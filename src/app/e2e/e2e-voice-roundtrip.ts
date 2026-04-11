@@ -16,9 +16,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { loadConfig } from '../../system/config/load-config.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
-import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { LLMClient } from '../../primitives/llm/client.js';
 import { composeSubstrateAgent, composeIdentity, composeSessionRuntime } from '../startup/composition/composition.js';
@@ -34,6 +32,7 @@ import {
 } from '../../primitives/voice/transports/websocket/types.js';
 import { INSECURE_LOCAL_API_PRINCIPAL } from '../../channels/backplane/http/auth.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { createIsolatedE2ERuntime } from './runtime-harness.js';
 import type {
   VoiceWebSocketRuntime,
   VoiceWebSocketRuntimeContext,
@@ -338,83 +337,85 @@ async function runSystemVoiceTurn(params: {
 }
 
 async function main(): Promise<void> {
-  const config = hydrateJsonBackedRuntimeConfig(loadConfig());
-
-  assertConfigured('DEEPGRAM_API_KEY', config.deepgramApiKey);
-  assertConfigured('ELEVENLABS_API_KEY', config.elevenLabsApiKey);
-  assertConfigured('ELEVENLABS_VOICE_ID', config.elevenLabsVoiceId);
-  assertConfigured('OPENROUTER_API_KEY', process.env.OPENROUTER_API_KEY);
-
-  console.log('=== Voice Round-Trip E2E ===');
-  console.log(`Primary model: ${config.primaryModel}`);
-
-  // Provider clients used for baseline and final audio verification
-  const ttsClient = new ElevenLabsTtsClient({
-    apiKey: config.elevenLabsApiKey ?? '',
-    voiceId: config.elevenLabsVoiceId ?? '',
-    modelId: config.elevenLabsModelId ?? '',
-    endpointBase: config.elevenLabsEndpointBase ?? '',
-  });
-
-  const sttClient = new DeepgramSttClient({
-    apiKey: config.deepgramApiKey ?? '',
-    model: config.deepgramModel ?? '',
-    endpoint: config.deepgramListenEndpoint ?? '',
-  });
-
-  // Step 1: seed text -> elevenlabs audio
-  console.log('\n[1/6] Synthesizing seed phrase with ElevenLabs...');
-  const { card, systemPrompt } = composeIdentity(config);
-  const companionName = card.data.name.trim() || 'Companion';
-  const inputPhrase = process.env.VOICE_E2E_PROMPT ?? buildDefaultInputPhrase(companionName);
-  const seedMp3 = await ttsClient.synthesize(inputPhrase);
-  console.log(`  Seed MP3 bytes: ${seedMp3.length}`);
-
-  // Step 2: elevenlabs audio -> deepgram stt baseline
-  console.log('[2/6] Baseline STT of seed audio with Deepgram...');
-  const seedWav16k = await transcodeWithFfmpeg(seedMp3, 'mp3', 'wav', [
-    '-ac', '1',
-    '-ar', '16000',
-    '-f', 'wav',
-  ]);
-  const seedBaselineTranscript = await sttClient.transcribeWav(seedWav16k);
-  const baselineMatch = textsMatch(inputPhrase, seedBaselineTranscript);
-  console.log(`  Baseline transcript: ${seedBaselineTranscript}`);
-  console.log(`  Baseline match: ${baselineMatch.pass} (${baselineMatch.score.toFixed(2)} | ${baselineMatch.reason})`);
-
-  // Build agent + voice runtime using real system components
-  const eventBus = new EventBus();
-  const llmClient = new LLMClient(config);
-  const { sessionManager } = composeSessionRuntime({ config });
-  const agentLoop = composeSubstrateAgent({
-    eventBus,
-    llmProvider: llmClient,
-    sessionManager,
-    systemPrompt,
-    config,
-  });
-
-  await eventBus.emit('system.init', {});
-  await eventBus.emit('system.ready', {});
-
-  let textSentToTts = '';
-  eventBus.on('voice.tts.requested', ({ text }) => {
-    if (text && text.trim()) {
-      textSentToTts = text.trim();
-    }
-  });
-
-  const runtime = createApiVoiceWebSocketRuntime({
-    agentLoop,
-    eventBus,
-    config,
-  });
-
-  if (!runtime) {
-    throw new Error('Voice websocket runtime did not initialize (missing config).');
-  }
+  const runtimeEnv = createIsolatedE2ERuntime({ prefix: 'psfn-voice-e2e-' });
+  const { config } = runtimeEnv;
 
   try {
+    assertConfigured('DEEPGRAM_API_KEY', config.deepgramApiKey);
+    assertConfigured('ELEVENLABS_API_KEY', config.elevenLabsApiKey);
+    assertConfigured('ELEVENLABS_VOICE_ID', config.elevenLabsVoiceId);
+    assertConfigured('OPENROUTER_API_KEY', process.env.OPENROUTER_API_KEY);
+
+    console.log('=== Voice Round-Trip E2E ===');
+    console.log(`Primary model: ${config.primaryModel}`);
+
+  // Provider clients used for baseline and final audio verification
+    const ttsClient = new ElevenLabsTtsClient({
+      apiKey: config.elevenLabsApiKey ?? '',
+      voiceId: config.elevenLabsVoiceId ?? '',
+      modelId: config.elevenLabsModelId ?? '',
+      endpointBase: config.elevenLabsEndpointBase ?? '',
+    });
+
+    const sttClient = new DeepgramSttClient({
+      apiKey: config.deepgramApiKey ?? '',
+      model: config.deepgramModel ?? '',
+      endpoint: config.deepgramListenEndpoint ?? '',
+    });
+
+  // Step 1: seed text -> elevenlabs audio
+    console.log('\n[1/6] Synthesizing seed phrase with ElevenLabs...');
+    const { card, systemPrompt } = composeIdentity(config);
+    const companionName = card.data.name.trim() || 'Companion';
+    const inputPhrase = process.env.VOICE_E2E_PROMPT ?? buildDefaultInputPhrase(companionName);
+    const seedMp3 = await ttsClient.synthesize(inputPhrase);
+    console.log(`  Seed MP3 bytes: ${seedMp3.length}`);
+
+  // Step 2: elevenlabs audio -> deepgram stt baseline
+    console.log('[2/6] Baseline STT of seed audio with Deepgram...');
+    const seedWav16k = await transcodeWithFfmpeg(seedMp3, 'mp3', 'wav', [
+      '-ac', '1',
+      '-ar', '16000',
+      '-f', 'wav',
+    ]);
+    const seedBaselineTranscript = await sttClient.transcribeWav(seedWav16k);
+    const baselineMatch = textsMatch(inputPhrase, seedBaselineTranscript);
+    console.log(`  Baseline transcript: ${seedBaselineTranscript}`);
+    console.log(`  Baseline match: ${baselineMatch.pass} (${baselineMatch.score.toFixed(2)} | ${baselineMatch.reason})`);
+
+  // Build agent + voice runtime using real system components
+    const eventBus = new EventBus();
+    const llmClient = new LLMClient(config);
+    const { sessionManager } = composeSessionRuntime({ config });
+    const agentLoop = composeSubstrateAgent({
+      eventBus,
+      llmProvider: llmClient,
+      sessionManager,
+      systemPrompt,
+      config,
+    });
+
+    await eventBus.emit('system.init', {});
+    await eventBus.emit('system.ready', {});
+
+    let textSentToTts = '';
+    eventBus.on('voice.tts.requested', ({ text }) => {
+      if (text && text.trim()) {
+        textSentToTts = text.trim();
+      }
+    });
+
+    const runtime = createApiVoiceWebSocketRuntime({
+      agentLoop,
+      eventBus,
+      config,
+    });
+
+    if (!runtime) {
+      throw new Error('Voice websocket runtime did not initialize (missing config).');
+    }
+
+    try {
     // Prepare runtime input: mp3 -> PCM s16le 48k mono (runtime STT config)
     console.log('[3/6] Preparing runtime input audio (mp3 -> pcm_s16le 48k)...');
     const inputPcm48k = await transcodeWithFfmpeg(seedMp3, 'mp3', 's16le', [
@@ -496,9 +497,12 @@ async function main(): Promise<void> {
       );
     }
 
-    console.log('\nPASS: Voice closed-loop round-trip + semantic sign/countersign validated.');
+      console.log('\nPASS: Voice closed-loop round-trip + semantic sign/countersign validated.');
+    } finally {
+      await Promise.resolve(runtime.stop());
+    }
   } finally {
-    await Promise.resolve(runtime.stop());
+    runtimeEnv.cleanup();
   }
 }
 

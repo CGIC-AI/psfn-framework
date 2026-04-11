@@ -190,6 +190,17 @@ function normalizeLifecycleArguments(args: Record<string, unknown>): Record<stri
   };
 }
 
+function normalizeUnifiedMemoryArguments(args: Record<string, unknown>): Record<string, unknown> {
+  const action = normalizeOptionalString(args.action).toLowerCase();
+  if (action === 'delete' || action === 'redact') {
+    return normalizeAliasedStringArgument(args, 'memory_id', ['id', 'memoryId']);
+  }
+  if (action === 'restore') {
+    return normalizeAliasedStringArgument(args, 'delete_id', ['id', 'deleteId']);
+  }
+  return args;
+}
+
 export function normalizeToolArguments(
   toolName: string,
   args: unknown,
@@ -202,6 +213,10 @@ export function normalizeToolArguments(
 
   if (toolName === 'memory_write') {
     return normalizeMemoryWriteArguments(args);
+  }
+
+  if (toolName === 'memory') {
+    return normalizeUnifiedMemoryArguments(args);
   }
 
   if (toolName === 'memory_patch' || toolName === 'memory_delete' || toolName === 'memory_redact') {

@@ -9,9 +9,7 @@
 
 import 'dotenv/config';
 import { join } from 'node:path';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { loadConfig } from '../../system/config/load-config.js';
+import { mkdirSync } from 'node:fs';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { LLMClient } from '../../primitives/llm/client.js';
@@ -20,7 +18,7 @@ import { MemoryStore } from '../../faculties/memory/store.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/think/types.js';
 import { runRLMLoop } from '../../core/tools/think/loop.js';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
-import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
+import { createIsolatedE2ERuntime } from './runtime-harness.js';
 import {
   composeIdentity,
   composeSessionRuntime,
@@ -66,82 +64,83 @@ function makeMessage(channelId: string, content: string, id?: string): Substrate
 async function main(): Promise<void> {
   console.log('=== PSFN E2E Integration Test ===\n');
 
-  const config = hydrateJsonBackedRuntimeConfig(loadConfig());
+  const runtime = createIsolatedE2ERuntime({ prefix: 'psfn-e2e-' });
+  const { config, rootDir } = runtime;
   const CHANNEL = 'e2e:test-' + Date.now();
 
-  // Use temp directory for sessions to avoid polluting production data
-  const tempDir = mkdtempSync(join(tmpdir(), 'psfn-e2e-'));
-  const sessionsDir = join(tempDir, 'sessions');
+  // Use isolated runtime directories so E2E never consumes mutable repo state.
+  const sessionsDir = join(rootDir, 'sessions');
   mkdirSync(sessionsDir, { recursive: true });
 
   // Use isolated database by default so extraction assertions are deterministic.
   // Override with E2E_DATABASE_PATH when you intentionally want to test against a shared DB.
-  const databasePath = process.env.E2E_DATABASE_PATH ?? join(tempDir, 'e2e.sqlite');
+  const databasePath = config.databasePath;
   const db = initDatabase(databasePath);
 
-  const eventBus = new EventBus();
+  try {
+    const eventBus = new EventBus();
 
-  // Track events for assertions
-  const events: Array<{ name: string; data: any }> = [];
-  const track = (name: string) => (d: any) => { events.push({ name, data: d }); };
-  eventBus.on('agent.turn.start', track('turn.start'));
-  eventBus.on('agent.turn.end', track('turn.end'));
-  eventBus.on('agent.stream.delta', track('stream.delta'));
-  eventBus.on('memory.extraction.start', track('extraction.start'));
-  eventBus.on('memory.extraction.end', track('extraction.end'));
-  eventBus.on('agent.error', track('error'));
+    // Track events for assertions
+    const events: Array<{ name: string; data: any }> = [];
+    const track = (name: string) => (d: any) => { events.push({ name, data: d }); };
+    eventBus.on('agent.turn.start', track('turn.start'));
+    eventBus.on('agent.turn.end', track('turn.end'));
+    eventBus.on('agent.stream.delta', track('stream.delta'));
+    eventBus.on('memory.extraction.start', track('extraction.start'));
+    eventBus.on('memory.extraction.end', track('extraction.end'));
+    eventBus.on('agent.error', track('error'));
 
-  // Identity
-  const { card, systemPrompt } = composeIdentity(config);
-  const companionName = card.data.name.trim() || 'Companion';
+    // Identity
+    const { card, systemPrompt } = composeIdentity(config);
+    const companionName = card.data.name.trim() || 'Companion';
 
-  // Core components
-  const llmClient = new LLMClient(config);
-  const sessionComposition = composeSessionRuntime({ config, sessionsDir });
-  const { sessionStore, sessionManager } = sessionComposition;
+    // Core components
+    const llmClient = new LLMClient(config);
+    const sessionComposition = composeSessionRuntime({ config, sessionsDir });
+    const { sessionStore, sessionManager } = sessionComposition;
 
-  // Embeddings
-  const embeddingProvider = createEmbeddingProviderFromEnv();
+    // Embeddings
+    const embeddingProvider = createEmbeddingProviderFromEnv();
 
-  const memoryStore = new MemoryStore(db, embeddingProvider.dims);
+    const memoryStore = new MemoryStore(db, embeddingProvider.dims);
 
-  // Agent loop
-  const agentLoop = composeSubstrateAgent({
-    eventBus,
-    llmProvider: llmClient,
-    sessionManager,
-    systemPrompt,
-    config,
-  });
-  const memoryExtractor = wireMemoryRuntime({
-    agentLoop,
-    llmProvider: llmClient,
-    sessionManager,
-    memoryStore,
-    embeddingService: embeddingProvider,
-    eventBus,
-  });
-  wireShardAndThinkRuntime({
-    agentLoop,
-    eventBus,
-    llmProvider: llmClient,
-    sessionStore,
-    embeddingService: embeddingProvider,
-    memoryStore,
-    sessionManager,
-    config,
-    parentSystemPrompt: systemPrompt,
-    replConfig: DEFAULT_REPL_CONFIG,
-  });
+    // Agent loop
+    const agentLoop = composeSubstrateAgent({
+      eventBus,
+      llmProvider: llmClient,
+      sessionManager,
+      systemPrompt,
+      config,
+    });
+    const memoryExtractor = wireMemoryRuntime({
+      agentLoop,
+      llmProvider: llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService: embeddingProvider,
+      eventBus,
+    });
+    wireShardAndThinkRuntime({
+      agentLoop,
+      eventBus,
+      llmProvider: llmClient,
+      sessionStore,
+      embeddingService: embeddingProvider,
+      memoryStore,
+      sessionManager,
+      config,
+      parentSystemPrompt: systemPrompt,
+      replConfig: DEFAULT_REPL_CONFIG,
+    });
 
-  await eventBus.emit('system.init', {});
-  await eventBus.emit('system.ready', {});
+    await eventBus.emit('system.init', {});
+    await eventBus.emit('system.ready', {});
 
-  console.log(`Channel: ${CHANNEL}`);
-  console.log(`Sessions dir: ${sessionsDir}`);
-  console.log(`Database: ${databasePath}`);
-  console.log(`Primary model: ${config.primaryModel}`);
-  console.log(`Extraction model: ${config.extractionModel}`);
+    console.log(`Channel: ${CHANNEL}`);
+    console.log(`Sessions dir: ${sessionsDir}`);
+    console.log(`Database: ${databasePath}`);
+    console.log(`Primary model: ${config.primaryModel}`);
+    console.log(`Extraction model: ${config.extractionModel}`);
 
   // ────────────────────────────────────────
   // TEST 1: Basic conversation
@@ -448,16 +447,16 @@ async function main(): Promise<void> {
   console.log(`  Failed: ${failed}`);
   console.log(`  Total:  ${passed + failed}`);
 
-  // Cleanup
-  db.close();
-  try { rmSync(tempDir, { recursive: true }); } catch { /* ok */ }
-
-  if (failed > 0) {
-    console.log('\nSome tests FAILED.');
-    process.exit(1);
-  } else {
-    console.log('\nAll tests PASSED.');
-    process.exit(0);
+    if (failed > 0) {
+      console.log('\nSome tests FAILED.');
+      process.exit(1);
+    } else {
+      console.log('\nAll tests PASSED.');
+      process.exit(0);
+    }
+  } finally {
+    db.close();
+    runtime.cleanup();
   }
 }
 

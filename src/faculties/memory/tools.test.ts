@@ -266,6 +266,49 @@ describe('createMemoryTool', () => {
     expect(resultText(restored as any)).toContain('Memory restored');
   });
 
+  it('accepts id alias for unified action=delete', async () => {
+    const store = mockUnifiedStore();
+    store.softDeleteMemory.mockResolvedValue(makeUnifiedDeleteVersion({
+      deleteId: 'del-alias',
+      memoryId: 'mem-alias',
+      deletedBy: 'tool:memory|action:delete',
+    }));
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const deleted = await tool.execute('memory-call-delete-alias', {
+      action: 'delete',
+      id: 'mem-alias',
+      reason: 'cleanup',
+    } as any);
+
+    expect(store.softDeleteMemory).toHaveBeenCalledWith('mem-alias', {
+      deletedBy: 'tool:memory|action:delete',
+      reason: 'cleanup',
+    });
+    expect(resultText(deleted as any)).toContain('del-alias');
+  });
+
+  it('accepts deleteId alias for unified action=restore', async () => {
+    const store = mockUnifiedStore();
+    store.undoSoftDelete.mockResolvedValue(makeUnifiedDeleteVersion({
+      deleteId: 'del-alias',
+      memoryId: 'mem-alias',
+      restoredBy: 'tool:memory|action:restore',
+      restoredAt: Date.now(),
+    }));
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const restored = await tool.execute('memory-call-restore-alias', {
+      action: 'restore',
+      deleteId: 'del-alias',
+    } as any);
+
+    expect(store.undoSoftDelete).toHaveBeenCalledWith('del-alias', {
+      restoredBy: 'tool:memory|action:restore',
+    });
+    expect(resultText(restored as any)).toContain('Memory restored');
+  });
+
   it('accepts shard provenance overrides for unified write/import/redact actions', async () => {
     const store = mockUnifiedStore();
     const redact = vi.fn().mockResolvedValue({

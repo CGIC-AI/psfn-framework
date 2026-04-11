@@ -15,6 +15,24 @@ const log = createComponentLogger('Settings');
 const SETTINGS_FILE = SETTINGS_FILE_NAME;
 const SETTINGS_SEED_FILE = 'settings.seed.json';
 
+function hasOwnKey(target: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(target, key);
+}
+
+function applyLegacyVoiceProviderDefaults(
+  raw: Record<string, unknown>,
+  normalized: EditableSettings,
+): EditableSettings {
+  const migrated: EditableSettings = { ...normalized };
+  if (!hasOwnKey(raw, 'ttsProvider')) {
+    migrated.ttsProvider = 'disabled';
+  }
+  if (!hasOwnKey(raw, 'sttProvider')) {
+    migrated.sttProvider = 'disabled';
+  }
+  return migrated;
+}
+
 /** Load saved settings from data/settings.json, seeding from config/settings.seed.json when missing/corrupt. */
 export function loadSettings(
   dataDir: string,
@@ -31,7 +49,10 @@ export function loadSettings(
       if (!isRecord(raw)) {
         throw new Error(`Invalid settings file format at ${sourcePath}`);
       }
-      return normalizeEditableSettings(raw as EditableSettings);
+      return applyLegacyVoiceProviderDefaults(
+        raw,
+        normalizeEditableSettings(raw as EditableSettings),
+      );
     },
   });
 

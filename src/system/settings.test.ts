@@ -224,6 +224,25 @@ describe('settings', () => {
       });
     });
 
+    it('migrates persisted settings missing voice provider keys to explicit disabled selections', () => {
+      const path = join(tempDir, 'settings.json');
+      writeFileSync(path, JSON.stringify({
+        voiceEnabled: false,
+        voiceId: '',
+        extractionInterval: 7,
+      }), 'utf-8');
+
+      const loaded = loadSettings(tempDir);
+      expect(loaded.ttsProvider).toBe('disabled');
+      expect(loaded.sttProvider).toBe('disabled');
+      expect(loaded.extractionInterval).toBe(7);
+
+      const config = makeConfig();
+      applySettings(config, loaded);
+      expect(config.ttsProvider).toBe('disabled');
+      expect(config.sttProvider).toBe('disabled');
+    });
+
     it('returns cached settings on repeated reads without re-reading disk', () => {
       const path = join(tempDir, 'settings.json');
       saveSettings(tempDir, { extractionInterval: 6 });

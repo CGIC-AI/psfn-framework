@@ -30,12 +30,10 @@ import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../bo
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { CoreMemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import {
-  createSessionListTool,
   createSessionNewTool,
   createSessionResumeTool,
   createSessionTool,
 } from '../../../core/tools/session.js';
-import { createSessionGrepTool, createSessionSearchTool } from '../../../core/tools/session-search.js';
 import { resolveSessionsDir } from '../../../persistence/layout.js';
 import { createCompleteFocusTool, createStartFocusTool } from '../../../core/tools/focus.js';
 import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
@@ -69,7 +67,6 @@ import { ValuesJournalStore } from '../../../faculties/values/store.js';
 import type { ValuesDeliberationMetadata } from '../../../faculties/values/store.js';
 import {
   createValuesAddTool,
-  createValuesListTool,
   createValuesUpdateTool,
 } from '../../../faculties/values/tools.js';
 import {
@@ -374,10 +371,6 @@ export function wireSessionToolsRuntime(
       );
     },
   }), 'core');
-  target.registerTool(createSessionSearchTool(sessionManager, llmProvider), 'core');
-  target.registerTool(createSessionGrepTool({
-    sessionsDir: resolveSessionsDir(dataDir),
-  }), 'core');
   target.registerTool(createSessionNewTool({
     dataDir,
     setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),
@@ -388,7 +381,6 @@ export function wireSessionToolsRuntime(
       );
     },
   }), 'extended');
-  target.registerTool(createSessionListTool(sessionManager, { dataDir }), 'core');
   target.registerTool(createSessionResumeTool(sessionManager, { dataDir }), 'extended');
   target.registerTool(createStartFocusTool(sessionManager), 'extended');
   target.registerTool(createCompleteFocusTool(sessionManager, llmProvider), 'extended');
@@ -1642,7 +1634,6 @@ export function wireHeartbeatRuntime(
   target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks), 'extended');
   target.registerTool(createHeartbeatRunTemplateTool(store, runTemplateNow), 'extended');
   target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId), 'extended');
-  target.registerTool(createValuesListTool(valuesJournal), 'core');
   target.registerTool(createValuesAddTool(valuesJournal), 'extended');
   target.registerTool(createValuesUpdateTool(valuesJournal), 'extended');
 

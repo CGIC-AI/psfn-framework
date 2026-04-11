@@ -7,9 +7,7 @@ import {
   createMemoryImportTool,
   createMemoryPatchTool,
   createMemoryRedactTool,
-  createMemoryWriteTool,
   createScratchpadTool,
-  createScratchpadReadTool,
   createScratchpadWriteTool,
   createUndoMemoryDeleteTool,
 } from './tools.js';
@@ -27,8 +25,6 @@ export function registerMemoryTools(
 ): void {
   target.registerTool(createMemoryTool(options.writer, options.memoryStore), 'core');
   target.registerTool(createScratchpadTool(options.memoryStore), 'core');
-  target.registerTool(createMemoryWriteTool(options.writer), 'core');
-  target.registerTool(createScratchpadReadTool(options.memoryStore), 'core');
   target.registerTool(createMemoryImportTool(options.writer), 'extended');
   target.registerTool(createMemoryPatchTool(options.writer), 'extended');
   target.registerTool(createMemoryRedactTool(options.writer), 'extended');

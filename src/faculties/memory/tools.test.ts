@@ -139,6 +139,26 @@ describe('createMemoryTool', () => {
     }));
   });
 
+  it('accepts action=memory_write as a legacy alias on the unified memory tool', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    await tool.execute('memory-call-alias', {
+      action: 'memory_write',
+      text: 'Alias write',
+      type: 'semantic',
+    } as any);
+
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'Alias write',
+      sourceRef: 'source:tool:memory|action:write|invocation:memory-call-alias',
+      provenance: {
+        toolName: 'memory',
+        toolCallId: 'memory-call-alias',
+      },
+    }));
+  });
+
   it('searches through action=search and formats results', async () => {
     const store = mockUnifiedStore();
     store.searchByText.mockResolvedValue([
@@ -1146,6 +1166,20 @@ describe('scratchpad tools', () => {
     } as any);
     expect(resultText(missingAppendId as any)).toContain('id is required for action=append');
     expect((missingAppendId.details as any).isError).toBe(true);
+  });
+
+  it('accepts action=scratchpad_read as a legacy alias on the unified scratchpad tool', async () => {
+    const store = mockScratchpadStore();
+    store.listScratchpadEntries.mockReturnValue([]);
+    const tool = createScratchpadTool(store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('scratchpad-read-alias', {
+      action: 'scratchpad_read',
+      limit: 4,
+    } as any);
+
+    expect(resultText(result as any)).toContain('Scratchpad is empty');
+    expect(store.listScratchpadEntries).toHaveBeenCalledWith(4);
   });
 
   it('scratchpad_read returns empty-state message', async () => {

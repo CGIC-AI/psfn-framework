@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { registerMemoryTools } from './runtime-wiring.js';
 
 describe('registerMemoryTools', () => {
-  it('registers unified memory and scratchpad tools as core semantic surfaces', () => {
+  it('registers unified memory and scratchpad tools without split read/write aliases', () => {
     const registerTool = vi.fn();
 
     registerMemoryTools(
@@ -13,12 +13,18 @@ describe('registerMemoryTools', () => {
       },
     );
 
-    expect(registerTool.mock.calls).toEqual(expect.arrayContaining([
-      [expect.objectContaining({ name: 'memory' }), 'core'],
-      [expect.objectContaining({ name: 'scratchpad' }), 'core'],
-      [expect.objectContaining({ name: 'memory_write' }), 'core'],
-      [expect.objectContaining({ name: 'scratchpad_read' }), 'core'],
-      [expect.objectContaining({ name: 'scratchpad_write' }), 'extended'],
+    const names = registerTool.mock.calls.map(([tool]) => tool.name);
+    expect(names).toEqual(expect.arrayContaining([
+      'memory',
+      'scratchpad',
+      'memory_import_batch',
+      'memory_patch',
+      'memory_redact',
+      'memory_delete',
+      'undo_memory_delete',
+      'scratchpad_write',
     ]));
+    expect(names).not.toContain('memory_write');
+    expect(names).not.toContain('scratchpad_read');
   });
 });

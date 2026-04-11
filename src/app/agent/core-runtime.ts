@@ -202,11 +202,6 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   wireSettingsRuntime(agentLoop, config, { registerSystemTool: false });
   wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway);
-  const coreMemoryStore = wireCoreMemoryRuntime({
-    agentLoop,
-    sessionManager,
-    config,
-  });
   const contactRuntimeOptions = {
     exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
     ...(primaryTelegramUserId
@@ -245,6 +240,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       behavioralPatternProvider: null,
     });
   }
+  const coreMemoryStore = wireCoreMemoryRuntime({
+    agentLoop,
+    sessionManager,
+    config,
+    concernStore: intentionRuntime.concernStore,
+  });
   wireSelfModelRuntime(agentLoop);
   const intentionAppraisalHooks = createIntentionAppraisalHooks(
     intentionRuntime.concernStore,

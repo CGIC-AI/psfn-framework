@@ -72,7 +72,7 @@ describe('wireSessionToolsRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers unified session plus split session tools during the migration window', async () => {
+  it('registers the unified session surface without split list/search/grep aliases', async () => {
     const target = {
       registerTool: vi.fn(),
     };
@@ -108,24 +108,18 @@ describe('wireSessionToolsRuntime', () => {
     wireSessionToolsRuntime(target, sessionManager, tempDir, llmProvider);
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls).toHaveLength(8);
+    expect(calls).toHaveLength(5);
     expect(calls.map(([tool]) => tool.name).sort()).toEqual([
       'complete_focus',
       'session',
-      'session_grep',
-      'session_list',
       'session_new',
       'session_resume',
-      'session_search',
       'start_focus',
     ]);
     expect(calls.find(([tool]) => tool.name === 'session')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'session_list')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'session_search')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'session_grep')?.[1]).toBe('core');
     expect(
       calls
-        .filter(([tool]) => !['session', 'session_list', 'session_search', 'session_grep'].includes(tool.name))
+        .filter(([tool]) => tool.name !== 'session')
         .every(([, category]) => category === 'extended'),
     ).toBe(true);
 
@@ -327,7 +321,7 @@ describe('wireHeartbeatRuntime', () => {
     expect(task?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'utc' });
   });
 
-  it('registers values_list in core and values mutations in extended tools', () => {
+  it('keeps values mutations extended while values_list moves behind orient', () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -353,12 +347,8 @@ describe('wireHeartbeatRuntime', () => {
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
     const names = calls.map(([tool]) => tool.name);
-    expect(names).toEqual(expect.arrayContaining([
-      'values_list',
-      'values_add',
-      'values_update',
-    ]));
-    expect(calls.find(([tool]) => tool.name === 'values_list')?.[1]).toBe('core');
+    expect(names).not.toContain('values_list');
+    expect(names).toEqual(expect.arrayContaining(['values_add', 'values_update']));
     expect(
       calls
         .filter(([tool]) => ['values_add', 'values_update'].includes(tool.name))

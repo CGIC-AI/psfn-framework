@@ -11,7 +11,6 @@ import {
 import { createScheduleTool } from './schedule-tool.js';
 import {
   createValuesAddTool,
-  createValuesListTool,
   createValuesUpdateTool,
 } from '../../faculties/values/tools.js';
 import { createLegacyAliasTelemetryEmitter } from '../tools/legacy-alias-telemetry.js';
@@ -80,7 +79,6 @@ export function wireHeartbeatRuntime(
   }), 'extended');
   target.registerTool(createHeartbeatRunTemplateTool(templateRuntime.policyStore, templateRuntime.runTemplateNow), 'extended');
   target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId), 'extended');
-  target.registerTool(createValuesListTool(templateRuntime.valuesJournal), 'core');
   target.registerTool(createValuesAddTool(templateRuntime.valuesJournal), 'extended');
   target.registerTool(createValuesUpdateTool(templateRuntime.valuesJournal), 'extended');
 

@@ -449,7 +449,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       }),
       expect.any(String),
       expect.any(String),
-      `${taskKind} run`,
+      `[SYSTEM: ${taskKind === 'heartbeat' ? 'Scheduler' : 'Whisper'}] ${taskKind} run`,
       DEFAULT_COMPANION_ID,
     );
     expect(recordUserMessage).not.toHaveBeenCalled();
@@ -462,6 +462,59 @@ describe('handleMessageForTurn compaction scheduling', () => {
       channelId,
       userId: DEFAULT_COMPANION_ID,
     }));
+    expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+      role: 'custom',
+      type: 'systemNote',
+      content: `[SYSTEM: ${taskKind === 'heartbeat' ? 'Scheduler' : 'Whisper'}] ${taskKind} run`,
+    });
+  });
+
+  it('routes runtime-authored repair guidance through system session + prompt lanes', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordUserMessage = vi.fn(() => null);
+    const recordSystemMessage = vi.fn(() => 1);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage,
+      recordSystemMessage,
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.resolveAuthorContext = vi.fn(() => ({
+      trustLevel: 'regular',
+      speakerRole: 'system',
+      resolvedUserName: 'Runtime',
+      canonicalContactKey: 'contact-1',
+      continuityFallbackKeys: [],
+    }));
+
+    await handleMessageForTurn(runtime, createMessage('msg-runtime-guidance', {
+      authorId: 'system:runtime',
+      authorName: 'Runtime',
+      content: 'tool notify is unavailable; choose another route',
+    }));
+
+    expect(recordUserMessage).not.toHaveBeenCalled();
+    expect(recordSystemMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.any(String),
+      expect.any(String),
+      '[SYSTEM: Runtime] tool notify is unavailable; choose another route',
+      'contact-1',
+    );
+    expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toMatchObject({
+      role: 'custom',
+      type: 'systemNote',
+      content: '[SYSTEM: Runtime] tool notify is unavailable; choose another route',
+    });
   });
 
   it('routes external turns through the canonical continuity subject instead of the session-local author id', async () => {

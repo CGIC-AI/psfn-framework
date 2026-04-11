@@ -164,6 +164,47 @@ describe('AdminChatBootstrapService', () => {
     expect(payload.runtime.transportHeaders['X-Channel-Privacy']).toBe('private');
   });
 
+  it('rolls back invalid identity updates so later bootstrap reads still succeed', async () => {
+    const latestContact: Contact = {
+      id: 'contact-latest',
+      displayName: 'Latest API Contact',
+      trustLevel: 'regular',
+      relationshipType: 'friend',
+      firstSeen: new Date().toISOString(),
+      lastSeen: new Date(Date.now() + 1000).toISOString(),
+      channels: [{
+        channel: 'api',
+        userId: 'api-key-user',
+        privacyLevel: 'private',
+      }],
+    };
+    const gardenContact = makeContact('contact-garden', 'Garden Contact');
+    const contactStore = {
+      listAll: () => [latestContact, gardenContact],
+      linkChannelIdentity: vi.fn(() => 'identity_conflict'),
+      setChannelPrivacy: vi.fn(() => true),
+      setConversationChannelPrivacy: vi.fn(() => true),
+    } as unknown as ContactStore;
+    const service = new AdminChatBootstrapService(contactStore, {
+      config: makeRuntimeConfig('/tmp/unused-card.json'),
+      resolveGlobalDefaultSessionId: () => null,
+    });
+
+    const initial = await service.buildBootstrap();
+    expect(initial.canonicalContactId).toBe('contact-latest');
+    expect(initial.selectedTarget.userId).toBe('api-key-user');
+
+    await expect(service.updateSelection({
+      canonicalContactId: 'contact-latest',
+      channel: 'api',
+      userId: 'admin-user',
+    })).rejects.toThrow('already linked to another contact');
+
+    const recovered = await service.buildBootstrap();
+    expect(recovered.canonicalContactId).toBe('contact-latest');
+    expect(recovered.selectedTarget.userId).toBe('api-key-user');
+  });
+
   it('switches to conversation-channel targets without forcing identity links', async () => {
     const contact = makeContact('contact-dm', 'DM Contact');
     contact.conversationChannels = [{

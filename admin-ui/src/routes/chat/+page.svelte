@@ -115,6 +115,15 @@
     return opts;
   }
 
+  function resolveGardenChatContactId(bs: AdminChatBootstrapResponse): string {
+    const gardenContact = bs.contactOptions.find((contact) => contact.linkedChannels.some((linked) => (
+      linked.targetKind === 'identity'
+      && linked.channel === GARDEN_CHAT_CHANNEL
+      && linked.userId === GARDEN_CHAT_USER_ID
+    )));
+    return gardenContact?.canonicalContactId ?? bs.canonicalContactId;
+  }
+
   function initializeOnboardingDraft(bs: AdminChatBootstrapResponse) {
     if (!bs.onboarding.required) {
       onboardingDraft = {
@@ -262,7 +271,7 @@
       if (currentIdentityKey !== GARDEN_CHAT_KEY) {
         // Switch to admin-native channel
         await updateChatBootstrap({
-          canonicalContactId: selectedContactId,
+          canonicalContactId: resolveGardenChatContactId(bootstrap),
           privacyLevel: selectedPrivacyLevel,
           channel: GARDEN_CHAT_CHANNEL,
           userId: GARDEN_CHAT_USER_ID,

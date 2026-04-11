@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
+import { existsSync, readFileSync } from 'node:fs';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 import WebSocket from 'ws';
 
-const DEFAULT_ADMIN_URL = 'http://127.0.0.1:3001';
+const DEFAULT_ADMIN_URL = 'http://127.0.0.1:10154';
 const DEFAULT_BOOTSTRAP_PATH = '/api/admin/chat/bootstrap';
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_VOICE_TIMEOUT_MS = 8_000;
+const DEFAULT_LIVE_ENV_PATH = '/mnt/samesung/ai/psfn-live/.env';
 
 function printUsage() {
   console.log(`Chat Cockpit Smoke Harness
@@ -57,11 +59,21 @@ function parseInteger(value, fieldName, fallback) {
   return parsed;
 }
 
+function readEnvValue(path, key) {
+  if (!existsSync(path)) return '';
+  const line = readFileSync(path, 'utf8')
+    .split('\n')
+    .find((entry) => entry.startsWith(`${key}=`));
+  if (!line) return '';
+  return line.slice(key.length + 1).trim().replace(/^['"]|['"]$/g, '');
+}
+
 function parseArgs(argv) {
+  const liveEnvPath = process.env.PSFN_LIVE_ENV || DEFAULT_LIVE_ENV_PATH;
   const options = {
     adminUrl: process.env.ADMIN_URL || DEFAULT_ADMIN_URL,
     apiBaseUrl: process.env.API_BASE_URL || '',
-    adminToken: process.env.ADMIN_TOKEN || '',
+    adminToken: process.env.ADMIN_TOKEN || readEnvValue(liveEnvPath, 'ADMIN_TOKEN'),
     apiKey: process.env.API_KEY || '',
     bootstrapPath: DEFAULT_BOOTSTRAP_PATH,
     message: 'Smoke ping from chat cockpit.',

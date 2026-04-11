@@ -160,6 +160,8 @@ export class AdminChatBootstrapService {
     input: AdminChatBootstrapUpdateInput,
     options: AdminChatBootstrapRuntimeOptions = {},
   ): Promise<AdminChatBootstrapResponse> {
+    const previousSelection: SelectionState = { ...this.selection };
+    const previousSelectionPinnedByUser = this.selectionPinnedByUser;
     this.applySelectionInput(input);
     if (
       input.canonicalContactId !== undefined
@@ -169,8 +171,14 @@ export class AdminChatBootstrapService {
     ) {
       this.selectionPinnedByUser = true;
     }
-    await this.persistSelectionMapping(input);
-    return this.composeBootstrap(options);
+    try {
+      await this.persistSelectionMapping(input);
+      return await this.composeBootstrap(options);
+    } catch (error) {
+      this.selection = previousSelection;
+      this.selectionPinnedByUser = previousSelectionPinnedByUser;
+      throw error;
+    }
   }
 
   async buildModelRoomBootstrap(

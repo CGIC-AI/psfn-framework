@@ -537,12 +537,12 @@ describe('AdminServer JSON API routes', () => {
       getAdaptiveToolRuntimeState: () => ({
         generatedAt: 1_701_234_567_890,
         coreTools: ['load_tools'],
-        extendedTools: ['repo_status', 'repo_diff', 'notify_operator'],
-        promotedToolsConfigured: ['repo_status', 'notify_operator'],
+        extendedTools: ['repo_status', 'repo_diff', 'notify'],
+        promotedToolsConfigured: ['repo_status', 'notify'],
         promotedToolsActive: ['repo_status'],
         promotedToolsSkipped: [
           {
-            toolName: 'notify_operator',
+            toolName: 'notify',
             source: 'promoted',
             reason: 'background_only',
           },
@@ -587,16 +587,12 @@ describe('AdminServer JSON API routes', () => {
             },
           },
           {
-            name: 'notify_operator',
-            description: 'Send an out-of-band operator alert via ntfy.',
+            name: 'notify',
+            description: 'Unified notification surface for operator briefs, lightweight outbound sends, and approval escalation.',
             scope: 'extended',
             wiringMeta: {
               requiredServices: ['ntfy'],
-              requiredGatewayMethods: ['notify.ntfy'],
-              contextRestrictions: {
-                disallowInternal: true,
-                disallowScheduled: true,
-              },
+              requiredGatewayMethods: ['discord.send', 'notify.ntfy'],
             },
           },
         ],
@@ -1135,9 +1131,9 @@ describe('AdminServer JSON API routes', () => {
     await eventBus.emit('agent.tool.end', {
       channelId: 'api-session',
       toolCallId: 'notify-1',
-      toolName: 'notify_operator',
+      toolName: 'notify',
       isError: true,
-      errorMessage: 'notify_operator: failure (503 Service Unavailable).',
+      errorMessage: 'notify: failure (503 Service Unavailable).',
     });
     await eventBus.emit('agent.tools.adaptive.decision', {
       turnId: 'turn-adaptive-1',
@@ -1219,7 +1215,7 @@ describe('AdminServer JSON API routes', () => {
     ]));
     expect(adaptivePayload.catalog?.tools).toEqual(expect.arrayContaining([
       expect.objectContaining({ name: 'load_tools', scope: 'core' }),
-      expect.objectContaining({ name: 'notify_operator', scope: 'extended' }),
+      expect.objectContaining({ name: 'notify', scope: 'extended' }),
     ]));
     expect(adaptivePayload.serviceHealth).toEqual(expect.arrayContaining([
       expect.objectContaining({ serviceId: 'gateway', status: 'healthy' }),
@@ -1231,11 +1227,11 @@ describe('AdminServer JSON API routes', () => {
     ]));
     expect(adaptivePayload.toolHealth).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        name: 'notify_operator',
+        name: 'notify',
         health: expect.objectContaining({ status: 'degraded' }),
         contexts: expect.objectContaining({
           chat: expect.objectContaining({ status: 'available' }),
-          internalHeartbeat: expect.objectContaining({ status: 'not_applicable' }),
+          internalHeartbeat: expect.objectContaining({ status: 'available' }),
         }),
       }),
       expect.objectContaining({
@@ -1245,8 +1241,8 @@ describe('AdminServer JSON API routes', () => {
     ]));
     expect(adaptivePayload.recentFailures).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        toolName: 'notify_operator',
-        message: 'notify_operator: failure (503 Service Unavailable).',
+        toolName: 'notify',
+        message: 'notify: failure (503 Service Unavailable).',
       }),
     ]));
     expect(adaptivePayload.recentTelemetry).toEqual(expect.arrayContaining([
@@ -1848,7 +1844,7 @@ describe('AdminServer JSON API routes', () => {
             callType: 'chat',
             purpose: 'agent.tools.adaptive.snapshot',
             tools: [{ toolName: 'contact_lookup', source: 'core' }],
-            skipped: [{ toolName: 'notify_operator', source: 'autoload', reason: 'not_needed_for_turn' }],
+            skipped: [{ toolName: 'notify', source: 'autoload', reason: 'not_needed_for_turn' }],
             counts: {
               core: 1,
               promoted: 0,
@@ -2093,7 +2089,7 @@ describe('AdminServer JSON API routes', () => {
     ]);
     expect(messagesPayload.turns[0]?.snapshot?.toolContext?.adaptiveSnapshot?.skipped).toEqual([
       expect.objectContaining({
-        toolName: 'notify_operator',
+        toolName: 'notify',
         reason: 'not_needed_for_turn',
       }),
     ]);

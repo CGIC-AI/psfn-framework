@@ -31,12 +31,9 @@ describe('registerVaultTools', () => {
 
   it('registers split vault tools as extended', () => {
     registerVaultTools(target, createMockOps());
-    expect(target.registerTool).toHaveBeenCalledTimes(4);
+    expect(target.registerTool).toHaveBeenCalledTimes(1);
     expect(target.registerTool.mock.calls).toEqual([
-      [expect.objectContaining({ name: 'vault_write' }), 'extended'],
-      [expect.objectContaining({ name: 'vault_read' }), 'extended'],
-      [expect.objectContaining({ name: 'vault_search' }), 'extended'],
-      [expect.objectContaining({ name: 'vault_daily' }), 'extended'],
+      [expect.objectContaining({ name: 'vault' }), 'extended'],
     ]);
   });
 
@@ -51,10 +48,7 @@ describe('registerVaultTools', () => {
     );
 
     expect(methodsByTool).toEqual(new Map([
-      ['vault_write', ['vault.write']],
-      ['vault_read', ['vault.read']],
-      ['vault_search', ['vault.search']],
-      ['vault_daily', ['vault.daily']],
+      ['vault', ['vault.write', 'vault.read', 'vault.search', 'vault.daily']],
     ]));
   });
 
@@ -81,7 +75,7 @@ describe('wireVaultRuntime', () => {
     const target = createMockTarget();
     const ops = wireVaultRuntime(target, { vaultName: 'TestVault' });
     expect(ops).toBeDefined();
-    expect(target.registerTool).toHaveBeenCalledTimes(4);
+    expect(target.registerTool).toHaveBeenCalledTimes(1);
   });
 
   it('passes config to VaultOps', () => {

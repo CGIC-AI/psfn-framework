@@ -5,6 +5,37 @@ import type { BeadsOperations } from './ops.js';
 import { textResult, textResultWithError } from '../../../core/tools/results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 
+const BEADS_ACTION_HELP = 'ready, show, create, update, close, sync';
+
+type BeadsActionName =
+  | 'ready'
+  | 'issue_ready'
+  | 'show'
+  | 'issue_show'
+  | 'create'
+  | 'issue_create'
+  | 'update'
+  | 'issue_update'
+  | 'close'
+  | 'issue_close'
+  | 'sync'
+  | 'issue_sync';
+
+type BeadsAction = 'ready' | 'show' | 'create' | 'update' | 'close' | 'sync';
+
+export interface BeadsToolParams {
+  action?: BeadsActionName;
+  id?: string;
+  title?: string;
+  issue_type?: 'bug' | 'feature' | 'task' | 'epic' | 'chore';
+  status?: 'open' | 'in_progress' | 'blocked' | 'closed';
+  priority?: number;
+  deps?: string[];
+  parent?: string;
+  reason?: string;
+  actor?: string;
+}
+
 function formatActionResult(result: BeadsActionResult): string {
   return JSON.stringify({
     actor: result.actor,
@@ -16,62 +47,92 @@ function formatActionResult(result: BeadsActionResult): string {
   }, null, 2);
 }
 
-export function createIssueReadyTool(ops: BeadsOperations): AgentTool<any> {
-  return {
-    name: 'issue_ready',
-    label: 'issue_ready',
-    description: 'List beads issues that are ready to be worked on.',
-    parameters: Type.Object({
-      actor: Type.Optional(Type.String({
-        description: 'Optional actor identifier for audit attribution.',
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { actor?: string },
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const result = await ops.ready({ actor: params.actor });
-        return textResult(formatActionResult(result));
-      } catch (error) {
-        return textResultWithError(`issue_ready failed: ${toErrorMessage(error)}`, true);
-      }
-    },
-  };
+function normalizeBeadsAction(params: BeadsToolParams): BeadsAction {
+  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+  if (rawAction) {
+    switch (rawAction) {
+      case 'ready':
+      case 'issue_ready':
+        return 'ready';
+      case 'show':
+      case 'issue_show':
+        return 'show';
+      case 'create':
+      case 'issue_create':
+        return 'create';
+      case 'update':
+      case 'issue_update':
+        return 'update';
+      case 'close':
+      case 'issue_close':
+        return 'close';
+      case 'sync':
+      case 'issue_sync':
+        return 'sync';
+      default:
+        throw new Error(`action must be one of: ${BEADS_ACTION_HELP}`);
+    }
+  }
+
+  const hasId = typeof params.id === 'string';
+  const hasTitle = typeof params.title === 'string';
+  const hasStatus = typeof params.status === 'string';
+  const hasPriority = typeof params.priority === 'number';
+  const hasReason = typeof params.reason === 'string';
+  const hasIssueType = typeof params.issue_type === 'string';
+  const hasDeps = Array.isArray(params.deps);
+  const hasParent = typeof params.parent === 'string';
+
+  if (!hasId && !hasTitle && !hasStatus && !hasPriority && !hasReason && !hasIssueType && !hasDeps && !hasParent) {
+    return 'ready';
+  }
+  if (hasId && hasReason && !hasTitle && !hasStatus && !hasPriority && !hasIssueType && !hasDeps && !hasParent) {
+    return 'close';
+  }
+  if (hasId && (hasStatus || hasPriority) && !hasTitle && !hasReason && !hasIssueType && !hasDeps && !hasParent) {
+    return 'update';
+  }
+  if (hasTitle && !hasId && !hasStatus && !hasReason) {
+    return 'create';
+  }
+  if (hasId && !hasTitle && !hasStatus && !hasPriority && !hasReason && !hasIssueType && !hasDeps && !hasParent) {
+    return 'show';
+  }
+
+  throw new Error(`action is required. Supported actions: ${BEADS_ACTION_HELP}`);
 }
 
-export function createIssueShowTool(ops: BeadsOperations): AgentTool<any> {
+export function createBeadsTool(ops: BeadsOperations): AgentTool<any> {
   return {
-    name: 'issue_show',
-    label: 'issue_show',
-    description: 'Show details for a beads issue by id.',
+    name: 'beads',
+    label: 'beads',
+    description:
+      'Unified tracked-work surface for beads issue discovery and mutation. '
+      + 'Use action=ready|show|create|update|close|sync. '
+      + 'Legacy issue_* aliases remain accepted as action values only.',
     parameters: Type.Object({
-      id: Type.String({ description: 'Issue ID (for example PSFN-123 or PSFN-123.1).' }),
-      actor: Type.Optional(Type.String({
-        description: 'Optional actor identifier for audit attribution.',
+      action: Type.Optional(Type.Union([
+        Type.Literal('ready'),
+        Type.Literal('issue_ready'),
+        Type.Literal('show'),
+        Type.Literal('issue_show'),
+        Type.Literal('create'),
+        Type.Literal('issue_create'),
+        Type.Literal('update'),
+        Type.Literal('issue_update'),
+        Type.Literal('close'),
+        Type.Literal('issue_close'),
+        Type.Literal('sync'),
+        Type.Literal('issue_sync'),
+      ], {
+        description: 'Beads action. Preferred actions: ready, show, create, update, close, sync.',
       })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { id: string; actor?: string },
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const result = await ops.show({ id: params.id, actor: params.actor });
-        return textResult(formatActionResult(result));
-      } catch (error) {
-        return textResultWithError(`issue_show failed: ${toErrorMessage(error)}`, true);
-      }
-    },
-  };
-}
-
-export function createIssueCreateTool(ops: BeadsOperations): AgentTool<any> {
-  return {
-    name: 'issue_create',
-    label: 'issue_create',
-    description: 'Create a new beads issue with optional type/priority/dependencies.',
-    parameters: Type.Object({
-      title: Type.String({ description: 'Issue title.' }),
+      id: Type.Optional(Type.String({
+        description: 'Used with action=show|update|close. Issue ID (for example PSFN-123 or PSFN-123.1).',
+      })),
+      title: Type.Optional(Type.String({
+        description: 'Used with action=create. Issue title.',
+      })),
       issue_type: Type.Optional(Type.Union([
         Type.Literal('bug'),
         Type.Literal('feature'),
@@ -79,58 +140,6 @@ export function createIssueCreateTool(ops: BeadsOperations): AgentTool<any> {
         Type.Literal('epic'),
         Type.Literal('chore'),
       ])),
-      priority: Type.Optional(Type.Integer({
-        minimum: 0,
-        maximum: 4,
-        description: 'Priority 0-4.',
-      })),
-      deps: Type.Optional(Type.Array(Type.String({
-        description: 'Dependency refs (for example discovered-from:PSFN-123).',
-      }), {
-        maxItems: 16,
-      })),
-      parent: Type.Optional(Type.String({
-        description: 'Optional parent issue ID for subtasks.',
-      })),
-      actor: Type.Optional(Type.String({
-        description: 'Optional actor identifier for audit attribution.',
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: {
-        title: string;
-        issue_type?: 'bug' | 'feature' | 'task' | 'epic' | 'chore';
-        priority?: number;
-        deps?: string[];
-        parent?: string;
-        actor?: string;
-      },
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const result = await ops.create({
-          title: params.title,
-          issueType: params.issue_type,
-          priority: params.priority,
-          deps: params.deps,
-          parent: params.parent,
-          actor: params.actor,
-        });
-        return textResult(formatActionResult(result));
-      } catch (error) {
-        return textResultWithError(`issue_create failed: ${toErrorMessage(error)}`, true);
-      }
-    },
-  };
-}
-
-export function createIssueUpdateTool(ops: BeadsOperations): AgentTool<any> {
-  return {
-    name: 'issue_update',
-    label: 'issue_update',
-    description: 'Update beads issue status and/or priority.',
-    parameters: Type.Object({
-      id: Type.String({ description: 'Issue ID to update.' }),
       status: Type.Optional(Type.Union([
         Type.Literal('open'),
         Type.Literal('in_progress'),
@@ -140,7 +149,18 @@ export function createIssueUpdateTool(ops: BeadsOperations): AgentTool<any> {
       priority: Type.Optional(Type.Integer({
         minimum: 0,
         maximum: 4,
-        description: 'Priority 0-4.',
+        description: 'Used with action=create|update. Priority 0-4.',
+      })),
+      deps: Type.Optional(Type.Array(Type.String({
+        description: 'Used with action=create. Dependency refs (for example discovered-from:PSFN-123).',
+      }), {
+        maxItems: 16,
+      })),
+      parent: Type.Optional(Type.String({
+        description: 'Used with action=create. Optional parent issue ID for subtasks.',
+      })),
+      reason: Type.Optional(Type.String({
+        description: 'Used with action=close. Close reason text.',
       })),
       actor: Type.Optional(Type.String({
         description: 'Optional actor identifier for audit attribution.',
@@ -148,77 +168,47 @@ export function createIssueUpdateTool(ops: BeadsOperations): AgentTool<any> {
     }),
     execute: async (
       _toolCallId: string,
-      params: {
-        id: string;
-        status?: 'open' | 'in_progress' | 'blocked' | 'closed';
-        priority?: number;
-        actor?: string;
-      },
+      params: BeadsToolParams = {},
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      let actionForError = typeof params.action === 'string' ? params.action : undefined;
       try {
-        const result = await ops.update({
-          id: params.id,
-          status: params.status,
-          priority: params.priority,
-          actor: params.actor,
-        });
+        actionForError = normalizeBeadsAction(params);
+        const result = await (async (): Promise<BeadsActionResult> => {
+          switch (actionForError) {
+            case 'ready':
+              return await ops.ready({ actor: params.actor });
+            case 'show':
+              return await ops.show({ id: params.id!, actor: params.actor });
+            case 'create':
+              return await ops.create({
+                title: params.title!,
+                issueType: params.issue_type,
+                priority: params.priority,
+                deps: params.deps,
+                parent: params.parent,
+                actor: params.actor,
+              });
+            case 'update':
+              return await ops.update({
+                id: params.id!,
+                status: params.status,
+                priority: params.priority,
+                actor: params.actor,
+              });
+            case 'close':
+              return await ops.close({
+                id: params.id!,
+                reason: params.reason!,
+                actor: params.actor,
+              });
+            case 'sync':
+              return await ops.sync({ actor: params.actor });
+          }
+        })();
         return textResult(formatActionResult(result));
       } catch (error) {
-        return textResultWithError(`issue_update failed: ${toErrorMessage(error)}`, true);
-      }
-    },
-  };
-}
-
-export function createIssueCloseTool(ops: BeadsOperations): AgentTool<any> {
-  return {
-    name: 'issue_close',
-    label: 'issue_close',
-    description: 'Close a beads issue with an explicit reason.',
-    parameters: Type.Object({
-      id: Type.String({ description: 'Issue ID to close.' }),
-      reason: Type.String({ description: 'Close reason text.' }),
-      actor: Type.Optional(Type.String({
-        description: 'Optional actor identifier for audit attribution.',
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { id: string; reason: string; actor?: string },
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const result = await ops.close({
-          id: params.id,
-          reason: params.reason,
-          actor: params.actor,
-        });
-        return textResult(formatActionResult(result));
-      } catch (error) {
-        return textResultWithError(`issue_close failed: ${toErrorMessage(error)}`, true);
-      }
-    },
-  };
-}
-
-export function createIssueSyncTool(ops: BeadsOperations): AgentTool<any> {
-  return {
-    name: 'issue_sync',
-    label: 'issue_sync',
-    description: 'Run bd sync so issue JSONL stays aligned with git state.',
-    parameters: Type.Object({
-      actor: Type.Optional(Type.String({
-        description: 'Optional actor identifier for audit attribution.',
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: { actor?: string },
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      try {
-        const result = await ops.sync({ actor: params.actor });
-        return textResult(formatActionResult(result));
-      } catch (error) {
-        return textResultWithError(`issue_sync failed: ${toErrorMessage(error)}`, true);
+        const suffix = actionForError ? ` for action=${actionForError}` : '';
+        return textResultWithError(`beads failed${suffix}: ${toErrorMessage(error)}`, true);
       }
     },
   };

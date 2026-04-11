@@ -16,6 +16,7 @@ describe('agent control plane', () => {
     expect(agentMainSource).not.toContain('createRestartTool(');
     expect(agentMainSource).not.toContain('createRebuildTool(');
     expect(agentMainSource).not.toContain('createNotifyOperatorTool(');
+    expect(agentMainSource).not.toContain('createNotifyTool(');
     expect(agentMainSource).not.toContain('createDiscordLifecycleNotifier(');
   });
 
@@ -24,7 +25,9 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).toContain('createDiscordLifecycleNotifier');
     expect(controlPlaneSource).toContain('createRestartTool(');
     expect(controlPlaneSource).toContain('createRebuildTool(');
-    expect(controlPlaneSource).toContain('createNotifyOperatorTool(');
+    expect(controlPlaneSource).toContain('createNotifyDispatcher(');
+    expect(controlPlaneSource).toContain('createNotifyTool(');
+    expect(controlPlaneSource).toContain('createGatewayDiscordNotifySender(');
     expect(controlPlaneSource).toContain('runShutdownSequence(');
     expect(controlPlaneSource).toContain('resolveRuntimeCommandInvocation');
     expect(controlPlaneSource).toContain("gateway.shellExec('npm', ['run', 'build']");

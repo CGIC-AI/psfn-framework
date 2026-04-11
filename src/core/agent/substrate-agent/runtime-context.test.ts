@@ -743,7 +743,7 @@ describe('runtime subject identity', () => {
       channelType: 'api',
       authorId: 'user-1',
       authorName: 'User',
-      content: 'Try web and notify_operator.',
+      content: 'Try web and notify.',
     });
 
     const runtimeContext = buildRuntimeContext({
@@ -772,7 +772,7 @@ describe('runtime subject identity', () => {
           execute: () => { throw new Error('not used'); },
         } as any,
         {
-          name: 'notify_operator',
+          name: 'notify',
           description: 'Notify the operator.',
           parameters: {} as any,
           execute: () => { throw new Error('not used'); },

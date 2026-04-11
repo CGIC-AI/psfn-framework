@@ -55,16 +55,10 @@ export const DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS: ReadonlySet<string> = new S
 
 export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnIntent, readonly string[]>> = {
   dev: [
-    'issue_create',
-    'issue_update',
-    'issue_close',
-    'issue_sync',
+    'beads',
   ],
   memory: [
-    'vault_write',
-    'vault_read',
-    'vault_search',
-    'vault_daily',
+    'vault',
     'session_resume',
     'session_new',
     'identity_changelog',
@@ -80,14 +74,13 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'heartbeat_update_policy',
     'heartbeat_run_template',
     'schedule_task',
-    'issue_sync',
+    'beads',
   ],
   social: [
     'image_create',
     'image_edit',
     'image_analyze',
-    'vault_write',
-    'vault_daily',
+    'vault',
   ],
 };
 

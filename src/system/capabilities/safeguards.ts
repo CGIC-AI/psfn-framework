@@ -79,6 +79,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   skill: 'irreversible',
   self_restart: 'irreversible',
   self_rebuild: 'irreversible',
+  notify: 'irreversible',
   notify_operator: 'irreversible',
   spawn_subagent: 'irreversible',
   think: 'reversible',

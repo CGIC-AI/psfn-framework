@@ -97,6 +97,17 @@ function resolveUnifiedToolRequirement(
       if (action === 'create' || action === 'update') return 'issue.write';
       if (action === 'close' || action === 'sync') return 'issue.close';
       return ['issue.read', 'issue.write', 'issue.close'];
+    case 'notify':
+      if (action === 'brief' || action === 'notify_operator' || action === 'approval_request') return 'external.web';
+      if (action === 'send') {
+        const channel = typeof params.delivery_channel === 'string'
+          ? params.delivery_channel.trim()
+          : '';
+        if (channel === 'discord') return 'external.discord';
+        if (channel === 'email') return 'external.email';
+        return ['external.discord', 'external.email'];
+      }
+      return ['external.web', 'external.discord', 'external.email'];
     default:
       return null;
   }

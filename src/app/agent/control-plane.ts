@@ -6,7 +6,12 @@ import {
 } from '../../system/lifecycle/notifications.js';
 import { resolveRuntimeCommandInvocation } from '../../system/lifecycle/runtime-mode.js';
 import { createRestartTool, createRebuildTool } from '../../core/tools/lifecycle.js';
-import { createNotifyOperatorTool, type NotificationPort } from '../../core/tools/ntfy.js';
+import {
+  createGatewayDiscordNotifySender,
+  createNotifyDispatcher,
+  createNotifyTool,
+  type NotificationPort,
+} from '../../core/tools/ntfy.js';
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -171,14 +176,15 @@ export function buildAgentControlPlane(
       },
     },
   ));
-  agentLoop.registerTool(createNotifyOperatorTool(
-    operatorNotifier,
-    {
-      rateLimiter: externalRateLimiter,
-      defaultChannel: 'discord',
-      gatewayMode: true,
-    },
-  ));
+  agentLoop.registerTool(createNotifyTool(createNotifyDispatcher({
+    briefNotifier: operatorNotifier,
+    channelSender: createGatewayDiscordNotifySender(gateway),
+    operatorDiscordChannelId: heartbeatChannelId,
+    rateLimiter: externalRateLimiter,
+    defaultBudgetChannel: 'discord',
+  }), {
+    gatewayMode: true,
+  }));
 
   return { lifecycleNotifier, stopFn };
 }

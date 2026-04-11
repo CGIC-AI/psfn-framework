@@ -63,6 +63,7 @@ import {
   createHeartbeatUpdatePolicyTool,
   createScheduleTaskTool,
 } from '../../../core/scheduler/heartbeat-tools.js';
+import { createScheduleTool } from '../../../core/scheduler/schedule-tool.js';
 import type { ReflectionTemplate } from '../../../core/scheduler/heartbeat-policy.js';
 import type { MemoryWriter } from '../../../faculties/memory/writer.js';
 import { ValuesJournalStore } from '../../../faculties/values/store.js';
@@ -117,6 +118,8 @@ import {
   type ActiveConcernSnapshot,
   type IntentionActionDecision,
 } from '../../../core/intention/appraisal.js';
+import type { PendingFollowUpStorePort } from '../../../core/intention/pending-follow-ups.js';
+import type { CareReminderStore } from '../../../core/intention/care-reminders.js';
 import { MotivationBridge } from '../../../core/intention/motivation.js';
 import {
   buildInternalStateSnapshotRef,
@@ -125,6 +128,7 @@ import {
   type InternalState,
 } from '../../../core/self-model/state.js';
 import { createSystemTool } from '../../../core/tools/lifecycle.js';
+import { createLegacyAliasTelemetryEmitter } from '../../../core/tools/legacy-alias-telemetry.js';
 
 const log = createComponentLogger('SharedWiring');
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
@@ -206,6 +210,8 @@ interface HeartbeatRuntimeOptions {
     emotionSnapshot: EmotionStateSnapshot;
     observedAtMs?: number;
   }) => Promise<void> | void;
+  pendingFollowUpStore?: PendingFollowUpStorePort | null;
+  careReminderStore?: CareReminderStore | null;
   coreMemoryStore?: Pick<CoreMemoryStorePort, 'getSnapshot' | 'rethink'>;
   sleeptimeCadenceTurns?: number;
   intentionAppraisalEnabled?: boolean;
@@ -1638,7 +1644,22 @@ export function wireHeartbeatRuntime(
   syncReflectionTasks();
 
   // Register tools
-  target.registerTool(createHeartbeatGetPolicyTool(store), 'core');
+  target.registerTool(createScheduleTool({
+    scheduler,
+    agentLoop,
+    sender,
+    heartbeatPolicyStore: store,
+    syncReflectionTasks,
+    runTemplate: runTemplateNow,
+    heartbeatChannelId,
+    memoryWriter: runtimeOptions.memoryWriter,
+    pendingFollowUpStore: runtimeOptions.pendingFollowUpStore ?? null,
+    careReminderStore: runtimeOptions.careReminderStore ?? null,
+    emitLegacyAliasTelemetry: runtimeOptions.eventBus
+      ? createLegacyAliasTelemetryEmitter(runtimeOptions.eventBus)
+      : undefined,
+  }), 'core');
+  target.registerTool(createHeartbeatGetPolicyTool(store), 'extended');
   target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks), 'extended');
   target.registerTool(createHeartbeatRunTemplateTool(store, runTemplateNow), 'extended');
   target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId), 'extended');

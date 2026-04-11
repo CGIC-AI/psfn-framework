@@ -66,7 +66,7 @@ const SHARD_TOOLSET_ALL = '*';
 const SHARD_SYNC_POLICY_VERSION = 1;
 const SHARD_SYNC_MEMORY_TARGET = 'memory:index';
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
-const BLOCKED_SHARD_TOOL_NAMES = new Set(['spawn_subagent', 'load_tools']);
+const BLOCKED_SHARD_TOOL_NAMES = new Set(['subagent', 'spawn_subagent', 'load_tools']);
 const APPRENTICE_SHARD_TOOL_EXTRAS = [
   'contact_list',
   'memory_import_batch',

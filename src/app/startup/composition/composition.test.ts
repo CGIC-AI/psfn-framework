@@ -98,15 +98,21 @@ function makeGatewayLLM(
 class FakeSubstrateAgent {
   memoryProvider = null;
   tools: AgentTool<any>[] = [];
+  registrations: Array<{ tool: AgentTool<any>; category: 'core' | 'extended' }> = [];
 
-  registerTool(tool: AgentTool<any>, _category?: 'core' | 'extended'): void {
+  registerTool(tool: AgentTool<any>, category: 'core' | 'extended' = 'core'): void {
     this.tools.push(tool);
+    this.registrations.push({ tool, category });
   }
 
   getToolCatalog(): { core: readonly AgentTool<any>[]; extended: readonly AgentTool<any>[] } {
     return {
-      core: this.tools,
-      extended: [],
+      core: this.registrations
+        .filter((entry) => entry.category === 'core')
+        .map((entry) => entry.tool),
+      extended: this.registrations
+        .filter((entry) => entry.category === 'extended')
+        .map((entry) => entry.tool),
     };
   }
 
@@ -209,6 +215,23 @@ function wireSplitThinkTool(options: {
 }
 
 describe('wireShardAndThinkRuntime split-mode module wiring', () => {
+  it('registers subagent as the canonical core surface and keeps spawn_subagent as extended compatibility', () => {
+    const llm: GatewayLLMProvider = {
+      stream: vi.fn(),
+      complete: vi.fn(async () => mockResponse('FINAL("noop")')),
+      fsRead: vi.fn(async () => '[]'),
+      fsWrite: vi.fn(async () => undefined),
+    };
+    const target = wireSplitThinkTool({
+      tier: 'autonomous',
+      llmProvider: llm,
+      eventBus: new EventBus(),
+    });
+
+    expect(target.registrations.find((entry) => entry.tool.name === 'subagent')?.category).toBe('core');
+    expect(target.registrations.find((entry) => entry.tool.name === 'spawn_subagent')?.category).toBe('extended');
+  });
+
   it('denies module_install for nursery tier', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-split-nursery-'));
     const registryPath = join(root, 'registry.json');

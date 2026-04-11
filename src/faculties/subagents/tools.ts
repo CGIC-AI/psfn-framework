@@ -1,6 +1,7 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
+import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import type { SubagentControlPort } from './port.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -163,12 +164,15 @@ export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
     },
   };
 
-  return withCapabilityRequirement(tool, (params) => {
-    const action = typeof params.action === 'string' ? params.action : 'spawn';
-    return action === 'status' || action === 'wait'
-      ? 'identity.read'
-      : 'shard.spawn';
-  });
+  return tagToolWithReversibility(
+    withCapabilityRequirement(tool, (params) => {
+      const action = typeof params.action === 'string' ? params.action : 'spawn';
+      return action === 'status' || action === 'wait'
+        ? 'identity.read'
+        : 'shard.spawn';
+    }),
+    'irreversible',
+  );
 }
 
 function formatPayload(payload: Record<string, unknown>): string {

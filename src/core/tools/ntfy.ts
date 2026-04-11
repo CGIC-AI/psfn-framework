@@ -526,7 +526,7 @@ export async function deliverApprovalRequestNotification(options: {
   try {
     const result = await options.briefNotifier.notify({
       message: notification,
-      title: 'PSFN approval required',
+      title: 'Companion approval required',
       priority: DEFAULT_APPROVAL_REQUEST_PRIORITY,
       topic: options.operatorNtfyTopic,
     });

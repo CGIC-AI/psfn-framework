@@ -65,6 +65,11 @@ export interface WyomingShardDelegationHint {
   reason: string;
 }
 
+export interface GatewayRoutingMetadata {
+  schemaVersion: 1;
+  companionId: string;
+}
+
 export interface WyomingRoutingMetadata {
   connectionId?: string;
   sessionId?: string;
@@ -97,6 +102,7 @@ export interface ModelControlKnobs {
 export interface LLMModelHint extends ModelControlKnobs {
   model?: string;
   provider?: string;
+  pin?: boolean;
 }
 
 export interface MessageModelOverride extends ModelControlKnobs {
@@ -162,6 +168,7 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
 
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'unknown';
+  gateway?: GatewayRoutingMetadata;
   wyoming?: WyomingRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;
   channelPrivacy?: ChannelVisibility;

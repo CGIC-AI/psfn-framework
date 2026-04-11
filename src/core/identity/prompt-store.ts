@@ -83,6 +83,79 @@ function validatePriority(priority: unknown): number {
   return priority;
 }
 
+function validateStoredPromptLayer(layer: unknown, index: number): PromptLayer {
+  if (!layer || typeof layer !== 'object' || Array.isArray(layer)) {
+    throw new Error(`layers[${String(index)}] must be an object`);
+  }
+
+  const candidate = layer as Record<string, unknown>;
+  if (typeof candidate.id !== 'string' || candidate.id.trim().length === 0) {
+    throw new Error(`layers[${String(index)}].id must be a non-empty string`);
+  }
+  if (typeof candidate.type !== 'string' || !(candidate.type in LAYER_TYPE_ORDER)) {
+    throw new Error(`layers[${String(index)}].type is invalid`);
+  }
+  if (typeof candidate.name !== 'string' || candidate.name.trim().length === 0) {
+    throw new Error(`layers[${String(index)}].name must be a non-empty string`);
+  }
+  if (typeof candidate.content !== 'string') {
+    throw new Error(`layers[${String(index)}].content must be a string`);
+  }
+  if (typeof candidate.enabled !== 'boolean') {
+    throw new Error(`layers[${String(index)}].enabled must be a boolean`);
+  }
+  if (typeof candidate.priority !== 'number' || !Number.isInteger(candidate.priority)) {
+    throw new Error(`layers[${String(index)}].priority must be an integer`);
+  }
+  if (typeof candidate.updatedAt !== 'string' || !Number.isFinite(Date.parse(candidate.updatedAt))) {
+    throw new Error(`layers[${String(index)}].updatedAt must be an ISO timestamp`);
+  }
+  if (typeof candidate.updatedBy !== 'string' || candidate.updatedBy.trim().length === 0) {
+    throw new Error(`layers[${String(index)}].updatedBy must be a non-empty string`);
+  }
+  if (typeof candidate.checksum !== 'string') {
+    throw new Error(`layers[${String(index)}].checksum must be a string`);
+  }
+  const expectedChecksum = contentChecksum(candidate.content);
+  if (candidate.checksum !== expectedChecksum) {
+    throw new Error(`layers[${String(index)}].checksum does not match content`);
+  }
+  if (typeof candidate.version !== 'number' || !Number.isInteger(candidate.version) || candidate.version < 1) {
+    throw new Error(`layers[${String(index)}].version must be an integer >= 1`);
+  }
+
+  const role = validatePromptRole(candidate.role);
+  const promptOrder = validatePromptOrder(candidate.promptOrder);
+  const identifier = normalizePromptIdentifier(
+    typeof candidate.identifier === 'string' ? candidate.identifier : undefined,
+  );
+
+  if (candidate.channelType !== undefined && typeof candidate.channelType !== 'string') {
+    throw new Error(`layers[${String(index)}].channelType must be a string when provided`);
+  }
+  if (candidate.taskKind !== undefined && typeof candidate.taskKind !== 'string') {
+    throw new Error(`layers[${String(index)}].taskKind must be a string when provided`);
+  }
+
+  return {
+    id: candidate.id,
+    type: candidate.type as LayerType,
+    name: candidate.name,
+    ...(identifier ? { identifier } : {}),
+    ...(role ? { role } : {}),
+    ...(promptOrder !== undefined ? { promptOrder } : {}),
+    content: candidate.content,
+    enabled: candidate.enabled,
+    priority: candidate.priority,
+    ...(typeof candidate.channelType === 'string' ? { channelType: candidate.channelType } : {}),
+    ...(typeof candidate.taskKind === 'string' ? { taskKind: candidate.taskKind } : {}),
+    updatedAt: new Date(candidate.updatedAt).toISOString(),
+    updatedBy: candidate.updatedBy.trim(),
+    checksum: candidate.checksum,
+    version: candidate.version,
+  };
+}
+
 function historyLinePreview(line: string): string {
   const compact = line.trim().replace(/\s+/g, ' ');
   if (compact.length <= 120) return compact;
@@ -118,26 +191,39 @@ export interface PromptLayerUpdatePatch {
   metadata?: PromptLayerMetadataUpdate;
 }
 
+export interface PromptLayerStoreOptions {
+  throwOnLoadError?: boolean;
+}
+
 export class PromptLayerStore {
   private filePath: string;
   private historyPath: string;
   private layers: PromptLayer[] = [];
+  private readonly throwOnLoadError: boolean;
 
-  constructor(filePath: string, historyPath: string) {
+  constructor(filePath: string, historyPath: string, options: PromptLayerStoreOptions = {}) {
     this.filePath = filePath;
     this.historyPath = historyPath;
+    this.throwOnLoadError = options.throwOnLoadError !== false;
     this.load();
   }
 
   private load(): void {
     try {
-      if (existsSync(this.filePath)) {
-        const raw = readFileSync(this.filePath, 'utf-8');
-        this.layers = JSON.parse(raw);
+      if (!existsSync(this.filePath)) return;
+      const raw = readFileSync(this.filePath, 'utf-8');
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        throw new Error('prompt layers file must contain a JSON array');
       }
+      this.layers = parsed.map((layer, index) => validateStoredPromptLayer(layer, index));
     } catch (err) {
       log.error('Failed to load prompt layers', { error: String(err) });
-      this.layers = [];
+      if (!this.throwOnLoadError) {
+        this.layers = [];
+        return;
+      }
+      throw new Error(`Failed to load prompt layers from ${this.filePath}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -150,6 +236,9 @@ export class PromptLayerStore {
       appendJsonLine(this.historyPath, entry);
     } catch (err) {
       log.error('Failed to write prompt history', { error: String(err) });
+      throw new Error(
+        `Failed to write prompt history to ${this.historyPath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 

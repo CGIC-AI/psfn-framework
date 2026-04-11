@@ -930,7 +930,7 @@ describe('ApiServer', () => {
       expect(body.error.type).toBe('invalid_json');
     });
 
-    it('queues same-session in-flight contention through follow-up delivery', async () => {
+    it('queues same-session in-flight contention through follow-up delivery when supported', async () => {
       const deferred = createDeferred<AgentResponse>();
       const mockAgent = {
         handleMessage: vi.fn().mockImplementationOnce(async () => deferred.promise),
@@ -982,7 +982,135 @@ describe('ApiServer', () => {
       expect(second.status).toBe(200);
       expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);
       expect(mockAgent.followUp).toHaveBeenCalledTimes(1);
+      const queuedFollowUp = (mockAgent.followUp as ReturnType<typeof vi.fn>).mock.calls[0][0] as SubstrateMessage;
+      expect(queuedFollowUp.authorId).toBe(INSECURE_LOCAL_API_PRINCIPAL_ID);
+      expect(queuedFollowUp.channelId).toBe(insecureSessionChannel('same-session'));
       expect(JSON.parse(second.body).choices[0].message.content).toBe('Second done');
+    });
+
+    it('falls back to channel lock delivery when queued same-session follow-up is unavailable', async () => {
+      const deferred = createDeferred<AgentResponse>();
+      const mockAgent = {
+        handleMessage: vi
+          .fn()
+          .mockImplementationOnce(async () => deferred.promise)
+          .mockResolvedValue({
+            content: 'Second done',
+            channelId: insecureSessionChannel('same-session-fallback'),
+            metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+          }),
+      } as unknown as SubstrateAgent;
+
+      await server.stop();
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const firstRequest = request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'First' }],
+      }, { 'X-Session-ID': 'same-session-fallback' });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      const secondRequest = request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Second' }],
+      }, { 'X-Session-ID': 'same-session-fallback' });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);
+
+      deferred.resolve({
+        content: 'First done',
+        channelId: insecureSessionChannel('same-session-fallback'),
+        metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+      });
+
+      const first = await firstRequest;
+      const second = await secondRequest;
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(mockAgent.handleMessage).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(second.body).choices[0].message.content).toBe('Second done');
+    });
+
+    it('does not seed queued session history before the active turn releases the channel', async () => {
+      const deferred = createDeferred<AgentResponse>();
+      let sessionMessageCount = 0;
+      const recordUserMessage = vi.fn(() => {
+        sessionMessageCount += 1;
+      });
+      const recordAssistantMessage = vi.fn(() => {
+        sessionMessageCount += 1;
+      });
+      const mockSessionManager = {
+        getMessageCount: vi.fn(() => sessionMessageCount),
+        recordUserMessage,
+        recordAssistantMessage,
+      } as unknown as SessionManager;
+      const mockAgent = {
+        handleMessage: vi
+          .fn()
+          .mockImplementationOnce(async () => deferred.promise)
+          .mockResolvedValue({
+            content: 'Second done',
+            channelId: insecureSessionChannel('seed-queue'),
+            metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+          }),
+      } as unknown as SubstrateAgent;
+
+      await server.stop();
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: mockSessionManager,
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const firstRequest = request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'First' }],
+      }, { 'X-Session-ID': 'seed-queue' });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      const secondRequest = request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [
+          { role: 'assistant', content: 'Queued assistant context' },
+          { role: 'user', content: 'Second' },
+        ],
+      }, { 'X-Session-ID': 'seed-queue' });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(recordAssistantMessage).not.toHaveBeenCalled();
+      expect(recordUserMessage).not.toHaveBeenCalled();
+
+      deferred.resolve({
+        content: 'First done',
+        channelId: insecureSessionChannel('seed-queue'),
+        metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+      });
+
+      const first = await firstRequest;
+      const second = await secondRequest;
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(recordAssistantMessage).toHaveBeenCalledTimes(1);
+      expect(recordAssistantMessage).toHaveBeenCalledWith(
+        insecureSessionChannel('seed-queue'),
+        'Queued assistant context',
+      );
     });
 
     it('emits queue telemetry for queued API contention', async () => {
@@ -992,14 +1120,14 @@ describe('ApiServer', () => {
         queueEvents.push(event as unknown as Record<string, unknown>);
       });
       const mockAgent = {
-        handleMessage: vi.fn().mockImplementationOnce(async () => deferred.promise),
-        followUp: vi.fn((message: SubstrateMessage) => {
-          emitQueuedTurnResult(eventBus, message, {
+        handleMessage: vi
+          .fn()
+          .mockImplementationOnce(async () => deferred.promise)
+          .mockResolvedValue({
             content: 'Second telemetry turn',
             channelId: insecureSessionChannel('queue-telemetry'),
             metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
-          });
-        }),
+          }),
       } as unknown as SubstrateAgent;
 
       await server.stop();

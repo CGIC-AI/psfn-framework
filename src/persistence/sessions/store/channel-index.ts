@@ -6,6 +6,7 @@ import { writeJsonAtomic } from '../../../shared/utils/fs.js';
 import {
   journalToMarkerEntry,
   readJournalFirstEntry,
+  readJournalTailEntries,
   scanJournalFileMetadata,
 } from '../../journals/journal-utils.js';
 import type { JournalEntry } from '../../../core/session/types.js';
@@ -17,6 +18,8 @@ import {
   normalizeOptionalJournalType,
   normalizeOptionalMarker,
   normalizeOptionalNonNegativeNumber,
+  normalizeOptionalSessionEntryRole,
+  normalizeOptionalString,
   type ChannelCache,
   type ChannelIndexEntry,
   type ChannelIndexFile,
@@ -37,6 +40,15 @@ import {
 } from './session-index-keys.js';
 
 const log = createComponentLogger('SessionStore');
+const DEFAULT_MESSAGE_PREVIEW_CHARS = 120;
+
+function toMessagePreview(content: string, maxChars = DEFAULT_MESSAGE_PREVIEW_CHARS): string {
+  const normalized = content.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxChars - 3)}...`;
+}
 
 export function parseChannelIndexEntry(raw: unknown): ChannelIndexEntry | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -59,6 +71,18 @@ export function parseChannelIndexEntry(raw: unknown): ChannelIndexEntry | null {
 
   const lastTimestamp = normalizeOptionalNonNegativeNumber(row.lastTimestamp);
   if (lastTimestamp !== undefined) entry.lastTimestamp = lastTimestamp;
+
+  const lastMessageTimestamp = normalizeOptionalNonNegativeNumber(row.lastMessageTimestamp);
+  if (lastMessageTimestamp !== undefined) entry.lastMessageTimestamp = lastMessageTimestamp;
+
+  const lastMessageRole = normalizeOptionalSessionEntryRole(row.lastMessageRole);
+  if (lastMessageRole !== undefined) entry.lastMessageRole = lastMessageRole;
+
+  const lastMessageAuthorName = normalizeOptionalString(row.lastMessageAuthorName);
+  if (lastMessageAuthorName !== undefined) entry.lastMessageAuthorName = lastMessageAuthorName;
+
+  const lastMessagePreview = normalizeOptionalString(row.lastMessagePreview);
+  if (lastMessagePreview !== undefined) entry.lastMessagePreview = lastMessagePreview;
 
   const maxId = normalizeOptionalNonNegativeNumber(row.maxId);
   if (maxId !== undefined) entry.maxId = maxId;
@@ -144,6 +168,13 @@ export function isIndexEntryComplete(entry: ChannelIndexEntry): boolean {
   const maxId = normalizeOptionalNonNegativeNumber(entry.maxId);
   if (maxId === undefined) return false;
 
+  const messageCount = normalizeOptionalNonNegativeNumber(entry.messageCount) ?? 0;
+  if (messageCount > 0) {
+    if (normalizeOptionalNonNegativeNumber(entry.lastMessageTimestamp) === undefined) return false;
+    if (!normalizeOptionalSessionEntryRole(entry.lastMessageRole)) return false;
+    if (normalizeOptionalString(entry.lastMessagePreview) === undefined) return false;
+  }
+
   if (normalizeOptionalNonNegativeNumber(entry.lastExtractionCoveredUpTo) === undefined) return false;
 
   if (maxId === 0) return true;
@@ -153,6 +184,48 @@ export function isIndexEntryComplete(entry: ChannelIndexEntry): boolean {
   if (type === 'marker' && !normalizeOptionalMarker(entry.lastMarker)) return false;
 
   return true;
+}
+
+function readLastMessageEntry(filePath: string): JournalEntry | null {
+  const tail = readJournalTailEntries(filePath, {
+    messageLimit: 1,
+    includeBoundaryEntry: false,
+  });
+  for (let index = tail.entries.length - 1; index >= 0; index -= 1) {
+    const candidate = tail.entries[index];
+    if (candidate.type === 'message') {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function enrichIndexEntryWithLastMessage(entry: ChannelIndexEntry, filePath: string): ChannelIndexEntry {
+  const messageCount = normalizeOptionalNonNegativeNumber(entry.messageCount) ?? 0;
+  if (messageCount <= 0) {
+    return {
+      ...entry,
+      lastMessageTimestamp: 0,
+      lastMessageRole: null,
+      lastMessageAuthorName: undefined,
+      lastMessagePreview: undefined,
+    };
+  }
+
+  const lastMessageEntry = readLastMessageEntry(filePath);
+  if (!lastMessageEntry) {
+    return entry;
+  }
+
+  return {
+    ...entry,
+    lastMessageTimestamp: lastMessageEntry.timestamp,
+    lastMessageRole: normalizeOptionalSessionEntryRole(lastMessageEntry.role) ?? null,
+    lastMessageAuthorName: normalizeOptionalString(lastMessageEntry.authorName),
+    lastMessagePreview: typeof lastMessageEntry.content === 'string'
+      ? toMessagePreview(lastMessageEntry.content)
+      : undefined,
+  };
 }
 
 export function buildIndexEntry(
@@ -172,6 +245,7 @@ export function buildIndexEntry(
   }
 
   const marker = metadata.lastEntry ? journalToMarkerEntry(metadata.lastEntry) : null;
+  const lastMessageEntry = metadata.messageCount > 0 ? readLastMessageEntry(filePath) : null;
 
   return {
     channelId,
@@ -179,6 +253,12 @@ export function buildIndexEntry(
     messageCount: metadata.messageCount,
     activeTurnTombstoneCount: metadata.activeTurnTombstoneCount,
     lastTimestamp: metadata.lastTimestamp,
+    lastMessageTimestamp: lastMessageEntry?.timestamp,
+    lastMessageRole: normalizeOptionalSessionEntryRole(lastMessageEntry?.role) ?? null,
+    lastMessageAuthorName: normalizeOptionalString(lastMessageEntry?.authorName),
+    lastMessagePreview: typeof lastMessageEntry?.content === 'string'
+      ? toMessagePreview(lastMessageEntry.content)
+      : undefined,
     maxId: metadata.maxId,
     lastHmac: metadata.lastHmac,
     lastExtractionCoveredUpTo: metadata.lastExtractionCoveredUpTo,
@@ -207,9 +287,21 @@ export function ensureChannelIndexEntry(params: {
     existing
     && existing.filename === filename
     && indexedChannelId(params.sessionId, existing) === params.channelId
-    && isIndexEntryComplete(existing)
   ) {
-    return existing;
+    if (isIndexEntryComplete(existing)) {
+      return existing;
+    }
+
+    const enriched = enrichIndexEntryWithLastMessage(existing, params.filePath);
+    if (isIndexEntryComplete(enriched)) {
+      upsertChannelIndex(
+        params.sessionId,
+        enriched,
+        params.channelIndexPath,
+        params.channelIndex,
+      );
+      return enriched;
+    }
   }
 
   const rebuilt = buildIndexEntry(
@@ -235,6 +327,10 @@ export function snapshotIndexEntry(cache: ChannelCache): ChannelIndexEntry {
     messageCount: cache.messageCount,
     activeTurnTombstoneCount: cache.activeTurnTombstoneCount,
     lastTimestamp: cache.lastTimestamp,
+    lastMessageTimestamp: cache.lastMessageTimestamp,
+    lastMessageRole: cache.lastMessageRole,
+    lastMessageAuthorName: cache.lastMessageAuthorName,
+    lastMessagePreview: cache.lastMessagePreview || undefined,
     maxId: cache.nextId - 1,
     lastHmac: cache.lastHmac,
     lastExtractionCoveredUpTo: cache.lastExtractionCoveredUpTo,
@@ -349,6 +445,7 @@ export function createLightweightCache(
   const maxId = normalizeOptionalNonNegativeNumber(indexEntry.maxId) ?? 0;
   const messageCount = normalizeOptionalNonNegativeNumber(indexEntry.messageCount) ?? 0;
   const lastTimestamp = normalizeOptionalNonNegativeNumber(indexEntry.lastTimestamp) ?? 0;
+  const lastMessageTimestamp = normalizeOptionalNonNegativeNumber(indexEntry.lastMessageTimestamp) ?? 0;
 
   return {
     channelId,
@@ -363,7 +460,12 @@ export function createLightweightCache(
     resolvedPath: filePath,
     messageCount,
     lastTimestamp,
+    lastMessageTimestamp,
+    lastMessageRole: normalizeOptionalSessionEntryRole(indexEntry.lastMessageRole) ?? null,
+    lastMessageAuthorName: normalizeOptionalString(indexEntry.lastMessageAuthorName),
+    lastMessagePreview: normalizeOptionalString(indexEntry.lastMessagePreview) ?? '',
     fullyLoaded: false,
+    recentEntriesByLimit: new Map(),
   };
 }
 

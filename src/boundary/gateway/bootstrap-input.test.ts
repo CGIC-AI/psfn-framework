@@ -58,6 +58,8 @@ function createConfig(): SubstrateConfig {
     embeddingApiUrl: 'https://embedding.local',
     embeddingApiModel: 'embed-model',
     embeddingApiDims: 384,
+    characterCardPath: '/workspace/companion-data/companion.json',
+    companionDataDir: '/companion-data',
     wyomingEnabled: false,
     telegramEnabled: false,
     capabilityTier: 'nursery',
@@ -122,6 +124,10 @@ describe('resolveGatewayBootstrapInput', () => {
       token: 'ntfy-token',
     });
     expect(bootstrap.policyConfig.workspacePath).toBe('/workspace');
+    expect(bootstrap.policyConfig.beads).toEqual({
+      enabled: true,
+      allowActions: ['ready', 'show', 'create', 'update', 'close', 'sync'],
+    });
     expect(bootstrap.providerEnv.OPENAI_API_KEY).toBe('openai-secret');
     expect(bootstrap.discordStartRetry).toEqual({
       baseDelayMs: 11,
@@ -149,6 +155,23 @@ describe('resolveGatewayBootstrapInput', () => {
         enabled: false,
         allowedUsers: ['primary-user'],
       },
+    });
+  });
+
+  it('honors an explicit BEADS_TOOLS_ENABLED=false override', () => {
+    const bootstrap = resolveGatewayBootstrapInput({
+      config: createConfig(),
+      env: {
+        PSFN_RUNTIME_MODE: 'split',
+        WORKSPACE_PATH: '/workspace',
+        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        BEADS_TOOLS_ENABLED: 'false',
+      },
+      startupHydration: createStartupHydration(),
+    });
+
+    expect(bootstrap.policyConfig.beads).toEqual({
+      enabled: false,
     });
   });
 });

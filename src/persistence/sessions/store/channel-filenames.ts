@@ -5,12 +5,12 @@ import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { readJournalFirstEntry } from '../../journals/journal-utils.js';
 import {
   IMPORT_MANIFEST_FILENAME,
-  READABLE_SESSION_FILENAME,
   formatDateUTC,
+  READABLE_SESSION_FILENAME,
   sanitizeChannelId,
   toSlug,
   type SessionFileSeed,
-} from '../store-primitives.js';
+} from '../store-file-contracts.js';
 
 const log = createComponentLogger('SessionStore');
 

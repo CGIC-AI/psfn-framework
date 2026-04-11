@@ -3,6 +3,7 @@ import { parseEnvList, parsePositiveIntEnv } from '../../../shared/utils/env.js'
 export interface ShellExecPolicyConfig {
   enabled?: boolean;
   allowlist?: string[];
+  envAllowlist?: string[];
   allowedCwd?: string[];
   defaultTimeoutMs?: number;
   maxTimeoutMs?: number;
@@ -27,11 +28,13 @@ export function buildShellExecPolicyConfig(
   env: NodeJS.ProcessEnv,
 ): ShellExecPolicyConfig {
   const allowlist = parseEnvList(env.SHELL_EXEC_ALLOWLIST, { separators: [','] });
+  const envAllowlist = parseEnvList(env.SHELL_EXEC_ENV_ALLOWLIST, { separators: [','] });
   const allowedCwd = parseEnvList(env.SHELL_EXEC_ALLOWED_CWD, { separators: [','] });
 
   return {
     enabled: parseBooleanEnvWithFallback(env.SHELL_EXEC_ENABLED, false),
     ...(allowlist ? { allowlist } : {}),
+    ...(envAllowlist ? { envAllowlist } : {}),
     ...(allowedCwd ? { allowedCwd } : {}),
     defaultTimeoutMs: parsePositiveIntEnv(
       env.SHELL_EXEC_DEFAULT_TIMEOUT_MS,

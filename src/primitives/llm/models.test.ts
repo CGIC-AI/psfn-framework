@@ -73,6 +73,19 @@ describe('createModel', () => {
     expect(model.contextWindow).toBe(128_000);
     expect(model.maxTokens).toBe(4096);
   });
+
+  it('can preserve routed vision capability when the registry marks the model as vision-capable', () => {
+    const model = createModel(
+      'http://localhost:4000/v1',
+      'openrouter/google/gemini-3-flash-preview',
+      16_384,
+      1_048_576,
+      'openai-completions',
+      { supportsVision: true },
+    );
+
+    expect(model.input).toEqual(['text', 'image']);
+  });
 });
 
 describe('resolveSystemRoleCapabilityMetadata', () => {

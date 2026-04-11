@@ -10,6 +10,15 @@ const DEFAULT_KEY_VERSION = 'v1';
 const HMAC_DIGEST = 'sha256';
 const HEX_SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 
+function appendUniqueChainCandidate(
+  target: Array<string | null>,
+  candidate: string | null | undefined,
+): void {
+  if (candidate === undefined) return;
+  if (target.some(existing => existing === candidate)) return;
+  target.push(candidate);
+}
+
 function stableNormalize(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(stableNormalize);
@@ -142,15 +151,8 @@ export function verifyJournalEntryIntegrity(
     return {
       verified: false,
       observedHmac,
+      expectedHmac: null,
       reason: 'missing_signature',
-    };
-  }
-
-  if (!HEX_SHA256_PATTERN.test(observedHmac)) {
-    return {
-      verified: false,
-      observedHmac,
-      reason: 'invalid_signature_format',
     };
   }
 
@@ -159,17 +161,28 @@ export function verifyJournalEntryIntegrity(
     return {
       verified: false,
       observedHmac,
+      expectedHmac: null,
       reason: 'unknown_key_version',
     };
   }
 
   const expected = computeJournalEntryHmac(entry, key, keyVersion, previousHmac);
+  if (!HEX_SHA256_PATTERN.test(observedHmac)) {
+    return {
+      verified: false,
+      observedHmac,
+      expectedHmac: expected,
+      reason: 'invalid_signature_format',
+    };
+  }
+
   const expectedBuf = Buffer.from(expected, 'hex');
   const observedBuf = Buffer.from(observedHmac, 'hex');
   if (expectedBuf.length !== observedBuf.length) {
     return {
       verified: false,
       observedHmac,
+      expectedHmac: expected,
       reason: 'signature_length_mismatch',
     };
   }
@@ -178,8 +191,39 @@ export function verifyJournalEntryIntegrity(
   return {
     verified: isMatch,
     observedHmac,
+    expectedHmac: expected,
     reason: isMatch ? undefined : 'signature_mismatch',
   };
+}
+
+export function resolveJournalIntegrityChainCandidates(
+  verification: JournalIntegrityVerificationResult,
+  previousHmac: string | null,
+): Array<string | null> {
+  const nextCandidates: Array<string | null> = [];
+
+  if (verification.verified) {
+    appendUniqueChainCandidate(nextCandidates, verification.observedHmac);
+  } else if (verification.reason === 'signature_mismatch' || verification.reason === 'unknown_key_version') {
+    // The stored HMAC is still the anchor that downstream entries were chained against.
+    appendUniqueChainCandidate(nextCandidates, verification.observedHmac);
+  } else if (
+    verification.reason === 'invalid_signature_format'
+    || verification.reason === 'signature_length_mismatch'
+    || verification.reason === 'missing_signature'
+  ) {
+    // The signature field itself is missing/corrupted, so the recomputed HMAC is our
+    // best chance to recover the original downstream chain without branching.
+    appendUniqueChainCandidate(nextCandidates, verification.expectedHmac);
+  } else {
+    appendUniqueChainCandidate(nextCandidates, verification.observedHmac);
+    appendUniqueChainCandidate(nextCandidates, verification.expectedHmac);
+  }
+
+  if (nextCandidates.length === 0) {
+    appendUniqueChainCandidate(nextCandidates, previousHmac);
+  }
+  return nextCandidates;
 }
 
 export function wrapUnverifiedHistory(content: string, reason?: string): string {

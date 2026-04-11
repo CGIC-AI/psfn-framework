@@ -649,6 +649,24 @@ describe('REPLSandbox', () => {
     expect(result.output).toBe('0');
   });
 
+  it('memory_count uses countActiveMemories when available', async () => {
+    const memoryStore = {
+      countActiveMemories: vi.fn(async () => 7),
+    } as unknown as MemoryStore;
+
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService: null,
+      memoryStore,
+      sessionManager: null,
+    });
+
+    const result = await sandbox.execute('print(await memory_count());', 5000, 8192);
+
+    expect(result.output).toBe('7');
+    expect((memoryStore.countActiveMemories as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+  });
+
   it('memory_write stamps repl provenance sourceRef', async () => {
     const embedding = new Float32Array([1, 0, 0]);
     const embeddingService = {
@@ -682,6 +700,39 @@ describe('REPLSandbox', () => {
     expect((memoryStore.insertMemory as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
     const insertedMemory = (memoryStore.insertMemory as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(insertedMemory.sourceRef).toMatch(/^source:repl\|operation:memory_write\|invocation:repl-/);
+  });
+
+  it('memory_write returns a structured error when the backend write fails', async () => {
+    const embedding = new Float32Array([1, 0, 0]);
+    const embeddingService = {
+      embed: vi.fn(async () => embedding),
+      embedBatch: vi.fn(),
+      dims: 3,
+    } as unknown as EmbeddingProviderPort;
+
+    const memoryStore = {
+      searchByEmbedding: vi.fn(() => []),
+      persistMemoryWrite: vi.fn(async () => {
+        throw new Error('persist failed');
+      }),
+    } as unknown as MemoryStore;
+
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService,
+      memoryStore,
+      sessionManager: null,
+    });
+
+    const result = await sandbox.execute(
+      'const r = await memory_write("from repl", "semantic"); print(r.action); print(r.id);',
+      5000,
+      8192,
+    );
+
+    expect(result.error).toBeNull();
+    expect(result.output).toContain('error');
+    expect(result.output).toContain('persist failed');
   });
 
   it('getLocals returns user-defined variables', async () => {
@@ -828,6 +879,38 @@ describe('REPLSandbox', () => {
 
     expect(result.output).toContain('abstracted');
     expect(result.output).toContain('true');
+  });
+
+  it('memory_redact returns a structured error when the backend redact path fails', async () => {
+    const embedding = new Float32Array([1, 0, 0]);
+    const embeddingService = {
+      embed: vi.fn(async () => embedding),
+      embedBatch: vi.fn(),
+      dims: 3,
+    } as unknown as EmbeddingProviderPort;
+
+    const memoryStore = {
+      getById: vi.fn(() => {
+        throw new Error('lookup failed');
+      }),
+    } as unknown as MemoryStore;
+
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService,
+      memoryStore,
+      sessionManager: null,
+    });
+
+    const result = await sandbox.execute(
+      'const r = await memory_redact("mem-1", "auto"); print(r.operation); print(r.sourceId);',
+      5000,
+      8192,
+    );
+
+    expect(result.error).toBeNull();
+    expect(result.output).toContain('error');
+    expect(result.output).toContain('lookup failed');
   });
 
   it('session_append_note returns false when no session manager', async () => {

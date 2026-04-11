@@ -49,6 +49,7 @@ export interface GatewayCorrelationParams {
 export interface LLMChatParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
+  pin?: boolean;
   messages: ContextMessage[];
   systemPrompt: string;
   stream?: boolean;
@@ -67,6 +68,7 @@ export interface LLMChatParams extends GatewayCorrelationParams {
 export interface LLMCompleteParams extends GatewayCorrelationParams {
   model: string;
   provider: string;
+  pin?: boolean;
   messages: ContextMessage[];
   systemPrompt: string;
   purpose: CompletionPurpose;
@@ -134,6 +136,23 @@ export interface FsWriteParams {
 export interface FsListParams {
   glob?: string;
   maxEntries?: number;
+}
+
+export interface FsSearchParams {
+  query: string;
+  glob?: string;
+  mode?: 'literal' | 'regexp';
+  maxMatches?: number;
+  maxFiles?: number;
+  maxBytesPerFile?: number;
+  contextLines?: number;
+}
+
+export interface FsEditParams {
+  path: string;
+  oldText: string;
+  newText: string;
+  replaceAll?: boolean;
 }
 
 export type GitStatusParams = Record<string, never>;
@@ -245,6 +264,16 @@ export interface ShellExecParams {
   cwd?: string;
   timeoutMs?: number;
   maxOutputChars?: number;
+  envVars?: string[];
+}
+
+export type ShardBackendRequestBackend = 'container' | 'orchestrated';
+
+export interface ShardBackendRequestParams {
+  backend: ShardBackendRequestBackend;
+  shardId: string;
+  name: string;
+  capabilityTier: string;
 }
 
 export type VaultWriteMode = 'create' | 'append' | 'prepend';
@@ -426,6 +455,27 @@ export interface FsListResult {
   paths: string[];
 }
 
+export interface FsSearchMatch {
+  path: string;
+  line: number;
+  column: number;
+  preview: string;
+  contextBefore?: string[];
+  contextAfter?: string[];
+}
+
+export interface FsSearchResult {
+  query: string;
+  glob: string;
+  hitLimit: boolean;
+  matches: FsSearchMatch[];
+}
+
+export interface FsEditResult {
+  success: boolean;
+  replacements: number;
+}
+
 export interface GitStatusResult {
   branch: string;
   ahead: number;
@@ -456,6 +506,13 @@ export interface GitCommitResult {
 
 export interface GitOpenPRResult {
   url: string;
+}
+
+export interface ShardBackendRequestResult {
+  backend: ShardBackendRequestBackend;
+  controller: 'gateway';
+  status: 'unavailable';
+  reason: string;
 }
 
 export interface GitHubProjectSyncResult {
@@ -577,6 +634,8 @@ export interface GatewayMethods {
   'fs.read': [FsReadParams, FsReadResult];
   'fs.write': [FsWriteParams, FsWriteResult];
   'fs.list': [FsListParams, FsListResult];
+  'fs.search': [FsSearchParams, FsSearchResult];
+  'fs.edit': [FsEditParams, FsEditResult];
   'git.status': [GitStatusParams, GitStatusResult];
   'git.diff': [GitDiffParams, GitDiffResult];
   'git.create_branch': [GitCreateBranchParams, GitCreateBranchResult];
@@ -593,6 +652,7 @@ export interface GatewayMethods {
   'image.edit': [ImageEditParams, ImageGenerationRpcResult];
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
+  'shard.backend.request': [ShardBackendRequestParams, ShardBackendRequestResult];
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];
   'confirmation.history': [ConfirmationHistoryListParams, ConfirmationHistoryListResult];
   'confirmation.resolve': [ConfirmationResolveParams, ConfirmationResolveResult];

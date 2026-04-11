@@ -33,8 +33,8 @@ import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import type {
   HeartbeatAgent,
   HeartbeatRuntimeOptions,
-} from './heartbeat-runtime.js';
-import { DEFERRED_HEARTBEAT_ACTION_KIND } from './heartbeat-runtime.js';
+} from './heartbeat-runtime-contracts.js';
+import { DEFERRED_HEARTBEAT_ACTION_KIND } from './heartbeat-runtime-contracts.js';
 import type { HeartbeatTemplateRuntime } from './heartbeat-template-runtime.js';
 
 const log = createComponentLogger('HeartbeatPostTurn');

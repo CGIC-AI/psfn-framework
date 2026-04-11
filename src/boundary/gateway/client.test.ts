@@ -214,6 +214,30 @@ describe('GatewayClient streaming', () => {
     });
   });
 
+  it('preserves pin hints on llm.chat RPC requests', async () => {
+    void client.stream(
+      {
+        systemPrompt: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+        modelHint: {
+          model: 'openrouter/deepseek/deepseek-v3.2',
+          provider: 'openrouter',
+          pin: true,
+          maxTokens: 128,
+        },
+      },
+      { onText: () => {} },
+    );
+
+    const req = conn.sent[0] as { params: Record<string, unknown> };
+    expect(req.params).toMatchObject({
+      model: 'openrouter/deepseek/deepseek-v3.2',
+      provider: 'openrouter',
+      pin: true,
+      maxTokens: 128,
+    });
+  });
+
   it('cleans up chunk handler after stream error', async () => {
     const chunks: string[] = [];
 
@@ -730,6 +754,38 @@ describe('GatewayClient session integrity RPC', () => {
       content: 'hello',
       timestamp: 1_000,
     }, null)).toThrow('requires a gateway socket path');
+  });
+
+  it('memoizes repeated sync session integrity verification for unchanged entries', () => {
+    client = new GatewayClient(conn.conn, 1024, {
+      sessionIntegritySocketPath: '/tmp/test-gateway.sock',
+    });
+    const requestSessionIntegritySync = vi.spyOn(client as any, 'requestSessionIntegritySync')
+      .mockReturnValue({
+        verified: true,
+        observedHmac: 'a'.repeat(64),
+      });
+    const provider = client.createSessionIntegrityProvider();
+    const entry = {
+      type: 'message' as const,
+      id: 1,
+      channelId: 'api:test',
+      role: 'user' as const,
+      content: 'hello',
+      timestamp: 1_000,
+      _hmac: 'a'.repeat(64),
+      _hmacKeyVersion: 'v1',
+    };
+
+    expect(provider.verify(entry, null)).toEqual({
+      verified: true,
+      observedHmac: 'a'.repeat(64),
+    });
+    expect(provider.verify(entry, null)).toEqual({
+      verified: true,
+      observedHmac: 'a'.repeat(64),
+    });
+    expect(requestSessionIntegritySync).toHaveBeenCalledTimes(1);
   });
 });
 

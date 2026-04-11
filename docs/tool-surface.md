@@ -2,7 +2,7 @@
 
 This document defines the target model-facing tool stack for PSFN and maps the current first-party names to that target.
 
-The goal is not to expose more tools. The goal is to reduce tool-choice entropy while preserving semantic companion-state surfaces that must stay explicit.
+The goal is not to expose more tools. The goal is to reduce tool-choice entropy while preserving semantic companion-state surfaces that must stay explicit. Unless a section explicitly says "current stabilized branch", treat the unified names below as target taxonomy, not a claim that every target tool is already registered in the live runtime.
 
 ## Target Stack
 
@@ -35,9 +35,46 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - `notify`
 - `media`
 
-## Live Identity Surface
+## Current Stabilized Branch
 
-The runtime now exposes a single model-facing `identity` tool for prompt-layer and persona work.
+The stabilized `refactor-pt3` branch still ships a mixed direct tool surface. The target stack above is architectural direction; the live runtime is only partially collapsed today.
+
+Always-on adaptive control:
+
+- `tool_search`
+- `toolset`
+
+Already unified top-level direct tools in the current runtime:
+
+- `shell`
+- `skill`
+- `orient`
+- `subagent`
+
+Still-split first-party direct tools in the current runtime:
+
+- memory and scratchpad: `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write`
+- filesystem: `fs_list`, `fs_read`
+- contacts: `contact_list`, `contact_lookup`, `contact_note`, `contact_set_trust`, `contact_link_identity`, `contact_set_channel_privacy`
+- identity and direction: `prompt_layer_*`, `identity_diff`, `identity_changelog`, `character_card_update`, `north_star_*`
+- repository: `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr`
+- sessions: `session_search`, `session_grep`, `session_list`, `session_new`, `session_resume`, `start_focus`, `complete_focus`
+- heartbeat and values: `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task`, `values_list`, `values_add`, `values_update`
+- vault: `vault_write`, `vault_read`, `vault_search`, `vault_daily`
+- beads: `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`
+- lifecycle and operator control: `settings_get`, `promoted_tools_*`, `self_restart`, `self_rebuild`, `notify_operator`
+- images: `image_create`, `image_edit`, `image_analyze`
+- shards: `spawn_shard`
+
+Important current-state notes:
+
+- `load_tools` is no longer a live runtime control tool. Tool discovery and activation now run through `tool_search` and `toolset`.
+- `session_search` and `session_grep` are direct runtime tools on this branch, not `think`-only helpers.
+- A unified `schedule` tool exists in code, but the stabilized agent entrypoint still wires the split heartbeat/scheduling tools through `src/app/startup/composition/parity.ts`.
+
+## Target Identity Surface
+
+The target model-facing `identity` surface collapses prompt-layer and persona work into one tool.
 
 - Read actions: `list_layers`, `get_layer`, `diff_layer`, `history`
 - Prompt mutation actions: `update_layer`, `rollback_layer`, `toggle_layer`, `commit_stage`, `cancel_stage`
@@ -45,9 +82,9 @@ The runtime now exposes a single model-facing `identity` tool for prompt-layer a
 
 The surface is always on so the model does not have to discover or choose among prompt-stack micro-tools. Write actions remain capability-gated, and the existing confirmation/cooling-off safeguards still apply.
 
-## Live Schedule Surface
+## Target Schedule Surface
 
-The runtime now exposes a unified model-facing `schedule` tool for time-based continuity and scheduling work.
+The target model-facing `schedule` surface collapses time-based continuity and scheduling work into one tool.
 
 - Continuity actions: `list`, `create_follow_up`, `activate_follow_up`, `create_reminder`, `trigger_reminder`
 - Scheduler/template actions: `list_templates`, `update_template`, `run_template`, `schedule_prompt`
@@ -58,9 +95,9 @@ The runtime now exposes a unified model-facing `schedule` tool for time-based co
 
 This keeps durable reminders, proactive follow-ups, birthdays, anniversaries, self-reminders, and timed work under one semantic faculty instead of scattering them across ad hoc timer micro-tools.
 
-## Live Filesystem Surface
+## Target Filesystem Surface
 
-The runtime now exposes a single model-facing `fs` tool for common workspace inspection and safe file mutation.
+The target model-facing `fs` surface collapses common workspace inspection and safe file mutation into one tool.
 
 - Inspection actions: `list`, `read`, `search`
 - Mutation actions: `write`, `edit`
@@ -77,9 +114,9 @@ Mutation guardrails remain explicit:
 - `edit` requires an exact `old_text` match and fails closed on ambiguous replacements unless `replace_all=true`
 - gateway-side path policy and workspace boundaries remain authoritative
 
-## Live Repo Surface
+## Target Repo Surface
 
-The runtime now exposes a unified model-facing `repo` tool for git-backed repository inspection and mutation.
+The target model-facing `repo` surface collapses git-backed repository inspection and mutation into one tool.
 
 - Actions: `inspect`, `patch`, `branch`, `commit`, `publish`
 - `inspect` keeps repository state and diff lookup on one primitive instead of splitting them across read-only micro-tools
@@ -88,9 +125,9 @@ The runtime now exposes a unified model-facing `repo` tool for git-backed reposi
 
 This keeps repository work on one primitive while preserving the existing protected-branch checks, allowlisted patch paths, and gateway approval policy for write and publish flows.
 
-## Live Shell Surface
+## Target Shell Surface
 
-The runtime now exposes a unified model-facing `shell` tool for direct command execution outside `think`.
+The current runtime already exposes a unified model-facing `shell` tool for direct command execution outside `think`, and that remains the target shape.
 
 - Action: `exec`
 
@@ -102,9 +139,9 @@ The surface stays intentionally narrow:
 - `shell` remains distinct from `fs` and `repo`; use those primitives for structured workspace and git operations instead of shelling out by default
 - `shell_exec` inside `think` remains a bounded helper, not the primary model-facing surface
 
-## Live Session Surface
+## Target Session Surface
 
-The runtime now exposes a unified model-facing `session` tool for continuity, transcript lookup, resumption, and focus workflow.
+The target model-facing `session` surface collapses continuity, transcript lookup, resumption, and focus workflow into one tool.
 
 - Primary actions: `list`, `new`, `resume`, `search`, `grep`, `list_continuity`, `checkpoint`, `wake_return`, `start_focus`, `complete_focus`
 - Migration aliases remain available inside the same tool:
@@ -120,9 +157,9 @@ The runtime now exposes a unified model-facing `session` tool for continuity, tr
 
 This keeps transcript lookup, gentle checkpointing, wake/return recaps, and focus lifecycle behavior under one continuity surface instead of turning them into generic assistant status chatter.
 
-## Live Contact Surface
+## Target Contact Surface
 
-The runtime now exposes a unified model-facing `contact` tool for relationship operations and canonical contact continuity.
+The target model-facing `contact` surface collapses relationship operations and canonical contact continuity into one tool.
 
 - Actions: `list`, `lookup`, `note`, `set_trust`, `link_identity`, `set_channel_privacy`
 - Legacy migration aliases remain available inside the same tool:
@@ -135,9 +172,9 @@ The runtime now exposes a unified model-facing `contact` tool for relationship o
 
 This keeps contact lookup, typed notes, trust drift handling, cross-channel identity linking, and per-channel privacy on one semantic relationship surface instead of scattering them across micro-tools. Trust/disclosure invariants and typed contact semantics remain enforced by the underlying contact store.
 
-## Live Notify Surface
+## Target Notify Surface
 
-The runtime now exposes a unified model-facing `notify` tool for operator briefs, lightweight outbound delivery, and approval escalation.
+The target model-facing `notify` surface collapses operator briefs, lightweight outbound delivery, and approval escalation into one tool.
 
 - Actions: `brief`, `send`, `approval_request`
 - `brief` is the direct replacement for legacy `notify_operator`
@@ -146,9 +183,9 @@ The runtime now exposes a unified model-facing `notify` tool for operator briefs
 
 The surface keeps lightweight visible tool output separate from the heavier internal delivery work. Briefs remain fail-closed for scheduled/internal contexts, outbound sends require explicit delivery targets, and approval escalation stays explicit about what is awaiting review.
 
-## Live Skill Surface
+## Target Skill Surface
 
-The runtime now exposes a unified model-facing `skill` tool for skill discovery, inspection, and managed-skill mutation.
+The current runtime already exposes a unified model-facing `skill` tool for skill discovery, inspection, and managed-skill mutation, and that remains the target shape.
 
 - Actions: `list`, `view`, `create`, `update`
 - Legacy migration aliases remain accepted at the action level for compatibility, but the model-facing tool name is now just `skill`
@@ -157,9 +194,9 @@ The runtime now exposes a unified model-facing `skill` tool for skill discovery,
 - `create` and `update` write managed skills under `companion-data/skills/<category>/<name>/SKILL.md` and refresh the runtime snapshot
 - Creator workflows such as image creation, music creation, and future media variants belong here as creator-category skills loaded with `skill action="view"`
 
-## Live Media Surface
+## Target Media Surface
 
-The runtime now exposes a unified model-facing `media` tool for unified media generation, transformation, and inspection.
+The target model-facing `media` surface collapses media generation, transformation, and inspection into one tool.
 
 - Actions: `generate`, `edit`, `analyze`
 - `generate` creates a new media artifact from a prompt
@@ -167,9 +204,9 @@ The runtime now exposes a unified model-facing `media` tool for unified media ge
 - `analyze` inspects visible contents or consistency questions on explicit inputs
 - Current implementation is image-backed, but image creation, music creation, and future creator workflows all stay modeled as creator skills loaded with `skill action="view"`; the top-level tool surface stays intentionally generic
 
-## Live Web Surface
+## Target Web Surface
 
-The runtime now targets a unified model-facing `web` surface for outward web work while keeping gateway fetch lanes and allowlists explicit underneath.
+The target model-facing `web` surface collapses outward web work while keeping gateway fetch lanes and allowlists explicit underneath.
 
 - Actions: `fetch`, `browse`, `search`
 - `fetch` is the ordinary external-web read path and maps to the gateway default lane
@@ -179,9 +216,9 @@ The runtime now targets a unified model-facing `web` surface for outward web wor
 
 This keeps ordinary page retrieval, crawler-style browsing, and small-scope web research under one semantic tool family instead of exposing multiple near-duplicate web micro-tools to the model.
 
-## Live Vault Surface
+## Target Vault Surface
 
-The runtime now exposes a unified model-facing `vault` tool for durable notes, Obsidian search, and daily journaling.
+The target model-facing `vault` surface collapses durable notes, Obsidian search, and daily journaling into one tool.
 
 - Actions: `read`, `write`, `search`, `daily`
 - Legacy migration aliases remain available inside the same tool:
@@ -192,9 +229,9 @@ The runtime now exposes a unified model-facing `vault` tool for durable notes, O
 
 This keeps durable note creation, retrieval, search, and daily-note workflows on one semantic surface instead of scattering them across vault micro-tools. `vault` stays distinct from `scratchpad` and `memory`: scratchpad is temporary working context, memory is structured recall, and vault is for durable notes and artifacts.
 
-## Live System Surface
+## Target System Surface
 
-The runtime now exposes a unified model-facing `system` tool for safe runtime-setting reads and guarded lifecycle control.
+The target model-facing `system` surface collapses safe runtime-setting reads and guarded lifecycle control into one tool.
 
 - Preferred actions:
   `read`
@@ -207,9 +244,9 @@ The runtime now exposes a unified model-facing `system` tool for safe runtime-se
 
 `system action="read"` preserves the existing safe runtime-settings snapshot behavior. `system action="restart|rebuild"` preserves the existing restart safeguard checks, notification flow, and capability enforcement, but keeps lifecycle control on one semantic surface instead of separate micro-tools.
 
-## Live Shard Surface
+## Target Shard Surface
 
-The runtime now exposes a unified model-facing `shard` tool for long-horizon shard work and fold-back lifecycle control.
+The target model-facing `shard` surface collapses long-horizon shard work and fold-back lifecycle control into one tool.
 
 - Actions: `spawn`, `list`, `status`, `deliver`
 - Legacy action alias remains available inside the same tool:
@@ -229,7 +266,7 @@ This keeps long-horizon shard execution, operator-visible shard runtime state, a
 
 ## Runtime Prompt Presentation
 
-The companion-facing runtime prompt should describe the live collapsed stack, not the implementation mechanics behind it.
+The companion-facing runtime prompt should describe the active stack for the turn, not the implementation mechanics behind it or an aspirational fully-collapsed taxonomy.
 
 - Treat the currently loaded tools as the active stack for the turn; prefer calling a direct tool that already fits the task.
 - Mention `tool_search` and `toolset` as the discovery/control path for non-default overlays, but do not spend prompt budget on active counts, per-tool activation sources, or suffixes such as promoted/autoload/deferred.
@@ -256,7 +293,7 @@ The companion-facing runtime prompt should describe the live collapsed stack, no
 
 ## Current-To-Target Migration Map
 
-The table below maps current first-party tool names to the target surface. "Keep" means the target name is already effectively present. "Collapse" means multiple current tools should become one semantic tool family. "Hide" means the surface should move behind toolset/background control.
+The table below maps current first-party tool names to the target surface. It is a migration map, not a claim that every target name is already live today. "Keep" means the target name is already effectively present. "Collapse" means multiple current tools should become one semantic tool family. "Hide" means the surface should move behind toolset/background control.
 
 | Current name | Target surface | Exposure | Notes |
 | --- | --- | --- | --- |
@@ -287,7 +324,7 @@ The table below maps current first-party tool names to the target surface. "Keep
 | `promoted_tools_add` | `toolset` | hidden | Legacy promoted-tool helper now collapses into `toolset action="pin"`. |
 | `promoted_tools_remove` | `toolset` | hidden | Legacy promoted-tool helper now collapses into `toolset action="unpin"`. |
 | `promoted_tools_swap` | `toolset` | hidden | Legacy slot-reorder helper is no longer model-facing. |
-| `load_tools` | `toolset` | hidden | Legacy exact-name activation path now collapses into `toolset action="activate"`. |
+| `load_tools` | `toolset` | hidden | `load_tools` no longer ships as a live runtime control tool on this branch; use `toolset action="activate"` for discovery-driven activation. |
 | `fs_read` | `fs` | always-on | Collapsed into `fs action="read"`. |
 | `fs_list` | `fs` | always-on | Collapsed into `fs action="list"`. |
 | `shell_exec` | `shell` | always-on | Direct command execution now belongs on `shell action="exec"`; the `think` helper remains bounded and secondary. |
@@ -338,7 +375,7 @@ The table below maps current first-party tool names to the target surface. "Keep
 
 ## Retirement Guidance
 
-- Legacy action aliases on unified tools are temporary migration shims, not a second permanent API surface.
+- Where unified tools already exist, legacy action aliases are temporary migration shims, not a second permanent API surface.
 - Use `agent.tools.legacy_alias` telemetry to measure whether operators and prompts have moved to the canonical action names.
 - Remove legacy aliases only after canonical unified actions have stable adoption and the dependent prompt/runtime surfaces have been updated.
 

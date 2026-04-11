@@ -683,6 +683,67 @@ describe('handleMessageForTurn compaction scheduling', () => {
     });
   });
 
+  it('moves system context into the prompt system lane instead of assistant history in observability snapshots', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'Final system prompt',
+      messages: [
+        { role: 'user', content: 'Earlier user message' },
+        { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
+        { role: 'assistant', content: 'Earlier assistant reply' },
+      ],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.captureTurnPromptSnapshot = vi.fn(() => ({
+      staticPrefixTemplate: 'Static prefix template',
+      dynamicSuffixTemplate: 'Dynamic suffix template',
+      staticHash: 'static-hash',
+      versionPointer: 'prompt-v1',
+    }));
+    runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
+    runtime.buildScratchpadContextBlock = vi.fn(() => '');
+    runtime.getPersonaAdaptation = vi.fn(() => null);
+
+    await handleMessageForTurn(runtime, createMessage('msg-system-context'));
+
+    const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    const mergedSystemPrompt = [
+      'Final system prompt',
+      '<session_context>',
+      '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.',
+      '</session_context>',
+    ].join('\n\n');
+    const providerWireMessages = (promptContext?.providerObservability as {
+      providerWireMessages?: Array<{ role: string; source: string; content: string }>;
+    } | undefined)?.providerWireMessages;
+
+    expect(promptContext?.messages).toEqual([
+      { role: 'user', content: 'Earlier user message' },
+      { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
+      { role: 'assistant', content: 'Earlier assistant reply' },
+    ]);
+    expect(promptContext?.finalSystemPrompt).toBe(mergedSystemPrompt);
+    expect(providerWireMessages).toEqual([
+      { role: 'system', source: 'system_prompt', content: mergedSystemPrompt },
+      { role: 'user', source: 'message', content: 'Earlier user message' },
+      { role: 'assistant', source: 'message', content: expect.stringContaining('Earlier assistant reply') },
+    ]);
+    expect(providerWireMessages?.some(message => message.role === 'assistant'
+      && message.content.includes('Queue a private follow-up reminder.'))).toBe(false);
+  });
+
   it('applies persisted runtime block order before session context assembly', async () => {
     const root = makeTempDir();
     const layoutStore = new PromptRuntimeLayoutStore(resolvePromptRuntimeLayoutPath(root));
@@ -732,6 +793,119 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(scratchpadIndex).toBeGreaterThanOrEqual(0);
     expect(runtimeContextIndex).toBeGreaterThan(scratchpadIndex);
     expect(personaIndex).toBeGreaterThan(runtimeContextIndex);
+  });
+});
+
+describe('handleMessageForTurn failure persistence', () => {
+  it('records a failed turn with observed tool calls when execution aborts after tool side effects', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    const buildTurnRecord = vi.fn((input: Parameters<TurnExecutionRuntime['buildTurnRecord']>[0]) => ({
+      schemaVersion: 1 as const,
+      turnId: input.turnId,
+      requestId: input.requestId,
+      channelId: input.message.channelId,
+      channelType: input.message.channelType,
+      startedAt: input.startedAt,
+      completedAt: input.completedAt,
+      status: input.status ?? 'completed',
+      userMessage: {
+        role: input.speakerRole,
+        content: input.message.content,
+        timestamp: input.message.timestamp.getTime(),
+      },
+      ...(input.assistantMessageContent
+        ? {
+          assistantMessage: {
+            role: 'assistant' as const,
+            content: input.assistantMessageContent,
+            timestamp: input.completedAt,
+          },
+        }
+        : {}),
+      toolCalls: [],
+      extractedMemoryIds: [],
+      concernDeltaRefs: [],
+      contactDeltaRefs: [],
+      versionPointers: {
+        model: input.model ?? input.response?.metadata.model ?? 'test-model',
+      },
+      provenanceRefs: [],
+    }));
+    runtime.buildTurnRecord = buildTurnRecord as unknown as TurnExecutionRuntime['buildTurnRecord'];
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        api: 'openai-responses',
+        provider: 'openrouter',
+        model: 'openrouter/moonshotai/kimi-k2.5',
+        usage: {
+          input: 120,
+          output: 15,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 135,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        },
+        stopReason: 'toolUse',
+        timestamp: 1_700_000_100_100,
+        content: [
+          { type: 'thinking', thinking: 'Need the memory tool first.' },
+          {
+            type: 'toolCall',
+            id: 'call-2',
+            name: 'memory_write',
+            arguments: { text: 'secret value' },
+            thoughtSignature: 'sig-2',
+          },
+        ],
+      });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'toolResult',
+        toolCallId: 'call-2',
+        toolName: 'memory_write',
+        isError: false,
+        timestamp: 1_700_000_100_180,
+        content: [{ type: 'text', text: 'Memory stored.' }],
+        details: { memoryId: 'memory-2' },
+      });
+      throw new Error('Request aborted');
+    });
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-failed-turn'))).rejects.toThrow('Request aborted');
+
+    expect(buildTurnRecord).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+      model: 'test-model',
+      assistantSessionEntryId: null,
+      turnMessages: expect.arrayContaining([
+        expect.objectContaining({ role: 'assistant' }),
+        expect.objectContaining({ role: 'toolResult', toolName: 'memory_write' }),
+      ]),
+    }));
+    expect(runtime.sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
+      status: 'failed',
+    }));
   });
 });
 

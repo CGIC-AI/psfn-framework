@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createSubagentTool } from './tools.js';
 import type { SubagentControlPort } from './port.js';
+import { resolveToolRequiredCapabilities } from '../../system/capabilities/requirements.js';
 
 function parseText(result: Awaited<ReturnType<ReturnType<typeof createSubagentTool>['execute']>>): unknown {
   return JSON.parse(result.content[0]?.text ?? '{}');
@@ -219,5 +220,15 @@ describe('createSubagentTool', () => {
         lifecycleState: 'cancelled',
       },
     });
+  });
+
+  it('uses shard.spawn for mutating subagent control actions and identity.read for read-only actions', () => {
+    const tool = createSubagentTool(createPort());
+
+    expect(resolveToolRequiredCapabilities(tool, { action: 'spawn' })).toEqual(['shard.spawn']);
+    expect(resolveToolRequiredCapabilities(tool, { action: 'message' })).toEqual(['shard.spawn']);
+    expect(resolveToolRequiredCapabilities(tool, { action: 'cancel' })).toEqual(['shard.spawn']);
+    expect(resolveToolRequiredCapabilities(tool, { action: 'status' })).toEqual(['identity.read']);
+    expect(resolveToolRequiredCapabilities(tool, { action: 'wait' })).toEqual(['identity.read']);
   });
 });

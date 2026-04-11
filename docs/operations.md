@@ -34,11 +34,12 @@ What it does:
 - creates or reuses a dedicated service account
 - stages a repo-owned checkout under the service home
 - bundles a Node binary under the app root
-- writes a filtered env file with only env-owned values
-- renders a systemd unit from the repo template
+- writes the filtered env file under the deployed checkout at `deployment/systemd/psfn.env`
+- renders the authoritative unit under the deployed checkout at `deployment/systemd/psfn.service`
+- links `/etc/systemd/system/psfn.service` to that repo-owned rendered unit as the only required external pointer
 - can optionally run the persistence cutover before enabling the service
 
-Use `--dry-run` first. Keep authoritative env and runtime wiring in the repo tree; do not create shadow service config elsewhere.
+Use `--dry-run` first. Keep authoritative env and runtime wiring in the deployed repo tree; do not create shadow service config elsewhere. The installer-owned unit injects the production layout paths and `PSFN_SKIP_DOTENV=true`, while the filtered env file only carries env-owned values that remain appropriate to source from disk.
 
 ## Persistence Cutover
 

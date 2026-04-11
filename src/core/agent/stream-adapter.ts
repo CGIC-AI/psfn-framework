@@ -824,10 +824,6 @@ function resolveStreamCandidates(
     litellmBaseUrl,
   );
   const routingCandidates = resolveRoutingCandidates(config, purpose);
-  if (routingCandidates.length === 0) {
-    return [currentCandidate];
-  }
-
   const adjustedRoutingCandidates = routingCandidates.map(candidate => (
     callerMaxTokens === undefined
       ? candidate
@@ -836,6 +832,21 @@ function resolveStreamCandidates(
         maxTokens: callerMaxTokens,
       }
   ));
+
+  if (routingCandidates.length === 0) {
+    if (purpose !== 'chat') {
+      throw new Error(
+        `No eligible model configured for purpose '${purpose}'. ` +
+        'Add a primary model for this purpose in config.modelRegistry.',
+      );
+    }
+    return [currentCandidate];
+  }
+
+  if (purpose !== 'chat') {
+    return adjustedRoutingCandidates;
+  }
+
   const matchedIndex = adjustedRoutingCandidates.findIndex(candidate => candidatesEquivalent(candidate, currentCandidate));
   if (matchedIndex < 0) {
     return [currentCandidate];

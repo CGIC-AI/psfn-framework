@@ -672,4 +672,56 @@ describe('runtime subject identity', () => {
       privacyLevel: 'private',
     }]);
   });
+
+  it('labels blocked extended tools clearly and forbids narrated tool outcomes without real tool results', () => {
+    const message = makeMessage({
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'Try web_fetch and notify_operator.',
+    });
+
+    const runtimeContext = buildRuntimeContext({
+      message,
+      resolvedUserName: 'User',
+      trustLevel: 'regular',
+      channelType: 'api',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'nursery',
+      activeToolCounts: {
+        core: 1,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 1,
+      },
+      extendedTools: [
+        {
+          name: 'web_fetch',
+          description: 'Fetch a web page.',
+          parameters: {} as any,
+          execute: () => { throw new Error('not used'); },
+        } as any,
+        {
+          name: 'notify_operator',
+          description: 'Notify the operator.',
+          parameters: {} as any,
+          execute: () => { throw new Error('not used'); },
+        } as any,
+      ],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      formatTopEmotions: () => '',
+    });
+
+    expect(runtimeContext).toContain('Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.');
+    expect(runtimeContext).toContain('blocked by current tier: external.web');
+    expect(runtimeContext).toContain('2 blocked by the current capability tier');
+  });
 });

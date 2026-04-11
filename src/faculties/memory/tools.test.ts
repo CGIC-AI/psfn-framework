@@ -303,6 +303,38 @@ describe('createMemoryWriteTool', () => {
     }));
   });
 
+  it('normalizes malformed text/content payloads onto the exact memory text', async () => {
+    const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
+
+    await tool.execute('call-15b', {
+      text: ': "matrix-secret-2026-04-10T04-49-43-076Z", "type": "semantic", "sensitivity": "personal"}',
+      content: 'matrix-secret-2026-04-10T04-49-43-076Z',
+      type: 'semantic',
+      sensitivity: 'personal',
+    } as any);
+
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'matrix-secret-2026-04-10T04-49-43-076Z',
+      sensitivity: 'personal',
+    }));
+  });
+
+  it('normalizes placeholder text/step_text payloads onto the exact memory text', async () => {
+    const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
+
+    await tool.execute('call-15c', {
+      text: '.',
+      step_text: 'matrix-secret-2026-04-10T05-00-06-862Z',
+      type: 'semantic',
+      sensitivity: 'personal',
+    } as any);
+
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'matrix-secret-2026-04-10T05-00-06-862Z',
+      sensitivity: 'personal',
+    }));
+  });
+
   it('omits optional fields when not provided', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 

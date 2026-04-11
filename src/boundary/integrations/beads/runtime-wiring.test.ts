@@ -29,30 +29,37 @@ describe('registerBeadsTools', () => {
     target = createMockTarget();
   });
 
-  it('registers the unified beads tool as extended', () => {
+  it('registers split beads tools with core and extended categories', () => {
     registerBeadsTools(target, createMockOps());
-    expect(target.registerTool).toHaveBeenCalledTimes(1);
-
-    const [tool, category] = target.registerTool.mock.calls[0] as [{ name: string }, string];
-    expect(tool.name).toBe('beads');
-    expect(category).toBe('extended');
+    expect(target.registerTool).toHaveBeenCalledTimes(6);
+    expect(target.registerTool.mock.calls).toEqual([
+      [expect.objectContaining({ name: 'issue_ready' }), 'core'],
+      [expect.objectContaining({ name: 'issue_show' }), 'core'],
+      [expect.objectContaining({ name: 'issue_create' }), 'extended'],
+      [expect.objectContaining({ name: 'issue_update' }), 'extended'],
+      [expect.objectContaining({ name: 'issue_close' }), 'extended'],
+      [expect.objectContaining({ name: 'issue_sync' }), 'extended'],
+    ]);
   });
 
   it('attaches gateway wiring metadata in gateway mode', () => {
     registerBeadsTools(target, createMockOps(), { gatewayMode: true });
 
-    const [tool] = target.registerTool.mock.calls[0] as [
-      { wiringMeta?: { requiredGatewayMethods: string[] } },
-    ];
-    expect(tool.wiringMeta).toBeDefined();
-    expect(tool.wiringMeta?.requiredGatewayMethods).toEqual([
-      'beads.ready',
-      'beads.show',
-      'beads.create',
-      'beads.update',
-      'beads.close',
-      'beads.sync',
-    ]);
+    const methodsByTool = new Map(
+      target.registerTool.mock.calls.map(([tool]) => [
+        (tool as { name: string }).name,
+        (tool as { wiringMeta?: { requiredGatewayMethods?: string[] } }).wiringMeta?.requiredGatewayMethods,
+      ]),
+    );
+
+    expect(methodsByTool).toEqual(new Map([
+      ['issue_ready', ['beads.ready']],
+      ['issue_show', ['beads.show']],
+      ['issue_create', ['beads.create']],
+      ['issue_update', ['beads.update']],
+      ['issue_close', ['beads.close']],
+      ['issue_sync', ['beads.sync']],
+    ]));
   });
 });
 

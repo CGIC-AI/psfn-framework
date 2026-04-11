@@ -1,5 +1,5 @@
-import type { EventBus } from '../event-bus.js';
-import { getRequestContext } from '../llm/request-context.js';
+import type { EventBus } from '../../shared/event-bus.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 
 export interface LegacyAliasTelemetryPayload {
   toolName: string;

@@ -3,7 +3,10 @@ import type { UserMessage } from '@mariozechner/pi-ai';
 import { enforceUntrustedCompactionGuard } from '../../identity/prompt-composer.js';
 import { runWithVisionToolRequestContext, type VisionToolRequestContext } from '../../images/request-context.js';
 import { runWithRequestContext } from '../../llm/request-context.js';
-import { contextMessagesToPiMessages } from '../../llm/message-conversion.js';
+import {
+  contextMessagesToPiMessages,
+  mergeSystemContextIntoSystemPrompt,
+} from '../../llm/message-conversion.js';
 import { createComponentLogger } from '../../logger.js';
 import type {
   AgentResponse,
@@ -131,7 +134,11 @@ export async function executePrimaryTurn(params: {
     };
   }
 
-  runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(context.systemPrompt));
+  const providerSystemPrompt = mergeSystemContextIntoSystemPrompt(
+    context.systemPrompt,
+    context.messages,
+  );
+  runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(providerSystemPrompt));
   const autoloadOutcome = runtime.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
   turnIntent = autoloadOutcome.intent;
   runtime.applyActiveToolsToAgentForTurn(

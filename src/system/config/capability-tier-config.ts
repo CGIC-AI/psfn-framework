@@ -5,6 +5,7 @@ import type { CapabilityToken } from '../capabilities/tokens.js';
 import { normalizeCapabilityTokens } from '../capabilities/tokens.js';
 import {
   loadOrSeedJson,
+  loadSeedJson,
   writeJsonAtomic,
 } from './load-or-seed.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -49,6 +50,16 @@ export function loadCapabilityTierConfig(
   const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
   return loadOrSeedJson({
     dataPath: join(dataDir, CAPABILITY_TIER_FILE_NAME),
+    seedPath: join(seedDir, CAPABILITY_TIER_SEED_FILE_NAME),
+    validate: validateCapabilityTierConfig,
+  });
+}
+
+export function loadCapabilityTierSeedDefaults(
+  options: CapabilityTierLoadOptions = {},
+): CapabilityTierConfig {
+  const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
+  return loadSeedJson({
     seedPath: join(seedDir, CAPABILITY_TIER_SEED_FILE_NAME),
     validate: validateCapabilityTierConfig,
   });

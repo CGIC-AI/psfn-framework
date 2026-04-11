@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
-import { CHANNEL_TYPES, type ChannelType } from '../types.js';
+import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 
 export const CARE_REMINDER_KINDS = ['important_date', 'self_reminder'] as const;
 export type CareReminderKind = typeof CARE_REMINDER_KINDS[number];

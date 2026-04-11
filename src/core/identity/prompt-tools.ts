@@ -277,20 +277,25 @@ export function createPromptLayerListTool(store: PromptLayerStatePort): AgentToo
 export function createPromptLayerGetTool(store: PromptLayerStatePort): AgentTool<any> {
   return {
     name: 'prompt_layer_get',
-    description: 'Get the full content and metadata of a specific prompt layer.',
+    description: 'Get the full content and metadata of a specific prompt layer. Use layer_id or layer.id.',
     label: 'prompt_layer_get',
     parameters: Type.Object({
-      layer_id: Type.String({ description: 'ID of the prompt layer to retrieve (prefix match OK).' }),
+      layer_id: Type.Optional(Type.String({ description: 'ID of the prompt layer to retrieve (prefix match OK).' })),
+      layer: Type.Optional(Type.Object({
+        id: Type.String({ description: 'Prompt layer ID to retrieve (prefix match OK).' }),
+      })),
     }),
     execute: async (
       _toolCallId: string,
-      params: { layer_id: string },
+      params: { layer_id?: string; layer?: { id: string } },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
+        const layerId = (params.layer_id ?? params.layer?.id ?? '').trim();
+        if (!layerId) return textResultWithError('prompt_layer_get requires layer_id.', true);
         const layers = store.getAll();
-        const layer = layers.find(l => l.id === params.layer_id || l.id.startsWith(params.layer_id));
-        if (!layer) return textResultWithError(`Layer not found: ${params.layer_id}`, true);
+        const layer = layers.find(l => l.id === layerId || l.id.startsWith(layerId));
+        if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
 
         const text = [
           `ID: ${layer.id}`,
@@ -317,11 +322,12 @@ export function createIdentityDiffTool(store: PromptLayerStatePort): AgentTool<a
   return withCapabilityRequirement({
     name: 'identity_diff',
     description:
-      'Compare a prompt layer\'s current version to any historical version and return a textual diff summary.',
+      'Compare a prompt layer\'s current version to any historical version and return a textual diff summary. Use version or to_version.',
     label: 'identity_diff',
     parameters: Type.Object({
       layer_id: Type.String({ description: 'Prompt layer ID (or prefix) to diff.' }),
-      version: Type.Number({ description: 'Historical version to compare against.', minimum: 1 }),
+      version: Type.Optional(Type.Number({ description: 'Historical version to compare against.', minimum: 1 })),
+      to_version: Type.Optional(Type.Number({ description: 'Alias for version.', minimum: 1 })),
       max_diff_lines: Type.Optional(Type.Number({
         description: `Max changed lines to display (default ${DEFAULT_DIFF_LINE_LIMIT}, max ${MAX_DIFF_LINE_LIMIT}).`,
         minimum: 1,
@@ -331,7 +337,8 @@ export function createIdentityDiffTool(store: PromptLayerStatePort): AgentTool<a
       _toolCallId: string,
       params: {
         layer_id: string;
-        version: number;
+        version?: number;
+        to_version?: number;
         max_diff_lines?: number;
       },
       _signal?: AbortSignal,
@@ -340,7 +347,7 @@ export function createIdentityDiffTool(store: PromptLayerStatePort): AgentTool<a
         const layer = resolvePromptLayerById(store, params.layer_id);
         if (!layer) return textResultWithError(`Layer not found: ${params.layer_id}`, true);
 
-        const requestedVersion = Math.floor(params.version);
+        const requestedVersion = Math.floor(params.version ?? params.to_version ?? Number.NaN);
         if (!Number.isInteger(requestedVersion) || requestedVersion <= 0) {
           return textResultWithError('version must be a positive integer.', true);
         }

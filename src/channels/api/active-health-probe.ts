@@ -2,7 +2,7 @@ import type { ApiHealthSubsystemStatus } from './types.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 
 const DEFAULT_ACTIVE_PROBES_ENABLED = true;
-const DEFAULT_ACTIVE_PROBE_TIMEOUT_MS = 2_000;
+const DEFAULT_ACTIVE_PROBE_TIMEOUT_MS = 10_000;
 const DEFAULT_ACTIVE_PROBE_CACHE_TTL_MS = 10_000;
 
 export interface ActiveHealthProbeConfig {
@@ -17,9 +17,12 @@ export interface ActiveHealthProbeResult {
   latencyMs: number;
   cached: boolean;
   reason?: string;
+  details?: Record<string, unknown>;
 }
 
-export type ActiveHealthProbeTask = (signal: AbortSignal) => Promise<void>;
+export type ActiveHealthProbeTask = (
+  signal: AbortSignal,
+) => Promise<Record<string, unknown> | void>;
 
 export function resolveActiveHealthProbeConfig(
   env: NodeJS.ProcessEnv,
@@ -89,19 +92,28 @@ export class CachedActiveHealthProbe {
     const startedAt = Date.now();
     const controller = new AbortController();
     let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      const timeoutError = new Error(`timeout after ${this.timeoutMs}ms`);
-      timeoutError.name = 'AbortError';
-      controller.abort(timeoutError);
-    }, this.timeoutMs);
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        const timeoutError = new Error(`timeout after ${this.timeoutMs}ms`);
+        timeoutError.name = 'AbortError';
+        controller.abort(timeoutError);
+        reject(timeoutError);
+      }, this.timeoutMs);
+      timeout.unref();
+      controller.signal.addEventListener('abort', () => clearTimeout(timeout), { once: true });
+    });
 
     try {
-      await task(controller.signal);
+      const details = await Promise.race([
+        Promise.resolve().then(() => task(controller.signal)),
+        timeoutPromise,
+      ]);
       return {
         ok: true,
         checkedAt: new Date().toISOString(),
         latencyMs: Math.max(0, Date.now() - startedAt),
+        ...(details ? { details } : {}),
       };
     } catch (error) {
       return {
@@ -110,8 +122,6 @@ export class CachedActiveHealthProbe {
         checkedAt: new Date().toISOString(),
         latencyMs: Math.max(0, Date.now() - startedAt),
       };
-    } finally {
-      clearTimeout(timeout);
     }
   }
 }
@@ -129,6 +139,7 @@ export function toActiveProbeMeta(
         probeCheckedAt: probeResult.checkedAt,
         probeLatencyMs: probeResult.latencyMs,
         probeCached: probeResult.cached,
+        ...(probeResult.details ?? {}),
       }
       : {}),
   };

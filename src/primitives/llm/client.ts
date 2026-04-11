@@ -28,7 +28,10 @@ import {
   extractTextContent,
   toPiTools,
 } from './conversion.js';
-import { contextMessagesToPiMessages } from './message-conversion.js';
+import {
+  contextMessagesToPiMessages,
+  mergeSystemContextIntoSystemPrompt,
+} from './message-conversion.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { FallbackRunner } from './fallback.js';
 import type { ImportPolicyAuditRecord, RoutingCandidate, RoutingPurpose } from './routing.js';
@@ -44,7 +47,12 @@ import {
   inferCallType as inferCorrelationCallType,
   resolveCorrelationMetadata,
 } from './correlation.js';
-import { ModelBudgetController, ModelBudgetExceededError } from './model-budget.js';
+import {
+  findRegistryEntryByModelId,
+  ModelBudgetController,
+  ModelBudgetExceededError,
+  normalizeModelIdForProvider,
+} from './model-budget.js';
 import {
   type CredentialReference,
   resolveProviderApiKey,
@@ -146,6 +154,10 @@ export class LLMClient {
 
   private getModelAndKey(candidate: RoutingCandidate): { model: Model<any>; apiKey: string | undefined } {
     const modelId = candidate.model;
+    const routedModelOptions = {
+      reasoning: candidate.supportsReasoning ?? candidate.thinkingEnabled ?? false,
+      supportsVision: candidate.supportsVision ?? false,
+    };
 
     if (candidate.requestBaseUrl) {
       const apiKey = candidate.requestApiKeyEnv
@@ -159,6 +171,8 @@ export class LLMClient {
           routeLabel: candidate.provider.replace(/_/g, ' '),
           maxTokens: candidate.maxTokens,
           contextWindow: candidate.contextWindow,
+          reasoning: routedModelOptions.reasoning,
+          supportsVision: routedModelOptions.supportsVision,
           api: this.resolveOpenAICompatibleApi(candidate),
         }),
         apiKey,
@@ -167,7 +181,14 @@ export class LLMClient {
 
     if (this.litellmBaseUrl) {
       return {
-        model: createModel(this.litellmBaseUrl, modelId, candidate.maxTokens, candidate.contextWindow, this.resolveOpenAICompatibleApi(candidate)),
+        model: createModel(
+          this.litellmBaseUrl,
+          modelId,
+          candidate.maxTokens,
+          candidate.contextWindow,
+          this.resolveOpenAICompatibleApi(candidate),
+          routedModelOptions,
+        ),
         apiKey: resolveConfiguredLiteLLMApiKey({
           credentialVault: this.config.credentialVault,
           litellmApiKeyRef: this.litellmApiKeyRef,
@@ -248,6 +269,7 @@ export class LLMClient {
       modelHint: {
         model: candidate.model,
         provider: candidate.provider,
+        pin: true,
         maxTokens: candidate.maxTokens,
         ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
         ...(candidate.thinkingEnabled !== undefined ? { thinkingEnabled: candidate.thinkingEnabled } : {}),
@@ -368,9 +390,11 @@ export class LLMClient {
     const topK = toPositiveInteger(modelHint.topK);
     const frequencyPenalty = toFiniteNumber(modelHint.frequencyPenalty);
     const repetitionPenalty = toFiniteNumber(modelHint.repetitionPenalty);
+    const pin = modelHint.pin === true ? true : undefined;
     if (
       !rawModel
       && !provider
+      && pin === undefined
       && maxTokens === undefined
       && contextWindow === undefined
       && thinkingEnabled === undefined
@@ -386,6 +410,7 @@ export class LLMClient {
     return {
       ...(rawModel ? { model: rawModel } : {}),
       ...(provider ? { provider } : {}),
+      ...(pin ? { pin } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
       ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
@@ -437,6 +462,8 @@ export class LLMClient {
       candidate.model,
       String(candidate.maxTokens),
       String(candidate.contextWindow ?? ''),
+      String(candidate.supportsVision ?? ''),
+      String(candidate.supportsReasoning ?? ''),
       String(candidate.thinkingEnabled ?? ''),
       candidate.thinkingEffort ?? '',
       String(candidate.temperature ?? ''),
@@ -487,6 +514,13 @@ export class LLMClient {
     const topK = modelHint.topK ?? baseCandidate.topK;
     const frequencyPenalty = modelHint.frequencyPenalty ?? baseCandidate.frequencyPenalty;
     const repetitionPenalty = modelHint.repetitionPenalty ?? baseCandidate.repetitionPenalty;
+    const registryEntry = this.findRegistryModelEntry(provider, model);
+    const supportsVision = typeof registryEntry?.capabilities?.supportsVision === 'boolean'
+      ? registryEntry.capabilities.supportsVision
+      : baseCandidate.supportsVision;
+    const supportsReasoning = typeof registryEntry?.capabilities?.supportsReasoning === 'boolean'
+      ? registryEntry.capabilities.supportsReasoning
+      : baseCandidate.supportsReasoning;
 
     if (!provider || !model) return null;
     provider = provider.trim().toLowerCase();
@@ -503,6 +537,8 @@ export class LLMClient {
       model,
       maxTokens: Math.floor(maxTokens),
       ...(contextWindow !== undefined ? { contextWindow } : {}),
+      ...(supportsVision !== undefined ? { supportsVision } : {}),
+      ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),
       ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
       ...(thinkingEffort !== undefined ? { thinkingEffort } : {}),
       ...(temperature !== undefined ? { temperature } : {}),
@@ -523,6 +559,22 @@ export class LLMClient {
     }
 
     return this.withOpenRouterPreferences(hinted);
+  }
+
+  private findRegistryModelEntry(provider: string, model: string) {
+    const registryModels = this.config.modelRegistry?.models ?? [];
+    const normalizedProvider = provider.trim().toLowerCase();
+    const normalizedModel = normalizeModelIdForProvider(normalizedProvider, model);
+
+    const directMatch = registryModels.find((entry) => (
+      entry.identity.provider.trim().toLowerCase() === normalizedProvider
+      && normalizeModelIdForProvider(entry.identity.provider, entry.identity.model) === normalizedModel
+    ));
+    if (directMatch) {
+      return directMatch;
+    }
+
+    return findRegistryEntryByModelId(this.config, normalizedModel);
   }
 
   private ensureNonLegacyModelHint(
@@ -562,16 +614,21 @@ export class LLMClient {
       purpose,
       requestedModel: normalizedHint.model ?? null,
       requestedProvider: normalizedHint.provider ?? null,
+      pin: normalizedHint.pin ?? false,
       routedModel: hintedCandidate.model,
       routedProvider: hintedCandidate.provider,
     });
+
+    if (normalizedHint.pin === true) {
+      return [hintedCandidate];
+    }
 
     return this.dedupeCandidates([hintedCandidate, ...candidates]);
   }
 
   private buildPiContext(context: LLMContext): PiContext {
     return {
-      systemPrompt: context.systemPrompt,
+      systemPrompt: mergeSystemContextIntoSystemPrompt(context.systemPrompt, context.messages),
       messages: contextMessagesToPiMessages(context.messages),
       ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
     };
@@ -752,21 +809,23 @@ export class LLMClient {
                     break;
 
                   case 'done': {
+                    const contentBlocks = event.message.content as unknown[];
                     // If text_delta events didn't fire, extract text from content blocks
                     if (!content) {
-                      content = extractTextContent(event.message.content as unknown[]);
+                      content = extractTextContent(contentBlocks);
                     }
                     // Extract reasoning from content blocks if thinking_delta didn't fire
                     if (!reasoning) {
-                      reasoning = extractReasoningContent(event.message.content as unknown[]);
+                      reasoning = extractReasoningContent(contentBlocks);
                     }
+                    const finalToolCalls = extractToolCallsFromContentBlocks(contentBlocks);
                     // Normalize away stringified content block arrays from streaming
                     content = normalizeContent(content);
                     response = {
                       content,
                       ...(reasoning ? { reasoning } : {}),
                       providerObservability,
-                      toolCalls,
+                      toolCalls: finalToolCalls.length > 0 ? finalToolCalls : toolCalls,
                       model: event.message.model,
                       inputTokens: event.message.usage.input,
                       outputTokens: event.message.usage.output,
@@ -1109,6 +1168,28 @@ function toThinkingEffort(value: unknown): ThinkingLevel | undefined {
     default:
       return undefined;
   }
+}
+
+function extractToolCallsFromContentBlocks(blocks?: unknown[]): ToolCall[] {
+  if (!Array.isArray(blocks) || blocks.length === 0) return [];
+  return blocks.flatMap((block) => {
+    if (!block || typeof block !== 'object') return [];
+    const candidate = block as {
+      type?: unknown;
+      id?: unknown;
+      name?: unknown;
+      arguments?: unknown;
+    };
+    if (candidate.type !== 'toolCall') return [];
+    if (typeof candidate.id !== 'string' || typeof candidate.name !== 'string') return [];
+    return [{
+      id: candidate.id,
+      name: candidate.name,
+      input: candidate.arguments && typeof candidate.arguments === 'object'
+        ? candidate.arguments as Record<string, unknown>
+        : {},
+    }];
+  });
 }
 
 // ── Content normalization ──

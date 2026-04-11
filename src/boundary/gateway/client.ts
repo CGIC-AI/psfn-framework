@@ -96,6 +96,7 @@ const DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS = 3_000;
 const DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS = 30_000;
 const GATEWAY_KEEPALIVE_CHANNEL_ID = 'internal:gateway-keepalive';
 const SESSION_INTEGRITY_RESPONSE_BUFFER_BYTES = 64 * 1024;
+const SESSION_INTEGRITY_VERIFY_CACHE_MAX_ENTRIES = 4_096;
 
 const SESSION_INTEGRITY_WORKER_SOURCE = `
 const net = require('node:net');
@@ -328,6 +329,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
   private keepaliveInFlight = false;
   private sessionIntegrityWorker: Worker | null = null;
   private sessionIntegrityRequestCounter = 0;
+  private sessionIntegrityVerifyCache = new Map<string, JournalIntegrityVerificationResult>();
   private closedNotified = false;
   private isDestroying = false;
 
@@ -431,6 +433,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
       const result = await this.rpcInstance.request('llm.chat', {
         model,  // gateway resolves roster defaults when hint fields are unset
         provider,
+        ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: context.messages,
         systemPrompt: context.systemPrompt,
         stream: !!callbacks?.onText,
@@ -502,6 +505,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
       {
         model,
         provider,
+        ...(modelHint?.pin !== undefined ? { pin: modelHint.pin } : {}),
         messages: context.messages,
         systemPrompt: context.systemPrompt,
         purpose,
@@ -870,13 +874,30 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
         });
         return result.entry;
       },
-      verify: (entry, previousHmac) => this.requestSessionIntegritySync<SessionHmacVerifyResult>(
-        'session.hmac.verify',
-        {
-          entry,
-          previousHmac,
-        },
-      ),
+      verify: (entry, previousHmac) => {
+        const cacheKey = this.buildSessionIntegrityVerifyCacheKey(entry, previousHmac);
+        const cached = this.sessionIntegrityVerifyCache.get(cacheKey);
+        if (cached) {
+          this.sessionIntegrityVerifyCache.delete(cacheKey);
+          this.sessionIntegrityVerifyCache.set(cacheKey, cached);
+          return { ...cached };
+        }
+
+        const result = this.requestSessionIntegritySync<SessionHmacVerifyResult>(
+          'session.hmac.verify',
+          {
+            entry,
+            previousHmac,
+          },
+        );
+        this.sessionIntegrityVerifyCache.set(cacheKey, { ...result });
+        while (this.sessionIntegrityVerifyCache.size > SESSION_INTEGRITY_VERIFY_CACHE_MAX_ENTRIES) {
+          const oldestKey = this.sessionIntegrityVerifyCache.keys().next().value;
+          if (oldestKey === undefined) break;
+          this.sessionIntegrityVerifyCache.delete(oldestKey);
+        }
+        return result;
+      },
     };
   }
 
@@ -1350,12 +1371,44 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
     return rpcResponse.result as T;
   }
 
+  private buildSessionIntegrityVerifyCacheKey(
+    entry: JournalEntry,
+    previousHmac: string | null,
+  ): string {
+    return JSON.stringify({
+      previousHmac,
+      type: entry.type,
+      id: entry.id,
+      channelId: entry.channelId,
+      role: entry.role ?? null,
+      content: entry.content ?? null,
+      authorId: entry.authorId ?? null,
+      authorName: entry.authorName ?? null,
+      timestamp: entry.timestamp,
+      discordMessageId: entry.discordMessageId ?? null,
+      metadata: entry.metadata ?? null,
+      originChannelId: entry.originChannelId ?? null,
+      channelVisibility: entry.channelVisibility ?? null,
+      summary: entry.summary ?? null,
+      coveredUpTo: entry.coveredUpTo ?? null,
+      marker: entry.marker ?? null,
+      tombstoneTargetType: entry.tombstoneTargetType ?? null,
+      tombstoneTargetId: entry.tombstoneTargetId ?? null,
+      tombstoneAction: entry.tombstoneAction ?? null,
+      tombstoneActor: entry.tombstoneActor ?? null,
+      tombstoneReason: entry.tombstoneReason ?? null,
+      _hmac: entry._hmac ?? null,
+      _hmacKeyVersion: entry._hmacKeyVersion ?? null,
+    });
+  }
+
   // ── Lifecycle ──
 
   destroy(): void {
     if (this.isDestroying) return;
     this.isDestroying = true;
     this.stopKeepalive();
+    this.sessionIntegrityVerifyCache.clear();
     this.voiceStreams.clear();
     this.connectionCloseHandlers.clear();
     if (this.sessionIntegrityWorker) {
@@ -1387,6 +1440,7 @@ function normalizeGatewayModelHint(modelHint: LLMModelHint | undefined): LLMMode
   if (!modelHint) return undefined;
   const model = normalizeCorrelationText(modelHint.model);
   const provider = normalizeCorrelationText(modelHint.provider)?.toLowerCase();
+  const pin = typeof modelHint.pin === 'boolean' ? modelHint.pin : undefined;
   const maxTokens = toPositiveInteger(modelHint.maxTokens);
   const contextWindow = toPositiveInteger(modelHint.contextWindow);
   const thinkingEnabled = typeof modelHint.thinkingEnabled === 'boolean'
@@ -1401,6 +1455,7 @@ function normalizeGatewayModelHint(modelHint: LLMModelHint | undefined): LLMMode
   if (
     !model
     && !provider
+    && pin === undefined
     && maxTokens === undefined
     && contextWindow === undefined
     && thinkingEnabled === undefined
@@ -1416,6 +1471,7 @@ function normalizeGatewayModelHint(modelHint: LLMModelHint | undefined): LLMMode
   return {
     ...(model ? { model } : {}),
     ...(provider ? { provider } : {}),
+    ...(pin !== undefined ? { pin } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),

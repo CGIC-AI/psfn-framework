@@ -14,11 +14,41 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 
+export type PromptCacheabilityClass = 'static' | 'session_stable' | 'append_only' | 'volatile';
+export type PromptCacheBreaker =
+  | 'prompt_layer'
+  | 'runtime'
+  | 'channel'
+  | 'task'
+  | 'macro'
+  | 'tool'
+  | 'retrieval'
+  | 'scratchpad'
+  | 'session_history';
+
+export interface PromptSectionCacheability {
+  section:
+    | 'staticPrefixTemplate'
+    | 'dynamicSuffixTemplate'
+    | 'renderedStaticPrefix'
+    | 'renderedDynamicSuffix'
+    | 'runtimeContext'
+    | 'memoryContextBlock'
+    | 'scratchpadContext'
+    | 'assembledPrompt'
+    | 'finalSystemPrompt'
+    | 'messages';
+  cacheability: PromptCacheabilityClass;
+  cacheBreakers: PromptCacheBreaker[];
+  reason: string;
+}
+
 export interface TurnPromptSnapshot {
   staticPrefixTemplate: string;
   dynamicSuffixTemplate: string;
   staticHash: string;
   versionPointer: string;
+  sectionCacheability?: PromptSectionCacheability[];
 }
 
 export interface TurnSessionContextSnapshot {
@@ -88,6 +118,7 @@ export interface TurnPromptContextSnapshot {
   inputSections?: PromptSectionTelemetry[];
   runtimeContextSections?: PromptSectionTelemetry[];
   finalSystemSections?: PromptSectionTelemetry[];
+  sectionCacheability?: PromptSectionCacheability[];
 }
 
 export interface TurnToolContextSnapshot {
@@ -160,6 +191,15 @@ export function cloneTurnPromptResponseSnapshot(
 ): TurnPromptResponseSnapshot {
   return {
     ...response,
+  };
+}
+
+export function clonePromptSectionCacheability(
+  section: PromptSectionCacheability,
+): PromptSectionCacheability {
+  return {
+    ...section,
+    cacheBreakers: [...section.cacheBreakers],
   };
 }
 

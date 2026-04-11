@@ -19,6 +19,8 @@ export interface RoutingCandidate {
   provider: string;
   maxTokens: number;
   contextWindow?: number;
+  supportsVision?: boolean;
+  supportsReasoning?: boolean;
   thinkingEnabled?: boolean;
   thinkingEffort?: ModelThinkingEffort;
   temperature?: number;
@@ -79,6 +81,8 @@ function uniquePush(
     candidate.model,
     String(candidate.maxTokens),
     String(candidate.contextWindow ?? ''),
+    String(candidate.supportsVision ?? ''),
+    String(candidate.supportsReasoning ?? ''),
     String(candidate.thinkingEnabled ?? ''),
     candidate.thinkingEffort ?? '',
     String(candidate.temperature ?? ''),
@@ -303,6 +307,12 @@ function candidateFromRegistryEntry(
   if (maxTokens === undefined) return null;
 
   const contextWindow = resolveContextWindow(entry, config.defaultContextWindow) ?? 0;
+  const supportsVision = typeof entry.capabilities?.supportsVision === 'boolean'
+    ? entry.capabilities.supportsVision
+    : undefined;
+  const supportsReasoning = typeof entry.capabilities?.supportsReasoning === 'boolean'
+    ? entry.capabilities.supportsReasoning
+    : undefined;
   const tuning = resolveCandidateTuning(entry);
   return {
     candidate: withOpenRouterPreferences({
@@ -311,6 +321,8 @@ function candidateFromRegistryEntry(
       model,
       maxTokens,
       ...(contextWindow > 0 ? { contextWindow } : {}),
+      ...(supportsVision !== undefined ? { supportsVision } : {}),
+      ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),
       ...tuning,
     }, config),
     primary: purposeTag.primary === true,

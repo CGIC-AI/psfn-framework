@@ -4,7 +4,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { saveSettings } from '../../../system/settings.js';
-import { saveSchedulerConfig } from '../../../system/config/scheduler-config.js';
+import {
+  loadSchedulerSeedDefaults,
+  saveSchedulerConfig,
+} from '../../../system/config/scheduler-config.js';
 import {
   RUNTIME_MODE,
   resolveRuntimeModeContract,
@@ -108,6 +111,7 @@ describe('resolveStartupPreflightBundle', () => {
       memoryRetrievalLimit: 12,
     });
     saveSchedulerConfig(systemDataDir, {
+      ...loadSchedulerSeedDefaults(),
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 8_000,
       salienceDecayIntervalMs: 123_000,

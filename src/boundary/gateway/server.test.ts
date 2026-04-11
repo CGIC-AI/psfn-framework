@@ -342,6 +342,40 @@ describe('GatewayServer', () => {
         reason: 'missing_signature',
       });
     });
+
+    it('does not audit internal session.hmac RPC calls', async () => {
+      const auditLog = vi.fn().mockResolvedValue(1);
+      const auditComplete = vi.fn().mockResolvedValue(undefined);
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        auditStore: {
+          log: auditLog,
+          complete: auditComplete,
+          recordSummary: vi.fn(),
+          createSummaryHook: vi.fn(),
+          getRecent: vi.fn(),
+          getByMethod: vi.fn(),
+          getApprovalEvents: vi.fn(),
+          count: vi.fn(),
+        } as any,
+      });
+
+      const verifyResponse = await invokeRpc(conn, 903, 'session.hmac.verify', {
+        entry: {
+          type: 'message',
+          id: 1,
+          channelId: 'api:test',
+          role: 'user',
+          content: 'hello',
+          timestamp: 1_000,
+        },
+        previousHmac: null,
+      });
+
+      expect(verifyResponse.error).toBeUndefined();
+      expect(auditLog).not.toHaveBeenCalled();
+      expect(auditComplete).not.toHaveBeenCalled();
+    });
   });
 
   it('serves fs.list results from workspace-scoped globbing', async () => {

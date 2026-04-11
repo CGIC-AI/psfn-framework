@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ImageService } from './service.js';
 
@@ -59,6 +62,17 @@ afterEach(() => {
 });
 
 describe('ImageService', () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    while (tempDirs.length > 0) {
+      const dir = tempDirs.pop();
+      if (dir) {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
   it('uses FAL by default when the provider succeeds', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -115,6 +129,58 @@ describe('ImageService', () => {
         },
       ],
     });
+  });
+
+  it('persists generated outputs into the companion images directory when companion storage is configured', async () => {
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-image-service-'));
+    tempDirs.push(companionDataDir);
+    const imageBytes = Uint8Array.from([1, 2, 3, 4]);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2') {
+        expect(init?.method).toBe('POST');
+        return jsonResponse({
+          status: 'COMPLETED',
+          request_id: 'fal-req-storage-1',
+          response_url: 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-req-storage-1',
+        });
+      }
+
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-req-storage-1') {
+        return jsonResponse({
+          images: [
+            {
+              url: 'https://cdn.example.test/output-storage.png',
+              content_type: 'image/png',
+              file_name: 'output-storage.png',
+            },
+          ],
+        });
+      }
+
+      if (url === 'https://cdn.example.test/output-storage.png') {
+        return binaryResponse(imageBytes);
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+        companionDataDir,
+        systemDataDir: join(companionDataDir, '..', 'system-data'),
+      } as any,
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'a lighthouse at dusk',
+    });
+
+    expect(result.images[0]?.localPath).toBeTruthy();
+    expect(existsSync(result.images[0]!.localPath!)).toBe(true);
+    expect(readFileSync(result.images[0]!.localPath!)).toEqual(Buffer.from(imageBytes));
   });
 
   it('maps Flux 2 generation options to the FAL payload', async () => {

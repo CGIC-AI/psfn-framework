@@ -20,7 +20,7 @@ import {
 } from './file-io.js';
 import { makeReadableFilePath } from '../../sessions/store/channel-filenames.js';
 import type { SessionEntryRole } from '../../../core/session/types.js';
-import type { SessionFileSeed } from '../../sessions/store-primitives.js';
+import type { SessionFileSeed } from '../../sessions/store-file-contracts.js';
 
 export interface SessionJournalPort {
   appendJournalEntry(filePath: string, entry: JournalEntry): void;

@@ -19,6 +19,7 @@ import {
 } from './types.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { normalizeToolArguments } from '../../shared/tool-argument-normalization.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const SCRATCHPAD_DEFAULT_LIMIT = 20;
@@ -107,14 +108,19 @@ export function createMemoryWriteTool(
     name: 'memory_write',
     description:
       'Write a new memory. Automatically deduplicates against existing memories. ' +
-      'Use for intentionally recording important facts, observations, or learnings.',
+      'Use for intentionally recording important facts, observations, or learnings. ' +
+      'Pass each argument in its own field; do not serialize a JSON object into text.',
     label: 'memory_write',
     parameters: Type.Object({
-      text: Type.String({ description: 'The memory text — a single clear sentence stating the fact' }),
+      text: Type.String({
+        description:
+          'The memory text only. Use just the fact or secret string itself, not JSON, not field labels, and not other parameters.',
+      }),
       type: Type.Unsafe<MemoryType>({
         type: 'string',
         enum: [...VALID_MEMORY_TYPES],
-        description: 'Memory type: episodic (events), semantic (facts), emotional (feelings), procedural (patterns), boundary (refusal/safety constraints), reflection (meta)',
+        description:
+          'Memory type only. Set this as a separate field: episodic (events), semantic (facts), emotional (feelings), procedural (patterns), boundary (refusal/safety constraints), reflection (meta).',
       }),
       importance: Type.Optional(
         Type.Number({ description: '0-1, how significant (default 0.5). 0.8+ for core identity facts.' }),
@@ -132,7 +138,8 @@ export function createMemoryWriteTool(
         Type.Unsafe<SensitivityLevel>({
           type: 'string',
           enum: [...VALID_SENSITIVITY_LEVELS],
-          description: 'Privacy level: public (share anywhere), personal (trusted only), intimate (primary only), confidential (1:1 only). Default: personal.',
+          description:
+            'Privacy level only. Set this as a separate field: public (share anywhere), personal (trusted only), intimate (primary only), confidential (1:1 only). Default: personal.',
         }),
       ),
     }),
@@ -140,6 +147,7 @@ export function createMemoryWriteTool(
       toolCallId: string,
       params: {
         text: string;
+        content?: string;
         type: MemoryType;
         importance?: number;
         emotional_valence?: number;
@@ -150,8 +158,12 @@ export function createMemoryWriteTool(
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const internalSource = extractInternalSource(params as Record<string, unknown>);
-        const { text, type } = params;
+        const normalizedParams = (normalizeToolArguments(
+          'memory_write',
+          params as Record<string, unknown>,
+        ) ?? params) as typeof params;
+        const internalSource = extractInternalSource(normalizedParams as Record<string, unknown>);
+        const { text, type } = normalizedParams;
 
         if (!text || text.trim().length === 0) {
           return textResultWithError('Error: text is required', true);
@@ -163,12 +175,12 @@ export function createMemoryWriteTool(
           );
         }
 
-        const importance = params.importance !== undefined ? clamp(Number(params.importance), 0, 1) : undefined;
-        const emotionalValence = params.emotional_valence !== undefined ? clamp(Number(params.emotional_valence), -1, 1) : undefined;
-        const confidence = params.confidence !== undefined ? clamp(Number(params.confidence), 0, 1) : undefined;
+        const importance = normalizedParams.importance !== undefined ? clamp(Number(normalizedParams.importance), 0, 1) : undefined;
+        const emotionalValence = normalizedParams.emotional_valence !== undefined ? clamp(Number(normalizedParams.emotional_valence), -1, 1) : undefined;
+        const confidence = normalizedParams.confidence !== undefined ? clamp(Number(normalizedParams.confidence), 0, 1) : undefined;
 
-        const tags = params.tags
-          ? params.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
+        const tags = normalizedParams.tags
+          ? normalizedParams.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
           : undefined;
         const formationVAD = options.getFormationVAD?.();
         const sourceContext = buildToolSourceContext('memory_write', toolCallId, internalSource);
@@ -184,7 +196,7 @@ export function createMemoryWriteTool(
           sourceRef: sourceContext.sourceRef,
           sourceType: sourceContext.sourceType,
           provenance: sourceContext.provenance,
-          sensitivity: params.sensitivity,
+          sensitivity: normalizedParams.sensitivity,
         });
 
         switch (result.action) {

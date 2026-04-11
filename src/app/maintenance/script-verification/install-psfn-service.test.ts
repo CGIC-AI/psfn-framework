@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -19,7 +19,7 @@ describe('install-psfn-service.sh', () => {
     }
   });
 
-  it('renders a filtered env file and wrapperless systemd unit for env-file launches', () => {
+  it('keeps the authoritative env file and rendered unit under the deployed checkout and links the systemd unit path to that repo-owned file', () => {
     const stagingRoot = mkdtempSync(join(tmpdir(), 'psfn-service-staging-'));
     tempDirs.push(stagingRoot);
 
@@ -77,8 +77,9 @@ describe('install-psfn-service.sh', () => {
       },
     );
 
-    const envFilePath = join(stagingRoot, 'etc/psfn/psfn.env');
-    const unitFilePath = join(stagingRoot, 'etc/systemd/system/psfn.service');
+    const envFilePath = join(stagingRoot, 'var/lib/psfn/app/deployment/systemd/psfn.env');
+    const unitFilePath = join(stagingRoot, 'var/lib/psfn/app/deployment/systemd/psfn.service');
+    const unitPointerPath = join(stagingRoot, 'etc/systemd/system/psfn.service');
     const envFile = readFileSync(envFilePath, 'utf8');
     const unitFile = readFileSync(unitFilePath, 'utf8');
 
@@ -107,7 +108,7 @@ describe('install-psfn-service.sh', () => {
     expect(envFile).not.toMatch(/^HOME=/m);
 
     expect(unitFile).toContain(`WorkingDirectory=${join(stagingRoot, 'var/lib/psfn/app')}`);
-    expect(unitFile).toContain(`EnvironmentFile=-${join(stagingRoot, 'etc/psfn/psfn.env')}`);
+    expect(unitFile).toContain(`EnvironmentFile=-${envFilePath}`);
     expect(unitFile).toContain('Environment=PSFN_SKIP_DOTENV=true');
     expect(unitFile).toContain('Environment=PSFN_RUNTIME_MODE=yolo');
     expect(unitFile).toContain('Environment=PSFN_RUNTIME_LAYOUT_MODE=production');
@@ -116,5 +117,9 @@ describe('install-psfn-service.sh', () => {
     expect(unitFile).toContain(`${join(stagingRoot, 'var/lib/psfn/app/scripts/start-gateway-agent.sh')}`);
     expect(unitFile).not.toContain('source /mnt/samesung/ai/psfn-live/.env');
     expect(unitFile).not.toContain('ExecStart=/bin/bash -lc');
+
+    expect(lstatSync(unitPointerPath).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(unitPointerPath)).toBe(unitFilePath);
+    expect(existsSync(join(stagingRoot, 'etc/psfn/psfn.env'))).toBe(false);
   });
 });

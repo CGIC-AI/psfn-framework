@@ -1,4 +1,4 @@
-import type { ScratchpadProvider } from '../../core/agent/contracts.js';
+import type { ScratchpadProvider } from '../../core/agent/scratchpad-port.js';
 import type {
   CoreMemoryAppendOptions,
   CoreMemoryBlock,
@@ -296,12 +296,18 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     persistMemoryWrite: async (input) => {
       await store.persistMemoryWrite(input);
     },
+    runInTransaction: async (handler) => {
+      return await store.runInTransaction(handler);
+    },
     searchByEmbedding: async (embedding, threshold, limit, scopeQuery) => (
       await store.searchByEmbedding(embedding, threshold, limit, scopeQuery)
     ),
     searchByText: async (query, limit, scopeQuery) => await store.searchByText(query, limit, scopeQuery),
     updateMemory: async (id, updates) => {
       await store.updateMemory(id, updates);
+    },
+    recordPatchEvent: async (event) => {
+      await store.recordPatchEvent(event);
     },
     getAllActiveMemories: async (limit) => await store.getAllActiveMemories(limit),
     listActiveMemories: async (options) => await store.listActiveMemories(options),

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../../shared/event-bus.js';
 import { UserContinuityStore } from '../../../core/session/continuity.js';
+import { createUserContinuityPort } from '../../../core/session/cross-channel-continuity-port.js';
 import { SessionManager } from '../../../core/session/manager.js';
 import {
   buildToolObservationMetadata,
@@ -340,6 +341,61 @@ describe('AdminSessionDataService', () => {
     });
   });
 
+  it('drops sibling API session continuity entries from merged context', () => {
+    const continuityStore = new UserContinuityStore(join(dir, 'continuity'));
+    continuityStore.append('canonical-contact-1', {
+      channelId: 'api:principal-a:session-b',
+      role: 'assistant',
+      content: 'This should stay in session-b.',
+      authorId: 'companion',
+      authorName: 'Whisper',
+      timestamp: 1_700_000_000_000,
+      channelVisibility: 'private',
+    });
+
+    const continuityPort = createUserContinuityPort(continuityStore);
+    expect(continuityPort.getMerged({
+      canonicalUserId: 'canonical-contact-1',
+      limit: 10,
+      fallbackUserIds: [],
+      channelId: 'api:principal-a:session-a',
+    })).toEqual([]);
+  });
+
+  it('drops continuity entries whose stored provenance no longer matches the entry payload', () => {
+    const continuityStore = new UserContinuityStore(join(dir, 'continuity'));
+    continuityStore.append('canonical-contact-1', {
+      channelId: 'discord:dm',
+      role: 'user',
+      content: 'Real message',
+      authorId: 'canonical-contact-1',
+      authorName: 'User',
+      timestamp: 1_700_000_000_000,
+      channelVisibility: 'private',
+    });
+
+    const [entry] = continuityStore.getRecent('canonical-contact-1', 10);
+    expect(entry).toBeDefined();
+    entry!.metadata = JSON.stringify({
+      continuity: {
+        kind: 'continuity',
+        continuityUserId: 'canonical-contact-1',
+        sourceChannelId: 'discord:other-dm',
+        sourceVisibility: 'private',
+        sourceRole: 'user',
+        recordedAt: 1_700_000_000_000,
+      },
+    });
+
+    const continuityPort = createUserContinuityPort(continuityStore);
+    expect(continuityPort.getMerged({
+      canonicalUserId: 'canonical-contact-1',
+      limit: 10,
+      fallbackUserIds: [],
+      channelId: 'api:principal-a:session-a',
+    })).toEqual([]);
+  });
+
   it('surfaces continuity provenance for cross-channel inspection', () => {
     const continuityStore = new UserContinuityStore(join(dir, 'continuity'));
     continuityStore.append('canonical-contact-1', {
@@ -672,7 +728,7 @@ describe('AdminSessionDataService', () => {
     });
   });
 
-  it('lists and reads distinct sessions for the same logical channel', () => {
+  it('lists and reads distinct sessions for the same logical channel', async () => {
     const channelId = 'voxta:legacy:cf0a06ea';
     writeFileSync(join(dir, '20241119_voxta-legacy-cf0a06ea_alex_111111.jsonl'), [
       JSON.stringify({

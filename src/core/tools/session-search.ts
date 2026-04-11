@@ -324,12 +324,17 @@ export function createSessionSearchTool(
     label: 'session_search',
     description:
       'Search archived L0 session transcripts with the fast keyword index. '
+      + 'Use query (or keyword) for the search text. '
       + 'Use summarize=true only when you want a short synthesis; raw hits are cheaper.',
     parameters: Type.Object({
-      query: Type.String({
+      query: Type.Optional(Type.String({
         minLength: 1,
         description: 'Keyword or phrase query to search in archived transcripts.',
-      }),
+      })),
+      keyword: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Alias for query.',
+      })),
       limit: Type.Optional(Type.Integer({
         minimum: 1,
         maximum: 25,
@@ -346,14 +351,15 @@ export function createSessionSearchTool(
     execute: async (
       _toolCallId: string,
       params: {
-        query: string;
+        query?: string;
+        keyword?: string;
         limit?: number;
         channelId?: string;
         summarize?: boolean;
       },
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const query = params.query.trim();
+      const query = (params.query ?? params.keyword ?? '').trim();
       if (!query) {
         return textResultWithError('session_search requires a non-empty query.', true);
       }

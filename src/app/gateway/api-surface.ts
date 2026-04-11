@@ -4,7 +4,10 @@ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { ApiServer } from '../../channels/api/server.js';
 import { resolveApiCorsAllowedOrigins } from '../../channels/api/http-policy.js';
 import { createApiVoiceWebSocketRuntime } from '../../channels/api/voice-websocket-runtime.js';
-import { GatewayApiRuntime } from '../../channels/api/gateway-runtime.js';
+import {
+  computeGatewayChatRequestTimeoutMs,
+  GatewayApiRuntime,
+} from '../../channels/api/gateway-runtime.js';
 import type { GatewayServer } from '../../boundary/gateway/server.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -16,6 +19,7 @@ import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-parsing.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
+const GATEWAY_API_REQUEST_TIMEOUT_MS = 120_000;
 
 export interface GatewayApiSurfaceBindings {
   apiHost?: string;
@@ -186,7 +190,10 @@ export async function startOptionalGatewayApiServer(
     corsAllowedOrigins,
     voiceWebSocketPath,
     voiceWebSocketRuntime,
-    runtime: new GatewayApiRuntime(options.gateway),
+    requestTimeoutMs: GATEWAY_API_REQUEST_TIMEOUT_MS,
+    runtime: new GatewayApiRuntime(options.gateway, {
+      chatRequestTimeoutMs: computeGatewayChatRequestTimeoutMs(GATEWAY_API_REQUEST_TIMEOUT_MS),
+    }),
     modelName: options.config.companionId,
   });
   await apiServer.start();

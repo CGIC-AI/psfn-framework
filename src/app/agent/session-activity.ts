@@ -3,7 +3,10 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { inferSessionChannelType } from '../../core/session/session-id.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { SessionRestartBehavior } from '../../system/config/runtime-config-contracts.js';
-import { writeLastActiveSession } from '../../system/lifecycle/notifications.js';
+import {
+  readLastActiveSession,
+  writeLastActiveSession,
+} from '../../system/lifecycle/notifications.js';
 
 const log = createComponentLogger('Agent');
 
@@ -12,6 +15,19 @@ export function writeStartupSessionMetadata(
   companionDataDir: string,
   restartBehavior: SessionRestartBehavior = 'reuse_latest_session',
 ): void {
+  if (restartBehavior !== 'new_session') {
+    const persisted = readLastActiveSession(companionDataDir);
+    if (persisted && sessionManager.getMessageCount(persisted.sessionId) > 0) {
+      writeLastActiveSession(companionDataDir, persisted);
+      log.info('Restored persisted startup session metadata', {
+        sessionId: persisted.sessionId,
+        channelType: persisted.channelType ?? 'unknown',
+        timestamp: persisted.timestamp,
+      });
+      return;
+    }
+  }
+
   const startupSession = sessionManager.resolveStartupSessionMetadata(restartBehavior);
   if (!startupSession) {
     return;

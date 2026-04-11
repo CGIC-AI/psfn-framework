@@ -3,6 +3,7 @@ import type { EmbeddingProviderPort, LLMProviderPort } from '../../../core/agent
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { MemoryType, MemoryRedactionOperation } from '../../../faculties/memory/types.js';
+import type { SessionSearchHit } from '../../../persistence/sessions/transcript-projection-port.js';
 import {
   VALID_MEMORY_TYPES,
   VALID_MEMORY_REDACTION_OPERATIONS,
@@ -24,7 +25,7 @@ export interface SessionSearchOptions {
 
 export interface MemoryCapabilities {
   memory_search: (query: string, limit?: number) => Promise<Array<{ text: string; type: string; importance: number; similarity: number }>>;
-  memory_count: () => Promise<number>;
+  memory_count: () => Promise<number> | number;
   memory_write: (
     text: string,
     type: string,
@@ -71,25 +72,123 @@ interface CreateMemoryCapabilitiesOptions {
   pushEvidence: (entry: ThinkEvidence) => void;
 }
 
+function resolveTranscriptSearchPort(
+  sessionManager: SessionManager | null,
+): {
+  searchByKeywords: (query: string, limit?: number) => Promise<SessionSearchHit[]>;
+} | null {
+  if (!sessionManager) {
+    return null;
+  }
+
+  const candidate = sessionManager as SessionManager & {
+    searchByKeywords?: (query: string, limit?: number) => Promise<SessionSearchHit[]>;
+    searchTranscripts?: (query: string, limit?: number) => Promise<SessionSearchHit[]>;
+  };
+
+  if (typeof candidate.searchByKeywords === 'function') {
+    return {
+      searchByKeywords: candidate.searchByKeywords.bind(sessionManager),
+    };
+  }
+
+  if (typeof candidate.searchTranscripts === 'function') {
+    return {
+      searchByKeywords: candidate.searchTranscripts.bind(sessionManager),
+    };
+  }
+
+  return null;
+}
+
 function nextReplInvocationId(): string {
   return `repl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function createCompatibleMemoryStore(memoryStore: MemoryStorePort | null): MemoryStorePort | null {
+  if (!memoryStore) {
+    return null;
+  }
+
+  const store = memoryStore as MemoryStorePort & {
+    countActiveMemories?: MemoryStorePort['countActiveMemories'];
+    persistMemoryWrite?: MemoryStorePort['persistMemoryWrite'];
+  };
+
+  if (
+    typeof store.countActiveMemories === 'function'
+    && typeof store.persistMemoryWrite === 'function'
+  ) {
+    return memoryStore;
+  }
+
+  return new Proxy(store, {
+    get(target, prop, receiver) {
+      if (prop === 'countActiveMemories') {
+        return async (): Promise<number> => {
+          if (typeof target.countActiveMemories === 'function') {
+            return target.countActiveMemories();
+          }
+          return (await target.getAllActiveMemories()).length;
+        };
+      }
+
+      if (prop === 'persistMemoryWrite') {
+        return async (
+          input: Parameters<MemoryStorePort['persistMemoryWrite']>[0],
+        ): Promise<void> => {
+          if (typeof target.persistMemoryWrite === 'function') {
+            await target.persistMemoryWrite(input);
+            return;
+          }
+
+          if (typeof target.insertMemory !== 'function') {
+            throw new Error('memory store missing persistMemoryWrite/insertMemory');
+          }
+
+          const commit = async (): Promise<void> => {
+            await target.insertMemory(input.memory, input.embedding);
+
+            if (input.supersededMemoryIds?.length) {
+              if (typeof target.updateMemory !== 'function') {
+                throw new Error('memory store missing updateMemory for superseded writes');
+              }
+              for (const memoryId of input.supersededMemoryIds) {
+                await target.updateMemory(memoryId, { supersededBy: input.memory.id });
+              }
+            }
+          };
+
+          if (typeof target.runInTransaction === 'function') {
+            await target.runInTransaction(() => commit());
+            return;
+          }
+
+          await commit();
+        };
+      }
+
+      return Reflect.get(target, prop, receiver);
+    },
+  }) as MemoryStorePort;
+}
+
 export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOptions): MemoryCapabilities {
-  const writer = (options.embeddingService && options.memoryStore)
-    ? new MemoryWriter(options.memoryStore, options.embeddingService)
+  const memoryStore = createCompatibleMemoryStore(options.memoryStore);
+  const writer = (options.embeddingService && memoryStore)
+    ? new MemoryWriter(memoryStore, options.embeddingService)
     : null;
 
   const memory_search = async (
     query: string,
     limit = 10,
   ): Promise<Array<{ text: string; type: string; importance: number; similarity: number }>> => {
-    if (!options.embeddingService || !options.memoryStore) {
+    if (!options.embeddingService || !memoryStore) {
       return [];
     }
 
     const embedding = await options.embeddingService.embed(query);
-    const results = await options.memoryStore.searchByEmbedding(embedding, 0.3, limit);
+    const results = await memoryStore.searchByEmbedding(embedding, 0.3, limit);
 
     addEvidence(options.pushEvidence, {
       source: 'memory_search',
@@ -106,11 +205,11 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     }));
   };
 
-  const memory_count = async (): Promise<number> => {
-    if (!options.memoryStore) {
+  const memory_count = (): Promise<number> | number => {
+    if (!memoryStore) {
       return 0;
     }
-    return (await options.memoryStore.getAllActiveMemories()).length;
+    return memoryStore.countActiveMemories();
   };
 
   const memory_write = async (
@@ -127,15 +226,19 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
       return { action: 'error', id: `invalid type: ${type}` };
     }
 
-    const result = await writer.write({
-      text,
-      type: type as MemoryType,
-      importance,
-      emotionalValence,
-      tags: splitCsvTags(tags),
-      sourceRef: `source:repl|operation:memory_write|invocation:${nextReplInvocationId()}`,
-    });
-    return { action: result.action, id: result.memory.id };
+    try {
+      const result = await writer.write({
+        text,
+        type: type as MemoryType,
+        importance,
+        emotionalValence,
+        tags: splitCsvTags(tags),
+        sourceRef: `source:repl|operation:memory_write|invocation:${nextReplInvocationId()}`,
+      });
+      return { action: result.action, id: result.memory.id };
+    } catch (error) {
+      return { action: 'error', id: toTrimmedString((error as Error).message) || 'memory write failed' };
+    }
   };
 
   const memory_import_batch = async (
@@ -177,20 +280,28 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
       return { action: 'error', id: `invalid type: ${type}`, superseded: false };
     }
 
-    const result = await writer.upsert({
-      text,
-      type: type as MemoryType,
-      importance,
-      emotionalValence,
-      tags: splitCsvTags(tags),
-      sourceRef: `source:repl|operation:memory_upsert|invocation:${nextReplInvocationId()}`,
-    });
+    try {
+      const result = await writer.upsert({
+        text,
+        type: type as MemoryType,
+        importance,
+        emotionalValence,
+        tags: splitCsvTags(tags),
+        sourceRef: `source:repl|operation:memory_upsert|invocation:${nextReplInvocationId()}`,
+      });
 
-    return {
-      action: result.action,
-      id: result.memory.id,
-      superseded: result.action === 'superseded',
-    };
+      return {
+        action: result.action,
+        id: result.memory.id,
+        superseded: result.action === 'superseded',
+      };
+    } catch (error) {
+      return {
+        action: 'error',
+        id: toTrimmedString((error as Error).message) || 'memory upsert failed',
+        superseded: false,
+      };
+    }
   };
 
   const memory_redact = async (
@@ -218,13 +329,21 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
       : 'auto';
     const invocationId = nextReplInvocationId();
 
-    const result = await writer.redact({
-      memoryId: normalizedId,
-      operation: normalizedOperation,
-      reason: toTrimmedString(reason) || undefined,
-      requestedBy: `source:repl|operation:memory_redact|invocation:${invocationId}`,
-      sourceRef: `source:repl|operation:memory_redact|invocation:${invocationId}`,
-    });
+    let result;
+    try {
+      result = await writer.redact({
+        memoryId: normalizedId,
+        operation: normalizedOperation,
+        reason: toTrimmedString(reason) || undefined,
+        requestedBy: `source:repl|operation:memory_redact|invocation:${invocationId}`,
+        sourceRef: `source:repl|operation:memory_redact|invocation:${invocationId}`,
+      });
+    } catch (error) {
+      return {
+        operation: 'error',
+        sourceId: toTrimmedString((error as Error).message) || 'memory redact failed',
+      };
+    }
 
     if (!result) {
       return { operation: 'error', sourceId: 'memory not found' };
@@ -269,7 +388,7 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
   ): Promise<SessionSearchResult> => {
     const normalizedQuery = toTrimmedString(query);
     const result = await runSessionSearch({
-      sessionManager: options.sessionManager,
+      transcriptSearch: resolveTranscriptSearchPort(options.sessionManager),
       llmProvider: options.llmProvider,
       query: normalizedQuery,
       limit,
@@ -296,11 +415,11 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
   };
 
   const memory_get_by_id = async (id: string): Promise<Record<string, unknown> | null> => {
-    if (!options.memoryStore) {
+    if (!memoryStore) {
       return null;
     }
 
-    const memory = await options.memoryStore.getById(id);
+    const memory = await memoryStore.getById(id);
     if (!memory) {
       return null;
     }

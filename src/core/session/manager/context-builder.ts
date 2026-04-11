@@ -127,6 +127,13 @@ function summarizeTextList(values: readonly string[], maxItems = 2): string {
     .join(' / ');
 }
 
+function summarizeFocusKnowledgeForOrientation(values: readonly string[], maxItems = 2): string {
+  return summarizeTextList(
+    values.map(value => value.replace(/^\[[^\]]+\]\s*/u, '')),
+    maxItems,
+  );
+}
+
 function formatIdleGap(idleGapMs: number): string {
   const normalized = Math.max(0, Math.floor(idleGapMs));
   const totalMinutes = Math.max(0, Math.floor(normalized / 60_000));
@@ -217,7 +224,7 @@ export function buildOrientationNoteTelemetry(params: {
 
   const sessionSummary = summarizeConversationEntries(priorEntries, params.characterName);
   const continuitySummary = summarizeConversationEntries(params.continuityEntries, params.characterName);
-  const openThreadSummary = summarizeTextList(params.focusKnowledgeTexts);
+  const openThreadSummary = summarizeFocusKnowledgeForOrientation(params.focusKnowledgeTexts);
 
   const noteParts = [
     '[Welcome back]',

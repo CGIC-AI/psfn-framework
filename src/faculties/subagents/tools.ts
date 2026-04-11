@@ -167,7 +167,7 @@ export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
     const action = typeof params.action === 'string' ? params.action : 'spawn';
     return action === 'status' || action === 'wait'
       ? 'identity.read'
-      : 'subagent.spawn';
+      : 'shard.spawn';
   });
 }
 

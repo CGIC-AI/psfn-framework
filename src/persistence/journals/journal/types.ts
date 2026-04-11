@@ -58,6 +58,7 @@ export interface SessionHmacKeyringInput {
 export interface JournalIntegrityVerificationResult {
   verified: boolean;
   observedHmac: string | null;
+  expectedHmac?: string | null;
   reason?: string;
 }
 

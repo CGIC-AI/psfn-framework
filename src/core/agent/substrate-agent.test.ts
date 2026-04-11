@@ -3487,9 +3487,9 @@ describe('SubstrateAgent.handleMessage', () => {
     } as any;
     agent.registerTool(extendedProbeTool, 'extended');
 
-    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
-    expect(loadTools).toBeDefined();
-    await (loadTools as any).execute('load-1', { tools: ['extended_probe_tool'] });
+    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
+    expect(toolset).toBeDefined();
+    await (toolset as any).execute('load-1', { action: 'activate', tools: ['extended_probe_tool'] });
 
     const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
     await agent.handleMessage(makeMessage({ id: 'msg-load-persist-1' }));
@@ -3503,7 +3503,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(setToolNamesByCall[1]).toContain('extended_probe_tool');
   });
 
-  it('captures deferred tool-handoff intent details from load_tools', async () => {
+  it('captures deferred tool-handoff intent details from toolset activate', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
@@ -3525,10 +3525,11 @@ describe('SubstrateAgent.handleMessage', () => {
     } as any;
     agent.registerTool(extendedProbeTool, 'extended');
 
-    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
-    expect(loadTools).toBeDefined();
+    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
+    expect(toolset).toBeDefined();
 
-    const result = await (loadTools as any).execute('load-intent-1', {
+    const result = await (toolset as any).execute('load-intent-1', {
+      action: 'activate',
       tools: ['extended_probe_tool'],
       intendedAction: 'Use extended_probe_tool to gather diagnostics for this request.',
       deferUntilTurnBoundary: true,
@@ -3548,7 +3549,7 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
-  it('skips background-only load_tools candidates and emits same-turn activation diagnostics', async () => {
+  it('skips background-only toolset activate candidates and emits same-turn activation diagnostics', async () => {
     const eventBus = new EventBus();
     const agent = new SubstrateAgent(
       eventBus,
@@ -3576,13 +3577,19 @@ describe('SubstrateAgent.handleMessage', () => {
     (agent as any).activeTurnTaskKind = 'chat';
     (agent as any).activeTurnIntent = 'ops';
 
-    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
-    expect(loadTools).toBeDefined();
-    const result = await (loadTools as any).execute('load-background-skip', {
+    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
+    expect(toolset).toBeDefined();
+    const result = await (toolset as any).execute('load-background-skip', {
+      action: 'activate',
       tools: ['schedule_task', 'repo_status'],
     });
 
-    expect(result.content[0]?.text).toContain('Background-only tools not activated in-turn: schedule_task');
+    const payload = JSON.parse(result.content[0]?.text as string) as {
+      backgroundOnlyTools?: string[];
+      activatedTools?: string[];
+    };
+    expect(payload.backgroundOnlyTools).toEqual(['schedule_task']);
+    expect(payload.activatedTools).toEqual(['repo_status']);
     const runtimeState = agent.getAdaptiveToolRuntimeState();
     const activeToolNames = runtimeState.activeTools.map(tool => tool.toolName);
     expect(activeToolNames).toContain('repo_status');
@@ -3606,7 +3613,7 @@ describe('SubstrateAgent.handleMessage', () => {
     ]));
   });
 
-  it('activates promoted extended tools each turn without load_tools calls', async () => {
+  it('activates promoted extended tools each turn without toolset activate calls', async () => {
     const config = makeConfig({
       promotedExtendedTools: ['extended_probe_tool'],
     });
@@ -3706,7 +3713,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     const toolNames = configuredTools.map(tool => tool.name);
-    expect(toolNames).toEqual(['load_tools']);
+    expect(toolNames).toEqual(['tool_search', 'toolset']);
 
     expect(autoloadSummaries).toEqual([]);
   });
@@ -3811,7 +3818,8 @@ describe('SubstrateAgent.handleMessage', () => {
     });
     expect(isTurnId(snapshot?.turnId)).toBe(true);
     expect(snapshot?.tools).toEqual(expect.arrayContaining([
-      expect.objectContaining({ toolName: 'load_tools', source: 'core' }),
+      expect.objectContaining({ toolName: 'tool_search', source: 'core' }),
+      expect.objectContaining({ toolName: 'toolset', source: 'core' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
       expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded' }),
       expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred' }),
@@ -3821,19 +3829,20 @@ describe('SubstrateAgent.handleMessage', () => {
       expect.objectContaining({ toolName: 'ghost_tool', source: 'promoted', reason: 'not_registered' }),
     ]));
     expect(snapshot?.counts).toMatchObject({
-      core: 1,
+      core: 2,
       promoted: 1,
       autoload: 0,
       extendedLoaded: 1,
       deferred: 1,
-      total: 4,
+      total: 5,
     });
 
     expect(adaptiveDecisions).toEqual(expect.arrayContaining([
       expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded', decision: 'activated' }),
       expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred', decision: 'activated' }),
       expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', decision: 'skipped', reason: 'capability_denied' }),
-      expect.objectContaining({ toolName: 'load_tools', source: 'core', decision: 'active', reason: 'turn_active_set' }),
+      expect.objectContaining({ toolName: 'tool_search', source: 'core', decision: 'active', reason: 'turn_active_set' }),
+      expect.objectContaining({ toolName: 'toolset', source: 'core', decision: 'active', reason: 'turn_active_set' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted', decision: 'active', reason: 'turn_active_set' }),
     ]));
   });
@@ -3862,9 +3871,9 @@ describe('SubstrateAgent.handleMessage', () => {
     } as any;
     agent.registerTool(extendedProbeTool, 'extended');
 
-    const loadTools = agent.getToolCatalog().core.find((tool) => tool.name === 'load_tools');
-    expect(loadTools).toBeDefined();
-    await (loadTools as any).execute('load-promoted-dedupe', { tools: ['extended_probe_tool'] });
+    const toolset = agent.getToolCatalog().core.find((tool) => tool.name === 'toolset');
+    expect(toolset).toBeDefined();
+    await (toolset as any).execute('load-promoted-dedupe', { action: 'activate', tools: ['extended_probe_tool'] });
 
     const setToolsSpy = vi.spyOn((agent as any).agent, 'setTools');
     await agent.handleMessage(makeMessage({ id: 'msg-promoted-dedupe' }));

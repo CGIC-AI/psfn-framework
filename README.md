@@ -18,7 +18,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 ## Features
 
 ### Core
-- **Agent Loop** — LLM-powered conversation with streaming, tool use, steering, follow-up handling, and lazy tool loading (built on [pi-agent-core](https://github.com/nickvdyck/pi-ai))
+- **Agent Loop** — LLM-powered conversation with streaming, tool use, steering, follow-up handling, and adaptive tool discovery/activation (`tool_search`, `toolset`, promotion, bounded autoload) built on [pi-agent-core](https://github.com/nickvdyck/pi-ai)
 - **Memory System** — 6 memory types (episodic, semantic, emotional, procedural, reflection, relational) with embedding-based retrieval, salience decay, contradiction resolution, agent-accessible write/redact tools, and scratchpad storage
 - **Pluggable Embeddings** — Runtime-configured embeddings in `settings.json`: local `@huggingface/transformers`, Ollama, or any OpenAI-compatible embeddings API
 - **Sessions** — Append-only JSONL files per channel — immutable conversation history with auto-compaction
@@ -135,7 +135,7 @@ Embedding selection lives in `settings.json` or, before first boot, `config/sett
 
 That path runs in-process via `@huggingface/transformers` and caches models under `models/transformers` by default. `HF_TOKEN` is only needed for gated or private Hugging Face repos.
 
-The shipped `config/settings.seed.json` currently defaults to the Ollama profile (`snowflake-arctic-embed2`, `1024` dims). If you do not want Ollama, change the seed or the generated `settings.json` before relying on first-boot defaults.
+The shipped `config/settings.seed.json` currently defaults to the local transformers profile (`Xenova/all-MiniLM-L6-v2`, `384` dims). If you want Ollama or another embeddings backend, change the seed or the generated `settings.json` before relying on first-boot defaults.
 
 ### Running
 
@@ -277,32 +277,31 @@ Gateway (host)                    Agent (container, --network=none)
 
 ### Agent Tools
 
-Your companion has access to these tools during conversation. Core tools are always available; extended tools load on demand via `load_tools`. The current names below are a migration surface, not the final collapsed taxonomy; see [`docs/tool-surface.md`](./docs/tool-surface.md) for the target stack and mapping.
+Your companion has access to a mixed direct-tool surface during conversation. `tool_search` and `toolset` are the canonical always-on discovery/control path for non-default overlays. Some domains are already unified (`shell`, `skill`, `orient`, `subagent`), while others still ship as split first-party tools on this stabilized branch. See [`docs/tool-surface.md`](./docs/tool-surface.md) for the target stack and the current-to-target mapping.
 
 Skills are reusable workflow guidance, not world-execution tools. The runtime manages them through the unified `skill` surface while execution stays on the tool families below.
 
-| Category | Tools |
+| Category | Current direct tool names |
 |----------|-------|
-| **Memory** | `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write` |
-| **Contacts** | `contact` |
-| **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle`, `north_star`, `identity_diff`, `identity_changelog`, `character_card_update` |
+| **Adaptive control** | `tool_search`, `toolset` |
+| **Memory and orientation** | `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write`, `orient` |
+| **Contacts** | `contact_list`, `contact_lookup`, `contact_note`, `contact_set_trust`, `contact_link_identity`, `contact_set_channel_privacy` |
+| **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_rollback`, `prompt_layer_toggle`, `identity_diff`, `identity_changelog`, `character_card_update`, `north_star` |
+| **Filesystem and shell** | `fs_list`, `fs_read`, `shell` |
 | **Git** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
 | **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
+| **Sessions and continuity** | `session_search`, `session_grep`, `session_list`, `session_new`, `session_resume`, `start_focus`, `complete_focus` |
+| **Heartbeat** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |
 | **Values** | `values_list`, `values_add`, `values_update` |
-| **Skills** | `skill` (`action=list|view|create|update`) |
-| **Media** | `media` (`action=generate|edit|analyze`; detailed prompt craft lives in creator skills loaded with `skill action="view"`) |
+| **Images and skills** | `image_create`, `image_edit`, `image_analyze`, `skill` (`action=list|view|create|update`) |
+| **Subagents and shards** | `subagent`, `spawn_shard` |
+| **Operator and lifecycle** | `settings_get`, `promoted_tools_list`, `promoted_tools_add`, `promoted_tools_remove`, `promoted_tools_swap`, `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`, `self_restart`, `self_rebuild`, `notify_operator` |
 | **Reasoning** | `think` (RLM+REPL sandbox) |
-| **Shards** | `spawn_shard` (long-running shard runtime with explicit artifact delivery) |
-| **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |
-| **Sessions** | `session_new`, `session_list`, `session_resume` |
-| **Settings** | `settings_get`, `promoted_tools_list`, `promoted_tools_add`, `promoted_tools_remove`, `promoted_tools_swap` |
-| **Lifecycle** | `self_restart`, `self_rebuild`, `notify_operator` |
-| **Meta** | `load_tools` (hot-swap core/extended tool sets) |
 
 Tool surface split:
-- **Direct agent tools**: registered as `core` or `extended`, visible to `load_tools`, subject to promotion/autoload rules
-- **REPL-only helpers**: only available inside `think` — includes `read_file`, `list_files`, `llm_query`, `session_search`, scheduler helpers, and module helpers
-- Shared names can exist on both surfaces, but REPL-only helpers are never promotable direct tools
+- **Direct agent tools**: `tool_search` and `toolset` stay core; the rest are registered as `core` or `extended`, with overlay activation controlled by `toolset`, promotion, and bounded autoload rules
+- **REPL-only helpers**: `think` also exposes bounded helper functions for filesystem, git, shell, memory, and model operations. Those helper names are separate from the direct-tool catalog and are never promotable direct tools.
+- Some capabilities exist on both surfaces, but the direct tool catalog is the source of truth for what the agent can call outside `think`
 
 ## Project Structure
 

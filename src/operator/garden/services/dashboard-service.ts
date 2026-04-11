@@ -49,6 +49,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
     scheduler: Scheduler;
     shardManager: ShardExecutionPort;
     eventBus: EventBus;
+    resolveLastActiveSessionId?: () => string | null;
   }) {
     this.deps.eventBus.on('agent.turn.usage', ({ message, usage }) => {
       const inputTokens = AdminDashboardDataService.normalizeCount(usage.inputTokens);
@@ -168,8 +169,9 @@ export class AdminDashboardDataService implements AdminDashboardService {
       return activeContextSessionId;
     }
 
-    const latestSession = this.deps.sessionStore.getLatestSessionByTimestamp();
-    const latestSessionId = AdminDashboardDataService.normalizeSessionId(latestSession?.sessionId);
+    const latestSessionId = AdminDashboardDataService.normalizeSessionId(
+      this.deps.resolveLastActiveSessionId?.(),
+    );
     if (latestSessionId) {
       return latestSessionId;
     }

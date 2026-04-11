@@ -118,6 +118,20 @@ class RequestLifecycleError extends Error {
   }
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 const telemetryIngestSchema = Type.Object({
   source: Type.String({ minLength: 1, maxLength: 128 }),
   eventType: Type.String({ minLength: 1, maxLength: 128 }),
@@ -133,6 +147,7 @@ type AgentTurnResult = Awaited<ReturnType<SubstrateAgent['handleMessage']>>;
 
 interface PendingTurn {
   channelId: string;
+  wasQueued: boolean;
   releaseChannel: () => void;
   substrateMsg: SubstrateMessage;
 }
@@ -140,6 +155,11 @@ interface PendingTurn {
 interface PreparedTurn {
   channelId: string;
   turnPromise: Promise<AgentTurnResult>;
+}
+
+interface AcquiredChannel {
+  wasQueued: boolean;
+  releaseChannel: () => void;
 }
 
 interface TurnRoutingOverrides {
@@ -475,7 +495,7 @@ export class ApiServer implements ChannelAdapterPort {
     channelId: string,
     req: IncomingMessage,
     res: ServerResponse,
-  ): Promise<(() => void) | null> {
+  ): Promise<AcquiredChannel | null> {
     const queued = this.channelTurnLock.acquire(channelId);
     if (queued.contended) {
       this.emitQueueTelemetry(channelId, 'contended', {
@@ -507,15 +527,18 @@ export class ApiServer implements ChannelAdapterPort {
     });
 
     let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      lease.release();
-      this.processingChannels.delete(channelId);
-      this.emitQueueTelemetry(channelId, 'released', {
-        queueDepth: this.channelTurnLock.pending(channelId),
-        waitMs: Math.max(0, Date.now() - lockStartMs),
-      });
+    return {
+      wasQueued: queued.contended,
+      releaseChannel: () => {
+        if (released) return;
+        released = true;
+        lease.release();
+        this.processingChannels.delete(channelId);
+        this.emitQueueTelemetry(channelId, 'released', {
+          queueDepth: this.channelTurnLock.pending(channelId),
+          waitMs: Math.max(0, Date.now() - lockStartMs),
+        });
+      },
     };
   }
 
@@ -1695,15 +1718,64 @@ export class ApiServer implements ChannelAdapterPort {
       channelPrivacy: resolvedChannelPrivacy,
       canonicalContactId,
     });
+
+    const acquiredChannel = await this.acquireChannel(channelId, req, res);
+    if (!acquiredChannel) return null;
+
     this.seedSession(channelId, request.messages, authorId, authorName, resolvedChannelPrivacy);
 
-    const releaseChannel = await this.acquireChannel(channelId, req, res);
-    if (!releaseChannel) return null;
-
-    return { channelId, releaseChannel, substrateMsg };
+    return {
+      channelId,
+      wasQueued: acquiredChannel.wasQueued,
+      releaseChannel: acquiredChannel.releaseChannel,
+      substrateMsg,
+    };
   }
 
   private beginPreparedTurn(turn: PendingTurn): PreparedTurn {
+    if (turn.wasQueued) {
+      const maybeFollowUp = (this.agentLoop as unknown as {
+        followUp?: (message: SubstrateMessage) => Promise<void> | void;
+      }).followUp;
+      if (typeof maybeFollowUp === 'function') {
+        const turnDeferred = createDeferred<AgentTurnResult>();
+        let settled = false;
+        const settle = (action: () => void) => {
+          if (settled) return;
+          settled = true;
+          unsubscribeEnd();
+          unsubscribeError();
+          action();
+        };
+        const unsubscribeEnd = this.eventBus.on('agent.turn.end', ({ message, response }) => {
+          if (message.id !== turn.substrateMsg.id) return;
+          settle(() => {
+            turnDeferred.resolve(response);
+          });
+        });
+        const unsubscribeError = this.eventBus.on('agent.error', ({ message, error }) => {
+          if (message.id !== turn.substrateMsg.id) return;
+          settle(() => {
+            turnDeferred.reject(error);
+          });
+        });
+
+        Promise.resolve()
+          .then(() => maybeFollowUp.call(this.agentLoop, turn.substrateMsg))
+          .catch((error) => {
+            settle(() => {
+              turnDeferred.reject(error);
+            });
+          });
+
+        this.attachTurnCleanup(turn.releaseChannel, turnDeferred.promise);
+        return {
+          channelId: turn.channelId,
+          turnPromise: turnDeferred.promise,
+        };
+      }
+    }
+
     const turnPromise = this.agentLoop.handleMessage(turn.substrateMsg);
     this.attachTurnCleanup(turn.releaseChannel, turnPromise);
     return {

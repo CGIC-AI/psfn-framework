@@ -20,6 +20,7 @@ export function applyWyomingRoutingPolicy(
   message: SubstrateMessage,
   metadata: VoiceStreamMetadata | undefined,
   config: WyomingShardRoutingConfig,
+  companionId: string,
 ): SubstrateMessage {
   const evaluation = resolveWyomingRoutingMetadata(message, metadata);
   if (!evaluation.isWyoming) {
@@ -58,6 +59,10 @@ export function applyWyomingRoutingPolicy(
     routing: {
       ...(message.routing ?? {}),
       source: 'wyoming',
+      gateway: {
+        schemaVersion: 1,
+        companionId,
+      },
       wyoming: {
         ...routing,
         shardDelegation: {

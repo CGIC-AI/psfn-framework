@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { contextMessagesToPiMessages } from './message-conversion.js';
+import {
+  contextMessagesToPiMessages,
+  mergeSystemContextIntoSystemPrompt,
+} from './message-conversion.js';
 
 describe('contextMessagesToPiMessages', () => {
   it('maps user and assistant context messages to pi chat messages', () => {
@@ -25,28 +28,86 @@ describe('contextMessagesToPiMessages', () => {
     expect((result[1] as any).content).toEqual([{ type: 'text', text: 'world' }]);
   });
 
-  it('maps system context messages to assistant-side internal notes without discarding them', () => {
+  it('preserves structured assistant and tool-result messages as legal pi-ai history', () => {
+    const result = contextMessagesToPiMessages([
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', thinking: 'trace', thinkingSignature: 'sig-1' },
+          { type: 'text', text: 'world' },
+          { type: 'toolCall', id: 'call-1', name: 'lookup', arguments: { q: 'test' } },
+        ],
+        api: 'openai-completions',
+        provider: 'openrouter',
+        model: 'openrouter/moonshotai/kimi-k2.5',
+        usage: {
+          input: 1,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 3,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: 'toolUse',
+        timestamp: 1000,
+      } as any,
+      {
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        toolName: 'lookup',
+        content: [{ type: 'text', text: 'done' }],
+        isError: false,
+        timestamp: 1001,
+      } as any,
+    ], () => 9999);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'trace', thinkingSignature: 'sig-1' },
+        { type: 'text', text: 'world' },
+        { type: 'toolCall', id: 'call-1', name: 'lookup', arguments: { q: 'test' } },
+      ],
+      api: 'openai-completions',
+      provider: 'openrouter',
+      model: 'openrouter/moonshotai/kimi-k2.5',
+      stopReason: 'toolUse',
+      timestamp: 1000,
+    });
+    expect(result[1]).toMatchObject({
+      role: 'toolResult',
+      toolCallId: 'call-1',
+      toolName: 'lookup',
+      content: [{ type: 'text', text: 'done' }],
+      isError: false,
+      timestamp: 1001,
+    });
+  });
+
+  it('keeps system context out of authored chat history', () => {
     const result = contextMessagesToPiMessages([
       { role: 'system', content: '[SYSTEM: Scheduler] heartbeat prompt' },
     ], () => 1000);
 
-    expect(result).toEqual([{
-      role: 'assistant',
-      content: [{ type: 'text', text: '[SYSTEM: Scheduler] heartbeat prompt' }],
-      api: '',
-      provider: '',
-      model: '',
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: 'stop',
-      timestamp: 1000,
-    }]);
+    expect(result).toEqual([]);
+  });
+
+  it('merges system context into the system prompt instead of fabricating chat history', () => {
+    const systemPrompt = mergeSystemContextIntoSystemPrompt('Base instructions', [
+      { role: 'user', content: 'hello' },
+      { role: 'system', content: '[SYSTEM: Scheduler] heartbeat prompt' },
+      { role: 'assistant', content: 'world' },
+      { role: 'system', content: '[Tool result: search_logs] Returned 2 hits.' },
+    ]);
+
+    expect(systemPrompt).toBe([
+      'Base instructions',
+      '<session_context>',
+      '[SYSTEM: Scheduler] heartbeat prompt',
+      '[Tool result: search_logs] Returned 2 hits.',
+      '</session_context>',
+    ].join('\n\n'));
   });
 
   it('uses Date.now by default for each converted message', () => {
@@ -62,6 +123,21 @@ describe('contextMessagesToPiMessages', () => {
     expect((result[0] as any).timestamp).toBe(10);
     expect((result[1] as any).timestamp).toBe(11);
     expect(nowSpy).toHaveBeenCalledTimes(2);
+
+    nowSpy.mockRestore();
+  });
+
+  it('does not spend timestamps on filtered system context messages', () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(77);
+
+    const result = contextMessagesToPiMessages([
+      { role: 'system', content: '[SYSTEM: Quiet Planner] hidden context' },
+      { role: 'user', content: 'visible partner message' },
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect((result[0] as any).timestamp).toBe(77);
+    expect(nowSpy).toHaveBeenCalledTimes(1);
 
     nowSpy.mockRestore();
   });

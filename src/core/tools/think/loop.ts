@@ -375,6 +375,22 @@ function buildThinkResult(options: BuildResultOptions): ThinkResult {
   );
 }
 
+function buildBudgetFallbackAnswer(reason: BudgetStatus['exceeded']): string {
+  if (reason === LLM_TIMEOUT_REASON) {
+    return LLM_TIMEOUT_ANSWER;
+  }
+  if (reason === INVOCATION_RATE_LIMIT_REASON) {
+    return RATE_LIMIT_ANSWER;
+  }
+  if (reason === NURSERY_DAILY_COST_REASON) {
+    return NURSERY_DAILY_CAP_ANSWER;
+  }
+  if (reason) {
+    return `[Think loop stopped: ${reason}]`;
+  }
+  return '[Think loop stopped before producing a final answer]';
+}
+
 function pushPassiveStep(
   steps: ThinkStep[],
   iteration: number,
@@ -675,7 +691,9 @@ export async function runRLMLoop(
   }, sharedState.budgetRef, { memoryCeilingBytes });
 
   // Gather context metadata for system prompt
-  const stats = deps.memoryStore?.getStats();
+  const stats = deps.memoryStore
+    ? await deps.memoryStore.getStats()
+    : null;
   const metadata: ThinkContextMetadata = {
     memoryCount: stats?.total ?? 0,
     memoryBreakdown: stats
@@ -963,18 +981,12 @@ export async function runRLMLoop(
   }
 
   // Budget or max iterations exhausted
-  const lastAssistant = messages.filter(m => m.role === 'assistant').pop();
   finalizeBudgetStatus();
   if (!budgetStatus.exceeded) {
     budgetStatus.exceeded = 'max iterations';
   }
-  const timeoutFallback = budgetStatus.exceeded === LLM_TIMEOUT_REASON
-    ? LLM_TIMEOUT_ANSWER
-    : budgetStatus.exceeded === NURSERY_DAILY_COST_REASON
-      ? NURSERY_DAILY_CAP_ANSWER
-    : '[No response generated]';
   return buildThinkResult({
-    answer: lastAssistant?.content ?? timeoutFallback,
+    answer: buildBudgetFallbackAnswer(budgetStatus.exceeded),
     iterations: isNestedRun ? localIterations : sharedState.consumedIterations,
     totalInputTokens: isNestedRun ? totalInputTokens : sharedState.totalInputTokens,
     totalOutputTokens: isNestedRun ? totalOutputTokens : sharedState.totalOutputTokens,

@@ -6,7 +6,10 @@ import type {
   ThinkingContent as ThinkingBlock,
 } from '@mariozechner/pi-ai';
 import type { ContextMessage, LLMContext, ToolSchema } from '../../shared/contracts/runtime.js';
-import { contextMessagesToPiMessages } from './message-conversion.js';
+import {
+  contextMessagesToPiMessages,
+  mergeSystemContextIntoSystemPrompt,
+} from './message-conversion.js';
 
 interface GenericBlock {
   type?: unknown;
@@ -57,7 +60,7 @@ export function toPiMessages(messages: ContextMessage[]): Message[] {
 
 export function toPiContext(context: LLMContext): PiContext {
   return {
-    systemPrompt: context.systemPrompt,
+    systemPrompt: mergeSystemContextIntoSystemPrompt(context.systemPrompt, context.messages),
     messages: toPiMessages(context.messages),
     ...(context.tools?.length ? { tools: toPiTools(context.tools) } : {}),
   };

@@ -1,6 +1,7 @@
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
+export type InferredSessionChannelType = ChannelType | 'subagent';
 
 function normalizePrefix(prefix: string): string | null {
   const normalized = prefix.trim().toLowerCase();
@@ -13,7 +14,8 @@ export function isInternalSessionId(sessionId: string): boolean {
     || sessionId.startsWith('shard:');
 }
 
-export function inferSessionChannelType(sessionId: string): ChannelType | undefined {
+export function inferSessionChannelType(sessionId: string): InferredSessionChannelType | undefined {
+  if (sessionId.startsWith('subagent:')) return 'subagent';
   if (sessionId.startsWith('discord-voice:')) return 'discord';
   if (DISCORD_CHANNEL_ID_PATTERN.test(sessionId)) return 'discord';
 

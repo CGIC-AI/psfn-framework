@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GatewayApiRuntime } from './gateway-runtime.js';
+import { GatewayApiRuntime, computeGatewayChatRequestTimeoutMs } from './gateway-runtime.js';
 import type { ApiRuntimeChatRequest } from './types.js';
 
 function createChatRequest(): ApiRuntimeChatRequest {
@@ -100,5 +100,65 @@ describe('GatewayApiRuntime', () => {
     await completionPromise;
 
     expect(requestAgent).toHaveBeenCalledWith('api.chat.cancel', expect.objectContaining({ requestId: expect.any(String) }));
+  });
+
+  it('degrades health instead of throwing when no agent is connected yet', async () => {
+    const runtime = new GatewayApiRuntime({
+      requestAgent: vi.fn(async () => {
+        throw new Error('No agent connected');
+      }),
+      subscribeApiStream: vi.fn(() => () => {}),
+    });
+
+    const health = await runtime.handleHealth();
+
+    expect(health.status).toBe('degraded');
+    expect(health.subsystems.memory.status).toBe('degraded');
+    expect(health.continuity.status).toBe('degraded');
+    expect(health.continuity.checks.gatewayLink.status).toBe('degraded');
+    expect(health.continuity.checks.gatewayLink.detail).toContain('No agent connected');
+    expect(health.continuity.checks.gatewayLink.meta).toEqual({ agentConnected: false });
+  });
+
+  it('passes an explicit chat completion timeout to the gateway request', async () => {
+    const requestAgent = vi.fn(async () => ({
+      ok: true,
+      response: {
+        content: 'ok',
+        channelId: 'api:test',
+        inputTokens: 1,
+        outputTokens: 1,
+      },
+    }));
+    const runtime = new GatewayApiRuntime({
+      requestAgent,
+      subscribeApiStream: vi.fn(() => () => {}),
+    }, {
+      chatRequestTimeoutMs: 123_456,
+    });
+
+    await runtime.handleChatCompletion({
+      request: {
+        model: 'openrouter/moonshotai/kimi-k2.5',
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {},
+    });
+
+    expect(requestAgent).toHaveBeenCalledWith(
+      'api.chat.completion',
+      expect.objectContaining({
+        request: expect.objectContaining({
+          model: 'openrouter/moonshotai/kimi-k2.5',
+        }),
+      }),
+      123_456,
+    );
+  });
+
+  it('adds a small buffer to the API request timeout when computing the gateway timeout', () => {
+    expect(computeGatewayChatRequestTimeoutMs(120_000)).toBe(125_000);
+    expect(computeGatewayChatRequestTimeoutMs(undefined)).toBe(95_000);
   });
 });

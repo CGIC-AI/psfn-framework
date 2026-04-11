@@ -6,11 +6,26 @@ import { normalizeChannelVisibility, type TrustLevel } from '../../../system/tru
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
-import { cloneTurnObservabilityRecord } from '../../turns/observability.js';
+import { cloneTurnObservabilityRecord, cloneUnknownValue } from '../../turns/observability.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { buildSessionMetadataWithEmotionState } from '../../emotion/session-metadata.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
+import { normalizeToolArguments } from '../../../shared/tool-argument-normalization.js';
+
+const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
+const REASONING_PLACEHOLDER_VALUES = new Set(['none', 'null', 'n/a', 'na', 'nil', 'undefined']);
+const REASONING_CONTAMINATION_PATTERNS = [
+  /\[scratchpad\]/i,
+  /working notes \(short-term, may be stale; verify before acting\)/i,
+  /runtime\.scratchpad/i,
+  /internal-only thinking/i,
+  /hidden reasoning/i,
+  /candidate failed; trying fallback/i,
+  /please write a ```repl code block/i,
+  /toolset with action/i,
+  /```/,
+];
 
 function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | undefined {
   const privacyLevel = normalizeChannelVisibility(message.routing?.channelPrivacy);
@@ -151,8 +166,11 @@ export function buildTurnRecord(input: {
   completedAt: number;
   userSessionEntryId: number | null;
   assistantSessionEntryId: number | null;
-  response: AgentResponse;
+  response?: AgentResponse;
+  model?: string;
+  assistantMessageContent?: string;
   turnMessages: AgentMessage[];
+  status?: TurnRecord['status'];
   promptMode: MessagePromptOverrideMode;
   promptText: string;
   contextMessageCount: number;
@@ -173,6 +191,14 @@ export function buildTurnRecord(input: {
     `turn:${input.turnId}`,
     ...input.retrievalProvenanceRefs,
   ])];
+  const status = input.status ?? 'completed';
+  const assistantMessageContent = (input.assistantMessageContent ?? input.response?.content ?? '').trim();
+  const model = input.response?.metadata.model ?? input.model?.trim();
+  if (!model) {
+    throw new Error('Turn record requires response metadata model or explicit model');
+  }
+
+  const observability = cloneTurnObservabilityForRecord(input.turnObservability);
 
   return {
     schemaVersion: 1,
@@ -182,7 +208,7 @@ export function buildTurnRecord(input: {
     channelType: input.message.channelType,
     startedAt: input.startedAt,
     completedAt: Math.max(input.startedAt, input.completedAt),
-    status: 'completed',
+    status,
     userMessage: {
       role: input.speakerRole,
       content: input.message.content,
@@ -192,13 +218,17 @@ export function buildTurnRecord(input: {
       authorName: input.message.authorName,
       ...(input.userSessionEntryId != null ? { sessionEntryId: input.userSessionEntryId } : {}),
     },
-    assistantMessage: {
-      role: 'assistant',
-      content: input.response.content,
-      timestamp: Math.max(input.startedAt, input.completedAt),
-      sourceMessageId: input.message.id,
-      ...(input.assistantSessionEntryId != null ? { sessionEntryId: input.assistantSessionEntryId } : {}),
-    },
+    ...(assistantMessageContent
+      ? {
+        assistantMessage: {
+          role: 'assistant' as const,
+          content: assistantMessageContent,
+          timestamp: Math.max(input.startedAt, input.completedAt),
+          sourceMessageId: input.message.id,
+          ...(input.assistantSessionEntryId != null ? { sessionEntryId: input.assistantSessionEntryId } : {}),
+        },
+      }
+      : {}),
     toolCalls,
     contextManifestRef: `session:${input.message.channelId}|messages:${input.contextMessageCount}|memory_chars:${input.memoryContextChars}`,
     internalStateSnapshotRef: [
@@ -213,11 +243,11 @@ export function buildTurnRecord(input: {
     concernDeltaRefs: [],
     contactDeltaRefs: [],
     ...(roleEnvelopeRefs.length > 0 ? { roleEnvelopeRefs } : {}),
-    ...(input.turnObservability
-      ? { observability: cloneTurnObservabilityRecord(input.turnObservability) }
+    ...(observability
+      ? { observability }
       : {}),
     versionPointers: {
-      model: input.response.metadata.model,
+      model,
       promptMode: input.promptMode,
       promptHash: input.hashPromptText(input.promptText),
       ...(input.turnSnapshot?.prompt?.versionPointer
@@ -296,17 +326,195 @@ export function isToolResultAgentMessage(message: AgentMessage): message is Tool
   return (message as { role?: string }).role === 'toolResult';
 }
 
+export function sanitizePersistedReasoningText(reasoning: string | undefined): string | undefined {
+  if (typeof reasoning !== 'string') return undefined;
+  const normalized = reasoning
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .join('\n');
+  if (!normalized) return undefined;
+  if (REASONING_PLACEHOLDER_VALUES.has(normalized.toLowerCase())) return undefined;
+  if (normalized.length > 280) return undefined;
+  if (normalized.split('\n').length > 3) return undefined;
+  if (REASONING_CONTAMINATION_PATTERNS.some(pattern => pattern.test(normalized))) return undefined;
+  return normalized;
+}
+
 function buildTurnToolCalls(turnMessages: AgentMessage[]): TurnRecordToolCall[] {
   const toolCalls: TurnRecordToolCall[] = [];
+  const toolCallsById = new Map<string, TurnRecordToolCall>();
   for (const entry of turnMessages) {
+    if (isAssistantAgentMessage(entry)) {
+      const rationale = extractAssistantReasoning(entry);
+      for (const toolCall of extractAssistantToolCalls(entry)) {
+        const normalizedArguments = normalizeToolArguments(toolCall.name, toolCall.arguments);
+        const provenanceRefs = collectToolProvenanceRefs({
+          toolName: toolCall.name,
+          toolCallId: toolCall.id,
+          argumentsValue: normalizedArguments,
+        });
+        const record: TurnRecordToolCall = {
+          toolName: toolCall.name,
+          toolCallId: toolCall.id,
+          ...(hasOwnKeys(normalizedArguments)
+            ? { arguments: cloneUnknownValue(normalizedArguments) as Record<string, unknown> }
+            : {}),
+          ...(provenanceRefs.length > 0 ? { provenanceRefs } : {}),
+          ...(rationale ? { rationale } : {}),
+          ...(toolCall.thoughtSignature?.trim()
+            ? { thoughtSignature: toolCall.thoughtSignature.trim() }
+            : {}),
+        };
+        toolCalls.push(record);
+        toolCallsById.set(toolCall.id, record);
+      }
+      continue;
+    }
+
     if (!isToolResultAgentMessage(entry)) continue;
+    const target = toolCallsById.get(entry.toolCallId);
+    const resultText = extractToolResultText(entry).trim();
+    const toolResultFields = {
+      ...(typeof entry.isError === 'boolean' ? { isError: entry.isError } : {}),
+      ...(resultText ? { resultText } : {}),
+      ...(entry.details !== undefined ? { details: cloneUnknownValue(entry.details) } : {}),
+    };
+    const provenanceRefs = collectToolProvenanceRefs({
+      toolName: entry.toolName,
+      toolCallId: entry.toolCallId,
+      details: entry.details,
+      existing: target?.provenanceRefs,
+    });
+
+    if (target) {
+      Object.assign(target, toolResultFields);
+      if (provenanceRefs.length > 0) {
+        target.provenanceRefs = provenanceRefs;
+      }
+      continue;
+    }
+
     toolCalls.push({
       toolName: entry.toolName,
       toolCallId: entry.toolCallId,
-      ...(typeof entry.isError === 'boolean' ? { isError: entry.isError } : {}),
+      ...(provenanceRefs.length > 0 ? { provenanceRefs } : {}),
+      ...toolResultFields,
     });
   }
   return toolCalls;
+}
+
+type AssistantToolCall = Extract<AssistantMessage['content'][number], { type: 'toolCall' }>;
+
+function extractAssistantToolCalls(message: AssistantMessage): AssistantToolCall[] {
+  return message.content.filter((block): block is AssistantToolCall => block.type === 'toolCall');
+}
+
+function extractAssistantReasoning(message: AssistantMessage): string | undefined {
+  const reasoning = message.content
+    .filter((block): block is Extract<AssistantMessage['content'][number], { type: 'thinking' }> => (
+      block.type === 'thinking' && typeof block.thinking === 'string'
+    ))
+    .map(block => block.thinking.trim())
+    .filter(Boolean)
+    .join('\n\n');
+  return sanitizePersistedReasoningText(reasoning);
+}
+
+function cloneTurnObservabilityForRecord(
+  turnObservability: TurnObservabilityRecord | undefined,
+): TurnObservabilityRecord | undefined {
+  if (!turnObservability) return undefined;
+  const cloned = cloneTurnObservabilityRecord(turnObservability);
+  const sanitizedReasoning = sanitizePersistedReasoningText(
+    cloned.snapshot?.promptContext?.response?.reasoning,
+  );
+  if (cloned.snapshot?.promptContext?.response) {
+    if (sanitizedReasoning) {
+      cloned.snapshot.promptContext.response.reasoning = sanitizedReasoning;
+    } else {
+      delete cloned.snapshot.promptContext.response.reasoning;
+    }
+  }
+  return cloned;
+}
+
+function hasOwnKeys(value: Record<string, unknown> | undefined): boolean {
+  return Boolean(value) && Object.keys(value).length > 0;
+}
+
+function collectToolProvenanceRefs(input: {
+  toolName: string;
+  toolCallId?: string;
+  argumentsValue?: Record<string, unknown>;
+  details?: unknown;
+  existing?: string[];
+}): string[] {
+  const refs = new Set<string>();
+  for (const ref of input.existing ?? []) {
+    const normalized = ref.trim();
+    if (normalized) refs.add(normalized);
+  }
+
+  const invocationRef = buildToolInvocationProvenanceRef(
+    input.toolName,
+    input.toolCallId,
+    input.argumentsValue,
+  );
+  if (invocationRef) refs.add(invocationRef);
+
+  collectProvenanceRefsFromUnknown(input.details, refs, false);
+  return [...refs];
+}
+
+function buildToolInvocationProvenanceRef(
+  toolName: string,
+  toolCallId: string | undefined,
+  argumentsValue: Record<string, unknown> | undefined,
+): string | undefined {
+  const normalizedToolName = toolName.trim();
+  const normalizedToolCallId = toolCallId?.trim();
+  if (!normalizedToolName || !normalizedToolCallId) return undefined;
+  const shardSource = normalizeShardSource(argumentsValue?.[INTERNAL_SHARD_SOURCE_PARAM]);
+  if (shardSource) {
+    return `source:${shardSource}|tool:${normalizedToolName}|invocation:${normalizedToolCallId}`;
+  }
+  return `source:tool:${normalizedToolName}|invocation:${normalizedToolCallId}`;
+}
+
+function normalizeShardSource(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function collectProvenanceRefsFromUnknown(
+  value: unknown,
+  refs: Set<string>,
+  collectDirectString: boolean,
+): void {
+  if (typeof value === 'string') {
+    if (!collectDirectString) return;
+    const normalized = value.trim();
+    if (normalized) refs.add(normalized);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectProvenanceRefsFromUnknown(entry, refs, collectDirectString);
+    }
+    return;
+  }
+  if (!value || typeof value !== 'object') return;
+  for (const [key, entry] of Object.entries(value)) {
+    const shouldCollectString = key === 'provenanceRef'
+      || key === 'sourceRef'
+      || key === 'provenanceRefs'
+      || key === 'sourceRefs';
+    collectProvenanceRefsFromUnknown(entry, refs, shouldCollectString);
+  }
 }
 
 function extractToolResultText(message: ToolResultMessage): string {

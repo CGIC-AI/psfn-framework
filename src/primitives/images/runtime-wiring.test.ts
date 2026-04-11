@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import { registerMediaTool } from './runtime-wiring.js';
+import { registerImageTools } from './runtime-wiring.js';
 
 describe('media runtime wiring', () => {
-  it('registers a single unified media tool with gateway requirements', () => {
+  it('registers image tools with gateway requirements', () => {
     const registerTool = vi.fn();
 
-    registerMediaTool(
+    registerImageTools(
       { registerTool },
       {
         create: vi.fn(),
@@ -19,13 +19,22 @@ describe('media runtime wiring', () => {
       },
     );
 
-    expect(registerTool).toHaveBeenCalledTimes(1);
-    const [tool, exposure] = registerTool.mock.calls[0] ?? [];
-    expect(tool?.name).toBe('media');
-    expect(exposure).toBe('extended');
-    expect(tool?.wiringMeta?.requiredGatewayMethods).toEqual([
+    expect(registerTool).toHaveBeenCalledTimes(4);
+
+    const calls = new Map(
+      registerTool.mock.calls.map(([tool, exposure]) => [tool.name, { tool, exposure }]),
+    );
+
+    expect(calls.get('image_create')?.exposure).toBe('extended');
+    expect(calls.get('selfie_create')?.tool.wiringMeta?.requiredGatewayMethods).toEqual([
       'image.create',
+      'web.fetch_binary',
+    ]);
+    expect(calls.get('image_edit')?.tool.wiringMeta?.requiredGatewayMethods).toEqual([
       'image.edit',
+      'web.fetch_binary',
+    ]);
+    expect(calls.get('image_analyze')?.tool.wiringMeta?.requiredGatewayMethods).toEqual([
       'web.fetch_binary',
     ]);
   });

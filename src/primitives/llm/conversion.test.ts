@@ -71,4 +71,25 @@ describe('llm conversion helpers', () => {
 
     nowSpy.mockRestore();
   });
+
+  it('moves system context into the pi system prompt instead of chat history', () => {
+    const context = toPiContext({
+      systemPrompt: 'system',
+      messages: [
+        { role: 'user', content: 'u1' },
+        { role: 'system', content: '[SYSTEM: Scheduler] Keep tomorrow afternoon in view.' },
+        { role: 'assistant', content: 'a1' },
+      ],
+    });
+
+    expect(context.systemPrompt).toBe([
+      'system',
+      '<session_context>',
+      '[SYSTEM: Scheduler] Keep tomorrow afternoon in view.',
+      '</session_context>',
+    ].join('\n\n'));
+    expect(context.messages).toHaveLength(2);
+    expect((context.messages[0] as any).role).toBe('user');
+    expect((context.messages[1] as any).role).toBe('assistant');
+  });
 });

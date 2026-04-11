@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { SubstrateConfig, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import { getIgnoredJsonBackedConfigEnvKeys } from '../../system/config/legacy-env.js';
@@ -237,7 +238,10 @@ function buildGatewayPolicyConfig(
     openRouterModelsApiUrl: config.openRouterModelsApiUrl,
   });
   const shellExecPolicy = buildShellExecPolicyConfig(env);
-  const beadsToolsEnabled = parseBooleanEnvWithFallback(env.BEADS_TOOLS_ENABLED, false);
+  const beadsToolsEnabled = parseBooleanEnvWithFallback(
+    env.BEADS_TOOLS_ENABLED,
+    existsSync(resolve(workspaceRoot, '.beads')) || existsSync(resolve(codebaseRoot, '.beads')),
+  );
   const beadsAllowActions = parseBeadsActionsEnv(env.BEADS_ALLOW_ACTIONS)
     ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
   const vaultToolsEnabled = parseBooleanEnvWithFallback(

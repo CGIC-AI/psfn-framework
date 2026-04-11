@@ -886,6 +886,12 @@ export async function handleMessageForTurn(
     );
     let renderedStaticPrefix = '';
     let renderedDynamicSuffix = '';
+    const dynamicSuffixTemplate = turnSnapshot.prompt?.dynamicSuffixTemplate
+      || DEFAULT_RUNTIME_PROMPT_TEMPLATE;
+    renderedDynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
+      now: runtimeNow,
+      variables: promptRuntimeVariables,
+    });
 
     if (promptOverride.mode === 'default') {
       const promptRuntimeLayout = getPromptRuntimeLayoutStore(runtime.config);
@@ -910,12 +916,6 @@ export async function handleMessageForTurn(
         preTurnMetacognitiveFlags,
         templateVariables,
       );
-      const dynamicSuffixTemplate = turnSnapshot.prompt?.dynamicSuffixTemplate
-        || DEFAULT_RUNTIME_PROMPT_TEMPLATE;
-      renderedDynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
-        now: runtimeNow,
-        variables: promptRuntimeVariables,
-      });
       const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
         {
           id: 'runtime.persona_adaptation' as PromptRuntimeSystemPromptBlockId,
@@ -941,6 +941,15 @@ export async function handleMessageForTurn(
       const promptRuntimeLayout = getPromptRuntimeLayoutStore(runtime.config);
       const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
         {
+          id: 'runtime.persona_adaptation' as PromptRuntimeSystemPromptBlockId,
+          content: runtime.getPersonaAdaptation(
+            trustLevel,
+            preTurnInternalState,
+            preTurnMetacognitiveFlags,
+            templateVariables,
+          ) ?? '',
+        },
+        {
           id: 'runtime.context' as PromptRuntimeSystemPromptBlockId,
           content: runtimeContext,
         },
@@ -949,7 +958,7 @@ export async function handleMessageForTurn(
           content: scratchpadBlock,
         },
       ], promptRuntimeLayout);
-      fullPrompt = [customPrompt, ...orderedRuntimeSections.map(section => section.content)]
+      fullPrompt = [customPrompt, renderedDynamicSuffix, ...orderedRuntimeSections.map(section => section.content)]
         .map(section => section.trim())
         .filter(section => section.length > 0)
         .join('\n\n');

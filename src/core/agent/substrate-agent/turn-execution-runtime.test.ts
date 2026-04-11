@@ -797,6 +797,42 @@ describe('handleMessageForTurn compaction scheduling', () => {
       && message.content.includes('Queue a private follow-up reminder.'))).toBe(false);
   });
 
+  it('keeps runtime-layer suffixes active when a custom system prompt override is used', async () => {
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'Final system prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus: new EventBus(),
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.normalizeTurnPromptOverride = vi.fn(() => ({
+      mode: 'custom',
+      systemPrompt: 'Custom system prompt',
+    }));
+    runtime.captureTurnPromptSnapshot = vi.fn(() => ({
+      staticPrefixTemplate: 'Static prefix template',
+      dynamicSuffixTemplate: 'Dynamic suffix template',
+      staticHash: 'static-hash',
+      versionPointer: 'prompt-v1',
+    }));
+    runtime.buildRuntimeContext = vi.fn(() => '');
+    runtime.buildScratchpadContextBlock = vi.fn(() => '');
+    runtime.getPersonaAdaptation = vi.fn(() => null);
+
+    await handleMessageForTurn(runtime, createMessage('msg-custom-runtime-suffix'));
+
+    const fullPrompt = buildContext.mock.calls[0]?.[1] as string;
+    expect(fullPrompt).toContain('Custom system prompt');
+    expect(fullPrompt).toContain('Dynamic suffix template');
+  });
+
   it('applies persisted runtime block order before session context assembly', async () => {
     const root = makeTempDir();
     const layoutStore = new PromptRuntimeLayoutStore(resolvePromptRuntimeLayoutPath(root));

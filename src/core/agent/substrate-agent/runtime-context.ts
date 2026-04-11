@@ -33,7 +33,6 @@ import {
   resolveActiveTimezone,
 } from '../../../shared/time/active-timezone.js';
 import {
-  isSingleWrappedPromptSection,
   unwrapSingleWrappedPromptSection,
   wrapPromptSectionXml,
 } from '../../identity/prompt-sections.js';
@@ -602,174 +601,17 @@ export function buildRuntimeContext(input: {
   behavioralNotesBlock?: string;
   formatTopEmotions: (discrete: Record<string, number>) => string;
 }): string {
-  const resolveAppearanceContext = (): string => {
-    const promptVariables = input.templateVariables ?? {};
-    return (
-      promptVariables['character.visual_description']
-      || promptVariables.extensions_visual_description
-      || promptVariables.visual_description
-      || ''
-    ).trim();
-  };
-
-  const hasActiveSelfImageTool = (): boolean => {
-    for (const toolName of SELF_IMAGE_TOOL_NAMES) {
-      if (input.promotedExtendedToolNames.has(toolName)) {
-        return true;
-      }
-      if (input.loadedExtended.has(toolName)) {
-        return true;
-      }
-    }
-    return false;
-  };
-
-  const responseStyle = input.responseStyle ?? 'concise';
-  const now = input.now ?? new Date();
-  const emotionAppraisalChain = input.emotionAppraisalChain ?? [];
-  const visibility = classifyChannel(input.message.channelId, resolveMessageChannelMeta(input.message));
-  const responseStyleGuidance = getResponseStylePromptGuidance(responseStyle);
-  const extendedCount = input.extendedTools.length;
-  const extendedToolGuide = buildExtendedToolGuide({
-    capabilityTier: input.capabilityTier,
-    extendedTools: input.extendedTools,
-    loadedExtended: input.loadedExtended,
-    classifyExtendedToolForTurn: input.classifyExtendedToolForTurn,
-    promotedExtendedToolNames: input.promotedExtendedToolNames,
-  });
-  const {
-    core: coreCount,
-    promoted: promotedCount,
-    extendedLoaded: extendedLoadedCount,
-    autoload: autoloadCount,
-    deferred: deferredCount,
-    total: activeCount,
-  } = input.activeToolCounts;
-  const activeToolSummary = `${activeCount} active now (${coreCount} core`
-    + (promotedCount > 0 ? `, ${promotedCount} promoted` : '')
-    + (extendedLoadedCount > 0 ? `, ${extendedLoadedCount} loaded` : '')
-    + (autoloadCount > 0 ? `, ${autoloadCount} autoload` : '')
-    + (deferredCount > 0 ? `, ${deferredCount} deferred` : '')
-    + ')';
   const runtimeContextExtra = (() => {
     const raw = input.templateVariables?.runtime_context_extra;
     return typeof raw === 'string' ? raw.trim() : '';
   })();
-
-  const runtimeLines = [
-    `It is ${formatPromptRuntimeDateTime(now)} ${resolveActiveTimezone()}.`,
-  ];
-  if (isInternalJournalChannel(input.message.channelId)) {
-    runtimeLines.push(`This is an internal ${input.taskKind ?? 'background'} turn.`);
-  } else {
-    runtimeLines.push(`Speaking with: ${input.resolvedUserName} (${input.trustLevel} trust).`);
-    runtimeLines.push(`Channel: ${input.channelType ?? 'unknown'} (${visibility}).`);
-  }
-  runtimeLines.push(`Current model: ${input.modelId}.`);
-  runtimeLines.push(`Capability tier: ${input.capabilityTier}.`);
-  runtimeLines.push(
-    `Tooling: ${activeToolSummary}${extendedCount > 0
-      ? `; ${extendedToolGuide.activatableCount} more activatable via toolset action="activate"`
-        + (extendedToolGuide.blockedCount > 0
-          ? `, ${extendedToolGuide.blockedCount} blocked by the current capability tier.`
-          : '.')
-      : '.'}`,
-  );
-
-  const sections: string[] = [
-    wrapPromptSectionXml({
-      id: 'runtime_context',
-      content: runtimeLines.join('\n'),
-    }),
-  ];
-
-  if (hasActiveSelfImageTool()) {
-    const appearance = resolveAppearanceContext();
-    if (appearance.length > 0) {
-      sections.push(wrapPromptSectionXml({
-        id: 'appearance_context',
-        content: appearance,
-      }));
-    }
-      sections.push(wrapPromptSectionXml({
-        id: 'self_image_tool_guidance',
-        content: [
-          'Use selfie_create for a brand new selfie or self-portrait featuring you.',
-          'Use image_create for scenes, objects, or other non-self images.',
-          'Use image_edit when modifying an existing image while keeping its subject consistent.',
-          'Use image_analyze to inspect generated images or explicit remote image URLs so you can see what is actually there.',
-          'If the current user message already includes an attached image, inspect that attachment directly instead of calling image_analyze for it.',
-          'When selfie_create is active, write the prompt as the full desired shot and combine your Appearance context with pose, framing, lighting, background, mood, and style details.',
-          'Generated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.',
-        ].join('\n'),
-      }));
-    }
-
-  if (extendedCount > 0) {
-    const extendedToolLines = [
-      'Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.',
-      'If a non-default tool is not already active, activate it before you describe its outcome.',
-      'Core tools are already active through the structured tool registry and are not duplicated here.',
-    ];
-    extendedToolLines.push(...extendedToolGuide.lines);
-    sections.push(wrapPromptSectionXml({
-      id: 'extended_tools',
-      content: extendedToolLines.join('\n'),
-    }));
-  }
-
-  sections.push(wrapPromptSectionXml({
-    id: 'response_style_guidance',
-    content: responseStyleGuidance,
-  }));
-
-  if (input.internalState) {
-    sections.push(wrapPromptSectionXml({
-      id: 'internal_state',
-      content: buildInternalStateSummaryLines({ internalState: input.internalState }).join('\n'),
-    }));
-  }
-
-  if (emotionAppraisalChain.length > 0) {
-    const appraisalLines: string[] = [];
-    for (const entry of emotionAppraisalChain.slice(-2)) {
-      appraisalLines.push(
-        `- ${formatActiveDateTimeLabel(new Date(entry.timestamp))} (${entry.trigger}): ${compactPromptText(entry.summary, 220)}`,
-      );
-    }
-    sections.push(wrapPromptSectionXml({
-      id: 'emotion_appraisal_chain',
-      content: appraisalLines.join('\n'),
-    }));
-  }
-
-  if (input.activeConcernsBlock) {
-    sections.push(input.activeConcernsBlock);
-  }
-
-  if (input.behavioralNotesBlock) {
-    sections.push(input.behavioralNotesBlock);
-  }
-
-  if (input.skillsContext) {
-    sections.push(
-      isSingleWrappedPromptSection(input.skillsContext)
-        ? input.skillsContext.trim()
-        : wrapPromptSectionXml({
-          id: 'skills_index',
-          content: input.skillsContext,
-        }),
-    );
-  }
-
   if (runtimeContextExtra) {
-    sections.push(wrapPromptSectionXml({
+    return wrapPromptSectionXml({
       id: 'companion_runtime_context',
       content: runtimeContextExtra,
-    }));
+    });
   }
-
-  return sections.filter(section => section.trim().length > 0).join('\n\n');
+  return '';
 }
 
 export function buildActiveConcernsContextBlock(input: {
@@ -885,36 +727,17 @@ export function getPersonaAdaptation(input: {
   templateVariables?: Record<string, string>;
   config: Record<string, unknown>;
 }): string | null {
-  const trustHint = resolveTrustGuidance(input.trustLevel);
-  const affectHint = buildEmotionalAffectSection({
-    trustLevel: input.trustLevel,
-    emotionSnapshot: toEmotionSnapshotFromInternalState(input.internalState),
-    promptVariables: input.templateVariables,
-    config: input.config,
-  });
-  const metacognitiveHint = buildMetacognitivePersonaHint(input.metacognitiveFlags);
   const runtimePersonaExtra = (() => {
     const raw = input.templateVariables?.runtime_persona_adaptation_extra;
     return typeof raw === 'string' ? raw.trim() : '';
   })();
-
-  const sections = [
-    wrapPromptSectionXml({
-      id: 'trust',
-      content: trustHint,
-    }),
-    affectHint,
-    metacognitiveHint,
-  ]
-    .filter((section): section is string => Boolean(section?.trim()));
   if (runtimePersonaExtra) {
-    sections.push(wrapPromptSectionXml({
+    return wrapPromptSectionXml({
       id: 'companion_persona_adaptation',
       content: runtimePersonaExtra,
-    }));
+    });
   }
-  if (sections.length === 0) return null;
-  return sections.join('\n\n');
+  return null;
 }
 
 export function resolveIdentityChannel(message: SubstrateMessage): string {

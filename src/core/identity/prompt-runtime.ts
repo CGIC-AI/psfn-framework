@@ -410,7 +410,7 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
   {
     id: 'runtime.persona_adaptation',
     label: 'Persona Adaptation',
-    description: 'Trust-tier and internal-state persona hint appended at turn time.',
+    description: 'Companion-authored persona overlay appended after prompt-owned runtime layers.',
     source: 'turn-execution-runtime:getPersonaAdaptation',
     schema: REQUIRED_RUNTIME_AWARE_SCHEMA,
     placement: 'system_prompt',
@@ -422,7 +422,7 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
   {
     id: 'runtime.context',
     label: 'Runtime Context',
-    description: 'Datetime, channel, trust, model, and runtime metadata block.',
+    description: 'Companion-authored runtime overlay appended after prompt-owned runtime layers.',
     source: 'turn-execution-runtime:buildRuntimeContext',
     schema: REQUIRED_RUNTIME_AWARE_SCHEMA,
     placement: 'system_prompt',

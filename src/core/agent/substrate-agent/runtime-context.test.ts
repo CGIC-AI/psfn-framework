@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
+import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import {
   buildDynamicPromptTemplateVariables,
@@ -20,6 +22,21 @@ function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessag
     timestamp: new Date('2026-03-17T12:00:00Z'),
     ...overrides,
   };
+}
+
+const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
+
+function renderPromptOwnedRuntimeLayers(
+  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+): string {
+  const variables = buildDynamicPromptTemplateVariables(input);
+  return injectPromptRuntimeTokens(DEFAULT_RUNTIME_PROMPT_TEMPLATE, {
+    now: input.now,
+    variables: {
+      ...(input.templateVariables ?? {}),
+      ...variables,
+    },
+  });
 }
 
 describe('runtime subject identity', () => {
@@ -45,7 +62,7 @@ describe('runtime subject identity', () => {
     expect(authorContext.canonicalContactKey).toBeUndefined();
   });
 
-  it('uses the companion subject in prompt variables and runtime context for reflection turns', () => {
+  it('renders prompt-owned runtime layers for reflection turns against the companion subject', () => {
     const message = makeMessage();
     const { templateVariables } = buildPromptTemplateVariables({
       message,
@@ -68,7 +85,44 @@ describe('runtime subject identity', () => {
     expect(templateVariables.user_id).toBe(DEFAULT_COMPANION_ID);
     expect(templateVariables.canonical_contact_id).toBe(DEFAULT_COMPANION_ID);
 
-    const runtimeContext = buildRuntimeContext({
+    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
+      message,
+      resolvedUserName: 'Companion',
+      trustLevel: 'primary',
+      channelType: 'internal',
+      canonicalContactKey: undefined,
+      subjectIdentityKey: DEFAULT_COMPANION_ID,
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      taskKind: 'reflection',
+      templateVariables,
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'nursery',
+      activeToolCounts: {
+        core: 0,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 0,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      config: {},
+    });
+
+    expect(renderedRuntimeLayers).toContain('<internal_turn_context>');
+    expect(renderedRuntimeLayers).toContain('<kind>reflection</kind>');
+    expect(renderedRuntimeLayers).not.toContain('userId: scheduler');
+    expect(renderedRuntimeLayers).not.toContain('Channel: internal:reflection:whisper');
+    expect(renderedRuntimeLayers).not.toContain('Appearance context: Silver eyes and a weathered jacket.');
+    expect(buildRuntimeContext({
       message,
       resolvedUserName: 'Companion',
       trustLevel: 'primary',
@@ -95,13 +149,7 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       formatTopEmotions: () => '',
-    });
-
-    expect(runtimeContext).toContain('<runtime_context>');
-    expect(runtimeContext).toContain('This is an internal reflection turn.');
-    expect(runtimeContext).not.toContain('userId: scheduler');
-    expect(runtimeContext).not.toContain('Channel: internal:reflection:whisper');
-    expect(runtimeContext).not.toContain('Appearance context: Silver eyes and a weathered jacket.');
+    })).toBe('');
   });
 
   it('marks ordinary external turns as user speakers', async () => {
@@ -161,7 +209,7 @@ describe('runtime subject identity', () => {
     });
   });
 
-  it('uses routed channel privacy in prompt variables and runtime context', () => {
+  it('renders routed channel privacy through the prompt-owned runtime layers', () => {
     const message = makeMessage({
       channelId: 'api:admin-broadcast',
       channelType: 'api',
@@ -190,7 +238,7 @@ describe('runtime subject identity', () => {
 
     expect(templateVariables.channel_visibility).toBe('broadcast');
 
-    const runtimeContext = buildRuntimeContext({
+    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
       message,
       resolvedUserName: 'Admin User',
       trustLevel: 'regular',
@@ -214,11 +262,18 @@ describe('runtime subject identity', () => {
       loadedExtended: new Map(),
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
-      formatTopEmotions: () => '',
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      config: {},
     });
 
-    expect(runtimeContext).toContain('Speaking with: Admin User (regular trust).');
-    expect(runtimeContext).toContain('Channel: api (broadcast).');
+    expect(renderedRuntimeLayers).toContain('<speaking_with>');
+    expect(renderedRuntimeLayers).toContain('<name>Admin User</name>');
+    expect(renderedRuntimeLayers).toContain('<trust_level>regular</trust_level>');
+    expect(renderedRuntimeLayers).toContain('<channel_context>');
+    expect(renderedRuntimeLayers).toContain('<type>api</type>');
+    expect(renderedRuntimeLayers).toContain('<visibility>broadcast</visibility>');
   });
 
   it('does not expose appearance context for generic image tools', () => {
@@ -246,7 +301,7 @@ describe('runtime subject identity', () => {
       fallbackCharacterName: 'Companion',
     });
 
-    const runtimeContext = buildRuntimeContext({
+    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
       message,
       resolvedUserName: 'Alex',
       trustLevel: 'trusted',
@@ -277,12 +332,15 @@ describe('runtime subject identity', () => {
       ]),
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
-      formatTopEmotions: () => '',
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      config: {},
     });
 
-    expect(runtimeContext).not.toContain('Appearance context: Silver eyes and a weathered jacket.');
-    expect(runtimeContext).not.toContain('[Self-Image Tool Guidance]');
-    expect(runtimeContext).not.toContain('Use selfie_create for a brand new selfie or self-portrait featuring you.');
+    expect(renderedRuntimeLayers).not.toContain('Appearance context: Silver eyes and a weathered jacket.');
+    expect(renderedRuntimeLayers).not.toContain('<self_image_tool_guidance>');
+    expect(renderedRuntimeLayers).not.toContain('Use selfie_create for a brand new selfie or self-portrait featuring you.');
   });
 
   it('does not expose appearance context for the unified media tool', () => {
@@ -310,7 +368,7 @@ describe('runtime subject identity', () => {
       fallbackCharacterName: 'Companion',
     });
 
-    const runtimeContext = buildRuntimeContext({
+    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
       message,
       resolvedUserName: 'Alex',
       trustLevel: 'trusted',
@@ -341,12 +399,15 @@ describe('runtime subject identity', () => {
       ]),
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
-      formatTopEmotions: () => '',
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      config: {},
     });
 
-    expect(runtimeContext).not.toContain('<appearance_context>');
-    expect(runtimeContext).not.toContain('Silver eyes and a weathered jacket.');
-    expect(runtimeContext).not.toContain('<self_image_tool_guidance>');
+    expect(renderedRuntimeLayers).not.toContain('<appearance_context>');
+    expect(renderedRuntimeLayers).not.toContain('Silver eyes and a weathered jacket.');
+    expect(renderedRuntimeLayers).not.toContain('<self_image_tool_guidance>');
   });
 
   it('exposes appearance context when the explicit selfie tool is active', () => {
@@ -374,7 +435,7 @@ describe('runtime subject identity', () => {
       fallbackCharacterName: 'Companion',
     });
 
-    const runtimeContext = buildRuntimeContext({
+    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
       message,
       resolvedUserName: 'Alex',
       trustLevel: 'trusted',
@@ -405,17 +466,20 @@ describe('runtime subject identity', () => {
       ]),
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
-      formatTopEmotions: () => '',
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      config: {},
     });
 
-    expect(runtimeContext).toContain('<appearance_context>');
-    expect(runtimeContext).toContain('Silver eyes and a weathered jacket.');
-    expect(runtimeContext).toContain('<self_image_tool_guidance>');
-    expect(runtimeContext).toContain('Use selfie_create for a brand new selfie or self-portrait featuring you.');
+    expect(renderedRuntimeLayers).toContain('<appearance_context>');
+    expect(renderedRuntimeLayers).toContain('Silver eyes and a weathered jacket.');
+    expect(renderedRuntimeLayers).toContain('<self_image_tool_guidance>');
+    expect(renderedRuntimeLayers).toContain('Use selfie_create for a brand new selfie or self-portrait featuring you.');
   });
 
-  it('surfaces attention counts for pending whispers and active concerns', () => {
-    const runtimeContext = buildRuntimeContext({
+  it('surfaces attention counts for pending whispers and active concerns through prompt-owned layers', () => {
+    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
       message: makeMessage({
         channelId: 'internal:reflection:whisper',
         authorId: 'scheduler',
@@ -501,12 +565,15 @@ describe('runtime subject identity', () => {
       loadedExtended: new Map(),
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
-      formatTopEmotions: () => '',
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      config: {},
     });
 
-    expect(runtimeContext).toContain('<internal_state>');
-    expect(runtimeContext).toContain('Attention: deepening, 2 open threads, 1 pending follow-up.');
-    expect(runtimeContext).toContain('Relationship baseline: primary trust');
+    expect(renderedRuntimeLayers).toContain('<internal_state>');
+    expect(renderedRuntimeLayers).toContain('Attention: deepening, 2 open threads, 1 pending follow-up.');
+    expect(renderedRuntimeLayers).toContain('Relationship baseline: primary trust');
   });
 
   it('appends companion runtime guidance overrides when present', () => {
@@ -737,7 +804,7 @@ describe('runtime subject identity', () => {
     }]);
   });
 
-  it('labels blocked extended tools clearly and forbids narrated tool outcomes without real tool results', () => {
+  it('labels blocked extended tools clearly in the prompt-owned runtime layers', () => {
     const message = makeMessage({
       channelId: 'api:test',
       channelType: 'api',
@@ -746,7 +813,7 @@ describe('runtime subject identity', () => {
       content: 'Try web and notify.',
     });
 
-    const runtimeContext = buildRuntimeContext({
+    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
       message,
       resolvedUserName: 'User',
       trustLevel: 'regular',
@@ -781,11 +848,14 @@ describe('runtime subject identity', () => {
       loadedExtended: new Map(),
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
-      formatTopEmotions: () => '',
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      config: {},
     });
 
-    expect(runtimeContext).toContain('Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.');
-    expect(runtimeContext).toContain('blocked by current tier: external.web');
-    expect(runtimeContext).toContain('2 blocked by the current capability tier');
+    expect(renderedRuntimeLayers).toContain('Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.');
+    expect(renderedRuntimeLayers).toContain('blocked by current tier: external.web');
+    expect(renderedRuntimeLayers).toContain('<available_extended_count>2</available_extended_count>');
   });
 });

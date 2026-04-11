@@ -273,6 +273,7 @@ function createRuntime(params: {
       ...payload,
     })),
     recordUserMessage: params.recordUserMessage,
+    recordSystemMessage: params.recordSystemMessage ?? vi.fn(() => null),
     resolveSessionChannelId: vi.fn((channelId: string) => channelId),
     resolveChannelType: vi.fn(() => 'api'),
     ensureModel: vi.fn(),
@@ -315,7 +316,6 @@ function createRuntime(params: {
     })),
     recordToolObservations: vi.fn(),
     recordAssistantMessage: params.recordAssistantMessage,
-    recordSystemMessage: params.recordSystemMessage ?? vi.fn(() => null),
     buildTurnToolSummary: vi.fn(() => ({ toolCalls: [] })),
     inferPostTurnActions: vi.fn(async () => []),
     buildTurnRecord: vi.fn(() => ({

@@ -27,6 +27,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import { resolveConfiguredCompanionDataDir } from '../../../persistence/layout.js';
 import { resolveSystemRoleCapabilityMetadata } from '../../../primitives/llm/models.js';
 import type { SessionManager } from '../../session/manager.js';
+import { formatAttributedSystemContent } from '../../session/entry-attribution.js';
 import type { ContextManifestMemorySeed } from '../../session/context-manifest.js';
 import {
   cloneMetacognitiveFlags,
@@ -82,6 +83,7 @@ import {
   hasVisionTurnInputs,
   buildTurnUserContent,
 } from './vision-attachments.js';
+import type { SystemNoteMessage } from '../messages.js';
 import {
   resolveMoaSettings,
   runMoaTurn,

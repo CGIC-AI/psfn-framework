@@ -413,7 +413,6 @@ describe('tool-call-scheduler', () => {
       }),
     );
   });
-
   it('emits cancelled telemetry when execution aborts before a tool call runs', async () => {
     const telemetry = vi.fn();
     const controller = new AbortController();

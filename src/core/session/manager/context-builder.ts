@@ -87,7 +87,6 @@ export interface OrientationNoteTelemetry {
   noteText?: string;
   sessionSummary?: string;
   continuitySummary?: string;
-  openThreadSummary?: string;
   sourceCounts: {
     session: number;
     continuity: number;
@@ -117,21 +116,6 @@ function summarizeConversationEntries(
       : entry.authorName ?? resolveRoleName('user', roleNames);
     return `${speaker}: ${compactPromptText(entry.content)}`;
   }).join(' / ');
-}
-
-function summarizeTextList(values: readonly string[], maxItems = 2): string {
-  return values
-    .slice(-maxItems)
-    .map(value => compactPromptText(value))
-    .filter(value => value.length > 0)
-    .join(' / ');
-}
-
-function summarizeFocusKnowledgeForOrientation(values: readonly string[], maxItems = 2): string {
-  return summarizeTextList(
-    values.map(value => value.replace(/^\[[^\]]+\]\s*/u, '')),
-    maxItems,
-  );
 }
 
 function formatIdleGap(idleGapMs: number): string {
@@ -224,7 +208,6 @@ export function buildOrientationNoteTelemetry(params: {
 
   const sessionSummary = summarizeConversationEntries(priorEntries, params.characterName);
   const continuitySummary = summarizeConversationEntries(params.continuityEntries, params.characterName);
-  const openThreadSummary = summarizeFocusKnowledgeForOrientation(params.focusKnowledgeTexts);
 
   const noteParts = [
     '[Welcome back]',
@@ -232,9 +215,6 @@ export function buildOrientationNoteTelemetry(params: {
   ];
   if (sessionSummary) {
     noteParts.push(`Last time here: ${sessionSummary}.`);
-  }
-  if (openThreadSummary) {
-    noteParts.push(`Open threads: ${openThreadSummary}.`);
   }
   if (continuitySummary) {
     noteParts.push(`Recent continuity: ${continuitySummary}.`);
@@ -250,7 +230,6 @@ export function buildOrientationNoteTelemetry(params: {
     noteText: noteParts.join('\n').trim(),
     sessionSummary,
     continuitySummary,
-    openThreadSummary,
     sourceCounts,
   };
 }

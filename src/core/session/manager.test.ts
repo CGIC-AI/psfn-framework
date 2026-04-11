@@ -220,16 +220,19 @@ describe('SessionManager', () => {
         reason: 'idle_gap_exceeded',
         idleGapMs: currentAt - previousAt,
         idleThresholdMs: expect.any(Number),
+        sourceCounts: {
+          focusKnowledge: 1,
+        },
       });
       expect(snapshot.orientation?.noteText).toContain('Welcome back');
       expect(snapshot.orientation?.noteText).toContain('Last time here');
       expect(snapshot.orientation?.noteText).toContain('Recent continuity');
-      expect(snapshot.orientation?.noteText).toContain('Open threads');
+      expect(snapshot.orientation?.noteText).not.toContain('Open threads');
 
       const ctx = await mgr.buildContext('api:main', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
       expect(ctx.systemPrompt).toContain('[Welcome back]');
-      expect(ctx.systemPrompt).toContain('Open threads');
       expect(ctx.systemPrompt).toContain('Recent continuity');
+      expect(ctx.systemPrompt).not.toContain('Open threads');
     } finally {
       nowSpy.mockRestore();
     }

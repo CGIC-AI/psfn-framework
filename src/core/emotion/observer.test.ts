@@ -186,6 +186,37 @@ describe('EmotionObserver', () => {
     expect(classify).toHaveBeenCalledTimes(1);
   });
 
+  it('fails closed when text classifier returns a malformed row before a valid one', async () => {
+    const classify = vi.fn().mockResolvedValue([
+      undefined,
+      { label: 'joy', score: 0.7 },
+    ] as unknown as readonly TextEmotionClassification[]);
+    const observer = new EmotionObserver({
+      textClassifier: { classify },
+      vadLexicon: createLexicon({}),
+    });
+
+    await expect(observer.buildObservation('unknown-token')).rejects.toThrow(
+      'classifications[0] must be an object',
+    );
+    expect(classify).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed when text classifier returns an out-of-range score', async () => {
+    const classify = vi.fn().mockResolvedValue([
+      { label: 'joy', score: 1.2 },
+    ] as const);
+    const observer = new EmotionObserver({
+      textClassifier: { classify },
+      vadLexicon: createLexicon({}),
+    });
+
+    await expect(observer.observe('unknown-token', 0)).rejects.toThrow(
+      'classifications[0].score must be between 0 and 1',
+    );
+    expect(classify).toHaveBeenCalledTimes(1);
+  });
+
   it('builds audio modality observations when audio classifier is configured', async () => {
     const { classifier } = createClassifier([{ label: 'neutral', score: 1 }]);
     const { classifier: audioClassifier, classify } = createAudioClassifier([

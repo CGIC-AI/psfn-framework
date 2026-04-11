@@ -207,11 +207,10 @@ function resolveClassifierSignal(classifications: readonly TextEmotionClassifica
 
   let best: CategoricalSignal | null = null;
   for (let index = 0; index < classifications.length; index += 1) {
-    const entry = classifications[index];
-    if (!entry) continue;
+    const entry = normalizeClassifierEntry(classifications[index], index);
 
     const label = normalizeEmotionLabel(entry.label, `classifications[${index}].label`);
-    const confidence = normalizeConfidence(entry.score, `classifications[${index}].score`);
+    const confidence = normalizeClassifierConfidence(entry.score, `classifications[${index}].score`);
     const candidate: CategoricalSignal = {
       label,
       confidence,
@@ -224,6 +223,19 @@ function resolveClassifierSignal(classifications: readonly TextEmotionClassifica
     return null;
   }
   return best;
+}
+
+function normalizeClassifierEntry(
+  value: unknown,
+  index: number,
+): { label: unknown; score: unknown } {
+  if (!isRecord(value)) {
+    throw new TypeError(`classifications[${index}] must be an object`);
+  }
+  return {
+    label: value.label,
+    score: value.score,
+  };
 }
 
 function chooseStrongerCategoricalSignal(
@@ -452,6 +464,16 @@ function normalizeConfidence(value: unknown, fieldName: string): number {
     throw new TypeError(`${fieldName} must be a finite number`);
   }
   return clampUnit(value);
+}
+
+function normalizeClassifierConfidence(value: unknown, fieldName: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new TypeError(`${fieldName} must be a finite number`);
+  }
+  if (value < 0 || value > 1) {
+    throw new RangeError(`${fieldName} must be between 0 and 1`);
+  }
+  return value;
 }
 
 function normalizeMaxTextLength(maxTextLength: number | undefined): number {

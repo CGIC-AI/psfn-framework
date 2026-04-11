@@ -49,6 +49,9 @@ Already unified top-level direct tools in the current runtime:
 - `shell`
 - `skill`
 - `orient`
+- `identity`
+- `north_star`
+- `system`
 - `subagent`
 
 Still-split first-party direct tools in the current runtime:
@@ -56,13 +59,12 @@ Still-split first-party direct tools in the current runtime:
 - memory and scratchpad: `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write`
 - filesystem: `fs_list`, `fs_read`
 - contacts: `contact_list`, `contact_lookup`, `contact_note`, `contact_set_trust`, `contact_link_identity`, `contact_set_channel_privacy`
-- identity and direction: `prompt_layer_*`, `identity_diff`, `identity_changelog`, `character_card_update`, `north_star_*`
 - repository: `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr`
 - sessions: `session_search`, `session_grep`, `session_list`, `session_new`, `session_resume`, `start_focus`, `complete_focus`
 - heartbeat and values: `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task`, `values_list`, `values_add`, `values_update`
 - vault: `vault_write`, `vault_read`, `vault_search`, `vault_daily`
 - beads: `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`
-- lifecycle and operator control: `settings_get`, `promoted_tools_*`, `self_restart`, `self_rebuild`, `notify_operator`
+- lifecycle and operator control: `promoted_tools_*`, `notify_operator`
 - images: `image_create`, `image_edit`, `image_analyze`
 - shards: `spawn_shard`
 

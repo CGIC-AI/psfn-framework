@@ -190,6 +190,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     pathSnapshot.companionDataDir,
     composeSystemPromptTemplate(),
     {
+      cardStore: cardVersionStore,
+      confirmationQueue: cardProposalQueue,
       identityCoolingOff,
       getCapabilityTier: () => capabilityRuntime.getTier(),
     },
@@ -198,7 +200,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     getCapabilityTier: () => capabilityRuntime.getTier(),
     confirmationQueue: cardProposalQueue,
   });
-  wireSettingsRuntime(agentLoop, config);
+  wireSettingsRuntime(agentLoop, config, { registerSystemTool: false });
   wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway);
   const coreMemoryStore = wireCoreMemoryRuntime({
     agentLoop,

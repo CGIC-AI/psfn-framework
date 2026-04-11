@@ -7,8 +7,22 @@ import {
   type NorthStarScope,
   type NorthStarStore,
 } from './store.js';
+import { withCapabilityRequirement, type CapabilityRequirement } from '../../system/capabilities/requirements.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+
+const NORTH_STAR_ACTIONS = ['list', 'create', 'update', 'delete', 'reorder'] as const;
+type NorthStarAction = (typeof NORTH_STAR_ACTIONS)[number];
+
+interface NorthStarToolParams {
+  action?: NorthStarAction;
+  item_id?: string;
+  item_ids?: string[];
+  title?: string;
+  content?: string;
+  scope?: NorthStarScope;
+  enabled?: boolean;
+}
 
 function errorMessage(error: unknown): string {
   return toErrorMessage(error);
@@ -51,6 +65,119 @@ function resolveItemByPrefix(store: NorthStarStore, rawId: unknown): NorthStarIt
     throw new Error(`North Star item id is ambiguous: ${requested}`);
   }
   return matches[0];
+}
+
+function normalizeAction(value: unknown): NorthStarAction {
+  if (value === undefined) return 'list';
+  if (typeof value !== 'string') {
+    throw new Error(`action must be one of: ${NORTH_STAR_ACTIONS.join(', ')}`);
+  }
+  const normalized = value.trim();
+  if ((NORTH_STAR_ACTIONS as readonly string[]).includes(normalized)) {
+    return normalized as NorthStarAction;
+  }
+  throw new Error(`action must be one of: ${NORTH_STAR_ACTIONS.join(', ')}`);
+}
+
+function resolveNorthStarCapabilityRequirement(params: Record<string, unknown>): CapabilityRequirement {
+  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+  switch (rawAction) {
+    case '':
+    case 'list':
+      return 'identity.read';
+    case 'create':
+    case 'update':
+    case 'delete':
+    case 'reorder':
+      return 'identity.write.runtime';
+    default:
+      return ['identity.read', 'identity.write.runtime'];
+  }
+}
+
+export function createNorthStarTool(store: NorthStarStore): AgentTool<any> {
+  const listTool = createNorthStarListTool(store);
+  const createTool = createNorthStarCreateTool(store);
+  const updateTool = createNorthStarUpdateTool(store);
+  const deleteTool = createNorthStarDeleteTool(store);
+  const reorderTool = createNorthStarReorderTool(store);
+
+  const tool: AgentTool<any> = {
+    name: 'north_star',
+    label: 'north_star',
+    description:
+      'Manage North Star long-horizon guiding intent. '
+      + 'Use action=list|create|update|delete|reorder. '
+      + 'This surface stays separate from orient and identity and is not for transient session state.',
+    parameters: Type.Object({
+      action: Type.Optional(Type.Union(
+        NORTH_STAR_ACTIONS.map(action => Type.Literal(action)),
+        { description: 'North Star action. Defaults to list.' },
+      )),
+      item_id: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'North Star item id or unique prefix for update/delete.',
+      })),
+      item_ids: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
+        minItems: 1,
+        maxItems: MAX_NORTH_STAR_ITEMS,
+        description: 'North Star item ids or unique prefixes in their desired order for reorder.',
+      })),
+      title: Type.Optional(Type.String({ minLength: 1, description: 'Short long-horizon guiding title.' })),
+      content: Type.Optional(Type.String({ minLength: 1, description: 'North Star details or intent.' })),
+      scope: Type.Optional(Type.Union(
+        NORTH_STAR_SCOPES.map(scope => Type.Literal(scope)),
+        { description: 'Whether the North Star item is shared or companion-owned.' },
+      )),
+      enabled: Type.Optional(Type.Boolean({ description: 'Whether to include this item in the live prompt.' })),
+    }),
+    execute: async (
+      toolCallId: string,
+      params: NorthStarToolParams = {},
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      const action = (() => {
+        try {
+          return normalizeAction(params.action);
+        } catch (error) {
+          return error;
+        }
+      })();
+
+      if (action instanceof Error) {
+        return textResultWithError(`north_star failed: ${action.message}`, true);
+      }
+
+      try {
+        switch (action) {
+          case 'list':
+            return listTool.execute(toolCallId, {});
+          case 'create':
+            return createTool.execute(toolCallId, params as {
+              title: string;
+              content: string;
+              scope?: NorthStarScope;
+              enabled?: boolean;
+            });
+          case 'update':
+            return updateTool.execute(toolCallId, params as {
+              item_id: string;
+              title?: string;
+              content?: string;
+              scope?: NorthStarScope;
+              enabled?: boolean;
+            });
+          case 'delete':
+            return deleteTool.execute(toolCallId, params as { item_id: string });
+          case 'reorder':
+            return reorderTool.execute(toolCallId, params as { item_ids: string[] });
+        }
+      } catch (error) {
+        return textResultWithError(`north_star failed for action=${action}: ${errorMessage(error)}`, true);
+      }
+    },
+  };
+
+  return withCapabilityRequirement(tool, resolveNorthStarCapabilityRequirement);
 }
 
 export function createNorthStarListTool(store: NorthStarStore): AgentTool<any> {

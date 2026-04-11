@@ -8,14 +8,17 @@ import type { LifecycleNotifier } from '../../system/lifecycle/notifications.js'
 import { createComponentLogger } from '../../shared/logger.js';
 import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
 import type { LifecycleRestartSafeguard } from '../../system/capabilities/safeguards.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
 import type { PostTurnInferenceContext } from '../agent/substrate-agent/post-turn-actions.js';
 import type { PostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
+import { executeSystemReadAction, type SettingsGetParams } from '../../system/settings-tools.js';
 import { textResult, textResultWithError } from './results.js';
 
 const log = createComponentLogger('LifecycleTools');
 export const DEFERRED_LIFECYCLE_ACTION_KIND = 'lifecycle.execute';
 type DeferredLifecycleOperation = 'restart' | 'rebuild';
+type SystemAction = 'read' | 'restart' | 'rebuild';
 
 interface DeferredLifecyclePayload {
   operation: DeferredLifecycleOperation;
@@ -28,6 +31,16 @@ interface LifecycleToolOptions {
   runRestartCommand?: () => Promise<void>;
   runBuildCommand?: () => Promise<void>;
   executionMode?: 'immediate' | 'deferred';
+}
+
+interface SystemToolOptions extends LifecycleToolOptions {
+  notifier?: LifecycleNotifier;
+  stopFn?: () => Promise<void>;
+}
+
+interface SystemToolParams extends SettingsGetParams {
+  action?: string;
+  reason?: string;
 }
 
 /**
@@ -197,6 +210,90 @@ export function createRebuildTool(
   };
 }
 
+function normalizeSystemAction(params: SystemToolParams): SystemAction {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  switch (action) {
+    case '':
+    case 'read':
+    case 'settings_get':
+      return 'read';
+    case 'restart':
+    case 'self_restart':
+      return 'restart';
+    case 'rebuild':
+    case 'self_rebuild':
+      return 'rebuild';
+    default:
+      throw new Error(`Unknown system action "${action}". Use action=read|restart|rebuild.`);
+  }
+}
+
+export function createSystemTool(
+  config: SubstrateConfig,
+  options: SystemToolOptions = {},
+): AgentTool<any> {
+  return {
+    name: 'system',
+    label: 'system',
+    description:
+      'Unified runtime settings and lifecycle surface. Use action=read|restart|rebuild. '
+      + 'Read exposes safe runtime settings; restart and rebuild preserve lifecycle safeguards.',
+    parameters: Type.Object({
+      action: Type.Optional(Type.Union([
+        Type.Literal('read'),
+        Type.Literal('settings_get'),
+        Type.Literal('restart'),
+        Type.Literal('self_restart'),
+        Type.Literal('rebuild'),
+        Type.Literal('self_rebuild'),
+      ], {
+        description: 'System action. Preferred actions: read, restart, rebuild. Legacy action aliases remain accepted.',
+      })),
+      key: Type.Optional(Type.String({ description: 'Used with action=read. Single settings key to retrieve.' })),
+      keys: Type.Optional(Type.Array(Type.String(), { description: 'Used with action=read. Subset of settings keys to retrieve.' })),
+      list: Type.Optional(Type.Boolean({ description: 'Used with action=read. Return available safe keys.' })),
+      reason: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Used with action=restart|rebuild. Required, logged to safeguard audit trail.',
+      })),
+    }),
+    execute: async (
+      toolCallId: string,
+      params: SystemToolParams = {},
+      signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      let action: SystemAction;
+      try {
+        action = normalizeSystemAction(params);
+      } catch (error) {
+        return textResultWithError(`system failed: ${error instanceof Error ? error.message : String(error)}`, true);
+      }
+
+      if (action === 'read') {
+        return executeSystemReadAction(config, params);
+      }
+
+      if (!options.notifier || !options.stopFn) {
+        return textResultWithError(`system action=${action} is not available in this runtime.`, true);
+      }
+
+      if (action === 'restart') {
+        return createRestartTool(
+          options.notifier,
+          options.stopFn,
+          options,
+        ).execute(toolCallId, { reason: params.reason ?? '' }, signal);
+      }
+
+      return createRebuildTool(
+        options.notifier,
+        options.stopFn,
+        options,
+      ).execute(toolCallId, { reason: params.reason ?? '' }, signal);
+    },
+  };
+}
+
 export function inferDeferredLifecycleActions(
   context: PostTurnInferenceContext,
 ): PostTurnActionCandidate[] {
@@ -283,12 +380,22 @@ function normalizeDeferredLifecyclePayloadFromToolCall(
   toolName: unknown,
   args: unknown,
 ): DeferredLifecyclePayload | null {
-  if (toolName !== 'self_restart' && toolName !== 'self_rebuild') {
+  if (toolName !== 'self_restart' && toolName !== 'self_rebuild' && toolName !== 'system') {
     return null;
   }
   const reason = normalizeReason(args);
   if (!reason) {
     return null;
+  }
+  if (toolName === 'system') {
+    const action = normalizeSystemActionFromArgs(args);
+    if (!action || action === 'read') {
+      return null;
+    }
+    return {
+      operation: action,
+      reason,
+    };
   }
   return {
     operation: toolName === 'self_restart' ? 'restart' : 'rebuild',
@@ -331,11 +438,32 @@ function normalizeReason(payload: unknown): string {
   return '';
 }
 
+function normalizeSystemActionFromArgs(payload: unknown): SystemAction | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return null;
+  }
+  const rawAction = (payload as { action?: unknown }).action;
+  if (typeof rawAction !== 'string') {
+    return 'read';
+  }
+  const normalized = rawAction.trim();
+  if (!normalized || normalized === 'read' || normalized === 'settings_get') {
+    return 'read';
+  }
+  if (normalized === 'restart' || normalized === 'self_restart') {
+    return 'restart';
+  }
+  if (normalized === 'rebuild' || normalized === 'self_rebuild') {
+    return 'rebuild';
+  }
+  return null;
+}
+
 function isSuccessfulLifecycleToolResult(message: AgentMessage): message is ToolResultMessage {
   if (message.role !== 'toolResult' || message.isError === true) {
     return false;
   }
-  return message.toolName === 'self_restart' || message.toolName === 'self_rebuild';
+  return message.toolName === 'self_restart' || message.toolName === 'self_rebuild' || message.toolName === 'system';
 }
 
 async function executeDeferredRestart(

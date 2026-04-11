@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   createPromotedToolsAddTool,
-  createSettingsGetTool,
   createPromotedToolsListTool,
   createPromotedToolsRemoveTool,
   createPromotedToolsSwapTool,
+  executeSystemReadAction,
 } from './settings-tools.js';
 import type { SubstrateConfig } from './config/runtime-config-contracts.js';
 
@@ -52,9 +52,9 @@ function readText(result: { content: Array<{ text?: string }> }): string {
   return result.content[0]?.text ?? '';
 }
 
-describe('settings_get tool', () => {
+describe('executeSystemReadAction', () => {
   it('returns a single key value', async () => {
-    const result = await createSettingsGetTool(makeConfig()).execute('call-single', {
+    const result = executeSystemReadAction(makeConfig(), {
       key: 'thinkMaxSubQueries',
     });
     const payload = JSON.parse(readText(result));
@@ -66,7 +66,7 @@ describe('settings_get tool', () => {
   });
 
   it('returns discoverable key list mode', async () => {
-    const result = await createSettingsGetTool(makeConfig()).execute('call-list', { list: true });
+    const result = executeSystemReadAction(makeConfig(), { list: true });
     const payload = JSON.parse(readText(result));
 
     expect(payload.mode).toBe('list');
@@ -75,7 +75,7 @@ describe('settings_get tool', () => {
   });
 
   it('returns subset for keys mode', async () => {
-    const result = await createSettingsGetTool(makeConfig()).execute('call-subset', {
+    const result = executeSystemReadAction(makeConfig(), {
       keys: ['primaryModel', 'retryMaxAttempts'],
     });
     const payload = JSON.parse(readText(result));
@@ -87,7 +87,7 @@ describe('settings_get tool', () => {
   });
 
   it('returns clear error for unknown keys', async () => {
-    const result = await createSettingsGetTool(makeConfig()).execute('call-error', {
+    const result = executeSystemReadAction(makeConfig(), {
       key: 'discordToken',
     });
 

@@ -73,7 +73,7 @@ describe('extended-tool-autoload-policy', () => {
   it('classifies background-only tools as non-overlay', () => {
     expect(classifyExtendedToolForTurn('schedule_task')).toBe('background');
     expect(classifyExtendedToolForTurn('heartbeat_run_template')).toBe('background');
-    expect(classifyExtendedToolForTurn('north_star_create')).toBe('overlay');
+    expect(classifyExtendedToolForTurn('north_star')).toBe('overlay');
     expect(classifyExtendedToolForTurn('repo_status')).toBe('overlay');
     expect(DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS.has('schedule_task')).toBe(true);
   });
@@ -84,13 +84,10 @@ describe('extended-tool-autoload-policy', () => {
       'vault_read',
       'vault_search',
       'vault_daily',
-      'north_star_create',
-      'north_star_update',
-      'north_star_delete',
-      'north_star_reorder',
+      'north_star',
     ]));
     expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory.filter(name => name === 'vault_write')).toHaveLength(1);
-    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory.filter(name => name === 'north_star_create')).toHaveLength(1);
+    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory.filter(name => name === 'north_star')).toHaveLength(1);
   });
 
   it('classifies tools with explicit core, overlay, and background semantics', () => {

@@ -27,9 +27,19 @@ function resolveUnifiedToolRequirement(
 
   switch (toolName) {
     case 'system':
+      if (action === 'read' || action === 'settings_get' || action === null) return 'identity.read';
       if (action === 'restart' || action === 'self_restart') return 'lifecycle.restart';
       if (action === 'rebuild' || action === 'self_rebuild') return 'lifecycle.rebuild';
-      return ['lifecycle.restart', 'lifecycle.rebuild'];
+      return ['identity.read', 'lifecycle.restart', 'lifecycle.rebuild'];
+    case 'identity':
+      if (action === 'list_layers' || action === 'get_layer' || action === 'diff_layer' || action === 'history' || action === null) {
+        return 'identity.read';
+      }
+      if (action === 'update_persona') return 'identity.write.runtime';
+      if (action === 'update_layer' || action === 'rollback_layer' || action === 'toggle_layer' || action === 'commit_stage' || action === 'cancel_stage') {
+        return ['identity.write.runtime', 'identity.write.base', 'identity.write.operator'];
+      }
+      return ['identity.read', 'identity.write.runtime', 'identity.write.base', 'identity.write.operator'];
     case 'memory':
       if (action === 'delete' || action === 'restore' || action === 'redact') return 'memory.delete';
       if (action === 'search' || action === 'list' || action === 'read' || action === 'get') return 'identity.read';

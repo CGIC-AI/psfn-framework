@@ -359,6 +359,7 @@ async function main(): Promise<void> {
   const controlPlane = buildAgentControlPlane({
     heartbeatChannelId,
     dataDir: pathSnapshot.companionDataDir,
+    config,
     eventBus,
     gateway,
     unregisterGatewayDisconnect,

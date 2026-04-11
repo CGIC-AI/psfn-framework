@@ -10,6 +10,8 @@ import {
   CARD_BACKED_FOUNDATION_PROMPT_MESSAGE,
   isCanonicalCharacterFoundationLayer,
 } from './canonical-foundation.js';
+import type { CharacterCardVersionStore, PersonaUpdateToolOptions } from './card-versioning.js';
+import { executePersonaUpdateAction, extractCardPatchFromRecord } from './card-versioning.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
 import {
@@ -23,6 +25,32 @@ const DEFAULT_DIFF_LINE_LIMIT = 160;
 const MAX_DIFF_LINE_LIMIT = 1_000;
 const DEFAULT_CHANGELOG_LIMIT = 20;
 const MAX_CHANGELOG_LIMIT = 200;
+const IDENTITY_FAIL_CLOSED_REQUIREMENTS: readonly CapabilityToken[] = [
+  'identity.read',
+  'identity.write.runtime',
+  'identity.write.base',
+  'identity.write.operator',
+] as const;
+const PERSONA_CONFLICT_PARAMETER_KEYS = [
+  'layer_id',
+  'content',
+  'version',
+  'stage_id',
+  'limit',
+  'max_diff_lines',
+] as const;
+
+type IdentityAction =
+  | 'list_layers'
+  | 'get_layer'
+  | 'diff_layer'
+  | 'history'
+  | 'update_layer'
+  | 'rollback_layer'
+  | 'toggle_layer'
+  | 'update_persona'
+  | 'commit_stage'
+  | 'cancel_stage';
 
 interface PromptLineDiffSummary {
   added: number;
@@ -241,6 +269,250 @@ function resolveHistoricalPromptVersion(
     content: entry.previousContent,
     checksum: entry.previousChecksum,
   };
+}
+
+function resolveIdentityAction(params: Record<string, unknown>): IdentityAction | null {
+  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!rawAction) {
+    return Object.keys(params).length === 0 ? 'list_layers' : null;
+  }
+
+  switch (rawAction) {
+    case 'list_layers':
+    case 'get_layer':
+    case 'diff_layer':
+    case 'history':
+    case 'update_layer':
+    case 'rollback_layer':
+    case 'toggle_layer':
+    case 'update_persona':
+    case 'commit_stage':
+    case 'cancel_stage':
+      return rawAction;
+    default:
+      return null;
+  }
+}
+
+function hasOwnDefinedValue(params: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(params, key) && params[key] !== undefined;
+}
+
+function hasPersonaMutationParams(params: Record<string, unknown>): boolean {
+  return Object.keys(extractCardPatchFromRecord(params)).length > 0
+    || params.allow_destructive_replace === true;
+}
+
+function hasPromptConflictParams(params: Record<string, unknown>): boolean {
+  return PERSONA_CONFLICT_PARAMETER_KEYS.some((key) => hasOwnDefinedValue(params, key));
+}
+
+function validateIdentityActionShape(
+  action: IdentityAction,
+  params: Record<string, unknown>,
+): string | null {
+  if (action === 'update_persona') {
+    if (hasPromptConflictParams(params)) {
+      return 'update_persona does not accept prompt-layer parameters; use the matching identity action for layer reads or mutations.';
+    }
+    return null;
+  }
+
+  if (hasPersonaMutationParams(params)) {
+    return `${action} does not accept persona mutation fields; use action=update_persona for character-card edits.`;
+  }
+
+  return null;
+}
+
+function resolveIdentityRequiredCapability(
+  store: PromptLayerStatePort,
+  identityCoolingOff: IdentityCoolingOffManager | undefined,
+  params: Record<string, unknown>,
+): CapabilityToken | readonly CapabilityToken[] {
+  const action = resolveIdentityAction(params);
+  switch (action) {
+    case 'list_layers':
+    case 'get_layer':
+    case 'diff_layer':
+    case 'history':
+      return 'identity.read';
+    case 'update_persona':
+      return 'identity.write.runtime';
+    case 'update_layer':
+    case 'rollback_layer':
+    case 'toggle_layer':
+      return resolvePromptLayerWriteCapability(store, String(params.layer_id ?? ''));
+    case 'commit_stage':
+      return resolvePromptLayerWriteCapabilityForAction(store, identityCoolingOff, {
+        action: 'commit',
+        stage_id: params.stage_id,
+        layer_id: params.layer_id,
+      });
+    case 'cancel_stage':
+      return resolvePromptLayerWriteCapabilityForAction(store, identityCoolingOff, {
+        action: 'cancel',
+        stage_id: params.stage_id,
+        layer_id: params.layer_id,
+      });
+    default:
+      return IDENTITY_FAIL_CLOSED_REQUIREMENTS;
+  }
+}
+
+export interface IdentityToolOptions extends PromptLayerUpdateToolOptions, Pick<PersonaUpdateToolOptions, 'confirmationQueue'> {
+  cardStore?: CharacterCardVersionStore;
+}
+
+export function createIdentityTool(
+  store: PromptLayerStatePort,
+  options: IdentityToolOptions = {},
+): AgentTool<any> {
+  const listTool = createPromptLayerListTool(store);
+  const getTool = createPromptLayerGetTool(store);
+  const diffTool = createIdentityDiffTool(store);
+  const historyTool = createIdentityChangelogTool(store);
+  const updateTool = createPromptLayerUpdateTool(store, options);
+  const rollbackTool = createPromptLayerRollbackTool(store, options);
+  const toggleTool = createPromptLayerToggleTool(store);
+  const identityCoolingOff = options.identityCoolingOff;
+
+  const tool: AgentTool<any> = {
+    name: 'identity',
+    description:
+      'Unified identity surface for prompt-layer inspection, prompt-layer mutation, staged prompt commits/cancels, and persona updates. '
+      + 'Mutating actions remain capability-gated, audited, and confirmation/cooling-off guarded.',
+    label: 'identity',
+    parameters: Type.Object({
+      action: Type.Optional(Type.Union([
+        Type.Literal('list_layers'),
+        Type.Literal('get_layer'),
+        Type.Literal('diff_layer'),
+        Type.Literal('history'),
+        Type.Literal('update_layer'),
+        Type.Literal('rollback_layer'),
+        Type.Literal('toggle_layer'),
+        Type.Literal('update_persona'),
+        Type.Literal('commit_stage'),
+        Type.Literal('cancel_stage'),
+      ], {
+        description:
+          'Identity action. Required for all actions except empty-argument calls, which default to list_layers.',
+      })),
+      layer_id: Type.Optional(Type.String({ description: 'Prompt layer ID (prefix match OK).' })),
+      content: Type.Optional(Type.String({ description: 'Replacement prompt-layer content for update_layer.' })),
+      version: Type.Optional(Type.Number({ description: 'Historical prompt-layer version for diff_layer or rollback_layer.', minimum: 1 })),
+      stage_id: Type.Optional(Type.String({ description: 'Staged prompt-layer edit ID for commit_stage or cancel_stage.' })),
+      max_diff_lines: Type.Optional(Type.Number({
+        description: `Max changed lines to display for diff_layer (default ${DEFAULT_DIFF_LINE_LIMIT}, max ${MAX_DIFF_LINE_LIMIT}).`,
+        minimum: 1,
+      })),
+      limit: Type.Optional(Type.Number({
+        description: `Max history entries for action=history (default ${DEFAULT_CHANGELOG_LIMIT}, max ${MAX_CHANGELOG_LIMIT}).`,
+        minimum: 1,
+      })),
+      reason: Type.Optional(Type.String({ description: 'Short rationale for an identity mutation.' })),
+      name: Type.Optional(Type.String({ description: 'Updated character name for update_persona.' })),
+      description: Type.Optional(Type.String({ description: 'Updated character description for update_persona.' })),
+      personality: Type.Optional(Type.String({ description: 'Updated character personality for update_persona.' })),
+      scenario: Type.Optional(Type.String({ description: 'Updated character scenario for update_persona.' })),
+      first_mes: Type.Optional(Type.String({ description: 'Updated first message seed for update_persona.' })),
+      mes_example: Type.Optional(Type.String({ description: 'Updated dialogue example for update_persona.' })),
+      system_prompt: Type.Optional(Type.String({ description: 'Updated system prompt section for update_persona.' })),
+      post_history_instructions: Type.Optional(Type.String({ description: 'Updated post-history instructions for update_persona.' })),
+      tags: Type.Optional(Type.Array(Type.String(), { description: 'Updated tag list for update_persona.' })),
+      creator: Type.Optional(Type.String({ description: 'Updated creator attribution for update_persona.' })),
+      creator_notes: Type.Optional(Type.String({ description: 'Updated creator notes for update_persona.' })),
+      alternate_greetings: Type.Optional(Type.Array(Type.String(), { description: 'Updated alternate greetings for update_persona.' })),
+      extensions_visual_description: Type.Optional(Type.String({ description: 'Updated visual description extension for update_persona.' })),
+      'extensions.visual_description': Type.Optional(Type.String({ description: 'Alias for extensions_visual_description.' })),
+      allow_destructive_replace: Type.Optional(Type.Boolean({
+        description:
+          'Set true only when intentionally replacing most of a long persona field instead of lightly editing it.',
+      })),
+    }),
+    execute: async (
+      toolCallId: string,
+      params: Record<string, unknown>,
+      signal?: AbortSignal,
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+      try {
+        const action = resolveIdentityAction(params);
+        if (!action) {
+          return textResultWithError(
+            'action is required. Supported actions: list_layers, get_layer, diff_layer, history, update_layer, rollback_layer, toggle_layer, update_persona, commit_stage, cancel_stage.',
+            true,
+          );
+        }
+
+        const shapeError = validateIdentityActionShape(action, params);
+        if (shapeError) {
+          return textResultWithError(shapeError, true);
+        }
+
+        switch (action) {
+          case 'list_layers':
+            return listTool.execute(toolCallId, {}, signal);
+          case 'get_layer':
+            return getTool.execute(toolCallId, params as { layer_id?: string; layer?: { id: string } }, signal);
+          case 'diff_layer':
+            return diffTool.execute(toolCallId, params as {
+              layer_id: string;
+              version?: number;
+              to_version?: number;
+              max_diff_lines?: number;
+            }, signal);
+          case 'history':
+            return historyTool.execute(toolCallId, params as { layer_id?: string; limit?: number }, signal);
+          case 'update_layer':
+            return updateTool.execute(toolCallId, {
+              layer_id: typeof params.layer_id === 'string' ? params.layer_id : undefined,
+              content: typeof params.content === 'string' ? params.content : undefined,
+              reason: typeof params.reason === 'string' ? params.reason : undefined,
+              action: 'update',
+            }, signal);
+          case 'rollback_layer':
+            return rollbackTool.execute(toolCallId, {
+              layer_id: typeof params.layer_id === 'string' ? params.layer_id : undefined,
+              version: typeof params.version === 'number' ? params.version : undefined,
+              reason: typeof params.reason === 'string' ? params.reason : undefined,
+              action: 'rollback',
+            }, signal);
+          case 'toggle_layer':
+            return toggleTool.execute(toolCallId, {
+              layer_id: typeof params.layer_id === 'string' ? params.layer_id : '',
+            }, signal);
+          case 'update_persona':
+            if (!options.cardStore) {
+              return textResultWithError('Character-card identity store is not configured.', true);
+            }
+            return executePersonaUpdateAction(options.cardStore, params, {
+              getCapabilityTier: options.getCapabilityTier,
+              confirmationQueue: options.confirmationQueue,
+            });
+          case 'commit_stage':
+          case 'cancel_stage':
+            return handlePromptLayerStagedAction(store, identityCoolingOff, {
+              action: action === 'commit_stage' ? 'commit' : 'cancel',
+              stage_id: typeof params.stage_id === 'string' ? params.stage_id : undefined,
+              reason: typeof params.reason === 'string' ? params.reason : undefined,
+            }, {
+              commitReason: 'Committed staged identity prompt-layer change via identity tool',
+              commitSuccessMessage: (updated, stageId) =>
+                `Committed staged prompt-layer change for "${updated.name}" to v${updated.version} (stage_id: ${stageId}).`,
+              cancelSuccessMessage: (stageId) =>
+                `Cancelled staged prompt-layer change (stage_id: ${stageId}).`,
+            });
+        }
+      } catch (error) {
+        return textResultWithError(`identity failed: ${errorMessage(error)}`, true);
+      }
+    },
+  };
+
+  return withCapabilityRequirement(tool, (params) =>
+    resolveIdentityRequiredCapability(store, identityCoolingOff, params),
+  );
 }
 
 export function createPromptLayerListTool(store: PromptLayerStatePort): AgentTool<any> {

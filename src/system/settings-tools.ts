@@ -46,6 +46,63 @@ export interface PromotedExtendedToolsManager {
   swapPromotedExtendedTools(fromSlot: number, toSlot: number): PromotedToolMutationResult;
 }
 
+export function executeSystemReadAction(
+  config: SubstrateConfig,
+  params: SettingsGetParams,
+): AgentToolResult<{ isError?: boolean }> {
+  const snapshot = getRuntimeSettingsSnapshot(config);
+
+  if (params.list) {
+    return textResult(
+      JSON.stringify({
+        mode: 'list',
+        keys: [...RUNTIME_SETTINGS_KEYS],
+      }, null, 2),
+    );
+  }
+
+  if (params.key && params.keys?.length) {
+    return textResult('Provide either "key" or "keys", not both.', true);
+  }
+
+  if (params.key) {
+    if (!isRuntimeSettingKey(params.key)) {
+      return unknownKeyError(params.key);
+    }
+    return textResult(
+      JSON.stringify({
+        mode: 'single',
+        key: params.key,
+        value: snapshot[params.key],
+      }, null, 2),
+    );
+  }
+
+  if (params.keys?.length) {
+    const invalid = params.keys.find(k => !isRuntimeSettingKey(k));
+    if (invalid) return unknownKeyError(invalid);
+
+    const subset: Partial<typeof snapshot> = {};
+    for (const key of params.keys as RuntimeSettingKey[]) {
+      subset[key] = snapshot[key];
+    }
+
+    return textResult(
+      JSON.stringify({
+        mode: 'subset',
+        settings: subset,
+      }, null, 2),
+    );
+  }
+
+  return textResult(
+    JSON.stringify({
+      mode: 'all',
+      settings: snapshot,
+    }, null, 2),
+  );
+}
+
 export function createSettingsGetTool(config: SubstrateConfig): AgentTool<any> {
   return {
     name: 'settings_get',
@@ -60,59 +117,7 @@ export function createSettingsGetTool(config: SubstrateConfig): AgentTool<any> {
     execute: async (
       _toolCallId: string,
       params: SettingsGetParams,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const snapshot = getRuntimeSettingsSnapshot(config);
-
-      if (params.list) {
-        return textResult(
-          JSON.stringify({
-            mode: 'list',
-            keys: [...RUNTIME_SETTINGS_KEYS],
-          }, null, 2),
-        );
-      }
-
-      if (params.key && params.keys?.length) {
-        return textResult('Provide either "key" or "keys", not both.', true);
-      }
-
-      if (params.key) {
-        if (!isRuntimeSettingKey(params.key)) {
-          return unknownKeyError(params.key);
-        }
-        return textResult(
-          JSON.stringify({
-            mode: 'single',
-            key: params.key,
-            value: snapshot[params.key],
-          }, null, 2),
-        );
-      }
-
-      if (params.keys?.length) {
-        const invalid = params.keys.find(k => !isRuntimeSettingKey(k));
-        if (invalid) return unknownKeyError(invalid);
-
-        const subset: Partial<typeof snapshot> = {};
-        for (const key of params.keys as RuntimeSettingKey[]) {
-          subset[key] = snapshot[key];
-        }
-
-        return textResult(
-          JSON.stringify({
-            mode: 'subset',
-            settings: subset,
-          }, null, 2),
-        );
-      }
-
-      return textResult(
-        JSON.stringify({
-          mode: 'all',
-          settings: snapshot,
-        }, null, 2),
-      );
-    },
+    ): Promise<AgentToolResult<{ isError?: boolean }>> => executeSystemReadAction(config, params),
   };
 }
 

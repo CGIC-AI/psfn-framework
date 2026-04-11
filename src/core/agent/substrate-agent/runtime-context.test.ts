@@ -285,6 +285,70 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).not.toContain('Use selfie_create for a brand new selfie or self-portrait featuring you.');
   });
 
+  it('does not expose appearance context for the unified media tool', () => {
+    const message = makeMessage({
+      channelId: 'discord:dm:alex',
+      channelType: 'discord',
+      authorId: 'user-alex',
+      authorName: 'Alex',
+      content: 'send me a portrait',
+    });
+
+    const { templateVariables } = buildPromptTemplateVariables({
+      message,
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      subjectIdentityKey: undefined,
+      now: new Date('2026-03-17T12:00:00Z'),
+      characterPromptVariables: {
+        char_name: 'Companion',
+        'character.visual_description': 'Silver eyes and a weathered jacket.',
+      },
+      modelId: 'test-model',
+      fallbackCharacterName: 'Companion',
+    });
+
+    const runtimeContext = buildRuntimeContext({
+      message,
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables,
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'nursery',
+      activeToolCounts: {
+        core: 0,
+        promoted: 0,
+        extendedLoaded: 1,
+        autoload: 1,
+        deferred: 0,
+        total: 1,
+      },
+      extendedTools: [],
+      loadedExtended: new Map([
+        ['media', {
+          toolName: 'media',
+          source: 'autoload',
+          activatedAt: 1,
+          lastActivatedAt: 1,
+        }],
+      ]),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      formatTopEmotions: () => '',
+    });
+
+    expect(runtimeContext).not.toContain('<appearance_context>');
+    expect(runtimeContext).not.toContain('Silver eyes and a weathered jacket.');
+    expect(runtimeContext).not.toContain('<self_image_tool_guidance>');
+  });
+
   it('exposes appearance context when the explicit selfie tool is active', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',

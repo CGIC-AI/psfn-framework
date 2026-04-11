@@ -21,6 +21,7 @@ describe('wireContactRuntime', () => {
 
     expect(target.contactStore).toBe(contactStore);
     expect(target.tools.map(t => t.name).sort()).toEqual([
+      'contact',
       'contact_link_identity',
       'contact_list',
       'contact_lookup',

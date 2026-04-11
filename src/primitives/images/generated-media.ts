@@ -8,11 +8,12 @@ import { resolveGeneratedImagesDir } from '../../persistence/layout.js';
 import type {
   ImageGenerationResult,
   ImageResultAsset,
+  MediaToolResultDetails,
   ImageToolResultDetails,
 } from './types.js';
 
 const log = createComponentLogger('ImageGeneratedMedia');
-const IMAGE_TOOL_NAMES = new Set(['image_create', 'selfie_create', 'image_edit']);
+const IMAGE_TOOL_NAMES = new Set(['media', 'image_create', 'selfie_create', 'image_edit']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -101,6 +102,10 @@ function parseImageGenerationResult(rawText: string): ImageGenerationResult | nu
 function resolveImageResultFromDetails(details: unknown): ImageGenerationResult | null {
   if (!isRecord(details)) {
     return null;
+  }
+  const mediaResult = normalizeImageGenerationResult((details as MediaToolResultDetails).mediaResult);
+  if (mediaResult) {
+    return mediaResult;
   }
   return normalizeImageGenerationResult((details as ImageToolResultDetails).imageResult);
 }

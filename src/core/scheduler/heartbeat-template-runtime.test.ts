@@ -138,4 +138,110 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       }
     }
   });
+
+  it('does not inject appearance context into deliberation heartbeat prompts', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const capturedPrompts: string[] = [];
+    const reflectionJournalPrototype = ReflectionJournalStore.prototype as ReflectionJournalStore & {
+      listRecent?: (options?: { limit?: number }) => unknown[];
+    };
+    const originalListRecent = reflectionJournalPrototype.listRecent;
+    reflectionJournalPrototype.listRecent = () => [];
+    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    try {
+      const policy = policyStore.load();
+      const valuesTemplate = policy.templates.find((template) => template.id === 'values-reflection');
+      expect(valuesTemplate).toBeDefined();
+      if (!valuesTemplate) {
+        throw new Error('values-reflection template missing from defaults');
+      }
+      valuesTemplate.deliberation = {
+        ...valuesTemplate.deliberation,
+        maxRounds: 1,
+      };
+      policyStore.save(policy);
+
+      const internalState = new InternalStateComputer().computeState({
+        emotionState: {
+          vad: { valence: 0.1, arousal: 0.2, dominance: 0.05 },
+          mood: { valence: 0.15, arousal: 0.25, dominance: 0.1 },
+          discrete: { curiosity: 0.55, calm: 0.45 },
+          confidence: 0.8,
+        },
+        activeConcerns: [],
+        trustLevel: 'trusted',
+        contactId: 'contact-1',
+        sessionMetrics: {
+          userMessageText: 'What matters right now?',
+          responseText: 'Care and continuity matter.',
+          toolCallCount: 0,
+          recentTurnCount: 2,
+          lastSeenDeltaSeconds: 90,
+        },
+      });
+      const snapshotRef = buildInternalStateSnapshotRef(internalState);
+      const llmProvider: LLMProviderPort = {
+        stream: vi.fn(async () => ({
+          content: '',
+          toolCalls: [],
+          model: 'mock-stream',
+          inputTokens: 0,
+          outputTokens: 0,
+          stopReason: 'stop',
+        })),
+        complete: vi.fn(async (context, purpose) => {
+          capturedPrompts.push(
+            context.messages
+              .map((message) => message.content)
+              .join('\n'),
+          );
+          return {
+            content: purpose === 'reasoning'
+              ? 'Continuity stays central.'
+              : 'Care keeps the tone steady.',
+            toolCalls: [],
+            model: `mock-${purpose}`,
+            inputTokens: 12,
+            outputTokens: 18,
+            stopReason: 'stop',
+          };
+        }),
+      };
+
+      const runtime = createHeartbeatTemplateRuntime({
+        scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+        agentLoop: {
+          handleMessage: vi.fn(async () => ({ content: 'unused' })),
+          getCurrentInternalState: () => internalState,
+          getCurrentInternalStateSnapshotRef: () => snapshotRef,
+          getCurrentMetacognitiveFlags: () => [],
+        },
+        sender: { send: vi.fn(async () => undefined) },
+        dataDir: tempDir,
+        runtimeOptions: {
+          llmProvider: llmProvider as any,
+          characterPromptVariablesProvider: () => ({
+            'character.visual_description': 'Silver eyes and a weathered jacket.',
+          }),
+        },
+      });
+
+      await runtime.runTemplateNow('values-reflection', {
+        sendToDiscordOverride: false,
+        deferIfBusy: false,
+      });
+
+      expect(capturedPrompts.length).toBeGreaterThan(0);
+      for (const prompt of capturedPrompts) {
+        expect(prompt).not.toContain('Appearance context:');
+        expect(prompt).not.toContain('Silver eyes and a weathered jacket.');
+      }
+    } finally {
+      if (originalListRecent === undefined) {
+        delete reflectionJournalPrototype.listRecent;
+      } else {
+        reflectionJournalPrototype.listRecent = originalListRecent;
+      }
+    }
+  });
 });

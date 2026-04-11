@@ -168,6 +168,7 @@ export const DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE: GatewayToolMetadataCoverage
   issue_update: Object.freeze(['beads.update']),
   issue_close: Object.freeze(['beads.close']),
   issue_sync: Object.freeze(['beads.sync']),
+  media: Object.freeze(['image.create', 'image.edit', 'web.fetch_binary']),
   image_create: Object.freeze(['image.create']),
   selfie_create: Object.freeze(['image.create']),
   image_edit: Object.freeze(['image.edit']),

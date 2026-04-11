@@ -292,6 +292,7 @@ export function buildAdminApiRoutes(options: {
             catalog: null,
             serviceHealth: [],
             toolHealth: [],
+            inventory: [],
             recentFailures: [],
             recentTelemetry: [],
           });

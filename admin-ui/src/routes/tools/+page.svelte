@@ -5,31 +5,11 @@
   import type {
     AdminAdaptiveToolsData,
     AdminToolAvailabilityStatus,
+    AdminToolInventoryGroup,
     AdminToolHealthView,
     RuntimeServiceHealth,
     RuntimeServiceHealthStatus,
   } from '$lib/types/tools';
-
-  type ToolScope = AdminToolHealthView['scope'];
-
-  const SCOPE_ORDER: ToolScope[] = ['core', 'extended', 'conditional'];
-  const SCOPE_META: Record<ToolScope, { title: string; detail: string; accent: string }> = {
-    core: {
-      title: 'Core Tools',
-      detail: 'Always registered in the runtime catalog.',
-      accent: 'bg-moss-400',
-    },
-    extended: {
-      title: 'Extended Tools',
-      detail: 'Registered runtime tools that can be loaded or promoted as needed.',
-      accent: 'bg-gold-400',
-    },
-    conditional: {
-      title: 'Conditional Tools',
-      detail: 'Derived rows for runtime-backed tools that are unavailable in this mode.',
-      accent: 'bg-wilt-400',
-    },
-  };
 
   const SERVICE_LABELS: Record<RuntimeServiceHealth['serviceId'], string> = {
     gateway: 'Gateway RPC',
@@ -121,16 +101,7 @@
     MEMORY_WORKFLOW_TOOL_NAMES.filter((name) => !toolHealthByName.has(name))
   ));
 
-  let toolGroups = $derived.by(() => {
-    const tools = data?.toolHealth ?? [];
-    return SCOPE_ORDER
-      .map((scope) => ({
-        scope,
-        ...SCOPE_META[scope],
-        tools: tools.filter((tool) => tool.scope === scope),
-      }))
-      .filter((group) => group.tools.length > 0);
-  });
+  let inventoryGroups = $derived.by(() => (data?.inventory ?? ([] as AdminToolInventoryGroup[])));
 
   let summary = $derived.by(() => ({
     registeredTools: data?.catalog?.tools.length ?? 0,
@@ -419,7 +390,7 @@
 
   <div class="space-y-5">
     <div class="flex items-baseline gap-3">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900">Tool Health</h2>
+      <h2 class="text-lg font-serif font-semibold text-shadow-900">Tool Inventory</h2>
       <span class="text-sm text-shadow-600">{data?.toolHealth.length ?? 0} runtime-derived rows</span>
     </div>
 
@@ -437,8 +408,8 @@
           </div>
         {/each}
       </div>
-    {:else if toolGroups.length}
-      {#each toolGroups as group}
+    {:else if inventoryGroups.length}
+      {#each inventoryGroups as group}
         <section class="space-y-3">
           <div class="flex items-center gap-3">
             <span class="inline-block h-2.5 w-2.5 rounded-full {group.accent}"></span>
@@ -458,6 +429,16 @@
                       <span class="rounded-full border border-bark-200 bg-bark-50 px-2 py-0.5 text-xs font-medium text-shadow-600">
                         {tool.scope}
                       </span>
+                      {#if tool.scope === 'extended'}
+                        <span class="rounded-full border border-gold-200 bg-gold-50 px-2 py-0.5 text-xs font-medium text-gold-700">
+                          toolset member
+                        </span>
+                      {/if}
+                      {#if (tool.scope === 'core' && tool.name === 'tool_search') || (tool.scope === 'core' && tool.name === 'toolset')}
+                        <span class="rounded-full border border-moss-200 bg-moss-50 px-2 py-0.5 text-xs font-medium text-moss-700">
+                          control surface
+                        </span>
+                      {/if}
                     </div>
                     <p class="mt-3 text-sm leading-relaxed text-shadow-700">{tool.description}</p>
                   </div>

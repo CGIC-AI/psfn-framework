@@ -15,6 +15,7 @@ import {
   cloneRuntimeState,
   cloneServiceHealth,
   cloneToolCatalogSnapshot,
+  deriveToolInventoryGroups,
   deriveToolHealthViews,
 } from './adaptive-tools-runtime.js';
 
@@ -98,17 +99,19 @@ export class AdminAdaptiveToolsDataService implements AdminAdaptiveToolsService 
       .slice()
       .sort((left, right) => right.timestamp - left.timestamp)
       .map(entry => ({ ...entry }));
+    const toolHealth = deriveToolHealthViews({
+      catalog,
+      state,
+      serviceHealth: healthSnapshot.services,
+      recentFailures,
+    });
 
     return {
       state: state ? cloneRuntimeState(state) : null,
       catalog: cloneToolCatalogSnapshot(catalog),
       serviceHealth: cloneServiceHealth(healthSnapshot),
-      toolHealth: deriveToolHealthViews({
-        catalog,
-        state,
-        serviceHealth: healthSnapshot.services,
-        recentFailures,
-      }),
+      toolHealth,
+      inventory: deriveToolInventoryGroups(toolHealth),
       recentFailures,
       recentTelemetry: this.recentTelemetry.map((entry) => (
         entry.type === 'decision'

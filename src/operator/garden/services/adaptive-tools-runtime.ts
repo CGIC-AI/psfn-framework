@@ -1,5 +1,9 @@
 import type { AdaptiveToolRuntimeState } from '../../../core/agent/adaptive-tools-telemetry.js';
-import type { RuntimeToolCatalogEntry, RuntimeToolCatalogSnapshot } from '../../../core/agent/tool-catalog.js';
+import {
+  isToolsetControlToolName,
+  type RuntimeToolCatalogEntry,
+  type RuntimeToolCatalogSnapshot,
+} from '../../../core/agent/tool-catalog.js';
 import { cloneToolWiringMeta } from '../../../core/agent/tool-wiring-validator.js';
 import type {
   RuntimeServiceHealth,
@@ -8,6 +12,7 @@ import type {
 } from '../../tool-health/types.js';
 import type {
   AdminToolFailureEvent,
+  AdminToolInventoryGroup,
   AdminToolHealthView,
 } from './types.js';
 
@@ -122,6 +127,57 @@ export function deriveToolHealthViews(params: {
       ...(lastFailure ? { lastFailure: { ...lastFailure } } : {}),
     };
   });
+}
+
+export function deriveToolInventoryGroups(toolHealth: AdminToolHealthView[]): AdminToolInventoryGroup[] {
+  const controlSurface = toolHealth.filter(tool => tool.scope === 'core' && isToolsetControlToolName(tool.name));
+  const directCoreTools = toolHealth.filter(tool => tool.scope === 'core' && !isToolsetControlToolName(tool.name));
+  const managedToolset = toolHealth.filter(tool => tool.scope === 'extended');
+  const conditionalToolset = toolHealth.filter(tool => tool.scope === 'conditional');
+
+  const groups: AdminToolInventoryGroup[] = [];
+
+  if (controlSurface.length > 0) {
+    groups.push({
+      key: 'control_surface',
+      title: 'Control Surface',
+      detail: 'Model-facing discovery and activation tools. Use tool_search to discover non-default tools, then toolset to activate or pin them.',
+      accent: 'bg-moss-400',
+      tools: controlSurface,
+    });
+  }
+
+  if (directCoreTools.length > 0) {
+    groups.push({
+      key: 'direct_core_tools',
+      title: 'Direct Core Tools',
+      detail: 'Always-registered core tools that remain directly callable in-turn.',
+      accent: 'bg-petal-400',
+      tools: directCoreTools,
+    });
+  }
+
+  if (managedToolset.length > 0) {
+    groups.push({
+      key: 'managed_toolset',
+      title: 'Managed Toolset',
+      detail: 'Extended tools surfaced through tool_search and activated or pinned with toolset.',
+      accent: 'bg-gold-400',
+      tools: managedToolset,
+    });
+  }
+
+  if (conditionalToolset.length > 0) {
+    groups.push({
+      key: 'conditional_toolset',
+      title: 'Conditional Toolset Members',
+      detail: 'Runtime-backed tools that appear only when their dependencies are available.',
+      accent: 'bg-wilt-400',
+      tools: conditionalToolset,
+    });
+  }
+
+  return groups;
 }
 
 function resolveToolDefinitions(

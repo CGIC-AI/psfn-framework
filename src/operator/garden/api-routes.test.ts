@@ -536,7 +536,7 @@ describe('AdminServer JSON API routes', () => {
     const adaptiveToolsStateProvider = {
       getAdaptiveToolRuntimeState: () => ({
         generatedAt: 1_701_234_567_890,
-        coreTools: ['load_tools'],
+        coreTools: ['tool_search', 'toolset'],
         extendedTools: ['repo_status', 'repo_diff', 'notify'],
         promotedToolsConfigured: ['repo_status', 'notify'],
         promotedToolsActive: ['repo_status'],
@@ -556,7 +556,8 @@ describe('AdminServer JSON API routes', () => {
           },
         ],
         activeTools: [
-          { toolName: 'load_tools', source: 'core' },
+          { toolName: 'tool_search', source: 'core' },
+          { toolName: 'toolset', source: 'core' },
           { toolName: 'repo_status', source: 'promoted' },
           { toolName: 'repo_diff', source: 'autoload' },
         ],
@@ -566,8 +567,13 @@ describe('AdminServer JSON API routes', () => {
         generatedAt: 1_701_234_567_890,
         tools: [
           {
-            name: 'load_tools',
-            description: 'Load extended tools for the current session.',
+            name: 'tool_search',
+            description: 'Search the non-default tool catalog.',
+            scope: 'core',
+          },
+          {
+            name: 'toolset',
+            description: 'Manage non-default tool activation and pinned tools.',
             scope: 'core',
           },
           {
@@ -1159,7 +1165,8 @@ describe('AdminServer JSON API routes', () => {
       taskKind: null,
       intent: 'dev',
       tools: [
-        { toolName: 'load_tools', source: 'core' },
+        { toolName: 'tool_search', source: 'core' },
+        { toolName: 'toolset', source: 'core' },
         { toolName: 'repo_status', source: 'promoted' },
         { toolName: 'repo_diff', source: 'autoload' },
       ],
@@ -1172,7 +1179,7 @@ describe('AdminServer JSON API routes', () => {
         },
       ],
       counts: {
-        core: 1,
+        core: 2,
         promoted: 1,
         extendedLoaded: 0,
         autoload: 1,
@@ -1192,6 +1199,12 @@ describe('AdminServer JSON API routes', () => {
         tools: Array<{ name: string; scope: string }>;
       } | null;
       serviceHealth: Array<{ serviceId: string; status: string; lastFailure?: { message: string } }>;
+      inventory: Array<{
+        key: string;
+        title: string;
+        accent: string;
+        tools: Array<{ name: string; scope: string }>;
+      }>;
       toolHealth: Array<{
         name: string;
         health: { status: string };
@@ -1208,14 +1221,36 @@ describe('AdminServer JSON API routes', () => {
     };
 
     expect(adaptivePayload.state).not.toBeNull();
-    expect(adaptivePayload.state?.coreTools).toContain('load_tools');
+    expect(adaptivePayload.state?.coreTools).toEqual(expect.arrayContaining(['tool_search', 'toolset']));
     expect(adaptivePayload.state?.activeTools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'tool_search', source: 'core' }),
+      expect.objectContaining({ toolName: 'toolset', source: 'core' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
       expect.objectContaining({ toolName: 'repo_diff', source: 'autoload' }),
     ]));
     expect(adaptivePayload.catalog?.tools).toEqual(expect.arrayContaining([
-      expect.objectContaining({ name: 'load_tools', scope: 'core' }),
+      expect.objectContaining({ name: 'tool_search', scope: 'core' }),
+      expect.objectContaining({ name: 'toolset', scope: 'core' }),
       expect.objectContaining({ name: 'notify', scope: 'extended' }),
+    ]));
+    expect(adaptivePayload.inventory).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        key: 'control_surface',
+        title: 'Control Surface',
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: 'tool_search' }),
+          expect.objectContaining({ name: 'toolset' }),
+        ]),
+      }),
+      expect.objectContaining({
+        key: 'managed_toolset',
+        title: 'Managed Toolset',
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: 'repo_status' }),
+          expect.objectContaining({ name: 'repo_diff' }),
+          expect.objectContaining({ name: 'notify' }),
+        ]),
+      }),
     ]));
     expect(adaptivePayload.serviceHealth).toEqual(expect.arrayContaining([
       expect.objectContaining({ serviceId: 'gateway', status: 'healthy' }),

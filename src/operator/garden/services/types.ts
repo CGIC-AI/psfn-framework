@@ -131,11 +131,20 @@ export interface AdminToolHealthView {
   lastFailure?: AdminToolFailureEvent;
 }
 
+export interface AdminToolInventoryGroup {
+  key: string;
+  title: string;
+  detail: string;
+  accent: string;
+  tools: AdminToolHealthView[];
+}
+
 export interface AdminAdaptiveToolsData {
   state: AdaptiveToolRuntimeState | null;
   catalog: RuntimeToolCatalogSnapshot | null;
   serviceHealth: RuntimeServiceHealth[];
   toolHealth: AdminToolHealthView[];
+  inventory: AdminToolInventoryGroup[];
   recentFailures: AdminToolFailureEvent[];
   recentTelemetry: AdminAdaptiveToolTelemetryEvent[];
 }

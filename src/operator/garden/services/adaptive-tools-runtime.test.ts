@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { deriveToolHealthViews } from './adaptive-tools-runtime.js';
+import { deriveToolHealthViews, deriveToolInventoryGroups } from './adaptive-tools-runtime.js';
 
 describe('deriveToolHealthViews', () => {
   it('marks chat and internal heartbeat availability from runtime metadata', () => {
@@ -150,6 +150,27 @@ describe('deriveToolHealthViews', () => {
         },
       },
     });
+
+    expect(deriveToolInventoryGroups(views)).toEqual([
+      expect.objectContaining({
+        key: 'control_surface',
+        title: 'Control Surface',
+        accent: 'bg-moss-400',
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: 'tool_search' }),
+          expect.objectContaining({ name: 'toolset' }),
+        ]),
+      }),
+      expect.objectContaining({
+        key: 'managed_toolset',
+        title: 'Managed Toolset',
+        accent: 'bg-gold-400',
+        tools: expect.arrayContaining([
+          expect.objectContaining({ name: 'notify' }),
+          expect.objectContaining({ name: 'heartbeat_run_template' }),
+        ]),
+      }),
+    ]);
   });
 
   it('shows unified vault health and degrades when gateway action coverage is partial', () => {

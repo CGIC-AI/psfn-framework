@@ -6,8 +6,6 @@ import { createSQLiteContactStore } from './sqlite-adapter.js';
 import {
   createContactTool,
   createContactLinkIdentityTool,
-  createContactListTool,
-  createContactLookupTool,
   createContactNoteTool,
   createContactSetChannelPrivacyTool,
   createContactSetTrustTool,
@@ -58,8 +56,6 @@ export async function registerContactRuntime(
   target.registerTool(createContactSetChannelPrivacyTool(contactStore), 'extended');
   target.registerTool(createContactNoteTool(contactStore), 'extended');
   target.registerTool(createContactLinkIdentityTool(contactStore), 'extended');
-  target.registerTool(createContactLookupTool(contactStore));
-  target.registerTool(createContactListTool(contactStore));
 
   return contactStore;
 }

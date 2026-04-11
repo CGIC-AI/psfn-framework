@@ -5,6 +5,7 @@
     getConstitutionSnapshot,
     getNorthStarSnapshot,
     saveNorthStarItems,
+    saveRuntimePromptBlocks,
     createPromptLayer,
     getPromptDetail,
     updatePrompt,
@@ -15,6 +16,10 @@
   import { apiPost } from '$lib/api/client';
   import type {
     PromptLayer,
+    PromptRegistryEntry,
+    PromptRuntimeBlock,
+    PromptRuntimeLayerCoverageEntry,
+    PromptRuntimeMacroHint,
     AdminPromptDetailData,
     PromptHistoryEntry,
     PromptDiffResult,
@@ -73,6 +78,13 @@
 
   // ── State ──
   let layers = $state<PromptLayer[]>([]);
+  let staticPrompts = $state<PromptRegistryEntry[]>([]);
+  let runtimeBlocks = $state<PromptRuntimeBlock[]>([]);
+  let runtimeLayerCoverage = $state<{ ok: boolean; entries: PromptRuntimeLayerCoverageEntry[] }>({ ok: true, entries: [] });
+  let runtimeMacroHints = $state<PromptRuntimeMacroHint[]>([]);
+  let runtimeBlockDrafts = $state<Record<string, string>>({});
+  let runtimeBlockSaving = $state<Record<string, boolean>>({});
+  let runtimeBlockMessages = $state<Record<string, string>>({});
   let loading = $state(true);
   let error = $state('');
   let constitutionLoading = $state(true);
@@ -142,6 +154,25 @@
 
   let editCharCount = $derived(editRawContent.length);
 
+  let orderedRuntimeBlocks = $derived(
+    [...runtimeBlocks].sort((a, b) => {
+      if (a.effectiveOrder !== b.effectiveOrder) {
+        return a.effectiveOrder - b.effectiveOrder;
+      }
+      return a.label.localeCompare(b.label);
+    })
+  );
+
+  function syncRuntimeBlockDrafts(blocks: PromptRuntimeBlock[]) {
+    runtimeBlockDrafts = Object.fromEntries(
+      blocks
+        .filter(block => block.companionEditable)
+        .map(block => [block.id, block.customContent ?? '']),
+    );
+    runtimeBlockSaving = {};
+    runtimeBlockMessages = {};
+  }
+
   let constitutionPreviewText = $derived.by(() => {
     const sections: string[] = [];
 
@@ -193,7 +224,8 @@
 
   type StackEntry =
     | { kind: 'fixed'; fixed: FixedStackEntry }
-    | { kind: 'layer'; layer: PromptLayer; idx: number };
+    | { kind: 'layer'; layer: PromptLayer; idx: number }
+    | { kind: 'runtime'; block: PromptRuntimeBlock; idx: number };
 
   let stackEntries = $derived.by((): StackEntry[] => {
     const entries: StackEntry[] = [];
@@ -227,8 +259,136 @@
       entries.push({ kind: 'layer', layer, idx: i });
     }
 
+    for (let i = 0; i < orderedRuntimeBlocks.length; i++) {
+      entries.push({ kind: 'runtime', block: orderedRuntimeBlocks[i], idx: i });
+    }
+
     return entries;
   });
+
+  function runtimePlacementLabel(block: PromptRuntimeBlock): string {
+    if (block.placement === 'system_prompt') return 'System Prompt';
+    if (block.placement === 'context_messages') return 'Context Messages';
+    return 'Tool Schemas';
+  }
+
+  function runtimeVisibilityLabel(block: PromptRuntimeBlock): string {
+    if (block.visibility === 'runtime_generated') return 'Runtime-generated';
+    if (block.visibility === 'provider_managed') return 'Provider-managed';
+    return 'Hidden';
+  }
+
+  function runtimeBlockStatusLabel(block: PromptRuntimeBlock): string {
+    if (!block.companionEditable) return block.contentVisible ? 'Built in' : 'Hidden';
+    return block.customContent?.trim() ? 'Companion override active' : 'Using built-in guidance';
+  }
+
+  function runtimeSchemaLabel(block: PromptRuntimeBlock): string {
+    if (block.immutable) return 'Immutable';
+    return block.required ? 'Required' : 'Optional';
+  }
+
+  function runtimeSchemaBadge(block: PromptRuntimeBlock): string {
+    if (block.immutable) return 'bg-bark-300 text-shadow-700';
+    return block.required ? 'bg-wilt-100 text-wilt-700' : 'bg-moss-100 text-moss-700';
+  }
+
+  function runtimeLayerStatusBadge(entry: PromptRuntimeLayerCoverageEntry): string {
+    if (entry.status === 'valid') return 'bg-moss-100 text-moss-700';
+    if (entry.status === 'missing') return 'bg-wilt-100 text-wilt-700';
+    return 'bg-gold-100 text-gold-800';
+  }
+
+  function runtimePlacementBadge(block: PromptRuntimeBlock): string {
+    if (block.placement === 'system_prompt') return 'bg-[#4A5C8B] text-white';
+    if (block.placement === 'context_messages') return 'bg-[#4A7C59] text-white';
+    return 'bg-[#8B7355] text-white';
+  }
+
+  function buildReorderedRuntimeBlockIds(sourceIdx: number, targetIdx: number): string[] | null {
+    if (sourceIdx === targetIdx) return null;
+    if (sourceIdx < 0 || sourceIdx >= orderedRuntimeBlocks.length) return null;
+    if (targetIdx < 0 || targetIdx >= orderedRuntimeBlocks.length) return null;
+
+    const movableBlocks = orderedRuntimeBlocks.filter(block => block.reorderable);
+    const source = orderedRuntimeBlocks[sourceIdx];
+    const target = orderedRuntimeBlocks[targetIdx];
+    if (!source?.reorderable || !target?.reorderable) return null;
+
+    const movableSourceIdx = movableBlocks.findIndex(block => block.id === source.id);
+    const movableTargetIdx = movableBlocks.findIndex(block => block.id === target.id);
+    if (movableSourceIdx < 0 || movableTargetIdx < 0) return null;
+
+    const nextOrder = movableBlocks.map(block => block.id);
+    const [movedId] = nextOrder.splice(movableSourceIdx, 1);
+    if (!movedId) return null;
+    nextOrder.splice(movableTargetIdx, 0, movedId);
+    return nextOrder;
+  }
+
+  async function reorderRuntimeBlocks(runtimeBlockIds: string[]) {
+    await apiPost<PromptUpdateResult>('/api/admin/prompts/reorder', { runtimeBlockIds });
+  }
+
+  async function saveRuntimeBlock(block: PromptRuntimeBlock) {
+    if (!block.companionEditable) return;
+    runtimeBlockSaving = { ...runtimeBlockSaving, [block.id]: true };
+    runtimeBlockMessages = { ...runtimeBlockMessages, [block.id]: '' };
+    error = '';
+    try {
+      const result = await saveRuntimePromptBlocks({
+        blocks: [
+          {
+            id: block.id,
+            content: runtimeBlockDrafts[block.id] ?? '',
+          },
+        ],
+      });
+      if (!result.ok) {
+        runtimeBlockMessages = {
+          ...runtimeBlockMessages,
+          [block.id]: result.message || 'Failed to save runtime guidance',
+        };
+        error = result.message || 'Failed to save runtime guidance';
+        return;
+      }
+      await refreshList();
+      error = '';
+      runtimeBlockMessages = {
+        ...runtimeBlockMessages,
+        [block.id]: result.message || 'Saved runtime guidance',
+      };
+      showToast(result.message || 'Runtime guidance saved');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Failed to save runtime guidance';
+      runtimeBlockMessages = { ...runtimeBlockMessages, [block.id]: message };
+      error = message;
+    } finally {
+      runtimeBlockSaving = { ...runtimeBlockSaving, [block.id]: false };
+    }
+  }
+
+  async function moveRuntimeBlock(blockId: string, direction: 'up' | 'down') {
+    const idx = orderedRuntimeBlocks.findIndex(block => block.id === blockId);
+    if (idx < 0) return;
+
+    let swapIdx = idx;
+    while (true) {
+      swapIdx += direction === 'up' ? -1 : 1;
+      if (swapIdx < 0 || swapIdx >= orderedRuntimeBlocks.length) return;
+      if (orderedRuntimeBlocks[swapIdx]?.reorderable) break;
+    }
+
+    const nextOrder = buildReorderedRuntimeBlockIds(idx, swapIdx);
+    if (!nextOrder) return;
+    try {
+      await reorderRuntimeBlocks(nextOrder);
+      await refreshList();
+      showToast('Runtime prompt order updated');
+    } catch (e2) {
+      error = e2 instanceof Error ? e2.message : 'Failed to reorder runtime blocks';
+    }
+  }
 
   // ── Helpers ──
   function isProtected(layer: PromptLayer): boolean {
@@ -294,6 +454,15 @@
     northStarLimit = snapshot.limit ?? 3;
     northStarServerPreview = snapshot.preview?.text ?? '';
     northStarSaveMessage = '';
+  }
+
+  function applyPromptListSnapshot(data: Awaited<ReturnType<typeof listPrompts>>) {
+    layers = data?.layers ?? [];
+    staticPrompts = data?.staticPrompts ?? [];
+    runtimeBlocks = data?.runtimeBlocks ?? [];
+    runtimeLayerCoverage = data?.runtimeLayerCoverage ?? { ok: true, entries: [] };
+    runtimeMacroHints = data?.runtimeMacroHints ?? [];
+    syncRuntimeBlockDrafts(runtimeBlocks);
   }
 
   async function refreshConstitution() {
@@ -425,7 +594,7 @@
     ]);
 
     if (promptsResult.status === 'fulfilled') {
-      layers = promptsResult.value?.layers ?? [];
+      applyPromptListSnapshot(promptsResult.value);
     } else {
       const reason = promptsResult.reason;
       error = reason instanceof Error ? reason.message : 'Failed to load prompts';
@@ -457,7 +626,7 @@
 
   async function refreshList() {
     const data = await listPrompts();
-    layers = data?.layers ?? [];
+    applyPromptListSnapshot(data);
     await Promise.all([refreshConstitution(), refreshNorthStar()]);
   }
 
@@ -713,7 +882,7 @@
     <div>
       <h1 class="text-2xl font-serif font-bold text-shadow-900">Prompt Soil</h1>
       <p class="text-sm text-shadow-600 mt-1">
-        Layered prompt composition stack -- {layers.length} layer{layers.length === 1 ? '' : 's'}
+        Layered prompt composition stack -- {layers.length} layer{layers.length === 1 ? '' : 's'}, {runtimeBlocks.length} runtime-derived, {staticPrompts.length} static
       </p>
     </div>
     <div class="flex items-center gap-3 text-sm text-shadow-600">
@@ -981,7 +1150,7 @@
       <div class="flex items-center justify-between mb-3">
         <div class="flex items-center gap-3">
           <h2 class="text-base font-serif font-semibold text-shadow-800">Composition Stack</h2>
-          <span class="text-sm text-shadow-600">Drag prompt layers to reorder. Constitution and North Star stay pinned; everything else in the stack is real prompt soil.</span>
+          <span class="text-sm text-shadow-600">Drag prompt layers to reorder. Runtime-derived participants are listed with their actual placement metadata and separate ordering controls.</span>
         </div>
         <button
           onclick={() => { showNewLayerForm = !showNewLayerForm; if (!showNewLayerForm) resetNewLayerForm(); }}
@@ -1093,6 +1262,123 @@
                   <pre class="text-xs font-mono text-shadow-700 whitespace-pre-wrap bg-white/70 p-2 rounded border border-bark-200 max-h-28 overflow-y-auto leading-relaxed">{fixed.preview}</pre>
                 </div>
               </div>
+            </div>
+          {:else if entry.kind === 'runtime'}
+            {@const block = entry.block}
+            {@const canMoveUp = block.reorderable && orderedRuntimeBlocks.slice(0, entry.idx).some(candidate => candidate.reorderable)}
+            {@const canMoveDown = block.reorderable && orderedRuntimeBlocks.slice(entry.idx + 1).some(candidate => candidate.reorderable)}
+            <div class="card-garden overflow-hidden border-dashed border-bark-400 bg-bark-50">
+              <div class="px-3 py-3 flex items-start gap-3">
+                <div class="flex items-center justify-center w-8 h-8 shrink-0 rounded-lg bg-bark-200 text-shadow-700">
+                  <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                  </svg>
+                </div>
+                <div class="min-w-0 flex-1 space-y-1.5">
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <span class="px-2 py-0.5 rounded text-[11px] font-bold uppercase tracking-wider {runtimePlacementBadge(block)}">
+                      {runtimePlacementLabel(block)}
+                    </span>
+                    <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-200 text-shadow-700">
+                      {runtimeVisibilityLabel(block)}
+                    </span>
+                    {#if block.reorderable}
+                      <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-gold-200 text-shadow-800">
+                        Sortable
+                      </span>
+                    {:else}
+                      <span class="px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-bark-300 text-shadow-700">
+                        Fixed
+                      </span>
+                    {/if}
+                    <span class="text-sm font-medium text-shadow-800">{block.label}</span>
+                    <span class="ml-auto text-sm font-mono text-shadow-600 shrink-0">
+                      #{block.effectiveOrder + 1}
+                    </span>
+                  </div>
+                  <p class="text-sm text-shadow-700">{block.description}</p>
+                  <div class="flex flex-wrap items-center gap-3 text-sm text-shadow-600">
+                    <span>Source: <span class="font-mono text-shadow-800">{block.source}</span></span>
+                    <span>Content: <span class="text-shadow-800">{block.contentVisible ? 'visible' : 'hidden in /prompts'}</span></span>
+                    <span>Status: <span class="text-shadow-800">{runtimeBlockStatusLabel(block)}</span></span>
+                    {#if block.lockedReason}
+                      <span>{block.lockedReason}</span>
+                    {/if}
+                  </div>
+                </div>
+                {#if block.reorderable}
+                  <div class="flex flex-col gap-1 shrink-0">
+                    <button
+                      onclick={() => moveRuntimeBlock(block.id, 'up')}
+                      disabled={!canMoveUp}
+                      class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
+                    >
+                      Up
+                    </button>
+                    <button
+                      onclick={() => moveRuntimeBlock(block.id, 'down')}
+                      disabled={!canMoveDown}
+                      class="px-2 py-0.5 rounded border border-bark-300 text-sm text-shadow-700 hover:bg-bark-100 disabled:opacity-40"
+                    >
+                      Down
+                    </button>
+                  </div>
+                {/if}
+              </div>
+
+              {#if block.companionEditable}
+                <div class="border-t border-dashed border-bark-300 bg-white/70 px-3 py-3 space-y-3">
+                  <div class="flex items-center justify-between gap-3 flex-wrap">
+                    <div class="space-y-0.5">
+                      <p class="text-sm font-medium text-shadow-800">Companion override</p>
+                      <p class="text-xs text-shadow-600">
+                        This content is appended to the built-in runtime guidance for this block. Immutable safety content is not editable here.
+                      </p>
+                    </div>
+                    <div class="flex items-center gap-2 text-xs text-shadow-600">
+                      <span class="px-1.5 py-0.5 rounded bg-bark-200 text-shadow-700 uppercase tracking-wider font-bold">
+                        Bounded
+                      </span>
+                      <span class="px-1.5 py-0.5 rounded bg-gold-100 text-shadow-700 uppercase tracking-wider font-bold">
+                        Companion-tunable
+                      </span>
+                    </div>
+                  </div>
+
+                  <label class="block">
+                    <span class="block text-sm font-medium text-shadow-700 mb-1">Override text</span>
+                    <textarea
+                      rows={5}
+                      value={runtimeBlockDrafts[block.id] ?? ''}
+                      oninput={(e) => {
+                        runtimeBlockDrafts = {
+                          ...runtimeBlockDrafts,
+                          [block.id]: (e.target as HTMLTextAreaElement).value,
+                        };
+                        runtimeBlockMessages = {
+                          ...runtimeBlockMessages,
+                          [block.id]: '',
+                        };
+                      }}
+                      class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+                      placeholder="Add companion-specific guidance for this runtime block..."
+                    ></textarea>
+                  </label>
+
+                  <div class="flex items-center gap-3">
+                    <button
+                      onclick={() => saveRuntimeBlock(block)}
+                      disabled={runtimeBlockSaving[block.id]}
+                      class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
+                    >
+                      {runtimeBlockSaving[block.id] ? 'Saving...' : 'Save block'}
+                    </button>
+                    {#if runtimeBlockMessages[block.id]}
+                      <span class="text-sm text-moss-700">{runtimeBlockMessages[block.id]}</span>
+                    {/if}
+                  </div>
+                </div>
+              {/if}
             </div>
           {:else}
             {@const layer = entry.layer}

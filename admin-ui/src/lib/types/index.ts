@@ -1,72 +1,27 @@
+import type { DashboardStats } from '../../../../src/operator/garden/types.js';
+import type { ProvidersRuntimeConfig } from '../../../../src/system/config/providers-config.js';
+
+export type {
+  CredentialReference,
+  EnvCredentialReference,
+} from '../../../../src/boundary/custody/credential-vault.js';
+export type {
+  DashboardCostWindow,
+  DashboardCostWindowTotals,
+  DashboardCostWindowUsage,
+  DashboardSessionContextPressure,
+  DashboardStats,
+  ThinkTraceStepView,
+  ThinkTraceView,
+} from '../../../../src/operator/garden/types.js';
+export type {
+  CanonicalProviderRegistry,
+  CanonicalProviderType,
+  ProviderRegistryEntry,
+} from '../../../../src/shared/contracts/runtime.js';
+export type { ProvidersRuntimeConfig } from '../../../../src/system/config/providers-config.js';
+
 // Dashboard
-export type DashboardCostWindow = 'today' | 'week' | 'month';
-
-export interface DashboardCostWindowUsage {
-  turns: number;
-  llmCalls: number;
-  toolCalls: number;
-  estimatedCostUsd: number;
-}
-
-export interface DashboardCostWindowTotals {
-  today: DashboardCostWindowUsage;
-  week: DashboardCostWindowUsage;
-  month: DashboardCostWindowUsage;
-}
-
-export interface DashboardSessionContextPressure {
-  sessionId: string | null;
-  utilizationPct: number;
-  hasTelemetry: boolean;
-}
-
-export interface DashboardStats {
-  memoryTotal: number;
-  memoryByType: Record<string, number>;
-  avgSalience: number;
-  sessionCount: number;
-  schedulerTasks: number;
-  activeShards: number;
-  sessionUsage: {
-    turns: number;
-    inputTokens: number;
-    outputTokens: number;
-    cacheReadTokens: number;
-    llmCalls: number;
-    toolCalls: number;
-    activeSessionContextPressure: DashboardSessionContextPressure;
-    estimatedCostUsd: number;
-    costWindows: {
-      selected: DashboardCostWindow;
-      byWindow: DashboardCostWindowTotals;
-    };
-  };
-  recentThinkTraces: ThinkTraceView[];
-}
-
-export interface ThinkTraceStepView {
-  iteration: number;
-  inputTokens: number;
-  outputTokens: number;
-  cumulativeTokens: number;
-  durationMs: number;
-  code: string;
-  output: string;
-  error: string | null;
-  variablesChanged: string[];
-}
-
-export interface ThinkTraceView {
-  timestamp: number;
-  task: string;
-  iterations: number;
-  totalTokens: number;
-  durationMs: number;
-  truncated: boolean;
-  budgetStop: string | null;
-  steps: ThinkTraceStepView[];
-}
-
 export interface AdminDashboardData {
   stats: DashboardStats;
 }
@@ -325,6 +280,40 @@ export interface AdminPromptSectionTelemetry {
   tokenCount: number;
 }
 
+export interface AdminTurnProviderWireMessage {
+  role: string;
+  source: string;
+  content: string;
+}
+
+export interface AdminTurnProviderSystemRoleData {
+  transport: string;
+  supportsSystemRole: boolean;
+  supportsDeveloperRole: boolean;
+  usesOutOfBandSystemPrompt: boolean;
+}
+
+export interface AdminTurnProviderObservabilityData {
+  routeKind: string;
+  requestedProvider: string;
+  requestedModel: string;
+  backendProvider: string;
+  backendModel: string;
+  backendApi: string;
+  backendBaseUrl?: string;
+  systemRole: AdminTurnProviderSystemRoleData;
+  providerWireMessages: AdminTurnProviderWireMessage[];
+}
+
+export interface AdminTurnPromptResponseSnapshotData {
+  content: string;
+  reasoning?: string;
+  model?: string;
+  stopReason?: string;
+  errorMessage?: string;
+  toolCallCount?: number;
+}
+
 export interface AdminTurnPromptContextSnapshotData {
   renderedStaticPrefix: string;
   renderedDynamicSuffix: string;
@@ -334,6 +323,9 @@ export interface AdminTurnPromptContextSnapshotData {
   assembledPrompt: string;
   finalSystemPrompt: string;
   messages: AdminTurnPromptContextMessage[];
+  currentTurnInput?: string;
+  providerObservability?: AdminTurnProviderObservabilityData;
+  response?: AdminTurnPromptResponseSnapshotData;
   inputSections?: AdminPromptSectionTelemetry[];
   runtimeContextSections?: AdminPromptSectionTelemetry[];
   finalSystemSections?: AdminPromptSectionTelemetry[];
@@ -463,10 +455,21 @@ export interface AdminSessionRoleEnvelopePreview {
   preview: SessionRoleEnvelopePreview;
 }
 
+export interface AdminSessionMessageOntologyView {
+  sessionEntryId: number;
+  transportRole: SessionEntry['role'];
+  promptRole: 'user' | 'assistant' | 'toolResult' | 'custom';
+  semanticType: 'outwardSpeech' | 'toolResult' | 'systemNote' | 'mirror';
+  messageClass: 'outwardSpeech' | 'systemNote' | 'internalWhisper' | 'compaction' | 'continuity' | 'mirror' | null;
+  promptVisibility: 'prompt_visible' | 'operator_only';
+  displayLabel: string;
+}
+
 export interface AdminSessionMessagesData {
   sessionId: string;
   channelId: string;
   messages: SessionEntry[];
+  messageOntologyViews: AdminSessionMessageOntologyView[];
   roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];
   compactionAuditViews: CompactionAuditView[];
   turns: AdminSessionTurnData[];
@@ -666,46 +669,13 @@ export interface SettingsContractData {
   fields: Record<string, SettingsContractField>;
 }
 
-export type CanonicalProviderType =
-  | 'litellm_proxy'
-  | 'openrouter'
-  | 'openai'
-  | 'anthropic'
-  | 'google'
-  | 'mistral'
-  | 'generic_openai';
-
-export interface ProviderRegistryEntry {
-  id: string;
-  type: CanonicalProviderType;
-  enabled: boolean;
-  label?: string;
-  apiBaseUrl?: string;
-  modelsApiUrl?: string;
-  apiKeyEnv?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface CanonicalProviderRegistry {
-  schemaVersion: 1;
-  providers: ProviderRegistryEntry[];
-}
-
-export interface ProvidersRuntimeConfig {
-  registry: CanonicalProviderRegistry;
-  litellmBaseUrl?: string;
-  litellmApiKeyEnv?: string;
-  openRouterApiBaseUrl?: string;
-  openRouterModelsApiUrl?: string;
-  openRouterApiKeyEnv?: string;
-}
-
 export interface AdminSettingsData {
   config: Record<string, unknown>;
   env: Record<string, unknown>;
   editors: {
     models: unknown;
     providers: ProvidersRuntimeConfig;
+    channels: Record<string, unknown>;
     skills: unknown;
     scheduler: unknown;
     trustPolicy: unknown;
@@ -849,9 +819,49 @@ export interface PromptRegistryEntry {
   identifier?: string;
 }
 
+export interface PromptRuntimeBlock {
+  id: string;
+  label: string;
+  description: string;
+  source: string;
+  schemaClassification: 'required_runtime_aware' | 'optional_runtime_aware' | 'immutable_provider_managed';
+  required: boolean;
+  immutable: boolean;
+  providerManaged: boolean;
+  placement: 'system_prompt' | 'context_messages' | 'tool_schemas';
+  visibility: 'hidden' | 'runtime_generated' | 'provider_managed';
+  reorderable: boolean;
+  contentVisible: boolean;
+  companionEditable: boolean;
+  customContent?: string;
+  lockedReason?: string;
+  effectiveOrder: number;
+}
+
+export interface PromptRuntimeLayerCoverageEntry {
+  identifier: string;
+  name: string;
+  classification: 'required_runtime_aware' | 'optional_runtime_aware';
+  required: boolean;
+  status: 'valid' | 'missing' | 'disabled' | 'empty';
+  layerId?: string;
+}
+
+export interface PromptRuntimeMacroHint {
+  token: string;
+  description: string;
+  example: string;
+}
+
 export interface AdminPromptListData {
   layers: PromptLayer[];
   staticPrompts: PromptRegistryEntry[];
+  runtimeBlocks: PromptRuntimeBlock[];
+  runtimeLayerCoverage: {
+    ok: boolean;
+    entries: PromptRuntimeLayerCoverageEntry[];
+  };
+  runtimeMacroHints: PromptRuntimeMacroHint[];
 }
 
 export interface ConstitutionImmutableBlock {
@@ -946,6 +956,12 @@ export interface NorthStarUpdateResult {
   ok: boolean;
   message: string;
   snapshot?: NorthStarSnapshotData;
+}
+
+export interface RuntimePromptUpdateResult {
+  ok: boolean;
+  message: string;
+  updated?: string[];
 }
 
 export interface PromptUpdateResult {

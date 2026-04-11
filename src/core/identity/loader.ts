@@ -1,0 +1,131 @@
+import { existsSync, readFileSync, renameSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import type { CharacterCardV2 } from './types.js';
+import { buildCharacterMacroMap } from './character-macro-map.js';
+import {
+  DEFAULT_COMPANION_NAME,
+  LEGACY_CHARACTER_CARD_FILE_NAME,
+  normalizeCompanionName,
+} from './companion-naming.js';
+import { renderPromptRuntimeTokens } from './prompt-runtime.js';
+import { wrapPromptSectionXml } from './prompt-sections.js';
+import { composeDefaultFoundationTemplate } from './foundation-sections.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
+
+export function loadCharacterCard(path: string): CharacterCardV2 {
+  if (!existsSync(path)) {
+    throw new Error(`Missing character card at ${path}: explicit companion identity is required before startup`);
+  }
+
+  const raw = readFileSync(path, 'utf-8');
+  let card: CharacterCardV2;
+  try {
+    card = JSON.parse(raw) as CharacterCardV2;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid character card at ${path}: ${detail}`);
+  }
+
+  assertValidCharacterCard(card, path);
+
+  return card;
+}
+
+export function isBootstrapStarterCard(card: CharacterCardV2): boolean {
+  return card.data.creator === 'system'
+    && Array.isArray(card.data.tags)
+    && card.data.tags.includes('bootstrap');
+}
+
+export function createBootstrapStarterCard(name = DEFAULT_COMPANION_NAME): CharacterCardV2 {
+  return {
+    spec: 'chara_card_v2',
+    spec_version: '2.0',
+    data: {
+      name,
+      description: `${name} is a newly bootstrapped companion instance awaiting onboarding and identity tuning.`,
+      personality: 'Warm, attentive, honest about uncertainty, and ready to be personalized through onboarding.',
+      scenario: 'You are meeting the operator for the first time and can be customized further through companion setup.',
+      first_mes: `Hi, I'm ${name}.`,
+      mes_example: '',
+      system_prompt: '',
+      post_history_instructions: '',
+      tags: ['bootstrap'],
+      creator: 'system',
+      creator_notes: 'Auto-seeded starter identity for first-run bootstrap.',
+    },
+  };
+}
+
+export function composeSystemPromptTemplate(): string {
+  return composeDefaultFoundationTemplate();
+}
+
+export function buildCharacterPromptTemplateVariables(card: CharacterCardV2): Record<string, string> {
+  return buildCharacterMacroMap(card);
+}
+
+function renderWithCharacterMacros(
+  template: string,
+  variables: Record<string, string>,
+): string {
+  return renderPromptRuntimeTokens(template, { variables }).text.trim();
+}
+
+export function loadOrInitializeCharacterCard(path: string): CharacterCardV2 {
+  if (!existsSync(path)) {
+    const legacyPath = join(dirname(path), LEGACY_CHARACTER_CARD_FILE_NAME);
+    if (legacyPath !== path && existsSync(legacyPath)) {
+      renameSync(legacyPath, path);
+    } else {
+      writeJsonAtomic(path, createBootstrapStarterCard());
+    }
+  }
+  return loadCharacterCard(path);
+}
+
+export function assertValidCharacterCard(card: CharacterCardV2, pathHint = 'character card'): void {
+  if (!card.data.name || !card.data.personality) {
+    throw new Error(`Invalid character card at ${pathHint}: missing name or personality`);
+  }
+}
+
+export function composeSystemPrompt(card: CharacterCardV2, userName = '{{user}}'): string {
+  const characterVariables = buildCharacterPromptTemplateVariables(card);
+  const runtimeCharacterName = normalizeCompanionName(characterVariables.char, card.data.name);
+  const runtimeVariables = {
+    ...characterVariables,
+    user: userName,
+    user_name: userName,
+    char: runtimeCharacterName,
+    char_name: runtimeCharacterName,
+    character: runtimeCharacterName,
+    character_name: runtimeCharacterName,
+  };
+
+  const sections: string[] = [];
+  sections.push(wrapPromptSectionXml({
+    id: 'identity',
+    title: 'Identity',
+    content: `You are ${runtimeCharacterName}.`,
+  }));
+
+  const appendRenderedMacro = (sectionId: string, macroValue: string | undefined): void => {
+    if (!macroValue) return;
+    const rendered = renderWithCharacterMacros(macroValue, runtimeVariables);
+    if (rendered.length > 0) {
+      sections.push(wrapPromptSectionXml({
+        id: sectionId,
+        content: rendered,
+      }));
+    }
+  };
+
+  appendRenderedMacro('description', characterVariables.description);
+  appendRenderedMacro('personality', characterVariables.personality);
+  appendRenderedMacro('scenario', characterVariables.scenario);
+  appendRenderedMacro('system_prompt', characterVariables.system_prompt);
+  appendRenderedMacro('post_history_instructions', characterVariables.post_history_instructions);
+
+  return sections.filter(section => section.trim().length > 0).join('\n\n');
+}

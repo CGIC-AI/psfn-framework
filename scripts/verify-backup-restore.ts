@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { verifyBackupRestore } from '../src/backup/service.js';
+import { ensureRepositoryBackupRestoreFixture } from './backup-restore-fixture.js';
+import { verifyBackupRestore } from '../src/persistence/backups/service.js';
 
 interface CliArgs {
   backupRootDir?: string;
@@ -15,7 +16,7 @@ function printUsage(): void {
       'Usage: tsx scripts/verify-backup-restore.ts [options]',
       '',
       'Options:',
-      '  --backup-root <path>          Root backup directory (default: BACKUP_ROOT_DIR or ./data/backups)',
+      '  --backup-root <path>          Root backup directory (default: BACKUP_ROOT_DIR or an auto-generated repo fixture)',
       '  --backup-dir <path>           Exact backup snapshot directory to verify',
       '  --restore-scratch-root <path> Root for temporary restore rehearsal directory',
       '  --keep-restore-dir            Preserve restore rehearsal directory for inspection',
@@ -62,6 +63,19 @@ function parseArgs(argv: string[]): CliArgs {
   }
 
   return args;
+}
+
+function resolveDefaultBackupRootDir(args: CliArgs): string {
+  if (args.backupRootDir) {
+    return resolve(args.backupRootDir);
+  }
+
+  const envBackupRootDir = process.env.BACKUP_ROOT_DIR?.trim();
+  if (envBackupRootDir) {
+    return resolve(envBackupRootDir);
+  }
+
+  return ensureRepositoryBackupRestoreFixture();
 }
 
 function resolveLatestBackupDir(backupRootDir: string): string {
@@ -111,9 +125,8 @@ function listSessionSnapshotFiles(sessionSnapshotDir: string): string[] {
 
 function main(): void {
   const args = parseArgs(process.argv.slice(2));
-  const backupDir = resolve(args.backupDir ?? resolveLatestBackupDir(
-    resolve(args.backupRootDir ?? process.env.BACKUP_ROOT_DIR ?? './data/backups'),
-  ));
+  const backupRootDir = args.backupDir ? undefined : resolveDefaultBackupRootDir(args);
+  const backupDir = resolve(args.backupDir ?? resolveLatestBackupDir(backupRootDir!));
   const databaseBackupPath = resolveDatabaseSnapshotPath(backupDir);
   const sessionSnapshotDir = join(backupDir, 'sessions');
   const expectedSessionFiles = listSessionSnapshotFiles(sessionSnapshotDir);

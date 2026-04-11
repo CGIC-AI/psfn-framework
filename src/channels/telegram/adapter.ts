@@ -1,5 +1,5 @@
 import type {
-  ChannelAdapter,
+  ChannelAdapterPort,
   ChannelCapabilities,
   ChannelConfigAdapter,
   ChannelGatewayAdapter,
@@ -11,18 +11,18 @@ import type {
   MediaAttachment,
   MessageHandler,
   OutboundContext,
-} from '../types.js';
-import type { SubstrateMessage } from '../../types.js';
-import type { EventBus } from '../../event-bus.js';
+} from '../backplane/types.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { EventBus } from '../../shared/event-bus.js';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { TelegramChannelConfig } from '../config.js';
-import { createComponentLogger } from '../../logger.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import type { TelegramChannelConfig } from '../backplane/config.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   DeferredLatestByChannel,
   emitTurnContentionTelemetry,
   type TurnContentionPolicy,
-} from '../../lifecycle/turn-contention.js';
+} from '../../system/lifecycle/turn-contention.js';
 
 const log = createComponentLogger('Telegram');
 
@@ -216,7 +216,7 @@ function resolveAuthorName(user: TelegramUser): string {
   return `telegram-${user.id}`;
 }
 
-export class TelegramAdapter implements ChannelAdapter {
+export class TelegramAdapter implements ChannelAdapterPort {
   readonly id = 'telegram';
   readonly name = this.id;
   readonly meta = {

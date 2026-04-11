@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { PassThrough } from 'node:stream';
-import { EventBus } from '../../event-bus.js';
-import type { SubstrateConfig } from '../../types.js';
+import { EventBus } from '../../shared/event-bus.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 const connectorMocks = vi.hoisted(() => {
   const sttConnector = {
@@ -206,7 +206,7 @@ vi.mock('prism-media', () => {
   };
 });
 
-vi.mock('../../voice/connectors/stt/index.js', () => {
+vi.mock('../../primitives/voice/connectors/stt/index.js', () => {
   return {
     createStreamingSttConnector: connectorMocks.createStreamingSttConnector,
     getStreamingSttProviderMetadata: connectorMocks.getStreamingSttProviderMetadata,
@@ -217,7 +217,7 @@ vi.mock('../../voice/connectors/stt/index.js', () => {
   };
 });
 
-vi.mock('../../voice/connectors/tts/index.js', () => {
+vi.mock('../../primitives/voice/connectors/tts/index.js', () => {
   return {
     createStreamingTtsConnector: connectorMocks.createStreamingTtsConnector,
     getStreamingTtsProviderMetadata: connectorMocks.getStreamingTtsProviderMetadata,
@@ -229,7 +229,7 @@ vi.mock('../../voice/connectors/tts/index.js', () => {
   };
 });
 
-vi.mock('../../voice/policy/reliability.js', () => {
+vi.mock('../../primitives/voice/policy/reliability.js', () => {
   return {
     runWithVoiceStageBudget: reliabilityMocks.runWithVoiceStageBudget,
     resolveVoiceReliabilityBudgets: reliabilityMocks.resolveVoiceReliabilityBudgets,
@@ -238,7 +238,7 @@ vi.mock('../../voice/policy/reliability.js', () => {
   };
 });
 
-vi.mock('../../voice/policy/security.js', () => {
+vi.mock('../../primitives/voice/policy/security.js', () => {
   return {
     resolveVoiceSecurityLimits: securityMocks.resolveVoiceSecurityLimits,
     validatePcmAudio: securityMocks.validatePcmAudio,
@@ -1365,20 +1365,19 @@ describe('DiscordVoiceRuntime', () => {
       expect(providers[0]).toBe('echo');
     });
 
-    it('disables runtime when no TTS provider is explicitly configured', () => {
+    it('throws when no TTS provider is explicitly configured', () => {
       connectorMocks.createStreamingTtsConnector.mockImplementation(() => connectorMocks.ttsConnector);
 
-      const runtime = new DiscordVoiceRuntime({
+      expect(() => new DiscordVoiceRuntime({
         client: { on: vi.fn(), off: vi.fn() } as any,
         config: makeConfig({
           ttsProvider: undefined,
         }),
         eventBus: new EventBus(),
         getHandler: () => null,
-      });
-
-      expect((runtime as any).preferredTtsProviderId).toBe('disabled');
-      expect((runtime as any).enabled).toBe(false);
+      })).toThrow(
+        'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
+      );
     });
 
     it('skips elevenlabs connector when no voice ID is configured', () => {

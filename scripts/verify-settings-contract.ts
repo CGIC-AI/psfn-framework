@@ -1,4 +1,4 @@
-import { verifySettingsContractGuard } from '../src/config/settings-contract-guard.js';
+import { verifySettingsContractGuard } from '../src/system/config/settings-contract-guard.js';
 
 const result = verifySettingsContractGuard();
 

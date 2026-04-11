@@ -1,5 +1,8 @@
 // ── OpenAI-compatible API types ──
 
+import type { ExternalTelemetryEvent } from '../../shared/event-bus.js';
+import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
+
 export interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
@@ -94,7 +97,7 @@ export const API_HEALTH_SUBSYSTEMS = [
 export const API_CONTINUITY_WATCHDOG_CHECKS = [
   'database',
   'gatewayLink',
-  'schedulerHeartbeat',
+  'schedulerHealthcheck',
 ] as const;
 
 export type ApiHealthState = 'healthy' | 'degraded';
@@ -108,8 +111,8 @@ export interface ApiHealthSubsystemStatus {
 }
 
 export type ApiServerHealthChecks = Partial<Record<
-ApiHealthSubsystem,
-() => Promise<ApiHealthSubsystemStatus> | ApiHealthSubsystemStatus
+  ApiHealthSubsystem,
+  () => Promise<ApiHealthSubsystemStatus> | ApiHealthSubsystemStatus
 >>;
 
 export interface ApiHealthResponse {
@@ -121,4 +124,79 @@ export interface ApiHealthResponse {
     status: ApiHealthState;
     checks: Record<ApiContinuityWatchdogCheck, ApiHealthSubsystemStatus>;
   };
+}
+
+export interface ApiRuntimeError {
+  status: number;
+  type: string;
+  message: string;
+  details?: Record<string, unknown>;
+}
+
+export interface ApiRpcHeaders {
+  [name: string]: string | undefined;
+}
+
+export interface ApiChatCompletionRpcParams {
+  requestId: string;
+  request: ChatCompletionRequest;
+  principal: ApiAuthPrincipal;
+  headers: ApiRpcHeaders;
+}
+
+export interface ApiChatCompletionRpcSuccess {
+  ok: true;
+  response: {
+    content: string;
+    channelId: string;
+    inputTokens: number;
+    outputTokens: number;
+  };
+}
+
+export interface ApiRpcFailure {
+  ok: false;
+  error: ApiRuntimeError;
+}
+
+export type ApiChatCompletionRpcResult = ApiChatCompletionRpcSuccess | ApiRpcFailure;
+
+export interface ApiChatCompletionCancelRpcParams {
+  requestId: string;
+}
+
+export interface ApiChatCompletionCancelRpcResult {
+  cancelled: boolean;
+}
+
+export interface ApiStreamDeltaNotification {
+  requestId: string;
+  text: string;
+}
+
+export interface ApiTelemetryIngestRpcParams {
+  event: ExternalTelemetryEvent;
+}
+
+export interface ApiTelemetryIngestRpcSuccess {
+  ok: true;
+  response: TelemetryIngestResponse;
+}
+
+export type ApiTelemetryIngestRpcResult = ApiTelemetryIngestRpcSuccess | ApiRpcFailure;
+
+export type ApiHealthRpcResult = ApiHealthResponse;
+
+export interface ApiRuntimeChatRequest {
+  request: ChatCompletionRequest;
+  principal: ApiAuthPrincipal;
+  headers: ApiRpcHeaders;
+  onDelta?: (text: string) => void;
+  signal?: AbortSignal;
+}
+
+export interface ApiServerRuntime {
+  handleHealth(): Promise<ApiHealthRpcResult>;
+  handleTelemetryIngest(event: ExternalTelemetryEvent): Promise<ApiTelemetryIngestRpcResult>;
+  handleChatCompletion(input: ApiRuntimeChatRequest): Promise<ApiChatCompletionRpcResult>;
 }

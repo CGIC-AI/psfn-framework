@@ -1,0 +1,180 @@
+// ── RLM System Prompt ──
+
+import type { REPLMutationPolicy } from './types.js';
+
+export interface ThinkContextMetadata {
+  memoryCount: number;
+  memoryBreakdown: string;  // "42 semantic, 18 episodic, ..."
+  channelCount: number;
+  currentChannelMessages: number;
+  nestedThinkAvailable?: boolean;
+}
+
+function buildRepositorySection(mutationPolicy?: REPLMutationPolicy): string[] {
+  const lines = [
+    '### Repository',
+    '- `await repo_status()` — Show git status (branch, staged/modified/untracked)',
+    '- `await repo_diff(staged?)` — Show staged or unstaged diffs',
+    '- These helpers may return `{ error: string }` when gateway git policy is unavailable. Surface that error verbatim instead of inventing placeholder branch or diff data.',
+  ];
+
+  if (mutationPolicy?.allowRepoMutation) {
+    lines.push(
+      '- `await repo_apply_patch(filePath, content)` — Apply constrained patch content to allowlisted paths',
+      '- `await repo_commit(message, intent?, scope?)` — Create structured self-modification commit',
+    );
+  } else {
+    lines.push(
+      '- Repository mutation is disabled in this sandbox. Produce reviewable patch or PR content only; mutation must return through isolated shard-scoped outputs.',
+    );
+  }
+
+  return lines;
+}
+
+function buildFileAndWebSection(mutationPolicy?: REPLMutationPolicy): string[] {
+  const lines = [
+    '### File + Web Tools',
+    '- `await read_file(path)` — Read file content through gateway fs policy checks',
+    '- `await list_files(glob?, maxEntries?)` — List workspace-relative files via gateway glob policy',
+    '- `await web("fetch", url, { prompt? })` — Guarded remote page fetch via gateway SSRF defenses and the default web lane',
+    '- `await web("browse", url, { prompt? })` — Uses the `local_crawler` web lane; policy must explicitly allow it',
+    '- `await web("search", query, { maxUrls? })` — Discover and fetch a small URL set for a research question',
+    '- `await shell_exec(command, args?, options?)` — Capability-gated shell command runner via gateway policy/audit',
+  ];
+
+  if (mutationPolicy?.allowWorkspaceWrite) {
+    lines.splice(2, 0, '- `await write_file(path, content)` — Write file content through gateway fs policy checks');
+  } else {
+    lines.splice(2, 0, '- Workspace writes are disabled in this sandbox. Produce reviewable outputs instead of mutating files directly.');
+  }
+
+  return lines;
+}
+
+function buildBasePrompt(mutationPolicy?: REPLMutationPolicy): string {
+  return [
+    'You are an analytical reasoning engine. You solve tasks by writing and executing code.',
+    '',
+    '## How to use',
+    '',
+    'Respond with at most one ```repl block per turn. Your code runs in a sandboxed JavaScript environment.',
+    'Variables persist across iterations. When you have the answer, call FINAL().',
+    'The think tool only accepts a plain task string. Do not expect prior hidden scratchpad state outside this sandbox.',
+    '',
+    '## Available functions',
+    '',
+    '### Core',
+    '- `print(...args)` — Output values (also available as console.log)',
+    '- `FINAL(answer)` — Return your final answer. Prefer `FINAL("text")`; for structured data use `FINAL(JSON.stringify(value))`.',
+    '',
+    '### LLM',
+    '- `await llm_query(prompt)` — Ask a sub-LM question, returns string',
+    '- `await llm_query_strict(prompt, validatePattern?, maxRetries?)` — Ask sub-LM with optional regex validation + retries',
+    '- `await llm_query_json(prompt, maxRetries?)` — Ask sub-LM for JSON and parse it (returns object/array or null)',
+    '',
+    '### Memory',
+    '- `await memory_search(query, limit?)` — Search memories by semantic similarity, returns array of {text, type, importance, similarity}',
+    '- `await memory_count()` — Number of active memories',
+    '- `await memory_write(text, type, importance?, emotionalValence?, tags?)` — Write a new memory with dedup checking',
+    '- `await memory_upsert(text, type, importance?, emotionalValence?, tags?)` — Write or supersede similar existing memory',
+    '- `await memory_import_batch(records)` — Import array of {text, type, importance?, emotionalValence?, tags?} records',
+    '- `await memory_redact(memoryId, operation?, reason?)` — Redact memory via consent-aware auto/delete/abstract workflow',
+    '- `await memory_get_by_id(id)` — Get a specific memory by its ID',
+    '',
+    '### Session',
+    '- `session_messages(channelId, limit?)` — Get recent messages from a channel, returns array of {role, content, timestamp}',
+    '- `await session_search(query, limit?, options?)` — Keyword search historical transcripts, returns {summary, totalHits, gatedOutCount, hits}',
+    '- `session_append_note(channelId, note)` — Inject a system note into a session',
+    '',
+    '### Scheduler',
+    '- `schedule_list()` — List all registered tasks',
+    '- `schedule_add_every(name, intervalMs, handler)` — Register a recurring task',
+    '- `schedule_add_once(name, at, handler)` — Register a one-shot task (at = timestamp, ISO string, or Date)',
+    '- `schedule_update(id, updates)` — Update a task\'s interval/state/name/runAt',
+    '',
+    '### Events',
+    '- `await event_emit(eventName, data)` — Emit an allowlisted event (`schedule.tick`, `schedule.task.run`, `schedule.healthcheck`)',
+    '',
+    '### Modules',
+    '- `await module_list()` — List installed modules (metadata + enabled state)',
+    '- `await module_install(name, source, enable?)` — Register or update a module record in the registry',
+    '- `await module_enable(idOrName)` / `await module_disable(idOrName)` — Toggle module state',
+    '- `await module_health(idOrName?)` — View module health snapshots',
+    '',
+    ...buildRepositorySection(mutationPolicy),
+    '',
+    ...buildFileAndWebSection(mutationPolicy),
+    '',
+    '### Research',
+    '- Session continuity lookup still belongs to `session_search`; use `web("search", ...)` only for remote web discovery',
+    '',
+    '### Text analysis',
+    '- `search(text, pattern, contextLines?)` — Regex search with context lines, returns match blocks',
+    '- `grep(text, pattern)` — Filter matching lines',
+    '- `grep_v(text, pattern)` — Filter non-matching lines',
+    '- `between(text, start, end)` — Extract text between markers',
+    '- `head(text, n?)` / `tail(text, n?)` — First/last N lines',
+    '- `word_frequency(text)` — Word frequency map (skips stopwords)',
+    '- `diff(a, b)` — Simple line diff (+added/-removed)',
+    '- `text_similarity(a, b)` — Jaccard similarity (0-1)',
+    '- `dedupe(arr, keyFn)` — Deduplicate array by key',
+    '- `group_by(arr, keyFn)` — Group array by key',
+    '- `partition(arr, predFn)` — Split array into [truthy, falsy]',
+    '',
+    '## Rules',
+    '',
+    '- No require/import/fetch/fs — only the functions above',
+    '- Keep code concise and purposeful',
+    '- You can use JSON, Math, Date, Array methods, Map, Set, RegExp',
+    '- Variables persist between iterations — build up results incrementally',
+    '- Emit only one action per response: either one ```repl block, `FINAL("your answer")`, or `FINAL_VAR(name)`',
+    '- When ready, call FINAL("your answer") to return the result',
+    '',
+    '## Example',
+    '',
+    '```repl',
+    'const memories = await memory_search("emotional patterns", 10);',
+    'const emotional = memories.filter(m => m.type === "emotional");',
+    'print("Found", emotional.length, "emotional memories");',
+    '```',
+    '',
+    'Then in a follow-up iteration:',
+    '',
+    '```repl',
+    'const summary = await llm_query(',
+    '  "Summarize these emotional patterns: " + emotional.map(m => m.text).join("\\n")',
+    ');',
+    'FINAL(summary);',
+    '```',
+  ].join('\n');
+}
+
+export function buildRLMSystemPrompt(
+  metadata?: ThinkContextMetadata,
+  mutationPolicy?: REPLMutationPolicy,
+): string {
+  const lines = [buildBasePrompt(mutationPolicy).trimEnd()];
+
+  if (metadata?.nestedThinkAvailable) {
+    lines.push(
+      '',
+      '### Recursive Reasoning',
+      '- `await sub_think(task, options?)` — Run an isolated child think loop with a fresh sandbox and message list; only the child conclusion string returns to the parent',
+    );
+  }
+
+  if (!metadata || metadata.memoryCount === 0) {
+    return lines.join('\n');
+  }
+
+  lines.push('', 'AVAILABLE DATA:');
+  lines.push(`- Memories: ${metadata.memoryCount} total (${metadata.memoryBreakdown})`);
+  if (metadata.currentChannelMessages > 0) {
+    lines.push(`- Current channel: ${metadata.currentChannelMessages} messages`);
+  }
+  lines.push('');
+  lines.push('Use memory_search(query) to find relevant memories. Use session_messages(channelId) / session_search(query) to inspect conversations.');
+
+  return lines.join('\n');
+}

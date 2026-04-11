@@ -27,7 +27,7 @@ function makeHealthyPayload() {
       checks: {
         database: { status: 'healthy' },
         gatewayLink: { status: 'healthy' },
-        schedulerHeartbeat: { status: 'healthy' },
+        schedulerHealthcheck: { status: 'healthy' },
       },
     },
   };
@@ -50,7 +50,7 @@ function makeDegradedPayload() {
       checks: {
         database: { status: 'healthy' },
         gatewayLink: { status: 'degraded', detail: 'simulated gateway outage' },
-        schedulerHeartbeat: { status: 'healthy' },
+        schedulerHealthcheck: { status: 'healthy' },
       },
     },
   };

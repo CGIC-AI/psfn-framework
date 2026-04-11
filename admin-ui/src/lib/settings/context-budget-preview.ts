@@ -9,7 +9,7 @@ import {
   type AdaptiveContextBudgetPreviewProfile,
   type ContextBudgetConfigLike,
   type ResolvedContextBudget,
-} from '../../../../src/context-budget.js';
+} from '../../../../src/shared/context-budget.js';
 
 export interface ContextBudgetPreviewVariant {
   key: AdaptiveContextBudgetPreviewProfile['key'];

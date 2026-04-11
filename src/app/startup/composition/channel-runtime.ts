@@ -1,0 +1,128 @@
+import type { EventBus } from '../../../shared/event-bus.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
+import type { EligibilityGate } from '../../../system/capabilities/eligibility.js';
+import { ApiServer, type ApiServerConfig } from '../../../channels/api/server.js';
+import { DiscordAdapter } from '../../../channels/discord/adapter.js';
+import { createOpenHomeSatelliteAdapterPort } from '../../../../satellites/openhome/host/adapter.js';
+import type { TelegramChannelConfig } from '../../../channels/backplane/config.js';
+import { TelegramAdapter } from '../../../channels/telegram/adapter.js';
+import type {
+  ChannelAdapterFactoryPort,
+  ChannelAdapterPort,
+  MessageHandler,
+} from '../../../channels/backplane/types.js';
+import type { ChannelAdapterRegistryPort } from '../../../channels/backplane/registry-port.js';
+import type { SessionStore } from '../../../persistence/sessions/store.js';
+
+export interface DiscordChannelAdapterFactoryOptions {
+  config: SubstrateConfig;
+  eventBus: EventBus;
+  sessionStore?: SessionStore | null;
+  agentLoop?: SubstrateAgent | null;
+  onMessage?: MessageHandler | null;
+  onVoiceMessage?: MessageHandler | null;
+  eligibilityGate?: EligibilityGate;
+}
+
+export function createDiscordChannelAdapterFactoryEntry(
+  options: DiscordChannelAdapterFactoryOptions,
+): ChannelAdapterFactoryPort {
+  return {
+    manifest: {
+      id: 'discord',
+      label: 'Discord',
+      enabled: true,
+      required: true,
+      eligibility: {},
+    },
+    create: async (): Promise<ChannelAdapterPort> => {
+      const adapter = new DiscordAdapter(options.config, options.eventBus, {
+        ...(options.sessionStore ? { sessionStore: options.sessionStore } : {}),
+        ...(options.eligibilityGate ? { eligibilityGate: options.eligibilityGate } : {}),
+      });
+      if (options.agentLoop) {
+        adapter.setAgent(options.agentLoop);
+      } else if (options.onMessage) {
+        adapter.onMessage(options.onMessage);
+      }
+      if (options.onVoiceMessage) {
+        adapter.setVoiceHandler(options.onVoiceMessage);
+      }
+      await adapter.init();
+      return adapter;
+    },
+  };
+}
+
+export interface TelegramChannelAdapterFactoryOptions {
+  config: TelegramChannelConfig;
+  eventBus: EventBus;
+  onMessage?: MessageHandler | null;
+}
+
+export function createTelegramChannelAdapterFactoryEntry(
+  options: TelegramChannelAdapterFactoryOptions,
+): ChannelAdapterFactoryPort {
+  return {
+    manifest: {
+      id: 'telegram',
+      label: 'Telegram',
+      enabled: options.config.enabled,
+      required: false,
+      eligibility: {},
+    },
+    create: async (): Promise<ChannelAdapterPort> => {
+      const adapter = new TelegramAdapter(options.config, options.eventBus);
+      if (options.onMessage) {
+        adapter.onMessage(options.onMessage);
+      }
+      await adapter.init();
+      return adapter;
+    },
+  };
+}
+
+export function createApiServerChannelAdapterFactoryEntry(
+  config: ApiServerConfig,
+): ChannelAdapterFactoryPort {
+  return {
+    manifest: {
+      id: 'api',
+      label: 'OpenAI-Compatible API',
+      enabled: true,
+      required: true,
+      eligibility: {},
+    },
+    create: async (): Promise<ChannelAdapterPort> => {
+      const adapter = new ApiServer(config);
+      await adapter.init();
+      return adapter;
+    },
+  };
+}
+
+export function createOpenHomeChannelAdapterFactoryEntry(): ChannelAdapterFactoryPort {
+  const channel = createOpenHomeSatelliteAdapterPort().channel;
+  if (!channel) {
+    throw new Error('OpenHome satellite adapter must expose a channel adapter facet.');
+  }
+  return {
+    manifest: channel.manifest,
+    create: () => channel.create(),
+  };
+}
+
+export function requireChannelAdapter<T extends ChannelAdapterPort>(
+  registry: ChannelAdapterRegistryPort,
+  channelId: string,
+): T {
+  return registry.require<T>(channelId);
+}
+
+export function getOptionalChannelAdapter<T extends ChannelAdapterPort>(
+  registry: ChannelAdapterRegistryPort,
+  channelId: string,
+): T | null {
+  return registry.optional<T>(channelId);
+}

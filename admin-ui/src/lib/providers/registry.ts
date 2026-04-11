@@ -46,6 +46,20 @@ function normalizeProviderType(value: unknown): CanonicalProviderType {
   return normalized as CanonicalProviderType;
 }
 
+function normalizeCredentialReference(value: unknown): ProviderRegistryEntry['apiKeyRef'] {
+  if (!isRecord(value) || value.kind !== 'env') {
+    return undefined;
+  }
+  const envName = toOptionalString(value.envName);
+  if (!envName) {
+    return undefined;
+  }
+  return {
+    kind: 'env',
+    envName,
+  };
+}
+
 function normalizeProviderEntry(value: unknown, index: number): ProviderRegistryEntry {
   const raw = isRecord(value) ? value : {};
   const fallbackId = `provider-${index + 1}`;
@@ -59,7 +73,7 @@ function normalizeProviderEntry(value: unknown, index: number): ProviderRegistry
     ...(toOptionalString(raw.label) ? { label: toOptionalString(raw.label) } : {}),
     ...(toOptionalString(raw.apiBaseUrl) ? { apiBaseUrl: toOptionalString(raw.apiBaseUrl) } : {}),
     ...(toOptionalString(raw.modelsApiUrl) ? { modelsApiUrl: toOptionalString(raw.modelsApiUrl) } : {}),
-    ...(toOptionalString(raw.apiKeyEnv) ? { apiKeyEnv: toOptionalString(raw.apiKeyEnv) } : {}),
+    ...(normalizeCredentialReference(raw.apiKeyRef) ? { apiKeyRef: normalizeCredentialReference(raw.apiKeyRef) } : {}),
     ...(isRecord(raw.metadata) ? { metadata: { ...raw.metadata } } : {}),
   };
 }
@@ -93,10 +107,10 @@ export function normalizeProvidersRuntimeConfig(value: unknown): ProvidersRuntim
   return {
     registry: normalizeProviderRegistry(isRecord(raw.registry) ? raw.registry : raw),
     ...(toOptionalString(raw.litellmBaseUrl) ? { litellmBaseUrl: toOptionalString(raw.litellmBaseUrl) } : {}),
-    ...(toOptionalString(raw.litellmApiKeyEnv) ? { litellmApiKeyEnv: toOptionalString(raw.litellmApiKeyEnv) } : {}),
+    ...(normalizeCredentialReference(raw.litellmApiKeyRef) ? { litellmApiKeyRef: normalizeCredentialReference(raw.litellmApiKeyRef) } : {}),
     ...(toOptionalString(raw.openRouterApiBaseUrl) ? { openRouterApiBaseUrl: toOptionalString(raw.openRouterApiBaseUrl) } : {}),
     ...(toOptionalString(raw.openRouterModelsApiUrl) ? { openRouterModelsApiUrl: toOptionalString(raw.openRouterModelsApiUrl) } : {}),
-    ...(toOptionalString(raw.openRouterApiKeyEnv) ? { openRouterApiKeyEnv: toOptionalString(raw.openRouterApiKeyEnv) } : {}),
+    ...(normalizeCredentialReference(raw.openRouterApiKeyRef) ? { openRouterApiKeyRef: normalizeCredentialReference(raw.openRouterApiKeyRef) } : {}),
   };
 }
 

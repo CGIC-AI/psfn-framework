@@ -121,8 +121,9 @@ These are project law. They are not suggestions.
 18. Companion-facing semantics must remain truthful.
 19. Internal system messages must never masquerade as partner speech.
 20. Broken state must not be made to look healthy.
-21. The monolith is dead; split runtime is the only supported operational shape.
+21. Split runtime is the only supported operational shape.
 22. Backends are adapters and mirrors, not identity.
+23. Support the user's flourishing and do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
 
 If a proposed change violates one of those, the proposal is wrong even if it appears operationally convenient.
 
@@ -157,6 +158,8 @@ The companion is not identical to a specific model. The companion is grounded by
 - behavioral continuity
 - relationship continuity
 - constitutional care constraints
+
+One of those constitutional care constraints is explicit: Support {{user}}'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
 
 ### 6.2 Core
 
@@ -557,6 +560,8 @@ L0 is the canonical lived archive.
 
 L0 is filesystem JSONL. The end.
 
+The canonical archive is owned by `SessionArchivePort`; filesystem JSONL is the backing format, not a separate architecture seam.
+
 Rules:
 
 - L0 is append-only
@@ -598,6 +603,8 @@ Examples:
 
 A mirror or projection is not the canonical source of truth.
 
+Mirrors and projections must be rebuildable from canonical archive truth.
+
 This distinction matters because PSFN must be able to survive backend swaps without identity loss.
 
 ## 7. Canonical Data Law
@@ -615,6 +622,8 @@ Why:
 - resilience against backend churn
 
 At some point L0 may be mirrored into a database for fast search. That database is a mirror, not L0.
+
+The database mirror belongs behind `TranscriptProjectionPort` and `TranscriptSearchPort`, not behind raw database adapters exposed to core code.
 
 ### 7.2 Owner Files
 
@@ -656,6 +665,17 @@ Rules:
 - mistakes in derived memory should be correctable
 - supersede/ignore semantics are preferable to destructive silent erasure
 - live-testing mistakes must not poison continuity forever
+
+### 7.5 Projection Repair
+
+Derived database copies must be repairable from canonical archive truth.
+
+Rules:
+
+- projection drift should be detectable
+- projection rebuilds should not rewrite canonical archive truth
+- projection failures should fail closed for search and operational views, not corrupt the archive
+- backend-specific adapters may optimize the rebuild path, but they do not own canonical history
 
 ## 8. Message and Care Semantics
 
@@ -771,7 +791,7 @@ Platform law should define structure. Companion-specific language should remain 
 
 There is only split mode.
 
-The monolithic app is dead debt and should be retired, not described as a supported operational shape.
+The split runtime is the only supported operational shape and should remain the only supported operational model.
 
 ### 9.2 Gateway or It Does Not Ship
 
@@ -886,13 +906,28 @@ These names can evolve, but the architectural seams must exist.
 
 - `LLMProviderPort`
 - `EmbeddingProviderPort`
-- `SessionJournalPort`
 - `PromptStatePort`
 - `ConfigStorePort`
-- `MemoryStorePort`
 - `CostTelemetryPort`
 
-### 11.2 Boundary Ports
+### 11.2 Persistence Ports
+
+These are the domain seams for durable state and search.
+
+- `SessionArchivePort`
+- `TranscriptProjectionPort`
+- `TranscriptSearchPort`
+- `TurnRecordStorePort`
+- `MemoryStorePort`
+- `ContactStorePort`
+- `ConcernStorePort`
+- `PendingFollowUpStorePort`
+- `BehavioralPatternStorePort`
+- `GatewayAuditStorePort`
+
+`SessionJournalPort` remains an internal filesystem adapter if the implementation still needs one. It is not the domain seam for L0.
+
+### 11.3 Boundary Ports
 
 - `GatewayOpsPort`
 - `CredentialVaultPort`
@@ -900,28 +935,32 @@ These names can evolve, but the architectural seams must exist.
 - `ApprovalQueuePort`
 - `NotificationPort`
 
-### 11.3 Channel and Embodiment Ports
+### 11.4 Channel and Embodiment Ports
 
 - `ChannelAdapterPort`
 - `SatelliteAdapterPort`
 - `CrossChannelContinuityPort`
 
-### 11.4 Agentic Work Ports
+### 11.5 Agentic Work Ports
 
 - `SubagentExecutionPort`
 - `ShardExecutionPort`
 - `ArtifactReturnPort`
 
-### 11.5 Future-Sensor Ports
+### 11.6 Future-Sensor Ports
 
 - `SensorIngestPort`
 
-### 11.6 Port Rules
+### 11.7 Port Rules
 
 - ports speak in domain language
 - ports do not leak backend quirks into core
 - ports exist to prevent cross-repo surgery for single concerns
 - repeated logic should be pulled behind reusable ports and shared domain services
+- persistence/search ports that may cross backend I/O are async-first
+- raw database adapters are internal implementation details behind ports and projections
+- if a port is intentionally synchronous, the exemption should be explicit and narrow
+- mirror and projection ports must support rebuild from canonical archive truth
 
 ## 12. Engineering Laws
 
@@ -931,9 +970,8 @@ Entrypoints and runtime hubs must stop growing into architecture by accumulation
 
 The current obvious split pressure includes files like:
 
-- `src/agent-main.ts`
-- `src/gateway-main.ts`
-- `src/runtime.ts`
+- `src/app/agent/main.ts`
+- `src/app/gateway/main.ts`
 
 Rules:
 
@@ -1024,11 +1062,11 @@ Ratify:
 
 This is required before code refactor because unclear names produce bad seams.
 
-### Phase 2: Kill the Monolith for Real
+### Phase 2: Lock Split-Only Shape
 
 Actions:
 
-- remove `runtime.ts` as a supported operational model
+- remove obsolete startup paths
 - make split runtime the only real shape
 - keep any parity/test harness concerns clearly separated from production architecture
 

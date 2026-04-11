@@ -3,19 +3,19 @@ import http from 'node:http';
 import net from 'node:net';
 import WebSocket from 'ws';
 import Database from 'better-sqlite3';
-import { EventBus } from '../../event-bus.js';
-import { ContactStore } from '../../contacts/store.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { ContactStore } from '../../core/contacts/store.js';
 import { ApiServer } from './server.js';
-import type { SubstrateAgent } from '../../agent/substrate-agent.js';
-import type { SessionManager } from '../../session/manager.js';
-import type { AgentResponse, SubstrateMessage } from '../../types.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import type { SessionManager } from '../../core/session/manager.js';
+import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { ApiServerHealthChecks } from './types.js';
-import { toErrorMessage } from '../../utils/errors.js';
-import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
+import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import {
   deriveApiKeyPrincipalId,
   INSECURE_LOCAL_API_PRINCIPAL_ID,
-} from '../http/auth.js';
+} from '../backplane/http/auth.js';
 import { resolveApiCorsAllowedOrigins } from './http-policy.js';
 import type {
   VoiceWebSocketCloseReason,
@@ -220,6 +220,13 @@ async function stopServer(server: ApiServer): Promise<void> {
   }
 }
 
+function createApiServer(config: ConstructorParameters<typeof ApiServer>[0]): ApiServer {
+  return new ApiServer({
+    companionId: DEFAULT_COMPANION_ID,
+    ...config,
+  });
+}
+
 function createDeferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (error?: unknown) => void;
@@ -228,6 +235,22 @@ function createDeferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function emitQueuedTurnResult(
+  eventBus: EventBus,
+  message: SubstrateMessage,
+  response: AgentResponse,
+  deltas: string[] = [],
+): void {
+  queueMicrotask(() => {
+    void (async () => {
+      for (const delta of deltas) {
+        await eventBus.emit('agent.stream.delta', { channelId: message.channelId, text: delta });
+      }
+      await eventBus.emit('agent.turn.end', { message, response });
+    })();
+  });
 }
 
 function toAuthSubprotocol(apiToken: string): string {
@@ -317,7 +340,7 @@ describe('ApiServer', () => {
   beforeEach(async () => {
     eventBus = new EventBus();
     port = await allocatePort();
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
@@ -352,7 +375,7 @@ describe('ApiServer', () => {
 
     it('routes outbound text through session manager without mutating API routes', async () => {
       const mockSessionMgr = createMockSessionManager();
-      const localServer = new ApiServer({
+      const localServer = createApiServer({
         port: await allocatePort(),
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -388,7 +411,7 @@ describe('ApiServer', () => {
 
     it('returns custom model name', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -408,7 +431,7 @@ describe('ApiServer', () => {
   describe('GET /health', () => {
     it('returns structured healthy subsystem status', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -434,14 +457,14 @@ describe('ApiServer', () => {
       expect(body.subsystems.scheduler.status).toBe('healthy');
       expect(body.continuity.checks.database.status).toBe('healthy');
       expect(body.continuity.checks.gatewayLink.status).toBe('healthy');
-      expect(body.continuity.checks.schedulerHeartbeat.status).toBe('healthy');
+      expect(body.continuity.checks.schedulerHealthcheck.status).toBe('healthy');
       expect(typeof body.subsystems.llm.meta.checkLatencyMs).toBe('number');
       expect(typeof body.subsystems.embeddings.meta.checkLatencyMs).toBe('number');
     });
 
     it('returns degraded health when any subsystem check fails', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -471,23 +494,23 @@ describe('ApiServer', () => {
       expect(body.subsystems.scheduler.status).toBe('healthy');
       expect(body.continuity.checks.database.status).toBe('healthy');
       expect(body.continuity.checks.gatewayLink.status).toBe('healthy');
-      expect(body.continuity.checks.schedulerHeartbeat.status).toBe('healthy');
+      expect(body.continuity.checks.schedulerHealthcheck.status).toBe('healthy');
     });
 
-    it('degrades health when scheduler heartbeat is stale beyond threshold', async () => {
+    it('degrades health when scheduler healthcheck is stale beyond threshold', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
         allowInsecureWithoutAuth: true,
         healthChecks: createHealthyHealthChecks(),
-        schedulerHeartbeatStaleAfterMs: 1_000,
+        schedulerHealthcheckStaleAfterMs: 1_000,
       });
       await server.init();
       await server.start();
-      await eventBus.emit('schedule.heartbeat', {
+      await eventBus.emit('schedule.healthcheck', {
         timestamp: Date.now() - 10_000,
         taskCount: 2,
       });
@@ -498,25 +521,25 @@ describe('ApiServer', () => {
       const body = JSON.parse(res.body);
       expect(body.status).toBe('degraded');
       expect(body.continuity.status).toBe('degraded');
-      expect(body.continuity.checks.schedulerHeartbeat.status).toBe('degraded');
-      expect(body.continuity.checks.schedulerHeartbeat.detail).toContain('Scheduler heartbeat stale');
+      expect(body.continuity.checks.schedulerHealthcheck.status).toBe('degraded');
+      expect(body.continuity.checks.schedulerHealthcheck.detail).toContain('Scheduler healthcheck stale');
     });
 
-    it('uses fresh schedule.heartbeat events for scheduler continuity health', async () => {
+    it('uses fresh schedule.healthcheck events for scheduler continuity health', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
         sessionManager: createMockSessionManager(),
         allowInsecureWithoutAuth: true,
         healthChecks: createHealthyHealthChecks(),
-        schedulerHeartbeatStaleAfterMs: 1_000,
+        schedulerHealthcheckStaleAfterMs: 1_000,
       });
       await server.init();
       await server.start();
 
-      await eventBus.emit('schedule.heartbeat', {
+      await eventBus.emit('schedule.healthcheck', {
         timestamp: Date.now(),
         taskCount: 2,
       });
@@ -527,8 +550,8 @@ describe('ApiServer', () => {
       const body = JSON.parse(res.body);
       expect(body.status).toBe('healthy');
       expect(body.continuity.status).toBe('healthy');
-      expect(body.continuity.checks.schedulerHeartbeat.status).toBe('healthy');
-      expect(body.continuity.checks.schedulerHeartbeat.meta.heartbeatObserved).toBe(true);
+      expect(body.continuity.checks.schedulerHealthcheck.status).toBe('healthy');
+      expect(body.continuity.checks.schedulerHealthcheck.meta.healthcheckObserved).toBe(true);
     });
   });
 
@@ -555,7 +578,7 @@ describe('ApiServer', () => {
     it('binds author identity to the local insecure principal and ignores spoofed headers', async () => {
       await server.stop();
       const mockAgent = createMockAgentLoop(eventBus);
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -582,7 +605,7 @@ describe('ApiServer', () => {
     it('passes direct-provider, prompt, and style overrides to substrate messages', async () => {
       await server.stop();
       const mockAgent = createMockAgentLoop(eventBus);
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -615,7 +638,7 @@ describe('ApiServer', () => {
     it('passes explicit channel privacy to substrate messages', async () => {
       await server.stop();
       const mockAgent = createMockAgentLoop(eventBus);
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -700,7 +723,7 @@ describe('ApiServer', () => {
       });
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -741,7 +764,7 @@ describe('ApiServer', () => {
       });
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -809,7 +832,7 @@ describe('ApiServer', () => {
       });
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -907,21 +930,21 @@ describe('ApiServer', () => {
       expect(body.error.type).toBe('invalid_json');
     });
 
-    it('queues same-session in-flight contention and runs requests in order', async () => {
+    it('queues same-session in-flight contention through follow-up delivery when supported', async () => {
       const deferred = createDeferred<AgentResponse>();
       const mockAgent = {
-        handleMessage: vi
-          .fn()
-          .mockImplementationOnce(async () => deferred.promise)
-          .mockImplementationOnce(async () => ({
+        handleMessage: vi.fn().mockImplementationOnce(async () => deferred.promise),
+        followUp: vi.fn((message: SubstrateMessage) => {
+          emitQueuedTurnResult(eventBus, message, {
             content: 'Second done',
             channelId: insecureSessionChannel('same-session'),
             metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
-          })),
+          });
+        }),
       } as unknown as SubstrateAgent;
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -945,6 +968,7 @@ describe('ApiServer', () => {
 
       await new Promise(resolve => setTimeout(resolve, 20));
       expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);
+      expect(mockAgent.followUp).not.toHaveBeenCalled();
 
       deferred.resolve({
         content: 'First done',
@@ -956,8 +980,137 @@ describe('ApiServer', () => {
       const second = await secondRequest;
       expect(first.status).toBe(200);
       expect(second.status).toBe(200);
+      expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);
+      expect(mockAgent.followUp).toHaveBeenCalledTimes(1);
+      const queuedFollowUp = (mockAgent.followUp as ReturnType<typeof vi.fn>).mock.calls[0][0] as SubstrateMessage;
+      expect(queuedFollowUp.authorId).toBe(INSECURE_LOCAL_API_PRINCIPAL_ID);
+      expect(queuedFollowUp.channelId).toBe(insecureSessionChannel('same-session'));
+      expect(JSON.parse(second.body).choices[0].message.content).toBe('Second done');
+    });
+
+    it('falls back to channel lock delivery when queued same-session follow-up is unavailable', async () => {
+      const deferred = createDeferred<AgentResponse>();
+      const mockAgent = {
+        handleMessage: vi
+          .fn()
+          .mockImplementationOnce(async () => deferred.promise)
+          .mockResolvedValue({
+            content: 'Second done',
+            channelId: insecureSessionChannel('same-session-fallback'),
+            metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+          }),
+      } as unknown as SubstrateAgent;
+
+      await server.stop();
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const firstRequest = request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'First' }],
+      }, { 'X-Session-ID': 'same-session-fallback' });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      const secondRequest = request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Second' }],
+      }, { 'X-Session-ID': 'same-session-fallback' });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);
+
+      deferred.resolve({
+        content: 'First done',
+        channelId: insecureSessionChannel('same-session-fallback'),
+        metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+      });
+
+      const first = await firstRequest;
+      const second = await secondRequest;
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
       expect(mockAgent.handleMessage).toHaveBeenCalledTimes(2);
       expect(JSON.parse(second.body).choices[0].message.content).toBe('Second done');
+    });
+
+    it('does not seed queued session history before the active turn releases the channel', async () => {
+      const deferred = createDeferred<AgentResponse>();
+      let sessionMessageCount = 0;
+      const recordUserMessage = vi.fn(() => {
+        sessionMessageCount += 1;
+      });
+      const recordAssistantMessage = vi.fn(() => {
+        sessionMessageCount += 1;
+      });
+      const mockSessionManager = {
+        getMessageCount: vi.fn(() => sessionMessageCount),
+        recordUserMessage,
+        recordAssistantMessage,
+      } as unknown as SessionManager;
+      const mockAgent = {
+        handleMessage: vi
+          .fn()
+          .mockImplementationOnce(async () => deferred.promise)
+          .mockResolvedValue({
+            content: 'Second done',
+            channelId: insecureSessionChannel('seed-queue'),
+            metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+          }),
+      } as unknown as SubstrateAgent;
+
+      await server.stop();
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: mockSessionManager,
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const firstRequest = request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'First' }],
+      }, { 'X-Session-ID': 'seed-queue' });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      const secondRequest = request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [
+          { role: 'assistant', content: 'Queued assistant context' },
+          { role: 'user', content: 'Second' },
+        ],
+      }, { 'X-Session-ID': 'seed-queue' });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(recordAssistantMessage).not.toHaveBeenCalled();
+      expect(recordUserMessage).not.toHaveBeenCalled();
+
+      deferred.resolve({
+        content: 'First done',
+        channelId: insecureSessionChannel('seed-queue'),
+        metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+      });
+
+      const first = await firstRequest;
+      const second = await secondRequest;
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(recordAssistantMessage).toHaveBeenCalledTimes(1);
+      expect(recordAssistantMessage).toHaveBeenCalledWith(
+        insecureSessionChannel('seed-queue'),
+        'Queued assistant context',
+      );
     });
 
     it('emits queue telemetry for queued API contention', async () => {
@@ -970,15 +1123,15 @@ describe('ApiServer', () => {
         handleMessage: vi
           .fn()
           .mockImplementationOnce(async () => deferred.promise)
-          .mockImplementationOnce(async () => ({
+          .mockResolvedValue({
             content: 'Second telemetry turn',
             channelId: insecureSessionChannel('queue-telemetry'),
             metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
-          })),
+          }),
       } as unknown as SubstrateAgent;
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -1044,7 +1197,7 @@ describe('ApiServer', () => {
       } as unknown as SubstrateAgent;
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -1095,7 +1248,7 @@ describe('ApiServer', () => {
       } as unknown as SubstrateAgent;
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -1126,11 +1279,18 @@ describe('ApiServer', () => {
             channelId: insecureSessionChannel('disconnect-session'),
             metadata: { model: 'test', inputTokens: 2, outputTokens: 3, durationMs: 5 },
           })),
+        followUp: vi.fn((message: SubstrateMessage) => {
+          emitQueuedTurnResult(eventBus, message, {
+            content: 'After disconnect',
+            channelId: insecureSessionChannel('disconnect-session'),
+            metadata: { model: 'test', inputTokens: 2, outputTokens: 3, durationMs: 5 },
+          });
+        }),
         abort: abortSpy,
       } as unknown as SubstrateAgent;
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,
@@ -1229,6 +1389,84 @@ describe('ApiServer', () => {
       // Final signal
       expect(res.chunks[res.chunks.length - 1]).toBe('[DONE]');
     });
+
+    it('delivers queued streaming follow-ups after the active stream finishes', async () => {
+      const releaseFirst = createDeferred<void>();
+      const completionOrder: string[] = [];
+      const mockAgent = {
+        handleMessage: vi.fn(async (message: SubstrateMessage) => {
+          await eventBus.emit('agent.stream.delta', { channelId: message.channelId, text: 'First' });
+          await releaseFirst.promise;
+          await eventBus.emit('agent.stream.delta', { channelId: message.channelId, text: ' done' });
+          return {
+            content: 'First done',
+            channelId: insecureSessionChannel('stream-queue'),
+            metadata: { model: 'test', inputTokens: 1, outputTokens: 2, durationMs: 2 },
+          } satisfies AgentResponse;
+        }),
+        followUp: vi.fn((message: SubstrateMessage) => {
+          emitQueuedTurnResult(eventBus, message, {
+            content: 'Second done',
+            channelId: insecureSessionChannel('stream-queue'),
+            metadata: { model: 'test', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+          }, ['Second done']);
+        }),
+      } as unknown as SubstrateAgent;
+
+      await server.stop();
+      server = new ApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const firstStreamPromise = streamRequest(port, {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'First stream turn' }],
+        stream: true,
+      }, { 'X-Session-ID': 'stream-queue' }).then((value) => {
+        completionOrder.push('first');
+        return value;
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+
+      const secondStreamPromise = streamRequest(port, {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Second stream turn' }],
+        stream: true,
+      }, { 'X-Session-ID': 'stream-queue' }).then((value) => {
+        completionOrder.push('second');
+        return value;
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 20));
+      expect(mockAgent.followUp).not.toHaveBeenCalled();
+
+      releaseFirst.resolve();
+
+      const firstStream = await firstStreamPromise;
+      const secondStream = await secondStreamPromise;
+
+      const firstContent = firstStream.chunks
+        .filter((chunk) => chunk !== '[DONE]')
+        .map((chunk) => JSON.parse(chunk).choices[0].delta.content)
+        .filter(Boolean);
+      const secondContent = secondStream.chunks
+        .filter((chunk) => chunk !== '[DONE]')
+        .map((chunk) => JSON.parse(chunk).choices[0].delta.content)
+        .filter(Boolean);
+
+      expect(completionOrder).toEqual(['first', 'second']);
+      expect(firstContent).toEqual(['First', ' done']);
+      expect(secondContent).toEqual(['Second done']);
+      expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);
+      expect(mockAgent.followUp).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('body size limit', () => {
@@ -1269,7 +1507,7 @@ describe('ApiServer', () => {
 
     it('allows preflight when origin is in API_CORS_ALLOWLIST', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1294,7 +1532,7 @@ describe('ApiServer', () => {
 
     it('allows preflight for split-mode admin origin derived from admin host/port', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1323,7 +1561,7 @@ describe('ApiServer', () => {
 
     it('allows preflight for split-mode admin origin when admin host is wildcard bind', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1350,7 +1588,7 @@ describe('ApiServer', () => {
 
     it('rejects wildcard-bind split-mode preflight when origin host differs from request host', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1376,7 +1614,7 @@ describe('ApiServer', () => {
 
     it('allows wildcard LAN preflight when configured origin host matches', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1399,7 +1637,7 @@ describe('ApiServer', () => {
 
     it('rejects wildcard LAN preflight when origin does not match configured port', async () => {
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1424,7 +1662,7 @@ describe('ApiServer', () => {
       const voice = createVoiceHooksProbe();
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1458,7 +1696,7 @@ describe('ApiServer', () => {
       const voice = createVoiceHooksProbe();
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1497,7 +1735,7 @@ describe('ApiServer', () => {
     it('seeds prior messages into session for new channel', async () => {
       const mockSessionMgr = createMockSessionManager();
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1532,7 +1770,7 @@ describe('ApiServer', () => {
     it('ignores spoofed author headers when seeding prior user messages', async () => {
       const mockSessionMgr = createMockSessionManager();
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: createMockAgentLoop(eventBus),
         eventBus,
@@ -1585,7 +1823,7 @@ describe('ApiServer startup auth guard', () => {
   it('fails startup without API key unless insecure local mode is explicit', async () => {
     const eventBus = new EventBus();
     const port = await allocatePort();
-    const server = new ApiServer({
+    const server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
@@ -1601,7 +1839,7 @@ describe('ApiServer startup auth guard', () => {
   it('rejects insecure local mode when API_HOST is not loopback', async () => {
     const eventBus = new EventBus();
     const port = await allocatePort();
-    const server = new ApiServer({
+    const server = createApiServer({
       port,
       host: '0.0.0.0',
       agentLoop: createMockAgentLoop(eventBus),
@@ -1625,7 +1863,7 @@ describe('ApiServer with auth', () => {
   beforeEach(async () => {
     eventBus = new EventBus();
     port = await allocatePort();
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
@@ -1663,7 +1901,7 @@ describe('ApiServer with auth', () => {
 
   it('accepts requests with admin token when configured as alternate auth token', async () => {
     await server.stop();
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
@@ -1682,7 +1920,7 @@ describe('ApiServer with auth', () => {
 
   it('accepts requests with admin auth cookie when configured as alternate auth token', async () => {
     await server.stop();
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
@@ -1717,7 +1955,7 @@ describe('ApiServer with auth', () => {
   it('binds message identity to authenticated principal and ignores spoofed user headers', async () => {
     await server.stop();
     const mockAgent = createMockAgentLoop(eventBus);
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: mockAgent,
       eventBus,
@@ -1754,7 +1992,7 @@ describe('ApiServer with auth', () => {
   it('routes authenticated PSFN Amica claims into psfn-amica channel sessions', async () => {
     await server.stop();
     const mockAgent = createMockAgentLoop(eventBus);
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: mockAgent,
       eventBus,
@@ -1795,7 +2033,7 @@ describe('ApiServer with auth', () => {
   it('applies configured psfn-amica defaults when the caller only claims channel type and id', async () => {
     await server.stop();
     const mockAgent = createMockAgentLoop(eventBus);
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: mockAgent,
       eventBus,
@@ -1835,7 +2073,7 @@ describe('ApiServer with auth', () => {
 
   it('fails closed for psfn-amica claims when the PSFN-side profile is missing', async () => {
     await server.stop();
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,
@@ -1867,7 +2105,7 @@ describe('ApiServer with auth', () => {
     });
 
     await server.stop();
-    server = new ApiServer({
+    server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
       eventBus,

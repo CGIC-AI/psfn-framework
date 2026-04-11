@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SubstrateAgent } from '../../agent/substrate-agent.js';
-import { createEligibilityGate } from '../../capabilities/eligibility.js';
-import type { EventBus } from '../../event-bus.js';
-import type { SubstrateConfig } from '../../types.js';
-import type { StreamingSttConnector } from '../../voice/connectors/stt/types.js';
-import type { StreamingTtsConnector } from '../../voice/connectors/tts/types.js';
-import { registerStreamingSttProvider } from '../../voice/connectors/stt/index.js';
-import { registerStreamingTtsProvider } from '../../voice/connectors/tts/index.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
+import type { EventBus } from '../../shared/event-bus.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { StreamingSttConnector } from '../../primitives/voice/connectors/stt/types.js';
+import type { StreamingTtsConnector } from '../../primitives/voice/connectors/tts/types.js';
+import { registerStreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
+import { registerStreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
 
 const {
   createStreamingSttConnectorMock,
@@ -16,16 +16,16 @@ const {
   createStreamingTtsConnectorMock: vi.fn(),
 }));
 
-vi.mock('../../voice/connectors/stt/index.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../voice/connectors/stt/index.js')>();
+vi.mock('../../primitives/voice/connectors/stt/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../primitives/voice/connectors/stt/index.js')>();
   return {
     ...actual,
     createStreamingSttConnector: createStreamingSttConnectorMock,
   };
 });
 
-vi.mock('../../voice/connectors/tts/index.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../voice/connectors/tts/index.js')>();
+vi.mock('../../primitives/voice/connectors/tts/index.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../primitives/voice/connectors/tts/index.js')>();
   return {
     ...actual,
     createStreamingTtsConnector: createStreamingTtsConnectorMock,
@@ -66,6 +66,8 @@ type RuntimeVoiceTestOverrides = Partial<SubstrateConfig> & {
 
 function createTestOptions(configOverrides: RuntimeVoiceTestOverrides = {}) {
   const config = {
+    sttProvider: 'deepgram',
+    ttsProvider: 'elevenlabs',
     deepgramApiKey: 'deepgram-key',
     deepgramModel: 'nova-3',
     deepgramSttEndpoint: 'wss://api.deepgram.com/v1/listen',
@@ -151,13 +153,13 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
     expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
   });
 
-  it('fails closed when TTS provider is unset even if elevenlabs credentials exist', () => {
-    const runtime = createApiVoiceWebSocketRuntime(createTestOptions({
+  it('throws when TTS provider selection is unset even if elevenlabs credentials exist', () => {
+    expect(() => createApiVoiceWebSocketRuntime(createTestOptions({
       ttsProvider: undefined,
       elevenLabsModelId: 'eleven_turbo_v2_5',
-    }));
-
-    expect(runtime).toBeUndefined();
+    }))).toThrow(
+      'Missing runtime voice TTS provider selection: set "ttsProvider" in settings.json to "disabled" or a registered TTS provider id',
+    );
     expect(createStreamingSttConnectorMock).not.toHaveBeenCalled();
     expect(createStreamingTtsConnectorMock).not.toHaveBeenCalled();
   });

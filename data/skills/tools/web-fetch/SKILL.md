@@ -16,7 +16,7 @@ Use `lane: "local_crawler"` only when you explicitly need the local crawler path
 The raw crawl4ai endpoint below is backend detail and fallback only.
 
 ## Service Location
-Base URL: `http://purrsephone.local.vega.nyc:11235/`
+Base URL: `http://purrsephone.local.internal:11235/`
 
 ## Methods
 
@@ -52,6 +52,6 @@ When asked to read a URL or fetch web content:
 3. Return the fetched content to the user
 
 ## Notes
-- This service runs locally on Vega's network
+- This service runs on the local network
 - Use for reading articles, documentation, etc.
 - The fit filter provides clean, readable content

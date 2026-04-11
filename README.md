@@ -18,13 +18,13 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 ## Features
 
 ### Core
-- **Agent Loop** — LLM-powered conversation with streaming, tool use, steering, follow-up handling, and lazy tool loading (built on [pi-agent-core](https://github.com/nickvdyck/pi-ai))
+- **Agent Loop** — LLM-powered conversation with streaming, tool use, steering, follow-up handling, and adaptive tool discovery/activation (`tool_search`, `toolset`, promotion, bounded autoload) built on [pi-agent-core](https://github.com/nickvdyck/pi-ai)
 - **Memory System** — 6 memory types (episodic, semantic, emotional, procedural, reflection, relational) with embedding-based retrieval, salience decay, contradiction resolution, agent-accessible write/redact tools, and scratchpad storage
 - **Pluggable Embeddings** — Runtime-configured embeddings in `settings.json`: local `@huggingface/transformers`, Ollama, or any OpenAI-compatible embeddings API
 - **Sessions** — Append-only JSONL files per channel — immutable conversation history with auto-compaction
 - **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slots (including vision)
 - **Capabilities System** — Runtime capability declarations gating tool access by tier (nursery/apprentice/autonomous)
-- **Skills System** — Self-authored capability documents (CRUD via agent tools, auto-filtered by eligibility)
+- **Skills System** — Self-authored workflow guidance documents managed through the unified `skill` tool and auto-filtered by eligibility
 - **Values Journal** — Agent-authored principles with persistence
 
 ### Privacy & Trust (Honne/Tatemae)
@@ -135,18 +135,16 @@ Embedding selection lives in `settings.json` or, before first boot, `config/sett
 
 That path runs in-process via `@huggingface/transformers` and caches models under `models/transformers` by default. `HF_TOKEN` is only needed for gated or private Hugging Face repos.
 
-The shipped `config/settings.seed.json` currently defaults to the Ollama profile (`snowflake-arctic-embed2`, `1024` dims). If you do not want Ollama, change the seed or the generated `settings.json` before relying on first-boot defaults.
+The shipped `config/settings.seed.json` currently defaults to the local transformers profile (`Xenova/all-MiniLM-L6-v2`, `384` dims). If you want Ollama or another embeddings backend, change the seed or the generated `settings.json` before relying on first-boot defaults.
 
 ### Running
 
-**Development (gateway + agent):**
+**Split runtime (gateway + agent):**
 ```bash
-npm run dev
+npm run split
 ```
 
 This starts gateway + agent together. The gateway holds secrets and proxies all external calls; the agent runs locally with scoped filesystem access.
-
-`npm run dev` and `npm run split` are equivalent.
 
 **YOLO mode (broader read scope):**
 ```bash
@@ -167,7 +165,8 @@ set -a && source .env && set +a && npm run agent
 **Containerized agent (maximum isolation):**
 ```bash
 npm run build
-npm run agent:docker    # --network=none Docker container
+npm run agent:docker          # Production profile (network_mode: "none")
+npm run agent:docker:continuous # Continuous/dev profile (isolated internal network)
 ```
 
 ### Optional Services
@@ -278,29 +277,30 @@ Gateway (host)                    Agent (container, --network=none)
 
 ### Agent Tools
 
-Your companion has access to these tools during conversation. Core tools are always available; extended tools load on demand via `load_tools`.
+Your companion has access to a mixed direct-tool surface during conversation. `tool_search` and `toolset` are the canonical always-on discovery/control path for non-default overlays. Some domains are already unified (`shell`, `skill`, `orient`, `subagent`), while others still ship as split first-party tools on this stabilized branch. See [`docs/tool-surface.md`](./docs/tool-surface.md) for the target stack and the current-to-target mapping.
 
-| Category | Tools |
+Skills are reusable workflow guidance, not world-execution tools. The runtime manages them through the unified `skill` surface while execution stays on the tool families below.
+
+| Category | Current direct tool names |
 |----------|-------|
-| **Memory** | `memory_write`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_read`, `scratchpad_write` |
-| **Contacts** | `contact_set_trust`, `contact_note`, `contact_set_channel_privacy`, `contact_link_identity`, `contact_lookup`, `contact_list` |
-| **Identity** | `prompt_layer_list`, `prompt_layer_get`, `prompt_layer_update`, `prompt_layer_toggle`, `north_star_list`, `north_star_create`, `north_star_update`, `north_star_delete`, `north_star_reorder`, `identity_diff`, `identity_changelog`, `character_card_update` |
-| **Git** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
+| **Adaptive control** | `tool_search`, `toolset` |
+| **Already unified direct tools** | `shell`, `skill`, `orient`, `memory`, `scratchpad`, `session`, `identity`, `north_star`, `system`, `subagent` |
+| **Filesystem** | `fs_list`, `fs_read` |
+| **Contacts** | `contact_list`, `contact_lookup`, `contact_note`, `contact_set_trust`, `contact_link_identity`, `contact_set_channel_privacy` |
+| **Repository** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
 | **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
-| **Values** | `values_list`, `values_add`, `values_update` |
-| **Skills** | `skill_list`, `skill_view`, `skill_create`, `skill_update` |
-| **Reasoning** | `think` (RLM+REPL sandbox) |
-| **Shards** | `spawn_shard` (parallel sub-agents) |
+| **North Star** | `north_star` |
+| **Values** | `orient`, `values_add`, `values_update` |
 | **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |
-| **Sessions** | `session_new`, `session_list`, `session_resume` |
-| **Settings** | `settings_get`, `promoted_tools_list`, `promoted_tools_add`, `promoted_tools_remove`, `promoted_tools_swap` |
-| **Lifecycle** | `self_restart`, `self_rebuild`, `notify_operator` |
-| **Meta** | `load_tools` (hot-swap core/extended tool sets) |
+| **Beads and lifecycle** | `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`, `settings_get`, `promoted_tools_*`, `self_restart`, `self_rebuild`, `notify_operator` |
+| **Media** | current stabilized branch: `image_create`, `image_edit`, `image_analyze`; target surface: `media` (`action=generate|edit|analyze`) |
+| **Shards** | `spawn_shard` |
+| **Reasoning** | `think` (RLM+REPL sandbox) |
 
 Tool surface split:
-- **Direct agent tools**: registered as `core` or `extended`, visible to `load_tools`, subject to promotion/autoload rules
-- **REPL-only helpers**: only available inside `think` — includes `read_file`, `list_files`, `llm_query`, `session_search`, scheduler helpers, and module helpers
-- Shared names can exist on both surfaces, but REPL-only helpers are never promotable direct tools
+- **Direct agent tools**: `tool_search` and `toolset` stay core; the rest are registered as `core` or `extended`, with overlay activation controlled by `toolset`, promotion, and bounded autoload rules
+- **REPL-only helpers**: `think` also exposes bounded helper functions for filesystem, git, shell, memory, and model operations. Those helper names are separate from the direct-tool catalog and are never promotable direct tools.
+- Some capabilities exist on both surfaces, but the direct tool catalog is the source of truth for what the agent can call outside `think`
 
 ## Project Structure
 
@@ -308,7 +308,6 @@ Tool surface split:
 src/
   gateway-main.ts           # Gateway entry point
   agent-main.ts             # Agent entry point
-  runtime.ts                # Core runtime orchestrator
 
   agent/                    # pi-agent-core wrapper, messages, event bridge
   gateway/                  # JSON-RPC server/client, policy, SSRF, sanitization
@@ -325,11 +324,11 @@ src/
   scheduler/                # Heartbeat, one-shot, maintenance
   voice/                    # Voice pipeline (STT, TTS connectors, WebSocket transport)
   vault/                    # Obsidian vault integration (ops, tools, auto-publish)
-  skills/                   # Self-authored skill store (CRUD, execution)
+  skills/                   # Runtime skill loading; companion-authored skills live under companion-data/skills
   capabilities/             # Runtime capability declarations
   values/                   # Values journal (agent-authored principles)
   modules/                  # Runtime module registry and loader
-  bootstrap/                # Composition root (parity wiring)
+  bootstrap/                # Composition root (shared wiring)
   channels/
     admin/                  # Admin server + JSON API
     api/                    # OpenAI-compatible REST API

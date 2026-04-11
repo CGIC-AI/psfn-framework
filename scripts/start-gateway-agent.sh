@@ -34,8 +34,20 @@ psfn_export_default_module_registry_path
 psfn_export_default_vad_lexicon_path
 
 # Local-dev defaults so split/yolo mode is one-command.
+if [ -z "${API_PORT:-}" ]; then
+  export API_PORT=10053
+fi
+
+if [ -z "${API_HOST:-}" ]; then
+  export API_HOST=127.0.0.1
+fi
+
+if [ -z "${API_KEY:-}" ] && [ -z "${ALLOW_INSECURE_LOCAL_API:-}" ]; then
+  export ALLOW_INSECURE_LOCAL_API=true
+fi
+
 if [ -z "${ADMIN_PORT:-}" ]; then
-  export ADMIN_PORT=3001
+  export ADMIN_PORT=10054
 fi
 
 if [ -z "${ADMIN_HOST:-}" ]; then
@@ -44,6 +56,14 @@ fi
 
 if [ -z "${ADMIN_TOKEN:-}" ] && [ -z "${ADMIN_ALLOW_INSECURE:-}" ]; then
   export ADMIN_ALLOW_INSECURE=true
+fi
+
+if [ -z "${GATEWAY_SESSION_HMAC_KEYS:-}" ] && [ -z "${GATEWAY_SESSION_HMAC_KEY:-}" ]; then
+  export GATEWAY_SESSION_HMAC_KEY="psfn-dev-session-hmac"
+fi
+
+if [ -z "${ALLOW_AGENT_OUTBOUND_NETWORK:-}" ]; then
+  export ALLOW_AGENT_OUTBOUND_NETWORK=true
 fi
 
 if [ "${YOLO_MODE}" -eq 1 ]; then
@@ -82,7 +102,8 @@ if [ "${PSFN_RUNTIME_MODE}" = "yolo" ]; then
 fi
 
 DEFAULT_SOCKET_PATH="/run/psfn/gateway.sock"
-FALLBACK_SOCKET_PATH="${XDG_RUNTIME_DIR:-/tmp}/psfn-gateway/gateway.sock"
+SOCKET_SUFFIX="$(basename "${ROOT_DIR}" | tr -cs 'A-Za-z0-9._-' '-')"
+FALLBACK_SOCKET_PATH="${XDG_RUNTIME_DIR:-/tmp}/psfn-gateway-${SOCKET_SUFFIX}/gateway.sock"
 
 if [ -z "${GATEWAY_SOCKET:-}" ]; then
   default_dir="$(dirname "${DEFAULT_SOCKET_PATH}")"
@@ -96,13 +117,18 @@ if [ -z "${GATEWAY_SOCKET:-}" ]; then
   fi
 fi
 
+if [ -z "${ADMIN_TRANSPORT_SOCKET:-}" ]; then
+  export ADMIN_TRANSPORT_SOCKET="$(dirname "${GATEWAY_SOCKET}")/garden-admin.sock"
+fi
+
 SOCKET_PATH="${GATEWAY_SOCKET}"
 GATEWAY_PID=""
 AGENT_PID=""
+OPERATOR_PID=""
 
 start_gateway() {
   if [ -x "./node_modules/.bin/tsx" ]; then
-    ./node_modules/.bin/tsx src/gateway-main.ts &
+    ./node_modules/.bin/tsx src/app/gateway/main.ts &
   else
     npm run gateway &
   fi
@@ -111,11 +137,20 @@ start_gateway() {
 
 start_agent() {
   if [ -x "./node_modules/.bin/tsx" ]; then
-    ./node_modules/.bin/tsx src/agent-main.ts &
+    ./node_modules/.bin/tsx src/app/agent/main.ts &
   else
     npm run agent &
   fi
   AGENT_PID=$!
+}
+
+start_operator() {
+  if [ -x "./node_modules/.bin/tsx" ]; then
+    ./node_modules/.bin/tsx src/app/operator/main.ts &
+  else
+    npm run operator &
+  fi
+  OPERATOR_PID=$!
 }
 
 stop_pid() {
@@ -131,6 +166,7 @@ stop_pid() {
 }
 
 cleanup() {
+  stop_pid "${OPERATOR_PID}"
   stop_pid "${AGENT_PID}"
   stop_pid "${GATEWAY_PID}"
 }
@@ -159,6 +195,9 @@ fi
 echo "[${MODE_LABEL}] starting agent..."
 start_agent
 
+echo "[${MODE_LABEL}] starting operator..."
+start_operator
+
 echo "[${MODE_LABEL}] admin ui: http://${ADMIN_HOST}:${ADMIN_PORT}"
-echo "[${MODE_LABEL}] running (gateway pid=${GATEWAY_PID}, agent pid=${AGENT_PID})"
-wait -n "${GATEWAY_PID}" "${AGENT_PID}"
+echo "[${MODE_LABEL}] running (gateway pid=${GATEWAY_PID}, agent pid=${AGENT_PID}, operator pid=${OPERATOR_PID})"
+wait -n "${GATEWAY_PID}" "${AGENT_PID}" "${OPERATOR_PID}"

@@ -6,7 +6,7 @@ import {
   isExpectedApiToken,
   principalFromApiKeyToken,
   type ApiAuthPrincipal,
-} from '../http/auth.js';
+} from '../backplane/http/auth.js';
 
 export const API_CORS_ALLOWED_METHODS = 'GET, POST, OPTIONS';
 export const API_CORS_ALLOWED_HEADERS = [

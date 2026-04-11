@@ -7,7 +7,10 @@
       "enabled": false,
       "label": "LiteLLM Proxy",
       "apiBaseUrl": "http://127.0.0.1:4000/v1",
-      "apiKeyEnv": "LITELLM_API_KEY"
+      "apiKeyRef": {
+        "kind": "env",
+        "envName": "LITELLM_API_KEY"
+      }
     },
     {
       "id": "openrouter",
@@ -16,7 +19,10 @@
       "label": "OpenRouter",
       "apiBaseUrl": "https://openrouter.ai/api/v1",
       "modelsApiUrl": "https://openrouter.ai/api/v1/models",
-      "apiKeyEnv": "OPENROUTER_API_KEY"
+      "apiKeyRef": {
+        "kind": "env",
+        "envName": "OPENROUTER_API_KEY"
+      }
     }
   ]
 }

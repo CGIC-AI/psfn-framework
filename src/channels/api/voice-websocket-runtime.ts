@@ -1,61 +1,73 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
-import type { SubstrateAgent } from '../../agent/substrate-agent.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import {
   EligibilityDeniedError,
   type EligibilityGate,
-} from '../../capabilities/eligibility.js';
-import type { EventBus } from '../../event-bus.js';
-import { createComponentLogger } from '../../logger.js';
-import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
-import { createWavFromPcm16le } from '../../voice/audio.js';
-import { DeepgramSttClient } from '../../voice/deepgram.js';
+} from '../../system/capabilities/eligibility.js';
+import type { EventBus } from '../../shared/event-bus.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { createWavFromPcm16le } from '../../primitives/voice/audio.js';
+import { DeepgramSttClient } from '../../primitives/voice/deepgram.js';
 import {
   resolveVoiceReliabilityBudgets,
   runWithVoiceStageBudget,
-} from '../../voice/policy/reliability.js';
+} from '../../primitives/voice/policy/reliability.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
   resolveRuntimeVoiceProviderGate,
-} from '../../runtime/bootstrap-helpers.js';
-import type { SttStreamConfig, SttStreamSession, SttTranscriptChunk, StreamingSttConnector } from '../../voice/connectors/stt/types.js';
-import type { StreamingTtsConnector } from '../../voice/connectors/tts/types.js';
+} from '../../app/startup/support/bootstrap-helpers.js';
+import type { SttStreamConfig, SttStreamSession, SttTranscriptChunk, StreamingSttConnector } from '../../primitives/voice/connectors/stt/types.js';
+import type { StreamingTtsConnector } from '../../primitives/voice/connectors/tts/types.js';
 import {
   resolveVoiceSecurityLimits,
   validatePcmAudio,
   validateTranscriptText,
   validateTtsAudioChunk,
   validateTtsInputText,
-} from '../../voice/policy/security.js';
-import { serializeVoiceWireFrame } from '../../voice/transports/websocket/serializer.js';
-import { WebSocketVoiceRuntime } from '../../voice/transports/websocket/runtime.js';
-import { WebSocketVoiceServer } from '../../voice/transports/websocket/server.js';
+} from '../../primitives/voice/policy/security.js';
+import { serializeVoiceWireFrame } from '../../primitives/voice/transports/websocket/serializer.js';
+import { WebSocketVoiceRuntime } from '../../primitives/voice/transports/websocket/runtime.js';
+import { WebSocketVoiceServer } from '../../primitives/voice/transports/websocket/server.js';
 import type {
   WebSocketVoiceConnection,
   WebSocketVoiceServerOptions,
   WebSocketVoiceSession,
-} from '../../voice/transports/websocket/types.js';
-import { toErrorMessage } from '../../utils/errors.js';
-import type { WebRequestBinaryResult } from '../../gateway/protocol.js';
+} from '../../primitives/voice/transports/websocket/types.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
+import type { WebRequestBinaryResult } from '../../boundary/gateway/protocol.js';
 import type {
   VoiceWebSocketRuntime,
   VoiceWebSocketRuntimeContext,
 } from './voice-websocket.js';
-import type { ApiAuthPrincipal } from '../http/auth.js';
+import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 
 const log = createComponentLogger('ApiVoiceRuntime');
 
 const DEFAULT_CHANNEL_PREFIX = 'api-voice';
 
+export interface ApiVoiceAssistantTurnInput {
+  request: IncomingMessage;
+  principal: ApiAuthPrincipal;
+  transportSession: WebSocketVoiceSession;
+  sessionId: string;
+  transcript: string;
+  signal: AbortSignal;
+  channelPrefix: string;
+}
+
 interface ApiVoiceWebSocketRuntimeConfig {
-  agentLoop: SubstrateAgent;
-  eventBus: EventBus;
+  agentLoop?: SubstrateAgent;
+  eventBus?: EventBus;
   config: SubstrateConfig;
   gateway?: GatewayVoiceHttpClient;
   channelPrefix?: string;
   serverOptions?: Partial<WebSocketVoiceServerOptions>;
   eligibilityGate?: EligibilityGate;
+  handleAssistantTurn?: (input: ApiVoiceAssistantTurnInput) => Promise<string>;
 }
 
 interface VoiceActor {
@@ -372,7 +384,7 @@ function toCloseReason(
   }
 }
 
-async function runAssistantTurn(params: {
+async function runAgentAssistantTurn(params: {
   agentLoop: SubstrateAgent;
   eventBus: EventBus;
   request: IncomingMessage;
@@ -572,6 +584,22 @@ export function createApiVoiceWebSocketRuntime(
   }
 
   const channelPrefix = options.channelPrefix ?? DEFAULT_CHANNEL_PREFIX;
+  const assistantTurnHandler = options.handleAssistantTurn ?? (async (input: ApiVoiceAssistantTurnInput) => {
+    if (!options.agentLoop || !options.eventBus) {
+      throw new Error('API voice websocket runtime requires agentLoop/eventBus or a handleAssistantTurn override');
+    }
+    return await runAgentAssistantTurn({
+      agentLoop: options.agentLoop,
+      eventBus: options.eventBus,
+      request: input.request,
+      principal: input.principal,
+      transportSession: input.transportSession,
+      sessionId: input.sessionId,
+      transcript: input.transcript,
+      signal: input.signal,
+      channelPrefix: input.channelPrefix,
+    });
+  });
   const contexts = new Map<string, VoiceWebSocketRuntimeContext>();
   const connections = new Map<string, WebSocketVoiceConnection>();
   const securityLimits = resolveVoiceSecurityLimits();
@@ -616,9 +644,7 @@ export function createApiVoiceWebSocketRuntime(
         throw new Error(`Missing websocket request context for ${transportSession.connectionId}`);
       }
 
-      return runAssistantTurn({
-        agentLoop: options.agentLoop,
-        eventBus: options.eventBus,
+      return assistantTurnHandler({
         request: context.request,
         principal: context.principal,
         transportSession,

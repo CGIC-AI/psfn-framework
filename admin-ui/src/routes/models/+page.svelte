@@ -12,26 +12,35 @@
   import type {
     AdminSettingsData,
     CanonicalProviderRegistry,
-    CanonicalProviderType,
-    DiscoveredModel,
     ProviderRegistryEntry,
+    DiscoveredModel,
   } from '$lib/types';
   import {
+    backfillDiscoveredMetadata,
     buildUniqueModelId,
     deriveDiscoveryAutofill,
     resolveDiscoveredModelSelection,
   } from './discovery-autofill';
   import {
-    createEmptyProviderEntry,
     normalizeProvidersRuntimeConfig,
     PROVIDER_TYPE_LABELS,
     PROVIDER_TYPES,
-    providerEnvNameIsValid,
-    providerIdIsValid,
     providerSupportsModelsApi,
   } from '$lib/providers/registry';
-
-  type ProviderEditableField = 'id' | 'label' | 'apiBaseUrl' | 'modelsApiUrl' | 'apiKeyEnv';
+  import {
+    appendProviderEntry,
+    cloneProviderRegistry,
+    providerRegistryIsDirty,
+    providerRuntimeRole,
+    providerTypeSummary,
+    removeProviderEntry as removeProviderRegistryEntry,
+    serializeProviderRegistry,
+    setProviderField as setProviderRegistryField,
+    setProviderType as setProviderRegistryType,
+    type ProviderEditableField,
+    updateProviderEntry as updateProviderRegistryEntry,
+    validateProviderRegistry,
+  } from '$lib/providers/editor';
   type CanonicalModelPurpose =
     | 'chat'
     | 'background'
@@ -272,151 +281,38 @@
   }
 
   function setProviderRegistryState(nextRegistry: CanonicalProviderRegistry): void {
-    providerRegistry = {
-      schemaVersion: 1,
-      providers: nextRegistry.providers.map((entry) => ({
-        ...entry,
-        ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}),
-      })),
-    };
-    providerRegistryInitialJson = JSON.stringify(providerRegistry, null, 2);
+    providerRegistry = cloneProviderRegistry(nextRegistry);
+    providerRegistryInitialJson = serializeProviderRegistry(providerRegistry);
     providerValidationErrors = [];
   }
 
   function providerRegistryDirty(): boolean {
-    return JSON.stringify(providerRegistry, null, 2) !== providerRegistryInitialJson;
-  }
-
-  function providerTypeSummary(type: CanonicalProviderType): string {
-    if (type === 'openrouter') return 'Model discovery + routed OpenRouter traffic';
-    if (type === 'litellm_proxy') return 'Proxy-backed provider routing';
-    if (type === 'generic_openai') return 'OpenAI-compatible backend';
-    return `${PROVIDER_TYPE_LABELS[type]} direct backend`;
-  }
-
-  function providerRuntimeRole(entry: ProviderRegistryEntry): string[] {
-    const roles: string[] = [];
-    if (entry.type === 'openrouter') {
-      roles.push('import routing');
-      roles.push('catalog discovery');
-    }
-    if (entry.type === 'litellm_proxy') {
-      roles.push('proxy routing');
-    }
-    if (!entry.enabled) {
-      roles.push('disabled');
-    }
-    return roles.length > 0 ? roles : ['direct backend'];
+    return providerRegistryIsDirty(providerRegistry, providerRegistryInitialJson);
   }
 
   function updateProviderEntry(index: number, updater: (entry: ProviderRegistryEntry) => ProviderRegistryEntry): void {
-    providerRegistry = {
-      ...providerRegistry,
-      providers: providerRegistry.providers.map((entry, entryIndex) => (
-        entryIndex === index
-          ? updater({
-            ...entry,
-            ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}),
-          })
-          : entry
-      )),
-    };
+    providerRegistry = updateProviderRegistryEntry(providerRegistry, index, updater);
     providerValidationErrors = [];
   }
 
   function addProviderEntry(): void {
-    providerRegistry = {
-      ...providerRegistry,
-      providers: [...providerRegistry.providers, createEmptyProviderEntry(providerRegistry.providers.length)],
-    };
+    providerRegistry = appendProviderEntry(providerRegistry);
     providerValidationErrors = [];
   }
 
   function removeProviderEntry(index: number): void {
-    providerRegistry = {
-      ...providerRegistry,
-      providers: providerRegistry.providers.filter((_, entryIndex) => entryIndex !== index),
-    };
+    providerRegistry = removeProviderRegistryEntry(providerRegistry, index);
     providerValidationErrors = [];
   }
 
   function setProviderType(index: number, value: string): void {
-    updateProviderEntry(index, (entry) => {
-      const nextType = (PROVIDER_TYPES.includes(value as CanonicalProviderType)
-        ? value
-        : 'openai') as CanonicalProviderType;
-      const nextEntry: ProviderRegistryEntry = {
-        ...entry,
-        type: nextType,
-      };
-      if (!providerSupportsModelsApi(nextType)) {
-        delete nextEntry.modelsApiUrl;
-      }
-      return nextEntry;
-    });
+    providerRegistry = setProviderRegistryType(providerRegistry, index, value);
+    providerValidationErrors = [];
   }
 
   function setProviderField(index: number, field: ProviderEditableField, value: string): void {
-    updateProviderEntry(index, (entry) => {
-      const trimmed = value.trim();
-      if (field === 'id') {
-        return {
-          ...entry,
-          id: trimmed.toLowerCase(),
-        };
-      }
-      if (trimmed.length === 0) {
-        const nextEntry = { ...entry };
-        delete nextEntry[field];
-        return nextEntry;
-      }
-      return {
-        ...entry,
-        [field]: trimmed,
-      };
-    });
-  }
-
-  function validateProviderRegistry(registry: CanonicalProviderRegistry): string[] {
-    const errors: string[] = [];
-    const seenIds = new Set<string>();
-    let enabledOpenRouterCount = 0;
-    let enabledLiteLLMCount = 0;
-
-    for (const [index, entry] of registry.providers.entries()) {
-      const label = entry.id || `provider #${index + 1}`;
-      if (!providerIdIsValid(entry.id)) {
-        errors.push(`${label}: id must use only letters, numbers, dot, underscore, or hyphen.`);
-      }
-      if (seenIds.has(entry.id)) {
-        errors.push(`${label}: duplicate provider id.`);
-      }
-      seenIds.add(entry.id);
-      if (entry.apiKeyEnv && !providerEnvNameIsValid(entry.apiKeyEnv)) {
-        errors.push(`${label}: apiKeyEnv must be an uppercase environment variable name.`);
-      }
-      if (!entry.apiBaseUrl?.trim()) {
-        errors.push(`${label}: apiBaseUrl is required for ${entry.type}.`);
-      }
-      if (entry.type === 'openrouter' && !entry.modelsApiUrl?.trim()) {
-        errors.push(`${label}: modelsApiUrl is required for openrouter.`);
-      }
-      if (entry.enabled && entry.type === 'openrouter') {
-        enabledOpenRouterCount += 1;
-      }
-      if (entry.enabled && entry.type === 'litellm_proxy') {
-        enabledLiteLLMCount += 1;
-      }
-    }
-
-    if (enabledOpenRouterCount > 1) {
-      errors.push('Only one enabled OpenRouter provider is supported.');
-    }
-    if (enabledLiteLLMCount > 1) {
-      errors.push('Only one enabled LiteLLM proxy provider is supported.');
-    }
-
-    return errors;
+    providerRegistry = setProviderRegistryField(providerRegistry, index, field, value);
+    providerValidationErrors = [];
   }
 
   async function saveProviderRegistry(): Promise<void> {
@@ -1003,6 +899,26 @@
     flashMessage = `Added ${discovered.id} with discovery autofill.`;
   }
 
+  function backfillExistingModelsFromDiscovery(discovered: readonly DiscoveredModel[]): number {
+    let backfilled = 0;
+    const nextModels = models.map((entry) => {
+      const normalizedModel = entry.identity.model.trim();
+      if (!normalizedModel) return entry;
+      const matched = resolveDiscoveredModelSelection(normalizedModel, discovered);
+      if (!matched) return entry;
+      const cloned = cloneModelEntry(entry);
+      if (!backfillDiscoveredMetadata(cloned, matched)) {
+        return entry;
+      }
+      backfilled += 1;
+      return cloned;
+    });
+    if (backfilled > 0) {
+      models = nextModels;
+    }
+    return backfilled;
+  }
+
   function removeModel(index: number): void {
     const target = models[index];
     if (!target) return;
@@ -1205,9 +1121,12 @@
     try {
       await refreshDiscoveredModels();
       discoveredModels = await listDiscoveredModels();
+      const backfilledCount = backfillExistingModelsFromDiscovery(discoveredModels);
       discoveryError = '';
       flashOk = true;
-      flashMessage = `Discovered ${discoveredModels.length} model(s).`;
+      flashMessage = backfilledCount > 0
+        ? `Discovered ${discoveredModels.length} model(s); backfilled ${backfilledCount} existing registry entr${backfilledCount === 1 ? 'y' : 'ies'}.`
+        : `Discovered ${discoveredModels.length} model(s).`;
     } catch (refreshError) {
       discoveredModels = [];
       discoveryError = toErrorMessage(refreshError, 'Model discovery unavailable');
@@ -1458,12 +1377,12 @@
               />
             </div>
             <div>
-              <label for={`provider-api-key-env-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">API Key Env</label>
+              <label for={`provider-api-key-env-${index}`} class="block text-sm font-medium text-shadow-700 mb-1.5">API Key Ref</label>
               <input
                 id={`provider-api-key-env-${index}`}
                 type="text"
-                value={entry.apiKeyEnv ?? ''}
-                oninput={(event) => setProviderField(index, 'apiKeyEnv', (event.currentTarget as HTMLInputElement).value)}
+                value={entry.apiKeyRef?.kind === 'env' ? entry.apiKeyRef.envName : ''}
+                oninput={(event) => setProviderField(index, 'apiKeyRef', (event.currentTarget as HTMLInputElement).value)}
                 class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none"
                 placeholder="LITELLM_API_KEY"
               />

@@ -18,9 +18,10 @@ import {
   resolveContinuityDir,
   resolveNorthStarPath,
   resolveReflectionNotesDir,
+  resolveSessionsDir,
   resolveValuesJournalPath,
 } from './layout.js';
-import { buildMessageJournalEntry } from '../session/journal/entries.js';
+import { buildMessageJournalEntry } from './journals/journal/entries.js';
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(join(path, '..'), { recursive: true });
@@ -126,7 +127,7 @@ describe('persistence cutover', () => {
     expect(existsSync(resolveNorthStarPath(dirs.companionDataDir))).toBe(true);
     expect(existsSync(join(dirs.companionDataDir, 'companion.db'))).toBe(true);
     expect(existsSync(join(dirs.companionDataDir, 'companion.db-wal'))).toBe(true);
-    expect(existsSync(join(dirs.companionDataDir, 'sessions', 'session-1.jsonl'))).toBe(true);
+    expect(existsSync(join(resolveSessionsDir(dirs.companionDataDir), 'session-1.jsonl'))).toBe(true);
     expect(existsSync(join(dirs.legacySharedDataDir, 'settings.json'))).toBe(false);
     expect(existsSync(join(dirs.legacySharedDataDir, 'character.json'))).toBe(false);
     expect(existsSync(join(dirs.legacySharedDataDir, 'sessions'))).toBe(false);
@@ -142,7 +143,7 @@ describe('persistence cutover', () => {
     expect(existsSync(join(result.backupRootDir!, 'system', 'settings.json'))).toBe(true);
     expect(existsSync(join(result.backupRootDir!, 'system', 'gateway-audit.db'))).toBe(true);
     expect(existsSync(join(result.backupRootDir!, 'companion', 'character.json'))).toBe(true);
-    expect(existsSync(join(result.backupRootDir!, 'companion', 'sessions', 'session-1.jsonl'))).toBe(true);
+    expect(existsSync(join(result.backupRootDir!, 'companion', 'state', 'sessions', 'session-1.jsonl'))).toBe(true);
 
     const rerun = executePersistenceCutover(dirs, { dryRun: true });
     expect(rerun.plan.actionableCount).toBe(0);

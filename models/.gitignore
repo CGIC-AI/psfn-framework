@@ -1,5 +1,7 @@
 *
 !.gitignore
 !README.md
+!gguf/
+!gguf/.gitignore
 !transformers/
 !transformers/.gitkeep

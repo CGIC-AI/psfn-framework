@@ -11,9 +11,10 @@ import {
   type TextChannel,
   type User,
 } from 'discord.js';
-import type { SubstrateMessage, SubstrateConfig } from '../../types.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
-  ChannelAdapter,
+  ChannelAdapterPort,
   ChannelCapabilities,
   ChannelConfigAdapter,
   ChannelGatewayAdapter,
@@ -25,20 +26,20 @@ import type {
   ChannelThreadingAdapter,
   MessageHandler,
   OutboundContext,
-} from '../types.js';
-import type { SubstrateAgent } from '../../agent/substrate-agent.js';
-import type { EventBus } from '../../event-bus.js';
-import type { SessionStore } from '../../session/store.js';
-import type { EligibilityGate } from '../../capabilities/eligibility.js';
-import { createComponentLogger } from '../../logger.js';
+} from '../backplane/types.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import type { EventBus } from '../../shared/event-bus.js';
+import type { SessionStore } from '../../persistence/sessions/store.js';
+import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import { DiscordVoiceRuntime } from './voice.js';
 import {
   DeferredLatestByChannel,
   emitTurnContentionTelemetry,
   type TurnContentionPhase,
   type TurnContentionPolicy,
-} from '../../lifecycle/turn-contention.js';
-import { toErrorMessage } from '../../utils/errors.js';
+} from '../../system/lifecycle/turn-contention.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 
 const log = createComponentLogger('Discord');
 
@@ -98,7 +99,7 @@ interface PendingDiscordTurn {
   replyToOriginal: boolean;
 }
 
-export class DiscordAdapter implements ChannelAdapter {
+export class DiscordAdapter implements ChannelAdapterPort {
   readonly id = 'discord';
   readonly name = this.id;
   readonly meta = {
@@ -442,7 +443,7 @@ export class DiscordAdapter implements ChannelAdapter {
           waitMs,
         });
         log.debug('Steering message into active stream', { channelId });
-        this.agent.steer(substrateMsg);
+        void this.agent.steer(substrateMsg);
       } else {
         // Gateway mode has no direct agent instance, so keep latest message queued
         // instead of dropping it during lock contention.

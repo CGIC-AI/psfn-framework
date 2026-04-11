@@ -1,6 +1,6 @@
 # Setup
 
-PSFN now boots through the split runtime. `src/index.ts` only validates the runtime mode contract and exits; use `npm run dev`, `npm run split`, `npm run gateway`, or `npm run agent`.
+PSFN now boots through the split runtime. `src/app/startup/index.ts` is disabled and exits fail-closed; use `npm run split` for the full gateway + agent + operator stack, or launch `npm run gateway`, `npm run agent`, and `npm run operator` individually.
 
 ## Prerequisites
 
@@ -13,6 +13,8 @@ PSFN now boots through the split runtime. `src/index.ts` only validates the runt
   - `ADMIN_TOKEN`
   - `DEEPGRAM_API_KEY`
   - `ELEVENLABS_API_KEY`
+- Required deployment identity wiring:
+  - `COMPANION_ID`
 
 ## Install
 
@@ -33,6 +35,7 @@ Keep `.env` limited to:
 - Host, port, and socket wiring
 - Runtime mode and persistence layout wiring
 - Explicit bootstrap overrides such as `CHARACTER_CARD_PATH`
+- Explicit deployment identity such as `COMPANION_ID`
 
 The runtime ignores mutable settings that are owned by JSON files. Do not use `.env` for embeddings, model roster, scheduler cadence, capability tier, channel policy, skills, or trust policy.
 
@@ -58,15 +61,16 @@ On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
 
    ```dotenv
    OPENROUTER_API_KEY=...
+   COMPANION_ID=companion
    CHARACTER_CARD_PATH=./data/character.json
    DATA_DIR=./data
    DATABASE_PATH=./data/companion.db
    ```
 
-2. Start the split runtime:
+2. Start the split runtime (gateway + agent + operator):
 
    ```bash
-   npm run dev
+   npm run split
    ```
 
 3. If you want the integrated Garden SPA served by the admin host, build it once:
@@ -99,17 +103,18 @@ On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
 ## Common Launch Commands
 
 ```bash
-npm run dev          # gateway + agent launcher
-npm run split        # same as dev
+npm run split        # gateway + agent + operator launcher
 npm run yolo         # split runtime with broader fs.read policy
 npm run gateway      # gateway only
-npm run agent        # agent only
-npm run agent:docker # production containerized agent
+npm run agent        # agent only (companion loop + private admin transport)
+npm run operator     # Garden operator surface only
+npm run agent:docker          # Production profile (network_mode: "none")
+npm run agent:docker:continuous # Continuous/dev profile (isolated internal network)
 ```
 
 ## Optional Surface Wiring
 
-### Admin + API
+### Garden operator surface + public API
 
 ```dotenv
 ADMIN_HOST=127.0.0.1
@@ -119,6 +124,9 @@ ADMIN_TOKEN=...
 API_HOST=127.0.0.1
 API_PORT=3000
 API_KEY=...
+
+# optional private agent/operator transport override
+ADMIN_TRANSPORT_SOCKET=./runtime/sockets/garden-admin.sock
 ```
 
 ### Discord voice
@@ -150,4 +158,5 @@ npm run lint
 npm run build
 npm run smoke:chat
 npm run verify:settings-contract
+npm run verify:agent-docker-isolation
 ```

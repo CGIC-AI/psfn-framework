@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
-const DEFAULT_ADMIN_URL = 'http://127.0.0.1:3001';
-const DEFAULT_BOOTSTRAP_PATH = '/api/chat/bootstrap';
+const DEFAULT_ADMIN_URL = 'http://127.0.0.1:10154';
+const DEFAULT_BOOTSTRAP_PATH = '/api/admin/chat/bootstrap';
 const DEFAULT_TIMEOUT_MS = 12_000;
 const DEFAULT_VOICE_TIMEOUT_MS = 8_000;
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
+const DEFAULT_LIVE_ENV_PATH = resolve(SCRIPT_DIR, '..', '.env');
 
 function printUsage() {
   console.log(`Chat Cockpit Smoke Harness
@@ -18,7 +23,8 @@ Usage:
 Options:
   --admin-url <url>        Admin server base URL (default: ${DEFAULT_ADMIN_URL})
   --api-base-url <url>     Base URL for API endpoint resolution (default: admin URL)
-  --admin-token <token>    Admin bearer token for /api/chat/bootstrap
+  --admin-token <token>    Admin bearer token for the bootstrap route
+  --api-key <key>          API bearer token for chat completions when bootstrap does not expose one
   --bootstrap-path <path>  Bootstrap path (default: ${DEFAULT_BOOTSTRAP_PATH})
   --message <text>         Prompt text for chat completion smoke
   --voice                  Enable optional websocket handshake check
@@ -56,11 +62,22 @@ function parseInteger(value, fieldName, fallback) {
   return parsed;
 }
 
+function readEnvValue(path, key) {
+  if (!existsSync(path)) return '';
+  const line = readFileSync(path, 'utf8')
+    .split('\n')
+    .find((entry) => entry.startsWith(`${key}=`));
+  if (!line) return '';
+  return line.slice(key.length + 1).trim().replace(/^['"]|['"]$/g, '');
+}
+
 function parseArgs(argv) {
+  const liveEnvPath = process.env.PSFN_LIVE_ENV || DEFAULT_LIVE_ENV_PATH;
   const options = {
     adminUrl: process.env.ADMIN_URL || DEFAULT_ADMIN_URL,
     apiBaseUrl: process.env.API_BASE_URL || '',
-    adminToken: process.env.ADMIN_TOKEN || '',
+    adminToken: process.env.ADMIN_TOKEN || readEnvValue(liveEnvPath, 'ADMIN_TOKEN'),
+    apiKey: process.env.API_KEY || readEnvValue(liveEnvPath, 'API_KEY'),
     bootstrapPath: DEFAULT_BOOTSTRAP_PATH,
     message: 'Smoke ping from chat cockpit.',
     enableVoice: false,
@@ -84,6 +101,9 @@ function parseArgs(argv) {
         break;
       case '--admin-token':
         options.adminToken = ensureString(argv[++i], '--admin-token');
+        break;
+      case '--api-key':
+        options.apiKey = ensureString(argv[++i], '--api-key');
         break;
       case '--bootstrap-path':
         options.bootstrapPath = ensureString(argv[++i], '--bootstrap-path');
@@ -136,8 +156,8 @@ function validateBootstrapPayload(payload) {
   ensureString(payload?.defaultSessionId, 'bootstrap.defaultSessionId');
   ensureString(payload?.defaultAuthorId, 'bootstrap.defaultAuthorId');
   ensureString(payload?.defaultAuthorName, 'bootstrap.defaultAuthorName');
-  ensureString(payload?.selectedIdentity?.channel, 'bootstrap.selectedIdentity.channel');
-  ensureString(payload?.selectedIdentity?.userId, 'bootstrap.selectedIdentity.userId');
+  ensureString(payload?.selectedTarget?.channel, 'bootstrap.selectedTarget.channel');
+  ensureString(payload?.selectedTarget?.canonicalContactId, 'bootstrap.selectedTarget.canonicalContactId');
   ensureString(payload?.api?.chatCompletionsUrl, 'bootstrap.api.chatCompletionsUrl');
   ensureString(payload?.api?.voiceWebSocketUrl, 'bootstrap.api.voiceWebSocketUrl');
 }
@@ -190,6 +210,7 @@ async function runChatCompletionCheck(options, bootstrap) {
   const apiBase = options.apiBaseUrl || options.adminUrl;
   const chatCompletionsUrl = resolveUrl(bootstrap.api.chatCompletionsUrl, apiBase);
   info(`Checking chat completions endpoint: ${chatCompletionsUrl}`);
+  const apiKey = bootstrap?.api?.apiKey || options.apiKey;
 
   const response = await fetchWithTimeout(chatCompletionsUrl, {
     method: 'POST',
@@ -199,7 +220,7 @@ async function runChatCompletionCheck(options, bootstrap) {
       'X-Session-ID': bootstrap.defaultSessionId,
       'X-User-ID': bootstrap.defaultAuthorId,
       'X-User-Name': bootstrap.defaultAuthorName,
-      ...createAuthHeaders(bootstrap?.api?.apiKey),
+      ...createAuthHeaders(apiKey),
     },
     body: JSON.stringify({
       model: bootstrap?.runtime?.model?.id || 'companion',

@@ -4,21 +4,21 @@ This is the current runtime shape. For the component graph, start with [`docs/ar
 
 ## Canonical Runtime Model
 
-- `src/index.ts` is intentionally not a runnable monolith. It validates the runtime mode contract and exits fail-closed.
-- `src/gateway-main.ts` is the host-side process. It owns secrets, outbound network access, policy checks, SSRF defense, confirmation queues, audit logging, and gateway-backed tool execution.
-- `src/agent-main.ts` is the isolated agent process. It loads companion state, enforces startup network isolation, connects to the gateway over the Unix socket, and runs the companion loop.
-- `src/runtime.ts` still exists as the single-process `SubstrateRuntime` used for parity, tests, and historical wiring. It is no longer the primary operational entrypoint.
+- `src/app/startup/index.ts` is disabled and exits fail-closed.
+- `src/app/gateway/main.ts` is the host-side process. It owns secrets, outbound network access, policy checks, SSRF defense, confirmation queues, audit logging, gateway-backed tool execution, and the public OpenAI-compatible API edge.
+- `src/app/operator/main.ts` is the operator-plane process. It hosts Garden HTTP/UI and proxies admin traffic over the private admin transport.
+- `src/app/agent/main.ts` is the isolated agent process. It loads companion state, enforces startup network isolation, connects to the gateway over the Unix socket, and runs the companion loop plus the private admin transport.
 
 ## Composition Layer
 
 Shared runtime construction is concentrated in:
 
-- `src/bootstrap/composition.ts`
-- `src/bootstrap/parity.ts`
-- `src/bootstrap/post-turn-actions.ts`
-- `src/bootstrap/channel-runtime.ts`
+- `src/app/startup/composition/composition.ts`
+- `src/app/startup/composition/parity.ts`
+- `src/app/startup/composition/post-turn-actions.ts`
+- `src/app/startup/composition/channel-runtime.ts`
 
-Those helpers keep the split runtime and the single-process parity runtime aligned on core wiring:
+Those helpers keep the split runtime and shared wiring aligned on core wiring:
 
 - identity loading
 - session runtime
@@ -30,22 +30,22 @@ Those helpers keep the split runtime and the single-process parity runtime align
 
 ## Gateway Responsibilities
 
-`src/gateway-main.ts` builds the privileged edge:
+`src/app/gateway/main.ts` builds the privileged edge:
 
 - `GatewayServer` exposes JSON-RPC over the NDJSON Unix socket.
 - `LLMClient` and embedding creation happen on the gateway side so provider secrets stay out of the agent.
 - Gateway policy resolves filesystem scope, URL policy, SSRF checks, and approval-gated actions.
-- Optional operator surfaces live here too: ntfy notifications, confirmation queue, beads tools, vault tools, shell execution, and git-backed mutations.
+- Optional operator-facing support surfaces live here too: ntfy notifications, confirmation queue, beads tools, vault tools, shell execution, and git-backed mutations.
 - Discord, Telegram, and Wyoming host-facing adapters are started from the gateway side when enabled.
 
 ## Agent Responsibilities
 
-`src/agent-main.ts` builds the companion runtime:
+`src/app/agent/main.ts` builds the companion runtime:
 
 - loads config, owner-file state, and trust policy
 - initializes SQLite-backed companion data
 - loads the character card and prompt registry
-- composes `SessionManager`, `SubstrateAgent`, `MemoryStore`, `MemoryRetriever`, `MemoryExtractor`, `Scheduler`, and admin/API servers
+- composes `SessionManager`, `SubstrateAgent`, `MemoryStore`, `MemoryRetriever`, `MemoryExtractor`, `Scheduler`, the gateway-routed API backend, and the private admin transport
 - wires contacts, values, skills, safeguards, core memory, shards, think tools, image tools, and post-turn actions
 
 The agent talks to the gateway through `GatewayClient`, which acts as the LLM and embeddings provider inside the isolated process.
@@ -55,12 +55,14 @@ The agent talks to the gateway through `GatewayClient`, which acts as the LLM an
 ### Sessions and context
 
 - L0 session history is append-only JSONL under `sessions/`.
+- The archive/projection split is intentional: canonical archive truth stays in JSONL, while fast-search copies belong behind projection/search ports.
 - `SessionManager` handles compaction, token budgeting, continuity, internal role envelopes, and prompt-aware context assembly.
 - Session integrity can be HMAC-backed in split mode through the gateway-provided integrity provider.
 
 ### Memory
 
 - `MemoryStore` uses SQLite plus `sqlite-vec`.
+- The intended backend shape is port-driven so SQLite can remain the default while PostgreSQL or future backends swap behind `MemoryStorePort`.
 - `MemoryRetriever` combines semantic retrieval, lexical fallback, trust filtering, emotional continuity, and optional compositional reranking.
 - `MemoryExtractor` runs post-turn extraction, crash-recovery extraction, compaction extraction, and profile refresh flows.
 
@@ -68,7 +70,7 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 
 ### Identity and prompts
 
-- Character card loading and prompt composition live under `src/identity/`.
+- Character card loading and prompt composition live under `src/core/identity/`.
 - Prompt layers, prompt registry entries, north-star state, and core memory are persisted in companion-owned files.
 - Admin surfaces mutate prompt/runtime state through the JSON owner-file contract rather than through `.env`.
 
@@ -80,8 +82,8 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 
 ### Channels and voice
 
-- Channel adapters are manifest-driven and loaded through `src/runtime/channel-lifecycle.ts`.
-- Current runtime surfaces include Discord, Telegram, the OpenAI-compatible API, Garden admin, Wyoming, and PSFN/OpenHome-related adapter entries.
+- Channel adapters are manifest-driven and loaded through `src/app/startup/support/channel-lifecycle.ts`.
+- Current runtime surfaces include Discord, Telegram, the gateway-hosted OpenAI-compatible API, the operator-hosted Garden surface, Wyoming, and PSFN/OpenHome-related adapter entries.
 - Voice connectors are plugin-style STT/TTS adapters resolved from runtime settings and capability eligibility.
 
 ### Scheduler and background work
@@ -97,6 +99,16 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 - Production mode forbids overlapping mutable roots and fails closed on partial split-root configuration.
 
 The path contract is defined in `src/persistence/layout.ts` and summarized in [`docs/specifications.md`](./specifications.md).
+
+## Persistence Ports
+
+Persistence is shaped around domain ports, not raw database adapters.
+
+- L0 archive operations belong to `SessionArchivePort` and continue to use JSONL as the canonical backing format.
+- Searchable transcript mirrors and projections belong to `TranscriptProjectionPort` and `TranscriptSearchPort`.
+- Durable state that may move across SQLite or PostgreSQL belongs behind async-safe domain ports such as `MemoryStorePort`, `ContactStorePort`, `ConcernStorePort`, `PendingFollowUpStorePort`, `BehavioralPatternStorePort`, `GatewayAuditStorePort`, and `TurnRecordStorePort`.
+- Raw SQLite or PostgreSQL adapter code stays behind those ports and is not a composition-root seam.
+- Backend choice happens in composition/runtime wiring so callers only see the port contracts.
 
 ## Extension Surfaces
 

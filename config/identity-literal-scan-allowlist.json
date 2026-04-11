@@ -31,25 +31,25 @@
       "pattern": "identity-proper-name"
     },
     {
-      "path": "src/git/tools.ts",
+      "path": "src/boundary/integrations/git/tools.ts",
       "contains": "legacy psfn/ is still allowed",
       "reason": "Intentional note describing temporary legacy skills path.",
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/identity/companion-naming.ts",
+      "path": "src/core/identity/companion-naming.ts",
       "contains": "LEGACY_COMPANION_NAME = 'PSFN'",
       "reason": "Legacy companion-name migration constant.",
       "pattern": "identity-proper-name"
     },
     {
-      "path": "src/identity/companion-naming.ts",
+      "path": "src/core/identity/companion-naming.ts",
       "contains": "LEGACY_COMPANION_ID = 'psfn'",
       "reason": "Legacy companion-id migration constant.",
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/identity/companion-naming.ts",
+      "path": "src/core/identity/companion-naming.ts",
       "contains": "LEGACY_COMPANION_SKILLS_DIRECTORY = 'psfn/skills'",
       "reason": "Legacy skills directory migration constant.",
       "pattern": "identity-legacy-slug"
@@ -59,6 +59,354 @@
       "contains": "LEGACY_BOOTSTRAP_NAME = 'PSFN'",
       "reason": "Legacy bootstrap identity migration marker.",
       "pattern": "identity-proper-name"
+    },
+    {
+      "path": "admin-ui/src/routes/settings/+page.svelte",
+      "contains": "/mnt/ai/psfn-bak",
+      "reason": "Project-owned backup mirror placeholder path in settings UI.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/check-dependency-cycles.mjs",
+      "contains": "PSFN-",
+      "reason": "Project bead IDs use the PSFN prefix in remediation guidance.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "scripts/import-discord-export-l0.ts",
+      "contains": "PSFN",
+      "reason": "CLI help names the target PSFN session export format.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "scripts/import-voxta-l0.ts",
+      "contains": "PSFN",
+      "reason": "CLI help names the target PSFN session export format.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "scripts/import-voxta-l0.ts",
+      "contains": "psfn",
+      "reason": "Default importer DB path uses the project-owned psfn database name.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/ops/continuity-watchdog-healthcheck.mjs",
+      "contains": "psfn",
+      "reason": "Watchdog state file uses the project slug in its filename.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/ops/continuity-watchdog-smoke.mjs",
+      "contains": "psfn",
+      "reason": "Watchdog smoke temp directories use the project slug in their prefix.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-agent-docker-isolation.mjs",
+      "contains": "psfn",
+      "reason": "Docker isolation verification references project-owned service and network names.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/e2e/e2e-test.ts",
+      "contains": "PSFN",
+      "reason": "E2E banner text identifies the project under test.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/app/e2e/e2e-test.ts",
+      "contains": "psfn",
+      "reason": "E2E temp directory prefix uses the project slug.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/e2e/e2e-voice-roundtrip.ts",
+      "contains": "PSFN",
+      "reason": "Voice roundtrip walkthrough text identifies the project runtime under test.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/app/e2e/e2e-voice-roundtrip.ts",
+      "contains": "psfn",
+      "reason": "Voice roundtrip temp directory prefix uses the project slug.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/e2e/e2e-walkthrough.ts",
+      "contains": "PSFN",
+      "reason": "Walkthrough text refers to the project framework by name.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/app/e2e/e2e-wyoming-roundtrip.ts",
+      "contains": "psfn",
+      "reason": "Wyoming smoke resources use the project slug in their names.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/startup/composition/channel-runtime.ts",
+      "contains": "PSFN",
+      "reason": "Startup channel wiring includes the PSFN Amica channel label.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/app/startup/composition/channel-runtime.ts",
+      "contains": "psfn-amica",
+      "reason": "Startup channel wiring preserves the psfn-amica external channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/startup/support/operator-alerts.ts",
+      "contains": "PSFN",
+      "reason": "Operator alerts use the configured default companion name placeholder.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/boundary/gateway/bootstrap-input.ts",
+      "contains": "/run/psfn/gateway.sock",
+      "reason": "Gateway bootstrap keeps the project-owned default socket path.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/ntfy-notifier.ts",
+      "contains": "PSFN",
+      "reason": "Approval notifications use project-branded operator titles.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/boundary/gateway/postgres-audit.ts",
+      "contains": "applicationName: options.applicationName ?? 'psfn-gateway-audit'",
+      "reason": "Gateway audit persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/integrations/beads/tools.ts",
+      "contains": "PSFN-",
+      "reason": "Beads tool docs use PSFN-prefixed issue ID examples.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/api/external-channel-claim.ts",
+      "contains": "PSFN",
+      "reason": "External claim validation documents PSFN-specific headers and channel semantics.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/api/external-channel-claim.ts",
+      "contains": "psfn",
+      "reason": "External claim validation preserves psfn-amica compatibility and PSFN header names.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/agent-backend.ts",
+      "contains": "if (channelType === 'psfn-amica') {",
+      "reason": "Agent backend preserves the psfn-amica external channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/agent-backend.ts",
+      "contains": "PSFN Amica claims require a canonical contact mapping",
+      "reason": "Agent backend errors intentionally name PSFN Amica claim requirements.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/api/agent-backend.ts",
+      "contains": "PSFN Amica claims require a configured channel privacy level",
+      "reason": "Agent backend errors intentionally name PSFN Amica claim requirements.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/api/http-policy.ts",
+      "contains": "X-PSFN",
+      "reason": "HTTP policy intentionally recognizes PSFN-scoped transport headers.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/api/http-policy.ts",
+      "contains": "psfn+same-request-host://",
+      "reason": "HTTP policy uses a project-scoped same-request-host origin token prefix.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/response-format.ts",
+      "contains": "psfn",
+      "reason": "OpenAI-style response metadata preserves the project-owned owner slug.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server.ts",
+      "contains": "PSFN",
+      "reason": "API runtime errors document PSFN Amica claim handling.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/api/server.ts",
+      "contains": "psfn-amica",
+      "reason": "API runtime preserves the psfn-amica external channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/backplane/config.ts",
+      "contains": "psfn-amica",
+      "reason": "Channel config keeps the psfn-amica default identity map key.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/intention/appraisal.ts",
+      "contains": "psfn-amica",
+      "reason": "Intention appraisal logic recognizes the psfn-amica channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/contacts/postgres-adapter.ts",
+      "contains": "application_name: options.applicationName ?? 'psfn-contacts'",
+      "reason": "Contacts persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/intention/postgres-adapters.ts",
+      "contains": "const CHANNEL_TYPES = ['terminal', 'api', 'discord', 'telegram', 'psfn-amica'] as const;",
+      "reason": "Intention persistence preserves the psfn-amica external channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/intention/postgres-adapters.ts",
+      "contains": "function normalizeChannelType(value: string): 'terminal' | 'api' | 'discord' | 'telegram' | 'psfn-amica' {",
+      "reason": "Intention persistence preserves the psfn-amica external channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/intention/postgres-adapters.ts",
+      "contains": "return value as 'terminal' | 'api' | 'discord' | 'telegram' | 'psfn-amica';",
+      "reason": "Intention persistence preserves the psfn-amica external channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/intention/postgres-adapters.ts",
+      "contains": "applicationName: options.applicationName ?? 'psfn-intention'",
+      "reason": "Intention persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/intention/pending-follow-ups.ts",
+      "contains": "psfn-amica",
+      "reason": "Pending follow-up persistence preserves the psfn-amica channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/self-model/state.ts",
+      "contains": "psfn-amica",
+      "reason": "Self-model state normalization preserves the psfn-amica channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/scheduler/schedule-tool.ts",
+      "contains": "case 'psfn-amica':",
+      "reason": "Scheduler follow-up tooling preserves the psfn-amica external channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/scheduler/schedule-tool.ts",
+      "contains": "Type.Literal('psfn-amica')",
+      "reason": "Scheduler follow-up tooling preserves the psfn-amica external channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/memory/postgres-store.ts",
+      "contains": "applicationName: 'psfn-memory'",
+      "reason": "Memory persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/backups/config.ts",
+      "contains": "/mnt/ai/psfn-bak",
+      "reason": "Backup config retains the project-owned default mirror directory.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/backups/service.ts",
+      "contains": "psfn-backup-restore-",
+      "reason": "Backup restore scratch directories use the project slug in their prefix.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/importers/profile-attribution.ts",
+      "contains": "psfn.db",
+      "reason": "Profile attribution importer defaults to the project-owned database filename.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/layout.ts",
+      "contains": "PSFN runtime layout mode",
+      "reason": "Layout errors refer to the project runtime mode by name.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/persistence/layout.ts",
+      "contains": "return join(workspacePath, '.psfn');",
+      "reason": "Managed workspace lifecycle state lives under a project-scoped hidden directory.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres.ts",
+      "contains": "application_name: options.applicationName ?? 'psfn-framework'",
+      "reason": "Shared PostgreSQL pool creation uses a project-scoped application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/migrations.ts",
+      "contains": "CHECK (channel_type IN ('terminal', 'api', 'discord', 'telegram', 'psfn-amica'))",
+      "reason": "PostgreSQL intention schema preserves the psfn-amica external channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/reflections/postgres-mirror.ts",
+      "contains": "applicationName: 'psfn-reflections'",
+      "reason": "Reflection persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/sessions/postgres-adapters.ts",
+      "contains": "applicationName: options.applicationName ?? 'psfn-session-search'",
+      "reason": "Session search persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/runtime.ts",
+      "contains": "psfn-amica",
+      "reason": "Runtime contracts preserve the psfn-amica channel/source enum values.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/event-bus.ts",
+      "contains": "psfn-amica",
+      "reason": "Event bus contracts preserve the psfn-amica channel type.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/system/capabilities/safeguards.ts",
+      "contains": "psfn.safeguardToolMeta",
+      "reason": "Safeguard metadata symbol uses a project-scoped namespace string.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/system/security/policy-constants.ts",
+      "contains": "/run/psfn/gateway.sock",
+      "reason": "Security policy constants preserve the project-owned default gateway socket path.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/test-support/postgres-test-harness.ts",
+      "contains": "applicationName: 'psfn-memory-test'",
+      "reason": "PostgreSQL test harness uses project-scoped application_name labels for connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/test-support/postgres-test-harness.ts",
+      "contains": "applicationName: 'psfn-memory-test-admin'",
+      "reason": "PostgreSQL test harness uses project-scoped application_name labels for connection attribution.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

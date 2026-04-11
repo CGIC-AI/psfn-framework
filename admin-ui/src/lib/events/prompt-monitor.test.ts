@@ -109,10 +109,36 @@ function buildTurn(seed: {
         scratchpadContext: 'Scratchpad block',
         assembledPrompt: 'Assembled prompt',
         finalSystemPrompt: 'Final system prompt',
+        currentTurnInput: 'hello',
         messages: [
           { role: 'user', content: 'hello' },
           { role: 'assistant', content: 'world' },
         ],
+        providerObservability: {
+          routeKind: 'registered_model',
+          requestedProvider: 'test',
+          requestedModel: 'test-model',
+          backendProvider: 'test',
+          backendModel: 'test-model',
+          backendApi: 'openai-completions',
+          systemRole: {
+            transport: 'openai_system',
+            supportsSystemRole: true,
+            supportsDeveloperRole: false,
+            usesOutOfBandSystemPrompt: false,
+          },
+          providerWireMessages: [
+            { role: 'system', source: 'system_prompt', content: 'Final system prompt' },
+            { role: 'user', source: 'message', content: 'hello' },
+          ],
+        },
+        response: {
+          content: 'world',
+          reasoning: 'straight shot',
+          model: 'test-model',
+          stopReason: 'stop',
+          toolCallCount: 0,
+        },
       },
       toolContext: {
         activeTools: [
@@ -232,10 +258,35 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
           scratchpadContext: 'Live scratchpad block',
           assembledPrompt: 'Live assembled prompt',
           finalSystemPrompt: 'Live final system prompt',
+          currentTurnInput: 'live user input',
           messages: [
             { role: 'user', content: 'earlier' },
             { role: 'assistant', content: 'reply' },
           ],
+          providerObservability: {
+            routeKind: 'configured_litellm_proxy',
+            requestedProvider: 'openrouter',
+            requestedModel: 'openrouter/live',
+            backendProvider: 'litellm',
+            backendModel: 'openrouter/live',
+            backendApi: 'openai-responses',
+            systemRole: {
+              transport: 'openai_developer',
+              supportsSystemRole: true,
+              supportsDeveloperRole: true,
+              usesOutOfBandSystemPrompt: false,
+            },
+            providerWireMessages: [
+              { role: 'developer', source: 'system_prompt', content: 'Live final system prompt' },
+              { role: 'user', source: 'message', content: 'earlier' },
+            ],
+          },
+          response: {
+            content: 'reply',
+            reasoning: 'live reasoning',
+            model: 'openrouter/live',
+            stopReason: 'stop',
+          },
         },
         toolContext: {
           activeTools: [
@@ -303,10 +354,21 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
   assert.equal(metrics.promptVersionPointer, 'prompt-live');
   assert.equal(metrics.isComplete, false);
   assert.equal(mergedStages[0]?.snapshot?.promptContext?.finalSystemPrompt, 'Live final system prompt');
+  assert.equal(mergedStages[0]?.snapshot?.promptContext?.currentTurnInput, 'live user input');
   assert.deepEqual(mergedStages[0]?.snapshot?.promptContext?.messages, [
     { role: 'user', content: 'earlier' },
     { role: 'assistant', content: 'reply' },
   ]);
+  assert.deepEqual(mergedStages[0]?.snapshot?.promptContext?.providerObservability?.providerWireMessages, [
+    { role: 'developer', source: 'system_prompt', content: 'Live final system prompt' },
+    { role: 'user', source: 'message', content: 'earlier' },
+  ]);
+  assert.deepEqual(mergedStages[0]?.snapshot?.promptContext?.response, {
+    content: 'reply',
+    reasoning: 'live reasoning',
+    model: 'openrouter/live',
+    stopReason: 'stop',
+  });
   assert.deepEqual(mergedStages[0]?.snapshot?.toolContext?.activeTools, [
     {
       name: 'session_list',

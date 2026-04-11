@@ -10,7 +10,6 @@ PSFN is a TypeScript runtime for long-lived AI companions.
 
 The codebase currently supports:
 
-- direct single-process runtime entrypoints
 - split gateway/agent runtime with policy enforcement
 - persistent session and memory systems
 - trust-aware privacy and contact modeling
@@ -23,10 +22,9 @@ The codebase currently supports:
 When checking behavior, prefer this order:
 
 1. Runtime entrypoints and composition
-   - `src/index.ts`
-   - `src/runtime.ts`
-   - `src/gateway-main.ts`
-   - `src/agent-main.ts`
+   - `src/app/startup/index.ts`
+   - `src/app/gateway/main.ts`
+   - `src/app/agent/main.ts`
    - `src/bootstrap/composition.ts`
    - `src/bootstrap/parity.ts`
 2. Config and persistence contracts
@@ -50,7 +48,6 @@ When checking behavior, prefer this order:
 ## Runtime Entry Points
 
 ```bash
-npm run dev                 # split launcher (gateway + agent)
 npm run split               # same launcher, explicit name
 npm run gateway             # gateway only
 npm run agent               # agent only
@@ -61,10 +58,9 @@ npm run agent:docker:continuous
 
 Entry point roles:
 
-- `src/index.ts`: direct single-process runtime entrypoint with dotenv
-- `src/gateway-main.ts`: host-side gateway holding secrets and external egress
-- `src/agent-main.ts`: isolated agent process, no dotenv import, gateway-backed providers
-- `src/runtime.ts`: single-process `SubstrateRuntime`
+- `src/app/startup/index.ts`: disabled fail-closed entrypoint with dotenv
+- `src/app/gateway/main.ts`: host-side gateway holding secrets and external egress
+- `src/app/agent/main.ts`: isolated agent process, no dotenv import, gateway-backed providers
 
 ## Configuration And Persistence Model
 
@@ -154,7 +150,7 @@ src/
 ### Persistence and layout
 
 - system-owned state lives under `system-data`; companion artifacts live under `companion-data`; cutover helpers and path guards enforce the topology
-- key files: `src/persistence/layout.ts`, `src/migrate-persistence-layout.ts`, `src/config/runtime-config.ts`, `src/runtime/bootstrap-helpers.ts`
+- key files: `src/persistence/layout.ts`, `src/app/maintenance/migrate-persistence-layout.ts`, `src/config/runtime-config.ts`, `src/runtime/bootstrap-helpers.ts`
 
 ### Cognition and context
 
@@ -214,8 +210,7 @@ Main wiring locations:
 
 - `src/bootstrap/composition.ts`
 - `src/bootstrap/parity.ts`
-- `src/runtime.ts`
-- `src/agent-main.ts`
+- `src/app/agent/main.ts`
 
 ## Validation Commands
 

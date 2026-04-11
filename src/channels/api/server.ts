@@ -7,60 +7,58 @@ import { randomUUID } from 'node:crypto';
 import type { Duplex } from 'node:stream';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
+import type { ChannelType, MessageModelOverride, MessagePromptOverride, MessageRoutingMetadata, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
+import {
+  createEventBusSensorIngestPort,
+  type SensorIngestPort,
+} from '../../shared/telemetry/sensor-ingest-port.js';
+import type { SessionManager } from '../../core/session/manager.js';
+import { isChannelVisibility, type ChannelVisibility } from '../../system/trust/types.js';
 import type {
-  ChannelType,
-  MessageModelOverride,
-  MessagePromptOverride,
-  MessageRoutingMetadata,
-  ResponseStyle,
-  SubstrateMessage,
-} from '../../types.js';
-import type { ContactStore } from '../../contacts/store.js';
-import type { SubstrateAgent } from '../../agent/substrate-agent.js';
-import type { EventBus, ExternalTelemetryEvent } from '../../event-bus.js';
-import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
-import type { SessionManager } from '../../session/manager.js';
-import { isChannelVisibility, type ChannelVisibility } from '../../trust/types.js';
-import type {
-  ChannelAdapter,
+  ChannelAdapterPort,
   ChannelCapabilities,
   ChannelConfigAdapter,
   ChannelGatewayAdapter,
   ChannelOutboundAdapter,
   ChannelPromptAdapter,
   OutboundContext,
-} from '../types.js';
+} from '../backplane/types.js';
 import type {
   ApiContinuityWatchdogCheck,
   ApiHealthResponse,
   ApiHealthSubsystem,
   ApiHealthSubsystemStatus,
+  ApiRuntimeChatRequest,
   ApiServerHealthChecks,
+  ApiServerRuntime,
   ChatCompletionRequest,
   ChatCompletionChunk,
   TelemetryIngestRequest,
   TelemetryIngestResponse,
 } from './types.js';
 import { API_CONTINUITY_WATCHDOG_CHECKS, API_HEALTH_SUBSYSTEMS } from './types.js';
-import { createComponentLogger } from '../../logger.js';
-import { type ApiAuthPrincipal } from '../http/auth.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import { type ApiAuthPrincipal } from '../backplane/http/auth.js';
 import {
   ApiVoiceWebSocketAdapter,
   type VoiceWebSocketRuntime,
   type VoiceWebSocketRuntimeHooks,
 } from './voice-websocket.js';
-import { toErrorMessage } from '../../utils/errors.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   readJsonBodyWithLimit,
   sendEmpty,
   sendJson,
-} from '../http/primitives.js';
+} from '../backplane/http/primitives.js';
 import {
   type FifoChannelLease,
   FifoChannelLock,
   emitTurnContentionTelemetry,
   isBusyTurnError,
-} from '../../lifecycle/turn-contention.js';
+} from '../../system/lifecycle/turn-contention.js';
 import {
   clampHttpHeader as clampHeaderValue,
   corsAllowlistIsEmpty,
@@ -83,12 +81,13 @@ import {
   formatSseDoneEvent,
 } from './response-format.js';
 import { resolveApiTurnIdentity } from './external-channel-claim.js';
-import type { ExternalChannelProfileConfig } from '../config.js';
+import type { ExternalChannelProfileConfig } from '../backplane/config.js';
+import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 
 const log = createComponentLogger('ApiServer');
 const MAX_BODY_SIZE = 1_048_576; // 1MB
 const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 90_000;
-const DEFAULT_SCHEDULER_HEARTBEAT_STALE_AFTER_MS = 65 * 60_000;
+const DEFAULT_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS = 65 * 60_000;
 const TELEMETRY_MAX_SKEW_MS = 5 * 60_000;
 const TELEMETRY_NONCE_TTL_MS = 10 * 60_000;
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
@@ -119,6 +118,20 @@ class RequestLifecycleError extends Error {
   }
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (error?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 const telemetryIngestSchema = Type.Object({
   source: Type.String({ minLength: 1, maxLength: 128 }),
   eventType: Type.String({ minLength: 1, maxLength: 128 }),
@@ -134,6 +147,7 @@ type AgentTurnResult = Awaited<ReturnType<SubstrateAgent['handleMessage']>>;
 
 interface PendingTurn {
   channelId: string;
+  wasQueued: boolean;
   releaseChannel: () => void;
   substrateMsg: SubstrateMessage;
 }
@@ -141,6 +155,11 @@ interface PendingTurn {
 interface PreparedTurn {
   channelId: string;
   turnPromise: Promise<AgentTurnResult>;
+}
+
+interface AcquiredChannel {
+  wasQueued: boolean;
+  releaseChannel: () => void;
 }
 
 interface TurnRoutingOverrides {
@@ -174,7 +193,8 @@ export interface ApiServerConfig {
   agentLoop: SubstrateAgent;
   eventBus: EventBus;
   sessionManager: SessionManager;
-  contactStore?: ContactStore;
+  companionId?: string;
+  contactStore?: ContactStorePort;
   apiKey?: string;
   adminToken?: string;
   modelName?: string;
@@ -182,14 +202,16 @@ export interface ApiServerConfig {
   voiceWebSocketPath?: string;
   voiceWebSocketRuntime?: VoiceWebSocketRuntime;
   voiceWebSocketHooks?: VoiceWebSocketRuntimeHooks;
+  runtime?: ApiServerRuntime;
   allowInsecureWithoutAuth?: boolean;
   corsAllowedOrigins?: string[];
   healthChecks?: ApiServerHealthChecks;
-  schedulerHeartbeatStaleAfterMs?: number;
+  schedulerHealthcheckStaleAfterMs?: number;
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
+  sensorIngest?: SensorIngestPort;
 }
 
-export class ApiServer implements ChannelAdapter {
+export class ApiServer implements ChannelAdapterPort {
   readonly id = 'api';
   readonly name = this.id;
   readonly meta = {
@@ -214,8 +236,10 @@ export class ApiServer implements ChannelAdapter {
   private host: string;
   private agentLoop: SubstrateAgent;
   private eventBus: EventBus;
+  private sensorIngest: SensorIngestPort;
   private sessionManager: SessionManager;
-  private contactStore: ContactStore | null;
+  private contactStore: ContactStorePort | null;
+  private runtime: ApiServerRuntime | null;
   private apiKey?: string;
   private adminToken?: string;
   private allowInsecureWithoutAuth: boolean;
@@ -227,34 +251,36 @@ export class ApiServer implements ChannelAdapter {
   private processingChannels = new Set<string>();
   private voiceWebSocket: ApiVoiceWebSocketAdapter;
   private healthChecks: ApiServerHealthChecks;
-  private schedulerHeartbeatStaleAfterMs: number;
+  private schedulerHealthcheckStaleAfterMs: number;
   private externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
-  private lastSchedulerHeartbeatAtMs: number | null = null;
-  private unregisterSchedulerHeartbeat: (() => void) | null = null;
+  private lastSchedulerHealthcheckAtMs: number | null = null;
+  private unregisterSchedulerHealthcheck: (() => void) | null = null;
 
   constructor(config: ApiServerConfig) {
     this.port = config.port;
     this.host = config.host ?? '127.0.0.1';
     this.agentLoop = config.agentLoop;
     this.eventBus = config.eventBus;
+    this.sensorIngest = config.sensorIngest ?? createEventBusSensorIngestPort(this.eventBus);
     this.sessionManager = config.sessionManager;
     this.contactStore = config.contactStore ?? null;
+    this.runtime = config.runtime ?? null;
     this.apiKey = clampHeaderValue(config.apiKey, 512);
     this.adminToken = clampHeaderValue(config.adminToken, 512);
     this.allowInsecureWithoutAuth = config.allowInsecureWithoutAuth === true;
     this.corsAllowedOrigins = normalizeCorsAllowedOrigins(config.corsAllowedOrigins);
-    this.modelName = config.modelName ?? DEFAULT_COMPANION_ID;
+    this.modelName = config.modelName ?? resolveCompanionIdFromConfig(config);
     this.requestTimeoutMs = this.parseTimeoutMs(config.requestTimeoutMs);
     this.healthChecks = config.healthChecks ?? {};
-    this.schedulerHeartbeatStaleAfterMs = this.parseSchedulerHeartbeatStaleAfterMs(
-      config.schedulerHeartbeatStaleAfterMs,
+    this.schedulerHealthcheckStaleAfterMs = this.parseSchedulerHealthcheckStaleAfterMs(
+      config.schedulerHealthcheckStaleAfterMs,
     );
     this.externalChannelProfiles = config.externalChannelProfiles ?? {};
-    this.unregisterSchedulerHeartbeat = this.eventBus.on('schedule.heartbeat', ({ timestamp }) => {
+    this.unregisterSchedulerHealthcheck = this.eventBus.on('schedule.healthcheck', ({ timestamp }) => {
       if (Number.isFinite(timestamp) && timestamp > 0) {
-        this.lastSchedulerHeartbeatAtMs = Math.floor(timestamp);
+        this.lastSchedulerHealthcheckAtMs = Math.floor(timestamp);
       } else {
-        this.lastSchedulerHeartbeatAtMs = Date.now();
+        this.lastSchedulerHealthcheckAtMs = Date.now();
       }
     });
     this.voiceWebSocket = new ApiVoiceWebSocketAdapter({
@@ -340,8 +366,8 @@ export class ApiServer implements ChannelAdapter {
   }
 
   async stop(): Promise<void> {
-    this.unregisterSchedulerHeartbeat?.();
-    this.unregisterSchedulerHeartbeat = null;
+    this.unregisterSchedulerHealthcheck?.();
+    this.unregisterSchedulerHealthcheck = null;
     await this.voiceWebSocket.stop();
     return new Promise((resolve, reject) => {
       this.server.close((err) => {
@@ -366,12 +392,12 @@ export class ApiServer implements ChannelAdapter {
     return Math.floor(value);
   }
 
-  private parseSchedulerHeartbeatStaleAfterMs(value: number | undefined): number {
+  private parseSchedulerHealthcheckStaleAfterMs(value: number | undefined): number {
     if (value !== undefined && Number.isFinite(value) && value >= 1_000) {
       return Math.floor(value);
     }
 
-    const envValue = process.env.API_HEALTH_SCHEDULER_HEARTBEAT_STALE_AFTER_MS;
+    const envValue = process.env.API_HEALTH_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS;
     if (envValue) {
       const parsed = Number.parseInt(envValue, 10);
       if (Number.isFinite(parsed) && parsed >= 1_000) {
@@ -379,7 +405,7 @@ export class ApiServer implements ChannelAdapter {
       }
     }
 
-    return DEFAULT_SCHEDULER_HEARTBEAT_STALE_AFTER_MS;
+    return DEFAULT_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS;
   }
 
   private applyCorsPolicy(req: IncomingMessage, res: ServerResponse): boolean {
@@ -469,7 +495,7 @@ export class ApiServer implements ChannelAdapter {
     channelId: string,
     req: IncomingMessage,
     res: ServerResponse,
-  ): Promise<(() => void) | null> {
+  ): Promise<AcquiredChannel | null> {
     const queued = this.channelTurnLock.acquire(channelId);
     if (queued.contended) {
       this.emitQueueTelemetry(channelId, 'contended', {
@@ -501,15 +527,18 @@ export class ApiServer implements ChannelAdapter {
     });
 
     let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      lease.release();
-      this.processingChannels.delete(channelId);
-      this.emitQueueTelemetry(channelId, 'released', {
-        queueDepth: this.channelTurnLock.pending(channelId),
-        waitMs: Math.max(0, Date.now() - lockStartMs),
-      });
+    return {
+      wasQueued: queued.contended,
+      releaseChannel: () => {
+        if (released) return;
+        released = true;
+        lease.release();
+        this.processingChannels.delete(channelId);
+        this.emitQueueTelemetry(channelId, 'released', {
+          queueDepth: this.channelTurnLock.pending(channelId),
+          waitMs: Math.max(0, Date.now() - lockStartMs),
+        });
+      },
     };
   }
 
@@ -582,6 +611,68 @@ export class ApiServer implements ChannelAdapter {
     }
   }
 
+  private async awaitRuntimeOrInterrupt<T>(
+    req: IncomingMessage,
+    res: ServerResponse,
+    operation: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    const controller = new AbortController();
+    let settled = false;
+    let cleanup: () => void = () => {};
+
+    const interruptionPromise = new Promise<never>((_, reject) => {
+      const fail = (reason: LifecycleInterrupt) => {
+        if (settled) return;
+        settled = true;
+        controller.abort();
+        reject(new RequestLifecycleError(reason));
+      };
+
+      const onAborted = () => fail('client_disconnected');
+      const onClose = () => {
+        if (res.writableEnded) return;
+        fail('client_disconnected');
+      };
+
+      req.once('aborted', onAborted);
+      res.once('close', onClose);
+      const timer = setTimeout(() => fail('timeout'), this.requestTimeoutMs);
+      cleanup = () => {
+        req.off('aborted', onAborted);
+        res.off('close', onClose);
+        clearTimeout(timer);
+      };
+    });
+
+    try {
+      const result = await Promise.race([operation(controller.signal), interruptionPromise]);
+      settled = true;
+      return result;
+    } finally {
+      settled = true;
+      cleanup();
+    }
+  }
+
+  private extractRpcHeaders(req: IncomingMessage): ApiRuntimeChatRequest['headers'] {
+    const headers: ApiRuntimeChatRequest['headers'] = {};
+    for (const [name, value] of Object.entries(req.headers)) {
+      headers[name] = this.singleHeader(value);
+    }
+    return headers;
+  }
+
+  private sendRuntimeError(
+    res: ServerResponse,
+    status: number,
+    type: string,
+    message: string,
+    details?: Record<string, unknown>,
+  ): void {
+    if (!this.canWriteResponse(res)) return;
+    this.sendError(res, status, type, message, details);
+  }
+
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     if (!this.applyCorsPolicy(req, res)) return;
 
@@ -635,6 +726,12 @@ export class ApiServer implements ChannelAdapter {
   }
 
   private async handleHealth(res: ServerResponse): Promise<void> {
+    if (this.runtime) {
+      const body = await this.runtime.handleHealth();
+      sendJson(res, body.status === 'healthy' ? 200 : 503, body);
+      return;
+    }
+
     const subsystemEntries = await Promise.all(
       API_HEALTH_SUBSYSTEMS.map(async (subsystem) => {
         const status = await this.evaluateSubsystemHealth(subsystem);
@@ -679,7 +776,7 @@ export class ApiServer implements ChannelAdapter {
         'Database-backed memory subsystem is degraded',
       ),
       gatewayLink: this.evaluateGatewayLinkHealth(subsystems),
-      schedulerHeartbeat: this.evaluateSchedulerHeartbeatHealth(subsystems.scheduler, checkedAtMs),
+      schedulerHealthcheck: this.evaluateSchedulerHealthcheckHealth(subsystems.scheduler, checkedAtMs),
     };
 
     const status: ApiHealthResponse['continuity']['status'] = API_CONTINUITY_WATCHDOG_CHECKS.every(
@@ -742,27 +839,27 @@ export class ApiServer implements ChannelAdapter {
     };
   }
 
-  private evaluateSchedulerHeartbeatHealth(
+  private evaluateSchedulerHealthcheckHealth(
     schedulerSubsystem: ApiHealthSubsystemStatus,
     checkedAtMs: number,
   ): ApiHealthSubsystemStatus {
     const schedulerDetail = schedulerSubsystem.detail?.trim();
-    const heartbeatObservedAtMs = this.lastSchedulerHeartbeatAtMs;
+    const healthcheckObservedAtMs = this.lastSchedulerHealthcheckAtMs;
     const uptimeMs = Math.max(0, Math.floor(process.uptime() * 1_000));
-    const heartbeatAgeMs = heartbeatObservedAtMs === null
+    const healthcheckAgeMs = healthcheckObservedAtMs === null
       ? null
-      : Math.max(0, checkedAtMs - heartbeatObservedAtMs);
+      : Math.max(0, checkedAtMs - healthcheckObservedAtMs);
 
     const baseMeta: Record<string, unknown> = {
       ...(schedulerSubsystem.meta ?? {}),
       sourceSubsystem: 'scheduler',
-      schedulerHeartbeatStaleAfterMs: this.schedulerHeartbeatStaleAfterMs,
-      ...(heartbeatObservedAtMs === null
-        ? { heartbeatObserved: false }
+      schedulerHealthcheckStaleAfterMs: this.schedulerHealthcheckStaleAfterMs,
+      ...(healthcheckObservedAtMs === null
+        ? { healthcheckObserved: false }
         : {
-          heartbeatObserved: true,
-          schedulerHeartbeatAt: new Date(heartbeatObservedAtMs).toISOString(),
-          schedulerHeartbeatAgeMs: heartbeatAgeMs,
+          healthcheckObserved: true,
+          schedulerHealthcheckAt: new Date(healthcheckObservedAtMs).toISOString(),
+          schedulerHealthcheckAgeMs: healthcheckAgeMs,
         }),
     };
 
@@ -774,30 +871,30 @@ export class ApiServer implements ChannelAdapter {
       };
     }
 
-    if (heartbeatObservedAtMs === null) {
-      if (uptimeMs <= this.schedulerHeartbeatStaleAfterMs) {
+    if (healthcheckObservedAtMs === null) {
+      if (uptimeMs <= this.schedulerHealthcheckStaleAfterMs) {
         return {
           status: 'healthy',
           meta: {
             ...baseMeta,
-            schedulerHeartbeatGraceMsRemaining: Math.max(
+            schedulerHealthcheckGraceMsRemaining: Math.max(
               0,
-              this.schedulerHeartbeatStaleAfterMs - uptimeMs,
+              this.schedulerHealthcheckStaleAfterMs - uptimeMs,
             ),
           },
         };
       }
       return {
         status: 'degraded',
-        detail: `No scheduler heartbeat observed within ${this.schedulerHeartbeatStaleAfterMs}ms`,
+        detail: `No scheduler healthcheck observed within ${this.schedulerHealthcheckStaleAfterMs}ms`,
         meta: baseMeta,
       };
     }
 
-    if (heartbeatAgeMs !== null && heartbeatAgeMs > this.schedulerHeartbeatStaleAfterMs) {
+    if (healthcheckAgeMs !== null && healthcheckAgeMs > this.schedulerHealthcheckStaleAfterMs) {
       return {
         status: 'degraded',
-        detail: `Scheduler heartbeat stale: ${heartbeatAgeMs}ms since last pulse (limit ${this.schedulerHeartbeatStaleAfterMs}ms)`,
+        detail: `Scheduler healthcheck stale: ${healthcheckAgeMs}ms since last pulse (limit ${this.schedulerHealthcheckStaleAfterMs}ms)`,
         meta: baseMeta,
       };
     }
@@ -1008,12 +1105,28 @@ export class ApiServer implements ChannelAdapter {
       scope: telemetry.scope,
     };
 
-    await this.eventBus.emit('external.telemetry.ingested', { event: normalizedEvent });
+    if (this.runtime) {
+      const result = await this.runtime.handleTelemetryIngest(normalizedEvent);
+      if (!result.ok) {
+        this.sendRuntimeError(
+          res,
+          result.error.status,
+          result.error.type,
+          result.error.message,
+          result.error.details,
+        );
+        return;
+      }
+      sendJson(res, 202, result.response);
+      return;
+    }
+
+    const receipt = await this.sensorIngest.ingestTelemetry(normalizedEvent);
 
     const response: TelemetryIngestResponse = {
       ok: true,
-      id: normalizedEvent.id,
-      acceptedEventType: normalizedEvent.eventType,
+      id: receipt.id,
+      acceptedEventType: receipt.acceptedEventType,
     };
     sendJson(res, 202, response);
   }
@@ -1346,11 +1459,11 @@ export class ApiServer implements ChannelAdapter {
     };
   }
 
-  private enforceIdentityClaim(
+  private async enforceIdentityClaim(
     req: IncomingMessage,
     res: ServerResponse,
     authorId: string,
-  ): boolean {
+  ): Promise<boolean> {
     const claim = this.readIdentityClaimHeaders(req);
     if (!claim) return true;
 
@@ -1375,7 +1488,7 @@ export class ApiServer implements ChannelAdapter {
     }
 
     const hasCompleteVerificationHeaders = Boolean(claim.nonce && claim.expiresAt && claim.signature);
-    const existingApiIdentity = this.contactStore.getByChannelIdentity('api', authorId);
+    const existingApiIdentity = await this.contactStore.getByChannelIdentity('api', authorId);
     if (existingApiIdentity?.id === claim.canonicalContactId && !hasCompleteVerificationHeaders) {
       return true;
     }
@@ -1391,7 +1504,7 @@ export class ApiServer implements ChannelAdapter {
 
     const requiresChallenge = !claim.nonce || !claim.expiresAt || !claim.signature;
     if (requiresChallenge) {
-      const challengeResult = this.contactStore.createIdentityLinkChallenge({
+      const challengeResult = await this.contactStore.createIdentityLinkChallenge({
         contactId: claim.canonicalContactId,
         sourceChannel: claim.sourceChannel,
         sourceUserId: claim.sourceUserId,
@@ -1453,7 +1566,7 @@ export class ApiServer implements ChannelAdapter {
       return false;
     }
 
-    const verificationResult = this.contactStore.verifyIdentityLinkChallenge({
+    const verificationResult = await this.contactStore.verifyIdentityLinkChallenge({
       contactId: claim.canonicalContactId,
       sourceChannel: claim.sourceChannel,
       sourceUserId: claim.sourceUserId,
@@ -1563,7 +1676,7 @@ export class ApiServer implements ChannelAdapter {
       channelPrivacy: claimedChannelPrivacy,
       canonicalContactId: claimedCanonicalContactId,
     } = turnIdentity.value;
-    if (!this.enforceIdentityClaim(req, res, authorId)) {
+    if (!(await this.enforceIdentityClaim(req, res, authorId))) {
       return null;
     }
 
@@ -1605,15 +1718,64 @@ export class ApiServer implements ChannelAdapter {
       channelPrivacy: resolvedChannelPrivacy,
       canonicalContactId,
     });
+
+    const acquiredChannel = await this.acquireChannel(channelId, req, res);
+    if (!acquiredChannel) return null;
+
     this.seedSession(channelId, request.messages, authorId, authorName, resolvedChannelPrivacy);
 
-    const releaseChannel = await this.acquireChannel(channelId, req, res);
-    if (!releaseChannel) return null;
-
-    return { channelId, releaseChannel, substrateMsg };
+    return {
+      channelId,
+      wasQueued: acquiredChannel.wasQueued,
+      releaseChannel: acquiredChannel.releaseChannel,
+      substrateMsg,
+    };
   }
 
   private beginPreparedTurn(turn: PendingTurn): PreparedTurn {
+    if (turn.wasQueued) {
+      const maybeFollowUp = (this.agentLoop as unknown as {
+        followUp?: (message: SubstrateMessage) => Promise<void> | void;
+      }).followUp;
+      if (typeof maybeFollowUp === 'function') {
+        const turnDeferred = createDeferred<AgentTurnResult>();
+        let settled = false;
+        const settle = (action: () => void) => {
+          if (settled) return;
+          settled = true;
+          unsubscribeEnd();
+          unsubscribeError();
+          action();
+        };
+        const unsubscribeEnd = this.eventBus.on('agent.turn.end', ({ message, response }) => {
+          if (message.id !== turn.substrateMsg.id) return;
+          settle(() => {
+            turnDeferred.resolve(response);
+          });
+        });
+        const unsubscribeError = this.eventBus.on('agent.error', ({ message, error }) => {
+          if (message.id !== turn.substrateMsg.id) return;
+          settle(() => {
+            turnDeferred.reject(error);
+          });
+        });
+
+        Promise.resolve()
+          .then(() => maybeFollowUp.call(this.agentLoop, turn.substrateMsg))
+          .catch((error) => {
+            settle(() => {
+              turnDeferred.reject(error);
+            });
+          });
+
+        this.attachTurnCleanup(turn.releaseChannel, turnDeferred.promise);
+        return {
+          channelId: turn.channelId,
+          turnPromise: turnDeferred.promise,
+        };
+      }
+    }
+
     const turnPromise = this.agentLoop.handleMessage(turn.substrateMsg);
     this.attachTurnCleanup(turn.releaseChannel, turnPromise);
     return {
@@ -1715,6 +1877,46 @@ export class ApiServer implements ChannelAdapter {
     res: ServerResponse,
     principal: ApiAuthPrincipal,
   ): Promise<void> {
+    if (this.runtime) {
+      try {
+        const result = await this.awaitRuntimeOrInterrupt(
+          req,
+          res,
+          (signal) => this.runtime!.handleChatCompletion({
+            request,
+            principal,
+            headers: this.extractRpcHeaders(req),
+            signal,
+          }),
+        );
+        if (!this.canWriteResponse(res)) return;
+        if (!result.ok) {
+          this.sendRuntimeError(
+            res,
+            result.error.status,
+            result.error.type,
+            result.error.message,
+            result.error.details,
+          );
+          return;
+        }
+
+        const response = buildChatCompletionResponse({
+          id: `chatcmpl-${randomUUID()}`,
+          created: Math.floor(Date.now() / 1000),
+          model: this.modelName,
+          content: result.response.content,
+          inputTokens: result.response.inputTokens,
+          outputTokens: result.response.outputTokens,
+        });
+
+        sendJson(res, 200, response);
+      } catch (err) {
+        this.handleNonStreamingTurnError(res, err);
+      }
+      return;
+    }
+
     const turn = await this.startTurn(request, req, res, principal);
     if (!turn) return;
 
@@ -1741,13 +1943,71 @@ export class ApiServer implements ChannelAdapter {
       this.handleNonStreamingTurnError(res, err);
     }
   }
-
   private async handleStreaming(
     request: ChatCompletionRequest,
     req: IncomingMessage,
     res: ServerResponse,
     principal: ApiAuthPrincipal,
   ): Promise<void> {
+    if (this.runtime) {
+      const completionId = `chatcmpl-${randomUUID()}`;
+      const created = Math.floor(Date.now() / 1000);
+
+      res.writeHead(200, SSE_RESPONSE_HEADERS);
+      const roleChunk = buildStreamingRoleChunk({
+        completionId,
+        created,
+        model: this.modelName,
+      });
+      this.writeStreamingChunk(res, roleChunk);
+
+      try {
+        const result = await this.awaitRuntimeOrInterrupt(
+          req,
+          res,
+          (signal) => this.runtime!.handleChatCompletion({
+            request,
+            principal,
+            headers: this.extractRpcHeaders(req),
+            signal,
+            onDelta: (text) => {
+              const chunk = buildStreamingContentChunk({
+                completionId,
+                created,
+                model: this.modelName,
+              }, text);
+              this.writeStreamingChunk(res, chunk);
+            },
+          }),
+        );
+        if (!this.canWriteResponse(res)) return;
+        if (!result.ok) {
+          this.writeStreamingErrorAndDone(
+            res,
+            completionId,
+            created,
+            `\n[Error: ${result.error.message}]`,
+          );
+          return;
+        }
+
+        const finishChunk = buildStreamingFinishChunk({
+          completionId,
+          created,
+          model: this.modelName,
+        });
+        this.writeStreamingChunk(res, finishChunk);
+        this.writeStreamingDone(res);
+      } catch (err) {
+        this.handleStreamingTurnError(res, err, completionId, created);
+      } finally {
+        if (this.canWriteResponse(res)) {
+          res.end();
+        }
+      }
+      return;
+    }
+
     const pendingTurn = await this.prepareTurn(request, req, res, principal);
     if (!pendingTurn) return;
 

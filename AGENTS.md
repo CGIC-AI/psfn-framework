@@ -44,14 +44,13 @@ Rules:
 Prefer these files when checking behavior:
 
 1. Runtime entrypoints and wiring
-   - `src/index.ts`
-   - `src/runtime.ts`
-   - `src/gateway-main.ts`
-   - `src/agent-main.ts`
+   - `src/app/startup/index.ts`
+   - `src/app/gateway/main.ts`
+   - `src/app/agent/main.ts`
 2. Config and ownership contracts
-   - `src/types.ts`
-   - `src/settings.ts`
-   - `src/config/settings-contract.ts`
+   - `src/shared/contracts/runtime.ts`
+   - `src/system/settings.ts`
+   - `src/system/settings/contracts.ts`
    - `src/persistence/layout.ts`
 3. Product/runtime overview and deeper design docs
    - `README.md`
@@ -217,6 +216,8 @@ Use parallel streams only when the dependency graph supports it. Prefer up to th
 - For a large multi-bead initiative, create a dedicated integration branch and keep parallel work scoped to that branch until the effort is validated.
 - Create each worktree from the integration branch and merge each completed stream back into the integration branch, not directly into the protected release branch.
 - Keep the release branch stable while the parallel effort is in flight. Merge the integration branch into the release branch only after the user or operator finishes the required manual verification.
+- For this repo, put parallel worktrees under `$HOME/ai/dev/worktrees/psfn-framework` unless the user explicitly asks for a repo-local `worktrees/` directory instead.
+- Do not scatter PSFN worktrees under sibling project-storage paths such as `/mnt/samesung/ai/psfn-worktrees`.
 
 ### Standard parallel loop
 
@@ -269,13 +270,70 @@ Required sequence:
    ```bash
    bd dolt push --json
    ```
-6. Verify the branch is up to date with origin.
-7. Clean up orchestration handles.
-8. Hand off with tests run, remaining risks, and any open beads.
+6. When a sprint or implementation wave is completed, refresh the kanban export:
+   ```bash
+   bd export > .beads/issues.jsonl
+   ```
+7. When a sprint or implementation wave is completed, run a Fallow pass and review high-signal findings:
+   ```bash
+   npx -y fallow --format json > /tmp/fallow-report.json
+   ```
+8. Verify the branch is up to date with origin.
+9. Clean up orchestration handles.
+10. Hand off with tests run, remaining risks, and any open beads.
 
 Rules:
 
 - Never stop at "ready to push". Push.
 - If push fails, resolve it and retry.
 - Keep bead state aligned with the shipped git state.
+- If a sprint or implementation wave closes tracked work, refresh `.beads/issues.jsonl` from the final bead database state before handoff.
+- Treat Fallow as sprint or implementation-wave wrap-up hygiene, not a mandatory per-change gate.
 - Do not close a worker bead before its worktree has a passing `npm run lint` result.
+
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
+## Beads Issue Tracker
+
+This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+
+### Quick Reference
+
+```bash
+bd ready              # Find available work
+bd show <id>          # View issue details
+bd update <id> --claim  # Claim work
+bd close <id>         # Complete work
+```
+
+### Rules
+
+- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
+- Run `bd prime` for detailed command reference and session close protocol
+- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+
+## Session Completion
+
+**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+**MANDATORY WORKFLOW:**
+
+1. **File issues for remaining work** - Create issues for anything that needs follow-up
+2. **Run quality gates** (if code changed) - Tests, linters, builds
+3. **Update issue status** - Close finished work, update in-progress items
+4. **PUSH TO REMOTE** - This is MANDATORY:
+   ```bash
+   git pull --rebase
+   bd dolt push
+   git push
+   git status  # MUST show "up to date with origin"
+   ```
+5. **Clean up** - Clear stashes, prune remote branches
+6. **Verify** - All changes committed AND pushed
+7. **Hand off** - Provide context for next session
+
+**CRITICAL RULES:**
+- Work is NOT complete until `git push` succeeds
+- NEVER stop before pushing - that leaves work stranded locally
+- NEVER say "ready to push when you are" - YOU must push
+- If push fails, resolve and retry until it succeeds
+<!-- END BEADS INTEGRATION -->

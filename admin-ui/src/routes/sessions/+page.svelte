@@ -1,11 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { listSessions, getSessionMessages } from '$lib/api/endpoints/sessions';
-  import type { ChannelInfo, AdminSessionMessagesData, SessionEntry } from '$lib/types';
+  import type {
+    ChannelInfo,
+    AdminSessionMessageOntologyView,
+    AdminSessionMessagesData,
+    SessionEntry,
+  } from '$lib/types';
 
   let channels = $state<ChannelInfo[]>([]);
   let selectedSessionId = $state<string | null>(null);
   let messages = $state<SessionEntry[]>([]);
+  let messageOntologyViews = $state<AdminSessionMessagesData['messageOntologyViews']>([]);
   let compactionAudits = $state<AdminSessionMessagesData['compactionAuditViews']>([]);
   let error = $state('');
   let loadingChannels = $state(true);
@@ -84,11 +90,13 @@
     selectedSessionId = sessionId;
     loadingMessages = true;
     messages = [];
+    messageOntologyViews = [];
     compactionAudits = [];
     expandedToolCall = null;
     try {
       const data = await getSessionMessages(sessionId);
       messages = data.messages;
+      messageOntologyViews = data.messageOntologyViews ?? [];
       compactionAudits = data.compactionAuditViews ?? [];
 
       // Track last activity from the most recent message timestamp.
@@ -155,6 +163,25 @@
     });
   }
 
+  function ontologyTone(ontology: AdminSessionMessageOntologyView | undefined): string {
+    if (!ontology) return 'bg-bark-200 text-shadow-700 border-bark-300';
+    switch (ontology.semanticType) {
+      case 'mirror':
+        return 'bg-sky-100 text-sky-800 border-sky-300';
+      case 'systemNote':
+        return 'bg-shadow-100 text-shadow-800 border-shadow-300';
+      case 'toolResult':
+        return 'bg-moss-100 text-moss-800 border-moss-300';
+      default:
+        return 'bg-gold-100 text-gold-800 border-gold-300';
+    }
+  }
+
+  function promptVisibilityLabel(ontology: AdminSessionMessageOntologyView | undefined): string {
+    if (!ontology) return '';
+    return ontology.promptVisibility === 'operator_only' ? 'Operator-only' : 'Prompt-visible';
+  }
+
   function channelLabel(ch: ChannelInfo): string {
     if (ch.displayLabel) return ch.displayLabel;
     return toReadableChannelLabel(ch.channelId);
@@ -216,6 +243,13 @@
   });
 
   const filteredMessages = $derived.by(() => filterMessages(messages, messageSearch));
+  const messageOntologyById = $derived.by(() => {
+    const views = new Map<number, AdminSessionMessageOntologyView>();
+    for (const view of messageOntologyViews) {
+      views.set(view.sessionEntryId, view);
+    }
+    return views;
+  });
 
   onMount(() => {
     loadChannels();
@@ -376,13 +410,29 @@
             </div>
           {:else}
             {#each filteredMessages as msg, i}
+              {@const ontology = messageOntologyById.get(msg.id)}
               <div class="rounded-lg border p-3 {roleColor(msg.role)}">
                 <div class="flex items-center justify-between mb-1">
-                  <span class="text-sm font-semibold {roleLabelColor(msg.role)}">{displayName(msg)}</span>
+                  <div class="flex items-center gap-2 min-w-0">
+                    <span class="text-sm font-semibold {roleLabelColor(msg.role)} truncate">{displayName(msg)}</span>
+                    {#if ontology}
+                      <span class="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium {ontologyTone(ontology)}">
+                        {ontology.displayLabel}
+                      </span>
+                      <span class="inline-flex items-center rounded-full border border-bark-300 bg-white/75 px-2 py-0.5 text-xs text-shadow-700">
+                        {promptVisibilityLabel(ontology)}
+                      </span>
+                    {/if}
+                  </div>
                   {#if msg.timestamp}
                     <span class="text-sm text-shadow-600">{formatTimestamp(msg.timestamp)}</span>
                   {/if}
                 </div>
+                {#if ontology?.messageClass}
+                  <p class="text-xs text-shadow-600 mb-1">
+                    class: <span class="font-mono">{ontology.messageClass}</span>
+                  </p>
+                {/if}
                 <p class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed">
                   {msg.content}
                 </p>

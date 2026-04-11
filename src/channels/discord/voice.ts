@@ -12,23 +12,24 @@ import {
 import prism from 'prism-media';
 import { Events, type Client, type VoiceBasedChannel, type VoiceState } from 'discord.js';
 import { Readable } from 'node:stream';
-import type { EventBus } from '../../event-bus.js';
-import { createComponentLogger } from '../../logger.js';
-import type { SubstrateConfig, SubstrateMessage } from '../../types.js';
-import type { EligibilityGate } from '../../capabilities/eligibility.js';
+import type { EventBus } from '../../shared/event-bus.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import {
   type StreamingTtsConnector,
   type StreamingTtsProvider,
   type TtsAudioChunk,
   type TtsSynthesisSession,
-} from '../../voice/connectors/tts/index.js';
+} from '../../primitives/voice/connectors/tts/index.js';
 import {
   buildFallbackOrder,
   resolveVoiceReliabilityBudgets,
   runWithVoiceStageBudget,
   selectFallbackCandidate,
   type VoiceReliabilityBudgets,
-} from '../../voice/policy/reliability.js';
+} from '../../primitives/voice/policy/reliability.js';
 import {
   resolveVoiceSecurityLimits,
   validatePcmAudio,
@@ -36,9 +37,9 @@ import {
   validateTtsAudioChunk,
   validateTtsInputText,
   type VoiceSecurityLimits,
-} from '../../voice/policy/security.js';
-import type { MessageHandler } from '../types.js';
-import { toErrorMessage } from '../../utils/errors.js';
+} from '../../primitives/voice/policy/security.js';
+import type { MessageHandler } from '../backplane/types.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
@@ -46,8 +47,8 @@ import {
   type RuntimeVoiceTtsProvider,
   resolveRuntimeVoiceTtsProvider,
   resolveRuntimeVoiceTtsProviderOrder,
-} from '../../runtime/bootstrap-helpers.js';
-import type { StreamingSttConnector, SttStreamSession } from '../../voice/connectors/stt/index.js';
+} from '../../app/startup/support/bootstrap-helpers.js';
+import type { StreamingSttConnector, SttStreamSession } from '../../primitives/voice/connectors/stt/index.js';
 
 const log = createComponentLogger('DiscordVoice');
 const CAPTURE_SILENCE_MS = 1_200;

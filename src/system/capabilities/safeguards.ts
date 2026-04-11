@@ -18,6 +18,7 @@ const DEFAULT_DISCORD_MESSAGES_PER_HOUR = 30;
 const DEFAULT_EMAIL_MESSAGES_PER_HOUR = 10;
 
 const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = {
+  identity: 'irreversible',
   system: 'irreversible',
   shell: 'irreversible',
   load_tools: 'reversible',

@@ -24,7 +24,6 @@ import {
   createPromotedToolsListTool,
   createPromotedToolsRemoveTool,
   createPromotedToolsSwapTool,
-  createSettingsGetTool,
   type PromotedExtendedToolsManager,
 } from '../../../system/settings-tools.js';
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../boundary/integrations/filesystem/runtime-wiring.js';
@@ -46,28 +45,16 @@ import { ensureRuntimePromptLayers } from '../../../core/identity/runtime-prompt
 import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { DeliberationResult } from '../../../primitives/llm/deliberation.js';
 import {
-  createPersonaUpdateTool,
-  type PersonaUpdateToolOptions,
   type CharacterCardVersionStore,
 } from '../../../core/identity/card-versioning.js';
 import { buildCharacterPromptTemplateVariables } from '../../../core/identity/loader.js';
 import {
-  createPromptLayerListTool,
-  createPromptLayerGetTool,
-  createIdentityDiffTool,
-  createIdentityChangelogTool,
-  createPromptLayerUpdateTool,
-  createPromptLayerRollbackTool,
-  createPromptLayerToggleTool,
-  type PromptLayerUpdateToolOptions,
+  createIdentityTool,
+  type IdentityToolOptions,
 } from '../../../core/identity/prompt-tools.js';
 import { NorthStarStore } from '../../../faculties/north-star/store.js';
 import {
-  createNorthStarCreateTool,
-  createNorthStarDeleteTool,
-  createNorthStarListTool,
-  createNorthStarReorderTool,
-  createNorthStarUpdateTool,
+  createNorthStarTool,
 } from '../../../faculties/north-star/tools.js';
 import { HeartbeatPolicyStore } from '../../../core/scheduler/heartbeat-policy.js';
 import {
@@ -137,6 +124,7 @@ import {
   serializeInternalState,
   type InternalState,
 } from '../../../core/self-model/state.js';
+import { createSystemTool } from '../../../core/tools/lifecycle.js';
 
 const log = createComponentLogger('SharedWiring');
 const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
@@ -277,7 +265,7 @@ export function wirePromptRuntime(
   target: PromptRuntimeTarget,
   dataDir: string,
   baseSystemPrompt: string,
-  options: PromptLayerUpdateToolOptions = {},
+  options: IdentityToolOptions = {},
 ): PromptLayerStore {
   const promptStore = new PromptLayerStore(
     resolvePromptLayersPath(dataDir),
@@ -300,29 +288,18 @@ export function wirePromptRuntime(
       northStarLayerProvider: () => northStarStore.buildPromptLayer(),
     },
   );
-  target.registerTool(createPromptLayerListTool(promptStore), 'core');
-  target.registerTool(createPromptLayerGetTool(promptStore), 'core');
-  target.registerTool(createIdentityDiffTool(promptStore), 'core');
-  target.registerTool(createNorthStarListTool(northStarStore), 'core');
-  target.registerTool(createIdentityChangelogTool(promptStore), 'extended');
-  target.registerTool(createPromptLayerUpdateTool(promptStore, options), 'extended');
-  target.registerTool(createPromptLayerRollbackTool(promptStore, options), 'extended');
-  target.registerTool(createPromptLayerToggleTool(promptStore), 'extended');
-  target.registerTool(createNorthStarCreateTool(northStarStore), 'extended');
-  target.registerTool(createNorthStarUpdateTool(northStarStore), 'extended');
-  target.registerTool(createNorthStarDeleteTool(northStarStore), 'extended');
-  target.registerTool(createNorthStarReorderTool(northStarStore), 'extended');
+  target.registerTool(createIdentityTool(promptStore, options), 'core');
+  target.registerTool(createNorthStarTool(northStarStore), 'extended');
 
   log.info(`Prompt stack enabled (${promptStore.count} layers)`);
   return promptStore;
 }
 
 export function wireCharacterCardRuntime(
-  target: CharacterCardRuntimeTarget,
+  _target: CharacterCardRuntimeTarget,
   cardStore: CharacterCardVersionStore,
-  options: PersonaUpdateToolOptions = {},
+  _options: { confirmationQueue?: unknown; getCapabilityTier?: () => CapabilityTier } = {},
 ): void {
-  target.registerTool(createPersonaUpdateTool(cardStore, options), 'extended');
   const snapshot = cardStore.getCurrent();
   log.info(`Persona tooling enabled (v${snapshot.version})`);
 }
@@ -362,8 +339,13 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
 export function wireSettingsRuntime(
   target: ToolRegistrarTarget,
   config: SubstrateConfig,
+  options: {
+    registerSystemTool?: boolean;
+  } = {},
 ): void {
-  target.registerTool(createSettingsGetTool(config), 'core');
+  if (options.registerSystemTool !== false) {
+    target.registerTool(createSystemTool(config), 'core');
+  }
   if (!hasPromotedToolsManager(target)) {
     return;
   }

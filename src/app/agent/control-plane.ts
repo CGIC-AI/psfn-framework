@@ -5,7 +5,7 @@ import {
   type MessageSender,
 } from '../../system/lifecycle/notifications.js';
 import { resolveRuntimeCommandInvocation } from '../../system/lifecycle/runtime-mode.js';
-import { createRestartTool, createRebuildTool } from '../../core/tools/lifecycle.js';
+import { createSystemTool } from '../../core/tools/lifecycle.js';
 import { createNotifyOperatorTool, type NotificationPort } from '../../core/tools/ntfy.js';
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
@@ -19,6 +19,7 @@ import type { LifecycleRestartSafeguard, ExternalCommunicationRateLimiter } from
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { ApiServer } from '../../channels/api/server.js';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
+import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 const log = createComponentLogger('AgentControlPlane');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -31,6 +32,7 @@ export interface AgentControlPlaneShutdownTargets {
 export interface BuildAgentControlPlaneOptions {
   heartbeatChannelId?: string;
   dataDir: string;
+  config: CoreSubstrateConfig;
   eventBus: EventBus;
   gateway: GatewayClient;
   unregisterGatewayDisconnect: () => void;
@@ -60,6 +62,7 @@ export function buildAgentControlPlane(
   const {
     heartbeatChannelId,
     dataDir,
+    config,
     eventBus,
     gateway,
     unregisterGatewayDisconnect,
@@ -130,27 +133,11 @@ export function buildAgentControlPlane(
     await stopPromise;
   };
 
-  agentLoop.registerTool(createRestartTool(
-    lifecycleNotifier,
-    stopFn,
+  agentLoop.registerTool(createSystemTool(
+    config,
     {
-      restartSafeguard: lifecycleRestartSafeguard,
-      getCapabilityTier: () => capabilityRuntime.getTier(),
-      runRestartCommand: async () => {
-        const invocation = resolveRuntimeCommandInvocation(lifecycleRuntimeContract.restart.command);
-        if (!invocation) return;
-        await gateway.shellExec(invocation.command, invocation.args, {
-          cwd: process.cwd(),
-          timeoutMs: 30_000,
-          maxOutputChars: 10_000,
-        });
-      },
-    },
-  ));
-  agentLoop.registerTool(createRebuildTool(
-    lifecycleNotifier,
-    stopFn,
-    {
+      notifier: lifecycleNotifier,
+      stopFn,
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
       runBuildCommand: async () => {

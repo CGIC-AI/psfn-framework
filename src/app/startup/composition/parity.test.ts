@@ -154,7 +154,7 @@ describe('wireSessionToolsRuntime', () => {
 });
 
 describe('wireSettingsRuntime', () => {
-  it('registers settings_get as core and promoted-tool helpers as extended', () => {
+  it('registers system as core and promoted-tool helpers as extended', () => {
     const target = {
       registerTool: vi.fn(),
       getPromotedExtendedToolsLimit: () => 4,
@@ -187,12 +187,12 @@ describe('wireSettingsRuntime', () => {
       'promoted_tools_list',
       'promoted_tools_remove',
       'promoted_tools_swap',
-      'settings_get',
+      'system',
     ]);
-    expect(calls.find(([tool]) => tool.name === 'settings_get')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'system')?.[1]).toBe('core');
     expect(
       calls
-        .filter(([tool]) => tool.name !== 'settings_get')
+        .filter(([tool]) => tool.name !== 'system')
         .every(([, category]) => category === 'extended'),
     ).toBe(true);
   });
@@ -209,7 +209,7 @@ describe('wirePromptRuntime', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('registers read-only prompt tools in core and prompt mutations in extended', () => {
+  it('registers unified identity as core and north_star as extended', () => {
     const target = {
       promptComposer: null,
       registerTool: vi.fn(),
@@ -218,29 +218,9 @@ describe('wirePromptRuntime', () => {
     wirePromptRuntime(target as any, tempDir, 'Base prompt');
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
-    expect(calls.find(([tool]) => tool.name === 'prompt_layer_list')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'prompt_layer_get')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'identity_diff')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'north_star_list')?.[1]).toBe('core');
-    expect(
-      calls
-        .filter(([tool]) => !['prompt_layer_list', 'prompt_layer_get', 'identity_diff', 'north_star_list'].includes(tool.name))
-        .every(([, category]) => category === 'extended'),
-    ).toBe(true);
-    expect(calls.map(([tool]) => tool.name)).toEqual(expect.arrayContaining([
-      'prompt_layer_list',
-      'prompt_layer_get',
-      'identity_diff',
-      'identity_changelog',
-      'prompt_layer_update',
-      'prompt_layer_rollback',
-      'prompt_layer_toggle',
-      'north_star_list',
-      'north_star_create',
-      'north_star_update',
-      'north_star_delete',
-      'north_star_reorder',
-    ]));
+    expect(calls.map(([tool]) => tool.name)).toEqual(['identity', 'north_star']);
+    expect(calls.find(([tool]) => tool.name === 'identity')?.[1]).toBe('core');
+    expect(calls.find(([tool]) => tool.name === 'north_star')?.[1]).toBe('extended');
   });
 });
 

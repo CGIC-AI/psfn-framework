@@ -216,5 +216,13 @@ export function normalizeToolArguments(
     return normalizeLifecycleArguments(args);
   }
 
+  if (toolName === 'system') {
+    const action = normalizeOptionalString(args.action).toLowerCase();
+    if (!action || action === 'restart' || action === 'self_restart' || action === 'rebuild' || action === 'self_rebuild') {
+      return normalizeLifecycleArguments(args);
+    }
+    return args;
+  }
+
   return args;
 }

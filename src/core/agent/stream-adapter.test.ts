@@ -122,6 +122,8 @@ function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistr
     capabilities: {
       maxOutputTokens: slot.maxTokens,
       ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
+      ...(id === 'vision' ? { supportsVision: true } : {}),
+      ...(id === 'reasoning' ? { supportsReasoning: true } : {}),
     },
     tuning: {
       maxOutputTokens: slot.maxTokens,
@@ -713,6 +715,57 @@ describe('resolveModel', () => {
     });
     const model = resolveModel(config, 'context');
     expect(model.id).toBe('long-context-model');
+  });
+
+  it('fails closed when a configured vision slot targets a text-only model', () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const config = makeConfig({
+      modelRoster: {
+        chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
+        vision: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chat-only',
+            rank: 1,
+            identity: {
+              provider: 'openrouter',
+              model: 'z-ai/glm-5',
+              source: { type: 'openrouter' },
+            },
+            purposes: [
+              { purpose: 'chat', primary: true },
+              { purpose: 'vision', primary: true },
+            ],
+            capabilities: {
+              maxOutputTokens: 16384,
+              contextWindow: 128_000,
+              supportsVision: false,
+            },
+            tuning: {
+              maxOutputTokens: 16384,
+              contextWindow: 128_000,
+            },
+          },
+          {
+            id: 'extraction',
+            rank: 2,
+            identity: {
+              provider: 'openrouter',
+              model: 'deepseek/deepseek-v3.2',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'background', primary: true }],
+            capabilities: { maxOutputTokens: 8192, contextWindow: 128_000 },
+            tuning: { maxOutputTokens: 8192, contextWindow: 128_000 },
+          },
+        ],
+      },
+    });
+
+    expect(() => resolveModel(config, 'vision')).toThrow(/not configured for vision input/);
   });
 
   it('fails closed when no eligible model exists for a requested purpose', () => {

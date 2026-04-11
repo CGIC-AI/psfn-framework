@@ -136,7 +136,6 @@ export function prepareAgentStartupContext(input: {
   log: AgentStartupLogger;
 }): AgentStartupContext {
   const config = loadAgentConfig();
-  const coreConfig = sanitizeCoreSubstrateConfig(config);
   const {
     lifecycleRuntimeContract,
     runtimeStatusMeta,
@@ -147,6 +146,7 @@ export function prepareAgentStartupContext(input: {
     secretAuthority: 'agent',
     logger: input.log,
   });
+  const coreConfig = sanitizeCoreSubstrateConfig(config);
   logAgentStartupHydrationDiagnostics(input.log, startupHydration.diagnostics);
 
   const { pathSnapshot, trustPolicyConfig, schedulerConfig } = startupHydration;

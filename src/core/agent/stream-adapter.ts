@@ -958,7 +958,9 @@ export function resolveModel(
   if (litellmBaseUrl) {
     const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
     const model = createModel(litellmBaseUrl, modelId, selection.maxTokens, selection.contextWindow);
-    return ensurePurposeInputCapabilities(model, purpose);
+    return ensurePurposeInputCapabilities(model, purpose, {
+      supportsVision: selection.supportsVision,
+    });
   }
 
   // Direct provider mode — use pi-ai's built-in registry.
@@ -970,7 +972,9 @@ export function resolveModel(
       'Configure LiteLLM in providers.json or update the canonical model config in models.json.',
     );
   }
-  return ensurePurposeInputCapabilities(model, purpose);
+  return ensurePurposeInputCapabilities(model, purpose, {
+    supportsVision: selection.supportsVision,
+  });
 }
 
 export function resolveModelSelection(
@@ -1020,21 +1024,37 @@ export function resolveExplicitModel(
 function ensurePurposeInputCapabilities(
   model: Model<any>,
   purpose: ModelPurpose | undefined,
+  options: { supportsVision?: boolean } = {},
 ): Model<any> {
   if (purpose !== 'vision') {
     return model;
   }
 
   const currentInput: Array<'text' | 'image'> = Array.isArray(model.input)
-    ? model.input
+    ? [...model.input]
     : [];
-  const nextInput: Array<'text' | 'image'> = [...currentInput];
-  if (!nextInput.includes('text')) nextInput.unshift('text');
-  if (!nextInput.includes('image')) nextInput.push('image');
+  const nextInput: Array<'text' | 'image'> = currentInput.includes('text')
+    ? [...currentInput]
+    : ['text', ...currentInput];
+
+  if (nextInput.includes('image')) {
+    return nextInput.length === currentInput.length
+      ? model
+      : {
+        ...model,
+        input: nextInput,
+      };
+  }
+
+  if (options.supportsVision !== true) {
+    throw new Error(
+      `Model "${String(model.id)}" is not configured for vision input. Configure a vision-capable model for the vision purpose in models.json.`,
+    );
+  }
 
   return {
     ...model,
-    input: nextInput,
+    input: [...nextInput, 'image'],
   };
 }
 

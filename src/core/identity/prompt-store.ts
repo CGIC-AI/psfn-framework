@@ -579,13 +579,11 @@ export class PromptLayerStore {
 
     const layerById = new Map(this.layers.map(layer => [layer.id, layer]));
     const targetOrder: PromptLayer[] = [];
-    const requestedIndexById = new Map<string, number>();
     for (const layerId of layerIds) {
       const layer = layerById.get(layerId);
       if (!layer) {
         throw new Error(`Prompt layer not found: ${layerId}`);
       }
-      requestedIndexById.set(layerId, targetOrder.length);
       targetOrder.push(layer);
     }
 
@@ -593,18 +591,13 @@ export class PromptLayerStore {
       throw new Error('layerIds must include every prompt layer exactly once');
     }
 
-    const normalizedOrder = [...targetOrder].sort((left, right) => {
-      const typeOrder = LAYER_TYPE_ORDER[left.type] - LAYER_TYPE_ORDER[right.type];
-      if (typeOrder !== 0) return typeOrder;
-      return (requestedIndexById.get(left.id) ?? 0) - (requestedIndexById.get(right.id) ?? 0);
-    });
-
     const normalizedReason = normalizeReason(reason);
     const timestamp = new Date().toISOString();
     const touched: PromptLayer[] = [];
+    const orderChanged = this.layers.some((layer, index) => layer.id !== targetOrder[index]?.id);
 
-    for (let nextPriority = 0; nextPriority < normalizedOrder.length; nextPriority++) {
-      const layer = normalizedOrder[nextPriority];
+    for (let nextPriority = 0; nextPriority < targetOrder.length; nextPriority++) {
+      const layer = targetOrder[nextPriority];
       const nextPromptOrder = nextPriority;
       if (layer.priority === nextPriority && layer.promptOrder === nextPromptOrder) continue;
 
@@ -629,7 +622,8 @@ export class PromptLayerStore {
       touched.push(layer);
     }
 
-    if (touched.length > 0) {
+    if (touched.length > 0 || orderChanged) {
+      this.layers = [...targetOrder];
       this.save();
       log.info(`Reordered prompt layers (${touched.length} touched)`);
     }

@@ -281,18 +281,19 @@ describe('PromptLayerStore', () => {
       expect(store.getById(c.id)?.content).toBe('charlie');
     });
 
-    it('keeps architectural type ordering while applying the requested order within each type', () => {
+    it('persists the requested layer order exactly', () => {
       const base = store.create({ type: 'base', name: 'Base', content: 'base', priority: 0, promptOrder: 0, identifier: 'main' });
       const runtimeA = store.create({ type: 'runtime', name: 'Runtime A', content: 'runtime-a', priority: 10, promptOrder: 10, identifier: 'runtime.a' });
       const runtimeB = store.create({ type: 'runtime', name: 'Runtime B', content: 'runtime-b', priority: 20, promptOrder: 20, identifier: 'runtime.b' });
 
       store.reorderByLayerIds([runtimeB.id, base.id, runtimeA.id], 'admin');
 
-      expect(store.getById(base.id)?.priority).toBe(0);
-      expect(store.getById(runtimeB.id)?.priority).toBe(1);
+      expect(store.getAll().map(layer => layer.id)).toEqual([runtimeB.id, base.id, runtimeA.id]);
+      expect(store.getById(runtimeB.id)?.priority).toBe(0);
+      expect(store.getById(base.id)?.priority).toBe(1);
       expect(store.getById(runtimeA.id)?.priority).toBe(2);
-      expect(store.getById(base.id)?.promptOrder).toBe(0);
-      expect(store.getById(runtimeB.id)?.promptOrder).toBe(1);
+      expect(store.getById(runtimeB.id)?.promptOrder).toBe(0);
+      expect(store.getById(base.id)?.promptOrder).toBe(1);
       expect(store.getById(runtimeA.id)?.promptOrder).toBe(2);
     });
 

@@ -33,43 +33,46 @@ describe('PromptComposer', () => {
   });
 
   describe('layer ordering', () => {
-    it('orders base before operator before runtime', () => {
-      store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
-      store.create({ type: 'operator', name: 'Operator', content: 'OPERATOR' });
+    it('preserves the stored order when composing enabled layers', () => {
+      const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
+      const base = store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      const operator = store.create({ type: 'operator', name: 'Operator', content: 'OPERATOR' });
+
+      store.reorderByLayerIds([operator.id, runtime.id, base.id], 'admin');
 
       const result = composer.compose();
       const parts = result.text.split('\n\n');
 
-      expect(parts[0]).toBe('BASE');
-      expect(parts[1]).toBe('OPERATOR');
+      expect(parts[0]).toBe('OPERATOR');
+      expect(parts[1]).toBe('BASE');
       expect(parts[2]).toBe('RUNTIME');
     });
 
-    it('sorts by priority within same type', () => {
-      store.create({ type: 'runtime', name: 'Second', content: 'SECOND', priority: 10 });
-      store.create({ type: 'runtime', name: 'First', content: 'FIRST', priority: 1 });
-      store.create({ type: 'runtime', name: 'Third', content: 'THIRD', priority: 20 });
+    it('preserves explicit reorder for dynamic layers without re-sorting by type', () => {
+      const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
+      const channel = store.create({ type: 'channel', name: 'Channel', content: 'CHANNEL', channelType: 'discord_text' });
+      const task = store.create({ type: 'task', name: 'Task', content: 'TASK', taskKind: 'heartbeat' });
 
-      const result = composer.compose();
+      store.reorderByLayerIds([task.id, runtime.id, channel.id], 'admin');
+
+      const result = composer.compose({ channelType: 'discord_text', taskKind: 'heartbeat' });
       const parts = result.text.split('\n\n');
 
-      expect(parts[0]).toBe('FIRST');
-      expect(parts[1]).toBe('SECOND');
-      expect(parts[2]).toBe('THIRD');
+      expect(parts[0]).toBe('TASK');
+      expect(parts[1]).toBe('RUNTIME');
+      expect(parts[2]).toBe('CHANNEL');
     });
 
-    it('handles mixed types and priorities', () => {
-      store.create({ type: 'operator', name: 'Op2', content: 'OP2', priority: 2 });
-      store.create({ type: 'base', name: 'Base', content: 'BASE', priority: 0 });
-      store.create({ type: 'operator', name: 'Op1', content: 'OP1', priority: 1 });
+    it('keeps requested order in composeSplit layer ids', () => {
+      const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
+      const channel = store.create({ type: 'channel', name: 'Channel', content: 'CHANNEL', channelType: 'discord_text' });
+      const task = store.create({ type: 'task', name: 'Task', content: 'TASK', taskKind: 'heartbeat' });
 
-      const result = composer.compose();
-      const parts = result.text.split('\n\n');
+      store.reorderByLayerIds([channel.id, task.id, runtime.id], 'admin');
 
-      expect(parts[0]).toBe('BASE');
-      expect(parts[1]).toBe('OP1');
-      expect(parts[2]).toBe('OP2');
+      const split = composer.composeSplit({ channelType: 'discord_text', taskKind: 'heartbeat' });
+      expect(split.layerIds).toEqual([channel.id, task.id, runtime.id]);
+      expect(split.dynamicLayerIds).toEqual([channel.id, task.id, runtime.id]);
     });
   });
 

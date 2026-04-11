@@ -1,7 +1,6 @@
 // ── Prompt Composer ──
-// Composes a system prompt by layering enabled prompt layers
-// in precedence order: base -> operator -> runtime -> channel -> task.
-// Includes context-aware filtering (channelType, taskKind).
+// Composes a system prompt by preserving enabled layer order from storage
+// while still filtering by channel/task context and splitting static vs dynamic sections.
 
 import { createHash } from 'node:crypto';
 import type {
@@ -14,7 +13,6 @@ import type {
   PromptComposerOptions,
   PromptLayer,
 } from './prompt-types.js';
-import { LAYER_TYPE_ORDER } from './prompt-types.js';
 import type { PromptLayerStatePort } from './prompt-state-port.js';
 import { PromptManager } from './prompt-manager.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -381,12 +379,7 @@ export class PromptComposer {
 
   private resolveSortedLayers(layers: PromptLayer[], ctx?: ComposeContext): PromptLayer[] {
     const enabled = layers.filter(layer => layer.enabled);
-    const matching = enabled.filter(layer => this.matchesContext(layer, ctx));
-    return [...matching].sort((a, b) => {
-      const typeOrder = LAYER_TYPE_ORDER[a.type] - LAYER_TYPE_ORDER[b.type];
-      if (typeOrder !== 0) return typeOrder;
-      return a.priority - b.priority;
-    });
+    return enabled.filter(layer => this.matchesContext(layer, ctx));
   }
 
   private matchesContext(layer: PromptLayer, ctx?: ComposeContext): boolean {

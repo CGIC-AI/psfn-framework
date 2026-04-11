@@ -328,6 +328,92 @@ describe('tool-call-scheduler', () => {
     );
   });
 
+  it('classifies queued system steering separately from queued user turns', async () => {
+    const telemetry = vi.fn();
+    const issueShow = makeTool(
+      'issue_show',
+      async () => ({
+        content: [{ type: 'text', text: 'show' }],
+        details: {},
+      }),
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:issue_show',
+        }),
+      },
+    );
+
+    const result = await executeToolCallsWithScheduler(
+      [issueShow],
+      makeAssistantMessage(['issue_show', 'issue_show']),
+      async () => [{
+        role: 'custom',
+        type: 'systemNote',
+        messageClass: 'system_note',
+        content: '[SYSTEM: Runtime] Queue a private follow-up reminder.',
+        timestamp: Date.now(),
+      } as any],
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, onTelemetry: telemetry },
+    );
+
+    expect((result.toolResults[1] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[1] as ToolResultMessage).content).toEqual([
+      { type: 'text', text: 'Skipped due to queued system message.' },
+    ]);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.skipped',
+      expect.objectContaining({
+        skippedCount: 1,
+        reason: 'queued_system_message',
+      }),
+    );
+  });
+
+  it('classifies queued internal whispers separately from queued user turns', async () => {
+    const telemetry = vi.fn();
+    const issueShow = makeTool(
+      'issue_show',
+      async () => ({
+        content: [{ type: 'text', text: 'show' }],
+        details: {},
+      }),
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:issue_show',
+        }),
+      },
+    );
+
+    const result = await executeToolCallsWithScheduler(
+      [issueShow],
+      makeAssistantMessage(['issue_show', 'issue_show']),
+      async () => [{
+        role: 'custom',
+        type: 'internalWhisper',
+        messageClass: 'internal_whisper',
+        content: 'Keep the answer concrete and grounded.',
+        timestamp: Date.now(),
+      } as any],
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, onTelemetry: telemetry },
+    );
+
+    expect((result.toolResults[1] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[1] as ToolResultMessage).content).toEqual([
+      { type: 'text', text: 'Skipped due to queued internal note.' },
+    ]);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.skipped',
+      expect.objectContaining({
+        skippedCount: 1,
+        reason: 'queued_internal_note',
+      }),
+    );
+  });
+
   it('emits cancelled telemetry when execution aborts before a tool call runs', async () => {
     const telemetry = vi.fn();
     const controller = new AbortController();

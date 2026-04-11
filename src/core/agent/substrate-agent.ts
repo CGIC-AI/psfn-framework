@@ -675,11 +675,19 @@ export class SubstrateAgent {
         authorContext.subjectIdentityKey ?? authorContext.canonicalContactKey,
       );
     }
-    this.agent.followUp({
-      role: 'user',
-      content: systemContent,
-      timestamp: Date.now(),
-    } satisfies UserMessage);
+    this.agent.followUp(isSystemOriginated
+      ? {
+        role: 'custom',
+        type: 'systemNote',
+        messageClass: MESSAGE_CLASSES.systemNote,
+        content: systemContent,
+        timestamp: Date.now(),
+      }
+      : {
+        role: 'user',
+        content: systemContent,
+        timestamp: Date.now(),
+      } satisfies UserMessage);
     log.debug('Queued follow-up', {
       channelId: message.channelId,
       systemOriginated: isSystemOriginated,

@@ -39,6 +39,8 @@ import {
 } from '../../self-model/state.js';
 import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
+import { MESSAGE_CLASSES } from '../message-classes.js';
+import type { SystemNoteMessage } from '../messages.js';
 import { classifyChannel, type ChannelMeta } from '../../../system/trust/policy.js';
 import { normalizeChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
@@ -102,6 +104,7 @@ import {
   buildPromptSectionTelemetryList,
   extractWrappedPromptSections,
 } from '../../identity/prompt-sections.js';
+import { formatAttributedSystemContent } from '../../session/entry-attribution.js';
 import { sanitizePersistedReasoningText } from './turn-records.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -117,6 +120,28 @@ function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayo
   const created = new PromptRuntimeLayoutStore(filePath);
   promptRuntimeLayoutStoreCache.set(filePath, created);
   return created;
+}
+
+function buildPromptMessage(
+  message: SubstrateMessage,
+  speakerRole: 'user' | 'system',
+  content: UserMessage['content'],
+): UserMessage | SystemNoteMessage {
+  if (speakerRole !== 'system' || typeof content !== 'string') {
+    return {
+      role: 'user',
+      content,
+      timestamp: Date.now(),
+    } satisfies UserMessage;
+  }
+
+  return {
+    role: 'custom',
+    type: 'systemNote',
+    messageClass: MESSAGE_CLASSES.systemNote,
+    content: formatAttributedSystemContent(content, message.authorName),
+    timestamp: Date.now(),
+  } satisfies SystemNoteMessage;
 }
 
 interface ProactiveMemoryProvider extends MemoryProvider {
@@ -638,6 +663,9 @@ export async function handleMessageForTurn(
       subjectIdentityKey: authorContext.subjectIdentityKey,
       authorId: message.authorId,
     });
+  const attributedSystemContent = authorContext.speakerRole === 'system'
+    ? formatAttributedSystemContent(message.content, message.authorName)
+    : message.content;
   emitObservedTurnStage('trust', {
     durationMs: Date.now() - trustStageStart,
     trustLevel: authorContext.trustLevel,
@@ -652,7 +680,7 @@ export async function handleMessageForTurn(
       message,
       turnId,
       requestId,
-      message.content,
+      attributedSystemContent,
       continuitySubjectKey,
     )
     : runtime.recordUserMessage(
@@ -1203,11 +1231,9 @@ export async function handleMessageForTurn(
             },
             async () => runWithVisionToolRequestContext(
               visionToolRequestContext,
-              async () => runtime.agent.prompt({
-                role: 'user',
-                content: turnUserContentBuildResult.content,
-                timestamp: Date.now(),
-              } satisfies UserMessage),
+              async () => runtime.agent.prompt(
+                buildPromptMessage(message, speakerRole, turnUserContentBuildResult.content),
+              ),
             ),
           ),
         });
@@ -1284,11 +1310,7 @@ export async function handleMessageForTurn(
                 },
                 async () => runWithVisionToolRequestContext(
                   visionToolRequestContext,
-                  async () => runtime.agent.prompt({
-                    role: 'user',
-                    content,
-                    timestamp: Date.now(),
-                  } satisfies UserMessage),
+                  async () => runtime.agent.prompt(buildPromptMessage(message, speakerRole, content)),
                 ),
               ),
             });

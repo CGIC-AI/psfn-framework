@@ -1,6 +1,7 @@
 import { validateToolArguments } from '@mariozechner/pi-ai';
 import type { AgentMessage, AgentTool } from '@mariozechner/pi-agent-core';
 import type { ToolResultMessage } from '@mariozechner/pi-ai';
+import { isInternalWhisperMessage, isSystemNoteMessage } from './messages.js';
 import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.js';
 
 export interface ToolCallSchedulerOptions {
@@ -23,6 +24,17 @@ interface ToolExecutionContext {
 export interface ToolExecutionResult {
   toolResults: ToolResultMessage[];
   steeringMessages?: AgentMessage[];
+}
+
+type QueuedMessageSkipReason =
+  | 'queued_user_message'
+  | 'queued_system_message'
+  | 'queued_internal_note'
+  | 'queued_message';
+
+interface QueuedMessageAttribution {
+  telemetryReason: QueuedMessageSkipReason;
+  resultText: string;
 }
 
 export async function executeToolCallsWithScheduler(
@@ -90,13 +102,14 @@ export async function executeToolCallsWithScheduler(
 
     if (steeringMessages && steeringMessages.length > 0) {
       const remainingDescriptors = descriptors.slice(index);
+      const attribution = resolveQueuedMessageAttribution(steeringMessages);
       options.onTelemetry?.('agent.tools.scheduler.skipped', {
-        reason: 'queued_user_message',
+        reason: attribution.telemetryReason,
         skippedCount: remainingDescriptors.length,
         skippedTools: remainingDescriptors.map((entry: ToolCallDescriptor) => entry.toolCall.name),
       });
       for (const descriptor of remainingDescriptors) {
-        results.push(skipToolCall(descriptor.toolCall, context.stream));
+        results.push(skipToolCall(descriptor.toolCall, context.stream, attribution.resultText));
       }
       break;
     }
@@ -219,9 +232,13 @@ async function executeSingleToolCall(
   return toolResultMessage;
 }
 
-function skipToolCall(toolCall: any, stream: { push: (event: any) => void }): ToolResultMessage {
+function skipToolCall(
+  toolCall: any,
+  stream: { push: (event: any) => void },
+  reasonText: string,
+): ToolResultMessage {
   const result = {
-    content: [{ type: 'text' as const, text: 'Skipped due to queued user message.' }],
+    content: [{ type: 'text' as const, text: reasonText }],
     details: {} as Record<string, unknown>,
   };
   stream.push({
@@ -250,6 +267,31 @@ function skipToolCall(toolCall: any, stream: { push: (event: any) => void }): To
   stream.push({ type: 'message_start', message: toolResultMessage });
   stream.push({ type: 'message_end', message: toolResultMessage });
   return toolResultMessage;
+}
+
+function resolveQueuedMessageAttribution(messages: readonly AgentMessage[]): QueuedMessageAttribution {
+  if (messages.some(message => (message as { role?: string }).role === 'user')) {
+    return {
+      telemetryReason: 'queued_user_message',
+      resultText: 'Skipped due to queued user message.',
+    };
+  }
+  if (messages.some(isSystemNoteMessage)) {
+    return {
+      telemetryReason: 'queued_system_message',
+      resultText: 'Skipped due to queued system message.',
+    };
+  }
+  if (messages.some(isInternalWhisperMessage)) {
+    return {
+      telemetryReason: 'queued_internal_note',
+      resultText: 'Skipped due to queued internal note.',
+    };
+  }
+  return {
+    telemetryReason: 'queued_message',
+    resultText: 'Skipped due to queued message.',
+  };
 }
 
 function collectCompatibleBatch(descriptors: ToolCallDescriptor[], startIndex: number): ToolCallDescriptor[] {

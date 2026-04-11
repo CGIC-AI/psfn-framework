@@ -1,31 +1,22 @@
-// ── Git Runtime Wiring ──
-// Instantiates GitOps and registers the requested git tool surface on a target (SubstrateAgent).
-
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { ToolRegistrar } from '../../../core/agent/tool-registrar.js';
 import type { WirableTool, ToolWiringMeta } from '../../../core/agent/tool-wiring-validator.js';
 import { GitOps, type GitOpsConfig, type GitOperations } from './ops.js';
-import {
-  createRepoStatusTool,
-  createRepoDiffTool,
-  createRepoApplyPatchTool,
-  createRepoCommitTool,
-  createRepoCreateBranchTool,
-  createRepoOpenPRTool,
-} from './tools.js';
+import { createRepoTool } from './tools.js';
 
 export interface GitRuntimeTarget {
   registerTool: ToolRegistrar;
 }
 
-/** Gateway RPC methods required by each git tool */
 const GIT_TOOL_GATEWAY_METHODS: Record<string, string[]> = {
-  repo_status: ['git.status'],
-  repo_diff: ['git.diff'],
-  repo_apply_patch: ['git.apply_patch'],
-  repo_commit: ['git.commit'],
-  repo_create_branch: ['git.create_branch'],
-  repo_open_pr: ['git.open_pr'],
+  repo: [
+    'git.status',
+    'git.diff',
+    'git.apply_patch',
+    'git.commit',
+    'git.create_branch',
+    'git.open_pr',
+  ],
 };
 
 function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTool {
@@ -35,9 +26,7 @@ function attachWiringMeta(tool: AgentTool<any>, meta: ToolWiringMeta): WirableTo
 }
 
 export interface RegisterGitToolsOptions {
-  /** When true, attaches gateway RPC method requirements as wiring metadata */
   gatewayMode?: boolean;
-  /** Restrict registration to read-only inspection tools for parent-agent runtime use. */
   access?: 'full' | 'read_only';
 }
 
@@ -46,30 +35,15 @@ export function registerGitTools(
   gitOps: GitOperations,
   options?: RegisterGitToolsOptions,
 ): void {
-  const tools: AgentTool<any>[] = options?.access === 'read_only'
-    ? [
-      createRepoStatusTool(gitOps),
-      createRepoDiffTool(gitOps),
-    ]
-    : [
-      createRepoStatusTool(gitOps),
-      createRepoDiffTool(gitOps),
-      createRepoApplyPatchTool(gitOps),
-      createRepoCommitTool(gitOps),
-      createRepoCreateBranchTool(gitOps),
-      createRepoOpenPRTool(gitOps),
-    ];
+  const tool = createRepoTool(gitOps, {
+    access: options?.access,
+  });
 
-  for (const tool of tools) {
-    if (options?.gatewayMode) {
-      const methods = GIT_TOOL_GATEWAY_METHODS[tool.name];
-      attachWiringMeta(tool, { requiredGatewayMethods: methods });
-    }
-    const category = tool.name === 'repo_status' || tool.name === 'repo_diff'
-      ? 'core'
-      : 'extended';
-    target.registerTool(tool, category);
+  if (options?.gatewayMode) {
+    attachWiringMeta(tool, { requiredGatewayMethods: GIT_TOOL_GATEWAY_METHODS[tool.name] });
   }
+
+  target.registerTool(tool, 'core');
 }
 
 export function wireGitRuntime(

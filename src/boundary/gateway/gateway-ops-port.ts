@@ -6,7 +6,11 @@ import type {
   GitStatusResult,
 } from '../integrations/git/ops.js';
 import type { WebFetchOperations } from '../integrations/web/ops.js';
-import type { FilesystemReadOperations } from '../integrations/filesystem/ops.js';
+import type {
+  FilesystemOperations,
+  FilesystemWriteResult,
+  FilesystemEditResult,
+} from '../integrations/filesystem/ops.js';
 import type { BeadsOperations } from '../integrations/beads/ops.js';
 import type {
   BeadsActionResult,
@@ -22,7 +26,7 @@ import type {
 export interface GatewayOpsPort {
   git: GitOperations;
   web: WebFetchOperations;
-  filesystem: FilesystemReadOperations;
+  filesystem: FilesystemOperations;
   beads: BeadsOperations;
 }
 
@@ -42,8 +46,11 @@ export function createGatewayOpsPort(port: GatewayOpsPort): GatewayOpsPort {
       fetch: (url: string, options?: { lane?: WebFetchLane; prompt?: string }) => port.web.fetch(url, options),
     },
     filesystem: {
-      read: (path: string) => port.filesystem.read(path),
+      read: (path: string, options?: { maxBytes?: number }) => port.filesystem.read(path, options),
       list: (glob?: string, maxEntries?: number) => port.filesystem.list(glob, maxEntries),
+      search: (options) => port.filesystem.search(options),
+      write: (options) => port.filesystem.write(options),
+      edit: (options) => port.filesystem.edit(options),
     },
     beads: {
       ready: (params?: BeadsReadyParams): Promise<BeadsActionResult> => port.beads.ready(params),
@@ -72,8 +79,47 @@ export function createGatewayOpsPortFromClient(gateway: GatewayClient): GatewayO
       ),
     },
     filesystem: {
-      read: (path: string) => gateway.fsRead(path),
+      read: (path: string, options?: { maxBytes?: number }) => gateway.fsReadDetailed(path, options),
       list: (glob = '**/*', maxEntries = 200) => gateway.fsList(glob, maxEntries),
+      search: (options) => gateway.fsSearch(options),
+      write: async (options): Promise<FilesystemWriteResult> => {
+        const existing = await gateway.fsReadDetailed(options.path).catch((error: unknown) => {
+          const code = typeof error === 'object' && error !== null && 'code' in error
+            ? String((error as { code?: unknown }).code)
+            : '';
+          const message = error instanceof Error ? error.message : String(error);
+          if (code === 'ENOENT' || message.includes('ENOENT')) {
+            return null;
+          }
+          throw error;
+        });
+
+        if (existing && existing.content === options.content) {
+          return {
+            path: options.path,
+            status: 'unchanged',
+            bytesWritten: Buffer.byteLength(options.content, 'utf-8'),
+          };
+        }
+
+        if (existing && options.overwrite !== true) {
+          throw new Error('fs write refuses to overwrite an existing file without overwrite=true');
+        }
+
+        await gateway.fsWrite(options.path, options.content);
+        return {
+          path: options.path,
+          status: existing ? 'overwritten' : 'created',
+          bytesWritten: Buffer.byteLength(options.content, 'utf-8'),
+        };
+      },
+      edit: async (options): Promise<FilesystemEditResult> => {
+        const result = await gateway.fsEdit(options);
+        return {
+          path: options.path,
+          replacements: result.replacements,
+        };
+      },
     },
     beads: {
       ready: (params: BeadsReadyParams = {}) => gateway.beadsReady(params),

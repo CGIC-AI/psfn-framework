@@ -13,16 +13,27 @@ function createMockTarget(): FilesystemRuntimeTarget & { registerTool: ReturnTyp
 }
 
 describe('filesystem runtime wiring', () => {
-  it('registers fs_list and fs_read as core tools', () => {
+  it('registers the unified fs tool as core', () => {
     const target = createMockTarget();
     const ops = {
-      read: vi.fn(async () => 'hello'),
+      read: vi.fn(async () => ({ content: 'hello', truncated: false })),
       list: vi.fn(async () => ['a.txt']),
+      search: vi.fn(async () => ({
+        query: 'a',
+        glob: '**/*',
+        mode: 'literal' as const,
+        scannedFiles: 1,
+        hitLimit: false,
+        truncatedFiles: [],
+        matches: [],
+      })),
+      write: vi.fn(async () => ({ path: 'a.txt', status: 'created' as const, bytesWritten: 1 })),
+      edit: vi.fn(async () => ({ path: 'a.txt', replacements: 1 })),
     };
 
     registerFilesystemTools(target, ops);
 
-    expect(target.registerTool.mock.calls.map((call: any[]) => call[0].name)).toEqual(['fs_list', 'fs_read']);
+    expect(target.registerTool.mock.calls.map((call: any[]) => call[0].name)).toEqual(['fs']);
     expect(target.registerTool.mock.calls.every((call: any[]) => call[1] === 'core')).toBe(true);
   });
 
@@ -30,21 +41,34 @@ describe('filesystem runtime wiring', () => {
     const target = createMockTarget();
     const gatewayOps = {
       filesystem: {
-        read: vi.fn(async () => 'content'),
+        read: vi.fn(async () => ({ content: 'content', truncated: false })),
         list: vi.fn(async () => []),
+        search: vi.fn(async () => ({
+          query: 'a',
+          glob: '**/*',
+          mode: 'literal' as const,
+          scannedFiles: 1,
+          hitLimit: false,
+          truncatedFiles: [],
+          matches: [],
+        })),
+        write: vi.fn(async () => ({ path: 'a.txt', status: 'created' as const, bytesWritten: 1 })),
+        edit: vi.fn(async () => ({ path: 'a.txt', replacements: 1 })),
       },
     };
 
     registerFilesystemTools(target, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
 
-    const methodsByTool = new Map(
-      target.registerTool.mock.calls.map((call: any[]) => [call[0].name, call[0].wiringMeta?.requiredGatewayMethods]),
-    );
-    expect(methodsByTool.get('fs_list')).toEqual(['fs.list']);
-    expect(methodsByTool.get('fs_read')).toEqual(['fs.read']);
+    expect(target.registerTool.mock.calls[0]?.[0].wiringMeta?.requiredGatewayMethods).toEqual([
+      'fs.read',
+      'fs.list',
+      'fs.search',
+      'fs.write',
+      'fs.edit',
+    ]);
   });
 
-  it('wires local workspace filesystem ops with workspace-relative list/read behavior', async () => {
+  it('wires local workspace filesystem ops with unified read/list/search/write/edit behavior', async () => {
     const root = mkdtempSync(join(tmpdir(), 'filesystem-runtime-'));
     const workspace = join(root, 'workspace');
     mkdirSync(join(workspace, 'memories'), { recursive: true });
@@ -59,7 +83,26 @@ describe('filesystem runtime wiring', () => {
       expect(listed).toEqual(['memories/memorybook.txt']);
 
       const content = await ops.read('memories/memorybook.txt');
-      expect(content).toBe('remember this\n');
+      expect(content).toEqual({ content: 'remember this\n', truncated: false });
+
+      const searched = await ops.search({ query: 'remember', glob: 'memories/**/*.txt' });
+      expect(searched.matches).toEqual([
+        expect.objectContaining({ path: 'memories/memorybook.txt', line: 1, column: 1 }),
+      ]);
+
+      const written = await ops.write({ path: 'memories/new.txt', content: 'fresh\n' });
+      expect(written).toEqual({
+        path: 'memories/new.txt',
+        status: 'created',
+        bytesWritten: 6,
+      });
+
+      const edited = await ops.edit({
+        path: 'memories/new.txt',
+        oldText: 'fresh',
+        newText: 'restored',
+      });
+      expect(edited).toEqual({ path: 'memories/new.txt', replacements: 1 });
 
       await expect(ops.read(resolve(root, 'outside.txt'))).rejects.toThrow('workspace root');
     } finally {

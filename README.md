@@ -284,19 +284,15 @@ Skills are reusable workflow guidance, not world-execution tools. The runtime ma
 | Category | Current direct tool names |
 |----------|-------|
 | **Adaptive control** | `tool_search`, `toolset` |
-| **Memory and orientation** | `memory`, `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad`, `scratchpad_write`, `orient` |
+| **Already unified direct tools** | `shell`, `skill`, `orient`, `memory`, `scratchpad`, `session`, `identity`, `north_star`, `system`, `subagent` |
+| **Filesystem** | `fs_list`, `fs_read` |
 | **Contacts** | `contact_list`, `contact_lookup`, `contact_note`, `contact_set_trust`, `contact_link_identity`, `contact_set_channel_privacy` |
-| **Identity** | `identity` |
-| **North Star** | `north_star` |
-| **Filesystem and shell** | `fs_list`, `fs_read`, `shell` |
-| **Git** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
+| **Repository** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
 | **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
-| **Sessions and continuity** | `session`, `session_new`, `session_resume`, `start_focus`, `complete_focus` |
-| **Heartbeat** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |
-| **Values** | `orient`, `values_add`, `values_update` |
-| **Images and skills** | `image_create`, `image_edit`, `image_analyze`, `skill` (`action=list|view|create|update`) |
-| **Subagents and shards** | `subagent`, `spawn_shard` |
-| **Operator and lifecycle** | `system`, `promoted_tools_list`, `promoted_tools_add`, `promoted_tools_remove`, `promoted_tools_swap`, `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`, `notify_operator` |
+| **Scheduler and values** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task`, `values_add`, `values_update` |
+| **Beads and lifecycle** | `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`, `settings_get`, `promoted_tools_*`, `self_restart`, `self_rebuild`, `notify_operator` |
+| **Media** | current stabilized branch: `image_create`, `image_edit`, `image_analyze`; target surface: `media` (`action=generate|edit|analyze`) |
+| **Shards** | `spawn_shard` |
 | **Reasoning** | `think` (RLM+REPL sandbox) |
 
 Tool surface split:

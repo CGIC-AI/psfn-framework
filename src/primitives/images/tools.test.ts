@@ -148,7 +148,7 @@ describe('image tools', () => {
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({
         question: 'Describe the generated image.',
-        summary: 'The selfie matches the companion look and reads as cute and consistent.',
+        summary: 'The portrait reads as cute and visually consistent.',
         model: 'vision-model',
         imageCount: 1,
       })),
@@ -156,22 +156,22 @@ describe('image tools', () => {
 
     const tool = createImageCreateTool(ops, reviewer);
     const result = await tool.execute('tool-call-1', {
-      prompt: 'a cute mirror selfie of me in warm morning light',
+      prompt: 'a cozy bedroom portrait in warm morning light',
       aspect_ratio: '3:4',
     }) as AgentToolResult<ImageToolResultDetails>;
 
     expect(ops.create).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: 'a cute mirror selfie of me in warm morning light',
+      prompt: 'a cozy bedroom portrait in warm morning light',
       aspectRatio: '3:4',
     }));
     expect(reviewer.analyze).toHaveBeenCalledWith({
       imageUrls: ['https://images.example.test/selfie.png'],
       imageLocalPaths: ['/tmp/selfie.png'],
-      prompt: 'a cute mirror selfie of me in warm morning light',
+      prompt: 'a cozy bedroom portrait in warm morning light',
       mode: 'create',
     });
     expect(result.details.imageResult?.requestId).toBe('req-vision-1');
-    expect(result.details.visionReview?.summary).toContain('matches the companion look');
+    expect(result.details.visionReview?.summary).toContain('visually consistent');
     expect(resultText(result)).toContain('"requestId": "req-vision-1"');
     expect(resultText(result)).toContain('Vision review:');
   });
@@ -224,6 +224,76 @@ describe('image tools', () => {
     expect(resultText(result)).toContain('Vision review:');
   });
 
+  it('injects appearance context into selfie_create backend prompts', async () => {
+    const ops = {
+      create: vi.fn(async () => ({
+        provider: 'fal',
+        mode: 'create' as const,
+        model: 'fal-ai/nano-banana-2',
+        fallbackUsed: false,
+        requestId: 'req-selfie-appearance-1',
+        images: [{
+          url: 'https://images.example.test/selfie-appearance.png',
+          contentType: 'image/png',
+          fileName: 'selfie-appearance.png',
+          localPath: '/tmp/selfie-appearance.png',
+        }],
+      })),
+      edit: vi.fn(),
+    };
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => ({
+        question: 'Describe the generated image.',
+        summary: 'The selfie matches the requested appearance context.',
+        model: 'vision-model',
+        imageCount: 1,
+      })),
+    };
+
+    const tool = createSelfieTool(ops, reviewer);
+    await runWithVisionToolRequestContext(
+      {
+        userMessageText: 'take a selfie',
+        imageAttachmentUrls: [],
+        appearanceContext: 'Platinum-white hair, bright blue eyes, white feline ears, and twin tails.',
+      },
+      async () => tool.execute('tool-call-selfie-appearance', {
+        prompt: 'a candid mirror selfie of me in soft morning light',
+        aspect_ratio: '3:4',
+      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+    );
+
+    const effectivePrompt = ops.create.mock.calls[0]?.[0]?.prompt;
+    expect(effectivePrompt).toContain('Appearance context (canonical subject identity):');
+    expect(effectivePrompt).toContain('Platinum-white hair, bright blue eyes, white feline ears, and twin tails.');
+    expect(effectivePrompt).toContain('Requested shot:');
+    expect(effectivePrompt).toContain('a candid mirror selfie of me in soft morning light');
+    expect(reviewer.analyze).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: effectivePrompt,
+    }));
+  });
+
+  it('fails closed when image_create is asked for a self-portrait', async () => {
+    const ops = {
+      create: vi.fn(async () => ({
+        provider: 'fal',
+        mode: 'create' as const,
+        model: 'fal-ai/nano-banana-2',
+        fallbackUsed: false,
+        requestId: 'req-generic-selfie-blocked',
+        images: [],
+      })),
+      edit: vi.fn(),
+    };
+
+    const tool = createImageCreateTool(ops);
+    const result = await tool.execute('tool-call-selfie-blocked', {
+      prompt: 'a mirror selfie of me in warm morning light',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    expect(ops.create).not.toHaveBeenCalled();
+    expect(resultText(result)).toContain('Use selfie_create for selfies or self-portraits');
+  });
   it('exposes image_analyze as a callable vision tool', async () => {
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({

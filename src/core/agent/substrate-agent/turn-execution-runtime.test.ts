@@ -1327,6 +1327,49 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     });
   });
 
+  it('exposes appearance context to tools when selfie_create is active for the turn', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.buildPromptTemplateVariables = vi.fn(() => ({ 'character.visual_description': 'Silver eyes and a weathered jacket.' }));
+    runtime.applyActiveToolsToAgentForTurn = vi.fn(() => {
+      runtime.agent.state.tools = [{
+        name: 'selfie_create',
+        description: 'Generate a dedicated selfie or self-portrait of the companion.',
+        inputSchema: { type: 'object' },
+      }] as any[];
+    });
+    let observedContext: ReturnType<typeof getVisionToolRequestContext> | undefined;
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      observedContext = getVisionToolRequestContext();
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: 'assistant reply' });
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-selfie-appearance-context', {
+      channelType: 'discord',
+      content: 'take a selfie',
+    }));
+
+    expect(observedContext).toEqual({
+      userMessageText: 'take a selfie',
+      imageAttachmentUrls: [],
+      appearanceContext: 'Silver eyes and a weathered jacket.',
+    });
+  });
+
   it('exposes the dedicated current-turn image review to tools during prompt execution', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({

@@ -75,6 +75,18 @@ export interface ResolvedAuthorContext {
 
 const SELF_IMAGE_TOOL_NAMES = ['selfie_create'] as const;
 
+export function resolveAppearanceContextFromTemplateVariables(
+  templateVariables?: Record<string, string>,
+): string {
+  const promptVariables = templateVariables ?? {};
+  return (
+    promptVariables['character.visual_description']
+    || promptVariables.extensions_visual_description
+    || promptVariables.visual_description
+    || ''
+  ).trim();
+}
+
 function isInternalJournalChannel(channelId: string): boolean {
   return channelId === 'internal:heartbeat' || channelId.startsWith('internal:reflection:');
 }
@@ -434,16 +446,6 @@ export function buildDynamicPromptTemplateVariables(input: {
 }): Record<string, string> {
   const internalTurn = isInternalJournalChannel(input.message.channelId);
   const visibility = classifyChannel(input.message.channelId, resolveMessageChannelMeta(input.message));
-  const resolveAppearanceContext = (): string => {
-    const promptVariables = input.templateVariables ?? {};
-    return (
-      promptVariables['character.visual_description']
-      || promptVariables.extensions_visual_description
-      || promptVariables.visual_description
-      || ''
-    ).trim();
-  };
-
   const hasActiveSelfImageTool = (): boolean => {
     for (const toolName of SELF_IMAGE_TOOL_NAMES) {
       if (input.promotedExtendedToolNames.has(toolName)) return true;
@@ -505,7 +507,9 @@ export function buildDynamicPromptTemplateVariables(input: {
   const openThreadsBody = unwrapPromptSectionBody(input.activeConcernsBlock);
   const behavioralNotesBody = unwrapPromptSectionBody(input.behavioralNotesBlock);
   const skillsIndexBody = unwrapPromptSectionBody(input.skillsContext);
-  const appearanceContextBody = hasActiveSelfImageTool() ? resolveAppearanceContext() : '';
+  const appearanceContextBody = hasActiveSelfImageTool()
+    ? resolveAppearanceContextFromTemplateVariables(input.templateVariables)
+    : '';
   const selfImageToolGuidanceBody = hasActiveSelfImageTool()
     ? [
       'Use selfie_create for a brand new selfie or self-portrait featuring you.',

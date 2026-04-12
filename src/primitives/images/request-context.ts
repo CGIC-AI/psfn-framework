@@ -10,6 +10,7 @@ export interface VisionToolRequestContext {
   userMessageText: string;
   imageAttachmentUrls: string[];
   currentTurnVisionReview?: CurrentTurnVisionReviewContext;
+  appearanceContext?: string;
 }
 
 const visionToolRequestContextStorage = new AsyncLocalStorage<VisionToolRequestContext>();
@@ -29,6 +30,9 @@ export function runWithVisionToolRequestContext<T>(
           summary: context.currentTurnVisionReview.summary,
         },
       }
+      : {}),
+    ...(context.appearanceContext !== undefined
+      ? { appearanceContext: context.appearanceContext }
       : {}),
   }, fn);
 }

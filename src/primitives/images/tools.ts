@@ -242,6 +242,50 @@ function normalizeInputUrls(inputUrls: readonly string[] | undefined): string[] 
     .slice(0, 4);
 }
 
+const SELF_IMAGE_PROMPT_PATTERNS = Object.freeze([
+  /\bselfie\b/i,
+  /\bself-portrait\b/i,
+  /\bself portrait\b/i,
+  /\bmirror selfie\b/i,
+  /\bportrait of me\b/i,
+  /\bphoto of me\b/i,
+  /\bpicture of me\b/i,
+  /\bimage of me\b/i,
+  /\bof myself\b/i,
+  /\bmy portrait\b/i,
+  /\bmyself\b/i,
+  /\bmy face\b/i,
+  /\bmy body\b/i,
+  /\blooks like me\b/i,
+  /\blook like me\b/i,
+]);
+
+function promptLikelyRequestsSelfPortrait(prompt: string): boolean {
+  const normalizedPrompt = prompt.trim();
+  return normalizedPrompt.length > 0
+    && SELF_IMAGE_PROMPT_PATTERNS.some((pattern) => pattern.test(normalizedPrompt));
+}
+
+function buildSelfImageRoutingError(toolName: string): string {
+  return `${toolName} rejected a self-image request. Use selfie_create for selfies or self-portraits so companion appearance context is applied explicitly.`;
+}
+
+function buildSelfieCreatePrompt(prompt: string, appearanceContext?: string): string {
+  const normalizedPrompt = prompt.trim();
+  const normalizedAppearance = appearanceContext?.trim() ?? '';
+  if (!normalizedAppearance) {
+    return normalizedPrompt;
+  }
+
+  return [
+    'Appearance context (canonical subject identity):',
+    normalizedAppearance,
+    '',
+    'Requested shot:',
+    normalizedPrompt,
+  ].join('\n');
+}
+
 async function executeMediaGenerate(
   ops: ImageOperations,
   reviewer: ImageVisionReviewer | undefined,
@@ -250,6 +294,10 @@ async function executeMediaGenerate(
   const prompt = normalizePrompt(params.prompt);
   if (!prompt) {
     return textResultWithError('media action "generate" requires a non-empty prompt', true);
+  }
+
+  if (promptLikelyRequestsSelfPortrait(prompt)) {
+    return textResultWithError(buildSelfImageRoutingError('media generate'), true);
   }
 
   try {
@@ -517,9 +565,17 @@ export function createImageCreateTool(
         use_turbo?: boolean;
       },
     ): Promise<AgentToolResult<ImageToolResultDetails>> => {
+      const normalizedPrompt = params.prompt.trim();
+      if (!selfImage && promptLikelyRequestsSelfPortrait(normalizedPrompt)) {
+        return textResultWithError(buildSelfImageRoutingError(toolName), true);
+      }
+      const effectivePrompt = selfImage
+        ? buildSelfieCreatePrompt(normalizedPrompt, getVisionToolRequestContext()?.appearanceContext)
+        : normalizedPrompt;
+
       try {
         const result = await ops.create({
-          prompt: params.prompt,
+          prompt: effectivePrompt,
           provider: params.provider,
           model: params.model,
           numImages: params.num_images,
@@ -542,7 +598,7 @@ export function createImageCreateTool(
         const review = await reviewGeneratedImages(reviewer, {
           imageUrls: result.images.map((image) => image.url),
           imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
-          prompt: params.prompt,
+          prompt: effectivePrompt,
           mode: 'create',
         });
         return {

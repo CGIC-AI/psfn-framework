@@ -90,6 +90,7 @@ import {
 } from './moa-turn.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import {
+  resolveAppearanceContextFromTemplateVariables,
   resolveContinuitySubjectKey,
   type ResolvedAuthorContext,
 } from './runtime-context.js';
@@ -1218,8 +1219,14 @@ export async function handleMessageForTurn(
           visionReviewer: runtime.imageVisionReviewer,
         }),
       });
+      const selfieAppearanceContext = activeTools.some((tool) => tool.name === 'selfie_create')
+        ? resolveAppearanceContextFromTemplateVariables(templateVariables)
+        : undefined;
       const visionToolRequestContext = {
         ...baseVisionToolRequestContext,
+        ...(selfieAppearanceContext !== undefined
+          ? { appearanceContext: selfieAppearanceContext }
+          : {}),
         ...(turnUserContentBuildResult.currentTurnVisionReview
           ? { currentTurnVisionReview: turnUserContentBuildResult.currentTurnVisionReview }
           : {}),

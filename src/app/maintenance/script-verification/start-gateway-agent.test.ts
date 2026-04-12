@@ -14,6 +14,12 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(launcher).toContain('kill -TERM -- "-${pgid}"');
     expect(launcher).toContain('kill -KILL -- "-${pgid}"');
   });
+
+  it('keeps the live user unit pointed at the launcher instead of npm', () => {
+    const unit = readFileSync(join(repoRoot, 'scripts/system/user/purrsephone.service'), 'utf8');
+    expect(unit).toContain('ExecStart=/bin/bash /mnt/samesung/ai/psfn-live/scripts/start-gateway-agent.sh --yolo');
+    expect(unit).not.toContain('ExecStart=%h/.nvm/versions/node/v22.21.1/bin/npm run yolo');
+  });
 });
 
 describe('psfn_source_dotenv_preserving_existing_env', () => {

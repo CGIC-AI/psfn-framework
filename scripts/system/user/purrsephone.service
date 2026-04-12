@@ -14,7 +14,7 @@ Environment=DATA_DIR=/mnt/samesung/ai/psfn-live/data
 Environment=DATABASE_PATH=/mnt/samesung/ai/psfn-live/data/purrsephone.db
 Environment=WORKSPACE_PATH=/mnt/samesung/ai/psfn-live/workspace
 Environment=CHARACTER_CARD_PATH=/mnt/samesung/ai/psfn-live/purrsephone/purrsephone.json
-ExecStart=%h/.nvm/versions/node/v22.21.1/bin/npm run yolo
+ExecStart=/bin/bash /mnt/samesung/ai/psfn-live/scripts/start-gateway-agent.sh --yolo
 Restart=on-failure
 RestartSec=10
 KillMode=mixed

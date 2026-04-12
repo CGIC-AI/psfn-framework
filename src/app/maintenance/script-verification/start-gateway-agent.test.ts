@@ -1,11 +1,20 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 
 const repoRoot = process.cwd();
 const runtimeEnvPath = join(repoRoot, 'scripts/system/runtime-env.sh');
+
+describe('start-gateway-agent launcher supervision', () => {
+  it('starts children in dedicated sessions and kills process groups on shutdown', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('setsid "$@" &');
+    expect(launcher).toContain('kill -TERM -- "-${pgid}"');
+    expect(launcher).toContain('kill -KILL -- "-${pgid}"');
+  });
+});
 
 describe('psfn_source_dotenv_preserving_existing_env', () => {
   const tempDirs: string[] = [];

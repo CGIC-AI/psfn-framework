@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SessionEntry, CompactionSummary, JournalEntry } from '../../core/session/types.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
@@ -72,6 +72,11 @@ import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
 import { indexedChannelId, resolvePrimarySessionId } from './store/session-index-keys.js';
 const log = createComponentLogger('SessionStore');
 const MAX_RECENT_ENTRY_CACHE_LIMITS = 8;
+const JOURNAL_WRITE_LOCK_SUFFIX = '.write-lock';
+const JOURNAL_WRITE_LOCK_POLL_MS = 10;
+const JOURNAL_WRITE_LOCK_STALE_MS = 30_000;
+const JOURNAL_WRITE_LOCK_TIMEOUT_MS = 5_000;
+const JOURNAL_WRITE_SLEEP_STATE = new Int32Array(new SharedArrayBuffer(4));
 export {
   sanitizeChannelId,
   unsanitizeChannelId,
@@ -138,6 +143,61 @@ function syncLastMessageMetadataFromEntries(cache: ChannelCache): void {
     return;
   }
   applyLastMessageMetadata(cache, lastEntry);
+}
+
+function sleepSync(ms: number): void {
+  if (ms <= 0) return;
+  Atomics.wait(JOURNAL_WRITE_SLEEP_STATE, 0, 0, ms);
+}
+
+function journalWriteLockPath(filePath: string): string {
+  return `${filePath}${JOURNAL_WRITE_LOCK_SUFFIX}`;
+}
+
+function clearStaleJournalWriteLock(lockPath: string): boolean {
+  try {
+    const stats = statSync(lockPath);
+    if (Date.now() - stats.mtimeMs <= JOURNAL_WRITE_LOCK_STALE_MS) {
+      return false;
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return false;
+    throw error;
+  }
+
+  rmSync(lockPath, { recursive: true, force: true });
+  return true;
+}
+
+function withJournalWriteLock<T>(filePath: string, operation: () => T): T {
+  const lockPath = journalWriteLockPath(filePath);
+  const deadline = Date.now() + JOURNAL_WRITE_LOCK_TIMEOUT_MS;
+
+  for (;;) {
+    try {
+      mkdirSync(lockPath);
+      break;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EEXIST') {
+        throw error;
+      }
+      if (clearStaleJournalWriteLock(lockPath)) {
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(`Timed out acquiring session journal write lock for ${filePath}`);
+      }
+      sleepSync(JOURNAL_WRITE_LOCK_POLL_MS);
+    }
+  }
+
+  try {
+    return operation();
+  } finally {
+    rmSync(lockPath, { recursive: true, force: true });
+  }
 }
 
 export class SessionStore implements TranscriptSearchPort {
@@ -335,6 +395,63 @@ export class SessionStore implements TranscriptSearchPort {
       upsertChannelIndex: (channelId, entry) => this.upsertChannelIndex(channelId, entry),
     });
   }
+  private resolveCacheSessionKey(cache: ChannelCache): string {
+    for (const [sessionId, candidate] of this.channels.entries()) {
+      if (candidate === cache) return sessionId;
+    }
+    return this.resolveSessionId(cache.channelId) ?? cache.channelId;
+  }
+  private reconcileWriteCache(cache: ChannelCache): ChannelCache {
+    const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
+    const metadata = this.journalRuntime.scanArchiveMetadata(archive);
+    if (metadata.quarantined.length > 0) {
+      this.journalRuntime.warnAboutQuarantinedEntries(
+        cache.channelId,
+        archive,
+        metadata.quarantined.length,
+        metadata.entryCount,
+      );
+    }
+
+    const diskNextId = metadata.maxId + 1;
+    const cacheLastJournalType = cache.lastJournalEntry?.type ?? null;
+    const diskLastJournalType = metadata.lastEntry?.type ?? null;
+    const cacheMatchesDisk = (
+      cache.nextId === diskNextId
+      && cache.lastHmac === metadata.lastHmac
+      && cache.lastTimestamp === metadata.lastTimestamp
+      && cache.messageCount === metadata.messageCount
+      && cache.activeTurnTombstoneCount === metadata.activeTurnTombstoneCount
+      && cache.lastExtractionCoveredUpTo === metadata.lastExtractionCoveredUpTo
+      && cacheLastJournalType === diskLastJournalType
+    );
+    if (cacheMatchesDisk) {
+      return cache;
+    }
+
+    const loaded = this.journalRuntime.loadChannel(archive);
+    const sessionId = this.resolveCacheSessionKey(cache);
+    this.channels.set(sessionId, loaded);
+    this.upsertChannelIndex(sessionId, snapshotIndexEntry(loaded));
+    this.syncTranscriptProjectionForChannel(loaded.channelId, loaded.entries);
+    return loaded;
+  }
+  private withLockedChannelWrite<T>(
+    channelId: string,
+    seed: SessionFileSeed,
+    writer: (cache: ChannelCache) => T,
+  ): T {
+    const cache = this.ensureChannelForWrite(channelId, seed);
+    return withJournalWriteLock(cache.resolvedPath, () => writer(this.reconcileWriteCache(cache)));
+  }
+  private withLockedExistingChannelWrite<T>(
+    channelId: string,
+    writer: (cache: ChannelCache) => T,
+  ): T | null {
+    const cache = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
+    if (!cache) return null;
+    return withJournalWriteLock(cache.resolvedPath, () => writer(this.reconcileWriteCache(cache)));
+  }
   private readRecentEntriesFromTail(channelId: string, filePath: string, limit: number): SessionEntry[] {
     return this.journalRuntime.readRecentEntriesFromTail(
       this.journalRuntime.openArchive(channelId, filePath),
@@ -442,46 +559,51 @@ export class SessionStore implements TranscriptSearchPort {
     });
   }
   append(entry: Omit<SessionEntry, 'id'>): number {
-    const cache = this.ensureChannelForWrite(entry.channelId, {
-      timestamp: entry.timestamp,
-      authorId: entry.authorId,
-      authorName: entry.authorName,
-    });
-    const id = cache.nextId;
-    const full: SessionEntry = { ...entry, id };
-    const previousNextId = cache.nextId;
-    const previousEntriesLength = cache.entries.length;
-    const previousMessageCount = cache.messageCount;
-    const previousLastTimestamp = cache.lastTimestamp;
-    const previousLastMessageTimestamp = cache.lastMessageTimestamp;
-    const previousLastMessageRole = cache.lastMessageRole;
-    const previousLastMessageAuthorName = cache.lastMessageAuthorName;
-    const previousLastMessagePreview = cache.lastMessagePreview;
-    cache.nextId = id + 1;
-    if (cache.fullyLoaded) {
-      cache.entries.push(full);
-    }
-    cache.messageCount += 1;
-    cache.lastTimestamp = entry.timestamp;
-    applyLastMessageMetadata(cache, entry);
-    const journal = buildMessageJournalEntry(id, entry);
-    try {
-      this.writeJournalEntry(cache, journal);
-    } catch (error) {
-      cache.nextId = previousNextId;
-      cache.messageCount = previousMessageCount;
-      cache.lastTimestamp = previousLastTimestamp;
-      cache.lastMessageTimestamp = previousLastMessageTimestamp;
-      cache.lastMessageRole = previousLastMessageRole;
-      cache.lastMessageAuthorName = previousLastMessageAuthorName;
-      cache.lastMessagePreview = previousLastMessagePreview;
-      if (cache.fullyLoaded) {
-        cache.entries.length = previousEntriesLength;
-      }
-      throw error;
-    }
-    this.indexSessionEntry(full);
-    return id;
+    return this.withLockedChannelWrite(
+      entry.channelId,
+      {
+        timestamp: entry.timestamp,
+        authorId: entry.authorId,
+        authorName: entry.authorName,
+      },
+      (cache) => {
+        const id = cache.nextId;
+        const full: SessionEntry = { ...entry, id };
+        const previousNextId = cache.nextId;
+        const previousEntriesLength = cache.entries.length;
+        const previousMessageCount = cache.messageCount;
+        const previousLastTimestamp = cache.lastTimestamp;
+        const previousLastMessageTimestamp = cache.lastMessageTimestamp;
+        const previousLastMessageRole = cache.lastMessageRole;
+        const previousLastMessageAuthorName = cache.lastMessageAuthorName;
+        const previousLastMessagePreview = cache.lastMessagePreview;
+        cache.nextId = id + 1;
+        if (cache.fullyLoaded) {
+          cache.entries.push(full);
+        }
+        cache.messageCount += 1;
+        cache.lastTimestamp = entry.timestamp;
+        applyLastMessageMetadata(cache, entry);
+        const journal = buildMessageJournalEntry(id, entry);
+        try {
+          this.writeJournalEntry(cache, journal);
+        } catch (error) {
+          cache.nextId = previousNextId;
+          cache.messageCount = previousMessageCount;
+          cache.lastTimestamp = previousLastTimestamp;
+          cache.lastMessageTimestamp = previousLastMessageTimestamp;
+          cache.lastMessageRole = previousLastMessageRole;
+          cache.lastMessageAuthorName = previousLastMessageAuthorName;
+          cache.lastMessagePreview = previousLastMessagePreview;
+          if (cache.fullyLoaded) {
+            cache.entries.length = previousEntriesLength;
+          }
+          throw error;
+        }
+        this.indexSessionEntry(full);
+        return id;
+      },
+    );
   }
   appendTurnRecord(record: TurnRecord): void {
     this.turnRecordStore.appendTurnRecord(record);
@@ -687,44 +809,49 @@ export class SessionStore implements TranscriptSearchPort {
   }
   insertCompaction(channelId: string, summary: string, coveredUpTo: number): void {
     const now = Date.now();
-    const cache = this.ensureChannelForWrite(channelId, {
-      timestamp: now,
-      authorId: 'system',
-      authorName: 'system',
-    });
-    const id = cache.nextId;
-    const previousNextId = cache.nextId;
-    const previousCompactionLength = cache.compactions.length;
-    cache.nextId = id + 1;
-    if (cache.fullyLoaded) {
-      cache.compactions.push({ id, channelId, summary, coveredUpTo, createdAt: now });
-    }
-    const journal = buildCompactionJournalEntry(id, channelId, summary, coveredUpTo, now);
-    try {
-      this.writeJournalEntry(cache, journal);
-    } catch (error) {
-      cache.nextId = previousNextId;
-      if (cache.fullyLoaded) {
-        cache.compactions.length = previousCompactionLength;
-      }
-      throw error;
-    }
+    this.withLockedChannelWrite(
+      channelId,
+      {
+        timestamp: now,
+        authorId: 'system',
+        authorName: 'system',
+      },
+      (cache) => {
+        const id = cache.nextId;
+        const previousNextId = cache.nextId;
+        const previousCompactionLength = cache.compactions.length;
+        cache.nextId = id + 1;
+        if (cache.fullyLoaded) {
+          cache.compactions.push({ id, channelId, summary, coveredUpTo, createdAt: now });
+        }
+        const journal = buildCompactionJournalEntry(id, channelId, summary, coveredUpTo, now);
+        try {
+          this.writeJournalEntry(cache, journal);
+        } catch (error) {
+          cache.nextId = previousNextId;
+          if (cache.fullyLoaded) {
+            cache.compactions.length = previousCompactionLength;
+          }
+          throw error;
+        }
+      },
+    );
   }
   insertExtractionMarker(channelId: string, coveredUpTo: number, timestamp = Date.now()): void {
     if (!Number.isFinite(coveredUpTo)) return;
-    const cache = this.getLoadedCache(channelId) ?? this.loadExistingChannelCache(channelId);
-    if (!cache) return;
     const markerCoveredUpTo = Math.max(0, Math.floor(coveredUpTo));
-    const id = cache.nextId;
-    const previousNextId = cache.nextId;
-    cache.nextId = id + 1;
-    const journal = buildExtractionMarkerJournalEntry(id, cache.channelId, markerCoveredUpTo, timestamp);
-    try {
-      this.writeJournalEntry(cache, journal);
-    } catch (error) {
-      cache.nextId = previousNextId;
-      throw error;
-    }
+    this.withLockedExistingChannelWrite(channelId, (cache) => {
+      const id = cache.nextId;
+      const previousNextId = cache.nextId;
+      cache.nextId = id + 1;
+      const journal = buildExtractionMarkerJournalEntry(id, cache.channelId, markerCoveredUpTo, timestamp);
+      try {
+        this.writeJournalEntry(cache, journal);
+      } catch (error) {
+        cache.nextId = previousNextId;
+        throw error;
+      }
+    });
   }
   private appendTurnTombstone(
     channelId: string,
@@ -738,39 +865,44 @@ export class SessionStore implements TranscriptSearchPort {
     }
 
     const timestamp = options.timestamp ?? Date.now();
-    const cache = this.ensureChannelForWrite(channelId, {
-      timestamp,
-      authorId: options.actor,
-      authorName: options.actor,
-    });
-    const id = cache.nextId;
-    const previousNextId = cache.nextId;
-    cache.nextId = id + 1;
+    this.withLockedChannelWrite(
+      channelId,
+      {
+        timestamp,
+        authorId: options.actor,
+        authorName: options.actor,
+      },
+      (cache) => {
+        const id = cache.nextId;
+        const previousNextId = cache.nextId;
+        cache.nextId = id + 1;
 
-    const journal = buildTurnTombstoneJournalEntry(id, channelId, {
-      turnId: parsedTurnId,
-      action,
-      timestamp,
-      actor: options.actor,
-      reason: options.reason,
-    });
+        const journal = buildTurnTombstoneJournalEntry(id, channelId, {
+          turnId: parsedTurnId,
+          action,
+          timestamp,
+          actor: options.actor,
+          reason: options.reason,
+        });
 
-    try {
-      this.writeJournalEntry(cache, journal);
-    } catch (error) {
-      cache.nextId = previousNextId;
-      throw error;
-    }
+        try {
+          this.writeJournalEntry(cache, journal);
+        } catch (error) {
+          cache.nextId = previousNextId;
+          throw error;
+        }
 
-    const full = cache.fullyLoaded ? cache : this.ensureChannelFullyLoaded(channelId);
-    if (full) {
-      full.entries = this.applyTurnTombstonesToEntries(full.entries, full.turnTombstones);
-      full.messageCount = full.entries.length;
-      full.activeTurnTombstoneCount = full.turnTombstones.size;
-      syncLastMessageMetadataFromEntries(full);
-      this.upsertChannelIndex(channelId, snapshotIndexEntry(full));
-      this.syncTranscriptProjectionForChannel(channelId, full.entries);
-    }
+        const full = cache.fullyLoaded ? cache : this.ensureChannelFullyLoaded(channelId);
+        if (full) {
+          full.entries = this.applyTurnTombstonesToEntries(full.entries, full.turnTombstones);
+          full.messageCount = full.entries.length;
+          full.activeTurnTombstoneCount = full.turnTombstones.size;
+          syncLastMessageMetadataFromEntries(full);
+          this.upsertChannelIndex(channelId, snapshotIndexEntry(full));
+          this.syncTranscriptProjectionForChannel(channelId, full.entries);
+        }
+      },
+    );
   }
   redactTurn(
     channelId: string,
@@ -796,24 +928,28 @@ export class SessionStore implements TranscriptSearchPort {
       if (skipChannels?.has(channelId)) {
         continue;
       }
-      if (!cache.lastJournalEntry || isGracefulShutdownEntry(cache.lastJournalEntry)) {
-        continue;
-      }
 
-      const id = cache.nextId;
-      cache.nextId = id + 1;
-      const journal = buildGracefulShutdownMarkerJournalEntry(id, channelId, timestamp);
+      withJournalWriteLock(cache.resolvedPath, () => {
+        const currentCache = this.reconcileWriteCache(cache);
+        if (!currentCache.lastJournalEntry || isGracefulShutdownEntry(currentCache.lastJournalEntry)) {
+          return;
+        }
 
-      try {
-        this.writeJournalEntry(cache, journal);
-        marked.push(channelId);
-      } catch (error) {
-        cache.nextId = id;
-        log.warn('Failed to write graceful shutdown marker for channel; continuing shutdown', {
-          channelId,
-          error: toErrorMessage(error),
-        });
-      }
+        const id = currentCache.nextId;
+        currentCache.nextId = id + 1;
+        const journal = buildGracefulShutdownMarkerJournalEntry(id, currentCache.channelId, timestamp);
+
+        try {
+          this.writeJournalEntry(currentCache, journal);
+          marked.push(channelId);
+        } catch (error) {
+          currentCache.nextId = id;
+          log.warn('Failed to write graceful shutdown marker for channel; continuing shutdown', {
+            channelId,
+            error: toErrorMessage(error),
+          });
+        }
+      });
     }
 
     return marked;

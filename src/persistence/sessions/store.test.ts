@@ -906,6 +906,49 @@ describe('SessionStore', () => {
     const id3 = store2.append({ channelId: 'ch1', role: 'user', content: 'C', timestamp: 3000 });
     expect(id3).toBe(3);
   });
+  it('reconciles stale cross-instance HMAC cursors before append', () => {
+    const channelId = 'api:stale-integrity';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:integrity-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+
+    const writer = new SessionStore(dir, { integrityKeyring: keyring });
+    expect(writer.append({ channelId, role: 'user', content: 'first', timestamp: 1_000 })).toBe(1);
+
+    const staleWriter = new SessionStore(dir, { integrityKeyring: keyring });
+    expect(staleWriter.getRecent(channelId, 10).map(entry => entry.content)).toEqual(['first']);
+
+    expect(writer.append({ channelId, role: 'assistant', content: 'second', timestamp: 2_000 })).toBe(2);
+    expect(staleWriter.append({ channelId, role: 'user', content: 'third', timestamp: 3_000 })).toBe(3);
+
+    const file = readdirSync(dir)
+      .filter(f => f.endsWith('.jsonl') && !f.startsWith('user_'))
+      .find(f => f.includes('stale-integrity'));
+    expect(file).toBeDefined();
+    const lines = readFileSync(join(dir, file!), 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as import('../../core/session/types.js').JournalEntry);
+
+    expect(lines.filter(entry => entry.type === 'message').map(entry => entry.id)).toEqual([1, 2, 3]);
+
+    let previousHmac: string | null = null;
+    for (const line of lines) {
+      const verification = verifyJournalEntryIntegrity(line, keyring!, previousHmac);
+      expect(verification.verified).toBe(true);
+      previousHmac = typeof line._hmac === 'string' ? line._hmac : previousHmac;
+    }
+
+    const reloaded = new SessionStore(dir, { integrityKeyring: keyring });
+    expect(reloaded.getRecent(channelId, 10).map(entry => entry.content)).toEqual([
+      'first',
+      'second',
+      'third',
+    ]);
+  });
+
 
   it('rolls back in-memory append state when journal persistence fails', () => {
     const channelId = 'api:append-rollback';

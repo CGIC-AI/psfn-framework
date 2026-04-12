@@ -22,6 +22,7 @@ import { applyJournalState } from './crash-recovery.js';
 import { snapshotIndexEntry } from './channel-index.js';
 import {
   createFilesystemSessionArchivePort,
+  type JournalFileMetadata,
   type SessionArchiveHandle,
   type SessionArchivePort,
 } from '../../journals/journal/port.js';
@@ -90,6 +91,10 @@ export class SessionJournalRuntime {
 
   resolveArchivePath(handle: SessionArchiveHandle): string {
     return this.archivePort.resolveArchivePath(handle);
+  }
+
+  scanArchiveMetadata(archive: SessionArchiveHandle): JournalFileMetadata {
+    return this.archivePort.scanJournalFileMetadata(archive);
   }
 
   verifyAndNormalizeEntry(

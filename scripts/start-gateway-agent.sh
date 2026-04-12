@@ -132,32 +132,55 @@ SOCKET_PATH="${GATEWAY_SOCKET}"
 GATEWAY_PID=""
 AGENT_PID=""
 OPERATOR_PID=""
+LAUNCHED_PID=""
+
+launch_background() {
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" &
+  else
+    "$@" &
+  fi
+  LAUNCHED_PID=$!
+}
+
+wait_for_pid_exit() {
+  local pid="$1"
+  local attempts="${2:-50}"
+  local attempt
+  for attempt in $(seq 1 "${attempts}"); do
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  return 1
+}
 
 start_gateway() {
   if [ -x "./node_modules/.bin/tsx" ]; then
-    ./node_modules/.bin/tsx src/app/gateway/main.ts &
+    launch_background ./node_modules/.bin/tsx src/app/gateway/main.ts
   else
-    npm run gateway &
+    launch_background npm run gateway
   fi
-  GATEWAY_PID=$!
+  GATEWAY_PID="${LAUNCHED_PID}"
 }
 
 start_agent() {
   if [ -x "./node_modules/.bin/tsx" ]; then
-    ./node_modules/.bin/tsx src/app/agent/main.ts &
+    launch_background ./node_modules/.bin/tsx src/app/agent/main.ts
   else
-    npm run agent &
+    launch_background npm run agent
   fi
-  AGENT_PID=$!
+  AGENT_PID="${LAUNCHED_PID}"
 }
 
 start_operator() {
   if [ -x "./node_modules/.bin/tsx" ]; then
-    ./node_modules/.bin/tsx src/app/operator/main.ts &
+    launch_background ./node_modules/.bin/tsx src/app/operator/main.ts
   else
-    npm run operator &
+    launch_background npm run operator
   fi
-  OPERATOR_PID=$!
+  OPERATOR_PID="${LAUNCHED_PID}"
 }
 
 stop_pid() {
@@ -165,11 +188,30 @@ stop_pid() {
   if [ -z "${pid}" ]; then
     return
   fi
-  if kill -0 "${pid}" 2>/dev/null; then
-    pkill -TERM -P "${pid}" 2>/dev/null || true
-    kill "${pid}" 2>/dev/null || true
+
+  if ! kill -0 "${pid}" 2>/dev/null; then
     wait "${pid}" 2>/dev/null || true
+    return
   fi
+
+  local pgid=""
+  pgid="$(ps -o pgid= -p "${pid}" 2>/dev/null | tr -d '[:space:]')"
+  if [ -n "${pgid}" ]; then
+    kill -TERM -- "-${pgid}" 2>/dev/null || true
+  else
+    kill -TERM "${pid}" 2>/dev/null || true
+  fi
+
+  if ! wait_for_pid_exit "${pid}" 100; then
+    if [ -n "${pgid}" ]; then
+      kill -KILL -- "-${pgid}" 2>/dev/null || true
+    else
+      kill -KILL "${pid}" 2>/dev/null || true
+    fi
+    wait_for_pid_exit "${pid}" 20 || true
+  fi
+
+  wait "${pid}" 2>/dev/null || true
 }
 
 cleanup() {

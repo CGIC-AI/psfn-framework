@@ -1152,7 +1152,7 @@ export async function handleMessageForTurn(
           stopReason: moaResult.stopReason,
         };
         turnSnapshot.capturedAt = Date.now();
-        await emitTurnSnapshot(turnSnapshot);
+        void emitTurnSnapshot(turnSnapshot);
       }
     } else {
       runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(providerSystemPrompt));
@@ -1234,7 +1234,7 @@ export async function handleMessageForTurn(
       if (turnSnapshot.promptContext) {
         turnSnapshot.promptContext.currentTurnInput = turnUserContentBuildResult.content;
         turnSnapshot.capturedAt = Date.now();
-        await emitTurnSnapshot(turnSnapshot);
+        void emitTurnSnapshot(turnSnapshot);
       }
       try {
         await runWithVisionTurnTimeout({

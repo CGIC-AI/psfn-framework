@@ -1,0 +1,1 @@
+{"type":"config","name":"Reduce TTFT in companion response turns","metricName":"median_turn_ms","metricUnit":"ms","bestDirection":"lower"}

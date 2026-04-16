@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { createIsolatedE2ERuntime } from '../src/app/e2e/runtime-harness.js';
 import { hydrateJsonBackedRuntimeConfig } from '../src/system/config/runtime-config.js';
 import { EventBus } from '../src/shared/event-bus.js';
-import { SessionStore } from '../src/persistence/sessions/store.js';
+
 import { MemoryStore } from '../src/faculties/memory/store.js';
 import { initDatabase } from '../src/persistence/sqlite-utils.js';
 import { LLMClient } from '../src/primitives/llm/client.js';
@@ -127,12 +127,10 @@ async function runProvider(provider: typeof PROVIDERS[number]): Promise<TurnResu
 
   try {
     const eventBus = new EventBus();
-    const { card, systemPrompt } = composeIdentity(config);
-    const companionName = card.data.name.trim() || 'Companion';
-
+    const { systemPrompt } = composeIdentity(config);
     const llmClient = new LLMClient(config);
     const sessionComposition = composeSessionRuntime({ config, sessionsDir });
-    const { sessionStore, sessionManager } = sessionComposition;
+    const { sessionManager } = sessionComposition;
     const embeddingProvider = createEmbeddingProviderFromEnv();
     const memoryStore = new MemoryStore(db, embeddingProvider.dims);
 

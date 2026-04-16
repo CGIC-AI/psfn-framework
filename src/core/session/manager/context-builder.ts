@@ -311,22 +311,25 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   const coreMemorySectionText = hasCoreMemorySection ? params.coreMemoryBlock : '';
   const coreMemoryTokenCount = countTokens(coreMemorySectionText);
   const memoryTokenCount = countTokens(params.memoriesBlock);
-  const compactionThresholdTokenBudget = Math.floor(
-    historyBudget.contextWindow * (params.config.compactionThresholdPct / 100),
-  );
-  const sessionMessageTokens = countMessageTokens(
-    entriesToMessages(recent, channelVisibility, false),
-  );
   let compactionManifest = {
     triggered: false,
     compactedEntryCount: 0,
-    totalTokensBefore: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + sessionMessageTokens,
-    totalTokensAfter: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + sessionMessageTokens,
+    totalTokensBefore: 0,
+    totalTokensAfter: 0,
   };
 
   // Explicit compaction remains available for callers that opt into it.
   if (params.llmProvider) {
+    const sessionMessageTokens = countMessageTokens(
+      entriesToMessages(recent, channelVisibility, false),
+    );
     const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount;
+    compactionManifest = {
+      triggered: false,
+      compactedEntryCount: 0,
+      totalTokensBefore: systemTokens + sessionMessageTokens,
+      totalTokensAfter: systemTokens + sessionMessageTokens,
+    };
     const preCompactionEntryCount = recent.length;
     const result = await runAutoCompaction({
       channelId: params.channelId,
@@ -365,6 +368,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       totalTokensAfter: systemTokens + postCompactionMessageTokens + newSummaryTokenCount,
     };
   }
+  const compactionThresholdTokenBudget = Math.floor(
+    historyBudget.contextWindow * (params.config.compactionThresholdPct / 100),
+  );
 
   // Build system prompt with memories
   let fullSystem = params.systemPrompt;

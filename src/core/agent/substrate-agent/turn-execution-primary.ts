@@ -160,7 +160,7 @@ export async function executePrimaryTurn(params: {
         : {}),
     };
     turnSnapshot.capturedAt = Date.now();
-    await emitTurnSnapshot(turnSnapshot);
+    void emitTurnSnapshot(turnSnapshot);
   }
 
   const agentMessages = contextMessagesToPiMessages(context.messages);

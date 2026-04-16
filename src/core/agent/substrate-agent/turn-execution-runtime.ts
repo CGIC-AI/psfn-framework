@@ -750,7 +750,7 @@ export async function handleMessageForTurn(
       ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot } : {}),
       ...(memorySnapshot ? { memory: memorySnapshot } : {}),
     };
-    await emitTurnSnapshot(turnSnapshot);
+    void emitTurnSnapshot(turnSnapshot);
 
     const memoryStageStart = Date.now();
     const { memoriesBlock, proactiveRecallBlock } = await runWithRequestContext(
@@ -1079,7 +1079,7 @@ export async function handleMessageForTurn(
         providerWireMessages,
       },
     };
-    await emitTurnSnapshot(turnSnapshot);
+    void emitTurnSnapshot(turnSnapshot);
     emitObservedTurnStage('context', {
       durationMs: Date.now() - contextStageStart,
       contextMessages: contextMessageCount,

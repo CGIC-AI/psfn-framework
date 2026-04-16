@@ -727,13 +727,14 @@ export function validatePromptRuntimeEditableBlockContents(
   };
 }
 
-const PROMPT_RUNTIME_RELOAD_INTERVAL_MS = 5000;
+const PROMPT_RUNTIME_RELOAD_INTERVAL_MS = 30000;
 
 export class PromptRuntimeLayoutStore {
   private readonly filePath: string;
   private layout: PromptRuntimeLayout;
   private lastLoadedMtimeMs: number;
   private lastReloadCheckAtMs: number;
+  private fileExists = false;
 
   constructor(filePath: string) {
     this.filePath = filePath;
@@ -826,10 +827,12 @@ export class PromptRuntimeLayoutStore {
 
   private load(): void {
     if (!existsSync(this.filePath)) {
+      this.fileExists = false;
       this.layout = buildDefaultPromptRuntimeLayout();
       return;
     }
 
+    this.fileExists = true;
     const raw = readFileSync(this.filePath, 'utf-8');
     this.layout = parsePromptRuntimeLayout(raw);
     this.lastLoadedMtimeMs = statSync(this.filePath).mtimeMs;
@@ -839,7 +842,8 @@ export class PromptRuntimeLayoutStore {
     const now = Date.now();
     if (now - this.lastReloadCheckAtMs < PROMPT_RUNTIME_RELOAD_INTERVAL_MS) return;
     this.lastReloadCheckAtMs = now;
-    if (!existsSync(this.filePath)) return;
+    if (!this.fileExists && !existsSync(this.filePath)) return;
+    this.fileExists = true;
     const nextMtime = statSync(this.filePath).mtimeMs;
     if (nextMtime <= this.lastLoadedMtimeMs) return;
     this.load();
@@ -848,6 +852,7 @@ export class PromptRuntimeLayoutStore {
   private save(): void {
     writeJsonAtomic(this.filePath, this.layout, { trailingNewline: true });
     if (existsSync(this.filePath)) {
+      this.fileExists = true;
       this.lastLoadedMtimeMs = statSync(this.filePath).mtimeMs;
     }
   }

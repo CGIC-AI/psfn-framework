@@ -22,18 +22,12 @@ import {
 } from '../src/app/startup/composition/composition.js';
 import type { SubstrateMessage } from '../src/shared/contracts/runtime.js';
 
-const TURNS_PER_PROVIDER = 6;
+const TURNS_PER_PROVIDER = 10;
 const WARMUP_TURNS = 1;
 
 const PROVIDERS = [
-  { id: 'kimi-k2.5', model: 'moonshotai/kimi-k2.5' },
-  { id: 'glm-5.1', model: 'z-ai/glm-5.1' },
-  { id: 'gemini-3.1-flash', model: 'google/gemini-3.1-flash' },
-  { id: 'deepseek-v3.2', model: 'deepseek/deepseek-v3.2' },
-  { id: 'minimax-m2.7', model: 'minimax/minimax-m2.7' },
-  { id: 'mimo-v2-pro', model: 'mimo/mimo-v2-pro' },
-  { id: 'qwen3.5-27b', model: 'qwen/qwen3.5-27b' },
   { id: 'gemma-4-31b-it', model: 'google/gemma-4-31b-it' },
+  { id: 'deepseek-v3.2', model: 'deepseek/deepseek-v3.2' },
 ];
 
 const MESSAGES = [

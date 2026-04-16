@@ -19,6 +19,7 @@ import {
   resolvePromptRuntimeLayoutPath,
   type PromptRuntimeSystemPromptBlockId,
 } from '../../identity/prompt-runtime.js';
+import { getCachedPromptRuntimeLayoutStore } from '../../identity/prompt-runtime-store-cache.js';
 import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';
 import { cloneSessionEntry } from '../../turns/snapshot.js';
 import type { SessionEntry } from '../types.js';
@@ -55,16 +56,10 @@ const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
 export const DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS = 3 * 60 * 60 * 1000;
 const ORIENTATION_SUMMARY_MAX_CHARS = 180;
-const promptRuntimeLayoutStoreCache = new Map<string, PromptRuntimeLayoutStore>();
-
 function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayoutStore {
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
   const filePath = resolvePromptRuntimeLayoutPath(companionDataDir);
-  const cached = promptRuntimeLayoutStoreCache.get(filePath);
-  if (cached) return cached;
-  const created = new PromptRuntimeLayoutStore(filePath);
-  promptRuntimeLayoutStoreCache.set(filePath, created);
-  return created;
+  return getCachedPromptRuntimeLayoutStore(filePath, () => new PromptRuntimeLayoutStore(filePath));
 }
 
 function isInternalJournalChannel(channelId: string): boolean {

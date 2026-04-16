@@ -12,6 +12,7 @@ import {
   resolvePromptRuntimeLayoutPath,
   type PromptRuntimeSystemPromptBlockId,
 } from '../../identity/prompt-runtime.js';
+import { getCachedPromptRuntimeLayoutStore } from '../../identity/prompt-runtime-store-cache.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
 import { collectGeneratedImageAttachments } from '../../../primitives/images/generated-media.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
@@ -113,16 +114,10 @@ import { sanitizePersistedReasoningText } from './turn-records.js';
 const log = createComponentLogger('SubstrateAgent');
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
 const VISION_TURN_TIMEOUT_MS = 10_000;
-const promptRuntimeLayoutStoreCache = new Map<string, PromptRuntimeLayoutStore>();
-
 function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayoutStore {
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
   const filePath = resolvePromptRuntimeLayoutPath(companionDataDir);
-  const cached = promptRuntimeLayoutStoreCache.get(filePath);
-  if (cached) return cached;
-  const created = new PromptRuntimeLayoutStore(filePath);
-  promptRuntimeLayoutStoreCache.set(filePath, created);
-  return created;
+  return getCachedPromptRuntimeLayoutStore(filePath, () => new PromptRuntimeLayoutStore(filePath));
 }
 
 function buildPromptMessage(

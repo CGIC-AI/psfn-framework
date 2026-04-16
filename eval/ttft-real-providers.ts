@@ -22,12 +22,11 @@ import {
 } from '../src/app/startup/composition/composition.js';
 import type { SubstrateMessage } from '../src/shared/contracts/runtime.js';
 
-const TURNS_PER_PROVIDER = 10;
+const TURNS_PER_PROVIDER = 15;
 const WARMUP_TURNS = 1;
 
 const PROVIDERS = [
   { id: 'gemma-4-31b-it', model: 'google/gemma-4-31b-it' },
-  { id: 'deepseek-v3.2', model: 'deepseek/deepseek-v3.2' },
 ];
 
 const MESSAGES = [

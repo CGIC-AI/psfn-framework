@@ -753,7 +753,16 @@ export async function handleMessageForTurn(
     void emitTurnSnapshot(turnSnapshot);
 
     const memoryStageStart = Date.now();
-    const { memoriesBlock, proactiveRecallBlock } = await runWithRequestContext(
+    const internalStatePromise = runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
+      message,
+      responseText: '',
+      trustLevel,
+      canonicalContactKey: authorContext.canonicalContactKey,
+      emotionSnapshot,
+      toolCallCount: 0,
+      sessionChannelId: emotionSessionId,
+    });
+    const memoryPromise = runWithRequestContext(
       {
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.memory'),
         ...viewerRequestContext,
@@ -793,6 +802,10 @@ export async function handleMessageForTurn(
         return { memoriesBlock, proactiveRecallBlock };
       },
     );
+    const [{ memoriesBlock, proactiveRecallBlock }, preTurnInternalState] = await Promise.all([
+      memoryPromise,
+      internalStatePromise,
+    ]);
     const memoryContextBlock = [memoriesBlock, proactiveRecallBlock]
       .map(section => section.trim())
       .filter(section => section.length > 0)
@@ -823,15 +836,6 @@ export async function handleMessageForTurn(
       authorContext.subjectIdentityKey,
       runtimeNow,
     );
-    const preTurnInternalState = await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
-      message,
-      responseText: '',
-      trustLevel,
-      canonicalContactKey: authorContext.canonicalContactKey,
-      emotionSnapshot,
-      toolCallCount: 0,
-      sessionChannelId: emotionSessionId,
-    });
     const preTurnInternalStateSnapshotRef = buildInternalStateSnapshotRef(preTurnInternalState);
     const preTurnMetacognitiveFlags = runtime.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
       internalState: preTurnInternalState,

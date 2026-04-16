@@ -651,7 +651,7 @@ export async function handleMessageForTurn(
     userMessageText: message.content,
     imageAttachmentUrls: collectVisionTurnImageUrls(message),
   };
-  await runtime.eventBus.emit('agent.turn.start', {
+  void runtime.eventBus.emit('agent.turn.start', {
     message,
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.start'),
   });

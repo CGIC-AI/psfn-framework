@@ -1177,7 +1177,7 @@ export async function handleMessageForTurn(
             : {}),
         };
         turnSnapshot.capturedAt = Date.now();
-        await emitTurnSnapshot(turnSnapshot);
+        void emitTurnSnapshot(turnSnapshot);
       }
 
       const agentMessages: AgentMessage[] = piMessages;

@@ -1005,7 +1005,8 @@ export async function handleMessageForTurn(
         content: providerSystemPrompt,
       });
     }
-    for (const providerMessage of contextMessagesToPiMessages(context.messages)) {
+    const piMessages = contextMessagesToPiMessages(context.messages);
+    for (const providerMessage of piMessages) {
       providerWireMessages.push({
         role: providerMessage.role === 'assistant' ? 'assistant' : 'user',
         source: 'message',
@@ -1180,7 +1181,7 @@ export async function handleMessageForTurn(
         await emitTurnSnapshot(turnSnapshot);
       }
 
-      const agentMessages: AgentMessage[] = contextMessagesToPiMessages(context.messages);
+      const agentMessages: AgentMessage[] = piMessages;
       const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
       runtime.agent.replaceMessages(historyMessages);
       turnStartMessageIndex = runtime.agent.state.messages.length;

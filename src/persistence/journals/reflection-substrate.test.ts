@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
+  assembleReflectionContactContextBundle,
   assembleReflectionSubstrateContext,
   buildReflectionProcessId,
   ReflectionDailyJournalStore,
@@ -174,6 +175,47 @@ describe('reflection substrate stores', () => {
       toReflectionDailyJournalProvenanceRef(recentDaily[0]!),
       toReflectionProcessLogProvenanceRef(recentProcesses[0]!),
     ]);
+  });
+
+  it('assembles a contact-scoped reflection context bundle with live chat, memories, and follow-ups', () => {
+    const bundle = assembleReflectionContactContextBundle({
+      contactId: 'contact-1',
+      contactDisplayName: 'Ari',
+      trustLevel: 'trusted',
+      primarySessionId: 'discord:primary-session',
+      lastSeen: '2026-03-31T12:00:00.000Z',
+      lastSeenDeltaSeconds: 90,
+      currentVAD: { valence: 0.2, arousal: -0.15, dominance: 0.05 },
+      emotionalSnapshot: { valence: 0.18, confidence: 0.84, observedAtMs: 1_700_000_000_000 },
+      recentSessionMessages: [
+        { role: 'user', content: 'I wanted to follow up on yesterday.' },
+        { role: 'assistant', content: 'I am here and tracking that thread.' },
+      ],
+      memoryBlock: '[Retrieved Memory]\n- contact-scoped recollection',
+      activeConcerns: [
+        { id: 'concern-1', text: 'Clarify the recovery timeline', priority: 'high', source: 'appraisal', expiresAt: '2026-04-01T12:00:00.000Z' },
+      ],
+      pendingFollowUps: [
+        { id: 'follow-up-1', content: 'Check in about the recovery plan', priority: 'medium', timing: 'soon', dueAt: '2026-04-01T09:00:00.000Z', wakeConditions: ['next_user_turn'] },
+      ],
+    });
+
+    expect(bundle.canonicalTruthBoundary).toBe(NON_CANONICAL_REFLECTION_SUBSTRATE);
+    expect(bundle.promptBlock).toContain('[Reflection Contact Context]');
+    expect(bundle.promptBlock).toContain('contact_id: contact-1');
+    expect(bundle.promptBlock).toContain('recent_contact_status: active');
+    expect(bundle.promptBlock).toContain('last_seen_delta_seconds: 90');
+    expect(bundle.promptBlock).toContain('I wanted to follow up on yesterday.');
+    expect(bundle.promptBlock).toContain('contact-scoped recollection');
+    expect(bundle.promptBlock).toContain('Clarify the recovery timeline');
+    expect(bundle.promptBlock).toContain('Check in about the recovery plan');
+    expect(bundle.promptBlock).not.toContain('stale silence');
+    expect(bundle.provenanceRefs).toEqual(expect.arrayContaining([
+      'reflection_contact:contact-1',
+      'reflection_contact_session:discord:primary-session',
+      'reflection_contact_session_messages:2',
+      'reflection_contact_memory:contact-1',
+    ]));
   });
 
   it('fails closed when required process-stage fields are missing', () => {

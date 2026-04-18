@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
+import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js';
 import { appendJsonLine } from '../jsonl.js';
 import { sanitizeChannelId } from '../sessions/store-primitives.js';
 import type { ValuesDeliberationMetadata } from '../../faculties/values/store.js';
@@ -103,6 +104,65 @@ export interface ReflectionProcessLogEntry {
 }
 
 export interface ReflectionSubstrateContext {
+  canonicalTruthBoundary: typeof NON_CANONICAL_REFLECTION_SUBSTRATE;
+  promptBlock: string;
+  provenanceRefs: string[];
+}
+
+export interface ReflectionContactRecentMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  authorName?: string;
+}
+
+export interface ReflectionContactEmotionalSnapshot {
+  valence?: number;
+  confidence?: number;
+  observedAtMs?: number;
+  [key: string]: unknown;
+}
+
+export interface ReflectionContactCurrentVAD {
+  valence: number;
+  arousal: number;
+  dominance: number;
+}
+
+export interface ReflectionContactActiveConcern {
+  id?: string;
+  text?: string;
+  priority?: 'high' | 'medium' | 'low';
+  source?: string;
+  expiresAt?: string;
+}
+
+export interface ReflectionContactPendingFollowUp {
+  id?: string;
+  content?: string;
+  priority?: 'low' | 'medium' | 'high';
+  timing?: 'immediate' | 'soon' | 'scheduled';
+  dueAt?: string;
+  contextSummary?: string;
+  wakeConditions?: readonly string[];
+}
+
+export interface ReflectionContactContextBundleInput {
+  contactId: string;
+  contactDisplayName?: string;
+  trustLevel?: string;
+  primarySessionId?: string;
+  lastSeen?: string;
+  lastSeenDeltaSeconds?: number | null;
+  currentVAD?: ReflectionContactCurrentVAD | null;
+  emotionalSnapshot?: ReflectionContactEmotionalSnapshot | null;
+  recentSessionMessages?: readonly ReflectionContactRecentMessage[];
+  memoryBlock?: string;
+  activeConcerns?: readonly ReflectionContactActiveConcern[];
+  pendingFollowUps?: readonly ReflectionContactPendingFollowUp[];
+  internalStateBlock?: string;
+}
+
+export interface ReflectionContactContextBundle {
   canonicalTruthBoundary: typeof NON_CANONICAL_REFLECTION_SUBSTRATE;
   promptBlock: string;
   provenanceRefs: string[];
@@ -254,6 +314,175 @@ function truncateReflectionText(text: string, maxLength = 220): string {
   const normalized = text.replace(/\s+/g, ' ').trim();
   if (normalized.length <= maxLength) return normalized;
   return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
+}
+
+function formatOptionalNumber(value: number | null | undefined, digits = 3): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) {
+    return 'unknown';
+  }
+  return Number(value).toFixed(digits);
+}
+
+function formatOptionalDateTime(value: string | null | undefined): string {
+  if (!value) return 'unknown';
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return value;
+  return formatActiveDateTimeLabel(new Date(parsed));
+}
+
+function formatRecentSessionMessagesBlock(
+  messages: readonly ReflectionContactRecentMessage[] | undefined,
+  primarySessionId?: string,
+): { block?: string; provenanceRefs: string[] } {
+  if (!messages || messages.length === 0) {
+    return { provenanceRefs: [] };
+  }
+
+  const lines = [
+    '[Recent Contact Session]',
+    'Use the live exchange below as the freshest conversation anchor.',
+  ];
+  const provenanceRefs = new Set<string>();
+
+  messages.slice(-12).forEach((message) => {
+    const speaker = message.role === 'assistant'
+      ? message.authorName?.trim() || 'Assistant'
+      : message.authorName?.trim() || 'User';
+    const content = truncateReflectionText(message.content, 240);
+    lines.push(`- ${speaker}: ${content}`);
+  });
+  if (primarySessionId?.trim()) {
+    provenanceRefs.add(`reflection_contact_session:${primarySessionId.trim()}`);
+  }
+  provenanceRefs.add(`reflection_contact_session_messages:${messages.length}`);
+
+  return {
+    block: lines.join('\n'),
+    provenanceRefs: [...provenanceRefs],
+  };
+}
+
+function formatActiveConcernsBlock(
+  concerns: readonly ReflectionContactActiveConcern[] | undefined,
+): string | undefined {
+  if (!concerns || concerns.length === 0) return undefined;
+
+  const lines = [
+    '[Active Concerns]',
+    'Treat these as soft threads to revisit, not as a global alarm state.',
+  ];
+
+  for (const concern of concerns.slice(0, 8)) {
+    const priority = concern.priority ?? 'medium';
+    const text = truncateReflectionText(concern.text ?? '', 180);
+    if (!text) continue;
+    const expiresAt = formatOptionalDateTime(concern.expiresAt);
+    lines.push(`- [${priority}${concern.source ? `|${concern.source}` : ''}] ${text}${expiresAt !== 'unknown' ? ` (revisit before ${expiresAt})` : ''}`);
+  }
+
+  return lines.length > 2 ? lines.join('\n') : undefined;
+}
+
+function formatPendingFollowUpsBlock(
+  followUps: readonly ReflectionContactPendingFollowUp[] | undefined,
+): string | undefined {
+  if (!followUps || followUps.length === 0) return undefined;
+
+  const lines = [
+    '[Pending Follow-Ups]',
+    'Use these as reminders of open loops, not as a queue to act on automatically.',
+  ];
+
+  for (const followUp of followUps.slice(0, 8)) {
+    const content = truncateReflectionText(followUp.content ?? '', 180);
+    if (!content) continue;
+    const pieces: string[] = [`- [${followUp.priority ?? 'medium'}|${followUp.timing ?? 'soon'}] ${content}`];
+    const dueAt = formatOptionalDateTime(followUp.dueAt);
+    if (dueAt !== 'unknown') {
+      pieces.push(`due ${dueAt}`);
+    }
+    if (followUp.contextSummary?.trim()) {
+      pieces.push(`context ${truncateReflectionText(followUp.contextSummary, 120)}`);
+    }
+    if (followUp.wakeConditions && followUp.wakeConditions.length > 0) {
+      pieces.push(`wake ${followUp.wakeConditions.join(', ')}`);
+    }
+    lines.push(pieces.join(' | '));
+  }
+
+  return lines.length > 2 ? lines.join('\n') : undefined;
+}
+
+function formatContactSnapshotBlock(input: ReflectionContactContextBundleInput): string {
+  const lines = [
+    '[Reflection Contact Context]',
+    `contact_id: ${input.contactId}`,
+    `contact_name: ${input.contactDisplayName?.trim() || 'unknown'}`,
+    `trust_level: ${input.trustLevel?.trim() || 'unknown'}`,
+    `primary_session_id: ${input.primarySessionId?.trim() || 'unknown'}`,
+    `last_seen: ${formatOptionalDateTime(input.lastSeen)}`,
+    `last_seen_delta_seconds: ${input.lastSeenDeltaSeconds === null || input.lastSeenDeltaSeconds === undefined
+      ? 'unknown'
+      : Math.max(0, Math.floor(input.lastSeenDeltaSeconds)).toString()}`,
+    `recent_contact_status: ${(input.recentSessionMessages?.length ?? 0) > 0 ? 'active' : 'quiet'}`,
+    'guidance:',
+    '- Ground the reflection in the live contact, not in a generic silence narrative.',
+    '- If recent_contact_status is active, do not invent a gap or stale absence.',
+  ];
+
+  if (input.currentVAD) {
+    lines.push(
+      `current_vad: valence=${formatOptionalNumber(input.currentVAD.valence, 3)} `
+      + `arousal=${formatOptionalNumber(input.currentVAD.arousal, 3)} `
+      + `dominance=${formatOptionalNumber(input.currentVAD.dominance, 3)}`,
+    );
+  }
+
+  if (input.emotionalSnapshot) {
+    lines.push(`emotional_snapshot: ${JSON.stringify(input.emotionalSnapshot)}`);
+  }
+
+  if (input.internalStateBlock?.trim()) {
+    lines.push(input.internalStateBlock.trim());
+  }
+
+  return lines.join('\n');
+}
+
+export function assembleReflectionContactContextBundle(
+  input: ReflectionContactContextBundleInput,
+): ReflectionContactContextBundle {
+  const sections = [formatContactSnapshotBlock(input)];
+  const provenanceRefs = new Set<string>([
+    `reflection_contact:${input.contactId}`,
+  ]);
+
+  const recentSessionBlock = formatRecentSessionMessagesBlock(input.recentSessionMessages, input.primarySessionId);
+  if (recentSessionBlock.block) {
+    sections.push(recentSessionBlock.block);
+    recentSessionBlock.provenanceRefs.forEach(ref => provenanceRefs.add(ref));
+  }
+
+  const activeConcernsBlock = formatActiveConcernsBlock(input.activeConcerns);
+  if (activeConcernsBlock) {
+    sections.push(activeConcernsBlock);
+  }
+
+  const pendingFollowUpsBlock = formatPendingFollowUpsBlock(input.pendingFollowUps);
+  if (pendingFollowUpsBlock) {
+    sections.push(pendingFollowUpsBlock);
+  }
+
+  if (input.memoryBlock?.trim()) {
+    sections.push('[Reflection Memory Retrieval]', input.memoryBlock.trim());
+    provenanceRefs.add(`reflection_contact_memory:${input.contactId}`);
+  }
+
+  return {
+    canonicalTruthBoundary: NON_CANONICAL_REFLECTION_SUBSTRATE,
+    promptBlock: sections.join('\n\n'),
+    provenanceRefs: [...provenanceRefs],
+  };
 }
 
 function normalizeDailyJournalEntry(raw: unknown): ReflectionDailyJournalEntry | null {

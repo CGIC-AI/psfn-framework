@@ -253,6 +253,41 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     'binds canonical contact context for %s reflection turns',
     async (templateId) => {
       tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+      const capturedPrompts: string[] = [];
+      const recentSessionMessages = [
+        {
+          id: 1,
+          channelId: 'discord:primary-session',
+          role: 'user' as const,
+          content: 'I was here yesterday.',
+          timestamp: 1_700_000_000_000,
+          authorName: 'Ari',
+        },
+        {
+          id: 2,
+          channelId: 'discord:primary-session',
+          role: 'assistant' as const,
+          content: 'I remember that contact.',
+          timestamp: 1_700_000_000_100,
+          authorName: 'Companion',
+        },
+      ];
+      const memoryRetrieve = vi.fn(async () => '[Reflection Memory Retrieval]\n- trust-filtered contact memory');
+      const currentContact = {
+        id: 'contact-1',
+        displayName: 'Ari',
+        nickname: 'Ari',
+        trustLevel: 'trusted' as const,
+        relationshipType: 'friend' as const,
+        firstSeen: '2026-01-01T00:00:00.000Z',
+        lastSeen: '2026-03-31T12:00:00.000Z',
+        conversationChannels: [{
+          channel: 'discord',
+          channelId: 'discord:primary-session',
+          firstSeen: '2026-01-01T00:00:00.000Z',
+          lastSeen: '2026-03-31T12:00:00.000Z',
+        }],
+      };
       const currentInternalState = new InternalStateComputer().computeState({
         emotionState: {
           vad: { valence: 0.2, arousal: 0.15, dominance: 0.1 },
@@ -273,6 +308,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       });
       const currentSnapshotRef = buildInternalStateSnapshotRef(currentInternalState);
       const handleMessage = vi.fn(async (message) => {
+        capturedPrompts.push(message.content);
         const responseInternalState = new InternalStateComputer().computeState({
           emotionState: {
             vad: { valence: 0.2, arousal: 0.15, dominance: 0.1 },
@@ -305,12 +341,60 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
         agentLoop: {
           handleMessage,
+          memoryProvider: {
+            retrieve: memoryRetrieve,
+          },
           getCurrentInternalState: () => currentInternalState,
           getCurrentInternalStateSnapshotRef: () => currentSnapshotRef,
           getCurrentMetacognitiveFlags: () => [],
-        },
+        } as any,
         sender: { send: vi.fn(async () => undefined) },
         dataDir: tempDir,
+        runtimeOptions: {
+          sessionManager: {
+            resolveSessionChannelId: (channelId: string) => channelId,
+            getRecentMessages: (channelId: string, limit?: number) => (
+              channelId === 'discord:primary-session'
+                ? recentSessionMessages.slice(0, limit ?? recentSessionMessages.length)
+                : []
+            ),
+          },
+          contactStore: {
+            getById: async (id: string) => (id === 'contact-1' ? currentContact : undefined),
+            getEmotionalSnapshot: async (id: string) => (
+              id === 'contact-1'
+                ? { valence: 0.18, confidence: 0.84, observedAtMs: 1_700_000_000_000 }
+                : undefined
+            ),
+          },
+          getActiveConcerns: async ({ canonicalContactKey }) => (
+            canonicalContactKey === 'contact-1'
+              ? [{
+                id: 'concern-1',
+                title: 'Clarify the recovery timeline',
+                summary: 'Keep the follow-up explicit.',
+                status: 'open',
+                dueAt: Date.parse('2026-04-01T12:00:00.000Z'),
+                priority: 'high',
+              }]
+              : []
+          ),
+          pendingFollowUpStore: {
+            getPendingFollowUps: async (contactId?: string) => (
+              contactId === 'contact-1'
+                ? [{
+                  id: 'follow-up-1',
+                  content: 'Check in about the recovery plan',
+                  priority: 'medium',
+                  timing: 'soon',
+                  dueAt: '2026-04-01T09:00:00.000Z',
+                  contextSummary: 'Follow up on recovery',
+                  wakeConditions: ['next_user_turn'],
+                }]
+                : []
+            ),
+          } as any,
+        },
       });
 
       await runtime.runTemplateNow(templateId, {
@@ -325,6 +409,15 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           canonicalContactId: 'contact-1',
         }),
       }));
+      expect(capturedPrompts[0]).toContain('[Reflection Contact Context]');
+      expect(capturedPrompts[0]).toContain('recent_contact_status: active');
+      expect(capturedPrompts[0]).toContain('I was here yesterday.');
+      expect(capturedPrompts[0]).toContain('trust-filtered contact memory');
+      expect(capturedPrompts[0]).not.toContain('stale silence');
+      expect(memoryRetrieve).toHaveBeenCalled();
+      expect(memoryRetrieve.mock.calls[0]?.[1]).toBe(`internal:reflection:${templateId}`);
+      expect(memoryRetrieve.mock.calls[0]?.[4]).toBe('contact-1');
+      expect(memoryRetrieve.mock.calls[0]?.[9]).toEqual({ retrievalMode: 'reflection' });
 
       const raw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
       const entry = JSON.parse(raw.split('\n').at(-1) ?? '{}') as {

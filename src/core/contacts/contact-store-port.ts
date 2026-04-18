@@ -3,7 +3,7 @@ import type {
   type TrustDriftBehaviorSignals,
 } from '../../system/trust/policy.js';
 import type { TrustLevel, TrustMutationSource } from '../../system/trust/types.js';
-import type { EmotionalSnapshot } from './store/emotional-baseline.js';
+import type { EmotionalSnapshot, EmotionalTimeSeriesPoint } from './store/emotional-baseline.js';
 import type {
   ChannelPrivacyLevel,
   Contact,
@@ -98,6 +98,7 @@ export interface ContactStorePort {
     },
   ): Awaitable<Contact | undefined>;
   getEmotionalSnapshot(id: string): Awaitable<EmotionalSnapshot | undefined>;
+  getEmotionalTimeSeries(id: string, limit?: number): Awaitable<EmotionalTimeSeriesPoint[]>;
   updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string): Awaitable<boolean>;
   setChannelPrivacy(
     contactId: string,

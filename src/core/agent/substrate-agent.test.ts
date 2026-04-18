@@ -2158,6 +2158,7 @@ describe('SubstrateAgent.handleMessage', () => {
       getConversationChannelPrivacy: vi.fn().mockResolvedValue(undefined),
       recordChannelActivity: vi.fn().mockResolvedValue(undefined),
       getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
+      getEmotionalTimeSeries: vi.fn().mockResolvedValue([]),
     } as unknown as ContactStore;
 
     const agent = new SubstrateAgent(
@@ -3321,6 +3322,7 @@ describe('SubstrateAgent.handleMessage', () => {
       getConversationChannelPrivacy: vi.fn().mockResolvedValue(undefined),
       recordChannelActivity: vi.fn().mockResolvedValue(undefined),
       getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
+      getEmotionalTimeSeries: vi.fn().mockResolvedValue([]),
     } as unknown as ContactStore;
 
     const agent = new SubstrateAgent(
@@ -3528,6 +3530,7 @@ describe('SubstrateAgent.handleMessage', () => {
       getConversationChannelPrivacy: vi.fn().mockResolvedValue(undefined),
       recordChannelActivity: vi.fn().mockResolvedValue(undefined),
       getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
+      getEmotionalTimeSeries: vi.fn().mockResolvedValue([]),
     } as unknown as ContactStore;
     const agent = new SubstrateAgent(
       new EventBus(),
@@ -4506,6 +4509,7 @@ describe('SubstrateAgent.handleMessage', () => {
         moodDrift: 0.05,
         moodSamples: 7,
       }),
+      getEmotionalTimeSeries: vi.fn().mockResolvedValue([]),
     } as unknown as ContactStore;
 
     const response = await agent.handleMessage(makeMessage({
@@ -4725,6 +4729,7 @@ describe('SubstrateAgent.handleMessage', () => {
       getConversationChannelPrivacy: vi.fn().mockResolvedValue(undefined),
       recordChannelActivity: vi.fn().mockResolvedValue(undefined),
       getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
+      getEmotionalTimeSeries: vi.fn().mockResolvedValue([]),
     } as unknown as ContactStore;
 
     const publicSessionManager = makeMockSessionManager();
@@ -4755,6 +4760,7 @@ describe('SubstrateAgent.handleMessage', () => {
       getConversationChannelPrivacy: vi.fn().mockResolvedValue(undefined),
       recordChannelActivity: vi.fn().mockResolvedValue(undefined),
       getEmotionalSnapshot: vi.fn().mockResolvedValue(undefined),
+      getEmotionalTimeSeries: vi.fn().mockResolvedValue([]),
     } as unknown as ContactStore;
 
     await primaryAgent.handleMessage(makeMessage({ id: 'affect-primary-turn' }));

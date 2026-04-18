@@ -362,8 +362,22 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
             getById: async (id: string) => (id === 'contact-1' ? currentContact : undefined),
             getEmotionalSnapshot: async (id: string) => (
               id === 'contact-1'
-                ? { valence: 0.18, confidence: 0.84, observedAtMs: 1_700_000_000_000 }
+                ? {
+                  baselineValence: 0.08,
+                  moodValence: 0.18,
+                  moodDrift: 0.1,
+                  moodSamples: 3,
+                  lastMoodUpdateEpochMs: 1_700_000_000_000,
+                }
                 : undefined
+            ),
+            getEmotionalTimeSeries: async (id: string) => (
+              id === 'contact-1'
+                ? [
+                  { valence: -0.1, confidence: 0.7, observedAtMs: 1_699_999_000_000 },
+                  { valence: 0.18, confidence: 0.84, observedAtMs: 1_700_000_000_000 },
+                ]
+                : []
             ),
           },
           getActiveConcerns: async ({ canonicalContactKey }) => (
@@ -585,8 +599,22 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           getById: async (id: string) => (id === 'contact-1' ? currentContact : undefined),
           getEmotionalSnapshot: async (id: string) => (
             id === 'contact-1'
-              ? { valence: 0.18, confidence: 0.84, observedAtMs: 1_700_000_000_000 }
+              ? {
+                baselineValence: 0.08,
+                moodValence: 0.18,
+                moodDrift: 0.1,
+                moodSamples: 3,
+                lastMoodUpdateEpochMs: 1_700_000_000_000,
+              }
               : undefined
+          ),
+          getEmotionalTimeSeries: async (id: string) => (
+            id === 'contact-1'
+              ? [
+                { valence: -0.1, confidence: 0.7, observedAtMs: 1_699_999_000_000 },
+                { valence: 0.18, confidence: 0.84, observedAtMs: 1_700_000_000_000 },
+              ]
+              : []
           ),
         },
       },
@@ -610,7 +638,9 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(capturedPrompts[0]).toContain('[Reflection Relational Substrate]');
     expect(capturedPrompts[0]).toContain('steadiness under pressure');
     expect(capturedPrompts[0]).toContain('[Reflection Affect Context]');
-    expect(capturedPrompts[0]).toContain('current_vad: valence=0.200 arousal=0.150 dominance=0.100');
+    expect(capturedPrompts[0]).toContain('emotional_time_series:');
+    expect(capturedPrompts[0]).toContain('- 2023-11-14T22:13:20.000Z valence=0.180 confidence=0.840');
+    expect(capturedPrompts[0]).not.toContain('current_vad: valence=0.200 arousal=0.150 dominance=0.100');
     expect(capturedPrompts[0]).toContain('[Reflection Affect Substrate]');
     expect(capturedPrompts[0]).toContain('uncertainty pattern around the unresolved handoff');
     expect(capturedPrompts[0]).toContain('[Reflection Self Substrate]');
@@ -765,8 +795,22 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
             getById: async (id: string) => (id === 'contact-1' ? currentContact : undefined),
             getEmotionalSnapshot: async (id: string) => (
               id === 'contact-1'
-                ? { valence: 0.18, confidence: 0.84, observedAtMs: 1_700_000_000_000 }
+                ? {
+                  baselineValence: 0.08,
+                  moodValence: 0.18,
+                  moodDrift: 0.1,
+                  moodSamples: 3,
+                  lastMoodUpdateEpochMs: 1_700_000_000_000,
+                }
                 : undefined
+            ),
+            getEmotionalTimeSeries: async (id: string) => (
+              id === 'contact-1'
+                ? [
+                  { valence: -0.1, confidence: 0.7, observedAtMs: 1_699_999_000_000 },
+                  { valence: 0.18, confidence: 0.84, observedAtMs: 1_700_000_000_000 },
+                ]
+                : []
             ),
           },
         },

@@ -1,5 +1,6 @@
 export const DEFAULT_EMOTIONAL_CONFIDENCE = 0.7;
 export const DEFAULT_SESSION_MOOD_LEARNING_RATE = 0.55;
+export const DEFAULT_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT = 8;
 
 export interface EmotionalSnapshot {
   baselineValence: number;
@@ -13,6 +14,12 @@ export interface EmotionalObservation {
   valence: number;
   confidence?: number;
   observedAtMs?: number;
+}
+
+export interface EmotionalTimeSeriesPoint {
+  valence: number;
+  confidence: number;
+  observedAtMs: number;
 }
 
 function clampUnit(value: number): number {
@@ -34,6 +41,95 @@ function round(value: number, precision = 4): number {
   if (!Number.isFinite(value)) return 0;
   const factor = 10 ** precision;
   return Math.round(value * factor) / factor;
+}
+
+function normalizeSeriesLimit(limit: number | undefined): number {
+  if (!Number.isFinite(limit)) return DEFAULT_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT;
+  return Math.max(1, Math.min(64, Math.floor(limit as number)));
+}
+
+function normalizeObservedAtMs(value: number | undefined): number {
+  if (!Number.isFinite(value)) return Date.now();
+  return Math.max(0, Math.floor(value as number));
+}
+
+function normalizeTimeSeriesPoint(
+  value: unknown,
+): EmotionalTimeSeriesPoint | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const point = value as Partial<EmotionalTimeSeriesPoint>;
+  if (!Number.isFinite(point.valence)) return undefined;
+  return {
+    valence: round(clampUnit(point.valence as number)),
+    confidence: round(clampProbability(point.confidence)),
+    observedAtMs: normalizeObservedAtMs(point.observedAtMs),
+  };
+}
+
+function finalizeTimeSeries(
+  points: readonly unknown[],
+  limit: number | undefined,
+): EmotionalTimeSeriesPoint[] {
+  const boundedLimit = normalizeSeriesLimit(limit);
+  const deduped = new Map<string, EmotionalTimeSeriesPoint>();
+  for (const point of points) {
+    const normalized = normalizeTimeSeriesPoint(point);
+    if (!normalized) continue;
+    deduped.set(
+      `${normalized.observedAtMs}:${normalized.valence.toFixed(4)}:${normalized.confidence.toFixed(4)}`,
+      normalized,
+    );
+  }
+  return [...deduped.values()]
+    .sort((left, right) => left.observedAtMs - right.observedAtMs)
+    .slice(-boundedLimit);
+}
+
+export function normalizeEmotionalTimeSeries(
+  value: unknown,
+  limit = DEFAULT_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT,
+): EmotionalTimeSeriesPoint[] {
+  if (Array.isArray(value)) {
+    return finalizeTimeSeries(value, limit);
+  }
+  if (typeof value === 'string') {
+    try {
+      return normalizeEmotionalTimeSeries(JSON.parse(value), limit);
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+export function appendEmotionalObservationToTimeSeries(
+  series: unknown,
+  observation: EmotionalObservation,
+  limit = DEFAULT_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT,
+): EmotionalTimeSeriesPoint[] {
+  const nextPoint: EmotionalTimeSeriesPoint = {
+    valence: round(clampUnit(observation.valence)),
+    confidence: round(clampProbability(observation.confidence)),
+    observedAtMs: normalizeObservedAtMs(observation.observedAtMs),
+  };
+  return finalizeTimeSeries(
+    [...normalizeEmotionalTimeSeries(series, limit), nextPoint],
+    limit,
+  );
+}
+
+export function mergeEmotionalTimeSeries(
+  left: unknown,
+  right: unknown,
+  limit = DEFAULT_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT,
+): EmotionalTimeSeriesPoint[] {
+  return finalizeTimeSeries(
+    [
+      ...normalizeEmotionalTimeSeries(left, limit),
+      ...normalizeEmotionalTimeSeries(right, limit),
+    ],
+    limit,
+  );
 }
 
 function resolveEmotionalBaselineLearningRate(sampleCount: number): number {

@@ -104,13 +104,15 @@ export function updateContactEmotionalBaseline(
   db: Database.Database,
   id: string,
   baseline: Record<string, number>,
+  emotionalTimeSeries: unknown,
 ): void {
   db.prepare(`
     UPDATE contacts
-    SET emotional_baseline = ?, last_seen = ?
+    SET emotional_baseline = ?, emotional_time_series = ?, last_seen = ?
     WHERE id = ?
   `).run(
     JSON.stringify(baseline),
+    JSON.stringify(emotionalTimeSeries),
     new Date().toISOString(),
     id,
   );

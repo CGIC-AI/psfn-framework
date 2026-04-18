@@ -1302,6 +1302,7 @@ describe('MemoryRetriever basic behavior', () => {
         moodSamples: 6,
         lastMoodUpdateEpochMs: Date.now(),
       }),
+      getEmotionalTimeSeries: vi.fn().mockReturnValue([]),
       getById: vi.fn(),
     } as any;
 

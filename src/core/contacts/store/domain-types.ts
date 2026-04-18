@@ -6,6 +6,7 @@ export interface ContactRow {
   trust_level: string;
   relationship_type: string;
   emotional_baseline: string;
+  emotional_time_series: string;
   first_seen: string;
   last_seen: string;
   notes: string | null;

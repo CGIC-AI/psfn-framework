@@ -28,6 +28,7 @@ function asyncContactStore(store: ContactStore): ContactStorePort {
     updateNotes: async (id, notes, actor) => store.updateNotes(id, notes, actor),
     updateEmotionalBaseline: async (id, observation) => store.updateEmotionalBaseline(id, observation),
     getEmotionalSnapshot: async (id) => store.getEmotionalSnapshot(id),
+    getEmotionalTimeSeries: async (id, limit) => store.getEmotionalTimeSeries(id, limit),
     updateRelationshipType: async (id, relationshipType, actor) => store.updateRelationshipType(id, relationshipType, actor),
     setChannelPrivacy: async (contactId, channel, channelUserId, privacyLevel, actor) => store.setChannelPrivacy(contactId, channel, channelUserId, privacyLevel, actor),
     setConversationChannelPrivacy: async (contactId, channel, channelId, privacyLevel, actor) => store.setConversationChannelPrivacy(contactId, channel, channelId, privacyLevel, actor),

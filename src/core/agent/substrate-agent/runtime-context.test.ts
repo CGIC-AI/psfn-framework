@@ -348,6 +348,7 @@ describe('runtime subject identity', () => {
         getConversationChannelPrivacy: () => undefined,
         updateLastSeen: () => undefined,
         recordChannelActivity: () => undefined,
+        getEmotionalTimeSeries: () => [],
       } as never,
       logger: {
         warn: () => undefined,
@@ -1555,6 +1556,7 @@ describe('runtime subject identity', () => {
         ) => {
           recordedCalls.push({ contactId, channel, channelId, privacyLevel });
         },
+        getEmotionalTimeSeries: () => [],
       } as any,
       logger: {
         warn: () => undefined,

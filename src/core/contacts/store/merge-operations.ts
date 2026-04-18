@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { RelationshipType } from '../types.js';
 import type { ContactRow } from './domain-types.js';
+import { mergeEmotionalTimeSeries } from './emotional-baseline.js';
 import {
   earliestTimestamp,
   latestTimestamp,
@@ -69,6 +70,12 @@ export function mergeContacts(
     const mergedBaseline = (targetRow.emotional_baseline && targetRow.emotional_baseline !== '{}')
       ? targetRow.emotional_baseline
       : sourceRow.emotional_baseline;
+    const mergedEmotionalTimeSeries = JSON.stringify(
+      mergeEmotionalTimeSeries(
+        sourceRow.emotional_time_series,
+        targetRow.emotional_time_series,
+      ),
+    );
     const mergedFirstSeen = earliestTimestamp(sourceRow.first_seen, targetRow.first_seen);
     const mergedLastSeen = latestTimestamp(sourceRow.last_seen, targetRow.last_seen);
     const mergedNotes = targetRow.notes ?? sourceRow.notes;
@@ -82,6 +89,7 @@ export function mergeContacts(
           trust_level = ?,
           relationship_type = ?,
           emotional_baseline = ?,
+          emotional_time_series = ?,
           first_seen = ?,
           last_seen = ?,
           notes = ?
@@ -93,6 +101,7 @@ export function mergeContacts(
       mergedTrustLevel,
       mergedRelationshipType,
       mergedBaseline || '{}',
+      mergedEmotionalTimeSeries,
       mergedFirstSeen,
       mergedLastSeen,
       mergedNotes,

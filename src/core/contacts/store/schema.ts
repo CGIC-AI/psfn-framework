@@ -30,6 +30,12 @@ function ensureNicknameColumn(db: Database.Database): void {
   }
 }
 
+function ensureEmotionalTimeSeriesColumn(db: Database.Database): void {
+  if (!hasColumn(db, 'contacts', 'emotional_time_series')) {
+    db.exec("ALTER TABLE contacts ADD COLUMN emotional_time_series TEXT NOT NULL DEFAULT '[]'");
+  }
+}
+
 function migrateLegacyDiscordIdentities(db: Database.Database): void {
   db.prepare(`
     INSERT INTO contact_channel_ids (contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen)
@@ -51,6 +57,7 @@ export function initializeContactStoreSchema(db: Database.Database): void {
       trust_level TEXT NOT NULL DEFAULT 'regular',
       relationship_type TEXT NOT NULL DEFAULT 'stranger',
       emotional_baseline TEXT DEFAULT '{}',
+      emotional_time_series TEXT NOT NULL DEFAULT '[]',
       first_seen TEXT NOT NULL,
       last_seen TEXT NOT NULL,
       notes TEXT
@@ -176,6 +183,7 @@ export function initializeContactStoreSchema(db: Database.Database): void {
   `);
 
   ensureNicknameColumn(db);
+  ensureEmotionalTimeSeriesColumn(db);
   ensureChannelPrivacyColumn(db);
   ensureConversationChannelPrivacyColumn(db);
   migrateLegacyDiscordIdentities(db);

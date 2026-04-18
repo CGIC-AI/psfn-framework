@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js';
+import type { EmotionalTimeSeriesPoint } from '../../core/contacts/store/emotional-baseline.js';
 import { appendJsonLine } from '../jsonl.js';
 import { sanitizeChannelId } from '../sessions/store-primitives.js';
 import type { ValuesDeliberationMetadata } from '../../faculties/values/store.js';
@@ -159,6 +160,7 @@ export interface ReflectionContactContextBundleInput {
   lastSeenDeltaSeconds?: number | null;
   currentVAD?: ReflectionContactCurrentVAD | null;
   emotionalSnapshot?: ReflectionContactEmotionalSnapshot | null;
+  emotionalTimeSeries?: readonly EmotionalTimeSeriesPoint[];
   recentSessionMessages?: readonly ReflectionContactRecentMessage[];
   memoryBlock?: string;
   activeConcerns?: readonly ReflectionContactActiveConcern[];
@@ -477,7 +479,7 @@ function formatContactRelationalBlock(input: ReflectionContactContextBundleInput
 }
 
 function formatContactAffectBlock(input: ReflectionContactContextBundleInput): string | undefined {
-  if (!input.currentVAD && !input.emotionalSnapshot) {
+  if (!input.currentVAD && !input.emotionalSnapshot && !(input.emotionalTimeSeries?.length)) {
     return undefined;
   }
 
@@ -496,6 +498,17 @@ function formatContactAffectBlock(input: ReflectionContactContextBundleInput): s
 
   if (input.emotionalSnapshot) {
     lines.push(`emotional_snapshot: ${JSON.stringify(input.emotionalSnapshot)}`);
+  }
+
+  if (input.emotionalTimeSeries?.length) {
+    lines.push('emotional_time_series:');
+    for (const point of input.emotionalTimeSeries) {
+      lines.push(
+        `- ${new Date(point.observedAtMs).toISOString()} `
+        + `valence=${formatOptionalNumber(point.valence, 3)} `
+        + `confidence=${formatOptionalNumber(point.confidence, 3)}`,
+      );
+    }
   }
 
   return lines.join('\n');

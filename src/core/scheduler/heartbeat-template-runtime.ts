@@ -65,6 +65,7 @@ const TEMPLATE_EXECUTION_BURST_WINDOW_MS = 60_000;
 const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
 const TEMPLATE_EXECUTION_COOLDOWN_MS = 10 * 60_000;
 const REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS = 2_500;
+const REFLECTION_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT = 8;
 const REFLECTION_PROMPT_TOKENS = {
   self: '{{reflection_self}}',
   relational: '{{reflection_relational}}',
@@ -579,6 +580,14 @@ export function createHeartbeatTemplateRuntime(
     )
       ? await runtimeOptions.contactStore.getEmotionalSnapshot(reflectionCanonicalContactId) ?? null
       : null;
+    const emotionalTimeSeries = (
+      reflectionCanonicalContactId && runtimeOptions.contactStore?.getEmotionalTimeSeries
+    )
+      ? await runtimeOptions.contactStore.getEmotionalTimeSeries(
+        reflectionCanonicalContactId,
+        REFLECTION_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT,
+      )
+      : [];
     const lastSeen = contact?.lastSeen ? contact.lastSeen.trim() : undefined;
     const lastSeenDeltaSeconds = lastSeen
       ? Math.max(0, Math.floor((Date.now() - Date.parse(lastSeen)) / 1000))
@@ -631,8 +640,8 @@ export function createHeartbeatTemplateRuntime(
       primarySessionId,
       lastSeen,
       lastSeenDeltaSeconds,
-      currentVAD,
       emotionalSnapshot,
+      emotionalTimeSeries,
       recentSessionMessages,
       memoryBlock,
       activeConcerns,

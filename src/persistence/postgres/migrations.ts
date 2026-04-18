@@ -124,6 +124,7 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
     trust_level TEXT NOT NULL DEFAULT 'regular',
     relationship_type TEXT NOT NULL DEFAULT 'stranger',
     emotional_baseline JSONB NOT NULL DEFAULT '{}'::jsonb,
+    emotional_time_series JSONB NOT NULL DEFAULT '[]'::jsonb,
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
     notes TEXT,
@@ -131,6 +132,7 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
     conversation_channels JSONB NOT NULL DEFAULT '[]'::jsonb
   );
   `,
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS emotional_time_series JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `CREATE INDEX IF NOT EXISTS idx_contacts_trust ON contacts(trust_level);`,
   `CREATE INDEX IF NOT EXISTS idx_contacts_discord ON contacts(discord_user_id);`,
   `

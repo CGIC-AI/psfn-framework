@@ -516,6 +516,7 @@ describe('intention appraisal runtime integration', () => {
           emotionState,
           contactStore: {
             getById: () => ({ trustLevel: 'primary' }),
+            getEmotionalTimeSeries: () => [],
           },
         },
       );

@@ -188,7 +188,17 @@ describe('reflection substrate stores', () => {
       lastSeen: '2026-03-31T12:00:00.000Z',
       lastSeenDeltaSeconds: 90,
       currentVAD: { valence: 0.2, arousal: -0.15, dominance: 0.05 },
-      emotionalSnapshot: { valence: 0.18, confidence: 0.84, observedAtMs: 1_700_000_000_000 },
+      emotionalSnapshot: {
+        baselineValence: 0.08,
+        moodValence: 0.18,
+        moodDrift: 0.1,
+        moodSamples: 3,
+        lastMoodUpdateEpochMs: 1_700_000_000_000,
+      },
+      emotionalTimeSeries: [
+        { valence: -0.1, confidence: 0.7, observedAtMs: 1_699_999_000_000 },
+        { valence: 0.18, confidence: 0.84, observedAtMs: 1_700_000_000_000 },
+      ],
       recentSessionMessages: [
         { role: 'user', content: 'I wanted to follow up on yesterday.' },
         { role: 'assistant', content: 'I am here and tracking that thread.' },
@@ -215,6 +225,8 @@ describe('reflection substrate stores', () => {
     expect(bundle.affect).toContain('[Reflection Affect Context]');
     expect(bundle.affect).toContain('current_vad: valence=0.200 arousal=-0.150 dominance=0.050');
     expect(bundle.affect).toContain('emotional_snapshot');
+    expect(bundle.affect).toContain('emotional_time_series:');
+    expect(bundle.affect).toContain('- 2023-11-14T22:13:20.000Z valence=0.180 confidence=0.840');
     expect(bundle.provenanceRefs).toEqual(expect.arrayContaining([
       'reflection_contact:contact-1',
       'reflection_contact_session:discord:primary-session',

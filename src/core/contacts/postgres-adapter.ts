@@ -44,10 +44,13 @@ import {
   SENSITIVITY_LEVELS,
   sensitivityOrd,
 } from '../../system/trust/types.js';
-import type { EmotionalSnapshot } from './store/emotional-baseline.js';
+import type { EmotionalSnapshot, EmotionalTimeSeriesPoint } from './store/emotional-baseline.js';
 import {
+  appendEmotionalObservationToTimeSeries,
   computeUpdatedEmotionalBaseline,
   hasLearnedMoodSnapshot,
+  mergeEmotionalTimeSeries,
+  normalizeEmotionalTimeSeries,
   parseMoodSnapshot,
 } from './store/emotional-baseline.js';
 import type {
@@ -80,6 +83,7 @@ export interface ContactRow {
   trust_level: string;
   relationship_type: string;
   emotional_baseline: unknown;
+  emotional_time_series?: unknown;
   first_seen: string;
   last_seen: string;
   notes: string | null;
@@ -498,6 +502,23 @@ class PostgresContactStore implements ContactStorePort {
       `,
       [id],
     );
+  }
+
+  private async loadContactEmotionalTimeSeries(
+    id: string,
+    limit?: number,
+  ): Promise<EmotionalTimeSeriesPoint[]> {
+    const row = await queryOne<{ emotional_time_series?: unknown }>(
+      this.pool,
+      `
+        SELECT emotional_time_series
+        FROM contacts
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [id],
+    );
+    return normalizeEmotionalTimeSeries(row?.emotional_time_series, limit);
   }
 
   private async loadContactByChannelIdentity(channel: ContactChannel, channelUserId: string): Promise<Contact | undefined> {
@@ -1510,7 +1531,7 @@ class PostgresContactStore implements ContactStorePort {
         this.pool,
         `
           SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
-                 emotional_baseline, first_seen, last_seen, notes
+                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes
           FROM contacts
           WHERE id = $1
           LIMIT 1
@@ -1521,7 +1542,7 @@ class PostgresContactStore implements ContactStorePort {
         this.pool,
         `
           SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
-                 emotional_baseline, first_seen, last_seen, notes
+                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes
           FROM contacts
           WHERE id = $1
           LIMIT 1
@@ -1564,6 +1585,10 @@ class PostgresContactStore implements ContactStorePort {
       const mergedBaseline = Object.keys(normalizeJsonObject(targetRow.emotional_baseline)).length > 0
         ? targetRow.emotional_baseline
         : sourceRow.emotional_baseline;
+      const mergedEmotionalTimeSeries = mergeEmotionalTimeSeries(
+        sourceRow.emotional_time_series,
+        targetRow.emotional_time_series,
+      );
       const mergedFirstSeen = earliestTimestamp(sourceRow.first_seen, targetRow.first_seen);
       const mergedLastSeen = latestTimestamp(sourceRow.last_seen, targetRow.last_seen);
       const mergedNotes = targetRow.notes ?? sourceRow.notes;
@@ -1671,10 +1696,11 @@ class PostgresContactStore implements ContactStorePort {
               trust_level = $4,
               relationship_type = $5,
               emotional_baseline = $6,
-              first_seen = $7,
-              last_seen = $8,
-              notes = $9
-          WHERE id = $10
+              emotional_time_series = $7,
+              first_seen = $8,
+              last_seen = $9,
+              notes = $10
+          WHERE id = $11
         `,
         [
           mergedDiscordUserId,
@@ -1683,6 +1709,7 @@ class PostgresContactStore implements ContactStorePort {
           mergedTrustLevel,
           mergedRelationshipType,
           mergedBaseline,
+          mergedEmotionalTimeSeries,
           mergedFirstSeen,
           mergedLastSeen,
           mergedNotes ?? null,
@@ -1717,14 +1744,19 @@ class PostgresContactStore implements ContactStorePort {
     const contact = await this.getById(id);
     if (!contact) return undefined;
     const updatedBaseline = computeUpdatedEmotionalBaseline(contact.emotionalBaseline, observation);
+    const updatedTimeSeries = appendEmotionalObservationToTimeSeries(
+      await this.loadContactEmotionalTimeSeries(id),
+      observation,
+    );
     await this.pool.query(
       `
         UPDATE contacts
         SET emotional_baseline = $1,
-            last_seen = $2
-        WHERE id = $3
+            emotional_time_series = $2,
+            last_seen = $3
+        WHERE id = $4
       `,
-      [updatedBaseline, new Date().toISOString(), id],
+      [updatedBaseline, updatedTimeSeries, new Date().toISOString(), id],
     );
     await this.syncContactExports();
     return await this.getById(id);
@@ -1735,6 +1767,10 @@ class PostgresContactStore implements ContactStorePort {
     if (!contact) return undefined;
     const snapshot = parseMoodSnapshot(contact.emotionalBaseline);
     return hasLearnedMoodSnapshot(snapshot) ? snapshot : undefined;
+  }
+
+  async getEmotionalTimeSeries(id: string, limit?: number): Promise<EmotionalTimeSeriesPoint[]> {
+    return await this.loadContactEmotionalTimeSeries(id, limit);
   }
 
   async updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string): Promise<boolean> {

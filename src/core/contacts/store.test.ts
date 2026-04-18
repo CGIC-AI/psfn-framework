@@ -946,6 +946,38 @@ describe('ContactStore', () => {
       expect(found!.emotionalBaseline).toEqual({});
     });
 
+    it('exposes an empty-to-populated bounded emotional time series per contact', () => {
+      const contact = store.upsert({ displayName: 'Timeline Learner' });
+
+      expect(store.getEmotionalTimeSeries(contact.id)).toEqual([]);
+
+      store.updateEmotionalBaseline(contact.id, {
+        valence: 0.25,
+        confidence: 0.9,
+        observedAtMs: 1_000,
+      });
+      store.updateEmotionalBaseline(contact.id, {
+        valence: -0.4,
+        confidence: 0.6,
+        observedAtMs: 2_000,
+      });
+      store.updateEmotionalBaseline(contact.id, {
+        valence: 0.7,
+        confidence: 0.8,
+        observedAtMs: 3_000,
+      });
+
+      expect(store.getEmotionalTimeSeries(contact.id)).toEqual([
+        { valence: 0.25, confidence: 0.9, observedAtMs: 1_000 },
+        { valence: -0.4, confidence: 0.6, observedAtMs: 2_000 },
+        { valence: 0.7, confidence: 0.8, observedAtMs: 3_000 },
+      ]);
+      expect(store.getEmotionalTimeSeries(contact.id, 2)).toEqual([
+        { valence: -0.4, confidence: 0.6, observedAtMs: 2_000 },
+        { valence: 0.7, confidence: 0.8, observedAtMs: 3_000 },
+      ]);
+    });
+
     it('learns baseline values dynamically from observed emotional signals', () => {
       const contact = store.upsert({
         displayName: 'Mood Learner',

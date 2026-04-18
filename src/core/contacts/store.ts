@@ -35,8 +35,11 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { appendMutationAuditEntry, listMutationAuditEntries } from './store/audit.js';
 import {
+  appendEmotionalObservationToTimeSeries,
   computeUpdatedEmotionalBaseline,
+  type EmotionalTimeSeriesPoint,
   hasLearnedMoodSnapshot,
+  normalizeEmotionalTimeSeries,
   parseMoodSnapshot,
 } from './store/emotional-baseline.js';
 import {
@@ -184,6 +187,16 @@ export class ContactStore implements ContactStorePort {
       getByDiscordUserId: discordUserId => this.getByDiscordUserId(discordUserId),
       getByChannelIdentity: (channel, userId) => this.getByChannelIdentity(channel, userId),
     });
+  }
+
+  private getStoredEmotionalTimeSeries(id: string, limit?: number): EmotionalTimeSeriesPoint[] {
+    const row = this.db.prepare(`
+      SELECT emotional_time_series
+      FROM contacts
+      WHERE id = ?
+      LIMIT 1
+    `).get(id) as { emotional_time_series?: string } | undefined;
+    return normalizeEmotionalTimeSeries(row?.emotional_time_series, limit);
   }
 
   private isPrimaryTrustAssignmentAuthorized(
@@ -633,7 +646,11 @@ export class ContactStore implements ContactStorePort {
     if (!contact) return undefined;
 
     const updatedBaseline = computeUpdatedEmotionalBaseline(contact.emotionalBaseline, observation);
-    updateContactEmotionalBaseline(this.db, id, updatedBaseline);
+    const updatedTimeSeries = appendEmotionalObservationToTimeSeries(
+      this.getStoredEmotionalTimeSeries(id),
+      observation,
+    );
+    updateContactEmotionalBaseline(this.db, id, updatedBaseline, updatedTimeSeries);
     this.syncContactExports();
     return this.getById(id);
   }
@@ -652,6 +669,13 @@ export class ContactStore implements ContactStorePort {
 
     const snapshot = parseMoodSnapshot(contact.emotionalBaseline);
     return hasLearnedMoodSnapshot(snapshot) ? snapshot : undefined;
+  }
+
+  getEmotionalTimeSeries(
+    id: string,
+    limit?: number,
+  ): EmotionalTimeSeriesPoint[] {
+    return this.getStoredEmotionalTimeSeries(id, limit);
   }
 
   updateRelationshipType(id: string, relationshipType: RelationshipType, actor?: string): boolean {

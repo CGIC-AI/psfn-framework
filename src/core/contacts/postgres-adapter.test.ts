@@ -58,6 +58,7 @@ class FakePostgresPool {
       || normalized === 'rollback'
       || normalized.startsWith('create table')
       || normalized.startsWith('create index')
+      || normalized.startsWith('alter table')
     ) {
       return result();
     }
@@ -80,6 +81,11 @@ class FakePostgresPool {
     if (normalized.startsWith('select c.id, c.discord_user_id, c.display_name, c.nickname, c.trust_level, c.relationship_type, c.emotional_baseline, c.first_seen, c.last_seen, c.notes from contacts c inner join contact_channel_ids i on i.contact_id = c.id where i.channel = $1 and i.channel_user_id = $2 limit 1')) {
       const row = this.findContactByChannelIdentity(String(values[0] ?? ''), String(values[1] ?? ''));
       return result(row ? [row] : []);
+    }
+
+    if (normalized.startsWith('select emotional_time_series from contacts where id = $1 limit 1')) {
+      const row = this.contacts.get(String(values[0] ?? ''));
+      return result(row ? [{ emotional_time_series: row.emotional_time_series ?? [] }] : []);
     }
 
     if (normalized.startsWith('select contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen from contact_channel_ids where contact_id = $1 order by channel asc, channel_user_id asc')) {
@@ -105,6 +111,7 @@ class FakePostgresPool {
         trust_level: String(values[4] ?? 'regular'),
         relationship_type: String(values[5] ?? 'stranger'),
         emotional_baseline: values[6] ?? {},
+        emotional_time_series: [],
         first_seen: String(values[7] ?? ''),
         last_seen: String(values[8] ?? ''),
         notes: values[9] == null ? null : String(values[9]),
@@ -133,6 +140,15 @@ class FakePostgresPool {
     if (normalized.startsWith('update contacts set trust_level = $1 where id = $2')) {
       const row = this.contacts.get(String(values[1] ?? ''));
       if (row) row.trust_level = String(values[0] ?? row.trust_level);
+      return result();
+    }
+
+    if (normalized.startsWith('update contacts set emotional_baseline = $1, emotional_time_series = $2, last_seen = $3 where id = $4')) {
+      const row = this.contacts.get(String(values[3] ?? ''));
+      if (!row) return result();
+      row.emotional_baseline = values[0] ?? row.emotional_baseline;
+      row.emotional_time_series = values[1] ?? row.emotional_time_series ?? [];
+      row.last_seen = String(values[2] ?? row.last_seen);
       return result();
     }
 
@@ -562,5 +578,38 @@ describe('PostgresContactStore', () => {
     expect(await store.getByChannelIdentity('api', 'alice-api')).toMatchObject({
       id: contact.id,
     });
+  });
+
+  it('records and returns a bounded emotional time series per contact', async () => {
+    const pool = new FakePostgresPool();
+    const store = await createPostgresContactStore('postgres://unused', 'primary-user-123', {
+      pool: pool as unknown as Pool,
+    });
+
+    const contact = await store.upsert({
+      displayName: 'Ari',
+      discordUserId: 'ari-discord',
+    });
+
+    expect(await store.getEmotionalTimeSeries(contact.id)).toEqual([]);
+
+    await store.updateEmotionalBaseline(contact.id, {
+      valence: 0.15,
+      confidence: 0.75,
+      observedAtMs: 1_000,
+    });
+    await store.updateEmotionalBaseline(contact.id, {
+      valence: -0.55,
+      confidence: 0.65,
+      observedAtMs: 2_000,
+    });
+
+    expect(await store.getEmotionalTimeSeries(contact.id)).toEqual([
+      { valence: 0.15, confidence: 0.75, observedAtMs: 1_000 },
+      { valence: -0.55, confidence: 0.65, observedAtMs: 2_000 },
+    ]);
+    expect(await store.getEmotionalTimeSeries(contact.id, 1)).toEqual([
+      { valence: -0.55, confidence: 0.65, observedAtMs: 2_000 },
+    ]);
   });
 });

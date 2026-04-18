@@ -76,17 +76,26 @@ const METACOGNITIVE_FLAG_NAMES = [
 
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
 
+function buildRuntimePromptOutputs(
+  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+): { variables: Record<string, string>; rendered: string } {
+  const variables = buildDynamicPromptTemplateVariables(input);
+  return {
+    variables,
+    rendered: injectPromptRuntimeTokens(DEFAULT_RUNTIME_PROMPT_TEMPLATE, {
+      now: input.now,
+      variables: {
+        ...(input.templateVariables ?? {}),
+        ...variables,
+      },
+    }),
+  };
+}
+
 function renderPromptOwnedRuntimeLayers(
   input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
 ): string {
-  const variables = buildDynamicPromptTemplateVariables(input);
-  return injectPromptRuntimeTokens(DEFAULT_RUNTIME_PROMPT_TEMPLATE, {
-    now: input.now,
-    variables: {
-      ...(input.templateVariables ?? {}),
-      ...variables,
-    },
-  });
+  return buildRuntimePromptOutputs(input).rendered;
 }
 
 function buildAtomicAffectTemplateOutput(
@@ -119,29 +128,6 @@ function buildInternalStateTemplateOutput(
     'relational={{runtime_internal_state_relational_trust_level}}/{{runtime_internal_state_relational_recent_interaction_frequency_label}}/{{runtime_internal_state_relational_last_seen_label}}',
     'emotional={{runtime_internal_state_emotional_mood_valence_label}}/{{runtime_internal_state_emotional_mood_arousal_label}}',
   ].join(' '), {
-    now: input.now,
-    variables: {
-      ...(input.templateVariables ?? {}),
-      ...variables,
-    },
-  });
-}
-
-function buildAttentionToolingTemplateOutput(
-  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
-): string {
-  const variables = buildDynamicPromptTemplateVariables(input);
-  return injectPromptRuntimeTokens([
-    'concerns={{runtime_concerns_count}}/{{runtime_concerns_top_priorities}}/{{runtime_concerns_omitted_count}}',
-    'concern_lines={{runtime_concerns_top_lines}}',
-    'behavioral_count={{runtime_behavioral_notes_count}}',
-    'behavioral_raw={{runtime_behavioral_notes_body_raw}}',
-    'skills_count={{runtime_skills_count}}',
-    'tools={{runtime_extended_tools_total}}/{{runtime_extended_tools_activatable_count}}/{{runtime_extended_tools_blocked_count}}/{{runtime_extended_tool_names}}',
-    'tool_lines={{runtime_extended_tool_directory_lines}}',
-    'appraisal={{runtime_emotion_appraisal_length}}/{{runtime_emotion_appraisal_latest_trigger}}/{{runtime_emotion_appraisal_latest_summary}}/{{runtime_emotion_appraisal_latest_timestamp_iso}}',
-    'appraisal_lines={{runtime_emotion_appraisal_recent_lines}}',
-  ].join('\n'), {
     now: input.now,
     variables: {
       ...(input.templateVariables ?? {}),
@@ -240,7 +226,7 @@ describe('runtime subject identity', () => {
     expect(templateVariables.user_id).toBe(DEFAULT_COMPANION_ID);
     expect(templateVariables.canonical_contact_id).toBe(DEFAULT_COMPANION_ID);
 
-    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
+    const { rendered, variables } = buildRuntimePromptOutputs({
       message,
       resolvedUserName: 'Companion',
       trustLevel: 'primary',
@@ -272,11 +258,14 @@ describe('runtime subject identity', () => {
       config: {},
     });
 
-    expect(renderedRuntimeLayers).toContain('<internal_turn_context>');
-    expect(renderedRuntimeLayers).toContain('<kind>reflection</kind>');
-    expect(renderedRuntimeLayers).not.toContain('userId: scheduler');
-    expect(renderedRuntimeLayers).not.toContain('Channel: internal:reflection:whisper');
-    expect(renderedRuntimeLayers).not.toContain('Appearance context: Silver eyes and a weathered jacket.');
+    expect(variables.runtime_internal_turn_kind).toBe('reflection');
+    expect(variables.runtime_speaking_with_name).toBe('');
+    expect(variables.runtime_appearance_context_body).toBe('');
+    expect(rendered).toContain('<internal_turn_context>');
+    expect(rendered).toContain('<kind>reflection</kind>');
+    expect(rendered).not.toContain('userId: scheduler');
+    expect(rendered).not.toContain('Channel: internal:reflection:whisper');
+    expect(rendered).not.toContain('<appearance_context>');
     expect(buildRuntimeContext({
       message,
       resolvedUserName: 'Companion',
@@ -457,7 +446,7 @@ describe('runtime subject identity', () => {
       fallbackCharacterName: 'Companion',
     });
 
-    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
+    const { rendered, variables } = buildRuntimePromptOutputs({
       message,
       resolvedUserName: 'Alex',
       trustLevel: 'trusted',
@@ -494,9 +483,10 @@ describe('runtime subject identity', () => {
       config: {},
     });
 
-    expect(renderedRuntimeLayers).not.toContain('Appearance context: Silver eyes and a weathered jacket.');
-    expect(renderedRuntimeLayers).not.toContain('<self_image_tool_guidance>');
-    expect(renderedRuntimeLayers).not.toContain('Use selfie_create for a brand new selfie or self-portrait featuring you.');
+    expect(variables.runtime_self_image_tool_active).toBe('false');
+    expect(variables.runtime_appearance_context_body).toBe('');
+    expect(rendered).not.toContain('<appearance_context>');
+    expect(rendered).not.toContain('<self_image_tool_guidance>');
   });
 
   it('does not expose appearance context for the unified media tool', () => {
@@ -524,7 +514,7 @@ describe('runtime subject identity', () => {
       fallbackCharacterName: 'Companion',
     });
 
-    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
+    const { rendered, variables } = buildRuntimePromptOutputs({
       message,
       resolvedUserName: 'Alex',
       trustLevel: 'trusted',
@@ -561,9 +551,10 @@ describe('runtime subject identity', () => {
       config: {},
     });
 
-    expect(renderedRuntimeLayers).not.toContain('<appearance_context>');
-    expect(renderedRuntimeLayers).not.toContain('Silver eyes and a weathered jacket.');
-    expect(renderedRuntimeLayers).not.toContain('<self_image_tool_guidance>');
+    expect(variables.runtime_self_image_tool_active).toBe('false');
+    expect(variables.runtime_appearance_context_body).toBe('');
+    expect(rendered).not.toContain('<appearance_context>');
+    expect(rendered).not.toContain('<self_image_tool_guidance>');
   });
 
   it('exposes appearance context when the explicit selfie tool is active', () => {
@@ -591,7 +582,7 @@ describe('runtime subject identity', () => {
       fallbackCharacterName: 'Companion',
     });
 
-    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
+    const { rendered, variables } = buildRuntimePromptOutputs({
       message,
       resolvedUserName: 'Alex',
       trustLevel: 'trusted',
@@ -628,14 +619,16 @@ describe('runtime subject identity', () => {
       config: {},
     });
 
-    expect(renderedRuntimeLayers).toContain('<appearance_context>');
-    expect(renderedRuntimeLayers).toContain('Silver eyes and a weathered jacket.');
-    expect(renderedRuntimeLayers).toContain('<self_image_tool_guidance>');
-    expect(renderedRuntimeLayers).toContain('Use selfie_create for a brand new selfie or self-portrait featuring you.');
+    expect(variables.runtime_self_image_tool_active).toBe('true');
+    expect(variables.runtime_appearance_context_body).toBe(
+      templateVariables['character.visual_description'],
+    );
+    expect(rendered).toContain('<appearance_context>');
+    expect(rendered).toContain('<self_image_tool_guidance>');
   });
 
   it('surfaces attention counts for pending whispers and active concerns through prompt-owned layers', () => {
-    const renderedRuntimeLayers = renderPromptOwnedRuntimeLayers({
+    const { rendered, variables } = buildRuntimePromptOutputs({
       message: makeMessage({
         channelId: 'internal:reflection:whisper',
         authorId: 'scheduler',
@@ -727,9 +720,11 @@ describe('runtime subject identity', () => {
       config: {},
     });
 
-    expect(renderedRuntimeLayers).toContain('<internal_state>');
-    expect(renderedRuntimeLayers).toContain('Attention: deepening, 2 open threads, 1 pending follow-up.');
-    expect(renderedRuntimeLayers).toContain('Relationship baseline: primary trust');
+    expect(variables.runtime_internal_state_attention_conversation_trajectory).toBe('deepening');
+    expect(variables.runtime_internal_state_attention_active_concern_count).toBe('2');
+    expect(variables.runtime_internal_state_attention_pending_follow_up_count).toBe('1');
+    expect(variables.runtime_internal_state_relational_trust_level).toBe('primary');
+    expect(rendered).toContain('<internal_state>');
   });
 
   it('appends companion runtime guidance overrides when present', () => {
@@ -963,7 +958,24 @@ describe('runtime subject identity', () => {
   });
 
   it('substitutes atomic concern, tooling, behavioral-note, skills, and appraisal macros', () => {
-    const output = buildAttentionToolingTemplateOutput({
+    const emotionAppraisalChain = [
+      {
+        timestamp: '2026-03-17T09:00:00.000Z',
+        trigger: 'user_checkin',
+        summary: 'She opened cautiously and needed a little grounding before discussing the plan.',
+      },
+      {
+        timestamp: '2026-03-17T10:30:00.000Z',
+        trigger: 'shared_joke',
+        summary: 'A quick joke lightened the mood and brought her energy back up.',
+      },
+      {
+        timestamp: '2026-03-17T12:00:00.000Z',
+        trigger: 'repair',
+        summary: 'Latest summary',
+      },
+    ] as const;
+    const variables = buildDynamicPromptTemplateVariables({
       message: makeMessage({
         channelId: 'api:test',
         channelType: 'api',
@@ -1043,40 +1055,44 @@ describe('runtime subject identity', () => {
         '- curiosity: avg +0.30 over 2 outcome sample(s), 100% positive',
         '</behavioral_notes>',
       ].join('\n'),
-      emotionAppraisalChain: [
-        {
-          timestamp: '2026-03-17T09:00:00.000Z',
-          trigger: 'user_checkin',
-          summary: 'She opened cautiously and needed a little grounding before discussing the plan.',
-        },
-        {
-          timestamp: '2026-03-17T10:30:00.000Z',
-          trigger: 'shared_joke',
-          summary: 'A quick joke lightened the mood and brought her energy back up.',
-        },
-        {
-          timestamp: '2026-03-17T12:00:00.000Z',
-          trigger: 'repair',
-          summary: 'Latest summary',
-        },
-      ],
+      emotionAppraisalChain,
       config: {},
     });
 
-    expect(output).toContain('concerns=3/high, low/1');
-    expect(output).toContain('concern_lines=- medication reminder logistics [high; revisit before');
-    expect(output).toContain('- sleep schedule drift [low; revisit before');
-    expect(output).toContain('behavioral_count=2');
-    expect(output).toContain('behavioral_raw=- validation: avg +0.45 over 1 outcome sample(s), 100% positive');
-    expect(output).toContain('skills_count=2');
-    expect(output).toContain('tools=3/0/2/web, notify, background_probe');
-    expect(output).toContain('tool_lines=- web: Fetch a web page (blocked by current tier: external.web)');
-    expect(output).toContain('- notify: Notify the operator (blocked by current tier: external.web, external.discord, external.email)');
-    expect(output).toContain('- background_probe: Observe long-running background state (background-only; not callable in-turn)');
-    expect(output).toContain('appraisal=3/repair/Latest summary/2026-03-17T12:00:00.000Z');
-    expect(output).toContain('appraisal_lines=');
-    expect(output).toContain('(shared_joke): A quick joke lightened the mood and brought her energy back up.');
-    expect(output).toContain('(repair): Latest summary');
+    expect(variables.runtime_concerns_count).toBe('3');
+    expect(variables.runtime_concerns_top_priorities).toBe('high, low');
+    expect(variables.runtime_concerns_omitted_count).toBe('1');
+    expect(variables.runtime_concerns_top_lines).toContain('medication reminder logistics');
+    expect(variables.runtime_concerns_top_lines).toContain('sleep schedule drift');
+    expect(variables.runtime_behavioral_notes_count).toBe('2');
+    expect(variables.runtime_skills_count).toBe('2');
+    expect(variables.runtime_extended_tools_total).toBe('3');
+    expect(variables.runtime_extended_tools_activatable_count).toBe('0');
+    expect(variables.runtime_extended_tools_blocked_count).toBe('2');
+    expect(variables.runtime_extended_tool_names).toBe('web, notify, background_probe');
+    expect(variables.runtime_extended_tool_directory_lines).toContain(
+      '- web: Fetch a web page (blocked by current tier: external.web)',
+    );
+    expect(variables.runtime_extended_tool_directory_lines).toContain(
+      '- notify: Notify the operator (blocked by current tier: external.web, external.discord, external.email)',
+    );
+    expect(variables.runtime_extended_tool_directory_lines).toContain(
+      '- background_probe: Observe long-running background state (background-only; not callable in-turn)',
+    );
+    expect(variables.runtime_emotion_appraisal_length).toBe(String(emotionAppraisalChain.length));
+    expect(variables.runtime_emotion_appraisal_latest_trigger).toBe(
+      emotionAppraisalChain[emotionAppraisalChain.length - 1]?.trigger ?? '',
+    );
+    expect(variables.runtime_emotion_appraisal_latest_summary).toBe(
+      emotionAppraisalChain[emotionAppraisalChain.length - 1]?.summary ?? '',
+    );
+    expect(variables.runtime_emotion_appraisal_latest_timestamp_iso).toBe(
+      emotionAppraisalChain[emotionAppraisalChain.length - 1]?.timestamp ?? '',
+    );
+    const appraisalLines = variables.runtime_emotion_appraisal_recent_lines.split('\n');
+    expect(appraisalLines).toHaveLength(2);
+    expect(appraisalLines[0]).toContain(`(${emotionAppraisalChain[1].trigger}):`);
+    expect(appraisalLines[1]).toContain(`(${emotionAppraisalChain[2].trigger}):`);
   });
 
   it('substitutes atomic metacognition macros while preserving wrapped persona guidance', () => {
@@ -1142,7 +1158,7 @@ describe('runtime subject identity', () => {
     ].join('\n'));
   });
 
-  it('preserves the canonical seeded runtime render byte-for-byte after moving prose into templates', () => {
+  it('preserves structured runtime sections while sourcing prose from atomic prompt variables', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord_text',
@@ -1151,6 +1167,27 @@ describe('runtime subject identity', () => {
       content: 'hey',
     });
     const now = new Date('2026-03-18T13:30:00Z');
+    const characterPromptVariables = {
+      char_name: 'Companion',
+      'character.visual_description': 'Silver eyes and a weathered jacket.',
+    };
+    const emotionAppraisalChain = [
+      {
+        timestamp: '2026-03-17T09:00:00.000Z',
+        trigger: 'user_checkin',
+        summary: 'She opened cautiously and needed a little grounding before discussing the plan.',
+      },
+      {
+        timestamp: '2026-03-17T10:30:00.000Z',
+        trigger: 'shared_joke',
+        summary: 'A quick joke lightened the mood and brought her energy back up.',
+      },
+      {
+        timestamp: '2026-03-17T12:00:00.000Z',
+        trigger: 'repair',
+        summary: 'Latest summary',
+      },
+    ] as const;
     const { templateVariables } = buildPromptTemplateVariables({
       message,
       resolvedUserName: 'Alex',
@@ -1158,15 +1195,12 @@ describe('runtime subject identity', () => {
       channelType: 'discord_text',
       canonicalContactKey: 'contact-alex',
       now,
-      characterPromptVariables: {
-        char_name: 'Companion',
-        'character.visual_description': 'Silver eyes and a weathered jacket.',
-      },
+      characterPromptVariables,
       modelId: 'test-model',
       fallbackCharacterName: 'Companion',
     });
 
-    const rendered = renderPromptOwnedRuntimeLayers({
+    const { rendered, variables } = buildRuntimePromptOutputs({
       message,
       resolvedUserName: 'Alex',
       trustLevel: 'trusted',
@@ -1229,23 +1263,7 @@ describe('runtime subject identity', () => {
         '- curiosity: avg +0.30 over 2 outcome sample(s), 100% positive',
         '</behavioral_notes>',
       ].join('\n'),
-      emotionAppraisalChain: [
-        {
-          timestamp: '2026-03-17T09:00:00.000Z',
-          trigger: 'user_checkin',
-          summary: 'She opened cautiously and needed a little grounding before discussing the plan.',
-        },
-        {
-          timestamp: '2026-03-17T10:30:00.000Z',
-          trigger: 'shared_joke',
-          summary: 'A quick joke lightened the mood and brought her energy back up.',
-        },
-        {
-          timestamp: '2026-03-17T12:00:00.000Z',
-          trigger: 'repair',
-          summary: 'Latest summary',
-        },
-      ],
+      emotionAppraisalChain,
       config: {},
       internalState: {
         emotional: TEST_INTERNAL_STATE.emotional,
@@ -1284,132 +1302,46 @@ describe('runtime subject identity', () => {
       lastMessageReceivedAtMs: new Date('2026-03-16T09:15:00Z').getTime(),
     });
 
-    expect(rendered).toBe([
-      '<runtime_state>',
-      '<last_message_received>',
-      '<weekday>Monday</weekday>',
-      '<date>March 16, 2026</date>',
-      '<time>5:15 AM</time>',
-      '<timezone>America/New_York</timezone>',
-      '<elapsed_time_since_last>2 days ago</elapsed_time_since_last>',
-      '',
-      '</last_message_received>',
-      '',
-      '<speaking_with>',
-      '<name>Alex</name>',
-      '<trust_level>trusted</trust_level>',
-      '</speaking_with>',
-      '',
-      '<channel_context>',
-      '<type>discord_text</type>',
-      '<visibility>semi_private</visibility>',
-      '</channel_context>',
-      '',
-      '<model_context>',
-      '<identifier>test-model</identifier>',
-      '</model_context>',
-      '',
-      '<capability_tier>',
-      '<tier>autonomous</tier>',
-      '</capability_tier>',
-      '',
-      '<current_datetime>',
-      '<weekday>Wednesday</weekday>',
-      '<date>March 18, 2026</date>',
-      '<time>9:30 AM</time>',
-      '<timezone>America/New_York</timezone>',
-      '</current_datetime>',
-      '</runtime_state>',
-      '',
-      '<runtime_self>',
-      '<trust>',
-      'This is a trusted contact. Be warm and personal but mindful of boundaries, share appropriate personal context, and avoid intimate details or confidential memories.',
-      '</trust>',
-      '',
-      '<emotional_affect>',
-      'Trust gate: tatemae (controlled)',
-      'Affect modifiers: warmth=+0.162, formality=-0.101, energy=-0.055, assertiveness=+0.092, expressiveness=0.197',
-      'Expression controls: intensity=0.500, variability=0.500, control=0.600, display_range=0.000..0.800',
-      'Guidance: slightly warmer, balanced tone, balanced tone, balanced tone, with minimal emotional display. Keep emotional expression surface-level and privacy-safe.',
-      '</emotional_affect>',
-      '',
-      '<metacognitive_persona_guidance>',
-      '- Use tentative language and acknowledge uncertainty explicitly.',
-      '- Anchor strong claims to retrieved evidence, or state when evidence is missing.',
-      '</metacognitive_persona_guidance>',
-      '',
-      '<response_style_guidance>',
-      '<style>expressive</style>',
-      '<delivery>Keep your voice warm and vivid.</delivery>',
-      '<expansion>Add personality-rich detail when it helps clarity.</expansion>',
-      '</response_style_guidance>',
-      '',
-      '<internal_state>',
-      'Current affect: mostly warm and calm, with joy and trust present.',
-      'Thinking state: deliberate, tentative certainty, high-energy engagement.',
-      'Attention: deepening, 1 open thread, 0 pending follow-ups.',
-      'Relationship baseline: trusted trust, occasional contact, just interacted.',
-      '</internal_state>',
-      '</runtime_self>',
-      '',
-      '<runtime_attention>',
-      '<emotion_appraisal_chain>',
-      '- 03-17-26 06:30 America/New_York (shared_joke): A quick joke lightened the mood and brought her energy back up.',
-      '- 03-17-26 08:00 America/New_York (repair): Latest summary',
-      '</emotion_appraisal_chain>',
-      '',
-      '<open_threads>',
-      'Treat these as soft threads to verify, not alarms that must dominate the turn.',
-      '- medication reminder logistics [high; revisit before 02-01-26 06:00 America/New_York]',
-      '- sleep schedule drift [low; revisit before 02-01-26 07:00 America/New_York]',
-      '- 1 additional lower-salience thread omitted.',
-      '</open_threads>',
-      '',
-      '<behavioral_notes>',
-      '- validation: avg +0.45 over 1 outcome sample(s), 100% positive',
-      '- curiosity: avg +0.30 over 2 outcome sample(s), 100% positive',
-      '</behavioral_notes>',
-      '',
-      '<skills_index>',
-      '<skill name="conversation" /><skill name="memory" />',
-      '</skills_index>',
-      '</runtime_attention>',
-      '',
-      '<runtime_tooling>',
-      '<tooling>',
-      '<active_count>5</active_count>',
-      '<core_count>2</core_count>',
-      '<promoted_count>1</promoted_count>',
-      '<loaded_count>1</loaded_count>',
-      '<autoload_count>1</autoload_count>',
-      '<deferred_count>0</deferred_count>',
-      '<available_extended_count>3</available_extended_count>',
-      '</tooling>',
-      '',
-      '<appearance_context>',
-      'Silver eyes and a weathered jacket.',
-      '</appearance_context>',
-      '',
-      '<self_image_tool_guidance>',
-      'Use selfie_create for a brand new selfie or self-portrait featuring you.',
-      'Use image_create for scenes, objects, or other non-self images.',
-      'Use image_edit when modifying an existing image while keeping its subject consistent.',
-      'Use image_analyze to inspect generated images or explicit remote image URLs so you can see what is actually there.',
-      'If the current user message already includes an attached image, inspect that attachment directly instead of calling image_analyze for it.',
-      'When selfie_create is active, write the prompt as the full desired shot and combine your Appearance context with pose, framing, lighting, background, mood, and style details.',
-      'Generated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.',
-      '</self_image_tool_guidance>',
-      '',
-      '<extended_tools>',
-      'Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.',
-      'If a non-default tool is not already active, activate it before you describe its outcome.',
-      'Core tools are already active through the structured tool registry and are not duplicated here.',
-      '- generate_image: Generate an image (autoload active)',
-      '- web: Fetch a web page (use toolset action="activate")',
-      '- background_probe: Observe long-running background state (background-only; not callable in-turn)',
-      '</extended_tools>',
-      '</runtime_tooling>',
-    ].join('\n'));
+    expect(variables.runtime_last_message_received_weekday).toBe('Monday');
+    expect(variables.runtime_last_message_received_date_human).toBe('March 16, 2026');
+    expect(variables.runtime_last_message_received_time_human).toBe('5:15 AM');
+    expect(variables.runtime_last_message_received_ago).toBe('2 days ago');
+    expect(variables.runtime_speaking_with_name).toBe('Alex');
+    expect(variables.runtime_speaking_with_trust_level).toBe('trusted');
+    expect(variables.runtime_channel_type).toBe('discord_text');
+    expect(variables.runtime_channel_visibility).toBe('semi_private');
+    expect(variables.runtime_capability_tier).toBe('autonomous');
+    expect(variables.runtime_response_style).toBe('expressive');
+    expect(variables.runtime_internal_state_attention_conversation_trajectory).toBe('deepening');
+    expect(variables.runtime_internal_state_attention_active_concern_count).toBe('1');
+    expect(variables.runtime_internal_state_relational_trust_level).toBe('trusted');
+    expect(variables.runtime_emotion_appraisal_length).toBe(String(emotionAppraisalChain.length));
+    expect(variables.runtime_emotion_appraisal_latest_trigger).toBe(
+      emotionAppraisalChain[emotionAppraisalChain.length - 1]?.trigger ?? '',
+    );
+    expect(variables.runtime_extended_tools_total).toBe('3');
+    expect(variables.runtime_tooling_active_count).toBe('5');
+    expect(variables.runtime_tooling_available_extended_count).toBe('3');
+    expect(variables.runtime_self_image_tool_active).toBe('true');
+    expect(variables.runtime_appearance_context_body).toBe(
+      characterPromptVariables['character.visual_description'],
+    );
+    expect(rendered).toContain('<runtime_state>');
+    expect(rendered).toContain('<runtime_self>');
+    expect(rendered).toContain('<runtime_attention>');
+    expect(rendered).toContain('<runtime_tooling>');
+    expect(rendered).toContain('<name>Alex</name>');
+    expect(rendered).toContain('<trust_level>trusted</trust_level>');
+    expect(rendered).toContain('<type>discord_text</type>');
+    expect(rendered).toContain('<visibility>semi_private</visibility>');
+    expect(rendered).toContain('<identifier>test-model</identifier>');
+    expect(rendered).toContain('<tier>autonomous</tier>');
+    expect(rendered).toContain('<active_count>5</active_count>');
+    expect(rendered).toContain('<available_extended_count>3</available_extended_count>');
+    expect(rendered).toContain('<appearance_context>');
+    expect(rendered).toContain('<self_image_tool_guidance>');
+    expect(rendered).toContain('<extended_tools>');
+    expect(rendered).not.toContain('{{');
   });
 
   it('fails closed with structured fallback variables when prior-message context is unavailable', () => {

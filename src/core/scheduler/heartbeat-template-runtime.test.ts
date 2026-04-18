@@ -31,6 +31,19 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     }
   });
 
+  function getPromptSection(prompt: string, header: string): string {
+    const escapedHeader = header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = prompt.match(new RegExp(`${escapedHeader}[\\s\\S]*?(?=\\n\\n\\[[^\\n]+\\]|$)`));
+    return match?.[0] ?? '';
+  }
+
+  function getPromptBulletLines(section: string): string[] {
+    return section
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.startsWith('- '));
+  }
+
   it('records manual deliberation runs with provenance and process ids', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
     const reflectionJournalPrototype = ReflectionJournalStore.prototype as ReflectionJournalStore & {
@@ -240,8 +253,8 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
 
       expect(capturedPrompts.length).toBeGreaterThan(0);
       for (const prompt of capturedPrompts) {
-        expect(prompt).not.toContain('Appearance context:');
-        expect(prompt).not.toContain('Silver eyes and a weathered jacket.');
+        expect(prompt).not.toContain('<appearance_context>');
+        expect(prompt).not.toContain('<self_image_tool_guidance>');
       }
     } finally {
       reflectionJournalPrototype.listRecent = originalListRecent;
@@ -422,11 +435,18 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           canonicalContactId: 'contact-1',
         }),
       }));
-      expect(capturedPrompts[0]).toContain('[Reflection Contact Context]');
-      expect(capturedPrompts[0]).toContain('recent_contact_status: active');
-      expect(capturedPrompts[0]).toContain('I was here yesterday.');
-      expect(capturedPrompts[0]).toContain('trust-filtered contact memory');
-      expect(capturedPrompts[0]).not.toContain('stale silence');
+      const prompt = capturedPrompts[0];
+      const contactSection = getPromptSection(prompt, '[Reflection Contact Context]');
+      const recentSessionSection = getPromptSection(prompt, '[Recent Contact Session]');
+      const memoryHeaderSection = getPromptSection(prompt, '[Reflection Memory Retrieval]');
+      const recentTailSection = getPromptSection(prompt, '[Recent Session Tail]');
+      expect(contactSection).toContain('contact_id: contact-1');
+      expect(contactSection).toContain('trust_level: trusted');
+      expect(contactSection).toContain('recent_contact_status: active');
+      expect(getPromptBulletLines(recentSessionSection)).toHaveLength(2);
+      expect(memoryHeaderSection).not.toBe('');
+      expect(recentTailSection).toBe('');
+      expect(prompt).not.toContain('stale silence');
       expect(memoryRetrieve).toHaveBeenCalled();
       expect(memoryRetrieve.mock.calls[0]?.[1]).toBe(`internal:reflection:${templateId}`);
       expect(memoryRetrieve.mock.calls[0]?.[4]).toBe('contact-1');
@@ -626,25 +646,37 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     });
 
     expect(capturedPrompts).toHaveLength(1);
-    expect(capturedPrompts[0]).not.toContain('{{reflection_self}}');
-    expect(capturedPrompts[0]).not.toContain('{{reflection_relational}}');
-    expect(capturedPrompts[0]).not.toContain('{{reflection_affect}}');
-    expect(capturedPrompts[0]).toContain('[Internal State Input]');
-    expect(capturedPrompts[0]).toContain(`snapshot_ref: ${currentSnapshotRef}`);
-    expect(capturedPrompts[0]).toContain('[Reflection Memory Retrieval]');
-    expect(capturedPrompts[0]).toContain('trust-filtered contact memory');
-    expect(capturedPrompts[0]).toContain('[Reflection Contact Context]');
-    expect(capturedPrompts[0]).toContain('I wanted to follow up on yesterday.');
-    expect(capturedPrompts[0]).toContain('[Reflection Relational Substrate]');
-    expect(capturedPrompts[0]).toContain('steadiness under pressure');
-    expect(capturedPrompts[0]).toContain('[Reflection Affect Context]');
-    expect(capturedPrompts[0]).toContain('emotional_time_series:');
-    expect(capturedPrompts[0]).toContain('- 2023-11-14T22:13:20.000Z valence=0.180 confidence=0.840');
-    expect(capturedPrompts[0]).not.toContain('current_vad: valence=0.200 arousal=0.150 dominance=0.100');
-    expect(capturedPrompts[0]).toContain('[Reflection Affect Substrate]');
-    expect(capturedPrompts[0]).toContain('uncertainty pattern around the unresolved handoff');
-    expect(capturedPrompts[0]).toContain('[Reflection Self Substrate]');
-    expect(capturedPrompts[0]).toContain('Continuity and care remained durable values');
+    const prompt = capturedPrompts[0];
+    const internalStateSection = getPromptSection(prompt, '[Internal State Input]');
+    const memoryHeaderSection = getPromptSection(prompt, '[Reflection Memory Retrieval]');
+    const retrievedMemorySection = getPromptSection(prompt, '[Retrieved Memory]');
+    const contactSection = getPromptSection(prompt, '[Reflection Contact Context]');
+    const recentSessionSection = getPromptSection(prompt, '[Recent Contact Session]');
+    const relationalSubstrateSection = getPromptSection(prompt, '[Reflection Relational Substrate]');
+    const affectContextSection = getPromptSection(prompt, '[Reflection Affect Context]');
+    const affectSubstrateSection = getPromptSection(prompt, '[Reflection Affect Substrate]');
+    const selfSubstrateSection = getPromptSection(prompt, '[Reflection Self Substrate]');
+
+    expect(prompt).not.toContain('{{reflection_self}}');
+    expect(prompt).not.toContain('{{reflection_relational}}');
+    expect(prompt).not.toContain('{{reflection_affect}}');
+    expect(internalStateSection).toContain(`snapshot_ref: ${currentSnapshotRef}`);
+    expect(internalStateSection).toContain('serialized_internal_state:');
+    expect(memoryHeaderSection).not.toBe('');
+    expect(retrievedMemorySection).not.toBe('');
+    expect(retrievedMemorySection).not.toContain('[Recent Session Tail]');
+    expect(contactSection).toContain('contact_id: contact-1');
+    expect(contactSection).toContain('recent_contact_status: active');
+    expect(getPromptBulletLines(recentSessionSection)).toHaveLength(2);
+    expect(relationalSubstrateSection).toContain('canonical_truth_boundary:');
+    expect(relationalSubstrateSection).toContain('template=daily-review');
+    expect(affectContextSection).toContain('emotional_time_series:');
+    expect(affectContextSection).toContain('confidence=0.840');
+    expect(affectContextSection).not.toContain('current_vad:');
+    expect(affectSubstrateSection).toContain('canonical_truth_boundary:');
+    expect(affectSubstrateSection).toContain('template=experiential-review');
+    expect(selfSubstrateSection).toContain('canonical_truth_boundary:');
+    expect(selfSubstrateSection).toContain('template=values-reflection');
     expect(memoryRetrieve).toHaveBeenCalled();
   });
 
@@ -838,11 +870,11 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(memoryRetrieve).toHaveBeenCalledTimes(1);
       expect(capturedPrompts.length).toBeGreaterThan(0);
       const prompt = capturedPrompts.join('\n\n');
-      expect(prompt).toContain('[Reflection Memory Retrieval]');
-      expect(prompt).toContain('[Recent Session Tail]');
-      expect(prompt).toContain('Memory retrieval was empty, so use this recent live tail as the fallback evidence.');
-      expect(prompt).toContain('I just sent the update.');
-      expect(prompt).toContain('I am tracking the update now.');
+      const memoryHeaderSection = getPromptSection(prompt, '[Reflection Memory Retrieval]');
+      const recentTailSection = getPromptSection(prompt, '[Recent Session Tail]');
+      expect(memoryHeaderSection).not.toBe('');
+      expect(recentTailSection).not.toBe('');
+      expect(getPromptBulletLines(recentTailSection)).toHaveLength(2);
     } finally {
       reflectionJournalPrototype.listRecent = originalListRecent;
     }

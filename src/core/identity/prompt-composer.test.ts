@@ -34,6 +34,33 @@ describe('PromptComposer', () => {
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  function toComposeSplitGolden(
+    result: ReturnType<PromptComposer['composeSplit']>,
+    layerNamesById: Map<string, string>,
+  ) {
+    const normalizeIdentifier = (identifier: string): string => {
+      if (!identifier.startsWith('layer:')) {
+        return identifier;
+      }
+      const layerId = identifier.slice('layer:'.length);
+      return `layer:${layerNamesById.get(layerId) ?? layerId}`;
+    };
+
+    const toLayerNames = (layerIds: string[]) => layerIds.map(id => layerNamesById.get(id) ?? id);
+
+    return {
+      layerCount: result.layerCount,
+      layerNames: toLayerNames(result.layerIds),
+      staticLayerNames: toLayerNames(result.staticLayerIds),
+      dynamicLayerNames: toLayerNames(result.dynamicLayerIds),
+      promptIdentifiers: (result.promptIdentifiers ?? []).map(normalizeIdentifier),
+      autoHealedPromptIdentifiers: result.autoHealedPromptIdentifiers ?? [],
+      staticPrefix: result.staticPrefix,
+      dynamicSuffix: result.dynamicSuffix,
+      text: result.text,
+    };
+  }
+
   describe('layer ordering', () => {
     it('preserves the stored order when composing enabled layers', () => {
       const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
@@ -380,6 +407,181 @@ describe('PromptComposer', () => {
       expect(result.text).toContain('Companion value one');
       expect(result.text).not.toContain('Manual value should not be in companion layer');
       expect(result.text).toContain('Shared care');
+    });
+
+    it('matches the reviewed composeSplit golden for constitution-enabled layered prompts', () => {
+      const valuesStore = new ValuesJournalStore(join(tmpDir, 'values-golden.jsonl'));
+      const northStarStore = new NorthStarStore(join(tmpDir, 'north-star-golden.json'));
+      valuesStore.append({
+        templateId: 'values-reflection',
+        templateName: 'Values Reflection',
+        prompt: 'Reflect on values.',
+        reflection: 'Shared care keeps the relationship durable.',
+        createdAt: '2026-03-01T00:00:00.000Z',
+        provenance: {
+          source: 'companion_reflection',
+          templateId: 'values-reflection',
+          channelId: 'internal:reflection:values-reflection',
+          mode: 'agent',
+        },
+      });
+      northStarStore.create({
+        title: 'Steady Trust',
+        content: 'Protect the human and the long arc of trust.',
+        scope: 'shared',
+        updatedBy: 'admin',
+      });
+
+      const base = store.create({ type: 'base', name: 'Base Identity', content: 'BASE' });
+      const operator = store.create({ type: 'operator', name: 'Operator Policy', content: 'OPERATOR' });
+      const runtime = store.create({ type: 'runtime', name: 'Runtime Overlay', content: 'RUNTIME' });
+      const channel = store.create({
+        type: 'channel',
+        name: 'Discord Overlay',
+        content: 'DISCORD',
+        channelType: 'discord_text',
+      });
+      const task = store.create({
+        type: 'task',
+        name: 'Heartbeat Overlay',
+        content: 'HEARTBEAT',
+        taskKind: 'heartbeat',
+      });
+      const constitutionComposer = new PromptComposer(
+        store,
+        undefined,
+        undefined,
+        {
+          enableConstitution: true,
+          companionValuesLayerProvider: () => valuesStore.buildCompanionDerivedLayer(),
+          northStarLayerProvider: () => northStarStore.buildPromptLayer(),
+        },
+      );
+
+      const result = constitutionComposer.composeSplit({
+        channelType: 'discord_text',
+        taskKind: 'heartbeat',
+      });
+
+      expect(toComposeSplitGolden(
+        result,
+        new Map([
+          [base.id, base.name],
+          [operator.id, operator.name],
+          [runtime.id, runtime.name],
+          [channel.id, channel.name],
+          [task.id, task.name],
+        ]),
+      )).toMatchInlineSnapshot(`
+        {
+          "autoHealedPromptIdentifiers": [
+            "charDescription",
+            "charPersonality",
+            "scenario",
+            "dialogueExamples",
+            "postHistoryInstructions",
+          ],
+          "dynamicLayerNames": [
+            "Runtime Overlay",
+            "Discord Overlay",
+            "Heartbeat Overlay",
+          ],
+          "dynamicSuffix": "<companion_values>
+        [Companion-Derived Values Layer]
+        Recent companion-derived values and reflections from the append-only journal.
+        [History]
+        - v1 @ 2026-03-01T00:00:00.000Z (companion_reflection; template=values-reflection; mode=agent): Shared care keeps the relationship durable.
+        </companion_values>
+
+        RUNTIME
+
+        DISCORD
+
+        HEARTBEAT",
+          "layerCount": 5,
+          "layerNames": [
+            "Base Identity",
+            "Operator Policy",
+            "Runtime Overlay",
+            "Discord Overlay",
+            "Heartbeat Overlay",
+          ],
+          "promptIdentifiers": [
+            "main",
+            "layer:Operator Policy",
+            "layer:Runtime Overlay",
+            "layer:Discord Overlay",
+            "layer:Heartbeat Overlay",
+          ],
+          "staticLayerNames": [
+            "Base Identity",
+            "Operator Policy",
+          ],
+          "staticPrefix": "<immutable_human_safety_amendments>
+        [Immutable Human-Safety Amendments]
+        1. Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.
+        2. Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.
+        3. When safety is uncertain, fail closed: ask for clarification or decline risky requests rather than guessing.
+        4. Support {{user}}'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+        </immutable_human_safety_amendments>
+
+        <constitution_precedence>
+        [Constitution Precedence]
+        Immutable amendments are hardcoded and non-editable.
+        If any mutable instruction conflicts with them, follow the immutable amendments.
+        </constitution_precedence>
+
+        <north_star>
+        [North Star]
+        Keep these long-horizon guiding intentions in view across planning, maintenance, and independent action.
+
+        1. [shared] Steady Trust
+        Protect the human and the long arc of trust.
+        </north_star>
+
+        BASE
+
+        OPERATOR",
+          "text": "<immutable_human_safety_amendments>
+        [Immutable Human-Safety Amendments]
+        1. Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.
+        2. Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.
+        3. When safety is uncertain, fail closed: ask for clarification or decline risky requests rather than guessing.
+        4. Support {{user}}'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+        </immutable_human_safety_amendments>
+
+        <constitution_precedence>
+        [Constitution Precedence]
+        Immutable amendments are hardcoded and non-editable.
+        If any mutable instruction conflicts with them, follow the immutable amendments.
+        </constitution_precedence>
+
+        <north_star>
+        [North Star]
+        Keep these long-horizon guiding intentions in view across planning, maintenance, and independent action.
+
+        1. [shared] Steady Trust
+        Protect the human and the long arc of trust.
+        </north_star>
+
+        BASE
+
+        OPERATOR
+
+        <companion_values>
+        [Companion-Derived Values Layer]
+        Recent companion-derived values and reflections from the append-only journal.
+        [History]
+        - v1 @ 2026-03-01T00:00:00.000Z (companion_reflection; template=values-reflection; mode=agent): Shared care keeps the relationship durable.
+        </companion_values>
+
+        RUNTIME
+
+        DISCORD
+
+        HEARTBEAT",
+        }
+      `);
     });
 
     it('keeps the static prefix stable when companion-derived values versions change', () => {

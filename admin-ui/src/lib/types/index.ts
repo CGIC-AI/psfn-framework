@@ -272,6 +272,40 @@ export interface AdminTurnPromptContextMessage {
   content: string;
 }
 
+export type AdminPromptSectionCacheabilityClass =
+  | 'static'
+  | 'session_stable'
+  | 'append_only'
+  | 'volatile';
+
+export type AdminPromptSectionCacheBreaker =
+  | 'prompt_layer'
+  | 'runtime'
+  | 'channel'
+  | 'task'
+  | 'macro'
+  | 'tool'
+  | 'retrieval'
+  | 'scratchpad'
+  | 'session_history';
+
+export interface AdminPromptSectionCacheability {
+  section:
+    | 'staticPrefixTemplate'
+    | 'dynamicSuffixTemplate'
+    | 'renderedStaticPrefix'
+    | 'renderedDynamicSuffix'
+    | 'runtimeContext'
+    | 'memoryContextBlock'
+    | 'scratchpadContext'
+    | 'assembledPrompt'
+    | 'finalSystemPrompt'
+    | 'messages';
+  cacheability: AdminPromptSectionCacheabilityClass;
+  cacheBreakers: AdminPromptSectionCacheBreaker[];
+  reason: string;
+}
+
 export interface AdminPromptSectionTelemetry {
   id: string;
   title: string;
@@ -329,6 +363,7 @@ export interface AdminTurnPromptContextSnapshotData {
   inputSections?: AdminPromptSectionTelemetry[];
   runtimeContextSections?: AdminPromptSectionTelemetry[];
   finalSystemSections?: AdminPromptSectionTelemetry[];
+  sectionCacheability?: AdminPromptSectionCacheability[];
 }
 
 export interface AdminTurnToolSchema {

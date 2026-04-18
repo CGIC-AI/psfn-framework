@@ -520,11 +520,12 @@ describe('wireHeartbeatRuntime', () => {
         outputTokens: 0,
         stopReason: 'stop',
       })),
-      complete: vi.fn(async (_context, purpose) => {
+      complete: vi.fn(async (context, purpose) => {
         purposes.push(purpose);
+        const promptBody = context.messages?.map((message) => message.content).join('\n\n') ?? '';
         const responses = {
           reasoning: {
-            content: purposes.length === 3
+            content: promptBody.includes('Synthesize the strongest insights into one coherent reflection')
               ? 'A single synthesized values reflection.'
               : 'Reasoning voice: continuity and trust matter.',
             inputTokens: 30,
@@ -592,8 +593,13 @@ describe('wireHeartbeatRuntime', () => {
       const handledChannels = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls
         .map(call => call[0]?.channelId);
       expect(handledChannels).not.toContain('internal:reflection:values-reflection');
-      expect(purposes).toEqual(['reasoning', 'background', 'reasoning']);
-      const firstDeliberationCall = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as
+      const valuesDeliberationCalls = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls
+        .filter((call) => (
+          typeof call[0]?.messages?.[0]?.content === 'string'
+          && call[0].messages[0].content.includes('Name the values guiding you today')
+        ));
+      expect(valuesDeliberationCalls.map((call) => call[1])).toEqual(['reasoning', 'background', 'reasoning']);
+      const firstDeliberationCall = valuesDeliberationCalls[0]?.[0] as
         | { messages?: Array<{ content?: string }> }
         | undefined;
       expect(firstDeliberationCall?.messages?.[0]?.content).not.toContain(
@@ -1008,10 +1014,14 @@ describe('wireHeartbeatRuntime', () => {
     const target = {
       registerTool: vi.fn(),
     };
+    const narrative = createInternalStateNarrativeFixture();
     const agentLoop = {
       handleMessage: vi.fn().mockResolvedValue({ content: 'Loop candidate reflection output' }),
       waitForIdle: vi.fn().mockResolvedValue(undefined),
       registerPostTurnActionInferer: vi.fn().mockReturnValue(() => {}),
+      getCurrentInternalState: vi.fn(() => narrative.internalState),
+      getCurrentInternalStateSnapshotRef: vi.fn(() => narrative.snapshotRef),
+      getCurrentMetacognitiveFlags: vi.fn(() => narrative.metacognitiveFlags),
     };
     const sender = {
       send: vi.fn().mockResolvedValue(undefined),

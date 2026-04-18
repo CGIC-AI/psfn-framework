@@ -21,13 +21,14 @@ describe('HeartbeatPolicyStore', () => {
 
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
-    expect(policy.templates).toHaveLength(5);
+    expect(policy.templates).toHaveLength(6);
     expect(policy.version).toBe(1);
     expect(policy.updatedBy).toBe('system');
 
     const ids = policy.templates.map(t => t.id);
     expect(ids).toContain('musing');
     expect(ids).toContain('daily-review');
+    expect(ids).toContain('emotional-check');
     expect(ids).toContain('goal-update');
     expect(ids).toContain('experiential-review');
     expect(ids).toContain('values-reflection');
@@ -67,10 +68,23 @@ describe('HeartbeatPolicyStore', () => {
     expect(dailyReview!.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
   });
 
+  it.each(['daily-review', 'emotional-check', 'goal-update'])(
+    '%s defaults to experiential deliberation mode',
+    (templateId) => {
+      const policy = store.load();
+      const template = policy.templates.find(t => t.id === templateId);
+      expect(template).toBeDefined();
+      expect(template?.mode).toBe('deliberation');
+      expect(template?.internalStateInput).toBe(true);
+      expect(template?.deliberation?.maxRounds).toBe(3);
+      expect(template?.deliberation?.maxTotalTokens).toBe(6_000);
+    },
+  );
+
   it('non-musing templates do not send to Discord', () => {
     const policy = store.load();
     const nonMusings = policy.templates.filter(t => t.id !== 'musing');
-    expect(nonMusings.length).toBe(4);
+    expect(nonMusings.length).toBe(5);
     for (const t of nonMusings) {
       expect(t.sendToDiscord).toBe(false);
     }
@@ -96,7 +110,7 @@ describe('HeartbeatPolicyStore', () => {
     store.save({ templates: 'bad' as any, version: 1, updatedAt: '', updatedBy: '' });
     const policy = store.load();
     // Invalid templates (not an array) triggers default
-    expect(policy.templates).toHaveLength(5);
+    expect(policy.templates).toHaveLength(6);
   });
 
   it('restores defaults when persisted template intervals are invalid', () => {
@@ -121,7 +135,7 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const policy = store.load();
-    expect(policy.templates).toHaveLength(5);
+    expect(policy.templates).toHaveLength(6);
     expect(policy.version).toBe(1);
     expect(policy.updatedBy).toBe('system');
   });
@@ -149,7 +163,7 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const policy = store.load();
-    expect(policy.templates).toHaveLength(5);
+    expect(policy.templates).toHaveLength(6);
     expect(policy.version).toBe(1);
     expect(policy.updatedBy).toBe('system');
   });

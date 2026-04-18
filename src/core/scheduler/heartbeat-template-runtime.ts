@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Scheduler } from './scheduler.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -10,7 +11,7 @@ import {
 } from './heartbeat-policy.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
 import type { ValuesDeliberationMetadata } from '../../faculties/values/store.js';
-import type { PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
+import type { CompletionPurpose, ContextMessage, PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
 import type {
   HeartbeatAgent,
   HeartbeatRunTemplateResult,
@@ -66,6 +67,10 @@ const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
 const TEMPLATE_EXECUTION_COOLDOWN_MS = 10 * 60_000;
 const REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS = 2_500;
 const REFLECTION_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT = 8;
+const EXPERIENTIAL_DELIBERATION_TEMPLATE_IDS = new Set(['daily-review', 'emotional-check', 'goal-update']);
+const DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS = 2;
+const DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS = 8;
+const MAX_UNSUPPORTED_CLAIM_FLAGS = 4;
 const REFLECTION_PROMPT_TOKENS = {
   self: '{{reflection_self}}',
   relational: '{{reflection_relational}}',
@@ -103,6 +108,12 @@ function getHeartbeatTemplateAuditProfile(
 
 type HeartbeatExecutionSource = 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
 type ReflectionRequestSource = 'manual' | 'scheduled';
+type ReflectionDeliberationExecutionResult = {
+  reflection: string;
+  metadata: ValuesDeliberationMetadata;
+  metacognitiveFlags: ReflectionMetacognitiveFlag[];
+};
+type ExperientialReflectionStage = 'evidence' | 'synthesis' | 'contradiction';
 
 class HeartbeatTemplateLoopGuardError extends Error {
   readonly templateId: string;
@@ -138,6 +149,113 @@ function joinReflectionPromptSections(...sections: Array<string | undefined>): s
 
 function promptUsesReflectionMacros(prompt: string): boolean {
   return Object.values(REFLECTION_PROMPT_TOKENS).some(token => prompt.includes(token));
+}
+
+function clampUnit(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function estimateDeliberationCostUsd(
+  inputTokens: number,
+  outputTokens: number,
+  inputUsdPerMillionTokens: number,
+  outputUsdPerMillionTokens: number,
+): number {
+  return (
+    (Math.max(0, inputTokens) * Math.max(0, inputUsdPerMillionTokens))
+    + (Math.max(0, outputTokens) * Math.max(0, outputUsdPerMillionTokens))
+  ) / 1_000_000;
+}
+
+function extractEmbeddedJsonObject(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    return trimmed;
+  }
+
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(trimmed);
+  if (fenced?.[1]) {
+    const body = fenced[1].trim();
+    if (body.startsWith('{') && body.endsWith('}')) {
+      return body;
+    }
+  }
+
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    return trimmed.slice(firstBrace, lastBrace + 1);
+  }
+
+  return null;
+}
+
+function normalizeUnsupportedClaimFlags(raw: unknown): ReflectionMetacognitiveFlag[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  const flags: ReflectionMetacognitiveFlag[] = [];
+  for (const [index, entry] of raw.entries()) {
+    if (flags.length >= MAX_UNSUPPORTED_CLAIM_FLAGS) {
+      break;
+    }
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+
+    const claim = typeof (entry as { claim?: unknown }).claim === 'string'
+      ? (entry as { claim: string }).claim.trim()
+      : '';
+    if (!claim) {
+      continue;
+    }
+
+    const reason = typeof (entry as { reason?: unknown }).reason === 'string'
+      ? (entry as { reason: string }).reason.trim()
+      : '';
+    const confidence = clampUnit(
+      typeof (entry as { confidence?: unknown }).confidence === 'number'
+        ? (entry as { confidence: number }).confidence
+        : 0.68,
+    );
+
+    flags.push({
+      flag: 'unsupported_claim',
+      confidence: Number(confidence.toFixed(4)),
+      evidence: reason ? `${claim} :: ${reason}` : claim,
+    });
+
+    if (index >= MAX_UNSUPPORTED_CLAIM_FLAGS - 1) {
+      break;
+    }
+  }
+
+  return flags;
+}
+
+function mergeMetacognitiveFlags(
+  ...groups: ReadonlyArray<readonly ReflectionMetacognitiveFlag[] | null | undefined>
+): ReflectionMetacognitiveFlag[] {
+  const merged = new Map<string, ReflectionMetacognitiveFlag>();
+
+  for (const group of groups) {
+    for (const flag of group ?? []) {
+      const key = `${flag.flag}::${flag.evidence ?? ''}`;
+      const existing = merged.get(key);
+      if (!existing || flag.confidence > existing.confidence) {
+        merged.set(key, flag);
+      }
+    }
+  }
+
+  return [...merged.values()];
+}
+
+function isExperientialDeliberationTemplate(template: ReflectionTemplate): boolean {
+  return EXPERIENTIAL_DELIBERATION_TEMPLATE_IDS.has(template.id);
 }
 
 function mergeReflectionPromptBundles(
@@ -739,6 +857,256 @@ export function createHeartbeatTemplateRuntime(
     durationMs: result.durationMs,
   });
 
+  const mergeInternalStateContextMetacognitiveFlags = (
+    context: ReflectionInternalStateContext | null,
+    flags: readonly ReflectionMetacognitiveFlag[],
+  ): ReflectionInternalStateContext | null => {
+    if (flags.length === 0 || !context) {
+      return context;
+    }
+    const mergedFlags = mergeMetacognitiveFlags(context.metacognitiveFlags, flags);
+    latestMetacognitiveFlags = mergedFlags;
+    return {
+      ...context,
+      metacognitiveFlags: mergedFlags,
+    };
+  };
+
+  const buildExperientialEvidenceMessages = (
+    template: ReflectionTemplate,
+    prompt: string,
+  ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
+    systemPrompt:
+      `You are the evidence pass for the experiential reflection template "${template.name}". `
+      + 'Extract only observations that are directly grounded in the supplied reflection context. '
+      + 'Return 3-6 bullet points. Do not speculate and do not invent support.',
+    messages: [{
+      role: 'user',
+      content: [
+        `Template: ${template.name} (${template.id})`,
+        'Stage: evidence',
+        'Reflection context:',
+        prompt,
+      ].join('\n\n'),
+    }],
+    purpose: template.deliberation?.voices?.[0] ?? 'background',
+  });
+
+  const buildExperientialSynthesisMessages = (
+    template: ReflectionTemplate,
+    prompt: string,
+    evidence: string,
+  ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
+    systemPrompt:
+      `You are the synthesis pass for the experiential reflection template "${template.name}". `
+      + 'Write a grounded reflection using only the supplied evidence. '
+      + 'Keep it to 2-5 sentences and make uncertainty explicit when the evidence is partial.',
+    messages: [{
+      role: 'user',
+      content: [
+        `Template: ${template.name} (${template.id})`,
+        'Stage: synthesis',
+        'Original reflection context:',
+        prompt,
+        'Grounded evidence:',
+        evidence,
+      ].join('\n\n'),
+    }],
+    purpose: template.deliberation?.voices?.[1] ?? template.deliberation?.voices?.[0] ?? 'reasoning',
+  });
+
+  const buildExperientialContradictionMessages = (
+    template: ReflectionTemplate,
+    prompt: string,
+    evidence: string,
+    synthesis: string,
+  ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
+    systemPrompt:
+      `You are the contradiction pass for the experiential reflection template "${template.name}". `
+      + 'Compare the candidate reflection against the grounded evidence. '
+      + 'Return strict JSON with keys "revisedReflection" and "unsupportedClaims". '
+      + '"unsupportedClaims" must be an array of objects with "claim", "reason", and "confidence" in [0,1]. '
+      + 'If every claim is supported, return an empty array and preserve the reflection.',
+    messages: [{
+      role: 'user',
+      content: [
+        `Template: ${template.name} (${template.id})`,
+        'Stage: contradiction',
+        'Original reflection context:',
+        prompt,
+        'Grounded evidence:',
+        evidence,
+        'Candidate reflection:',
+        synthesis,
+        'Return JSON only.',
+      ].join('\n\n'),
+    }],
+    purpose: 'reasoning',
+  });
+
+  const parseExperientialContradictionResponse = (
+    raw: string,
+    fallbackReflection: string,
+  ): { revisedReflection: string; metacognitiveFlags: ReflectionMetacognitiveFlag[] } => {
+    const jsonObject = extractEmbeddedJsonObject(raw);
+    if (!jsonObject) {
+      return {
+        revisedReflection: fallbackReflection,
+        metacognitiveFlags: [],
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(jsonObject) as {
+        revisedReflection?: unknown;
+        unsupportedClaims?: unknown;
+      };
+      const revisedReflection = typeof parsed.revisedReflection === 'string'
+        && parsed.revisedReflection.trim().length > 0
+        ? parsed.revisedReflection.trim()
+        : fallbackReflection;
+      return {
+        revisedReflection,
+        metacognitiveFlags: normalizeUnsupportedClaimFlags(parsed.unsupportedClaims),
+      };
+    } catch (error) {
+      log.warn('Experiential contradiction pass returned invalid JSON; preserving synthesis', {
+        error: String(error),
+      });
+      return {
+        revisedReflection: fallbackReflection,
+        metacognitiveFlags: [],
+      };
+    }
+  };
+
+  const runExperientialTemplateDeliberation = async (
+    template: ReflectionTemplate,
+    prompt: string,
+  ): Promise<ReflectionDeliberationExecutionResult> => {
+    const llmProvider = runtimeOptions.llmProvider;
+    if (!llmProvider) {
+      throw new Error('Experiential deliberation requested without llmProvider');
+    }
+
+    const startedAt = Date.now();
+    const sessionId = randomUUID();
+    const maxTotalTokens = Math.max(256, Math.floor(template.deliberation?.maxTotalTokens ?? 6_000));
+    const maxWallTimeMs = Math.max(250, Math.floor(template.deliberation?.maxWallTimeMs ?? 35_000));
+    const inputUsdPerMillionTokens = template.deliberation?.inputUsdPerMillionTokens
+      ?? DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS;
+    const outputUsdPerMillionTokens = template.deliberation?.outputUsdPerMillionTokens
+      ?? DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS;
+
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let estimatedCostUsd = 0;
+    let completedRounds = 0;
+    let stopReason: ValuesDeliberationMetadata['stopReason'] = 'max_rounds';
+    let evidence = '';
+    let synthesis = '';
+    let finalReflection = '';
+    let metacognitiveFlags: ReflectionMetacognitiveFlag[] = [];
+
+    const runStage = async (
+      stage: ExperientialReflectionStage,
+      builder: () => { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose },
+    ): Promise<string | null> => {
+      if (Date.now() - startedAt >= maxWallTimeMs) {
+        stopReason = 'time_cap';
+        return null;
+      }
+      if (totalInputTokens + totalOutputTokens >= maxTotalTokens) {
+        stopReason = 'token_cap';
+        return null;
+      }
+
+      const stageStartedAt = Date.now();
+      const { systemPrompt, messages, purpose } = builder();
+      const response = await llmProvider.complete({ systemPrompt, messages }, purpose);
+      const content = response.content.trim();
+
+      totalInputTokens += response.inputTokens;
+      totalOutputTokens += response.outputTokens;
+      estimatedCostUsd += estimateDeliberationCostUsd(
+        response.inputTokens,
+        response.outputTokens,
+        inputUsdPerMillionTokens,
+        outputUsdPerMillionTokens,
+      );
+      completedRounds += 1;
+
+      const elapsed = Date.now() - startedAt;
+      if (elapsed >= maxWallTimeMs) {
+        stopReason = 'time_cap';
+      } else if (totalInputTokens + totalOutputTokens >= maxTotalTokens) {
+        stopReason = 'token_cap';
+      }
+
+      log.debug('Completed experiential reflection deliberation stage', {
+        templateId: template.id,
+        stage,
+        purpose,
+        durationMs: Date.now() - stageStartedAt,
+        inputTokens: response.inputTokens,
+        outputTokens: response.outputTokens,
+      });
+
+      return content;
+    };
+
+    const evidenceResult = await runStage(
+      'evidence',
+      () => buildExperientialEvidenceMessages(template, prompt),
+    );
+    if (evidenceResult) {
+      evidence = evidenceResult;
+      finalReflection = evidenceResult;
+    }
+
+    const synthesisResult = await runStage(
+      'synthesis',
+      () => buildExperientialSynthesisMessages(template, prompt, evidence || prompt),
+    );
+    if (synthesisResult) {
+      synthesis = synthesisResult;
+      finalReflection = synthesisResult;
+    }
+
+    const contradictionResult = await runStage(
+      'contradiction',
+      () => buildExperientialContradictionMessages(
+        template,
+        prompt,
+        evidence || prompt,
+        synthesis || finalReflection || evidence || prompt,
+      ),
+    );
+    if (contradictionResult) {
+      const parsedContradiction = parseExperientialContradictionResponse(
+        contradictionResult,
+        synthesis || finalReflection || evidence || prompt,
+      );
+      metacognitiveFlags = parsedContradiction.metacognitiveFlags;
+      finalReflection = parsedContradiction.revisedReflection;
+    }
+
+    return {
+      reflection: finalReflection.trim() || synthesis.trim() || evidence.trim() || prompt.trim(),
+      metadata: {
+        sessionId,
+        stopReason,
+        rounds: completedRounds,
+        totalInputTokens,
+        totalOutputTokens,
+        totalTokens: totalInputTokens + totalOutputTokens,
+        estimatedCostUsd,
+        durationMs: Math.max(0, Date.now() - startedAt),
+      },
+      metacognitiveFlags,
+    };
+  };
+
   const resolveReflectionInitiationContext = (
     source: HeartbeatExecutionSource,
     requestedSource: ReflectionRequestSource,
@@ -842,7 +1210,11 @@ export function createHeartbeatTemplateRuntime(
   const runTemplateDeliberation = async (
     template: ReflectionTemplate,
     prompt: string,
-  ): Promise<{ reflection: string; metadata: ValuesDeliberationMetadata }> => {
+  ): Promise<ReflectionDeliberationExecutionResult> => {
+    if (isExperientialDeliberationTemplate(template)) {
+      return runExperientialTemplateDeliberation(template, prompt);
+    }
+
     const llmProvider = runtimeOptions.llmProvider;
     if (!llmProvider) {
       throw new Error('Deliberation mode requested without llmProvider');
@@ -876,6 +1248,7 @@ export function createHeartbeatTemplateRuntime(
     return {
       reflection: result.output,
       metadata: toDeliberationMetadata(result),
+      metacognitiveFlags: [],
     };
   };
 
@@ -943,6 +1316,10 @@ export function createHeartbeatTemplateRuntime(
         silentInterval = normalizedReflection.silent;
         deliberationMetadata = deliberationResult.metadata;
         reflectionMode = 'deliberation';
+        persistenceContext = mergeInternalStateContextMetacognitiveFlags(
+          persistenceContext,
+          deliberationResult.metacognitiveFlags,
+        );
 
         try {
           reflectionProcessLog.append({

@@ -518,6 +518,7 @@ function classifyReflectionContextSection(templateId: string | undefined): Refle
   switch (templateId) {
     case 'daily-review':
       return 'relational';
+    case 'emotional-check':
     case 'experiential-review':
     case 'musing':
     case 'whisper':

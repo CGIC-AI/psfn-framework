@@ -159,6 +159,211 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     }
   });
 
+  it('runs experiential deliberation across evidence, synthesis, and contradiction stages and persists unsupported-claim flags', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const capturedPrompts: string[] = [];
+    const currentContact = {
+      id: 'contact-1',
+      displayName: 'Ari',
+      nickname: 'Ari',
+      trustLevel: 'trusted' as const,
+      relationshipType: 'friend' as const,
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-03-31T12:00:00.000Z',
+      conversationChannels: [{
+        channel: 'discord',
+        channelId: 'discord:primary-session',
+        firstSeen: '2026-01-01T00:00:00.000Z',
+        lastSeen: '2026-03-31T12:00:00.000Z',
+      }],
+    };
+    const currentInternalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: -0.15, arousal: 0.3, dominance: -0.05 },
+        mood: { valence: -0.1, arousal: 0.28, dominance: 0.02 },
+        discrete: { concern: 0.64, calm: 0.18, curiosity: 0.22 },
+        confidence: 0.81,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'The handoff still feels unresolved.',
+        responseText: 'I am keeping the recovery thread active.',
+        toolCallCount: 0,
+        recentTurnCount: 4,
+        lastSeenDeltaSeconds: 90,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(currentInternalState);
+    const llmProvider: LLMProviderPort = {
+      stream: vi.fn(async () => ({
+        content: '',
+        toolCalls: [],
+        model: 'mock-stream',
+        inputTokens: 0,
+        outputTokens: 0,
+        stopReason: 'stop',
+      })),
+      complete: vi.fn(async (context, purpose) => {
+        capturedPrompts.push(context.messages.map((message) => message.content).join('\n\n'));
+        const index = capturedPrompts.length;
+        if (index === 1) {
+          expect(purpose).toBe('background');
+          return {
+            content: [
+              '- Recent conversations kept returning to an unresolved handoff.',
+              '- Emotional tone stayed tense but steady.',
+              '- The recovery timeline is still an active concern.',
+            ].join('\n'),
+            toolCalls: [],
+            model: 'mock-evidence',
+            inputTokens: 18,
+            outputTokens: 24,
+            stopReason: 'stop',
+          };
+        }
+        if (index === 2) {
+          expect(purpose).toBe('reasoning');
+          return {
+            content:
+              'I felt steady but stretched by the unresolved handoff, and the day kept circling back to that open loop. '
+              + 'I already resolved the recovery plan and closed the follow-up.',
+            toolCalls: [],
+            model: 'mock-synthesis',
+            inputTokens: 20,
+            outputTokens: 28,
+            stopReason: 'stop',
+          };
+        }
+        expect(purpose).toBe('reasoning');
+        return {
+          content: JSON.stringify({
+            revisedReflection:
+              'I felt steady but stretched by the unresolved handoff, and the day kept circling back to that open loop. '
+              + 'The recovery plan still needs an explicit follow-up.',
+            unsupportedClaims: [{
+              claim: 'I already resolved the recovery plan and closed the follow-up.',
+              reason: 'The evidence marks the recovery timeline as unresolved and still active.',
+              confidence: 0.91,
+            }],
+          }),
+          toolCalls: [],
+          model: 'mock-contradiction',
+          inputTokens: 16,
+          outputTokens: 30,
+          stopReason: 'stop',
+        };
+      }),
+    };
+    const handleMessage = vi.fn(async () => ({ content: 'unused' }));
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage,
+        memoryProvider: {
+          retrieve: vi.fn(async () => '[Reflection Memory Retrieval]\n- trust-filtered contact memory'),
+        },
+        getCurrentInternalState: () => currentInternalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [{ flag: 'continuity', confidence: 0.51 }],
+      } as any,
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+      runtimeOptions: {
+        llmProvider: llmProvider as any,
+        sessionManager: {
+          resolveSessionChannelId: (channelId: string) => channelId,
+          getRecentMessages: (channelId: string, limit?: number) => (
+            channelId === 'discord:primary-session'
+              ? [{
+                id: 1,
+                channelId,
+                role: 'user' as const,
+                content: 'We should revisit the recovery plan tomorrow.',
+                timestamp: 1_700_000_000_000,
+                authorName: 'Ari',
+              }].slice(0, limit ?? 1)
+              : []
+          ),
+        },
+        contactStore: {
+          getById: async (id: string) => (id === 'contact-1' ? currentContact : undefined),
+          getEmotionalSnapshot: async () => ({
+            baselineValence: -0.04,
+            moodValence: -0.1,
+            moodDrift: -0.06,
+            moodSamples: 4,
+            lastMoodUpdateEpochMs: 1_700_000_000_000,
+          }),
+          getEmotionalTimeSeries: async () => [
+            { valence: -0.2, confidence: 0.76, observedAtMs: 1_699_999_000_000 },
+            { valence: -0.1, confidence: 0.84, observedAtMs: 1_700_000_000_000 },
+          ],
+        },
+        getActiveConcerns: async () => [{
+          id: 'concern-1',
+          title: 'Clarify the recovery timeline',
+          summary: 'Keep the follow-up explicit.',
+          status: 'open',
+          dueAt: Date.parse('2026-04-01T12:00:00.000Z'),
+          priority: 'high',
+        }],
+      },
+    });
+
+    const result = await runtime.runTemplateNow('daily-review', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    expect(result.reflection).toContain('still needs an explicit follow-up');
+    expect(handleMessage).not.toHaveBeenCalled();
+    expect(capturedPrompts).toHaveLength(3);
+    expect(capturedPrompts[0]).toContain('Stage: evidence');
+    expect(capturedPrompts[0]).toContain('[Reflection Contact Context]');
+    expect(capturedPrompts[0]).toContain('We should revisit the recovery plan tomorrow.');
+    expect(capturedPrompts[1]).toContain('Stage: synthesis');
+    expect(capturedPrompts[2]).toContain('Stage: contradiction');
+
+    const metacognitionRaw = readFileSync(resolveReflectionMetacognitionJournalPath(tempDir), 'utf-8').trim();
+    const metacognitionEntry = JSON.parse(metacognitionRaw.split('\n').at(-1) ?? '{}') as {
+      mode?: string;
+      reflection?: string;
+      metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
+      deliberation?: { rounds?: number };
+    };
+
+    expect(metacognitionEntry.mode).toBe('deliberation');
+    expect(metacognitionEntry.reflection).toContain('still needs an explicit follow-up');
+    expect(metacognitionEntry.deliberation?.rounds).toBe(3);
+    expect(metacognitionEntry.metacognitiveFlags).toEqual([
+      { flag: 'continuity', confidence: 0.51 },
+      {
+        flag: 'unsupported_claim',
+        confidence: 0.91,
+        evidence:
+          'I already resolved the recovery plan and closed the follow-up. :: '
+          + 'The evidence marks the recovery timeline as unresolved and still active.',
+      },
+    ]);
+
+    const reflectionRaw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
+    const reflectionEntry = JSON.parse(reflectionRaw.split('\n').at(-1) ?? '{}') as {
+      telemetry?: {
+        narrativeContext?: {
+          metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
+        };
+        deliberation?: { rounds?: number };
+      };
+    };
+    expect(reflectionEntry.telemetry?.deliberation?.rounds).toBe(3);
+    expect(reflectionEntry.telemetry?.narrativeContext?.metacognitiveFlags?.some(
+      (flag) => flag.flag === 'unsupported_claim',
+    )).toBe(true);
+  });
+
   it('does not inject appearance context into deliberation heartbeat prompts', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
     const capturedPrompts: string[] = [];

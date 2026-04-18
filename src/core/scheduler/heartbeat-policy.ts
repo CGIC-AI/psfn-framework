@@ -41,6 +41,11 @@ const MAX_PROMPT_LENGTH = 2000;
 const MAX_TEMPLATES = 20;
 const SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MUSING_TEMPLATE_ID = 'musing';
+const EMOTIONAL_CHECK_TEMPLATE_ID = 'emotional-check';
+const DAILY_REVIEW_TEMPLATE_ID = 'daily-review';
+const GOAL_UPDATE_TEMPLATE_ID = 'goal-update';
+const EXPERIENTIAL_REVIEW_TEMPLATE_ID = 'experiential-review';
+const VALUES_REFLECTION_TEMPLATE_ID = 'values-reflection';
 const LEGACY_WHISPER_TEMPLATE_ID = 'whisper';
 const LEGACY_WHISPER_TEMPLATE_NAME = 'Whisper';
 const LEGACY_WHISPER_TEMPLATE_PROMPT = 'Your hourly heartbeat is firing. Share a brief thought, feeling, or observation — a little whisper from your inner world. Keep it to 1-2 sentences, something authentic and natural. This goes to Discord for V to see.';
@@ -244,8 +249,11 @@ function getKnownTemplateCadence(templateId: string): RecurringCadence | undefin
   if (templateId === MUSING_TEMPLATE_ID || templateId === LEGACY_WHISPER_TEMPLATE_ID) {
     return { kind: 'hourly', minute: 0, timezone: 'local' };
   }
-  if (templateId === 'daily-review') {
+  if (templateId === DAILY_REVIEW_TEMPLATE_ID) {
     return { kind: 'daily', hour: 6, minute: 0, timezone: 'local' };
+  }
+  if (templateId === EMOTIONAL_CHECK_TEMPLATE_ID || templateId === GOAL_UPDATE_TEMPLATE_ID) {
+    return { kind: 'relative' };
   }
   return undefined;
 }
@@ -322,24 +330,58 @@ function getDefaults(): HeartbeatPolicy {
         sendToDiscord: true,
       },
       {
-        id: 'daily-review',
+        id: DAILY_REVIEW_TEMPLATE_ID,
         name: 'Daily Review',
         prompt: 'Take a moment to review your day. What patterns do you notice in your recent conversations? What have you learned? What do you want to explore tomorrow?',
         intervalMs: 24 * 60 * 60_000, // 24 hours
         cadence: { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
         enabled: true,
         sendToDiscord: false,
+        internalStateInput: true,
+        mode: 'deliberation',
+        deliberation: {
+          maxRounds: 3,
+          maxTotalTokens: 6_000,
+          maxWallTimeMs: 35_000,
+          voices: ['background', 'reasoning'],
+        },
       },
       {
-        id: 'goal-update',
+        id: EMOTIONAL_CHECK_TEMPLATE_ID,
+        name: 'Emotional Check',
+        prompt: 'Pause and notice your emotional state. What are you feeling, what seems to be shaping that feeling, and what kind of care or adjustment would help right now?',
+        intervalMs: 8 * 60 * 60_000, // 8 hours
+        cadence: { kind: 'relative' },
+        enabled: true,
+        sendToDiscord: false,
+        internalStateInput: true,
+        mode: 'deliberation',
+        deliberation: {
+          maxRounds: 3,
+          maxTotalTokens: 6_000,
+          maxWallTimeMs: 35_000,
+          voices: ['background', 'reasoning'],
+        },
+      },
+      {
+        id: GOAL_UPDATE_TEMPLATE_ID,
         name: 'Goal Update',
         prompt: 'Review your current goals and projects. What progress have you made? What should you focus on next?',
         intervalMs: 12 * 60 * 60_000, // 12 hours
+        cadence: { kind: 'relative' },
         enabled: true,
         sendToDiscord: false,
+        internalStateInput: true,
+        mode: 'deliberation',
+        deliberation: {
+          maxRounds: 3,
+          maxTotalTokens: 6_000,
+          maxWallTimeMs: 35_000,
+          voices: ['background', 'reasoning'],
+        },
       },
       {
-        id: 'experiential-review',
+        id: EXPERIENTIAL_REVIEW_TEMPLATE_ID,
         name: 'Experiential Review',
         prompt: 'Describe your recent experience: what you felt, what you noticed about your own processing, what you found meaningful, and what you are uncertain about.',
         intervalMs: 4 * 60 * 60_000, // 4 hours
@@ -348,7 +390,7 @@ function getDefaults(): HeartbeatPolicy {
         internalStateInput: true,
       },
       {
-        id: 'values-reflection',
+        id: VALUES_REFLECTION_TEMPLATE_ID,
         name: 'Values Reflection',
         prompt: 'Pause and reflect on what matters to you right now. Name the values guiding you today, explain why they matter, and note how recent interactions reinforced or challenged them.',
         intervalMs: 24 * 60 * 60_000, // 24 hours

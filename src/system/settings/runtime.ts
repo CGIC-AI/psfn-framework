@@ -72,7 +72,7 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     maintenanceIntervalMs: config.maintenanceIntervalMs,
     extractionThresholdPct: config.extractionThresholdPct,
     compactionThresholdPct: config.compactionThresholdPct,
-    observationMaskingWindow: config.observationMaskingWindow ?? 10,
+    observationMaskingWindow: config.observationMaskingWindow ?? 1,
     compactionEmotionalSalienceThresholdPct: config.compactionEmotionalSalienceThresholdPct ?? 75,
     memoryExtractionMinImportance: config.memoryExtractionMinImportance ?? null,
     memoryExtractionMinConfidence: config.memoryExtractionMinConfidence ?? null,

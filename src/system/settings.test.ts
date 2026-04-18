@@ -41,7 +41,7 @@ function makeConfig(): SubstrateConfig {
     defaultContextWindow: 128_000,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
-    observationMaskingWindow: 10,
+    observationMaskingWindow: 1,
     compactionEmotionalSalienceThresholdPct: 75,
     modelCatalog: {
       primary: {
@@ -158,7 +158,7 @@ describe('settings', () => {
       expect(result.memoryRetrievalBudgetPct).toBe(2);
       expect(result.moodCongruenceWeight).toBe(0.15);
       expect(result.extractionInterval).toBe(5);
-      expect(result.observationMaskingWindow).toBe(10);
+      expect(result.observationMaskingWindow).toBe(1);
       expect(result.compositionalPolicy).toEqual(createDefaultCompositionalPolicyConfig());
       expect(existsSync(join(tempDir, 'settings.json'))).toBe(true);
     });
@@ -1566,7 +1566,7 @@ describe('settings', () => {
       expect(snapshot.thinkMaxWallTimeMs).toBeNull();
       expect(snapshot.thinkMaxSubQueries).toBeNull();
       expect(snapshot.sessionRestartBehavior).toBe('reuse_latest_session');
-      expect(snapshot.observationMaskingWindow).toBe(10);
+      expect(snapshot.observationMaskingWindow).toBe(1);
       expect(snapshot.compactionEmotionalSalienceThresholdPct).toBe(75);
       expect(snapshot.memoryExtractionEmotionalIntensityWeight).toBeNull();
       expect(snapshot.openRouterProviderOrder).toEqual([]);

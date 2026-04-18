@@ -681,7 +681,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   };
 }
 
-export const DEFAULT_OBSERVATION_MASKING_WINDOW = 10;
+export const DEFAULT_OBSERVATION_MASKING_WINDOW = 1;
 
 export function applyObservationMasking(
   entries: SessionEntry[],

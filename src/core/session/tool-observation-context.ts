@@ -87,6 +87,20 @@ export function deriveToolObservationContextShape(content: string): ToolObservat
   };
 }
 
+export function deriveMaskedToolObservationContextSummary(content: string): string {
+  const normalized = normalizeSummaryWhitespace(content);
+  if (!normalized) {
+    return '(no text tool output)';
+  }
+
+  const structuredSummary = summarizeStructuredPayload(normalized);
+  if (structuredSummary) {
+    return truncateSummary(structuredSummary);
+  }
+
+  return truncateSummary(buildGenericToolOutputSummary(normalized));
+}
+
 function shouldInlineToolObservation(content: string): boolean {
   return (
     countContentLines(content) <= MAX_INLINE_TOOL_CONTEXT_LINES

@@ -510,13 +510,19 @@ describe('SessionManager', () => {
   it('persists tool observations and renders them as distinct context blocks', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
-    mgr.recordUserMessage('ch1', 'Search for the latest log', 'u1', 'User');
+    const turnId = createTurnId();
+    const turnMetadata = {
+      turnId,
+      requestId: 'req-tool-context',
+      sourceMessageId: 'msg-tool-context',
+    };
+    mgr.recordUserMessage('ch1', 'Search for the latest log', 'u1', 'User', undefined, undefined, turnMetadata);
     mgr.recordToolObservation('ch1', {
       toolName: 'search_logs',
       toolCallId: 'tool-1',
       content: 'Found 3 matching log entries.',
-    });
-    mgr.recordAssistantMessage('ch1', 'I found the relevant logs.');
+    }, undefined, turnMetadata);
+    mgr.recordAssistantMessage('ch1', 'I found the relevant logs.', undefined, undefined, undefined, turnMetadata);
 
     const reloadedStore = new SessionStore(dir);
     const reloadedManager = new SessionManager(reloadedStore, config);
@@ -687,8 +693,8 @@ describe('SessionManager', () => {
     expect(toolMessage?.content).not.toContain('"matches"');
   });
 
-  it('masks tool observations outside the configured rolling turn window', async () => {
-    const config = makeConfig({ observationMaskingWindow: 1 });
+  it('masks prior-turn tool dumps by default while keeping the current turn verbatim', async () => {
+    const config = makeConfig();
     const mgr = new SessionManager(store, config);
     const firstTurnId = createTurnId();
     const secondTurnId = createTurnId();
@@ -701,7 +707,7 @@ describe('SessionManager', () => {
     mgr.recordToolObservation('ch1', {
       toolName: 'search_logs',
       toolCallId: 'tool-1',
-      content: 'Older tool output should be masked.',
+      content: 'Orientation note: older tool output should be masked.',
     }, undefined, {
       turnId: firstTurnId,
       requestId: 'req-1',
@@ -735,7 +741,8 @@ describe('SessionManager', () => {
 
     const ctx = await mgr.buildContext('ch1', 'System prompt', '');
     const allContent = ctx.messages.map(message => message.content).join('\n');
-    expect(allContent).toContain('[Tool result: search_logs] Older tool output should be masked.');
+    expect(allContent).toContain('[Tool result: search_logs] Captured 1 line of text output.');
+    expect(allContent).not.toContain('Orientation note: older tool output should be masked.');
     expect(allContent).toContain('[Tool result: search_logs] Newest tool output should remain visible.');
     expect(ctx.manifest?.session).toMatchObject({
       sourceEntryCount: 6,

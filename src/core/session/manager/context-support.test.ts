@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { countIntentionAppraisalArtifacts, entriesToMessages } from './context-support.js';
 import type { SessionEntry } from '../types.js';
+import {
+  buildToolObservationMetadata,
+  MASKED_TOOL_OBSERVATION_CONTENT,
+  normalizeToolObservation,
+} from '../tool-observation.js';
 
 function makeEntry(overrides: Partial<SessionEntry>): SessionEntry {
   return {
@@ -138,6 +143,28 @@ describe('entriesToMessages', () => {
       {
         role: 'user',
         content: 'What changed?',
+      },
+    ]);
+  });
+
+  it('renders masked stale tool dumps as summaries instead of verbatim output', () => {
+    const observation = normalizeToolObservation({
+      toolName: 'orientation_dump',
+      content: 'Orientation note: keep the trust policy lane isolated.',
+    });
+
+    const messages = entriesToMessages([
+      makeEntry({
+        role: 'tool',
+        content: MASKED_TOOL_OBSERVATION_CONTENT,
+        metadata: buildToolObservationMetadata(undefined, observation.metadata),
+      }),
+    ], 'private');
+
+    expect(messages).toEqual([
+      {
+        role: 'system',
+        content: '[Tool result: orientation_dump] Captured 1 line of text output.',
       },
     ]);
   });

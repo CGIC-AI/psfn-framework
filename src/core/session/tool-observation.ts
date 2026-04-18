@@ -1,4 +1,5 @@
 import {
+  deriveMaskedToolObservationContextSummary,
   deriveToolObservationContextShape,
   type ToolObservationContextDisplayMode,
 } from './tool-observation-context.js';
@@ -24,6 +25,7 @@ export interface ToolObservationMetadata {
   originalCharLength: number;
   contextSummary?: string;
   contextDisplayMode?: ToolObservationContextDisplayMode;
+  maskedContextSummary?: string;
 }
 
 export interface NormalizedToolObservation {
@@ -138,6 +140,7 @@ export function normalizeToolObservation(input: ToolObservationInput): Normalize
   const toolCallId = input.toolCallId?.trim();
   const normalizedContent = truncateToolObservationContent(input.content);
   const contextShape = deriveToolObservationContextShape(input.content);
+  const maskedContextSummary = deriveMaskedToolObservationContextSummary(input.content);
   return {
     content: normalizedContent.content,
     metadata: {
@@ -149,6 +152,7 @@ export function normalizeToolObservation(input: ToolObservationInput): Normalize
       originalCharLength: normalizedContent.originalCharLength,
       contextSummary: contextShape.summary,
       contextDisplayMode: contextShape.displayMode,
+      maskedContextSummary,
     },
   };
 }
@@ -199,6 +203,10 @@ export function parseToolObservationMetadata(metadata: string | undefined): Tool
     toolObservation.contextDisplayMode,
     'toolObservation.contextDisplayMode',
   );
+  const maskedContextSummary = parseOptionalStringField(
+    toolObservation.maskedContextSummary,
+    'toolObservation.maskedContextSummary',
+  );
 
   return {
     schemaVersion: TOOL_OBSERVATION_SCHEMA_VERSION,
@@ -209,6 +217,7 @@ export function parseToolObservationMetadata(metadata: string | undefined): Tool
     originalCharLength,
     ...(contextSummary ? { contextSummary } : {}),
     ...(contextDisplayMode ? { contextDisplayMode } : {}),
+    ...(maskedContextSummary ? { maskedContextSummary } : {}),
   };
 }
 
@@ -218,9 +227,11 @@ export function formatToolObservationForContext(
 ): string {
   const errorSuffix = metadata.isError ? ' (error)' : '';
   const contextText = metadata.contextSummary?.trim();
+  const maskedContextText = metadata.maskedContextSummary?.trim();
   if (content === MASKED_TOOL_OBSERVATION_CONTENT) {
-    if (contextText) {
-      return `[Tool result: ${metadata.toolName}${errorSuffix}] ${contextText}`;
+    const maskedSummary = maskedContextText || (metadata.contextDisplayMode === 'summary' ? contextText : undefined);
+    if (maskedSummary) {
+      return `[Tool result: ${metadata.toolName}${errorSuffix}] ${maskedSummary}`;
     }
     return `[Tool result: ${metadata.toolName}${errorSuffix} — see earlier context]`;
   }

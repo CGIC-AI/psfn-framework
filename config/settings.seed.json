@@ -12,7 +12,7 @@
   "extractionInterval": 5,
   "extractionThresholdPct": 30,
   "compactionThresholdPct": 70,
-  "observationMaskingWindow": 10,
+  "observationMaskingWindow": 1,
   "compactionEmotionalSalienceThresholdPct": 75,
   "memoryExtractionMinImportance": 0.45,
   "memoryExtractionMinConfidence": 0.6,

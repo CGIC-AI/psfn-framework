@@ -170,14 +170,12 @@ class FakeIntentionPool {
     }
 
     if (normalized.includes('FROM intention_pending_follow_ups') && normalized.includes('ORDER BY created_at ASC, id ASC')) {
-      const [maybeContactId, maybeLimit] = values as [string | number, number | undefined];
-      const contactId = typeof maybeLimit === 'number' ? (typeof maybeContactId === 'string' ? maybeContactId : undefined) : undefined;
-      const limit = typeof maybeLimit === 'number' ? maybeLimit : Number(maybeContactId);
+      const [maybeContactId] = values as [string | undefined];
+      const contactId = typeof maybeContactId === 'string' ? maybeContactId : undefined;
       const rows = [...this.pendingFollowUps.values()]
         .filter(row => row.activated_at === null)
         .filter(row => !contactId || row.contact_id === null || row.contact_id === contactId)
         .sort((left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id))
-        .slice(0, Number(limit))
         .map(row => row as Row);
       return { rows };
     }
@@ -402,7 +400,9 @@ describe('postgres intention adapters', () => {
 
   it('persists pending follow-ups and activation state', async () => {
     const pool = new FakeIntentionPool();
-    const ports = createPostgresIntentionPortsFromPool(pool as never);
+    const ports = createPostgresIntentionPortsFromPool(pool as never, {
+      now: () => new Date('2026-03-28T02:00:00.000Z'),
+    });
 
     const followUp = await ports.pendingFollowUpStore.create({
       content: 'Check in tomorrow about medication.',
@@ -432,6 +432,60 @@ describe('postgres intention adapters', () => {
     });
     expect(activated?.activatedAt).toBe('2026-03-28T04:00:00.000Z');
     expect(activated?.activationReason).toBe('post_turn_action');
+  });
+
+  it('filters stale pending follow-ups the same way for store and runtime provider access', async () => {
+    const pool = new FakeIntentionPool();
+    const ports = createPostgresIntentionPortsFromPool(pool as never, {
+      now: () => new Date('2026-03-25T12:00:00.000Z'),
+    });
+
+    await ports.pendingFollowUpStore.create({
+      content: 'Age this out.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      createdAt: '2026-03-24T11:00:00.000Z',
+    });
+    await ports.pendingFollowUpStore.create({
+      content: 'Expire after the overdue window.',
+      priority: 'medium',
+      timing: 'scheduled',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      createdAt: '2026-03-24T09:00:00.000Z',
+      dueAt: '2026-03-24T10:30:00.000Z',
+    });
+    await ports.pendingFollowUpStore.create({
+      content: 'Keep this pending.',
+      priority: 'medium',
+      timing: 'scheduled',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      createdAt: '2026-03-25T08:00:00.000Z',
+      dueAt: '2026-03-25T18:00:00.000Z',
+    });
+
+    await expect(ports.pendingFollowUpStore.getPendingFollowUps('contact-a')).resolves.toEqual([
+      expect.objectContaining({ content: 'Keep this pending.' }),
+    ]);
+    expect(ports.pendingFollowUpProvider.getPendingFollowUps('contact-a')).toEqual([
+      expect.objectContaining({ content: 'Keep this pending.' }),
+    ]);
+    await expect(ports.pendingFollowUpStore.list({
+      contactId: 'contact-a',
+      includeExpired: true,
+    })).resolves.toHaveLength(3);
   });
 
   it('tracks behavioral samples and summaries', async () => {

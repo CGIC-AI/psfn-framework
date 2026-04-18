@@ -23,6 +23,7 @@ import {
 } from './concerns.js';
 import {
   createPendingFollowUpStorePort,
+  isPendingFollowUpExpired,
   type PendingFollowUpContextProvider,
   type PendingFollowUp,
   type PendingFollowUpActivateOptions,
@@ -668,9 +669,11 @@ class PostgresPendingFollowUpStore {
 
   snapshotPendingFollowUps(contactId?: string): PendingFollowUp[] {
     const normalizedContactId = normalizeContactId(contactId);
+    const asOfMs = this.now().getTime();
     return [...this.pendingFollowUpCache.values()]
       .filter((followUp) => {
         if (followUp.activatedAt) return false;
+        if (isPendingFollowUpExpired(followUp, asOfMs)) return false;
         if (!normalizedContactId) return true;
         return !followUp.contactId || followUp.contactId === normalizedContactId;
       })
@@ -772,12 +775,17 @@ class PostgresPendingFollowUpStore {
     return await this.list({
       contactId,
       includeActivated: false,
+      includeExpired: false,
+      asOf: this.now().toISOString(),
     });
   }
 
   async list(options: PendingFollowUpListOptions = {}): Promise<PendingFollowUp[]> {
+    const asOf = options.asOf ? normalizeIsoTimestamp(options.asOf, 'asOf') : this.now().toISOString();
+    const asOfMs = Date.parse(asOf);
     const normalizedContactId = normalizeContactId(options.contactId);
     const includeActivated = options.includeActivated === true;
+    const includeExpired = options.includeExpired === true;
     const limit = clampListLimit(options.limit, DEFAULT_PENDING_LIST_LIMIT);
     const params: unknown[] = [];
     const whereClauses: string[] = [];
@@ -787,7 +795,6 @@ class PostgresPendingFollowUpStore {
       params.push(normalizedContactId);
       whereClauses.push(`(contact_id IS NULL OR contact_id = $${params.length})`);
     }
-    params.push(limit);
 
     const rows = await queryRows<PendingFollowUpRow>(
       this.pool,
@@ -798,11 +805,13 @@ class PostgresPendingFollowUpStore {
         FROM intention_pending_follow_ups
         ${whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : ''}
         ORDER BY created_at ASC, id ASC
-        LIMIT $${params.length}
       `,
       params,
     );
-    return rows.map(mapPendingFollowUpRow);
+    return rows
+      .map(mapPendingFollowUpRow)
+      .filter((followUp) => includeExpired || !isPendingFollowUpExpired(followUp, asOfMs))
+      .slice(0, limit);
   }
 
   async markActivated(id: string, options: PendingFollowUpActivateOptions = {}): Promise<PendingFollowUp | null> {

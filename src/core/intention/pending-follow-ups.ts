@@ -74,6 +74,8 @@ export interface PendingFollowUpActivateOptions {
 export interface PendingFollowUpListOptions {
   contactId?: string;
   includeActivated?: boolean;
+  includeExpired?: boolean;
+  asOf?: string;
   limit?: number;
 }
 
@@ -176,6 +178,11 @@ const DEFAULT_LIST_LIMIT = 32;
 const MAX_LIST_LIMIT = 200;
 const NEGATIVE_MOOD_WAKE_THRESHOLD = -0.2;
 const PENDING_FOLLOW_UPS_TABLE = 'intention_pending_follow_ups';
+const PENDING_FOLLOW_UP_STALE_MS_BY_PRIORITY: Record<PendingFollowUpPriority, number> = {
+  low: 8 * 60 * 60 * 1000,
+  medium: 24 * 60 * 60 * 1000,
+  high: 48 * 60 * 60 * 1000,
+};
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
@@ -340,6 +347,33 @@ function mapRow(row: PendingFollowUpRow): PendingFollowUp {
 
 export function hasStateWakeConditions(followUp: Pick<PendingFollowUp, 'wakeConditions'>): boolean {
   return Array.isArray(followUp.wakeConditions) && followUp.wakeConditions.length > 0;
+}
+
+export function resolvePendingFollowUpExpiryMs(
+  followUp: Pick<PendingFollowUp, 'priority' | 'createdAt' | 'dueAt'>,
+): number | null {
+  const createdAtMs = Date.parse(followUp.createdAt);
+  if (!Number.isFinite(createdAtMs)) {
+    return null;
+  }
+  const staleAfterMs = PENDING_FOLLOW_UP_STALE_MS_BY_PRIORITY[followUp.priority];
+  const ageExpiryMs = createdAtMs + staleAfterMs;
+  const dueAtMs = typeof followUp.dueAt === 'string' ? Date.parse(followUp.dueAt) : Number.NaN;
+  if (!Number.isFinite(dueAtMs) || dueAtMs <= 0) {
+    return ageExpiryMs;
+  }
+  return Math.max(ageExpiryMs, dueAtMs + staleAfterMs);
+}
+
+export function isPendingFollowUpExpired(
+  followUp: Pick<PendingFollowUp, 'priority' | 'createdAt' | 'dueAt'>,
+  asOfMs: number,
+): boolean {
+  const expiryMs = resolvePendingFollowUpExpiryMs(followUp);
+  if (expiryMs === null || !Number.isFinite(asOfMs)) {
+    return false;
+  }
+  return asOfMs >= expiryMs;
 }
 
 export function evaluatePendingFollowUpWakeState(
@@ -554,11 +588,18 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
     return this.list({
       contactId,
       includeActivated: false,
+      includeExpired: false,
+      asOf: this.now().toISOString(),
     });
   }
 
   list(options: PendingFollowUpListOptions = {}): PendingFollowUp[] {
+    const asOf = options.asOf
+      ? normalizeIsoTimestamp(options.asOf, 'asOf')
+      : this.now().toISOString();
+    const asOfMs = Date.parse(asOf);
     const normalizedContactId = normalizeOptionalId(options.contactId);
+    const includeExpired = options.includeExpired === true;
     const limit = clampListLimit(options.limit);
     const whereClauses: string[] = [];
     if (options.includeActivated !== true) {
@@ -592,13 +633,14 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
       ORDER BY
         created_at ASC,
         id ASC
-      LIMIT @limit
     `).all({
       contactId: normalizedContactId ?? null,
-      limit,
     }) as PendingFollowUpRow[];
 
-    return rows.map(mapRow);
+    const followUps = rows
+      .map(mapRow)
+      .filter(followUp => includeExpired || !isPendingFollowUpExpired(followUp, asOfMs));
+    return followUps.slice(0, limit);
   }
 
   markActivated(id: string, options: PendingFollowUpActivateOptions = {}): PendingFollowUp | null {

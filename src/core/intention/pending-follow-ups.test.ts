@@ -69,6 +69,57 @@ describe('PendingFollowUpStore', () => {
     expect(store.list({ includeActivated: true })).toHaveLength(1);
   });
 
+  it('expires stale pending follow-ups by age and overdue dueAt', () => {
+    const db = new Database(':memory:');
+    let nextId = 0;
+    const store = new PendingFollowUpStore(db, {
+      idFactory: () => `follow-up-${++nextId}`,
+      now: () => new Date('2026-03-25T12:00:00.000Z'),
+    });
+
+    store.create({
+      content: 'This should age out.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      createdAt: '2026-03-24T11:00:00.000Z',
+    });
+    store.create({
+      content: 'This should expire after its overdue window.',
+      priority: 'medium',
+      timing: 'scheduled',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      createdAt: '2026-03-24T09:00:00.000Z',
+      dueAt: '2026-03-24T10:30:00.000Z',
+    });
+    store.create({
+      content: 'This should stay pending.',
+      priority: 'medium',
+      timing: 'scheduled',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      createdAt: '2026-03-25T08:00:00.000Z',
+      dueAt: '2026-03-25T18:00:00.000Z',
+    });
+
+    expect(store.getPendingFollowUps().map(followUp => followUp.content)).toEqual([
+      'This should stay pending.',
+    ]);
+    expect(store.list({ includeExpired: true }).map(followUp => followUp.content)).toEqual([
+      'This should expire after its overdue window.',
+      'This should age out.',
+      'This should stay pending.',
+    ]);
+  });
+
   it('updates an existing pending follow-up while it is still active', () => {
     const db = new Database(':memory:');
     const store = new PendingFollowUpStore(db, {

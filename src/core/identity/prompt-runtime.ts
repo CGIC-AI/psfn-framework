@@ -357,6 +357,61 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     example: '0.840',
   },
   {
+    token: '{{runtime_internal_state_cognitive_processing_quality}}',
+    description: 'Processing quality label from the current internal cognitive state.',
+    example: 'fluent',
+  },
+  {
+    token: '{{runtime_internal_state_cognitive_certainty_label}}',
+    description: 'Certainty label from the current internal cognitive state.',
+    example: 'steady',
+  },
+  {
+    token: '{{runtime_internal_state_cognitive_topic_engagement_label}}',
+    description: 'Topic engagement label from the current internal cognitive state.',
+    example: 'engaged',
+  },
+  {
+    token: '{{runtime_internal_state_attention_conversation_trajectory}}',
+    description: 'Conversation trajectory from the current internal attention state.',
+    example: 'deepening',
+  },
+  {
+    token: '{{runtime_internal_state_attention_active_concern_count}}',
+    description: 'Active concern count from the current internal attention state.',
+    example: '2',
+  },
+  {
+    token: '{{runtime_internal_state_attention_pending_follow_up_count}}',
+    description: 'Pending follow-up count from the current internal attention state.',
+    example: '1',
+  },
+  {
+    token: '{{runtime_internal_state_relational_trust_level}}',
+    description: 'Trust level from the current internal relational state.',
+    example: 'trusted',
+  },
+  {
+    token: '{{runtime_internal_state_relational_recent_interaction_frequency_label}}',
+    description: 'Interaction frequency label from the current internal relational state.',
+    example: 'frequent',
+  },
+  {
+    token: '{{runtime_internal_state_relational_last_seen_label}}',
+    description: 'Last-seen recency label from the current internal relational state.',
+    example: 'recently interacted',
+  },
+  {
+    token: '{{runtime_internal_state_emotional_mood_valence_label}}',
+    description: 'Mood valence label from the current internal emotional state.',
+    example: 'warm',
+  },
+  {
+    token: '{{runtime_internal_state_emotional_mood_arousal_label}}',
+    description: 'Mood arousal label from the current internal emotional state.',
+    example: 'calm',
+  },
+  {
     token: '{{runtime_response_style}}',
     description: 'Resolved response style identifier for the current turn.',
     example: 'expressive',

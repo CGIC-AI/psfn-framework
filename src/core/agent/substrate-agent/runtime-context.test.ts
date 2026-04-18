@@ -100,6 +100,24 @@ function buildAtomicAffectTemplateOutput(
   });
 }
 
+function buildInternalStateTemplateOutput(
+  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+): string {
+  const variables = buildDynamicPromptTemplateVariables(input);
+  return injectPromptRuntimeTokens([
+    'cognitive={{runtime_internal_state_cognitive_processing_quality}}/{{runtime_internal_state_cognitive_certainty_label}}/{{runtime_internal_state_cognitive_topic_engagement_label}}',
+    'attention={{runtime_internal_state_attention_conversation_trajectory}}/{{runtime_internal_state_attention_active_concern_count}}/{{runtime_internal_state_attention_pending_follow_up_count}}',
+    'relational={{runtime_internal_state_relational_trust_level}}/{{runtime_internal_state_relational_recent_interaction_frequency_label}}/{{runtime_internal_state_relational_last_seen_label}}',
+    'emotional={{runtime_internal_state_emotional_mood_valence_label}}/{{runtime_internal_state_emotional_mood_arousal_label}}',
+  ].join(' '), {
+    now: input.now,
+    variables: {
+      ...(input.templateVariables ?? {}),
+      ...variables,
+    },
+  });
+}
+
 describe('runtime subject identity', () => {
   it('resolves internal reflection turns to the companion subject instead of the scheduler', async () => {
     const authorContext = await resolveAuthorContext({
@@ -850,6 +868,50 @@ describe('runtime subject identity', () => {
     expect(tatemaeOutput).not.toContain('{{');
   });
 
+  it('substitutes atomic internal-state macros using the existing describe helper labels', () => {
+    const baseInput = {
+      message: makeMessage({
+        channelId: 'discord:dm:alex',
+        channelType: 'discord_text',
+        authorId: 'alex',
+        authorName: 'Alex',
+        content: 'hey',
+      }),
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      responseStyle: 'expressive',
+      now: new Date('2026-03-18T13:30:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 2,
+        promoted: 1,
+        extendedLoaded: 1,
+        autoload: 1,
+        deferred: 0,
+        total: 5,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay' as const,
+      promotedExtendedToolNames: new Set<string>(),
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      config: {},
+      internalState: TEST_INTERNAL_STATE,
+    };
+
+    const output = buildInternalStateTemplateOutput(baseInput);
+
+    expect(output).toBe(
+      'cognitive=fluent/steady/engaged attention=deepening/0/0 relational=trusted/occasional/just interacted emotional=warm/calm',
+    );
+  });
+
   it('fails closed with structured fallback variables when prior-message context is unavailable', () => {
     const variables = buildDynamicPromptTemplateVariables({
       message: makeMessage(),
@@ -910,7 +972,19 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_affect_snapshot_mood_arousal).toBe('');
     expect(variables.runtime_affect_snapshot_mood_dominance).toBe('');
     expect(variables.runtime_affect_snapshot_confidence).toBe('');
+    expect(variables.runtime_internal_state_cognitive_processing_quality).toBe('');
+    expect(variables.runtime_internal_state_cognitive_certainty_label).toBe('');
+    expect(variables.runtime_internal_state_cognitive_topic_engagement_label).toBe('');
+    expect(variables.runtime_internal_state_attention_conversation_trajectory).toBe('');
+    expect(variables.runtime_internal_state_attention_active_concern_count).toBe('');
+    expect(variables.runtime_internal_state_attention_pending_follow_up_count).toBe('');
+    expect(variables.runtime_internal_state_relational_trust_level).toBe('');
+    expect(variables.runtime_internal_state_relational_recent_interaction_frequency_label).toBe('');
+    expect(variables.runtime_internal_state_relational_last_seen_label).toBe('');
+    expect(variables.runtime_internal_state_emotional_mood_valence_label).toBe('');
+    expect(variables.runtime_internal_state_emotional_mood_arousal_label).toBe('');
     expect(variables.runtime_emotional_affect_body).toBe('');
+    expect(variables.runtime_internal_state_body).toBe('');
     expect(variables.runtime_internal_turn_kind).toBe('heartbeat');
     expect(variables.runtime_speaking_with_name).toBe('');
     expect(variables.runtime_speaking_with_trust_level).toBe('');

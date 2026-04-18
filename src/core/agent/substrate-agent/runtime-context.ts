@@ -427,6 +427,13 @@ function describeInteractionFrequency(value: number): string {
   return 'new or infrequent';
 }
 
+function describeLastSeenRecency(lastSeenDeltaSeconds: number | null | undefined): string {
+  if (lastSeenDeltaSeconds == null) return 'unknown recency';
+  if (lastSeenDeltaSeconds <= 300) return 'just interacted';
+  if (lastSeenDeltaSeconds <= 3_600) return 'recently interacted';
+  return 'not recently seen';
+}
+
 function resolveTopEmotionNames(
   discrete: Record<string, number>,
   max = 2,
@@ -448,20 +455,50 @@ function buildInternalStateSummaryLines(input: {
     : `Current affect: ${describeValence(internalState.emotional.mood.valence)} and ${describeArousal(internalState.emotional.mood.arousal)}.`;
 
   const pendingFollowUps = internalState.attention.pendingFollowUps ?? [];
-  const lastSeenText = internalState.relational.lastSeenDeltaSeconds == null
-    ? 'unknown recency'
-    : internalState.relational.lastSeenDeltaSeconds <= 300
-      ? 'just interacted'
-      : internalState.relational.lastSeenDeltaSeconds <= 3_600
-        ? 'recently interacted'
-        : 'not recently seen';
 
   return [
     emotionalSummary,
     `Thinking state: ${internalState.cognitive.processingQuality}, ${describeCertainty(internalState.cognitive.certaintyLevel)} certainty, ${describeArousal(internalState.cognitive.topicEngagement)} engagement.`,
     `Attention: ${internalState.attention.conversationTrajectory}, ${internalState.attention.activeConcerns.length} open thread${internalState.attention.activeConcerns.length === 1 ? '' : 's'}, ${pendingFollowUps.length} pending follow-up${pendingFollowUps.length === 1 ? '' : 's'}.`,
-    `Relationship baseline: ${internalState.relational.trustLevel} trust, ${describeInteractionFrequency(internalState.relational.recentInteractionFrequency)} contact, ${lastSeenText}.`,
+    `Relationship baseline: ${internalState.relational.trustLevel} trust, ${describeInteractionFrequency(internalState.relational.recentInteractionFrequency)} contact, ${describeLastSeenRecency(internalState.relational.lastSeenDeltaSeconds)}.`,
   ];
+}
+
+function buildInternalStatePromptVariables(internalState?: InternalState): Record<string, string> {
+  const emptyInternalStateVariables = {
+    runtime_internal_state_cognitive_processing_quality: '',
+    runtime_internal_state_cognitive_certainty_label: '',
+    runtime_internal_state_cognitive_topic_engagement_label: '',
+    runtime_internal_state_attention_conversation_trajectory: '',
+    runtime_internal_state_attention_active_concern_count: '',
+    runtime_internal_state_attention_pending_follow_up_count: '',
+    runtime_internal_state_relational_trust_level: '',
+    runtime_internal_state_relational_recent_interaction_frequency_label: '',
+    runtime_internal_state_relational_last_seen_label: '',
+    runtime_internal_state_emotional_mood_valence_label: '',
+    runtime_internal_state_emotional_mood_arousal_label: '',
+  } satisfies Record<string, string>;
+
+  if (!internalState) {
+    return emptyInternalStateVariables;
+  }
+
+  const pendingFollowUps = internalState.attention.pendingFollowUps ?? [];
+  return {
+    runtime_internal_state_cognitive_processing_quality: internalState.cognitive.processingQuality,
+    runtime_internal_state_cognitive_certainty_label: describeCertainty(internalState.cognitive.certaintyLevel),
+    runtime_internal_state_cognitive_topic_engagement_label: describeArousal(internalState.cognitive.topicEngagement),
+    runtime_internal_state_attention_conversation_trajectory: internalState.attention.conversationTrajectory,
+    runtime_internal_state_attention_active_concern_count: String(internalState.attention.activeConcerns.length),
+    runtime_internal_state_attention_pending_follow_up_count: String(pendingFollowUps.length),
+    runtime_internal_state_relational_trust_level: internalState.relational.trustLevel,
+    runtime_internal_state_relational_recent_interaction_frequency_label: describeInteractionFrequency(
+      internalState.relational.recentInteractionFrequency,
+    ),
+    runtime_internal_state_relational_last_seen_label: describeLastSeenRecency(internalState.relational.lastSeenDeltaSeconds),
+    runtime_internal_state_emotional_mood_valence_label: describeValence(internalState.emotional.mood.valence),
+    runtime_internal_state_emotional_mood_arousal_label: describeArousal(internalState.emotional.mood.arousal),
+  };
 }
 
 export function buildPromptTemplateVariables(input: {
@@ -597,6 +634,7 @@ export function buildDynamicPromptTemplateVariables(input: {
   const internalStateBody = input.internalState
     ? buildInternalStateSummaryLines({ internalState: input.internalState }).join('\n')
     : '';
+  const internalStateVariables = buildInternalStatePromptVariables(input.internalState);
   const emotionAppraisalBody = emotionAppraisalChain.length > 0
     ? emotionAppraisalChain
       .slice(-2)
@@ -664,6 +702,7 @@ export function buildDynamicPromptTemplateVariables(input: {
     runtime_tooling_available_extended_count: String(extendedCount),
     runtime_trust_guidance: trustGuidance,
     ...affectVariables,
+    ...internalStateVariables,
     runtime_emotional_affect_body: affectBody,
     runtime_metacognitive_persona_guidance_body: metacognitiveBody,
     ...responseStyleTemplateVariables,

@@ -62,6 +62,20 @@ const AFFECT_MACRO_TOKENS = [
   '{{runtime_affect_snapshot_confidence}}',
 ] as const;
 
+const INTERNAL_STATE_MACRO_TOKENS = [
+  '{{runtime_internal_state_cognitive_processing_quality}}',
+  '{{runtime_internal_state_cognitive_certainty_label}}',
+  '{{runtime_internal_state_cognitive_topic_engagement_label}}',
+  '{{runtime_internal_state_attention_conversation_trajectory}}',
+  '{{runtime_internal_state_attention_active_concern_count}}',
+  '{{runtime_internal_state_attention_pending_follow_up_count}}',
+  '{{runtime_internal_state_relational_trust_level}}',
+  '{{runtime_internal_state_relational_recent_interaction_frequency_label}}',
+  '{{runtime_internal_state_relational_last_seen_label}}',
+  '{{runtime_internal_state_emotional_mood_valence_label}}',
+  '{{runtime_internal_state_emotional_mood_arousal_label}}',
+] as const;
+
 
 describe('runtime prompt block schema', () => {
   it('classifies required, optional, immutable, and editable runtime blocks', () => {
@@ -346,6 +360,17 @@ describe('prompt runtime macro hints', () => {
     const hintsByToken = new Map(PROMPT_RUNTIME_MACRO_HINTS.map(entry => [entry.token, entry]));
 
     for (const token of AFFECT_MACRO_TOKENS) {
+      const hint = hintsByToken.get(token);
+      expect(hint).toBeDefined();
+      expect(hint?.description).toBeTruthy();
+      expect(hint?.example).toBeTruthy();
+    }
+  });
+
+  it('documents the atomic internal-state macros with descriptions and examples', () => {
+    const hintsByToken = new Map(PROMPT_RUNTIME_MACRO_HINTS.map(entry => [entry.token, entry]));
+
+    for (const token of INTERNAL_STATE_MACRO_TOKENS) {
       const hint = hintsByToken.get(token);
       expect(hint).toBeDefined();
       expect(hint?.description).toBeTruthy();

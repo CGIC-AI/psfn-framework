@@ -6,6 +6,7 @@ import { injectPromptRuntimeTokens } from './prompt-runtime.js';
 import { PromptLayerStore } from './prompt-store.js';
 import {
   ensureRuntimePromptLayers,
+  getRequiredRuntimePromptSignalManifest,
   getRuntimePromptLayerDefinition,
   getRuntimePromptLayerDefinitions,
   isRequiredRuntimePromptLayer,
@@ -17,6 +18,41 @@ let tempDir: string | null = null;
 function makeTempDir(): string {
   tempDir = mkdtempSync(join(tmpdir(), 'psfn-runtime-prompt-layers-'));
   return tempDir;
+}
+
+const REQUIRED_RUNTIME_SIGNAL_SECTIONS: Record<string, string> = {
+  'runtime.last_message_received': '<last_message_received>{{runtime_last_message_received_weekday}}</last_message_received>',
+  'runtime.internal_turn_context': '<internal_turn_context>{{runtime_internal_turn_kind}}</internal_turn_context>',
+  'runtime.speaking_with': '<speaking_with>{{runtime_speaking_with_name}}</speaking_with>',
+  'runtime.channel_context': '<channel_context>{{runtime_channel_visibility}}</channel_context>',
+  'runtime.model_context': '<model_context>{{model}}</model_context>',
+  'runtime.capability_tier': '<capability_tier>{{runtime_capability_tier}}</capability_tier>',
+  'runtime.current_datetime': '<current_datetime>{{runtime_current_weekday}}</current_datetime>',
+  'runtime.trust': '<trust>{{#if runtime_trust_is_primary}}primary{{/if}}</trust>',
+  'runtime.emotional_affect': '<emotional_affect>{{runtime_affect_mode_label}}</emotional_affect>',
+  'runtime.metacognitive_guidance': '<metacognitive_persona_guidance>{{runtime_flag_uncertainty_present}}</metacognitive_persona_guidance>',
+  'runtime.response_style_guidance': '<response_style_guidance>{{runtime_response_style}}</response_style_guidance>',
+  'runtime.internal_state': '<internal_state>{{runtime_internal_state_cognitive_processing_quality}}</internal_state>',
+  'runtime.tooling': '<tooling>{{runtime_tooling_active_count}}</tooling>',
+};
+
+function buildCustomRuntimeSignalLayer(
+  omittedSignalIdentifiers: readonly string[] = [],
+): {
+  type: 'runtime';
+  identifier: string;
+  content: string;
+  enabled: boolean;
+} {
+  return {
+    type: 'runtime',
+    identifier: 'runtime.custom',
+    content: getRequiredRuntimePromptSignalManifest()
+      .filter(signal => !omittedSignalIdentifiers.includes(signal.identifier))
+      .map(signal => REQUIRED_RUNTIME_SIGNAL_SECTIONS[signal.identifier])
+      .join('\n\n'),
+    enabled: true,
+  };
 }
 
 afterEach(() => {
@@ -50,6 +86,29 @@ describe('runtime prompt layer schema', () => {
     ]);
     definitions[0]!.schema.required = false;
     expect(getRuntimePromptLayerDefinition('runtime.state')?.schema.required).toBe(true);
+  });
+
+  it('returns cloned required runtime signal metadata for callers', () => {
+    const manifest = getRequiredRuntimePromptSignalManifest();
+
+    expect(manifest.map(signal => signal.identifier)).toEqual([
+      'runtime.last_message_received',
+      'runtime.internal_turn_context',
+      'runtime.speaking_with',
+      'runtime.channel_context',
+      'runtime.model_context',
+      'runtime.capability_tier',
+      'runtime.current_datetime',
+      'runtime.trust',
+      'runtime.emotional_affect',
+      'runtime.metacognitive_guidance',
+      'runtime.response_style_guidance',
+      'runtime.internal_state',
+      'runtime.tooling',
+    ]);
+    manifest[0]!.required = false;
+
+    expect(getRequiredRuntimePromptSignalManifest()[0]?.required).toBe(true);
   });
 
   it('uses atomic macros and moved prose inside the umbrella templates', () => {
@@ -103,40 +162,66 @@ describe('runtime prompt layer schema', () => {
     expect(rendered).toContain('<delivery>Answer directly and keep wording tight.</delivery>');
   });
 
-  it('reports missing and invalid required runtime prompt layers distinctly', () => {
+  it('treats the umbrella runtime defaults as valid required signal coverage', () => {
     const layers = getRuntimePromptLayerDefinitions().map(definition => ({
       type: 'runtime' as const,
       identifier: definition.identifier,
       content: definition.content,
       enabled: true,
     }));
-    const filteredLayers = layers.filter(layer => layer.identifier !== 'runtime.state');
-    const selfLayer = filteredLayers.find(layer => layer.identifier === 'runtime.self');
-    const toolingLayer = filteredLayers.find(layer => layer.identifier === 'runtime.tooling');
-    expect(selfLayer).toBeTruthy();
-    expect(toolingLayer).toBeTruthy();
 
-    selfLayer!.content = '';
-    toolingLayer!.enabled = false;
+    const result = validateRuntimePromptLayerCoverage(layers);
 
-    const result = validateRuntimePromptLayerCoverage(filteredLayers);
+    expect(result.ok).toBe(true);
+    expect(result.issues).toEqual([]);
+  });
+
+  it('accepts a single custom runtime layer when it references every required signal', () => {
+    const result = validateRuntimePromptLayerCoverage([
+      buildCustomRuntimeSignalLayer(),
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(result.issues).toEqual([]);
+  });
+
+  it('reports missing, disabled, and empty required runtime signals distinctly', () => {
+    const result = validateRuntimePromptLayerCoverage([
+      buildCustomRuntimeSignalLayer([
+        'runtime.last_message_received',
+        'runtime.trust',
+        'runtime.tooling',
+      ]),
+      {
+        type: 'runtime',
+        identifier: 'runtime.trust',
+        content: REQUIRED_RUNTIME_SIGNAL_SECTIONS['runtime.trust'],
+        enabled: false,
+      },
+      {
+        type: 'runtime',
+        identifier: 'runtime.tooling',
+        content: '   ',
+        enabled: true,
+      },
+    ]);
 
     expect(result.ok).toBe(false);
     expect(result.issues).toEqual([
       {
-        identifier: 'runtime.state',
-        name: 'Runtime State',
+        identifier: 'runtime.last_message_received',
+        name: 'Last Message Received',
         reason: 'missing',
       },
       {
-        identifier: 'runtime.self',
-        name: 'Runtime Self',
-        reason: 'empty',
+        identifier: 'runtime.trust',
+        name: 'Trust Guidance',
+        reason: 'disabled',
       },
       {
         identifier: 'runtime.tooling',
         name: 'Tooling',
-        reason: 'disabled',
+        reason: 'empty',
       },
     ]);
   });
@@ -159,7 +244,7 @@ describe('runtime prompt layer schema', () => {
     ].map(identifier => ({
       type: 'runtime' as const,
       identifier,
-      content: `<${identifier.replace('runtime.', '').replace(/\./g, '_')}>ok</${identifier.replace('runtime.', '').replace(/\./g, '_')}>`,
+      content: REQUIRED_RUNTIME_SIGNAL_SECTIONS[identifier],
       enabled: true,
     }));
 
@@ -212,7 +297,7 @@ describe('runtime prompt layer schema', () => {
         type: 'runtime',
         name: identifier,
         identifier,
-        content: `<${identifier.replace('runtime.', '').replace(/\./g, '_')}>legacy</${identifier.replace('runtime.', '').replace(/\./g, '_')}>`,
+        content: REQUIRED_RUNTIME_SIGNAL_SECTIONS[identifier],
         updatedBy: 'admin',
       });
     }

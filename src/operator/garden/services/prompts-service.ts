@@ -10,7 +10,7 @@ import {
   type PromptLayerRole,
 } from '../../../core/identity/prompt-types.js';
 import {
-  getRuntimePromptLayerDefinitions,
+  getRequiredRuntimePromptSignalManifest,
   validateRuntimePromptLayerCoverage,
 } from '../../../core/identity/runtime-prompt-layers.js';
 import {
@@ -252,12 +252,12 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     if (missing.length > 0) {
       parts.push(
-        `missing required runtime prompt block${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`,
+        `missing required runtime prompt signal${missing.length === 1 ? '' : 's'}: ${missing.join(', ')}`,
       );
     }
     if (invalid.length > 0) {
       parts.push(
-        `invalid required runtime prompt block${invalid.length === 1 ? '' : 's'}: ${invalid.join(', ')} (required runtime prompt blocks must stay enabled with non-empty content)`,
+        `invalid required runtime prompt signal${invalid.length === 1 ? '' : 's'}: ${invalid.join(', ')} (required runtime prompt signals must stay covered by enabled runtime layers with non-empty content)`,
       );
     }
 
@@ -389,7 +389,7 @@ export class AdminPromptsDataService implements AdminPromptsService {
 
     return {
       ok: validation.ok,
-      entries: getRuntimePromptLayerDefinitions().map((definition) => {
+      entries: getRequiredRuntimePromptSignalManifest().map((definition) => {
         const layer = layers.find((entry) => (
           entry.type === 'runtime'
           && entry.identifier === definition.identifier
@@ -397,8 +397,8 @@ export class AdminPromptsDataService implements AdminPromptsService {
         return {
           identifier: definition.identifier,
           name: definition.name,
-          classification: definition.schema.classification,
-          required: definition.schema.required,
+          classification: definition.classification,
+          required: definition.required,
           status: issueByIdentifier.get(definition.identifier) ?? 'valid',
           ...(layer ? { layerId: layer.id } : {}),
         };

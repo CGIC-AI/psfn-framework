@@ -119,7 +119,7 @@ describe('AdminPromptsDataService', () => {
     expect(promptStore.getById(editableBase.id)?.enabled).toBe(false);
   });
 
-  it('fails closed when saving a runtime layer would clear a required runtime prompt block', () => {
+  it('fails closed when saving a runtime layer would clear required runtime prompt signals', () => {
     const root = makeTempDir();
     const promptStore = new PromptLayerStore(
       join(root, 'prompt-layers.json'),
@@ -138,8 +138,8 @@ describe('AdminPromptsDataService', () => {
     }));
 
     expect(result.ok).toBe(false);
-    expect(result.message).toContain('runtime.state');
-    expect(result.message).toContain('Runtime State');
+    expect(result.message).toContain('runtime.last_message_received');
+    expect(result.message).toContain('Last Message Received');
     expect(promptStore.getById(runtimeStateLayerId!)?.content).toBe(before?.content);
   });
 
@@ -193,7 +193,7 @@ describe('AdminPromptsDataService', () => {
     }));
 
     expect(result.ok).toBe(false);
-    expect(result.message).toContain('runtime.state');
+    expect(result.message).toContain('runtime.last_message_received');
     expect(promptStore.getById(runtimeStateLayerId!)?.content).toContain('Recovered runtime coverage.');
   });
 
@@ -286,7 +286,7 @@ describe('AdminPromptsDataService', () => {
       providerManaged: false,
     });
     expect(listed.runtimeLayerCoverage.ok).toBe(false);
-    expect(listed.runtimeLayerCoverage.entries.find(entry => entry.identifier === 'runtime.state')).toMatchObject({
+    expect(listed.runtimeLayerCoverage.entries.find(entry => entry.identifier === 'runtime.last_message_received')).toMatchObject({
       classification: 'required_runtime_aware',
       required: true,
       status: 'missing',

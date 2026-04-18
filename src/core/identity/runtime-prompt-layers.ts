@@ -28,8 +28,16 @@ export interface RuntimePromptLayerDefinition {
   schema: RuntimePromptLayerSchema;
 }
 
-interface RuntimePromptLayerDefinitionInternal extends RuntimePromptLayerDefinition {
-  legacyCoverageIdentifiers?: readonly string[];
+export interface RequiredRuntimePromptSignalManifestEntry {
+  identifier: string;
+  name: string;
+  classification: RuntimePromptLayerSchemaClassification;
+  required: boolean;
+}
+
+interface RequiredRuntimePromptSignalDefinitionInternal extends RequiredRuntimePromptSignalManifestEntry {
+  ownerLayerIdentifiers: readonly string[];
+  coverageAnchors: readonly string[];
 }
 
 export interface RuntimePromptLayerCoverageIssue {
@@ -85,6 +93,22 @@ const LEGACY_RUNTIME_LAYER_IDENTIFIERS = [
 
 const LEGACY_RUNTIME_LAYER_IDENTIFIER_SET = new Set<string>(LEGACY_RUNTIME_LAYER_IDENTIFIERS);
 
+function createRequiredRuntimePromptSignalDefinition(
+  identifier: string,
+  name: string,
+  ownerLayerIdentifiers: readonly string[],
+  coverageAnchors: readonly string[],
+): RequiredRuntimePromptSignalDefinitionInternal {
+  return Object.freeze({
+    identifier,
+    name,
+    classification: REQUIRED_RUNTIME_LAYER_SCHEMA.classification,
+    required: true,
+    ownerLayerIdentifiers: Object.freeze([identifier, ...ownerLayerIdentifiers]),
+    coverageAnchors: Object.freeze([...coverageAnchors]),
+  });
+}
+
 function wrapRuntimeUmbrella(tag: string, sections: readonly string[]): string {
   return `<${tag}>\n${sections.map(section => section.trim()).join('\n\n')}\n</${tag}>`;
 }
@@ -121,14 +145,94 @@ const RUNTIME_TOOLING_LAYER_CONTENT = wrapRuntimeUmbrella('runtime_tooling', [
   `<extended_tools>\n${EXTENDED_TOOLS_BODY_TEMPLATE}\n</extended_tools>`,
 ]);
 
-const RUNTIME_PROMPT_LAYER_DEFINITIONS: readonly RuntimePromptLayerDefinitionInternal[] = [
+const REQUIRED_RUNTIME_PROMPT_SIGNAL_DEFINITIONS: readonly RequiredRuntimePromptSignalDefinitionInternal[] = [
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.last_message_received',
+    'Last Message Received',
+    ['runtime.state'],
+    ['<last_message_received>', '{{runtime_last_message_received_'],
+  ),
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.internal_turn_context',
+    'Internal Turn Context',
+    ['runtime.state'],
+    ['<internal_turn_context>', '{{runtime_internal_turn_kind}}'],
+  ),
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.speaking_with',
+    'Speaking With',
+    ['runtime.state'],
+    ['<speaking_with>', '{{runtime_speaking_with_'],
+  ),
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.channel_context',
+    'Channel Context',
+    ['runtime.state'],
+    ['<channel_context>', '{{runtime_channel_'],
+  ),
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.model_context',
+    'Model Context',
+    ['runtime.state'],
+    ['<model_context>', '{{model}}'],
+  ),
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.capability_tier',
+    'Capability Tier',
+    ['runtime.state'],
+    ['<capability_tier>', '{{runtime_capability_tier}}'],
+  ),
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.current_datetime',
+    'Current Date & Time',
+    ['runtime.state'],
+    ['<current_datetime>', '{{runtime_current_'],
+  ),
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.trust',
+    'Trust Guidance',
+    ['runtime.self'],
+    ['<trust>', '{{runtime_trust_'],
+  ),
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.emotional_affect',
+    'Emotional Affect',
+    ['runtime.self'],
+    ['<emotional_affect>', '{{runtime_affect_'],
+  ),
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.metacognitive_guidance',
+    'Metacognitive Guidance',
+    ['runtime.self'],
+    ['<metacognitive_persona_guidance>', '{{runtime_flag_'],
+  ),
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.response_style_guidance',
+    'Response Style Guidance',
+    ['runtime.self'],
+    ['<response_style_guidance>', '{{runtime_response_style'],
+  ),
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.internal_state',
+    'Internal State',
+    ['runtime.self'],
+    ['<internal_state>', '{{runtime_internal_state_'],
+  ),
+  createRequiredRuntimePromptSignalDefinition(
+    'runtime.tooling',
+    'Tooling',
+    [],
+    ['<tooling>', '{{runtime_tooling_'],
+  ),
+] as const;
+
+const RUNTIME_PROMPT_LAYER_DEFINITIONS: readonly RuntimePromptLayerDefinition[] = [
   {
     identifier: 'runtime.state',
     name: 'Runtime State',
     priority: 100,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
     content: RUNTIME_STATE_LAYER_CONTENT,
-    legacyCoverageIdentifiers: RUNTIME_STATE_LEGACY_IDENTIFIERS,
   },
   {
     identifier: 'runtime.self',
@@ -136,7 +240,6 @@ const RUNTIME_PROMPT_LAYER_DEFINITIONS: readonly RuntimePromptLayerDefinitionInt
     priority: 110,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
     content: RUNTIME_SELF_LAYER_CONTENT,
-    legacyCoverageIdentifiers: RUNTIME_SELF_LEGACY_IDENTIFIERS,
   },
   {
     identifier: 'runtime.attention',
@@ -179,6 +282,15 @@ export function getRuntimePromptLayerDefinition(identifier: string): RuntimeProm
   } : null;
 }
 
+export function getRequiredRuntimePromptSignalManifest(): RequiredRuntimePromptSignalManifestEntry[] {
+  return REQUIRED_RUNTIME_PROMPT_SIGNAL_DEFINITIONS.map(signal => ({
+    identifier: signal.identifier,
+    name: signal.name,
+    classification: signal.classification,
+    required: signal.required,
+  }));
+}
+
 export function isRequiredRuntimePromptLayer(identifier: string): boolean {
   return RUNTIME_PROMPT_LAYER_DEFINITION_MAP.get(identifier)?.schema.required ?? false;
 }
@@ -189,14 +301,12 @@ export function validateRuntimePromptLayerCoverage(
   const runtimeLayers = layers.filter(layer => layer.type === 'runtime');
   const issues: RuntimePromptLayerCoverageIssue[] = [];
 
-  for (const definition of RUNTIME_PROMPT_LAYER_DEFINITIONS) {
-    if (!definition.schema.required) continue;
-
-    const issue = resolveRuntimeLayerCoverageIssue(runtimeLayers, definition);
-    if (issue) {
+  for (const signal of REQUIRED_RUNTIME_PROMPT_SIGNAL_DEFINITIONS) {
+    const issue = resolveRuntimeSignalCoverageIssue(runtimeLayers, signal);
+    if (issue !== null) {
       issues.push({
-        identifier: definition.identifier,
-        name: definition.name,
+        identifier: signal.identifier,
+        name: signal.name,
         reason: issue,
       });
     }
@@ -267,50 +377,31 @@ export function ensureRuntimePromptLayers(promptStore: PromptLayerStatePort): vo
   }
 }
 
-function resolveRuntimeLayerCoverageIssue(
+function resolveRuntimeSignalCoverageIssue(
   runtimeLayers: readonly Pick<PromptLayer, 'identifier' | 'content' | 'enabled'>[],
-  definition: RuntimePromptLayerDefinitionInternal,
+  signal: RequiredRuntimePromptSignalDefinitionInternal,
 ): RuntimePromptLayerCoverageIssue['reason'] | null {
-  const exactCoverageIssue = evaluateCoverageIdentifiers(runtimeLayers, [definition.identifier]);
-  if (exactCoverageIssue === null) {
-    return null;
+  const candidates = runtimeLayers.filter(layer => (
+    signal.ownerLayerIdentifiers.includes(layer.identifier)
+    || layerReferencesRequiredRuntimeSignal(layer.content, signal)
+  ));
+  if (candidates.length === 0) {
+    return 'missing';
   }
 
-  if (definition.legacyCoverageIdentifiers) {
-    const legacyCoverageIssue = evaluateCoverageIdentifiers(runtimeLayers, definition.legacyCoverageIdentifiers);
-    if (legacyCoverageIssue === null) {
-      return null;
-    }
-
-    if (exactCoverageIssue === 'empty' || legacyCoverageIssue === 'empty') {
-      return 'empty';
-    }
-    if (exactCoverageIssue === 'disabled' || legacyCoverageIssue === 'disabled') {
-      return 'disabled';
-    }
+  const enabledCandidates = candidates.filter(layer => layer.enabled);
+  if (enabledCandidates.length === 0) {
+    return 'disabled';
   }
 
-  return exactCoverageIssue;
+  return enabledCandidates.some(layer => layerReferencesRequiredRuntimeSignal(layer.content, signal))
+    ? null
+    : 'empty';
 }
 
-function evaluateCoverageIdentifiers(
-  runtimeLayers: readonly Pick<PromptLayer, 'identifier' | 'content' | 'enabled'>[],
-  identifiers: readonly string[],
-): RuntimePromptLayerCoverageIssue['reason'] | null {
-  for (const identifier of identifiers) {
-    const matches = runtimeLayers.filter(layer => layer.identifier === identifier);
-    if (matches.length === 0) {
-      return 'missing';
-    }
-
-    if (!matches.some(layer => layer.enabled)) {
-      return 'disabled';
-    }
-
-    if (!matches.some(layer => layer.enabled && layer.content.trim().length > 0)) {
-      return 'empty';
-    }
-  }
-
-  return null;
+function layerReferencesRequiredRuntimeSignal(
+  content: string,
+  signal: RequiredRuntimePromptSignalDefinitionInternal,
+): boolean {
+  return signal.coverageAnchors.some(anchor => content.includes(anchor));
 }

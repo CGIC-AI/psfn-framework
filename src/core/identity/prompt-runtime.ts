@@ -56,9 +56,33 @@ const TOKEN_RESOLVERS: Array<[RegExp, TokenResolver]> = [
 ];
 
 export interface PromptRuntimeMacroHint {
+  group:
+    | 'global_aliases'
+    | 'runtime_state'
+    | 'trust'
+    | 'response_style'
+    | 'affect'
+    | 'metacognition'
+    | 'internal_state'
+    | 'attention'
+    | 'tooling';
   token: string;
   description: string;
   example: string;
+}
+
+function createPromptRuntimeMacroHint(
+  group: PromptRuntimeMacroHint['group'],
+  token: string,
+  description: string,
+  example: string,
+): PromptRuntimeMacroHint {
+  return {
+    group,
+    token,
+    description,
+    example,
+  };
 }
 
 const METACOGNITIVE_FLAG_PROMPT_HINT_DETAILS: Record<
@@ -94,531 +118,207 @@ const METACOGNITIVE_FLAG_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = METACOG
   const details = METACOGNITIVE_FLAG_PROMPT_HINT_DETAILS[flagName];
   const label = flagName.replace(/_/g, ' ');
   return [
-    {
-      token: `{{runtime_flag_${flagName}_present}}`,
-      description: `Whether the ${label} metacognitive flag is active for the current turn.`,
-      example: 'true',
-    },
-    {
-      token: `{{runtime_flag_${flagName}_confidence}}`,
-      description: `Confidence score for the ${label} metacognitive flag when it is active.`,
-      example: details.confidenceExample,
-    },
-    {
-      token: `{{runtime_flag_${flagName}_evidence}}`,
-      description: `Evidence summary for the ${label} metacognitive flag when it is active.`,
-      example: details.evidenceExample,
-    },
+    createPromptRuntimeMacroHint(
+      'metacognition',
+      `{{runtime_flag_${flagName}_present}}`,
+      `Whether the ${label} metacognitive flag is active for the current turn.`,
+      'true',
+    ),
+    createPromptRuntimeMacroHint(
+      'metacognition',
+      `{{runtime_flag_${flagName}_confidence}}`,
+      `Confidence score for the ${label} metacognitive flag when it is active.`,
+      details.confidenceExample,
+    ),
+    createPromptRuntimeMacroHint(
+      'metacognition',
+      `{{runtime_flag_${flagName}_evidence}}`,
+      `Evidence summary for the ${label} metacognitive flag when it is active.`,
+      details.evidenceExample,
+    ),
   ];
 });
 
+const GLOBAL_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
+  createPromptRuntimeMacroHint(
+    'global_aliases',
+    '{{current_datetime}} / {{now()}}',
+    `Current active timezone datetime in ISO-8601 format (${resolveActiveTimezone()}).`,
+    '2026-02-21T08:20:11.123-05:00',
+  ),
+  createPromptRuntimeMacroHint(
+    'global_aliases',
+    '{{current_date}}',
+    `Current calendar date in the active timezone (${resolveActiveTimezone()}).`,
+    '2026-02-21',
+  ),
+  createPromptRuntimeMacroHint(
+    'global_aliases',
+    '{{current_time}}',
+    `Current time in the active timezone (${resolveActiveTimezone()}).`,
+    '08:20:11-05:00',
+  ),
+  createPromptRuntimeMacroHint('global_aliases', '{{unix_timestamp}}', 'Current Unix epoch timestamp in seconds.', '1769020811'),
+  createPromptRuntimeMacroHint('global_aliases', '{{user}}', 'Current author/user display name from runtime context.', 'PrimaryUser'),
+  createPromptRuntimeMacroHint('global_aliases', '{{char}}', 'Character/assistant name from runtime context.', 'Companion'),
+  createPromptRuntimeMacroHint('global_aliases', '{{description}}', 'Character card description field.', 'A new companion identity waiting to be customized.'),
+  createPromptRuntimeMacroHint('global_aliases', '{{personality}}', 'Character card personality field.', 'A blank starter personality.'),
+  createPromptRuntimeMacroHint('global_aliases', '{{scenario}}', 'Character card scenario field.', '{{user}} and {{char}} are chatting.'),
+  createPromptRuntimeMacroHint('global_aliases', '{{system_prompt}}', 'Character card system_prompt field.', 'Use clear language and stay grounded.'),
+  createPromptRuntimeMacroHint('global_aliases', '{{mes_example}}', 'Character card message example block.', 'Example dialogue style:\\n{{user}}: hi\\n{{char}}: hello'),
+  createPromptRuntimeMacroHint('global_aliases', '{{post_history_instructions}}', 'Character card post-history instructions field.', 'Stay concise and ask clarifying questions when needed.'),
+  createPromptRuntimeMacroHint('global_aliases', '{{channel_id}}', 'Resolved channel/session identifier.', 'discord:dm:123456789'),
+  createPromptRuntimeMacroHint('global_aliases', '{{channel_type}}', 'Resolved channel type.', 'discord_text'),
+  createPromptRuntimeMacroHint('global_aliases', '{{trust_level}}', 'Current trust tier for the author/context.', 'primary'),
+  createPromptRuntimeMacroHint('global_aliases', '{{model}}', 'Current active model identifier.', 'moonshotai/kimi-k2.5'),
+  createPromptRuntimeMacroHint('global_aliases', '{{active_timezone}}', 'Active runtime timezone identifier.', 'America/New_York'),
+];
+
+const RUNTIME_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_current_datetime_human}}', 'Current local datetime formatted for prompt-facing companion context.', 'Friday, March 27, 2026 at 10:27 PM'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_current_datetime_iso}}', 'Current local datetime as an ISO-8601 timestamp in the active timezone.', '2026-03-27T22:27:11.123-04:00'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_current_weekday}}', 'Current weekday in the active timezone.', 'Friday'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_current_date_human}}', 'Current local calendar date in companion-facing format.', 'March 27, 2026'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_current_time_human}}', 'Current local clock time in companion-facing format.', '10:27 PM'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_human}}', 'Last pre-turn message timestamp plus relative elapsed wording.', 'Friday, March 27, 2026 at 10:11 PM America/New_York (16 minutes ago)'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_at_iso}}', 'ISO-8601 timestamp for the most recent pre-turn message.', '2026-03-27T22:11:04.112-04:00'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_weekday}}', 'Weekday of the most recent pre-turn message when available.', 'Friday'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_date_human}}', 'Calendar date of the most recent pre-turn message when available.', 'March 27, 2026'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_time_human}}', 'Clock time of the most recent pre-turn message when available.', '10:11 PM'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_timezone}}', 'Timezone label for the most recent pre-turn message when available.', 'America/New_York'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_ago}}', 'Relative time since the most recent pre-turn message.', '16 minutes ago'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_days_hours}}', 'Approximate elapsed time since the most recent pre-turn message in day/hour form.', '2 days 3 hours'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_missing_notice}}', 'Fallback note when no earlier message is loaded for the current channel.', 'No earlier message is loaded for this channel.'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_internal_turn_kind}}', 'Internal task kind for heartbeat/reflection/planning/maintenance turns when applicable.', 'reflection'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_speaking_with_name}}', 'Resolved speaking-partner display name for user-facing turns.', 'Vega'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_speaking_with_trust_level}}', 'Trust level for the current speaking partner when the turn is user-facing.', 'trusted'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_channel_type}}', 'Resolved channel type for the current speaking context when user-facing.', 'discord_text'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_channel_visibility}}', 'Resolved channel visibility for the current speaking context when user-facing.', 'private'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_capability_tier}}', 'Current capability tier used to gate extended tool access.', 'apprentice'),
+];
+
+const TRUST_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
+  createPromptRuntimeMacroHint('trust', '{{runtime_trust_level}}', 'Resolved trust tier for the current turn.', 'trusted'),
+  createPromptRuntimeMacroHint('trust', '{{runtime_trust_is_primary}}', 'Whether the current turn is with the primary person.', 'false'),
+  createPromptRuntimeMacroHint('trust', '{{runtime_trust_is_trusted}}', 'Whether the current turn is with a trusted contact.', 'true'),
+  createPromptRuntimeMacroHint('trust', '{{runtime_trust_is_regular}}', 'Whether the current turn is with a regular acquaintance.', 'false'),
+  createPromptRuntimeMacroHint('trust', '{{runtime_trust_is_public}}', 'Whether the current turn is a public interaction.', 'false'),
+];
+
+const RESPONSE_STYLE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
+  createPromptRuntimeMacroHint('response_style', '{{runtime_response_style}}', 'Resolved response style identifier for the current turn.', 'expressive'),
+  createPromptRuntimeMacroHint('response_style', '{{runtime_response_style_name}}', 'Human-readable response style name for the current turn.', 'Expressive'),
+  createPromptRuntimeMacroHint('response_style', '{{runtime_response_style_is_concise}}', 'Whether the current turn should use the concise delivery profile.', 'false'),
+  createPromptRuntimeMacroHint('response_style', '{{runtime_response_style_is_expressive}}', 'Whether the current turn should use the expressive delivery profile.', 'true'),
+  createPromptRuntimeMacroHint('response_style', '{{runtime_response_style_delivery_guidance}}', 'Prompt fragment describing the default delivery for the current response style.', 'Keep your voice warm and vivid.'),
+  createPromptRuntimeMacroHint('response_style', '{{runtime_response_style_expansion_guidance}}', 'Prompt fragment describing when to expand or compress detail for the current response style.', 'Add personality-rich detail when it helps clarity.'),
+  createPromptRuntimeMacroHint('response_style', '{{runtime_response_style_guidance_body}}', 'Detailed response-style guidance text for the current turn.', 'Prefer expressive responses: keep your voice warm and vivid, and add personality-rich detail when it helps clarity.'),
+];
+
+const AFFECT_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_snapshot_present}}', 'Whether the current turn has an emotion snapshot available for affect macros.', 'true'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_mode}}', 'Trust-gated affect mode derived from the current emotion snapshot.', 'honne'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_mode_label}}', 'Human-readable trust-gated affect mode label.', 'honne (genuine)'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_mode_is_honne}}', 'Whether the current turn can express the genuine honne affect profile.', 'true'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_mode_is_tatemae}}', 'Whether the current turn is constrained to the tatemae affect profile.', 'false'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_warmth}}', 'Signed warmth modifier derived from the current affect state.', '+0.420'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_formality}}', 'Signed formality modifier derived from the current affect state.', '-0.180'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_energy}}', 'Signed energy modifier derived from the current affect state.', '+0.310'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_assertiveness}}', 'Signed assertiveness modifier derived from the current affect state.', '+0.205'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_expressiveness}}', 'Expressiveness level derived from the current affect state.', '0.615'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_profile_intensity}}', 'Resolved affect profile intensity used for prompt shaping.', '0.500'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_profile_variability}}', 'Resolved affect profile variability used for prompt shaping.', '0.500'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_profile_control}}', 'Resolved affect profile control used for prompt shaping.', '0.600'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_profile_display_range_min}}', 'Lower bound of the affect profile display range.', '0.000'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_profile_display_range_max}}', 'Upper bound of the affect profile display range.', '0.800'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_intensity}}', 'Resolved affect intensity used for prompt shaping.', '0.500'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_variability}}', 'Resolved affect variability used for prompt shaping.', '0.500'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_control}}', 'Resolved affect control used for prompt shaping.', '0.600'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_display_range_min}}', 'Lower bound of the affect display range.', '0.000'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_display_range_max}}', 'Upper bound of the affect display range.', '0.800'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_valence}}', 'Signed valence from the current affect snapshot.', '+0.320'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_arousal}}', 'Signed arousal from the current affect snapshot.', '+0.180'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_dominance}}', 'Signed dominance from the current affect snapshot.', '-0.120'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_snapshot_vad_valence}}', 'Signed valence from the current emotion snapshot.', '+0.320'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_snapshot_vad_arousal}}', 'Signed arousal from the current emotion snapshot.', '+0.180'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_snapshot_vad_dominance}}', 'Signed dominance from the current emotion snapshot.', '-0.120'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_snapshot_mood_valence}}', 'Signed mood valence from the current emotion snapshot.', '+0.280'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_snapshot_mood_arousal}}', 'Signed mood arousal from the current emotion snapshot.', '+0.090'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_snapshot_mood_dominance}}', 'Signed mood dominance from the current emotion snapshot.', '-0.060'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_snapshot_confidence}}', 'Confidence score from the current emotion snapshot.', '0.840'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_guidance_warmth_label}}', 'Human-readable warmth guidance derived from the current affect state.', 'warmer'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_guidance_formality_label}}', 'Human-readable formality guidance derived from the current affect state.', 'more relaxed'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_guidance_energy_label}}', 'Human-readable energy guidance derived from the current affect state.', 'higher energy'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_guidance_assertiveness_label}}', 'Human-readable assertiveness guidance derived from the current affect state.', 'more assertive'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_guidance_expressiveness_label}}', 'Human-readable expressiveness guidance derived from the current affect state.', 'moderate'),
+  createPromptRuntimeMacroHint('affect', '{{runtime_affect_privacy_guidance}}', 'Privacy wording derived from the current trust-gated affect mode.', 'Express warmth openly; intimate details are okay here.'),
+];
+
+const INTERNAL_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_present}}', 'Whether a structured internal-state snapshot is available for the current turn.', 'true'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_cognitive_processing_quality}}', 'Processing quality label from the current internal cognitive state.', 'fluent'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_cognitive_certainty_label}}', 'Certainty label from the current internal cognitive state.', 'steady'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_cognitive_topic_engagement_label}}', 'Topic engagement label from the current internal cognitive state.', 'engaged'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_attention_conversation_trajectory}}', 'Conversation trajectory from the current internal attention state.', 'deepening'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_attention_active_concern_count}}', 'Active concern count from the current internal attention state.', '2'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_attention_active_concern_plural_suffix}}', 'Plural suffix for active-concern count prose.', 's'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_attention_pending_follow_up_count}}', 'Pending follow-up count from the current internal attention state.', '1'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_attention_pending_follow_up_plural_suffix}}', 'Plural suffix for pending follow-up count prose.', 's'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_relational_trust_level}}', 'Trust level from the current internal relational state.', 'trusted'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_relational_recent_interaction_frequency_label}}', 'Interaction frequency label from the current internal relational state.', 'frequent'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_relational_last_seen_label}}', 'Last-seen recency label from the current internal relational state.', 'recently interacted'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_emotional_mood_valence_label}}', 'Mood valence label from the current internal emotional state.', 'warm'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_emotional_mood_arousal_label}}', 'Mood arousal label from the current internal emotional state.', 'calm'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_emotional_prefix}}', 'Optional prose prefix when secondary emotions are present.', 'mostly '),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_emotional_secondary_clause}}', 'Optional prose clause describing secondary emotions.', ', with hopeful and curious secondary emotions present'),
+];
+
+const ATTENTION_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
+  createPromptRuntimeMacroHint('attention', '{{runtime_concerns_count}}', 'Total deduplicated active concern count available to the current turn.', '2'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_concerns_top_lines}}', 'Top active concern bullet lines without the prose opener.', '- medication reminder logistics [high; revisit before Friday, March 27, 2026 at 10:27 PM]'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_concerns_top_priorities}}', 'Comma-joined priorities for the top active concerns.', 'high, low'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_concerns_omitted_count}}', 'Count of lower-salience active concerns omitted from the top list.', '1'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_concerns_omitted_plural_suffix}}', 'Plural suffix for omitted-concern count prose.', 's'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_emotion_appraisal_length}}', 'Total number of emotion appraisal entries in the current chain.', '3'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_emotion_appraisal_latest_trigger}}', 'Trigger label for the latest emotion appraisal entry.', 'user_checkin'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_emotion_appraisal_latest_summary}}', 'Compacted summary text from the latest emotion appraisal entry.', 'She relaxed after the reassurance and shifted back toward curiosity.'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_emotion_appraisal_latest_timestamp_iso}}', 'ISO-8601 timestamp for the latest emotion appraisal entry.', '2026-03-27T22:27:11.123Z'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_emotion_appraisal_recent_lines}}', 'Last two formatted emotion appraisal bullet lines, newline-joined.', '- Friday, March 27, 2026 at 10:27 PM (user_checkin): She relaxed after the reassurance.'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_emotion_appraisal_body}}', 'Preformatted appraisal-chain body ready to drop into the legacy attention section.', '- Friday, March 27, 2026 at 10:27 PM (user_checkin): She relaxed after the reassurance.'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_behavioral_notes_count}}', 'Count of current behavioral note lines available for the active contact.', '2'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_behavioral_notes_body_raw}}', 'Raw behavioral-notes body text without the wrapping XML tag.', '- validation: avg +0.45 over 1 outcome sample(s), 100% positive'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_behavioral_notes_body}}', 'Preformatted behavioral-notes body ready to drop into the legacy attention section.', '- validation: avg +0.45 over 1 outcome sample(s), 100% positive'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_skills_count}}', 'Count of skill entries present in the current skills index XML.', '2'),
+  createPromptRuntimeMacroHint('attention', '{{runtime_skills_index_body}}', 'Preformatted skills-index body ready to drop into the legacy attention section.', '<skill id="memory.write">Persist durable relational memories.</skill>'),
+];
+
+const TOOLING_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
+  createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_active_count}}', 'Count of currently active tools.', '6'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_core_count}}', 'Count of active core tools.', '4'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_promoted_count}}', 'Count of promoted extended tools that are always active.', '1'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_loaded_count}}', 'Count of explicitly loaded extended tools active for the turn.', '1'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_autoload_count}}', 'Count of autoloaded extended tools active for the turn.', '2'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_deferred_count}}', 'Count of deferred tools still active for this turn.', '0'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_available_extended_count}}', 'Count of additional extended tools available for loading.', '3'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_appearance_context_body}}', 'Appearance-context body that tool prompts can splice into self-image requests.', 'Tall black dress, soft gold jewelry, moonlit conservatory backdrop.'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_self_image_tool_active}}', 'Whether a self-image generation tool is currently active.', 'false'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_extended_tools_total}}', 'Total number of extended tools registered for the current turn.', '3'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_extended_tools_activatable_count}}', 'Count of extended tools that can be activated immediately.', '1'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_extended_tools_blocked_count}}', 'Count of extended tools blocked by the current capability tier.', '1'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_extended_tool_names}}', 'Comma-joined extended tool names in registered order.', 'web, notify, background_probe'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_extended_tool_directory_lines}}', 'Extended tool directory lines without any extra prose preface.', '- web: Fetch a web page (blocked by current tier: external.web)'),
+];
+
 export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
-  {
-    token: '{{current_datetime}} / {{now()}}',
-    description: `Current active timezone datetime in ISO-8601 format (${resolveActiveTimezone()}).`,
-    example: '2026-02-21T08:20:11.123-05:00',
-  },
-  {
-    token: '{{current_date}}',
-    description: `Current calendar date in the active timezone (${resolveActiveTimezone()}).`,
-    example: '2026-02-21',
-  },
-  {
-    token: '{{current_time}}',
-    description: `Current time in the active timezone (${resolveActiveTimezone()}).`,
-    example: '08:20:11-05:00',
-  },
-  {
-    token: '{{unix_timestamp}}',
-    description: 'Current Unix epoch timestamp in seconds.',
-    example: '1769020811',
-  },
-  {
-    token: '{{user}}',
-    description: 'Current author/user display name from runtime context.',
-    example: 'PrimaryUser',
-  },
-  {
-    token: '{{char}}',
-    description: 'Character/assistant name from runtime context.',
-    example: 'Companion',
-  },
-  {
-    token: '{{description}}',
-    description: 'Character card description field.',
-    example: 'A new companion identity waiting to be customized.',
-  },
-  {
-    token: '{{personality}}',
-    description: 'Character card personality field.',
-    example: 'A blank starter personality.',
-  },
-  {
-    token: '{{scenario}}',
-    description: 'Character card scenario field.',
-    example: '{{user}} and {{char}} are chatting.',
-  },
-  {
-    token: '{{system_prompt}}',
-    description: 'Character card system_prompt field.',
-    example: 'Use clear language and stay grounded.',
-  },
-  {
-    token: '{{mes_example}}',
-    description: 'Character card message example block.',
-    example: 'Example dialogue style:\\n{{user}}: hi\\n{{char}}: hello',
-  },
-  {
-    token: '{{post_history_instructions}}',
-    description: 'Character card post-history instructions field.',
-    example: 'Stay concise and ask clarifying questions when needed.',
-  },
-  {
-    token: '{{channel_id}}',
-    description: 'Resolved channel/session identifier.',
-    example: 'discord:dm:123456789',
-  },
-  {
-    token: '{{channel_type}}',
-    description: 'Resolved channel type.',
-    example: 'discord_text',
-  },
-  {
-    token: '{{trust_level}}',
-    description: 'Current trust tier for the author/context.',
-    example: 'primary',
-  },
-  {
-    token: '{{model}}',
-    description: 'Current active model identifier.',
-    example: 'moonshotai/kimi-k2.5',
-  },
-  {
-    token: '{{active_timezone}}',
-    description: 'Active runtime timezone identifier.',
-    example: 'America/New_York',
-  },
-  {
-    token: '{{runtime_current_datetime_human}}',
-    description: 'Current local datetime formatted for prompt-facing companion context.',
-    example: 'Friday, March 27, 2026 at 10:27 PM',
-  },
-  {
-    token: '{{runtime_current_datetime_iso}}',
-    description: 'Current local datetime as an ISO-8601 timestamp in the active timezone.',
-    example: '2026-03-27T22:27:11.123-04:00',
-  },
-  {
-    token: '{{runtime_current_weekday}}',
-    description: 'Current weekday in the active timezone.',
-    example: 'Friday',
-  },
-  {
-    token: '{{runtime_current_date_human}}',
-    description: 'Current local calendar date in companion-facing format.',
-    example: 'March 27, 2026',
-  },
-  {
-    token: '{{runtime_current_time_human}}',
-    description: 'Current local clock time in companion-facing format.',
-    example: '10:27 PM',
-  },
-  {
-    token: '{{runtime_last_message_received_human}}',
-    description: 'Last pre-turn message timestamp plus relative elapsed wording.',
-    example: 'Friday, March 27, 2026 at 10:11 PM America/New_York (16 minutes ago)',
-  },
-  {
-    token: '{{runtime_last_message_received_at_iso}}',
-    description: 'ISO-8601 timestamp for the most recent pre-turn message.',
-    example: '2026-03-27T22:11:04.112-04:00',
-  },
-  {
-    token: '{{runtime_last_message_received_weekday}}',
-    description: 'Weekday of the most recent pre-turn message when available.',
-    example: 'Friday',
-  },
-  {
-    token: '{{runtime_last_message_received_date_human}}',
-    description: 'Calendar date of the most recent pre-turn message when available.',
-    example: 'March 27, 2026',
-  },
-  {
-    token: '{{runtime_last_message_received_time_human}}',
-    description: 'Clock time of the most recent pre-turn message when available.',
-    example: '10:11 PM',
-  },
-  {
-    token: '{{runtime_last_message_received_timezone}}',
-    description: 'Timezone label for the most recent pre-turn message when available.',
-    example: 'America/New_York',
-  },
-  {
-    token: '{{runtime_last_message_received_ago}}',
-    description: 'Relative time since the most recent pre-turn message.',
-    example: '16 minutes ago',
-  },
-  {
-    token: '{{runtime_last_message_received_days_hours}}',
-    description: 'Approximate elapsed time since the most recent pre-turn message in day/hour form.',
-    example: '2 days 3 hours',
-  },
-  {
-    token: '{{runtime_last_message_received_missing_notice}}',
-    description: 'Fallback note when no earlier message is loaded for the current channel.',
-    example: 'No earlier message is loaded for this channel.',
-  },
-  {
-    token: '{{runtime_internal_turn_kind}}',
-    description: 'Internal task kind for heartbeat/reflection/planning/maintenance turns when applicable.',
-    example: 'reflection',
-  },
-  {
-    token: '{{runtime_speaking_with_trust_level}}',
-    description: 'Trust level for the current speaking partner when the turn is user-facing.',
-    example: 'trusted',
-  },
-  {
-    token: '{{runtime_channel_visibility}}',
-    description: 'Resolved channel visibility for the current speaking context when user-facing.',
-    example: 'private',
-  },
-  {
-    token: '{{runtime_affect_snapshot_present}}',
-    description: 'Whether the current turn has an emotion snapshot available for affect macros.',
-    example: 'true',
-  },
-  {
-    token: '{{runtime_affect_mode}}',
-    description: 'Trust-gated affect mode derived from the current emotion snapshot.',
-    example: 'honne',
-  },
-  {
-    token: '{{runtime_affect_warmth}}',
-    description: 'Signed warmth modifier derived from the current affect state.',
-    example: '+0.420',
-  },
-  {
-    token: '{{runtime_affect_formality}}',
-    description: 'Signed formality modifier derived from the current affect state.',
-    example: '-0.180',
-  },
-  {
-    token: '{{runtime_affect_energy}}',
-    description: 'Signed energy modifier derived from the current affect state.',
-    example: '+0.310',
-  },
-  {
-    token: '{{runtime_affect_assertiveness}}',
-    description: 'Signed assertiveness modifier derived from the current affect state.',
-    example: '+0.205',
-  },
-  {
-    token: '{{runtime_affect_expressiveness}}',
-    description: 'Expressiveness level derived from the current affect state.',
-    example: '0.615',
-  },
-  {
-    token: '{{runtime_affect_profile_intensity}}',
-    description: 'Resolved affect profile intensity used for prompt shaping.',
-    example: '0.500',
-  },
-  {
-    token: '{{runtime_affect_profile_variability}}',
-    description: 'Resolved affect profile variability used for prompt shaping.',
-    example: '0.500',
-  },
-  {
-    token: '{{runtime_affect_profile_control}}',
-    description: 'Resolved affect profile control used for prompt shaping.',
-    example: '0.600',
-  },
-  {
-    token: '{{runtime_affect_profile_display_range_min}}',
-    description: 'Lower bound of the affect profile display range.',
-    example: '0.000',
-  },
-  {
-    token: '{{runtime_affect_profile_display_range_max}}',
-    description: 'Upper bound of the affect profile display range.',
-    example: '0.800',
-  },
-  {
-    token: '{{runtime_affect_intensity}}',
-    description: 'Resolved affect intensity used for prompt shaping.',
-    example: '0.500',
-  },
-  {
-    token: '{{runtime_affect_variability}}',
-    description: 'Resolved affect variability used for prompt shaping.',
-    example: '0.500',
-  },
-  {
-    token: '{{runtime_affect_control}}',
-    description: 'Resolved affect control used for prompt shaping.',
-    example: '0.600',
-  },
-  {
-    token: '{{runtime_affect_display_range_min}}',
-    description: 'Lower bound of the affect display range.',
-    example: '0.000',
-  },
-  {
-    token: '{{runtime_affect_display_range_max}}',
-    description: 'Upper bound of the affect display range.',
-    example: '0.800',
-  },
-  {
-    token: '{{runtime_affect_valence}}',
-    description: 'Signed valence from the current affect snapshot.',
-    example: '+0.320',
-  },
-  {
-    token: '{{runtime_affect_arousal}}',
-    description: 'Signed arousal from the current affect snapshot.',
-    example: '+0.180',
-  },
-  {
-    token: '{{runtime_affect_dominance}}',
-    description: 'Signed dominance from the current affect snapshot.',
-    example: '-0.120',
-  },
-  {
-    token: '{{runtime_affect_snapshot_vad_valence}}',
-    description: 'Signed valence from the current emotion snapshot.',
-    example: '+0.320',
-  },
-  {
-    token: '{{runtime_affect_snapshot_vad_arousal}}',
-    description: 'Signed arousal from the current emotion snapshot.',
-    example: '+0.180',
-  },
-  {
-    token: '{{runtime_affect_snapshot_vad_dominance}}',
-    description: 'Signed dominance from the current emotion snapshot.',
-    example: '-0.120',
-  },
-  {
-    token: '{{runtime_affect_snapshot_mood_valence}}',
-    description: 'Signed mood valence from the current emotion snapshot.',
-    example: '+0.280',
-  },
-  {
-    token: '{{runtime_affect_snapshot_mood_arousal}}',
-    description: 'Signed mood arousal from the current emotion snapshot.',
-    example: '+0.090',
-  },
-  {
-    token: '{{runtime_affect_snapshot_mood_dominance}}',
-    description: 'Signed mood dominance from the current emotion snapshot.',
-    example: '-0.060',
-  },
-  {
-    token: '{{runtime_affect_snapshot_confidence}}',
-    description: 'Confidence score from the current emotion snapshot.',
-    example: '0.840',
-  },
-  {
-    token: '{{runtime_internal_state_cognitive_processing_quality}}',
-    description: 'Processing quality label from the current internal cognitive state.',
-    example: 'fluent',
-  },
-  {
-    token: '{{runtime_internal_state_cognitive_certainty_label}}',
-    description: 'Certainty label from the current internal cognitive state.',
-    example: 'steady',
-  },
-  {
-    token: '{{runtime_internal_state_cognitive_topic_engagement_label}}',
-    description: 'Topic engagement label from the current internal cognitive state.',
-    example: 'engaged',
-  },
-  {
-    token: '{{runtime_internal_state_attention_conversation_trajectory}}',
-    description: 'Conversation trajectory from the current internal attention state.',
-    example: 'deepening',
-  },
-  {
-    token: '{{runtime_internal_state_attention_active_concern_count}}',
-    description: 'Active concern count from the current internal attention state.',
-    example: '2',
-  },
-  {
-    token: '{{runtime_internal_state_attention_pending_follow_up_count}}',
-    description: 'Pending follow-up count from the current internal attention state.',
-    example: '1',
-  },
-  {
-    token: '{{runtime_internal_state_relational_trust_level}}',
-    description: 'Trust level from the current internal relational state.',
-    example: 'trusted',
-  },
-  {
-    token: '{{runtime_internal_state_relational_recent_interaction_frequency_label}}',
-    description: 'Interaction frequency label from the current internal relational state.',
-    example: 'frequent',
-  },
-  {
-    token: '{{runtime_internal_state_relational_last_seen_label}}',
-    description: 'Last-seen recency label from the current internal relational state.',
-    example: 'recently interacted',
-  },
-  {
-    token: '{{runtime_internal_state_emotional_mood_valence_label}}',
-    description: 'Mood valence label from the current internal emotional state.',
-    example: 'warm',
-  },
-  {
-    token: '{{runtime_internal_state_emotional_mood_arousal_label}}',
-    description: 'Mood arousal label from the current internal emotional state.',
-    example: 'calm',
-  },
+  ...GLOBAL_PROMPT_RUNTIME_MACRO_HINTS,
+  ...RUNTIME_STATE_PROMPT_RUNTIME_MACRO_HINTS,
+  ...TRUST_PROMPT_RUNTIME_MACRO_HINTS,
+  ...RESPONSE_STYLE_PROMPT_RUNTIME_MACRO_HINTS,
+  ...AFFECT_PROMPT_RUNTIME_MACRO_HINTS,
   ...METACOGNITIVE_FLAG_RUNTIME_MACRO_HINTS,
-  {
-    token: '{{runtime_concerns_count}}',
-    description: 'Total deduplicated active concern count available to the current turn.',
-    example: '2',
-  },
-  {
-    token: '{{runtime_concerns_top_lines}}',
-    description: 'Top active concern bullet lines without the prose opener.',
-    example: '- medication reminder logistics [high; revisit before Friday, March 27, 2026 at 10:27 PM]',
-  },
-  {
-    token: '{{runtime_concerns_top_priorities}}',
-    description: 'Comma-joined priorities for the top active concerns.',
-    example: 'high, low',
-  },
-  {
-    token: '{{runtime_concerns_omitted_count}}',
-    description: 'Count of lower-salience active concerns omitted from the top list.',
-    example: '1',
-  },
-  {
-    token: '{{runtime_emotion_appraisal_length}}',
-    description: 'Total number of emotion appraisal entries in the current chain.',
-    example: '3',
-  },
-  {
-    token: '{{runtime_emotion_appraisal_latest_trigger}}',
-    description: 'Trigger label for the latest emotion appraisal entry.',
-    example: 'user_checkin',
-  },
-  {
-    token: '{{runtime_emotion_appraisal_latest_summary}}',
-    description: 'Compacted summary text from the latest emotion appraisal entry.',
-    example: 'She relaxed after the reassurance and shifted back toward curiosity.',
-  },
-  {
-    token: '{{runtime_emotion_appraisal_latest_timestamp_iso}}',
-    description: 'ISO-8601 timestamp for the latest emotion appraisal entry.',
-    example: '2026-03-27T22:27:11.123Z',
-  },
-  {
-    token: '{{runtime_emotion_appraisal_recent_lines}}',
-    description: 'Last two formatted emotion appraisal bullet lines, newline-joined.',
-    example: '- Friday, March 27, 2026 at 10:27 PM (user_checkin): She relaxed after the reassurance.',
-  },
-  {
-    token: '{{runtime_behavioral_notes_count}}',
-    description: 'Count of current behavioral note lines available for the active contact.',
-    example: '2',
-  },
-  {
-    token: '{{runtime_behavioral_notes_body_raw}}',
-    description: 'Raw behavioral-notes body text without the wrapping XML tag.',
-    example: '- validation: avg +0.45 over 1 outcome sample(s), 100% positive',
-  },
-  {
-    token: '{{runtime_skills_count}}',
-    description: 'Count of skill entries present in the current skills index XML.',
-    example: '2',
-  },
-  {
-    token: '{{runtime_response_style}}',
-    description: 'Resolved response style identifier for the current turn.',
-    example: 'expressive',
-  },
-  {
-    token: '{{runtime_response_style_name}}',
-    description: 'Human-readable response style name for the current turn.',
-    example: 'Expressive',
-  },
-  {
-    token: '{{runtime_response_style_delivery_guidance}}',
-    description: 'Prompt fragment describing the default delivery for the current response style.',
-    example: 'Keep your voice warm and vivid.',
-  },
-  {
-    token: '{{runtime_response_style_expansion_guidance}}',
-    description: 'Prompt fragment describing when to expand or compress detail for the current response style.',
-    example: 'Add personality-rich detail when it helps clarity.',
-  },
-  {
-    token: '{{runtime_response_style_guidance_body}}',
-    description: 'Detailed response style guidance text for the current turn.',
-    example: 'Warm, emotionally available prose is appropriate here; do not collapse into sterile brevity.',
-  },
-  {
-    token: '{{runtime_tooling_active_count}}',
-    description: 'Count of currently active tools.',
-    example: '6',
-  },
-  {
-    token: '{{runtime_tooling_core_count}}',
-    description: 'Count of active core tools.',
-    example: '4',
-  },
-  {
-    token: '{{runtime_tooling_promoted_count}}',
-    description: 'Count of promoted extended tools that are always active.',
-    example: '1',
-  },
-  {
-    token: '{{runtime_tooling_loaded_count}}',
-    description: 'Count of explicitly loaded extended tools active for the turn.',
-    example: '1',
-  },
-  {
-    token: '{{runtime_tooling_autoload_count}}',
-    description: 'Count of autoloaded extended tools active for the turn.',
-    example: '2',
-  },
-  {
-    token: '{{runtime_tooling_deferred_count}}',
-    description: 'Count of deferred tools still active for this turn.',
-    example: '0',
-  },
-  {
-    token: '{{runtime_tooling_available_extended_count}}',
-    description: 'Count of additional extended tools available for loading.',
-    example: '3',
-  },
-  {
-    token: '{{runtime_extended_tools_total}}',
-    description: 'Total number of extended tools registered for the current turn.',
-    example: '3',
-  },
-  {
-    token: '{{runtime_extended_tools_activatable_count}}',
-    description: 'Count of extended tools that can be activated immediately.',
-    example: '1',
-  },
-  {
-    token: '{{runtime_extended_tools_blocked_count}}',
-    description: 'Count of extended tools blocked by the current capability tier.',
-    example: '1',
-  },
-  {
-    token: '{{runtime_extended_tool_names}}',
-    description: 'Comma-joined extended tool names in registered order.',
-    example: 'web, notify, background_probe',
-  },
-  {
-    token: '{{runtime_extended_tool_directory_lines}}',
-    description: 'Extended tool directory lines without any extra prose preface.',
-    example: '- web: Fetch a web page (blocked by current tier: external.web)',
-  },
+  ...INTERNAL_STATE_PROMPT_RUNTIME_MACRO_HINTS,
+  ...ATTENTION_PROMPT_RUNTIME_MACRO_HINTS,
+  ...TOOLING_PROMPT_RUNTIME_MACRO_HINTS,
 ];
 
 export const PROMPT_RUNTIME_TOKEN_HINT = `Runtime tokens: ${PROMPT_RUNTIME_MACRO_HINTS

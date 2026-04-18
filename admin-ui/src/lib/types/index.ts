@@ -848,6 +848,16 @@ export interface PromptRuntimeLayerCoverageEntry {
 }
 
 export interface PromptRuntimeMacroHint {
+  group:
+    | 'global_aliases'
+    | 'runtime_state'
+    | 'trust'
+    | 'response_style'
+    | 'affect'
+    | 'metacognition'
+    | 'internal_state'
+    | 'attention'
+    | 'tooling';
   token: string;
   description: string;
   example: string;

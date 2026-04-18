@@ -33,32 +33,45 @@
   } from '$lib/types';
 
   // ── Macro catalog ──
-  const MACROS = [
-    { token: '{{current_datetime}}', alias: '{{now()}}', desc: 'Current UTC datetime in ISO-8601 format.', example: '2026-02-21T13:20:11.123Z' },
-    { token: '{{current_date}}', alias: null, desc: 'Current UTC calendar date.', example: '2026-02-21' },
-    { token: '{{current_time}}', alias: null, desc: 'Current UTC time.', example: '13:20:11Z' },
-    { token: '{{unix_timestamp}}', alias: null, desc: 'Current Unix epoch timestamp in seconds.', example: '1769020811' },
-    { token: '{{active_timezone}}', alias: null, desc: 'Active runtime timezone identifier.', example: 'America/New_York' },
-    { token: '{{runtime_current_datetime_human}}', alias: null, desc: 'Current local datetime in companion-facing format.', example: 'Friday, March 27, 2026 at 10:27 PM' },
-    { token: '{{runtime_current_weekday}}', alias: null, desc: 'Current weekday in the active timezone.', example: 'Friday' },
-    { token: '{{runtime_current_date_human}}', alias: null, desc: 'Current local date in companion-facing format.', example: 'March 27, 2026' },
-    { token: '{{runtime_current_time_human}}', alias: null, desc: 'Current local time in companion-facing format.', example: '10:27 PM' },
-    { token: '{{runtime_last_message_received_human}}', alias: null, desc: 'Last pre-turn message timestamp plus relative elapsed wording.', example: 'Friday, March 27, 2026 at 10:11 PM America/New_York (16 minutes ago)' },
-    { token: '{{runtime_last_message_received_at_iso}}', alias: null, desc: 'ISO-8601 timestamp for the most recent pre-turn message.', example: '2026-03-27T22:11:04.112-04:00' },
-    { token: '{{runtime_last_message_received_ago}}', alias: null, desc: 'Relative time since the most recent pre-turn message.', example: '16 minutes ago' },
-    { token: '{{user}}', alias: null, desc: 'Current author/user display name from runtime context.', example: 'PrimaryUser' },
-    { token: '{{char}}', alias: null, desc: 'Character/assistant name from runtime context.', example: 'Companion' },
-    { token: '{{description}}', alias: '{{character.description}}', desc: 'Character card description field.', example: 'A new companion identity waiting to be customized.' },
-    { token: '{{personality}}', alias: '{{character.personality}}', desc: 'Character card personality field.', example: 'A blank starter personality.' },
-    { token: '{{scenario}}', alias: '{{character.scenario}}', desc: 'Character card scenario field.', example: '{{user}} and {{char}} are chatting.' },
-    { token: '{{system_prompt}}', alias: '{{character.system_prompt}}', desc: 'Character card system prompt field.', example: 'Use clear language and stay grounded.' },
-    { token: '{{mes_example}}', alias: '{{character.mes_example}}', desc: 'Character card dialogue example field.', example: 'Example dialogue style:\\n{{user}}: Hi\\n{{char}}: Hey there!' },
-    { token: '{{post_history_instructions}}', alias: '{{character.post_history_instructions}}', desc: 'Character card post-history instructions field.', example: 'Stay concise and ask focused questions when needed.' },
-    { token: '{{channel_id}}', alias: null, desc: 'Resolved channel/session identifier.', example: 'discord:dm:123456789' },
-    { token: '{{channel_type}}', alias: null, desc: 'Resolved channel type.', example: 'discord_text' },
-    { token: '{{trust_level}}', alias: null, desc: 'Current trust tier for the author/context.', example: 'primary' },
-    { token: '{{model}}', alias: null, desc: 'Current active model identifier.', example: 'moonshotai/kimi-k2.5' },
-  ];
+  type PromptRuntimeMacroGroup = PromptRuntimeMacroHint['group'];
+  const MACRO_GROUP_META: Record<PromptRuntimeMacroGroup, { label: string; rationale: string }> = {
+    global_aliases: {
+      label: 'Core Aliases',
+      rationale: 'Stable card-backed fields plus the shared clock and channel aliases.',
+    },
+    runtime_state: {
+      label: 'Runtime State',
+      rationale: 'Per-turn situational facts: time, speaker, channel, and capability tier.',
+    },
+    trust: {
+      label: 'Trust Gates',
+      rationale: 'Use these booleans to branch prose cleanly instead of hardcoding relationship text.',
+    },
+    response_style: {
+      label: 'Response Style',
+      rationale: 'Delivery and expansion signals for concise vs expressive turns.',
+    },
+    affect: {
+      label: 'Affect',
+      rationale: 'Atomic emotional signals. Write your own prose around them instead of pasting monolithic paragraphs.',
+    },
+    metacognition: {
+      label: 'Metacognition',
+      rationale: 'Flags, confidence, and evidence helpers for uncertainty, avoidance, repetition, and confabulation risk.',
+    },
+    internal_state: {
+      label: 'Internal State',
+      rationale: 'Cognitive, attentional, relational, and mood labels plus small prose helpers.',
+    },
+    attention: {
+      label: 'Attention & Memory',
+      rationale: 'Open threads, appraisal history, behavioral notes, and skills context.',
+    },
+    tooling: {
+      label: 'Tooling & Self-Image',
+      rationale: 'Tool counts, appearance context, self-image activation, and extended-tool directory macros.',
+    },
+  };
 
   // ── Layer type badge colors ──
   const LAYER_BADGE: Record<string, { bg: string; text: string; label: string }> = {
@@ -153,6 +166,22 @@
   );
 
   let editCharCount = $derived(editRawContent.length);
+  let groupedRuntimeMacroHints = $derived.by(() => {
+    const groups = new Map<PromptRuntimeMacroGroup, PromptRuntimeMacroHint[]>();
+    for (const hint of runtimeMacroHints) {
+      const existing = groups.get(hint.group) ?? [];
+      existing.push(hint);
+      groups.set(hint.group, existing);
+    }
+    return (Object.entries(MACRO_GROUP_META) as Array<[PromptRuntimeMacroGroup, { label: string; rationale: string }]>)
+      .map(([group, meta]) => ({
+        group,
+        label: meta.label,
+        rationale: meta.rationale,
+        hints: groups.get(group) ?? [],
+      }))
+      .filter(section => section.hints.length > 0);
+  });
 
   let orderedRuntimeBlocks = $derived(
     [...runtimeBlocks].sort((a, b) => {
@@ -1710,7 +1739,7 @@
         <div class="flex items-center gap-3">
           <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">{'{}'}</span>
           <h2 class="text-sm font-serif font-semibold text-shadow-800">Macro Catalog</h2>
-          <span class="text-sm text-shadow-600">{MACROS.length} runtime macros</span>
+          <span class="text-sm text-shadow-600">{runtimeMacroHints.length} runtime macros</span>
         </div>
         <svg class="w-4 h-4 text-shadow-600 transition-transform {showMacroCatalog ? 'rotate-180' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M19 9l-7 7-7-7" />
@@ -1718,29 +1747,44 @@
       </button>
       {#if showMacroCatalog}
         <div class="border-t border-bark-300">
+          <div class="px-5 py-3 bg-bark-50 border-b border-bark-200">
+            <p class="text-sm text-shadow-700 leading-relaxed">
+              Prefer the atomic-signal-plus-prose pattern: reach for booleans, labels, counts, and short fragments first, then wrap them in companion-authored prose inside the layer template. The families below mirror the live runtime payload.
+            </p>
+          </div>
           <div class="grid gap-0 divide-y divide-bark-200">
-            {#each MACROS as macro}
-              <!-- svelte-ignore a11y_no_static_element_interactions -->
-              <div
-                class="flex items-center gap-4 px-5 py-3 hover:bg-bark-100 transition-colors cursor-pointer group"
-                onclick={() => copyToClipboard(macro.token)}
-                onkeydown={(e) => { if (e.key === 'Enter') copyToClipboard(macro.token); }}
-                role="button"
-                tabindex="0"
-                title="Click to copy"
-              >
-                <code class="text-sm font-mono text-gold-700 bg-gold-50 px-2 py-0.5 rounded border border-gold-200 shrink-0 group-hover:bg-gold-100 transition-colors">
-                  {macro.token}
-                </code>
-                {#if macro.alias}
-                  <code class="text-sm font-mono text-shadow-500 shrink-0">{macro.alias}</code>
-                {/if}
-                <span class="text-sm text-shadow-700 flex-1">{macro.desc}</span>
-                <code class="text-sm font-mono text-shadow-500 hidden sm:inline shrink-0">{macro.example}</code>
-                <svg class="w-4 h-4 text-shadow-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                  <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path>
-                </svg>
+            {#each groupedRuntimeMacroHints as section}
+              <div>
+                <div class="px-5 py-3.5 bg-bark-50 border-b border-bark-200">
+                  <div class="flex items-center justify-between gap-4">
+                    <h3 class="text-sm font-semibold text-shadow-800 uppercase tracking-[0.16em]">{section.label}</h3>
+                    <span class="text-sm text-shadow-500">{section.hints.length} macro{section.hints.length === 1 ? '' : 's'}</span>
+                  </div>
+                  <p class="mt-1 text-sm text-shadow-600 leading-relaxed">{section.rationale}</p>
+                </div>
+                <div class="grid gap-0 divide-y divide-bark-200">
+                  {#each section.hints as macro}
+                    <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <div
+                      class="flex items-center gap-4 px-5 py-3 hover:bg-bark-100 transition-colors cursor-pointer group"
+                      onclick={() => copyToClipboard(macro.token)}
+                      onkeydown={(e) => { if (e.key === 'Enter') copyToClipboard(macro.token); }}
+                      role="button"
+                      tabindex="0"
+                      title="Click to copy"
+                    >
+                      <code class="text-sm font-mono text-gold-700 bg-gold-50 px-2 py-0.5 rounded border border-gold-200 shrink-0 group-hover:bg-gold-100 transition-colors">
+                        {macro.token}
+                      </code>
+                      <span class="text-sm text-shadow-700 flex-1">{macro.description}</span>
+                      <code class="text-sm font-mono text-shadow-500 hidden sm:inline shrink-0">{macro.example}</code>
+                      <svg class="w-4 h-4 text-shadow-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"></path>
+                      </svg>
+                    </div>
+                  {/each}
+                </div>
               </div>
             {/each}
           </div>

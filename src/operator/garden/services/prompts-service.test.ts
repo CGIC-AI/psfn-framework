@@ -292,6 +292,12 @@ describe('AdminPromptsDataService', () => {
       status: 'missing',
     });
     expect(listed.runtimeMacroHints.find(entry => entry.token === '{{runtime_current_datetime_human}}')).toMatchObject({
+      group: 'runtime_state',
+      description: expect.any(String),
+      example: expect.any(String),
+    });
+    expect(listed.runtimeMacroHints.find(entry => entry.token === '{{runtime_affect_mode_label}}')).toMatchObject({
+      group: 'affect',
       description: expect.any(String),
       example: expect.any(String),
     });

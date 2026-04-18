@@ -230,6 +230,28 @@
       ],
     },
     {
+      title: 'Prompt Soil Authoring',
+      intro: 'Runtime prompt authoring now centers on grouped atomic macros instead of coarse legacy prose blocks.',
+      knobs: [
+        {
+          name: 'Atomic Signals + Prose',
+          description: 'Treat runtime macros as small facts: booleans, labels, counts, timestamps, and short fragments. Write the connective prose yourself in Prompt Soil so tone and emphasis stay companion-authored instead of being locked inside giant canned paragraphs.',
+        },
+        {
+          name: 'Runtime Macro Families',
+          description: 'Prompt Soil groups the live macro catalog into Core Aliases, Runtime State, Trust Gates, Response Style, Affect, Metacognition, Internal State, Attention & Memory, and Tooling & Self-Image. Start with the family that matches the kind of guidance you are writing instead of scanning one flat list.',
+        },
+        {
+          name: 'Legacy Runtime Layer Migration',
+          description: 'Untouched legacy runtime layers are migrated onto the umbrella Runtime State / Self / Attention / Tooling defaults. Customized legacy layers are kept so old handcrafted guidance is not lost, but new umbrella sections become the main default surface for future edits.',
+        },
+        {
+          name: 'Prompt Soil Workflow',
+          description: 'Use the grouped macro catalog in Prompt Soil as the runtime source of truth. Reach for trust and response-style booleans when branching prose, use affect/internal-state labels for texture, and prefer counts plus bullet-line bodies when summarizing attention or tooling state.',
+        },
+      ],
+    },
+    {
       title: 'How Settings Work',
       knobs: [
         {

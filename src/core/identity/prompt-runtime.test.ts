@@ -32,9 +32,53 @@ function makeTempDir(): string {
   return tempDir;
 }
 
+const RUNTIME_STATE_MACRO_TOKENS = [
+  '{{runtime_current_datetime_human}}',
+  '{{runtime_current_datetime_iso}}',
+  '{{runtime_current_weekday}}',
+  '{{runtime_current_date_human}}',
+  '{{runtime_current_time_human}}',
+  '{{runtime_last_message_received_human}}',
+  '{{runtime_last_message_received_at_iso}}',
+  '{{runtime_last_message_received_weekday}}',
+  '{{runtime_last_message_received_date_human}}',
+  '{{runtime_last_message_received_time_human}}',
+  '{{runtime_last_message_received_timezone}}',
+  '{{runtime_last_message_received_ago}}',
+  '{{runtime_last_message_received_days_hours}}',
+  '{{runtime_last_message_received_missing_notice}}',
+  '{{runtime_internal_turn_kind}}',
+  '{{runtime_speaking_with_name}}',
+  '{{runtime_speaking_with_trust_level}}',
+  '{{runtime_channel_type}}',
+  '{{runtime_channel_visibility}}',
+  '{{runtime_capability_tier}}',
+] as const;
+
+const TRUST_MACRO_TOKENS = [
+  '{{runtime_trust_level}}',
+  '{{runtime_trust_is_primary}}',
+  '{{runtime_trust_is_trusted}}',
+  '{{runtime_trust_is_regular}}',
+  '{{runtime_trust_is_public}}',
+] as const;
+
+const RESPONSE_STYLE_MACRO_TOKENS = [
+  '{{runtime_response_style}}',
+  '{{runtime_response_style_name}}',
+  '{{runtime_response_style_is_concise}}',
+  '{{runtime_response_style_is_expressive}}',
+  '{{runtime_response_style_delivery_guidance}}',
+  '{{runtime_response_style_expansion_guidance}}',
+  '{{runtime_response_style_guidance_body}}',
+] as const;
+
 const AFFECT_MACRO_TOKENS = [
   '{{runtime_affect_snapshot_present}}',
   '{{runtime_affect_mode}}',
+  '{{runtime_affect_mode_label}}',
+  '{{runtime_affect_mode_is_honne}}',
+  '{{runtime_affect_mode_is_tatemae}}',
   '{{runtime_affect_warmth}}',
   '{{runtime_affect_formality}}',
   '{{runtime_affect_energy}}',
@@ -60,35 +104,62 @@ const AFFECT_MACRO_TOKENS = [
   '{{runtime_affect_snapshot_mood_arousal}}',
   '{{runtime_affect_snapshot_mood_dominance}}',
   '{{runtime_affect_snapshot_confidence}}',
+  '{{runtime_affect_guidance_warmth_label}}',
+  '{{runtime_affect_guidance_formality_label}}',
+  '{{runtime_affect_guidance_energy_label}}',
+  '{{runtime_affect_guidance_assertiveness_label}}',
+  '{{runtime_affect_guidance_expressiveness_label}}',
+  '{{runtime_affect_privacy_guidance}}',
 ] as const;
 
 const INTERNAL_STATE_MACRO_TOKENS = [
+  '{{runtime_internal_state_present}}',
   '{{runtime_internal_state_cognitive_processing_quality}}',
   '{{runtime_internal_state_cognitive_certainty_label}}',
   '{{runtime_internal_state_cognitive_topic_engagement_label}}',
   '{{runtime_internal_state_attention_conversation_trajectory}}',
   '{{runtime_internal_state_attention_active_concern_count}}',
+  '{{runtime_internal_state_attention_active_concern_plural_suffix}}',
   '{{runtime_internal_state_attention_pending_follow_up_count}}',
+  '{{runtime_internal_state_attention_pending_follow_up_plural_suffix}}',
   '{{runtime_internal_state_relational_trust_level}}',
   '{{runtime_internal_state_relational_recent_interaction_frequency_label}}',
   '{{runtime_internal_state_relational_last_seen_label}}',
   '{{runtime_internal_state_emotional_mood_valence_label}}',
   '{{runtime_internal_state_emotional_mood_arousal_label}}',
+  '{{runtime_internal_state_emotional_prefix}}',
+  '{{runtime_internal_state_emotional_secondary_clause}}',
 ] as const;
 
-const ATTENTION_TOOLING_MACRO_TOKENS = [
+const ATTENTION_MACRO_TOKENS = [
   '{{runtime_concerns_count}}',
   '{{runtime_concerns_top_lines}}',
   '{{runtime_concerns_top_priorities}}',
   '{{runtime_concerns_omitted_count}}',
+  '{{runtime_concerns_omitted_plural_suffix}}',
   '{{runtime_emotion_appraisal_length}}',
   '{{runtime_emotion_appraisal_latest_trigger}}',
   '{{runtime_emotion_appraisal_latest_summary}}',
   '{{runtime_emotion_appraisal_latest_timestamp_iso}}',
   '{{runtime_emotion_appraisal_recent_lines}}',
+  '{{runtime_emotion_appraisal_body}}',
   '{{runtime_behavioral_notes_count}}',
   '{{runtime_behavioral_notes_body_raw}}',
+  '{{runtime_behavioral_notes_body}}',
   '{{runtime_skills_count}}',
+  '{{runtime_skills_index_body}}',
+] as const;
+
+const TOOLING_MACRO_TOKENS = [
+  '{{runtime_tooling_active_count}}',
+  '{{runtime_tooling_core_count}}',
+  '{{runtime_tooling_promoted_count}}',
+  '{{runtime_tooling_loaded_count}}',
+  '{{runtime_tooling_autoload_count}}',
+  '{{runtime_tooling_deferred_count}}',
+  '{{runtime_tooling_available_extended_count}}',
+  '{{runtime_appearance_context_body}}',
+  '{{runtime_self_image_tool_active}}',
   '{{runtime_extended_tools_total}}',
   '{{runtime_extended_tools_activatable_count}}',
   '{{runtime_extended_tools_blocked_count}}',
@@ -411,12 +482,35 @@ describe('injectPromptRuntimeTokens', () => {
 });
 
 describe('prompt runtime macro hints', () => {
+  it('groups runtime state, trust, and response-style macros for prompt authors', () => {
+    const hintsByToken = new Map(PROMPT_RUNTIME_MACRO_HINTS.map(entry => [entry.token, entry]));
+
+    for (const token of RUNTIME_STATE_MACRO_TOKENS) {
+      const hint = hintsByToken.get(token);
+      expect(hint).toBeDefined();
+      expect(hint?.group).toBe('runtime_state');
+    }
+
+    for (const token of TRUST_MACRO_TOKENS) {
+      const hint = hintsByToken.get(token);
+      expect(hint).toBeDefined();
+      expect(hint?.group).toBe('trust');
+    }
+
+    for (const token of RESPONSE_STYLE_MACRO_TOKENS) {
+      const hint = hintsByToken.get(token);
+      expect(hint).toBeDefined();
+      expect(hint?.group).toBe('response_style');
+    }
+  });
+
   it('documents the atomic affect macros with descriptions and examples', () => {
     const hintsByToken = new Map(PROMPT_RUNTIME_MACRO_HINTS.map(entry => [entry.token, entry]));
 
     for (const token of AFFECT_MACRO_TOKENS) {
       const hint = hintsByToken.get(token);
       expect(hint).toBeDefined();
+      expect(hint?.group).toBe('affect');
       expect(hint?.description).toBeTruthy();
       expect(hint?.example).toBeTruthy();
     }
@@ -428,17 +522,27 @@ describe('prompt runtime macro hints', () => {
     for (const token of INTERNAL_STATE_MACRO_TOKENS) {
       const hint = hintsByToken.get(token);
       expect(hint).toBeDefined();
+      expect(hint?.group).toBe('internal_state');
       expect(hint?.description).toBeTruthy();
       expect(hint?.example).toBeTruthy();
     }
   });
 
-  it('documents the atomic attention/tooling macros with descriptions and examples', () => {
+  it('documents the atomic attention and tooling macros with descriptions and examples', () => {
     const hintsByToken = new Map(PROMPT_RUNTIME_MACRO_HINTS.map(entry => [entry.token, entry]));
 
-    for (const token of ATTENTION_TOOLING_MACRO_TOKENS) {
+    for (const token of ATTENTION_MACRO_TOKENS) {
       const hint = hintsByToken.get(token);
       expect(hint).toBeDefined();
+      expect(hint?.group).toBe('attention');
+      expect(hint?.description).toBeTruthy();
+      expect(hint?.example).toBeTruthy();
+    }
+
+    for (const token of TOOLING_MACRO_TOKENS) {
+      const hint = hintsByToken.get(token);
+      expect(hint).toBeDefined();
+      expect(hint?.group).toBe('tooling');
       expect(hint?.description).toBeTruthy();
       expect(hint?.example).toBeTruthy();
     }
@@ -450,6 +554,7 @@ describe('prompt runtime macro hints', () => {
     for (const token of METACOGNITIVE_FLAG_MACRO_TOKENS) {
       const hint = hintsByToken.get(token);
       expect(hint).toBeDefined();
+      expect(hint?.group).toBe('metacognition');
       expect(hint?.description).toBeTruthy();
       expect(hint?.example).toBeTruthy();
     }

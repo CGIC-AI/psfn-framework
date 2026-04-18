@@ -296,11 +296,12 @@ export class PromptComposer {
     if (immutableSection) {
       staticChunks.push(immutableSection);
     }
-    if (companionValuesSection) {
-      staticChunks.push(companionValuesSection.content);
-    }
     if (northStarSection) {
       staticChunks.push(northStarSection.content);
+    }
+    if (companionValuesSection) {
+      // Keep companion reflections dynamic so static-prefix caching does not churn as the journal ages.
+      dynamicChunks.push(companionValuesSection.content);
     }
 
     for (const prompt of managed.prompts) {

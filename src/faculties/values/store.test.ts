@@ -365,6 +365,57 @@ describe('ValuesJournalStore', () => {
     expect(store.buildCompanionDerivedLayer()).toBeNull();
   });
 
+  it('ages out companion-derived versions older than the configured threshold', () => {
+    const first = store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P1',
+      reflection: 'First companion value',
+      createdAt: '2026-02-26T01:00:00.000Z',
+      provenance: {
+        source: 'companion_reflection',
+        templateId: 'values-reflection',
+        channelId: 'internal:reflection:values-reflection',
+        mode: 'agent',
+      },
+    });
+    const second = store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P2',
+      reflection: 'Second companion value',
+      createdAt: '2026-02-26T02:00:00.000Z',
+      provenance: {
+        source: 'companion_reflection',
+        templateId: 'values-reflection',
+        channelId: 'internal:reflection:values-reflection',
+        mode: 'agent',
+      },
+    });
+    const third = store.append({
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      prompt: 'P3',
+      reflection: 'Third companion value',
+      createdAt: '2026-02-26T03:00:00.000Z',
+      provenance: {
+        source: 'companion_reflection',
+        templateId: 'values-reflection',
+        channelId: 'internal:reflection:values-reflection',
+        mode: 'deliberation',
+      },
+    });
+
+    const layer = store.buildCompanionDerivedLayer({ historyLimit: 3, maxVersionAge: 1 });
+
+    expect(layer).not.toBeNull();
+    expect(layer?.entryIds).toEqual([second.id, third.id]);
+    expect(layer?.historyVersions).toEqual([second.version, third.version]);
+    expect(layer?.content).not.toContain(first.reflection);
+    expect(layer?.content).toContain(second.reflection);
+    expect(layer?.content).toContain(third.reflection);
+  });
+
   it('migrates legacy values.jsonl into notes/values.jsonl on first access', () => {
     const legacyPath = join(tempDir, 'values.jsonl');
     const notesPath = join(tempDir, 'notes', 'values.jsonl');

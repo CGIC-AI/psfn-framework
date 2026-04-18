@@ -95,6 +95,7 @@ export interface CompanionDerivedValuesLayer {
 
 interface CompanionDerivedLayerOptions {
   historyLimit?: number;
+  maxVersionAge?: number;
 }
 
 function normalizeDeliberationMetadata(raw: unknown): ValuesDeliberationMetadata | undefined {
@@ -303,6 +304,17 @@ function normalizeCompanionLayerHistoryLimit(raw: unknown): number {
   return raw;
 }
 
+function normalizeCompanionLayerMaxVersionAge(raw: unknown): number | null {
+  if (raw === undefined) return null;
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || !Number.isInteger(raw)) {
+    throw new Error('companion layer maxVersionAge must be an integer');
+  }
+  if (raw < 0) {
+    throw new Error('companion layer maxVersionAge must be greater than or equal to 0');
+  }
+  return raw;
+}
+
 function sanitizeReflectionForCompanionLayer(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
 }
@@ -438,13 +450,16 @@ export class ValuesJournalStore {
   buildCompanionDerivedLayer(options: CompanionDerivedLayerOptions = {}): CompanionDerivedValuesLayer | null {
     this.ensureLegacyMigration();
     const historyLimit = normalizeCompanionLayerHistoryLimit(options.historyLimit);
+    const maxVersionAge = normalizeCompanionLayerMaxVersionAge(options.maxVersionAge);
     const companionEntries = this.readAll()
       .filter(entry => isCompanionDerivedEntry(entry));
     if (companionEntries.length === 0) {
       return null;
     }
 
+    const newestCompanionVersion = companionEntries[companionEntries.length - 1]!.version;
     const selected = companionEntries
+      .filter(entry => maxVersionAge === null || newestCompanionVersion - entry.version <= maxVersionAge)
       .slice()
       .sort((left, right) => right.version - left.version)
       .slice(0, historyLimit)

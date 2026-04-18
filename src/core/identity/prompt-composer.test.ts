@@ -4,8 +4,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PromptLayerStore } from './prompt-store.js';
 import {
+  COMPANION_VALUES_LAYER_HEADER,
   IMMUTABLE_HUMAN_SAFETY_AMENDMENTS,
   IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER,
+  NORTH_STAR_LAYER_HEADER,
   PromptComposer,
 } from './prompt-composer.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
@@ -361,21 +363,77 @@ describe('PromptComposer', () => {
       store.create({ type: 'base', name: 'Base', content: 'BASE' });
       store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
 
-      const result = constitutionComposer.compose();
+      const result = constitutionComposer.composeSplit();
       const immutableIndex = result.text.indexOf(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
-      const companionIndex = result.text.indexOf('[Companion-Derived Values Layer]');
-      const northStarIndex = result.text.indexOf('[North Star]');
+      const companionIndex = result.text.indexOf(COMPANION_VALUES_LAYER_HEADER);
+      const northStarIndex = result.text.indexOf(NORTH_STAR_LAYER_HEADER);
       const baseIndex = result.text.indexOf('BASE');
       const runtimeIndex = result.text.indexOf('RUNTIME');
 
       expect(immutableIndex).toBeGreaterThanOrEqual(0);
-      expect(companionIndex).toBeGreaterThan(immutableIndex);
-      expect(northStarIndex).toBeGreaterThan(companionIndex);
+      expect(northStarIndex).toBeGreaterThan(immutableIndex);
       expect(baseIndex).toBeGreaterThan(northStarIndex);
-      expect(runtimeIndex).toBeGreaterThan(baseIndex);
+      expect(companionIndex).toBeGreaterThan(baseIndex);
+      expect(runtimeIndex).toBeGreaterThan(companionIndex);
+      expect(result.staticPrefix).not.toContain(COMPANION_VALUES_LAYER_HEADER);
+      expect(result.dynamicSuffix).toContain(COMPANION_VALUES_LAYER_HEADER);
       expect(result.text).toContain('Companion value one');
       expect(result.text).not.toContain('Manual value should not be in companion layer');
       expect(result.text).toContain('Shared care');
+    });
+
+    it('keeps the static prefix stable when companion-derived values versions change', () => {
+      const valuesStore = new ValuesJournalStore(join(tmpDir, 'values.jsonl'));
+      valuesStore.append({
+        templateId: 'values-reflection',
+        templateName: 'Values Reflection',
+        prompt: 'P1',
+        reflection: 'Companion value one',
+        createdAt: '2026-03-02T00:00:00.000Z',
+        provenance: {
+          source: 'companion_reflection',
+          templateId: 'values-reflection',
+          channelId: 'internal:reflection:values-reflection',
+          mode: 'agent',
+        },
+      });
+
+      const constitutionComposer = new PromptComposer(
+        store,
+        undefined,
+        undefined,
+        {
+          enableConstitution: true,
+          companionValuesLayerProvider: () => valuesStore.buildCompanionDerivedLayer(),
+        },
+      );
+      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
+
+      const before = constitutionComposer.composeSplit();
+
+      valuesStore.append({
+        templateId: 'values-reflection',
+        templateName: 'Values Reflection',
+        prompt: 'P2',
+        reflection: 'Companion value two',
+        createdAt: '2026-03-02T00:05:00.000Z',
+        provenance: {
+          source: 'companion_reflection',
+          templateId: 'values-reflection',
+          channelId: 'internal:reflection:values-reflection',
+          mode: 'deliberation',
+        },
+      });
+
+      const after = constitutionComposer.composeSplit();
+
+      expect(before.staticPrefix).toBe(after.staticPrefix);
+      expect(before.staticHash).toBe(after.staticHash);
+      expect(before.dynamicHash).not.toBe(after.dynamicHash);
+      expect(before.staticPrefix).not.toContain(COMPANION_VALUES_LAYER_HEADER);
+      expect(after.dynamicSuffix).toContain(COMPANION_VALUES_LAYER_HEADER);
+      expect(after.dynamicSuffix).toContain('Companion value two');
     });
 
     it('fails closed by keeping immutable amendments when the companion layer provider fails', () => {

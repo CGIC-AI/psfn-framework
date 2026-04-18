@@ -281,6 +281,24 @@ export function createHeartbeatTemplateRuntime(
     };
   };
 
+  const normalizeCanonicalContactId = (
+    value: string | null | undefined,
+  ): string | undefined => {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  };
+
+  const resolveReflectionCanonicalContactId = (
+    internalStateContext: ReflectionInternalStateContext | null,
+  ): string | undefined => normalizeCanonicalContactId(
+    internalStateContext?.internalState.relational.contactId
+      ?? agentLoop.getCurrentInternalState?.()?.relational.contactId
+      ?? undefined,
+  );
+
   const formatNarrativePromptInput = (
     prompt: string,
     context: ReflectionInternalStateContext | null,
@@ -537,6 +555,7 @@ export function createHeartbeatTemplateRuntime(
     const requestedSource = options.requestedSource ?? (source === 'manual' ? 'manual' : 'scheduled');
     const reflectionChannelId = `internal:reflection:${template.id}`;
     const internalStateContext = resolveInternalStateContext(template);
+    const reflectionCanonicalContactId = resolveReflectionCanonicalContactId(internalStateContext);
     const reflectionSubstrateContext = resolveReflectionSubstratePromptContext(template);
     const reflectionCreatedAt = new Date(Date.now()).toISOString();
     const reflectionPrompt = formatNarrativePromptInput(
@@ -641,11 +660,12 @@ export function createHeartbeatTemplateRuntime(
         id: `reflection-${template.id}-${Date.now()}`,
         channelId: reflectionChannelId,
         channelType: 'terminal',
-        authorId: 'scheduler',
+        authorId: reflectionCanonicalContactId ?? 'scheduler',
         authorName: template.name,
         content: reflectionPrompt,
         timestamp: new Date(),
         routing: {
+          ...(reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {}),
           workerExecution: createWorkerExecutionPolicy(WHISPER_WORKER_LANE),
         },
       });

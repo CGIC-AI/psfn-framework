@@ -807,24 +807,27 @@ export async function resolveAuthorContext(input: {
   companionDisplayName?: string;
 }): Promise<ResolvedAuthorContext> {
   if (input.message.channelId.startsWith('internal:')) {
-    const isSelfSubjectChannel = (
-      input.message.channelId === 'internal:heartbeat'
-      || input.message.channelId.startsWith('internal:reflection:')
-    );
-    if (isSelfSubjectChannel) {
+    const isHeartbeatChannel = input.message.channelId === 'internal:heartbeat';
+    const isReflectionChannel = input.message.channelId.startsWith('internal:reflection:');
+    if (isHeartbeatChannel || isReflectionChannel) {
       // Heartbeat/reflection turns are executed by the scheduler, but the subject
-      // of the turn is the companion. Keeping canonicalContactKey unset preserves
-      // access to self-directed/high-intimacy memories while subjectIdentityKey
-      // carries the continuity/prompt subject separately from executor identity.
+      // of the turn is the companion. Reflection turns may also carry a bound
+      // canonical contact hint so self-model and memory subsystems can stay scoped
+      // to the current primary contact while subjectIdentityKey continues to drive
+      // continuity/prompt subject selection.
       const subjectIdentityKey = input.companionIdentityKey.trim();
       if (!subjectIdentityKey) {
         throw new Error('Missing companion identity key for self-directed runtime turn');
       }
       const resolvedUserName = input.companionDisplayName?.trim() || resolvePromptUserName(input.message);
+      const canonicalContactKey = isReflectionChannel
+        ? input.message.routing?.canonicalContactId?.trim() || undefined
+        : undefined;
       return {
         trustLevel: 'primary',
         speakerRole: 'system',
         resolvedUserName,
+        ...(canonicalContactKey ? { canonicalContactKey } : {}),
         ...(subjectIdentityKey ? { subjectIdentityKey } : {}),
         ...(subjectIdentityKey ? { continuitySubjectKey: subjectIdentityKey } : {}),
         continuityFallbackKeys: [],

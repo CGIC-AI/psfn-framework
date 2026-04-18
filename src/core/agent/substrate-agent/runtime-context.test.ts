@@ -62,6 +62,33 @@ describe('runtime subject identity', () => {
     expect(authorContext.canonicalContactKey).toBeUndefined();
   });
 
+  it('binds routed internal reflection turns to the canonical contact while keeping the companion subject', async () => {
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        authorId: 'contact-primary',
+        routing: {
+          canonicalContactId: 'contact-primary',
+        },
+      }),
+      contactStore: null,
+      logger: {
+        warn: () => undefined,
+        debug: () => undefined,
+      },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    expect(authorContext).toMatchObject({
+      trustLevel: 'primary',
+      speakerRole: 'system',
+      resolvedUserName: 'Companion',
+      canonicalContactKey: 'contact-primary',
+      subjectIdentityKey: DEFAULT_COMPANION_ID,
+      continuitySubjectKey: DEFAULT_COMPANION_ID,
+    });
+  });
+
   it('renders prompt-owned runtime layers for reflection turns against the companion subject', () => {
     const message = makeMessage();
     const { templateVariables } = buildPromptTemplateVariables({

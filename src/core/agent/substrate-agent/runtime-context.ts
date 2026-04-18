@@ -36,6 +36,10 @@ import {
   unwrapSingleWrappedPromptSection,
   wrapPromptSectionXml,
 } from '../../identity/prompt-sections.js';
+import {
+  mapEmotionToPersonaAffect,
+  resolveEmotionalExpressionProfile,
+} from '../../emotion/persona-adaptation.js';
 
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
@@ -302,9 +306,97 @@ function buildLastMessagePromptVariables(input: {
   };
 }
 
+function buildAffectPromptVariables(input: {
+  trustLevel: TrustLevel;
+  emotionSnapshot: EmotionStateSnapshot | null;
+  promptVariables?: Record<string, string>;
+  config: Record<string, unknown>;
+}): Record<string, string> {
+  const emptyAffectVariables = {
+    runtime_affect_snapshot_present: 'false',
+    runtime_affect_mode: '',
+    runtime_affect_warmth: '',
+    runtime_affect_formality: '',
+    runtime_affect_energy: '',
+    runtime_affect_assertiveness: '',
+    runtime_affect_expressiveness: '',
+    runtime_affect_intensity: '',
+    runtime_affect_variability: '',
+    runtime_affect_control: '',
+    runtime_affect_display_range_min: '',
+    runtime_affect_display_range_max: '',
+    runtime_affect_profile_intensity: '',
+    runtime_affect_profile_variability: '',
+    runtime_affect_profile_control: '',
+    runtime_affect_profile_display_range_min: '',
+    runtime_affect_profile_display_range_max: '',
+    runtime_affect_valence: '',
+    runtime_affect_arousal: '',
+    runtime_affect_dominance: '',
+    runtime_affect_snapshot_vad_valence: '',
+    runtime_affect_snapshot_vad_arousal: '',
+    runtime_affect_snapshot_vad_dominance: '',
+    runtime_affect_snapshot_mood_valence: '',
+    runtime_affect_snapshot_mood_arousal: '',
+    runtime_affect_snapshot_mood_dominance: '',
+    runtime_affect_snapshot_confidence: '',
+  } satisfies Record<string, string>;
+
+  if (!input.emotionSnapshot) {
+    return emptyAffectVariables;
+  }
+
+  const affect = mapEmotionToPersonaAffect({
+    trustLevel: input.trustLevel,
+    emotionSnapshot: input.emotionSnapshot,
+    profile: resolveEmotionalExpressionProfile({
+      promptVariables: input.promptVariables,
+      config: input.config,
+    }),
+  });
+
+  return {
+    runtime_affect_snapshot_present: 'true',
+    runtime_affect_mode: affect.mode,
+    runtime_affect_warmth: formatSignedScale(affect.warmth),
+    runtime_affect_formality: formatSignedScale(affect.formality),
+    runtime_affect_energy: formatSignedScale(affect.energy),
+    runtime_affect_assertiveness: formatSignedScale(affect.assertiveness),
+    runtime_affect_expressiveness: formatDecimal(affect.expressiveness),
+    runtime_affect_intensity: formatDecimal(affect.profile.intensity),
+    runtime_affect_variability: formatDecimal(affect.profile.variability),
+    runtime_affect_control: formatDecimal(affect.profile.control),
+    runtime_affect_display_range_min: formatDecimal(affect.profile.displayRange.min),
+    runtime_affect_display_range_max: formatDecimal(affect.profile.displayRange.max),
+    runtime_affect_profile_intensity: formatDecimal(affect.profile.intensity),
+    runtime_affect_profile_variability: formatDecimal(affect.profile.variability),
+    runtime_affect_profile_control: formatDecimal(affect.profile.control),
+    runtime_affect_profile_display_range_min: formatDecimal(affect.profile.displayRange.min),
+    runtime_affect_profile_display_range_max: formatDecimal(affect.profile.displayRange.max),
+    runtime_affect_valence: formatSignedScale(input.emotionSnapshot.vad.valence),
+    runtime_affect_arousal: formatSignedScale(input.emotionSnapshot.vad.arousal),
+    runtime_affect_dominance: formatSignedScale(input.emotionSnapshot.vad.dominance),
+    runtime_affect_snapshot_vad_valence: formatSignedScale(input.emotionSnapshot.vad.valence),
+    runtime_affect_snapshot_vad_arousal: formatSignedScale(input.emotionSnapshot.vad.arousal),
+    runtime_affect_snapshot_vad_dominance: formatSignedScale(input.emotionSnapshot.vad.dominance),
+    runtime_affect_snapshot_mood_valence: formatSignedScale(input.emotionSnapshot.mood.valence),
+    runtime_affect_snapshot_mood_arousal: formatSignedScale(input.emotionSnapshot.mood.arousal),
+    runtime_affect_snapshot_mood_dominance: formatSignedScale(input.emotionSnapshot.mood.dominance),
+    runtime_affect_snapshot_confidence: formatDecimal(input.emotionSnapshot.confidence),
+  };
+}
+
 function unwrapPromptSectionBody(section: string | null | undefined): string {
   if (!section) return '';
   return unwrapSingleWrappedPromptSection(section)?.content ?? section.trim();
+}
+
+function formatSignedScale(value: number): string {
+  return `${value >= 0 ? '+' : ''}${value.toFixed(3)}`;
+}
+
+function formatDecimal(value: number): string {
+  return value.toFixed(3);
 }
 
 function describeValence(value: number): string {
@@ -486,12 +578,19 @@ export function buildDynamicPromptTemplateVariables(input: {
       : '.'}`;
   const trustGuidance = resolveTrustGuidance(input.trustLevel);
 
+  const emotionSnapshot = input.internalState ? toEmotionSnapshotFromInternalState(input.internalState) : null;
   const affectBody = unwrapPromptSectionBody(buildEmotionalAffectSection({
     trustLevel: input.trustLevel,
-    emotionSnapshot: input.internalState ? toEmotionSnapshotFromInternalState(input.internalState) : null,
+    emotionSnapshot,
     promptVariables: input.templateVariables,
     config: input.config,
   }));
+  const affectVariables = buildAffectPromptVariables({
+    trustLevel: input.trustLevel,
+    emotionSnapshot,
+    promptVariables: input.templateVariables,
+    config: input.config,
+  });
   const metacognitiveBody = unwrapPromptSectionBody(
     buildMetacognitivePersonaHint(input.metacognitiveFlags ?? []),
   );
@@ -564,6 +663,7 @@ export function buildDynamicPromptTemplateVariables(input: {
     runtime_tooling_deferred_count: String(deferredCount),
     runtime_tooling_available_extended_count: String(extendedCount),
     runtime_trust_guidance: trustGuidance,
+    ...affectVariables,
     runtime_emotional_affect_body: affectBody,
     runtime_metacognitive_persona_guidance_body: metacognitiveBody,
     ...responseStyleTemplateVariables,

@@ -7,6 +7,7 @@ import {
   getPromptRuntimeBlockIdsByClassification,
   getPromptRuntimeImmutableAnchorDefinitions,
   getPromptRuntimeRequiredBlockIds,
+  PROMPT_RUNTIME_MACRO_HINTS,
   injectPromptRuntimeTokens,
   isPromptRuntimeBlockCompanionEditable,
   isPromptRuntimeBlockImmutable,
@@ -30,6 +31,36 @@ function makeTempDir(): string {
   tempDir = mkdtempSync(join(tmpdir(), 'psfn-prompt-runtime-'));
   return tempDir;
 }
+
+const AFFECT_MACRO_TOKENS = [
+  '{{runtime_affect_snapshot_present}}',
+  '{{runtime_affect_mode}}',
+  '{{runtime_affect_warmth}}',
+  '{{runtime_affect_formality}}',
+  '{{runtime_affect_energy}}',
+  '{{runtime_affect_assertiveness}}',
+  '{{runtime_affect_expressiveness}}',
+  '{{runtime_affect_intensity}}',
+  '{{runtime_affect_variability}}',
+  '{{runtime_affect_control}}',
+  '{{runtime_affect_display_range_min}}',
+  '{{runtime_affect_display_range_max}}',
+  '{{runtime_affect_valence}}',
+  '{{runtime_affect_arousal}}',
+  '{{runtime_affect_dominance}}',
+  '{{runtime_affect_profile_intensity}}',
+  '{{runtime_affect_profile_variability}}',
+  '{{runtime_affect_profile_control}}',
+  '{{runtime_affect_profile_display_range_min}}',
+  '{{runtime_affect_profile_display_range_max}}',
+  '{{runtime_affect_snapshot_vad_valence}}',
+  '{{runtime_affect_snapshot_vad_arousal}}',
+  '{{runtime_affect_snapshot_vad_dominance}}',
+  '{{runtime_affect_snapshot_mood_valence}}',
+  '{{runtime_affect_snapshot_mood_arousal}}',
+  '{{runtime_affect_snapshot_mood_dominance}}',
+  '{{runtime_affect_snapshot_confidence}}',
+] as const;
 
 
 describe('runtime prompt block schema', () => {
@@ -307,5 +338,18 @@ describe('injectPromptRuntimeTokens', () => {
     expect(() => store.reorderSystemPromptBlocks(invalidOrder, 'admin')).toThrow(
       'systemPromptBlockOrder must include each reorderable runtime block exactly once',
     );
+  });
+});
+
+describe('prompt runtime macro hints', () => {
+  it('documents the atomic affect macros with descriptions and examples', () => {
+    const hintsByToken = new Map(PROMPT_RUNTIME_MACRO_HINTS.map(entry => [entry.token, entry]));
+
+    for (const token of AFFECT_MACRO_TOKENS) {
+      const hint = hintsByToken.get(token);
+      expect(hint).toBeDefined();
+      expect(hint?.description).toBeTruthy();
+      expect(hint?.example).toBeTruthy();
+    }
   });
 });

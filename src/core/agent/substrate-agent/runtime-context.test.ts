@@ -3,6 +3,7 @@ import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type { InternalState } from '../../self-model/state.js';
 import {
   buildDynamicPromptTemplateVariables,
   buildPromptTemplateVariables,
@@ -24,6 +25,46 @@ function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessag
   };
 }
 
+const TEST_INTERNAL_STATE: InternalState = {
+  emotional: {
+    vad: {
+      valence: 0.52,
+      arousal: -0.18,
+      dominance: 0.31,
+    },
+    mood: {
+      valence: 0.24,
+      arousal: -0.08,
+      dominance: 0.12,
+    },
+    discreteEmotions: {
+      joy: 0.7,
+      trust: 0.25,
+    },
+    confidence: 0.84,
+  },
+  cognitive: {
+    certaintyLevel: 0.66,
+    topicEngagement: 0.38,
+    processingQuality: 'fluent',
+  },
+  attention: {
+    activeConcerns: [],
+    pendingFollowUps: [],
+    careReminders: [],
+    salientEntities: [],
+    conversationTrajectory: 'deepening',
+  },
+  relational: {
+    contactId: 'contact-alex',
+    trustLevel: 'trusted',
+    baselineValence: 0.18,
+    moodDrift: 0.05,
+    recentInteractionFrequency: 0.33,
+    lastSeenDeltaSeconds: 240,
+  },
+};
+
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
 
 function renderPromptOwnedRuntimeLayers(
@@ -31,6 +72,26 @@ function renderPromptOwnedRuntimeLayers(
 ): string {
   const variables = buildDynamicPromptTemplateVariables(input);
   return injectPromptRuntimeTokens(DEFAULT_RUNTIME_PROMPT_TEMPLATE, {
+    now: input.now,
+    variables: {
+      ...(input.templateVariables ?? {}),
+      ...variables,
+    },
+  });
+}
+
+function buildAtomicAffectTemplateOutput(
+  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+): string {
+  const variables = buildDynamicPromptTemplateVariables(input);
+  return injectPromptRuntimeTokens([
+    'present={{runtime_affect_snapshot_present}}',
+    'mode={{runtime_affect_mode}}',
+    'warmth={{runtime_affect_warmth}}',
+    'intensity={{runtime_affect_intensity}}',
+    'valence={{runtime_affect_valence}}',
+    'confidence={{runtime_affect_snapshot_confidence}}',
+  ].join(' '), {
     now: input.now,
     variables: {
       ...(input.templateVariables ?? {}),
@@ -735,6 +796,60 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_tooling_available_extended_count).toBe('1');
   });
 
+  it('substitutes atomic affect macros under both honne and tatemae trust tiers', () => {
+    const baseInput = {
+      message: makeMessage({
+        channelId: 'discord:dm:alex',
+        channelType: 'discord_text',
+        authorId: 'alex',
+        authorName: 'Alex',
+        content: 'hey',
+      }),
+      resolvedUserName: 'Alex',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      responseStyle: 'expressive',
+      now: new Date('2026-03-18T13:30:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 2,
+        promoted: 1,
+        extendedLoaded: 1,
+        autoload: 1,
+        deferred: 0,
+        total: 5,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay' as const,
+      promotedExtendedToolNames: new Set<string>(),
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      config: {},
+      internalState: TEST_INTERNAL_STATE,
+    };
+
+    const honneOutput = buildAtomicAffectTemplateOutput({
+      ...baseInput,
+      trustLevel: 'primary',
+    });
+    const tatemaeOutput = buildAtomicAffectTemplateOutput({
+      ...baseInput,
+      trustLevel: 'trusted',
+    });
+
+    expect(honneOutput).toContain('present=true');
+    expect(honneOutput).toContain('mode=honne');
+    expect(honneOutput).not.toContain('{{');
+
+    expect(tatemaeOutput).toContain('present=true');
+    expect(tatemaeOutput).toContain('mode=tatemae');
+    expect(tatemaeOutput).not.toContain('{{');
+  });
+
   it('fails closed with structured fallback variables when prior-message context is unavailable', () => {
     const variables = buildDynamicPromptTemplateVariables({
       message: makeMessage(),
@@ -768,6 +883,34 @@ describe('runtime subject identity', () => {
       config: {},
     });
 
+    expect(variables.runtime_affect_snapshot_present).toBe('false');
+    expect(variables.runtime_affect_mode).toBe('');
+    expect(variables.runtime_affect_warmth).toBe('');
+    expect(variables.runtime_affect_formality).toBe('');
+    expect(variables.runtime_affect_energy).toBe('');
+    expect(variables.runtime_affect_assertiveness).toBe('');
+    expect(variables.runtime_affect_expressiveness).toBe('');
+    expect(variables.runtime_affect_intensity).toBe('');
+    expect(variables.runtime_affect_variability).toBe('');
+    expect(variables.runtime_affect_control).toBe('');
+    expect(variables.runtime_affect_display_range_min).toBe('');
+    expect(variables.runtime_affect_display_range_max).toBe('');
+    expect(variables.runtime_affect_profile_intensity).toBe('');
+    expect(variables.runtime_affect_profile_variability).toBe('');
+    expect(variables.runtime_affect_profile_control).toBe('');
+    expect(variables.runtime_affect_profile_display_range_min).toBe('');
+    expect(variables.runtime_affect_profile_display_range_max).toBe('');
+    expect(variables.runtime_affect_valence).toBe('');
+    expect(variables.runtime_affect_arousal).toBe('');
+    expect(variables.runtime_affect_dominance).toBe('');
+    expect(variables.runtime_affect_snapshot_vad_valence).toBe('');
+    expect(variables.runtime_affect_snapshot_vad_arousal).toBe('');
+    expect(variables.runtime_affect_snapshot_vad_dominance).toBe('');
+    expect(variables.runtime_affect_snapshot_mood_valence).toBe('');
+    expect(variables.runtime_affect_snapshot_mood_arousal).toBe('');
+    expect(variables.runtime_affect_snapshot_mood_dominance).toBe('');
+    expect(variables.runtime_affect_snapshot_confidence).toBe('');
+    expect(variables.runtime_emotional_affect_body).toBe('');
     expect(variables.runtime_internal_turn_kind).toBe('heartbeat');
     expect(variables.runtime_speaking_with_name).toBe('');
     expect(variables.runtime_speaking_with_trust_level).toBe('');

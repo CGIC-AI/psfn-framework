@@ -222,6 +222,141 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     example: 'private',
   },
   {
+    token: '{{runtime_affect_snapshot_present}}',
+    description: 'Whether the current turn has an emotion snapshot available for affect macros.',
+    example: 'true',
+  },
+  {
+    token: '{{runtime_affect_mode}}',
+    description: 'Trust-gated affect mode derived from the current emotion snapshot.',
+    example: 'honne',
+  },
+  {
+    token: '{{runtime_affect_warmth}}',
+    description: 'Signed warmth modifier derived from the current affect state.',
+    example: '+0.420',
+  },
+  {
+    token: '{{runtime_affect_formality}}',
+    description: 'Signed formality modifier derived from the current affect state.',
+    example: '-0.180',
+  },
+  {
+    token: '{{runtime_affect_energy}}',
+    description: 'Signed energy modifier derived from the current affect state.',
+    example: '+0.310',
+  },
+  {
+    token: '{{runtime_affect_assertiveness}}',
+    description: 'Signed assertiveness modifier derived from the current affect state.',
+    example: '+0.205',
+  },
+  {
+    token: '{{runtime_affect_expressiveness}}',
+    description: 'Expressiveness level derived from the current affect state.',
+    example: '0.615',
+  },
+  {
+    token: '{{runtime_affect_profile_intensity}}',
+    description: 'Resolved affect profile intensity used for prompt shaping.',
+    example: '0.500',
+  },
+  {
+    token: '{{runtime_affect_profile_variability}}',
+    description: 'Resolved affect profile variability used for prompt shaping.',
+    example: '0.500',
+  },
+  {
+    token: '{{runtime_affect_profile_control}}',
+    description: 'Resolved affect profile control used for prompt shaping.',
+    example: '0.600',
+  },
+  {
+    token: '{{runtime_affect_profile_display_range_min}}',
+    description: 'Lower bound of the affect profile display range.',
+    example: '0.000',
+  },
+  {
+    token: '{{runtime_affect_profile_display_range_max}}',
+    description: 'Upper bound of the affect profile display range.',
+    example: '0.800',
+  },
+  {
+    token: '{{runtime_affect_intensity}}',
+    description: 'Resolved affect intensity used for prompt shaping.',
+    example: '0.500',
+  },
+  {
+    token: '{{runtime_affect_variability}}',
+    description: 'Resolved affect variability used for prompt shaping.',
+    example: '0.500',
+  },
+  {
+    token: '{{runtime_affect_control}}',
+    description: 'Resolved affect control used for prompt shaping.',
+    example: '0.600',
+  },
+  {
+    token: '{{runtime_affect_display_range_min}}',
+    description: 'Lower bound of the affect display range.',
+    example: '0.000',
+  },
+  {
+    token: '{{runtime_affect_display_range_max}}',
+    description: 'Upper bound of the affect display range.',
+    example: '0.800',
+  },
+  {
+    token: '{{runtime_affect_valence}}',
+    description: 'Signed valence from the current affect snapshot.',
+    example: '+0.320',
+  },
+  {
+    token: '{{runtime_affect_arousal}}',
+    description: 'Signed arousal from the current affect snapshot.',
+    example: '+0.180',
+  },
+  {
+    token: '{{runtime_affect_dominance}}',
+    description: 'Signed dominance from the current affect snapshot.',
+    example: '-0.120',
+  },
+  {
+    token: '{{runtime_affect_snapshot_vad_valence}}',
+    description: 'Signed valence from the current emotion snapshot.',
+    example: '+0.320',
+  },
+  {
+    token: '{{runtime_affect_snapshot_vad_arousal}}',
+    description: 'Signed arousal from the current emotion snapshot.',
+    example: '+0.180',
+  },
+  {
+    token: '{{runtime_affect_snapshot_vad_dominance}}',
+    description: 'Signed dominance from the current emotion snapshot.',
+    example: '-0.120',
+  },
+  {
+    token: '{{runtime_affect_snapshot_mood_valence}}',
+    description: 'Signed mood valence from the current emotion snapshot.',
+    example: '+0.280',
+  },
+  {
+    token: '{{runtime_affect_snapshot_mood_arousal}}',
+    description: 'Signed mood arousal from the current emotion snapshot.',
+    example: '+0.090',
+  },
+  {
+    token: '{{runtime_affect_snapshot_mood_dominance}}',
+    description: 'Signed mood dominance from the current emotion snapshot.',
+    example: '-0.060',
+  },
+  {
+    token: '{{runtime_affect_snapshot_confidence}}',
+    description: 'Confidence score from the current emotion snapshot.',
+    example: '0.840',
+  },
+  {
     token: '{{runtime_response_style}}',
     description: 'Resolved response style identifier for the current turn.',
     example: 'expressive',

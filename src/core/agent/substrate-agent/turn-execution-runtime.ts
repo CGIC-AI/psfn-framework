@@ -29,6 +29,7 @@ import { resolveSystemRoleCapabilityMetadata } from '../../../primitives/llm/mod
 import type { SessionManager } from '../../session/manager.js';
 import { formatAttributedSystemContent } from '../../session/entry-attribution.js';
 import type { ContextManifestMemorySeed } from '../../session/context-manifest.js';
+import { resolveMaxHistorySpanMs } from '../../session/manager-primitives.js';
 import {
   cloneMetacognitiveFlags,
   type MetacognitiveFlag,
@@ -65,6 +66,7 @@ import {
   sanitizeTurnSnapshot,
   sanitizeTurnStageTelemetry,
 } from '../../turns/observability.js';
+import { detectTurnObservabilityWarnings } from '../../turns/observability-warnings.js';
 import type {
   TurnPromptResponseSnapshot,
   TurnPromptSnapshot,
@@ -84,7 +86,6 @@ import {
   hasVisionTurnInputs,
   buildTurnUserContent,
 } from './vision-attachments.js';
-import type { SystemNoteMessage } from '../messages.js';
 import {
   resolveMoaSettings,
   runMoaTurn,
@@ -113,7 +114,6 @@ import {
   buildRuntimeDatetimeContradictionRefusal,
   detectRuntimeDatetimeContradiction,
 } from './runtime-datetime-contradiction-guard.js';
-import { formatAttributedSystemContent } from '../../session/entry-attribution.js';
 import { sanitizePersistedReasoningText } from './turn-records.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -129,6 +129,27 @@ function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayo
   const created = new PromptRuntimeLayoutStore(filePath);
   promptRuntimeLayoutStoreCache.set(filePath, created);
   return created;
+}
+
+function buildTurnObservabilityWarningPayload(input: {
+  callType: ObservabilityCallType;
+  nowMs: number;
+  maxHistorySpanMs: number;
+  temporalRetrievalMode: boolean;
+  snapshot?: TurnSnapshot;
+  retrievals: readonly TurnRetrievalTelemetryRecord[];
+}): {
+  observabilityWarnings?: ReturnType<typeof detectTurnObservabilityWarnings>['warnings'];
+  observabilityCounters?: ReturnType<typeof detectTurnObservabilityWarnings>['counters'];
+} {
+  const warningSummary = detectTurnObservabilityWarnings(input);
+  if (warningSummary.warnings.length === 0) {
+    return {};
+  }
+  return {
+    observabilityWarnings: warningSummary.warnings,
+    observabilityCounters: warningSummary.counters,
+  };
 }
 
 function buildPromptMessage(
@@ -1100,6 +1121,23 @@ export async function handleMessageForTurn(
       },
     };
     await emitTurnSnapshot(turnSnapshot);
+    const turnObservabilityWarningPayload = buildTurnObservabilityWarningPayload({
+      callType: turnCallType,
+      nowMs: Date.now(),
+      maxHistorySpanMs: resolveMaxHistorySpanMs(runtime.config),
+      temporalRetrievalMode: temporalRetrievalMode === 'temporal',
+      snapshot: turnSnapshot,
+      retrievals: observedTurnRetrievals,
+    });
+    if (turnObservabilityWarningPayload.observabilityWarnings) {
+      log.warn('Turn observability warnings detected', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        warningCodes: turnObservabilityWarningPayload.observabilityWarnings.map(warning => warning.code),
+        counters: turnObservabilityWarningPayload.observabilityCounters,
+      });
+    }
     emitObservedTurnStage('context', {
       durationMs: Date.now() - contextStageStart,
       contextMessages: contextMessageCount,
@@ -1108,6 +1146,7 @@ export async function handleMessageForTurn(
       assembledPromptChars: fullPrompt.length,
       assembledPromptTokens: countTokens(fullPrompt),
       promptMode,
+      ...turnObservabilityWarningPayload,
       ...(turnSnapshot.sessionContext?.orientation
         ? {
           orientationFired: turnSnapshot.sessionContext.orientation.fired,
@@ -1851,13 +1890,14 @@ export async function handleMessageForTurn(
     } catch {
       assistantMessageContent = undefined;
     }
+    const failedCompletedAt = Date.now();
     runtime.sessionManager.recordTurn(
       runtime.buildTurnRecord({
         message,
         turnId,
         requestId,
         startedAt: startTime,
-        completedAt: Date.now(),
+        completedAt: failedCompletedAt,
         userSessionEntryId,
         assistantSessionEntryId,
         ...(assistantMessageContent ? { assistantMessageContent } : {}),

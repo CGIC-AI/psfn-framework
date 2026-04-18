@@ -8,6 +8,10 @@ import { PromptRuntimeLayoutStore, resolvePromptRuntimeLayoutPath } from '../../
 import { getVisionToolRequestContext } from '../../../primitives/images/request-context.js';
 import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
 import type { SessionManager } from '../../session/manager.js';
+import {
+  buildToolObservationMetadata,
+  normalizeToolObservation,
+} from '../../session/tool-observation.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
@@ -1164,6 +1168,155 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       { retrievalMode: 'temporal' },
       'temporal',
     );
+  });
+
+  it('attaches structured observability warnings to the context stage when chat context is stale or contradictory', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-18T16:00:00.000Z'));
+
+    try {
+      const nowMs = Date.now();
+      const eventBus = new EventBus();
+      let activeTurnId = '';
+      eventBus.on('agent.turn.start', (payload) => {
+        activeTurnId = payload.turnId ?? '';
+      });
+      const staleObservation = normalizeToolObservation({
+        toolName: 'orientation_dump',
+        content: 'Orientation note: keep the trust policy lane isolated.',
+      });
+      const captureTurnMemorySnapshot = vi.fn(async () => ({
+        channelId: 'ch1',
+        contactEmotionalMemories: [],
+        semanticCandidates: [
+          {
+            id: 'reflection-memory',
+            text: 'It has been 3 days since we last heard from the user.',
+            type: 'reflection',
+            importance: 0.8,
+            confidence: 0.9,
+            emotionalValence: 0.1,
+            salience: 0.7,
+            sourceRef: 'reflection:journal',
+            extractedAt: nowMs - (3 * 24 * 60 * 60 * 1000),
+            lastAccessed: nowMs,
+            accessCount: 1,
+            tags: ['reflection'],
+            sensitivity: 'personal',
+            similarity: 0.91,
+          },
+        ],
+        lexicalCandidates: [],
+        proactiveCandidates: [],
+        versionPointer: 'memory-v1',
+      }));
+      const retrieve = vi.fn(async () => {
+        await eventBus.emit('memory.retrieval', {
+          turnId: activeTurnId,
+          channelId: 'ch1',
+          requestId: 'msg-warning-stage',
+          count: 2,
+          selectedTypes: { reflection: 2 },
+        });
+        return 'memories';
+      });
+      const buildContext = vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      }));
+      const runtime = createRuntime({
+        eventBus,
+        sessionManager: {
+          captureTurnContextSnapshot: vi.fn(() => ({
+            channelId: 'ch1',
+            recentEntries: [
+              {
+                id: 1,
+                channelId: 'ch1',
+                role: 'tool',
+                content: staleObservation.content,
+                timestamp: nowMs - (48 * 60 * 60 * 1000),
+                metadata: buildToolObservationMetadata(undefined, staleObservation.metadata),
+              },
+              {
+                id: 2,
+                channelId: 'ch1',
+                role: 'assistant',
+                content: 'Checking in from yesterday.',
+                timestamp: nowMs - (24 * 60 * 60 * 1000),
+              },
+              {
+                id: 3,
+                channelId: 'ch1',
+                role: 'user',
+                content: 'What changed just now?',
+                timestamp: nowMs,
+              },
+            ],
+            compactionSummaryTexts: [],
+            focusKnowledgeTexts: [],
+            continuityEntries: [
+              {
+                id: 4,
+                channelId: 'discord:live',
+                originChannelId: 'discord:live',
+                role: 'assistant',
+                content: 'Live continuity ping.',
+                timestamp: nowMs - (5 * 60 * 1000),
+              },
+            ],
+            versionPointer: 'session-v1',
+          })),
+        } as unknown as SessionManager,
+        buildContext,
+        scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+        awaitPendingAutoCompaction: vi.fn(async () => undefined),
+        recordUserMessage: vi.fn(() => 1),
+        recordAssistantMessage: vi.fn(() => 2),
+        buildTurnBudgetCharacteristics: vi.fn(() => ({ messageText: 'what time is it?' })),
+        memoryProvider: {
+          captureTurnMemorySnapshot,
+          retrieve,
+          retrieveProactiveRecall: vi.fn(async () => ''),
+        } as unknown as TurnExecutionRuntime['memoryProvider'],
+      });
+      runtime.captureTurnPromptSnapshot = vi.fn(() => ({
+        staticPrefixTemplate: 'System prompt',
+        dynamicSuffixTemplate: [
+          '[Companion-Derived Values Layer]',
+          '- v7 @ 2026-04-17T22:00:00.000Z (companion_reflection; template=values-reflection; mode=agent):',
+          '  We have not heard from the user in days, so continuity may be breaking down.',
+        ].join('\n'),
+        staticHash: 'static-hash',
+        versionPointer: 'prompt-v1',
+      }));
+
+      await handleMessageForTurn(runtime, createMessage('msg-warning-stage', {
+        content: 'what time is it?',
+        timestamp: new Date(nowMs),
+      }));
+
+      const buildTurnRecordMock = runtime.buildTurnRecord as unknown as ReturnType<typeof vi.fn>;
+      const turnObservability = buildTurnRecordMock.mock.calls[0]?.[0]?.turnObservability;
+      const contextStage = turnObservability?.stages.find((stage: { stage: string }) => stage.stage === 'context');
+
+      expect(contextStage?.data.observabilityWarnings.map((warning: { code: string }) => warning.code).sort()).toEqual([
+        'history_span_exceeded',
+        'stale_tool_observation_verbatim',
+        'temporal_reflection_only_retrieval',
+        'values_activity_contradiction',
+      ]);
+      expect(contextStage?.data.observabilityCounters).toEqual({
+        warningCount: 4,
+        historySpanExceededCount: 1,
+        temporalReflectionOnlyRetrievalCount: 2,
+        staleToolObservationVerbatimCount: 1,
+        valuesActivityContradictionCount: 2,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('threads the active focus scope into subagent memory retrieval calls', async () => {

@@ -798,7 +798,12 @@ describe('AdminServer Garden routing', () => {
         data: {
           stage: string;
           callType?: string;
-          data: { memoryChars?: number; proactiveRecallIncluded?: boolean };
+          data: {
+            memoryChars?: number;
+            proactiveRecallIncluded?: boolean;
+            observabilityWarnings?: Array<{ code: string }>;
+            observabilityCounters?: Record<string, number>;
+          };
         };
       }>(ws);
       await harness.eventBus.emit('agent.turn.stage', {
@@ -811,6 +816,20 @@ describe('AdminServer Garden routing', () => {
         elapsedMs: 25,
         memoryChars: 128,
         proactiveRecallIncluded: true,
+        observabilityWarnings: [
+          {
+            code: 'temporal_reflection_only_retrieval',
+            severity: 'warning',
+            message: 'Temporal retrieval resolved only reflection-type memories.',
+            details: {
+              totalRetrievedCount: 2,
+            },
+          },
+        ],
+        observabilityCounters: {
+          warningCount: 1,
+          temporalReflectionOnlyRetrievalCount: 2,
+        },
       });
       const stageMessage = await stageMessagePromise;
       expect(stageMessage.type).toBe('agent.turn.stage');
@@ -820,6 +839,15 @@ describe('AdminServer Garden routing', () => {
         data: {
           memoryChars: 128,
           proactiveRecallIncluded: true,
+          observabilityWarnings: [
+            {
+              code: 'temporal_reflection_only_retrieval',
+            },
+          ],
+          observabilityCounters: {
+            warningCount: 1,
+            temporalReflectionOnlyRetrievalCount: 2,
+          },
         },
       });
 

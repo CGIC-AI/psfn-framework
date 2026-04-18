@@ -18,6 +18,7 @@ import type { BehavioralPatternContextProvider } from '../../intention/patterns.
 import { buildEmotionalAffectSection } from '../../emotion/persona-adaptation.js';
 import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import {
+  buildMetacognitiveFlagPromptVariables,
   buildMetacognitivePersonaHint,
   formatMetacognitiveNotesContextBlock,
 } from '../../self-model/metacognition.js';
@@ -736,6 +737,7 @@ export function buildDynamicPromptTemplateVariables(input: {
     promptVariables: input.templateVariables,
     config: input.config,
   });
+  const metacognitiveVariables = buildMetacognitiveFlagPromptVariables(input.metacognitiveFlags);
   const metacognitiveBody = unwrapPromptSectionBody(
     buildMetacognitivePersonaHint(input.metacognitiveFlags ?? []),
   );
@@ -813,6 +815,7 @@ export function buildDynamicPromptTemplateVariables(input: {
     runtime_tooling_available_extended_count: String(extendedCount),
     runtime_trust_guidance: trustGuidance,
     ...affectVariables,
+    ...metacognitiveVariables,
     ...internalStateVariables,
     ...concernVariables,
     ...emotionAppraisalVariables,

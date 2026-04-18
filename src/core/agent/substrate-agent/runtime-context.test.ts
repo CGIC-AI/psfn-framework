@@ -66,6 +66,14 @@ const TEST_INTERNAL_STATE: InternalState = {
   },
 };
 
+const METACOGNITIVE_FLAG_NAMES = [
+  'uncertainty',
+  'avoidance',
+  'high_engagement',
+  'repetition',
+  'confabulation_risk',
+] as const;
+
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
 
 function renderPromptOwnedRuntimeLayers(
@@ -134,6 +142,23 @@ function buildAttentionToolingTemplateOutput(
     'appraisal={{runtime_emotion_appraisal_length}}/{{runtime_emotion_appraisal_latest_trigger}}/{{runtime_emotion_appraisal_latest_summary}}/{{runtime_emotion_appraisal_latest_timestamp_iso}}',
     'appraisal_lines={{runtime_emotion_appraisal_recent_lines}}',
   ].join('\n'), {
+    now: input.now,
+    variables: {
+      ...(input.templateVariables ?? {}),
+      ...variables,
+    },
+  });
+}
+
+function buildAtomicMetacognitionTemplateOutput(
+  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+): string {
+  const variables = buildDynamicPromptTemplateVariables(input);
+  return injectPromptRuntimeTokens([
+    'uncertainty={{runtime_flag_uncertainty_present}}|{{runtime_flag_uncertainty_confidence}}|{{runtime_flag_uncertainty_evidence}}',
+    'avoidance={{runtime_flag_avoidance_present}}|{{runtime_flag_avoidance_confidence}}|{{runtime_flag_avoidance_evidence}}',
+    'confabulation={{runtime_flag_confabulation_risk_present}}|{{runtime_flag_confabulation_risk_confidence}}|{{runtime_flag_confabulation_risk_evidence}}',
+  ].join(' '), {
     now: input.now,
     variables: {
       ...(input.templateVariables ?? {}),
@@ -1053,6 +1078,69 @@ describe('runtime subject identity', () => {
     expect(output).toContain('(repair): Latest summary');
   });
 
+  it('substitutes atomic metacognition macros while preserving wrapped persona guidance', () => {
+    const baseInput = {
+      message: makeMessage({
+        channelId: 'discord:dm:alex',
+        channelType: 'discord_text',
+        authorId: 'alex',
+        authorName: 'Alex',
+        content: 'hey',
+      }),
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      responseStyle: 'expressive',
+      now: new Date('2026-03-18T13:30:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 2,
+        promoted: 1,
+        extendedLoaded: 1,
+        autoload: 1,
+        deferred: 0,
+        total: 5,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay' as const,
+      promotedExtendedToolNames: new Set<string>(),
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      config: {},
+      internalState: TEST_INTERNAL_STATE,
+      metacognitiveFlags: [
+        {
+          flag: 'uncertainty' as const,
+          confidence: 0.583,
+          evidence: 'certainty=0.220 (<0.400); contradictory_memory_signals=2',
+        },
+        {
+          flag: 'confabulation_risk' as const,
+          confidence: 0.65,
+          evidence: 'assertions=2; supporting_memories=0',
+        },
+      ],
+    };
+
+    const output = buildAtomicMetacognitionTemplateOutput(baseInput);
+    const variables = buildDynamicPromptTemplateVariables(baseInput);
+
+    expect(output).toBe(
+      'uncertainty=true|0.583|certainty=0.220 (<0.400); contradictory_memory_signals=2'
+      + ' avoidance=false||'
+      + ' confabulation=true|0.650|assertions=2; supporting_memories=0',
+    );
+    expect(variables.runtime_metacognitive_persona_guidance_body).toBe([
+      '- Use tentative language and acknowledge uncertainty explicitly.',
+      '- Anchor strong claims to retrieved evidence, or state when evidence is missing.',
+    ].join('\n'));
+  });
+
   it('fails closed with structured fallback variables when prior-message context is unavailable', () => {
     const variables = buildDynamicPromptTemplateVariables({
       message: makeMessage(),
@@ -1141,7 +1229,13 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_extended_tools_blocked_count).toBe('0');
     expect(variables.runtime_extended_tool_names).toBe('');
     expect(variables.runtime_extended_tool_directory_lines).toBe('');
+    for (const flagName of METACOGNITIVE_FLAG_NAMES) {
+      expect(variables[`runtime_flag_${flagName}_present`]).toBe('false');
+      expect(variables[`runtime_flag_${flagName}_confidence`]).toBe('');
+      expect(variables[`runtime_flag_${flagName}_evidence`]).toBe('');
+    }
     expect(variables.runtime_emotional_affect_body).toBe('');
+    expect(variables.runtime_metacognitive_persona_guidance_body).toBe('');
     expect(variables.runtime_internal_state_body).toBe('');
     expect(variables.runtime_internal_turn_kind).toBe('heartbeat');
     expect(variables.runtime_speaking_with_name).toBe('');

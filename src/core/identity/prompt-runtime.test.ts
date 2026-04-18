@@ -96,6 +96,24 @@ const ATTENTION_TOOLING_MACRO_TOKENS = [
   '{{runtime_extended_tool_directory_lines}}',
 ] as const;
 
+const METACOGNITIVE_FLAG_MACRO_TOKENS = [
+  '{{runtime_flag_uncertainty_present}}',
+  '{{runtime_flag_uncertainty_confidence}}',
+  '{{runtime_flag_uncertainty_evidence}}',
+  '{{runtime_flag_avoidance_present}}',
+  '{{runtime_flag_avoidance_confidence}}',
+  '{{runtime_flag_avoidance_evidence}}',
+  '{{runtime_flag_high_engagement_present}}',
+  '{{runtime_flag_high_engagement_confidence}}',
+  '{{runtime_flag_high_engagement_evidence}}',
+  '{{runtime_flag_repetition_present}}',
+  '{{runtime_flag_repetition_confidence}}',
+  '{{runtime_flag_repetition_evidence}}',
+  '{{runtime_flag_confabulation_risk_present}}',
+  '{{runtime_flag_confabulation_risk_confidence}}',
+  '{{runtime_flag_confabulation_risk_evidence}}',
+] as const;
+
 
 describe('runtime prompt block schema', () => {
   it('classifies required, optional, immutable, and editable runtime blocks', () => {
@@ -402,6 +420,17 @@ describe('prompt runtime macro hints', () => {
     const hintsByToken = new Map(PROMPT_RUNTIME_MACRO_HINTS.map(entry => [entry.token, entry]));
 
     for (const token of ATTENTION_TOOLING_MACRO_TOKENS) {
+      const hint = hintsByToken.get(token);
+      expect(hint).toBeDefined();
+      expect(hint?.description).toBeTruthy();
+      expect(hint?.example).toBeTruthy();
+    }
+  });
+
+  it('documents the atomic metacognition flag macros with descriptions and examples', () => {
+    const hintsByToken = new Map(PROMPT_RUNTIME_MACRO_HINTS.map(entry => [entry.token, entry]));
+
+    for (const token of METACOGNITIVE_FLAG_MACRO_TOKENS) {
       const hint = hintsByToken.get(token);
       expect(hint).toBeDefined();
       expect(hint?.description).toBeTruthy();

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ActiveConcern } from '../intention/concerns.js';
 import type { InternalState } from './state.js';
 import {
+  buildMetacognitiveFlagPromptVariables,
   buildMetacognitivePersonaHint,
   formatMetacognitiveNotesContextBlock,
   MetacognitiveMonitor,
@@ -100,6 +101,33 @@ describe('MetacognitiveMonitor', () => {
     });
 
     expect(flags.find(flag => flag.flag === 'confabulation_risk')).toBeUndefined();
+  });
+
+  it('builds atomic runtime flag variables with fail-closed defaults for absent flags', () => {
+    const variables = buildMetacognitiveFlagPromptVariables([
+      {
+        flag: 'uncertainty',
+        confidence: 0.583,
+        evidence: 'certainty=0.220 (<0.400); contradictory_memory_signals=2',
+      },
+      {
+        flag: 'confabulation_risk',
+        confidence: 0.65,
+        evidence: 'assertions=2; supporting_memories=0',
+      },
+    ]);
+
+    expect(variables).toMatchObject({
+      runtime_flag_uncertainty_present: 'true',
+      runtime_flag_uncertainty_confidence: '0.583',
+      runtime_flag_uncertainty_evidence: 'certainty=0.220 (<0.400); contradictory_memory_signals=2',
+      runtime_flag_avoidance_present: 'false',
+      runtime_flag_avoidance_confidence: '',
+      runtime_flag_avoidance_evidence: '',
+      runtime_flag_confabulation_risk_present: 'true',
+      runtime_flag_confabulation_risk_confidence: '0.650',
+      runtime_flag_confabulation_risk_evidence: 'assertions=2; supporting_memories=0',
+    });
   });
 
   it('fails closed for invalid monitor input payloads', () => {

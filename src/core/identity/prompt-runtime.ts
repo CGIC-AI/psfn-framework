@@ -11,6 +11,10 @@ import {
   resolveActiveTimezone,
 } from '../../shared/time/active-timezone.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import {
+  METACOGNITIVE_FLAG_NAMES,
+  type MetacognitiveFlagName,
+} from '../self-model/metacognition.js';
 
 export interface PromptRuntimeContext {
   now?: Date;
@@ -49,6 +53,57 @@ export interface PromptRuntimeMacroHint {
   description: string;
   example: string;
 }
+
+const METACOGNITIVE_FLAG_PROMPT_HINT_DETAILS: Record<
+  MetacognitiveFlagName,
+  {
+    confidenceExample: string;
+    evidenceExample: string;
+  }
+> = {
+  uncertainty: {
+    confidenceExample: '0.583',
+    evidenceExample: 'certainty=0.220 (<0.400); contradictory_memory_signals=2',
+  },
+  avoidance: {
+    confidenceExample: '1.000',
+    evidenceExample: 'unresolved_concerns=concern-1; lookback_turns=3',
+  },
+  high_engagement: {
+    confidenceExample: '0.612',
+    evidenceExample: 'arousal=0.820; valence=0.415; tool_calls=3',
+  },
+  repetition: {
+    confidenceExample: '0.600',
+    evidenceExample: 'max_jaccard=0.900; sampled_responses=3',
+  },
+  confabulation_risk: {
+    confidenceExample: '0.650',
+    evidenceExample: 'assertions=2; supporting_memories=0',
+  },
+};
+
+const METACOGNITIVE_FLAG_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = METACOGNITIVE_FLAG_NAMES.flatMap((flagName) => {
+  const details = METACOGNITIVE_FLAG_PROMPT_HINT_DETAILS[flagName];
+  const label = flagName.replace(/_/g, ' ');
+  return [
+    {
+      token: `{{runtime_flag_${flagName}_present}}`,
+      description: `Whether the ${label} metacognitive flag is active for the current turn.`,
+      example: 'true',
+    },
+    {
+      token: `{{runtime_flag_${flagName}_confidence}}`,
+      description: `Confidence score for the ${label} metacognitive flag when it is active.`,
+      example: details.confidenceExample,
+    },
+    {
+      token: `{{runtime_flag_${flagName}_evidence}}`,
+      description: `Evidence summary for the ${label} metacognitive flag when it is active.`,
+      example: details.evidenceExample,
+    },
+  ];
+});
 
 export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   {
@@ -411,6 +466,7 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     description: 'Mood arousal label from the current internal emotional state.',
     example: 'calm',
   },
+  ...METACOGNITIVE_FLAG_RUNTIME_MACRO_HINTS,
   {
     token: '{{runtime_concerns_count}}',
     description: 'Total deduplicated active concern count available to the current turn.',

@@ -159,6 +159,26 @@ export function serializeMetacognitiveFlags(flags: readonly MetacognitiveFlag[])
   return JSON.stringify(cloneMetacognitiveFlags(flags));
 }
 
+export function buildMetacognitiveFlagPromptVariables(
+  flags: readonly MetacognitiveFlag[] = [],
+): Record<string, string> {
+  const variables = Object.fromEntries(
+    METACOGNITIVE_FLAG_NAMES.flatMap(flagName => [
+      [`runtime_flag_${flagName}_present`, 'false'],
+      [`runtime_flag_${flagName}_confidence`, ''],
+      [`runtime_flag_${flagName}_evidence`, ''],
+    ]),
+  ) as Record<string, string>;
+
+  for (const flag of cloneMetacognitiveFlags(flags)) {
+    variables[`runtime_flag_${flag.flag}_present`] = 'true';
+    variables[`runtime_flag_${flag.flag}_confidence`] = flag.confidence.toFixed(3);
+    variables[`runtime_flag_${flag.flag}_evidence`] = flag.evidence;
+  }
+
+  return variables;
+}
+
 export function formatMetacognitiveNotesContextBlock(
   flags: readonly MetacognitiveFlag[],
   options: MetacognitiveNotesFormatOptions = {},

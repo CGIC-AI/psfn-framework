@@ -53,6 +53,7 @@ import { buildPromptSectionTelemetryList } from '../../identity/prompt-sections.
 
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
+const INTERNAL_HEARTBEAT_CHANNEL = 'internal:heartbeat';
 export const DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS = 3 * 60 * 60 * 1000;
 const ORIENTATION_SUMMARY_MAX_CHARS = 180;
 const promptRuntimeLayoutStoreCache = new Map<string, PromptRuntimeLayoutStore>();
@@ -67,8 +68,63 @@ function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayo
   return created;
 }
 
-function isInternalJournalChannel(channelId: string): boolean {
-  return channelId === 'internal:heartbeat' || channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX);
+export function isInternalHeartbeatChannel(channelId: string): boolean {
+  return channelId === INTERNAL_HEARTBEAT_CHANNEL;
+}
+
+export function isInternalReflectionChannel(channelId: string): boolean {
+  return channelId.startsWith(INTERNAL_REFLECTION_CHANNEL_PREFIX);
+}
+
+function shouldIncludeContinuityEntryForChannel(targetChannelId: string, sourceChannelId: string): boolean {
+  if (isInternalHeartbeatChannel(sourceChannelId)) {
+    return false;
+  }
+  if (isInternalReflectionChannel(sourceChannelId)) {
+    return isInternalReflectionChannel(targetChannelId);
+  }
+  return true;
+}
+
+export function filterContinuityEntriesForChannel(
+  targetChannelId: string,
+  entries: readonly SessionEntry[],
+): SessionEntry[] {
+  return entries.filter(entry => shouldIncludeContinuityEntryForChannel(
+    targetChannelId,
+    entry.originChannelId ?? entry.channelId,
+  ));
+}
+
+export function getOrientationRecentActivityEntries(params: {
+  channelId: string;
+  userId?: string;
+  channelMeta?: ChannelMeta;
+  continuityFallbackUserIds: string[];
+  store: SessionStore;
+  config: SubstrateConfig;
+  crossChannelContinuity: CrossChannelContinuityPort;
+}): SessionEntry[] {
+  const recentEntries = params.store.getRecent(params.channelId, 6);
+  if (!isInternalReflectionChannel(params.channelId) || !params.userId) {
+    return recentEntries;
+  }
+
+  const reflectionProbeChannelId = `${params.channelId}:__orientation_probe__`;
+  const continuityEntries = params.crossChannelContinuity.getMerged({
+    canonicalUserId: params.userId,
+    limit: Math.max(params.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT, 6),
+    fallbackUserIds: params.continuityFallbackUserIds,
+    channelId: reflectionProbeChannelId,
+    channelMeta: params.channelMeta,
+  });
+  const sameChannelEntries = continuityEntries.filter(
+    entry => (entry.originChannelId ?? entry.channelId) === params.channelId,
+  );
+  if (sameChannelEntries.length === 0) {
+    return recentEntries;
+  }
+  return sameChannelEntries.slice(-6);
 }
 
 export type OrientationNoteReason =
@@ -158,7 +214,7 @@ export function buildOrientationNoteTelemetry(params: {
     focusKnowledge: params.focusKnowledgeTexts.filter(text => text.trim().length > 0).length,
   };
 
-  if (isInternalJournalChannel(params.channelId)) {
+  if (isInternalHeartbeatChannel(params.channelId)) {
     return {
       fired: false,
       reason: 'internal_channel',
@@ -400,14 +456,26 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
         channelMeta: params.channelMeta,
       })
       : [];
-  const crossChannel = rawCrossChannel.filter(entry => !isInternalJournalChannel(entry.originChannelId ?? entry.channelId));
-  const orientationTelemetry = params.turnSnapshot?.orientation ?? buildOrientationNoteTelemetry({
+  const crossChannel = filterContinuityEntriesForChannel(params.channelId, rawCrossChannel);
+  const recentActivityEntries = getOrientationRecentActivityEntries({
     channelId: params.channelId,
-    recentActivityEntries: params.store.getRecent(params.channelId, 6),
+    userId: params.userId,
+    channelMeta: params.channelMeta,
+    continuityFallbackUserIds: params.continuityFallbackUserIds,
+    store: params.store,
+    config: params.config,
+    crossChannelContinuity: params.crossChannelContinuity,
+  });
+  const computedOrientationTelemetry = buildOrientationNoteTelemetry({
+    channelId: params.channelId,
+    recentActivityEntries,
     continuityEntries: crossChannel,
     focusKnowledgeTexts,
     characterName: params.characterName,
   });
+  const orientationTelemetry = params.turnSnapshot && !isInternalReflectionChannel(params.channelId)
+    ? (params.turnSnapshot.orientation ?? computedOrientationTelemetry)
+    : computedOrientationTelemetry;
 
   let continuitySectionText = '';
   if (orientationTelemetry.fired && orientationTelemetry.noteText) {

@@ -58,6 +58,8 @@ import {
   DEFAULT_OBSERVATION_MASKING_WINDOW,
   applyObservationMasking,
   buildOrientationNoteTelemetry,
+  filterContinuityEntriesForChannel,
+  getOrientationRecentActivityEntries,
 } from './manager/context-builder.js';
 import {
   buildSessionMetadataWithTurn,
@@ -1026,10 +1028,19 @@ export class SessionManager {
         channelMeta,
       })
       : [];
-    const orientationContinuityEntries = continuityEntries.filter(entry => !(
-      (entry.originChannelId ?? entry.channelId) === 'internal:heartbeat'
-      || (entry.originChannelId ?? entry.channelId).startsWith('internal:reflection:')
-    ));
+    const orientationContinuityEntries = filterContinuityEntriesForChannel(
+      resolvedChannelId,
+      continuityEntries,
+    );
+    const orientationRecentActivityEntries = getOrientationRecentActivityEntries({
+      channelId: resolvedChannelId,
+      userId,
+      channelMeta,
+      continuityFallbackUserIds,
+      store: this.store,
+      config: this.config,
+      crossChannelContinuity: this.crossChannelContinuity,
+    });
     const compactionSummaryTexts = this.compactionBoundaryStore
       .getCompactionSummaries(resolvedChannelId)
       .map(summary => summary.summary);
@@ -1038,7 +1049,7 @@ export class SessionManager {
     const compactionPromptText = this.resolveCompactionPromptText(baseCompactionPrompt);
     const orientation = buildOrientationNoteTelemetry({
       channelId: resolvedChannelId,
-      recentActivityEntries: this.store.getRecent(resolvedChannelId, 6),
+      recentActivityEntries: orientationRecentActivityEntries,
       continuityEntries: orientationContinuityEntries,
       focusKnowledgeTexts,
       characterName: this.characterName,

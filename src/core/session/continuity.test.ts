@@ -672,7 +672,7 @@ describe('SessionManager with continuity', () => {
     expect(ctx.systemPrompt).not.toContain('[from api:private-main]');
   });
 
-  it('keeps internal journals out of prompt-facing cross-channel continuity', async () => {
+  it('keeps heartbeat journals out of prompt-facing cross-channel continuity', async () => {
     const mgr = new SessionManager(sessionStore, config);
     mgr.continuityStore = continuityStore;
     mgr.characterName = 'Companion';
@@ -684,17 +684,8 @@ describe('SessionManager with continuity', () => {
       undefined,
       DEFAULT_COMPANION_ID,
     );
-    const reflectionEntryId = mgr.recordAssistantMessage(
-      'internal:reflection:whisper',
-      'Earlier reflection summary',
-      DEFAULT_COMPANION_ID,
-      undefined,
-      DEFAULT_COMPANION_ID,
-    );
 
     expect(heartbeatEntryId).not.toBeNull();
-    expect(reflectionEntryId).toBeNull();
-    expect(sessionStore.getRecent('internal:reflection:whisper', 10)).toHaveLength(0);
 
     const ctx = await mgr.buildContext(
       'internal:reflection:daily',
@@ -706,7 +697,88 @@ describe('SessionManager with continuity', () => {
 
     expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
     expect(ctx.systemPrompt).not.toContain('Earlier heartbeat summary');
-    expect(ctx.systemPrompt).not.toContain('Earlier reflection summary');
+  });
+
+  it('includes reflection continuity and orientation for bound reflection channels', async () => {
+    const mgr = new SessionManager(sessionStore, config);
+    mgr.continuityStore = continuityStore;
+    mgr.characterName = 'Companion';
+    const previousAt = 1_700_000_000_000;
+    const currentAt = previousAt + (4 * 60 * 60 * 1000);
+    const nowSpy = vi.spyOn(Date, 'now');
+
+    try {
+      nowSpy
+        .mockReturnValueOnce(previousAt)
+        .mockReturnValueOnce(previousAt + 1)
+        .mockReturnValueOnce(currentAt)
+        .mockReturnValueOnce(currentAt - 500)
+        .mockReturnValueOnce(currentAt - 250)
+        .mockReturnValue(currentAt);
+
+      mgr.recordUserMessage(
+        'internal:reflection:daily',
+        'Reflect on the recovery week.',
+        DEFAULT_COMPANION_ID,
+        'Companion',
+        undefined,
+        DEFAULT_COMPANION_ID,
+      );
+      const dailyReflectionEntryId = mgr.recordAssistantMessage(
+        'internal:reflection:daily',
+        'Recovery mattered most.',
+        DEFAULT_COMPANION_ID,
+        undefined,
+        DEFAULT_COMPANION_ID,
+      );
+      mgr.recordUserMessage(
+        'internal:reflection:daily',
+        'Continue the daily reflection.',
+        DEFAULT_COMPANION_ID,
+        'Companion',
+        undefined,
+        DEFAULT_COMPANION_ID,
+      );
+      const whisperReflectionEntryId = mgr.recordAssistantMessage(
+        'internal:reflection:whisper',
+        'Earlier reflection summary',
+        DEFAULT_COMPANION_ID,
+        undefined,
+        DEFAULT_COMPANION_ID,
+      );
+      mgr.recordAssistantMessage(
+        'api:main',
+        'The API thread still needs recovery notes.',
+        DEFAULT_COMPANION_ID,
+        undefined,
+        DEFAULT_COMPANION_ID,
+      );
+
+      expect(dailyReflectionEntryId).toBeNull();
+      expect(whisperReflectionEntryId).toBeNull();
+      expect(sessionStore.getRecent('internal:reflection:daily', 10)).toHaveLength(0);
+      expect(sessionStore.getRecent('internal:reflection:whisper', 10)).toHaveLength(0);
+
+      const ctx = await mgr.buildContext(
+        'internal:reflection:daily',
+        'System prompt',
+        '',
+        undefined,
+        DEFAULT_COMPANION_ID,
+      );
+
+      expect(ctx.systemPrompt).toContain('[Welcome back]');
+      expect(ctx.systemPrompt).toContain('Last time here');
+      expect(ctx.systemPrompt).toContain('Recovery mattered most.');
+      expect(ctx.systemPrompt).toContain('Recent continuity');
+      expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+      expect(ctx.systemPrompt).toContain('Earlier reflection summary');
+      expect(ctx.systemPrompt).toContain('The API thread still needs recovery notes.');
+      expect(ctx.systemPrompt).not.toContain('[from internal:reflection:daily]');
+      expect(ctx.systemPrompt).not.toContain('Earlier heartbeat summary');
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('buildContext works without continuity store (backward compat)', async () => {

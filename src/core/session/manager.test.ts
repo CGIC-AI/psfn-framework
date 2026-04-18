@@ -238,6 +238,86 @@ describe('SessionManager', () => {
     }
   });
 
+  it('captures reflection-channel orientation from contact-bound continuity snapshots', async () => {
+    const config = makeConfig({ dataDir: dir });
+    const mgr = new SessionManager(store, config);
+    const previousAt = 1_700_000_000_000;
+    const currentAt = previousAt + (4 * 60 * 60 * 1000);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
+    const continuityStore = new UserContinuityStore(join(dir, 'continuity-reflection'));
+    mgr.continuityStore = continuityStore;
+
+    try {
+      continuityStore.append('u1', {
+        channelId: 'internal:reflection:daily',
+        originChannelId: 'internal:reflection:daily',
+        role: 'user',
+        content: 'Reflect on the recovery week.',
+        authorId: 'u1',
+        authorName: 'User',
+        timestamp: previousAt,
+      });
+      continuityStore.append('u1', {
+        channelId: 'internal:reflection:daily',
+        originChannelId: 'internal:reflection:daily',
+        role: 'assistant',
+        content: 'Recovery mattered most.',
+        timestamp: previousAt + 1,
+      });
+      continuityStore.append('u1', {
+        channelId: 'internal:reflection:daily',
+        originChannelId: 'internal:reflection:daily',
+        role: 'user',
+        content: 'Continue the daily reflection.',
+        authorId: 'u1',
+        authorName: 'User',
+        timestamp: currentAt,
+      });
+      continuityStore.append('u1', {
+        channelId: 'internal:reflection:whisper',
+        originChannelId: 'internal:reflection:whisper',
+        role: 'assistant',
+        content: 'Earlier reflection summary',
+        timestamp: currentAt - 500,
+      });
+      continuityStore.append('u1', {
+        channelId: 'internal:heartbeat',
+        originChannelId: 'internal:heartbeat',
+        role: 'assistant',
+        content: 'Heartbeat should stay hidden',
+        timestamp: currentAt - 250,
+      });
+
+      const snapshot = mgr.captureTurnContextSnapshot('internal:reflection:daily', 'u1');
+      expect(snapshot.orientation).toMatchObject({
+        fired: true,
+        reason: 'idle_gap_exceeded',
+        idleThresholdMs: expect.any(Number),
+      });
+      expect(snapshot.orientation?.noteText).toContain('Welcome back');
+      expect(snapshot.orientation?.noteText).toContain('Recovery mattered most.');
+      expect(snapshot.orientation?.noteText).toContain('Earlier reflection summary');
+      expect(snapshot.orientation?.noteText).not.toContain('Heartbeat should stay hidden');
+
+      const ctx = await mgr.buildContext(
+        'internal:reflection:daily',
+        'System prompt',
+        '',
+        undefined,
+        'u1',
+        undefined,
+        [],
+        snapshot,
+      );
+      expect(ctx.systemPrompt).toContain('[Welcome back]');
+      expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+      expect(ctx.systemPrompt).toContain('Earlier reflection summary');
+      expect(ctx.systemPrompt).not.toContain('Heartbeat should stay hidden');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('skips the wake orientation note when the idle gap is below threshold', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);

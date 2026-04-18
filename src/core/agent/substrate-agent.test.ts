@@ -196,6 +196,7 @@ function buildRegistryFromConfig(config: SubstrateConfig): CanonicalModelRegistr
     capabilities: {
       maxOutputTokens: slot.maxTokens,
       ...(slot.contextWindow !== undefined ? { contextWindow: slot.contextWindow } : {}),
+      ...(id === 'vision' ? { supportsVision: true } : {}),
     },
     tuning: {
       maxOutputTokens: slot.maxTokens,
@@ -2238,6 +2239,8 @@ describe('SubstrateAgent.handleMessage', () => {
       }),
       undefined,
       undefined,
+      undefined,
+      undefined,
     );
   });
 
@@ -2318,6 +2321,8 @@ describe('SubstrateAgent.handleMessage', () => {
       }),
       undefined,
       undefined,
+      undefined,
+      undefined,
     );
   });
 
@@ -2352,7 +2357,8 @@ describe('SubstrateAgent.handleMessage', () => {
     });
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    expect(prompt).toContain(`This is an internal ${channelId.includes('reflection') ? 'reflection' : 'heartbeat'} turn.`);
+    expect(prompt).toContain('<internal_turn_context>');
+    expect(prompt).toContain(`<kind>${channelId.includes('reflection') ? 'reflection' : 'heartbeat'}</kind>`);
     expect(prompt).not.toContain('scheduler');
   });
 
@@ -3346,7 +3352,8 @@ describe('SubstrateAgent.handleMessage', () => {
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     const prompt = buildCall[1] as string;
     expect(prompt).toContain('<response_style_guidance>');
-    expect(prompt).toContain('Prefer expressive responses');
+    expect(prompt).toContain('<style>expressive</style>');
+    expect(prompt).toContain('<delivery>Keep your voice warm and vivid.</delivery>');
   });
 
   it('injects concise style guidance for Discord guild/voice and Telegram turns', async () => {
@@ -3380,7 +3387,8 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(guildPrompt).toContain('<response_style_guidance>');
     expect(voicePrompt).toContain('<response_style_guidance>');
     expect(telegramPrompt).toContain('<response_style_guidance>');
-    expect(guildPrompt).toContain('Prefer concise responses');
+    expect(guildPrompt).toContain('<style>concise</style>');
+    expect(guildPrompt).toContain('<delivery>Answer directly and keep wording tight.</delivery>');
   });
 
   it('honors routing responseStyle overrides ahead of channel defaults', async () => {
@@ -3402,7 +3410,8 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
     expect(prompt).toContain('<response_style_guidance>');
-    expect(prompt).toContain('Prefer concise responses');
+    expect(prompt).toContain('<style>concise</style>');
+    expect(prompt).toContain('<delivery>Answer directly and keep wording tight.</delivery>');
   });
 
   it('honors config responseStyleOverrides for channelType defaults', async () => {
@@ -3426,7 +3435,8 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
     expect(prompt).toContain('<response_style_guidance>');
-    expect(prompt).toContain('Prefer concise responses');
+    expect(prompt).toContain('<style>concise</style>');
+    expect(prompt).toContain('<delivery>Answer directly and keep wording tight.</delivery>');
   });
 
   it('interpolates {{user}} and {{char}} variables per turn before context build', async () => {
@@ -3548,8 +3558,10 @@ describe('SubstrateAgent.handleMessage', () => {
     const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
     expect(firstPrompt).toContain('Address V by name.');
     expect(secondPrompt).toContain('Address V by name.');
-    expect(firstPrompt).toContain('Speaking with: V');
-    expect(secondPrompt).toContain('Speaking with: V');
+    expect(firstPrompt).toContain('<speaking_with>');
+    expect(secondPrompt).toContain('<speaking_with>');
+    expect(firstPrompt).toContain('<name>V</name>');
+    expect(secondPrompt).toContain('<name>V</name>');
     expect(firstPrompt).not.toContain('Address discord-user by name.');
     expect(secondPrompt).not.toContain('Address 5635268079 by name.');
   });

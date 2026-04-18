@@ -1,3 +1,4 @@
+import { existsSync, readFileSync } from 'node:fs';
 import { appendJsonLine } from '../jsonl.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { cloneInternalState, type InternalState } from '../../core/self-model/state.js';
@@ -63,6 +64,10 @@ export interface ReflectionJournalEntry {
   telemetry?: ReflectionJournalTelemetry;
   substrateBoundary?: string;
   substrateProvenanceRefs?: string[];
+}
+
+export interface ReflectionJournalListOptions {
+  limit?: number;
 }
 
 function normalizeReflectionTelemetry(
@@ -140,6 +145,47 @@ function normalizeProvenanceRefs(value: unknown): string[] | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizePersistedReflectionEntry(raw: unknown): ReflectionJournalEntry | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const entry = raw as Partial<ReflectionJournalEntry>;
+  if (
+    typeof entry.id !== 'string'
+    || typeof entry.templateId !== 'string'
+    || typeof entry.templateName !== 'string'
+    || typeof entry.prompt !== 'string'
+    || typeof entry.reflection !== 'string'
+    || typeof entry.channelId !== 'string'
+    || typeof entry.createdAt !== 'string'
+    || (entry.mode !== 'agent' && entry.mode !== 'deliberation')
+  ) {
+    return null;
+  }
+
+  try {
+    const substrateProvenanceRefs = normalizeProvenanceRefs(entry.substrateProvenanceRefs);
+    return {
+      id: entry.id.trim(),
+      templateId: normalizeTemplateId(entry.templateId),
+      templateName: normalizeTemplateName(entry.templateName),
+      prompt: entry.prompt.trim(),
+      reflection: entry.reflection.trim(),
+      channelId: entry.channelId.trim(),
+      mode: entry.mode,
+      createdAt: entry.createdAt.trim(),
+      ...(entry.telemetry ? { telemetry: entry.telemetry } : {}),
+      ...(typeof entry.substrateBoundary === 'string' && entry.substrateBoundary.trim().length > 0
+        ? { substrateBoundary: entry.substrateBoundary.trim() }
+        : {}),
+      ...(substrateProvenanceRefs ? { substrateProvenanceRefs } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export class ReflectionJournalStore {
   private readonly filePath: string;
 
@@ -176,5 +222,41 @@ export class ReflectionJournalStore {
       channelId: entry.channelId,
     });
     return entry;
+  }
+
+  listRecent(options: ReflectionJournalListOptions = {}): ReflectionJournalEntry[] {
+    const limitRaw = options.limit ?? 10;
+    if (!Number.isInteger(limitRaw) || limitRaw < 1) {
+      throw new Error('Reflection journal listRecent limit must be a positive integer when provided');
+    }
+    if (!existsSync(this.filePath)) {
+      return [];
+    }
+
+    const raw = readFileSync(this.filePath, 'utf-8');
+    if (raw.trim().length === 0) {
+      return [];
+    }
+
+    return raw
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0)
+      .map(line => {
+        try {
+          return normalizePersistedReflectionEntry(JSON.parse(line) as unknown);
+        } catch {
+          return null;
+        }
+      })
+      .filter((entry): entry is ReflectionJournalEntry => entry !== null)
+      .sort((left, right) => {
+        const createdAtDelta = Date.parse(right.createdAt) - Date.parse(left.createdAt);
+        if (createdAtDelta !== 0) {
+          return createdAtDelta;
+        }
+        return right.id.localeCompare(left.id);
+      })
+      .slice(0, limitRaw);
   }
 }

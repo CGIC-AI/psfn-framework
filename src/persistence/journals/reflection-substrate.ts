@@ -103,11 +103,15 @@ export interface ReflectionProcessLogEntry {
   deliberation?: ValuesDeliberationMetadata;
 }
 
-export interface ReflectionSubstrateContext {
+export interface ReflectionContextBundle {
   canonicalTruthBoundary: typeof NON_CANONICAL_REFLECTION_SUBSTRATE;
-  promptBlock: string;
+  self: string;
+  relational: string;
+  affect: string;
   provenanceRefs: string[];
 }
+
+export interface ReflectionSubstrateContext extends ReflectionContextBundle {}
 
 export interface ReflectionContactRecentMessage {
   role: 'user' | 'assistant';
@@ -162,11 +166,9 @@ export interface ReflectionContactContextBundleInput {
   internalStateBlock?: string;
 }
 
-export interface ReflectionContactContextBundle {
-  canonicalTruthBoundary: typeof NON_CANONICAL_REFLECTION_SUBSTRATE;
-  promptBlock: string;
-  provenanceRefs: string[];
-}
+export interface ReflectionContactContextBundle extends ReflectionContextBundle {}
+
+type ReflectionContextSectionKey = 'self' | 'relational' | 'affect';
 
 function normalizeRequiredString(value: unknown, fieldName: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
@@ -330,6 +332,13 @@ function formatOptionalDateTime(value: string | null | undefined): string {
   return formatActiveDateTimeLabel(new Date(parsed));
 }
 
+function joinContextSections(...sections: Array<string | undefined>): string {
+  return sections
+    .map(section => section?.trim() ?? '')
+    .filter(section => section.length > 0)
+    .join('\n\n');
+}
+
 function formatRecentSessionMessagesBlock(
   messages: readonly ReflectionContactRecentMessage[] | undefined,
   primarySessionId?: string,
@@ -447,7 +456,7 @@ function formatPendingFollowUpsBlock(
   return lines.length > 2 ? lines.join('\n') : undefined;
 }
 
-function formatContactSnapshotBlock(input: ReflectionContactContextBundleInput): string {
+function formatContactRelationalBlock(input: ReflectionContactContextBundleInput): string {
   const lines = [
     '[Reflection Contact Context]',
     `contact_id: ${input.contactId}`,
@@ -464,6 +473,19 @@ function formatContactSnapshotBlock(input: ReflectionContactContextBundleInput):
     '- If recent_contact_status is active, do not invent a gap or stale absence.',
   ];
 
+  return lines.join('\n');
+}
+
+function formatContactAffectBlock(input: ReflectionContactContextBundleInput): string | undefined {
+  if (!input.currentVAD && !input.emotionalSnapshot) {
+    return undefined;
+  }
+
+  const lines = [
+    '[Reflection Affect Context]',
+    'Treat these affect signals as current evidence, not as a command to intensify them.',
+  ];
+
   if (input.currentVAD) {
     lines.push(
       `current_vad: valence=${formatOptionalNumber(input.currentVAD.valence, 3)} `
@@ -476,52 +498,92 @@ function formatContactSnapshotBlock(input: ReflectionContactContextBundleInput):
     lines.push(`emotional_snapshot: ${JSON.stringify(input.emotionalSnapshot)}`);
   }
 
-  if (input.internalStateBlock?.trim()) {
-    lines.push(input.internalStateBlock.trim());
+  return lines.join('\n');
+}
+
+function classifyReflectionContextSection(templateId: string | undefined): ReflectionContextSectionKey {
+  switch (templateId) {
+    case 'daily-review':
+      return 'relational';
+    case 'experiential-review':
+    case 'musing':
+    case 'whisper':
+      return 'affect';
+    default:
+      return 'self';
+  }
+}
+
+function buildSubstrateSection(
+  title: string,
+  lines: readonly string[],
+): string {
+  if (lines.length === 0) {
+    return '';
   }
 
-  return lines.join('\n');
+  return [
+    title,
+    `canonical_truth_boundary: ${NON_CANONICAL_REFLECTION_SUBSTRATE}`,
+    'guidance:',
+    '- Treat these append-only journal and process traces as reflective clues, not canonical truth.',
+    '- Preserve cited provenance refs when carrying a pattern forward.',
+    ...lines,
+  ].join('\n');
 }
 
 export function assembleReflectionContactContextBundle(
   input: ReflectionContactContextBundleInput,
 ): ReflectionContactContextBundle {
-  const sections = [formatContactSnapshotBlock(input)];
+  const selfSections: string[] = [];
+  const relationalSections = [formatContactRelationalBlock(input)];
+  const affectSections: string[] = [];
   const provenanceRefs = new Set<string>([
     `reflection_contact:${input.contactId}`,
   ]);
 
   const recentSessionBlock = formatRecentSessionMessagesBlock(input.recentSessionMessages, input.primarySessionId);
   if (recentSessionBlock.block) {
-    sections.push(recentSessionBlock.block);
+    relationalSections.push(recentSessionBlock.block);
     recentSessionBlock.provenanceRefs.forEach(ref => provenanceRefs.add(ref));
   }
 
   const activeConcernsBlock = formatActiveConcernsBlock(input.activeConcerns);
   if (activeConcernsBlock) {
-    sections.push(activeConcernsBlock);
+    relationalSections.push(activeConcernsBlock);
   }
 
   const pendingFollowUpsBlock = formatPendingFollowUpsBlock(input.pendingFollowUps);
   if (pendingFollowUpsBlock) {
-    sections.push(pendingFollowUpsBlock);
+    relationalSections.push(pendingFollowUpsBlock);
+  }
+
+  if (input.internalStateBlock?.trim()) {
+    selfSections.push(input.internalStateBlock.trim());
+  }
+
+  const affectBlock = formatContactAffectBlock(input);
+  if (affectBlock) {
+    affectSections.push(affectBlock);
   }
 
   const memoryBlock = input.memoryBlock?.trim();
   if (memoryBlock) {
-    sections.push('[Reflection Memory Retrieval]', memoryBlock);
+    selfSections.push('[Reflection Memory Retrieval]', memoryBlock);
     provenanceRefs.add(`reflection_contact_memory:${input.contactId}`);
   } else {
     const tailBlock = formatRecentSessionTailBlock(input.recentSessionMessages, input.primarySessionId);
     if (tailBlock.block) {
-      sections.push('[Reflection Memory Retrieval]', tailBlock.block);
+      selfSections.push('[Reflection Memory Retrieval]', tailBlock.block);
       tailBlock.provenanceRefs.forEach(ref => provenanceRefs.add(ref));
     }
   }
 
   return {
     canonicalTruthBoundary: NON_CANONICAL_REFLECTION_SUBSTRATE,
-    promptBlock: sections.join('\n\n'),
+    self: joinContextSections(...selfSections),
+    relational: joinContextSections(...relationalSections),
+    affect: joinContextSections(...affectSections),
     provenanceRefs: [...provenanceRefs],
   };
 }
@@ -673,54 +735,81 @@ export function assembleReflectionSubstrateContext(input: {
     return null;
   }
 
-  const sections: string[] = [
-    '[Reflection Substrate Replay]',
-    `canonical_truth_boundary: ${NON_CANONICAL_REFLECTION_SUBSTRATE}`,
-    'guidance:',
-    '- Treat these append-only journal and process traces as reflective clues, not canonical truth.',
-    '- Preserve cited provenance refs when carrying a pattern forward.',
-  ];
+  const sectionLines: Record<ReflectionContextSectionKey, string[]> = {
+    self: [],
+    relational: [],
+    affect: [],
+  };
   const provenanceRefs: string[] = [];
 
   if (recentReflectionJournalEntries.length > 0) {
-    sections.push('[Recent Reflection Journal]');
+    const linesBySection: Record<ReflectionContextSectionKey, string[]> = {
+      self: [],
+      relational: [],
+      affect: [],
+    };
     for (const entry of recentReflectionJournalEntries) {
       const provenanceRef = toReflectionJournalProvenanceRef(entry);
       provenanceRefs.push(provenanceRef);
-      sections.push(
+      linesBySection[classifyReflectionContextSection(entry.templateId)].push(
         `- ref=${provenanceRef} template=${entry.templateId} mode=${entry.mode} reflection=${truncateReflectionText(entry.reflection)}`,
       );
+    }
+    for (const [sectionKey, lines] of Object.entries(linesBySection) as Array<[ReflectionContextSectionKey, string[]]>) {
+      if (lines.length > 0) {
+        sectionLines[sectionKey].push('[Recent Reflection Journal]', ...lines);
+      }
     }
   }
 
   if (recentDailyJournalEntries.length > 0) {
-    sections.push('[Recent Lived-Day Journal]');
+    const linesBySection: Record<ReflectionContextSectionKey, string[]> = {
+      self: [],
+      relational: [],
+      affect: [],
+    };
     for (const entry of recentDailyJournalEntries) {
       const provenanceRef = toReflectionDailyJournalProvenanceRef(entry);
       provenanceRefs.push(provenanceRef);
-      sections.push(
+      linesBySection[classifyReflectionContextSection(entry.templateId)].push(
         `- ref=${provenanceRef} date=${entry.date} template=${entry.templateId ?? 'unknown'} reflection=${truncateReflectionText(entry.reflection)}`,
       );
+    }
+    for (const [sectionKey, lines] of Object.entries(linesBySection) as Array<[ReflectionContextSectionKey, string[]]>) {
+      if (lines.length > 0) {
+        sectionLines[sectionKey].push('[Recent Lived-Day Journal]', ...lines);
+      }
     }
   }
 
   if (recentProcessLogEntries.length > 0) {
-    sections.push('[Recent Long-Process Trace]');
+    const linesBySection: Record<ReflectionContextSectionKey, string[]> = {
+      self: [],
+      relational: [],
+      affect: [],
+    };
     for (const entry of recentProcessLogEntries) {
       const provenanceRef = toReflectionProcessLogProvenanceRef(entry);
       provenanceRefs.push(provenanceRef);
       const processSummary = entry.stage === 'failed'
         ? `error=${truncateReflectionText(entry.error ?? 'unknown failure')}`
         : `reflection=${truncateReflectionText(entry.reflection ?? 'none')}`;
-      sections.push(
+      linesBySection[classifyReflectionContextSection(entry.templateId)].push(
         `- ref=${provenanceRef} process=${entry.processId} stage=${entry.stage} template=${entry.templateId ?? 'unknown'} ${processSummary}`,
       );
+    }
+    for (const [sectionKey, lines] of Object.entries(linesBySection) as Array<[ReflectionContextSectionKey, string[]]>) {
+      if (lines.length > 0) {
+        sectionLines[sectionKey].push('[Recent Long-Process Trace]', ...lines);
+      }
     }
   }
 
   return {
     canonicalTruthBoundary: NON_CANONICAL_REFLECTION_SUBSTRATE,
-    promptBlock: sections.join('\n'),
+    self: buildSubstrateSection('[Reflection Self Substrate]', sectionLines.self),
+    relational: buildSubstrateSection('[Reflection Relational Substrate]', sectionLines.relational),
+    affect: buildSubstrateSection('[Reflection Affect Substrate]', sectionLines.affect),
     provenanceRefs: [...new Set(provenanceRefs)],
   };
 }

@@ -26,7 +26,6 @@ import {
   resolveValuesJournalPath,
 } from '../../persistence/layout.js';
 import {
-  NON_CANONICAL_REFLECTION_SUBSTRATE,
   ReflectionJournalStore,
 } from '../../persistence/journals/reflection-journal.js';
 import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
@@ -39,6 +38,7 @@ import {
   type ReflectionContactActiveConcern,
   type ReflectionContactContextBundle,
   type ReflectionContactRecentMessage,
+  type ReflectionSubstrateContext,
 } from '../../persistence/journals/reflection-substrate.js';
 import type { Contact } from '../contacts/types.js';
 import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
@@ -65,6 +65,11 @@ const TEMPLATE_EXECUTION_BURST_WINDOW_MS = 60_000;
 const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
 const TEMPLATE_EXECUTION_COOLDOWN_MS = 10 * 60_000;
 const REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS = 2_500;
+const REFLECTION_PROMPT_TOKENS = {
+  self: '{{reflection_self}}',
+  relational: '{{reflection_relational}}',
+  affect: '{{reflection_affect}}',
+} as const;
 
 interface ReflectionMetacognitiveFlag {
   flag: string;
@@ -78,16 +83,15 @@ interface ReflectionInternalStateContext {
   metacognitiveFlags: ReflectionMetacognitiveFlag[];
 }
 
-interface ReflectionSubstratePromptContext {
-  canonicalTruthBoundary: typeof NON_CANONICAL_REFLECTION_SUBSTRATE;
-  promptBlock: string;
-  provenanceRefs: string[];
-}
+type ReflectionPromptSectionBundle = Pick<
+  ReflectionContactContextBundle,
+  'self' | 'relational' | 'affect' | 'provenanceRefs'
+>;
 
 interface ReflectionPromptContext {
   internalState?: ReflectionInternalStateContext;
   contactBundle?: ReflectionContactContextBundle;
-  substrateContext?: ReflectionSubstratePromptContext;
+  substrateContext?: ReflectionSubstrateContext;
 }
 
 function getHeartbeatTemplateAuditProfile(
@@ -122,6 +126,39 @@ function isHeartbeatTemplateLoopGuardError(
   error: unknown,
 ): error is HeartbeatTemplateLoopGuardError {
   return error instanceof HeartbeatTemplateLoopGuardError;
+}
+
+function joinReflectionPromptSections(...sections: Array<string | undefined>): string {
+  return sections
+    .map(section => section?.trim() ?? '')
+    .filter(section => section.length > 0)
+    .join('\n\n');
+}
+
+function promptUsesReflectionMacros(prompt: string): boolean {
+  return Object.values(REFLECTION_PROMPT_TOKENS).some(token => prompt.includes(token));
+}
+
+function mergeReflectionPromptBundles(
+  ...bundles: Array<ReflectionPromptSectionBundle | null | undefined>
+): ReflectionPromptSectionBundle | null {
+  const self = joinReflectionPromptSections(...bundles.map(bundle => bundle?.self));
+  const relational = joinReflectionPromptSections(...bundles.map(bundle => bundle?.relational));
+  const affect = joinReflectionPromptSections(...bundles.map(bundle => bundle?.affect));
+  const provenanceRefs = [...new Set(
+    bundles.flatMap(bundle => bundle?.provenanceRefs ?? []),
+  )];
+
+  if (!self && !relational && !affect && provenanceRefs.length === 0) {
+    return null;
+  }
+
+  return {
+    self,
+    relational,
+    affect,
+    provenanceRefs,
+  };
 }
 
 export interface HeartbeatTemplateRuntime {
@@ -322,6 +359,22 @@ export function createHeartbeatTemplateRuntime(
       '[Active Concerns]',
       concernSection,
     ].join('\n');
+  };
+
+  const buildInternalStatePromptBundle = (
+    context: ReflectionInternalStateContext | null,
+  ): ReflectionPromptSectionBundle | null => {
+    const block = formatInternalStateContextBlock(context);
+    if (!block) {
+      return null;
+    }
+
+    return {
+      self: block,
+      relational: '',
+      affect: '',
+      provenanceRefs: [`internal_state_snapshot:${context?.internalStateSnapshotRef ?? 'unknown'}`],
+    };
   };
 
   const normalizeCanonicalContactId = (
@@ -589,7 +642,7 @@ export function createHeartbeatTemplateRuntime(
 
   const resolveReflectionSubstratePromptContext = (
     template: ReflectionTemplate,
-  ): ReflectionSubstratePromptContext | null => {
+  ): ReflectionSubstrateContext | null => {
     if (!template.internalStateInput && template.mode !== 'deliberation') {
       return null;
     }
@@ -601,31 +654,34 @@ export function createHeartbeatTemplateRuntime(
         stages: ['completed', 'failed'],
       }),
     });
-    return context
-      ? {
-        canonicalTruthBoundary: context.canonicalTruthBoundary,
-        promptBlock: context.promptBlock,
-        provenanceRefs: context.provenanceRefs,
-      }
-      : null;
+    return context;
   };
 
   const formatNarrativePromptInput = (
     prompt: string,
     context: ReflectionPromptContext,
   ): string => {
-    const sections: string[] = [prompt];
-    if (context.contactBundle) {
-      sections.push(context.contactBundle.promptBlock);
+    const reflectionBundle = mergeReflectionPromptBundles(
+      context.contactBundle,
+      buildInternalStatePromptBundle(context.internalState ?? null),
+      context.substrateContext,
+    );
+
+    if (promptUsesReflectionMacros(prompt)) {
+      return prompt
+        .split(REFLECTION_PROMPT_TOKENS.self).join(reflectionBundle?.self ?? '')
+        .split(REFLECTION_PROMPT_TOKENS.relational).join(reflectionBundle?.relational ?? '')
+        .split(REFLECTION_PROMPT_TOKENS.affect).join(reflectionBundle?.affect ?? '')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
     }
-    const internalStateBlock = formatInternalStateContextBlock(context.internalState);
-    if (internalStateBlock) {
-      sections.push(internalStateBlock);
-    }
-    if (context.substrateContext) {
-      sections.push(context.substrateContext.promptBlock);
-    }
-    return sections.join('\n\n');
+
+    return joinReflectionPromptSections(
+      prompt,
+      reflectionBundle?.relational,
+      reflectionBundle?.affect,
+      reflectionBundle?.self,
+    );
   };
 
   const captureResponseInternalStateContext = (

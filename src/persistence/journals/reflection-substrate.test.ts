@@ -165,11 +165,13 @@ describe('reflection substrate stores', () => {
     });
 
     expect(context?.canonicalTruthBoundary).toBe(NON_CANONICAL_REFLECTION_SUBSTRATE);
-    expect(context?.promptBlock).toContain('[Reflection Substrate Replay]');
-    expect(context?.promptBlock).toContain('not canonical truth');
-    expect(context?.promptBlock).toContain('steadiness under pressure');
-    expect(context?.promptBlock).toContain('Continuity and care remained durable values');
-    expect(context?.promptBlock).toContain('uncertainty pattern around unresolved ownership');
+    expect(context?.self).toContain('[Reflection Self Substrate]');
+    expect(context?.self).toContain('not canonical truth');
+    expect(context?.self).toContain('Continuity and care remained durable values');
+    expect(context?.relational).toContain('[Reflection Relational Substrate]');
+    expect(context?.relational).toContain('steadiness under pressure');
+    expect(context?.affect).toContain('[Reflection Affect Substrate]');
+    expect(context?.affect).toContain('uncertainty pattern around unresolved ownership');
     expect(context?.provenanceRefs).toEqual([
       toReflectionJournalProvenanceRef(recentJournal[0]!),
       toReflectionDailyJournalProvenanceRef(recentDaily[0]!),
@@ -201,15 +203,18 @@ describe('reflection substrate stores', () => {
     });
 
     expect(bundle.canonicalTruthBoundary).toBe(NON_CANONICAL_REFLECTION_SUBSTRATE);
-    expect(bundle.promptBlock).toContain('[Reflection Contact Context]');
-    expect(bundle.promptBlock).toContain('contact_id: contact-1');
-    expect(bundle.promptBlock).toContain('recent_contact_status: active');
-    expect(bundle.promptBlock).toContain('last_seen_delta_seconds: 90');
-    expect(bundle.promptBlock).toContain('I wanted to follow up on yesterday.');
-    expect(bundle.promptBlock).toContain('contact-scoped recollection');
-    expect(bundle.promptBlock).toContain('Clarify the recovery timeline');
-    expect(bundle.promptBlock).toContain('Check in about the recovery plan');
-    expect(bundle.promptBlock).not.toContain('stale silence');
+    expect(bundle.relational).toContain('[Reflection Contact Context]');
+    expect(bundle.relational).toContain('contact_id: contact-1');
+    expect(bundle.relational).toContain('recent_contact_status: active');
+    expect(bundle.relational).toContain('last_seen_delta_seconds: 90');
+    expect(bundle.relational).toContain('I wanted to follow up on yesterday.');
+    expect(bundle.relational).toContain('Clarify the recovery timeline');
+    expect(bundle.relational).toContain('Check in about the recovery plan');
+    expect(bundle.relational).not.toContain('stale silence');
+    expect(bundle.self).toContain('contact-scoped recollection');
+    expect(bundle.affect).toContain('[Reflection Affect Context]');
+    expect(bundle.affect).toContain('current_vad: valence=0.200 arousal=-0.150 dominance=0.050');
+    expect(bundle.affect).toContain('emotional_snapshot');
     expect(bundle.provenanceRefs).toEqual(expect.arrayContaining([
       'reflection_contact:contact-1',
       'reflection_contact_session:discord:primary-session',
@@ -231,11 +236,11 @@ describe('reflection substrate stores', () => {
       memoryBlock: '',
     });
 
-    expect(bundle.promptBlock).toContain('[Reflection Memory Retrieval]');
-    expect(bundle.promptBlock).toContain('[Recent Session Tail]');
-    expect(bundle.promptBlock).toContain('Memory retrieval was empty, so use this recent live tail as the fallback evidence.');
-    expect(bundle.promptBlock).toContain('I just sent the update.');
-    expect(bundle.promptBlock).toContain('I am tracking the update now.');
+    expect(bundle.self).toContain('[Reflection Memory Retrieval]');
+    expect(bundle.self).toContain('[Recent Session Tail]');
+    expect(bundle.self).toContain('Memory retrieval was empty, so use this recent live tail as the fallback evidence.');
+    expect(bundle.self).toContain('I just sent the update.');
+    expect(bundle.self).toContain('I am tracking the update now.');
     expect(bundle.provenanceRefs).toEqual(expect.arrayContaining([
       'reflection_contact:contact-1',
       'reflection_contact_session_tail:discord:primary-session',

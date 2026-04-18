@@ -5,11 +5,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
+import {
+  ReflectionDailyJournalStore,
+  ReflectionProcessLogStore,
+  buildReflectionProcessId,
+} from '../../persistence/journals/reflection-substrate.js';
 import { InternalStateComputer, buildInternalStateSnapshotRef } from '../self-model/state.js';
 import {
   resolveHeartbeatPolicyPath,
+  resolveReflectionDailyJournalsDir,
   resolveReflectionJournalPath,
   resolveReflectionMetacognitionJournalPath,
+  resolveReflectionProcessLogsDir,
 } from '../../persistence/layout.js';
 import { HeartbeatPolicyStore } from './heartbeat-policy.js';
 import { Scheduler } from './scheduler.js';
@@ -135,11 +142,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(entry.reflectionJournalEntryId).toBeDefined();
       expect(entry.dailyJournalEntryId).toBeDefined();
     } finally {
-      if (originalListRecent === undefined) {
-        delete reflectionJournalPrototype.listRecent;
-      } else {
-        reflectionJournalPrototype.listRecent = originalListRecent;
-      }
+      reflectionJournalPrototype.listRecent = originalListRecent;
     }
   });
 
@@ -241,11 +244,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         expect(prompt).not.toContain('Silver eyes and a weathered jacket.');
       }
     } finally {
-      if (originalListRecent === undefined) {
-        delete reflectionJournalPrototype.listRecent;
-      } else {
-        reflectionJournalPrototype.listRecent = originalListRecent;
-      }
+      reflectionJournalPrototype.listRecent = originalListRecent;
     }
   });
 
@@ -435,6 +434,190 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     },
   );
 
+  it('expands reflection_self, reflection_relational, and reflection_affect macros from atomic bundles', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const capturedPrompts: string[] = [];
+
+    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policy = policyStore.load();
+    const experientialTemplate = policy.templates.find((template) => template.id === 'experiential-review');
+    expect(experientialTemplate).toBeDefined();
+    if (!experientialTemplate) {
+      throw new Error('experiential-review template missing from defaults');
+    }
+    experientialTemplate.prompt = [
+      'Self:',
+      '{{reflection_self}}',
+      'Relational:',
+      '{{reflection_relational}}',
+      'Affect:',
+      '{{reflection_affect}}',
+    ].join('\n\n');
+    policyStore.save(policy);
+
+    const reflectionJournal = new ReflectionJournalStore(resolveReflectionJournalPath(tempDir));
+    reflectionJournal.append({
+      templateId: 'experiential-review',
+      templateName: 'Experiential Review',
+      prompt: 'Describe your recent experience.',
+      reflection: 'I noticed a subtle uncertainty pattern around the unresolved handoff.',
+      channelId: 'internal:reflection:experiential-review',
+      mode: 'agent',
+      createdAt: '2026-03-31T07:00:00.000Z',
+    });
+
+    const reflectionDailyJournal = new ReflectionDailyJournalStore(resolveReflectionDailyJournalsDir(tempDir));
+    reflectionDailyJournal.append({
+      source: 'heartbeat_template',
+      executionSource: 'scheduled',
+      templateId: 'daily-review',
+      templateName: 'Daily Review',
+      channelId: 'internal:reflection:daily-review',
+      prompt: 'Review the day.',
+      reflection: 'Recent conversations kept returning to steadiness under pressure.',
+      mode: 'agent',
+      createdAt: '2026-03-31T08:00:00.000Z',
+    });
+
+    const reflectionProcessLog = new ReflectionProcessLogStore(resolveReflectionProcessLogsDir(tempDir));
+    reflectionProcessLog.append({
+      processId: buildReflectionProcessId('Values Reflection Deliberation', () => 1_700_000_000_000),
+      processLabel: 'Values Reflection Deliberation',
+      processType: 'reflection_deliberation',
+      stage: 'completed',
+      executionSource: 'scheduled',
+      templateId: 'values-reflection',
+      templateName: 'Values Reflection',
+      channelId: 'internal:reflection:values-reflection',
+      prompt: 'Reflect carefully on your current values.',
+      reflection: 'Continuity and care remained durable values.',
+      createdAt: '2026-03-31T09:00:00.000Z',
+    });
+
+    const recentSessionMessages = [
+      {
+        id: 1,
+        channelId: 'discord:primary-session',
+        role: 'user' as const,
+        content: 'I wanted to follow up on yesterday.',
+        timestamp: 1_700_000_000_000,
+        authorName: 'Ari',
+      },
+      {
+        id: 2,
+        channelId: 'discord:primary-session',
+        role: 'assistant' as const,
+        content: 'I am here and tracking that thread.',
+        timestamp: 1_700_000_000_100,
+        authorName: 'Companion',
+      },
+    ];
+    const currentContact = {
+      id: 'contact-1',
+      displayName: 'Ari',
+      nickname: 'Ari',
+      trustLevel: 'trusted' as const,
+      relationshipType: 'friend' as const,
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-03-31T12:00:00.000Z',
+      conversationChannels: [{
+        channel: 'discord',
+        channelId: 'discord:primary-session',
+        firstSeen: '2026-01-01T00:00:00.000Z',
+        lastSeen: '2026-03-31T12:00:00.000Z',
+      }],
+    };
+    const currentInternalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.2, arousal: 0.15, dominance: 0.1 },
+        mood: { valence: 0.25, arousal: 0.2, dominance: 0.15 },
+        discrete: { curiosity: 0.5, calm: 0.4 },
+        confidence: 0.75,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'Recent conversations matter.',
+        responseText: 'Keep continuity with the primary contact.',
+        toolCallCount: 0,
+        recentTurnCount: 3,
+        lastSeenDeltaSeconds: 120,
+      },
+    });
+    const currentSnapshotRef = buildInternalStateSnapshotRef(currentInternalState);
+    const memoryRetrieve = vi.fn(async () => '[Retrieved Memory]\n- trust-filtered contact memory');
+    const handleMessage = vi.fn(async (message) => {
+      capturedPrompts.push(message.content);
+      return {
+        content: 'Expanded reflection',
+        metadata: {
+          internalState: currentInternalState,
+          internalStateSnapshotRef: currentSnapshotRef,
+          metacognitiveFlags: [],
+        },
+      };
+    });
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage,
+        memoryProvider: {
+          retrieve: memoryRetrieve,
+        },
+        getCurrentInternalState: () => currentInternalState,
+        getCurrentInternalStateSnapshotRef: () => currentSnapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      } as any,
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+      runtimeOptions: {
+        sessionManager: {
+          resolveSessionChannelId: (channelId: string) => channelId,
+          getRecentMessages: (channelId: string, limit?: number) => (
+            channelId === 'discord:primary-session'
+              ? recentSessionMessages.slice(0, limit ?? recentSessionMessages.length)
+              : []
+          ),
+        },
+        contactStore: {
+          getById: async (id: string) => (id === 'contact-1' ? currentContact : undefined),
+          getEmotionalSnapshot: async (id: string) => (
+            id === 'contact-1'
+              ? { valence: 0.18, confidence: 0.84, observedAtMs: 1_700_000_000_000 }
+              : undefined
+          ),
+        },
+      },
+    });
+
+    await runtime.runTemplateNow('experiential-review', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    expect(capturedPrompts).toHaveLength(1);
+    expect(capturedPrompts[0]).not.toContain('{{reflection_self}}');
+    expect(capturedPrompts[0]).not.toContain('{{reflection_relational}}');
+    expect(capturedPrompts[0]).not.toContain('{{reflection_affect}}');
+    expect(capturedPrompts[0]).toContain('[Internal State Input]');
+    expect(capturedPrompts[0]).toContain(`snapshot_ref: ${currentSnapshotRef}`);
+    expect(capturedPrompts[0]).toContain('[Reflection Memory Retrieval]');
+    expect(capturedPrompts[0]).toContain('trust-filtered contact memory');
+    expect(capturedPrompts[0]).toContain('[Reflection Contact Context]');
+    expect(capturedPrompts[0]).toContain('I wanted to follow up on yesterday.');
+    expect(capturedPrompts[0]).toContain('[Reflection Relational Substrate]');
+    expect(capturedPrompts[0]).toContain('steadiness under pressure');
+    expect(capturedPrompts[0]).toContain('[Reflection Affect Context]');
+    expect(capturedPrompts[0]).toContain('current_vad: valence=0.200 arousal=0.150 dominance=0.100');
+    expect(capturedPrompts[0]).toContain('[Reflection Affect Substrate]');
+    expect(capturedPrompts[0]).toContain('uncertainty pattern around the unresolved handoff');
+    expect(capturedPrompts[0]).toContain('[Reflection Self Substrate]');
+    expect(capturedPrompts[0]).toContain('Continuity and care remained durable values');
+    expect(memoryRetrieve).toHaveBeenCalled();
+  });
+
   it('waits for pending extraction before reflection and seeds a recent session tail when retrieval is empty', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
     const capturedPrompts: string[] = [];
@@ -617,11 +800,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(prompt).toContain('I just sent the update.');
       expect(prompt).toContain('I am tracking the update now.');
     } finally {
-      if (originalListRecent === undefined) {
-        delete reflectionJournalPrototype.listRecent;
-      } else {
-        reflectionJournalPrototype.listRecent = originalListRecent;
-      }
+      reflectionJournalPrototype.listRecent = originalListRecent;
     }
   });
 });

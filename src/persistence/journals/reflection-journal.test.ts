@@ -87,6 +87,33 @@ describe('ReflectionJournalStore', () => {
     expect(persisted.templateId).toBe('musing');
   });
 
+  it('lists recent entries in descending createdAt order', () => {
+    store.append({
+      templateId: 'musing',
+      templateName: 'Musing',
+      prompt: 'Share a brief reflection.',
+      reflection: 'Earlier reflection.',
+      channelId: 'internal:reflection:musing',
+      mode: 'agent',
+      createdAt: '2026-03-02T00:00:00.000Z',
+    });
+    store.append({
+      templateId: 'experiential-review',
+      templateName: 'Experiential Review',
+      prompt: 'Describe your recent experience.',
+      reflection: 'Later reflection.',
+      channelId: 'internal:reflection:experiential-review',
+      mode: 'agent',
+      createdAt: '2026-03-02T01:00:00.000Z',
+    });
+
+    const entries = store.listRecent({ limit: 1 });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.templateId).toBe('experiential-review');
+    expect(entries[0]?.reflection).toBe('Later reflection.');
+  });
+
   it('persists internal-state narrative context when provided', () => {
     const sample = buildInternalStateSample();
     store.append({

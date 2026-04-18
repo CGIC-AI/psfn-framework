@@ -8,7 +8,14 @@ import type {
   ContactProfileArtifact,
   MemoryStorePort,
 } from './memory-store-port.js';
-import type { PurrMemory, MemoryPrivacyRiskBreakdown, MemoryScopeQuery } from './types.js';
+import type {
+  PurrMemory,
+  MemoryPrivacyRiskBreakdown,
+  MemoryScopeQuery,
+  RetrievalCallerContext,
+  RetrievalMode,
+  RetrievalModeInput,
+} from './types.js';
 import { MEMORY_CONFIG, evaluateMemoryPrivacyRisk } from './types.js';
 import { DEFAULT_MOOD_CONGRUENCE_WEIGHT, type SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -97,6 +104,14 @@ const SCORE_GUARANTEE_MIN_K = 3;
  * so naturally-scored memories always rank higher.
  */
 const SCORE_GUARANTEE_FLOOR = 0.01;
+const DEFAULT_RECENCY_DECAY_DAYS = 30;
+const TEMPORAL_RECENCY_DECAY_DAYS = 7;
+const TEMPORAL_SAME_DAY_EVIDENCE_BOOST = 1.2;
+const REFLECTION_PROVENANCE_PREFIXES = [
+  'reflection_journal:',
+  'reflection_daily:',
+  'reflection_process:',
+] as const;
 const WITHHOLD_BOUNDARY_TAGS = new Set([
   'withhold',
   'withheld',
@@ -123,6 +138,7 @@ interface ScoredMemory {
   privacyRisk: number;
   privacyPenalty: number;
   privacyBreakdown: MemoryPrivacyRiskBreakdown;
+  retrievalModeExcluded: boolean;
   score: number;
 }
 
@@ -327,6 +343,66 @@ function summarizeWithheldMemories<T extends Pick<PurrMemory, 'id' | 'sensitivit
   };
 }
 
+function cloneRetrievalModeInput(input: RetrievalModeInput | undefined): RetrievalModeInput | undefined {
+  if (input === undefined) return undefined;
+  return Array.isArray(input) ? [...input] : input;
+}
+
+function cloneRetrievalCallerContext(
+  callerContext: RetrievalCallerContext | undefined,
+): RetrievalCallerContext | undefined {
+  if (!callerContext) return undefined;
+  return {
+    ...callerContext,
+    ...(callerContext.retrievalMode !== undefined
+      ? { retrievalMode: cloneRetrievalModeInput(callerContext.retrievalMode) }
+      : {}),
+  };
+}
+
+function appendRetrievalModes(target: Set<RetrievalMode>, input: unknown): void {
+  if (Array.isArray(input)) {
+    for (const entry of input) appendRetrievalModes(target, entry);
+    return;
+  }
+  if (typeof input !== 'string') return;
+
+  const normalized = input.trim().toLowerCase();
+  if (!normalized) return;
+
+  const tokens = normalized.split(/[+,|]/g)
+    .map(token => token.trim())
+    .filter(Boolean);
+  for (const token of tokens) {
+    if (token === 'default' || token === 'temporal' || token === 'reflection') {
+      target.add(token);
+    }
+  }
+}
+
+function normalizeRetrievalModes(
+  callerContext?: RetrievalCallerContext,
+  retrievalMode?: RetrievalModeInput,
+): ReadonlySet<RetrievalMode> {
+  const modes = new Set<RetrievalMode>();
+  appendRetrievalModes(modes, retrievalMode);
+  appendRetrievalModes(modes, callerContext?.retrievalMode);
+  if (modes.size > 1 && modes.has('default')) {
+    modes.delete('default');
+  }
+  return modes;
+}
+
+function serializeRetrievalModes(
+  callerContext?: RetrievalCallerContext,
+  retrievalMode?: RetrievalModeInput,
+): string {
+  const modes = normalizeRetrievalModes(callerContext, retrievalMode);
+  if (modes.size === 0) return '';
+  const orderedModes: RetrievalMode[] = ['default', 'temporal', 'reflection'];
+  return orderedModes.filter(mode => modes.has(mode)).join(',');
+}
+
 type RetrievalIntegrityErrorStage =
   | 'retrieve'
   | 'selected_access_update'
@@ -457,6 +533,8 @@ export class MemoryRetriever implements MemoryProvider {
     canonicalContactId?: string,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     scopeQuery?: MemoryScopeQuery,
+    callerContext?: RetrievalCallerContext,
+    retrievalMode?: RetrievalModeInput,
   ): Promise<TurnMemorySnapshot> {
     const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
@@ -532,6 +610,10 @@ export class MemoryRetriever implements MemoryProvider {
       proactiveCandidates,
       ...(withheldSummary ? { withheldSummary } : {}),
       ...(withheldCandidateIds.length > 0 ? { withheldCandidateIds } : {}),
+      ...(callerContext ? { callerContext: cloneRetrievalCallerContext(callerContext) } : {}),
+      ...((retrievalMode ?? callerContext?.retrievalMode) !== undefined
+        ? { retrievalMode: cloneRetrievalModeInput(retrievalMode ?? callerContext?.retrievalMode) }
+        : {}),
       versionPointer: buildSnapshotVersionPointer([
         channelId,
         effectiveTrust,
@@ -545,6 +627,7 @@ export class MemoryRetriever implements MemoryProvider {
         lexicalCandidates.map(memory => `${memory.id}:${memory.similarity.toFixed(4)}`).join(','),
         proactiveCandidates.map(memory => memory.id).join(','),
         serializeMemoryWithheldSummary(withheldSummary),
+        serializeRetrievalModes(callerContext, retrievalMode),
       ]),
     };
   }
@@ -559,7 +642,16 @@ export class MemoryRetriever implements MemoryProvider {
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     currentVAD?: RetrievalVADInput,
     scopeQuery?: MemoryScopeQuery,
+    callerContext?: RetrievalCallerContext,
+    retrievalMode?: RetrievalModeInput,
   ): Promise<string> {
+    const hasDirectRetrievalContext = callerContext !== undefined || retrievalMode !== undefined;
+    const effectiveCallerContext = hasDirectRetrievalContext
+      ? callerContext
+      : turnSnapshot?.callerContext;
+    const effectiveRetrievalMode = hasDirectRetrievalContext
+      ? retrievalMode
+      : turnSnapshot?.retrievalMode;
     const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
       channelId,
@@ -835,8 +927,11 @@ export class MemoryRetriever implements MemoryProvider {
             currentVAD,
             moodCongruenceWeight: this.moodCongruenceWeight,
             scopeQuery: normalizedScopeQuery,
+            callerContext: effectiveCallerContext,
+            retrievalMode: effectiveRetrievalMode,
           }),
         }))
+        .filter(item => !item.retrievalModeExcluded)
         .sort((a, b) => b.score - a.score);
       const rerankDecision = await this.applyCompositionalRetrievalRanking(
         contextText,
@@ -1613,6 +1708,8 @@ function computeRetrievalScore(
     currentVAD?: RetrievalVADInput;
     moodCongruenceWeight: number;
     scopeQuery?: MemoryScopeQuery;
+    callerContext?: RetrievalCallerContext;
+    retrievalMode?: RetrievalModeInput;
   },
 ): {
   score: number;
@@ -1625,9 +1722,16 @@ function computeRetrievalScore(
   privacyRisk: number;
   privacyPenalty: number;
   privacyBreakdown: MemoryPrivacyRiskBreakdown;
+  retrievalModeExcluded: boolean;
 } {
-  const ageDays = (Date.now() - memory.extractedAt) / (1000 * 60 * 60 * 24);
-  const recencyBoost = 1 / (1 + ageDays / 30);
+  const now = Date.now();
+  const retrievalModes = normalizeRetrievalModes(options?.callerContext, options?.retrievalMode);
+  const temporalMode = retrievalModes.has('temporal');
+  const reflectionMode = retrievalModes.has('reflection');
+  const recencyBoost = computeRetrievalRecencyBoost(memory.extractedAt, now, temporalMode);
+  const sameDayEvidenceBoost = temporalMode && hasSameDayTemporalEvidence(memory, now)
+    ? TEMPORAL_SAME_DAY_EVIDENCE_BOOST
+    : 1;
   const emotionalWeight = 1 + Math.abs(memory.emotionalValence) * 0.5;
   const moodCongruenceFactor = computeMoodCongruenceFactor(
     memory.formationVAD,
@@ -1644,6 +1748,7 @@ function computeRetrievalScore(
   const rawBaseScore = (
     memory.similarity *
     recencyBoost *
+    sameDayEvidenceBoost *
     emotionalWeight *
     memory.importance *
     memory.salience *
@@ -1656,6 +1761,7 @@ function computeRetrievalScore(
   const evidence = deriveEvidenceSupport(memory);
   const contradictionPenaltyMultiplier = deriveContradictionPenalty(memory);
   const explicitlyQueried = hasExplicitMemoryMention(contextText, memory.text);
+  const retrievalModeExcluded = reflectionMode && isReflectionRetrievalCandidate(memory);
   const lowConfidenceSingleSourceSuppressed = (
     evidence.sourceCount <= 1
     && memory.confidence < 0.45
@@ -1665,8 +1771,8 @@ function computeRetrievalScore(
   const baseScore = rawBaseScore * evidenceBoost * contradictionPenaltyMultiplier;
   const privacyEvaluation = evaluateMemoryPrivacyRisk(memory);
   const privacyPenalty = baseScore * privacyEvaluation.risk * MEMORY_CONFIG.privacyRiskPenaltyWeight;
-  let score = Math.max(0, baseScore - privacyPenalty);
-  if (lowConfidenceSingleSourceSuppressed) {
+  let score = retrievalModeExcluded ? 0 : Math.max(0, baseScore - privacyPenalty);
+  if (!retrievalModeExcluded && lowConfidenceSingleSourceSuppressed) {
     // Keep weak single-source memories available for rescue/explicit retrieval,
     // but prevent them from dominating ranked outputs by default.
     const dominanceCap = memory.similarity * 0.02;
@@ -1683,7 +1789,55 @@ function computeRetrievalScore(
     privacyRisk: privacyEvaluation.risk,
     privacyPenalty,
     privacyBreakdown: privacyEvaluation.breakdown,
+    retrievalModeExcluded,
   };
+}
+
+function computeRetrievalRecencyBoost(
+  extractedAt: number,
+  now: number,
+  temporalMode: boolean,
+): number {
+  const ageDays = Math.max(0, (now - extractedAt) / (1000 * 60 * 60 * 24));
+  const decayDays = temporalMode ? TEMPORAL_RECENCY_DECAY_DAYS : DEFAULT_RECENCY_DECAY_DAYS;
+  return 1 / (1 + ageDays / decayDays);
+}
+
+function hasSameDayTemporalEvidence(
+  memory: Pick<PurrMemory, 'extractedAt' | 'sourceRef' | 'provenanceRefs'>,
+  now: number,
+): boolean {
+  if (isSameUtcDay(memory.extractedAt, now)) return true;
+  const currentDate = formatUtcDate(now);
+  if (memory.sourceRef.includes(`date:${currentDate}`) || memory.sourceRef.includes(`createdAt:${currentDate}`)) {
+    return true;
+  }
+  for (const ref of memory.provenanceRefs ?? []) {
+    if (ref.includes(`date:${currentDate}`) || ref.includes(`createdAt:${currentDate}`)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isReflectionRetrievalCandidate(
+  memory: Pick<PurrMemory, 'type' | 'sourceRef' | 'provenanceRefs'>,
+): boolean {
+  if (memory.type === 'reflection') return true;
+  if (REFLECTION_PROVENANCE_PREFIXES.some(prefix => memory.sourceRef.startsWith(prefix))) {
+    return true;
+  }
+  return (memory.provenanceRefs ?? []).some(ref => (
+    REFLECTION_PROVENANCE_PREFIXES.some(prefix => ref.startsWith(prefix))
+  ));
+}
+
+function isSameUtcDay(left: number, right: number): boolean {
+  return formatUtcDate(left) === formatUtcDate(right);
+}
+
+function formatUtcDate(epochMs: number): string {
+  return new Date(epochMs).toISOString().slice(0, 10);
 }
 
 function computeMoodCongruenceFactor(

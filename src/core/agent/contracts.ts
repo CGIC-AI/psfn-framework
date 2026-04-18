@@ -7,7 +7,11 @@ import type { TrustLevel } from '../../system/trust/types.js';
 import type { ChannelMeta } from '../../system/trust/policy.js';
 import type { TurnMemorySnapshot } from '../turns/snapshot.js';
 import type { ContextBudgetTurnCharacteristics } from '../../shared/context-budget.js';
-import type { MemoryScopeQuery } from '../../faculties/memory/types.js';
+import type {
+  MemoryScopeQuery,
+  RetrievalCallerContext,
+  RetrievalModeInput,
+} from '../../faculties/memory/types.js';
 export type { ScratchpadEntry, ScratchpadProvider } from './scratchpad-port.js';
 
 export interface LLMProviderPort {
@@ -45,6 +49,8 @@ export interface MemoryProvider {
     canonicalContactId?: string,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     scopeQuery?: MemoryScopeQuery,
+    callerContext?: RetrievalCallerContext,
+    retrievalMode?: RetrievalModeInput,
   ): Promise<TurnMemorySnapshot>;
   retrieve(
     contextText: string,
@@ -56,6 +62,8 @@ export interface MemoryProvider {
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     currentVAD?: RetrievalVADInput,
     scopeQuery?: MemoryScopeQuery,
+    callerContext?: RetrievalCallerContext,
+    retrievalMode?: RetrievalModeInput,
   ): Promise<string>;
   retrieveProactiveRecall?(
     channelId: string,

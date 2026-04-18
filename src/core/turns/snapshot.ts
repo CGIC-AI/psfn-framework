@@ -3,7 +3,11 @@ import type { AdaptiveToolSnapshotTelemetry } from '../agent/adaptive-tools-tele
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { MemoryWithheldSummary } from '../../faculties/memory/withheld-summary.js';
 import type { ContactProfileArtifact } from '../../faculties/memory/memory-store-port.js';
-import type { PurrMemory } from '../../faculties/memory/types.js';
+import type {
+  PurrMemory,
+  RetrievalCallerContext,
+  RetrievalModeInput,
+} from '../../faculties/memory/types.js';
 import type { SessionEntry } from '../session/types.js';
 import type {
   ContextMessage,
@@ -91,6 +95,8 @@ export interface TurnMemorySnapshot {
   proactiveCandidates: PurrMemory[];
   withheldSummary?: MemoryWithheldSummary;
   withheldCandidateIds?: string[];
+  callerContext?: RetrievalCallerContext;
+  retrievalMode?: RetrievalModeInput;
   versionPointer: string;
 }
 

@@ -46,6 +46,8 @@ export type MemoryScopeKind =
   | 'shard'
   | 'system';
 export type MemoryScopeQueryMode = 'prefer' | 'only';
+export type RetrievalMode = 'default' | 'temporal' | 'reflection';
+export type RetrievalModeInput = RetrievalMode | readonly RetrievalMode[];
 export interface MemoryFormationVAD {
   valence: number;
   arousal: number;
@@ -74,6 +76,10 @@ export interface MemoryScopeQuery {
   refs?: MemoryScopeRef[];
   tags?: string[];
   mode?: MemoryScopeQueryMode;
+}
+
+export interface RetrievalCallerContext {
+  retrievalMode?: RetrievalModeInput;
 }
 
 export interface AutonomousActionMemoryContext {

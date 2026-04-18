@@ -2482,3 +2482,210 @@ describe('MemoryRetriever mood-congruent retrieval bias', () => {
     }).toThrow('moodCongruenceWeight must be a finite number between 0 and 1');
   });
 });
+
+describe('MemoryRetriever caller-context retrieval modes', () => {
+  beforeEach(() => {
+    idCounter = 0;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-04-18T12:00:00.000Z'));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    tokenTestUtils.resetTokenizerState();
+  });
+
+  it('preserves default ranking when retrievalMode is explicitly default', async () => {
+    const now = Date.now();
+    const memories = [
+      makeMemory({
+        text: 'Week-old but higher-similarity memory',
+        sensitivity: 'public',
+        similarity: 0.97,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: now - 7 * 24 * 60 * 60 * 1000,
+      }),
+      makeMemory({
+        text: 'Same-day but lower-similarity memory',
+        sensitivity: 'public',
+        similarity: 0.76,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: now - 2 * 60 * 60 * 1000,
+      }),
+    ];
+    const retriever = new MemoryRetriever(makeMockStore(memories), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    const baseline = await retriever.retrieve('timeline question', 'api:test', 'primary');
+    const explicitDefault = await retriever.retrieve(
+      'timeline question',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'default',
+    );
+
+    expect(baseline).toBe(explicitDefault);
+    expect(baseline.indexOf('Week-old but higher-similarity memory')).toBeLessThan(
+      baseline.indexOf('Same-day but lower-similarity memory'),
+    );
+  });
+
+  it('temporal mode favors same-day evidence over slightly stronger older matches', async () => {
+    const now = Date.now();
+    const memories = [
+      makeMemory({
+        text: 'Week-old but higher-similarity memory',
+        sensitivity: 'public',
+        similarity: 0.97,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: now - 7 * 24 * 60 * 60 * 1000,
+      }),
+      makeMemory({
+        text: 'Same-day but lower-similarity memory',
+        sensitivity: 'public',
+        similarity: 0.76,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: now - 2 * 60 * 60 * 1000,
+        provenanceRefs: ['source:daily_status|date:2026-04-18'],
+      }),
+    ];
+    const retriever = new MemoryRetriever(makeMockStore(memories), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'timeline question',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { retrievalMode: 'temporal' },
+    );
+
+    expect(result.indexOf('Same-day but lower-similarity memory')).toBeLessThan(
+      result.indexOf('Week-old but higher-similarity memory'),
+    );
+  });
+
+  it('reflection mode excludes reflection memories from ranked retrieval', async () => {
+    const now = Date.now();
+    const memories = [
+      makeMemory({
+        text: 'Reflection entry about what we learned',
+        type: 'reflection',
+        sensitivity: 'public',
+        similarity: 0.99,
+        importance: 0.95,
+        salience: 0.95,
+        extractedAt: now - 60 * 60 * 1000,
+        sourceRef: 'reflection_journal:entry-1|createdAt:2026-04-18T11:00:00.000Z',
+      }),
+      makeMemory({
+        text: 'Concrete project status memory',
+        type: 'semantic',
+        sensitivity: 'public',
+        similarity: 0.8,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: now - 60 * 60 * 1000,
+      }),
+    ];
+    const retriever = new MemoryRetriever(makeMockStore(memories), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    const baseline = await retriever.retrieve('what should I focus on?', 'api:test', 'primary');
+    const reflectionFiltered = await retriever.retrieve(
+      'what should I focus on?',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'reflection',
+    );
+
+    expect(baseline.indexOf('Reflection entry about what we learned')).toBeLessThan(
+      baseline.indexOf('Concrete project status memory'),
+    );
+    expect(reflectionFiltered).toContain('Concrete project status memory');
+    expect(reflectionFiltered).not.toContain('Reflection entry about what we learned');
+  });
+
+  it('propagates composed caller-context modes from snapshot capture into retrieval', async () => {
+    const now = Date.now();
+    const memories = [
+      makeMemory({
+        text: 'Same-day reflection daily summary',
+        type: 'reflection',
+        sensitivity: 'public',
+        similarity: 0.99,
+        importance: 0.95,
+        salience: 0.95,
+        extractedAt: now - 30 * 60 * 1000,
+        sourceRef: 'reflection_daily:entry-7|date:2026-04-18',
+      }),
+      makeMemory({
+        text: 'Same-day concrete timeline evidence',
+        type: 'semantic',
+        sensitivity: 'public',
+        similarity: 0.76,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: now - 2 * 60 * 60 * 1000,
+        provenanceRefs: ['source:daily_status|date:2026-04-18'],
+      }),
+      makeMemory({
+        text: 'Week-old but higher-similarity memory',
+        type: 'semantic',
+        sensitivity: 'public',
+        similarity: 0.97,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: now - 7 * 24 * 60 * 60 * 1000,
+      }),
+    ];
+    const retriever = new MemoryRetriever(makeMockStore(memories), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    const snapshot = await retriever.captureTurnMemorySnapshot(
+      'timeline question',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { retrievalMode: ['temporal', 'reflection'] },
+    );
+    const result = await retriever.retrieve(
+      'timeline question',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      snapshot,
+    );
+
+    expect(snapshot.callerContext).toEqual({ retrievalMode: ['temporal', 'reflection'] });
+    expect(snapshot.retrievalMode).toEqual(['temporal', 'reflection']);
+    expect(result).toContain('Same-day concrete timeline evidence');
+    expect(result).not.toContain('Same-day reflection daily summary');
+    expect(result.indexOf('Same-day concrete timeline evidence')).toBeLessThan(
+      result.indexOf('Week-old but higher-similarity memory'),
+    );
+  });
+});

@@ -76,6 +76,26 @@ const INTERNAL_STATE_MACRO_TOKENS = [
   '{{runtime_internal_state_emotional_mood_arousal_label}}',
 ] as const;
 
+const ATTENTION_TOOLING_MACRO_TOKENS = [
+  '{{runtime_concerns_count}}',
+  '{{runtime_concerns_top_lines}}',
+  '{{runtime_concerns_top_priorities}}',
+  '{{runtime_concerns_omitted_count}}',
+  '{{runtime_emotion_appraisal_length}}',
+  '{{runtime_emotion_appraisal_latest_trigger}}',
+  '{{runtime_emotion_appraisal_latest_summary}}',
+  '{{runtime_emotion_appraisal_latest_timestamp_iso}}',
+  '{{runtime_emotion_appraisal_recent_lines}}',
+  '{{runtime_behavioral_notes_count}}',
+  '{{runtime_behavioral_notes_body_raw}}',
+  '{{runtime_skills_count}}',
+  '{{runtime_extended_tools_total}}',
+  '{{runtime_extended_tools_activatable_count}}',
+  '{{runtime_extended_tools_blocked_count}}',
+  '{{runtime_extended_tool_names}}',
+  '{{runtime_extended_tool_directory_lines}}',
+] as const;
+
 
 describe('runtime prompt block schema', () => {
   it('classifies required, optional, immutable, and editable runtime blocks', () => {
@@ -371,6 +391,17 @@ describe('prompt runtime macro hints', () => {
     const hintsByToken = new Map(PROMPT_RUNTIME_MACRO_HINTS.map(entry => [entry.token, entry]));
 
     for (const token of INTERNAL_STATE_MACRO_TOKENS) {
+      const hint = hintsByToken.get(token);
+      expect(hint).toBeDefined();
+      expect(hint?.description).toBeTruthy();
+      expect(hint?.example).toBeTruthy();
+    }
+  });
+
+  it('documents the atomic attention/tooling macros with descriptions and examples', () => {
+    const hintsByToken = new Map(PROMPT_RUNTIME_MACRO_HINTS.map(entry => [entry.token, entry]));
+
+    for (const token of ATTENTION_TOOLING_MACRO_TOKENS) {
       const hint = hintsByToken.get(token);
       expect(hint).toBeDefined();
       expect(hint?.description).toBeTruthy();

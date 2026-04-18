@@ -67,6 +67,13 @@ export interface ActiveConcernContextProvider {
   getActiveConcerns(contactId?: string): ActiveConcern[];
 }
 
+export interface ActiveConcernRuntimeData {
+  totalCount: number;
+  topLines: string[];
+  topPriorities: ActiveConcernPriority[];
+  omittedCount: number;
+}
+
 type Awaitable<T> = T | Promise<T>;
 
 interface ConcernStorePortBackend extends ActiveConcernContextProvider {
@@ -399,31 +406,55 @@ export function formatActiveConcernsContextBlock(
   concerns: readonly ActiveConcern[],
   limit = DEFAULT_RUNTIME_CONTEXT_LIMIT,
 ): string {
-  if (concerns.length === 0) return '';
-  const normalizedLimit = clampListLimit(limit);
-  const deduped = dedupeConcernsForRuntime(concerns);
-  const selected = deduped.slice(0, normalizedLimit);
+  const runtimeData = buildActiveConcernsRuntimeData(concerns, limit);
+  if (runtimeData.totalCount === 0) return '';
   const lines = [
     'Treat these as soft threads to verify, not alarms that must dominate the turn.',
+    ...runtimeData.topLines,
   ];
 
-  for (const concern of selected) {
-    const expiresAtMs = Date.parse(concern.expiresAt);
-    const expiresAtLabel = Number.isFinite(expiresAtMs)
-      ? formatActiveDateTimeLabel(new Date(expiresAtMs))
-      : concern.expiresAt;
-    lines.push(`- ${softenConcernText(concern.text)} [${concern.priority}; revisit before ${expiresAtLabel}]`);
-  }
-
-  const omitted = deduped.length - selected.length;
-  if (omitted > 0) {
-    lines.push(`- ${String(omitted)} additional lower-salience thread${omitted === 1 ? '' : 's'} omitted.`);
+  if (runtimeData.omittedCount > 0) {
+    lines.push(
+      `- ${String(runtimeData.omittedCount)} additional lower-salience thread${runtimeData.omittedCount === 1 ? '' : 's'} omitted.`,
+    );
   }
 
   return wrapPromptSectionXml({
     id: 'open_threads',
     content: lines.join('\n'),
   });
+}
+
+export function buildActiveConcernsRuntimeData(
+  concerns: readonly ActiveConcern[],
+  limit = DEFAULT_RUNTIME_CONTEXT_LIMIT,
+): ActiveConcernRuntimeData {
+  if (concerns.length === 0) {
+    return {
+      totalCount: 0,
+      topLines: [],
+      topPriorities: [],
+      omittedCount: 0,
+    };
+  }
+
+  const normalizedLimit = clampListLimit(limit);
+  const deduped = dedupeConcernsForRuntime(concerns);
+  const selected = deduped.slice(0, normalizedLimit);
+  const topLines = selected.map((concern) => {
+    const expiresAtMs = Date.parse(concern.expiresAt);
+    const expiresAtLabel = Number.isFinite(expiresAtMs)
+      ? formatActiveDateTimeLabel(new Date(expiresAtMs))
+      : concern.expiresAt;
+    return `- ${softenConcernText(concern.text)} [${concern.priority}; revisit before ${expiresAtLabel}]`;
+  });
+
+  return {
+    totalCount: deduped.length,
+    topLines,
+    topPriorities: selected.map(concern => concern.priority),
+    omittedCount: Math.max(0, deduped.length - selected.length),
+  };
 }
 
 export function createConcernStorePort(store: ConcernStorePortBackend): ConcernStorePort {

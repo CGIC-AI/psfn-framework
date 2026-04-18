@@ -66,6 +66,10 @@ interface ExtendedToolGuideEntry {
   activatable: boolean;
 }
 
+const OMITTED_CONCERN_LINE_PATTERN = /^- (\d+) additional lower-salience thread(?:s)? omitted\.$/;
+const CONCERN_PRIORITY_PATTERN = /\[(high|medium|low);/i;
+const SKILL_TAG_PATTERN = /<skill\b/gi;
+
 export interface ResolvedAuthorContext {
   trustLevel: TrustLevel;
   speakerRole: 'user' | 'system';
@@ -501,6 +505,110 @@ function buildInternalStatePromptVariables(internalState?: InternalState): Recor
   };
 }
 
+function buildConcernPromptVariables(activeConcernsBlock: string | null | undefined): Record<string, string> {
+  const body = unwrapPromptSectionBody(activeConcernsBlock);
+  if (!body) {
+    return {
+      runtime_concerns_count: '0',
+      runtime_concerns_top_lines: '',
+      runtime_concerns_top_priorities: '',
+      runtime_concerns_omitted_count: '0',
+    };
+  }
+
+  const lines = body
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean);
+  const topLines = lines.filter(line => (
+    line.startsWith('- ')
+    && !OMITTED_CONCERN_LINE_PATTERN.test(line)
+  ));
+  const omittedLine = lines.find(line => OMITTED_CONCERN_LINE_PATTERN.test(line));
+  const omittedCount = omittedLine
+    ? Number.parseInt(omittedLine.match(OMITTED_CONCERN_LINE_PATTERN)?.[1] ?? '0', 10)
+    : 0;
+  const topPriorities = topLines
+    .map(line => line.match(CONCERN_PRIORITY_PATTERN)?.[1]?.toLowerCase() ?? '')
+    .filter((priority): priority is string => priority.length > 0);
+
+  return {
+    runtime_concerns_count: String(topLines.length + omittedCount),
+    runtime_concerns_top_lines: topLines.join('\n'),
+    runtime_concerns_top_priorities: topPriorities.join(', '),
+    runtime_concerns_omitted_count: String(omittedCount),
+  };
+}
+
+function countNonEmptyLines(body: string): number {
+  return body
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line.length > 0)
+    .length;
+}
+
+function buildBehavioralNotesPromptVariables(behavioralNotesBlock: string | null | undefined): Record<string, string> {
+  const body = unwrapPromptSectionBody(behavioralNotesBlock);
+  return {
+    runtime_behavioral_notes_count: body ? String(countNonEmptyLines(body)) : '0',
+    runtime_behavioral_notes_body_raw: body,
+  };
+}
+
+function buildSkillsPromptVariables(skillsContext: string | null | undefined): Record<string, string> {
+  const count = skillsContext?.match(SKILL_TAG_PATTERN)?.length ?? 0;
+  return {
+    runtime_skills_count: String(count),
+  };
+}
+
+function formatEmotionAppraisalLines(
+  emotionAppraisalChain: readonly EmotionAppraisalEntry[],
+): string[] {
+  return emotionAppraisalChain
+    .slice(-2)
+    .map(entry => (
+      `- ${formatActiveDateTimeLabel(new Date(entry.timestamp))} (${entry.trigger}): ${compactPromptText(entry.summary, 220)}`
+    ));
+}
+
+function buildEmotionAppraisalPromptVariables(
+  emotionAppraisalChain: readonly EmotionAppraisalEntry[],
+): Record<string, string> {
+  const latestEntry = emotionAppraisalChain.at(-1);
+  const recentLines = formatEmotionAppraisalLines(emotionAppraisalChain);
+  const latestTimestamp = latestEntry ? new Date(latestEntry.timestamp) : null;
+  const latestTimestampIso = latestTimestamp && Number.isFinite(latestTimestamp.getTime())
+    ? latestTimestamp.toISOString()
+    : '';
+
+  return {
+    runtime_emotion_appraisal_length: String(emotionAppraisalChain.length),
+    runtime_emotion_appraisal_latest_trigger: latestEntry?.trigger ?? '',
+    runtime_emotion_appraisal_latest_summary: latestEntry ? compactPromptText(latestEntry.summary, 220) : '',
+    runtime_emotion_appraisal_latest_timestamp_iso: latestTimestampIso,
+    runtime_emotion_appraisal_recent_lines: recentLines.join('\n'),
+  };
+}
+
+function buildExtendedToolPromptVariables(input: {
+  extendedTools: AgentTool<any>[];
+  extendedToolGuide: {
+    lines: string[];
+    activatableCount: number;
+    blockedCount: number;
+  };
+}): Record<string, string> {
+  return {
+    runtime_extended_tools_total: String(input.extendedTools.length),
+    runtime_extended_tools_activatable_count: String(input.extendedToolGuide.activatableCount),
+    runtime_extended_tools_blocked_count: String(input.extendedToolGuide.blockedCount),
+    runtime_extended_tool_names: input.extendedTools.map(tool => tool.name).join(', '),
+    runtime_extended_tool_directory_lines: input.extendedToolGuide.lines.join('\n'),
+  };
+}
+
 export function buildPromptTemplateVariables(input: {
   message: SubstrateMessage;
   resolvedUserName: string;
@@ -635,15 +743,14 @@ export function buildDynamicPromptTemplateVariables(input: {
     ? buildInternalStateSummaryLines({ internalState: input.internalState }).join('\n')
     : '';
   const internalStateVariables = buildInternalStatePromptVariables(input.internalState);
-  const emotionAppraisalBody = emotionAppraisalChain.length > 0
-    ? emotionAppraisalChain
-      .slice(-2)
-      .map(entry => `- ${formatActiveDateTimeLabel(new Date(entry.timestamp))} (${entry.trigger}): ${compactPromptText(entry.summary, 220)}`)
-      .join('\n')
-    : '';
+  const emotionAppraisalVariables = buildEmotionAppraisalPromptVariables(emotionAppraisalChain);
+  const emotionAppraisalBody = emotionAppraisalVariables.runtime_emotion_appraisal_recent_lines;
+  const concernVariables = buildConcernPromptVariables(input.activeConcernsBlock);
   const openThreadsBody = unwrapPromptSectionBody(input.activeConcernsBlock);
   const behavioralNotesBody = unwrapPromptSectionBody(input.behavioralNotesBlock);
+  const behavioralNotesVariables = buildBehavioralNotesPromptVariables(input.behavioralNotesBlock);
   const skillsIndexBody = unwrapPromptSectionBody(input.skillsContext);
+  const skillsVariables = buildSkillsPromptVariables(input.skillsContext);
   const appearanceContextBody = hasActiveSelfImageTool()
     ? resolveAppearanceContextFromTemplateVariables(input.templateVariables)
     : '';
@@ -666,6 +773,10 @@ export function buildDynamicPromptTemplateVariables(input: {
       ...extendedToolGuide.lines,
     ].join('\n')
     : '';
+  const extendedToolVariables = buildExtendedToolPromptVariables({
+    extendedTools: input.extendedTools,
+    extendedToolGuide,
+  });
   const lastMessageReceivedAt = (
     typeof input.lastMessageReceivedAtMs === 'number' && Number.isFinite(input.lastMessageReceivedAtMs)
   )
@@ -703,6 +814,11 @@ export function buildDynamicPromptTemplateVariables(input: {
     runtime_trust_guidance: trustGuidance,
     ...affectVariables,
     ...internalStateVariables,
+    ...concernVariables,
+    ...emotionAppraisalVariables,
+    ...behavioralNotesVariables,
+    ...skillsVariables,
+    ...extendedToolVariables,
     runtime_emotional_affect_body: affectBody,
     runtime_metacognitive_persona_guidance_body: metacognitiveBody,
     ...responseStyleTemplateVariables,

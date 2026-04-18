@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
+import { formatActiveConcernsContextBlock } from '../../intention/concerns.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { InternalState } from '../../self-model/state.js';
 import {
@@ -110,6 +111,29 @@ function buildInternalStateTemplateOutput(
     'relational={{runtime_internal_state_relational_trust_level}}/{{runtime_internal_state_relational_recent_interaction_frequency_label}}/{{runtime_internal_state_relational_last_seen_label}}',
     'emotional={{runtime_internal_state_emotional_mood_valence_label}}/{{runtime_internal_state_emotional_mood_arousal_label}}',
   ].join(' '), {
+    now: input.now,
+    variables: {
+      ...(input.templateVariables ?? {}),
+      ...variables,
+    },
+  });
+}
+
+function buildAttentionToolingTemplateOutput(
+  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+): string {
+  const variables = buildDynamicPromptTemplateVariables(input);
+  return injectPromptRuntimeTokens([
+    'concerns={{runtime_concerns_count}}/{{runtime_concerns_top_priorities}}/{{runtime_concerns_omitted_count}}',
+    'concern_lines={{runtime_concerns_top_lines}}',
+    'behavioral_count={{runtime_behavioral_notes_count}}',
+    'behavioral_raw={{runtime_behavioral_notes_body_raw}}',
+    'skills_count={{runtime_skills_count}}',
+    'tools={{runtime_extended_tools_total}}/{{runtime_extended_tools_activatable_count}}/{{runtime_extended_tools_blocked_count}}/{{runtime_extended_tool_names}}',
+    'tool_lines={{runtime_extended_tool_directory_lines}}',
+    'appraisal={{runtime_emotion_appraisal_length}}/{{runtime_emotion_appraisal_latest_trigger}}/{{runtime_emotion_appraisal_latest_summary}}/{{runtime_emotion_appraisal_latest_timestamp_iso}}',
+    'appraisal_lines={{runtime_emotion_appraisal_recent_lines}}',
+  ].join('\n'), {
     now: input.now,
     variables: {
       ...(input.templateVariables ?? {}),
@@ -912,6 +936,123 @@ describe('runtime subject identity', () => {
     );
   });
 
+  it('substitutes atomic concern, tooling, behavioral-note, skills, and appraisal macros', () => {
+    const output = buildAttentionToolingTemplateOutput({
+      message: makeMessage({
+        channelId: 'api:test',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'Focus.',
+      }),
+      resolvedUserName: 'User',
+      trustLevel: 'regular',
+      channelType: 'api',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'nursery',
+      activeToolCounts: {
+        core: 1,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 1,
+      },
+      extendedTools: [
+        {
+          name: 'web',
+          description: 'Fetch a web page.',
+          parameters: {} as any,
+          execute: () => { throw new Error('not used'); },
+        } as any,
+        {
+          name: 'notify',
+          description: 'Notify the operator.',
+          parameters: {} as any,
+          execute: () => { throw new Error('not used'); },
+        } as any,
+        {
+          name: 'background_probe',
+          description: 'Observe long-running background state.',
+          parameters: {} as any,
+          execute: () => { throw new Error('not used'); },
+        } as any,
+      ],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: (toolName) => (toolName === 'background_probe' ? 'background' : 'overlay'),
+      promotedExtendedToolNames: new Set(),
+      skillsContext: '<skills_index><skill name="conversation" /><skill name="memory" /></skills_index>',
+      activeConcernsBlock: formatActiveConcernsContextBlock([
+        {
+          id: 'concern-1',
+          text: 'medication reminder logistics',
+          priority: 'high',
+          source: 'agent',
+          createdAt: '2026-02-01T10:00:00.000Z',
+          expiresAt: '2026-02-01T11:00:00.000Z',
+        },
+        {
+          id: 'concern-2',
+          text: 'sleep schedule drift',
+          priority: 'low',
+          source: 'agent',
+          createdAt: '2026-02-01T10:00:00.000Z',
+          expiresAt: '2026-02-01T12:00:00.000Z',
+        },
+        {
+          id: 'concern-3',
+          text: 'hydration routine check',
+          priority: 'low',
+          source: 'agent',
+          createdAt: '2026-02-01T10:00:00.000Z',
+          expiresAt: '2026-02-01T13:00:00.000Z',
+        },
+      ], 2),
+      behavioralNotesBlock: [
+        '<behavioral_notes>',
+        '- validation: avg +0.45 over 1 outcome sample(s), 100% positive',
+        '- curiosity: avg +0.30 over 2 outcome sample(s), 100% positive',
+        '</behavioral_notes>',
+      ].join('\n'),
+      emotionAppraisalChain: [
+        {
+          timestamp: '2026-03-17T09:00:00.000Z',
+          trigger: 'user_checkin',
+          summary: 'She opened cautiously and needed a little grounding before discussing the plan.',
+        },
+        {
+          timestamp: '2026-03-17T10:30:00.000Z',
+          trigger: 'shared_joke',
+          summary: 'A quick joke lightened the mood and brought her energy back up.',
+        },
+        {
+          timestamp: '2026-03-17T12:00:00.000Z',
+          trigger: 'repair',
+          summary: 'Latest summary',
+        },
+      ],
+      config: {},
+    });
+
+    expect(output).toContain('concerns=3/high, low/1');
+    expect(output).toContain('concern_lines=- medication reminder logistics [high; revisit before');
+    expect(output).toContain('- sleep schedule drift [low; revisit before');
+    expect(output).toContain('behavioral_count=2');
+    expect(output).toContain('behavioral_raw=- validation: avg +0.45 over 1 outcome sample(s), 100% positive');
+    expect(output).toContain('skills_count=2');
+    expect(output).toContain('tools=3/0/2/web, notify, background_probe');
+    expect(output).toContain('tool_lines=- web: Fetch a web page (blocked by current tier: external.web)');
+    expect(output).toContain('- notify: Notify the operator (blocked by current tier: external.web, external.discord, external.email)');
+    expect(output).toContain('- background_probe: Observe long-running background state (background-only; not callable in-turn)');
+    expect(output).toContain('appraisal=3/repair/Latest summary/2026-03-17T12:00:00.000Z');
+    expect(output).toContain('appraisal_lines=');
+    expect(output).toContain('(shared_joke): A quick joke lightened the mood and brought her energy back up.');
+    expect(output).toContain('(repair): Latest summary');
+  });
+
   it('fails closed with structured fallback variables when prior-message context is unavailable', () => {
     const variables = buildDynamicPromptTemplateVariables({
       message: makeMessage(),
@@ -983,6 +1124,23 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_internal_state_relational_last_seen_label).toBe('');
     expect(variables.runtime_internal_state_emotional_mood_valence_label).toBe('');
     expect(variables.runtime_internal_state_emotional_mood_arousal_label).toBe('');
+    expect(variables.runtime_concerns_count).toBe('0');
+    expect(variables.runtime_concerns_top_lines).toBe('');
+    expect(variables.runtime_concerns_top_priorities).toBe('');
+    expect(variables.runtime_concerns_omitted_count).toBe('0');
+    expect(variables.runtime_emotion_appraisal_length).toBe('0');
+    expect(variables.runtime_emotion_appraisal_latest_trigger).toBe('');
+    expect(variables.runtime_emotion_appraisal_latest_summary).toBe('');
+    expect(variables.runtime_emotion_appraisal_latest_timestamp_iso).toBe('');
+    expect(variables.runtime_emotion_appraisal_recent_lines).toBe('');
+    expect(variables.runtime_behavioral_notes_count).toBe('0');
+    expect(variables.runtime_behavioral_notes_body_raw).toBe('');
+    expect(variables.runtime_skills_count).toBe('0');
+    expect(variables.runtime_extended_tools_total).toBe('0');
+    expect(variables.runtime_extended_tools_activatable_count).toBe('0');
+    expect(variables.runtime_extended_tools_blocked_count).toBe('0');
+    expect(variables.runtime_extended_tool_names).toBe('');
+    expect(variables.runtime_extended_tool_directory_lines).toBe('');
     expect(variables.runtime_emotional_affect_body).toBe('');
     expect(variables.runtime_internal_state_body).toBe('');
     expect(variables.runtime_internal_turn_kind).toBe('heartbeat');

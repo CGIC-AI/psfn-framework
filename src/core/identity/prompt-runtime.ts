@@ -412,6 +412,66 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     example: 'calm',
   },
   {
+    token: '{{runtime_concerns_count}}',
+    description: 'Total deduplicated active concern count available to the current turn.',
+    example: '2',
+  },
+  {
+    token: '{{runtime_concerns_top_lines}}',
+    description: 'Top active concern bullet lines without the prose opener.',
+    example: '- medication reminder logistics [high; revisit before Friday, March 27, 2026 at 10:27 PM]',
+  },
+  {
+    token: '{{runtime_concerns_top_priorities}}',
+    description: 'Comma-joined priorities for the top active concerns.',
+    example: 'high, low',
+  },
+  {
+    token: '{{runtime_concerns_omitted_count}}',
+    description: 'Count of lower-salience active concerns omitted from the top list.',
+    example: '1',
+  },
+  {
+    token: '{{runtime_emotion_appraisal_length}}',
+    description: 'Total number of emotion appraisal entries in the current chain.',
+    example: '3',
+  },
+  {
+    token: '{{runtime_emotion_appraisal_latest_trigger}}',
+    description: 'Trigger label for the latest emotion appraisal entry.',
+    example: 'user_checkin',
+  },
+  {
+    token: '{{runtime_emotion_appraisal_latest_summary}}',
+    description: 'Compacted summary text from the latest emotion appraisal entry.',
+    example: 'She relaxed after the reassurance and shifted back toward curiosity.',
+  },
+  {
+    token: '{{runtime_emotion_appraisal_latest_timestamp_iso}}',
+    description: 'ISO-8601 timestamp for the latest emotion appraisal entry.',
+    example: '2026-03-27T22:27:11.123Z',
+  },
+  {
+    token: '{{runtime_emotion_appraisal_recent_lines}}',
+    description: 'Last two formatted emotion appraisal bullet lines, newline-joined.',
+    example: '- Friday, March 27, 2026 at 10:27 PM (user_checkin): She relaxed after the reassurance.',
+  },
+  {
+    token: '{{runtime_behavioral_notes_count}}',
+    description: 'Count of current behavioral note lines available for the active contact.',
+    example: '2',
+  },
+  {
+    token: '{{runtime_behavioral_notes_body_raw}}',
+    description: 'Raw behavioral-notes body text without the wrapping XML tag.',
+    example: '- validation: avg +0.45 over 1 outcome sample(s), 100% positive',
+  },
+  {
+    token: '{{runtime_skills_count}}',
+    description: 'Count of skill entries present in the current skills index XML.',
+    example: '2',
+  },
+  {
     token: '{{runtime_response_style}}',
     description: 'Resolved response style identifier for the current turn.',
     example: 'expressive',
@@ -470,6 +530,31 @@ export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     token: '{{runtime_tooling_available_extended_count}}',
     description: 'Count of additional extended tools available for loading.',
     example: '3',
+  },
+  {
+    token: '{{runtime_extended_tools_total}}',
+    description: 'Total number of extended tools registered for the current turn.',
+    example: '3',
+  },
+  {
+    token: '{{runtime_extended_tools_activatable_count}}',
+    description: 'Count of extended tools that can be activated immediately.',
+    example: '1',
+  },
+  {
+    token: '{{runtime_extended_tools_blocked_count}}',
+    description: 'Count of extended tools blocked by the current capability tier.',
+    example: '1',
+  },
+  {
+    token: '{{runtime_extended_tool_names}}',
+    description: 'Comma-joined extended tool names in registered order.',
+    example: 'web, notify, background_probe',
+  },
+  {
+    token: '{{runtime_extended_tool_directory_lines}}',
+    description: 'Extended tool directory lines without any extra prose preface.',
+    example: '- web: Fetch a web page (blocked by current tier: external.web)',
   },
 ];
 

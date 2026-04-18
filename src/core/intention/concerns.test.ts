@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   ActiveConcernStore,
+  buildActiveConcernsRuntimeData,
   formatActiveConcernsContextBlock,
 } from './concerns.js';
 
@@ -207,5 +208,32 @@ describe('ActiveConcernStore', () => {
     expect(block).toContain('additional lower-salience threads omitted');
     const concernLines = block.split('\n').filter(line => line.startsWith('- '));
     expect(concernLines.length).toBe(7);
+  });
+
+  it('builds atomic active-concern runtime data without the prose opener', () => {
+    store.create({
+      text: textFixture('medication reminder logistics'),
+      priority: 'high',
+      expiresAt: '2026-02-01T11:00:00.000Z',
+    });
+    store.create({
+      text: textFixture('sleep schedule drift'),
+      priority: 'low',
+      expiresAt: '2026-02-01T12:00:00.000Z',
+    });
+    store.create({
+      text: textFixture('hydration routine check'),
+      priority: 'low',
+      expiresAt: '2026-02-01T13:00:00.000Z',
+    });
+
+    const runtimeData = buildActiveConcernsRuntimeData(store.getActiveConcerns(), 2);
+
+    expect(runtimeData.totalCount).toBe(3);
+    expect(runtimeData.topPriorities).toEqual(['high', 'low']);
+    expect(runtimeData.omittedCount).toBe(1);
+    expect(runtimeData.topLines).toHaveLength(2);
+    expect(runtimeData.topLines[0]).toMatch(/^- medication reminder logistics \[high; revisit before /);
+    expect(runtimeData.topLines[1]).toMatch(/^- sleep schedule drift \[low; revisit before /);
   });
 });

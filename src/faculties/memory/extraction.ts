@@ -254,6 +254,13 @@ export class MemoryExtractor {
     return true;
   }
 
+  getPendingExtractionPromise(channelId: string): Promise<void> | null {
+    const resolvedChannelId = this.sessionManager.resolveSessionChannelId(channelId);
+    return this.inFlightByChannel.get(channelId)
+      ?? this.inFlightByChannel.get(resolvedChannelId)
+      ?? null;
+  }
+
   private trackExtraction(
     channelId: string,
     triggerReason: ExtractionTriggerReason,

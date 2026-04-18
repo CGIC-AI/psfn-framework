@@ -25,6 +25,7 @@ import type { PendingFollowUp, PendingFollowUpStorePort } from '../intention/pen
 import type { CareReminderStore } from '../intention/care-reminders.js';
 import type { PostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import type { InternalState } from '../self-model/state.js';
+import type { MemoryExtractor } from '../agent/contracts.js';
 
 export const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
@@ -38,6 +39,7 @@ export interface HeartbeatAgent {
     };
   }>;
   followUp?(message: SubstrateMessage): void;
+  memoryExtractor?: MemoryExtractor | null;
   activateExtendedTools?(
     toolNames: readonly string[],
     options?: ExtendedToolActivationOptions,

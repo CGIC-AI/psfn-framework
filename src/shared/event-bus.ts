@@ -227,6 +227,16 @@ export interface EventMap {
     crossChunkDeduplicatedCount?: number;
     boundaryFactCount?: number;
   } & EventCorrelationFields;
+  'memory.extraction.flush': {
+    channelId: string;
+    templateId: string;
+    templateName: string;
+    canonicalContactId?: string;
+    phase: 'completed' | 'timeout' | 'failed';
+    timeoutMs: number;
+    waitMs: number;
+    error?: string;
+  };
   'memory.retrieval': {
     channelId: string;
     count: number;

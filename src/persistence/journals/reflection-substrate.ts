@@ -362,6 +362,40 @@ function formatRecentSessionMessagesBlock(
   };
 }
 
+function formatRecentSessionTailBlock(
+  messages: readonly ReflectionContactRecentMessage[] | undefined,
+  primarySessionId?: string,
+): { block?: string; provenanceRefs: string[] } {
+  const tailMessages = messages?.slice(-4);
+  if (!tailMessages || tailMessages.length === 0) {
+    return { provenanceRefs: [] };
+  }
+
+  const lines = [
+    '[Recent Session Tail]',
+    'Memory retrieval was empty, so use this recent live tail as the fallback evidence.',
+  ];
+  const provenanceRefs = new Set<string>();
+
+  tailMessages.forEach((message) => {
+    const speaker = message.role === 'assistant'
+      ? message.authorName?.trim() || 'Assistant'
+      : message.authorName?.trim() || 'User';
+    const content = truncateReflectionText(message.content, 240);
+    lines.push(`- ${speaker}: ${content}`);
+  });
+
+  if (primarySessionId?.trim()) {
+    provenanceRefs.add(`reflection_contact_session_tail:${primarySessionId.trim()}`);
+  }
+  provenanceRefs.add(`reflection_contact_session_tail_messages:${tailMessages.length}`);
+
+  return {
+    block: lines.join('\n'),
+    provenanceRefs: [...provenanceRefs],
+  };
+}
+
 function formatActiveConcernsBlock(
   concerns: readonly ReflectionContactActiveConcern[] | undefined,
 ): string | undefined {
@@ -473,9 +507,16 @@ export function assembleReflectionContactContextBundle(
     sections.push(pendingFollowUpsBlock);
   }
 
-  if (input.memoryBlock?.trim()) {
-    sections.push('[Reflection Memory Retrieval]', input.memoryBlock.trim());
+  const memoryBlock = input.memoryBlock?.trim();
+  if (memoryBlock) {
+    sections.push('[Reflection Memory Retrieval]', memoryBlock);
     provenanceRefs.add(`reflection_contact_memory:${input.contactId}`);
+  } else {
+    const tailBlock = formatRecentSessionTailBlock(input.recentSessionMessages, input.primarySessionId);
+    if (tailBlock.block) {
+      sections.push('[Reflection Memory Retrieval]', tailBlock.block);
+      tailBlock.provenanceRefs.forEach(ref => provenanceRefs.add(ref));
+    }
   }
 
   return {

@@ -434,4 +434,194 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(entry.telemetry?.narrativeContext?.internalState?.relational?.contactId).toBe('contact-1');
     },
   );
+
+  it('waits for pending extraction before reflection and seeds a recent session tail when retrieval is empty', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const capturedPrompts: string[] = [];
+    const flushTelemetry: Array<{
+      channelId: string;
+      templateId: string;
+      phase: string;
+      timeoutMs: number;
+      waitMs: number;
+    }> = [];
+    const reflectionJournalPrototype = ReflectionJournalStore.prototype as ReflectionJournalStore & {
+      listRecent?: (options?: { limit?: number }) => unknown[];
+    };
+    const originalListRecent = reflectionJournalPrototype.listRecent;
+    reflectionJournalPrototype.listRecent = () => [];
+
+    try {
+      const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+      const policy = policyStore.load();
+      const valuesTemplate = policy.templates.find((template) => template.id === 'values-reflection');
+      expect(valuesTemplate).toBeDefined();
+      if (!valuesTemplate) {
+        throw new Error('values-reflection template missing from defaults');
+      }
+      valuesTemplate.deliberation = {
+        ...valuesTemplate.deliberation,
+        maxRounds: 1,
+      };
+      policyStore.save(policy);
+
+      const recentSessionMessages = [
+        {
+          id: 1,
+          channelId: 'discord:primary-session',
+          role: 'user' as const,
+          content: 'I just sent the update.',
+          timestamp: 1_700_000_000_000,
+          authorName: 'Ari',
+        },
+        {
+          id: 2,
+          channelId: 'discord:primary-session',
+          role: 'assistant' as const,
+          content: 'I am tracking the update now.',
+          timestamp: 1_700_000_000_100,
+          authorName: 'Companion',
+        },
+      ];
+      const currentContact = {
+        id: 'contact-1',
+        displayName: 'Ari',
+        nickname: 'Ari',
+        trustLevel: 'trusted' as const,
+        relationshipType: 'friend' as const,
+        firstSeen: '2026-01-01T00:00:00.000Z',
+        lastSeen: '2026-03-31T12:00:00.000Z',
+        conversationChannels: [{
+          channel: 'discord',
+          channelId: 'discord:primary-session',
+          firstSeen: '2026-01-01T00:00:00.000Z',
+          lastSeen: '2026-03-31T12:00:00.000Z',
+        }],
+      };
+      const currentInternalState = new InternalStateComputer().computeState({
+        emotionState: {
+          vad: { valence: 0.2, arousal: 0.15, dominance: 0.1 },
+          mood: { valence: 0.25, arousal: 0.2, dominance: 0.15 },
+          discrete: { curiosity: 0.5, calm: 0.4 },
+          confidence: 0.75,
+        },
+        activeConcerns: [],
+        trustLevel: 'trusted',
+        contactId: 'contact-1',
+        sessionMetrics: {
+          userMessageText: 'Recent conversations matter.',
+          responseText: 'Keep continuity with the primary contact.',
+          toolCallCount: 0,
+          recentTurnCount: 3,
+          lastSeenDeltaSeconds: 120,
+        },
+      });
+      const snapshotRef = buildInternalStateSnapshotRef(currentInternalState);
+      const llmProvider: LLMProviderPort = {
+        stream: vi.fn(async () => ({
+          content: '',
+          toolCalls: [],
+          model: 'mock-stream',
+          inputTokens: 0,
+          outputTokens: 0,
+          stopReason: 'stop',
+        })),
+        complete: vi.fn(async (context, purpose) => {
+          capturedPrompts.push(context.messages.map((message) => message.content).join('\n'));
+          return {
+            content: purpose === 'reasoning'
+              ? 'Continuity stays central.'
+              : 'Care keeps the tone steady.',
+            toolCalls: [],
+            model: `mock-${purpose}`,
+            inputTokens: 12,
+            outputTokens: 18,
+            stopReason: 'stop',
+          };
+        }),
+      };
+      let resolvePendingDrain!: () => void;
+      const pendingDrain = new Promise<void>((resolve) => {
+        resolvePendingDrain = resolve;
+      });
+      const memoryRetrieve = vi.fn(async () => '');
+      const memoryExtractor = {
+        getPendingExtractionPromise: vi.fn(() => pendingDrain),
+      };
+      const eventBus = new EventBus();
+      eventBus.on('memory.extraction.flush', (telemetry) => {
+        flushTelemetry.push(telemetry);
+      });
+
+      const runtime = createHeartbeatTemplateRuntime({
+        scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+        agentLoop: {
+          handleMessage: vi.fn(async () => ({ content: 'unused' })),
+          memoryExtractor,
+          memoryProvider: {
+            retrieve: memoryRetrieve,
+          },
+          getCurrentInternalState: () => currentInternalState,
+          getCurrentInternalStateSnapshotRef: () => snapshotRef,
+          getCurrentMetacognitiveFlags: () => [],
+        } as any,
+        sender: { send: vi.fn(async () => undefined) },
+        dataDir: tempDir,
+        runtimeOptions: {
+          eventBus,
+          llmProvider: llmProvider as any,
+          sessionManager: {
+            resolveSessionChannelId: (channelId: string) => channelId,
+            getRecentMessages: (channelId: string, limit?: number) => (
+              channelId === 'discord:primary-session'
+                ? recentSessionMessages.slice(0, limit ?? recentSessionMessages.length)
+                : []
+            ),
+          },
+          contactStore: {
+            getById: async (id: string) => (id === 'contact-1' ? currentContact : undefined),
+            getEmotionalSnapshot: async (id: string) => (
+              id === 'contact-1'
+                ? { valence: 0.18, confidence: 0.84, observedAtMs: 1_700_000_000_000 }
+                : undefined
+            ),
+          },
+        },
+      });
+
+      const reflectionRun = runtime.runTemplateNow('values-reflection', {
+        sendToDiscordOverride: false,
+        deferIfBusy: false,
+      });
+
+      await Promise.resolve();
+      expect(memoryRetrieve).not.toHaveBeenCalled();
+
+      resolvePendingDrain();
+      await reflectionRun;
+
+      expect(memoryExtractor.getPendingExtractionPromise).toHaveBeenCalledWith('discord:primary-session');
+      expect(flushTelemetry).toEqual([
+        expect.objectContaining({
+          channelId: 'discord:primary-session',
+          templateId: 'values-reflection',
+          phase: 'completed',
+        }),
+      ]);
+      expect(memoryRetrieve).toHaveBeenCalledTimes(1);
+      expect(capturedPrompts.length).toBeGreaterThan(0);
+      const prompt = capturedPrompts.join('\n\n');
+      expect(prompt).toContain('[Reflection Memory Retrieval]');
+      expect(prompt).toContain('[Recent Session Tail]');
+      expect(prompt).toContain('Memory retrieval was empty, so use this recent live tail as the fallback evidence.');
+      expect(prompt).toContain('I just sent the update.');
+      expect(prompt).toContain('I am tracking the update now.');
+    } finally {
+      if (originalListRecent === undefined) {
+        delete reflectionJournalPrototype.listRecent;
+      } else {
+        reflectionJournalPrototype.listRecent = originalListRecent;
+      }
+    }
+  });
 });

@@ -218,6 +218,31 @@ describe('reflection substrate stores', () => {
     ]));
   });
 
+  it('seeds a recent session tail into the reflection memory section when retrieval is empty', () => {
+    const bundle = assembleReflectionContactContextBundle({
+      contactId: 'contact-1',
+      contactDisplayName: 'Ari',
+      trustLevel: 'trusted',
+      primarySessionId: 'discord:primary-session',
+      recentSessionMessages: [
+        { role: 'user', content: 'I just sent the update.' },
+        { role: 'assistant', content: 'I am tracking the update now.' },
+      ],
+      memoryBlock: '',
+    });
+
+    expect(bundle.promptBlock).toContain('[Reflection Memory Retrieval]');
+    expect(bundle.promptBlock).toContain('[Recent Session Tail]');
+    expect(bundle.promptBlock).toContain('Memory retrieval was empty, so use this recent live tail as the fallback evidence.');
+    expect(bundle.promptBlock).toContain('I just sent the update.');
+    expect(bundle.promptBlock).toContain('I am tracking the update now.');
+    expect(bundle.provenanceRefs).toEqual(expect.arrayContaining([
+      'reflection_contact:contact-1',
+      'reflection_contact_session_tail:discord:primary-session',
+      'reflection_contact_session_tail_messages:2',
+    ]));
+  });
+
   it('fails closed when required process-stage fields are missing', () => {
     const store = new ReflectionProcessLogStore(join(tempDir, 'processes'));
 

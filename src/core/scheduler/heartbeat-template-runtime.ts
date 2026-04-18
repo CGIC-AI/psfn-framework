@@ -64,6 +64,7 @@ const MIN_SCHEDULED_TEMPLATE_GAP_MS = 60_000;
 const TEMPLATE_EXECUTION_BURST_WINDOW_MS = 60_000;
 const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
 const TEMPLATE_EXECUTION_COOLDOWN_MS = 10 * 60_000;
+const REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS = 2_500;
 
 interface ReflectionMetacognitiveFlag {
   flag: string;
@@ -341,6 +342,86 @@ export function createHeartbeatTemplateRuntime(
       ?? undefined,
   );
 
+  const awaitPendingReflectionExtractionDrain = async (
+    reflectionChannelId: string,
+    reflectionTemplate: ReflectionTemplate,
+    reflectionCanonicalContactId?: string,
+  ): Promise<void> => {
+    const pendingExtractionPromise = agentLoop.memoryExtractor?.getPendingExtractionPromise?.(reflectionChannelId);
+    if (!pendingExtractionPromise) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<
+      { phase: 'timeout' }
+    >((resolve) => {
+      timeoutHandle = setTimeout(() => resolve({ phase: 'timeout' }), REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS);
+    });
+    const drainPromise = pendingExtractionPromise.then(
+      () => ({ phase: 'completed' as const }),
+      (error) => ({ phase: 'failed' as const, error }),
+    );
+
+    const outcome = await Promise.race([drainPromise, timeoutPromise]);
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+
+    const waitMs = Date.now() - startedAt;
+    const telemetry = {
+      channelId: reflectionChannelId,
+      templateId: reflectionTemplate.id,
+      templateName: reflectionTemplate.name,
+      ...(reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {}),
+      timeoutMs: REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS,
+      waitMs,
+    };
+
+    if (outcome.phase === 'completed') {
+      log.debug('Pending memory extraction drained before reflection', telemetry);
+      if (runtimeOptions.eventBus) {
+        try {
+          await runtimeOptions.eventBus.emit('memory.extraction.flush', {
+            ...telemetry,
+            phase: 'completed',
+          });
+        } catch (error) {
+          log.warn('Failed to emit memory extraction flush telemetry', {
+            ...telemetry,
+            phase: 'completed',
+            error: String(error),
+          });
+        }
+      }
+      return;
+    }
+
+    const error = outcome.phase === 'failed' ? String(outcome.error) : undefined;
+    log.warn('Timed out waiting for pending memory extraction before reflection', {
+      ...telemetry,
+      phase: outcome.phase,
+      ...(error ? { error } : {}),
+    });
+    if (runtimeOptions.eventBus) {
+      try {
+        await runtimeOptions.eventBus.emit('memory.extraction.flush', {
+          ...telemetry,
+          phase: outcome.phase,
+          ...(error ? { error } : {}),
+        });
+      } catch (emitError) {
+        log.warn('Failed to emit memory extraction flush telemetry', {
+          ...telemetry,
+          phase: outcome.phase,
+          ...(error ? { error } : {}),
+          emitError: String(emitError),
+        });
+      }
+    }
+  };
+
   const resolveReflectionContactSessionId = (
     contact: Contact | null,
     fallbackSessionId: string,
@@ -429,6 +510,12 @@ export function createHeartbeatTemplateRuntime(
     const recentSessionMessages = recentSessionEntries
       .map(normalizeRecentReflectionMessage)
       .filter((message): message is ReflectionContactRecentMessage => message !== null);
+
+    await awaitPendingReflectionExtractionDrain(
+      primarySessionId,
+      template,
+      reflectionCanonicalContactId,
+    );
 
     const currentInternalState = internalStateContext?.internalState
       ?? agentLoop.getCurrentInternalState?.()

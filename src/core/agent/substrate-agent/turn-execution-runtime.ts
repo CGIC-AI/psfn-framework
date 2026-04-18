@@ -108,6 +108,11 @@ import {
   buildPromptSectionTelemetryList,
   extractWrappedPromptSections,
 } from '../../identity/prompt-sections.js';
+import {
+  buildRuntimeDatetimeAnchorRetryPrompt,
+  buildRuntimeDatetimeContradictionRefusal,
+  detectRuntimeDatetimeContradiction,
+} from './runtime-datetime-contradiction-guard.js';
 import { formatAttributedSystemContent } from '../../session/entry-attribution.js';
 import { sanitizePersistedReasoningText } from './turn-records.js';
 
@@ -1119,6 +1124,7 @@ export async function handleMessageForTurn(
     let turnUsage: TurnUsage;
     let responseText: string;
     let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
+    let runtimeContradictionDiagnostics: NonNullable<AgentResponse['metadata']['diagnostics']> | undefined;
     let turnIntent: string | null = null;
     const isVisionTurn = hasVisionTurnInputs(message);
     const visionTurnDeadlineAt = isVisionTurn ? promptStageStart + VISION_TURN_TIMEOUT_MS : null;
@@ -1279,10 +1285,6 @@ export async function handleMessageForTurn(
           source: 'fallback',
         });
       }
-      emitObservedTurnStage('prompt', {
-        durationMs: Date.now() - promptStageStart,
-        ttftMs: streamFirstTokenAt - startTime,
-      });
 
       turnMessages = runtime.agent.state.messages.slice(turnStartMessageIndex);
       turnUsage = runtime.accumulateTurnUsage(turnMessages);
@@ -1290,6 +1292,108 @@ export async function handleMessageForTurn(
       firstTokenAt = streamFirstTokenAt;
 
       responseText = runtime.extractResponseText();
+      const runtimeContradictionDetection = detectRuntimeDatetimeContradiction(
+        turnSnapshot.promptContext,
+        responseText,
+      );
+      if (runtimeContradictionDetection.anchorDetected && runtimeContradictionDetection.contradictionDetected) {
+        runtimeContradictionDiagnostics = {
+          runtimeContradiction: {
+            code: 'runtime_datetime_anchor_contradiction',
+            anchorDetected: true,
+            matchedSignals: [...runtimeContradictionDetection.matchedSignals],
+            attempts: 1,
+            retryAttempted: true,
+            retrySucceeded: false,
+            refusalApplied: false,
+          },
+        };
+        log.warn('Runtime datetime contradiction detected; retrying with strengthened anchor', {
+          channelId: message.channelId,
+          matchedSignals: runtimeContradictionDetection.matchedSignals,
+        });
+
+        const preRetryTurnUsage = turnUsage;
+        const strengthenedSystemPrompt = buildRuntimeDatetimeAnchorRetryPrompt(providerSystemPrompt);
+        runtime.agent.replaceMessages(historyMessages);
+        runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(strengthenedSystemPrompt));
+
+        const contradictionRetryBridgeToken = runtime.bridge.setChannel(message.channelId, {
+          turnId,
+          requestId: `${requestId}:runtime-contradiction-retry`,
+          callType: turnCallType,
+          originType: turnCallType,
+          originStage: 'agent.turn.runtime_contradiction_retry',
+          purpose: 'agent.turn.runtime_contradiction_retry',
+        });
+        runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, autoloadOutcome.intent);
+        try {
+          await runWithVisionTurnTimeout({
+            channelId: message.channelId,
+            deadlineAt: visionTurnDeadlineAt,
+            stage: 'agent_turn_runtime_contradiction_retry',
+            onTimeout: () => runtime.agent.abort(),
+            run: () => runWithRequestContext(
+              {
+                ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.runtime_contradiction_retry'),
+                ...viewerRequestContext,
+              },
+              async () => runWithVisionToolRequestContext(
+                visionToolRequestContext,
+                async () => runtime.agent.prompt(
+                  buildPromptMessage(message, speakerRole, turnUserContentBuildResult.content),
+                ),
+              ),
+            ),
+          });
+        } finally {
+          runtime.bridge.clearChannel(contradictionRetryBridgeToken);
+          runtime.clearActiveTurnContext();
+        }
+
+        turnMessages = runtime.agent.state.messages.slice(turnStartMessageIndex);
+        const retryTurnUsage = runtime.accumulateTurnUsage(turnMessages);
+        turnUsage = {
+          inputTokens: preRetryTurnUsage.inputTokens + retryTurnUsage.inputTokens,
+          outputTokens: preRetryTurnUsage.outputTokens + retryTurnUsage.outputTokens,
+          cacheReadTokens: preRetryTurnUsage.cacheReadTokens + retryTurnUsage.cacheReadTokens,
+          llmCalls: preRetryTurnUsage.llmCalls + retryTurnUsage.llmCalls,
+          toolCalls: preRetryTurnUsage.toolCalls + retryTurnUsage.toolCalls,
+          contextUtilization: Math.max(preRetryTurnUsage.contextUtilization, retryTurnUsage.contextUtilization),
+          ...(preRetryTurnUsage.estimatedCostUsd !== undefined || retryTurnUsage.estimatedCostUsd !== undefined
+            ? { estimatedCostUsd: (preRetryTurnUsage.estimatedCostUsd ?? 0) + (retryTurnUsage.estimatedCostUsd ?? 0) }
+            : {}),
+        };
+        responseModel = runtime.agent.state.model.id;
+        responseText = runtime.extractResponseText();
+
+        const retryContradictionDetection = detectRuntimeDatetimeContradiction(
+          turnSnapshot.promptContext,
+          responseText,
+        );
+        if (retryContradictionDetection.contradictionDetected) {
+          const baseRuntimeContradiction = runtimeContradictionDiagnostics.runtimeContradiction;
+          runtimeContradictionDiagnostics = {
+            runtimeContradiction: {
+              ...baseRuntimeContradiction,
+              attempts: 2,
+              retrySucceeded: false,
+              refusalApplied: true,
+            },
+          };
+          responseText = buildRuntimeDatetimeContradictionRefusal();
+        } else {
+          const baseRuntimeContradiction = runtimeContradictionDiagnostics.runtimeContradiction;
+          runtimeContradictionDiagnostics = {
+            runtimeContradiction: {
+              ...baseRuntimeContradiction,
+              attempts: 2,
+              retrySucceeded: true,
+              refusalApplied: false,
+            },
+          };
+        }
+      }
       if (isVisionTurn && responseText.trim().length === 0) {
         const assistantMessage = runtime.getLatestAssistantMessage();
         log.warn('Vision turn produced empty assistant text; attempting non-fabricating recovery replay', {
@@ -1410,6 +1514,16 @@ export async function handleMessageForTurn(
           });
         }
       }
+      emitObservedTurnStage('prompt', {
+        durationMs: Date.now() - promptStageStart,
+        ttftMs: streamFirstTokenAt - startTime,
+        ...(runtimeContradictionDiagnostics
+          ? {
+            runtimeContradictionRetry: true,
+            runtimeContradictionAttempts: runtimeContradictionDiagnostics.runtimeContradiction.attempts,
+          }
+          : {}),
+      });
       if (turnSnapshot.promptContext) {
         turnSnapshot.promptContext.response = buildPromptResponseSnapshot({
           assistantMessage: runtime.getLatestAssistantMessage(),
@@ -1533,6 +1647,13 @@ export async function handleMessageForTurn(
     }
 
     const completedAt = Date.now();
+    const responseDiagnostics: NonNullable<AgentResponse['metadata']['diagnostics']> = {};
+    if (fallbackDiagnostics?.fallback) {
+      responseDiagnostics.fallback = fallbackDiagnostics.fallback;
+    }
+    if (runtimeContradictionDiagnostics?.runtimeContradiction) {
+      responseDiagnostics.runtimeContradiction = runtimeContradictionDiagnostics.runtimeContradiction;
+    }
     const agentResponse: AgentResponse = {
       content: safeResponseText,
       channelId: message.channelId,
@@ -1545,7 +1666,7 @@ export async function handleMessageForTurn(
         internalState: cloneInternalState(internalState),
         internalStateSnapshotRef,
         metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),
-        ...(fallbackDiagnostics ? { diagnostics: fallbackDiagnostics } : {}),
+        ...(Object.keys(responseDiagnostics).length > 0 ? { diagnostics: responseDiagnostics } : {}),
         ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
       },
     };

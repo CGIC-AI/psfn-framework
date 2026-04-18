@@ -2994,8 +2994,78 @@ describe('SubstrateAgent.handleMessage', () => {
         attempts: 2,
         finalContentEmpty: true,
       });
-    } finally {
+  } finally {
       (globalThis as any).fetch = originalFetch;
+    }
+  });
+
+  it('emits a runtime contradiction signal when a draft disputes the authoritative current_datetime anchor', async () => {
+    const config = makeConfig();
+    const setSystemPromptSpy = vi.spyOn(Agent.prototype, 'setSystemPrompt');
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+      );
+
+      mockAssistantResponse('The clock is off, that cannot be right.');
+      mockAssistantResponse('The runtime current_datetime block says it is Thursday, March 18, 2026 at 9:30 AM.');
+
+      const promptCallsBefore = promptSpy.mock.calls.length;
+      const response = await agent.handleMessage(makeMessage({
+        content: 'What time is it?',
+      }));
+
+      expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(2);
+      expect(response.content).toBe('The runtime current_datetime block says it is Thursday, March 18, 2026 at 9:30 AM.');
+      expect(response.metadata.diagnostics?.runtimeContradiction).toMatchObject({
+        code: 'runtime_datetime_anchor_contradiction',
+        anchorDetected: true,
+        attempts: 2,
+        retryAttempted: true,
+        retrySucceeded: true,
+        refusalApplied: false,
+      });
+      expect(response.metadata.diagnostics?.runtimeContradiction?.matchedSignals).toEqual(
+        expect.arrayContaining(['clock_is_off', 'cannot_be_right']),
+      );
+      expect(setSystemPromptSpy.mock.calls.at(-1)?.[0]).toContain('<runtime_datetime_guard>');
+    } finally {
+      setSystemPromptSpy.mockRestore();
+    }
+  });
+
+  it('strengthens the runtime anchor on retry and returns the retried answer', async () => {
+    const config = makeConfig();
+    const setSystemPromptSpy = vi.spyOn(Agent.prototype, 'setSystemPrompt');
+
+    try {
+      const agent = new SubstrateAgent(
+        new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
+      );
+
+      mockAssistantResponse('Time is wrong. Are you sure this is right?');
+      mockAssistantResponse('The authoritative runtime current_datetime block says it is Thursday, March 18, 2026 at 9:30 AM.');
+
+      const promptCallsBefore = promptSpy.mock.calls.length;
+      const response = await agent.handleMessage(makeMessage({
+        content: 'What time is it?',
+      }));
+
+      expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(2);
+      expect(response.content).toBe('The authoritative runtime current_datetime block says it is Thursday, March 18, 2026 at 9:30 AM.');
+      expect(response.metadata.diagnostics?.runtimeContradiction).toMatchObject({
+        code: 'runtime_datetime_anchor_contradiction',
+        anchorDetected: true,
+        attempts: 2,
+        retryAttempted: true,
+        retrySucceeded: true,
+        refusalApplied: false,
+      });
+      expect(setSystemPromptSpy.mock.calls.at(-1)?.[0]).toContain('runtime current_datetime block is authoritative');
+      expect(setSystemPromptSpy.mock.calls.at(-1)?.[0]).toContain('<runtime_datetime_guard>');
+    } finally {
+      setSystemPromptSpy.mockRestore();
     }
   });
 

@@ -249,6 +249,15 @@ export interface ResponseMetadata {
       previousStopReason?: string;
       previousErrorMessage?: string;
     };
+    runtimeContradiction?: {
+      code: 'runtime_datetime_anchor_contradiction';
+      anchorDetected: boolean;
+      matchedSignals: string[];
+      attempts: number;
+      retryAttempted: boolean;
+      retrySucceeded: boolean;
+      refusalApplied: boolean;
+    };
   };
   broadcastSafety?: {
     visibilityScope: 'public_only' | 'approved_private_context';

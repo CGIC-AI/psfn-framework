@@ -1,5 +1,7 @@
 import { beforeEach, describe, it, expect } from 'vitest';
 import {
+  buildResponseStylePromptState,
+  buildTrustPromptState,
   evaluateMemoryPolicy,
   classifyChannel,
   resolveChannelResponseStyle,
@@ -399,6 +401,27 @@ describe('classifyChannel', () => {
     expect(classifyChannel('1234567890')).toBe('semi_private');
     expect(classifyChannel('1234567890', undefined)).toBe('semi_private');
     expect(classifyChannel('1234567890', {})).toBe('semi_private');
+  });
+});
+
+describe('prompt-facing trust/style state', () => {
+  it('emits one-hot trust state variables for prompt templates', () => {
+    expect(buildTrustPromptState('trusted')).toEqual({
+      runtime_trust_level: 'trusted',
+      runtime_trust_is_primary: 'false',
+      runtime_trust_is_trusted: 'true',
+      runtime_trust_is_regular: 'false',
+      runtime_trust_is_public: 'false',
+    });
+  });
+
+  it('emits one-hot response-style state variables for prompt templates', () => {
+    expect(buildResponseStylePromptState('expressive')).toEqual({
+      runtime_response_style: 'expressive',
+      runtime_response_style_name: 'Expressive',
+      runtime_response_style_is_concise: 'false',
+      runtime_response_style_is_expressive: 'true',
+    });
   });
 });
 

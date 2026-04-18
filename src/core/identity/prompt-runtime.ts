@@ -11,10 +11,16 @@ import {
   resolveActiveTimezone,
 } from '../../shared/time/active-timezone.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
-import {
-  METACOGNITIVE_FLAG_NAMES,
-  type MetacognitiveFlagName,
-} from '../self-model/metacognition.js';
+
+const METACOGNITIVE_FLAG_HINT_NAMES = [
+  'uncertainty',
+  'avoidance',
+  'high_engagement',
+  'repetition',
+  'confabulation_risk',
+] as const;
+
+type MetacognitiveFlagName = typeof METACOGNITIVE_FLAG_HINT_NAMES[number];
 
 export interface PromptRuntimeContext {
   now?: Date;
@@ -40,6 +46,7 @@ function unixTimestamp(now: Date): string {
 
 type TokenResolver = (now: Date) => string;
 const EMPTY_WRAPPED_SECTION_PATTERN = /<([a-z0-9_]+)>\s*<\/\1>/g;
+const CONDITIONAL_BLOCK_PATTERN = /\{\{#if\s+([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}([\s\S]*?)\{\{\/if\}\}/g;
 
 const TOKEN_RESOLVERS: Array<[RegExp, TokenResolver]> = [
   [/\{\{\s*(?:current_datetime|current_datetime_iso|now|now\(\))\s*\}\}/gi, activeIso],
@@ -83,7 +90,7 @@ const METACOGNITIVE_FLAG_PROMPT_HINT_DETAILS: Record<
   },
 };
 
-const METACOGNITIVE_FLAG_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = METACOGNITIVE_FLAG_NAMES.flatMap((flagName) => {
+const METACOGNITIVE_FLAG_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = METACOGNITIVE_FLAG_HINT_NAMES.flatMap((flagName) => {
   const details = METACOGNITIVE_FLAG_PROMPT_HINT_DETAILS[flagName];
   const label = flagName.replace(/_/g, ' ');
   return [
@@ -1295,6 +1302,23 @@ function pruneEmptyWrappedSections(text: string): string {
     .trim();
 }
 
+function isConditionTruthy(value: string | undefined): boolean {
+  if (value === undefined) return false;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return false;
+  if (normalized === 'false' || normalized === '0' || normalized === 'no' || normalized === 'null') {
+    return false;
+  }
+  return true;
+}
+
+function resolveConditionalBlocks(text: string, lookup: Map<string, string>): string {
+  return text.replace(CONDITIONAL_BLOCK_PATTERN, (_full, rawToken: string, content: string) => {
+    const normalizedToken = normalizeLookupKey(normalizeTokenName(rawToken));
+    return isConditionTruthy(lookup.get(normalizedToken)) ? content : '';
+  });
+}
+
 export interface PromptRuntimeRenderResult {
   text: string;
   unresolvedTokens: string[];
@@ -1320,6 +1344,8 @@ export function renderPromptRuntimeTokens(
     for (const [pattern, resolver] of TOKEN_RESOLVERS) {
       output = output.replace(pattern, () => resolver(now));
     }
+
+    output = resolveConditionalBlocks(output, variableLookup);
 
     output = output.replace(/\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g, (fullToken, rawName: string) => {
       const cleaned = normalizeTokenName(rawName);

@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js';
 import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
+import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 
 export const ACTIVE_CONCERN_PRIORITIES = ['high', 'medium', 'low'] as const;
 export type ActiveConcernPriority = typeof ACTIVE_CONCERN_PRIORITIES[number];
@@ -73,6 +74,12 @@ export interface ActiveConcernRuntimeData {
   topPriorities: ActiveConcernPriority[];
   omittedCount: number;
 }
+
+export const OPEN_THREADS_BODY_TEMPLATE = [
+  '{{#if runtime_concerns_count}}Treat these as soft threads to verify, not alarms that must dominate the turn.{{/if}}',
+  '{{runtime_concerns_top_lines}}',
+  '{{#if runtime_concerns_omitted_count}}- {{runtime_concerns_omitted_count}} additional lower-salience thread{{runtime_concerns_omitted_plural_suffix}} omitted.{{/if}}',
+].join('\n');
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -408,21 +415,27 @@ export function formatActiveConcernsContextBlock(
 ): string {
   const runtimeData = buildActiveConcernsRuntimeData(concerns, limit);
   if (runtimeData.totalCount === 0) return '';
-  const lines = [
-    'Treat these as soft threads to verify, not alarms that must dominate the turn.',
-    ...runtimeData.topLines,
-  ];
-
-  if (runtimeData.omittedCount > 0) {
-    lines.push(
-      `- ${String(runtimeData.omittedCount)} additional lower-salience thread${runtimeData.omittedCount === 1 ? '' : 's'} omitted.`,
-    );
-  }
+  const content = injectPromptRuntimeTokens(OPEN_THREADS_BODY_TEMPLATE, {
+    variables: buildActiveConcernsPromptVariables(runtimeData),
+  });
+  if (!content) return '';
 
   return wrapPromptSectionXml({
     id: 'open_threads',
-    content: lines.join('\n'),
+    content,
   });
+}
+
+export function buildActiveConcernsPromptVariables(
+  runtimeData: ActiveConcernRuntimeData,
+): Record<string, string> {
+  return {
+    runtime_concerns_count: String(runtimeData.totalCount),
+    runtime_concerns_top_lines: runtimeData.topLines.join('\n'),
+    runtime_concerns_top_priorities: runtimeData.topPriorities.join(', '),
+    runtime_concerns_omitted_count: String(runtimeData.omittedCount),
+    runtime_concerns_omitted_plural_suffix: runtimeData.omittedCount === 1 ? '' : 's',
+  };
 }
 
 export function buildActiveConcernsRuntimeData(

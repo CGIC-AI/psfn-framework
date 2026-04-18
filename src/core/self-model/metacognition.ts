@@ -122,6 +122,11 @@ const TOKEN_STOP_WORDS = new Set([
   'your',
 ]);
 
+export const METACOGNITIVE_PERSONA_GUIDANCE_BODY_TEMPLATE = [
+  '{{#if runtime_flag_uncertainty_present}}- Use tentative language and acknowledge uncertainty explicitly.{{/if}}',
+  '{{#if runtime_flag_confabulation_risk_present}}- Anchor strong claims to retrieved evidence, or state when evidence is missing.{{/if}}',
+].join('\n');
+
 export class MetacognitiveMonitor {
   private readonly config: ResolvedMetacognitiveMonitorConfig;
 
@@ -206,23 +211,24 @@ export function formatMetacognitiveNotesContextBlock(
 }
 
 export function buildMetacognitivePersonaHint(flags: readonly MetacognitiveFlag[]): string | null {
-  const normalizedFlags = cloneMetacognitiveFlags(flags);
-  const guidance: string[] = [];
-  const uncertainty = normalizedFlags.find(flag => flag.flag === 'uncertainty' && flag.confidence >= 0.45);
-  if (uncertainty) {
-    guidance.push('Use tentative language and acknowledge uncertainty explicitly.');
-  }
-  const confabulationRisk = normalizedFlags.find(
-    flag => flag.flag === 'confabulation_risk' && flag.confidence >= 0.45,
+  const variables = buildMetacognitiveFlagPromptVariables(
+    cloneMetacognitiveFlags(flags).filter(flag => flag.confidence >= 0.45),
   );
-  if (confabulationRisk) {
-    guidance.push('Anchor strong claims to retrieved evidence, or state when evidence is missing.');
-  }
-  if (guidance.length === 0) return null;
+  const body = [
+    variables.runtime_flag_uncertainty_present === 'true'
+      ? '- Use tentative language and acknowledge uncertainty explicitly.'
+      : '',
+    variables.runtime_flag_confabulation_risk_present === 'true'
+      ? '- Anchor strong claims to retrieved evidence, or state when evidence is missing.'
+      : '',
+  ]
+    .filter(line => line.length > 0)
+    .join('\n');
+  if (!body) return null;
 
   return wrapPromptSectionXml({
     id: 'metacognitive_persona_guidance',
-    content: guidance.map(entry => `- ${entry}`).join('\n'),
+    content: body,
   });
 }
 

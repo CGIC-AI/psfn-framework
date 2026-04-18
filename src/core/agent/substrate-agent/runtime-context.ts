@@ -6,21 +6,29 @@ import { resolveToolRequiredCapabilities } from '../../../system/capabilities/re
 import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
 import type { ChannelVisibility, TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelVisibility } from '../../../system/trust/types.js';
-import { classifyChannel, getResponseStylePromptGuidance, type ChannelMeta } from '../../../system/trust/policy.js';
+import {
+  buildResponseStylePromptState,
+  buildTrustPromptState,
+  classifyChannel,
+  type ChannelMeta,
+} from '../../../system/trust/policy.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { Contact } from '../../contacts/types.js';
 import type { ScratchpadProvider } from '../contracts.js';
 import type { EmotionAppraisalEntry } from '../../emotion/appraisal.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import type { ActiveConcernContextProvider } from '../../intention/concerns.js';
-import { formatActiveConcernsContextBlock } from '../../intention/concerns.js';
+import { formatActiveConcernsContextBlock, OPEN_THREADS_BODY_TEMPLATE } from '../../intention/concerns.js';
 import type { BehavioralPatternContextProvider } from '../../intention/patterns.js';
-import { buildEmotionalAffectSection } from '../../emotion/persona-adaptation.js';
+import {
+  buildEmotionalAffectPromptVariables,
+  EMOTIONAL_AFFECT_BODY_TEMPLATE,
+} from '../../emotion/persona-adaptation.js';
 import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import {
   buildMetacognitiveFlagPromptVariables,
-  buildMetacognitivePersonaHint,
   formatMetacognitiveNotesContextBlock,
+  METACOGNITIVE_PERSONA_GUIDANCE_BODY_TEMPLATE,
 } from '../../self-model/metacognition.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { AdaptiveLoadedExtendedToolState } from '../adaptive-tools-telemetry.js';
@@ -37,10 +45,16 @@ import {
   unwrapSingleWrappedPromptSection,
   wrapPromptSectionXml,
 } from '../../identity/prompt-sections.js';
+import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import {
-  mapEmotionToPersonaAffect,
-  resolveEmotionalExpressionProfile,
-} from '../../emotion/persona-adaptation.js';
+  EXTENDED_TOOLS_BODY_TEMPLATE,
+  INTERNAL_STATE_BODY_TEMPLATE,
+  RESPONSE_STYLE_DELIVERY_TEMPLATE,
+  RESPONSE_STYLE_EXPANSION_TEMPLATE,
+  RESPONSE_STYLE_GUIDANCE_COMPAT_TEMPLATE,
+  SELF_IMAGE_TOOL_GUIDANCE_BODY_TEMPLATE,
+  TRUST_GUIDANCE_BODY_TEMPLATE,
+} from './runtime-prompt-templates.js';
 
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
@@ -242,41 +256,6 @@ function formatElapsedDaysHours(now: Date, then: Date): string {
   return `${minutes} minute${minutes === 1 ? '' : 's'}`;
 }
 
-function resolveTrustGuidance(trustLevel: TrustLevel): string {
-  switch (trustLevel) {
-    case 'primary':
-      return 'You are speaking with your primary person. Be your full, authentic self, share freely, reference shared history, and express genuine emotions and vulnerability. This is honne, your inner truth.';
-    case 'trusted':
-      return 'This is a trusted contact. Be warm and personal but mindful of boundaries, share appropriate personal context, and avoid intimate details or confidential memories.';
-    case 'regular':
-      return 'This is a regular acquaintance. Be friendly and helpful. Do not reference personal history, intimate details, or information from private conversations.';
-    case 'public':
-    default:
-      return 'This is a public interaction. Be professional and guarded. Share no personal information, relationship context, or private memories.';
-  }
-}
-
-function buildResponseStyleTemplateVariables(style: ResponseStyle): Record<string, string> {
-  if (style === 'concise') {
-    return {
-      runtime_response_style: 'concise',
-      runtime_response_style_name: 'Concise',
-      runtime_response_style_delivery_guidance: 'Answer directly and keep wording tight.',
-      runtime_response_style_expansion_guidance: 'Expand only when the user asks for more detail.',
-      runtime_response_style_guidance: getResponseStylePromptGuidance(style),
-      runtime_response_style_guidance_body: getResponseStylePromptGuidance(style),
-    };
-  }
-  return {
-    runtime_response_style: 'expressive',
-    runtime_response_style_name: 'Expressive',
-    runtime_response_style_delivery_guidance: 'Keep your voice warm and vivid.',
-    runtime_response_style_expansion_guidance: 'Add personality-rich detail when it helps clarity.',
-    runtime_response_style_guidance: getResponseStylePromptGuidance(style),
-    runtime_response_style_guidance_body: getResponseStylePromptGuidance(style),
-  };
-}
-
 function buildLastMessagePromptVariables(input: {
   now: Date;
   lastMessageReceivedAt: Date | null;
@@ -311,97 +290,9 @@ function buildLastMessagePromptVariables(input: {
   };
 }
 
-function buildAffectPromptVariables(input: {
-  trustLevel: TrustLevel;
-  emotionSnapshot: EmotionStateSnapshot | null;
-  promptVariables?: Record<string, string>;
-  config: Record<string, unknown>;
-}): Record<string, string> {
-  const emptyAffectVariables = {
-    runtime_affect_snapshot_present: 'false',
-    runtime_affect_mode: '',
-    runtime_affect_warmth: '',
-    runtime_affect_formality: '',
-    runtime_affect_energy: '',
-    runtime_affect_assertiveness: '',
-    runtime_affect_expressiveness: '',
-    runtime_affect_intensity: '',
-    runtime_affect_variability: '',
-    runtime_affect_control: '',
-    runtime_affect_display_range_min: '',
-    runtime_affect_display_range_max: '',
-    runtime_affect_profile_intensity: '',
-    runtime_affect_profile_variability: '',
-    runtime_affect_profile_control: '',
-    runtime_affect_profile_display_range_min: '',
-    runtime_affect_profile_display_range_max: '',
-    runtime_affect_valence: '',
-    runtime_affect_arousal: '',
-    runtime_affect_dominance: '',
-    runtime_affect_snapshot_vad_valence: '',
-    runtime_affect_snapshot_vad_arousal: '',
-    runtime_affect_snapshot_vad_dominance: '',
-    runtime_affect_snapshot_mood_valence: '',
-    runtime_affect_snapshot_mood_arousal: '',
-    runtime_affect_snapshot_mood_dominance: '',
-    runtime_affect_snapshot_confidence: '',
-  } satisfies Record<string, string>;
-
-  if (!input.emotionSnapshot) {
-    return emptyAffectVariables;
-  }
-
-  const affect = mapEmotionToPersonaAffect({
-    trustLevel: input.trustLevel,
-    emotionSnapshot: input.emotionSnapshot,
-    profile: resolveEmotionalExpressionProfile({
-      promptVariables: input.promptVariables,
-      config: input.config,
-    }),
-  });
-
-  return {
-    runtime_affect_snapshot_present: 'true',
-    runtime_affect_mode: affect.mode,
-    runtime_affect_warmth: formatSignedScale(affect.warmth),
-    runtime_affect_formality: formatSignedScale(affect.formality),
-    runtime_affect_energy: formatSignedScale(affect.energy),
-    runtime_affect_assertiveness: formatSignedScale(affect.assertiveness),
-    runtime_affect_expressiveness: formatDecimal(affect.expressiveness),
-    runtime_affect_intensity: formatDecimal(affect.profile.intensity),
-    runtime_affect_variability: formatDecimal(affect.profile.variability),
-    runtime_affect_control: formatDecimal(affect.profile.control),
-    runtime_affect_display_range_min: formatDecimal(affect.profile.displayRange.min),
-    runtime_affect_display_range_max: formatDecimal(affect.profile.displayRange.max),
-    runtime_affect_profile_intensity: formatDecimal(affect.profile.intensity),
-    runtime_affect_profile_variability: formatDecimal(affect.profile.variability),
-    runtime_affect_profile_control: formatDecimal(affect.profile.control),
-    runtime_affect_profile_display_range_min: formatDecimal(affect.profile.displayRange.min),
-    runtime_affect_profile_display_range_max: formatDecimal(affect.profile.displayRange.max),
-    runtime_affect_valence: formatSignedScale(input.emotionSnapshot.vad.valence),
-    runtime_affect_arousal: formatSignedScale(input.emotionSnapshot.vad.arousal),
-    runtime_affect_dominance: formatSignedScale(input.emotionSnapshot.vad.dominance),
-    runtime_affect_snapshot_vad_valence: formatSignedScale(input.emotionSnapshot.vad.valence),
-    runtime_affect_snapshot_vad_arousal: formatSignedScale(input.emotionSnapshot.vad.arousal),
-    runtime_affect_snapshot_vad_dominance: formatSignedScale(input.emotionSnapshot.vad.dominance),
-    runtime_affect_snapshot_mood_valence: formatSignedScale(input.emotionSnapshot.mood.valence),
-    runtime_affect_snapshot_mood_arousal: formatSignedScale(input.emotionSnapshot.mood.arousal),
-    runtime_affect_snapshot_mood_dominance: formatSignedScale(input.emotionSnapshot.mood.dominance),
-    runtime_affect_snapshot_confidence: formatDecimal(input.emotionSnapshot.confidence),
-  };
-}
-
 function unwrapPromptSectionBody(section: string | null | undefined): string {
   if (!section) return '';
   return unwrapSingleWrappedPromptSection(section)?.content ?? section.trim();
-}
-
-function formatSignedScale(value: number): string {
-  return `${value >= 0 ? '+' : ''}${value.toFixed(3)}`;
-}
-
-function formatDecimal(value: number): string {
-  return value.toFixed(3);
 }
 
 function describeValence(value: number): string {
@@ -450,38 +341,24 @@ function resolveTopEmotionNames(
     .map(([emotion]) => emotion);
 }
 
-function buildInternalStateSummaryLines(input: {
-  internalState: InternalState;
-}): string[] {
-  const { internalState } = input;
-  const secondaryEmotions = resolveTopEmotionNames(internalState.emotional.discreteEmotions);
-  const emotionalSummary = secondaryEmotions.length > 0
-    ? `Current affect: mostly ${describeValence(internalState.emotional.mood.valence)} and ${describeArousal(internalState.emotional.mood.arousal)}, with ${secondaryEmotions.join(' and ')} present.`
-    : `Current affect: ${describeValence(internalState.emotional.mood.valence)} and ${describeArousal(internalState.emotional.mood.arousal)}.`;
-
-  const pendingFollowUps = internalState.attention.pendingFollowUps ?? [];
-
-  return [
-    emotionalSummary,
-    `Thinking state: ${internalState.cognitive.processingQuality}, ${describeCertainty(internalState.cognitive.certaintyLevel)} certainty, ${describeArousal(internalState.cognitive.topicEngagement)} engagement.`,
-    `Attention: ${internalState.attention.conversationTrajectory}, ${internalState.attention.activeConcerns.length} open thread${internalState.attention.activeConcerns.length === 1 ? '' : 's'}, ${pendingFollowUps.length} pending follow-up${pendingFollowUps.length === 1 ? '' : 's'}.`,
-    `Relationship baseline: ${internalState.relational.trustLevel} trust, ${describeInteractionFrequency(internalState.relational.recentInteractionFrequency)} contact, ${describeLastSeenRecency(internalState.relational.lastSeenDeltaSeconds)}.`,
-  ];
-}
-
 function buildInternalStatePromptVariables(internalState?: InternalState): Record<string, string> {
   const emptyInternalStateVariables = {
+    runtime_internal_state_present: 'false',
     runtime_internal_state_cognitive_processing_quality: '',
     runtime_internal_state_cognitive_certainty_label: '',
     runtime_internal_state_cognitive_topic_engagement_label: '',
     runtime_internal_state_attention_conversation_trajectory: '',
     runtime_internal_state_attention_active_concern_count: '',
+    runtime_internal_state_attention_active_concern_plural_suffix: '',
     runtime_internal_state_attention_pending_follow_up_count: '',
+    runtime_internal_state_attention_pending_follow_up_plural_suffix: '',
     runtime_internal_state_relational_trust_level: '',
     runtime_internal_state_relational_recent_interaction_frequency_label: '',
     runtime_internal_state_relational_last_seen_label: '',
     runtime_internal_state_emotional_mood_valence_label: '',
     runtime_internal_state_emotional_mood_arousal_label: '',
+    runtime_internal_state_emotional_prefix: '',
+    runtime_internal_state_emotional_secondary_clause: '',
   } satisfies Record<string, string>;
 
   if (!internalState) {
@@ -489,13 +366,17 @@ function buildInternalStatePromptVariables(internalState?: InternalState): Recor
   }
 
   const pendingFollowUps = internalState.attention.pendingFollowUps ?? [];
+  const secondaryEmotions = resolveTopEmotionNames(internalState.emotional.discreteEmotions);
   return {
+    runtime_internal_state_present: 'true',
     runtime_internal_state_cognitive_processing_quality: internalState.cognitive.processingQuality,
     runtime_internal_state_cognitive_certainty_label: describeCertainty(internalState.cognitive.certaintyLevel),
     runtime_internal_state_cognitive_topic_engagement_label: describeArousal(internalState.cognitive.topicEngagement),
     runtime_internal_state_attention_conversation_trajectory: internalState.attention.conversationTrajectory,
     runtime_internal_state_attention_active_concern_count: String(internalState.attention.activeConcerns.length),
+    runtime_internal_state_attention_active_concern_plural_suffix: internalState.attention.activeConcerns.length === 1 ? '' : 's',
     runtime_internal_state_attention_pending_follow_up_count: String(pendingFollowUps.length),
+    runtime_internal_state_attention_pending_follow_up_plural_suffix: pendingFollowUps.length === 1 ? '' : 's',
     runtime_internal_state_relational_trust_level: internalState.relational.trustLevel,
     runtime_internal_state_relational_recent_interaction_frequency_label: describeInteractionFrequency(
       internalState.relational.recentInteractionFrequency,
@@ -503,6 +384,10 @@ function buildInternalStatePromptVariables(internalState?: InternalState): Recor
     runtime_internal_state_relational_last_seen_label: describeLastSeenRecency(internalState.relational.lastSeenDeltaSeconds),
     runtime_internal_state_emotional_mood_valence_label: describeValence(internalState.emotional.mood.valence),
     runtime_internal_state_emotional_mood_arousal_label: describeArousal(internalState.emotional.mood.arousal),
+    runtime_internal_state_emotional_prefix: secondaryEmotions.length > 0 ? 'mostly ' : '',
+    runtime_internal_state_emotional_secondary_clause: secondaryEmotions.length > 0
+      ? `, with ${secondaryEmotions.join(' and ')} present`
+      : '',
   };
 }
 
@@ -514,6 +399,7 @@ function buildConcernPromptVariables(activeConcernsBlock: string | null | undefi
       runtime_concerns_top_lines: '',
       runtime_concerns_top_priorities: '',
       runtime_concerns_omitted_count: '0',
+      runtime_concerns_omitted_plural_suffix: 's',
     };
   }
 
@@ -538,6 +424,7 @@ function buildConcernPromptVariables(activeConcernsBlock: string | null | undefi
     runtime_concerns_top_lines: topLines.join('\n'),
     runtime_concerns_top_priorities: topPriorities.join(', '),
     runtime_concerns_omitted_count: String(omittedCount),
+    runtime_concerns_omitted_plural_suffix: omittedCount === 1 ? '' : 's',
   };
 }
 
@@ -608,6 +495,13 @@ function buildExtendedToolPromptVariables(input: {
     runtime_extended_tool_names: input.extendedTools.map(tool => tool.name).join(', '),
     runtime_extended_tool_directory_lines: input.extendedToolGuide.lines.join('\n'),
   };
+}
+
+function renderRuntimePromptBodyTemplate(
+  template: string,
+  variables: Record<string, string>,
+): string {
+  return injectPromptRuntimeTokens(template, { variables });
 }
 
 export function buildPromptTemplateVariables(input: {
@@ -722,58 +616,26 @@ export function buildDynamicPromptTemplateVariables(input: {
           ? `, ${extendedToolGuide.blockedCount} blocked by the current capability tier.`
           : '.')
       : '.'}`;
-  const trustGuidance = resolveTrustGuidance(input.trustLevel);
 
   const emotionSnapshot = input.internalState ? toEmotionSnapshotFromInternalState(input.internalState) : null;
-  const affectBody = unwrapPromptSectionBody(buildEmotionalAffectSection({
-    trustLevel: input.trustLevel,
-    emotionSnapshot,
-    promptVariables: input.templateVariables,
-    config: input.config,
-  }));
-  const affectVariables = buildAffectPromptVariables({
+  const affectVariables = buildEmotionalAffectPromptVariables({
     trustLevel: input.trustLevel,
     emotionSnapshot,
     promptVariables: input.templateVariables,
     config: input.config,
   });
-  const metacognitiveVariables = buildMetacognitiveFlagPromptVariables(input.metacognitiveFlags);
-  const metacognitiveBody = unwrapPromptSectionBody(
-    buildMetacognitivePersonaHint(input.metacognitiveFlags ?? []),
-  );
-  const internalStateBody = input.internalState
-    ? buildInternalStateSummaryLines({ internalState: input.internalState }).join('\n')
-    : '';
+  const metacognitiveVariables = buildMetacognitiveFlagPromptVariables(input.metacognitiveFlags ?? []);
   const internalStateVariables = buildInternalStatePromptVariables(input.internalState);
   const emotionAppraisalVariables = buildEmotionAppraisalPromptVariables(emotionAppraisalChain);
   const emotionAppraisalBody = emotionAppraisalVariables.runtime_emotion_appraisal_recent_lines;
   const concernVariables = buildConcernPromptVariables(input.activeConcernsBlock);
-  const openThreadsBody = unwrapPromptSectionBody(input.activeConcernsBlock);
   const behavioralNotesBody = unwrapPromptSectionBody(input.behavioralNotesBlock);
   const behavioralNotesVariables = buildBehavioralNotesPromptVariables(input.behavioralNotesBlock);
   const skillsIndexBody = unwrapPromptSectionBody(input.skillsContext);
   const skillsVariables = buildSkillsPromptVariables(input.skillsContext);
-  const appearanceContextBody = hasActiveSelfImageTool()
+  const selfImageToolActive = hasActiveSelfImageTool();
+  const appearanceContextBody = selfImageToolActive
     ? resolveAppearanceContextFromTemplateVariables(input.templateVariables)
-    : '';
-  const selfImageToolGuidanceBody = hasActiveSelfImageTool()
-    ? [
-      'Use selfie_create for a brand new selfie or self-portrait featuring you.',
-      'Use image_create for scenes, objects, or other non-self images.',
-      'Use image_edit when modifying an existing image while keeping its subject consistent.',
-      'Use image_analyze to inspect generated images or explicit remote image URLs so you can see what is actually there.',
-      'If the current user message already includes an attached image, inspect that attachment directly instead of calling image_analyze for it.',
-      'When selfie_create is active, write the prompt as the full desired shot and combine your Appearance context with pose, framing, lighting, background, mood, and style details.',
-      'Generated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.',
-    ].join('\n')
-    : '';
-  const extendedToolsBody = extendedCount > 0
-    ? [
-      'Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.',
-      'If a non-default tool is not already active, activate it before you describe its outcome.',
-      'Core tools are already active through the structured tool registry and are not duplicated here.',
-      ...extendedToolGuide.lines,
-    ].join('\n')
     : '';
   const extendedToolVariables = buildExtendedToolPromptVariables({
     extendedTools: input.extendedTools,
@@ -788,9 +650,9 @@ export function buildDynamicPromptTemplateVariables(input: {
     now,
     lastMessageReceivedAt,
   });
-  const responseStyleTemplateVariables = buildResponseStyleTemplateVariables(responseStyle);
-
-  return {
+  const responseStyleState = buildResponseStylePromptState(responseStyle);
+  const trustState = buildTrustPromptState(input.trustLevel);
+  const dynamicVariables = {
     active_timezone: resolveActiveTimezone(),
     runtime_current_datetime_human: formatPromptRuntimeDateTime(now),
     runtime_current_datetime_iso: formatActiveDateTimeIso(now),
@@ -813,7 +675,8 @@ export function buildDynamicPromptTemplateVariables(input: {
     runtime_tooling_autoload_count: String(autoloadCount),
     runtime_tooling_deferred_count: String(deferredCount),
     runtime_tooling_available_extended_count: String(extendedCount),
-    runtime_trust_guidance: trustGuidance,
+    ...trustState,
+    ...responseStyleState,
     ...affectVariables,
     ...metacognitiveVariables,
     ...internalStateVariables,
@@ -822,17 +685,47 @@ export function buildDynamicPromptTemplateVariables(input: {
     ...behavioralNotesVariables,
     ...skillsVariables,
     ...extendedToolVariables,
-    runtime_emotional_affect_body: affectBody,
-    runtime_metacognitive_persona_guidance_body: metacognitiveBody,
-    ...responseStyleTemplateVariables,
-    runtime_internal_state_body: internalStateBody,
     runtime_emotion_appraisal_body: emotionAppraisalBody,
-    runtime_open_threads_body: openThreadsBody,
     runtime_behavioral_notes_body: behavioralNotesBody,
     runtime_skills_index_body: skillsIndexBody,
     runtime_appearance_context_body: appearanceContextBody,
-    runtime_self_image_tool_guidance_body: selfImageToolGuidanceBody,
-    runtime_extended_tools_body: extendedToolsBody,
+    runtime_self_image_tool_active: String(selfImageToolActive),
+  } satisfies Record<string, string>;
+  const compatibilityVariables = {
+    runtime_trust_guidance: renderRuntimePromptBodyTemplate(TRUST_GUIDANCE_BODY_TEMPLATE, dynamicVariables),
+    runtime_emotional_affect_body: renderRuntimePromptBodyTemplate(EMOTIONAL_AFFECT_BODY_TEMPLATE, dynamicVariables),
+    runtime_metacognitive_persona_guidance_body: renderRuntimePromptBodyTemplate(
+      METACOGNITIVE_PERSONA_GUIDANCE_BODY_TEMPLATE,
+      dynamicVariables,
+    ),
+    runtime_response_style_delivery_guidance: renderRuntimePromptBodyTemplate(
+      RESPONSE_STYLE_DELIVERY_TEMPLATE,
+      dynamicVariables,
+    ),
+    runtime_response_style_expansion_guidance: renderRuntimePromptBodyTemplate(
+      RESPONSE_STYLE_EXPANSION_TEMPLATE,
+      dynamicVariables,
+    ),
+    runtime_response_style_guidance: renderRuntimePromptBodyTemplate(
+      RESPONSE_STYLE_GUIDANCE_COMPAT_TEMPLATE,
+      dynamicVariables,
+    ),
+    runtime_response_style_guidance_body: renderRuntimePromptBodyTemplate(
+      RESPONSE_STYLE_GUIDANCE_COMPAT_TEMPLATE,
+      dynamicVariables,
+    ),
+    runtime_internal_state_body: renderRuntimePromptBodyTemplate(INTERNAL_STATE_BODY_TEMPLATE, dynamicVariables),
+    runtime_open_threads_body: renderRuntimePromptBodyTemplate(OPEN_THREADS_BODY_TEMPLATE, dynamicVariables),
+    runtime_self_image_tool_guidance_body: renderRuntimePromptBodyTemplate(
+      SELF_IMAGE_TOOL_GUIDANCE_BODY_TEMPLATE,
+      dynamicVariables,
+    ),
+    runtime_extended_tools_body: renderRuntimePromptBodyTemplate(EXTENDED_TOOLS_BODY_TEMPLATE, dynamicVariables),
+  } satisfies Record<string, string>;
+
+  return {
+    ...dynamicVariables,
+    ...compatibilityVariables,
   };
 }
 

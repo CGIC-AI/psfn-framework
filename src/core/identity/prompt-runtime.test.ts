@@ -289,6 +289,23 @@ describe('injectPromptRuntimeTokens', () => {
     expect(output).toBe('Hello Anon, this is Companion.');
   });
 
+  it('renders simple conditional blocks from runtime variables', () => {
+    const input = [
+      '{{#if runtime_trust_is_trusted}}Trusted guidance.{{/if}}',
+      '{{#if runtime_trust_is_public}}Public guidance.{{/if}}',
+    ].join('\n');
+
+    const output = injectPromptRuntimeTokens(input, {
+      now: fixedNow,
+      variables: {
+        runtime_trust_is_trusted: 'true',
+        runtime_trust_is_public: 'false',
+      },
+    });
+
+    expect(output).toBe('Trusted guidance.');
+  });
+
   it('drops wrapped prompt sections whose body resolves to empty content', () => {
     const input = [
       '<current_datetime>',

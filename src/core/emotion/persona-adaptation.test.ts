@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildEmotionalAffectPromptVariables,
   buildEmotionalAffectSection,
   mapEmotionToPersonaAffect,
   resolveEmotionalExpressionProfile,
@@ -100,5 +101,25 @@ describe('emotion/persona-adaptation', () => {
     expect(Math.abs(publicMode.energy)).toBeLessThan(Math.abs(primary.energy));
     expect(Math.abs(publicMode.assertiveness)).toBeLessThan(Math.abs(primary.assertiveness));
     expect(publicMode.expressiveness).toBeLessThan(primary.expressiveness);
+  });
+
+  it('emits atomic affect prompt variables while leaving the prose to templates', () => {
+    const variables = buildEmotionalAffectPromptVariables({
+      trustLevel: 'trusted',
+      emotionSnapshot: makeSnapshot(),
+    });
+
+    expect(variables.runtime_affect_snapshot_present).toBe('true');
+    expect(variables.runtime_affect_mode).toBe('tatemae');
+    expect(variables.runtime_affect_mode_label).toBe('tatemae (controlled)');
+    expect(variables.runtime_affect_guidance_warmth_label).toBeTruthy();
+    expect(variables.runtime_affect_privacy_guidance).toBe('Keep emotional expression surface-level and privacy-safe.');
+
+    const section = buildEmotionalAffectSection({
+      trustLevel: 'trusted',
+      emotionSnapshot: makeSnapshot(),
+    });
+    expect(section).toContain('Trust gate: tatemae (controlled)');
+    expect(section).toContain('Guidance:');
   });
 });

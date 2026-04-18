@@ -40,8 +40,10 @@ describe('runtime prompt layer schema', () => {
     expect(getRuntimePromptLayerDefinition('runtime.channel_context')?.content).toContain('{{runtime_channel_visibility}}');
     expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).toContain('{{runtime_tooling_active_count}}');
     expect(getRuntimePromptLayerDefinition('runtime.response_style_guidance')?.content).toContain('{{runtime_response_style}}');
-    expect(getRuntimePromptLayerDefinition('runtime.response_style_guidance')?.content).toContain('{{runtime_response_style_delivery_guidance}}');
-    expect(getRuntimePromptLayerDefinition('runtime.response_style_guidance')?.content).toContain('{{runtime_response_style_expansion_guidance}}');
+    expect(getRuntimePromptLayerDefinition('runtime.response_style_guidance')?.content).toContain('{{#if runtime_response_style_is_concise}}');
+    expect(getRuntimePromptLayerDefinition('runtime.trust')?.content).toContain('{{#if runtime_trust_is_trusted}}');
+    expect(getRuntimePromptLayerDefinition('runtime.emotional_affect')?.content).toContain('{{runtime_affect_mode_label}}');
+    expect(getRuntimePromptLayerDefinition('runtime.metacognitive_guidance')?.content).toContain('runtime_flag_uncertainty_present');
   });
 
   it('renders structured runtime metadata and prunes unavailable nested fields', () => {
@@ -61,8 +63,8 @@ describe('runtime prompt layer schema', () => {
         runtime_last_message_received_missing_notice: 'No earlier message is loaded for this channel.',
         runtime_internal_turn_kind: '',
         runtime_response_style: 'concise',
-        runtime_response_style_delivery_guidance: 'Answer directly and keep wording tight.',
-        runtime_response_style_expansion_guidance: 'Expand only when the user asks for more detail.',
+        runtime_response_style_is_concise: 'true',
+        runtime_response_style_is_expressive: 'false',
       },
     });
 

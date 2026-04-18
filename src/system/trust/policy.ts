@@ -40,6 +40,25 @@ const RESPONSE_STYLE_BY_VISIBILITY: Record<ChannelVisibility, ResponseStyle> = {
   broadcast: 'concise',
 };
 
+export function buildTrustPromptState(trustLevel: TrustLevel): Record<string, string> {
+  return {
+    runtime_trust_level: trustLevel,
+    runtime_trust_is_primary: String(trustLevel === 'primary'),
+    runtime_trust_is_trusted: String(trustLevel === 'trusted'),
+    runtime_trust_is_regular: String(trustLevel === 'regular'),
+    runtime_trust_is_public: String(trustLevel === 'public'),
+  };
+}
+
+export function buildResponseStylePromptState(style: ResponseStyle): Record<string, string> {
+  return {
+    runtime_response_style: style,
+    runtime_response_style_name: style === 'concise' ? 'Concise' : 'Expressive',
+    runtime_response_style_is_concise: String(style === 'concise'),
+    runtime_response_style_is_expressive: String(style === 'expressive'),
+  };
+}
+
 // ── Policy evaluation ──
 
 export type PolicyDecision = 'allow' | 'deny' | 'sanitize';

@@ -1,5 +1,15 @@
 import type { PromptLayerStatePort } from './prompt-state-port.js';
 import type { PromptLayer } from './prompt-types.js';
+import { EMOTIONAL_AFFECT_BODY_TEMPLATE } from '../emotion/persona-adaptation.js';
+import { OPEN_THREADS_BODY_TEMPLATE } from '../intention/concerns.js';
+import { METACOGNITIVE_PERSONA_GUIDANCE_BODY_TEMPLATE } from '../self-model/metacognition.js';
+import {
+  EXTENDED_TOOLS_BODY_TEMPLATE,
+  INTERNAL_STATE_BODY_TEMPLATE,
+  RESPONSE_STYLE_GUIDANCE_BODY_TEMPLATE,
+  SELF_IMAGE_TOOL_GUIDANCE_BODY_TEMPLATE,
+  TRUST_GUIDANCE_BODY_TEMPLATE,
+} from '../agent/substrate-agent/runtime-prompt-templates.js';
 
 export type RuntimePromptLayerSchemaClassification =
   | 'required_runtime_aware'
@@ -94,35 +104,35 @@ export const RUNTIME_PROMPT_LAYER_DEFINITIONS: readonly RuntimePromptLayerDefini
     name: "Trust Guidance",
     priority: 170,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<trust>\n{{runtime_trust_guidance}}\n</trust>",
+    content: `<trust>\n${TRUST_GUIDANCE_BODY_TEMPLATE}\n</trust>`,
   },
   {
     identifier: "runtime.emotional_affect",
     name: "Emotional Affect",
     priority: 180,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<emotional_affect>\n{{runtime_emotional_affect_body}}\n</emotional_affect>",
+    content: `<emotional_affect>\n${EMOTIONAL_AFFECT_BODY_TEMPLATE}\n</emotional_affect>`,
   },
   {
     identifier: "runtime.metacognitive_guidance",
     name: "Metacognitive Guidance",
     priority: 190,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<metacognitive_persona_guidance>\n{{runtime_metacognitive_persona_guidance_body}}\n</metacognitive_persona_guidance>",
+    content: `<metacognitive_persona_guidance>\n${METACOGNITIVE_PERSONA_GUIDANCE_BODY_TEMPLATE}\n</metacognitive_persona_guidance>`,
   },
   {
     identifier: "runtime.response_style_guidance",
     name: "Response Style Guidance",
     priority: 200,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<response_style_guidance>\n<style>{{runtime_response_style}}</style>\n<delivery>{{runtime_response_style_delivery_guidance}}</delivery>\n<expansion>{{runtime_response_style_expansion_guidance}}</expansion>\n</response_style_guidance>",
+    content: `<response_style_guidance>\n${RESPONSE_STYLE_GUIDANCE_BODY_TEMPLATE}\n</response_style_guidance>`,
   },
   {
     identifier: "runtime.internal_state",
     name: "Internal State",
     priority: 210,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<internal_state>\n{{runtime_internal_state_body}}\n</internal_state>",
+    content: `<internal_state>\n${INTERNAL_STATE_BODY_TEMPLATE}\n</internal_state>`,
   },
   {
     identifier: "runtime.emotion_appraisal_chain",
@@ -136,7 +146,7 @@ export const RUNTIME_PROMPT_LAYER_DEFINITIONS: readonly RuntimePromptLayerDefini
     name: "Open Threads",
     priority: 230,
     schema: OPTIONAL_RUNTIME_LAYER_SCHEMA,
-    content: "<open_threads>\n{{runtime_open_threads_body}}\n</open_threads>",
+    content: `<open_threads>\n${OPEN_THREADS_BODY_TEMPLATE}\n</open_threads>`,
   },
   {
     identifier: "runtime.behavioral_notes",
@@ -164,14 +174,14 @@ export const RUNTIME_PROMPT_LAYER_DEFINITIONS: readonly RuntimePromptLayerDefini
     name: "Self-Image Tool Guidance",
     priority: 270,
     schema: OPTIONAL_RUNTIME_LAYER_SCHEMA,
-    content: "<self_image_tool_guidance>\n{{runtime_self_image_tool_guidance_body}}\n</self_image_tool_guidance>",
+    content: `<self_image_tool_guidance>\n${SELF_IMAGE_TOOL_GUIDANCE_BODY_TEMPLATE}\n</self_image_tool_guidance>`,
   },
   {
     identifier: "runtime.extended_tools",
     name: "Extended Tools",
     priority: 280,
     schema: OPTIONAL_RUNTIME_LAYER_SCHEMA,
-    content: "<extended_tools>\n{{runtime_extended_tools_body}}\n</extended_tools>",
+    content: `<extended_tools>\n${EXTENDED_TOOLS_BODY_TEMPLATE}\n</extended_tools>`,
   },
   {
     identifier: "runtime.current_datetime",

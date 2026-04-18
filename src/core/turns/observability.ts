@@ -39,6 +39,8 @@ export interface ObservedScoredMemory extends ObservedMemory {
 export interface TurnSessionContextSnapshotRecord {
   channelId: string;
   recentEntries: SessionEntry[];
+  historySummaryText?: string;
+  historySummaryEntryCount?: number;
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];
@@ -239,6 +241,12 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         sessionContext: {
           channelId: snapshot.sessionContext.channelId,
           recentEntries: snapshot.sessionContext.recentEntries.map(cloneSessionEntry),
+          ...(snapshot.sessionContext.historySummaryText
+            ? { historySummaryText: snapshot.sessionContext.historySummaryText }
+            : {}),
+          ...(snapshot.sessionContext.historySummaryEntryCount !== undefined
+            ? { historySummaryEntryCount: snapshot.sessionContext.historySummaryEntryCount }
+            : {}),
           compactionSummaryTexts: [...snapshot.sessionContext.compactionSummaryTexts],
           focusKnowledgeTexts: [...snapshot.sessionContext.focusKnowledgeTexts],
           continuityEntries: snapshot.sessionContext.continuityEntries.map(cloneSessionEntry),
@@ -335,6 +343,12 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
         sessionContext: {
           channelId: snapshot.sessionContext.channelId,
           recentEntries: snapshot.sessionContext.recentEntries.map(cloneSessionEntry),
+          ...(snapshot.sessionContext.historySummaryText
+            ? { historySummaryText: snapshot.sessionContext.historySummaryText }
+            : {}),
+          ...(snapshot.sessionContext.historySummaryEntryCount !== undefined
+            ? { historySummaryEntryCount: snapshot.sessionContext.historySummaryEntryCount }
+            : {}),
           compactionSummaryTexts: [...snapshot.sessionContext.compactionSummaryTexts],
           focusKnowledgeTexts: [...snapshot.sessionContext.focusKnowledgeTexts],
           continuityEntries: snapshot.sessionContext.continuityEntries.map(cloneSessionEntry),

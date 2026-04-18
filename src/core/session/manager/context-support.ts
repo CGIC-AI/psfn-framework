@@ -80,6 +80,7 @@ export function entriesToMessages(
   entries: SessionEntry[],
   defaultVisibility: ChannelVisibility,
   includeTrustTags: boolean = true,
+  preserveLeadingAssistant: boolean = false,
 ): ContextMessage[] {
   const messages: Array<ContextMessage & { sourceRole: SessionEntry['role'] }> = [];
 
@@ -129,7 +130,7 @@ export function entriesToMessages(
   }
 
   // Drop any leading assistant response without preceding user/system context.
-  if (messages.length > 0 && messages[0].role === 'assistant') {
+  if (!preserveLeadingAssistant && messages.length > 0 && messages[0].role === 'assistant') {
     messages.shift();
   }
 

@@ -58,6 +58,8 @@ export interface TurnPromptSnapshot {
 export interface TurnSessionContextSnapshot {
   channelId: string;
   recentEntries: SessionEntry[];
+  historySummaryText?: string;
+  historySummaryEntryCount?: number;
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];

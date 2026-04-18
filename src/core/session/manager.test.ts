@@ -930,7 +930,7 @@ describe('SessionManager', () => {
           model: 'test-model',
           provider: 'test',
           maxTokens: 16384,
-          contextWindow: 4_000,
+          contextWindow: 20_000,
           contextBudget: {
             sessionHistoryMinTokens: 1,
           },
@@ -949,6 +949,88 @@ describe('SessionManager', () => {
 
     expect(recent.length).toBeGreaterThan(5);
     expect(ctx.messages).toHaveLength(recent.length);
+  });
+
+  it('keeps a 7-day session bounded to the active history window in live and snapshot context builds', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
+    const currentAt = 1_710_000_000_000;
+    const hourMs = 60 * 60 * 1000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
+    const config = makeConfig({
+      sessionHistoryBudgetPct: 10,
+      maxHistorySpanMs: 36 * hourMs,
+      modelRoster: {
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 2_200,
+          contextBudget: {
+            sessionHistoryMinTokens: 1,
+          },
+        },
+      },
+    });
+    const mgr = new SessionManager(store, config);
+
+    try {
+      const append = (
+        timestamp: number,
+        role: 'user' | 'assistant',
+        content: string,
+      ): void => {
+        store.append({
+          channelId: 'ch-span-window',
+          role,
+          content,
+          authorId: role === 'user' ? 'u1' : 'assistant',
+          authorName: role === 'user' ? 'User' : 'Companion',
+          timestamp,
+        });
+      };
+
+      append(currentAt - (7 * 24 * hourMs), 'user', 'outside-old-01');
+      append(currentAt - (6 * 24 * hourMs), 'assistant', 'outside-old-02');
+
+      append(currentAt - (30 * hourMs), 'user', 'bridge-u1-alpha-01-window');
+      append(currentAt - (28 * hourMs), 'assistant', 'bridge-a1-alpha-02-window');
+      append(currentAt - (24 * hourMs), 'user', 'bridge-u2-beta-03-window');
+      append(currentAt - (20 * hourMs), 'assistant', 'bridge-a2-beta-04-window');
+      append(currentAt - (16 * hourMs), 'user', 'recent-u3-gamma-05-window');
+      append(currentAt - (12 * hourMs), 'assistant', 'recent-a3-gamma-06-window');
+      append(currentAt - (8 * hourMs), 'user', 'recent-u4-delta-07-window');
+      append(currentAt - (6 * hourMs), 'assistant', 'recent-a4-delta-08-window');
+      append(currentAt - (3 * hourMs), 'user', 'recent-u5-epsilon-09-window');
+      append(currentAt - (1 * hourMs), 'assistant', 'recent-a5-theta-10-window');
+
+      const liveContext = await mgr.buildContext('ch-span-window', 'Sys', '');
+      const snapshot = mgr.captureTurnContextSnapshot('ch-span-window');
+      const snapshotContext = await mgr.buildContext(
+        'ch-span-window',
+        'Sys',
+        '',
+        undefined,
+        undefined,
+        undefined,
+        [],
+        snapshot,
+      );
+
+      expect(liveContext.messages.some(message => message.content.includes('outside-old-01'))).toBe(false);
+      expect(liveContext.messages.some(message => message.content.includes('recent-a5-theta-10-window'))).toBe(true);
+      expect(liveContext.messages.length).toBeGreaterThanOrEqual(5);
+      expect(liveContext.manifest?.session).toMatchObject({
+        sourceEntryCount: 12,
+        finalMessageCount: liveContext.messages.length,
+      });
+      expect(liveContext.manifest?.budgets.sessionHistory.actualCount).toBe(liveContext.messages.length);
+      expect(snapshotContext.messages).toEqual(liveContext.messages);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('applies adaptive per-turn session and memory budgets when enabled', async () => {

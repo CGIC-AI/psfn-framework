@@ -40,9 +40,11 @@ import {
   type ContextBudgetTurnCharacteristics,
 } from '../../shared/context-budget.js';
 import {
+  collectRecentEntriesWithinHistorySpan,
   collectRecentEntriesWithinTokenBudget,
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
   isNonConversationalSessionEntry,
+  resolveMaxHistorySpanMs,
   type SessionMessageRecordOptions,
 } from './manager-primitives.js';
 import {
@@ -54,6 +56,7 @@ import {
   mirrorMessageToActiveSessions,
 } from './manager/mirroring.js';
 import {
+  assembleSessionHistoryForContext,
   buildSessionContext,
   DEFAULT_OBSERVATION_MASKING_WINDOW,
   applyObservationMasking,
@@ -1005,11 +1008,12 @@ export class SessionManager {
       ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
       adaptiveProfile,
     });
-    let recent = collectRecentEntriesWithinTokenBudget({
+    const maxHistorySpanMs = resolveMaxHistorySpanMs(this.config);
+    let recent = collectRecentEntriesWithinHistorySpan({
       store: this.compactionBoundaryStore,
       channelId: resolvedChannelId,
       estimatedCount: historyBudget.estimatedCount,
-      tokenBudget: historyBudget.tokenBudget,
+      maxHistorySpanMs,
     }).entries;
     const focusCompaction = applyFocusCompactionRanges(
       recent,
@@ -1017,6 +1021,17 @@ export class SessionManager {
     );
     recent = focusCompaction.entries;
     const intentionAppraisalArtifactCount = countIntentionAppraisalArtifacts(recent);
+    recent = applyObservationMasking(
+      recent,
+      this.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
+    ).entries;
+    const assembledHistory = assembleSessionHistoryForContext({
+      entries: recent,
+      channelVisibility: classifyChannel(resolvedChannelId, channelMeta),
+      tokenBudget: historyBudget.tokenBudget,
+      characterName: this.characterName,
+    });
+    recent = assembledHistory.verbatimEntries;
     const focusKnowledgeTexts = this.getFocusKnowledgeTexts(resolvedChannelId);
 
     const continuityEntries = userId
@@ -1058,6 +1073,12 @@ export class SessionManager {
     return {
       channelId: resolvedChannelId,
       recentEntries: recent.map(cloneSessionEntry),
+      ...(assembledHistory.summaryText
+        ? { historySummaryText: assembledHistory.summaryText }
+        : {}),
+      ...(assembledHistory.summarizedEntryCount > 0
+        ? { historySummaryEntryCount: assembledHistory.summarizedEntryCount }
+        : {}),
       compactionSummaryTexts: [...compactionSummaryTexts],
       focusKnowledgeTexts: [...focusKnowledgeTexts],
       continuityEntries: continuityEntries.map(cloneSessionEntry),
@@ -1068,6 +1089,8 @@ export class SessionManager {
         resolvedChannelId,
         recent.at(-1)?.id,
         recent.at(-1)?.timestamp,
+        assembledHistory.summaryText,
+        assembledHistory.summarizedEntryCount,
         compactionSummaryTexts.join('\n'),
         focusKnowledgeTexts.join('\n'),
         focusCompaction.compactedCount,

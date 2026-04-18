@@ -99,6 +99,7 @@ export interface ContextManifestSessionSummary {
   intentionAppraisalArtifactCount?: number;
   finalEntryCount: number;
   finalMessageCount: number;
+  historySummaryEntryCount: number;
   compactionSummaryCount: number;
   continuityEntryCount: number;
 }

@@ -10,6 +10,7 @@ import type { SessionEntry } from './types.js';
 
 /** Default number of cross-channel continuity messages to include in context. */
 export const DEFAULT_CONTINUITY_CONTEXT_LIMIT = 10;
+export const DEFAULT_MAX_HISTORY_SPAN_MS = 36 * 60 * 60 * 1000;
 
 /**
  * Resolve a display name for a message role.
@@ -97,6 +98,8 @@ const DEFAULT_EMOTIONAL_SALIENCE_THRESHOLD_PCT = 75;
 const MAX_PRESERVED_SAFETY_TAGS = 8;
 const MAX_PRESERVED_EMOTIONAL_ENTRIES = 6;
 const MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS = 240;
+const MAX_HISTORY_SUMMARY_LINES = 6;
+const MAX_HISTORY_SUMMARY_LINE_CHARS = 160;
 
 export interface SessionMessageRecordOptions {
   trustLevel?: TrustLevel;
@@ -127,6 +130,10 @@ export interface RecentEntryStoreLike {
 export interface BudgetedRecentEntries {
   entries: SessionEntry[];
   sourceCount: number;
+}
+
+export interface SpanBoundRecentEntries extends BudgetedRecentEntries {
+  cutoffTimestamp: number;
 }
 
 interface RetryConfig {
@@ -268,6 +275,164 @@ export function collectRecentEntriesWithinTokenBudget(params: {
     previousFetchedCount = recent.length;
     limit = Math.max(limit + 1, limit * 2);
   }
+}
+
+export function resolveMaxHistorySpanMs(
+  config: Pick<SubstrateConfig, 'maxHistorySpanMs'>,
+): number {
+  const candidate = config.maxHistorySpanMs;
+  if (typeof candidate !== 'number' || !Number.isFinite(candidate) || candidate <= 0) {
+    return DEFAULT_MAX_HISTORY_SPAN_MS;
+  }
+  return Math.floor(candidate);
+}
+
+function selectEntriesWithinHistorySpan(
+  entries: SessionEntry[],
+  cutoffTimestamp: number,
+): SessionEntry[] {
+  if (entries.length === 0) return [];
+
+  const firstInRangeIndex = entries.findIndex(
+    entry => Number.isFinite(entry.timestamp) && entry.timestamp >= cutoffTimestamp,
+  );
+  const inRange = firstInRangeIndex === -1 ? [] : entries.slice(firstInRangeIndex);
+  if (inRange.length >= SESSION_HISTORY_MIN_MESSAGES) {
+    return inRange;
+  }
+
+  return entries.slice(-Math.min(entries.length, SESSION_HISTORY_MIN_MESSAGES));
+}
+
+export function collectRecentEntriesWithinHistorySpan(params: {
+  store: RecentEntryStoreLike;
+  channelId: string;
+  estimatedCount: number;
+  maxHistorySpanMs: number;
+  nowMs?: number;
+}): SpanBoundRecentEntries {
+  const normalizedSpanMs = Math.max(1, Math.floor(params.maxHistorySpanMs));
+  const cutoffTimestamp = (params.nowMs ?? Date.now()) - normalizedSpanMs;
+  let limit = Math.max(SESSION_HISTORY_MIN_MESSAGES, Math.floor(params.estimatedCount));
+  let previousFetchedCount = -1;
+
+  for (;;) {
+    const recent = params.store.getRecent(params.channelId, limit);
+    const visibleRecent = recent.filter(entry => !isNonConversationalSessionEntry(entry));
+    const inRange = selectEntriesWithinHistorySpan(visibleRecent, cutoffTimestamp);
+    const oldestVisibleTimestamp = visibleRecent[0]?.timestamp;
+
+    if (
+      recent.length < limit
+      || recent.length === previousFetchedCount
+      || (typeof oldestVisibleTimestamp === 'number' && oldestVisibleTimestamp <= cutoffTimestamp)
+    ) {
+      return {
+        entries: inRange,
+        sourceCount: recent.length,
+        cutoffTimestamp,
+      };
+    }
+
+    previousFetchedCount = recent.length;
+    limit = Math.max(limit + 1, limit * 2);
+  }
+}
+
+function normalizeHistorySummaryContent(content: string): string {
+  return content.replace(/\s+/g, ' ').trim();
+}
+
+function clipHistorySummaryContent(content: string, maxChars: number): string {
+  if (content.length <= maxChars) return content;
+  return `${content.slice(0, Math.max(1, maxChars - 3)).trimEnd()}...`;
+}
+
+function resolveHistorySummarySpeaker(
+  entry: SessionEntry,
+  characterName?: string,
+): string {
+  switch (entry.role) {
+    case 'assistant':
+      return resolveRoleName('assistant', { charName: characterName });
+    case 'user':
+      return entry.authorName?.trim() || resolveRoleName('user', {});
+    case 'tool':
+      return 'Tool';
+    default:
+      return entry.authorName?.trim() || 'System';
+  }
+}
+
+interface HistorySummaryLine {
+  speaker: string;
+  content: string;
+}
+
+function buildHistorySummaryLines(
+  entries: SessionEntry[],
+  characterName?: string,
+): HistorySummaryLine[] {
+  const grouped: HistorySummaryLine[] = [];
+
+  for (const entry of entries) {
+    const normalizedContent = normalizeHistorySummaryContent(entry.content);
+    if (!normalizedContent) continue;
+
+    const speaker = resolveHistorySummarySpeaker(entry, characterName);
+    const last = grouped.at(-1);
+    if (last && last.speaker === speaker) {
+      last.content = `${last.content} / ${normalizedContent}`;
+      continue;
+    }
+
+    grouped.push({ speaker, content: normalizedContent });
+  }
+
+  return grouped.slice(-MAX_HISTORY_SUMMARY_LINES);
+}
+
+function fitHistorySummaryLine(
+  prefixLines: string[],
+  line: HistorySummaryLine,
+  maxTokens: number,
+): string | null {
+  let content = clipHistorySummaryContent(line.content, MAX_HISTORY_SUMMARY_LINE_CHARS);
+
+  for (;;) {
+    const candidate = `- ${line.speaker}: ${content}`;
+    if (countTokens([...prefixLines, candidate].join('\n')) <= maxTokens) {
+      return candidate;
+    }
+    if (content.length <= 16) {
+      return null;
+    }
+    content = clipHistorySummaryContent(content, Math.max(16, content.length - 24));
+  }
+}
+
+export function buildSessionHistorySummaryText(params: {
+  entries: SessionEntry[];
+  characterName?: string;
+  maxTokens: number;
+}): string {
+  if (params.entries.length === 0 || params.maxTokens <= 0) {
+    return '';
+  }
+
+  const headerLines = ['[History summary]'];
+  if (countTokens(headerLines.join('\n')) > params.maxTokens) {
+    return '';
+  }
+
+  const lines = [...headerLines];
+  for (const line of buildHistorySummaryLines(params.entries, params.characterName)) {
+    const fitted = fitHistorySummaryLine(lines, line, params.maxTokens);
+    if (!fitted) break;
+    lines.push(fitted);
+  }
+
+  return lines.length > headerLines.length ? lines.join('\n') : '';
 }
 
 export function normalizeImportBootstrapMaxTokens(value: number | undefined): number {

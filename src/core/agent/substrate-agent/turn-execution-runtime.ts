@@ -52,6 +52,7 @@ import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, Messag
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
+import { isTemporalContextBudgetTurn } from '../../../shared/context-budget.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
 import { createTurnId } from '../../turns/id.js';
 import type {
@@ -529,6 +530,12 @@ export async function handleMessageForTurn(
   );
   const taskKind = runtime.resolveTaskKind(message);
   const turnBudgetCharacteristics = runtime.buildTurnBudgetCharacteristics(message, taskKind);
+  const temporalRetrievalMode: 'temporal' | undefined = isTemporalContextBudgetTurn(turnBudgetCharacteristics)
+    ? 'temporal'
+    : undefined;
+  const temporalRetrievalCallerContext = temporalRetrievalMode
+    ? { retrievalMode: temporalRetrievalMode }
+    : undefined;
   const turnCallType = runtime.resolveTurnCallType(message, taskKind);
   const turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
   const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
@@ -740,6 +747,8 @@ export async function handleMessageForTurn(
       authorContext.canonicalContactKey,
           turnBudgetCharacteristics,
           focusMemoryScopeQuery ?? undefined,
+          temporalRetrievalCallerContext,
+          temporalRetrievalMode,
         )
         : Promise.resolve(undefined),
     ]);
@@ -776,6 +785,8 @@ export async function handleMessageForTurn(
             turnBudgetCharacteristics,
             undefined,
             focusMemoryScopeQuery ?? undefined,
+            temporalRetrievalCallerContext,
+            temporalRetrievalMode,
           )
           : Promise.resolve('');
         const proactiveRecallBlockPromise = memoryProvider

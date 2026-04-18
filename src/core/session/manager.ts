@@ -40,6 +40,7 @@ import {
   type ContextBudgetTurnCharacteristics,
 } from '../../shared/context-budget.js';
 import {
+  applyTemporalSessionHistoryWindow,
   collectRecentEntriesWithinHistorySpan,
   collectRecentEntriesWithinTokenBudget,
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
@@ -792,6 +793,7 @@ export class SessionManager {
           channelId: resolvedChannelId,
           estimatedCount: historyBudget.estimatedCount,
           tokenBudget: historyBudget.tokenBudget,
+          turnBudgetCharacteristics: params.turnBudgetCharacteristics,
         }).entries;
         recent = applyFocusCompactionRanges(
           recent,
@@ -1015,6 +1017,7 @@ export class SessionManager {
       estimatedCount: historyBudget.estimatedCount,
       maxHistorySpanMs,
     }).entries;
+    recent = applyTemporalSessionHistoryWindow(recent, turnBudgetCharacteristics);
     const focusCompaction = applyFocusCompactionRanges(
       recent,
       this.getFocusCompactionRanges(resolvedChannelId),

@@ -25,6 +25,7 @@ describe('runtime prompt layer schema', () => {
   it('returns cloned schema metadata for callers', () => {
     const definitions = getRuntimePromptLayerDefinitions();
     expect(definitions).toHaveLength(20);
+    expect(definitions.at(-1)?.identifier).toBe('runtime.current_datetime');
     definitions[0]!.schema.required = false;
     expect(getRuntimePromptLayerDefinition('runtime.current_datetime')?.schema.required).toBe(true);
   });
@@ -93,11 +94,6 @@ describe('runtime prompt layer schema', () => {
     expect(result.ok).toBe(false);
     expect(result.issues).toEqual([
       {
-        identifier: 'runtime.current_datetime',
-        name: 'Current Date & Time',
-        reason: 'empty',
-      },
-      {
         identifier: 'runtime.last_message_received',
         name: 'Last Message Received',
         reason: 'disabled',
@@ -106,6 +102,11 @@ describe('runtime prompt layer schema', () => {
         identifier: 'runtime.internal_turn_context',
         name: 'Internal Turn Context',
         reason: 'missing',
+      },
+      {
+        identifier: 'runtime.current_datetime',
+        name: 'Current Date & Time',
+        reason: 'empty',
       },
     ]);
   });

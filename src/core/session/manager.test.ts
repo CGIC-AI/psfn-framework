@@ -1125,6 +1125,72 @@ describe('SessionManager', () => {
     expect(taskContext.manifest?.budgets.memoryRetrieval.budgetPct).toBe(2);
   });
 
+  it('keeps temporal turns anchored to same-day history instead of a 7-day session window', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const now = new Date('2026-04-18T12:00:00.000-04:00');
+    const temporalTurn = {
+      messageText: 'what time is it?',
+    };
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+
+    try {
+      const sevenDaysAgo = now.getTime() - (7 * 24 * 60 * 60 * 1000);
+      store.append({
+        channelId: 'ch-temporal',
+        role: 'user',
+        content: 'I mentioned a deadline a week ago.',
+        authorId: 'u1',
+        authorName: 'User',
+        timestamp: sevenDaysAgo,
+      });
+      store.append({
+        channelId: 'ch-temporal',
+        role: 'assistant',
+        content: 'We reviewed that deadline a week ago.',
+        authorId: 'u1',
+        authorName: 'Companion',
+        timestamp: sevenDaysAgo + 1_000,
+      });
+      store.append({
+        channelId: 'ch-temporal',
+        role: 'user',
+        content: 'what time is it?',
+        authorId: 'u1',
+        authorName: 'User',
+        timestamp: now.getTime(),
+      });
+
+      const snapshot = mgr.captureTurnContextSnapshot(
+        'ch-temporal',
+        'u1',
+        undefined,
+        [],
+        temporalTurn,
+      );
+      const context = await mgr.buildContext(
+        'ch-temporal',
+        'System prompt',
+        '',
+        undefined,
+        'u1',
+        undefined,
+        [],
+        snapshot,
+        undefined,
+        temporalTurn,
+      );
+
+      expect(context.messages).toHaveLength(1);
+      expect(context.messages[0]?.content).toBe('what time is it?');
+      expect(JSON.stringify(context.messages)).not.toContain('I mentioned a deadline a week ago.');
+      expect(JSON.stringify(context.messages)).not.toContain('We reviewed that deadline a week ago.');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('recomputes effective context budgets from canonical per-turn model metadata', async () => {
     const config = makeConfig({
       sessionMessageLimit: undefined,

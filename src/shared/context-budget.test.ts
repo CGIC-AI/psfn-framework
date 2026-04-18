@@ -278,6 +278,12 @@ describe('context-budget', () => {
       messageText: 'Can you remember what I said yesterday?',
     })).toBe('recall');
     expect(classifyContextBudgetTurn({
+      messageText: 'What time is it?',
+    })).toBe('temporal');
+    expect(classifyContextBudgetTurn({
+      messageText: 'I need the time now, please.',
+    })).toBe('temporal');
+    expect(classifyContextBudgetTurn({
       taskKind: 'planning',
     })).toBe('task');
     expect(classifyContextBudgetTurn({
@@ -353,6 +359,22 @@ describe('context-budget', () => {
     expect(profile.memoryRetrievalBudgetPct).toBe(8);
   });
 
+  it('adapts temporal turns to same-day session history and temporal retrieval mode when enabled', () => {
+    const profile = resolveAdaptiveContextBudgetProfile({
+      sessionHistoryBudgetPct: 6,
+      memoryRetrievalBudgetPct: 2,
+      adaptiveContextBudgetsEnabled: true,
+    }, {
+      messageText: 'What time is it?',
+    });
+
+    expect(profile.enabled).toBe(true);
+    expect(profile.source).toBe('adaptive');
+    expect(profile.category).toBe('temporal');
+    expect(profile.sessionHistoryBudgetPct).toBe(4);
+    expect(profile.memoryRetrievalBudgetPct).toBe(6);
+  });
+
   it('builds preview profiles from the same adaptive budget table used by runtime', () => {
     const profiles = resolveAdaptiveContextBudgetPreviewProfiles({
       sessionHistoryBudgetPct: 6,
@@ -372,6 +394,12 @@ describe('context-budget', () => {
         source: 'default',
         sessionHistoryBudgetPct: 6,
         memoryRetrievalBudgetPct: 2,
+      }),
+      expect.objectContaining({
+        key: 'temporal',
+        source: 'adaptive',
+        sessionHistoryBudgetPct: 4,
+        memoryRetrievalBudgetPct: 6,
       }),
       expect.objectContaining({
         key: 'recall',

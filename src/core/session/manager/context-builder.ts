@@ -39,6 +39,7 @@ import {
   buildSessionHistorySummaryText,
   collectRecentEntriesWithinHistorySpan,
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
+  applyTemporalSessionHistoryWindow,
   isUntrustedVisibility,
   parseChannelVisibility,
   resolveMaxHistorySpanMs,
@@ -456,6 +457,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   let recent = params.turnSnapshot
     ? params.turnSnapshot.recentEntries.map(cloneSessionEntry)
     : collectedRecent!.entries;
+  recent = applyTemporalSessionHistoryWindow(recent, params.turnBudgetCharacteristics);
   const sourceEntryCount = params.turnSnapshot
     ? recent.length + (params.turnSnapshot.historySummaryEntryCount ?? 0)
     : collectedRecent!.sourceCount;

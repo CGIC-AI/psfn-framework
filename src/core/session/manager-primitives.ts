@@ -2,7 +2,13 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import type { SessionRoleEnvelopePreview } from '../internal-role-envelopes/projections.js';
 import { countTokens } from '../../primitives/llm/tokens.js';
-import { SESSION_HISTORY_MIN_MESSAGES } from '../../shared/context-budget.js';
+import {
+  resolveTemporalTurnWindow,
+  SESSION_HISTORY_MIN_MESSAGES,
+  type ContextBudgetTurnCharacteristics,
+  type TemporalTurnWindow,
+} from '../../shared/context-budget.js';
+import { formatActiveDate } from '../../shared/time/active-timezone.js';
 import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
 import type { ChannelMeta } from '../../system/trust/policy.js';
 import { COMPACTION_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../../system/security/refusal-patterns.js';
@@ -136,6 +142,37 @@ export interface SpanBoundRecentEntries extends BudgetedRecentEntries {
   cutoffTimestamp: number;
 }
 
+function isEntryWithinTemporalWindow(
+  entry: SessionEntry,
+  temporalWindow: TemporalTurnWindow,
+  nowMs: number,
+): boolean {
+  if (!Number.isFinite(entry.timestamp) || entry.timestamp <= 0 || entry.timestamp > nowMs) return false;
+  const entryDate = new Date(entry.timestamp);
+  const nowDate = new Date(nowMs);
+
+  if (temporalWindow.mode === 'same_day') {
+    return formatActiveDate(entryDate) === formatActiveDate(nowDate);
+  }
+
+  const recentHours = Math.max(1, Math.floor(temporalWindow.recentHours ?? 12));
+  return nowMs - entry.timestamp <= recentHours * 60 * 60 * 1000;
+}
+
+export function applyTemporalSessionHistoryWindow(
+  entries: readonly SessionEntry[],
+  turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+  now: Date = new Date(),
+): SessionEntry[] {
+  const temporalWindow = resolveTemporalTurnWindow(turnBudgetCharacteristics);
+  if (!temporalWindow) {
+    return [...entries];
+  }
+
+  const nowMs = now.getTime();
+  return entries.filter(entry => isEntryWithinTemporalWindow(entry, temporalWindow, nowMs));
+}
+
 interface RetryConfig {
   maxRetries: number;
   baseDelayMs: number;
@@ -244,6 +281,8 @@ export function collectRecentEntriesWithinTokenBudget(params: {
   channelId: string;
   estimatedCount: number;
   tokenBudget: number;
+  turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
+  now?: Date;
 }): BudgetedRecentEntries {
   let limit = Math.max(SESSION_HISTORY_MIN_MESSAGES, Math.floor(params.estimatedCount));
   let previousFetchedCount = -1;
@@ -251,11 +290,16 @@ export function collectRecentEntriesWithinTokenBudget(params: {
   for (;;) {
     const recent = params.store.getRecent(params.channelId, limit);
     const visibleRecent = recent.filter(entry => !isNonConversationalSessionEntry(entry));
-    const trimmed = trimRecentEntriesToTokenBudget(visibleRecent, params.tokenBudget);
+    const temporalRecent = applyTemporalSessionHistoryWindow(
+      visibleRecent,
+      params.turnBudgetCharacteristics,
+      params.now,
+    );
+    const trimmed = trimRecentEntriesToTokenBudget(temporalRecent, params.tokenBudget);
     if (recent.length < limit || recent.length === previousFetchedCount) {
       return {
         entries: trimmed,
-        sourceCount: recent.length,
+        sourceCount: temporalRecent.length,
       };
     }
 
@@ -268,7 +312,7 @@ export function collectRecentEntriesWithinTokenBudget(params: {
     if (trimmed.length < visibleRecent.length) {
       return {
         entries: trimmed,
-        sourceCount: recent.length,
+        sourceCount: temporalRecent.length,
       };
     }
 

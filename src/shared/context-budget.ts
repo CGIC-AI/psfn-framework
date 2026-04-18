@@ -37,7 +37,7 @@ export interface ContextBudgetTurnCharacteristics {
   modelSelection?: ContextBudgetModelSelectionLike;
 }
 
-export type ContextBudgetTurnCategory = 'default' | 'recall' | 'task' | 'emotional' | 'creative' | 'factual';
+export type ContextBudgetTurnCategory = 'default' | 'temporal' | 'recall' | 'task' | 'emotional' | 'creative' | 'factual';
 
 export interface AdaptiveContextBudgetProfile {
   enabled: boolean;
@@ -48,7 +48,7 @@ export interface AdaptiveContextBudgetProfile {
 }
 
 export interface AdaptiveContextBudgetPreviewProfile {
-  key: 'default' | 'heartbeat_reflection' | 'recall' | 'task' | 'emotional' | 'creative' | 'factual';
+  key: 'default' | 'heartbeat_reflection' | 'temporal' | 'recall' | 'task' | 'emotional' | 'creative' | 'factual';
   label: string;
   source: 'disabled' | 'default' | 'adaptive';
   category: ContextBudgetTurnCategory;
@@ -79,6 +79,11 @@ export const DEFAULT_CONTEXT_WINDOW_FALLBACK = 128_000;
 const TASK_KIND_TASK_SET = new Set(['planning', 'maintenance', 'deferred_tool_handoff']);
 const COMPANION_CONTEXT_TASK_KIND_SET = new Set(['heartbeat', 'reflection']);
 const CHANNEL_TASK_TYPE_SET = new Set(['terminal', 'internal']);
+const TEMPORAL_NOW_PATTERN = /\b(now|right now|current time|local time|what time(?: is it)?|what(?:'s| is) the time|time is it|time now|what day(?: is it)?|what date(?: is it)?|date(?: and time)?|current date)\b/i;
+const TEMPORAL_DAY_PATTERN = /\b(today|this morning|this afternoon|this evening|tonight|earlier today|just now|this hour)\b/i;
+const TEMPORAL_RECENT_HOURS_PATTERN = /\b(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|few|couple(?:\s+of)?|several)\s+hours?\s+ago\b/i;
+const TEMPORAL_RECENT_MINUTES_PATTERN = /\b(?:\d+|a|an|one|two|three|four|five|six|seven|eight|nine|ten|few|couple(?:\s+of)?|several)\s+minutes?\s+ago\b/i;
+const TEMPORAL_EXPLICIT_CORRECTION_PATTERN = /\b(actually|correction|correct(?:ing|ed)?|more accurately|to be precise|i meant|i mean)\b.*\b(\d{1,2}(?::\d{2})?\s*(?:am|pm)?|noon|midnight|today|tonight|this morning|this afternoon|this evening)\b/i;
 const MEMORY_RECALL_PATTERN = /\b(remember|recall|memory|memories|journal|scratchpad|what do you know about|what did i (?:say|mention|tell)|last time|previous conversation)\b/i;
 const TASK_PATTERN = /\b(step(?:-by-step)?|plan|roadmap|implement|fix|debug|build|refactor|investigate|analy[sz]e|tests?|deploy|terminal|shell|command|script)\b/i;
 const EMOTIONAL_PATTERN = /\b(feel(?:ing)?|emotion(?:al)?|anxious|stressed|overwhelmed|upset|sad|lonely|frustrated|relationship|support|comfort|vent)\b/i;
@@ -88,6 +93,7 @@ const ADAPTIVE_BUDGET_PROFILE_BY_CATEGORY: Readonly<Record<
   Exclude<ContextBudgetTurnCategory, 'default'>,
   { sessionHistoryBudgetPct: number; memoryRetrievalBudgetPct: number }
 >> = {
+  temporal: { sessionHistoryBudgetPct: 4, memoryRetrievalBudgetPct: 6 },
   recall: { sessionHistoryBudgetPct: 4, memoryRetrievalBudgetPct: 8 },
   task: { sessionHistoryBudgetPct: 12, memoryRetrievalBudgetPct: 2 },
   emotional: { sessionHistoryBudgetPct: 7, memoryRetrievalBudgetPct: 4 },
@@ -137,6 +143,54 @@ function normalizeModelPurpose(value: unknown): string | undefined {
 
 function normalizeTurnText(value: string | undefined): string {
   return value?.trim().toLowerCase() ?? '';
+}
+
+export interface TemporalTurnWindow {
+  mode: 'same_day' | 'recent_hours';
+  recentHours?: number;
+}
+
+function matchesTemporalCue(text: string): boolean {
+  return TEMPORAL_NOW_PATTERN.test(text)
+    || TEMPORAL_DAY_PATTERN.test(text)
+    || TEMPORAL_RECENT_HOURS_PATTERN.test(text)
+    || TEMPORAL_RECENT_MINUTES_PATTERN.test(text)
+    || TEMPORAL_EXPLICIT_CORRECTION_PATTERN.test(text);
+}
+
+export function resolveTemporalTurnWindow(
+  turn: ContextBudgetTurnCharacteristics | undefined,
+): TemporalTurnWindow | null {
+  const messageText = normalizeTurnText(turn?.messageText);
+  if (!messageText) return null;
+
+  if (!matchesTemporalCue(messageText)) {
+    return null;
+  }
+
+  if (TEMPORAL_RECENT_HOURS_PATTERN.test(messageText)) {
+    return {
+      mode: 'recent_hours',
+      recentHours: 12,
+    };
+  }
+
+  if (TEMPORAL_RECENT_MINUTES_PATTERN.test(messageText)) {
+    return {
+      mode: 'recent_hours',
+      recentHours: 6,
+    };
+  }
+
+  return {
+    mode: 'same_day',
+  };
+}
+
+export function isTemporalContextBudgetTurn(
+  turn: ContextBudgetTurnCharacteristics | undefined,
+): boolean {
+  return resolveTemporalTurnWindow(turn) !== null;
 }
 
 function isCompanionContextBudgetTurn(
@@ -364,11 +418,14 @@ export function classifyContextBudgetTurn(
     return 'default';
   }
 
-  if (MEMORY_RECALL_PATTERN.test(messageText)) {
-    return 'recall';
-  }
   if (EMOTIONAL_PATTERN.test(messageText)) {
     return 'emotional';
+  }
+  if (resolveTemporalTurnWindow(turn)) {
+    return 'temporal';
+  }
+  if (MEMORY_RECALL_PATTERN.test(messageText)) {
+    return 'recall';
   }
   if (CREATIVE_PATTERN.test(messageText)) {
     return 'creative';
@@ -489,6 +546,7 @@ export function resolveAdaptiveContextBudgetPreviewProfiles(
   return [
     buildProfile('default', 'Default chat', 'default'),
     buildProfile('heartbeat_reflection', 'Heartbeat / reflection', 'default'),
+    buildProfile('temporal', 'Temporal grounding', 'temporal'),
     buildProfile('recall', 'Memory recall', 'recall'),
     buildProfile('task', 'Task / terminal', 'task'),
     buildProfile('emotional', 'Emotional support', 'emotional'),

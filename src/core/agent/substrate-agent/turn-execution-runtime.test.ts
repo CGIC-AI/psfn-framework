@@ -173,6 +173,7 @@ function createRuntime(params: {
   recordSystemMessage?: ReturnType<typeof vi.fn>;
   recordAssistantMessage: ReturnType<typeof vi.fn>;
   resolveAuthorContext?: ReturnType<typeof vi.fn>;
+  buildTurnBudgetCharacteristics?: ReturnType<typeof vi.fn>;
   memoryProvider?: TurnExecutionRuntime['memoryProvider'];
   imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
   emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
@@ -245,7 +246,7 @@ function createRuntime(params: {
     emotionSelfModelRuntime,
     pinDeferredContinuationSessionContext: vi.fn(() => () => undefined),
     resolveTaskKind: vi.fn(() => undefined),
-    buildTurnBudgetCharacteristics: vi.fn(() => ({ mode: 'default' })),
+    buildTurnBudgetCharacteristics: params.buildTurnBudgetCharacteristics ?? vi.fn(() => ({ mode: 'default' })),
     resolveTurnCallType: vi.fn(() => 'chat'),
     buildTurnCorrelation: vi.fn((_message, callType, turnId, requestId) => ({
       callType,
@@ -1109,6 +1110,62 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     await expect(responsePromise).resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
   });
 
+  it('threads temporal retrieval mode through memory snapshot capture and retrieval', async () => {
+    const eventBus = new EventBus();
+    const captureTurnMemorySnapshot = vi.fn(async () => ({ snapshot: 'memory' }));
+    const retrieve = vi.fn(async () => 'memories');
+    const retrieveProactiveRecall = vi.fn(async () => 'proactive');
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      buildTurnBudgetCharacteristics: vi.fn(() => ({ messageText: 'what time is it?' })),
+      memoryProvider: {
+        captureTurnMemorySnapshot,
+        retrieve,
+        retrieveProactiveRecall,
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-temporal-memory', {
+      content: 'what time is it?',
+    }));
+
+    expect(captureTurnMemorySnapshot).toHaveBeenCalledWith(
+      'what time is it?',
+      'ch1',
+      'regular',
+      {},
+      'contact-1',
+      expect.objectContaining({ messageText: 'what time is it?' }),
+      undefined,
+      { retrievalMode: 'temporal' },
+      'temporal',
+    );
+    expect(retrieve).toHaveBeenCalledWith(
+      'what time is it?',
+      'ch1',
+      'regular',
+      {},
+      'contact-1',
+      expect.objectContaining({ snapshot: 'memory' }),
+      expect.objectContaining({ messageText: 'what time is it?' }),
+      undefined,
+      undefined,
+      { retrievalMode: 'temporal' },
+      'temporal',
+    );
+  });
+
   it('threads the active focus scope into subagent memory retrieval calls', async () => {
     const eventBus = new EventBus();
     const focusScopeQuery = buildFocusMemoryScopeQuery('Memory Improvement');
@@ -1148,6 +1205,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       'contact-1',
       expect.any(Object),
       focusScopeQuery,
+      undefined,
+      undefined,
     );
     expect(retrieve).toHaveBeenCalledWith(
       'Hello there',
@@ -1159,6 +1218,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       expect.any(Object),
       undefined,
       focusScopeQuery,
+      undefined,
+      undefined,
     );
     expect(retrieveProactiveRecall).toHaveBeenCalledWith(
       'ch1',

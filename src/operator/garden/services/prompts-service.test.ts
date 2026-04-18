@@ -128,19 +128,19 @@ describe('AdminPromptsDataService', () => {
     const runtimeLayerIds = seedRuntimePromptLayers(promptStore);
 
     const service = new AdminPromptsDataService({ promptStore });
-    const currentDatetimeLayerId = runtimeLayerIds.get('runtime.current_datetime');
-    expect(currentDatetimeLayerId).toBeTruthy();
-    const before = promptStore.getById(currentDatetimeLayerId!);
+    const runtimeStateLayerId = runtimeLayerIds.get('runtime.state');
+    expect(runtimeStateLayerId).toBeTruthy();
+    const before = promptStore.getById(runtimeStateLayerId!);
 
     const result = service.updatePromptLayer(JSON.stringify({
-      layerId: currentDatetimeLayerId,
+      layerId: runtimeStateLayerId,
       content: '   ',
     }));
 
     expect(result.ok).toBe(false);
-    expect(result.message).toContain('runtime.current_datetime');
-    expect(result.message).toContain('Current Date & Time');
-    expect(promptStore.getById(currentDatetimeLayerId!)?.content).toBe(before?.content);
+    expect(result.message).toContain('runtime.state');
+    expect(result.message).toContain('Runtime State');
+    expect(promptStore.getById(runtimeStateLayerId!)?.content).toBe(before?.content);
   });
 
   it('allows optional runtime prompt layers to be omitted by disabling them', () => {
@@ -152,7 +152,7 @@ describe('AdminPromptsDataService', () => {
     const runtimeLayerIds = seedRuntimePromptLayers(promptStore);
 
     const service = new AdminPromptsDataService({ promptStore });
-    const optionalLayerId = runtimeLayerIds.get('runtime.appearance_context');
+    const optionalLayerId = runtimeLayerIds.get('runtime.attention');
     expect(optionalLayerId).toBeTruthy();
 
     const result = service.togglePromptLayer(JSON.stringify({
@@ -170,31 +170,31 @@ describe('AdminPromptsDataService', () => {
       join(root, 'prompt-history.jsonl'),
     );
     const runtimeLayerIds = seedRuntimePromptLayers(promptStore);
-    const currentDatetimeLayerId = runtimeLayerIds.get('runtime.current_datetime');
-    expect(currentDatetimeLayerId).toBeTruthy();
+    const runtimeStateLayerId = runtimeLayerIds.get('runtime.state');
+    expect(runtimeStateLayerId).toBeTruthy();
 
     promptStore.update(
-      currentDatetimeLayerId!,
+      runtimeStateLayerId!,
       { content: '' },
       'test',
       'blank runtime layer',
     );
     promptStore.update(
-      currentDatetimeLayerId!,
-      { content: '<current_datetime>Recovered runtime coverage.</current_datetime>' },
+      runtimeStateLayerId!,
+      { content: '<runtime_state>Recovered runtime coverage.</runtime_state>' },
       'test',
       'restore runtime layer',
     );
 
     const service = new AdminPromptsDataService({ promptStore });
     const result = service.rollbackPromptLayer(JSON.stringify({
-      layerId: currentDatetimeLayerId,
+      layerId: runtimeStateLayerId,
       version: 2,
     }));
 
     expect(result.ok).toBe(false);
-    expect(result.message).toContain('runtime.current_datetime');
-    expect(promptStore.getById(currentDatetimeLayerId!)?.content).toContain('Recovered runtime coverage.');
+    expect(result.message).toContain('runtime.state');
+    expect(promptStore.getById(runtimeStateLayerId!)?.content).toContain('Recovered runtime coverage.');
   });
 
   it('returns constitution snapshot with immutable and mutable boundaries plus preview output', () => {
@@ -286,7 +286,7 @@ describe('AdminPromptsDataService', () => {
       providerManaged: false,
     });
     expect(listed.runtimeLayerCoverage.ok).toBe(false);
-    expect(listed.runtimeLayerCoverage.entries.find(entry => entry.identifier === 'runtime.current_datetime')).toMatchObject({
+    expect(listed.runtimeLayerCoverage.entries.find(entry => entry.identifier === 'runtime.state')).toMatchObject({
       classification: 'required_runtime_aware',
       required: true,
       status: 'missing',

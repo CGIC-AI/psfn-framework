@@ -28,6 +28,10 @@ export interface RuntimePromptLayerDefinition {
   schema: RuntimePromptLayerSchema;
 }
 
+interface RuntimePromptLayerDefinitionInternal extends RuntimePromptLayerDefinition {
+  legacyCoverageIdentifiers?: readonly string[];
+}
+
 export interface RuntimePromptLayerCoverageIssue {
   identifier: string;
   name: string;
@@ -49,146 +53,104 @@ const OPTIONAL_RUNTIME_LAYER_SCHEMA: RuntimePromptLayerSchema = Object.freeze({
   required: false,
 });
 
-export const RUNTIME_PROMPT_LAYER_DEFINITIONS: readonly RuntimePromptLayerDefinition[] = [
+const RUNTIME_STATE_LEGACY_IDENTIFIERS = [
+  'runtime.last_message_received',
+  'runtime.internal_turn_context',
+  'runtime.speaking_with',
+  'runtime.channel_context',
+  'runtime.model_context',
+  'runtime.capability_tier',
+  'runtime.current_datetime',
+] as const;
+
+const RUNTIME_SELF_LEGACY_IDENTIFIERS = [
+  'runtime.trust',
+  'runtime.emotional_affect',
+  'runtime.metacognitive_guidance',
+  'runtime.response_style_guidance',
+  'runtime.internal_state',
+] as const;
+
+const LEGACY_RUNTIME_LAYER_IDENTIFIERS = [
+  ...RUNTIME_STATE_LEGACY_IDENTIFIERS,
+  ...RUNTIME_SELF_LEGACY_IDENTIFIERS,
+  'runtime.emotion_appraisal_chain',
+  'runtime.open_threads',
+  'runtime.behavioral_notes',
+  'runtime.skills_index',
+  'runtime.appearance_context',
+  'runtime.self_image_tool_guidance',
+  'runtime.extended_tools',
+] as const;
+
+const LEGACY_RUNTIME_LAYER_IDENTIFIER_SET = new Set<string>(LEGACY_RUNTIME_LAYER_IDENTIFIERS);
+
+function wrapRuntimeUmbrella(tag: string, sections: readonly string[]): string {
+  return `<${tag}>\n${sections.map(section => section.trim()).join('\n\n')}\n</${tag}>`;
+}
+
+const RUNTIME_STATE_LAYER_CONTENT = wrapRuntimeUmbrella('runtime_state', [
+  "<last_message_received>\n<weekday>{{runtime_last_message_received_weekday}}</weekday>\n<date>{{runtime_last_message_received_date_human}}</date>\n<time>{{runtime_last_message_received_time_human}}</time>\n<timezone>{{runtime_last_message_received_timezone}}</timezone>\n<elapsed_time_since_last>{{runtime_last_message_received_ago}}</elapsed_time_since_last>\n<status>{{runtime_last_message_received_missing_notice}}</status>\n</last_message_received>",
+  "<internal_turn_context>\n<kind>{{runtime_internal_turn_kind}}</kind>\n</internal_turn_context>",
+  "<speaking_with>\n<name>{{runtime_speaking_with_name}}</name>\n<trust_level>{{runtime_speaking_with_trust_level}}</trust_level>\n</speaking_with>",
+  "<channel_context>\n<type>{{runtime_channel_type}}</type>\n<visibility>{{runtime_channel_visibility}}</visibility>\n</channel_context>",
+  "<model_context>\n<identifier>{{model}}</identifier>\n</model_context>",
+  "<capability_tier>\n<tier>{{runtime_capability_tier}}</tier>\n</capability_tier>",
+  "<current_datetime>\n<weekday>{{runtime_current_weekday}}</weekday>\n<date>{{runtime_current_date_human}}</date>\n<time>{{runtime_current_time_human}}</time>\n<timezone>{{active_timezone}}</timezone>\n</current_datetime>",
+]);
+
+const RUNTIME_SELF_LAYER_CONTENT = wrapRuntimeUmbrella('runtime_self', [
+  `<trust>\n${TRUST_GUIDANCE_BODY_TEMPLATE}\n</trust>`,
+  `<emotional_affect>\n${EMOTIONAL_AFFECT_BODY_TEMPLATE}\n</emotional_affect>`,
+  `<metacognitive_persona_guidance>\n${METACOGNITIVE_PERSONA_GUIDANCE_BODY_TEMPLATE}\n</metacognitive_persona_guidance>`,
+  `<response_style_guidance>\n${RESPONSE_STYLE_GUIDANCE_BODY_TEMPLATE}\n</response_style_guidance>`,
+  `<internal_state>\n${INTERNAL_STATE_BODY_TEMPLATE}\n</internal_state>`,
+]);
+
+const RUNTIME_ATTENTION_LAYER_CONTENT = wrapRuntimeUmbrella('runtime_attention', [
+  "<emotion_appraisal_chain>\n{{runtime_emotion_appraisal_body}}\n</emotion_appraisal_chain>",
+  `<open_threads>\n${OPEN_THREADS_BODY_TEMPLATE}\n</open_threads>`,
+  "<behavioral_notes>\n{{runtime_behavioral_notes_body}}\n</behavioral_notes>",
+  "<skills_index>\n{{runtime_skills_index_body}}\n</skills_index>",
+]);
+
+const RUNTIME_TOOLING_LAYER_CONTENT = wrapRuntimeUmbrella('runtime_tooling', [
+  "<tooling>\n<active_count>{{runtime_tooling_active_count}}</active_count>\n<core_count>{{runtime_tooling_core_count}}</core_count>\n<promoted_count>{{runtime_tooling_promoted_count}}</promoted_count>\n<loaded_count>{{runtime_tooling_loaded_count}}</loaded_count>\n<autoload_count>{{runtime_tooling_autoload_count}}</autoload_count>\n<deferred_count>{{runtime_tooling_deferred_count}}</deferred_count>\n<available_extended_count>{{runtime_tooling_available_extended_count}}</available_extended_count>\n</tooling>",
+  "<appearance_context>\n{{runtime_appearance_context_body}}\n</appearance_context>",
+  `<self_image_tool_guidance>\n${SELF_IMAGE_TOOL_GUIDANCE_BODY_TEMPLATE}\n</self_image_tool_guidance>`,
+  `<extended_tools>\n${EXTENDED_TOOLS_BODY_TEMPLATE}\n</extended_tools>`,
+]);
+
+const RUNTIME_PROMPT_LAYER_DEFINITIONS: readonly RuntimePromptLayerDefinitionInternal[] = [
   {
-    identifier: "runtime.last_message_received",
-    name: "Last Message Received",
+    identifier: 'runtime.state',
+    name: 'Runtime State',
     priority: 100,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<last_message_received>\n<weekday>{{runtime_last_message_received_weekday}}</weekday>\n<date>{{runtime_last_message_received_date_human}}</date>\n<time>{{runtime_last_message_received_time_human}}</time>\n<timezone>{{runtime_last_message_received_timezone}}</timezone>\n<elapsed_time_since_last>{{runtime_last_message_received_ago}}</elapsed_time_since_last>\n<status>{{runtime_last_message_received_missing_notice}}</status>\n</last_message_received>",
+    content: RUNTIME_STATE_LAYER_CONTENT,
+    legacyCoverageIdentifiers: RUNTIME_STATE_LEGACY_IDENTIFIERS,
   },
   {
-    identifier: "runtime.internal_turn_context",
-    name: "Internal Turn Context",
+    identifier: 'runtime.self',
+    name: 'Runtime Self',
     priority: 110,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<internal_turn_context>\n<kind>{{runtime_internal_turn_kind}}</kind>\n</internal_turn_context>",
+    content: RUNTIME_SELF_LAYER_CONTENT,
+    legacyCoverageIdentifiers: RUNTIME_SELF_LEGACY_IDENTIFIERS,
   },
   {
-    identifier: "runtime.speaking_with",
-    name: "Speaking With",
+    identifier: 'runtime.attention',
+    name: 'Runtime Attention',
     priority: 120,
-    schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<speaking_with>\n<name>{{runtime_speaking_with_name}}</name>\n<trust_level>{{runtime_speaking_with_trust_level}}</trust_level>\n</speaking_with>",
+    schema: OPTIONAL_RUNTIME_LAYER_SCHEMA,
+    content: RUNTIME_ATTENTION_LAYER_CONTENT,
   },
   {
-    identifier: "runtime.channel_context",
-    name: "Channel Context",
+    identifier: 'runtime.tooling',
+    name: 'Tooling',
     priority: 130,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<channel_context>\n<type>{{runtime_channel_type}}</type>\n<visibility>{{runtime_channel_visibility}}</visibility>\n</channel_context>",
-  },
-  {
-    identifier: "runtime.model_context",
-    name: "Model Context",
-    priority: 140,
-    schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<model_context>\n<identifier>{{model}}</identifier>\n</model_context>",
-  },
-  {
-    identifier: "runtime.capability_tier",
-    name: "Capability Tier",
-    priority: 150,
-    schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<capability_tier>\n<tier>{{runtime_capability_tier}}</tier>\n</capability_tier>",
-  },
-  {
-    identifier: "runtime.tooling",
-    name: "Tooling",
-    priority: 160,
-    schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<tooling>\n<active_count>{{runtime_tooling_active_count}}</active_count>\n<core_count>{{runtime_tooling_core_count}}</core_count>\n<promoted_count>{{runtime_tooling_promoted_count}}</promoted_count>\n<loaded_count>{{runtime_tooling_loaded_count}}</loaded_count>\n<autoload_count>{{runtime_tooling_autoload_count}}</autoload_count>\n<deferred_count>{{runtime_tooling_deferred_count}}</deferred_count>\n<available_extended_count>{{runtime_tooling_available_extended_count}}</available_extended_count>\n</tooling>",
-  },
-  {
-    identifier: "runtime.trust",
-    name: "Trust Guidance",
-    priority: 170,
-    schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: `<trust>\n${TRUST_GUIDANCE_BODY_TEMPLATE}\n</trust>`,
-  },
-  {
-    identifier: "runtime.emotional_affect",
-    name: "Emotional Affect",
-    priority: 180,
-    schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: `<emotional_affect>\n${EMOTIONAL_AFFECT_BODY_TEMPLATE}\n</emotional_affect>`,
-  },
-  {
-    identifier: "runtime.metacognitive_guidance",
-    name: "Metacognitive Guidance",
-    priority: 190,
-    schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: `<metacognitive_persona_guidance>\n${METACOGNITIVE_PERSONA_GUIDANCE_BODY_TEMPLATE}\n</metacognitive_persona_guidance>`,
-  },
-  {
-    identifier: "runtime.response_style_guidance",
-    name: "Response Style Guidance",
-    priority: 200,
-    schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: `<response_style_guidance>\n${RESPONSE_STYLE_GUIDANCE_BODY_TEMPLATE}\n</response_style_guidance>`,
-  },
-  {
-    identifier: "runtime.internal_state",
-    name: "Internal State",
-    priority: 210,
-    schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: `<internal_state>\n${INTERNAL_STATE_BODY_TEMPLATE}\n</internal_state>`,
-  },
-  {
-    identifier: "runtime.emotion_appraisal_chain",
-    name: "Emotion Appraisal Chain",
-    priority: 220,
-    schema: OPTIONAL_RUNTIME_LAYER_SCHEMA,
-    content: "<emotion_appraisal_chain>\n{{runtime_emotion_appraisal_body}}\n</emotion_appraisal_chain>",
-  },
-  {
-    identifier: "runtime.open_threads",
-    name: "Open Threads",
-    priority: 230,
-    schema: OPTIONAL_RUNTIME_LAYER_SCHEMA,
-    content: `<open_threads>\n${OPEN_THREADS_BODY_TEMPLATE}\n</open_threads>`,
-  },
-  {
-    identifier: "runtime.behavioral_notes",
-    name: "Behavioral Notes",
-    priority: 240,
-    schema: OPTIONAL_RUNTIME_LAYER_SCHEMA,
-    content: "<behavioral_notes>\n{{runtime_behavioral_notes_body}}\n</behavioral_notes>",
-  },
-  {
-    identifier: "runtime.skills_index",
-    name: "Skills Index",
-    priority: 250,
-    schema: OPTIONAL_RUNTIME_LAYER_SCHEMA,
-    content: "<skills_index>\n{{runtime_skills_index_body}}\n</skills_index>",
-  },
-  {
-    identifier: "runtime.appearance_context",
-    name: "Appearance Context",
-    priority: 260,
-    schema: OPTIONAL_RUNTIME_LAYER_SCHEMA,
-    content: "<appearance_context>\n{{runtime_appearance_context_body}}\n</appearance_context>",
-  },
-  {
-    identifier: "runtime.self_image_tool_guidance",
-    name: "Self-Image Tool Guidance",
-    priority: 270,
-    schema: OPTIONAL_RUNTIME_LAYER_SCHEMA,
-    content: `<self_image_tool_guidance>\n${SELF_IMAGE_TOOL_GUIDANCE_BODY_TEMPLATE}\n</self_image_tool_guidance>`,
-  },
-  {
-    identifier: "runtime.extended_tools",
-    name: "Extended Tools",
-    priority: 280,
-    schema: OPTIONAL_RUNTIME_LAYER_SCHEMA,
-    content: `<extended_tools>\n${EXTENDED_TOOLS_BODY_TEMPLATE}\n</extended_tools>`,
-  },
-  {
-    identifier: "runtime.current_datetime",
-    name: "Current Date & Time",
-    priority: 290,
-    schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<current_datetime>\n<weekday>{{runtime_current_weekday}}</weekday>\n<date>{{runtime_current_date_human}}</date>\n<time>{{runtime_current_time_human}}</time>\n<timezone>{{active_timezone}}</timezone>\n</current_datetime>",
+    content: RUNTIME_TOOLING_LAYER_CONTENT,
   },
 ] as const;
 
@@ -198,14 +160,23 @@ const RUNTIME_PROMPT_LAYER_DEFINITION_MAP = new Map(
 
 export function getRuntimePromptLayerDefinitions(): RuntimePromptLayerDefinition[] {
   return RUNTIME_PROMPT_LAYER_DEFINITIONS.map(definition => ({
-    ...definition,
+    identifier: definition.identifier,
+    name: definition.name,
+    content: definition.content,
+    priority: definition.priority,
     schema: { ...definition.schema },
   }));
 }
 
 export function getRuntimePromptLayerDefinition(identifier: string): RuntimePromptLayerDefinition | null {
   const definition = RUNTIME_PROMPT_LAYER_DEFINITION_MAP.get(identifier);
-  return definition ? { ...definition, schema: { ...definition.schema } } : null;
+  return definition ? {
+    identifier: definition.identifier,
+    name: definition.name,
+    content: definition.content,
+    priority: definition.priority,
+    schema: { ...definition.schema },
+  } : null;
 }
 
 export function isRequiredRuntimePromptLayer(identifier: string): boolean {
@@ -221,32 +192,12 @@ export function validateRuntimePromptLayerCoverage(
   for (const definition of RUNTIME_PROMPT_LAYER_DEFINITIONS) {
     if (!definition.schema.required) continue;
 
-    const matches = runtimeLayers.filter(layer => layer.identifier === definition.identifier);
-    if (matches.length === 0) {
+    const issue = resolveRuntimeLayerCoverageIssue(runtimeLayers, definition);
+    if (issue) {
       issues.push({
         identifier: definition.identifier,
         name: definition.name,
-        reason: 'missing',
-      });
-      continue;
-    }
-
-    const hasEnabledLayer = matches.some(layer => layer.enabled);
-    if (!hasEnabledLayer) {
-      issues.push({
-        identifier: definition.identifier,
-        name: definition.name,
-        reason: 'disabled',
-      });
-      continue;
-    }
-
-    const hasEnabledContent = matches.some(layer => layer.enabled && layer.content.trim().length > 0);
-    if (!hasEnabledContent) {
-      issues.push({
-        identifier: definition.identifier,
-        name: definition.name,
-        reason: 'empty',
+        reason: issue,
       });
     }
   }
@@ -275,6 +226,12 @@ function findExistingRuntimeLayer(
 }
 
 export function ensureRuntimePromptLayers(promptStore: PromptLayerStatePort): void {
+  const runtimeLayers = promptStore.getAll().filter(layer => layer.type === 'runtime');
+  const preserveLegacyCompanion = runtimeLayers.some(layer => (
+    typeof layer.identifier === 'string'
+    && LEGACY_RUNTIME_LAYER_IDENTIFIER_SET.has(layer.identifier)
+  ));
+
   for (const definition of RUNTIME_PROMPT_LAYER_DEFINITIONS) {
     const existing = findExistingRuntimeLayer(promptStore, definition);
     if (existing) {
@@ -293,6 +250,10 @@ export function ensureRuntimePromptLayers(promptStore: PromptLayerStatePort): vo
       continue;
     }
 
+    if (preserveLegacyCompanion) {
+      continue;
+    }
+
     promptStore.create({
       type: 'runtime',
       name: definition.name,
@@ -304,4 +265,52 @@ export function ensureRuntimePromptLayers(promptStore: PromptLayerStatePort): vo
       updatedBy: 'system',
     });
   }
+}
+
+function resolveRuntimeLayerCoverageIssue(
+  runtimeLayers: readonly Pick<PromptLayer, 'identifier' | 'content' | 'enabled'>[],
+  definition: RuntimePromptLayerDefinitionInternal,
+): RuntimePromptLayerCoverageIssue['reason'] | null {
+  const exactCoverageIssue = evaluateCoverageIdentifiers(runtimeLayers, [definition.identifier]);
+  if (exactCoverageIssue === null) {
+    return null;
+  }
+
+  if (definition.legacyCoverageIdentifiers) {
+    const legacyCoverageIssue = evaluateCoverageIdentifiers(runtimeLayers, definition.legacyCoverageIdentifiers);
+    if (legacyCoverageIssue === null) {
+      return null;
+    }
+
+    if (exactCoverageIssue === 'empty' || legacyCoverageIssue === 'empty') {
+      return 'empty';
+    }
+    if (exactCoverageIssue === 'disabled' || legacyCoverageIssue === 'disabled') {
+      return 'disabled';
+    }
+  }
+
+  return exactCoverageIssue;
+}
+
+function evaluateCoverageIdentifiers(
+  runtimeLayers: readonly Pick<PromptLayer, 'identifier' | 'content' | 'enabled'>[],
+  identifiers: readonly string[],
+): RuntimePromptLayerCoverageIssue['reason'] | null {
+  for (const identifier of identifiers) {
+    const matches = runtimeLayers.filter(layer => layer.identifier === identifier);
+    if (matches.length === 0) {
+      return 'missing';
+    }
+
+    if (!matches.some(layer => layer.enabled)) {
+      return 'disabled';
+    }
+
+    if (!matches.some(layer => layer.enabled && layer.content.trim().length > 0)) {
+      return 'empty';
+    }
+  }
+
+  return null;
 }

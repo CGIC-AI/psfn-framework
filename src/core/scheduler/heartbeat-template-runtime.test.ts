@@ -4,11 +4,17 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { EventBus, type EventMap } from '../../shared/event-bus.js';
-import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
+import {
+  NON_CANONICAL_REFLECTION_SUBSTRATE,
+  ReflectionJournalStore,
+} from '../../persistence/journals/reflection-journal.js';
 import {
   ReflectionDailyJournalStore,
   ReflectionProcessLogStore,
   buildReflectionProcessId,
+  toReflectionDailyJournalProvenanceRef,
+  toReflectionJournalProvenanceRef,
+  toReflectionProcessLogProvenanceRef,
 } from '../../persistence/journals/reflection-substrate.js';
 import { InternalStateComputer, buildInternalStateSnapshotRef } from '../self-model/state.js';
 import {
@@ -1006,7 +1012,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     policyStore.save(policy);
 
     const reflectionJournal = new ReflectionJournalStore(resolveReflectionJournalPath(tempDir));
-    reflectionJournal.append({
+    const substrateJournalEntry = reflectionJournal.append({
       templateId: 'experiential-review',
       templateName: 'Experiential Review',
       prompt: 'Describe your recent experience.',
@@ -1017,7 +1023,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     });
 
     const reflectionDailyJournal = new ReflectionDailyJournalStore(resolveReflectionDailyJournalsDir(tempDir));
-    reflectionDailyJournal.append({
+    const substrateDailyEntry = reflectionDailyJournal.append({
       source: 'heartbeat_template',
       executionSource: 'scheduled',
       templateId: 'daily-review',
@@ -1030,7 +1036,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     });
 
     const reflectionProcessLog = new ReflectionProcessLogStore(resolveReflectionProcessLogsDir(tempDir));
-    reflectionProcessLog.append({
+    const substrateProcessEntry = reflectionProcessLog.append({
       processId: buildReflectionProcessId('Values Reflection Deliberation', () => 1_700_000_000_000),
       processLabel: 'Values Reflection Deliberation',
       processType: 'reflection_deliberation',
@@ -1194,6 +1200,30 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(selfSubstrateSection).toContain('canonical_truth_boundary:');
     expect(selfSubstrateSection).toContain('template=values-reflection');
     expect(memoryRetrieve).toHaveBeenCalled();
+
+    const reflectionRaw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
+    const reflectionEntry = JSON.parse(reflectionRaw.split('\n').at(-1) ?? '{}') as {
+      substrateBoundary?: string;
+      substrateProvenanceRefs?: string[];
+    };
+    expect(reflectionEntry.substrateBoundary).toBe(NON_CANONICAL_REFLECTION_SUBSTRATE);
+    expect(reflectionEntry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
+      toReflectionJournalProvenanceRef(substrateJournalEntry),
+      toReflectionDailyJournalProvenanceRef(substrateDailyEntry),
+      toReflectionProcessLogProvenanceRef(substrateProcessEntry),
+    ]));
+
+    const metacognitionRaw = readFileSync(resolveReflectionMetacognitionJournalPath(tempDir), 'utf-8').trim();
+    const metacognitionEntry = JSON.parse(metacognitionRaw.split('\n').at(-1) ?? '{}') as {
+      substrateBoundary?: string;
+      substrateProvenanceRefs?: string[];
+    };
+    expect(metacognitionEntry.substrateBoundary).toBe(NON_CANONICAL_REFLECTION_SUBSTRATE);
+    expect(metacognitionEntry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
+      toReflectionJournalProvenanceRef(substrateJournalEntry),
+      toReflectionDailyJournalProvenanceRef(substrateDailyEntry),
+      toReflectionProcessLogProvenanceRef(substrateProcessEntry),
+    ]));
   });
 
   it('waits for pending extraction before reflection and seeds a recent session tail when retrieval is empty', async () => {

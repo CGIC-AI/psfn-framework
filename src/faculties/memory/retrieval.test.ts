@@ -2627,6 +2627,55 @@ describe('MemoryRetriever caller-context retrieval modes', () => {
     expect(reflectionFiltered).not.toContain('Reflection entry about what we learned');
   });
 
+  it('reflection mode excludes semantic memories whose provenance refs point at self-reflection traces', async () => {
+    const now = Date.now();
+    const memories = [
+      makeMemory({
+        text: 'Semantic memory synthesized from a self-reflection trace',
+        type: 'semantic',
+        sensitivity: 'public',
+        similarity: 0.96,
+        importance: 0.94,
+        salience: 0.94,
+        extractedAt: now - 30 * 60 * 1000,
+        provenanceRefs: [
+          'reflection_journal:entry-2|template:values-reflection|channel:internal:reflection:values-reflection|mode:agent|createdAt:2026-04-18T11:30:00.000Z',
+        ],
+      }),
+      makeMemory({
+        text: 'Concrete project status memory',
+        type: 'semantic',
+        sensitivity: 'public',
+        similarity: 0.8,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: now - 60 * 60 * 1000,
+      }),
+    ];
+    const retriever = new MemoryRetriever(makeMockStore(memories), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    const baseline = await retriever.retrieve('what should I focus on?', 'api:test', 'primary');
+    const reflectionFiltered = await retriever.retrieve(
+      'what should I focus on?',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'reflection',
+    );
+
+    expect(baseline.indexOf('Semantic memory synthesized from a self-reflection trace')).toBeLessThan(
+      baseline.indexOf('Concrete project status memory'),
+    );
+    expect(reflectionFiltered).toContain('Concrete project status memory');
+    expect(reflectionFiltered).not.toContain('Semantic memory synthesized from a self-reflection trace');
+  });
+
   it('propagates composed caller-context modes from snapshot capture into retrieval', async () => {
     const now = Date.now();
     const memories = [

@@ -86,7 +86,7 @@ export async function runMoaTurn(input: {
   context: LLMContext;
   message: SubstrateMessage;
   settings: ResolvedMoaSettings;
-  config: SubstrateConfig;
+  config?: SubstrateConfig;
   turnId: TurnID;
   requestId: string;
   callType: ObservabilityCallType;
@@ -100,7 +100,7 @@ export async function runMoaTurn(input: {
   stopReason: string;
 }> {
   const activeChargeContext = getRunChargeContext();
-  if (!activeChargeContext && input.config.chargePolicy) {
+  if (!activeChargeContext && input.config?.chargePolicy) {
     return runWithChargeContext({
       chargePolicy: input.config.chargePolicy,
       eventBus: {
@@ -243,9 +243,9 @@ export async function runMoaTurn(input: {
 
 function resolveReferenceModelClass(
   model: string,
-  config: SubstrateConfig,
+  config: SubstrateConfig | undefined,
 ): ChargePolicyReferenceModelClass {
-  const entry = config.modelRegistry?.models.find((candidate) => (
+  const entry = config?.modelRegistry?.models.find((candidate) => (
     candidate.id === model
     || candidate.identity.model === model
     || candidate.identity.provider === model
@@ -296,10 +296,10 @@ function resolveReferenceModelClass(
 }
 
 function resolveConsultCharge(
-  config: SubstrateConfig,
+  config: SubstrateConfig | undefined,
   modelClass: ChargePolicyReferenceModelClass,
 ): number {
-  const pricing = config.chargePolicy?.referenceModelClassPricing[modelClass] ?? 0;
-  const multiplier = config.chargePolicy?.moa.perRoundMultiplierByReferenceModelClass[modelClass] ?? 1;
+  const pricing = config?.chargePolicy?.referenceModelClassPricing[modelClass] ?? 0;
+  const multiplier = config?.chargePolicy?.moa.perRoundMultiplierByReferenceModelClass[modelClass] ?? 1;
   return pricing * multiplier;
 }

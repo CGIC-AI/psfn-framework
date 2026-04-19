@@ -80,6 +80,102 @@
       "tuning": {
         "maxOutputTokens": 8192
       }
+    },
+    {
+      "id": "kimi-k2.5",
+      "rank": 100,
+      "identity": {
+        "provider": "openrouter",
+        "model": "moonshotai/kimi-k2.5",
+        "source": { "type": "openrouter" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": { "maxOutputTokens": 4096, "contextWindow": 256000 },
+      "tuning": { "maxOutputTokens": 4096 }
+    },
+    {
+      "id": "glm-5.1",
+      "rank": 99,
+      "identity": {
+        "provider": "openrouter",
+        "model": "z-ai/glm-5.1",
+        "source": { "type": "openrouter" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": { "maxOutputTokens": 16384, "contextWindow": 128000 },
+      "tuning": { "maxOutputTokens": 16384 }
+    },
+    {
+      "id": "gemini-3.1-flash",
+      "rank": 98,
+      "identity": {
+        "provider": "openrouter",
+        "model": "google/gemini-3.1-flash",
+        "source": { "type": "openrouter" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 1000000 },
+      "tuning": { "maxOutputTokens": 8192 }
+    },
+    {
+      "id": "deepseek-v3.2",
+      "rank": 97,
+      "identity": {
+        "provider": "openrouter",
+        "model": "deepseek/deepseek-v3.2",
+        "source": { "type": "openrouter" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 128000 },
+      "tuning": { "maxOutputTokens": 8192 }
+    },
+    {
+      "id": "minimax-m2.7",
+      "rank": 96,
+      "identity": {
+        "provider": "openrouter",
+        "model": "minimax/minimax-m2.7",
+        "source": { "type": "openrouter" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 100000 },
+      "tuning": { "maxOutputTokens": 8192 }
+    },
+    {
+      "id": "mimo-v2-pro",
+      "rank": 95,
+      "identity": {
+        "provider": "openrouter",
+        "model": "mimo/mimo-v2-pro",
+        "source": { "type": "openrouter" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 128000 },
+      "tuning": { "maxOutputTokens": 8192 }
+    },
+    {
+      "id": "qwen3.5-27b",
+      "rank": 94,
+      "identity": {
+        "provider": "openrouter",
+        "model": "qwen/qwen3.5-27b",
+        "source": { "type": "openrouter" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 131072 },
+      "tuning": { "maxOutputTokens": 8192 }
+    },
+    {
+      "id": "gemma-4-31b-it",
+      "rank": 93,
+      "identity": {
+        "provider": "openrouter",
+        "model": "google/gemma-4-31b-it",
+        "source": { "type": "openrouter" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 128000 },
+      "tuning": { "maxOutputTokens": 8192 }
     }
   ]
 }

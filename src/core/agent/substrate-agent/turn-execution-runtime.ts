@@ -12,6 +12,7 @@ import {
   resolvePromptRuntimeLayoutPath,
   type PromptRuntimeSystemPromptBlockId,
 } from '../../identity/prompt-runtime.js';
+import { getCachedPromptRuntimeLayoutStore } from '../../identity/prompt-runtime-store-cache.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
 import { collectGeneratedImageAttachments } from '../../../primitives/images/generated-media.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
@@ -119,16 +120,10 @@ import { sanitizePersistedReasoningText } from './turn-records.js';
 const log = createComponentLogger('SubstrateAgent');
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
 const VISION_TURN_TIMEOUT_MS = 10_000;
-const promptRuntimeLayoutStoreCache = new Map<string, PromptRuntimeLayoutStore>();
-
 function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayoutStore {
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
   const filePath = resolvePromptRuntimeLayoutPath(companionDataDir);
-  const cached = promptRuntimeLayoutStoreCache.get(filePath);
-  if (cached) return cached;
-  const created = new PromptRuntimeLayoutStore(filePath);
-  promptRuntimeLayoutStoreCache.set(filePath, created);
-  return created;
+  return getCachedPromptRuntimeLayoutStore(filePath, () => new PromptRuntimeLayoutStore(filePath));
 }
 
 function buildTurnObservabilityWarningPayload(input: {
@@ -689,7 +684,7 @@ export async function handleMessageForTurn(
     userMessageText: message.content,
     imageAttachmentUrls: collectVisionTurnImageUrls(message),
   };
-  await runtime.eventBus.emit('agent.turn.start', {
+  void runtime.eventBus.emit('agent.turn.start', {
     message,
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.start'),
   });
@@ -790,10 +785,19 @@ export async function handleMessageForTurn(
       ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot } : {}),
       ...(memorySnapshot ? { memory: memorySnapshot } : {}),
     };
-    await emitTurnSnapshot(turnSnapshot);
+    void emitTurnSnapshot(turnSnapshot);
 
     const memoryStageStart = Date.now();
-    const { memoriesBlock, proactiveRecallBlock } = await runWithRequestContext(
+    const internalStatePromise = runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
+      message,
+      responseText: '',
+      trustLevel,
+      canonicalContactKey: authorContext.canonicalContactKey,
+      emotionSnapshot,
+      toolCallCount: 0,
+      sessionChannelId: emotionSessionId,
+    });
+    const memoryPromise = runWithRequestContext(
       {
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.memory'),
         ...viewerRequestContext,
@@ -835,6 +839,10 @@ export async function handleMessageForTurn(
         return { memoriesBlock, proactiveRecallBlock };
       },
     );
+    const [{ memoriesBlock, proactiveRecallBlock }, preTurnInternalState] = await Promise.all([
+      memoryPromise,
+      internalStatePromise,
+    ]);
     const memoryContextBlock = [memoriesBlock, proactiveRecallBlock]
       .map(section => section.trim())
       .filter(section => section.length > 0)
@@ -865,15 +873,6 @@ export async function handleMessageForTurn(
       authorContext.subjectIdentityKey,
       runtimeNow,
     );
-    const preTurnInternalState = await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
-      message,
-      responseText: '',
-      trustLevel,
-      canonicalContactKey: authorContext.canonicalContactKey,
-      emotionSnapshot,
-      toolCallCount: 0,
-      sessionChannelId: emotionSessionId,
-    });
     const preTurnInternalStateSnapshotRef = buildInternalStateSnapshotRef(preTurnInternalState);
     const preTurnMetacognitiveFlags = runtime.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
       internalState: preTurnInternalState,
@@ -1042,7 +1041,8 @@ export async function handleMessageForTurn(
         content: providerSystemPrompt,
       });
     }
-    for (const providerMessage of contextMessagesToPiMessages(context.messages)) {
+    const piMessages = contextMessagesToPiMessages(context.messages);
+    for (const providerMessage of piMessages) {
       providerWireMessages.push({
         role: providerMessage.role === 'assistant' ? 'assistant' : 'user',
         source: 'message',
@@ -1120,7 +1120,6 @@ export async function handleMessageForTurn(
         providerWireMessages,
       },
     };
-    await emitTurnSnapshot(turnSnapshot);
     const turnObservabilityWarningPayload = buildTurnObservabilityWarningPayload({
       callType: turnCallType,
       nowMs: Date.now(),
@@ -1138,6 +1137,7 @@ export async function handleMessageForTurn(
         counters: turnObservabilityWarningPayload.observabilityCounters,
       });
     }
+    void emitTurnSnapshot(turnSnapshot);
     emitObservedTurnStage('context', {
       durationMs: Date.now() - contextStageStart,
       contextMessages: contextMessageCount,
@@ -1208,7 +1208,7 @@ export async function handleMessageForTurn(
           stopReason: moaResult.stopReason,
         };
         turnSnapshot.capturedAt = Date.now();
-        await emitTurnSnapshot(turnSnapshot);
+        void emitTurnSnapshot(turnSnapshot);
       }
     } else {
       runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(providerSystemPrompt));
@@ -1233,10 +1233,10 @@ export async function handleMessageForTurn(
             : {}),
         };
         turnSnapshot.capturedAt = Date.now();
-        await emitTurnSnapshot(turnSnapshot);
+        void emitTurnSnapshot(turnSnapshot);
       }
 
-      const agentMessages: AgentMessage[] = contextMessagesToPiMessages(context.messages);
+      const agentMessages: AgentMessage[] = piMessages;
       const historyMessages = agentMessages.length > 0 ? agentMessages.slice(0, -1) : [];
       runtime.agent.replaceMessages(historyMessages);
       turnStartMessageIndex = runtime.agent.state.messages.length;
@@ -1290,7 +1290,7 @@ export async function handleMessageForTurn(
       if (turnSnapshot.promptContext) {
         turnSnapshot.promptContext.currentTurnInput = turnUserContentBuildResult.content;
         turnSnapshot.capturedAt = Date.now();
-        await emitTurnSnapshot(turnSnapshot);
+        void emitTurnSnapshot(turnSnapshot);
       }
       try {
         await runWithVisionTurnTimeout({

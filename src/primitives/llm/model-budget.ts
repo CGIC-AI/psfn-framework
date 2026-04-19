@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CorrelationMetadata, ModelBudgetBlockedEvent, ModelBudgetBlockReason, ModelBudgetWindowSnapshot, ModelRegistryEntry, ModelUsageLedgerRecord } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -331,6 +331,8 @@ export function findRegistryEntryByModelId(
 
 export class ModelBudgetController {
   private readonly ledgerPath: string;
+  private cachedLedger: ModelUsageLedger | null = null;
+  private cachedLedgerMtimeMs = 0;
 
   constructor(private readonly config: SubstrateConfig) {
     this.ledgerPath = join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME);
@@ -496,16 +498,29 @@ export class ModelBudgetController {
 
   private loadLedger(): ModelUsageLedger {
     if (!existsSync(this.ledgerPath)) {
+      this.cachedLedger = null;
+      this.cachedLedgerMtimeMs = 0;
       return {
         schemaVersion: MODEL_USAGE_LEDGER_SCHEMA_VERSION,
         records: [],
       };
     }
+    const mtimeMs = statSync(this.ledgerPath).mtimeMs;
+    if (this.cachedLedger && mtimeMs <= this.cachedLedgerMtimeMs) {
+      return this.cachedLedger;
+    }
     const raw = JSON.parse(readFileSync(this.ledgerPath, 'utf-8')) as unknown;
-    return validateLedger(raw, this.ledgerPath);
+    const ledger = validateLedger(raw, this.ledgerPath);
+    this.cachedLedger = ledger;
+    this.cachedLedgerMtimeMs = mtimeMs;
+    return ledger;
   }
 
   private saveLedger(ledger: ModelUsageLedger): void {
     writeJsonAtomic(this.ledgerPath, ledger);
+    if (existsSync(this.ledgerPath)) {
+      this.cachedLedgerMtimeMs = statSync(this.ledgerPath).mtimeMs;
+      this.cachedLedger = ledger;
+    }
   }
 }

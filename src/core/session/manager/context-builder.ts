@@ -20,6 +20,7 @@ import {
   resolvePromptRuntimeLayoutPath,
   type PromptRuntimeSystemPromptBlockId,
 } from '../../identity/prompt-runtime.js';
+import { getCachedPromptRuntimeLayoutStore } from '../../identity/prompt-runtime-store-cache.js';
 import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';
 import { cloneSessionEntry } from '../../turns/snapshot.js';
 import type { SessionEntry } from '../types.js';
@@ -62,16 +63,10 @@ const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
 const INTERNAL_HEARTBEAT_CHANNEL = 'internal:heartbeat';
 export const DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS = 3 * 60 * 60 * 1000;
 const ORIENTATION_SUMMARY_MAX_CHARS = 180;
-const promptRuntimeLayoutStoreCache = new Map<string, PromptRuntimeLayoutStore>();
-
 function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayoutStore {
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
   const filePath = resolvePromptRuntimeLayoutPath(companionDataDir);
-  const cached = promptRuntimeLayoutStoreCache.get(filePath);
-  if (cached) return cached;
-  const created = new PromptRuntimeLayoutStore(filePath);
-  promptRuntimeLayoutStoreCache.set(filePath, created);
-  return created;
+  return getCachedPromptRuntimeLayoutStore(filePath, () => new PromptRuntimeLayoutStore(filePath));
 }
 
 export function isInternalHeartbeatChannel(channelId: string): boolean {
@@ -485,22 +480,25 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   const coreMemorySectionText = hasCoreMemorySection ? params.coreMemoryBlock : '';
   const coreMemoryTokenCount = countTokens(coreMemorySectionText);
   const memoryTokenCount = countTokens(params.memoriesBlock);
-  const compactionThresholdTokenBudget = Math.floor(
-    historyBudget.contextWindow * (params.config.compactionThresholdPct / 100),
-  );
-  const preAssemblySessionMessageTokens = countMessageTokens(
-    entriesToMessages(recent, channelVisibility, false),
-  );
   let compactionManifest = {
     triggered: false,
     compactedEntryCount: 0,
-    totalTokensBefore: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + preAssemblySessionMessageTokens,
-    totalTokensAfter: baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount + preAssemblySessionMessageTokens,
+    totalTokensBefore: 0,
+    totalTokensAfter: 0,
   };
 
   // Explicit compaction remains available for callers that opt into it.
   if (params.llmProvider) {
+    const sessionMessageTokens = countMessageTokens(
+      entriesToMessages(recent, channelVisibility, false),
+    );
     const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount;
+    compactionManifest = {
+      triggered: false,
+      compactedEntryCount: 0,
+      totalTokensBefore: systemTokens + sessionMessageTokens,
+      totalTokensAfter: systemTokens + sessionMessageTokens,
+    };
     const preCompactionEntryCount = recent.length;
     const result = await runAutoCompaction({
       channelId: params.channelId,
@@ -539,6 +537,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       totalTokensAfter: systemTokens + postCompactionMessageTokens + newSummaryTokenCount,
     };
   }
+  const compactionThresholdTokenBudget = Math.floor(
+    historyBudget.contextWindow * (params.config.compactionThresholdPct / 100),
+  );
 
   // Build system prompt with memories
   let fullSystem = params.systemPrompt;

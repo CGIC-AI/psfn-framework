@@ -151,6 +151,47 @@ describe('runRLMLoop', () => {
     expect((emitted[0][1] as any).lineage.runId).toBeDefined();
   });
 
+  it('refuses the next iteration when think charge quota is exhausted before the extension band', async () => {
+    const llm = sequentialLLM([
+      '```repl\nvar step = 1;\n```',
+      'FINAL("done")',
+    ]);
+
+    const result = await runRLMLoop('Charge exhaustion test', makeDeps(llm, {
+      chargePolicy: {
+        ...makeChargePolicy(),
+        runChargeQuotaByLane: {
+          interactive: 0,
+          background: 100,
+          maintenance: 0,
+          subagent: 100,
+          shard: 100,
+        },
+      },
+    }));
+
+    expect(result.iterations).toBe(1);
+    expect(result.budgetStatus.exceeded).toBe('charge quota');
+    expect(result.answer).toContain('charge quota exhausted');
+    expect((llm.complete as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
+  it('keeps the max-iteration ceiling authoritative even when charge quota is available', async () => {
+    const llm = sequentialLLM([
+      '```repl\nvar step = 1;\n```',
+      'FINAL("done")',
+    ]);
+
+    const result = await runRLMLoop('Hard cap test', makeDeps(llm, {
+      chargePolicy: makeChargePolicy(),
+      config: makeConfig({ maxIterations: 1 }),
+    }));
+
+    expect(result.iterations).toBe(1);
+    expect(result.budgetStatus.exceeded).toBe('max iterations');
+    expect((llm.complete as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
+  });
+
   it('awaits async memory stats when building prompt context', async () => {
     const llm = sequentialLLM(['FINAL("done")']);
     const getStats = vi.fn(async () => ({

@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../../shared/event-bus.js';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { PromptRuntimeLayoutStore, resolvePromptRuntimeLayoutPath } from '../../identity/prompt-runtime.js';
@@ -14,11 +14,23 @@ import {
 } from '../../session/tool-observation.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { createActiveEmanationSatellitePresencePort } from '../satellite-adapter-port.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
+import { runMoaTurn } from './moa-turn.js';
+
+vi.mock('./moa-turn.js', async () => {
+  const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
+  return {
+    ...actual,
+    runMoaTurn: vi.fn(),
+  };
+});
+
+const mockedRunMoaTurn = vi.mocked(runMoaTurn);
 
 let tempDir: string | null = null;
 
@@ -27,6 +39,10 @@ afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
     tempDir = null;
   }
+});
+
+beforeEach(() => {
+  mockedRunMoaTurn.mockReset();
 });
 
 function makeTempDir(): string {
@@ -54,6 +70,48 @@ function createMessage(id: string, overrides: Partial<SubstrateMessage> = {}): S
     content: 'Hello there',
     timestamp: new Date('2026-03-08T12:00:00Z'),
     ...overrides,
+  };
+}
+
+function makeChargePolicy(): ChargePolicyConfig {
+  return {
+    schemaVersion: 1,
+    runChargeQuotaByLane: {
+      interactive: 100,
+      background: 100,
+      maintenance: 0,
+      subagent: 100,
+      shard: 100,
+    },
+    surfaceCosts: {
+      ownerFileInspection: 0,
+      localFilesystem: 0,
+      memoryRead: 0,
+      memoryWrite: 0,
+      localEmbedding: 0,
+      externalEmbedding: 0,
+      localImageGeneration: 0,
+      paidImageGeneration: 6,
+      thinkExtensionBand: 1,
+      subagentLaunch: 1,
+      shardLaunch: 8,
+      externalModelConsult: 1,
+      moaRoundBase: 1,
+    },
+    moa: {
+      perRoundMultiplierByReferenceModelClass: {
+        local: 1,
+        subscription: 1,
+        cheap_cloud: 1,
+        premium_cloud: 2,
+      },
+    },
+    referenceModelClassPricing: {
+      local: 0,
+      subscription: 0,
+      cheap_cloud: 1,
+      premium_cloud: 4,
+    },
   };
 }
 
@@ -138,6 +196,61 @@ describe('handleMessageForTurn presence canonicalization', () => {
       }),
     }));
   });
+
+  it('passes runtime config into MoA turns so charge policy is available', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
+    const awaitPendingAutoCompaction = vi.fn(async () => undefined);
+    const recordUserMessage = vi.fn(() => 1);
+    const recordAssistantMessage = vi.fn(() => 2);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns,
+      awaitPendingAutoCompaction,
+      recordUserMessage,
+      recordAssistantMessage,
+      configOverrides: {
+        moaEnabled: true,
+        chargePolicy: makeChargePolicy(),
+      },
+    });
+    mockedRunMoaTurn.mockResolvedValueOnce({
+      output: 'MoA reply',
+      model: 'moa-model',
+      turnUsage: {
+        inputTokens: 1,
+        outputTokens: 1,
+        cacheReadTokens: 0,
+        llmCalls: 1,
+        toolCalls: 0,
+        contextUtilization: 1,
+      },
+      rounds: 1,
+      stopReason: 'stop',
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-moa-charge-config'));
+
+    expect(mockedRunMoaTurn).toHaveBeenCalledTimes(1);
+    expect(mockedRunMoaTurn.mock.calls[0]?.[0]).toMatchObject({
+      config: expect.objectContaining({
+        chargePolicy: expect.objectContaining({
+          runChargeQuotaByLane: expect.objectContaining({
+            interactive: 100,
+          }),
+        }),
+      }),
+    });
+  });
 });
 
 const TEST_INTERNAL_STATE: InternalState = {
@@ -181,6 +294,7 @@ function createRuntime(params: {
   memoryProvider?: TurnExecutionRuntime['memoryProvider'];
   imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
   emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
+  configOverrides?: Partial<SubstrateConfig>;
 }) {
   const agentState = {
     messages: [] as any[],
@@ -220,6 +334,7 @@ function createRuntime(params: {
       modelRoster: {
         chat: { model: 'test-model', provider: 'test', maxTokens: 1024, contextWindow: 4096 },
       },
+      ...params.configOverrides,
     } as unknown as SubstrateConfig,
     runtimeMode: 'default',
     agent: {

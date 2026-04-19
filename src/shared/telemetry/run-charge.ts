@@ -44,6 +44,18 @@ export interface RunChargeChargeInput {
   runId?: string;
 }
 
+export interface ChargeSurfaceInspection {
+  lane: ChargePolicyRuntimeLane;
+  surface: ChargePolicySurface;
+  amount: number;
+  quota: number;
+  spentBefore: number;
+  spentAfter: number;
+  remainingBefore: number;
+  remainingAfter: number;
+  allowed: boolean;
+}
+
 const runChargeStorage = new AsyncLocalStorage<RunChargeContextState>();
 
 function normalizePositiveNumber(value: unknown): number {
@@ -135,6 +147,42 @@ function createChargeEvent(input: {
   };
 }
 
+export function inspectChargeSurface(
+  surface: ChargePolicySurface,
+  input: RunChargeChargeInput = {},
+): ChargeSurfaceInspection | null {
+  const context = getRunChargeContext();
+  const chargePolicy = input.chargePolicy ?? context?.chargePolicy;
+  if (!chargePolicy) {
+    return null;
+  }
+
+  const lane = input.lane ?? context?.lane;
+  if (!lane) {
+    throw new Error(`Charge surface "${surface}" requires a runtime lane`);
+  }
+
+  const amount = normalizePositiveNumber(input.amount ?? chargePolicy.surfaceCosts[surface]);
+  if (amount === 0) {
+    return null;
+  }
+
+  const quota = chargePolicy.runChargeQuotaByLane[lane];
+  const spentBefore = context?.account.spentByLane[lane] ?? 0;
+  const spentAfter = spentBefore + amount;
+  return {
+    lane,
+    surface,
+    amount,
+    quota,
+    spentBefore,
+    spentAfter,
+    remainingBefore: Math.max(0, quota - spentBefore),
+    remainingAfter: Math.max(0, quota - spentAfter),
+    allowed: spentAfter <= quota,
+  };
+}
+
 export function getRunChargeContext(): RunChargeContextState | undefined {
   return runChargeStorage.getStore();
 }
@@ -164,20 +212,20 @@ export function chargeSurface(
   input: RunChargeChargeInput = {},
 ): RunChargeEvent | null {
   const context = getRunChargeContext();
-  const chargePolicy = input.chargePolicy ?? context?.chargePolicy;
   const eventBus = input.eventBus ?? context?.eventBus;
-  if (!chargePolicy) {
+  const inspection = inspectChargeSurface(surface, input);
+  if (!inspection) {
     return null;
   }
 
-  const lane = input.lane ?? context?.lane;
-  if (!lane) {
-    throw new Error(`Charge surface "${surface}" requires a runtime lane`);
+  if (!inspection.allowed) {
+    throw new Error(
+      `Charge quota exceeded for lane "${inspection.lane}" while charging "${surface}" (${inspection.spentAfter}/${inspection.quota}).`,
+    );
   }
 
-  const amount = normalizePositiveNumber(input.amount ?? chargePolicy.surfaceCosts[surface]);
-  if (amount === 0) {
-    return null;
+  if (context) {
+    context.account.spentByLane[inspection.lane] = inspection.spentAfter;
   }
 
   const lineage = {
@@ -190,31 +238,18 @@ export function chargeSurface(
         : {}),
   } satisfies RunChargeLineage;
 
-  const quota = chargePolicy.runChargeQuotaByLane[lane];
-  const spentBefore = context?.account.spentByLane[lane] ?? 0;
-  const spentAfter = spentBefore + amount;
-  if (spentAfter > quota) {
-    throw new Error(
-      `Charge quota exceeded for lane "${lane}" while charging "${surface}" (${spentAfter}/${quota}).`,
-    );
-  }
-
-  if (context) {
-    context.account.spentByLane[lane] = spentAfter;
-  }
-
   const event = createChargeEvent({
-    amount,
+    amount: inspection.amount,
     correlation: {
       ...(context?.correlation ?? {}),
       ...(input.correlation ?? {}),
     },
     details: input.details,
-    lane,
+    lane: inspection.lane,
     lineage,
     surface,
-    spentAfter,
-    quota,
+    spentAfter: inspection.spentAfter,
+    quota: inspection.quota,
   });
 
   void eventBus?.emit('agent.charge', event);

@@ -2,7 +2,12 @@ import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { LLMContext, ObservabilityCallType, SubstrateMessage, TurnID, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { ChargePolicyReferenceModelClass } from '../../../system/config/charge-policy-config.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
+import {
+  chargeSurface,
+  getRunChargeContext,
+  inspectChargeSurface,
+  runWithChargeContext,
+} from '../../../shared/telemetry/run-charge.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import type { LLMProviderPort } from '../contracts.js';
 
@@ -81,6 +86,89 @@ function buildMoaPrompt(context: LLMContext): string {
     .join('\n\n');
 }
 
+const MOA_CHARGE_QUOTA_REASON = 'charge quota';
+const MOA_CHARGE_QUOTA_ANSWER = '[MoA turn stopped before the next charge could be applied]';
+
+function buildMoaTurnUsage(
+  deliberation: Awaited<ReturnType<typeof runDeliberation>>,
+  contextWindow: number,
+): TurnUsage {
+  const llmCalls = deliberation.rounds.reduce(
+    (sum, round) => sum + round.voices.length + (round.aggregatorModel ? 1 : 0),
+    0,
+  );
+  const peakInputTokens = deliberation.rounds.reduce(
+    (max, round) => Math.max(max, round.inputTokens),
+    0,
+  );
+
+  return {
+    inputTokens: deliberation.totalInputTokens,
+    outputTokens: deliberation.totalOutputTokens,
+    cacheReadTokens: 0,
+    llmCalls,
+    toolCalls: 0,
+    contextUtilization: contextWindow > 0
+      ? Math.min(100, (peakInputTokens / contextWindow) * 100)
+      : 0,
+    ...(deliberation.estimatedCostUsd > 0 ? { estimatedCostUsd: deliberation.estimatedCostUsd } : {}),
+  };
+}
+
+function buildMoaChargeQuotaRefusal(input: {
+  deliberation: Awaited<ReturnType<typeof runDeliberation>>;
+  model: string;
+  contextWindow: number;
+}): {
+  output: string;
+  model: string;
+  turnUsage: TurnUsage;
+  rounds: number;
+  stopReason: string;
+} {
+  return {
+    output: MOA_CHARGE_QUOTA_ANSWER,
+    model: input.model,
+    turnUsage: buildMoaTurnUsage(input.deliberation, input.contextWindow),
+    rounds: input.deliberation.rounds.length,
+    stopReason: MOA_CHARGE_QUOTA_REASON,
+  };
+}
+
+function emitMoaTelemetry(input: {
+  deliberation: Awaited<ReturnType<typeof runDeliberation>>;
+  message: SubstrateMessage;
+  callType: ObservabilityCallType;
+  requestId: string;
+  turnId: TurnID;
+  settings: ResolvedMoaSettings;
+  model: string;
+  emitTelemetry: (eventName: string, payload: Record<string, unknown>) => void;
+  stopReason: string;
+}): void {
+  input.emitTelemetry('agent.moa.turn', {
+    turnId: input.turnId,
+    requestId: input.requestId,
+    channelId: input.message.channelId,
+    callType: input.callType,
+    purpose: 'agent.moa.turn',
+    rounds: input.deliberation.rounds.length,
+    stopReason: input.stopReason,
+    llmCalls: input.deliberation.rounds.reduce(
+      (sum, round) => sum + round.voices.length + (round.aggregatorModel ? 1 : 0),
+      0,
+    ),
+    referenceModels: input.settings.referenceModels,
+    aggregatorModel: input.settings.aggregatorModel ?? null,
+    model: input.model,
+    totalInputTokens: input.deliberation.totalInputTokens,
+    totalOutputTokens: input.deliberation.totalOutputTokens,
+    maxRounds: input.settings.maxRounds,
+    maxTokensPerRound: input.settings.maxTokensPerRound ?? null,
+    timeoutMs: input.settings.timeoutMs,
+  });
+}
+
 export async function runMoaTurn(input: {
   llmClient: LLMProviderPort;
   context: LLMContext;
@@ -151,7 +239,30 @@ export async function runMoaTurn(input: {
     },
   );
 
+  const lastRound = deliberation.rounds[deliberation.rounds.length - 1]!;
+  const model = lastRound.aggregatorModel
+    ?? lastRound.voices[lastRound.voices.length - 1].model;
+
   for (const round of deliberation.rounds) {
+    const roundBaseInspection = inspectChargeSurface('moaRoundBase');
+    if (roundBaseInspection && !roundBaseInspection.allowed) {
+      emitMoaTelemetry({
+        deliberation,
+        message: input.message,
+        callType: input.callType,
+        requestId: input.requestId,
+        turnId: input.turnId,
+        settings: input.settings,
+        model,
+        emitTelemetry: input.emitTelemetry,
+        stopReason: MOA_CHARGE_QUOTA_REASON,
+      });
+      return buildMoaChargeQuotaRefusal({
+        deliberation,
+        model,
+        contextWindow: input.contextWindow,
+      });
+    }
     chargeSurface('moaRoundBase', {
       details: {
         round: round.index + 1,
@@ -162,6 +273,27 @@ export async function runMoaTurn(input: {
     for (const voice of round.voices) {
       const modelClass = resolveReferenceModelClass(voice.model, input.config);
       const consultCharge = resolveConsultCharge(input.config, modelClass);
+      const consultInspection = inspectChargeSurface('externalModelConsult', {
+        amount: consultCharge,
+      });
+      if (consultInspection && !consultInspection.allowed) {
+        emitMoaTelemetry({
+          deliberation,
+          message: input.message,
+          callType: input.callType,
+          requestId: input.requestId,
+          turnId: input.turnId,
+          settings: input.settings,
+          model,
+          emitTelemetry: input.emitTelemetry,
+          stopReason: MOA_CHARGE_QUOTA_REASON,
+        });
+        return buildMoaChargeQuotaRefusal({
+          deliberation,
+          model,
+          contextWindow: input.contextWindow,
+        });
+      }
       chargeSurface('externalModelConsult', {
         amount: consultCharge,
         details: {
@@ -176,6 +308,27 @@ export async function runMoaTurn(input: {
     if (round.aggregatorModel) {
       const modelClass = resolveReferenceModelClass(round.aggregatorModel, input.config);
       const consultCharge = resolveConsultCharge(input.config, modelClass);
+      const aggregatorInspection = inspectChargeSurface('externalModelConsult', {
+        amount: consultCharge,
+      });
+      if (aggregatorInspection && !aggregatorInspection.allowed) {
+        emitMoaTelemetry({
+          deliberation,
+          message: input.message,
+          callType: input.callType,
+          requestId: input.requestId,
+          turnId: input.turnId,
+          settings: input.settings,
+          model,
+          emitTelemetry: input.emitTelemetry,
+          stopReason: MOA_CHARGE_QUOTA_REASON,
+        });
+        return buildMoaChargeQuotaRefusal({
+          deliberation,
+          model,
+          contextWindow: input.contextWindow,
+        });
+      }
       chargeSurface('externalModelConsult', {
         amount: consultCharge,
         details: {
@@ -188,48 +341,17 @@ export async function runMoaTurn(input: {
     }
   }
 
-  const llmCalls = deliberation.rounds.reduce(
-    (sum, round) => sum + round.voices.length + (round.aggregatorModel ? 1 : 0),
-    0,
-  );
-  const peakInputTokens = deliberation.rounds.reduce(
-    (max, round) => Math.max(max, round.inputTokens),
-    0,
-  );
-  const contextUtilization = input.contextWindow > 0
-    ? Math.min(100, (peakInputTokens / input.contextWindow) * 100)
-    : 0;
-  const lastRound = deliberation.rounds[deliberation.rounds.length - 1];
-  const model = lastRound.aggregatorModel
-    ?? lastRound.voices[lastRound.voices.length - 1].model;
-
-  const turnUsage: TurnUsage = {
-    inputTokens: deliberation.totalInputTokens,
-    outputTokens: deliberation.totalOutputTokens,
-    cacheReadTokens: 0,
-    llmCalls,
-    toolCalls: 0,
-    contextUtilization,
-    ...(deliberation.estimatedCostUsd > 0 ? { estimatedCostUsd: deliberation.estimatedCostUsd } : {}),
-  };
-
-  input.emitTelemetry('agent.moa.turn', {
-    turnId: input.turnId,
-    requestId: input.requestId,
-    channelId: input.message.channelId,
+  const turnUsage = buildMoaTurnUsage(deliberation, input.contextWindow);
+  emitMoaTelemetry({
+    deliberation,
+    message: input.message,
     callType: input.callType,
-    purpose: 'agent.moa.turn',
-    rounds: deliberation.rounds.length,
-    stopReason: deliberation.stopReason,
-    llmCalls,
-    referenceModels: input.settings.referenceModels,
-    aggregatorModel: input.settings.aggregatorModel ?? null,
+    requestId: input.requestId,
+    turnId: input.turnId,
+    settings: input.settings,
     model,
-    totalInputTokens: deliberation.totalInputTokens,
-    totalOutputTokens: deliberation.totalOutputTokens,
-    maxRounds: input.settings.maxRounds,
-    maxTokensPerRound: input.settings.maxTokensPerRound ?? null,
-    timeoutMs: input.settings.timeoutMs,
+    emitTelemetry: input.emitTelemetry,
+    stopReason: deliberation.stopReason,
   });
 
   return {

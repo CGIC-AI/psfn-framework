@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { runMoaTurn, type ResolvedMoaSettings } from './moa-turn.js';
 import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { LLMContext, ObservabilityCallType, SubstrateMessage } from '../../../shared/contracts/runtime.js';
@@ -10,6 +10,10 @@ vi.mock('../../../primitives/llm/deliberation.js', () => ({
 }));
 
 const mockedRunDeliberation = vi.mocked(runDeliberation);
+
+beforeEach(() => {
+  mockedRunDeliberation.mockReset();
+});
 
 function makeChargePolicy(): ChargePolicyConfig {
   return {
@@ -195,5 +199,149 @@ describe('runMoaTurn', () => {
       'externalModelConsult',
       'externalModelConsult',
     ]);
+  });
+
+  it('refuses MoA work when the charge quota is exhausted before charging the first round', async () => {
+    mockedRunDeliberation.mockResolvedValueOnce({
+      sessionId: 'session-3',
+      output: 'final answer',
+      stopReason: 'max_rounds',
+      rounds: [
+        {
+          index: 0,
+          voices: [
+            {
+              purpose: 'reasoning',
+              content: 'analysis',
+              model: 'openrouter/cheap-model',
+              inputTokens: 1,
+              outputTokens: 1,
+            },
+          ],
+          synthesis: 'final answer',
+          novelty: 1,
+          fatigue: 0,
+          continueProbability: 0,
+          inputTokens: 2,
+          outputTokens: 1,
+          durationMs: 1,
+        },
+      ],
+      voices: ['reasoning'],
+      caps: { maxRounds: 1, maxTotalTokens: 1, maxWallTimeMs: 1 },
+      totalInputTokens: 2,
+      totalOutputTokens: 1,
+      totalTokens: 3,
+      estimatedCostUsd: 0,
+      startedAt: 0,
+      endedAt: 1,
+      durationMs: 1,
+    });
+
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const emitTelemetry = vi.fn((eventName: string, payload: Record<string, unknown>) => {
+      emitted.push([eventName, payload]);
+    });
+
+    const result = await runMoaTurn({
+      llmClient: {} as any,
+      context: {
+        systemPrompt: 'You are a helper.',
+        messages: [],
+      } as LLMContext,
+      message: { channelId: 'api:test' } as SubstrateMessage,
+      settings: {
+        maxRounds: 1,
+        timeoutMs: 1_000,
+        referenceModels: ['openrouter/cheap-model'],
+      },
+      config: {
+        chargePolicy: {
+          ...makeChargePolicy(),
+          runChargeQuotaByLane: {
+            interactive: 0,
+            background: 100,
+            maintenance: 0,
+            subagent: 100,
+            shard: 100,
+          },
+        },
+      } as SubstrateConfig,
+      turnId: 'turn-3',
+      requestId: 'req-3',
+      callType: 'chat' as ObservabilityCallType,
+      contextWindow: 1_000,
+      emitTelemetry,
+    });
+
+    expect(result.stopReason).toBe('charge quota');
+    expect(result.output).toContain('next charge could be applied');
+    expect(mockedRunDeliberation).toHaveBeenCalledTimes(1);
+    expect(emitted.some(([eventName, payload]) => eventName === 'agent.moa.turn' && (payload as any).stopReason === 'charge quota')).toBe(true);
+  });
+
+  it('keeps the configured MoA round ceiling authoritative when charge quota is available', async () => {
+    mockedRunDeliberation.mockResolvedValueOnce({
+      sessionId: 'session-4',
+      output: 'final answer',
+      stopReason: 'max_rounds',
+      rounds: [
+        {
+          index: 0,
+          voices: [
+            {
+              purpose: 'reasoning',
+              content: 'analysis',
+              model: 'openrouter/cheap-model',
+              inputTokens: 1,
+              outputTokens: 1,
+            },
+          ],
+          synthesis: 'final answer',
+          novelty: 1,
+          fatigue: 0,
+          continueProbability: 0,
+          inputTokens: 2,
+          outputTokens: 1,
+          durationMs: 1,
+        },
+      ],
+      voices: ['reasoning'],
+      caps: { maxRounds: 1, maxTotalTokens: 1, maxWallTimeMs: 1 },
+      totalInputTokens: 2,
+      totalOutputTokens: 1,
+      totalTokens: 3,
+      estimatedCostUsd: 0,
+      startedAt: 0,
+      endedAt: 1,
+      durationMs: 1,
+    });
+
+    const emitTelemetry = vi.fn();
+
+    await runMoaTurn({
+      llmClient: {} as any,
+      context: {
+        systemPrompt: 'You are a helper.',
+        messages: [],
+      } as LLMContext,
+      message: { channelId: 'api:test' } as SubstrateMessage,
+      settings: {
+        maxRounds: 1,
+        timeoutMs: 1_000,
+        referenceModels: ['openrouter/cheap-model'],
+      },
+      config: {
+        chargePolicy: makeChargePolicy(),
+      } as SubstrateConfig,
+      turnId: 'turn-4',
+      requestId: 'req-4',
+      callType: 'chat' as ObservabilityCallType,
+      contextWindow: 1_000,
+      emitTelemetry,
+    });
+
+    const caps = mockedRunDeliberation.mock.calls.at(-1)?.[2]?.caps as { maxRounds?: number } | undefined;
+    expect(caps?.maxRounds).toBe(1);
   });
 });

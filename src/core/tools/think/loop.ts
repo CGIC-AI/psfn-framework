@@ -32,15 +32,22 @@ import {
 } from './loop-helpers.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { evaluateCompositionalPolicyForChannelId } from '../../../system/capabilities/compositional-policy.js';
-import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
+import {
+  chargeSurface,
+  getRunChargeContext,
+  inspectChargeSurface,
+  runWithChargeContext,
+} from '../../../shared/telemetry/run-charge.js';
 
 const LLM_TIMEOUT_BUFFER_MS = 25;
 const LLM_TIMEOUT_REASON = 'llm timeout';
 const LLM_TIMEOUT_ANSWER = '[Think loop timed out waiting for LLM response]';
 const INVOCATION_RATE_LIMIT_REASON = 'invocation rate limit';
 const NURSERY_DAILY_COST_REASON = 'daily cost cap';
+const CHARGE_QUOTA_REASON = 'charge quota';
 const RATE_LIMIT_ANSWER = '[Think invocation rate limit exceeded; try again shortly]';
 const NURSERY_DAILY_CAP_ANSWER = '[Think daily cost cap reached for nursery tier]';
+const CHARGE_QUOTA_ANSWER = '[Think extension charge quota exhausted before the next iteration]';
 const MAX_NESTED_THINK_DEPTH = 2;
 
 interface DailyCostSnapshot {
@@ -386,6 +393,9 @@ function buildBudgetFallbackAnswer(reason: BudgetStatus['exceeded']): string {
   if (reason === NURSERY_DAILY_COST_REASON) {
     return NURSERY_DAILY_CAP_ANSWER;
   }
+  if (reason === CHARGE_QUOTA_REASON) {
+    return CHARGE_QUOTA_ANSWER;
+  }
   if (reason) {
     return `[Think loop stopped: ${reason}]`;
   }
@@ -528,6 +538,7 @@ export async function runRLMLoop(
   const { config, llmProvider } = deps;
   const depth = runOptions.depth ?? 0;
   const isNestedRun = depth > 0;
+  const chargePolicy = deps.chargePolicy ?? activeChargeContext?.chargePolicy;
   const tier = deps.getCapabilityTier?.() ?? 'autonomous';
   const budget = resolveEffectiveBudget(config, tier);
   const sharedState = runOptions.sharedState ?? createSharedThinkExecutionState(
@@ -808,6 +819,27 @@ export async function runRLMLoop(
   };
 
   while (localIterations < budget.maxIterations) {
+    if (localIterations > 0) {
+      const chargeInspection = inspectChargeSurface('thinkExtensionBand', {
+        chargePolicy,
+      });
+      if (chargeInspection && !chargeInspection.allowed) {
+        finalizeBudgetStatus();
+        budgetStatus.exceeded = CHARGE_QUOTA_REASON;
+        return buildThinkResult({
+          answer: buildBudgetFallbackAnswer(CHARGE_QUOTA_REASON),
+          iterations: isNestedRun ? localIterations : sharedState.consumedIterations,
+          totalInputTokens: isNestedRun ? totalInputTokens : sharedState.totalInputTokens,
+          totalOutputTokens: isNestedRun ? totalOutputTokens : sharedState.totalOutputTokens,
+          startTime,
+          truncated: true,
+          budgetStatus,
+          steps,
+          diagnostics: sharedState.diagnostics,
+        });
+      }
+    }
+
     if (tier === 'nursery' && nurseryDailyCapUsd > 0 && dayCost.totalUsd >= nurseryDailyCapUsd) {
       finalizeBudgetStatus();
       budgetStatus.exceeded = NURSERY_DAILY_COST_REASON;
@@ -871,7 +903,7 @@ export async function runRLMLoop(
     applyCostCharge(response.inputTokens, response.outputTokens);
     if (iterationNumber > 1) {
       chargeSurface('thinkExtensionBand', {
-        chargePolicy: deps.chargePolicy,
+        chargePolicy,
         details: {
           iteration: iterationNumber,
           depth,

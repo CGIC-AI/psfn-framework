@@ -1179,6 +1179,7 @@ export async function handleMessageForTurn(
           context,
           message,
           settings: moaSettings,
+          config: runtime.config,
           turnId,
           requestId,
           callType: turnCallType,

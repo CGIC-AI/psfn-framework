@@ -23,6 +23,7 @@ import {
   type ProvidersLoadResult,
 } from '../../../system/config/providers-config.js';
 import { CAPABILITY_TIER_FILE_NAME } from '../../../system/config/capability-tier-config.js';
+import { type ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import { SCHEDULER_FILE_NAME, type SchedulerRuntimeConfig } from '../../../system/config/scheduler-config.js';
 import { type TrustPolicyConfig } from '../../../system/config/trust-policy-config.js';
 import { setRuntimeTrustPolicy } from '../../../system/trust/runtime-policy.js';
@@ -82,6 +83,7 @@ export interface StartupConfigHydrationResult {
   providersLoadResult: ProvidersLoadResult;
   trustPolicyConfig: TrustPolicyConfig;
   schedulerConfig: SchedulerRuntimeConfig;
+  chargePolicyConfig: ChargePolicyConfig;
   diagnostics: StartupConfigHydrationDiagnostics;
 }
 
@@ -319,6 +321,8 @@ export function hydrateCanonicalStartupConfig(
     salienceDecayIntervalMs: persistedScheduler.salienceDecayIntervalMs,
   };
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
+  const chargePolicyConfig = configStore.loadStartupChargePolicy();
+  config.chargePolicy = chargePolicyConfig;
 
   return {
     systemDataDir,
@@ -330,6 +334,7 @@ export function hydrateCanonicalStartupConfig(
     providersLoadResult,
     trustPolicyConfig,
     schedulerConfig,
+    chargePolicyConfig,
     diagnostics,
   };
 }

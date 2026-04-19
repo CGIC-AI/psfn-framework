@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadBackupConfig } from '../../../system/config/backup-config.js';
 import { loadCapabilityTierConfig } from '../../../system/config/capability-tier-config.js';
+import { loadChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import { loadModelsConfig } from '../../../system/config/models-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
 import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
@@ -575,6 +576,66 @@ describe('AdminSettingsDataService', () => {
     expect(await service.getSettingsData()).toEqual(expect.objectContaining({
       editors: expect.objectContaining({
         channels: payload,
+      }),
+    }));
+  });
+
+  it('round-trips charge-policy.json owner-file saves through the Garden raw editor surface', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const service = buildService(config);
+    const payload = {
+      schemaVersion: 1,
+      runChargeQuotaByLane: {
+        interactive: 20,
+        background: 8,
+        maintenance: 0,
+        subagent: 5,
+        shard: 11,
+      },
+      surfaceCosts: {
+        ownerFileInspection: 0,
+        localFilesystem: 0,
+        memoryRead: 0,
+        memoryWrite: 0,
+        localEmbedding: 0,
+        externalEmbedding: 0,
+        localImageGeneration: 0,
+        paidImageGeneration: 5,
+        thinkExtensionBand: 1,
+        subagentLaunch: 1,
+        shardLaunch: 7,
+        externalModelConsult: 1,
+        moaRoundBase: 1,
+      },
+      moa: {
+        perRoundMultiplierByReferenceModelClass: {
+          local: 1,
+          subscription: 1,
+          cheap_cloud: 1,
+          premium_cloud: 2,
+        },
+      },
+      referenceModelClassPricing: {
+        local: 0,
+        subscription: 0,
+        cheap_cloud: 1,
+        premium_cloud: 4,
+      },
+    };
+
+    const result = service.saveSubConfigJson('charge-policy', JSON.stringify(payload));
+
+    expect(result).toEqual({
+      ok: true,
+      message: 'charge-policy.json saved',
+    });
+    expect(JSON.parse(service.getSubConfigJson('charge-policy') ?? '{}')).toEqual(payload);
+    expect(loadChargePolicyConfig(root)).toEqual(payload);
+    expect(config.chargePolicy).toEqual(payload);
+    expect(await service.getSettingsData()).toEqual(expect.objectContaining({
+      editors: expect.objectContaining({
+        chargePolicy: payload,
       }),
     }));
   });

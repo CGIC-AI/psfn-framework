@@ -27,6 +27,12 @@ import {
   type CapabilityTierConfig,
   CAPABILITY_TIER_FILE_NAME,
 } from './capability-tier-config.js';
+import {
+  loadChargePolicyConfig,
+  type ChargePolicyConfig,
+  CHARGE_POLICY_FILE_NAME,
+  CHARGE_POLICY_SEED_FILE_NAME,
+} from './charge-policy-config.js';
 
 export interface StartupOwnerFileLoadOptions {
   dataDir: string;
@@ -42,6 +48,7 @@ export interface StartupOwnerFileState {
   modelsLoadResult: ModelsLoadResult;
   providersLoadResult: ProvidersLoadResult;
   trustPolicyConfig: TrustPolicyConfig;
+  chargePolicyConfig: ChargePolicyConfig;
 }
 
 export interface StartupOwnerFileVerificationResult {
@@ -119,6 +126,13 @@ export function loadStartupCapabilityTierOwnerFile(
   return loadCapabilityTierConfig(dataDir, seedDir ? { seedDir } : undefined);
 }
 
+export function loadStartupChargePolicyOwnerFile(
+  dataDir: string,
+  seedDir?: string,
+): ChargePolicyConfig {
+  return loadChargePolicyConfig(dataDir, seedDir ? { seedDir } : undefined);
+}
+
 export function verifyStartupOwnerFiles(
   options: StartupOwnerFileLoadOptions,
 ): StartupOwnerFileVerificationResult {
@@ -166,6 +180,12 @@ export function verifyStartupOwnerFiles(
       dataPath: join(options.dataDir, CAPABILITY_TIER_FILE_NAME),
       seedPath: join(seedDir, 'capability-tier.seed.json'),
       run: () => loadStartupCapabilityTierOwnerFile(options.dataDir, options.seedDir),
+    },
+    {
+      label: 'charge-policy',
+      dataPath: join(options.dataDir, CHARGE_POLICY_FILE_NAME),
+      seedPath: join(seedDir, CHARGE_POLICY_SEED_FILE_NAME),
+      run: () => loadStartupChargePolicyOwnerFile(options.dataDir, options.seedDir),
     },
   ];
 

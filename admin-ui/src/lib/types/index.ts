@@ -715,6 +715,7 @@ export interface AdminSettingsData {
     scheduler: unknown;
     trustPolicy: unknown;
     capabilities: unknown;
+    chargePolicy: unknown;
     backup: unknown;
   };
   voiceProviders: {

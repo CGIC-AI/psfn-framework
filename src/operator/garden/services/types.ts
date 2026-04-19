@@ -40,6 +40,7 @@ import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../../s
 import type {
   CapabilityTierConfig,
 } from '../../../system/config/capability-tier-config.js';
+import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import type { SettingsContractData } from '../../../system/config/settings-contract.js';
 import type { BackupJsonConfig } from '../../../system/config/backup-config.js';
 import type { ModelsRuntimeConfig } from '../../../system/config/models-config.js';
@@ -409,6 +410,7 @@ export interface SettingsConfigEditors {
   scheduler: SchedulerRuntimeConfig;
   trustPolicy: TrustPolicyConfig;
   capabilities: CapabilityTierConfig;
+  chargePolicy: ChargePolicyConfig;
   backup: BackupJsonConfig;
 }
 

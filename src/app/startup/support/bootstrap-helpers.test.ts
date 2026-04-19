@@ -14,6 +14,7 @@ import {
 import { loadSettings, saveSettings } from '../../../system/settings.js';
 import { saveModelsConfig } from '../../../system/config/models-config.js';
 import { loadCapabilityTierConfig } from '../../../system/config/capability-tier-config.js';
+import { saveChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
 import {
   loadSchedulerConfig,
@@ -1090,6 +1091,45 @@ describe('hydrateCanonicalStartupConfig', () => {
       heartbeatIntervalMs: 8_000,
       salienceDecayIntervalMs: 123_000,
     });
+    saveChargePolicyConfig(systemDataDir, {
+      schemaVersion: 1,
+      runChargeQuotaByLane: {
+        interactive: 30,
+        background: 10,
+        maintenance: 0,
+        subagent: 5,
+        shard: 14,
+      },
+      surfaceCosts: {
+        ownerFileInspection: 0,
+        localFilesystem: 0,
+        memoryRead: 0,
+        memoryWrite: 0,
+        localEmbedding: 0,
+        externalEmbedding: 0,
+        localImageGeneration: 0,
+        paidImageGeneration: 6,
+        thinkExtensionBand: 1,
+        subagentLaunch: 1,
+        shardLaunch: 8,
+        externalModelConsult: 1,
+        moaRoundBase: 1,
+      },
+      moa: {
+        perRoundMultiplierByReferenceModelClass: {
+          local: 1,
+          subscription: 1,
+          cheap_cloud: 1,
+          premium_cloud: 2,
+        },
+      },
+      referenceModelClassPricing: {
+        local: 0,
+        subscription: 0,
+        cheap_cloud: 1,
+        premium_cloud: 4,
+      },
+    });
 
     const result = hydrateCanonicalStartupConfig(config, {
       env: {
@@ -1118,6 +1158,8 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(config.litellmBaseUrl).toBeUndefined();
     expect(config.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
     expect(result.trustPolicyConfig.channelClassification.defaultVisibility).toBeTruthy();
+    expect(result.chargePolicyConfig.runChargeQuotaByLane.interactive).toBe(30);
+    expect(config.chargePolicy?.surfaceCosts.shardLaunch).toBe(8);
     expect(result.diagnostics.modelsMigratedFromLegacySettings).toBe(false);
     expect(result.diagnostics.providersMigratedFromLegacyConfig).toBe(false);
     expect(result.diagnostics.providersLegacyDriftDetected).toBe(false);

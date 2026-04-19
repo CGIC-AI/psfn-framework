@@ -17,6 +17,11 @@ import {
   loadCapabilityTierConfig,
   saveCapabilityTierConfig,
 } from './capability-tier-config.js';
+import type { ChargePolicyConfig } from './charge-policy-config.js';
+import {
+  loadChargePolicyConfig,
+  saveChargePolicyConfig,
+} from './charge-policy-config.js';
 import type { ModelsLoadResult, ModelsRuntimeConfig } from './models-config.js';
 import {
   loadModelsConfig,
@@ -44,6 +49,7 @@ import {
   loadStartupRuntimeSettingsOwnerFile,
   loadStartupSchedulerOwnerFile,
   loadStartupTrustPolicyOwnerFile,
+  loadStartupChargePolicyOwnerFile,
   type StartupOwnerFileState,
 } from './startup-owner-files.js';
 import type { TrustPolicyConfig } from './trust-policy-config.js';
@@ -63,6 +69,8 @@ export interface ConfigStorePort {
   saveScheduler(nextConfig: unknown): SchedulerRuntimeConfig;
   loadCapabilityTier(): CapabilityTierConfig;
   saveCapabilityTier(nextConfig: unknown): CapabilityTierConfig;
+  loadChargePolicy(): ChargePolicyConfig;
+  saveChargePolicy(nextConfig: unknown): ChargePolicyConfig;
   loadChannels(env?: ProcessEnv, overrides?: RuntimeChannelsConfigOverrides): RuntimeChannelsConfig;
   loadChannelsOwnerFile(): Record<string, unknown>;
   saveChannelsOwnerFile(nextConfig: unknown): Record<string, unknown>;
@@ -81,6 +89,7 @@ export interface ConfigStorePort {
   loadStartupTrustPolicy(): TrustPolicyConfig;
   loadStartupScheduler(): SchedulerRuntimeConfig;
   loadStartupCapabilityTier(): CapabilityTierConfig;
+  loadStartupChargePolicy(): ChargePolicyConfig;
 }
 
 export interface OwnerFileConfigStoreOptions {
@@ -109,6 +118,8 @@ export function createOwnerFileConfigStore(
     saveScheduler: (nextConfig) => saveSchedulerConfig(options.dataDir, nextConfig),
     loadCapabilityTier: () => loadCapabilityTierConfig(options.dataDir, loadOptions),
     saveCapabilityTier: (nextConfig) => saveCapabilityTierConfig(options.dataDir, nextConfig),
+    loadChargePolicy: () => loadChargePolicyConfig(options.dataDir, loadOptions),
+    saveChargePolicy: (nextConfig) => saveChargePolicyConfig(options.dataDir, nextConfig),
     loadChannels: (env, overrides) => loadRuntimeChannelsConfig(
       options.dataDir,
       env,
@@ -141,6 +152,10 @@ export function createOwnerFileConfigStore(
     loadStartupTrustPolicy: () => loadStartupTrustPolicyOwnerFile(options.dataDir, options.seedDir),
     loadStartupScheduler: () => loadStartupSchedulerOwnerFile(options.dataDir, options.seedDir),
     loadStartupCapabilityTier: () => loadStartupCapabilityTierOwnerFile(
+      options.dataDir,
+      options.seedDir,
+    ),
+    loadStartupChargePolicy: () => loadStartupChargePolicyOwnerFile(
       options.dataDir,
       options.seedDir,
     ),

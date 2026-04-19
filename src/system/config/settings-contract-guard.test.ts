@@ -21,6 +21,16 @@ describe('settings contract guard', () => {
     });
   });
 
+  it('declares charge-policy as a raw-only owner-file subsystem', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.subsystems.chargePolicy).toEqual({
+      id: 'chargePolicy',
+      ownerFile: 'charge-policy.json',
+      mode: 'raw_only',
+    });
+  });
+
   it('fails closed when a schema field loses Garden exposure metadata', () => {
     const contractData = buildSettingsContractData();
     const uiFieldExposureKeys = Object.keys(contractData.fields).filter((fieldKey) => fieldKey !== 'sessionHistoryBudgetPct');

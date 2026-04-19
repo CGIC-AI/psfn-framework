@@ -89,6 +89,45 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
         },
       ],
     }), 'utf8');
+    writeFileSync(join(dataDir, 'charge-policy.json'), JSON.stringify({
+      schemaVersion: 1,
+      runChargeQuotaByLane: {
+        interactive: 20,
+        background: 8,
+        maintenance: 0,
+        subagent: 4,
+        shard: 9,
+      },
+      surfaceCosts: {
+        ownerFileInspection: 0,
+        localFilesystem: 0,
+        memoryRead: 0,
+        memoryWrite: 0,
+        localEmbedding: 0,
+        externalEmbedding: 0,
+        localImageGeneration: 0,
+        paidImageGeneration: 5,
+        thinkExtensionBand: 1,
+        subagentLaunch: 1,
+        shardLaunch: 7,
+        externalModelConsult: 1,
+        moaRoundBase: 1,
+      },
+      moa: {
+        perRoundMultiplierByReferenceModelClass: {
+          local: 1,
+          subscription: 1,
+          cheap_cloud: 1,
+          premium_cloud: 2,
+        },
+      },
+      referenceModelClassPricing: {
+        local: 0,
+        subscription: 0,
+        cheap_cloud: 1,
+        premium_cloud: 4,
+      },
+    }), 'utf8');
 
     process.env.DATA_DIR = dataDir;
     process.env.CONFIG_DIR = 'config';
@@ -105,5 +144,6 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     expect(config.thinkMaxTokens).toBe(180000);
     expect(config.thinkMaxWallTimeMs).toBe(180000);
     expect(config.thinkMaxSubQueries).toBe(12);
+    expect(config.chargePolicy?.surfaceCosts.shardLaunch).toBe(7);
   });
 });

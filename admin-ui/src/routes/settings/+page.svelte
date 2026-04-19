@@ -123,6 +123,7 @@
     scheduler: '',
     'trust-policy': '',
     capabilities: '',
+    'charge-policy': '',
     backup: '',
   });
 
@@ -271,6 +272,7 @@
   let schedulerJson = $state('');
   let trustPolicyJson = $state('');
   let capabilitiesJson = $state('');
+  let chargePolicyJson = $state('');
   let backupJson = $state('');
   let settingsJson = $state('');
 
@@ -940,6 +942,7 @@
       case 'scheduler': return schedulerJson;
       case 'trust-policy': return trustPolicyJson;
       case 'capabilities': return capabilitiesJson;
+      case 'charge-policy': return chargePolicyJson;
       case 'backup': return backupJson;
       default: return '';
     }
@@ -954,6 +957,7 @@
       case 'scheduler': schedulerJson = val; break;
       case 'trust-policy': trustPolicyJson = val; break;
       case 'capabilities': capabilitiesJson = val; break;
+      case 'charge-policy': chargePolicyJson = val; break;
       case 'backup': backupJson = val; break;
     }
   }
@@ -968,6 +972,7 @@
       scheduler: schedulerJson,
       'trust-policy': trustPolicyJson,
       capabilities: capabilitiesJson,
+      'charge-policy': chargePolicyJson,
       backup: backupJson,
     };
   }
@@ -1210,13 +1215,14 @@
     setProviderRegistryState(normalizeProvidersRuntimeConfig(nextSettingsData.editors.providers).registry);
     settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
 
-    const [provConf, chanConf, skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
+    const [provConf, chanConf, skConf, schConf, tpConf, capConf, chargeConf, bakConf] = await Promise.all([
       getSubConfig('providers').catch(() => '{}'),
       getSubConfig('channels').catch(() => '{}'),
       getSubConfig('skills').catch(() => '{}'),
       getSubConfig('scheduler').catch(() => '{}'),
       getSubConfig('trust-policy').catch(() => '{}'),
       getSubConfig('capabilities').catch(() => '{}'),
+      getSubConfig('charge-policy').catch(() => '{}'),
       getSubConfig('backup').catch(() => '{}'),
     ]);
     providersJson = tryPrettyPrint(provConf);
@@ -1225,6 +1231,7 @@
     schedulerJson = tryPrettyPrint(schConf);
     trustPolicyJson = tryPrettyPrint(tpConf);
     capabilitiesJson = tryPrettyPrint(capConf);
+    chargePolicyJson = tryPrettyPrint(chargeConf);
     backupJson = tryPrettyPrint(bakConf);
     populateBackupFields(bakConf);
     resetDirtyTracking();
@@ -1407,19 +1414,23 @@
       setProviderRegistryState(normalizeProvidersRuntimeConfig(settingsData.editors.providers).registry);
       settingsJson = JSON.stringify(data.config as Record<string, unknown>, null, 2);
 
-      const [provConf, skConf, schConf, tpConf, capConf, bakConf] = await Promise.all([
+      const [provConf, chanConf, skConf, schConf, tpConf, capConf, chargeConf, bakConf] = await Promise.all([
         getSubConfig('providers').catch(() => '{}'),
+        getSubConfig('channels').catch(() => '{}'),
         getSubConfig('skills').catch(() => '{}'),
         getSubConfig('scheduler').catch(() => '{}'),
         getSubConfig('trust-policy').catch(() => '{}'),
         getSubConfig('capabilities').catch(() => '{}'),
+        getSubConfig('charge-policy').catch(() => '{}'),
         getSubConfig('backup').catch(() => '{}'),
       ]);
       providersJson = tryPrettyPrint(provConf);
+      channelsJson = tryPrettyPrint(chanConf);
       skillsJson = tryPrettyPrint(skConf);
       schedulerJson = tryPrettyPrint(schConf);
       trustPolicyJson = tryPrettyPrint(tpConf);
       capabilitiesJson = tryPrettyPrint(capConf);
+      chargePolicyJson = tryPrettyPrint(chargeConf);
       backupJson = tryPrettyPrint(bakConf);
       resetDirtyTracking();
     } catch (e) {

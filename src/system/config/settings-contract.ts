@@ -7,6 +7,7 @@ import {
 } from '../settings.js';
 import { BACKUP_FILE_NAME } from './backup-config.js';
 import { CAPABILITY_TIER_FILE_NAME } from './capability-tier-config.js';
+import { CHARGE_POLICY_FILE_NAME } from './charge-policy-config.js';
 import { MODELS_FILE_NAME } from './models-config.js';
 import { PROVIDERS_FILE_NAME } from './providers-config.js';
 import { SCHEDULER_FILE_NAME } from './scheduler-config.js';
@@ -30,6 +31,7 @@ export type SettingsSubsystemId =
   | 'providers'
   | 'scheduler'
   | 'capabilities'
+  | 'chargePolicy'
   | 'skills'
   | 'trustPolicy'
   | 'backup'
@@ -92,6 +94,11 @@ export const SETTINGS_SUBSYSTEMS: Record<SettingsSubsystemId, SettingsContractSu
     id: 'capabilities',
     ownerFile: CAPABILITY_TIER_FILE_NAME,
     mode: 'structured',
+  },
+  chargePolicy: {
+    id: 'chargePolicy',
+    ownerFile: CHARGE_POLICY_FILE_NAME,
+    mode: 'raw_only',
   },
   skills: {
     id: 'skills',

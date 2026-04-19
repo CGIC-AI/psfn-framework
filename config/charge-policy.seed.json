@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "runChargeQuotaByLane": {
+    "interactive": 24,
+    "background": 8,
+    "maintenance": 0,
+    "subagent": 6,
+    "shard": 12
+  },
+  "surfaceCosts": {
+    "ownerFileInspection": 0,
+    "localFilesystem": 0,
+    "memoryRead": 0,
+    "memoryWrite": 0,
+    "localEmbedding": 0,
+    "externalEmbedding": 0,
+    "localImageGeneration": 0,
+    "paidImageGeneration": 6,
+    "thinkExtensionBand": 1,
+    "subagentLaunch": 1,
+    "shardLaunch": 8,
+    "externalModelConsult": 1,
+    "moaRoundBase": 1
+  },
+  "moa": {
+    "perRoundMultiplierByReferenceModelClass": {
+      "local": 1,
+      "subscription": 1,
+      "cheap_cloud": 1,
+      "premium_cloud": 2
+    }
+  },
+  "referenceModelClassPricing": {
+    "local": 0,
+    "subscription": 0,
+    "cheap_cloud": 1,
+    "premium_cloud": 4
+  }
+}

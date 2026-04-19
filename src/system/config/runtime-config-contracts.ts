@@ -3,6 +3,7 @@ import type { CredentialReference, CredentialVaultPort } from '../../boundary/cu
 import type { StreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
 import type { CapabilityTier } from '../capabilities/tier-types.js';
+import type { ChargePolicyConfig } from './charge-policy-config.js';
 import type {
   CanonicalModelRegistry,
   CanonicalProviderRegistry,
@@ -197,6 +198,9 @@ export interface SubstrateConfig {
   obsidianCliPath?: string;
   obsidianAutoPublish?: boolean;
   obsidianTimeoutMs?: number;
+
+  // ── Charge policy ──
+  chargePolicy?: ChargePolicyConfig;
 
   // ── MoA (Mixture of Agents) ──
   moaEnabled?: boolean;

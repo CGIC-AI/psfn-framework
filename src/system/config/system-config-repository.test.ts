@@ -61,6 +61,11 @@ describe('createOwnerFileConfigStore', () => {
     expect(repo.loadCapabilityTier()).toEqual(capabilities);
     expect(readJson(join(dataDir, 'capability-tier.json'))).toEqual(capabilities);
 
+    const chargePolicy = repo.loadChargePolicy();
+    repo.saveChargePolicy(chargePolicy);
+    expect(repo.loadChargePolicy()).toEqual(chargePolicy);
+    expect(readJson(join(dataDir, 'charge-policy.json'))).toEqual(chargePolicy);
+
     const backup = repo.loadBackup();
     repo.saveBackup(backup);
     expect(repo.loadBackup()).toEqual(backup);
@@ -203,5 +208,6 @@ describe('createOwnerFileConfigStore', () => {
     expect(repo.loadStartupTrustPolicy()).toEqual(repo.loadTrustPolicy());
     expect(repo.loadStartupScheduler()).toEqual(repo.loadScheduler());
     expect(repo.loadStartupCapabilityTier()).toEqual(repo.loadCapabilityTier());
+    expect(repo.loadStartupChargePolicy()).toEqual(repo.loadChargePolicy());
   });
 });

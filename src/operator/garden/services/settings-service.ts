@@ -308,6 +308,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       scheduler: this.deps.configStore.loadScheduler(),
       trustPolicy: this.deps.configStore.loadTrustPolicy(),
       capabilities: this.deps.configStore.loadCapabilityTier(),
+      chargePolicy: this.deps.configStore.loadChargePolicy(),
       backup: this.deps.configStore.loadBackup(),
     };
   }
@@ -777,6 +778,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
           return JSON.stringify(this.deps.configStore.loadTrustPolicy(), null, 2);
         case 'capabilities':
           return JSON.stringify(this.deps.configStore.loadCapabilityTier(), null, 2);
+        case 'charge-policy':
+          return JSON.stringify(this.deps.configStore.loadChargePolicy(), null, 2);
         case 'channels':
           return JSON.stringify(this.deps.configStore.loadChannelsOwnerFile(), null, 2);
         case 'backup':
@@ -828,6 +831,11 @@ export class AdminSettingsDataService implements AdminSettingsService {
           return result.ok
             ? { ok: true, message: 'capability-tier.json saved' }
             : { ok: false, message: result.message };
+        }
+        case 'charge-policy': {
+          const saved = this.deps.configStore.saveChargePolicy(parsed);
+          this.deps.config.chargePolicy = saved;
+          return { ok: true, message: 'charge-policy.json saved' };
         }
         case 'backup': {
           this.deps.configStore.saveBackup(parsed);

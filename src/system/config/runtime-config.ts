@@ -7,6 +7,7 @@ import {
 } from './providers-config.js';
 import { resolveRuntimeSchedulerConfig } from './scheduler-runtime.js';
 import { loadCapabilityTierConfig } from './capability-tier-config.js';
+import { loadChargePolicyConfig } from './charge-policy-config.js';
 
 export function hydrateJsonBackedRuntimeConfig(
   config: SubstrateConfig,
@@ -34,6 +35,7 @@ export function hydrateJsonBackedRuntimeConfig(
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
 
   config.capabilityTier = loadCapabilityTierConfig(dataDir, loadOptions).tier;
+  config.chargePolicy = loadChargePolicyConfig(dataDir, loadOptions);
 
   return config;
 }

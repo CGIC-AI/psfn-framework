@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort } from '../agent/contracts.js';
-import { EventBus } from '../../shared/event-bus.js';
+import { EventBus, type EventMap } from '../../shared/event-bus.js';
 import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
 import {
   ReflectionDailyJournalStore,
@@ -672,6 +672,317 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(entry.telemetry?.narrativeContext?.internalState?.relational?.contactId).toBe('contact-1');
     },
   );
+
+  it('emits null-contact and synthesized snapshot guardrail telemetry when canonical contact binding is absent', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const telemetryEvents: EventMap['reflection.guardrail'][] = [];
+    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policy = policyStore.load();
+    const template = policy.templates.find((candidate) => candidate.id === 'musing');
+    expect(template).toBeDefined();
+    if (!template) {
+      throw new Error('musing template missing from defaults');
+    }
+    template.internalStateInput = true;
+    policyStore.save(policy);
+
+    const currentInternalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.1, arousal: 0.2, dominance: 0.05 },
+        mood: { valence: 0.12, arousal: 0.18, dominance: 0.08 },
+        discrete: { curiosity: 0.45, calm: 0.35 },
+        confidence: 0.7,
+      },
+      activeConcerns: [],
+      trustLevel: 'regular',
+      sessionMetrics: {
+        userMessageText: 'Check inward.',
+        responseText: 'No canonical contact attached.',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+        lastSeenDeltaSeconds: 60,
+      },
+    });
+    const eventBus = new EventBus();
+    eventBus.on('reflection.guardrail', (payload) => {
+      telemetryEvents.push(payload);
+    });
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage: vi.fn(async () => ({ content: 'Quiet check-in.' })),
+        getCurrentInternalState: () => currentInternalState,
+        getCurrentInternalStateSnapshotRef: () => null,
+        getCurrentMetacognitiveFlags: () => [],
+      },
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+      runtimeOptions: { eventBus },
+    });
+
+    await runtime.runTemplateNow('musing', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    expect(telemetryEvents).toHaveLength(1);
+    expect(telemetryEvents[0]).toMatchObject({
+      channelId: 'internal:reflection:musing',
+      snapshotSource: 'derived_runtime',
+      counters: {
+        nullCanonicalContactCount: 1,
+        missingInternalStateSnapshotCount: 1,
+        warningCount: 2,
+      },
+    });
+    expect(
+      (telemetryEvents[0] as { warnings: Array<{ code: string }> }).warnings.map(warning => warning.code).sort(),
+    ).toEqual(['missing_internal_state_snapshot', 'null_canonical_contact']);
+  });
+
+  it('emits cadence drift and scheduler-bound snapshot guardrail telemetry for contact-scoped reflections', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const telemetryEvents: EventMap['reflection.guardrail'][] = [];
+    const now = Date.now();
+    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policy = policyStore.load();
+    const template = policy.templates.find((candidate) => candidate.id === 'musing');
+    expect(template).toBeDefined();
+    if (!template) {
+      throw new Error('musing template missing from defaults');
+    }
+    template.internalStateInput = true;
+    template.intervalMs = 15 * 60 * 1000;
+    policyStore.save(policy);
+
+    const currentInternalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.2, arousal: 0.12, dominance: 0.08 },
+        mood: { valence: 0.18, arousal: 0.16, dominance: 0.1 },
+        discrete: { curiosity: 0.5, calm: 0.42 },
+        confidence: 0.82,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'Stay grounded.',
+        responseText: 'Use the current contact scope.',
+        toolCallCount: 0,
+        recentTurnCount: 2,
+        lastSeenDeltaSeconds: 6 * 60 * 60,
+      },
+    });
+    const responseInternalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.2, arousal: 0.12, dominance: 0.08 },
+        mood: { valence: 0.18, arousal: 0.16, dominance: 0.1 },
+        discrete: { curiosity: 0.5, calm: 0.42 },
+        confidence: 0.82,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      sessionMetrics: {
+        userMessageText: 'Stay grounded.',
+        responseText: 'Grounded reflection.',
+        toolCallCount: 0,
+        recentTurnCount: 2,
+        lastSeenDeltaSeconds: 6 * 60 * 60,
+      },
+    });
+    const currentSnapshotRef = buildInternalStateSnapshotRef(currentInternalState);
+    const responseSnapshotRef = buildInternalStateSnapshotRef(responseInternalState);
+    const eventBus = new EventBus();
+    eventBus.on('reflection.guardrail', (payload) => {
+      telemetryEvents.push(payload);
+    });
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage: vi.fn(async () => ({
+          content: 'Grounded reflection.',
+          metadata: {
+            internalState: responseInternalState,
+            internalStateSnapshotRef: responseSnapshotRef,
+            metacognitiveFlags: [],
+          },
+        })),
+        getCurrentInternalState: () => currentInternalState,
+        getCurrentInternalStateSnapshotRef: () => currentSnapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      },
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+      runtimeOptions: {
+        eventBus,
+        sessionManager: {
+          resolveSessionChannelId: (channelId: string) => channelId,
+          getRecentMessages: () => [],
+        },
+        contactStore: {
+          getById: async () => ({
+            id: 'contact-1',
+            displayName: 'Ari',
+            nickname: 'Ari',
+            trustLevel: 'trusted' as const,
+            relationshipType: 'friend' as const,
+            firstSeen: new Date(now - (14 * 24 * 60 * 60 * 1000)).toISOString(),
+            lastSeen: new Date(now - (6 * 60 * 60 * 1000)).toISOString(),
+            conversationChannels: [{
+              channel: 'discord',
+              channelId: 'discord:primary-session',
+              firstSeen: new Date(now - (14 * 24 * 60 * 60 * 1000)).toISOString(),
+              lastSeen: new Date(now - (6 * 60 * 60 * 1000)).toISOString(),
+            }],
+          }),
+        },
+      },
+    });
+
+    await runtime.runTemplateNow('musing', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    expect(telemetryEvents).toHaveLength(1);
+    expect(telemetryEvents[0]).toMatchObject({
+      canonicalContactId: 'contact-1',
+      snapshotSource: 'response',
+      counters: {
+        reflectionCadenceDriftCount: 1,
+        schedulerBoundInternalStateCount: 1,
+        warningCount: 2,
+      },
+    });
+    expect(
+      (telemetryEvents[0] as { warnings: Array<{ code: string }> }).warnings.map(warning => warning.code).sort(),
+    ).toEqual(['reflection_cadence_drift', 'scheduler_bound_internal_state']);
+  });
+
+  it('emits stale silence-claim guardrail telemetry when reflection text contradicts fresh chat', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const telemetryEvents: EventMap['reflection.guardrail'][] = [];
+    const now = Date.now();
+    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policy = policyStore.load();
+    const template = policy.templates.find((candidate) => candidate.id === 'musing');
+    expect(template).toBeDefined();
+    if (!template) {
+      throw new Error('musing template missing from defaults');
+    }
+    template.internalStateInput = true;
+    policyStore.save(policy);
+
+    const currentInternalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.18, arousal: 0.2, dominance: 0.07 },
+        mood: { valence: 0.2, arousal: 0.18, dominance: 0.09 },
+        discrete: { curiosity: 0.5, calm: 0.4 },
+        confidence: 0.8,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'We just talked.',
+        responseText: 'A quiet contradiction.',
+        toolCallCount: 0,
+        recentTurnCount: 3,
+        lastSeenDeltaSeconds: 60,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(currentInternalState);
+    const eventBus = new EventBus();
+    eventBus.on('reflection.guardrail', (payload) => {
+      telemetryEvents.push(payload);
+    });
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage: vi.fn(async () => ({
+          content: 'It has been 3 days since we last chatted.',
+          metadata: {
+            internalState: currentInternalState,
+            internalStateSnapshotRef: snapshotRef,
+            metacognitiveFlags: [],
+          },
+        })),
+        getCurrentInternalState: () => currentInternalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      },
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+      runtimeOptions: {
+        eventBus,
+        sessionManager: {
+          resolveSessionChannelId: (channelId: string) => channelId,
+          getRecentMessages: (channelId: string) => (
+            channelId === 'discord:primary-session'
+              ? [
+                {
+                  id: 1,
+                  channelId,
+                  role: 'user' as const,
+                  content: 'I just sent the update.',
+                  timestamp: now - 120_000,
+                  authorName: 'Ari',
+                },
+                {
+                  id: 2,
+                  channelId,
+                  role: 'assistant' as const,
+                  content: 'I saw it and I am here.',
+                  timestamp: now - 60_000,
+                  authorName: 'Companion',
+                },
+              ]
+              : []
+          ),
+        },
+        contactStore: {
+          getById: async () => ({
+            id: 'contact-1',
+            displayName: 'Ari',
+            nickname: 'Ari',
+            trustLevel: 'trusted' as const,
+            relationshipType: 'friend' as const,
+            firstSeen: new Date(now - (14 * 24 * 60 * 60 * 1000)).toISOString(),
+            lastSeen: new Date(now - 60_000).toISOString(),
+            conversationChannels: [{
+              channel: 'discord',
+              channelId: 'discord:primary-session',
+              firstSeen: new Date(now - (14 * 24 * 60 * 60 * 1000)).toISOString(),
+              lastSeen: new Date(now - 60_000).toISOString(),
+            }],
+          }),
+        },
+      },
+    });
+
+    await runtime.runTemplateNow('musing', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    expect(telemetryEvents).toHaveLength(1);
+    expect(telemetryEvents[0]).toMatchObject({
+      canonicalContactId: 'contact-1',
+      snapshotSource: 'response',
+      counters: {
+        staleSilenceClaimCount: 1,
+        warningCount: 1,
+      },
+    });
+    const warning = (telemetryEvents[0] as {
+      warnings: Array<{ code: string; details: { claimSnippets?: string[] } }>;
+    }).warnings[0];
+    expect(warning.code).toBe('stale_silence_claim');
+    expect(warning.details.claimSnippets?.[0]).toContain('3 days since we last chatted');
+  });
 
   it('expands reflection_self, reflection_relational, and reflection_affect macros from atomic bundles', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));

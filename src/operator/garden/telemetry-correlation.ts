@@ -41,6 +41,9 @@ function inferTelemetryCallType(eventName: EventName): ObservabilityCallType | u
   if (eventName === 'memory.extraction.end') {
     return 'memory';
   }
+  if (eventName === 'reflection.guardrail') {
+    return 'scheduled';
+  }
   if (
     eventName === 'agent.turn.usage'
     || eventName === 'message.sent'

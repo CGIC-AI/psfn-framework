@@ -4,6 +4,10 @@ import type {
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolSnapshotTelemetry,
 } from '../core/agent/adaptive-tools-telemetry.js';
+import type {
+  ReflectionGuardrailSnapshotSource,
+  ReflectionGuardrailWarning,
+} from '../core/scheduler/reflection-guardrail-telemetry.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
@@ -237,6 +241,20 @@ export interface EventMap {
     waitMs: number;
     error?: string;
   };
+  'reflection.guardrail': {
+    templateId: string;
+    templateName: string;
+    channelId: string;
+    executionSource: 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
+    reflectionMode: 'agent' | 'deliberation';
+    timestamp: number;
+    snapshotSource: ReflectionGuardrailSnapshotSource;
+    warnings: ReflectionGuardrailWarning[];
+    counters: Record<string, number>;
+    canonicalContactId?: string;
+    primarySessionId?: string;
+    internalStateSnapshotRef?: string;
+  } & EventCorrelationFields;
   'memory.retrieval': {
     channelId: string;
     count: number;

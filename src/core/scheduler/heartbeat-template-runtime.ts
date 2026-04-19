@@ -55,6 +55,11 @@ import {
   WHISPER_WORKER_LANE,
   createWorkerExecutionPolicy,
 } from '../agent/worker-lanes.js';
+import {
+  detectReflectionGuardrailWarnings,
+  type ReflectionGuardrailSnapshotSource,
+  type ReflectionGuardrailSummary,
+} from './reflection-guardrail-telemetry.js';
 
 const log = createComponentLogger('HeartbeatTemplates');
 
@@ -87,6 +92,7 @@ interface ReflectionInternalStateContext {
   internalState: InternalState;
   internalStateSnapshotRef: string;
   metacognitiveFlags: ReflectionMetacognitiveFlag[];
+  snapshotSource: ReflectionGuardrailSnapshotSource;
 }
 
 type ReflectionPromptSectionBundle = Pick<
@@ -98,6 +104,18 @@ interface ReflectionPromptContext {
   internalState?: ReflectionInternalStateContext;
   contactBundle?: ReflectionContactContextBundle;
   substrateContext?: ReflectionSubstrateContext;
+}
+
+interface ReflectionContactTelemetryDiagnostics {
+  primarySessionId?: string;
+  recentMessageCount: number;
+  freshestLiveChatGapMs?: number;
+  latestLiveActivityAgeMs?: number;
+}
+
+interface ReflectionContactContextResolution {
+  bundle: ReflectionContactContextBundle | null;
+  diagnostics: ReflectionContactTelemetryDiagnostics;
 }
 
 function getHeartbeatTemplateAuditProfile(
@@ -166,6 +184,19 @@ function estimateDeliberationCostUsd(
     (Math.max(0, inputTokens) * Math.max(0, inputUsdPerMillionTokens))
     + (Math.max(0, outputTokens) * Math.max(0, outputUsdPerMillionTokens))
   ) / 1_000_000;
+}
+
+function normalizeFiniteTimestamp(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function selectFreshestLiveChatGapMs(...values: Array<number | null | undefined>): number | undefined {
+  const finiteValues = values
+    .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0);
+  if (finiteValues.length === 0) {
+    return undefined;
+  }
+  return Math.min(...finiteValues);
 }
 
 function extractEmbeddedJsonObject(raw: string): string | null {
@@ -433,10 +464,11 @@ export function createHeartbeatTemplateRuntime(
     }
 
     const normalizedState = cloneInternalState(currentInternalState);
-    const snapshotRef = normalizeSnapshotRef(
+    const providedSnapshotRef = normalizeSnapshotRef(
       agentLoop.getCurrentInternalStateSnapshotRef?.(),
       'getCurrentInternalStateSnapshotRef result',
-    ) ?? buildInternalStateSnapshotRef(normalizedState);
+    );
+    const snapshotRef = providedSnapshotRef ?? buildInternalStateSnapshotRef(normalizedState);
     const rawMetacognitiveFlags = agentLoop.getCurrentMetacognitiveFlags?.();
     const metacognitiveFlags = rawMetacognitiveFlags !== undefined
       ? normalizeMetacognitiveFlags(rawMetacognitiveFlags, 'getCurrentMetacognitiveFlags result')
@@ -447,6 +479,7 @@ export function createHeartbeatTemplateRuntime(
       internalState: normalizedState,
       internalStateSnapshotRef: snapshotRef,
       metacognitiveFlags,
+      snapshotSource: providedSnapshotRef ? 'runtime' : 'derived_runtime',
     };
   };
 
@@ -663,11 +696,17 @@ export function createHeartbeatTemplateRuntime(
     internalStateContext: ReflectionInternalStateContext | null,
     reflectionChannelId: string,
     reflectionCanonicalContactId: string | undefined,
-  ): Promise<ReflectionContactContextBundle | null> => {
+  ): Promise<ReflectionContactContextResolution> => {
     if (!reflectionCanonicalContactId) {
-      return null;
+      return {
+        bundle: null,
+        diagnostics: {
+          recentMessageCount: 0,
+        },
+      };
     }
 
+    const nowMs = Date.now();
     const contact = runtimeOptions.contactStore?.getById
       ? await runtimeOptions.contactStore.getById(reflectionCanonicalContactId) as Contact | undefined
       : undefined;
@@ -679,6 +718,10 @@ export function createHeartbeatTemplateRuntime(
     const recentSessionEntries = runtimeOptions.sessionManager?.getRecentMessages
       ? runtimeOptions.sessionManager.getRecentMessages(primarySessionId, 12)
       : [];
+    const recentLiveActivityTimestamps = recentSessionEntries
+      .filter((entry) => entry.role === 'user' || entry.role === 'assistant')
+      .map(entry => normalizeFiniteTimestamp((entry as { timestamp?: unknown }).timestamp))
+      .filter((timestamp): timestamp is number => timestamp !== undefined);
     const recentSessionMessages = recentSessionEntries
       .map(normalizeRecentReflectionMessage)
       .filter((message): message is ReflectionContactRecentMessage => message !== null);
@@ -707,9 +750,23 @@ export function createHeartbeatTemplateRuntime(
       )
       : [];
     const lastSeen = contact?.lastSeen ? contact.lastSeen.trim() : undefined;
-    const lastSeenDeltaSeconds = lastSeen
-      ? Math.max(0, Math.floor((Date.now() - Date.parse(lastSeen)) / 1000))
-      : null;
+    const lastSeenTimestamp = lastSeen ? Date.parse(lastSeen) : Number.NaN;
+    const contactLastSeenGapMs = Number.isFinite(lastSeenTimestamp)
+      ? Math.max(0, nowMs - lastSeenTimestamp)
+      : undefined;
+    const stateLastSeenDeltaMs = currentInternalState?.relational.lastSeenDeltaSeconds !== null
+      && currentInternalState?.relational.lastSeenDeltaSeconds !== undefined
+      ? Math.max(0, currentInternalState.relational.lastSeenDeltaSeconds * 1000)
+      : undefined;
+    const latestLiveActivityAtMs = recentLiveActivityTimestamps.length > 0
+      ? Math.max(...recentLiveActivityTimestamps)
+      : undefined;
+    const latestLiveActivityAgeMs = latestLiveActivityAtMs !== undefined
+      ? Math.max(0, nowMs - latestLiveActivityAtMs)
+      : undefined;
+    const lastSeenDeltaSeconds = contactLastSeenGapMs !== undefined
+      ? Math.max(0, Math.floor(contactLastSeenGapMs / 1000))
+      : currentInternalState?.relational.lastSeenDeltaSeconds ?? null;
     const trustLevel = contact?.trustLevel ?? currentInternalState?.relational.trustLevel;
     const contactDisplayName = contact?.displayName ?? contact?.nickname ?? undefined;
 
@@ -751,20 +808,32 @@ export function createHeartbeatTemplateRuntime(
       )
       : undefined;
 
-    return assembleReflectionContactContextBundle({
-      contactId: reflectionCanonicalContactId,
-      contactDisplayName,
-      trustLevel,
-      primarySessionId,
-      lastSeen,
-      lastSeenDeltaSeconds,
-      emotionalSnapshot,
-      emotionalTimeSeries,
-      recentSessionMessages,
-      memoryBlock,
-      activeConcerns,
-      pendingFollowUps,
-    });
+    return {
+      bundle: assembleReflectionContactContextBundle({
+        contactId: reflectionCanonicalContactId,
+        contactDisplayName,
+        trustLevel,
+        primarySessionId,
+        lastSeen,
+        lastSeenDeltaSeconds,
+        emotionalSnapshot,
+        emotionalTimeSeries,
+        recentSessionMessages,
+        memoryBlock,
+        activeConcerns,
+        pendingFollowUps,
+      }),
+      diagnostics: {
+        primarySessionId,
+        recentMessageCount: recentSessionMessages.length,
+        freshestLiveChatGapMs: selectFreshestLiveChatGapMs(
+          latestLiveActivityAgeMs,
+          contactLastSeenGapMs,
+          stateLastSeenDeltaMs,
+        ),
+        ...(latestLiveActivityAgeMs !== undefined ? { latestLiveActivityAgeMs } : {}),
+      },
+    };
   };
 
   const resolveReflectionSubstratePromptContext = (
@@ -828,10 +897,11 @@ export function createHeartbeatTemplateRuntime(
     }
 
     const internalState = cloneInternalState(metadata.internalState);
-    const snapshotRef = normalizeSnapshotRef(
+    const providedSnapshotRef = normalizeSnapshotRef(
       metadata.internalStateSnapshotRef,
       'metadata.internalStateSnapshotRef',
-    ) ?? buildInternalStateSnapshotRef(internalState);
+    );
+    const snapshotRef = providedSnapshotRef ?? buildInternalStateSnapshotRef(internalState);
     const metacognitiveFlags = normalizeMetacognitiveFlags(
       metadata.metacognitiveFlags,
       'metadata.metacognitiveFlags',
@@ -841,6 +911,7 @@ export function createHeartbeatTemplateRuntime(
       internalState,
       internalStateSnapshotRef: snapshotRef,
       metacognitiveFlags,
+      snapshotSource: providedSnapshotRef ? 'response' : 'derived_response',
     };
   };
 
@@ -1158,6 +1229,65 @@ export function createHeartbeatTemplateRuntime(
     }
   };
 
+  const emitReflectionGuardrailTelemetry = async (input: {
+    template: ReflectionTemplate;
+    reflectionChannelId: string;
+    executionSource: HeartbeatExecutionSource;
+    reflectionMode: 'agent' | 'deliberation';
+    canonicalContactId?: string;
+    diagnostics: ReflectionContactTelemetryDiagnostics;
+    persistenceContext: ReflectionInternalStateContext | null;
+    summary: ReflectionGuardrailSummary;
+  }): Promise<void> => {
+    if (input.summary.warnings.length === 0) {
+      return;
+    }
+
+    const warningCodes = input.summary.warnings.map(warning => warning.code);
+    log.warn('Reflection guardrail warnings detected', {
+      templateId: input.template.id,
+      executionSource: input.executionSource,
+      reflectionMode: input.reflectionMode,
+      canonicalContactId: input.canonicalContactId ?? null,
+      warningCodes,
+      counters: input.summary.counters,
+    });
+
+    if (!runtimeOptions.eventBus) {
+      return;
+    }
+
+    const callType = input.executionSource === 'manual' ? 'tool' : 'scheduled';
+    try {
+      await runtimeOptions.eventBus.emit('reflection.guardrail', {
+        templateId: input.template.id,
+        templateName: input.template.name,
+        channelId: input.reflectionChannelId,
+        executionSource: input.executionSource,
+        reflectionMode: input.reflectionMode,
+        timestamp: Date.now(),
+        snapshotSource: input.persistenceContext?.snapshotSource ?? 'missing',
+        warnings: input.summary.warnings,
+        counters: input.summary.counters,
+        ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
+        ...(input.diagnostics.primarySessionId ? { primarySessionId: input.diagnostics.primarySessionId } : {}),
+        ...(input.persistenceContext?.internalStateSnapshotRef
+          ? { internalStateSnapshotRef: input.persistenceContext.internalStateSnapshotRef }
+          : {}),
+        callType,
+        originType: callType,
+        originStage: 'reflection.guardrail',
+        purpose: 'reflection.guardrail',
+      });
+    } catch (error) {
+      log.warn('Failed to emit reflection guardrail telemetry', {
+        templateId: input.template.id,
+        warningCodes,
+        error: String(error),
+      });
+    }
+  };
+
   const persistDeliberationMemory = async (
     template: ReflectionTemplate,
     reflection: string,
@@ -1263,12 +1393,13 @@ export function createHeartbeatTemplateRuntime(
     const reflectionChannelId = `internal:reflection:${template.id}`;
     const internalStateContext = resolveInternalStateContext(template);
     const reflectionCanonicalContactId = resolveReflectionCanonicalContactId(internalStateContext);
-    const reflectionContactContext = await resolveReflectionContactContextBundle(
+    const reflectionContactResolution = await resolveReflectionContactContextBundle(
       template,
       internalStateContext,
       reflectionChannelId,
       reflectionCanonicalContactId,
     );
+    const reflectionContactContext = reflectionContactResolution.bundle;
     const reflectionSubstrateContext = resolveReflectionSubstratePromptContext(template);
     const reflectionCreatedAt = new Date(Date.now()).toISOString();
     const reflectionPrompt = formatNarrativePromptInput(
@@ -1397,6 +1528,37 @@ export function createHeartbeatTemplateRuntime(
         persistenceContext = responseContext;
       }
     }
+
+    const guardrailSummary = detectReflectionGuardrailWarnings({
+      templateIntervalMs: template.intervalMs,
+      ...(reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {}),
+      ...(reflectionContactResolution.diagnostics.primarySessionId
+        ? { primarySessionId: reflectionContactResolution.diagnostics.primarySessionId }
+        : {}),
+      recentMessageCount: reflectionContactResolution.diagnostics.recentMessageCount,
+      ...(reflectionContactResolution.diagnostics.freshestLiveChatGapMs !== undefined
+        ? { freshestLiveChatGapMs: reflectionContactResolution.diagnostics.freshestLiveChatGapMs }
+        : {}),
+      ...(reflectionContactResolution.diagnostics.latestLiveActivityAgeMs !== undefined
+        ? { latestLiveActivityAgeMs: reflectionContactResolution.diagnostics.latestLiveActivityAgeMs }
+        : {}),
+      reflectionText,
+      internalStateSnapshotRef: persistenceContext?.internalStateSnapshotRef,
+      snapshotSource: persistenceContext?.snapshotSource ?? 'missing',
+      ...(normalizeCanonicalContactId(persistenceContext?.internalState.relational.contactId)
+        ? { internalStateContactId: normalizeCanonicalContactId(persistenceContext?.internalState.relational.contactId) }
+        : {}),
+    });
+    await emitReflectionGuardrailTelemetry({
+      template,
+      reflectionChannelId,
+      executionSource: source,
+      reflectionMode,
+      canonicalContactId: reflectionCanonicalContactId,
+      diagnostics: reflectionContactResolution.diagnostics,
+      persistenceContext,
+      summary: guardrailSummary,
+    });
 
     let reflectionJournalEntryId: string | undefined;
     let dailyJournalEntryId: string | undefined;

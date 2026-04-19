@@ -896,6 +896,74 @@ describe('AdminServer Garden routing', () => {
       ws.close();
     });
 
+    it('streams reflection guardrail telemetry over /api/admin/events', async () => {
+      const ws = await openWebSocket(harness.port, '/api/admin/events', bearerHeaders);
+      const messagePromise = readWebSocketMessage<{
+        type: string;
+        correlation: {
+          callType?: string;
+          purpose?: string;
+          channelId?: string;
+        };
+        data: {
+          canonicalContactId?: string;
+          snapshotSource: string;
+          counters: Record<string, number>;
+          warnings: Array<{ code: string }>;
+        };
+      }>(ws);
+
+      await harness.eventBus.emit('reflection.guardrail', {
+        templateId: 'musing',
+        templateName: 'Musing',
+        channelId: 'internal:reflection:musing',
+        executionSource: 'scheduled',
+        reflectionMode: 'agent',
+        timestamp: Date.now(),
+        canonicalContactId: 'contact-1',
+        primarySessionId: 'discord:primary-session',
+        internalStateSnapshotRef: 'internal-state-v1:abc123',
+        snapshotSource: 'response',
+        warnings: [{
+          code: 'stale_silence_claim',
+          severity: 'warning',
+          message: 'Reflection asserted silence despite recent live-chat evidence.',
+          details: {
+            claimSnippets: ['It has been 3 days since we last chatted.'],
+            recentMessageCount: 2,
+            latestLiveActivityAgeMs: 60_000,
+          },
+        }],
+        counters: {
+          staleSilenceClaimCount: 1,
+          warningCount: 1,
+        },
+        callType: 'scheduled',
+        originType: 'scheduled',
+        originStage: 'reflection.guardrail',
+        purpose: 'reflection.guardrail',
+      });
+
+      const telemetry = await messagePromise;
+      expect(telemetry.type).toBe('reflection.guardrail');
+      expect(telemetry.correlation).toMatchObject({
+        callType: 'scheduled',
+        purpose: 'reflection.guardrail',
+        channelId: 'internal:reflection:musing',
+      });
+      expect(telemetry.data).toMatchObject({
+        canonicalContactId: 'contact-1',
+        snapshotSource: 'response',
+        counters: {
+          staleSilenceClaimCount: 1,
+          warningCount: 1,
+        },
+      });
+      expect(telemetry.data.warnings[0]?.code).toBe('stale_silence_claim');
+
+      ws.close();
+    });
+
     it('streams thinking deltas with correlation metadata for Garden event bus consumers', async () => {
       const ws = await openWebSocket(harness.port, '/api/admin/events', bearerHeaders);
       const thinkingMessagePromise = readWebSocketMessage<{

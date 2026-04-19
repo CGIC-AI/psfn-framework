@@ -139,6 +139,30 @@ function parseOptionalTextMap<T extends string>(
   return Object.keys(parsed).length > 0 ? parsed : {};
 }
 
+function assertNonZeroEntriesHaveRationales<T extends string>(
+  values: Record<T, number>,
+  rationales: ChargePolicyRationaleMap<T> | undefined,
+  fieldPath: string,
+  rationaleFieldPath: string,
+): void {
+  const missing = Object.entries(values)
+    .filter(([, amount]) => amount > 0)
+    .map(([key]) => key as T)
+    .filter((key) => {
+      if (!rationales) {
+        return true;
+      }
+      const rationale = rationales[key];
+      return !rationale || rationale.trim().length === 0;
+    });
+
+  if (missing.length > 0) {
+    throw new Error(
+      `Invalid charge policy: ${rationaleFieldPath} must include non-empty entries for nonzero ${fieldPath}: ${missing.join(', ')}`,
+    );
+  }
+}
+
 function validateChargePolicyConfig(
   raw: unknown,
   sourcePath: string,
@@ -170,27 +194,50 @@ function validateChargePolicyConfig(
   }
   assertNoUnknownKeys(raw.moa, ['perRoundMultiplierByReferenceModelClass'], `${sourcePath}.moa`);
 
+  const runChargeQuotaByLane = parseFixedNumericMap(
+    raw.runChargeQuotaByLane,
+    `${sourcePath}.runChargeQuotaByLane`,
+    CHARGE_POLICY_RUNTIME_LANE_VALUES,
+  );
+  const surfaceCosts = parseFixedNumericMap(
+    raw.surfaceCosts,
+    `${sourcePath}.surfaceCosts`,
+    CHARGE_POLICY_SURFACE_VALUES,
+  );
+  const surfaceRationales = parseOptionalTextMap(
+    raw.surfaceRationales,
+    `${sourcePath}.surfaceRationales`,
+    CHARGE_POLICY_SURFACE_VALUES,
+  );
+  const referenceModelClassPricing = parseFixedNumericMap(
+    raw.referenceModelClassPricing,
+    `${sourcePath}.referenceModelClassPricing`,
+    CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES,
+  );
+  const referenceModelClassPricingRationales = parseOptionalTextMap(
+    raw.referenceModelClassPricingRationales,
+    `${sourcePath}.referenceModelClassPricingRationales`,
+    CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES,
+  );
+
+  assertNonZeroEntriesHaveRationales(
+    surfaceCosts,
+    surfaceRationales,
+    `${sourcePath}.surfaceCosts`,
+    `${sourcePath}.surfaceRationales`,
+  );
+  assertNonZeroEntriesHaveRationales(
+    referenceModelClassPricing,
+    referenceModelClassPricingRationales,
+    `${sourcePath}.referenceModelClassPricing`,
+    `${sourcePath}.referenceModelClassPricingRationales`,
+  );
+
   return {
     schemaVersion: 1,
-    runChargeQuotaByLane: parseFixedNumericMap(
-      raw.runChargeQuotaByLane,
-      `${sourcePath}.runChargeQuotaByLane`,
-      CHARGE_POLICY_RUNTIME_LANE_VALUES,
-    ),
-    surfaceCosts: parseFixedNumericMap(
-      raw.surfaceCosts,
-      `${sourcePath}.surfaceCosts`,
-      CHARGE_POLICY_SURFACE_VALUES,
-    ),
-    ...(raw.surfaceRationales !== undefined
-      ? {
-          surfaceRationales: parseOptionalTextMap(
-            raw.surfaceRationales,
-            `${sourcePath}.surfaceRationales`,
-            CHARGE_POLICY_SURFACE_VALUES,
-          ),
-        }
-      : {}),
+    runChargeQuotaByLane,
+    surfaceCosts,
+    ...(surfaceRationales !== undefined ? { surfaceRationales } : {}),
     moa: {
       perRoundMultiplierByReferenceModelClass: parseFixedNumericMap(
         raw.moa.perRoundMultiplierByReferenceModelClass,
@@ -198,19 +245,9 @@ function validateChargePolicyConfig(
         CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES,
       ),
     },
-    referenceModelClassPricing: parseFixedNumericMap(
-      raw.referenceModelClassPricing,
-      `${sourcePath}.referenceModelClassPricing`,
-      CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES,
-    ),
-    ...(raw.referenceModelClassPricingRationales !== undefined
-      ? {
-          referenceModelClassPricingRationales: parseOptionalTextMap(
-            raw.referenceModelClassPricingRationales,
-            `${sourcePath}.referenceModelClassPricingRationales`,
-            CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES,
-          ),
-        }
+    referenceModelClassPricing,
+    ...(referenceModelClassPricingRationales !== undefined
+      ? { referenceModelClassPricingRationales }
       : {}),
   };
 }

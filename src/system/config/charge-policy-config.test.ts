@@ -255,6 +255,13 @@ describe('charge policy config', () => {
           premium_cloud: 4,
         },
       })).toThrow('unknown keys');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        surfaceRationales: {
+          shardLaunch: 'Launching a shard consumes worker coordination overhead.',
+        },
+      })).toThrow(/surfaceRationales must include non-empty entries for nonzero .*paidImageGeneration/);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

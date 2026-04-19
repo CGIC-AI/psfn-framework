@@ -44,14 +44,18 @@ export type ChargePolicyRuntimeLane = (typeof CHARGE_POLICY_RUNTIME_LANE_VALUES)
 export type ChargePolicySurface = (typeof CHARGE_POLICY_SURFACE_VALUES)[number];
 export type ChargePolicyReferenceModelClass = (typeof CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES)[number];
 
+type ChargePolicyRationaleMap<T extends string> = Partial<Record<T, string>>;
+
 export interface ChargePolicyConfig {
   schemaVersion: 1;
   runChargeQuotaByLane: Record<ChargePolicyRuntimeLane, number>;
   surfaceCosts: Record<ChargePolicySurface, number>;
+  surfaceRationales?: ChargePolicyRationaleMap<ChargePolicySurface>;
   moa: {
     perRoundMultiplierByReferenceModelClass: Record<ChargePolicyReferenceModelClass, number>;
   };
   referenceModelClassPricing: Record<ChargePolicyReferenceModelClass, number>;
+  referenceModelClassPricingRationales?: ChargePolicyRationaleMap<ChargePolicyReferenceModelClass>;
 }
 
 interface ChargePolicyLoadOptions {
@@ -106,6 +110,35 @@ function parseFixedNumericMap<T extends string>(
   return parsed;
 }
 
+function parseOptionalTextMap<T extends string>(
+  raw: unknown,
+  fieldPath: string,
+  allowedKeys: readonly T[],
+): ChargePolicyRationaleMap<T> | undefined {
+  if (raw === undefined) {
+    return undefined;
+  }
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be an object`);
+  }
+
+  assertNoUnknownKeys(raw, allowedKeys, fieldPath);
+
+  const parsed = {} as ChargePolicyRationaleMap<T>;
+  for (const key of allowedKeys) {
+    const value = raw[key];
+    if (value === undefined) {
+      continue;
+    }
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      throw new Error(`Invalid charge policy: ${fieldPath}.${key} must be a non-empty string`);
+    }
+    parsed[key] = value.trim();
+  }
+
+  return Object.keys(parsed).length > 0 ? parsed : {};
+}
+
 function validateChargePolicyConfig(
   raw: unknown,
   sourcePath: string,
@@ -116,7 +149,15 @@ function validateChargePolicyConfig(
 
   assertNoUnknownKeys(
     raw,
-    ['schemaVersion', 'runChargeQuotaByLane', 'surfaceCosts', 'moa', 'referenceModelClassPricing'],
+    [
+      'schemaVersion',
+      'runChargeQuotaByLane',
+      'surfaceCosts',
+      'surfaceRationales',
+      'moa',
+      'referenceModelClassPricing',
+      'referenceModelClassPricingRationales',
+    ],
     sourcePath,
   );
 
@@ -141,6 +182,15 @@ function validateChargePolicyConfig(
       `${sourcePath}.surfaceCosts`,
       CHARGE_POLICY_SURFACE_VALUES,
     ),
+    ...(raw.surfaceRationales !== undefined
+      ? {
+          surfaceRationales: parseOptionalTextMap(
+            raw.surfaceRationales,
+            `${sourcePath}.surfaceRationales`,
+            CHARGE_POLICY_SURFACE_VALUES,
+          ),
+        }
+      : {}),
     moa: {
       perRoundMultiplierByReferenceModelClass: parseFixedNumericMap(
         raw.moa.perRoundMultiplierByReferenceModelClass,
@@ -153,6 +203,15 @@ function validateChargePolicyConfig(
       `${sourcePath}.referenceModelClassPricing`,
       CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES,
     ),
+    ...(raw.referenceModelClassPricingRationales !== undefined
+      ? {
+          referenceModelClassPricingRationales: parseOptionalTextMap(
+            raw.referenceModelClassPricingRationales,
+            `${sourcePath}.referenceModelClassPricingRationales`,
+            CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES,
+          ),
+        }
+      : {}),
   };
 }
 

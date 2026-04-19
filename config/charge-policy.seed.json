@@ -22,6 +22,14 @@
     "externalModelConsult": 1,
     "moaRoundBase": 1
   },
+  "surfaceRationales": {
+    "paidImageGeneration": "External image generation spends paid provider credits.",
+    "thinkExtensionBand": "Extended think loops get a small cost to keep them bounded.",
+    "subagentLaunch": "Spawning a subagent reserves a separate runtime budget.",
+    "shardLaunch": "Launching a shard consumes worker coordination overhead.",
+    "externalModelConsult": "Consulting an external model uses a paid API boundary.",
+    "moaRoundBase": "Each MOA round carries coordination overhead even before model spend."
+  },
   "moa": {
     "perRoundMultiplierByReferenceModelClass": {
       "local": 1,
@@ -35,5 +43,9 @@
     "subscription": 0,
     "cheap_cloud": 1,
     "premium_cloud": 4
+  },
+  "referenceModelClassPricingRationales": {
+    "cheap_cloud": "Cheap cloud models are lightly priced to keep them available for routine use.",
+    "premium_cloud": "Premium cloud models are intentionally more expensive to reserve for high-value calls."
   }
 }

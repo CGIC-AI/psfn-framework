@@ -2,6 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { ChargePolicySurface } from './charge-policy-config.js';
 import {
   CHARGE_POLICY_FILE_NAME,
   CHARGE_POLICY_SEED_FILE_NAME,
@@ -14,6 +15,64 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
 }
 
+function repeatSurface(surface: ChargePolicySurface, count: number): ChargePolicySurface[] {
+  return Array.from({ length: count }, () => surface);
+}
+
+function getDefaultSeedPolicy() {
+  return {
+    schemaVersion: 1,
+    runChargeQuotaByLane: {
+      interactive: 24,
+      background: 8,
+      maintenance: 0,
+      subagent: 6,
+      shard: 12,
+    },
+    surfaceCosts: {
+      ownerFileInspection: 0,
+      localFilesystem: 0,
+      memoryRead: 0,
+      memoryWrite: 0,
+      localEmbedding: 0,
+      externalEmbedding: 0,
+      localImageGeneration: 0,
+      paidImageGeneration: 6,
+      thinkExtensionBand: 1,
+      subagentLaunch: 1,
+      shardLaunch: 8,
+      externalModelConsult: 1,
+      moaRoundBase: 1,
+    },
+    surfaceRationales: {
+      paidImageGeneration: 'External image generation spends paid provider credits.',
+      thinkExtensionBand: 'Extended think loops get a small cost to keep them bounded.',
+      subagentLaunch: 'Spawning a subagent reserves a separate runtime budget.',
+      shardLaunch: 'Launching a shard consumes worker coordination overhead.',
+      externalModelConsult: 'Consulting an external model uses a paid API boundary.',
+      moaRoundBase: 'Each MOA round carries coordination overhead even before model spend.',
+    },
+    moa: {
+      perRoundMultiplierByReferenceModelClass: {
+        local: 1,
+        subscription: 1,
+        cheap_cloud: 1,
+        premium_cloud: 2,
+      },
+    },
+    referenceModelClassPricing: {
+      local: 0,
+      subscription: 0,
+      cheap_cloud: 1,
+      premium_cloud: 4,
+    },
+    referenceModelClassPricingRationales: {
+      cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
+      premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
+    },
+  };
+}
+
 describe('charge policy config', () => {
   it('loads from seed and persists the owner file when missing', () => {
     const root = mkdtempSync(join(tmpdir(), 'charge-policy-config-'));
@@ -23,8 +82,9 @@ describe('charge policy config', () => {
     mkdirSync(seedDir, { recursive: true });
 
     try {
+      const defaultSeed = getDefaultSeedPolicy();
       const seed = {
-        schemaVersion: 1,
+        ...defaultSeed,
         runChargeQuotaByLane: {
           interactive: 30,
           background: 10,
@@ -33,19 +93,10 @@ describe('charge policy config', () => {
           shard: 16,
         },
         surfaceCosts: {
-          ownerFileInspection: 0,
-          localFilesystem: 0,
-          memoryRead: 0,
-          memoryWrite: 0,
-          localEmbedding: 0,
-          externalEmbedding: 0,
-          localImageGeneration: 0,
+          ...defaultSeed.surfaceCosts,
           paidImageGeneration: 7,
-          thinkExtensionBand: 1,
-          subagentLaunch: 1,
           shardLaunch: 9,
           externalModelConsult: 2,
-          moaRoundBase: 1,
         },
         moa: {
           perRoundMultiplierByReferenceModelClass: {
@@ -60,6 +111,13 @@ describe('charge policy config', () => {
           subscription: 0,
           cheap_cloud: 1,
           premium_cloud: 5,
+        },
+        referenceModelClassPricingRationales: defaultSeed.referenceModelClassPricingRationales,
+        surfaceRationales: {
+          ...defaultSeed.surfaceRationales,
+          paidImageGeneration: 'External image generation spends paid provider credits.',
+          shardLaunch: 'Launching a shard consumes worker coordination overhead.',
+          externalModelConsult: 'Consulting an external model uses a paid API boundary.',
         },
       };
       writeJson(join(seedDir, CHARGE_POLICY_SEED_FILE_NAME), seed);
@@ -78,85 +136,39 @@ describe('charge policy config', () => {
     mkdirSync(seedDir, { recursive: true });
 
     try {
-      writeJson(join(seedDir, CHARGE_POLICY_SEED_FILE_NAME), {
-        schemaVersion: 1,
-        runChargeQuotaByLane: {
-          interactive: 24,
-          background: 8,
-          maintenance: 0,
-          subagent: 6,
-          shard: 12,
-        },
-        surfaceCosts: {
-          ownerFileInspection: 0,
-          localFilesystem: 0,
-          memoryRead: 0,
-          memoryWrite: 0,
-          localEmbedding: 0,
-          externalEmbedding: 0,
-          localImageGeneration: 0,
-          paidImageGeneration: 6,
-          thinkExtensionBand: 1,
-          subagentLaunch: 1,
-          shardLaunch: 8,
-          externalModelConsult: 1,
-          moaRoundBase: 1,
-        },
-        moa: {
-          perRoundMultiplierByReferenceModelClass: {
-            local: 1,
-            subscription: 1,
-            cheap_cloud: 1,
-            premium_cloud: 2,
-          },
-        },
-        referenceModelClassPricing: {
-          local: 0,
-          subscription: 0,
-          cheap_cloud: 1,
-          premium_cloud: 4,
-        },
-      });
+      const defaultSeed = getDefaultSeedPolicy();
+      writeJson(join(seedDir, CHARGE_POLICY_SEED_FILE_NAME), defaultSeed);
 
-      expect(loadChargePolicySeedDefaults({ seedDir })).toEqual({
-        schemaVersion: 1,
-        runChargeQuotaByLane: {
-          interactive: 24,
-          background: 8,
-          maintenance: 0,
-          subagent: 6,
-          shard: 12,
-        },
-        surfaceCosts: {
-          ownerFileInspection: 0,
-          localFilesystem: 0,
-          memoryRead: 0,
-          memoryWrite: 0,
-          localEmbedding: 0,
-          externalEmbedding: 0,
-          localImageGeneration: 0,
-          paidImageGeneration: 6,
-          thinkExtensionBand: 1,
-          subagentLaunch: 1,
-          shardLaunch: 8,
-          externalModelConsult: 1,
-          moaRoundBase: 1,
-        },
-        moa: {
-          perRoundMultiplierByReferenceModelClass: {
-            local: 1,
-            subscription: 1,
-            cheap_cloud: 1,
-            premium_cloud: 2,
-          },
-        },
-        referenceModelClassPricing: {
-          local: 0,
-          subscription: 0,
-          cheap_cloud: 1,
-          premium_cloud: 4,
-        },
-      });
+      const seed = loadChargePolicySeedDefaults({ seedDir });
+      expect(seed).toEqual(defaultSeed);
+
+      const representativeRun: ChargePolicySurface[] = [
+        ...repeatSurface('ownerFileInspection', 8),
+        ...repeatSurface('localFilesystem', 8),
+        ...repeatSurface('memoryRead', 6),
+        ...repeatSurface('memoryWrite', 6),
+        ...repeatSurface('localEmbedding', 4),
+        ...repeatSurface('externalEmbedding', 4),
+        ...repeatSurface('localImageGeneration', 4),
+        'paidImageGeneration',
+        'thinkExtensionBand',
+        'subagentLaunch',
+        'shardLaunch',
+        'externalModelConsult',
+        'moaRoundBase',
+      ];
+      const zeroCostCalls = representativeRun.filter(surface => seed.surfaceCosts[surface] === 0).length;
+      expect(zeroCostCalls / representativeRun.length).toBeGreaterThan(0.8);
+      const surfaceRationales = seed.surfaceRationales ?? {};
+      expect(Object.entries(seed.surfaceCosts).filter(([, amount]) => amount > 0).every(([surface]) => {
+        const rationale = surfaceRationales[surface as keyof typeof surfaceRationales];
+        return typeof rationale === 'string' && rationale.trim().length > 0;
+      })).toBe(true);
+      const referenceRationales = seed.referenceModelClassPricingRationales ?? {};
+      expect(Object.entries(seed.referenceModelClassPricing).filter(([, amount]) => amount > 0).every(([modelClass]) => {
+        const rationale = referenceRationales[modelClass as keyof typeof referenceRationales];
+        return typeof rationale === 'string' && rationale.trim().length > 0;
+      })).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -168,8 +180,9 @@ describe('charge policy config', () => {
     mkdirSync(dataDir, { recursive: true });
 
     try {
+      const defaultSeed = getDefaultSeedPolicy();
       const saved = saveChargePolicyConfig(dataDir, {
-        schemaVersion: 1,
+        ...defaultSeed,
         runChargeQuotaByLane: {
           interactive: 18,
           background: 6,
@@ -178,19 +191,9 @@ describe('charge policy config', () => {
           shard: 10,
         },
         surfaceCosts: {
-          ownerFileInspection: 0,
-          localFilesystem: 0,
-          memoryRead: 0,
-          memoryWrite: 0,
-          localEmbedding: 0,
-          externalEmbedding: 0,
-          localImageGeneration: 0,
+          ...defaultSeed.surfaceCosts,
           paidImageGeneration: 5,
-          thinkExtensionBand: 1,
-          subagentLaunch: 1,
           shardLaunch: 7,
-          externalModelConsult: 1,
-          moaRoundBase: 1,
         },
         moa: {
           perRoundMultiplierByReferenceModelClass: {
@@ -209,6 +212,7 @@ describe('charge policy config', () => {
       });
 
       expect(saved.referenceModelClassPricing.premium_cloud).toBe(3);
+      expect(saved.surfaceRationales?.paidImageGeneration).toContain('paid provider credits');
       expect(JSON.parse(readFileSync(join(dataDir, CHARGE_POLICY_FILE_NAME), 'utf-8'))).toEqual(saved);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -221,8 +225,9 @@ describe('charge policy config', () => {
     mkdirSync(dataDir, { recursive: true });
 
     try {
+      const defaultSeed = getDefaultSeedPolicy();
       expect(() => saveChargePolicyConfig(dataDir, {
-        schemaVersion: 1,
+        ...defaultSeed,
         runChargeQuotaByLane: {
           interactive: 24,
           background: 8,
@@ -230,21 +235,6 @@ describe('charge policy config', () => {
           subagent: 6,
           shard: 12,
           ephemeral: 2,
-        },
-        surfaceCosts: {
-          ownerFileInspection: 0,
-          localFilesystem: 0,
-          memoryRead: 0,
-          memoryWrite: 0,
-          localEmbedding: 0,
-          externalEmbedding: 0,
-          localImageGeneration: 0,
-          paidImageGeneration: 6,
-          thinkExtensionBand: 1,
-          subagentLaunch: 1,
-          shardLaunch: 8,
-          externalModelConsult: 1,
-          moaRoundBase: 1,
         },
         moa: {
           perRoundMultiplierByReferenceModelClass: {
@@ -254,9 +244,13 @@ describe('charge policy config', () => {
             premium_cloud: 2,
           },
         },
+        surfaceCosts: {
+          ...defaultSeed.surfaceCosts,
+          paidImageGeneration: 6,
+          externalModelConsult: 1,
+        },
         referenceModelClassPricing: {
-          local: 0,
-          subscription: 0,
+          ...defaultSeed.referenceModelClassPricing,
           cheap_cloud: 1,
           premium_cloud: 4,
         },

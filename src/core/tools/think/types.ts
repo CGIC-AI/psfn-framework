@@ -7,6 +7,7 @@ import type { Scheduler } from '../../scheduler/scheduler.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import type { CapabilityTier, CompositionalPolicyConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
@@ -134,6 +135,7 @@ export interface REPLDeps {
   costTelemetry?: CostTelemetryPort | null;
   getCapabilityTier?: () => CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
+  chargePolicy?: ChargePolicyConfig;
   moduleInstallConfirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   requestMetadata?: Partial<LLMRequestMetadata>;

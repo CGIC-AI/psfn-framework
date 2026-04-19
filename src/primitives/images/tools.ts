@@ -4,6 +4,7 @@ import type { TextContent } from '@mariozechner/pi-ai';
 import type { ImageOperations } from './ops.js';
 import { getVisionToolRequestContext } from './request-context.js';
 import { textResultWithError } from '../../core/tools/results.js';
+import { chargeSurface } from '../../shared/telemetry/run-charge.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
@@ -203,6 +204,11 @@ async function reviewGeneratedImages(
   }
 
   try {
+    chargeVisionConsult('image_review', {
+      mode: input.mode,
+      imageCount: input.imageUrls.length,
+      ...(input.prompt ? { prompt: input.prompt } : {}),
+    });
     return {
       visionReview: await reviewer.analyze({
         imageUrls: input.imageUrls,
@@ -230,6 +236,29 @@ function buildMediaResultDetails(
   };
 }
 
+function chargePaidImageGeneration(result: ImageGenerationResult, action: 'generate' | 'edit'): void {
+  if (result.provider !== 'fal') {
+    return;
+  }
+  chargeSurface('paidImageGeneration', {
+    details: {
+      action,
+      provider: result.provider,
+      ...(result.model ? { model: result.model } : {}),
+      imageCount: result.images.length,
+    },
+  });
+}
+
+function chargeVisionConsult(source: string, details: Record<string, unknown>): void {
+  chargeSurface('externalModelConsult', {
+    details: {
+      source,
+      ...details,
+    },
+  });
+}
+
 function normalizePrompt(prompt: string | undefined): string | null {
   const normalized = prompt?.trim() ?? '';
   return normalized.length > 0 ? normalized : null;
@@ -242,50 +271,6 @@ function normalizeInputUrls(inputUrls: readonly string[] | undefined): string[] 
     .slice(0, 4);
 }
 
-const SELF_IMAGE_PROMPT_PATTERNS = Object.freeze([
-  /\bselfie\b/i,
-  /\bself-portrait\b/i,
-  /\bself portrait\b/i,
-  /\bmirror selfie\b/i,
-  /\bportrait of me\b/i,
-  /\bphoto of me\b/i,
-  /\bpicture of me\b/i,
-  /\bimage of me\b/i,
-  /\bof myself\b/i,
-  /\bmy portrait\b/i,
-  /\bmyself\b/i,
-  /\bmy face\b/i,
-  /\bmy body\b/i,
-  /\blooks like me\b/i,
-  /\blook like me\b/i,
-]);
-
-function promptLikelyRequestsSelfPortrait(prompt: string): boolean {
-  const normalizedPrompt = prompt.trim();
-  return normalizedPrompt.length > 0
-    && SELF_IMAGE_PROMPT_PATTERNS.some((pattern) => pattern.test(normalizedPrompt));
-}
-
-function buildSelfImageRoutingError(toolName: string): string {
-  return `${toolName} rejected a self-image request. Use selfie_create for selfies or self-portraits so companion appearance context is applied explicitly.`;
-}
-
-function buildSelfieCreatePrompt(prompt: string, appearanceContext?: string): string {
-  const normalizedPrompt = prompt.trim();
-  const normalizedAppearance = appearanceContext?.trim() ?? '';
-  if (!normalizedAppearance) {
-    return normalizedPrompt;
-  }
-
-  return [
-    'Appearance context (canonical subject identity):',
-    normalizedAppearance,
-    '',
-    'Requested shot:',
-    normalizedPrompt,
-  ].join('\n');
-}
-
 async function executeMediaGenerate(
   ops: ImageOperations,
   reviewer: ImageVisionReviewer | undefined,
@@ -294,10 +279,6 @@ async function executeMediaGenerate(
   const prompt = normalizePrompt(params.prompt);
   if (!prompt) {
     return textResultWithError('media action "generate" requires a non-empty prompt', true);
-  }
-
-  if (promptLikelyRequestsSelfPortrait(prompt)) {
-    return textResultWithError(buildSelfImageRoutingError('media generate'), true);
   }
 
   try {
@@ -322,6 +303,7 @@ async function executeMediaGenerate(
       negativePrompt: params.negative_prompt,
       useTurbo: params.use_turbo,
     });
+    chargePaidImageGeneration(result, 'generate');
     const review = await reviewGeneratedImages(reviewer, {
       imageUrls: result.images.map((image) => image.url),
       imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
@@ -370,6 +352,7 @@ async function executeMediaEdit(
       inputFidelity: params.input_fidelity,
       seed: params.seed,
     });
+    chargePaidImageGeneration(result, 'edit');
     const review = await reviewGeneratedImages(reviewer, {
       imageUrls: result.images.map((image) => image.url),
       imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
@@ -421,6 +404,10 @@ async function executeMediaAnalyze(
       };
     }
 
+    chargeVisionConsult('image_analyze', {
+      imageCount: inputUrls.length,
+      ...(params.question ? { question: params.question } : {}),
+    });
     const visionReview = await reviewer.analyze({
       imageUrls: inputUrls,
       question: params.question,
@@ -565,17 +552,9 @@ export function createImageCreateTool(
         use_turbo?: boolean;
       },
     ): Promise<AgentToolResult<ImageToolResultDetails>> => {
-      const normalizedPrompt = params.prompt.trim();
-      if (!selfImage && promptLikelyRequestsSelfPortrait(normalizedPrompt)) {
-        return textResultWithError(buildSelfImageRoutingError(toolName), true);
-      }
-      const effectivePrompt = selfImage
-        ? buildSelfieCreatePrompt(normalizedPrompt, getVisionToolRequestContext()?.appearanceContext)
-        : normalizedPrompt;
-
       try {
         const result = await ops.create({
-          prompt: effectivePrompt,
+          prompt: params.prompt,
           provider: params.provider,
           model: params.model,
           numImages: params.num_images,
@@ -595,10 +574,11 @@ export function createImageCreateTool(
           negativePrompt: params.negative_prompt,
           useTurbo: params.use_turbo,
         });
+        chargePaidImageGeneration(result, 'generate');
         const review = await reviewGeneratedImages(reviewer, {
           imageUrls: result.images.map((image) => image.url),
           imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
-          prompt: effectivePrompt,
+          prompt: params.prompt,
           mode: 'create',
         });
         return {
@@ -693,6 +673,7 @@ export function createImageEditTool(
           inputFidelity: params.input_fidelity,
           seed: params.seed,
         });
+        chargePaidImageGeneration(result, 'edit');
         const review = await reviewGeneratedImages(reviewer, {
           imageUrls: result.images.map((image) => image.url),
           imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
@@ -757,6 +738,10 @@ export function createImageAnalyzeTool(reviewer: ImageVisionReviewer): AgentTool
           };
         }
 
+        chargeVisionConsult('image_analyze', {
+          imageCount: params.image_urls.length,
+          ...(params.question ? { question: params.question } : {}),
+        });
         const visionReview = await reviewer.analyze({
           imageUrls: [...params.image_urls],
           question: params.question,

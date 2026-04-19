@@ -1,13 +1,17 @@
-import type { SubstrateMessage, AgentResponse, ModelBudgetBlockedEvent, TurnUsage, InferredPostTurnAction, CorrelationMetadata } from './contracts/runtime.js';
+import type {
+  SubstrateMessage,
+  AgentResponse,
+  ModelBudgetBlockedEvent,
+  TurnUsage,
+  InferredPostTurnAction,
+  CorrelationMetadata,
+  RunChargeEvent,
+} from './contracts/runtime.js';
 import type { TurnSnapshot } from '../core/turns/snapshot.js';
 import type {
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolSnapshotTelemetry,
 } from '../core/agent/adaptive-tools-telemetry.js';
-import type {
-  ReflectionGuardrailSnapshotSource,
-  ReflectionGuardrailWarning,
-} from '../core/scheduler/reflection-guardrail-telemetry.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
@@ -128,6 +132,7 @@ export interface EventMap {
     [key: string]: unknown;
   };
   'agent.turn.usage': { message: SubstrateMessage; usage: TurnUsage } & EventCorrelationFields;
+  'agent.charge': RunChargeEvent;
   'agent.stream.delta': { channelId: string; text: string } & EventCorrelationFields;
   'agent.stream.thinking': { channelId: string; text: string } & EventCorrelationFields;
   'agent.toolcall.start': {
@@ -230,30 +235,6 @@ export interface EventMap {
     mergedFactCount?: number;
     crossChunkDeduplicatedCount?: number;
     boundaryFactCount?: number;
-  } & EventCorrelationFields;
-  'memory.extraction.flush': {
-    channelId: string;
-    templateId: string;
-    templateName: string;
-    canonicalContactId?: string;
-    phase: 'completed' | 'timeout' | 'failed';
-    timeoutMs: number;
-    waitMs: number;
-    error?: string;
-  };
-  'reflection.guardrail': {
-    templateId: string;
-    templateName: string;
-    channelId: string;
-    executionSource: 'manual' | 'scheduled' | 'deferred_scheduler' | 'deferred_post_turn';
-    reflectionMode: 'agent' | 'deliberation';
-    timestamp: number;
-    snapshotSource: ReflectionGuardrailSnapshotSource;
-    warnings: ReflectionGuardrailWarning[];
-    counters: Record<string, number>;
-    canonicalContactId?: string;
-    primarySessionId?: string;
-    internalStateSnapshotRef?: string;
   } & EventCorrelationFields;
   'memory.retrieval': {
     channelId: string;

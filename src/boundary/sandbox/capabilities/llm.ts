@@ -2,6 +2,7 @@ import type { LLMProviderPort, LLMRequestMetadata } from '../../../core/agent/co
 import type { ThinkEvidence } from '../../../core/tools/think/types.js';
 import type { SandboxBudgetRef } from './contracts.js';
 import { addEvidence, BUDGET_EXCEEDED_MESSAGE } from './common.js';
+import { chargeSurface } from '../../../shared/telemetry/run-charge.js';
 
 export interface LLMCapabilities {
   llm_query: (prompt: string) => Promise<string>;
@@ -29,6 +30,13 @@ export function createLLMCapabilities(options: CreateLLMCapabilitiesOptions): LL
     if (options.budgetRef) {
       options.budgetRef.subQueries++;
     }
+
+    chargeSurface('externalModelConsult', {
+      details: {
+        source: 'llm_query',
+        ...(attempt ? { attempt } : {}),
+      },
+    });
 
     const response = await options.llmProvider.complete(
       {

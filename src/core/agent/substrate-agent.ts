@@ -13,6 +13,7 @@ import type { AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
 import type { UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createEventBusCostTelemetryPort } from '../../shared/telemetry/cost-telemetry-port.js';
+import { getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import type { SessionManager } from '../session/manager.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
@@ -37,7 +38,6 @@ import {
   PromptRuntimeLayoutStore,
   resolvePromptRuntimeLayoutPath,
 } from '../identity/prompt-runtime.js';
-import { getCachedPromptRuntimeLayoutStore } from '../identity/prompt-runtime-store-cache.js';
 import type { ComposeContext } from '../identity/prompt-types.js';
 import { resolveCompanionIdFromConfig } from '../identity/companion-runtime.js';
 import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
@@ -146,10 +146,16 @@ import {
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
+const promptRuntimeLayoutStoreCache = new Map<string, PromptRuntimeLayoutStore>();
+
 function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayoutStore {
   const companionDataDir = resolveConfiguredCompanionDataDir(config);
   const filePath = resolvePromptRuntimeLayoutPath(companionDataDir);
-  return getCachedPromptRuntimeLayoutStore(filePath, () => new PromptRuntimeLayoutStore(filePath));
+  const cached = promptRuntimeLayoutStoreCache.get(filePath);
+  if (cached) return cached;
+  const created = new PromptRuntimeLayoutStore(filePath);
+  promptRuntimeLayoutStoreCache.set(filePath, created);
+  return created;
 }
 
 function resolveRuntimePromptGuidanceVariables(config: SubstrateConfig): Record<string, string> {
@@ -737,7 +743,7 @@ export class SubstrateAgent {
   }
 
   async handleMessage(message: SubstrateMessage): Promise<AgentResponse> {
-    return handleMessageForTurn(createTurnExecutionRuntimeAdapter({
+    const run = async (): Promise<AgentResponse> => handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
       costTelemetry: createEventBusCostTelemetryPort(this.eventBus),
       satellitePresence: this.satellitePresencePort,
@@ -889,6 +895,21 @@ export class SubstrateAgent {
         getLatestAssistantMessage: () => getLatestAssistantMessageForRuntime(this.agent.state.messages),
       },
     }), message);
+
+    if (!this.config.chargePolicy || getRunChargeContext()) {
+      return run();
+    }
+
+    return runWithChargeContext({
+      chargePolicy: this.config.chargePolicy,
+      eventBus: this.eventBus,
+      lane: 'interactive',
+      runId: message.id,
+      correlation: {
+        requestId: message.id,
+        channelId: message.channelId,
+      },
+    }, run);
   }
 
   // ── Private helpers ──

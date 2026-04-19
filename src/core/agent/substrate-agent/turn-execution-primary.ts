@@ -102,6 +102,7 @@ export async function executePrimaryTurn(params: {
       context,
       message,
       settings: moaSettings,
+      config: runtime.config,
       turnId,
       requestId,
       callType: turnCallType,
@@ -160,7 +161,7 @@ export async function executePrimaryTurn(params: {
         : {}),
     };
     turnSnapshot.capturedAt = Date.now();
-    void emitTurnSnapshot(turnSnapshot);
+    await emitTurnSnapshot(turnSnapshot);
   }
 
   const agentMessages = contextMessagesToPiMessages(context.messages);

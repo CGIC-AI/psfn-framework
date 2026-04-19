@@ -1,6 +1,9 @@
 import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { LLMContext, ObservabilityCallType, SubstrateMessage, TurnID, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { ChargePolicyReferenceModelClass } from '../../../system/config/charge-policy-config.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
+import { isRecord } from '../../../shared/utils/types.js';
 import type { LLMProviderPort } from '../contracts.js';
 
 interface MoaLogger {
@@ -83,6 +86,7 @@ export async function runMoaTurn(input: {
   context: LLMContext;
   message: SubstrateMessage;
   settings: ResolvedMoaSettings;
+  config: SubstrateConfig;
   turnId: TurnID;
   requestId: string;
   callType: ObservabilityCallType;
@@ -95,6 +99,29 @@ export async function runMoaTurn(input: {
   rounds: number;
   stopReason: string;
 }> {
+  const activeChargeContext = getRunChargeContext();
+  if (!activeChargeContext && input.config.chargePolicy) {
+    return runWithChargeContext({
+      chargePolicy: input.config.chargePolicy,
+      eventBus: {
+        emit: async (eventName, payload) => {
+          input.emitTelemetry(eventName, payload);
+        },
+      },
+      lane: 'interactive',
+      runId: input.requestId,
+      correlation: {
+        turnId: input.turnId,
+        requestId: input.requestId,
+        channelId: input.message.channelId,
+        callType: input.callType,
+        originType: input.callType,
+        originStage: 'agent.moa.turn',
+        purpose: 'agent.moa.turn',
+      },
+    }, async () => runMoaTurn(input));
+  }
+
   const caps = {
     maxRounds: input.settings.maxRounds,
     maxWallTimeMs: input.settings.timeoutMs,
@@ -123,6 +150,43 @@ export async function runMoaTurn(input: {
       caps,
     },
   );
+
+  for (const round of deliberation.rounds) {
+    chargeSurface('moaRoundBase', {
+      details: {
+        round: round.index + 1,
+        totalRounds: deliberation.rounds.length,
+      },
+    });
+
+    for (const voice of round.voices) {
+      const modelClass = resolveReferenceModelClass(voice.model, input.config);
+      const consultCharge = resolveConsultCharge(input.config, modelClass);
+      chargeSurface('externalModelConsult', {
+        amount: consultCharge,
+        details: {
+          round: round.index + 1,
+          model: voice.model,
+          referenceModelClass: modelClass,
+          voicePurpose: voice.purpose,
+        },
+      });
+    }
+
+    if (round.aggregatorModel) {
+      const modelClass = resolveReferenceModelClass(round.aggregatorModel, input.config);
+      const consultCharge = resolveConsultCharge(input.config, modelClass);
+      chargeSurface('externalModelConsult', {
+        amount: consultCharge,
+        details: {
+          round: round.index + 1,
+          model: round.aggregatorModel,
+          referenceModelClass: modelClass,
+          role: 'aggregator',
+        },
+      });
+    }
+  }
 
   const llmCalls = deliberation.rounds.reduce(
     (sum, round) => sum + round.voices.length + (round.aggregatorModel ? 1 : 0),
@@ -175,4 +239,67 @@ export async function runMoaTurn(input: {
     rounds: deliberation.rounds.length,
     stopReason: deliberation.stopReason,
   };
+}
+
+function resolveReferenceModelClass(
+  model: string,
+  config: SubstrateConfig,
+): ChargePolicyReferenceModelClass {
+  const entry = config.modelRegistry?.models.find((candidate) => (
+    candidate.id === model
+    || candidate.identity.model === model
+    || candidate.identity.provider === model
+  ));
+
+  const metadataClass = isRecord(entry?.metadata) ? entry.metadata.chargeClass : undefined;
+  if (
+    metadataClass === 'local'
+    || metadataClass === 'subscription'
+    || metadataClass === 'cheap_cloud'
+    || metadataClass === 'premium_cloud'
+  ) {
+    return metadataClass;
+  }
+
+  const provider = entry?.identity.provider.toLowerCase() ?? '';
+  const modelId = model.toLowerCase();
+  if (
+    provider.includes('ollama')
+    || provider.includes('transformers')
+    || provider === 'local'
+    || modelId.includes('/local')
+    || modelId.includes('local:')
+  ) {
+    return 'local';
+  }
+
+  if (modelId.includes('premium')) {
+    return 'premium_cloud';
+  }
+  if (modelId.includes('cheap')) {
+    return 'cheap_cloud';
+  }
+  if (modelId.includes('subscription')) {
+    return 'subscription';
+  }
+
+  const inputCost = entry?.cost?.inputPer1MUsd ?? 0;
+  const outputCost = entry?.cost?.outputPer1MUsd ?? 0;
+  const maxCost = Math.max(inputCost, outputCost);
+  if (maxCost <= 0) {
+    return 'subscription';
+  }
+  if (maxCost < 1) {
+    return 'cheap_cloud';
+  }
+  return 'premium_cloud';
+}
+
+function resolveConsultCharge(
+  config: SubstrateConfig,
+  modelClass: ChargePolicyReferenceModelClass,
+): number {
+  const pricing = config.chargePolicy?.referenceModelClassPricing[modelClass] ?? 0;
+  const multiplier = config.chargePolicy?.moa.perRoundMultiplierByReferenceModelClass[modelClass] ?? 1;
+  return pricing * multiplier;
 }

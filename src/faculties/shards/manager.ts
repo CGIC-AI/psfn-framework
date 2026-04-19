@@ -28,6 +28,7 @@ import {
 } from '../../boundary/gateway/policy.js';
 import { appendShardSessionMemorySyncAudit } from '../../persistence/jsonl.js';
 import type { ShardExecutionPort } from './port.js';
+import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import type {
   ShardConfig,
   ShardContextPack,
@@ -38,6 +39,7 @@ import type {
   ShardSourceContext,
 } from './types.js';
 import { buildShardLineageEnvelope, deriveShardCompanionId } from './result-lineage.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 import {
   createArtifactReturnPort,
   type ArtifactReturnBatch,
@@ -177,6 +179,17 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   }
 
   async spawn(shardConfig: ShardConfig): Promise<ShardResult> {
+    const activeChargeContext = getRunChargeContext();
+    const chargePolicy = this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy;
+    if (!activeChargeContext && chargePolicy) {
+      return runWithChargeContext({
+        chargePolicy,
+        eventBus: this.deps.eventBus,
+        lane: 'interactive',
+        correlation: getRequestContext(),
+      }, async () => this.spawn(shardConfig));
+    }
+
     this.refreshShardHealth();
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
@@ -211,10 +224,37 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       sourceMessage: baseMessage,
       ...(shardConfig.sourceContext ? { sourceContext: shardConfig.sourceContext } : {}),
     });
+    if (chargePolicy) {
+      return runWithChargeContext({
+        chargePolicy,
+        eventBus: this.deps.eventBus,
+        lane: 'shard',
+        runId: shardId,
+        correlation: getRequestContext(),
+      }, async () => this.executeShard(shardId, channelId, preparedConfig, baseMessage, lineage, shardRuntimeConfig));
+    }
     return this.executeShard(shardId, channelId, preparedConfig, baseMessage, lineage, shardRuntimeConfig);
   }
 
   async executeSubagent(shardConfig: ShardConfig): Promise<BoundedSubagentLaunchSummary> {
+    const activeChargeContext = getRunChargeContext();
+    const chargePolicy = this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy;
+    if (!activeChargeContext && chargePolicy) {
+      return runWithChargeContext({
+        chargePolicy,
+        eventBus: this.deps.eventBus,
+        lane: 'interactive',
+        correlation: getRequestContext(),
+      }, async () => this.executeSubagent(shardConfig));
+    }
+
+    chargeSurface('subagentLaunch', {
+      details: {
+        name: shardConfig.name,
+        ...(shardConfig.maxTurns !== undefined ? { maxTurns: shardConfig.maxTurns } : {}),
+      },
+    });
+
     const result = await this.spawn(shardConfig);
     return {
       subagentId: result.shardId,
@@ -236,6 +276,17 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   }
 
   async delegateSatelliteSession(request: SatelliteDelegationRequest): Promise<ShardResult> {
+    const activeChargeContext = getRunChargeContext();
+    const chargePolicy = this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy;
+    if (!activeChargeContext && chargePolicy) {
+      return runWithChargeContext({
+        chargePolicy,
+        eventBus: this.deps.eventBus,
+        lane: 'interactive',
+        correlation: getRequestContext(),
+      }, async () => this.delegateSatelliteSession(request));
+    }
+
     this.refreshShardHealth();
     const content = request.message.content.trim();
     if (!content) {
@@ -289,14 +340,29 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     });
 
     try {
-      const result = await this.executeShard(
-        shardId,
-        request.message.channelId,
-        shardConfig,
-        request.message,
-        lineage,
-        shardRuntimeConfig,
-      );
+      const result = chargePolicy
+        ? await runWithChargeContext({
+          chargePolicy,
+          eventBus: this.deps.eventBus,
+          lane: 'shard',
+          runId: shardId,
+          correlation: getRequestContext(),
+        }, async () => this.executeShard(
+          shardId,
+          request.message.channelId,
+          shardConfig,
+          request.message,
+          lineage,
+          shardRuntimeConfig,
+        ))
+        : await this.executeShard(
+          shardId,
+          request.message.channelId,
+          shardConfig,
+          request.message,
+          lineage,
+          shardRuntimeConfig,
+        );
       this.auditTrail?.append('satellite.shard.delegate.end', {
         shardId,
         status: 'completed',
@@ -355,6 +421,15 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       shardConfig.heartbeatDisconnectAfterMs,
       heartbeatStaleAfterMs,
     );
+
+    chargeSurface('shardLaunch', {
+      details: {
+        shardId,
+        name: shardConfig.name,
+        maxTurns,
+        channelId,
+      },
+    });
 
     this.activeCount++;
     this.activeShards.set(shardId, {

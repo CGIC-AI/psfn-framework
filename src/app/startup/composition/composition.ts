@@ -384,6 +384,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     costTelemetry: createEventBusCostTelemetryPort(options.eventBus),
     getCapabilityTier: options.getCapabilityTier,
     compositionalPolicy: options.compositionalPolicy,
+    chargePolicy: options.config.chargePolicy,
     moduleInstallConfirmationQueue: options.moduleInstallConfirmationQueue,
     onModuleRegistryMutation: options.onModuleRegistryMutation,
     executionPort: options.executionPort ?? null,

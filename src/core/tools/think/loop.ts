@@ -32,6 +32,7 @@ import {
 } from './loop-helpers.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { evaluateCompositionalPolicyForChannelId } from '../../../system/capabilities/compositional-policy.js';
+import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 
 const LLM_TIMEOUT_BUFFER_MS = 25;
 const LLM_TIMEOUT_REASON = 'llm timeout';
@@ -511,9 +512,20 @@ export async function runRLMLoop(
   toolInvocationMetadata?: Partial<LLMRequestMetadata>,
   runOptions: ThinkRunOptions = {},
 ): Promise<ThinkResult> {
+  const requestMetadata = resolveThinkRequestMetadata(deps, toolInvocationMetadata);
+  const activeChargeContext = getRunChargeContext();
+  if (!activeChargeContext && deps.chargePolicy) {
+    return runWithChargeContext({
+      chargePolicy: deps.chargePolicy,
+      eventBus: deps.eventBus ?? null,
+      lane: 'interactive',
+      runId: requestMetadata.requestId,
+      correlation: getRequestContext(),
+    }, async () => runRLMLoop(task, deps, toolInvocationMetadata, runOptions));
+  }
+
   const startTime = Date.now();
   const { config, llmProvider } = deps;
-  const requestMetadata = resolveThinkRequestMetadata(deps, toolInvocationMetadata);
   const depth = runOptions.depth ?? 0;
   const isNestedRun = depth > 0;
   const tier = deps.getCapabilityTier?.() ?? 'autonomous';
@@ -654,19 +666,29 @@ export async function runRLMLoop(
     try {
       const childId = ++sharedState.nextNestedThinkId;
       const childConfig = buildNestedThinkConfig(config, sharedState, nestedOptions);
-      const childResult = await runRLMLoop(
+      const nestedRequestMetadata = buildNestedThinkRequestMetadata(requestMetadata, childId);
+      const runChild = async () => runRLMLoop(
         nestedTask,
         {
           ...deps,
           config: childConfig,
         },
-        buildNestedThinkRequestMetadata(requestMetadata, childId),
+        nestedRequestMetadata,
         {
           depth: depth + 1,
           sharedState,
           skipInvocationRateLimit: true,
         },
       );
+      const childResult = deps.chargePolicy
+        ? await runWithChargeContext({
+          chargePolicy: deps.chargePolicy,
+          eventBus: deps.eventBus ?? null,
+          lane: activeChargeContext?.lane ?? 'interactive',
+          runId: nestedRequestMetadata.requestId,
+          correlation: nestedRequestMetadata,
+        }, runChild)
+        : await runChild();
       sharedState.diagnostics.nestedThinkSuccessCount += 1;
       return childResult.answer;
     } catch (error) {
@@ -847,6 +869,16 @@ export async function runRLMLoop(
     sharedState.totalOutputTokens += response.outputTokens;
 
     applyCostCharge(response.inputTokens, response.outputTokens);
+    if (iterationNumber > 1) {
+      chargeSurface('thinkExtensionBand', {
+        chargePolicy: deps.chargePolicy,
+        details: {
+          iteration: iterationNumber,
+          depth,
+          ...(requestMetadata.turnId ? { turnId: requestMetadata.turnId } : {}),
+        },
+      });
+    }
     refreshBudgetStatus();
 
     const text = response.content;

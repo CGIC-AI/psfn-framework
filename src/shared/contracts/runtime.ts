@@ -4,6 +4,10 @@ import type { CredentialReference } from '../../boundary/custody/credential-vaul
 import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
 import type { TurnID } from '../../core/turns/types.js';
 import type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
+import type {
+  ChargePolicyRuntimeLane,
+  ChargePolicySurface,
+} from '../../system/config/charge-policy-config.js';
 
 // ── Channel-agnostic message types ──
 
@@ -230,6 +234,24 @@ export interface InferredPostTurnAction {
   inferredAt: number;
   maxRetries?: number;
   runAt?: number;
+}
+
+export interface RunChargeLineage {
+  runId: string;
+  rootRunId: string;
+  parentRunId?: string;
+}
+
+export interface RunChargeEvent extends Partial<CorrelationMetadata> {
+  timestampMs: number;
+  lane: ChargePolicyRuntimeLane;
+  surface: ChargePolicySurface;
+  amount: number;
+  quota: number;
+  spentAfter: number;
+  remainingAfter: number;
+  lineage: RunChargeLineage;
+  details?: Record<string, unknown>;
 }
 
 export interface ResponseMetadata {

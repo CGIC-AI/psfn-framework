@@ -14,6 +14,7 @@ import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { createBoundedSubagentLaunchTool } from './tools.js';
 import type { SubagentExecutionPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
 import type { LLMProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
+import type { ChargePolicyConfig } from '../../system/config/charge-policy-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMResponse } from '../../shared/contracts/runtime.js';
 import { createTurnId } from '../../core/turns/id.js';
@@ -106,6 +107,48 @@ function mockMemoryProvider(result = ''): MemoryProvider {
   return { retrieve: vi.fn(async () => result) };
 }
 
+function makeChargePolicy(): ChargePolicyConfig {
+  return {
+    schemaVersion: 1,
+    runChargeQuotaByLane: {
+      interactive: 100,
+      background: 100,
+      maintenance: 0,
+      subagent: 100,
+      shard: 100,
+    },
+    surfaceCosts: {
+      ownerFileInspection: 0,
+      localFilesystem: 0,
+      memoryRead: 0,
+      memoryWrite: 0,
+      localEmbedding: 0,
+      externalEmbedding: 0,
+      localImageGeneration: 0,
+      paidImageGeneration: 6,
+      thinkExtensionBand: 1,
+      subagentLaunch: 1,
+      shardLaunch: 8,
+      externalModelConsult: 1,
+      moaRoundBase: 1,
+    },
+    moa: {
+      perRoundMultiplierByReferenceModelClass: {
+        local: 1,
+        subscription: 1,
+        cheap_cloud: 1,
+        premium_cloud: 2,
+      },
+    },
+    referenceModelClassPricing: {
+      local: 0,
+      subscription: 0,
+      cheap_cloud: 1,
+      premium_cloud: 4,
+    },
+  };
+}
+
 const TEST_CONFIG: SubstrateConfig = {
   primaryModel: 'test-model',
   primaryProvider: 'test',
@@ -194,6 +237,53 @@ describe('ShardManager', () => {
         authorName: 'Companion',
         isDirectMessage: false,
       }),
+      }));
+  });
+
+  it('charges bounded subagent launches and nested shard execution with lineage', async () => {
+    mockShardContent = 'charged shard response';
+    const chargeEvents: Array<Record<string, unknown>> = [];
+    eventBus.on('agent.charge', (event) => {
+      chargeEvents.push(event as unknown as Record<string, unknown>);
+    });
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: {
+        ...TEST_CONFIG,
+        chargePolicy: makeChargePolicy(),
+      },
+      parentSystemPrompt: 'You are a helpful assistant.',
+    });
+
+    await runWithRequestContext(
+      {
+        requestId: 'launch-request',
+        turnId: 'turn-launch',
+        channelId: 'api:launch',
+        callType: 'tool',
+        purpose: 'shard',
+      } as any,
+      async () => manager.executeSubagent({
+        name: 'launch-charge',
+        task: 'Do charged work',
+      }),
+    );
+
+    expect(chargeEvents.map((event) => event.surface)).toEqual([
+      'subagentLaunch',
+      'shardLaunch',
+    ]);
+    expect(chargeEvents[0].lineage).toEqual(expect.objectContaining({
+      runId: 'launch-request',
+      rootRunId: 'launch-request',
+    }));
+    expect(chargeEvents[1].lineage).toEqual(expect.objectContaining({
+      parentRunId: 'launch-request',
     }));
   });
 

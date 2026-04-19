@@ -4,6 +4,7 @@ import type { LLMProviderPort } from '../../agent/contracts.js';
 import type { REPLDeps, REPLConfig } from './types.js';
 import { DEFAULT_REPL_CONFIG } from './types.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
+import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
 
@@ -61,6 +62,48 @@ function makeConfig(overrides: Partial<REPLConfig['budget']> = {}): REPLConfig {
   };
 }
 
+function makeChargePolicy(): ChargePolicyConfig {
+  return {
+    schemaVersion: 1,
+    runChargeQuotaByLane: {
+      interactive: 100,
+      background: 100,
+      maintenance: 0,
+      subagent: 100,
+      shard: 100,
+    },
+    surfaceCosts: {
+      ownerFileInspection: 0,
+      localFilesystem: 0,
+      memoryRead: 0,
+      memoryWrite: 0,
+      localEmbedding: 0,
+      externalEmbedding: 0,
+      localImageGeneration: 0,
+      paidImageGeneration: 6,
+      thinkExtensionBand: 1,
+      subagentLaunch: 1,
+      shardLaunch: 8,
+      externalModelConsult: 1,
+      moaRoundBase: 1,
+    },
+    moa: {
+      perRoundMultiplierByReferenceModelClass: {
+        local: 1,
+        subscription: 1,
+        cheap_cloud: 1,
+        premium_cloud: 2,
+      },
+    },
+    referenceModelClassPricing: {
+      local: 0,
+      subscription: 0,
+      cheap_cloud: 1,
+      premium_cloud: 4,
+    },
+  };
+}
+
 describe('runRLMLoop', () => {
   it('handles single-iteration FINAL in text', async () => {
     const llm = sequentialLLM(['FINAL("immediate answer")']);
@@ -82,6 +125,30 @@ describe('runRLMLoop', () => {
 
     const calls = (llm.complete as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls[0][1]).toBe('reasoning');
+  });
+
+  it('charges the think extension band on iterative follow-up passes', async () => {
+    const llm = sequentialLLM([
+      '```repl\nvar step = 1;\n```',
+      'FINAL("done")',
+    ]);
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const eventBus = {
+      emit: vi.fn(async (eventName: string, payload: Record<string, unknown>) => {
+        emitted.push([eventName, payload]);
+      }),
+    } as any;
+
+    const result = await runRLMLoop('Iteration charge test', makeDeps(llm, {
+      chargePolicy: makeChargePolicy(),
+      eventBus,
+    }));
+
+    expect(result.iterations).toBe(2);
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0][0]).toBe('agent.charge');
+    expect((emitted[0][1] as any).surface).toBe('thinkExtensionBand');
+    expect((emitted[0][1] as any).lineage.runId).toBeDefined();
   });
 
   it('awaits async memory stats when building prompt context', async () => {
@@ -782,11 +849,22 @@ describe('runRLMLoop', () => {
       nurseryDailyCapUsd: 999,
       autonomousDailyWarningUsd: 999,
     };
-    const deps = makeDeps(llm, { config: cfg });
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const deps = makeDeps(llm, {
+      config: cfg,
+      chargePolicy: makeChargePolicy(),
+      eventBus: {
+        emit: vi.fn(async (eventName: string, payload: Record<string, unknown>) => {
+          emitted.push([eventName, payload]);
+        }),
+      } as any,
+    });
 
     const result = await runRLMLoop('subquery-cost', deps);
 
     expect(result.budgetStatus.sessionCostUsd).toBeCloseTo(0.00009, 8);
     expect(result.budgetStatus.dayCostUsd).toBeCloseTo(0.00009, 8);
+    const consultEvents = emitted.filter(([eventName, payload]) => eventName === 'agent.charge' && (payload as any).surface === 'externalModelConsult');
+    expect(consultEvents.length).toBeGreaterThanOrEqual(1);
   });
 });

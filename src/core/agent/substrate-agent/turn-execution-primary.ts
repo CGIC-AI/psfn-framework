@@ -59,7 +59,7 @@ export async function executePrimaryTurn(params: {
     stage: 'first-token' | 'prompt',
     payload: Record<string, unknown>,
   ) => void;
-  emitTurnSnapshot: (snapshot: TurnSnapshot) => Promise<void>;
+  emitTurnSnapshotInBackground: (snapshot: TurnSnapshot) => void;
 }): Promise<{
   firstTokenAt: number;
   turnMessages: AgentMessage[];
@@ -84,7 +84,7 @@ export async function executePrimaryTurn(params: {
     baseVisionToolRequestContext,
     turnSnapshot,
     emitObservedTurnStage,
-    emitTurnSnapshot,
+    emitTurnSnapshotInBackground,
   } = params;
 
   let firstTokenAt: number;
@@ -161,7 +161,7 @@ export async function executePrimaryTurn(params: {
         : {}),
     };
     turnSnapshot.capturedAt = Date.now();
-    await emitTurnSnapshot(turnSnapshot);
+    emitTurnSnapshotInBackground(turnSnapshot);
   }
 
   const agentMessages = contextMessagesToPiMessages(context.messages);

@@ -593,12 +593,27 @@ export async function handleMessageForTurn(
     );
     observedTurnStages.push(sanitizeTurnStageTelemetry(telemetry));
   };
-  const emitTurnSnapshot = async (snapshot: TurnSnapshot): Promise<void> => {
+  const buildTurnSnapshotPayload = (snapshot: TurnSnapshot) => ({
+    snapshot: structuredClone(snapshot),
+    ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.snapshot'),
+  });
+  const recordObservedTurnSnapshot = (snapshot: TurnSnapshot): void => {
     observedTurnSnapshot = sanitizeTurnSnapshot(snapshot);
-    await runtime.eventBus.emit('agent.turn.snapshot', {
-      snapshot,
-      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.snapshot'),
+  };
+  const emitTurnSnapshotInBackground = (snapshot: TurnSnapshot): void => {
+    recordObservedTurnSnapshot(snapshot);
+    void runtime.eventBus.emit('agent.turn.snapshot', buildTurnSnapshotPayload(snapshot)).catch(error => {
+      log.debug('Background turn snapshot emit failed', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        error: toErrorMessage(error),
+      });
     });
+  };
+  const emitTurnSnapshot = async (snapshot: TurnSnapshot): Promise<void> => {
+    recordObservedTurnSnapshot(snapshot);
+    await runtime.eventBus.emit('agent.turn.snapshot', buildTurnSnapshotPayload(snapshot));
   };
   const unsubscribeRetrieval = runtime.eventBus.on('memory.retrieval', (telemetry) => {
     if (telemetry.channelId !== message.channelId) return;
@@ -698,8 +713,15 @@ export async function handleMessageForTurn(
     imageAttachmentUrls: collectVisionTurnImageUrls(message),
   };
   void runtime.eventBus.emit('agent.turn.start', {
-    message,
+    message: structuredClone(message),
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.start'),
+  }).catch(error => {
+    log.debug('Background turn start emit failed', {
+      channelId: message.channelId,
+      turnId,
+      requestId,
+      error: toErrorMessage(error),
+    });
   });
   const continuitySubjectKey = authorContext.continuitySubjectKey
     ?? resolveContinuitySubjectKey({
@@ -798,7 +820,7 @@ export async function handleMessageForTurn(
       ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot } : {}),
       ...(memorySnapshot ? { memory: memorySnapshot } : {}),
     };
-    void emitTurnSnapshot(turnSnapshot);
+    emitTurnSnapshotInBackground(turnSnapshot);
 
     const memoryStageStart = Date.now();
     const internalStatePromise = runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
@@ -1150,7 +1172,7 @@ export async function handleMessageForTurn(
         counters: turnObservabilityWarningPayload.observabilityCounters,
       });
     }
-    void emitTurnSnapshot(turnSnapshot);
+    emitTurnSnapshotInBackground(turnSnapshot);
     emitObservedTurnStage('context', {
       durationMs: Date.now() - contextStageStart,
       contextMessages: contextMessageCount,
@@ -1222,7 +1244,7 @@ export async function handleMessageForTurn(
           stopReason: moaResult.stopReason,
         };
         turnSnapshot.capturedAt = Date.now();
-        void emitTurnSnapshot(turnSnapshot);
+        emitTurnSnapshotInBackground(turnSnapshot);
       }
     } else {
       runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(providerSystemPrompt));
@@ -1247,7 +1269,7 @@ export async function handleMessageForTurn(
             : {}),
         };
         turnSnapshot.capturedAt = Date.now();
-        void emitTurnSnapshot(turnSnapshot);
+        emitTurnSnapshotInBackground(turnSnapshot);
       }
 
       const agentMessages: AgentMessage[] = piMessages;
@@ -1304,7 +1326,7 @@ export async function handleMessageForTurn(
       if (turnSnapshot.promptContext) {
         turnSnapshot.promptContext.currentTurnInput = turnUserContentBuildResult.content;
         turnSnapshot.capturedAt = Date.now();
-        void emitTurnSnapshot(turnSnapshot);
+        emitTurnSnapshotInBackground(turnSnapshot);
       }
       try {
         await runWithVisionTurnTimeout({

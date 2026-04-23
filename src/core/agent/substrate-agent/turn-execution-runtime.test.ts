@@ -1003,6 +1003,82 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(runtimeContextIndex).toBeGreaterThan(scratchpadIndex);
     expect(personaIndex).toBeGreaterThan(runtimeContextIndex);
   });
+
+  it('does not let slow pre-prompt observability subscribers block prompt progress', async () => {
+    const eventBus = new EventBus();
+    const releaseTurnStart = createDeferred<void>();
+    const releaseFirstSnapshot = createDeferred<void>();
+    const turnStartEvents: Array<Record<string, unknown>> = [];
+    const turnSnapshotEvents: Array<Record<string, unknown>> = [];
+
+    eventBus.on('agent.turn.start', async (payload) => {
+      turnStartEvents.push(payload as unknown as Record<string, unknown>);
+      await releaseTurnStart.promise;
+    });
+    eventBus.on('agent.turn.snapshot', async (payload) => {
+      turnSnapshotEvents.push(payload as unknown as Record<string, unknown>);
+      if (turnSnapshotEvents.length === 1) {
+        await releaseFirstSnapshot.promise;
+      }
+    });
+
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+
+    const responsePromise = handleMessageForTurn(runtime, createMessage('msg-slow-observability'));
+
+    await vi.waitFor(() => {
+      expect(turnStartEvents).toHaveLength(1);
+      expect(turnSnapshotEvents.length).toBeGreaterThan(0);
+      expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    });
+
+    const firstSnapshot = turnSnapshotEvents[0] as {
+      requestId?: string;
+      channelId?: string;
+      purpose?: string;
+      snapshot?: Record<string, unknown>;
+    };
+    expect(turnStartEvents[0]).toMatchObject({
+      requestId: 'msg-slow-observability',
+      channelId: 'ch1',
+      purpose: 'agent.turn.start',
+      message: expect.objectContaining({
+        id: 'msg-slow-observability',
+        channelId: 'ch1',
+      }),
+    });
+    expect(firstSnapshot).toMatchObject({
+      requestId: 'msg-slow-observability',
+      channelId: 'ch1',
+      purpose: 'agent.turn.snapshot',
+      snapshot: expect.objectContaining({
+        requestId: 'msg-slow-observability',
+        channelId: 'ch1',
+      }),
+    });
+    expect(firstSnapshot.snapshot?.promptContext).toBeUndefined();
+
+    releaseTurnStart.resolve();
+    releaseFirstSnapshot.resolve();
+
+    await expect(responsePromise).resolves.toMatchObject({
+      content: 'assistant reply',
+      channelId: 'ch1',
+    });
+  });
 });
 
 describe('handleMessageForTurn failure persistence', () => {

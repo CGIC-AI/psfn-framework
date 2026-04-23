@@ -11,13 +11,18 @@ import {
   sanitizeTurnStageTelemetry,
 } from '../../turns/observability.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
+
+const log = createComponentLogger('SubstrateAgent');
 
 export interface TurnExecutionObservability {
   emitObservedTurnStage: (
     stage: 'trust' | 'memory' | 'context' | 'first-token' | 'prompt' | 'end',
     payload: Record<string, unknown>,
   ) => void;
+  emitTurnSnapshotInBackground: (snapshot: TurnSnapshot) => void;
   emitTurnSnapshot: (snapshot: TurnSnapshot) => Promise<void>;
   getObservedTurnStages: () => TurnStageTelemetryRecord[];
   getObservedTurnRetrievals: () => TurnRetrievalTelemetryRecord[];
@@ -67,12 +72,30 @@ export function createTurnExecutionObservability(input: {
     observedTurnStages.push(sanitizeTurnStageTelemetry(telemetry));
   };
 
-  const emitTurnSnapshot = async (snapshot: TurnSnapshot): Promise<void> => {
+  const buildTurnSnapshotPayload = (snapshot: TurnSnapshot) => ({
+    snapshot: structuredClone(snapshot),
+    ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.snapshot'),
+  });
+
+  const recordObservedTurnSnapshot = (snapshot: TurnSnapshot): void => {
     observedTurnSnapshot = sanitizeTurnSnapshot(snapshot);
-    await runtime.eventBus.emit('agent.turn.snapshot', {
-      snapshot,
-      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.snapshot'),
+  };
+
+  const emitTurnSnapshotInBackground = (snapshot: TurnSnapshot): void => {
+    recordObservedTurnSnapshot(snapshot);
+    void runtime.eventBus.emit('agent.turn.snapshot', buildTurnSnapshotPayload(snapshot)).catch(error => {
+      log.debug('Background turn snapshot emit failed', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        error: toErrorMessage(error),
+      });
     });
+  };
+
+  const emitTurnSnapshot = async (snapshot: TurnSnapshot): Promise<void> => {
+    recordObservedTurnSnapshot(snapshot);
+    await runtime.eventBus.emit('agent.turn.snapshot', buildTurnSnapshotPayload(snapshot));
   };
 
   const unsubscribe = runtime.eventBus.on('memory.retrieval', (telemetry) => {
@@ -122,6 +145,7 @@ export function createTurnExecutionObservability(input: {
 
   return {
     emitObservedTurnStage,
+    emitTurnSnapshotInBackground,
     emitTurnSnapshot,
     getObservedTurnStages: () => [...observedTurnStages],
     getObservedTurnRetrievals: () => [...observedTurnRetrievals],

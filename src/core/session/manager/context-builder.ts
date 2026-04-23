@@ -12,15 +12,12 @@ import {
 } from '../../../shared/context-budget.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { PromptRegistryStatePort } from '../../identity/prompt-state-port.js';
-import { resolveConfiguredCompanionDataDir } from '../../../persistence/layout.js';
 import { wrapCompactionSummaryAsUntrustedContext } from '../../identity/prompt-composer.js';
 import {
   orderPromptRuntimeSystemPromptSections,
-  PromptRuntimeLayoutStore,
-  resolvePromptRuntimeLayoutPath,
   type PromptRuntimeSystemPromptBlockId,
 } from '../../identity/prompt-runtime.js';
-import { getCachedPromptRuntimeLayoutStore } from '../../identity/prompt-runtime-store-cache.js';
+import { resolveCachedPromptRuntimeLayoutStore } from '../../identity/prompt-runtime-store-cache.js';
 import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';
 import { cloneSessionEntry } from '../../turns/snapshot.js';
 import type { SessionEntry } from '../types.js';
@@ -63,11 +60,6 @@ const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
 const INTERNAL_HEARTBEAT_CHANNEL = 'internal:heartbeat';
 export const DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS = 3 * 60 * 60 * 1000;
 const ORIENTATION_SUMMARY_MAX_CHARS = 180;
-function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayoutStore {
-  const companionDataDir = resolveConfiguredCompanionDataDir(config);
-  const filePath = resolvePromptRuntimeLayoutPath(companionDataDir);
-  return getCachedPromptRuntimeLayoutStore(filePath, () => new PromptRuntimeLayoutStore(filePath));
-}
 
 export function isInternalHeartbeatChannel(channelId: string): boolean {
   return channelId === INTERNAL_HEARTBEAT_CHANNEL;
@@ -630,7 +622,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       : '[Recent activity from other channels]\n' + continuityBlock;
   }
 
-  const promptRuntimeLayout = getPromptRuntimeLayoutStore(params.config);
+  const promptRuntimeLayout = resolveCachedPromptRuntimeLayoutStore(params.config);
   const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
     {
       id: 'memory.core' as PromptRuntimeSystemPromptBlockId,

@@ -8,11 +8,9 @@ import type { ComposeContext } from '../../identity/prompt-types.js';
 import {
   injectPromptRuntimeTokens,
   orderPromptRuntimeSystemPromptSections,
-  PromptRuntimeLayoutStore,
-  resolvePromptRuntimeLayoutPath,
   type PromptRuntimeSystemPromptBlockId,
 } from '../../identity/prompt-runtime.js';
-import { getCachedPromptRuntimeLayoutStore } from '../../identity/prompt-runtime-store-cache.js';
+import { resolveCachedPromptRuntimeLayoutStore } from '../../identity/prompt-runtime-store-cache.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
 import { collectGeneratedImageAttachments } from '../../../primitives/images/generated-media.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
@@ -126,11 +124,6 @@ import { sanitizePersistedReasoningText } from './turn-records.js';
 const log = createComponentLogger('SubstrateAgent');
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
 const VISION_TURN_TIMEOUT_MS = 10_000;
-function getPromptRuntimeLayoutStore(config: SubstrateConfig): PromptRuntimeLayoutStore {
-  const companionDataDir = resolveConfiguredCompanionDataDir(config);
-  const filePath = resolvePromptRuntimeLayoutPath(companionDataDir);
-  return getCachedPromptRuntimeLayoutStore(filePath, () => new PromptRuntimeLayoutStore(filePath));
-}
 
 function buildTurnObservabilityWarningPayload(input: {
   callType: ObservabilityCallType;
@@ -940,8 +933,7 @@ export async function handleMessageForTurn(
       ...templateVariables,
       ...dynamicPromptVariables,
     };
-    let runtimeContext = '';
-    runtimeContext = runtime.buildRuntimeContext(
+    const runtimeContext = runtime.buildRuntimeContext(
       message,
       authorContext.resolvedUserName,
       trustLevel,
@@ -956,17 +948,37 @@ export async function handleMessageForTurn(
       preTurnMetacognitiveFlags,
       emotionAppraisalChain,
     );
-    let renderedStaticPrefix = '';
-    let renderedDynamicSuffix = '';
     const dynamicSuffixTemplate = turnSnapshot.prompt?.dynamicSuffixTemplate
       || DEFAULT_RUNTIME_PROMPT_TEMPLATE;
-    renderedDynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
+    const renderedDynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
       now: runtimeNow,
       variables: promptRuntimeVariables,
     });
+    const promptRuntimeLayout = resolveCachedPromptRuntimeLayoutStore(runtime.config);
+    const personaHint = runtime.getPersonaAdaptation(
+      trustLevel,
+      preTurnInternalState,
+      preTurnMetacognitiveFlags,
+      templateVariables,
+    );
+    const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
+      {
+        id: 'runtime.persona_adaptation' as PromptRuntimeSystemPromptBlockId,
+        content: personaHint ?? '',
+      },
+      {
+        id: 'runtime.context' as PromptRuntimeSystemPromptBlockId,
+        content: runtimeContext,
+      },
+      {
+        id: 'runtime.scratchpad' as PromptRuntimeSystemPromptBlockId,
+        content: scratchpadBlock,
+      },
+    ], promptRuntimeLayout);
+    let renderedStaticPrefix = '';
+    let promptPrefix = '';
 
     if (promptOverride.mode === 'default') {
-      const promptRuntimeLayout = getPromptRuntimeLayoutStore(runtime.config);
       const staticCacheKey = runtime.buildPromptPrefixCacheKey(
         message,
         channelType,
@@ -982,59 +994,16 @@ export async function handleMessageForTurn(
         now: runtimeNow,
         variables: templateVariables,
       });
-      const personaHint = runtime.getPersonaAdaptation(
-        trustLevel,
-        preTurnInternalState,
-        preTurnMetacognitiveFlags,
-        templateVariables,
-      );
-      const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
-        {
-          id: 'runtime.persona_adaptation' as PromptRuntimeSystemPromptBlockId,
-          content: personaHint ?? '',
-        },
-        {
-          id: 'runtime.context' as PromptRuntimeSystemPromptBlockId,
-          content: runtimeContext,
-        },
-        {
-          id: 'runtime.scratchpad' as PromptRuntimeSystemPromptBlockId,
-          content: scratchpadBlock,
-        },
-      ], promptRuntimeLayout);
-      fullPrompt = [renderedStaticPrefix, renderedDynamicSuffix, ...orderedRuntimeSections.map(section => section.content)]
-        .map(section => section.trim())
-        .filter(section => section.length > 0)
-        .join('\n\n');
+      promptPrefix = renderedStaticPrefix;
     } else {
-      const customPrompt = promptOverride.mode === 'custom'
+      promptPrefix = promptOverride.mode === 'custom'
         ? (promptOverride.systemPrompt ?? '')
         : '';
-      const promptRuntimeLayout = getPromptRuntimeLayoutStore(runtime.config);
-      const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
-        {
-          id: 'runtime.persona_adaptation' as PromptRuntimeSystemPromptBlockId,
-          content: runtime.getPersonaAdaptation(
-            trustLevel,
-            preTurnInternalState,
-            preTurnMetacognitiveFlags,
-            templateVariables,
-          ) ?? '',
-        },
-        {
-          id: 'runtime.context' as PromptRuntimeSystemPromptBlockId,
-          content: runtimeContext,
-        },
-        {
-          id: 'runtime.scratchpad' as PromptRuntimeSystemPromptBlockId,
-          content: scratchpadBlock,
-        },
-      ], promptRuntimeLayout);
-      fullPrompt = [customPrompt, renderedDynamicSuffix, ...orderedRuntimeSections.map(section => section.content)]
-        .map(section => section.trim())
-        .filter(section => section.length > 0)
-        .join('\n\n');
     }
+    fullPrompt = [promptPrefix, renderedDynamicSuffix, ...orderedRuntimeSections.map(section => section.content)]
+      .map(section => section.trim())
+      .filter(section => section.length > 0)
+      .join('\n\n');
 
     const contextStageStart = Date.now();
     const context = await runWithRequestContext(

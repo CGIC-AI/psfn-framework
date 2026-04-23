@@ -17,6 +17,7 @@ import {
   renderPromptRuntimeTokens,
   validatePromptRuntimeEditableBlockContents,
 } from './prompt-runtime.js';
+import { resolveCachedPromptRuntimeLayoutStore } from './prompt-runtime-store-cache.js';
 
 let tempDir: string | null = null;
 
@@ -437,6 +438,35 @@ describe('injectPromptRuntimeTokens', () => {
       'session.continuity',
       'memory.retrieval',
       'runtime.context',
+    ]);
+  });
+
+  it('reuses the same cached runtime layout store for repeated config resolution', () => {
+    const root = makeTempDir();
+    const firstStore = resolveCachedPromptRuntimeLayoutStore({ companionDataDir: root });
+
+    firstStore.reorderSystemPromptBlocks([
+      'session.continuity',
+      'memory.core',
+      'memory.retrieval',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+    ], 'admin');
+
+    const secondStore = resolveCachedPromptRuntimeLayoutStore({ companionDataDir: root });
+    expect(secondStore).toBe(firstStore);
+    expect(secondStore.getSystemPromptBlockOrder()).toEqual([
+      'session.continuity',
+      'memory.core',
+      'memory.retrieval',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
     ]);
   });
 

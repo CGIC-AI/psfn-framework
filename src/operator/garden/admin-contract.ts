@@ -19,6 +19,7 @@ import type {
   AdminIdentityService,
   AdminMemoryService,
   AdminPromptsService,
+  AdminShardFoldReviewService,
   AdminSessionService,
   AdminSettingsService,
 } from './services/types.js';
@@ -113,6 +114,7 @@ export interface AdminChatBootstrapApi {
 
 export interface GardenAdminDomainServices {
   dashboard: AdminDashboardService;
+  shards: AdminShardFoldReviewService;
   adaptiveTools?: AdminAdaptiveToolsService | null;
   memory: AdminMemoryService;
   sessions: AdminSessionService;

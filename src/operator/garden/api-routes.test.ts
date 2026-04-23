@@ -11,10 +11,15 @@ import { EventBus } from '../../shared/event-bus.js';
 import { AdminServer } from './server.js';
 import { createInProcessGardenAdminContract } from './local-admin-contract.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
+import { MemoryWriter } from '../../faculties/memory/writer.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { ShardManager } from '../../faculties/shards/manager.js';
+import { ShardFoldReviewController } from '../../faculties/shards/fold-review.js';
+import { createArtifactReturnPort } from '../../faculties/shards/artifact-policy.js';
+import { resolveStagedShardMemoryOutputs } from '../../faculties/shards/output-review.js';
+import { buildShardLineageEnvelope } from '../../faculties/shards/result-lineage.js';
 import { ContactStore } from '../../core/contacts/store.js';
 import { PromptLayerStore } from '../../core/identity/prompt-store.js';
 import {
@@ -431,6 +436,7 @@ describe('AdminServer JSON API routes', () => {
   let sessionManager: SessionManager;
   let scheduler: Scheduler;
   let shardManager: ShardManager;
+  let foldReviewController: ShardFoldReviewController;
   let contactStore: ContactStore;
   let promptStore: PromptLayerStore;
   let promptRegistry: PromptRegistryStore;
@@ -524,14 +530,19 @@ describe('AdminServer JSON API routes', () => {
     });
 
     const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProviderPort;
+    foldReviewController = new ShardFoldReviewController(
+      join(tempDir, 'state', 'shard-fold-reviews.json'),
+      new MemoryWriter(memoryStore as any, testEmbeddingService),
+    );
     shardManager = new ShardManager({
       eventBus,
       llmProvider: mockLlmProvider,
       sessionStore,
-      embeddingService: null,
+      embeddingService: testEmbeddingService,
       memoryProvider: null,
       config: testConfig,
       parentSystemPrompt: '',
+      foldReviewController,
     });
     const adaptiveToolsStateProvider = {
       getAdaptiveToolRuntimeState: () => ({
@@ -688,6 +699,220 @@ describe('AdminServer JSON API routes', () => {
     expect(authorized.status).toBe(200);
     const payload = JSON.parse(authorized.body) as { stats: { memoryTotal: number } };
     expect(payload.stats.memoryTotal).toBeGreaterThanOrEqual(0);
+  });
+
+  it('lists and fetches persisted shard fold reviews on the canonical admin shard routes', async () => {
+    const shardId = 'shard-admin-review-1';
+    const lineage = buildShardLineageEnvelope({
+      kind: 'spawn',
+      coreCompanionId: 'test-companion',
+      shardId,
+      shardChannelId: `shard:${shardId}`,
+      sourceMessage: {
+        id: shardId,
+        channelId: `shard:${shardId}`,
+        channelType: 'api',
+        authorId: 'test-companion',
+        authorName: 'ApiTestBot',
+        timestamp: new Date(1_710_000_000_000),
+      },
+    });
+    const stagedOutputs = resolveStagedShardMemoryOutputs(
+      { channelId: 'api:admin-review', task: 'seed shard review', lineage },
+      'memory_import_batch',
+      'admin-import-call',
+      {
+        records: [{
+          text: 'Partner is nervous about tomorrow.',
+          type: 'emotional',
+          tags: 'relationship,partner',
+          sensitivity: 'intimate',
+        }],
+      },
+    );
+    const artifactReturn = createArtifactReturnPort().collectArtifactReturn({
+      lineage,
+      turnIndex: 1,
+      turnMessageId: shardId,
+      attachments: [{
+        url: 'https://images.example.test/admin-review.png',
+        contentType: 'image/png',
+        name: 'admin-review.png',
+      }],
+    });
+    await foldReviewController.recordPendingMemoryCandidates({
+      shardId,
+      channelId: 'api:admin-review',
+      task: 'seed shard review',
+      lineage,
+      outputs: stagedOutputs,
+    });
+    await foldReviewController.recordArtifactReturn({
+      shardId,
+      channelId: 'api:admin-review',
+      task: 'seed shard review',
+      lineage,
+      artifactReturn: artifactReturn!,
+    });
+
+    const listRes = await request(port, 'GET', '/api/admin/shards', undefined, authHeaders);
+    expect(listRes.status).toBe(200);
+    const listPayload = JSON.parse(listRes.body) as {
+      reviews: Array<{
+        shardId: string;
+        reviewState: string;
+        pendingMemoryCount: number;
+        pendingArtifactCount: number;
+        emotionalOrRelational: boolean;
+      }>;
+    };
+    expect(listPayload.reviews).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        shardId,
+        reviewState: 'pending',
+        pendingMemoryCount: 1,
+        pendingArtifactCount: 1,
+        emotionalOrRelational: true,
+      }),
+    ]));
+
+    const detailRes = await request(port, 'GET', `/api/admin/shards/${shardId}`, undefined, authHeaders);
+    expect(detailRes.status).toBe(200);
+    const detailPayload = JSON.parse(detailRes.body) as {
+      shardId: string;
+      memoryItems: unknown[];
+      artifactItems: unknown[];
+      validationPath: string;
+    };
+    expect(detailPayload.shardId).toBe(shardId);
+    expect(detailPayload.validationPath).toBe(`/api/admin/shards/${shardId}`);
+    expect(detailPayload.memoryItems).toHaveLength(1);
+    expect(detailPayload.artifactItems).toHaveLength(1);
+  });
+
+  it('approves and denies shard fold reviews through the admin routes', async () => {
+    const approveShardId = 'shard-admin-review-approve';
+    const approveLineage = buildShardLineageEnvelope({
+      kind: 'spawn',
+      coreCompanionId: 'test-companion',
+      shardId: approveShardId,
+      shardChannelId: `shard:${approveShardId}`,
+      sourceMessage: {
+        id: approveShardId,
+        channelId: `shard:${approveShardId}`,
+        channelType: 'api',
+        authorId: 'test-companion',
+        authorName: 'ApiTestBot',
+        timestamp: new Date(1_710_000_000_100),
+      },
+    });
+    await foldReviewController.recordPendingMemoryCandidates({
+      shardId: approveShardId,
+      channelId: 'api:admin-review',
+      task: 'approve shard review',
+      lineage: approveLineage,
+      outputs: resolveStagedShardMemoryOutputs(
+        { channelId: 'api:admin-review', task: 'approve shard review', lineage: approveLineage },
+        'memory_import_batch',
+        'approve-import-call',
+        {
+          records: [{
+            text: 'Remember the migration rollback steps.',
+            type: 'procedural',
+            tags: 'runbook',
+          }],
+        },
+      ),
+    });
+
+    const approveRes = await request(
+      port,
+      'POST',
+      `/api/admin/shards/${approveShardId}/review`,
+      JSON.stringify({ decision: 'approve', actor: 'operator:test', note: 'approve import' }),
+      authHeaders,
+    );
+    expect(approveRes.status).toBe(200);
+    const approvePayload = JSON.parse(approveRes.body) as {
+      ok: boolean;
+      review?: {
+        reviewState: string;
+        memoryItems: Array<{ reviewState: string; promotedMemoryId?: string }>;
+        lastReviewedBy?: string;
+      };
+    };
+    expect(approvePayload.ok).toBe(true);
+    expect(approvePayload.review).toMatchObject({
+      reviewState: 'approved',
+      lastReviewedBy: 'operator:test',
+      memoryItems: [
+        expect.objectContaining({
+          reviewState: 'approved',
+        }),
+      ],
+    });
+    const promotedMemory = await memoryStore.listActiveMemories({ limit: 10 });
+    expect(promotedMemory.some(memory => memory.text === 'Remember the migration rollback steps.')).toBe(true);
+
+    const denyShardId = 'shard-admin-review-deny';
+    const denyLineage = buildShardLineageEnvelope({
+      kind: 'spawn',
+      coreCompanionId: 'test-companion',
+      shardId: denyShardId,
+      shardChannelId: `shard:${denyShardId}`,
+      sourceMessage: {
+        id: denyShardId,
+        channelId: `shard:${denyShardId}`,
+        channelType: 'api',
+        authorId: 'test-companion',
+        authorName: 'ApiTestBot',
+        timestamp: new Date(1_710_000_000_200),
+      },
+    });
+    await foldReviewController.recordPendingMemoryCandidates({
+      shardId: denyShardId,
+      channelId: 'api:admin-review',
+      task: 'deny shard review',
+      lineage: denyLineage,
+      outputs: resolveStagedShardMemoryOutputs(
+        { channelId: 'api:admin-review', task: 'deny shard review', lineage: denyLineage },
+        'memory_import_batch',
+        'deny-import-call',
+        {
+          records: [{
+            text: 'Do not promote this review candidate.',
+            type: 'semantic',
+          }],
+        },
+      ),
+    });
+
+    const denyRes = await request(
+      port,
+      'POST',
+      `/api/admin/shards/${denyShardId}/review`,
+      JSON.stringify({ decision: 'deny', actor: 'operator:test' }),
+      authHeaders,
+    );
+    expect(denyRes.status).toBe(200);
+    const denyPayload = JSON.parse(denyRes.body) as {
+      ok: boolean;
+      review?: {
+        reviewState: string;
+        memoryItems: Array<{ reviewState: string }>;
+      };
+    };
+    expect(denyPayload.ok).toBe(true);
+    expect(denyPayload.review).toMatchObject({
+      reviewState: 'rejected',
+      memoryItems: [
+        expect.objectContaining({
+          reviewState: 'rejected',
+        }),
+      ],
+    });
+    const allMemories = await memoryStore.listActiveMemories({ limit: 20 });
+    expect(allMemories.some(memory => memory.text === 'Do not promote this review candidate.')).toBe(false);
   });
 
   it('returns period-bounded dashboard cost windows and honors costWindow selection', async () => {

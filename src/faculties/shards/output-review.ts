@@ -1,4 +1,9 @@
 import { randomUUID } from 'node:crypto';
+import type { SensitivityLevel, MemoryType } from '../memory/types.js';
+import {
+  VALID_SENSITIVITY_LEVELS,
+  normalizeMemoryTypeValue,
+} from '../memory/types.js';
 import type {
   ShardMergeReview,
   ShardRuntimeRecord,
@@ -9,6 +14,16 @@ import type {
   ShardWorkLogEntry,
 } from './types.js';
 import { truncateShardContextText } from './context-pack.js';
+
+export interface StagedShardMemoryCandidate {
+  text: string;
+  type?: MemoryType;
+  importance?: number;
+  emotionalValence?: number;
+  confidence?: number;
+  tags: string[];
+  sensitivity?: SensitivityLevel;
+}
 
 export interface StagedShardMemoryOutput {
   outputId: string;
@@ -23,6 +38,7 @@ export interface StagedShardMemoryOutput {
   source: ShardTaggedOutputSource;
   provenanceTags: string[];
   provenance: ShardTaggedOutputProvenance;
+  candidate: StagedShardMemoryCandidate;
 }
 
 export function buildShardValidationPath(shardId: string): string {
@@ -156,6 +172,22 @@ export function parseShardMemoryTags(rawTags: unknown): string[] {
     .filter(Boolean);
 }
 
+function clampUnit(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(0, Math.min(1, value));
+}
+
+function clampSigned(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(-1, Math.min(1, value));
+}
+
+function normalizeShardMemorySensitivity(value: unknown): SensitivityLevel | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim().toLowerCase() as SensitivityLevel;
+  return VALID_SENSITIVITY_LEVELS.includes(normalized) ? normalized : undefined;
+}
+
 export function isEmotionalOrRelationalShardMemory(memoryType: string | undefined, tags: readonly string[]): boolean {
   if (memoryType?.trim().toLowerCase() === 'emotional') {
     return true;
@@ -208,11 +240,16 @@ export function resolveStagedShardMemoryOutputs(
     if (!text) {
       return [];
     }
-    const memoryType = typeof record.type === 'string' ? record.type.trim().toLowerCase() : '';
+    const memoryType = normalizeMemoryTypeValue(record.type);
+    if (!memoryType) {
+      return [];
+    }
+    const candidateTags = parseShardMemoryTags(record.tags);
+    const sensitivity = normalizeShardMemorySensitivity(record.sensitivity);
     const provenanceTags = buildShardMemoryOutputProvenanceTags(
-      record.type,
-      record.tags,
-      record.sensitivity,
+      memoryType,
+      candidateTags,
+      sensitivity,
     );
     const provenance = createShardTaggedOutputProvenance(shard, source, {
       sourceToolName: toolName,
@@ -223,7 +260,7 @@ export function resolveStagedShardMemoryOutputs(
     return [{
       outputId: `${source}-${toolCallId}-${randomUUID()}`,
       kind: 'l2_memory',
-      label: `${labelPrefix}${memoryType ? ` (${memoryType})` : ''}`,
+      label: `${labelPrefix} (${memoryType})`,
       content: text,
       preview: truncateShardContextText(text, 200),
       createdAt: Date.now(),
@@ -233,6 +270,15 @@ export function resolveStagedShardMemoryOutputs(
       source,
       provenanceTags,
       provenance,
+      candidate: {
+        text,
+        type: memoryType,
+        importance: clampUnit(record.importance),
+        emotionalValence: clampSigned(record.emotional_valence),
+        confidence: clampUnit(record.confidence),
+        tags: candidateTags,
+        sensitivity,
+      },
     }];
   };
 
@@ -252,11 +298,16 @@ export function resolveStagedShardMemoryOutputs(
       if (!text) {
         return [];
       }
-      const memoryType = typeof entry.type === 'string' ? entry.type.trim().toLowerCase() : '';
+      const memoryType = normalizeMemoryTypeValue(entry.type);
+      if (!memoryType) {
+        return [];
+      }
+      const candidateTags = parseShardMemoryTags(entry.tags);
+      const sensitivity = normalizeShardMemorySensitivity(entry.sensitivity);
       const provenanceTags = buildShardMemoryOutputProvenanceTags(
-        entry.type,
-        entry.tags,
-        entry.sensitivity,
+        memoryType,
+        candidateTags,
+        sensitivity,
       );
       const provenance = createShardTaggedOutputProvenance(shard, 'memory_import_batch', {
         sourceToolName: toolName,
@@ -267,16 +318,25 @@ export function resolveStagedShardMemoryOutputs(
       return [{
         outputId: `memory_import_batch-${toolCallId}-${randomUUID()}`,
         kind: 'l2_memory',
-        label: `Imported shard memory ${index + 1} from ${sourceLabel}${memoryType ? ` (${memoryType})` : ''}`,
+        label: `Imported shard memory ${index + 1} from ${sourceLabel} (${memoryType})`,
         content: text,
         preview: truncateShardContextText(text, 200),
-      createdAt: Date.now(),
-      reviewRequired: true,
-      reviewState,
-      blockedCorePromotion: true,
+        createdAt: Date.now(),
+        reviewRequired: true,
+        reviewState,
+        blockedCorePromotion: true,
         source: 'memory_import_batch',
         provenanceTags,
         provenance,
+        candidate: {
+          text,
+          type: memoryType,
+          importance: clampUnit(entry.importance),
+          emotionalValence: clampSigned(entry.emotional_valence),
+          confidence: clampUnit(entry.confidence),
+          tags: candidateTags,
+          sensitivity,
+        },
       }];
     });
   };

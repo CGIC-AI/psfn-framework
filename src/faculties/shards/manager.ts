@@ -53,6 +53,11 @@ import {
 } from './output-review.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { textResultWithError } from '../../core/tools/results.js';
+import type {
+  ShardFoldReviewController,
+  ShardFoldReviewRecord,
+  ShardFoldReviewResolveParams,
+} from './fold-review.js';
 import {
   type BoundedSubagentLaunchSummary,
   type SubagentExecutionPort,
@@ -129,6 +134,7 @@ export interface ShardManagerDeps {
   shardSessionMemorySyncAuditPath?: string;
   artifactReturnPort?: ArtifactReturnPort;
   satellitePresencePort?: SatellitePresencePort;
+  foldReviewController?: ShardFoldReviewController | null;
 }
 
 export interface SatelliteDelegationRequest {
@@ -166,6 +172,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   private heartbeatDisconnectAfterMs: number;
   private activeShards = new Map<string, ActiveShard>();
   private activeShardChannels = new Map<string, Set<string>>();
+  private foldReviewController: ShardFoldReviewController | null;
 
   constructor(deps: ShardManagerDeps) {
     this.deps = deps;
@@ -182,6 +189,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     this.auditTrail = deps.auditTrail ?? null;
     this.artifactReturnPort = deps.artifactReturnPort ?? createArtifactReturnPort();
     this.satellitePresencePort = deps.satellitePresencePort ?? createActiveEmanationSatellitePresencePort();
+    this.foldReviewController = deps.foldReviewController ?? null;
     this.installAuditHooks();
   }
 
@@ -559,6 +567,16 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
             artifactIds: shardArtifacts.map(artifact => artifact.artifactId),
             mergePolicy: shardArtifactReturn.mergePolicy,
           });
+          if (this.foldReviewController) {
+            await this.foldReviewController.recordArtifactReturn({
+              shardId,
+              channelId,
+              task: shardConfig.task,
+              lineage,
+              timestamp: Date.now(),
+              artifactReturn: shardArtifactReturn,
+            });
+          }
         }
 
         totalInput += response.metadata.inputTokens;
@@ -632,12 +650,31 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     }));
   }
 
+  async listFoldReviews(): Promise<ShardFoldReviewRecord[]> {
+    return await this.requireFoldReviewController().listFoldReviews();
+  }
+
+  async getFoldReview(shardId: string): Promise<ShardFoldReviewRecord | null> {
+    return await this.requireFoldReviewController().getFoldReview(shardId);
+  }
+
+  async resolveFoldReview(params: ShardFoldReviewResolveParams): Promise<ShardFoldReviewRecord | null> {
+    return await this.requireFoldReviewController().resolveFoldReview(params);
+  }
+
   private resolveHeartbeatStaleAfterMs(value: number | undefined): number {
     return normalizeHeartbeatStaleAfterMs(value, this.heartbeatStaleAfterMs);
   }
 
   private resolveHeartbeatDisconnectAfterMs(value: number | undefined, staleAfterMs: number): number {
     return normalizeHeartbeatDisconnectAfterMs(value, staleAfterMs, this.heartbeatDisconnectAfterMs);
+  }
+
+  private requireFoldReviewController(): ShardFoldReviewController {
+    if (!this.foldReviewController) {
+      throw new Error('Shard fold review controller unavailable.');
+    }
+    return this.foldReviewController;
   }
 
   private resolveAdvertisedCapabilities(tokens: readonly string[] | undefined): string[] {
@@ -1211,20 +1248,20 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     return action === 'import';
   }
 
-  private quarantineShardMemoryImport(
+  private async quarantineShardMemoryImport(
     toolName: string,
     toolCallId: string,
     params: unknown,
     memoryReviewContext: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'>,
   ): Promise<AgentToolResult<any>> {
     if (typeof params !== 'object' || params === null || Array.isArray(params)) {
-      return Promise.resolve(textResultWithError('Error: records must be a non-empty array', true));
+      return textResultWithError('Error: records must be a non-empty array', true);
     }
 
     const input = params as Record<string, unknown>;
     const rawRecords = input.records;
     if (!Array.isArray(rawRecords) || rawRecords.length === 0) {
-      return Promise.resolve(textResultWithError('Error: records must be a non-empty array', true));
+      return textResultWithError('Error: records must be a non-empty array', true);
     }
 
     const stagedOutputs = resolveStagedShardMemoryOutputs(
@@ -1234,7 +1271,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       params,
     );
     if (stagedOutputs.length === 0) {
-      return Promise.resolve(textResultWithError('Error: memory import batch must contain valid records', true));
+      return textResultWithError('Error: memory import batch must contain valid records', true);
     }
 
     const reviewTimestamp = Date.now();
@@ -1251,9 +1288,19 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       pendingTaggedOutputCount: stagedOutputs.length,
       blockingReasons,
     });
+    if (this.foldReviewController) {
+      await this.foldReviewController.recordPendingMemoryCandidates({
+        shardId: memoryReviewContext.lineage.shardId,
+        channelId: memoryReviewContext.channelId,
+        task: memoryReviewContext.task,
+        lineage: memoryReviewContext.lineage,
+        timestamp: reviewTimestamp,
+        outputs: stagedOutputs,
+      });
+    }
 
     const summary = `Memory import quarantined: ${stagedOutputs.length} record(s) staged as pending fold review.`;
-    return Promise.resolve({
+    return {
       content: [{ type: 'text', text: summary }],
       details: {
         mutationWorkflow: 'fold_review_only',
@@ -1271,7 +1318,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
           outputs: stagedOutputs,
         },
       },
-    });
+    };
   }
 
   private enforceShardToolSyncPolicy(toolName: string, shardId: string, toolCallId: string): void {

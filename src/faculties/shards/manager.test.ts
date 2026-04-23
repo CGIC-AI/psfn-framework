@@ -11,6 +11,7 @@ import { buildSessionMetadataWithTurn } from '../../core/session/turn-provenance
 import { buildFocusMemoryScopeQuery } from '../../core/session/focus-knowledge.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
+import { ShardFoldReviewController } from './fold-review.js';
 import { createBoundedSubagentLaunchTool } from './tools.js';
 import type { SubagentExecutionPort } from '../../core/agent/substrate-agent/bounded-subagent-contract.js';
 import type { LLMProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
@@ -1158,6 +1159,68 @@ describe('ShardManager', () => {
     }));
   });
 
+  it('persists quarantined shard memory candidates in the fold review controller', async () => {
+    const memoryImport = makeTestTool('memory_import_batch');
+    const foldReviewController = new ShardFoldReviewController(
+      join(dir, 'state', 'shard-fold-reviews.json'),
+    );
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'apprentice' },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memoryImport.tool],
+        extended: [],
+      }),
+      foldReviewController,
+    });
+
+    const result = await manager.spawn({ name: 'persist-fold-review', task: 'test' });
+    const tools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{
+      name: string;
+      execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+    }>;
+    const wrappedMemoryImport = tools.find((tool) => tool.name === 'memory_import_batch');
+    expect(wrappedMemoryImport).toBeDefined();
+    if (!wrappedMemoryImport) {
+      throw new Error('Expected wrapped memory_import_batch tool to be present');
+    }
+
+    await wrappedMemoryImport.execute('persist-import-call', {
+      records: [{
+        text: 'Partner needs follow-up after the deploy.',
+        type: 'emotional',
+        tags: 'relationship,partner',
+        sensitivity: 'intimate',
+      }],
+      source: 'backup',
+    });
+
+    const review = await manager.getFoldReview(result.shardId);
+    expect(review).toMatchObject({
+      shardId: result.shardId,
+      reviewState: 'pending',
+      memoryItems: [
+        expect.objectContaining({
+          reviewState: 'pending',
+          candidate: expect.objectContaining({
+            type: 'emotional',
+            sensitivity: 'intimate',
+          }),
+        }),
+      ],
+    });
+    expect(review?.blockingReasons).toEqual(expect.arrayContaining([
+      'staged_shard_memory_pending_merge_review',
+      'emotional_or_relational_interpretation_requires_core_review',
+    ]));
+  });
+
   it('returns lineage provenance on shard spawns with explicit source context', async () => {
     mockShardContent = 'lineage response';
     const manager = new ShardManager({
@@ -1253,6 +1316,60 @@ describe('ShardManager', () => {
           turnMessageId: result.shardId,
         },
       })]);
+    } finally {
+      handleMessageSpy.mockRestore();
+    }
+  });
+
+  it('persists review-required shard artifact returns in the fold review controller', async () => {
+    const foldReviewController = new ShardFoldReviewController(
+      join(dir, 'state', 'shard-fold-reviews.json'),
+    );
+    const handleMessageSpy = vi.spyOn(SubstrateAgent.prototype, 'handleMessage').mockResolvedValueOnce({
+      content: 'artifact response',
+      channelId: 'shard:result',
+      attachments: [{
+        url: 'https://images.example.test/fold-review-artifact.png',
+        contentType: 'image/png',
+        name: 'fold-review-artifact.png',
+      }],
+      metadata: {
+        model: 'mock-model',
+        inputTokens: 3,
+        outputTokens: 4,
+        durationMs: 8,
+      },
+    } as any);
+
+    try {
+      const manager = new ShardManager({
+        eventBus,
+        llmProvider: mockLLM(),
+        sessionStore,
+        embeddingService: null,
+        memoryProvider: null,
+        config: TEST_CONFIG,
+        parentSystemPrompt: 'test',
+        foldReviewController,
+      });
+
+      const result = await manager.spawn({ name: 'artifact-review', task: 'emit an image artifact' });
+      const review = await manager.getFoldReview(result.shardId);
+
+      expect(review).toMatchObject({
+        shardId: result.shardId,
+        reviewState: 'pending',
+        artifactItems: [
+          expect.objectContaining({
+            reviewState: 'pending',
+            artifact: expect.objectContaining({
+              artifactId: `artifact-${result.shardId}-1-1`,
+              url: 'https://images.example.test/fold-review-artifact.png',
+            }),
+          }),
+        ],
+      });
+      expect(review?.blockingReasons).toContain('artifact_output_pending_merge_review');
     } finally {
       handleMessageSpy.mockRestore();
     }

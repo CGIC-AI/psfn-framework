@@ -19,6 +19,7 @@ import type {
   AdminIdentityService,
   AdminMemoryService,
   AdminPromptsService,
+  AdminShardFoldReviewService,
   AdminSessionService,
   AdminSettingsService,
 } from './services/types.js';
@@ -41,6 +42,7 @@ import type {
   AdminAuditDecision,
 } from './types.js';
 import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
+import { isShardFoldReviewUnavailableError } from './services/shard-fold-review-service.js';
 
 export interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -123,6 +125,7 @@ const ADMIN_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
 export function buildAdminApiRoutes(options: {
   config: SubstrateConfig;
   dashboardService: AdminDashboardService;
+  shardFoldReviewService: AdminShardFoldReviewService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
   memoryService: AdminMemoryService;
   sessionService: AdminSessionService;
@@ -148,6 +151,7 @@ export function buildAdminApiRoutes(options: {
   const {
     config,
     dashboardService,
+    shardFoldReviewService,
     adaptiveToolsService,
     memoryService,
     sessionService,
@@ -277,6 +281,96 @@ export function buildAdminApiRoutes(options: {
           (error) => {
             sendJson(res, 500, {
               error: `Failed to load dashboard data: ${toSanitizedMessage(error, 'unknown error')}`,
+            });
+          },
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/shards'),
+      handle: (_req, res) => {
+        shardFoldReviewService.listShardFoldReviews().then(
+          (payload) => {
+            sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS);
+          },
+          (error) => {
+            const status = isShardFoldReviewUnavailableError(error) ? 503 : 500;
+            sendJson(res, status, {
+              error: toSanitizedMessage(error, 'Failed to list shard fold reviews'),
+            });
+          },
+        );
+      },
+    },
+    {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/shards/', 'shardId', '/review'),
+      handle: (req, res, { shardId }) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          if (
+            parsed.value === null
+            || typeof parsed.value !== 'object'
+            || Array.isArray(parsed.value)
+          ) {
+            sendJson(res, 400, { error: 'Shard fold review payload must be a JSON object' });
+            return;
+          }
+
+          const payload = parsed.value as Record<string, unknown>;
+          const decision = typeof payload.decision === 'string' ? payload.decision.trim().toLowerCase() : '';
+          if (decision !== 'approve' && decision !== 'deny') {
+            sendJson(res, 400, { error: 'decision must be approve or deny' });
+            return;
+          }
+
+          const actor = typeof payload.actor === 'string' ? payload.actor.trim() : undefined;
+          const note = typeof payload.note === 'string' ? payload.note.trim() : undefined;
+          shardFoldReviewService.resolveShardFoldReview({
+            shardId,
+            decision,
+            actor,
+            note,
+          }).then(
+            (result) => {
+              if (!result.ok) {
+                const status = result.message === 'Shard fold review not found' ? 404 : 400;
+                sendJson(res, status, { error: result.message ?? 'Failed to resolve shard fold review' });
+                return;
+              }
+              sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS);
+            },
+            (error) => {
+              const status = isShardFoldReviewUnavailableError(error) ? 503 : 500;
+              sendJson(res, status, {
+                error: toSanitizedMessage(error, 'Failed to resolve shard fold review'),
+              });
+            },
+          );
+        });
+      },
+    },
+    {
+      method: 'GET',
+      match: prefixedParamPath('/api/admin/shards/', 'shardId'),
+      handle: (_req, res, { shardId }) => {
+        shardFoldReviewService.getShardFoldReview(shardId).then(
+          (review) => {
+            if (!review) {
+              sendJson(res, 404, { error: 'Shard fold review not found' });
+              return;
+            }
+            sendJson(res, 200, review, ADMIN_DYNAMIC_JSON_HEADERS);
+          },
+          (error) => {
+            const status = isShardFoldReviewUnavailableError(error) ? 503 : 500;
+            sendJson(res, status, {
+              error: toSanitizedMessage(error, 'Failed to load shard fold review'),
             });
           },
         );

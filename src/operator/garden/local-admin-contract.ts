@@ -45,6 +45,7 @@ import { AdminPromptsDataService } from './services/prompts-service.js';
 import { AdminSchedulerService } from './services/scheduler-service.js';
 import { AdminSessionDataService } from './services/session-service.js';
 import { AdminSettingsDataService } from './services/settings-service.js';
+import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 
 export interface InProcessGardenAdminContractOptions {
@@ -99,6 +100,7 @@ export function createInProcessGardenAdminContract(
       eventBus: options.eventBus,
       resolveLastActiveSessionId,
     }),
+    shards: new AdminShardFoldReviewDataService(options.shardManager),
     adaptiveTools: new AdminAdaptiveToolsDataService({
       eventBus: options.eventBus,
       stateProvider: options.adaptiveToolsStateProvider ?? null,

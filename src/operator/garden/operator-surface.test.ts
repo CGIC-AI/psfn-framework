@@ -189,6 +189,11 @@ async function createHarness(): Promise<Harness> {
         },
       })),
     },
+    shards: {
+      listShardFoldReviews: vi.fn(async () => ({ reviews: [] })),
+      getShardFoldReview: vi.fn(async () => null),
+      resolveShardFoldReview: vi.fn(async () => ({ ok: false, message: 'Shard fold review not found' })),
+    },
     adaptiveTools: null,
     memory: {} as GardenAdminDomainServices['memory'],
     sessions: {} as GardenAdminDomainServices['sessions'],

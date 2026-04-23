@@ -29,6 +29,7 @@ import {
 } from '../../../core/agent/substrate-agent.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import { MemoryExtractor } from '../../../faculties/memory/extraction.js';
+import { MemoryWriter } from '../../../faculties/memory/writer.js';
 import type {
   CoreMemoryStorePort,
   MemoryStorePort,
@@ -36,6 +37,7 @@ import type {
 import { createCoreMemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { ShardManager } from '../../../faculties/shards/manager.js';
+import { ShardFoldReviewController } from '../../../faculties/shards/fold-review.js';
 import {
   createShardExecutionPort,
   type ShardExecutionPort,
@@ -67,6 +69,7 @@ import {
   resolveCoreMemoryPath,
   resolveContinuityDir,
   resolveLegacyValuesJournalPath,
+  resolveShardFoldReviewStorePath,
   resolveShardSessionMemorySyncAuditPath,
   resolveSessionsDir,
   resolveValuesJournalPath,
@@ -342,6 +345,11 @@ export interface ToolRuntimeOptions {
 }
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExecutionPort {
+  const companionDataDir = options.companionDataDir ?? resolveConfiguredCompanionDataDir(options.config);
+  const foldReviewController = new ShardFoldReviewController(
+    resolveShardFoldReviewStorePath(companionDataDir),
+    new MemoryWriter(options.memoryStore, options.embeddingService),
+  );
   const shardManager = new ShardManager({
     eventBus: options.eventBus,
     llmProvider: options.llmProvider,
@@ -354,9 +362,8 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     toolCatalogProvider: () => options.agentLoop.getToolCatalog(),
     auditTrail: options.shardAuditTrail ?? undefined,
     runtimeMode: options.runtimeMode,
-    shardSessionMemorySyncAuditPath: options.companionDataDir
-      ? resolveShardSessionMemorySyncAuditPath(options.companionDataDir)
-      : undefined,
+    shardSessionMemorySyncAuditPath: resolveShardSessionMemorySyncAuditPath(companionDataDir),
+    foldReviewController,
   });
   const subagentFaculty = new SubagentFaculty({
     eventBus: options.eventBus,

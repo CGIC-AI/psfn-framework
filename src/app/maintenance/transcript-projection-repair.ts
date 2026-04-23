@@ -17,6 +17,8 @@ import type { TranscriptProjectionPort } from '../../persistence/sessions/transc
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
+import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 
 interface CliOptions {
   dataDir?: string;
@@ -165,6 +167,11 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig();
+  applyGatewayTlsConfig({
+    caPath: config.gatewayTlsCaPath,
+    rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
+  });
+  await hydrateSecretBearingConfig(config, { env: process.env });
   const report = await runTranscriptProjectionRepairCommand({
     config,
     dataDir: options.dataDir,

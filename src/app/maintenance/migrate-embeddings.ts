@@ -8,11 +8,13 @@
 import 'dotenv/config';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
 import * as sqliteVec from 'sqlite-vec';
-import { createEmbeddingProviderFromEnv } from '../../faculties/memory/embedding.js';
+import { createEmbeddingProviderFromConfig } from '../../faculties/memory/embedding.js';
 import { migrateMemoryEmbeddings } from '../../faculties/memory/migration.js';
 import type { ReembedMigrationProgress } from '../../faculties/memory/migration.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
+import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 
 interface CliOptions {
   batchSize?: number;
@@ -87,13 +89,18 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig();
+  applyGatewayTlsConfig({
+    caPath: config.gatewayTlsCaPath,
+    rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
+  });
+  await hydrateSecretBearingConfig(config, { env: process.env });
   const db = initDatabase(config.databasePath);
   sqliteVec.load(db);
 
   try {
     console.log(`Database: ${config.databasePath}`);
 
-    const embeddingProvider = createEmbeddingProviderFromEnv();
+    const embeddingProvider = createEmbeddingProviderFromConfig(config);
     console.log(`Embedding provider: ${embeddingProvider.kind} (dims=${embeddingProvider.dims})`);
     console.log('');
 

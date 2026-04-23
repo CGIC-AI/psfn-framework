@@ -4,6 +4,8 @@ import { loadConfig } from '../../system/config/load-config.js';
 import { createSessionHmacBoundaryService } from '../../persistence/journals/hmac-boundary.js';
 import { runSessionIntegrityRepair } from '../../persistence/repair/integrity-repair.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
+import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 
 interface CliOptions {
   dataDir?: string;
@@ -48,6 +50,11 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig();
+  applyGatewayTlsConfig({
+    caPath: config.gatewayTlsCaPath,
+    rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
+  });
+  await hydrateSecretBearingConfig(config, { env: process.env });
   const repoRoot = process.cwd();
   const dataDir = resolve(options.dataDir ?? config.dataDir);
   const backupDir = resolve(

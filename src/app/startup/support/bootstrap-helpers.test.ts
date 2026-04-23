@@ -25,6 +25,7 @@ import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
   hydrateCanonicalStartupConfig,
+  hydrateSecretBearingConfig,
   installPromotedToolsPersistenceHook,
   resolveRuntimeVoiceProviderGate,
   resolveRuntimeVoiceSttProvider,
@@ -1060,6 +1061,54 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(config.credentialVault).toBeUndefined();
     expect(config.discordToken).toBeUndefined();
     expect(config.discordBotId).toBeUndefined();
+  });
+
+  it('hydrates secret-bearing config from OpenBao before startup validation', async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    config.voiceEnabled = true;
+
+    await hydrateSecretBearingConfig(config, {
+      env: {
+        ...process.env,
+        CREDENTIAL_VAULT_BACKEND: 'openbao',
+        OPENBAO_ADDR: 'https://openbao.internal:8200',
+        OPENBAO_TOKEN: 'openbao-token',
+        OPENBAO_KV_MOUNT: 'kv',
+        OPENBAO_KV_PATH: 'psfn/runtime',
+      },
+      fetchImpl: async () => new Response(JSON.stringify({
+        data: {
+          data: {
+            DISCORD_TOKEN: 'discord-secret',
+            DISCORD_BOT_ID: 'discord-bot-id',
+            DEEPGRAM_API_KEY: 'deepgram-secret',
+          },
+        },
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      }),
+    });
+
+    expect(config.credentialVault).toBeDefined();
+    expect(config.discordToken).toBe('discord-secret');
+    expect(config.discordBotId).toBe('discord-bot-id');
+    expect(config.deepgramApiKey).toBe('deepgram-secret');
+    expect(() => hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: rootDir,
+      },
+    })).not.toThrow();
   });
 
   it('hydrates settings/models/trust/scheduler from canonical owners in one helper', () => {

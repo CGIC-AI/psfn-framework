@@ -15,6 +15,7 @@ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { EligibilityDecision } from '../../system/capabilities/eligibility.js';
 import { resolveGatewayBootstrapInput } from '../../boundary/gateway/bootstrap-input.js';
 import type { StartupConfigHydrationDiagnostics } from '../startup/support/bootstrap-helpers.js';
+import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
 import { RUNTIME_MODE } from '../../system/lifecycle/runtime-mode.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import { buildGatewayPrivilegedCore } from '../../boundary/gateway/privileged-core.js';
@@ -114,6 +115,11 @@ function emitEligibilityDecision(eventBus: EventBus, decision: EligibilityDecisi
 async function main(): Promise<void> {
   const env = process.env;
   const config = loadConfig();
+  applyGatewayTlsConfig({
+    caPath: config.gatewayTlsCaPath,
+    rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
+  });
+  await hydrateSecretBearingConfig(config, { env });
   const {
     startupHydration,
   } = resolveStartupPreflightBundle(config, {
@@ -140,11 +146,6 @@ async function main(): Promise<void> {
       workspacePath: bootstrap.workspacePath,
     });
   }
-  // ── Apply TLS config early, before any HTTPS connections ──
-  applyGatewayTlsConfig({
-    caPath: config.gatewayTlsCaPath,
-    rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
-  });
 
   const privilegedCore = await buildGatewayPrivilegedCore({
     config,

@@ -2,7 +2,11 @@ import {
   MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
   SESSION_HISTORY_BUDGET_PCT_DEFAULT,
 } from '../../shared/context-budget.js';
-import { createEnvCredentialVault, resolveOptionalEnvCredential } from '../../boundary/custody/credential-vault.js';
+import {
+  createEnvCredentialVault,
+  resolveCredentialVaultBackend,
+  resolveOptionalEnvCredential,
+} from '../../boundary/custody/credential-vault.js';
 import { resolveCompanionStateDir, resolveRuntimePathLayout } from '../../persistence/layout.js';
 import { parseOptionalStringEnv } from '../../shared/utils/env.js';
 import type {
@@ -83,9 +87,13 @@ function parsePersistenceBackendEnv(value: string | undefined): PersistenceBacke
 
 function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = process.env): SubstrateConfig {
   const includeSecretBearingConfig = mode === 'gateway';
+  const credentialVaultBackend = includeSecretBearingConfig
+    ? resolveCredentialVaultBackend(env)
+    : 'env';
+  const materializeEnvBackedSecrets = includeSecretBearingConfig && credentialVaultBackend === 'env';
   const modelSeedDefaults = loadModelSeedDefaults();
   const runtimeSeedDefaults = loadRuntimeSettingsSeedDefaults();
-  const credentialVault = includeSecretBearingConfig
+  const credentialVault = materializeEnvBackedSecrets
     ? createEnvCredentialVault(env)
     : undefined;
   const primaryModel = modelSeedDefaults.primary.model;
@@ -176,12 +184,12 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
   const gatewayTlsCaPath = parseOptionalStringEnv(env.GATEWAY_TLS_CA_PATH);
   const gatewayTlsRejectUnauthorized = parseOptionalBooleanEnv(env.GATEWAY_TLS_REJECT_UNAUTHORIZED);
   const discordToken = includeSecretBearingConfig
-    ? parseOptionalStringEnv(env.DISCORD_TOKEN)
+    ? resolveOptionalEnvCredential(credentialVault, 'DISCORD_TOKEN', env)
     : undefined;
   const discordBotId = includeSecretBearingConfig
-    ? parseOptionalStringEnv(env.DISCORD_BOT_ID)
+    ? resolveOptionalEnvCredential(credentialVault, 'DISCORD_BOT_ID', env)
     : undefined;
-  if (includeSecretBearingConfig) {
+  if (materializeEnvBackedSecrets) {
     assertMutuallyRequiredEnvPair('DISCORD_TOKEN', discordToken, 'DISCORD_BOT_ID', discordBotId);
   }
   const wyomingEnabled = parseOptionalBooleanEnv(env.WYOMING_ENABLED) ?? false;
@@ -300,19 +308,19 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     voiceReadyCueText: runtimeSeedDefaults.voiceReadyCueText,
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
-    ...(includeSecretBearingConfig
+    ...(materializeEnvBackedSecrets
       ? { deepgramApiKey: resolveOptionalEnvCredential(credentialVault, 'DEEPGRAM_API_KEY', env) }
       : {}),
     deepgramModel: runtimeSeedDefaults.deepgramModel,
     deepgramSttEndpoint: runtimeSeedDefaults.deepgramSttEndpoint,
     deepgramListenEndpoint: runtimeSeedDefaults.deepgramListenEndpoint,
-    ...(includeSecretBearingConfig
+    ...(materializeEnvBackedSecrets
       ? { elevenLabsApiKey: resolveOptionalEnvCredential(credentialVault, 'ELEVENLABS_API_KEY', env) }
       : {}),
     elevenLabsVoiceId: env.ELEVENLABS_VOICE_ID,
     elevenLabsModelId: runtimeSeedDefaults.elevenLabsModelId,
     elevenLabsEndpointBase: runtimeSeedDefaults.elevenLabsEndpointBase,
-    ...(includeSecretBearingConfig
+    ...(materializeEnvBackedSecrets
       ? { falApiKey: resolveOptionalEnvCredential(credentialVault, 'FAL_API_KEY', env) }
       : {}),
     imageWorkflows: {},

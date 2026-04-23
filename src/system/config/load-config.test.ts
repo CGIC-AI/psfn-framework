@@ -16,6 +16,7 @@ function restoreEnv(): void {
 
 function clearRuntimePathEnv(): void {
   delete process.env.COMPANION_ID;
+  delete process.env.CREDENTIAL_VAULT_BACKEND;
   delete process.env.DATA_DIR;
   delete process.env.SYSTEM_DATA_DIR;
   delete process.env.COMPANION_DATA_DIR;
@@ -32,6 +33,12 @@ function clearRuntimePathEnv(): void {
   delete process.env.DISCORD_BOT_ID;
   delete process.env.PERSISTENCE_BACKEND;
   delete process.env.POSTGRES_DATABASE_URL;
+  delete process.env.OPENBAO_ADDR;
+  delete process.env.OPENBAO_TOKEN;
+  delete process.env.OPENBAO_KV_MOUNT;
+  delete process.env.OPENBAO_KV_PATH;
+  delete process.env.OPENBAO_KV_VERSION;
+  delete process.env.OPENBAO_NAMESPACE;
 }
 
 afterEach(() => {
@@ -270,6 +277,26 @@ describe('loadConfig path defaults', () => {
     expect(config.deepgramApiKey).toBe('deepgram-secret');
     expect(config.elevenLabsApiKey).toBe('eleven-secret');
     expect(config.gatewayTlsCaPath).toBe('./certs/dev-ca.pem');
+  });
+
+  it('defers secret-bearing config materialization when OpenBao is selected', () => {
+    clearRuntimePathEnv();
+    process.env.DATA_DIR = './sandbox-data';
+    process.env.CREDENTIAL_VAULT_BACKEND = 'openbao';
+    process.env.OPENBAO_ADDR = 'https://openbao.internal:8200';
+    process.env.OPENBAO_TOKEN = 'openbao-token';
+    process.env.OPENBAO_KV_MOUNT = 'kv';
+    process.env.OPENBAO_KV_PATH = 'psfn/runtime';
+
+    const config = loadConfig();
+
+    expect(config.dataDir).toBe('./sandbox-data');
+    expect(config.credentialVault).toBeUndefined();
+    expect(config.discordToken).toBe('');
+    expect(config.discordBotId).toBe('');
+    expect(config.deepgramApiKey).toBeUndefined();
+    expect(config.elevenLabsApiKey).toBeUndefined();
+    expect(config.falApiKey).toBeUndefined();
   });
 
   it('keeps agent config free of secret-bearing startup fields', () => {

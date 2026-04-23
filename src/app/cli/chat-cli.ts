@@ -14,11 +14,15 @@ import { MemoryStore } from '../../faculties/memory/store.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/think/types.js';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
-import { hydrateCanonicalStartupConfig } from '../startup/support/bootstrap-helpers.js';
+import {
+  hydrateCanonicalStartupConfig,
+  hydrateSecretBearingConfig,
+} from '../startup/support/bootstrap-helpers.js';
+import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import {
   composeIdentity,
   composeSessionRuntime,
-  createEmbeddingProviderFromEnv,
+  createEmbeddingProviderFromConfig,
   composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
@@ -28,6 +32,11 @@ const CHANNEL_ID = 'cli:chat';
 
 async function main(): Promise<void> {
   const config = loadConfig();
+  applyGatewayTlsConfig({
+    caPath: config.gatewayTlsCaPath,
+    rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
+  });
+  await hydrateSecretBearingConfig(config, { env: process.env });
   hydrateCanonicalStartupConfig(config, { env: process.env });
   const eventBus = new EventBus();
 
@@ -47,7 +56,7 @@ async function main(): Promise<void> {
   const { sessionStore, sessionManager } = sessionComposition;
 
   // Embeddings
-  const embeddingProvider = createEmbeddingProviderFromEnv();
+  const embeddingProvider = createEmbeddingProviderFromConfig(config);
 
   const memoryStore = new MemoryStore(db, embeddingProvider.dims);
 

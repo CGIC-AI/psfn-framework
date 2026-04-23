@@ -12,7 +12,11 @@ import {
   type EmbeddingDimensionValidationResult,
 } from '../../../persistence/backups/startup-checks.js';
 import type { RuntimeChannelsConfigOverrides } from '../../../channels/backplane/config.js';
-import { createEnvCredentialVault } from '../../../boundary/custody/credential-vault.js';
+import {
+  createCredentialVaultFromEnvironment,
+  createEnvCredentialVault,
+  resolveInlineOrEnvCredential,
+} from '../../../boundary/custody/credential-vault.js';
 import {
   createOwnerFileConfigStore,
   type ConfigStorePort,
@@ -135,6 +139,50 @@ function createDefaultConfigStore(options: {
     seedDir: options.env.CONFIG_DIR,
     defaultContextWindow: options.defaultContextWindow,
   });
+}
+
+export async function hydrateSecretBearingConfig(
+  config: SubstrateConfig,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    fetchImpl?: typeof fetch;
+  } = {},
+): Promise<void> {
+  const env = options.env ?? process.env;
+  config.credentialVault ??= await createCredentialVaultFromEnvironment(env, {
+    fetchImpl: options.fetchImpl,
+  });
+  config.discordToken = resolveInlineOrEnvCredential(
+    config.discordToken,
+    config.credentialVault,
+    'DISCORD_TOKEN',
+    env,
+  ) ?? '';
+  config.discordBotId = resolveInlineOrEnvCredential(
+    config.discordBotId,
+    config.credentialVault,
+    'DISCORD_BOT_ID',
+    env,
+  ) ?? '';
+  config.deepgramApiKey = resolveInlineOrEnvCredential(
+    config.deepgramApiKey,
+    config.credentialVault,
+    'DEEPGRAM_API_KEY',
+    env,
+  );
+  config.elevenLabsApiKey = resolveInlineOrEnvCredential(
+    config.elevenLabsApiKey,
+    config.credentialVault,
+    'ELEVENLABS_API_KEY',
+    env,
+  );
+  config.falApiKey = resolveInlineOrEnvCredential(
+    config.falApiKey,
+    config.credentialVault,
+    'FAL_API_KEY',
+    env,
+  );
+  assertSecuritySensitiveStartupConfig(config);
 }
 
 export function installPromotedToolsPersistenceHook(

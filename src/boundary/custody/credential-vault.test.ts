@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildProviderCredentialEnv,
+  createCredentialVaultFromEnvironment,
   createEnvCredentialVault,
   envCredential,
   resolveHuggingFaceToken,
@@ -61,5 +62,49 @@ describe('credential vault', () => {
       HUGGINGFACE_HUB_TOKEN: undefined,
       TRANSFORMERS_HF_TOKEN: undefined,
     });
+  });
+
+  it('creates an OpenBao-backed vault from env-owned wiring', async () => {
+    const vault = await createCredentialVaultFromEnvironment({
+      CREDENTIAL_VAULT_BACKEND: 'openbao',
+      OPENBAO_ADDR: 'https://openbao.internal:8200',
+      OPENBAO_TOKEN: 'openbao-token',
+      OPENBAO_KV_MOUNT: 'kv',
+      OPENBAO_KV_PATH: 'psfn/runtime',
+    }, {
+      fetchImpl: async (input, init) => {
+        expect(String(input)).toBe('https://openbao.internal:8200/v1/kv/data/psfn/runtime');
+        expect(init?.headers).toMatchObject({
+          Accept: 'application/json',
+          'X-Vault-Token': 'openbao-token',
+        });
+        return new Response(JSON.stringify({
+          data: {
+            data: {
+              OPENAI_API_KEY: 'openbao-openai-key',
+              DEEPGRAM_API_KEY: 'openbao-deepgram-key',
+            },
+          },
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    expect(vault.resolveRequired(envCredential('OPENAI_API_KEY'), 'OpenAI API key')).toBe('openbao-openai-key');
+    expect(vault.resolveOptional(envCredential('DEEPGRAM_API_KEY'))).toBe('openbao-deepgram-key');
+    expect(vault.has(envCredential('ELEVENLABS_API_KEY'))).toBe(false);
+  });
+
+  it('fails closed when OpenBao wiring is invalid', async () => {
+    await expect(createCredentialVaultFromEnvironment({
+      CREDENTIAL_VAULT_BACKEND: 'openbao',
+      OPENBAO_TOKEN: 'openbao-token',
+      OPENBAO_KV_MOUNT: 'kv',
+      OPENBAO_KV_PATH: 'psfn/runtime',
+    })).rejects.toThrow(
+      'OPENBAO_ADDR is required when CREDENTIAL_VAULT_BACKEND=openbao',
+    );
   });
 });

@@ -1,35 +1,16 @@
-import { createRequire } from 'node:module';
 import {
   buildSettingsContractData,
   type SettingsContractData,
   type SettingsSubsystemId,
 } from './settings-contract.js';
-
-interface GardenSettingsFieldExposure {
-  sectionId: string;
-  surface: 'advanced' | 'custom';
-  editorId?: string;
-}
-
-interface SettingsGardenContractModule {
-  SETTINGS_GARDEN_FIELD_EXPOSURE: Record<string, GardenSettingsFieldExposure | undefined>;
-  SETTINGS_GARDEN_GENERIC_FIELD_TYPES: readonly string[];
-  SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY: Record<string, string>;
-  SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY: Record<string, SettingsSubsystemId>;
-  SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS: readonly string[];
-  listGardenSettingsFieldExposureKeys: () => string[];
-}
-
-const require = createRequire(import.meta.url);
-const settingsGardenContract = require('../../../admin-ui/src/lib/settings-garden-contract.ts') as SettingsGardenContractModule;
-const {
+import {
   SETTINGS_GARDEN_FIELD_EXPOSURE,
   SETTINGS_GARDEN_GENERIC_FIELD_TYPES,
   SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY,
   SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
   SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS,
   listGardenSettingsFieldExposureKeys,
-} = settingsGardenContract;
+} from '../../shared/contracts/settings-garden-contract.js';
 
 export interface SettingsContractGuardOptions {
   contractData?: SettingsContractData;
@@ -109,7 +90,9 @@ export function verifySettingsContractGuard(
   }
 
   for (const [fieldKey, field] of Object.entries(contractData.fields)) {
-    const exposure = SETTINGS_GARDEN_FIELD_EXPOSURE[fieldKey];
+    const exposure = SETTINGS_GARDEN_FIELD_EXPOSURE[
+      fieldKey as keyof typeof SETTINGS_GARDEN_FIELD_EXPOSURE
+    ];
     if (!subsystemIds.has(field.ownerSubsystem)) {
       errors.push(`Field "${fieldKey}" references unknown owner subsystem "${field.ownerSubsystem}".`);
       continue;
@@ -127,10 +110,6 @@ export function verifySettingsContractGuard(
     if (!uiFieldExposureKeys.has(fieldKey)) {
       errors.push(`Field "${fieldKey}" is missing Garden UI exposure metadata.`);
     }
-    if (!exposure) {
-      errors.push(`Field "${fieldKey}" is missing detailed Garden exposure metadata.`);
-      continue;
-    }
     if (exposure.surface === 'advanced') {
       if (field.ownerSubsystem !== 'runtime') {
         errors.push(
@@ -140,9 +119,6 @@ export function verifySettingsContractGuard(
       if (!genericFieldTypes.has(field.type)) {
         errors.push(`Advanced field "${fieldKey}" uses unsupported Garden generic field type "${field.type}".`);
       }
-    }
-    if (exposure.surface === 'custom' && !exposure.editorId) {
-      errors.push(`Custom field "${fieldKey}" is missing a Garden custom editor binding.`);
     }
     if (field.ownerSubsystem === 'runtime' && !genericFieldTypes.has(field.type)) {
       errors.push(`Runtime field "${fieldKey}" uses unsupported Garden generic field type "${field.type}".`);

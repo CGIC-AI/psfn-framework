@@ -69,7 +69,6 @@ export type ShardSessionMemorySyncDecisionReason =
   | 'allowed_prime_transcript_fact'
   | 'allowed_prime_memory_seed'
   | 'allowed_shard_memory_write'
-  | 'allowed_shard_memory_import'
   | 'denied_invalid_envelope'
   | 'denied_runtime_state_sync'
   | 'denied_direction_class'
@@ -175,7 +174,7 @@ const PRIME_TO_SHARD_SYNC_OPERATIONS: Readonly<Record<ShardSessionMemorySyncClas
 
 const SHARD_TO_PRIME_SYNC_OPERATIONS: Readonly<Record<ShardSessionMemorySyncClass, readonly ShardSessionMemorySyncOperation[]>> = {
   transcript_fact: [],
-  derived_memory: ['memory_write', 'memory_import_batch'],
+  derived_memory: ['memory_write'],
   runtime_state: [],
 };
 
@@ -230,7 +229,7 @@ export function evaluateShardSessionMemorySyncPolicy(
   if (envelope.operation === 'memory_write') {
     return { allowed: true, reason: 'allowed_shard_memory_write' };
   }
-  return { allowed: true, reason: 'allowed_shard_memory_import' };
+  return { allowed: false, reason: 'denied_operation' };
 }
 
 export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): PolicyDecision {

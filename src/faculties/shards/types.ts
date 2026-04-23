@@ -31,6 +31,59 @@ export interface ShardContextPack {
   memoryBlock?: string;
 }
 
+export type ShardTaggedOutputSource = 'memory_write' | 'memory_import_batch';
+export type ShardTaggedOutputKind = 'l0_output' | 'l2_memory';
+export type ShardTaggedOutputReviewState = 'pending' | 'approved' | 'blocked' | 'rejected';
+
+export interface ShardTaggedOutputProvenance {
+  coreCompanionId: string;
+  shardCompanionId: string;
+  shardId: string;
+  channelId: string;
+  task: string;
+  source: ShardTaggedOutputSource;
+  sourceToolName?: string;
+  toolCallId?: string;
+  lineage: ShardResultLineageEnvelope;
+  tags: string[];
+}
+
+export interface ShardTaggedOutput {
+  outputId: string;
+  kind: ShardTaggedOutputKind;
+  label: string;
+  content: string;
+  preview: string;
+  createdAt: number;
+  reviewRequired: true;
+  reviewState: ShardTaggedOutputReviewState;
+  blockedCorePromotion: boolean;
+  provenance: ShardTaggedOutputProvenance;
+}
+
+export interface ShardWorkLogEntry {
+  timestamp: number;
+  message: string;
+  details: string[];
+}
+
+export interface ShardMergeReview {
+  required: boolean;
+  status: 'none' | 'pending' | 'approved' | 'blocked';
+  validationPath: string;
+  lastUpdatedAt: number;
+  pendingTaggedOutputCount: number;
+  blockingReasons: string[];
+}
+
+export interface ShardRuntimeRecord {
+  channelId: string;
+  task: string;
+  lineage: ShardResultLineageEnvelope;
+  taggedOutputs: ShardTaggedOutput[];
+  mergeReview: ShardMergeReview;
+}
+
 export interface ShardConfig {
   name: string;                    // Human-readable label
   task: string;                    // The prompt to send to the shard

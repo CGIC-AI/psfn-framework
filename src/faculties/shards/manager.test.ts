@@ -1051,7 +1051,7 @@ describe('ShardManager', () => {
     expect(injected).not.toContain('spawn_subagent');
   });
 
-  it('stamps shard source provenance on shard memory tools', async () => {
+  it('stamps shard source provenance on shard memory writes and quarantines imports behind review', async () => {
     const memoryWrite = makeTestTool('memory_write');
     const memoryImport = makeTestTool('memory_import_batch');
 
@@ -1075,7 +1075,10 @@ describe('ShardManager', () => {
     const wrappedMemoryImport = tools.find((tool) => tool.name === 'memory_import_batch');
 
     await wrappedMemoryWrite?.execute('mem-call', { text: 'x', type: 'semantic' });
-    await wrappedMemoryImport?.execute('import-call', { records: [{ text: 'x', type: 'semantic' }] });
+    const importResult = await wrappedMemoryImport?.execute('import-call', {
+      records: [{ text: 'x', type: 'semantic', tags: 'archive' }],
+      source: 'backup',
+    });
 
     expect(memoryWrite.execute).toHaveBeenCalledWith(
       'mem-call',
@@ -1084,13 +1087,75 @@ describe('ShardManager', () => {
       }),
       undefined,
     );
-    expect(memoryImport.execute).toHaveBeenCalledWith(
-      'import-call',
-      expect.objectContaining({
-        __psfnShardSource: `shard:${result.shardId}`,
+    expect(memoryImport.execute).not.toHaveBeenCalled();
+    expect(importResult).toEqual(expect.objectContaining({
+      content: expect.arrayContaining([
+        expect.objectContaining({
+          type: 'text',
+          text: expect.stringContaining('pending fold review'),
+        }),
+      ]),
+      details: expect.objectContaining({
+        mutationWorkflow: 'fold_review_only',
+        reviewState: 'pending',
+        blockedCorePromotion: true,
+        foldReview: expect.objectContaining({
+          status: 'pending',
+          pendingTaggedOutputCount: 1,
+          outputs: expect.arrayContaining([
+            expect.objectContaining({
+              reviewState: 'pending',
+              blockedCorePromotion: true,
+              provenance: expect.objectContaining({
+                shardId: result.shardId,
+                source: 'memory_import_batch',
+                sourceToolName: 'memory_import_batch',
+                toolCallId: 'import-call',
+              }),
+            }),
+          ]),
+        }),
       }),
-      undefined,
-    );
+    }));
+  });
+
+  it('quarantines unified memory import actions behind review instead of calling the memory writer', async () => {
+    const memoryTool = makeTestTool('memory');
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: { ...TEST_CONFIG, capabilityTier: 'autonomous' },
+      parentSystemPrompt: 'test',
+      toolCatalogProvider: () => ({
+        core: [memoryTool.tool],
+        extended: [],
+      }),
+    });
+
+    await manager.spawn({ name: 'memory-import', task: 'test' });
+    const tools = (setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string; execute: (...args: any[]) => Promise<any> }>);
+    const wrappedMemory = tools.find((tool) => tool.name === 'memory');
+    if (!wrappedMemory) {
+      throw new Error('Expected wrapped memory tool to be present');
+    }
+
+    const importResult = await wrappedMemory.execute('memory-import-call', {
+      action: 'import',
+      records: [{ text: 'Unified import', type: 'semantic' }],
+    });
+
+    expect(memoryTool.execute).not.toHaveBeenCalled();
+    expect(importResult).toEqual(expect.objectContaining({
+      details: expect.objectContaining({
+        mutationWorkflow: 'fold_review_only',
+        reviewState: 'pending',
+        blockedCorePromotion: true,
+      }),
+    }));
   });
 
   it('returns lineage provenance on shard spawns with explicit source context', async () => {

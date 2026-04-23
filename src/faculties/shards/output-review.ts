@@ -11,10 +11,18 @@ import type {
 import { truncateShardContextText } from './context-pack.js';
 
 export interface StagedShardMemoryOutput {
-  content: string;
+  outputId: string;
+  kind: ShardTaggedOutputKind;
   label: string;
+  content: string;
+  preview: string;
+  createdAt: number;
+  reviewRequired: true;
+  reviewState: ShardTaggedOutput['reviewState'];
+  blockedCorePromotion: boolean;
   source: ShardTaggedOutputSource;
   provenanceTags: string[];
+  provenance: ShardTaggedOutputProvenance;
 }
 
 export function buildShardValidationPath(shardId: string): string {
@@ -72,6 +80,7 @@ export function createShardTaggedOutputProvenance(
     channelId: shard.channelId,
     task: shard.task,
     source,
+    lineage: shard.lineage,
     ...(options.sourceToolName ? { sourceToolName: options.sourceToolName } : {}),
     ...(options.toolCallId ? { toolCallId: options.toolCallId } : {}),
     tags: [...new Set(options.provenanceTags?.filter(Boolean) ?? [])],
@@ -118,7 +127,7 @@ export function createShardTaggedOutput(
 }
 
 export function computeShardMergeReviewBlockingReasons(shard: ShardRuntimeRecord): string[] {
-  const pendingOutputs = shard.taggedOutputs.filter(output => output.reviewRequired && output.reviewState === 'pending');
+  const pendingOutputs = shard.taggedOutputs.filter(output => output.reviewState === 'pending');
   const reasons = new Set<string>();
   if (pendingOutputs.some(output => output.kind === 'l0_output')) {
     reasons.add('artifact_output_pending_merge_review');
@@ -180,7 +189,9 @@ export function buildShardMemoryOutputProvenanceTags(
 }
 
 export function resolveStagedShardMemoryOutputs(
+  shard: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'>,
   toolName: string,
+  toolCallId: string,
   params: unknown,
 ): StagedShardMemoryOutput[] {
   if (typeof params !== 'object' || params === null || Array.isArray(params)) {
@@ -188,21 +199,40 @@ export function resolveStagedShardMemoryOutputs(
   }
   const input = params as Record<string, unknown>;
 
-  const toWriteOutput = (record: Record<string, unknown>, labelPrefix: string): StagedShardMemoryOutput[] => {
+  const toWriteOutput = (
+    record: Record<string, unknown>,
+    labelPrefix: string,
+    source: ShardTaggedOutputSource,
+  ): StagedShardMemoryOutput[] => {
     const text = typeof record.text === 'string' ? record.text.trim() : '';
     if (!text) {
       return [];
     }
     const memoryType = typeof record.type === 'string' ? record.type.trim().toLowerCase() : '';
+    const provenanceTags = buildShardMemoryOutputProvenanceTags(
+      record.type,
+      record.tags,
+      record.sensitivity,
+    );
+    const provenance = createShardTaggedOutputProvenance(shard, source, {
+      sourceToolName: toolName,
+      toolCallId,
+      provenanceTags,
+    });
+    const reviewState: ShardTaggedOutput['reviewState'] = 'pending';
     return [{
-      content: text,
+      outputId: `${source}-${toolCallId}-${randomUUID()}`,
+      kind: 'l2_memory',
       label: `${labelPrefix}${memoryType ? ` (${memoryType})` : ''}`,
-      source: 'memory_write',
-      provenanceTags: buildShardMemoryOutputProvenanceTags(
-        record.type,
-        record.tags,
-        record.sensitivity,
-      ),
+      content: text,
+      preview: truncateShardContextText(text, 200),
+      createdAt: Date.now(),
+      reviewRequired: true,
+      reviewState,
+      blockedCorePromotion: true,
+      source,
+      provenanceTags,
+      provenance,
     }];
   };
 
@@ -223,15 +253,30 @@ export function resolveStagedShardMemoryOutputs(
         return [];
       }
       const memoryType = typeof entry.type === 'string' ? entry.type.trim().toLowerCase() : '';
+      const provenanceTags = buildShardMemoryOutputProvenanceTags(
+        entry.type,
+        entry.tags,
+        entry.sensitivity,
+      );
+      const provenance = createShardTaggedOutputProvenance(shard, 'memory_import_batch', {
+        sourceToolName: toolName,
+        toolCallId,
+        provenanceTags,
+      });
+      const reviewState: ShardTaggedOutput['reviewState'] = 'pending';
       return [{
-        content: text,
+        outputId: `memory_import_batch-${toolCallId}-${randomUUID()}`,
+        kind: 'l2_memory',
         label: `Imported shard memory ${index + 1} from ${sourceLabel}${memoryType ? ` (${memoryType})` : ''}`,
-        source: 'memory_import_batch' as const,
-        provenanceTags: buildShardMemoryOutputProvenanceTags(
-          entry.type,
-          entry.tags,
-          entry.sensitivity,
-        ),
+        content: text,
+        preview: truncateShardContextText(text, 200),
+      createdAt: Date.now(),
+      reviewRequired: true,
+      reviewState,
+      blockedCorePromotion: true,
+        source: 'memory_import_batch',
+        provenanceTags,
+        provenance,
       }];
     });
   };
@@ -239,7 +284,7 @@ export function resolveStagedShardMemoryOutputs(
   if (toolName === 'memory') {
     const action = typeof input.action === 'string' ? input.action.trim().toLowerCase() : '';
     if (action === 'write') {
-      return toWriteOutput(input, 'Staged shard memory');
+      return toWriteOutput(input, 'Staged shard memory', 'memory_write');
     }
     if (action === 'import') {
       const source = typeof input.source === 'string' && input.source.trim()
@@ -251,7 +296,7 @@ export function resolveStagedShardMemoryOutputs(
   }
 
   if (toolName === 'memory_write') {
-    return toWriteOutput(input, 'Staged shard memory');
+    return toWriteOutput(input, 'Staged shard memory', 'memory_write');
   }
   if (toolName === 'memory_import_batch') {
     const source = typeof input.source === 'string' && input.source.trim()

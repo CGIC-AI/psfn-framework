@@ -3,7 +3,7 @@
 // Bounded launches share parent's heavy resources (LLM, DB, memory) but get isolated channelIds.
 
 import { randomUUID } from 'node:crypto';
-import type { AgentTool } from '@mariozechner/pi-agent-core';
+import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier, ShardToolsetConfig, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { resolvePresenceSubjectId } from '../../core/agent/presence-metadata.js';
@@ -36,6 +36,7 @@ import type {
   ShardHealthState,
   ShardLifecycleState,
   ShardResult,
+  ShardRuntimeRecord,
   ShardSourceContext,
 } from './types.js';
 import { buildShardLineageEnvelope, deriveShardCompanionId } from './result-lineage.js';
@@ -45,7 +46,13 @@ import {
   type ArtifactReturnBatch,
   type ArtifactReturnPort,
 } from './artifact-policy.js';
+import {
+  createEmptyShardMergeReview,
+  resolveStagedShardMemoryOutputs,
+  computeShardMergeReviewBlockingReasons,
+} from './output-review.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { textResultWithError } from '../../core/tools/results.js';
 import {
   type BoundedSubagentLaunchSummary,
   type SubagentExecutionPort,
@@ -466,6 +473,11 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       requiredCapabilities,
     });
     try {
+      const shardMemoryReviewContext: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'> = {
+        channelId,
+        task: shardConfig.task,
+        lineage,
+      };
       // Each shard gets its own SessionManager wrapping the shared store
       const sessionManager = new SessionManager(
         this.deps.sessionStore,
@@ -492,7 +504,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       }
 
       // Shards don't recurse or self-escalate: we inject a tier-limited subset only.
-      const injectedTools = this.resolveInjectedTools(shardId);
+      const injectedTools = this.resolveInjectedTools(shardId, shardMemoryReviewContext);
       for (const tool of injectedTools) {
         agentLoop.registerTool(tool);
       }
@@ -796,7 +808,10 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     });
   }
 
-  private resolveInjectedTools(shardId: string): AgentTool<any>[] {
+  private resolveInjectedTools(
+    shardId: string,
+    memoryReviewContext: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'>,
+  ): AgentTool<any>[] {
     const catalog = this.deps.toolCatalogProvider?.();
     if (!catalog) return [];
 
@@ -817,7 +832,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         .map(name => availableByName.get(name))
         .filter((tool): tool is AgentTool<any> => tool !== undefined);
 
-    return selected.map(tool => this.wrapShardTool(tool, shardId));
+    return selected.map(tool => this.wrapShardTool(tool, shardId, memoryReviewContext));
   }
 
   private resolveToolNamesForTier(tier: CapabilityTier): string[] {
@@ -1163,10 +1178,17 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     return `${normalized.slice(0, maxChars - 3)}...`;
   }
 
-  private wrapShardTool(tool: AgentTool<any>, shardId: string): AgentTool<any> {
+  private wrapShardTool(
+    tool: AgentTool<any>,
+    shardId: string,
+    memoryReviewContext: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'>,
+  ): AgentTool<any> {
     return {
       ...tool,
       execute: async (toolCallId, params, signal) => {
+        if (this.isShardMemoryImportTool(tool.name, params)) {
+          return this.quarantineShardMemoryImport(tool.name, toolCallId, params, memoryReviewContext);
+        }
         this.enforceShardToolSyncPolicy(tool.name, shardId, toolCallId);
         const scopedParams = this.applyShardSourceParams(tool.name, params, shardId);
         // scopedParams has extra shard-source fields; tool.execute expects Static<TSchema>
@@ -1174,6 +1196,82 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         return tool.execute(toolCallId, scopedParams as any, signal);
       },
     };
+  }
+
+  private isShardMemoryImportTool(toolName: string, params: unknown): boolean {
+    if (toolName === 'memory_import_batch') {
+      return true;
+    }
+    if (toolName !== 'memory' || typeof params !== 'object' || params === null || Array.isArray(params)) {
+      return false;
+    }
+    const action = typeof (params as Record<string, unknown>).action === 'string'
+      ? (params as Record<string, unknown>).action.trim().toLowerCase()
+      : '';
+    return action === 'import';
+  }
+
+  private quarantineShardMemoryImport(
+    toolName: string,
+    toolCallId: string,
+    params: unknown,
+    memoryReviewContext: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'>,
+  ): Promise<AgentToolResult<any>> {
+    if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+      return Promise.resolve(textResultWithError('Error: records must be a non-empty array', true));
+    }
+
+    const input = params as Record<string, unknown>;
+    const rawRecords = input.records;
+    if (!Array.isArray(rawRecords) || rawRecords.length === 0) {
+      return Promise.resolve(textResultWithError('Error: records must be a non-empty array', true));
+    }
+
+    const stagedOutputs = resolveStagedShardMemoryOutputs(
+      memoryReviewContext,
+      toolName,
+      toolCallId,
+      params,
+    );
+    if (stagedOutputs.length === 0) {
+      return Promise.resolve(textResultWithError('Error: memory import batch must contain valid records', true));
+    }
+
+    const reviewTimestamp = Date.now();
+    const mergeReview = createEmptyShardMergeReview(memoryReviewContext.lineage.shardId, reviewTimestamp);
+    const blockingReasons = computeShardMergeReviewBlockingReasons({
+      ...memoryReviewContext,
+      taggedOutputs: stagedOutputs,
+      mergeReview,
+    });
+    this.auditTrail?.append('shard.memory.import.quarantined', {
+      shardId: memoryReviewContext.lineage.shardId,
+      toolName,
+      toolCallId,
+      pendingTaggedOutputCount: stagedOutputs.length,
+      blockingReasons,
+    });
+
+    const summary = `Memory import quarantined: ${stagedOutputs.length} record(s) staged as pending fold review.`;
+    return Promise.resolve({
+      content: [{ type: 'text', text: summary }],
+      details: {
+        mutationWorkflow: 'fold_review_only',
+        reviewState: 'pending',
+        blockedCorePromotion: true,
+        pendingTaggedOutputCount: stagedOutputs.length,
+        blockingReasons,
+        foldReview: {
+          required: true,
+          status: 'pending',
+          validationPath: mergeReview.validationPath,
+          lastUpdatedAt: reviewTimestamp,
+          pendingTaggedOutputCount: stagedOutputs.length,
+          blockingReasons,
+          outputs: stagedOutputs,
+        },
+      },
+    });
   }
 
   private enforceShardToolSyncPolicy(toolName: string, shardId: string, toolCallId: string): void {

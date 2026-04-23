@@ -35,6 +35,7 @@ export interface StagedShardMemoryOutput {
   reviewRequired: true;
   reviewState: ShardTaggedOutput['reviewState'];
   blockedCorePromotion: boolean;
+  blockedCorePromotionReason?: string;
   source: ShardTaggedOutputSource;
   provenanceTags: string[];
   provenance: ShardTaggedOutputProvenance;
@@ -116,6 +117,7 @@ export function createShardTaggedOutput(
     toolCallId?: string;
     provenanceTags?: string[];
     reviewState?: ShardTaggedOutput['reviewState'];
+    blockedCorePromotionReason?: string;
   } = {},
 ): ShardTaggedOutput {
   const normalizedContent = content.trim();
@@ -130,6 +132,9 @@ export function createShardTaggedOutput(
     reviewRequired: true,
     reviewState,
     blockedCorePromotion: reviewState !== 'approved',
+    ...(options.blockedCorePromotionReason
+      ? { blockedCorePromotionReason: options.blockedCorePromotionReason }
+      : {}),
     provenance: createShardTaggedOutputProvenance(shard, source, {
       ...options,
       provenanceTags: [
@@ -225,6 +230,9 @@ export function resolveStagedShardMemoryOutputs(
   toolName: string,
   toolCallId: string,
   params: unknown,
+  options: {
+    blockedCorePromotionReason?: string;
+  } = {},
 ): StagedShardMemoryOutput[] {
   if (typeof params !== 'object' || params === null || Array.isArray(params)) {
     return [];
@@ -267,6 +275,9 @@ export function resolveStagedShardMemoryOutputs(
       reviewRequired: true,
       reviewState,
       blockedCorePromotion: true,
+      ...(options.blockedCorePromotionReason
+        ? { blockedCorePromotionReason: options.blockedCorePromotionReason }
+        : {}),
       source,
       provenanceTags,
       provenance,
@@ -325,6 +336,9 @@ export function resolveStagedShardMemoryOutputs(
         reviewRequired: true,
         reviewState,
         blockedCorePromotion: true,
+        ...(options.blockedCorePromotionReason
+          ? { blockedCorePromotionReason: options.blockedCorePromotionReason }
+          : {}),
         source: 'memory_import_batch',
         provenanceTags,
         provenance,

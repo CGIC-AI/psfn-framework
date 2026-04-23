@@ -1264,11 +1264,18 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       return textResultWithError('Error: records must be a non-empty array', true);
     }
 
+    const directPromotionDecision = this.evaluateShardMemoryImportPromotionPolicy(
+      memoryReviewContext.lineage.shardId,
+      toolCallId,
+    );
     const stagedOutputs = resolveStagedShardMemoryOutputs(
       memoryReviewContext,
       toolName,
       toolCallId,
       params,
+      {
+        blockedCorePromotionReason: directPromotionDecision.reason,
+      },
     );
     if (stagedOutputs.length === 0) {
       return textResultWithError('Error: memory import batch must contain valid records', true);
@@ -1286,6 +1293,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       toolName,
       toolCallId,
       pendingTaggedOutputCount: stagedOutputs.length,
+      blockedCorePromotionReason: directPromotionDecision.reason,
       blockingReasons,
     });
     if (this.foldReviewController) {
@@ -1306,6 +1314,8 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         mutationWorkflow: 'fold_review_only',
         reviewState: 'pending',
         blockedCorePromotion: true,
+        blockedCorePromotionReason: directPromotionDecision.reason,
+        directPromotionDecision,
         pendingTaggedOutputCount: stagedOutputs.length,
         blockingReasons,
         foldReview: {
@@ -1319,6 +1329,35 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         },
       },
     };
+  }
+
+  private evaluateShardMemoryImportPromotionPolicy(
+    shardId: string,
+    toolCallId: string,
+  ): ShardSessionMemorySyncDecision {
+    const decision = this.evaluateSyncPolicy({
+      version: SHARD_SYNC_POLICY_VERSION,
+      syncClass: 'derived_memory',
+      direction: 'shard_to_prime',
+      authority: 'shard',
+      operation: 'memory_import_batch',
+      shardId,
+      sourceId: `shard:${shardId}`,
+      targetId: SHARD_SYNC_MEMORY_TARGET,
+      idempotencyKey: this.buildSyncIdempotencyKey([
+        'shard_tool_sync',
+        shardId,
+        toolCallId,
+        'memory_import_batch',
+      ]),
+      requestedAt: Date.now(),
+    });
+    if (decision.allowed) {
+      throw new Error(
+        `Shard session/memory sync unexpectedly allowed for memory_import_batch (${decision.reason}).`,
+      );
+    }
+    return decision;
   }
 
   private enforceShardToolSyncPolicy(toolName: string, shardId: string, toolCallId: string): void {

@@ -1055,6 +1055,7 @@ describe('ShardManager', () => {
   it('stamps shard source provenance on shard memory writes and quarantines imports behind review', async () => {
     const memoryWrite = makeTestTool('memory_write');
     const memoryImport = makeTestTool('memory_import_batch');
+    const auditTrail = { append: vi.fn() };
 
     const manager = new ShardManager({
       eventBus,
@@ -1068,6 +1069,7 @@ describe('ShardManager', () => {
         core: [memoryWrite.tool, memoryImport.tool],
         extended: [],
       }),
+      auditTrail,
     });
 
     const result = await manager.spawn({ name: 'provenance', task: 'test' });
@@ -1100,6 +1102,11 @@ describe('ShardManager', () => {
         mutationWorkflow: 'fold_review_only',
         reviewState: 'pending',
         blockedCorePromotion: true,
+        blockedCorePromotionReason: 'denied_operation',
+        directPromotionDecision: {
+          allowed: false,
+          reason: 'denied_operation',
+        },
         foldReview: expect.objectContaining({
           status: 'pending',
           pendingTaggedOutputCount: 1,
@@ -1107,6 +1114,7 @@ describe('ShardManager', () => {
             expect.objectContaining({
               reviewState: 'pending',
               blockedCorePromotion: true,
+              blockedCorePromotionReason: 'denied_operation',
               provenance: expect.objectContaining({
                 shardId: result.shardId,
                 source: 'memory_import_batch',
@@ -1118,10 +1126,20 @@ describe('ShardManager', () => {
         }),
       }),
     }));
+    expect(auditTrail.append).toHaveBeenCalledWith(
+      'shard.sync.policy',
+      expect.objectContaining({
+        shardId: result.shardId,
+        operation: 'memory_import_batch',
+        decision: 'DENY',
+        reason: 'denied_operation',
+      }),
+    );
   });
 
   it('quarantines unified memory import actions behind review instead of calling the memory writer', async () => {
     const memoryTool = makeTestTool('memory');
+    const auditTrail = { append: vi.fn() };
 
     const manager = new ShardManager({
       eventBus,
@@ -1135,6 +1153,7 @@ describe('ShardManager', () => {
         core: [memoryTool.tool],
         extended: [],
       }),
+      auditTrail,
     });
 
     await manager.spawn({ name: 'memory-import', task: 'test' });
@@ -1155,8 +1174,32 @@ describe('ShardManager', () => {
         mutationWorkflow: 'fold_review_only',
         reviewState: 'pending',
         blockedCorePromotion: true,
+        blockedCorePromotionReason: 'denied_operation',
+        directPromotionDecision: {
+          allowed: false,
+          reason: 'denied_operation',
+        },
+        foldReview: expect.objectContaining({
+          outputs: expect.arrayContaining([
+            expect.objectContaining({
+              blockedCorePromotionReason: 'denied_operation',
+              provenance: expect.objectContaining({
+                sourceToolName: 'memory',
+                toolCallId: 'memory-import-call',
+              }),
+            }),
+          ]),
+        }),
       }),
     }));
+    expect(auditTrail.append).toHaveBeenCalledWith(
+      'shard.sync.policy',
+      expect.objectContaining({
+        operation: 'memory_import_batch',
+        decision: 'DENY',
+        reason: 'denied_operation',
+      }),
+    );
   });
 
   it('persists quarantined shard memory candidates in the fold review controller', async () => {

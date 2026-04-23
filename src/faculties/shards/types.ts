@@ -58,6 +58,7 @@ export interface ShardTaggedOutput {
   reviewRequired: true;
   reviewState: ShardTaggedOutputReviewState;
   blockedCorePromotion: boolean;
+  blockedCorePromotionReason?: string;
   provenance: ShardTaggedOutputProvenance;
 }
 

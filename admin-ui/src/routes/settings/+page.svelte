@@ -114,18 +114,18 @@
   let initialSnapshot = $state('');
   let dirty = $state(false);
   type RawEditorKey = GardenSettingsRawEditorKey;
-  let initialRawJsonByKey = $state<Record<RawEditorKey, string>>({
-    settings: '',
-    models: '',
-    providers: '',
-    channels: '',
-    skills: '',
-    scheduler: '',
-    'trust-policy': '',
-    capabilities: '',
-    'charge-policy': '',
-    backup: '',
-  });
+
+  function buildRawEditorJsonMap(
+    resolveValue: (key: RawEditorKey) => string,
+  ): Record<RawEditorKey, string> {
+    return Object.fromEntries(
+      SETTINGS_GARDEN_RAW_EDITOR_KEYS.map((key) => [key, resolveValue(key)]),
+    ) as Record<RawEditorKey, string>;
+  }
+
+  let initialRawJsonByKey = $state<Record<RawEditorKey, string>>(
+    buildRawEditorJsonMap(() => ''),
+  );
 
   function computeSnapshot(): string {
     return JSON.stringify({
@@ -935,6 +935,7 @@
 
   function getRawJson(key: string): string {
     switch (key) {
+      case 'settings': return settingsJson;
       case 'models': return modelsJson;
       case 'providers': return providersJson;
       case 'channels': return channelsJson;
@@ -950,6 +951,7 @@
 
   function setRawJson(key: string, val: string) {
     switch (key) {
+      case 'settings': settingsJson = val; break;
       case 'models': modelsJson = val; break;
       case 'providers': providersJson = val; break;
       case 'channels': channelsJson = val; break;
@@ -963,23 +965,12 @@
   }
 
   function currentRawJsonByKey(): Record<RawEditorKey, string> {
-    return {
-      settings: settingsJson,
-      models: modelsJson,
-      providers: providersJson,
-      channels: channelsJson,
-      skills: skillsJson,
-      scheduler: schedulerJson,
-      'trust-policy': trustPolicyJson,
-      capabilities: capabilitiesJson,
-      'charge-policy': chargePolicyJson,
-      backup: backupJson,
-    };
+    return buildRawEditorJsonMap((key) => getRawJson(key));
   }
 
   function dirtyRawEditorKeys(): RawEditorKey[] {
     const current = currentRawJsonByKey();
-    return (Object.keys(current) as RawEditorKey[]).filter(
+    return SETTINGS_GARDEN_RAW_EDITOR_KEYS.filter(
       key => current[key] !== initialRawJsonByKey[key],
     );
   }

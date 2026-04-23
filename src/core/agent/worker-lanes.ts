@@ -63,6 +63,10 @@ export const BACKGROUND_CONTINUATION_RUNTIME_CLASS: BackgroundContinuationRuntim
 export const MAINTENANCE_REFLECTION_RUNTIME_CLASS: MaintenanceReflectionRuntimeClass = (
   RUNTIME_LANE_CLASSES.maintenanceReflection
 );
+const MAINTENANCE_REFLECTION_ORIGIN_STAGE_PREFIXES = [
+  'heartbeat.deliberation',
+  'reflection.deliberation',
+] as const;
 
 export interface RuntimeLaneBudgetProfile {
   runtimeClass: RuntimeLaneClass;
@@ -196,6 +200,7 @@ export function resolveRuntimeLaneClassForModelCall(input: {
     || input.channelId === 'internal:heartbeat'
     || input.channelId?.startsWith('internal:heartbeat:')
     || input.channelId?.startsWith('internal:reflection:')
+    || MAINTENANCE_REFLECTION_ORIGIN_STAGE_PREFIXES.some(prefix => originStage.startsWith(prefix))
     || originStage === 'heartbeat.run_template'
     || originStage === 'memory.sleeptime.run'
   ) {

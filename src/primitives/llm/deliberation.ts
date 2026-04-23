@@ -4,9 +4,13 @@ import type { CompletionPurpose, ContextMessage, CorrelationMetadata, Observabil
 import type { LLMCompletionOptions } from './client.js';
 
 type DeliberationPurpose = Extract<CompletionPurpose, 'background' | 'reasoning'>;
+export type DeliberationEpisodeKind = 'generic' | 'maintenance_reflection' | 'multi_model_consultation';
+export type DeliberationEpisodeMode = 'foreground_blocking' | 'background_bounded';
 
 const DEFAULT_VOICES: DeliberationPurpose[] = ['reasoning', 'background'];
 const DEFAULT_AGGREGATOR_PURPOSE: DeliberationPurpose = 'reasoning';
+const DEFAULT_EPISODE_KIND: DeliberationEpisodeKind = 'generic';
+const DEFAULT_EPISODE_MODE: DeliberationEpisodeMode = 'foreground_blocking';
 
 const DEFAULT_CAPS = {
   maxRounds: 4,
@@ -51,6 +55,29 @@ export interface DeliberationCostConfig {
   outputUsdPerMillionTokens: number;
 }
 
+export interface DeliberationEpisodeOptions {
+  kind?: DeliberationEpisodeKind;
+  mode?: DeliberationEpisodeMode;
+}
+
+export interface DeliberationEpisodeExit {
+  reason: DeliberationStopReason;
+  exhaustedBudget: boolean;
+  maxRoundsReached: boolean;
+  maxTotalTokensReached: boolean;
+  maxWallTimeReached: boolean;
+  maxTokensPerRoundReached: boolean;
+  fatigueTapered: boolean;
+}
+
+export interface DeliberationEpisodeDescriptor {
+  id: string;
+  kind: DeliberationEpisodeKind;
+  mode: DeliberationEpisodeMode;
+  budget: DeliberationCaps;
+  exit: DeliberationEpisodeExit;
+}
+
 export interface DeliberationVoiceTurn {
   purpose: DeliberationPurpose;
   requestedModel?: string;
@@ -76,6 +103,7 @@ export interface DeliberationRound {
 
 export interface DeliberationResult {
   sessionId: string;
+  episode: DeliberationEpisodeDescriptor;
   output: string;
   stopReason: DeliberationStopReason;
   rounds: DeliberationRound[];
@@ -92,6 +120,7 @@ export interface DeliberationResult {
 
 export interface DeliberationOptions {
   sessionId?: string;
+  episode?: DeliberationEpisodeOptions;
   voices?: DeliberationPurpose[];
   referenceModels?: string[];
   aggregatorModel?: string;
@@ -110,6 +139,10 @@ interface DeliberationVoiceConfig {
 
 interface ResolvedDeliberationConfig {
   sessionId: string;
+  episode: {
+    kind: DeliberationEpisodeKind;
+    mode: DeliberationEpisodeMode;
+  };
   voices: DeliberationVoiceConfig[];
   aggregatorModel?: string;
   aggregatorPurpose: DeliberationPurpose;
@@ -209,6 +242,8 @@ function resolveDeliberationConfig(options: DeliberationOptions = {}): ResolvedD
   const voices = normalizePurposes(options.voices);
   const referenceModels = normalizeModelHints(options.referenceModels);
   const aggregatorModel = options.aggregatorModel?.trim() || undefined;
+  const episodeKind = options.episode?.kind ?? DEFAULT_EPISODE_KIND;
+  const episodeMode = options.episode?.mode ?? DEFAULT_EPISODE_MODE;
   const caps: DeliberationCaps = {
     maxRounds: Math.max(1, Math.floor(options.caps?.maxRounds ?? DEFAULT_CAPS.maxRounds)),
     maxTotalTokens: Math.max(256, Math.floor(options.caps?.maxTotalTokens ?? DEFAULT_CAPS.maxTotalTokens)),
@@ -240,6 +275,10 @@ function resolveDeliberationConfig(options: DeliberationOptions = {}): ResolvedD
 
   return {
     sessionId: options.sessionId ?? randomUUID(),
+    episode: {
+      kind: episodeKind,
+      mode: episodeMode,
+    },
     voices: resolveVoiceConfigs(voices, referenceModels),
     ...(aggregatorModel ? { aggregatorModel } : {}),
     aggregatorPurpose: options.aggregatorPurpose === 'background'
@@ -363,19 +402,59 @@ function buildCompletionOptions(
 
 function buildDeliberationCorrelation(
   baseCorrelation: Partial<CorrelationMetadata> | undefined,
-  originStage: string,
+  stageSuffix: string,
   fallbackOriginType: ObservabilityCallType,
 ): CorrelationMetadata {
+  const baseOriginStage = baseCorrelation?.originStage?.trim();
+  const originStage = baseOriginStage
+    ? `${baseOriginStage}.${stageSuffix}`
+    : `deliberation.${stageSuffix}`;
+  const pinnedCallType = baseCorrelation?.callType ?? baseCorrelation?.originType;
+  const shouldInferCallType = pinnedCallType === undefined
+    && typeof baseCorrelation?.channelId === 'string'
+    && baseCorrelation.channelId.trim().length > 0;
   return {
     ...(baseCorrelation?.turnId ? { turnId: baseCorrelation.turnId } : {}),
     ...(baseCorrelation?.requestId ? { requestId: baseCorrelation.requestId } : {}),
     ...(baseCorrelation?.channelId ? { channelId: baseCorrelation.channelId } : {}),
-    callType: baseCorrelation?.callType ?? baseCorrelation?.originType ?? fallbackOriginType,
     ...(baseCorrelation?.toolName ? { toolName: baseCorrelation.toolName } : {}),
     ...(baseCorrelation?.toolCallId ? { toolCallId: baseCorrelation.toolCallId } : {}),
+    ...(!shouldInferCallType
+      ? { callType: pinnedCallType ?? fallbackOriginType }
+      : {}),
     purpose: originStage,
-    originType: baseCorrelation?.originType ?? baseCorrelation?.callType ?? fallbackOriginType,
+    ...(!shouldInferCallType
+      ? { originType: pinnedCallType ?? fallbackOriginType }
+      : {}),
     originStage,
+  };
+}
+
+function buildDeliberationEpisodeExit(
+  caps: DeliberationCaps,
+  stopReason: DeliberationStopReason,
+  rounds: readonly DeliberationRound[],
+  totalTokens: number,
+): DeliberationEpisodeExit {
+  const lastRound = rounds.at(-1);
+  const lastRoundTokens = (lastRound?.inputTokens ?? 0) + (lastRound?.outputTokens ?? 0);
+  const maxRoundsReached = stopReason === 'max_rounds';
+  const maxWallTimeReached = stopReason === 'time_cap';
+  const maxTotalTokensReached = stopReason === 'token_cap' && totalTokens >= caps.maxTotalTokens;
+  const maxTokensPerRoundReached = stopReason === 'token_cap'
+    && caps.maxTokensPerRound !== undefined
+    && lastRoundTokens >= caps.maxTokensPerRound;
+  const fatigueTapered = stopReason === 'fatigue_taper';
+
+  return {
+    reason: stopReason,
+    exhaustedBudget:
+      maxRoundsReached || maxWallTimeReached || maxTotalTokensReached || maxTokensPerRoundReached,
+    maxRoundsReached,
+    maxTotalTokensReached,
+    maxWallTimeReached,
+    maxTokensPerRoundReached,
+    fatigueTapered,
   };
 }
 
@@ -430,15 +509,15 @@ export async function runDeliberation(
           messages: buildVoiceMessages(prompt, previousSynthesis, roundIndex),
         },
         voice.purpose,
-          buildCompletionOptions(
-            voice.requestedModel,
-            roundRemainingTokens,
-            buildDeliberationCorrelation(
-              config.correlation,
-              `deliberation.voice.${voice.purpose}`,
-              voice.purpose === 'background' ? 'background' : 'tool',
-            ),
+        buildCompletionOptions(
+          voice.requestedModel,
+          roundRemainingTokens,
+          buildDeliberationCorrelation(
+            config.correlation,
+            `voice.${voice.purpose}`,
+            voice.purpose === 'background' ? 'background' : 'tool',
           ),
+        ),
       );
 
       totalInputTokens += response.inputTokens;
@@ -500,7 +579,7 @@ export async function runDeliberation(
             roundRemainingTokens,
             buildDeliberationCorrelation(
               config.correlation,
-              'deliberation.aggregator',
+              'aggregator',
               'summary',
             ),
           ),
@@ -571,8 +650,17 @@ export async function runDeliberation(
   }
 
   const endedAt = config.now();
+  const totalTokens = totalInputTokens + totalOutputTokens;
+  const exit = buildDeliberationEpisodeExit(config.caps, stopReason, rounds, totalTokens);
   return {
     sessionId: config.sessionId,
+    episode: {
+      id: config.sessionId,
+      kind: config.episode.kind,
+      mode: config.episode.mode,
+      budget: config.caps,
+      exit,
+    },
     output,
     stopReason,
     rounds,
@@ -580,7 +668,7 @@ export async function runDeliberation(
     caps: config.caps,
     totalInputTokens,
     totalOutputTokens,
-    totalTokens: totalInputTokens + totalOutputTokens,
+    totalTokens,
     estimatedCostUsd,
     startedAt,
     endedAt,

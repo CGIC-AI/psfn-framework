@@ -2,7 +2,11 @@
 // Common primitives used by both split-runtime and gateway agent mode.
 
 import type { CapabilityTier, CompositionalPolicyConfig, SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { PostTurnActionCandidate, SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type {
+  ObservabilityCallType,
+  PostTurnActionCandidate,
+  SubstrateMessage,
+} from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -762,8 +766,8 @@ export function wireHeartbeatRuntime(
   const toDeliberationMetadata = (
     result: DeliberationResult,
   ): ValuesDeliberationMetadata => ({
-    sessionId: result.sessionId,
-    stopReason: result.stopReason,
+    sessionId: result.episode.id,
+    stopReason: result.episode.exit.reason,
     rounds: result.rounds.length,
     totalInputTokens: result.totalInputTokens,
     totalOutputTokens: result.totalOutputTokens,
@@ -771,6 +775,53 @@ export function wireHeartbeatRuntime(
     estimatedCostUsd: result.estimatedCostUsd,
     durationMs: result.durationMs,
   });
+
+  const resolveReflectionDeliberationCallType = (
+    source: HeartbeatExecutionSource,
+  ): ObservabilityCallType => (source === 'manual' ? 'background' : 'scheduled');
+
+  const buildReflectionDeliberationOptions = (
+    template: ReflectionTemplate,
+    source: HeartbeatExecutionSource,
+    reflectionChannelId: string,
+    requestId: string,
+  ) => {
+    const callType = resolveReflectionDeliberationCallType(source);
+    return {
+      episode: {
+        kind: 'maintenance_reflection' as const,
+        mode: 'background_bounded' as const,
+      },
+      correlation: {
+        requestId,
+        channelId: reflectionChannelId,
+        callType,
+        originType: callType,
+        originStage: 'heartbeat.deliberation',
+        purpose: 'heartbeat.deliberation',
+      },
+      ...(template.deliberation?.voices ? { voices: template.deliberation.voices } : {}),
+      caps: {
+        ...(template.deliberation?.maxRounds !== undefined
+          ? { maxRounds: template.deliberation.maxRounds }
+          : {}),
+        ...(template.deliberation?.maxTotalTokens !== undefined
+          ? { maxTotalTokens: template.deliberation.maxTotalTokens }
+          : {}),
+        ...(template.deliberation?.maxWallTimeMs !== undefined
+          ? { maxWallTimeMs: template.deliberation.maxWallTimeMs }
+          : {}),
+      },
+      cost: {
+        ...(template.deliberation?.inputUsdPerMillionTokens !== undefined
+          ? { inputUsdPerMillionTokens: template.deliberation.inputUsdPerMillionTokens }
+          : {}),
+        ...(template.deliberation?.outputUsdPerMillionTokens !== undefined
+          ? { outputUsdPerMillionTokens: template.deliberation.outputUsdPerMillionTokens }
+          : {}),
+      },
+    };
+  };
 
   const resolveReflectionInitiationContext = (
     source: HeartbeatExecutionSource,
@@ -812,36 +863,18 @@ export function wireHeartbeatRuntime(
   const runTemplateDeliberation = async (
     template: ReflectionTemplate,
     prompt: string,
+    source: HeartbeatExecutionSource,
+    reflectionChannelId: string,
   ): Promise<{ reflection: string; metadata: ValuesDeliberationMetadata }> => {
     const llmProvider = runtimeOptions.llmProvider;
     if (!llmProvider) {
       throw new Error('Deliberation mode requested without llmProvider');
     }
+    const requestId = `heartbeat-deliberation:${template.id}:${Date.now()}`;
     const result = await runDeliberation(
       llmProvider,
       prompt,
-      {
-        ...(template.deliberation?.voices ? { voices: template.deliberation.voices } : {}),
-        caps: {
-          ...(template.deliberation?.maxRounds !== undefined
-            ? { maxRounds: template.deliberation.maxRounds }
-            : {}),
-          ...(template.deliberation?.maxTotalTokens !== undefined
-            ? { maxTotalTokens: template.deliberation.maxTotalTokens }
-            : {}),
-          ...(template.deliberation?.maxWallTimeMs !== undefined
-            ? { maxWallTimeMs: template.deliberation.maxWallTimeMs }
-            : {}),
-        },
-        cost: {
-          ...(template.deliberation?.inputUsdPerMillionTokens !== undefined
-            ? { inputUsdPerMillionTokens: template.deliberation.inputUsdPerMillionTokens }
-            : {}),
-          ...(template.deliberation?.outputUsdPerMillionTokens !== undefined
-            ? { outputUsdPerMillionTokens: template.deliberation.outputUsdPerMillionTokens }
-            : {}),
-        },
-      },
+      buildReflectionDeliberationOptions(template, source, reflectionChannelId, requestId),
     );
     return {
       reflection: result.output,
@@ -866,7 +899,12 @@ export function wireHeartbeatRuntime(
     let persistenceContext = internalStateContext;
 
     if (shouldUseDeliberation(template)) {
-      const deliberationResult = await runTemplateDeliberation(template, reflectionPrompt);
+      const deliberationResult = await runTemplateDeliberation(
+        template,
+        reflectionPrompt,
+        source,
+        reflectionChannelId,
+      );
       reflectionText = deliberationResult.reflection;
       deliberationMetadata = deliberationResult.metadata;
       reflectionMode = 'deliberation';

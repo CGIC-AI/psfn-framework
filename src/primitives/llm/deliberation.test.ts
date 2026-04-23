@@ -82,6 +82,16 @@ describe('runDeliberation', () => {
 
     expect(result.stopReason).toBe('fatigue_taper');
     expect(result.rounds).toHaveLength(2);
+    expect(result.episode).toMatchObject({
+      kind: 'generic',
+      mode: 'foreground_blocking',
+      budget: { maxRounds: 6, maxTotalTokens: 10_000, maxWallTimeMs: 20_000 },
+      exit: {
+        reason: 'fatigue_taper',
+        fatigueTapered: true,
+        exhaustedBudget: false,
+      },
+    });
     expect(calls).toContain('reasoning');
     expect(calls).toContain('background');
     expect(result.totalTokens).toBeGreaterThan(0);
@@ -100,6 +110,11 @@ describe('runDeliberation', () => {
 
     expect(result.stopReason).toBe('token_cap');
     expect(result.rounds).toHaveLength(1);
+    expect(result.episode.exit).toMatchObject({
+      reason: 'token_cap',
+      exhaustedBudget: true,
+      maxTotalTokensReached: true,
+    });
     expect(result.totalTokens).toBeGreaterThanOrEqual(300);
   });
 
@@ -114,6 +129,11 @@ describe('runDeliberation', () => {
 
     expect(result.stopReason).toBe('time_cap');
     expect(result.rounds).toHaveLength(1);
+    expect(result.episode.exit).toMatchObject({
+      reason: 'time_cap',
+      exhaustedBudget: true,
+      maxWallTimeReached: true,
+    });
   });
 
   it('stops at max rounds when fatigue never triggers', async () => {
@@ -132,6 +152,11 @@ describe('runDeliberation', () => {
 
     expect(result.stopReason).toBe('max_rounds');
     expect(result.rounds).toHaveLength(2);
+    expect(result.episode.exit).toMatchObject({
+      reason: 'max_rounds',
+      exhaustedBudget: true,
+      maxRoundsReached: true,
+    });
   });
 
   it('propagates model hints for reference voices and aggregator', async () => {
@@ -166,6 +191,11 @@ describe('runDeliberation', () => {
     expect(result.stopReason).toBe('token_cap');
     expect(result.rounds).toHaveLength(1);
     expect(result.rounds[0].voices).toHaveLength(1);
+    expect(result.episode.exit).toMatchObject({
+      reason: 'token_cap',
+      exhaustedBudget: true,
+      maxTokensPerRoundReached: true,
+    });
     expect(calls).toEqual(['reasoning']);
   });
 
@@ -198,17 +228,49 @@ describe('runDeliberation', () => {
         channelId: 'internal:heartbeat',
         callType: 'scheduled',
         originType: 'scheduled',
-        originStage: 'deliberation.voice.reasoning',
+        originStage: 'heartbeat.deliberation.voice.reasoning',
         toolName: 'heartbeat_run_template',
         toolCallId: 'tool-77',
-        purpose: 'deliberation.voice.reasoning',
+        purpose: 'heartbeat.deliberation.voice.reasoning',
       },
     });
     expect(options[2]).toMatchObject({
       correlation: {
-        originStage: 'deliberation.aggregator',
+        originStage: 'heartbeat.deliberation.aggregator',
         toolCallId: 'tool-77',
       },
     });
+  });
+
+  it('keeps maintenance reflection episodes background-bounded and preserves scheduled inference from internal channels', async () => {
+    const { provider, options } = scriptedProvider([
+      { purpose: 'reasoning', content: 'Voice one', model: 'model-a', inputTokens: 10, outputTokens: 10 },
+      { purpose: 'background', content: 'Voice two', model: 'model-b', inputTokens: 10, outputTokens: 10 },
+      { purpose: 'reasoning', content: 'Synthesis output', model: 'model-agg', inputTokens: 10, outputTokens: 10 },
+    ]);
+
+    const result = await runDeliberation(provider, 'Reflection lane check', {
+      episode: {
+        kind: 'maintenance_reflection',
+        mode: 'background_bounded',
+      },
+      correlation: {
+        channelId: 'internal:reflection:musing',
+        originStage: 'heartbeat.deliberation',
+      },
+      caps: { maxRounds: 1, maxTotalTokens: 10_000, maxWallTimeMs: 20_000 },
+    });
+
+    expect(result.episode).toMatchObject({
+      kind: 'maintenance_reflection',
+      mode: 'background_bounded',
+    });
+    expect(options[0]).toMatchObject({
+      correlation: {
+        channelId: 'internal:reflection:musing',
+        originStage: 'heartbeat.deliberation.voice.reasoning',
+      },
+    });
+    expect((options[0]?.correlation as { callType?: string } | undefined)?.callType).toBeUndefined();
   });
 });

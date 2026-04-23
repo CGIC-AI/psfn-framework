@@ -105,6 +105,11 @@ describe('worker lanes', () => {
       channelId: 'internal:heartbeat',
       originStage: 'memory.sleeptime.run',
     })).toBe(MAINTENANCE_REFLECTION_RUNTIME_CLASS);
+    expect(resolveRuntimeLaneClassForModelCall({
+      purpose: 'reasoning',
+      callType: 'background',
+      originStage: 'heartbeat.deliberation.voice.reasoning',
+    })).toBe(MAINTENANCE_REFLECTION_RUNTIME_CLASS);
   });
 
   it('assigns bounded priorities, budgets, and degradation rules per runtime class', () => {

@@ -602,11 +602,20 @@ describe('wireHeartbeatRuntime', () => {
       const firstDeliberationCall = valuesDeliberationCalls[0]?.[0] as
         | { messages?: Array<{ content?: string }> }
         | undefined;
+      const firstDeliberationOptions = valuesDeliberationCalls[0]?.[2] as
+        | { correlation?: { callType?: string; originType?: string; originStage?: string; channelId?: string } }
+        | undefined;
       expect(firstDeliberationCall?.messages?.[0]?.content).not.toContain(
         '<appearance_context>',
       );
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain('<internal_state_input>');
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
+      expect(firstDeliberationOptions?.correlation).toMatchObject({
+        callType: 'scheduled',
+        originType: 'scheduled',
+        originStage: 'heartbeat.deliberation.voice.reasoning',
+        channelId: 'internal:reflection:values-reflection',
+      });
       expect(memoryWriter.write).not.toHaveBeenCalled();
 
       const raw = readFileSync(resolveValuesJournalPath(tempDir), 'utf-8').trim();

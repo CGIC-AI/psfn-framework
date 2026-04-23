@@ -92,6 +92,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       });
       const snapshotRef = buildInternalStateSnapshotRef(internalState);
       const metacognitiveFlags = [{ flag: 'continuity', confidence: 0.72 }];
+      const capturedOptions: Array<Record<string, unknown> | undefined> = [];
       const llmProvider: LLMProviderPort = {
         stream: vi.fn(async () => ({
           content: '',
@@ -101,7 +102,8 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           outputTokens: 0,
           stopReason: 'stop',
         })),
-        complete: vi.fn(async (_context, purpose) => {
+        complete: vi.fn(async (_context, purpose, requestOptions?: Record<string, unknown>) => {
+          capturedOptions.push(requestOptions);
           const content = purpose === 'reasoning'
             ? 'Continuity stays central.'
             : 'Care keeps the tone steady.';
@@ -160,6 +162,19 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(entry.metacognitiveFlags).toEqual(metacognitiveFlags);
       expect(entry.reflectionJournalEntryId).toBeDefined();
       expect(entry.dailyJournalEntryId).toBeDefined();
+      expect(capturedOptions[0]).toMatchObject({
+        correlation: {
+          callType: 'background',
+          originType: 'background',
+          channelId: 'internal:reflection:values-reflection',
+          originStage: 'heartbeat.deliberation.voice.reasoning',
+        },
+      });
+      expect(capturedOptions[2]).toMatchObject({
+        correlation: {
+          originStage: 'heartbeat.deliberation.aggregator',
+        },
+      });
     } finally {
       reflectionJournalPrototype.listRecent = originalListRecent;
     }
@@ -214,6 +229,8 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       complete: vi.fn(async (context, purpose) => {
         capturedPrompts.push(context.messages.map((message) => message.content).join('\n\n'));
         const index = capturedPrompts.length;
+        expect(context.correlation?.originStage).toBe(`heartbeat.deliberation.${index === 1 ? 'evidence' : index === 2 ? 'synthesis' : 'contradiction'}`);
+        expect(context.correlation?.channelId).toBe('internal:reflection:daily-review');
         if (index === 1) {
           expect(purpose).toBe('background');
           return {

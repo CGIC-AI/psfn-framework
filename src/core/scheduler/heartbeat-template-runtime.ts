@@ -11,7 +11,12 @@ import {
 } from './heartbeat-policy.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
 import type { ValuesDeliberationMetadata } from '../../faculties/values/store.js';
-import type { CompletionPurpose, ContextMessage, PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
+import type {
+  CompletionPurpose,
+  ContextMessage,
+  ObservabilityCallType,
+  PostTurnActionCandidate,
+} from '../../shared/contracts/runtime.js';
 import type {
   HeartbeatAgent,
   HeartbeatRunTemplateResult,
@@ -918,14 +923,68 @@ export function createHeartbeatTemplateRuntime(
   const toDeliberationMetadata = (
     result: DeliberationResult,
   ): ValuesDeliberationMetadata => ({
-    sessionId: result.sessionId,
-    stopReason: result.stopReason,
+    sessionId: result.episode.id,
+    stopReason: result.episode.exit.reason,
     rounds: result.rounds.length,
     totalInputTokens: result.totalInputTokens,
     totalOutputTokens: result.totalOutputTokens,
     totalTokens: result.totalTokens,
     estimatedCostUsd: result.estimatedCostUsd,
     durationMs: result.durationMs,
+  });
+
+  const resolveReflectionDeliberationCallType = (
+    source: HeartbeatExecutionSource,
+  ): ObservabilityCallType => (source === 'manual' ? 'background' : 'scheduled');
+
+  const buildReflectionDeliberationCorrelation = (
+    source: HeartbeatExecutionSource,
+    reflectionChannelId: string,
+    processId: string,
+    originStage = 'heartbeat.deliberation',
+  ) => {
+    const callType = resolveReflectionDeliberationCallType(source);
+    return {
+      requestId: processId,
+      channelId: reflectionChannelId,
+      callType,
+      originType: callType,
+      originStage,
+      purpose: originStage,
+    };
+  };
+
+  const buildReflectionDeliberationOptions = (
+    template: ReflectionTemplate,
+    source: HeartbeatExecutionSource,
+    reflectionChannelId: string,
+    processId: string,
+  ) => ({
+    episode: {
+      kind: 'maintenance_reflection' as const,
+      mode: 'background_bounded' as const,
+    },
+    correlation: buildReflectionDeliberationCorrelation(source, reflectionChannelId, processId),
+    ...(template.deliberation?.voices ? { voices: template.deliberation.voices } : {}),
+    caps: {
+      ...(template.deliberation?.maxRounds !== undefined
+        ? { maxRounds: template.deliberation.maxRounds }
+        : {}),
+      ...(template.deliberation?.maxTotalTokens !== undefined
+        ? { maxTotalTokens: template.deliberation.maxTotalTokens }
+        : {}),
+      ...(template.deliberation?.maxWallTimeMs !== undefined
+        ? { maxWallTimeMs: template.deliberation.maxWallTimeMs }
+        : {}),
+    },
+    cost: {
+      ...(template.deliberation?.inputUsdPerMillionTokens !== undefined
+        ? { inputUsdPerMillionTokens: template.deliberation.inputUsdPerMillionTokens }
+        : {}),
+      ...(template.deliberation?.outputUsdPerMillionTokens !== undefined
+        ? { outputUsdPerMillionTokens: template.deliberation.outputUsdPerMillionTokens }
+        : {}),
+    },
   });
 
   const mergeInternalStateContextMetacognitiveFlags = (
@@ -1054,6 +1113,9 @@ export function createHeartbeatTemplateRuntime(
   const runExperientialTemplateDeliberation = async (
     template: ReflectionTemplate,
     prompt: string,
+    source: HeartbeatExecutionSource,
+    reflectionChannelId: string,
+    processId: string,
   ): Promise<ReflectionDeliberationExecutionResult> => {
     const llmProvider = runtimeOptions.llmProvider;
     if (!llmProvider) {
@@ -1094,7 +1156,16 @@ export function createHeartbeatTemplateRuntime(
 
       const stageStartedAt = Date.now();
       const { systemPrompt, messages, purpose } = builder();
-      const response = await llmProvider.complete({ systemPrompt, messages }, purpose);
+      const response = await llmProvider.complete({
+        systemPrompt,
+        messages,
+        correlation: buildReflectionDeliberationCorrelation(
+          source,
+          reflectionChannelId,
+          processId,
+          `heartbeat.deliberation.${stage}`,
+        ),
+      }, purpose);
       const content = response.content.trim();
 
       totalInputTokens += response.inputTokens;
@@ -1340,9 +1411,18 @@ export function createHeartbeatTemplateRuntime(
   const runTemplateDeliberation = async (
     template: ReflectionTemplate,
     prompt: string,
+    source: HeartbeatExecutionSource,
+    reflectionChannelId: string,
+    processId: string,
   ): Promise<ReflectionDeliberationExecutionResult> => {
     if (isExperientialDeliberationTemplate(template)) {
-      return runExperientialTemplateDeliberation(template, prompt);
+      return runExperientialTemplateDeliberation(
+        template,
+        prompt,
+        source,
+        reflectionChannelId,
+        processId,
+      );
     }
 
     const llmProvider = runtimeOptions.llmProvider;
@@ -1352,28 +1432,7 @@ export function createHeartbeatTemplateRuntime(
     const result = await runDeliberation(
       llmProvider,
       prompt,
-      {
-        ...(template.deliberation?.voices ? { voices: template.deliberation.voices } : {}),
-        caps: {
-          ...(template.deliberation?.maxRounds !== undefined
-            ? { maxRounds: template.deliberation.maxRounds }
-            : {}),
-          ...(template.deliberation?.maxTotalTokens !== undefined
-            ? { maxTotalTokens: template.deliberation.maxTotalTokens }
-            : {}),
-          ...(template.deliberation?.maxWallTimeMs !== undefined
-            ? { maxWallTimeMs: template.deliberation.maxWallTimeMs }
-            : {}),
-        },
-        cost: {
-          ...(template.deliberation?.inputUsdPerMillionTokens !== undefined
-            ? { inputUsdPerMillionTokens: template.deliberation.inputUsdPerMillionTokens }
-            : {}),
-          ...(template.deliberation?.outputUsdPerMillionTokens !== undefined
-            ? { outputUsdPerMillionTokens: template.deliberation.outputUsdPerMillionTokens }
-            : {}),
-        },
-      },
+      buildReflectionDeliberationOptions(template, source, reflectionChannelId, processId),
     );
     return {
       reflection: result.output,
@@ -1441,7 +1500,13 @@ export function createHeartbeatTemplateRuntime(
       }
 
       try {
-        const deliberationResult = await runTemplateDeliberation(template, reflectionPrompt);
+        const deliberationResult = await runTemplateDeliberation(
+          template,
+          reflectionPrompt,
+          source,
+          reflectionChannelId,
+          processId,
+        );
         const normalizedReflection = normalizeTemplateReflectionOutput(template, deliberationResult.reflection);
         reflectionText = normalizedReflection.reflection;
         silentInterval = normalizedReflection.silent;

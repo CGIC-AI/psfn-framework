@@ -82,7 +82,7 @@ export function createSubstrateStreamFn(
     const purpose = resolveStreamBudgetPurpose(requestContext);
     const processName = requestContext?.originStage ?? requestContext?.purpose ?? 'agent.stream.prompt';
     const service = requestContext?.callType ?? 'chat';
-    const estimatedInputTokens = estimateContextInputTokens(context);
+    const estimatedInputTokens = resolveEstimatedBudgetInputTokens(budgetController, context);
     const callerMaxTokens = resolveCallerMaxTokens(options?.maxTokens);
     const candidates = resolveStreamCandidates(
       config,
@@ -168,7 +168,7 @@ interface ExecuteStreamCandidateParams {
   purpose: RoutingPurpose;
   service: string;
   processName: string;
-  estimatedInputTokens: number;
+  estimatedInputTokens?: number;
   requestContext: Partial<CorrelationMetadata> | undefined;
   budgetController: ModelBudgetController;
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
@@ -182,7 +182,7 @@ function executeStreamCandidate(params: ExecuteStreamCandidateParams): AsyncGene
     purpose: params.purpose,
     service: params.service,
     process: params.processName,
-    estimatedInputTokens: params.estimatedInputTokens,
+    estimatedInputTokens: params.estimatedInputTokens ?? 0,
     correlation: params.requestContext,
   });
   if (!preflight.allowed && preflight.blockedEvent) {
@@ -727,6 +727,16 @@ function resolveStreamBudgetPurpose(context: Partial<CorrelationMetadata> | unde
   if (raw.includes('context')) return 'context';
   if (raw.includes('longcontext') || raw.includes('long_context')) return 'context';
   return 'chat';
+}
+
+function resolveEstimatedBudgetInputTokens(
+  budgetController: ModelBudgetController,
+  context: unknown,
+): number | undefined {
+  if (!budgetController.requiresPreflightEstimate()) {
+    return undefined;
+  }
+  return estimateContextInputTokens(context);
 }
 
 function estimateContextInputTokens(context: unknown): number {

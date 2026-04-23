@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
@@ -8,7 +8,7 @@ import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntr
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
 import * as models from '../../primitives/llm/models.js';
-import { ModelBudgetController } from '../../primitives/llm/model-budget.js';
+import { MODEL_USAGE_LEDGER_FILE_NAME, ModelBudgetController } from '../../primitives/llm/model-budget.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
 const streamAdapterMocks = vi.hoisted(() => ({
@@ -365,6 +365,50 @@ describe('createSubstrateStreamFn', () => {
       estimatedRequestCostUsd: expect.any(Number),
     });
     expect((blockedEvents[0].estimatedRequestCostUsd as number)).toBeGreaterThan(0);
+  });
+
+  it('skips preflight token estimation when model budget policy is disabled', async () => {
+    const baseConfig = makeConfig();
+    const baseRegistry = baseConfig.modelRegistry!;
+    const config = makeConfig({
+      modelRegistry: {
+        ...baseRegistry,
+        budgetPolicy: {
+          enabled: false,
+          dailyUsdLimit: 1,
+          monthlyUsdLimit: 10,
+          currency: 'USD',
+        },
+      },
+    });
+    const circular = {} as { self?: unknown };
+    circular.self = circular;
+    const streamFn = makeStreamFn(config);
+    const model = resolveModel(config, 'chat');
+
+    streamAdapterMocks.transportStream.mockResolvedValue({
+      content: 'ok',
+      toolCalls: [],
+      model: 'openrouter/deepseek/deepseek-v3.2',
+      inputTokens: 13,
+      outputTokens: 7,
+      stopReason: 'stop',
+    });
+
+    const stream = await streamFn(model, {
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'hello' }],
+      debugOnly: circular,
+    } as any, {});
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+
+    expect((events.at(-1) as { type: string }).type).toBe('done');
+    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
+    const parsed = JSON.parse(raw) as { records: Array<Record<string, unknown>> };
+    expect(parsed.records[0]).toMatchObject({
+      inputTokens: 13,
+      outputTokens: 7,
+    });
   });
 
   it('falls back to the next configured chat candidate when the primary stream errors before output commits', async () => {

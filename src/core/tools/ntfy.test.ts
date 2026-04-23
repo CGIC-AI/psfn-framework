@@ -9,6 +9,15 @@ import type { NotificationPort } from '../../boundary/gateway/notification-port.
 import { ExternalCommunicationRateLimiter } from '../../system/capabilities/safeguards.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
+const companionBriefSender = {
+  kind: 'companion',
+  provenance: 'companion.notify.brief',
+} as const;
+const systemApprovalSender = {
+  kind: 'system',
+  provenance: 'system.approval.request',
+} as const;
+
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
   return result.content[0]?.text ?? '';
 }
@@ -35,6 +44,9 @@ describe('notify tool', () => {
     expect(resultText(result as any)).toContain('topic "ops"');
     expect(resultText(result as any)).toContain('id msg-1');
     expect((result.details as any).isError).toBeUndefined();
+    expect(notifier.notify).toHaveBeenCalledWith(expect.objectContaining({
+      sender: companionBriefSender,
+    }));
   });
 
   it('returns explicit debounced text when a duplicate brief is suppressed', async () => {
@@ -216,7 +228,10 @@ describe('notify tool', () => {
         },
       );
 
-      await notifier.notify({ message: 'Operator alert' });
+      await notifier.notify({
+        sender: systemApprovalSender,
+        message: 'Operator alert',
+      });
 
       expect(fetchSpy).toHaveBeenCalledWith(
         'https://ntfy.local/ops',
@@ -226,6 +241,29 @@ describe('notify tool', () => {
           }),
         }),
       );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('fails closed when the sender provenance does not match the sender kind', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    try {
+      const notifier = createHttpNotificationPortFromEnv({
+        NTFY_BASE_URL: 'https://ntfy.local',
+        NTFY_TOPIC: 'ops',
+      });
+
+      await expect(notifier.notify({
+        sender: {
+          kind: 'system',
+          provenance: 'companion.notify.brief',
+        },
+        message: 'Operator alert',
+      })).rejects.toThrow('notify sender provenance must start with "system."');
+      expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }

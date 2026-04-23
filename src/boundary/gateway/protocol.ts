@@ -31,6 +31,7 @@ import type {
   ApiTelemetryIngestRpcResult,
 } from '../../channels/api/types.js';
 import type { RuntimeServiceHealthSnapshot } from '../../operator/tool-health/types.js';
+import type { NotificationSenderMetadata } from './notification-sender.js';
 
 // ── Request parameter types (agent → gateway) ──
 
@@ -310,6 +311,7 @@ export interface NotifyNtfyParams {
   title?: string;
   priority?: number;
   topic?: string;
+  sender: NotificationSenderMetadata;
 }
 
 export interface SessionHmacSignParams {

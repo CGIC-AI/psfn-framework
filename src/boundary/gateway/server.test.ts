@@ -1163,6 +1163,10 @@ describe('GatewayServer', () => {
         title: 'Incident',
         priority: 5,
         topic: 'urgent',
+        sender: {
+          kind: 'system',
+          provenance: 'system.operator_alert.prompt_generation_failure',
+        },
       });
 
       expect(response.result).toEqual({
@@ -1201,6 +1205,10 @@ describe('GatewayServer', () => {
         message: 'Discord gateway offline',
         title: 'Incident',
         priority: 5,
+        sender: {
+          kind: 'companion',
+          provenance: 'companion.notify.brief',
+        },
       };
       const first = await invokeRpc(conn, 2, 'notify.ntfy', params);
       const second = await invokeRpc(conn, 3, 'notify.ntfy', params);
@@ -1232,6 +1240,10 @@ describe('GatewayServer', () => {
 
       const response = await invokeRpc(conn, 4, 'notify.ntfy', {
         message: 'Discord gateway offline',
+        sender: {
+          kind: 'companion',
+          provenance: 'companion.notify.brief',
+        },
       });
 
       expect(response.error).toBeDefined();
@@ -1254,6 +1266,10 @@ describe('GatewayServer', () => {
       const response = await invokeRpc(conn, 5, 'notify.ntfy', {
         message: 'unicode title test',
         title: '😺 Alert',
+        sender: {
+          kind: 'system',
+          provenance: 'system.operator_alert.prompt_generation_failure',
+        },
       });
 
       expect(response.result).toEqual({
@@ -1268,6 +1284,67 @@ describe('GatewayServer', () => {
       expect(encodedTitle).toBeDefined();
       expect(encodedTitle).not.toContain('😺');
       expect(Buffer.from(encodedTitle!, 'latin1').toString('utf8')).toBe('😺 Alert');
+    });
+
+    it('does not debounce identical payloads across sender provenance boundaries', async () => {
+      fetchMock.mockResolvedValue(new Response('', { status: 200 }));
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        ntfy: {
+          baseUrl: 'https://ntfy.local',
+          defaultTopic: 'ops',
+          timeoutMs: 1_000,
+          debounceWindowMs: 60_000,
+        },
+      });
+
+      const first = await invokeRpc(conn, 6, 'notify.ntfy', {
+        message: 'Shared message body',
+        title: 'Incident',
+        priority: 5,
+        sender: {
+          kind: 'companion',
+          provenance: 'companion.notify.brief',
+        },
+      });
+      const second = await invokeRpc(conn, 7, 'notify.ntfy', {
+        message: 'Shared message body',
+        title: 'Incident',
+        priority: 5,
+        sender: {
+          kind: 'system',
+          provenance: 'system.operator_alert.prompt_generation_failure',
+        },
+      });
+
+      expect(first.result.status).toBe('sent');
+      expect(second.result.status).toBe('sent');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('fails closed when sender metadata is malformed', async () => {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        ntfy: {
+          baseUrl: 'https://ntfy.local',
+          defaultTopic: 'ops',
+          timeoutMs: 1_000,
+          debounceWindowMs: 60_000,
+        },
+      });
+
+      const response = await invokeRpc(conn, 8, 'notify.ntfy', {
+        message: 'Discord gateway offline',
+        sender: {
+          kind: 'system',
+          provenance: 'companion.notify.brief',
+        },
+      });
+
+      expect(response.error).toBeDefined();
+      expect(response.error.code).toBe(-32003);
+      expect(response.error.message).toContain('notify sender provenance must start with "system."');
+      expect(fetchMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1328,6 +1405,10 @@ describe('GatewayServer', () => {
 
       const notifyFailure = await invokeRpc(conn, 601, 'notify.ntfy', {
         message: 'operator alert',
+        sender: {
+          kind: 'system',
+          provenance: 'system.operator_alert.prompt_generation_failure',
+        },
       });
       expect(notifyFailure.error).toBeDefined();
       expect(notifyFailure.error.message).toContain('ntfy request failed: 500');

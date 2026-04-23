@@ -62,6 +62,10 @@ describe('operator alerts', () => {
     await handler(makeEvent());
 
     expect(notifier.notify).toHaveBeenCalledWith(expect.objectContaining({
+      sender: {
+        kind: 'system',
+        provenance: 'system.operator_alert.prompt_generation_failure',
+      },
       title: 'PSFN prompt generation failure',
       priority: 5,
       message: expect.stringContaining('Last tried: openrouter/moonshotai/kimi-k2.5'),

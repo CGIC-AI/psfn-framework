@@ -8,6 +8,7 @@ import {
   type NotifyNtfyParams,
   type NotifyNtfyResult,
 } from './protocol.js';
+import { normalizeNotificationSenderMetadata } from './notification-sender.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONFIRMATION_NOTIFICATION_PRIORITY = 4;
@@ -38,6 +39,16 @@ export class GatewayNtfyNotifier {
       throw new JSONRPCErrorException('ntfy is not configured', GatewayErrors.PROVIDER_ERROR);
     }
 
+    let sender;
+    try {
+      sender = normalizeNotificationSenderMetadata(params.sender);
+    } catch (error) {
+      throw new JSONRPCErrorException(
+        `notify.ntfy ${toErrorMessage(error)}`,
+        GatewayErrors.PROVIDER_ERROR,
+      );
+    }
+
     const message = params.message.trim();
     if (!message) {
       throw new JSONRPCErrorException('notify.ntfy requires a non-empty message', GatewayErrors.PROVIDER_ERROR);
@@ -51,7 +62,13 @@ export class GatewayNtfyNotifier {
     const title = params.title?.trim();
     const priority = this.normalizePriority(params.priority);
 
-    const fingerprint = JSON.stringify({ topic, title: title ?? '', priority, message });
+    const fingerprint = JSON.stringify({
+      sender,
+      topic,
+      title: title ?? '',
+      priority,
+      message,
+    });
     if (this.isDebouncedAlert(fingerprint, config.debounceWindowMs)) {
       return { status: 'debounced', topic };
     }

@@ -12,6 +12,10 @@ import {
   type CredentialVaultPort,
 } from '../../boundary/custody/credential-vault.js';
 import type { NotificationPort } from '../../boundary/gateway/notification-port.js';
+import {
+  normalizeNotificationSenderMetadata,
+  type NotificationSenderMetadata,
+} from '../../boundary/gateway/notification-sender.js';
 import { textResult, textResultWithError } from './results.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -20,6 +24,14 @@ import { getRequestContext } from '../../primitives/llm/request-context.js';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
 const DEFAULT_APPROVAL_REQUEST_PRIORITY = 4;
+const COMPANION_NOTIFY_BRIEF_SENDER = Object.freeze({
+  kind: 'companion',
+  provenance: 'companion.notify.brief',
+} satisfies NotificationSenderMetadata);
+const SYSTEM_APPROVAL_REQUEST_SENDER = Object.freeze({
+  kind: 'system',
+  provenance: 'system.approval.request',
+} satisfies NotificationSenderMetadata);
 
 export type { NotificationPort } from '../../boundary/gateway/notification-port.js';
 
@@ -146,6 +158,8 @@ class HttpNtfyNotifier implements NotificationPort {
       throw new Error('ntfy is not configured (set NTFY_BASE_URL and NTFY_TOPIC)');
     }
 
+    const sender = normalizeNotificationSenderMetadata(params.sender);
+
     const message = params.message.trim();
     if (!message) {
       throw new Error('message is required');
@@ -155,7 +169,13 @@ class HttpNtfyNotifier implements NotificationPort {
     const title = params.title?.trim();
     const priority = this.normalizePriority(params.priority);
 
-    const fingerprint = JSON.stringify({ topic, title: title ?? '', priority, message });
+    const fingerprint = JSON.stringify({
+      sender,
+      topic,
+      title: title ?? '',
+      priority,
+      message,
+    });
     if (this.isDebounced(fingerprint)) {
       return { status: 'debounced', topic };
     }
@@ -255,6 +275,7 @@ class DefaultNotifyDispatcher implements NotifyDispatcher {
     this.enforceRateLimit(budgetChannel, topic || 'default-topic');
 
     const result = await this.briefNotifier.notify({
+      sender: COMPANION_NOTIFY_BRIEF_SENDER,
       message,
       title: request.title?.trim(),
       priority: request.priority,
@@ -525,6 +546,7 @@ export async function deliverApprovalRequestNotification(options: {
 
   try {
     const result = await options.briefNotifier.notify({
+      sender: SYSTEM_APPROVAL_REQUEST_SENDER,
       message: notification,
       title: 'Companion approval required',
       priority: DEFAULT_APPROVAL_REQUEST_PRIORITY,
@@ -556,7 +578,10 @@ export function createGatewayNotificationPort(
   gateway: { notifyNtfy(params: NotifyNtfyParams): Promise<NotifyNtfyResult> },
 ): NotificationPort {
   return {
-    notify: (params) => gateway.notifyNtfy(params),
+    notify: (params) => gateway.notifyNtfy({
+      ...params,
+      sender: normalizeNotificationSenderMetadata(params.sender),
+    }),
   };
 }
 

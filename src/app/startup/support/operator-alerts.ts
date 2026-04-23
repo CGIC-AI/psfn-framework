@@ -1,9 +1,14 @@
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { StreamTerminalFailureEvent } from '../../../core/agent/stream-adapter.js';
 import type { NotificationPort } from '../../../core/tools/ntfy.js';
+import type { NotificationSenderMetadata } from '../../../boundary/gateway/notification-sender.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 const log = createComponentLogger('OperatorAlerts');
+const PROMPT_GENERATION_FAILURE_SENDER: NotificationSenderMetadata = Object.freeze({
+  kind: 'system',
+  provenance: 'system.operator_alert.prompt_generation_failure',
+});
 
 export function createPromptGenerationFailureAlertHandler(
   notifier: NotificationPort,
@@ -14,6 +19,7 @@ export function createPromptGenerationFailureAlertHandler(
   return async (event: StreamTerminalFailureEvent): Promise<void> => {
     try {
       await notifier.notify({
+        sender: PROMPT_GENERATION_FAILURE_SENDER,
         title: `${resolvedCompanionName} prompt generation failure`,
         priority: 5,
         message: formatPromptGenerationFailureAlert(event, resolvedCompanionName),

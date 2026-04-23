@@ -18,6 +18,7 @@ import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
+import { withNodeVmSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
 import { wireShardAndThinkRuntime } from './composition.js';
 
 type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous';
@@ -214,6 +215,18 @@ function wireSplitThinkTool(options: {
   return target;
 }
 
+function makeExecutionPort(
+  overrides: Partial<SandboxExecutionPort> = {},
+): SandboxExecutionPort {
+  const base = withNodeVmSandboxExecutionPort(null);
+  return {
+    boundary: overrides.boundary ?? base.boundary,
+    codeExecutionBoundary: overrides.codeExecutionBoundary ?? base.codeExecutionBoundary,
+    shellExec: overrides.shellExec ?? base.shellExec,
+    executeCode: overrides.executeCode ?? base.executeCode,
+  };
+}
+
 describe('wireShardAndThinkRuntime split-mode module wiring', () => {
   it('registers subagent as the canonical core surface and keeps spawn_subagent as extended compatibility', () => {
     const llm: GatewayLLMProvider = {
@@ -375,7 +388,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
 
     try {
       const llm = makeGatewayLLM([makeShellExecScript()], registryPath);
-      const executionPort: SandboxExecutionPort = {
+      const executionPort = makeExecutionPort({
         boundary: {
           kind: 'sandbox_broker',
           isolatedFromGatewaySecrets: true,
@@ -392,7 +405,12 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
           truncated: false,
           durationMs: 7,
         })),
-      };
+        codeExecutionBoundary: {
+          kind: 'node_vm',
+          isolatedFromGatewaySecrets: true,
+          reason: 'test think adapter',
+        },
+      });
       const target = wireSplitThinkTool({
         tier: 'autonomous',
         llmProvider: llm,
@@ -407,6 +425,49 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
       expect(text).toContain('"ok":true');
       expect(text).toContain('"stdout":"v22.0.0"');
       expect(executionPort.shellExec).toHaveBeenCalledWith('node', ['-v'], {});
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('routes think code execution through the sandbox execution port', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-split-code-broker-'));
+    const registryPath = join(root, 'registry.json');
+    writeFileSync(registryPath, '[]', 'utf-8');
+
+    try {
+      const llm = makeGatewayLLM(['```repl\nprint("through-port"); FINAL("done");\n```'], registryPath);
+      const fallbackPort = withNodeVmSandboxExecutionPort(null);
+      const executeCode = vi.fn(fallbackPort.executeCode);
+      const executionPort = makeExecutionPort({
+        boundary: {
+          kind: 'sandbox_broker',
+          isolatedFromGatewaySecrets: true,
+          brokerId: 'test-broker',
+        },
+        codeExecutionBoundary: {
+          kind: 'node_vm',
+          isolatedFromGatewaySecrets: true,
+          reason: 'test think adapter',
+        },
+        executeCode,
+      });
+      const target = wireSplitThinkTool({
+        tier: 'autonomous',
+        llmProvider: llm,
+        eventBus: new EventBus(),
+        executionPort,
+      });
+
+      const think = findThinkTool(target);
+      const result = await think.execute('call-code', { task: 'exercise think execution port' });
+      const text = extractText(result);
+
+      expect(text).toContain('done');
+      expect(executeCode).toHaveBeenCalledTimes(1);
+      expect(executeCode).toHaveBeenCalledWith(expect.objectContaining({
+        code: expect.stringContaining('FINAL("done");'),
+      }));
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

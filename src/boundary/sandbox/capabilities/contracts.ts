@@ -58,13 +58,33 @@ export type SandboxExecutionBoundary =
   | SandboxBrokerExecutionBoundary
   | GatewayProcessExecutionBoundary;
 
+export interface NodeVmCodeExecutionBoundary {
+  kind: 'node_vm';
+  isolatedFromGatewaySecrets: boolean;
+  reason: string;
+}
+
+export type SandboxCodeExecutionBoundary = NodeVmCodeExecutionBoundary;
+
+export interface SandboxCodeExecutionRequest {
+  code: string;
+  context: vm.Context;
+  timeoutMs: number;
+  memoryCeilingBytes?: number;
+  assertMemoryCeiling?: () => void;
+}
+
 export interface SandboxExecutionPort {
   readonly boundary: SandboxExecutionBoundary;
+  readonly codeExecutionBoundary: SandboxCodeExecutionBoundary;
   shellExec: (
     command: string,
     args?: string[],
     options?: { cwd?: string; timeoutMs?: number; maxOutputChars?: number },
   ) => Promise<ShellExecView>;
+  executeCode: (
+    request: SandboxCodeExecutionRequest,
+  ) => Promise<void>;
 }
 
 export type { ModuleRecord } from '../../../system/modules/types.js';

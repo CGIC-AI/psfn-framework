@@ -10,8 +10,10 @@ import type {
   GatewayREPLCapabilities,
   SandboxBudgetRef,
   SandboxDeps,
+  SandboxExecutionPort,
 } from '../../../boundary/sandbox/capabilities/contracts.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { withNodeVmSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
 import {
   createLLMCapabilities,
   createMemoryCapabilities,
@@ -45,11 +47,13 @@ export class REPLSandbox {
   private builtinKeysSet: Set<string>;
   private currentEvidence: ThinkEvidence[] = [];
   private memoryCeilingBytes: number | undefined;
+  private executionPort: SandboxExecutionPort;
 
   constructor(deps: SandboxDeps, budgetRef?: SandboxBudgetRef, limits?: SandboxLimits) {
     this.deps = deps;
     this.budgetRef = budgetRef;
     this.memoryCeilingBytes = limits?.memoryCeilingBytes;
+    this.executionPort = withNodeVmSandboxExecutionPort(this.deps.executionPort ?? null);
 
     const print = (...args: unknown[]) => {
       this.outputBuffer.push(args.map(value => {
@@ -123,7 +127,7 @@ export class REPLSandbox {
     });
 
     const shell = createShellCapabilities({
-      executionPort: this.deps.executionPort ?? null,
+      executionPort: this.executionPort,
       budgetRef: this.budgetRef,
     });
 
@@ -134,9 +138,8 @@ export class REPLSandbox {
     const allowRepoMutation = this.deps.mutationPolicy?.allowRepoMutation === true;
     const allowWorkspaceWrite = this.deps.mutationPolicy?.allowWorkspaceWrite === true;
     const hasShellExecPort = Boolean(
-      this.deps.executionPort
-      && this.deps.executionPort.boundary.kind === 'sandbox_broker'
-      && typeof this.deps.executionPort.shellExec === 'function',
+      this.executionPort.boundary.kind === 'sandbox_broker'
+      && typeof this.executionPort.shellExec === 'function',
     );
 
     const contextValues: Record<string, unknown> = {
@@ -283,37 +286,14 @@ export class REPLSandbox {
     const wrapped = `(async () => {\n${transformed}\n})()`;
 
     try {
+      await this.executionPort.executeCode({
+        code: wrapped,
+        context: this.context,
+        timeoutMs,
+        memoryCeilingBytes: this.memoryCeilingBytes,
+        assertMemoryCeiling: () => this.assertMemoryCeiling(),
+      });
       this.assertMemoryCeiling();
-      const script = new vm.Script(wrapped, { filename: 'repl' });
-      const promise = Promise.resolve(script.runInContext(this.context, { timeout: timeoutMs }));
-      let timeoutHandle: NodeJS.Timeout | undefined;
-      let memoryGuardHandle: NodeJS.Timeout | undefined;
-      const timeout = new Promise<never>((_resolve, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(`Execution timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-      });
-      const memoryGuard = new Promise<never>((_resolve, reject) => {
-        if (!this.memoryCeilingBytes || this.memoryCeilingBytes <= 0) return;
-        memoryGuardHandle = setInterval(() => {
-          try {
-            this.assertMemoryCeiling();
-          } catch (error) {
-            if (memoryGuardHandle) {
-              clearInterval(memoryGuardHandle);
-              memoryGuardHandle = undefined;
-            }
-            reject(error);
-          }
-        }, 20);
-      });
-      try {
-        await Promise.race([promise, timeout, memoryGuard]);
-        this.assertMemoryCeiling();
-      } finally {
-        if (timeoutHandle) clearTimeout(timeoutHandle);
-        if (memoryGuardHandle) clearInterval(memoryGuardHandle);
-      }
 
       const output = this.truncate(this.outputBuffer.join('\n'), truncationLimit);
       const variablesChanged = this.diffVars(before);

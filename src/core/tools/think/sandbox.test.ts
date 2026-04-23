@@ -8,6 +8,7 @@ import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import { EventBus } from '../../../shared/event-bus.js';
 import { Scheduler } from '../../scheduler/scheduler.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
+import { withNodeVmSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
 import type { REPLMutationPolicy } from './types.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
@@ -85,6 +86,18 @@ function nullDeps(
     scheduler: null,
     eventBus: null,
     mutationPolicy,
+  };
+}
+
+function makeExecutionPort(
+  overrides: Partial<SandboxExecutionPort> = {},
+): SandboxExecutionPort {
+  const base = withNodeVmSandboxExecutionPort(null);
+  return {
+    boundary: overrides.boundary ?? base.boundary,
+    codeExecutionBoundary: overrides.codeExecutionBoundary ?? base.codeExecutionBoundary,
+    shellExec: overrides.shellExec ?? base.shellExec,
+    executeCode: overrides.executeCode ?? base.executeCode,
   };
 }
 
@@ -406,8 +419,35 @@ describe('REPLSandbox', () => {
     expect(result.output).toBe(['undefined', 'undefined', 'undefined'].join('\n'));
   });
 
+  it('routes code execution through the sandbox execution port', async () => {
+    const fallbackPort = withNodeVmSandboxExecutionPort(null);
+    const executeCode = vi.fn(fallbackPort.executeCode);
+    const sandbox = new REPLSandbox(nullDeps(mockLLM(), makeExecutionPort({
+      executeCode,
+      codeExecutionBoundary: {
+        kind: 'node_vm',
+        isolatedFromGatewaySecrets: false,
+        reason: 'test execution spy',
+      },
+    })));
+
+    const result = await sandbox.execute(
+      'var counter = 1; print(counter);',
+      5000,
+      8192,
+    );
+
+    expect(result.output).toBe('1');
+    expect(result.error).toBeNull();
+    expect(executeCode).toHaveBeenCalledTimes(1);
+    expect(executeCode).toHaveBeenCalledWith(expect.objectContaining({
+      timeoutMs: 5000,
+      code: expect.stringContaining('globalThis.counter = 1;'),
+    }));
+  });
+
   it('shell_exec helper calls the sandbox execution port when allowed', async () => {
-    const executionPort = {
+    const executionPort = makeExecutionPort({
       boundary: {
         kind: 'sandbox_broker',
         isolatedFromGatewaySecrets: true,
@@ -423,7 +463,12 @@ describe('REPLSandbox', () => {
         truncated: false,
         durationMs: 12,
       })),
-    };
+      codeExecutionBoundary: {
+        kind: 'node_vm',
+        isolatedFromGatewaySecrets: true,
+        reason: 'test node:vm adapter',
+      },
+    });
     const sandbox = new REPLSandbox(nullDeps(mockLLM(), executionPort));
 
     const result = await sandbox.execute(
@@ -437,13 +482,18 @@ describe('REPLSandbox', () => {
   });
 
   it('fails closed when the execution port returns an invalid shell result shape', async () => {
-    const executionPort = {
+    const executionPort = makeExecutionPort({
       boundary: {
         kind: 'sandbox_broker',
         isolatedFromGatewaySecrets: true,
       },
       shellExec: vi.fn(async () => ({ exitCode: 0 })),
-    };
+      codeExecutionBoundary: {
+        kind: 'node_vm',
+        isolatedFromGatewaySecrets: true,
+        reason: 'test node:vm adapter',
+      },
+    });
     const sandbox = new REPLSandbox(nullDeps(mockLLM(), executionPort));
 
     const result = await sandbox.execute(
@@ -457,7 +507,7 @@ describe('REPLSandbox', () => {
   });
 
   it('omits shell_exec helper when execution boundary is still the gateway process', async () => {
-    const sandbox = new REPLSandbox(nullDeps(mockLLM(), {
+    const sandbox = new REPLSandbox(nullDeps(mockLLM(), makeExecutionPort({
       boundary: {
         kind: 'gateway_process',
         isolatedFromGatewaySecrets: false,
@@ -474,7 +524,12 @@ describe('REPLSandbox', () => {
         truncated: false,
         durationMs: 12,
       })),
-    }));
+      codeExecutionBoundary: {
+        kind: 'node_vm',
+        isolatedFromGatewaySecrets: false,
+        reason: 'legacy node:vm path',
+      },
+    })));
     const result = await sandbox.execute(
       'print(typeof shell_exec);',
       5000,

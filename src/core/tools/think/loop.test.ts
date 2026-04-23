@@ -5,6 +5,7 @@ import type { REPLDeps, REPLConfig } from './types.js';
 import { DEFAULT_REPL_CONFIG } from './types.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
+import { withNodeVmSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
 
@@ -546,6 +547,51 @@ describe('runRLMLoop', () => {
     const feedback = calls[2][0].messages[2].content;
     expect(feedback).toContain('child conclusion');
     expect(feedback).not.toContain('[Think:');
+  });
+
+  it('routes think and sub_think code execution through the sandbox execution port', async () => {
+    const llm = sequentialLLM([
+      '```repl\nconst child = await sub_think("child task"); print(child);\n```',
+      '```repl\nFINAL("child conclusion")\n```',
+      'FINAL("parent conclusion")',
+    ]);
+    const fallbackPort = withNodeVmSandboxExecutionPort(null);
+    const executeCode = vi.fn(fallbackPort.executeCode);
+
+    const result = await runRLMLoop(
+      'Root task',
+      makeDeps(llm, {
+        executionPort: {
+          ...fallbackPort,
+          codeExecutionBoundary: {
+            kind: 'node_vm',
+            isolatedFromGatewaySecrets: false,
+            reason: 'test execution spy',
+          },
+          executeCode,
+        },
+        getCapabilityTier: () => 'autonomous',
+        compositionalPolicy: {
+          enabled: true,
+          allowedTiers: ['autonomous'],
+          allowedChannelTypes: ['api'],
+          allowedPurposes: ['think'],
+        },
+      }),
+      {
+        channelId: 'api:session-port',
+        requestId: 'req-port',
+        toolCallId: 'tool-port',
+        toolName: 'think',
+        originType: 'tool',
+        originStage: 'repl.think.tool',
+      },
+    );
+
+    expect(result.answer).toBe('parent conclusion');
+    expect(executeCode).toHaveBeenCalledTimes(2);
+    expect(executeCode.mock.calls[0]?.[0]?.code).toContain('sub_think("child task")');
+    expect(executeCode.mock.calls[1]?.[0]?.code).toContain('FINAL("child conclusion")');
   });
 
   it('fails closed when sub_think is denied by compositional policy', async () => {

@@ -3,6 +3,7 @@ import { tagToolWithReversibility } from '../../../system/capabilities/safeguard
 import type { CapabilityAccess } from '../../../system/capabilities/gate.js';
 import type { CorrelationMetadata, ObservabilityCallType, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import { textResultWithError } from '../../tools/results.js';
 import type { ToolCategory } from '../tool-registrar.js';
 import type {
   AdaptiveLoadedExtendedToolState,
@@ -82,6 +83,153 @@ interface ToolRuntimeFacadeOptions {
   getActiveTurnCorrelation: () => CorrelationMetadata | null;
   getActiveTurnTaskKind: () => string | null;
   getActiveTurnIntent: () => string | null;
+}
+
+interface MaintenanceCoreToolPolicy {
+  readonly allowedActions: readonly string[];
+  readonly resolveAction: (params: Record<string, unknown>) => string | null;
+}
+
+const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy>([
+  ['contact', {
+    allowedActions: ['list', 'lookup'],
+    resolveAction: resolveMaintenanceContactAction,
+  }],
+  ['identity', {
+    allowedActions: ['list_layers', 'get_layer', 'diff_layer', 'history'],
+    resolveAction: resolveMaintenanceIdentityAction,
+  }],
+  ['session', {
+    allowedActions: ['list', 'search', 'grep'],
+    resolveAction: resolveMaintenanceSessionAction,
+  }],
+  ['system', {
+    allowedActions: ['read'],
+    resolveAction: resolveMaintenanceSystemAction,
+  }],
+]);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isMaintenanceToolRestrictedTaskKind(taskKind: string | null | undefined): boolean {
+  return taskKind === 'heartbeat' || taskKind === 'reflection';
+}
+
+function resolveMaintenanceIdentityAction(params: Record<string, unknown>): string | null {
+  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!rawAction) {
+    return Object.keys(params).length === 0 ? 'list_layers' : null;
+  }
+  switch (rawAction) {
+    case 'list_layers':
+    case 'get_layer':
+    case 'diff_layer':
+    case 'history':
+    case 'update_layer':
+    case 'rollback_layer':
+    case 'toggle_layer':
+    case 'update_persona':
+    case 'commit_stage':
+    case 'cancel_stage':
+      return rawAction;
+    default:
+      return null;
+  }
+}
+
+function resolveMaintenanceSystemAction(params: Record<string, unknown>): string | null {
+  const action = typeof params.action === 'string' ? params.action.trim() : '';
+  switch (action) {
+    case '':
+    case 'read':
+    case 'settings_get':
+      return 'read';
+    case 'restart':
+    case 'self_restart':
+      return 'restart';
+    case 'rebuild':
+    case 'self_rebuild':
+      return 'rebuild';
+    default:
+      return null;
+  }
+}
+
+function resolveMaintenanceSessionAction(params: Record<string, unknown>): string | null {
+  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!rawAction) {
+    const hasNonListParams = Object.entries(params).some(([key, value]) => (
+      key !== 'action'
+      && key !== 'limit'
+      && value !== undefined
+    ));
+    return hasNonListParams ? null : 'list';
+  }
+  switch (rawAction) {
+    case 'list':
+    case 'session_list':
+      return 'list';
+    case 'new':
+    case 'session_new':
+      return 'new';
+    case 'resume':
+    case 'session_resume':
+      return 'resume';
+    case 'search':
+    case 'session_search':
+      return 'search';
+    case 'grep':
+    case 'session_grep':
+      return 'grep';
+    case 'start_focus':
+    case 'focus_start':
+      return 'start_focus';
+    case 'complete_focus':
+    case 'focus_complete':
+      return 'complete_focus';
+    default:
+      return null;
+  }
+}
+
+function resolveMaintenanceContactAction(params: Record<string, unknown>): string | null {
+  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!rawAction) {
+    const nonActionKeys = Object.entries(params)
+      .filter(([key, value]) => key !== 'action' && value !== undefined)
+      .map(([key]) => key);
+    if (nonActionKeys.length === 0) {
+      return 'list';
+    }
+    if (nonActionKeys.length === 1 && nonActionKeys[0] === 'contactId') {
+      return 'lookup';
+    }
+    return null;
+  }
+  switch (rawAction) {
+    case 'list':
+    case 'contact_list':
+      return 'list';
+    case 'lookup':
+    case 'contact_lookup':
+      return 'lookup';
+    case 'note':
+    case 'contact_note':
+      return 'note';
+    case 'set_trust':
+    case 'contact_set_trust':
+      return 'set_trust';
+    case 'link_identity':
+    case 'contact_link_identity':
+      return 'link_identity';
+    case 'set_channel_privacy':
+    case 'contact_set_channel_privacy':
+      return 'set_channel_privacy';
+    default:
+      return null;
+  }
 }
 
 export class ToolRuntimeFacade {
@@ -322,7 +470,11 @@ export class ToolRuntimeFacade {
     correlation: CorrelationMetadata,
     autoloadOutcome: AutoloadTurnOutcome,
   ): void {
-    const resolution = this.resolveActiveTools(autoloadOutcome.skipped);
+    const resolution = this.applyMaintenanceCoreToolPolicy(
+      this.resolveActiveTools(autoloadOutcome.skipped),
+      taskKind,
+      correlation,
+    );
     applyActiveToolsToAgent({
       resolution,
       withCapabilityGates: tools => this.withCapabilityGates(tools),
@@ -458,12 +610,118 @@ export class ToolRuntimeFacade {
   }
 
   private applyActiveToolsToAgent(): void {
-    const resolution = this.resolveActiveTools();
+    const resolution = this.applyMaintenanceCoreToolPolicy(
+      this.resolveActiveTools(),
+      this.getActiveTurnTaskKind(),
+      this.getActiveTurnCorrelation(),
+    );
     applyActiveToolsToAgent({
       resolution,
       withCapabilityGates: tools => this.withCapabilityGates(tools),
       setAgentTools: tools => this.agent.setTools(tools),
     });
+  }
+
+  private applyMaintenanceCoreToolPolicy(
+    resolution: ActiveToolResolution,
+    taskKind: string | null | undefined,
+    correlation: CorrelationMetadata | null,
+  ): ActiveToolResolution {
+    if (!isMaintenanceToolRestrictedTaskKind(taskKind)) {
+      return resolution;
+    }
+
+    const sourceByToolName = new Map(
+      resolution.snapshotTools.map((entry) => [entry.toolName, entry.source] as const),
+    );
+    const filteredTools: AgentTool<any>[] = [];
+    const filteredSnapshotTools: AdaptiveToolSnapshotTool[] = [];
+
+    for (const tool of resolution.tools) {
+      const source = sourceByToolName.get(tool.name);
+      if (source !== 'core') {
+        filteredTools.push(tool);
+        if (source) {
+          filteredSnapshotTools.push({ toolName: tool.name, source });
+        }
+        continue;
+      }
+
+      const guardedTool = this.createMaintenanceGuardedCoreTool(tool, taskKind, correlation);
+      if (!guardedTool) {
+        this.emitTelemetry('agent.tools.core_guardrail.skipped', {
+          ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.skipped'),
+          toolName: tool.name,
+          taskKind,
+          reason: 'maintenance_turn_allowlist',
+        });
+        continue;
+      }
+
+      filteredTools.push(guardedTool);
+      filteredSnapshotTools.push({ toolName: guardedTool.name, source: 'core' });
+    }
+
+    const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
+      core: 0,
+      promoted: 0,
+      extendedLoaded: 0,
+      autoload: 0,
+      deferred: 0,
+      total: filteredSnapshotTools.length,
+    };
+    for (const entry of filteredSnapshotTools) {
+      if (entry.source === 'core') counts.core += 1;
+      else if (entry.source === 'promoted') counts.promoted += 1;
+      else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
+      else if (entry.source === 'autoload') counts.autoload += 1;
+      else counts.deferred += 1;
+    }
+
+    return {
+      tools: filteredTools,
+      snapshotTools: filteredSnapshotTools,
+      promotedSkipped: resolution.promotedSkipped.map(entry => ({
+        ...entry,
+        ...(entry.missingTokens ? { missingTokens: [...entry.missingTokens] } : {}),
+      })),
+      counts,
+    };
+  }
+
+  private createMaintenanceGuardedCoreTool(
+    tool: AgentTool<any>,
+    taskKind: string,
+    correlation: CorrelationMetadata | null,
+  ): AgentTool<any> | null {
+    const policy = MAINTENANCE_CORE_TOOL_POLICIES.get(tool.name);
+    if (!policy) {
+      return null;
+    }
+
+    return {
+      ...tool,
+      execute: async (toolCallId, params, signal) => {
+        const normalizedParams = isPlainRecord(params) ? params : {};
+        const requestedAction = policy.resolveAction(normalizedParams);
+        if (!requestedAction || !policy.allowedActions.includes(requestedAction)) {
+          this.emitTelemetry('agent.tools.core_guardrail.denied', {
+            ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.denied'),
+            toolName: tool.name,
+            taskKind,
+            requestedAction: requestedAction ?? null,
+            allowedActions: [...policy.allowedActions],
+            reason: 'maintenance_turn_allowlist',
+          });
+          return textResultWithError(
+            `${tool.name} is limited to read-only introspection during ${taskKind} turns. `
+            + `Allowed actions: ${policy.allowedActions.join(', ')}.`,
+            true,
+          );
+        }
+        return tool.execute(toolCallId, params, signal);
+      },
+    };
   }
 }
 

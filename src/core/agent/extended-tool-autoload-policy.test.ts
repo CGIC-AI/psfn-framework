@@ -45,6 +45,22 @@ describe('extended-tool-autoload-policy', () => {
     expect(taskKindIntent).toBe('ops');
   });
 
+  it('classifies reflection turns onto the dedicated reflection intent', () => {
+    const internalIntent = classifyTurnIntent({
+      channelId: 'internal:reflection:musing',
+      channelType: 'terminal',
+      content: 'Reflect on the recent pattern.',
+    });
+    expect(internalIntent).toBe('reflection');
+
+    const taskKindIntent = classifyTurnIntent({
+      channelId: 'discord-general',
+      channelType: 'discord',
+      content: 'quiet background pass',
+    }, 'reflection');
+    expect(taskKindIntent).toBe('reflection');
+  });
+
   it('falls back to social intent for casual conversation', () => {
     const intent = classifyTurnIntent({
       channelId: 'discord-lounge',
@@ -83,6 +99,18 @@ describe('extended-tool-autoload-policy', () => {
     ]));
     expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory.filter(name => name === 'vault')).toHaveLength(1);
     expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory.filter(name => name === 'north_star')).toHaveLength(1);
+  });
+
+  it('keeps reflection intent free of overlay preload candidates', () => {
+    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.reflection).toEqual([]);
+    const policy = createDefaultExtendedToolAutoloadPolicy(2);
+    const selection = policy.selectOverlayCandidates('reflection', [
+      'heartbeat_update_policy',
+      'beads',
+      'vault',
+    ]);
+    expect(selection.selected).toEqual([]);
+    expect(selection.skipped).toEqual([]);
   });
 
   it('classifies tools with explicit core, overlay, and background semantics', () => {

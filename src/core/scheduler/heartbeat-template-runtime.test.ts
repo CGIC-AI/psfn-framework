@@ -345,6 +345,9 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(handleMessage).not.toHaveBeenCalled();
     expect(capturedPrompts).toHaveLength(3);
     expect(capturedPrompts[0]).toContain('Stage: evidence');
+    expect(capturedPrompts[0]).toContain('[Reflection Introspection Policy]');
+    expect(capturedPrompts[0]).toContain('tool_use_mode: prompt_bounded');
+    expect(capturedPrompts[0]).toContain('memory_retrieval_modes: temporal, reflection');
     expect(capturedPrompts[0]).toContain('[Reflection Contact Context]');
     expect(capturedPrompts[0]).toContain('We should revisit the recovery plan tomorrow.');
     expect(capturedPrompts[1]).toContain('Stage: synthesis');
@@ -664,10 +667,16 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         }),
       }));
       const prompt = capturedPrompts[0];
+      const introspectionPolicySection = getPromptSection(prompt, '[Reflection Introspection Policy]');
       const contactSection = getPromptSection(prompt, '[Reflection Contact Context]');
       const recentSessionSection = getPromptSection(prompt, '[Recent Contact Session]');
       const memoryHeaderSection = getPromptSection(prompt, '[Reflection Memory Retrieval]');
       const recentTailSection = getPromptSection(prompt, '[Recent Session Tail]');
+      expect(introspectionPolicySection).toContain('tool_use_mode: bounded_read_only_introspection');
+      expect(introspectionPolicySection).toContain('memory_retrieval_modes: temporal, reflection');
+      expect(introspectionPolicySection).toContain('overlay_tool_activation: forbidden');
+      expect(introspectionPolicySection).toContain('core think tool');
+      expect(introspectionPolicySection).toContain('memory_search, session_messages, session_search');
       expect(contactSection).toContain('contact_id: contact-1');
       expect(contactSection).toContain('trust_level: trusted');
       expect(contactSection).toContain('recent_contact_status: active');
@@ -678,7 +687,8 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(memoryRetrieve).toHaveBeenCalled();
       expect(memoryRetrieve.mock.calls[0]?.[1]).toBe(`internal:reflection:${templateId}`);
       expect(memoryRetrieve.mock.calls[0]?.[4]).toBe('contact-1');
-      expect(memoryRetrieve.mock.calls[0]?.[9]).toEqual({ retrievalMode: 'reflection' });
+      expect(memoryRetrieve.mock.calls[0]?.[9]).toEqual({ retrievalMode: ['temporal', 'reflection'] });
+      expect(memoryRetrieve.mock.calls[0]?.[10]).toEqual(['temporal', 'reflection']);
 
       const raw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
       const entry = JSON.parse(raw.split('\n').at(-1) ?? '{}') as {

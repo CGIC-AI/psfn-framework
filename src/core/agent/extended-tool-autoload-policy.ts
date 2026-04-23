@@ -1,6 +1,6 @@
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 
-export type TurnIntent = 'dev' | 'memory' | 'ops' | 'social';
+export type TurnIntent = 'dev' | 'memory' | 'ops' | 'reflection' | 'social';
 export type ToolTurnClass = 'core' | 'overlay' | 'background';
 export type ExtendedToolTurnClass = Exclude<ToolTurnClass, 'core'>;
 export type OverlaySelectionSkipReason =
@@ -45,7 +45,7 @@ export interface ExtendedToolAutoloadPolicy {
 const DEV_PATTERN = /\b(git|repo|branch|commit|diff|patch|pr|pull request|code|test|build|lint|debug|bug|issue|ticket|beads|refactor|typescript|javascript|python|npm|pnpm|yarn)\b/i;
 const MEMORY_PATTERN = /\b(memory|remember|recall|journal|scratchpad|profile|contact|trust|archive|history|vault|obsidian|note|daily note)\b/i;
 const OPS_PATTERN = /\b(schedule|heartbeat|policy|runtime|settings|restart|rebuild|maintenance|incident|ops|operation)\b/i;
-const OPS_TASK_KINDS = new Set(['heartbeat', 'reflection', 'planning', 'maintenance']);
+const OPS_TASK_KINDS = new Set(['heartbeat', 'planning', 'maintenance']);
 
 export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX = 3;
 export const DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS: ReadonlySet<string> = new Set([
@@ -67,6 +67,7 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'schedule_task',
     'beads',
   ],
+  reflection: [],
   social: [
     'image_create',
     'image_edit',
@@ -191,11 +192,19 @@ export function classifyTurnIntent(
   message: Pick<SubstrateMessage, 'channelId' | 'channelType' | 'content'>,
   taskKind?: string,
 ): TurnIntent {
+  if (message.channelId.startsWith('internal:reflection:')) {
+    return 'reflection';
+  }
+
+  const normalizedTaskKind = taskKind?.trim().toLowerCase();
+  if (normalizedTaskKind === 'reflection') {
+    return 'reflection';
+  }
+
   if (message.channelId.startsWith('internal:')) {
     return 'ops';
   }
 
-  const normalizedTaskKind = taskKind?.trim().toLowerCase();
   if (normalizedTaskKind && OPS_TASK_KINDS.has(normalizedTaskKind)) {
     return 'ops';
   }

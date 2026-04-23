@@ -65,6 +65,11 @@ import {
   type ReflectionGuardrailSnapshotSource,
   type ReflectionGuardrailSummary,
 } from './reflection-guardrail-telemetry.js';
+import {
+  formatReflectionIntrospectionPolicyBlock,
+  resolveReflectionIntrospectionPolicy,
+  type ReflectionIntrospectionPolicy,
+} from './reflection-introspection-policy.js';
 
 const log = createComponentLogger('HeartbeatTemplates');
 
@@ -698,6 +703,7 @@ export function createHeartbeatTemplateRuntime(
 
   const resolveReflectionContactContextBundle = async (
     template: ReflectionTemplate,
+    reflectionPolicy: ReflectionIntrospectionPolicy,
     internalStateContext: ReflectionInternalStateContext | null,
     reflectionChannelId: string,
     reflectionCanonicalContactId: string | undefined,
@@ -809,7 +815,8 @@ export function createHeartbeatTemplateRuntime(
         undefined,
         currentVAD,
         undefined,
-        { retrievalMode: 'reflection' },
+        { retrievalMode: reflectionPolicy.memoryRetrievalModes },
+        reflectionPolicy.memoryRetrievalModes,
       )
       : undefined;
 
@@ -861,6 +868,7 @@ export function createHeartbeatTemplateRuntime(
   const formatNarrativePromptInput = (
     prompt: string,
     context: ReflectionPromptContext,
+    reflectionPolicyBlock: string,
   ): string => {
     const reflectionBundle = mergeReflectionPromptBundles(
       context.contactBundle,
@@ -869,15 +877,20 @@ export function createHeartbeatTemplateRuntime(
     );
 
     if (promptUsesReflectionMacros(prompt)) {
-      return prompt
+      const expandedPrompt = prompt
         .split(REFLECTION_PROMPT_TOKENS.self).join(reflectionBundle?.self ?? '')
         .split(REFLECTION_PROMPT_TOKENS.relational).join(reflectionBundle?.relational ?? '')
         .split(REFLECTION_PROMPT_TOKENS.affect).join(reflectionBundle?.affect ?? '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
+      return joinReflectionPromptSections(
+        reflectionPolicyBlock,
+        expandedPrompt,
+      );
     }
 
     return joinReflectionPromptSections(
+      reflectionPolicyBlock,
       prompt,
       reflectionBundle?.relational,
       reflectionBundle?.affect,
@@ -1452,8 +1465,17 @@ export function createHeartbeatTemplateRuntime(
     const reflectionChannelId = `internal:reflection:${template.id}`;
     const internalStateContext = resolveInternalStateContext(template);
     const reflectionCanonicalContactId = resolveReflectionCanonicalContactId(internalStateContext);
+    const plannedReflectionMode: 'agent' | 'deliberation' = shouldUseDeliberation(template)
+      ? 'deliberation'
+      : 'agent';
+    const reflectionPolicy = resolveReflectionIntrospectionPolicy({
+      template,
+      canonicalContactId: reflectionCanonicalContactId,
+      reflectionMode: plannedReflectionMode,
+    });
     const reflectionContactResolution = await resolveReflectionContactContextBundle(
       template,
+      reflectionPolicy,
       internalStateContext,
       reflectionChannelId,
       reflectionCanonicalContactId,
@@ -1468,6 +1490,7 @@ export function createHeartbeatTemplateRuntime(
         contactBundle: reflectionContactContext ?? undefined,
         substrateContext: reflectionSubstrateContext ?? undefined,
       },
+      formatReflectionIntrospectionPolicyBlock(reflectionPolicy),
     );
     let reflectionText = '';
     let silentInterval = false;

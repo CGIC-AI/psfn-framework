@@ -5,6 +5,7 @@ export interface BackgroundCompletionDeliveryQueueEntry {
 
 export interface BackgroundCompletionDeliveryQueueEnqueueResult {
   queueDepth: number;
+  droppedContinuationIds: string[];
 }
 
 export interface BackgroundCompletionDeliveryQueueCancelResult {
@@ -20,14 +21,30 @@ export class BackgroundCompletionDeliveryQueue<
   private readonly bySession = new Map<string, TEntry[]>();
   private readonly byContinuation = new Map<string, string>();
 
-  enqueue(entry: TEntry): BackgroundCompletionDeliveryQueueEnqueueResult {
+  enqueue(
+    entry: TEntry,
+    options: { maxDepth?: number } = {},
+  ): BackgroundCompletionDeliveryQueueEnqueueResult {
     this.cancel(entry.continuationId);
     const existing = this.bySession.get(entry.deliverySessionId) ?? [];
     const next = [...existing, entry];
-    this.bySession.set(entry.deliverySessionId, next);
+    const maxDepth = typeof options.maxDepth === 'number' && Number.isFinite(options.maxDepth)
+      ? Math.max(1, Math.floor(options.maxDepth))
+      : null;
+    const dropped = maxDepth !== null && next.length > maxDepth
+      ? next.slice(0, next.length - maxDepth)
+      : [];
+    const kept = dropped.length > 0 ? next.slice(dropped.length) : next;
+    this.bySession.set(entry.deliverySessionId, kept);
     this.byContinuation.set(entry.continuationId, entry.deliverySessionId);
+    for (const trimmed of dropped) {
+      if (this.byContinuation.get(trimmed.continuationId) === entry.deliverySessionId) {
+        this.byContinuation.delete(trimmed.continuationId);
+      }
+    }
     return {
-      queueDepth: next.length,
+      queueDepth: kept.length,
+      droppedContinuationIds: dropped.map((trimmed) => trimmed.continuationId),
     };
   }
 
@@ -69,18 +86,27 @@ export class BackgroundCompletionDeliveryQueue<
     };
   }
 
-  dequeue(deliverySessionId: string): TEntry[] {
+  dequeue(deliverySessionId: string, limit?: number): TEntry[] {
     const existing = this.bySession.get(deliverySessionId);
     if (!existing || existing.length === 0) {
       return [];
     }
-    this.bySession.delete(deliverySessionId);
-    for (const entry of existing) {
+    const boundedLimit = typeof limit === 'number' && Number.isFinite(limit)
+      ? Math.max(1, Math.floor(limit))
+      : null;
+    const dequeued = boundedLimit === null ? existing : existing.slice(0, boundedLimit);
+    const remaining = boundedLimit === null ? [] : existing.slice(boundedLimit);
+    if (remaining.length > 0) {
+      this.bySession.set(deliverySessionId, remaining);
+    } else {
+      this.bySession.delete(deliverySessionId);
+    }
+    for (const entry of dequeued) {
       if (this.byContinuation.get(entry.continuationId) === deliverySessionId) {
         this.byContinuation.delete(entry.continuationId);
       }
     }
-    return existing;
+    return dequeued;
   }
 
   sizeForSession(deliverySessionId: string): number {

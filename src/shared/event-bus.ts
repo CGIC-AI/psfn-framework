@@ -49,13 +49,20 @@ export interface EventMap {
     channelId: string;
     sourceMessageId: string;
     dedupeKey: string;
+    runtimeClass:
+      | 'foreground_chat'
+      | 'post_turn_appraisal'
+      | 'background_continuation'
+      | 'maintenance_reflection';
+    chargeLane: 'interactive' | 'background' | 'maintenance' | 'subagent' | 'shard';
     phase:
       | 'queued'
       | 'deduplicated'
       | 'started'
       | 'succeeded'
       | 'retry_scheduled'
-      | 'failed';
+      | 'failed'
+      | 'dropped_budget';
     attempt: number;
     maxAttempts: number;
     queueDepth: number;

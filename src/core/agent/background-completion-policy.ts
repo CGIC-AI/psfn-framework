@@ -2,6 +2,7 @@ import { DEFERRED_TOOL_HANDOFF_MESSAGE_ID_PREFIX } from './deferred-tool-handoff
 
 export type BackgroundCompletionNotificationReason =
   | 'notify_deferred_user_task'
+  | 'suppress_lane_budget'
   | 'suppress_empty_response'
   | 'suppress_internal_session'
   | 'suppress_non_user_task'

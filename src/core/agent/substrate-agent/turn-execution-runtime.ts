@@ -103,6 +103,12 @@ import type {
   PendingBackgroundContinuationDelivery,
 } from './background-continuation-runtime.js';
 import {
+  BACKGROUND_CONTINUATION_RUNTIME_CLASS,
+  FOREGROUND_CHAT_RUNTIME_CLASS,
+  resolveRuntimeLaneBudgetProfile,
+  resolveRuntimeLaneClassForTurn,
+} from '../worker-lanes.js';
+import {
   cloneObservedAdaptiveToolSnapshot,
   readActiveTurnToolSchemas,
 } from './turn-tool-context.js';
@@ -410,6 +416,7 @@ export interface TurnExecutionRuntime {
   ) => Promise<void>;
   dequeueBackgroundContinuationDeliveries: (
     deliverySessionId: string,
+    limit?: number,
   ) => PendingBackgroundContinuationDelivery[];
   emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
   runIntentionPostTurnHooks: (context: {
@@ -558,6 +565,12 @@ export async function handleMessageForTurn(
     ? { retrievalMode: temporalRetrievalMode }
     : undefined;
   const turnCallType = runtime.resolveTurnCallType(message, taskKind);
+  const turnRuntimeClass = resolveRuntimeLaneClassForTurn({
+    callType: turnCallType,
+    channelId: message.channelId,
+    ...(taskKind ? { taskKind } : {}),
+    ...(deferredContinuationId ? { deferredContinuationId } : {}),
+  });
   const turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
   const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
   let retrievalProvenanceRefs: string[] = [];
@@ -1728,9 +1741,10 @@ export async function handleMessageForTurn(
         turnIntent,
       )
       : null;
-    const postTurnDeliveries = !completionSignal && turnCallType === 'chat'
+    const postTurnDeliveries = !completionSignal && turnRuntimeClass === FOREGROUND_CHAT_RUNTIME_CLASS
       ? runtime.dequeueBackgroundContinuationDeliveries(
         runtime.resolveSessionChannelId(message.channelId),
+        resolveRuntimeLaneBudgetProfile(BACKGROUND_CONTINUATION_RUNTIME_CLASS).maxDeliveriesPerForegroundTurn,
       )
       : [];
     emitObservedTurnStage('end', {
@@ -1778,6 +1792,7 @@ export async function handleMessageForTurn(
         'agent.background.continuation.completed',
         {
           channelId: message.channelId,
+          runtimeClass: completionSignal.runtimeClass,
           continuationId: completionSignal.continuationId,
           sourceMessageId: completionSignal.sourceMessageId,
           deliverySessionId: completionSignal.deliverySessionId,
@@ -1794,6 +1809,7 @@ export async function handleMessageForTurn(
           intent: completionSignal.intent,
           completedAt: completionSignal.completedAt,
           queueDepth: completionSignal.queueDepth,
+          droppedContinuationIds: completionSignal.droppedContinuationIds,
           ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.background.continuation.completed'),
         },
       );
@@ -1803,6 +1819,7 @@ export async function handleMessageForTurn(
         {
           channelId: message.channelId,
           deliverySessionId: runtime.resolveSessionChannelId(message.channelId),
+          runtimeClass: BACKGROUND_CONTINUATION_RUNTIME_CLASS,
           deliveries: postTurnDeliveries,
           ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.background.continuation.post_turn_delivery'),
         },

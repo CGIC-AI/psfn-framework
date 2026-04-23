@@ -214,10 +214,12 @@ export class TurnSupportRuntime {
 
   dequeueBackgroundContinuationDeliveries(
     deliverySessionId: string,
+    limit?: number,
   ): PendingBackgroundContinuationDelivery[] {
     return dequeueBackgroundContinuationDeliveriesForTurn(
       this.pendingBackgroundContinuationDeliveries,
       deliverySessionId,
+      limit,
     );
   }
 

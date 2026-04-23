@@ -344,8 +344,8 @@ export function createTurnExecutionRuntimeAdapter(
       eventName,
       payload,
     ) => options.turnSupportRuntime.emitBackgroundContinuationEvent(eventName, payload),
-    dequeueBackgroundContinuationDeliveries: (deliverySessionId) => options.turnSupportRuntime
-      .dequeueBackgroundContinuationDeliveries(deliverySessionId),
+    dequeueBackgroundContinuationDeliveries: (deliverySessionId, limit) => options.turnSupportRuntime
+      .dequeueBackgroundContinuationDeliveries(deliverySessionId, limit),
     emitTelemetry: (eventName, payload) => options.turnSupportRuntime.emitTelemetry(eventName, payload),
     runIntentionPostTurnHooks: (context) => options.turnSupportRuntime.runIntentionPostTurnHooks(context),
   };

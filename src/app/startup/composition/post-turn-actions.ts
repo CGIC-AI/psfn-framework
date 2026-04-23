@@ -2,6 +2,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import type { InferredPostTurnAction } from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
+import {
+  compareRuntimeLanePriority,
+  isRuntimeLaneClass,
+  resolveRuntimeLaneBudgetProfile,
+  resolveRuntimeLaneClassForPostTurnActionKind,
+  type RuntimeLaneClass,
+} from '../../../core/agent/worker-lanes.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { writeJsonAtomic } from '../../../shared/utils/fs.js';
 import { isRecord } from '../../../shared/utils/types.js';
@@ -21,6 +28,7 @@ export type PostTurnActionExecutionMode = 'foreground' | 'background';
 
 export interface PostTurnActionHandlerOptions {
   executionMode?: PostTurnActionExecutionMode;
+  runtimeClass?: RuntimeLaneClass;
 }
 
 export interface PostTurnActionRuntime {
@@ -33,6 +41,7 @@ export interface PostTurnActionRuntime {
     actionId: string;
     actionKind: string;
     dedupeKey: string;
+    runtimeClass: RuntimeLaneClass;
     attempt: number;
     maxAttempts: number;
     nextRunAt: number;
@@ -41,6 +50,7 @@ export interface PostTurnActionRuntime {
 
 interface DeferredQueueEntry {
   action: InferredPostTurnAction;
+  runtimeClass: RuntimeLaneClass;
   attempt: number;
   nextRunAt: number;
   maxRetries: number;
@@ -49,6 +59,7 @@ interface DeferredQueueEntry {
 interface RegisteredPostTurnActionHandler {
   callback: PostTurnActionHandler;
   executionMode: PostTurnActionExecutionMode;
+  runtimeClass: RuntimeLaneClass;
 }
 
 export interface WirePostTurnActionRuntimeOptions {
@@ -125,6 +136,10 @@ export function wirePostTurnActionRuntime(
     return Math.max(now, runAt);
   };
 
+  const resolveRuntimeClassForKind = (kind: string): RuntimeLaneClass => (
+    resolveRuntimeLaneClassForPostTurnActionKind(kind)
+  );
+
   const normalizePersistedAction = (value: unknown): InferredPostTurnAction | null => {
     if (!isRecord(value)) {
       return null;
@@ -179,9 +194,13 @@ export function wirePostTurnActionRuntime(
     if (attempt > resolvedMaxRetries + 1) {
       return null;
     }
+    const runtimeClass = typeof value.runtimeClass === 'string' && isRuntimeLaneClass(value.runtimeClass)
+      ? value.runtimeClass
+      : resolveRuntimeClassForKind(action.kind);
 
     return {
       action,
+      runtimeClass,
       attempt,
       nextRunAt,
       maxRetries: resolvedMaxRetries,
@@ -197,6 +216,7 @@ export function wirePostTurnActionRuntime(
       version: PERSISTED_QUEUE_VERSION,
       entries: [...queue.values()].map((entry) => ({
         action: entry.action,
+        runtimeClass: entry.runtimeClass,
         attempt: entry.attempt,
         nextRunAt: entry.nextRunAt,
         maxRetries: entry.maxRetries,
@@ -268,17 +288,27 @@ export function wirePostTurnActionRuntime(
   };
 
   const emitTelemetry = (
-    phase: 'queued' | 'deduplicated' | 'started' | 'succeeded' | 'retry_scheduled' | 'failed',
+    phase:
+      | 'queued'
+      | 'deduplicated'
+      | 'started'
+      | 'succeeded'
+      | 'retry_scheduled'
+      | 'failed'
+      | 'dropped_budget',
     entry: DeferredQueueEntry,
     optionsOverride: { nextRetryAt?: number; delayMs?: number; error?: string } = {},
   ): void => {
     const maxAttempts = entry.maxRetries + 1;
+    const runtimeProfile = resolveRuntimeLaneBudgetProfile(entry.runtimeClass);
     eventBus.emit('agent.post_turn.action.telemetry', {
       actionId: entry.action.id,
       actionKind: entry.action.kind,
       channelId: entry.action.channelId,
       sourceMessageId: entry.action.sourceMessageId,
       dedupeKey: entry.action.dedupeKey,
+      runtimeClass: entry.runtimeClass,
+      chargeLane: runtimeProfile.chargeLane,
       phase,
       attempt: entry.attempt,
       maxAttempts,
@@ -305,16 +335,32 @@ export function wirePostTurnActionRuntime(
 
     const entry: DeferredQueueEntry = {
       action,
+      runtimeClass: resolveRuntimeClassForKind(action.kind),
       attempt: 0,
       nextRunAt: resolveInitialNextRunAt(action),
       maxRetries: normalizeMaxRetries(action.maxRetries),
     };
     queue.set(action.dedupeKey, entry);
+    const runtimeProfile = resolveRuntimeLaneBudgetProfile(entry.runtimeClass);
+    const sameClassEntries = [...queue.values()]
+      .filter((candidate) => candidate.runtimeClass === entry.runtimeClass)
+      .sort((left, right) => left.action.inferredAt - right.action.inferredAt || left.nextRunAt - right.nextRunAt);
+    const overflow = Math.max(0, sameClassEntries.length - runtimeProfile.maxQueuedActions);
+    if (overflow > 0) {
+      for (const droppedEntry of sameClassEntries.slice(0, overflow)) {
+        queue.delete(droppedEntry.action.dedupeKey);
+        emitTelemetry('dropped_budget', droppedEntry, {
+          error: `Runtime class queue budget exhausted for ${droppedEntry.runtimeClass}`,
+        });
+      }
+    }
     persistQueue();
     emitTelemetry('queued', entry);
   };
 
-  const runNextDueAction = async (): Promise<boolean> => {
+  const runNextDueAction = async (
+    classRunCounts: Partial<Record<RuntimeLaneClass, number>>,
+  ): Promise<boolean> => {
     if (queue.size === 0) {
       return false;
     }
@@ -322,11 +368,20 @@ export function wirePostTurnActionRuntime(
     const now = Date.now();
     const dueEntries = [...queue.values()]
       .filter((entry) => entry.nextRunAt <= now)
-      .sort((left, right) => left.nextRunAt - right.nextRunAt || left.action.inferredAt - right.action.inferredAt);
+      .filter((entry) => {
+        const classRuns = classRunCounts[entry.runtimeClass] ?? 0;
+        return classRuns < resolveRuntimeLaneBudgetProfile(entry.runtimeClass).maxRunsPerSchedulerTick;
+      })
+      .sort((left, right) => (
+        compareRuntimeLanePriority(left.runtimeClass, right.runtimeClass)
+        || left.nextRunAt - right.nextRunAt
+        || left.action.inferredAt - right.action.inferredAt
+      ));
     const entry = dueEntries[0] as typeof dueEntries[number] | undefined;
     if (!entry) {
       return false;
     }
+    classRunCounts[entry.runtimeClass] = (classRunCounts[entry.runtimeClass] ?? 0) + 1;
 
     const registrations = handlers.get(entry.action.kind);
     if (!registrations || registrations.size === 0) {
@@ -427,7 +482,8 @@ export function wirePostTurnActionRuntime(
     if (processing) return;
     processing = true;
     try {
-      while (await runNextDueAction()) {
+      const classRunCounts: Partial<Record<RuntimeLaneClass, number>> = {};
+      while (await runNextDueAction(classRunCounts)) {
         // Continue draining due actions in a single scheduler tick.
       }
     } finally {
@@ -471,6 +527,7 @@ export function wirePostTurnActionRuntime(
       handlerSet.set(handler, {
         callback: handler,
         executionMode: options.executionMode === 'background' ? 'background' : 'foreground',
+        runtimeClass: options.runtimeClass ?? resolveRuntimeClassForKind(normalizedKind),
       });
       handlers.set(normalizedKind, handlerSet);
       return () => {
@@ -487,6 +544,7 @@ export function wirePostTurnActionRuntime(
         actionId: entry.action.id,
         actionKind: entry.action.kind,
         dedupeKey: entry.action.dedupeKey,
+        runtimeClass: entry.runtimeClass,
         attempt: entry.attempt,
         maxAttempts: entry.maxRetries + 1,
         nextRunAt: entry.nextRunAt,

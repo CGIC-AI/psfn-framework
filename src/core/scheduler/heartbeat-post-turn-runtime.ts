@@ -29,6 +29,11 @@ import {
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
 import { cloneInternalState } from '../self-model/state.js';
+import {
+  BACKGROUND_CONTINUATION_RUNTIME_CLASS,
+  MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+  POST_TURN_APPRAISAL_RUNTIME_CLASS,
+} from '../agent/worker-lanes.js';
 import type { PostTurnActionInferer } from '../agent/substrate-agent.js';
 import type {
   HeartbeatAgent,
@@ -525,7 +530,10 @@ export function wireHeartbeatPostTurnRuntime(
         phase: 'executed',
       });
     },
-    { executionMode: 'background' },
+    {
+      executionMode: 'background',
+      runtimeClass: BACKGROUND_CONTINUATION_RUNTIME_CLASS,
+    },
   );
 
   runtimeOptions.postTurnActions.registerHandler(
@@ -542,6 +550,9 @@ export function wireHeartbeatPostTurnRuntime(
         ...(sendToDiscordOverride !== undefined ? { sendToDiscordOverride } : {}),
         actionId: action.id,
       });
+    },
+    {
+      runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
     },
   );
 
@@ -573,7 +584,10 @@ export function wireHeartbeatPostTurnRuntime(
             timestamp: new Date(),
           });
         },
-        { executionMode: 'background' },
+        {
+          executionMode: 'background',
+          runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
+        },
       );
       runtimeOptions.postTurnActions.registerHandler(
         INTENTION_REMINDER_ACTION_KIND,
@@ -642,7 +656,10 @@ export function wireHeartbeatPostTurnRuntime(
             timestamp: new Date(),
           });
         },
-        { executionMode: 'background' },
+        {
+          executionMode: 'background',
+          runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
+        },
       );
     } else {
       log.warn('Intention appraisal enabled but followUp hook is unavailable on agent loop');
@@ -655,7 +672,10 @@ export function wireHeartbeatPostTurnRuntime(
       async (action) => {
         await sleeptimeAgent.execute(action);
       },
-      { executionMode: 'background' },
+      {
+        executionMode: 'background',
+        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      },
     );
   } else {
     log.info('Sleeptime memory agent wiring skipped: missing post-turn dependencies', {

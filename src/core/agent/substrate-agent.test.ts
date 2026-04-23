@@ -1559,6 +1559,76 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(deliveries[0].deliveries).toHaveLength(1);
   });
 
+  it('delivers queued background completions one at a time across foreground turns', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      eventBus, makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+
+    const deliveries: any[] = [];
+    (eventBus as any).on('agent.background.continuation.post_turn_delivery', (payload: any) => {
+      deliveries.push(payload);
+    });
+
+    mockAssistantResponse('First deferred continuation output');
+    await agent.handleMessage(makeMessage({
+      id: 'deferred-tool-handoff:action-budget-a',
+      channelId: 'terminal:budget-session',
+      channelType: 'terminal',
+      content: 'first deferred completion',
+    }));
+
+    mockAssistantResponse('Second deferred continuation output');
+    await agent.handleMessage(makeMessage({
+      id: 'deferred-tool-handoff:action-budget-b',
+      channelId: 'terminal:budget-session',
+      channelType: 'terminal',
+      content: 'second deferred completion',
+    }));
+
+    mockAssistantResponse('Foreground flush one');
+    await agent.handleMessage(makeMessage({
+      id: 'foreground-turn-budget-1',
+      channelId: 'terminal:budget-session',
+      channelType: 'terminal',
+      content: 'first foreground turn',
+    }));
+
+    mockAssistantResponse('Foreground flush two');
+    await agent.handleMessage(makeMessage({
+      id: 'foreground-turn-budget-2',
+      channelId: 'terminal:budget-session',
+      channelType: 'terminal',
+      content: 'second foreground turn',
+    }));
+
+    expect(deliveries).toHaveLength(2);
+    expect(deliveries[0]).toMatchObject({
+      runtimeClass: 'background_continuation',
+      deliveries: [
+        expect.objectContaining({
+          continuationId: 'action-budget-a',
+          runtimeClass: 'background_continuation',
+          content: 'First deferred continuation output',
+        }),
+      ],
+    });
+    expect(deliveries[0].deliveries).toHaveLength(1);
+    expect(deliveries[1]).toMatchObject({
+      runtimeClass: 'background_continuation',
+      deliveries: [
+        expect.objectContaining({
+          continuationId: 'action-budget-b',
+          runtimeClass: 'background_continuation',
+          content: 'Second deferred continuation output',
+        }),
+      ],
+    });
+    expect(deliveries[1].deliveries).toHaveLength(1);
+  });
+
   it('cancels queued background completion delivery when a later completion is suppressed', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

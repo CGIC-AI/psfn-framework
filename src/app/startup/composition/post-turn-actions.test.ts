@@ -4,6 +4,10 @@ import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
 import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { EventBus } from '../../../shared/event-bus.js';
+import {
+  BACKGROUND_CONTINUATION_RUNTIME_CLASS,
+  MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+} from '../../../core/agent/worker-lanes.js';
 import { createEligibilityGate } from '../../../system/capabilities/eligibility.js';
 import { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from './post-turn-actions.js';
@@ -180,6 +184,160 @@ describe('wirePostTurnActionRuntime', () => {
     expect(handler).toHaveBeenCalledTimes(1);
     expect(runtime.listQueued()).toHaveLength(0);
     expect(phases).toEqual(expect.arrayContaining(['queued', 'started', 'succeeded']));
+  });
+
+  it('drops oldest maintenance work when the maintenance lane queue budget is exceeded', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_350_000);
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: {
+          waitForIdle: vi.fn().mockResolvedValue(undefined),
+        },
+        intervalMs: 10,
+      });
+      runtime.registerHandler('heartbeat.run_template', vi.fn().mockResolvedValue(undefined), {
+        executionMode: 'background',
+      });
+
+      const phases: Array<{ phase: string; dedupeKey: string; runtimeClass: string; chargeLane: string }> = [];
+      eventBus.on('agent.post_turn.action.telemetry', (telemetry) => {
+        phases.push({
+          phase: telemetry.phase,
+          dedupeKey: telemetry.dedupeKey,
+          runtimeClass: telemetry.runtimeClass,
+          chargeLane: telemetry.chargeLane,
+        });
+      });
+
+      await eventBus.emit('agent.post_turn.actions.inferred', {
+        message: makeMessage(),
+        response: makeResponse(),
+        actions: [0, 1, 2, 3].map((index) => makeAction({
+          id: `maintenance-${index}`,
+          dedupeKey: `maintenance:${index}`,
+          inferredAt: 1_700_000_350_000 + index,
+        })),
+      });
+
+      expect(runtime.listQueued().map((entry) => entry.dedupeKey)).toEqual([
+        'maintenance:1',
+        'maintenance:2',
+        'maintenance:3',
+      ]);
+      expect(runtime.listQueued().map((entry) => entry.runtimeClass)).toEqual([
+        MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+        MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+        MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      ]);
+      expect(phases).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          phase: 'dropped_budget',
+          dedupeKey: 'maintenance:0',
+          runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+          chargeLane: 'maintenance',
+        }),
+      ]));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('prioritizes appraisal before continuation before maintenance and enforces per-class tick budgets', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_360_000);
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: {
+          waitForIdle: vi.fn().mockResolvedValue(undefined),
+        },
+        intervalMs: 10,
+      });
+      const callOrder: string[] = [];
+      runtime.registerHandler('intention.follow_up', vi.fn(async (action) => {
+        callOrder.push(`appraisal:${action.id}`);
+      }), {
+        executionMode: 'background',
+      });
+      runtime.registerHandler('tool_handoff.continue', vi.fn(async (action) => {
+        callOrder.push(`continuation:${action.id}`);
+      }), {
+        executionMode: 'background',
+      });
+      runtime.registerHandler('heartbeat.run_template', vi.fn(async (action) => {
+        callOrder.push(`maintenance:${action.id}`);
+      }), {
+        executionMode: 'background',
+      });
+
+      await eventBus.emit('agent.post_turn.actions.inferred', {
+        message: makeMessage(),
+        response: makeResponse(),
+        actions: [
+          makeAction({
+            id: 'maintenance-1',
+            kind: 'heartbeat.run_template',
+            dedupeKey: 'maintenance:one',
+          }),
+          makeAction({
+            id: 'continuation-1',
+            kind: 'tool_handoff.continue',
+            dedupeKey: 'continuation:one',
+          }),
+          makeAction({
+            id: 'continuation-2',
+            kind: 'tool_handoff.continue',
+            dedupeKey: 'continuation:two',
+          }),
+          makeAction({
+            id: 'appraisal-1',
+            kind: 'intention.follow_up',
+            dedupeKey: 'appraisal:one',
+          }),
+        ],
+      });
+
+      await scheduler.tick();
+
+      expect(callOrder).toEqual([
+        'appraisal:appraisal-1',
+        'continuation:continuation-1',
+        'maintenance:maintenance-1',
+      ]);
+      expect(runtime.listQueued()).toEqual([
+        expect.objectContaining({
+          actionId: 'continuation-2',
+          dedupeKey: 'continuation:two',
+          runtimeClass: BACKGROUND_CONTINUATION_RUNTIME_CLASS,
+        }),
+      ]);
+
+      nowSpy.mockReturnValue(1_700_000_360_051);
+      await scheduler.tick();
+      expect(callOrder).toEqual([
+        'appraisal:appraisal-1',
+        'continuation:continuation-1',
+        'maintenance:maintenance-1',
+        'continuation:continuation-2',
+      ]);
+      expect(runtime.listQueued()).toHaveLength(0);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('retries failures with bounded attempts and then marks failed', async () => {

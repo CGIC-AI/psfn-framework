@@ -3,6 +3,11 @@ import type { SessionManager } from '../../session/manager.js';
 import type { AgentResponse, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { BackgroundCompletionDeliveryQueue } from '../background-completion-delivery-queue.js';
 import {
+  BACKGROUND_CONTINUATION_RUNTIME_CLASS,
+  resolveRuntimeLaneBudgetProfile,
+  type BackgroundContinuationRuntimeClass,
+} from '../worker-lanes.js';
+import {
   decideBackgroundCompletionNotification,
   type BackgroundCompletionChannelContext,
   type BackgroundCompletionNotificationReason,
@@ -10,7 +15,12 @@ import {
   type BackgroundCompletionUrgency,
 } from '../background-completion-policy.js';
 
+const BACKGROUND_CONTINUATION_PROFILE = resolveRuntimeLaneBudgetProfile(
+  BACKGROUND_CONTINUATION_RUNTIME_CLASS,
+);
+
 export interface BackgroundContinuationCompletionSignal {
+  runtimeClass: BackgroundContinuationRuntimeClass;
   continuationId: string;
   sourceMessageId: string;
   deliverySessionId: string;
@@ -27,9 +37,11 @@ export interface BackgroundContinuationCompletionSignal {
   intent: string | null;
   completedAt: number;
   queueDepth: number;
+  droppedContinuationIds: string[];
 }
 
 export interface PendingBackgroundContinuationDelivery {
+  runtimeClass: BackgroundContinuationRuntimeClass;
   continuationId: string;
   sourceMessageId: string;
   deliverySessionId: string;
@@ -46,6 +58,7 @@ export interface PendingBackgroundContinuationDelivery {
 }
 
 export interface BackgroundContinuationTaskRecord {
+  runtimeClass: BackgroundContinuationRuntimeClass;
   continuationId: string;
   sourceMessageId: string;
   sourceTimestampMs: number | null;
@@ -64,6 +77,7 @@ export interface BackgroundContinuationTaskRecord {
   hasDeliverableContent: boolean;
   notifyUser: boolean;
   notificationReason: BackgroundCompletionNotificationReason;
+  droppedContinuationIds: string[];
 }
 
 export type BackgroundContinuationEventName =
@@ -142,6 +156,7 @@ export function queueBackgroundContinuationCompletion(
   const completedAt = params.now ? params.now() : Date.now();
   const deliverySessionId = params.resolveSessionChannelId(params.message.channelId);
   const hasDeliverableContent = params.response.content.trim().length > 0;
+  const runtimeClass = BACKGROUND_CONTINUATION_RUNTIME_CLASS;
   const sourceTimestampMs = Number.isFinite(params.message.timestamp.getTime())
     ? Math.trunc(params.message.timestamp.getTime())
     : null;
@@ -159,6 +174,7 @@ export function queueBackgroundContinuationCompletion(
   });
 
   params.backgroundContinuationTasks.set(params.deferredContinuationId, {
+    runtimeClass,
     continuationId: params.deferredContinuationId,
     sourceMessageId: params.message.id,
     sourceTimestampMs,
@@ -177,10 +193,12 @@ export function queueBackgroundContinuationCompletion(
     hasDeliverableContent,
     notifyUser: decision.shouldNotify,
     notificationReason: decision.reason,
+    droppedContinuationIds: [],
   });
 
   if (decision.shouldNotify) {
     const enqueueResult = params.pendingBackgroundContinuationDeliveries.enqueue({
+      runtimeClass,
       continuationId: params.deferredContinuationId,
       sourceMessageId: params.message.id,
       deliverySessionId,
@@ -194,8 +212,51 @@ export function queueBackgroundContinuationCompletion(
       taskKind: params.taskKind,
       intent: params.intent,
       notificationReason: decision.reason,
-    } satisfies PendingBackgroundContinuationDelivery);
+    } satisfies PendingBackgroundContinuationDelivery, {
+      maxDepth: BACKGROUND_CONTINUATION_PROFILE.maxPendingSessionDeliveries,
+    });
+    if (enqueueResult.droppedContinuationIds.length > 0) {
+      for (const droppedContinuationId of enqueueResult.droppedContinuationIds) {
+        const droppedTask = params.backgroundContinuationTasks.get(droppedContinuationId);
+        if (!droppedTask) {
+          continue;
+        }
+        params.backgroundContinuationTasks.set(droppedContinuationId, {
+          ...droppedTask,
+          notifyUser: false,
+          notificationReason: 'suppress_lane_budget',
+          droppedContinuationIds: [],
+        });
+      }
+      params.backgroundContinuationTasks.set(params.deferredContinuationId, {
+        ...(params.backgroundContinuationTasks.get(params.deferredContinuationId) ?? {
+          runtimeClass,
+          continuationId: params.deferredContinuationId,
+        }),
+        continuationId: params.deferredContinuationId,
+        sourceMessageId: params.message.id,
+        sourceTimestampMs,
+        channelId: params.message.channelId,
+        channelType: params.message.channelType,
+        deliverySessionId,
+        origin: decision.context.origin,
+        urgency: decision.context.urgency,
+        channelContext: decision.context.channelContext,
+        completionAgeMs: decision.context.completionAgeMs,
+        stale: decision.context.stale,
+        taskKind: params.taskKind,
+        intent: params.intent,
+        completedAt,
+        responseChars: params.response.content.length,
+        hasDeliverableContent,
+        notifyUser: true,
+        notificationReason: decision.reason,
+        runtimeClass,
+        droppedContinuationIds: [...enqueueResult.droppedContinuationIds],
+      });
+    }
     return {
+      runtimeClass,
       continuationId: params.deferredContinuationId,
       sourceMessageId: params.message.id,
       deliverySessionId,
@@ -212,6 +273,7 @@ export function queueBackgroundContinuationCompletion(
       intent: params.intent,
       completedAt,
       queueDepth: enqueueResult.queueDepth,
+      droppedContinuationIds: [...enqueueResult.droppedContinuationIds],
     };
   }
 
@@ -221,6 +283,7 @@ export function queueBackgroundContinuationCompletion(
   );
 
   return {
+    runtimeClass,
     continuationId: params.deferredContinuationId,
     sourceMessageId: params.message.id,
     deliverySessionId,
@@ -237,6 +300,7 @@ export function queueBackgroundContinuationCompletion(
     intent: params.intent,
     completedAt,
     queueDepth: cancelled.queueDepth,
+    droppedContinuationIds: [],
   };
 }
 
@@ -244,8 +308,9 @@ export function dequeueBackgroundContinuationDeliveries(
   pendingBackgroundContinuationDeliveries:
   BackgroundCompletionDeliveryQueue<PendingBackgroundContinuationDelivery>,
   deliverySessionId: string,
+  limit?: number,
 ): PendingBackgroundContinuationDelivery[] {
-  return pendingBackgroundContinuationDeliveries.dequeue(deliverySessionId);
+  return pendingBackgroundContinuationDeliveries.dequeue(deliverySessionId, limit);
 }
 
 export async function emitBackgroundContinuationEvent(

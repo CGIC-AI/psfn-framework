@@ -53,6 +53,7 @@ import {
   ModelBudgetExceededError,
   normalizeModelIdForProvider,
 } from './model-budget.js';
+import { countMessageTokens } from './tokens.js';
 import {
   type CredentialReference,
   resolveProviderApiKey,
@@ -699,17 +700,30 @@ export class LLMClient {
     };
   }
 
-  private estimateContextInputTokens(context: PiContext): number {
-    const collectChars = (value: unknown): number => {
-      if (typeof value === 'string') return value.length;
-      if (Array.isArray(value)) return value.reduce((sum, entry) => sum + collectChars(entry), 0);
-      if (value && typeof value === 'object') {
-        return Object.values(value).reduce((sum, entry) => sum + collectChars(entry), 0);
-      }
-      return 0;
-    };
-    const charCount = collectChars(context.systemPrompt) + collectChars(context.messages);
-    return Math.max(1, Math.ceil(charCount / 4));
+  private estimateBudgetInputTokens(context: PiContext): number {
+    const budgetMessages = [];
+    if (context.systemPrompt) {
+      budgetMessages.push({
+        role: 'system',
+        content: context.systemPrompt,
+      });
+    }
+    for (const message of context.messages) {
+      budgetMessages.push({
+        role: message.role,
+        content: typeof message.content === 'string'
+          ? message.content
+          : JSON.stringify(message.content),
+      });
+    }
+    return Math.max(1, countMessageTokens(budgetMessages));
+  }
+
+  private resolveEstimatedBudgetInputTokens(context: PiContext): number | undefined {
+    if (!this.budgetController.requiresPreflightEstimate()) {
+      return undefined;
+    }
+    return this.estimateBudgetInputTokens(context);
   }
 
   private resolveBudgetService(purpose: RoutingPurpose, correlation: ResolvedCorrelationMetadata | undefined): string {
@@ -808,7 +822,7 @@ export class LLMClient {
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks): Promise<LLMResponse> {
     const piContext = this.buildPiContext(context);
-    const estimatedInputTokens = this.estimateContextInputTokens(piContext);
+    const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
     const modelHint = this.mergeModelHints(context.modelHint, undefined);
 
@@ -975,7 +989,7 @@ export class LLMClient {
   ): Promise<LLMResponse> {
     const routingPurpose = this.toRoutingPurpose(purpose);
     const piContext = this.buildPiContext(context);
-    const estimatedInputTokens = this.estimateContextInputTokens(piContext);
+    const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
     const modelHint = this.mergeModelHints(context.modelHint, options.modelHint);
 

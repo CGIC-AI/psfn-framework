@@ -1828,6 +1828,45 @@ describe('LLMClient model budget gates and usage metering', () => {
     });
   });
 
+  it('skips preflight token estimation when model budget policy is disabled', async () => {
+    const config = makeConfig();
+    const baseRegistry = config.modelRegistry!;
+    config.modelRegistry = {
+      ...baseRegistry,
+      budgetPolicy: {
+        enabled: false,
+        dailyUsdLimit: 1,
+        monthlyUsdLimit: 10,
+        currency: 'USD',
+      },
+    };
+    const client = new LLMClient(config, 'http://litellm.test/v1');
+    const estimateSpy = vi.spyOn(client as any, 'estimateBudgetInputTokens');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 13, output: 7 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Summarize this quickly' }],
+      },
+      'background',
+      { disableRetry: true },
+    );
+
+    expect(estimateSpy).not.toHaveBeenCalled();
+    const raw = readFileSync(join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME), 'utf-8');
+    const parsed = JSON.parse(raw) as { records: Array<Record<string, unknown>> };
+    expect(parsed.records[0]).toMatchObject({
+      inputTokens: 13,
+      outputTokens: 7,
+    });
+  });
+
   it('routes completion through injected transport without calling direct provider transport', async () => {
     const config = makeConfig();
     const transport = {

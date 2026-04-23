@@ -101,6 +101,8 @@ describe('ModelBudgetController', () => {
     const dataDir = makeTempDir();
     const controller = new ModelBudgetController(makeConfig(dataDir));
 
+    expect(controller.requiresPreflightEstimate()).toBe(true);
+
     controller.recordUsage({
       candidate: { provider: 'openrouter', model: 'z-ai/glm-5', maxTokens: 4096, slotKey: 'chat' },
       purpose: 'chat',
@@ -189,5 +191,36 @@ describe('ModelBudgetController', () => {
 
     expect(preflight.allowed).toBe(false);
     expect(preflight.blockedEvent?.reason).toBe('missing_cost_metadata');
+  });
+
+  it('does not require preflight estimates when budget policy is disabled', () => {
+    const dataDir = makeTempDir();
+    const baseRegistry = makeConfig(dataDir).modelRegistry!;
+    const controller = new ModelBudgetController(makeConfig(dataDir, {
+      modelRegistry: {
+        ...baseRegistry,
+        budgetPolicy: {
+          enabled: false,
+          dailyUsdLimit: 1,
+          monthlyUsdLimit: 10,
+          currency: 'USD',
+        },
+      },
+    }));
+
+    expect(controller.requiresPreflightEstimate()).toBe(false);
+    expect(controller.evaluatePreflight({
+      candidate: { provider: 'openrouter', model: 'z-ai/glm-5', maxTokens: 1000, slotKey: 'chat' },
+      purpose: 'chat',
+      service: 'chat',
+      process: 'agent.turn.prompt',
+      estimatedInputTokens: 0,
+      estimatedOutputTokens: 0,
+      nowMs: Date.parse('2026-03-06T10:00:00.000Z'),
+    })).toMatchObject({
+      allowed: true,
+      estimatedRequestCostUsd: 0,
+      snapshot: null,
+    });
   });
 });

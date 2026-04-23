@@ -338,6 +338,10 @@ export class ModelBudgetController {
     this.ledgerPath = join(config.dataDir, MODEL_USAGE_LEDGER_FILE_NAME);
   }
 
+  requiresPreflightEstimate(): boolean {
+    return this.config.modelRegistry?.budgetPolicy?.enabled === true;
+  }
+
   getUsageSnapshot(nowMs = Date.now()): ModelUsageSnapshot {
     const ledger = this.loadLedger();
     const dayKey = makeDayKey(nowMs);
@@ -378,7 +382,7 @@ export class ModelBudgetController {
   evaluatePreflight(params: BudgetPreflightParams): BudgetPreflightResult {
     const nowMs = params.nowMs ?? Date.now();
     const policy = this.config.modelRegistry?.budgetPolicy;
-    if (!policy || !policy.enabled) {
+    if (!this.requiresPreflightEstimate() || !policy) {
       return {
         allowed: true,
         estimatedRequestCostUsd: 0,

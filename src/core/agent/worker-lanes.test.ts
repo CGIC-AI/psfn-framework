@@ -14,6 +14,7 @@ import {
   isSubagentWorkerLane,
   isWhisperWorkerLane,
   resolveRuntimeLaneBudgetProfile,
+  resolveRuntimeLaneClassForModelCall,
   resolveRuntimeLaneClassForPostTurnActionKind,
   resolveRuntimeLaneClassForTurn,
   resolveWorkerProfileClassForLane,
@@ -75,6 +76,35 @@ describe('worker lanes', () => {
     expect(resolveRuntimeLaneClassForPostTurnActionKind('heartbeat.run_template')).toBe(
       MAINTENANCE_REFLECTION_RUNTIME_CLASS,
     );
+  });
+
+  it('maps model-bound work into explicit runtime classes for contention control', () => {
+    expect(resolveRuntimeLaneClassForModelCall({
+      purpose: 'chat',
+      callType: 'chat',
+      originStage: 'agent.turn.prompt',
+    })).toBe(FOREGROUND_CHAT_RUNTIME_CLASS);
+    expect(resolveRuntimeLaneClassForModelCall({
+      purpose: 'reasoning',
+      callType: 'tool',
+      originStage: 'repl.think.tool',
+    })).toBe(FOREGROUND_CHAT_RUNTIME_CLASS);
+    expect(resolveRuntimeLaneClassForModelCall({
+      purpose: 'summary',
+      callType: 'summary',
+      originStage: 'session.compaction.summary',
+    })).toBe(POST_TURN_APPRAISAL_RUNTIME_CLASS);
+    expect(resolveRuntimeLaneClassForModelCall({
+      purpose: 'background',
+      callType: 'background',
+      originStage: 'tool_handoff.continue',
+    })).toBe(BACKGROUND_CONTINUATION_RUNTIME_CLASS);
+    expect(resolveRuntimeLaneClassForModelCall({
+      purpose: 'memory',
+      callType: 'memory',
+      channelId: 'internal:heartbeat',
+      originStage: 'memory.sleeptime.run',
+    })).toBe(MAINTENANCE_REFLECTION_RUNTIME_CLASS);
   });
 
   it('assigns bounded priorities, budgets, and degradation rules per runtime class', () => {

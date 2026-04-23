@@ -1,5 +1,9 @@
 import type { ChargePolicyRuntimeLane } from '../../system/config/charge-policy-config.js';
-import type { ObservabilityCallType, ModelPurpose } from '../../shared/contracts/runtime.js';
+import type {
+  CompletionPurpose,
+  ObservabilityCallType,
+  ModelPurpose,
+} from '../../shared/contracts/runtime.js';
 import type { WorkerExecutionPolicy, WorkerProfileClass } from '../types.js';
 
 /**
@@ -47,6 +51,7 @@ export type ForegroundChatRuntimeClass = typeof RUNTIME_LANE_CLASSES.foregroundC
 export type PostTurnAppraisalRuntimeClass = typeof RUNTIME_LANE_CLASSES.postTurnAppraisal;
 export type BackgroundContinuationRuntimeClass = typeof RUNTIME_LANE_CLASSES.backgroundContinuation;
 export type MaintenanceReflectionRuntimeClass = typeof RUNTIME_LANE_CLASSES.maintenanceReflection;
+export type ModelCallRuntimePurpose = CompletionPurpose | ModelPurpose | 'chat';
 
 export const FOREGROUND_CHAT_RUNTIME_CLASS: ForegroundChatRuntimeClass = RUNTIME_LANE_CLASSES.foregroundChat;
 export const POST_TURN_APPRAISAL_RUNTIME_CLASS: PostTurnAppraisalRuntimeClass = (
@@ -172,6 +177,41 @@ export function resolveRuntimeLaneClassForTurn(input: {
     return MAINTENANCE_REFLECTION_RUNTIME_CLASS;
   }
   return FOREGROUND_CHAT_RUNTIME_CLASS;
+}
+
+export function resolveRuntimeLaneClassForModelCall(input: {
+  purpose: ModelCallRuntimePurpose;
+  callType: ObservabilityCallType;
+  channelId?: string;
+  originStage?: string;
+}): RuntimeLaneClass {
+  const originStage = input.originStage?.trim() ?? '';
+  if (input.purpose === 'chat' || input.callType === 'chat' || input.callType === 'tool') {
+    return FOREGROUND_CHAT_RUNTIME_CLASS;
+  }
+  if (
+    input.callType === 'scheduled'
+    || input.purpose === 'memory'
+    || input.purpose === 'extraction'
+    || input.channelId === 'internal:heartbeat'
+    || input.channelId?.startsWith('internal:heartbeat:')
+    || input.channelId?.startsWith('internal:reflection:')
+    || originStage === 'heartbeat.run_template'
+    || originStage === 'memory.sleeptime.run'
+  ) {
+    return MAINTENANCE_REFLECTION_RUNTIME_CLASS;
+  }
+  if (
+    input.callType === 'summary'
+    || input.purpose === 'summary'
+    || originStage === 'intention.follow_up'
+  ) {
+    return POST_TURN_APPRAISAL_RUNTIME_CLASS;
+  }
+  if (originStage === 'tool_handoff.continue') {
+    return BACKGROUND_CONTINUATION_RUNTIME_CLASS;
+  }
+  return BACKGROUND_CONTINUATION_RUNTIME_CLASS;
 }
 
 export function resolveRuntimeLaneClassForPostTurnActionKind(

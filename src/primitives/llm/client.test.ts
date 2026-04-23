@@ -37,6 +37,20 @@ import {
 } from './client.js';
 import { MODEL_USAGE_LEDGER_FILE_NAME } from './model-budget.js';
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return {
+    promise,
+    resolve,
+    reject,
+  };
+}
+
 function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
   const dataDir = mkdtempSync(join(tmpdir(), 'psfn-llm-client-test-'));
   tempDirs.push(dataDir);
@@ -1907,5 +1921,211 @@ describe('LLMClient model budget gates and usage metering', () => {
       inputTokens: 11,
       outputTokens: 6,
     });
+  });
+
+  it('prioritizes queued foreground chat ahead of queued background work on constrained routes', async () => {
+    const config = makeConfig();
+    const order: string[] = [];
+    const firstBackground = createDeferred<{
+      content: string;
+      model: string;
+      inputTokens: number;
+      outputTokens: number;
+      stopReason: string;
+      toolCalls: [];
+    }>();
+    const foregroundRelease = createDeferred<{
+      content: string;
+      model: string;
+      inputTokens: number;
+      outputTokens: number;
+      stopReason: string;
+      toolCalls: [];
+    }>();
+    const transport = {
+      stream: vi.fn(async (context: { correlation?: { requestId?: string } }) => {
+        order.push(`stream:${context.correlation?.requestId ?? 'unknown'}`);
+        return await foregroundRelease.promise;
+      }),
+      complete: vi.fn(async (
+        context: { correlation?: { requestId?: string } },
+        purpose: string,
+      ) => {
+        order.push(`complete:${purpose}:${context.correlation?.requestId ?? 'unknown'}`);
+        if (context.correlation?.requestId === 'bg-1') {
+          return await firstBackground.promise;
+        }
+        return {
+          content: `${purpose}-result`,
+          model: 'deepseek/deepseek-v3.2',
+          inputTokens: 4,
+          outputTokens: 2,
+          stopReason: 'stop',
+          toolCalls: [],
+        };
+      }),
+    };
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      transport: transport as any,
+    });
+
+    const backgroundOnePromise = client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Background 1' }],
+        correlation: {
+          requestId: 'bg-1',
+          callType: 'background',
+          originType: 'background',
+          originStage: 'agent.background.turn',
+        },
+      },
+      'background',
+    );
+    await vi.waitFor(() => expect(transport.complete).toHaveBeenCalledTimes(1));
+
+    const backgroundTwoPromise = client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Background 2' }],
+        correlation: {
+          requestId: 'bg-2',
+          callType: 'background',
+          originType: 'background',
+          originStage: 'agent.background.turn',
+        },
+      },
+      'background',
+    );
+    const foregroundPromise = client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Foreground chat' }],
+      correlation: {
+        requestId: 'chat-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(transport.complete).toHaveBeenCalledTimes(1);
+    expect(transport.stream).not.toHaveBeenCalled();
+
+    firstBackground.resolve({
+      content: 'background-1-result',
+      model: 'deepseek/deepseek-v3.2',
+      inputTokens: 6,
+      outputTokens: 2,
+      stopReason: 'stop',
+      toolCalls: [],
+    });
+
+    await vi.waitFor(() => expect(transport.stream).toHaveBeenCalledTimes(1));
+    expect(transport.complete).toHaveBeenCalledTimes(1);
+
+    foregroundRelease.resolve({
+      content: 'foreground-result',
+      model: 'z-ai/glm-5',
+      inputTokens: 5,
+      outputTokens: 3,
+      stopReason: 'stop',
+      toolCalls: [],
+    });
+
+    await expect(foregroundPromise).resolves.toMatchObject({
+      content: 'foreground-result',
+      model: 'z-ai/glm-5',
+    });
+    await vi.waitFor(() => expect(transport.complete).toHaveBeenCalledTimes(2));
+    await expect(backgroundTwoPromise).resolves.toMatchObject({
+      content: 'background-result',
+      model: 'deepseek/deepseek-v3.2',
+    });
+    await expect(backgroundOnePromise).resolves.toMatchObject({
+      content: 'background-1-result',
+      model: 'deepseek/deepseek-v3.2',
+    });
+
+    expect(order).toEqual([
+      'complete:background:bg-1',
+      'stream:chat-1',
+      'complete:background:bg-2',
+    ]);
+  });
+
+  it('does not serialize direct registered-model calls when no shared route is in play', async () => {
+    const config = makeConfig();
+    const secondStarted = createDeferred<void>();
+    const firstRelease = createDeferred<{
+      content: string;
+      model: string;
+      inputTokens: number;
+      outputTokens: number;
+      stopReason: string;
+      toolCalls: [];
+    }>();
+    const transport = {
+      stream: vi.fn(),
+      complete: vi.fn(async (context: { correlation?: { requestId?: string } }) => {
+        if (context.correlation?.requestId === 'direct-1') {
+          return await firstRelease.promise;
+        }
+        secondStarted.resolve();
+        return {
+          content: 'direct-2-result',
+          model: 'deepseek/deepseek-v3.2',
+          inputTokens: 2,
+          outputTokens: 1,
+          stopReason: 'stop',
+          toolCalls: [],
+        };
+      }),
+    };
+    const client = new LLMClient(config, { transport: transport as any });
+
+    const firstPromise = client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Direct 1' }],
+        correlation: {
+          requestId: 'direct-1',
+          callType: 'background',
+          originType: 'background',
+          originStage: 'agent.background.turn',
+        },
+      },
+      'background',
+    );
+    await vi.waitFor(() => expect(transport.complete).toHaveBeenCalledTimes(1));
+
+    const secondPromise = client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Direct 2' }],
+        correlation: {
+          requestId: 'direct-2',
+          callType: 'background',
+          originType: 'background',
+          originStage: 'agent.background.turn',
+        },
+      },
+      'background',
+    );
+
+    await expect(secondStarted.promise).resolves.toBeUndefined();
+    firstRelease.resolve({
+      content: 'direct-1-result',
+      model: 'deepseek/deepseek-v3.2',
+      inputTokens: 2,
+      outputTokens: 1,
+      stopReason: 'stop',
+      toolCalls: [],
+    });
+
+    await expect(firstPromise).resolves.toMatchObject({ content: 'direct-1-result' });
+    await expect(secondPromise).resolves.toMatchObject({ content: 'direct-2-result' });
+    expect(transport.complete).toHaveBeenCalledTimes(2);
   });
 });

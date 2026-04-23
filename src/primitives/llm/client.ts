@@ -64,6 +64,8 @@ import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import { resolveRuntimeLaneClassForModelCall } from '../../core/agent/worker-lanes.js';
+import { ModelCallGate } from './model-call-gate.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -133,6 +135,7 @@ export class LLMClient {
   private eligibilityGate?: EligibilityGate;
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
   private onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  private modelCallGate: ModelCallGate;
 
   constructor(
     config: SubstrateConfig,
@@ -150,6 +153,7 @@ export class LLMClient {
     this.eligibilityGate = runtimeOptions.eligibilityGate;
     this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
     this.onBudgetBlocked = runtimeOptions.onBudgetBlocked;
+    this.modelCallGate = new ModelCallGate();
   }
 
   private getModelAndKey(candidate: RoutingCandidate): { model: Model<any>; apiKey: string | undefined } {
@@ -719,6 +723,48 @@ export class LLMClient {
     return correlation?.originStage ?? correlation?.purpose ?? purpose;
   }
 
+  private resolveModelCallRuntimeClass(
+    purpose: RoutingPurpose,
+    correlation: ResolvedCorrelationMetadata | undefined,
+  ) {
+    return resolveRuntimeLaneClassForModelCall({
+      purpose,
+      callType: correlation?.callType ?? inferCorrelationCallType(purpose, correlation?.channelId),
+      ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
+      ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
+    });
+  }
+
+  private resolveModelCallResourceKey(candidate: RoutingCandidate): string | null {
+    const routeKind = this.resolveRouteKind(candidate);
+    if (routeKind === 'request_base_url') {
+      return `request_base_url::${normalizeSharedRouteKey(candidate.requestBaseUrl)}`;
+    }
+    if (routeKind === 'configured_litellm_proxy') {
+      return `configured_litellm_proxy::${normalizeSharedRouteKey(this.litellmBaseUrl)}`;
+    }
+
+    const provider = candidate.provider.trim().toLowerCase();
+    if (provider === 'litellm' || provider === 'local_endpoint') {
+      return `registered_model::${provider}`;
+    }
+    return null;
+  }
+
+  private async runWithModelCallGate<T>(
+    purpose: RoutingPurpose,
+    candidate: RoutingCandidate,
+    correlation: ResolvedCorrelationMetadata | undefined,
+    execute: () => Promise<T>,
+    signal?: AbortSignal,
+  ): Promise<T> {
+    return await this.modelCallGate.run({
+      resourceKey: this.resolveModelCallResourceKey(candidate),
+      runtimeClass: this.resolveModelCallRuntimeClass(purpose, correlation),
+      signal,
+    }, execute);
+  }
+
   private evaluateBudgetPreflight(
     purpose: RoutingPurpose,
     candidate: RoutingCandidate,
@@ -989,12 +1035,13 @@ export class LLMClient {
         });
         return { response, providerObservability };
       },
-      {
-        modelHint,
-        correlation,
-        estimatedInputTokens,
-      },
-    );
+        {
+          modelHint,
+          correlation,
+          estimatedInputTokens,
+          signal: options.signal,
+        },
+      );
 
     log.info('LLM complete finished', {
       model: candidate.model,
@@ -1103,6 +1150,7 @@ export class LLMClient {
       modelHint?: LLMCompletionModelHint;
       correlation?: ResolvedCorrelationMetadata;
       estimatedInputTokens?: number;
+      signal?: AbortSignal;
     } = {},
   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
     if (this.eligibilityGate) {
@@ -1140,7 +1188,13 @@ export class LLMClient {
         options.correlation,
       );
       this.enforceImportRoutingPolicy(purpose, candidate);
-      return execute(candidate, attempt);
+      return await this.runWithModelCallGate(
+        purpose,
+        candidate,
+        options.correlation,
+        () => execute(candidate, attempt),
+        options.signal,
+      );
     }, options.correlation);
   }
 }
@@ -1176,6 +1230,21 @@ function toThinkingEffort(value: unknown): ThinkingLevel | undefined {
       return value;
     default:
       return undefined;
+  }
+}
+
+function normalizeSharedRouteKey(value: string | null | undefined): string {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return 'shared';
+  }
+
+  try {
+    const parsed = new URL(normalized);
+    const pathname = parsed.pathname.replace(/\/+$/, '') || '/';
+    return `${parsed.origin}${pathname}`.toLowerCase();
+  } catch {
+    return normalized.toLowerCase();
   }
 }
 

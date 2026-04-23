@@ -948,7 +948,6 @@ export class SessionManager {
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): Promise<LLMContext> {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    await this.awaitPendingAutoCompaction(resolvedChannelId);
     const coreMemoryBlock = this.coreMemoryProvider
       ? this.coreMemoryProvider.formatForContext()
       : '';
@@ -991,6 +990,8 @@ export class SessionManager {
       focusCompactionRanges,
       memoryManifestSeed,
       turnBudgetCharacteristics,
+      compactionMode: 'deferred',
+      pendingCompaction: this.pendingAutoCompactions.has(resolvedChannelId),
     });
   }
 

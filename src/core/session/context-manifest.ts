@@ -106,6 +106,9 @@ export interface ContextManifestSessionSummary {
 
 export interface ContextManifestCompactionSummary {
   triggered: boolean;
+  eligible?: boolean;
+  pending?: boolean;
+  mode?: 'deferred' | 'foreground';
   thresholdPct: number;
   tokenBudget: number;
   totalTokensBefore: number;

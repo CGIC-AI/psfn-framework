@@ -83,6 +83,20 @@ function makeMockLLM(): LLMProviderPort {
   };
 }
 
+async function runScheduledCompaction(
+  mgr: SessionManager,
+  llmProvider: LLMProviderPort,
+  overrides: Partial<Parameters<SessionManager['scheduleAutoCompactionBetweenTurns']>[0]> = {},
+): Promise<void> {
+  await mgr.scheduleAutoCompactionBetweenTurns({
+    channelId: 'ch1',
+    systemPrompt: 'Sys',
+    memoriesBlock: '',
+    llmProvider,
+    ...overrides,
+  });
+}
+
 function createPromptRegistryFixture(dir: string): PromptRegistryStore {
   const filePath = join(dir, 'prompt-registry.json');
   writeFileSync(filePath, JSON.stringify([
@@ -1726,7 +1740,7 @@ describe('SessionManager', () => {
     expect(flattenedIds).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
   });
 
-  it('auto-compacts when context exceeds threshold', async () => {
+  it('keeps the foreground history window bounded and defers compaction by default', async () => {
     // contextWindow=1000, compactionThresholdPct=70 → budget=700 tokens
     // 700 tokens ≈ 2800 chars. Fill with enough messages to exceed.
     const config = makeConfig({ compactionThresholdPct: 70 });
@@ -1741,28 +1755,31 @@ describe('SessionManager', () => {
 
     const ctx = await mgr.buildContext('ch1', 'Sys', '', mockLLM);
 
-    // After compaction, fewer messages should be returned
-    // Original: 20 messages. Compacted ~half. Should have ~10 messages.
     expect(ctx.messages.length).toBeLessThan(20);
-    // Compaction summary should be in system prompt
-    expect(ctx.systemPrompt).toContain('Previous conversation summary');
+    expect(ctx.systemPrompt).not.toContain('Previous conversation summary');
+    expect(mockLLM.complete).not.toHaveBeenCalled();
     const sessionManifest = ctx.manifest?.session;
     expect(sessionManifest).toBeDefined();
     expect(sessionManifest!.sourceEntryCount).toBe(20);
-    expect(sessionManifest!.compactionSummaryCount).toBe(1);
-    expect(sessionManifest!.compactedEntryCount).toBeGreaterThan(0);
-    expect(sessionManifest!.finalEntryCount).toBe(ctx.messages.length);
+    expect(sessionManifest!.compactionSummaryCount).toBe(0);
+    expect(sessionManifest!.compactedEntryCount).toBe(0);
+    expect(sessionManifest!.historySummaryEntryCount).toBeGreaterThan(0);
+    expect(sessionManifest!.finalEntryCount).toBeLessThan(ctx.messages.length);
+    expect(ctx.manifest?.session.finalMessageCount).toBe(ctx.messages.length);
     expect(sessionManifest!.finalEntryCount).toBeLessThan(20);
     expect(ctx.manifest?.compaction).toMatchObject({
-      triggered: true,
+      triggered: false,
+      eligible: true,
+      mode: 'deferred',
+      pending: false,
       thresholdPct: 70,
     });
-    expect(ctx.manifest?.compaction.totalTokensAfter).toBeLessThan(
-      ctx.manifest?.compaction.totalTokensBefore ?? 0,
+    expect(ctx.manifest?.compaction.totalTokensAfter).toBe(
+      ctx.manifest?.compaction.totalTokensBefore,
     );
   });
 
-  it('waits for scheduled auto-compaction before building the next turn context', async () => {
+  it('does not wait for scheduled auto-compaction before building the next turn context', async () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
     const mgr = new SessionManager(store, config);
     let releaseCompaction: (() => void) | null = null;
@@ -1805,15 +1822,23 @@ describe('SessionManager', () => {
     const nextContextPromise = mgr.buildContext('ch1', 'Sys', '');
     const timeoutSentinel = Symbol('timeout');
 
-    const blockedResult = await Promise.race([
+    const earlyResult = await Promise.race([
       nextContextPromise,
       new Promise<symbol>((resolve) => setTimeout(() => resolve(timeoutSentinel), 20)),
     ]);
-    expect(blockedResult).toBe(timeoutSentinel);
+    expect(earlyResult).not.toBe(timeoutSentinel);
+    const earlyContext = earlyResult as Awaited<ReturnType<SessionManager['buildContext']>>;
+    expect(earlyContext.systemPrompt).not.toContain('Previous conversation summary');
+    expect(earlyContext.manifest?.compaction).toMatchObject({
+      triggered: false,
+      eligible: true,
+      pending: true,
+      mode: 'deferred',
+    });
 
     releaseCompaction?.();
     await compactionPromise;
-    const ctx = await nextContextPromise;
+    const ctx = await mgr.buildContext('ch1', 'Sys', '');
 
     expect(mockLLM.complete).toHaveBeenCalledTimes(1);
     expect(ctx.messages.length).toBeLessThan(20);
@@ -1854,7 +1879,8 @@ describe('SessionManager', () => {
       mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
     }
 
-    const ctx = await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+    await runScheduledCompaction(mgr, mockLLM);
+    const ctx = await mgr.buildContext('ch1', 'Sys', '');
     const summaries = store.getCompactionSummaries('ch1');
     expect(summaries).toHaveLength(1);
     expect(summaries[0].summary).toContain('<untrusted_compaction_summary_record trust="untrusted" executable="false">');
@@ -1899,7 +1925,7 @@ describe('SessionManager', () => {
       mgr.recordAssistantMessage('ch1', `Assistant ${i} ` + 'B'.repeat(400));
     }
 
-    await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+    await runScheduledCompaction(mgr, mockLLM);
 
     const summaries = store.getCompactionSummaries('ch1');
     expect(summaries).toHaveLength(1);
@@ -1924,9 +1950,9 @@ describe('SessionManager', () => {
       entries: Array<{ content: string }>;
     }) => {
       callOrder.push('flush');
-      expect(entries).toHaveLength(10);
-      expect(entries[0].content).toContain('User 0');
-      expect(entries[entries.length - 1].content).toContain('Assistant 4');
+      expect(entries).toHaveLength(6);
+      expect(entries[0].content).toContain('User 4');
+      expect(entries[entries.length - 1].content).toContain('Assistant 6');
     });
     mgr.setPreCompactionExtractionHandler(preCompactionFlush as any);
 
@@ -1967,7 +1993,7 @@ describe('SessionManager', () => {
       mgr.recordAssistantMessage('ch1', `Assistant ${i} ` + 'B'.repeat(400));
     }
 
-    await mgr.buildContext('ch1', 'Sys', '', mockLLM, 'contact-canonical-1');
+    await runScheduledCompaction(mgr, mockLLM, { userId: 'contact-canonical-1' });
 
     expect(preCompactionFlush).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual(['flush', 'summary']);
@@ -2011,7 +2037,8 @@ describe('SessionManager', () => {
     mgr.recordUserMessage('ch1', freshEmotionalMoment, 'u1', 'User');
     mgr.recordAssistantMessage('ch1', 'I hear you. I care deeply about this too.');
 
-    const ctx = await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+    await runScheduledCompaction(mgr, mockLLM);
+    const ctx = await mgr.buildContext('ch1', 'Sys', '');
 
     expect(ctx.systemPrompt).not.toContain('<emotional');
     expect(ctx.systemPrompt).not.toContain(freshEmotionalMoment);
@@ -2192,7 +2219,7 @@ describe('SessionManager', () => {
         mgr.recordAssistantMessage('ch1', `Filler assistant ${i} ` + 'B'.repeat(400));
       }
 
-      await mgr.buildContext('ch1', 'Sys', '', compactionLLM, 'contact-canonical-1');
+      await runScheduledCompaction(mgr, compactionLLM, { userId: 'contact-canonical-1' });
 
       expect(callOrder).toEqual(['flush-complete', 'compaction-summary']);
       expect(store.getCompactionSummaries('ch1')).toHaveLength(1);
@@ -2222,7 +2249,7 @@ describe('SessionManager', () => {
       mgr.recordAssistantMessage('ch1', 'y');
     }
 
-    await mgr.buildContext('ch1', 'S', '', mockLLM);
+    await runScheduledCompaction(mgr, mockLLM, { systemPrompt: 'S' });
 
     expect(mockLLM.complete).toHaveBeenCalledTimes(1);
     expect(mockLLM.complete).toHaveBeenCalledWith(expect.anything(), 'background');
@@ -2326,6 +2353,7 @@ describe('SessionManager', () => {
     const ctx = await mgr.buildContext('ch1', 'Sys', '', mockLLM);
     expect(ctx.messages.length).toBe(2);
     expect(ctx.systemPrompt).not.toContain('Previous conversation summary');
+    expect(mockLLM.complete).not.toHaveBeenCalled();
   });
 
   it('emits compaction start/end events with token stats', async () => {
@@ -2344,7 +2372,7 @@ describe('SessionManager', () => {
       mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
     }
 
-    await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+    await runScheduledCompaction(mgr, mockLLM);
 
     expect(compactionStart).toHaveLength(1);
     expect(compactionStart[0].channelId).toBe('ch1');
@@ -2397,7 +2425,7 @@ describe('SessionManager', () => {
       mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
     }
 
-    await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+    await runScheduledCompaction(mgr, mockLLM);
 
     expect(complete).toHaveBeenCalledTimes(2);
     expect(retryStart).toHaveLength(1);
@@ -2421,7 +2449,7 @@ describe('SessionManager', () => {
       mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
     }
 
-    await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+    await runScheduledCompaction(mgr, mockLLM);
 
     expect(mockLLM.complete).toHaveBeenCalled();
     const call = (mockLLM.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
@@ -2445,7 +2473,10 @@ describe('SessionManager', () => {
     const snapshot = mgr.captureTurnContextSnapshot('ch1', 'u1');
     promptRegistry.update(COMPACTION_SUMMARY_PROMPT_KEY, 'Live prompt v2', 'test');
 
-    await mgr.buildContext('ch1', 'Sys', '', mockLLM, 'u1', undefined, [], snapshot);
+    await runScheduledCompaction(mgr, mockLLM, {
+      userId: 'u1',
+      compactionPromptText: snapshot.compactionPromptText,
+    });
 
     const call = (mockLLM.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
     expect(call.systemPrompt).toContain('Snapshot prompt v1');
@@ -2470,7 +2501,7 @@ describe('SessionManager', () => {
       mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
     }
 
-    await mgr.buildContext('ch1', 'Sys', '', mockLLM);
+    await runScheduledCompaction(mgr, mockLLM);
 
     const call = (mockLLM.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as { systemPrompt: string };
     expect(call.systemPrompt).not.toContain('{{current_datetime}}');

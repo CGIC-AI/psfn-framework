@@ -50,7 +50,7 @@ import {
   countIntentionAppraisalArtifacts,
   entriesToMessages,
 } from './context-support.js';
-import { runAutoCompaction } from './compaction-service.js';
+import { runAutoCompaction, shouldCompact } from './compaction-service.js';
 import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
 import { buildPromptSectionTelemetryList } from '../../identity/prompt-sections.js';
@@ -416,6 +416,8 @@ interface BuildSessionContextParams {
   focusCompactionRanges: FocusCompactionRange[];
   memoryManifestSeed?: ContextManifestMemorySeed;
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
+  compactionMode?: 'deferred' | 'foreground';
+  pendingCompaction?: boolean;
 }
 
 export async function buildSessionContext(params: BuildSessionContextParams): Promise<LLMContext> {
@@ -472,25 +474,29 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   const coreMemorySectionText = hasCoreMemorySection ? params.coreMemoryBlock : '';
   const coreMemoryTokenCount = countTokens(coreMemorySectionText);
   const memoryTokenCount = countTokens(params.memoriesBlock);
+  const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount;
+  const preAssemblySessionMessageTokens = countMessageTokens(
+    entriesToMessages(recent, channelVisibility, false),
+  );
+  const compactionMode = params.compactionMode ?? 'deferred';
+  const compactionCheck = shouldCompact({
+    recent,
+    channelVisibility,
+    systemTokens,
+    config: params.config,
+  });
   let compactionManifest = {
     triggered: false,
     compactedEntryCount: 0,
-    totalTokensBefore: 0,
-    totalTokensAfter: 0,
+    eligible: compactionCheck.trigger,
+    pending: params.pendingCompaction ?? false,
+    mode: compactionMode,
+    totalTokensBefore: systemTokens + preAssemblySessionMessageTokens,
+    totalTokensAfter: systemTokens + preAssemblySessionMessageTokens,
   };
 
-  // Explicit compaction remains available for callers that opt into it.
-  if (params.llmProvider) {
-    const sessionMessageTokens = countMessageTokens(
-      entriesToMessages(recent, channelVisibility, false),
-    );
-    const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount;
-    compactionManifest = {
-      triggered: false,
-      compactedEntryCount: 0,
-      totalTokensBefore: systemTokens + sessionMessageTokens,
-      totalTokensAfter: systemTokens + sessionMessageTokens,
-    };
+  // Explicit foreground compaction remains available for callers that opt into it.
+  if (params.llmProvider && compactionMode === 'foreground') {
     const preCompactionEntryCount = recent.length;
     const result = await runAutoCompaction({
       channelId: params.channelId,
@@ -525,6 +531,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       compactedEntryCount: result.compacted
         ? Math.max(0, preCompactionEntryCount - recent.length)
         : 0,
+      eligible: compactionCheck.trigger,
+      pending: params.pendingCompaction ?? false,
+      mode: compactionMode,
       totalTokensBefore: systemTokens + preAssemblySessionMessageTokens,
       totalTokensAfter: systemTokens + postCompactionMessageTokens + newSummaryTokenCount,
     };
@@ -764,6 +773,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     },
     compaction: {
       triggered: compactionManifest.triggered,
+      eligible: compactionManifest.eligible,
+      pending: compactionManifest.pending,
+      mode: compactionManifest.mode,
       thresholdPct: params.config.compactionThresholdPct,
       tokenBudget: compactionThresholdTokenBudget,
       totalTokensBefore: compactionManifest.totalTokensBefore,

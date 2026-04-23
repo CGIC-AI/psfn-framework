@@ -1,15 +1,14 @@
-// Real-provider TTFT benchmark for autoresearch.
-// Measures time-to-first-token across multiple providers over multi-turn sessions.
-//
-// Run: npx tsx eval/ttft-real-providers.ts
-
 import 'dotenv/config';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createIsolatedE2ERuntime } from '../src/app/e2e/runtime-harness.js';
 import { hydrateJsonBackedRuntimeConfig } from '../src/system/config/runtime-config.js';
 import { EventBus } from '../src/shared/event-bus.js';
-
+import type {
+  LLMContext,
+  StreamCallbacks,
+  SubstrateMessage,
+} from '../src/shared/contracts/runtime.js';
 import { MemoryStore } from '../src/faculties/memory/store.js';
 import { initDatabase } from '../src/persistence/sqlite-utils.js';
 import { LLMClient } from '../src/primitives/llm/client.js';
@@ -20,9 +19,14 @@ import {
   composeSubstrateAgent,
   wireMemoryRuntime,
 } from '../src/app/startup/composition/composition.js';
-import type { SubstrateMessage } from '../src/shared/contracts/runtime.js';
+import {
+  buildTtftBenchmarkReport,
+  evaluateHotPath,
+  type TtftBenchmarkMethodology,
+  type TtftBenchmarkSample,
+} from '../src/core/agent/ttft-benchmark.js';
 
-const TURNS_PER_PROVIDER = 15;
+const MEASURED_TURNS = 6;
 const WARMUP_TURNS = 1;
 
 const PROVIDERS = [
@@ -34,9 +38,43 @@ const MESSAGES = [
   "Interesting. Can you tell me something you remember about me from earlier conversations? Be honest if you don't have anything.",
   "What's the weather like today where you are? I know you don't have a body, but work with me.",
   "If you could change one thing about how we talk, what would it be?",
-  "Tell me a short joke. One sentence.",
-  "Goodbye for now. Summarize our conversation in three words.",
+  'Tell me a short joke. One sentence.',
+  'Goodbye for now. Summarize our conversation in three words.',
 ];
+
+interface TransportTurnProbe {
+  streamCalls: number;
+  transportTextDeltas: number;
+  streamStartedAt: number | null;
+  firstTransportTextAt: number | null;
+  streamResolvedAt: number | null;
+}
+
+const METHODOLOGY: TtftBenchmarkMethodology = {
+  benchmarkId: 'ttft-real-providers',
+  measurementClass: 'provider_e2e_ttft',
+  measuredPath: [
+    'SubstrateAgent.handleMessage',
+    'Agent.prompt',
+    'createSubstrateStreamFn',
+    'LLMClient.stream',
+    'provider transport',
+    'EventBridge',
+    'agent.stream.delta',
+    'agent.turn.stage:first-token',
+  ],
+  providerSensitiveMetrics: ['ttftMs', 'providerTtfbMs', 'providerRoundTripMs', 'totalMs'],
+  structuralMetrics: ['localPreProviderMs', 'localPostProviderMs', 'structuralOverheadMs'],
+  hotPathSignals: [
+    'transport.stream invoked',
+    'transport.onText invoked',
+    'agent.stream.delta observed',
+    'agent.turn.stage first-token sourced from stream',
+    'agent.turn.stage prompt emitted',
+  ],
+  warmupTurns: WARMUP_TURNS,
+  measuredTurns: MEASURED_TURNS,
+};
 
 function makeMessage(channelId: string, content: string, id?: string): SubstrateMessage {
   return {
@@ -48,17 +86,6 @@ function makeMessage(channelId: string, content: string, id?: string): Substrate
     content,
     timestamp: new Date(),
   };
-}
-
-interface TurnResult {
-  providerId: string;
-  turnIndex: number;
-  ttftMs: number;
-  totalMs: number;
-  inputTokens: number;
-  outputTokens: number;
-  model: string;
-  error?: string;
 }
 
 function buildModelsJson(primaryModel: string) {
@@ -105,25 +132,39 @@ function buildModelsJson(primaryModel: string) {
   };
 }
 
-async function runProvider(provider: typeof PROVIDERS[number]): Promise<TurnResult[]> {
-  const results: TurnResult[] = [];
+function createTransportProbe(): TransportTurnProbe {
+  return {
+    streamCalls: 0,
+    transportTextDeltas: 0,
+    streamStartedAt: null,
+    firstTransportTextAt: null,
+    streamResolvedAt: null,
+  };
+}
+
+function durationBetween(start: number | null, end: number | null): number | undefined {
+  if (start === null || end === null) {
+    return undefined;
+  }
+  return end - start;
+}
+
+async function runProvider(provider: typeof PROVIDERS[number]): Promise<TtftBenchmarkSample[]> {
+  const results: TtftBenchmarkSample[] = [];
   const runtime = createIsolatedE2ERuntime({ prefix: 'psfn-ttft-' });
   const { config, rootDir } = runtime;
 
-  // Write a valid models.json for this provider and re-hydrate config
   writeFileSync(
     join(runtime.systemDataDir, 'models.json'),
     JSON.stringify(buildModelsJson(provider.model), null, 2),
   );
   hydrateJsonBackedRuntimeConfig(config, { seedDir: 'config' });
 
-  // Point to Artie character card
   process.env.CHARACTER_CARD_PATH = join(process.cwd(), 'artie-character-card.json');
 
   const sessionsDir = join(rootDir, 'sessions');
   mkdirSync(sessionsDir, { recursive: true });
-  const databasePath = config.databasePath;
-  const db = initDatabase(databasePath);
+  const db = initDatabase(config.databasePath);
 
   try {
     const eventBus = new EventBus();
@@ -133,6 +174,7 @@ async function runProvider(provider: typeof PROVIDERS[number]): Promise<TurnResu
     const { sessionManager } = sessionComposition;
     const embeddingProvider = createEmbeddingProviderFromEnv();
     const memoryStore = new MemoryStore(db, embeddingProvider.dims);
+    const activeProbe = { current: null as TransportTurnProbe | null };
 
     const agentLoop = composeSubstrateAgent({
       eventBus,
@@ -140,6 +182,33 @@ async function runProvider(provider: typeof PROVIDERS[number]): Promise<TurnResu
       sessionManager,
       systemPrompt,
       config,
+      streamTransport: {
+        async stream(context: LLMContext, callbacks?: StreamCallbacks) {
+          const probe = activeProbe.current;
+          if (probe === null) {
+            throw new Error('TTFT benchmark transport invoked without an active turn probe');
+          }
+
+          probe.streamCalls += 1;
+          probe.streamStartedAt ??= performance.now();
+
+          try {
+            const response = await llmClient.stream(context, {
+              ...callbacks,
+              onText: (delta) => {
+                probe.transportTextDeltas += 1;
+                probe.firstTransportTextAt ??= performance.now();
+                callbacks?.onText?.(delta);
+              },
+            });
+            probe.streamResolvedAt = performance.now();
+            return response;
+          } catch (error) {
+            probe.streamResolvedAt = performance.now();
+            throw error;
+          }
+        },
+      },
     });
     wireMemoryRuntime({
       agentLoop,
@@ -155,46 +224,110 @@ async function runProvider(provider: typeof PROVIDERS[number]): Promise<TurnResu
 
     const channelId = `ttft-${provider.id}-${Date.now()}`;
 
-    for (let i = 0; i < WARMUP_TURNS + TURNS_PER_PROVIDER; i++) {
+    for (let i = 0; i < WARMUP_TURNS + MEASURED_TURNS; i += 1) {
       const content = MESSAGES[i % MESSAGES.length];
       const msg = makeMessage(channelId, content, `ttft-${provider.id}-turn-${i}`);
+      const probe = createTransportProbe();
+      activeProbe.current = probe;
+      let agentStreamDeltas = 0;
+      let firstTokenSource: 'stream' | 'fallback' | 'missing' = 'missing';
+      let firstTokenTtftMs: number | null = null;
+      let promptStageObserved = false;
 
-      let firstTokenAt: number | null = null;
+      const unsubscribeStream = (eventBus as any).on(
+        'agent.stream.delta',
+        (data: { channelId: string }) => {
+          if (data.channelId === channelId) {
+            agentStreamDeltas += 1;
+          }
+        },
+      );
+      const unsubscribeStage = (eventBus as any).on(
+        'agent.turn.stage',
+        (data: { channelId?: string; stage: string; source?: string; ttftMs?: number }) => {
+          if (data.channelId !== undefined && data.channelId !== channelId) {
+            return;
+          }
+          if (data.stage === 'first-token') {
+            firstTokenSource = data.source === 'stream' || data.source === 'fallback'
+              ? data.source
+              : 'missing';
+            if (typeof data.ttftMs === 'number' && Number.isFinite(data.ttftMs)) {
+              firstTokenTtftMs = data.ttftMs;
+            }
+          }
+          if (data.stage === 'prompt') {
+            promptStageObserved = true;
+          }
+        },
+      );
+
       const turnStart = performance.now();
-
-      const unsubscribe = eventBus.on('agent.stream.delta', () => {
-        if (firstTokenAt === null) {
-          firstTokenAt = performance.now();
-        }
-      });
-
       try {
         const response = await agentLoop.handleMessage(msg);
         const turnEnd = performance.now();
-        unsubscribe();
 
-        if (i < WARMUP_TURNS) continue; // skip warmup from results
+        unsubscribeStage();
+        unsubscribeStream();
+        activeProbe.current = null;
 
-        results.push({
+        if (i < WARMUP_TURNS) {
+          continue;
+        }
+
+        const sample: TtftBenchmarkSample = {
           providerId: provider.id,
           turnIndex: i - WARMUP_TURNS,
-          ttftMs: firstTokenAt !== null ? firstTokenAt - turnStart : -1,
+          ttftMs: firstTokenTtftMs ?? -1,
           totalMs: turnEnd - turnStart,
           inputTokens: response.metadata.inputTokens,
           outputTokens: response.metadata.outputTokens,
           model: response.metadata.model,
-        });
+          localPreProviderMs: durationBetween(turnStart, probe.streamStartedAt),
+          providerTtfbMs: durationBetween(probe.streamStartedAt, probe.firstTransportTextAt),
+          providerRoundTripMs: durationBetween(probe.streamStartedAt, probe.streamResolvedAt),
+          localPostProviderMs: durationBetween(probe.streamResolvedAt, turnEnd),
+          structuralOverheadMs:
+            (durationBetween(turnStart, probe.streamStartedAt) ?? 0)
+            + (durationBetween(probe.streamResolvedAt, turnEnd) ?? 0),
+          hotPath: evaluateHotPath({
+            transportStreamCalls: probe.streamCalls,
+            transportTextDeltas: probe.transportTextDeltas,
+            agentStreamDeltas,
+            firstTokenSource,
+            promptStageObserved,
+          }),
+        };
+        results.push(sample);
       } catch (err) {
-        unsubscribe();
-        if (i < WARMUP_TURNS) continue;
+        unsubscribeStage();
+        unsubscribeStream();
+        activeProbe.current = null;
+
+        if (i < WARMUP_TURNS) {
+          continue;
+        }
+
         results.push({
           providerId: provider.id,
           turnIndex: i - WARMUP_TURNS,
-          ttftMs: -1,
+          ttftMs: firstTokenTtftMs ?? -1,
           totalMs: performance.now() - turnStart,
           inputTokens: 0,
           outputTokens: 0,
           model: provider.model,
+          localPreProviderMs: durationBetween(turnStart, probe.streamStartedAt),
+          providerTtfbMs: durationBetween(probe.streamStartedAt, probe.firstTransportTextAt),
+          providerRoundTripMs: durationBetween(probe.streamStartedAt, probe.streamResolvedAt),
+          localPostProviderMs: undefined,
+          structuralOverheadMs: undefined,
+          hotPath: evaluateHotPath({
+            transportStreamCalls: probe.streamCalls,
+            transportTextDeltas: probe.transportTextDeltas,
+            agentStreamDeltas,
+            firstTokenSource,
+            promptStageObserved,
+          }),
           error: err instanceof Error ? err.message : String(err),
         });
       }
@@ -207,69 +340,79 @@ async function runProvider(provider: typeof PROVIDERS[number]): Promise<TurnResu
   return results;
 }
 
-function percentile(sorted: number[], p: number): number {
-  if (sorted.length === 0) return 0;
-  const idx = Math.ceil((p / 100) * sorted.length) - 1;
-  return sorted[Math.max(0, idx)];
+function emitMetric(name: string, value: number | undefined): void {
+  console.log(`METRIC ${name}=${value?.toFixed(3) ?? '0'}`);
 }
 
 async function main(): Promise<void> {
-  console.log('=== Real-Provider TTFT Benchmark ===\n');
-  const allResults: TurnResult[] = [];
+  console.log('=== Real-Provider TTFT Benchmark ===');
+  console.log(`BENCHMARK_METHODOLOGY ${JSON.stringify(METHODOLOGY)}`);
+
+  const allResults: TtftBenchmarkSample[] = [];
 
   for (const provider of PROVIDERS) {
     console.log(`Running ${provider.id} (${provider.model})...`);
     const results = await runProvider(provider);
-    for (const r of results) {
-      const status = r.error ? `ERROR: ${r.error}` : `ttft=${r.ttftMs.toFixed(0)}ms total=${r.totalMs.toFixed(0)}ms tokens=${r.inputTokens}/${r.outputTokens}`;
-      console.log(`  turn ${r.turnIndex + 1}: ${status}`);
-    }
-    allResults.push(...results);
-    console.log();
-  }
-
-  // Per-provider summary
-  console.log('=== Per-Provider Summary ===');
-  for (const provider of PROVIDERS) {
-    const providerResults = allResults.filter(r => r.providerId === provider.id && !r.error);
-    const ttfts = providerResults.map(r => r.ttftMs).sort((a, b) => a - b);
-    const totals = providerResults.map(r => r.totalMs).sort((a, b) => a - b);
-    const errors = allResults.filter(r => r.providerId === provider.id && r.error);
-
-    if (ttfts.length === 0) {
-      console.log(`${provider.id}: ALL ERRORS (${errors.length} failures)`);
-      continue;
+    for (const sample of results) {
+      console.log(`BENCHMARK_SAMPLE ${JSON.stringify(sample)}`);
     }
 
+    const providerReport = buildTtftBenchmarkReport({
+      methodology: METHODOLOGY,
+      samples: results,
+      metrics: {
+        ttftMs: (sample) => sample.ttftMs,
+        totalMs: (sample) => sample.totalMs,
+        providerTtfbMs: (sample) => sample.providerTtfbMs,
+        providerRoundTripMs: (sample) => sample.providerRoundTripMs,
+        localPreProviderMs: (sample) => sample.localPreProviderMs,
+        localPostProviderMs: (sample) => sample.localPostProviderMs,
+        structuralOverheadMs: (sample) => sample.structuralOverheadMs,
+      },
+    });
     console.log(
-      `${provider.id}: ` +
-      `median_ttft=${percentile(ttfts, 50).toFixed(0)}ms ` +
-      `p90_ttft=${percentile(ttfts, 90).toFixed(0)}ms ` +
-      `median_total=${percentile(totals, 50).toFixed(0)}ms ` +
-      `errors=${errors.length}/${TURNS_PER_PROVIDER}`
+      `BENCHMARK_PROVIDER_SUMMARY ${JSON.stringify({
+        providerId: provider.id,
+        providerModel: provider.model,
+        ...providerReport.summary,
+      })}`,
     );
+    allResults.push(...results);
   }
 
-  // Global summary
-  const allTtfts = allResults.filter(r => !r.error).map(r => r.ttftMs).sort((a, b) => a - b);
-  const allTotals = allResults.filter(r => !r.error).map(r => r.totalMs).sort((a, b) => a - b);
-  const totalErrors = allResults.filter(r => r.error).length;
+  const report = buildTtftBenchmarkReport({
+    methodology: METHODOLOGY,
+    samples: allResults,
+    metrics: {
+      ttftMs: (sample) => sample.ttftMs,
+      totalMs: (sample) => sample.totalMs,
+      providerTtfbMs: (sample) => sample.providerTtfbMs,
+      providerRoundTripMs: (sample) => sample.providerRoundTripMs,
+      localPreProviderMs: (sample) => sample.localPreProviderMs,
+      localPostProviderMs: (sample) => sample.localPostProviderMs,
+      structuralOverheadMs: (sample) => sample.structuralOverheadMs,
+    },
+  });
 
-  console.log('\n=== Global Summary ===');
-  console.log(`Providers tested: ${PROVIDERS.length}`);
-  console.log(`Total turns: ${allResults.length}`);
-  console.log(`Successful turns: ${allTtfts.length}`);
-  console.log(`Errors: ${totalErrors}`);
-  console.log(`Global median TTFT: ${percentile(allTtfts, 50).toFixed(0)}ms`);
-  console.log(`Global p90 TTFT: ${percentile(allTtfts, 90).toFixed(0)}ms`);
-  console.log(`Global median total: ${percentile(allTotals, 50).toFixed(0)}ms`);
+  console.log(`BENCHMARK_SUMMARY ${JSON.stringify(report.summary)}`);
+  emitMetric('median_turn_ms', report.summary.metrics.totalMs?.medianMs);
+  emitMetric('p90_turn_ms', report.summary.metrics.totalMs?.p90Ms);
+  emitMetric('min_turn_ms', report.summary.metrics.totalMs?.minMs);
+  emitMetric('median_ttft_ms', report.summary.metrics.ttftMs?.medianMs);
+  emitMetric('p90_ttft_ms', report.summary.metrics.ttftMs?.p90Ms);
+  emitMetric('median_provider_ttfb_ms', report.summary.metrics.providerTtfbMs?.medianMs);
+  emitMetric('median_provider_round_trip_ms', report.summary.metrics.providerRoundTripMs?.medianMs);
+  emitMetric('median_local_pre_provider_ms', report.summary.metrics.localPreProviderMs?.medianMs);
+  emitMetric('median_local_post_provider_ms', report.summary.metrics.localPostProviderMs?.medianMs);
+  emitMetric('median_local_structural_overhead_ms', report.summary.metrics.structuralOverheadMs?.medianMs);
+  console.log(`METRIC hot_path_failures=${report.summary.hotPathFailures}`);
 
-  // METRIC lines for autoresearch parsing
-  console.log(`\nMETRIC median_turn_ms=${percentile(allTotals, 50).toFixed(3)}`);
-  console.log(`METRIC p90_turn_ms=${percentile(allTotals, 90).toFixed(3)}`);
-  console.log(`METRIC min_turn_ms=${allTotals[0]?.toFixed(3) ?? '0'}`);
-  console.log(`METRIC median_ttft_ms=${percentile(allTtfts, 50).toFixed(3)}`);
-  console.log(`METRIC p90_ttft_ms=${percentile(allTtfts, 90).toFixed(3)}`);
+  if (report.summary.successCount === 0) {
+    throw new Error('Real-provider TTFT benchmark produced no successful turns');
+  }
+  if (report.summary.hotPathFailures > 0) {
+    throw new Error(`Real-provider TTFT benchmark hit non-streaming or incomplete hot paths on ${report.summary.hotPathFailures} turns`);
+  }
 }
 
 main().catch((err) => {

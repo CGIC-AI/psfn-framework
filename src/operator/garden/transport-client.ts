@@ -7,6 +7,15 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { sendText } from '../../channels/backplane/http/primitives.js';
 
 const log = createComponentLogger('GardenAdminTransportProxy');
+const HEALTH_PROBE_TIMEOUT_MS = 1_500;
+const HEALTH_PROBE_PATH = '/api/admin/__transport_probe__';
+
+export interface GardenAdminTransportHealth {
+  reachable: boolean;
+  status: 'ok' | 'error';
+  httpStatus?: number;
+  error?: string;
+}
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -36,6 +45,38 @@ export class GardenAdminTransportProxy {
 
   close(callback: () => void): void {
     this.webSocketServer.close(callback);
+  }
+
+  probeHealth(): Promise<GardenAdminTransportHealth> {
+    return new Promise((resolve) => {
+      const proxyRequest = request({
+        socketPath: this.socketPath,
+        path: HEALTH_PROBE_PATH,
+        method: 'GET',
+      }, (proxyResponse) => {
+        proxyResponse.resume();
+        const httpStatus = proxyResponse.statusCode ?? 502;
+        resolve({
+          reachable: true,
+          status: 'ok',
+          httpStatus,
+        });
+      });
+
+      proxyRequest.setTimeout(HEALTH_PROBE_TIMEOUT_MS, () => {
+        proxyRequest.destroy(new Error(`Timed out after ${HEALTH_PROBE_TIMEOUT_MS}ms`));
+      });
+
+      proxyRequest.on('error', (error) => {
+        resolve({
+          reachable: false,
+          status: 'error',
+          error: String(error),
+        });
+      });
+
+      proxyRequest.end();
+    });
   }
 
   proxyApiRequest(req: IncomingMessage, res: ServerResponse): void {

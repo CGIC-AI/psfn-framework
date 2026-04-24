@@ -133,6 +133,7 @@ interface Harness {
   eventBus: EventBus;
   transportServer: GardenAdminTransportServer;
   operatorSurface: GardenOperatorSurface;
+  transportStopped: boolean;
 }
 
 async function createHarness(): Promise<Harness> {
@@ -245,12 +246,15 @@ async function createHarness(): Promise<Harness> {
     eventBus,
     transportServer,
     operatorSurface,
+    transportStopped: false,
   };
 }
 
 async function destroyHarness(harness: Harness): Promise<void> {
   await harness.operatorSurface.stop();
-  await harness.transportServer.stop();
+  if (!harness.transportStopped) {
+    await harness.transportServer.stop();
+  }
   rmSync(harness.tempDir, { recursive: true, force: true });
   resetRuntimeTrustPolicy();
 }
@@ -281,6 +285,41 @@ describe('Garden operator surface', () => {
     expect(res.status).toBe(200);
     const payload = JSON.parse(res.body) as { stats: { sessionCount: number } };
     expect(payload.stats.sessionCount).toBeTypeOf('number');
+  });
+
+  it('reports degraded health when the admin transport is unreachable', async () => {
+    await harness.transportServer.stop();
+    harness.transportStopped = true;
+
+    const res = await requestPort(harness.port, 'GET', '/health');
+    expect(res.status).toBe(503);
+    expect(JSON.parse(res.body)).toEqual({
+      status: 'degraded',
+      uptime: expect.any(Number),
+      dependencies: {
+        adminTransport: expect.objectContaining({
+          reachable: false,
+          status: 'error',
+          error: expect.any(String),
+        }),
+      },
+    });
+  });
+
+  it('reports healthy transport status in operator health', async () => {
+    const res = await requestPort(harness.port, 'GET', '/health');
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body)).toEqual({
+      status: 'ok',
+      uptime: expect.any(Number),
+      dependencies: {
+        adminTransport: {
+          reachable: true,
+          status: 'ok',
+          httpStatus: 404,
+        },
+      },
+    });
   });
 
   it('bridges telemetry websocket events through the operator surface', async () => {

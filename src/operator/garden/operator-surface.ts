@@ -14,7 +14,10 @@ import { handleAdminRequest } from './server-request-routing.js';
 import { AdminServerTransport } from './server-transport.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { sendGardenLoginPage } from './auth-pages.js';
-import { GardenAdminTransportProxy } from './transport-client.js';
+import {
+  GardenAdminTransportProxy,
+  type GardenAdminTransportHealth,
+} from './transport-client.js';
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -26,6 +29,14 @@ export interface GardenOperatorSurfaceConfig {
   allowInsecureWithoutToken?: boolean;
   config: SubstrateConfig;
   transportSocketPath: string;
+}
+
+interface GardenOperatorHealthPayload {
+  status: 'ok' | 'degraded';
+  uptime: number;
+  dependencies: {
+    adminTransport: GardenAdminTransportHealth;
+  };
 }
 
 export class GardenOperatorSurface implements Lifecycle {
@@ -180,10 +191,7 @@ export class GardenOperatorSurface implements Lifecycle {
     }
 
     if (method === 'GET' && path === '/health') {
-      sendJson(res, 200, {
-        status: 'ok',
-        uptime: process.uptime(),
-      });
+      void this.handleHealth(res);
       return true;
     }
 
@@ -216,5 +224,22 @@ export class GardenOperatorSurface implements Lifecycle {
         sendText(res, 500, 'Internal Server Error');
       },
     );
+  }
+
+  private async handleHealth(res: ServerResponse): Promise<void> {
+    const adminTransport = await this.proxy.probeHealth();
+    if (res.writableEnded || res.destroyed) {
+      return;
+    }
+
+    const payload: GardenOperatorHealthPayload = {
+      status: adminTransport.status === 'ok' ? 'ok' : 'degraded',
+      uptime: process.uptime(),
+      dependencies: {
+        adminTransport,
+      },
+    };
+
+    sendJson(res, payload.status === 'ok' ? 200 : 503, payload);
   }
 }

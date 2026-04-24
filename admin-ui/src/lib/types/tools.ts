@@ -1,9 +1,10 @@
-import type { AdaptiveToolRuntimeState } from '../../../../src/core/agent/adaptive-tools-telemetry.js';
-import type { RuntimeToolCatalogSnapshot } from '../../../../src/core/agent/tool-catalog.js';
 import type {
-  RuntimeServiceHealth,
-  RuntimeServiceHealthStatus,
-} from '../../../../src/operator/tool-health/types.js';
+  AdminAdaptiveToolsData as CanonicalAdminAdaptiveToolsData,
+  AdminToolAvailabilityView as CanonicalAdminToolAvailabilityView,
+  AdminToolFailureEvent as CanonicalAdminToolFailureEvent,
+  AdminToolHealthView as CanonicalAdminToolHealthView,
+  AdminToolInventoryGroup as CanonicalAdminToolInventoryGroup,
+} from '../../../../src/operator/garden/services/types.js';
 
 export type { AdaptiveToolRuntimeState } from '../../../../src/core/agent/adaptive-tools-telemetry.js';
 export type {
@@ -17,54 +18,14 @@ export type {
   RuntimeServiceId,
 } from '../../../../src/operator/tool-health/types.js';
 
-export interface AdminToolFailureEvent {
-  toolName: string;
-  channelId: string;
-  message: string;
-  timestamp: number;
-}
+export type AdminToolFailureEvent = CanonicalAdminToolFailureEvent;
 
-export type AdminToolAvailabilityStatus =
-  | 'active'
-  | 'available'
-  | 'unavailable'
-  | 'not_applicable';
+export type AdminToolAvailabilityStatus = CanonicalAdminToolAvailabilityView['status'];
 
-export interface AdminToolAvailabilityView {
-  status: AdminToolAvailabilityStatus;
-  detail: string;
-  source?: string;
-}
+export type AdminToolAvailabilityView = CanonicalAdminToolAvailabilityView;
 
-export interface AdminToolHealthView {
-  name: string;
-  description: string;
-  scope: 'core' | 'extended' | 'conditional';
-  health: {
-    status: RuntimeServiceHealthStatus;
-    detail: string;
-  };
-  contexts: {
-    chat: AdminToolAvailabilityView;
-    internalHeartbeat: AdminToolAvailabilityView;
-  };
-  lastFailure?: AdminToolFailureEvent;
-}
+export type AdminToolHealthView = CanonicalAdminToolHealthView;
 
-export interface AdminToolInventoryGroup {
-  key: string;
-  title: string;
-  detail: string;
-  accent: string;
-  tools: AdminToolHealthView[];
-}
+export type AdminToolInventoryGroup = CanonicalAdminToolInventoryGroup;
 
-export interface AdminAdaptiveToolsData {
-  state: AdaptiveToolRuntimeState | null;
-  catalog: RuntimeToolCatalogSnapshot | null;
-  serviceHealth: RuntimeServiceHealth[];
-  toolHealth: AdminToolHealthView[];
-  inventory: AdminToolInventoryGroup[];
-  recentFailures: AdminToolFailureEvent[];
-  recentTelemetry: Array<Record<string, unknown>>;
-}
+export type AdminAdaptiveToolsData = CanonicalAdminAdaptiveToolsData;

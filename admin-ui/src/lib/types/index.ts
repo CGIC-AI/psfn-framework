@@ -1,5 +1,63 @@
-import type { DashboardStats } from '../../../../src/operator/garden/types.js';
-import type { ProvidersRuntimeConfig } from '../../../../src/system/config/providers-config.js';
+import type {
+  ConfirmationDecision as CanonicalConfirmationDecision,
+  ConfirmationQueueEntry as CanonicalConfirmationQueueEntry,
+  ConfirmationResolveResult as CanonicalConfirmationResolveResult,
+} from '../../../../src/boundary/gateway/protocol.js';
+import type {
+  PurrMemory as CanonicalPurrMemory,
+  MemoryScopeRef as CanonicalMemoryScopeRef,
+} from '../../../../src/faculties/memory/types.js';
+import type { ReflectionTemplate as CanonicalReflectionTemplate } from '../../../../src/core/scheduler/heartbeat-policy.js';
+import type {
+  RecurringCadence as CanonicalRecurringCadence,
+  ScheduledTask as CanonicalScheduledTask,
+  TaskState as CanonicalTaskState,
+  TaskType as CanonicalTaskType,
+} from '../../../../src/core/scheduler/types.js';
+import type {
+  PromptRegistryEntry as CanonicalPromptRegistryEntry,
+  PromptRegistryHistoryEntry as CanonicalPromptRegistryHistoryEntry,
+} from '../../../../src/core/identity/prompt-registry.js';
+import type {
+  PromptRuntimeBlockId,
+  PromptRuntimeBlockPlacement,
+  PromptRuntimeBlockSchemaClassification,
+  PromptRuntimeBlockVisibility,
+  PromptRuntimeEditableBlockId,
+  PromptRuntimeMacroHint as CanonicalPromptRuntimeMacroHint,
+} from '../../../../src/core/identity/prompt-runtime.js';
+import type { PromptLayer, PromptHistoryEntry } from '../../../../src/core/identity/prompt-types.js';
+import type { RuntimePromptLayerSchemaClassification } from '../../../../src/core/identity/runtime-prompt-layers.js';
+import type { NorthStarItem as CanonicalNorthStarItem } from '../../../../src/faculties/north-star/store.js';
+import type { SkillEntry as CanonicalSkillEntry, SkillSnapshot as CanonicalSkillSnapshot, SkillSkipRecord as CanonicalSkillSkipRecord } from '../../../../src/faculties/skills/types.js';
+import type { ValuesJournalEntry as CanonicalValuesJournalEntry } from '../../../../src/faculties/values/store.js';
+import type {
+  AdminChatBootstrapResponse as CanonicalAdminChatBootstrapResponse,
+  AdminModelRoomBootstrapResponse as CanonicalAdminModelRoomBootstrapResponse,
+  AdminModelRoomParticipant as CanonicalAdminModelRoomParticipant,
+} from '../../../../src/operator/garden/chat/types.js';
+import type {
+  AdminDashboardData as CanonicalAdminDashboardData,
+  AdminPromptDetailData as CanonicalAdminPromptDetailData,
+  AdminPromptListData as CanonicalAdminPromptListData,
+  AdminSessionListData as CanonicalAdminSessionListData,
+  AdminSessionMessagesData as CanonicalAdminSessionMessagesData,
+  AdminSessionTurnData as CanonicalAdminSessionTurnData,
+  AdminSettingsData as CanonicalAdminSettingsData,
+  ConfigUpdateResult as CanonicalConfigUpdateResult,
+  ConstitutionUpdateResult as CanonicalConstitutionUpdateResult,
+  FoundationUpdateResult as CanonicalFoundationUpdateResult,
+  NorthStarUpdateResult as CanonicalNorthStarUpdateResult,
+  PromptUpdateResult as CanonicalPromptUpdateResult,
+  RuntimePromptUpdateResult as CanonicalRuntimePromptUpdateResult,
+  SettingsConfigEditors as CanonicalSettingsConfigEditors,
+  SettingsValidationError as CanonicalSettingsValidationError,
+} from '../../../../src/operator/garden/services/types.js';
+import type {
+  SettingsContractData as CanonicalSettingsContractData,
+  SettingsContractField as CanonicalSettingsContractField,
+  SettingsContractSubsystem as CanonicalSettingsContractSubsystem,
+} from '../../../../src/system/config/settings-contract.js';
 
 export type {
   CredentialReference,
@@ -19,48 +77,25 @@ export type {
   CanonicalProviderType,
   ProviderRegistryEntry,
 } from '../../../../src/shared/contracts/runtime.js';
-export type { ProvidersRuntimeConfig } from '../../../../src/system/config/providers-config.js';
 
 // Dashboard
-export interface AdminDashboardData {
-  stats: DashboardStats;
-}
+export type AdminDashboardData = CanonicalAdminDashboardData;
 
-// Memory -- mirrors backend PurrMemory from src/memory/types.ts
-export interface PurrMemory {
-  id: string;
-  text: string;
-  type: string;
-  importance: number;
-  confidence: number;
-  emotionalValence: number;
-  salience: number;
-  sourceRef: string;
-  extractedAt: number;
-  lastAccessed: number;
-  accessCount: number;
-  tags: string[];
-  provenanceRefs?: string[];
+// Memory -- backend-owned with UI compatibility overlays for legacy wire shapes.
+export type PurrMemory = Omit<CanonicalPurrMemory, 'type' | 'scopeRef' | 'sensitivity'> & {
+  type: CanonicalPurrMemory['type'] | string;
   scopeRef?: MemoryScopeRef;
-  scopeTags?: string[];
-  sensitivity?: string;
-  consentFlags?: Record<string, unknown>;
-  contactId?: string;
-  supersededBy?: string;
-  deletedAt?: number;
-  // Legacy compat fields (old frontend code may reference these)
+  sensitivity?: CanonicalPurrMemory['sensitivity'] | string;
   content?: string;
   createdAt?: number;
   updatedAt?: number;
   emotionalWeight?: number;
   supersededAt?: number;
-}
+};
 
-export interface MemoryScopeRef {
-  kind: string;
-  id: string;
-  label?: string;
-}
+export type MemoryScopeRef = Omit<CanonicalMemoryScopeRef, 'kind'> & {
+  kind: CanonicalMemoryScopeRef['kind'] | string;
+};
 
 export interface AdminMemoryContactSummary {
   id: string;
@@ -165,15 +200,7 @@ export interface AdminMemoryScopeMutationResult {
 }
 
 // Sessions
-export interface ChannelInfo {
-  sessionId: string;
-  channelId: string;
-  messageCount: number;
-  lastActivityAt?: number;
-  displayLabel?: string;
-  linkedContactId?: string;
-  linkedContactName?: string;
-}
+export type ChannelInfo = CanonicalAdminSessionListData['channels'][number];
 
 export interface SessionEntry {
   role: string;
@@ -186,45 +213,13 @@ export interface SessionEntry {
   channelVisibility?: string;
 }
 
-export interface CompactionAuditView {
-  id: number;
-  createdAt: number;
-  coveredUpTo: number;
-  summary: string;
-  sourceHash: string | null;
-  sourceMessageCount: number | null;
-  verification: string;
-  verificationDetail: string;
-}
+export type CompactionAuditView = CanonicalAdminSessionMessagesData['compactionAuditViews'][number];
 
-export interface AdminSessionListData {
-  channels: ChannelInfo[];
-}
+export type AdminSessionListData = CanonicalAdminSessionListData;
 
-export interface AdminTurnStageTelemetry {
-  observedAt: number;
-  turnId: string;
-  requestId?: string;
-  channelId: string;
-  callType?: string;
-  purpose?: string;
-  stage: string;
-  elapsedMs: number;
-  data: Record<string, unknown>;
-}
+export type AdminTurnStageTelemetry = CanonicalAdminSessionTurnData['stages'][number];
 
-export interface AdminTurnRetrievalTelemetry {
-  observedAt: number;
-  turnId: string;
-  requestId?: string;
-  channelId: string;
-  callType?: string;
-  purpose?: string;
-  count: number;
-  reason?: string;
-  retrievalSource?: 'embedding' | 'lexical_fallback';
-  data: Record<string, unknown>;
-}
+export type AdminTurnRetrievalTelemetry = CanonicalAdminSessionTurnData['retrievals'][number];
 
 export interface MemoryWithheldSummary {
   totalCount: number;
@@ -448,32 +443,7 @@ export interface AdminTurnSnapshotData {
   memory?: AdminTurnMemorySnapshotData;
 }
 
-export interface AdminSessionTurnData {
-  record: {
-    turnId: string;
-    requestId: string;
-    channelId: string;
-    channelType: string;
-    startedAt: number;
-    completedAt: number;
-    status: string;
-    userMessage: SessionEntry;
-    assistantMessage?: SessionEntry;
-    toolCalls: Array<Record<string, unknown>>;
-    contextManifestRef?: string;
-    internalStateSnapshotRef?: string;
-    extractedMemoryIds: string[];
-    concernDeltaRefs: string[];
-    contactDeltaRefs: string[];
-    roleEnvelopeRefs?: string[];
-    versionPointers: Record<string, unknown>;
-    provenanceRefs: string[];
-  };
-  roleEnvelopeRefs: string[];
-  stages: AdminTurnStageTelemetry[];
-  retrievals: AdminTurnRetrievalTelemetry[];
-  snapshot: AdminTurnSnapshotData | null;
-}
+export type AdminSessionTurnData = CanonicalAdminSessionTurnData;
 
 export interface SessionRoleEnvelopePreview {
   schemaVersion: 1;
@@ -500,15 +470,7 @@ export interface AdminSessionMessageOntologyView {
   displayLabel: string;
 }
 
-export interface AdminSessionMessagesData {
-  sessionId: string;
-  channelId: string;
-  messages: SessionEntry[];
-  messageOntologyViews: AdminSessionMessageOntologyView[];
-  roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];
-  compactionAuditViews: CompactionAuditView[];
-  turns: AdminSessionTurnData[];
-}
+export type AdminSessionMessagesData = CanonicalAdminSessionMessagesData;
 
 // Contacts
 export interface ContactChannelIdentity {
@@ -681,66 +643,19 @@ export interface ContactMutationAuditEntry {
 }
 
 // Settings
-export interface SettingsContractSubsystem {
-  id: string;
-  ownerFile: string;
-  mode: 'structured' | 'raw_only';
-}
+export type SettingsContractSubsystem = CanonicalSettingsContractSubsystem;
 
-export interface SettingsContractField {
-  key: string;
-  ownerSubsystem: string;
-  ownerFile: string;
-  type: 'string' | 'boolean' | 'integer' | 'number' | 'string_array' | 'enum' | 'object';
-  minimum?: number;
-  maximum?: number;
-  enumValues?: string[];
-  deprecated?: boolean;
-}
+export type SettingsContractField = CanonicalSettingsContractField;
 
-export interface SettingsContractData {
-  schemaVersion: number;
-  subsystems: Record<string, SettingsContractSubsystem>;
-  fields: Record<string, SettingsContractField>;
-}
+export type SettingsContractData = CanonicalSettingsContractData;
 
-export interface AdminSettingsData {
-  config: Record<string, unknown>;
-  env: Record<string, unknown>;
-  editors: {
-    models: unknown;
-    providers: ProvidersRuntimeConfig;
-    channels: Record<string, unknown>;
-    skills: unknown;
-    scheduler: unknown;
-    trustPolicy: unknown;
-    capabilities: unknown;
-    chargePolicy: unknown;
-    backup: unknown;
-  };
-  voiceProviders: {
-    stt: Array<{
-      id: string;
-      configured: boolean;
-      requiredTokens: string[];
-    }>;
-    tts: Array<{
-      id: string;
-      configured: boolean;
-      requiredTokens: string[];
-    }>;
-  };
-}
+export type SettingsConfigEditors = CanonicalSettingsConfigEditors;
 
-export interface ConfigUpdateResult {
-  ok: boolean;
-  message: string;
-  validationErrors?: Array<{
-    field: string;
-    message: string;
-    code?: string;
-  }>;
-}
+export type AdminSettingsData = CanonicalAdminSettingsData;
+
+export type SettingsValidationError = CanonicalSettingsValidationError;
+
+export type ConfigUpdateResult = CanonicalConfigUpdateResult;
 
 // Identity
 export interface CharacterCardV2 {
@@ -819,53 +734,30 @@ export interface PromptHistoryEntry {
   version: number;
 }
 
-export interface AdminPromptDetailData {
-  layer?: PromptLayer;
-  layerHistory?: PromptHistoryEntry[];
-  staticPrompt?: PromptRegistryEntry;
-  staticPromptHistory?: PromptRegistryHistoryEntry[];
-}
+export type AdminPromptDetailData = CanonicalAdminPromptDetailData;
 
-export interface PromptRegistryHistoryEntry {
-  version: number;
-  updatedBy: string;
-  timestamp: string;
-  previousChecksum: string;
-  previousText: string;
-}
+export type PromptRegistryHistoryEntry = CanonicalPromptRegistryHistoryEntry;
 
 export interface PromptDiffResult {
   oldContent: string;
   newContent: string;
 }
 
-export interface PromptRegistryEntry {
-  key: string;
-  name?: string;
+export type PromptRegistryEntry = CanonicalPromptRegistryEntry & {
   content?: string;
-  text?: string; // Backend uses `text`, not `content`
-  description?: string;
-  consumers?: string[];
-  version?: number;
-  enabled?: boolean;
-  category?: string;
-  updatedAt?: string;
-  updatedBy?: string;
-  checksum?: string;
-  identifier?: string;
-}
+};
 
 export interface PromptRuntimeBlock {
-  id: string;
+  id: PromptRuntimeBlockId;
   label: string;
   description: string;
   source: string;
-  schemaClassification: 'required_runtime_aware' | 'optional_runtime_aware' | 'immutable_provider_managed';
+  schemaClassification: PromptRuntimeBlockSchemaClassification;
   required: boolean;
   immutable: boolean;
   providerManaged: boolean;
-  placement: 'system_prompt' | 'context_messages' | 'tool_schemas';
-  visibility: 'hidden' | 'runtime_generated' | 'provider_managed';
+  placement: PromptRuntimeBlockPlacement;
+  visibility: PromptRuntimeBlockVisibility;
   reorderable: boolean;
   contentVisible: boolean;
   companionEditable: boolean;
@@ -877,38 +769,15 @@ export interface PromptRuntimeBlock {
 export interface PromptRuntimeLayerCoverageEntry {
   identifier: string;
   name: string;
-  classification: 'required_runtime_aware' | 'optional_runtime_aware';
+  classification: RuntimePromptLayerSchemaClassification;
   required: boolean;
   status: 'valid' | 'missing' | 'disabled' | 'empty';
   layerId?: string;
 }
 
-export interface PromptRuntimeMacroHint {
-  group:
-    | 'global_aliases'
-    | 'runtime_state'
-    | 'trust'
-    | 'response_style'
-    | 'affect'
-    | 'metacognition'
-    | 'internal_state'
-    | 'attention'
-    | 'tooling';
-  token: string;
-  description: string;
-  example: string;
-}
+export type PromptRuntimeMacroHint = CanonicalPromptRuntimeMacroHint;
 
-export interface AdminPromptListData {
-  layers: PromptLayer[];
-  staticPrompts: PromptRegistryEntry[];
-  runtimeBlocks: PromptRuntimeBlock[];
-  runtimeLayerCoverage: {
-    ok: boolean;
-    entries: PromptRuntimeLayerCoverageEntry[];
-  };
-  runtimeMacroHints: PromptRuntimeMacroHint[];
-}
+export type AdminPromptListData = CanonicalAdminPromptListData;
 
 export interface ConstitutionImmutableBlock {
   id: string;
@@ -962,32 +831,13 @@ export interface ConstitutionSnapshotData {
   };
 }
 
-export interface ConstitutionUpdateResult {
-  ok: boolean;
-  message: string;
-  snapshot?: ConstitutionSnapshotData;
-}
+export type ConstitutionUpdateResult = CanonicalConstitutionUpdateResult;
 
-export interface FoundationUpdateResult {
-  ok: boolean;
-  message: string;
-  snapshot?: FoundationSnapshotData;
-}
+export type FoundationUpdateResult = CanonicalFoundationUpdateResult;
 
 export type NorthStarScope = 'shared' | 'companion';
 
-export interface NorthStarItem {
-  id: string;
-  title: string;
-  content: string;
-  scope: NorthStarScope;
-  enabled: boolean;
-  priority: number;
-  updatedAt: string;
-  updatedBy: string;
-  checksum: string;
-  version: number;
-}
+export type NorthStarItem = CanonicalNorthStarItem;
 
 export interface NorthStarSnapshotData {
   items: NorthStarItem[];
@@ -998,121 +848,20 @@ export interface NorthStarSnapshotData {
   };
 }
 
-export interface NorthStarUpdateResult {
-  ok: boolean;
-  message: string;
-  snapshot?: NorthStarSnapshotData;
-}
+export type NorthStarUpdateResult = CanonicalNorthStarUpdateResult;
 
-export interface RuntimePromptUpdateResult {
-  ok: boolean;
-  message: string;
-  updated?: string[];
-}
+export type RuntimePromptUpdateResult = Omit<CanonicalRuntimePromptUpdateResult, 'updated'> & {
+  updated?: Array<PromptRuntimeEditableBlockId | string>;
+};
 
-export interface PromptUpdateResult {
-  ok: boolean;
-  message: string;
-  layer?: PromptLayer;
-}
+export type PromptUpdateResult = CanonicalPromptUpdateResult;
 
 // Chat
-export interface AdminChatBootstrapResponse {
-  contactOptions: Array<{
-    canonicalContactId: string;
-    displayName: string;
-    nickname?: string;
-    linkedChannels: Array<{
-      targetKind: 'identity' | 'conversation';
-      channel: string;
-      userId?: string;
-      channelId?: string;
-      privacyLevel: string;
-    }>;
-  }>;
-  assistantName: string;
-  canonicalContactId: string;
-  displayName: string;
-  nickname?: string;
-  linkedChannels: Array<{
-    targetKind: 'identity' | 'conversation';
-    channel: string;
-    userId?: string;
-    channelId?: string;
-    privacyLevel: string;
-  }>;
-  selectedTarget: {
-    canonicalContactId: string;
-    targetKind: 'identity' | 'conversation';
-    channel: string;
-    userId?: string;
-    channelId?: string;
-    privacyLevel: string;
-    sessionId: string;
-  };
-  privacy: {
-    availableLevels: string[];
-    selectedLevel: string;
-  };
-  onboarding: {
-    required: boolean;
-    message?: string;
-  };
-  api: {
-    chatCompletionsUrl: string;
-    voiceWebSocketUrl: string;
-    apiKey?: string;
-  };
-  runtime: {
-    assets: {
-      moduleUrl: string;
-      stylesheetUrl: string;
-    };
-    transportHeaders: Record<string, string>;
-    model: {
-      id: string;
-      name: string;
-      provider: string;
-      api: string;
-      baseUrl: string;
-      headers: Record<string, string>;
-    };
-    apiKey?: string;
-  };
-  defaultSessionId: string;
-  defaultAuthorName: string;
-  defaultAuthorId: string;
-}
+export type AdminChatBootstrapResponse = CanonicalAdminChatBootstrapResponse;
 
-export interface AdminModelRoomParticipant {
-  id: string;
-  slotKey: string;
-  purpose: string;
-  displayName: string;
-  provider: string;
-  model: string;
-  maxTokens?: number;
-  contextWindow?: number;
-  defaultSystemPrompt?: string;
-}
+export type AdminModelRoomParticipant = CanonicalAdminModelRoomParticipant;
 
-export interface AdminModelRoomBootstrapResponse {
-  api: {
-    chatCompletionsUrl: string;
-    apiKey?: string;
-  };
-  defaultRoomId: string;
-  companion: {
-    id: string;
-    displayName: string;
-    defaultSystemPromptMode: 'default';
-  };
-  participants: AdminModelRoomParticipant[];
-  constraints: {
-    allowedProviders: string[];
-    deniedProviders: string[];
-  };
-}
+export type AdminModelRoomBootstrapResponse = CanonicalAdminModelRoomBootstrapResponse;
 
 // Models
 export interface DiscoveredModel {
@@ -1127,41 +876,15 @@ export interface DiscoveredModel {
 }
 
 // Scheduler
-export type TaskType = 'every' | 'one-shot';
-export type TaskState = 'idle' | 'active' | 'paused' | 'complete';
-export type SchedulerCadenceTimezone = 'local' | 'utc';
+export type TaskType = CanonicalTaskType;
+export type TaskState = CanonicalTaskState;
+export type SchedulerCadenceTimezone = Extract<CanonicalRecurringCadence, { timezone: 'local' | 'utc' }>['timezone'];
+export type RelativeRecurringCadence = Extract<CanonicalRecurringCadence, { kind: 'relative' }>;
+export type HourlyRecurringCadence = Extract<CanonicalRecurringCadence, { kind: 'hourly' }>;
+export type DailyRecurringCadence = Extract<CanonicalRecurringCadence, { kind: 'daily' }>;
+export type RecurringCadence = CanonicalRecurringCadence;
 
-export interface RelativeRecurringCadence {
-  kind: 'relative';
-}
-
-export interface HourlyRecurringCadence {
-  kind: 'hourly';
-  minute: number;
-  timezone: SchedulerCadenceTimezone;
-}
-
-export interface DailyRecurringCadence {
-  kind: 'daily';
-  hour: number;
-  minute: number;
-  timezone: SchedulerCadenceTimezone;
-}
-
-export type RecurringCadence =
-  | RelativeRecurringCadence
-  | HourlyRecurringCadence
-  | DailyRecurringCadence;
-
-export interface ScheduledTask {
-  id: string;
-  name: string;
-  type: TaskType;
-  intervalMs: number;
-  cadence?: RecurringCadence;
-  runAt?: number;
-  state: TaskState;
-}
+export type ScheduledTask = Omit<CanonicalScheduledTask, 'handler' | 'eligibility'>;
 
 export interface ReflectionDeliberationConfig {
   maxRounds?: number;
@@ -1172,17 +895,10 @@ export interface ReflectionDeliberationConfig {
   outputUsdPerMillionTokens?: number;
 }
 
-export interface ReflectionTemplate {
-  id: string;
-  name: string;
-  prompt: string;
-  intervalMs: number;
+export type ReflectionTemplate = Omit<CanonicalReflectionTemplate, 'cadence' | 'deliberation'> & {
   cadence?: RecurringCadence;
-  enabled: boolean;
-  sendToDiscord: boolean;
-  mode?: 'standard' | 'deliberation';
   deliberation?: ReflectionDeliberationConfig;
-}
+};
 
 export interface AdminSchedulerData {
   tasks: ScheduledTask[];
@@ -1195,51 +911,25 @@ export interface SchedulerMutationResult {
 }
 
 // Skills
-export interface SkillRequirements {
-  binaries: string[];
-  env: string[];
-  config: string[];
-}
+export type SkillRequirements = CanonicalSkillEntry['requires'];
 
-export interface SkillEntry {
-  id: string;
-  name: string;
-  description: string;
-  category?: string;
-  relativePath: string;
-  source: string;
-  always: boolean;
-  requires: SkillRequirements;
-  content: string;
-  size: number;
-}
+export type SkillEntry = Pick<
+  CanonicalSkillEntry,
+  'id' | 'name' | 'description' | 'category' | 'relativePath' | 'source' | 'always' | 'requires' | 'content' | 'size'
+>;
 
-export interface SkillSkipRecord {
-  kind: string;
-  name: string;
-  relativePath: string;
-  source: string;
-  reason: string;
-  details?: string[];
-}
+export type SkillSkipRecord = Pick<
+  CanonicalSkillSkipRecord,
+  'kind' | 'name' | 'relativePath' | 'source' | 'reason' | 'details'
+>;
 
-export interface SkillDirectorySpec {
-  relativePath: string;
-  source: string;
-}
+export type SkillDirectorySpec = Pick<CanonicalSkillSnapshot['directories'][number], 'relativePath' | 'source'>;
 
-export interface SkillSnapshot {
-  generatedAt: string;
-  signature: string;
-  configEnabled: boolean;
-  budget: { maxSkills: number; maxChars: number };
+export type SkillSnapshot = Omit<CanonicalSkillSnapshot, 'directories' | 'includedSkills' | 'skipped'> & {
   directories: SkillDirectorySpec[];
-  scannedFiles: number;
-  loadedSkills: number;
   includedSkills: SkillEntry[];
-  promptXml: string;
   skipped: SkillSkipRecord[];
-}
+};
 
 export interface ManagedSkill {
   name: string;
@@ -1258,18 +948,9 @@ export interface AdminSkillsData {
 }
 
 // Confirmations
-export type ConfirmationDecision = 'approve' | 'deny' | 'modify';
+export type ConfirmationDecision = CanonicalConfirmationDecision;
 
-export interface ConfirmationQueueEntry {
-  id: string;
-  method: string;
-  action: string;
-  scope: string;
-  params: Record<string, unknown>;
-  companionReason: string;
-  requestedAt: number;
-  expiresAt: number;
-}
+export type ConfirmationQueueEntry = CanonicalConfirmationQueueEntry;
 
 export interface AdminConfirmationsData {
   entries: ConfirmationQueueEntry[];
@@ -1277,21 +958,10 @@ export interface AdminConfirmationsData {
   message?: string;
 }
 
-export interface ConfirmationResolveResult {
-  ok: boolean;
-  message?: string;
-}
+export type ConfirmationResolveResult = CanonicalConfirmationResolveResult;
 
 // Values Timeline
-export interface ValuesJournalEntry {
-  id: string;
-  version: number;
-  templateId: string;
-  templateName: string;
-  prompt: string;
-  reflection: string;
-  createdAt: string;
-}
+export type ValuesJournalEntry = CanonicalValuesJournalEntry;
 
 export interface AdminValuesData {
   entries: ValuesJournalEntry[];

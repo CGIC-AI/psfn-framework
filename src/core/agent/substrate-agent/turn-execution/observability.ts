@@ -1,25 +1,32 @@
-import type { ContextManifestMemorySeed } from '../../session/context-manifest.js';
-import type { SubstrateMessage, CorrelationMetadata, ObservabilityCallType, TurnID } from '../../types.js';
+import type { ContextManifestMemorySeed } from '../../../session/context-manifest.js';
+import type {
+  CorrelationMetadata,
+  ObservabilityCallType,
+  SubstrateMessage,
+  TurnID,
+} from '../../../../shared/contracts/runtime.js';
 import type {
   TurnObservabilityRecord,
   TurnRetrievalTelemetryRecord,
   TurnStageTelemetryRecord,
-} from '../../turns/observability.js';
+} from '../../../turns/observability.js';
 import {
   sanitizeTurnRetrievalTelemetry,
   sanitizeTurnSnapshot,
   sanitizeTurnStageTelemetry,
-} from '../../turns/observability.js';
-import type { TurnSnapshot } from '../../turns/snapshot.js';
-import { createComponentLogger } from '../../../shared/logger.js';
-import { toErrorMessage } from '../../../shared/utils/errors.js';
-import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
+} from '../../../turns/observability.js';
+import type { TurnSnapshot } from '../../../turns/snapshot.js';
+import { createComponentLogger } from '../../../../shared/logger.js';
+import { toErrorMessage } from '../../../../shared/utils/errors.js';
+import type { TurnExecutionRuntime } from '../turn-execution-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
+export type TurnExecutionStageName = 'trust' | 'memory' | 'context' | 'first-token' | 'prompt' | 'end';
+
 export interface TurnExecutionObservability {
   emitObservedTurnStage: (
-    stage: 'trust' | 'memory' | 'context' | 'first-token' | 'prompt' | 'end',
+    stage: TurnExecutionStageName,
     payload: Record<string, unknown>,
   ) => void;
   emitTurnSnapshotInBackground: (snapshot: TurnSnapshot) => void;
@@ -57,7 +64,7 @@ export function createTurnExecutionObservability(input: {
   let retrievalProvenanceRefs: string[] = [];
 
   const emitObservedTurnStage = (
-    stage: 'trust' | 'memory' | 'context' | 'first-token' | 'prompt' | 'end',
+    stage: TurnExecutionStageName,
     payload: Record<string, unknown>,
   ): void => {
     const telemetry = runtime.emitTurnStage(

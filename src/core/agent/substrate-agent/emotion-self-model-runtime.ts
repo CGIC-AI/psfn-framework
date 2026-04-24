@@ -2,7 +2,8 @@ import { EmotionAppraisal, type EmotionAppraisalEntry } from '../../emotion/appr
 import type { EmotionObserver, EmotionObserverResult } from '../../emotion/observer.js';
 import { EmotionState, type EmotionObservation, type EmotionStateSnapshot } from '../../emotion/state.js';
 import { parseSessionEmotionState } from '../../emotion/session-metadata.js';
-import type { ActiveConcern, ActiveConcernContextProvider } from '../../intention/concerns.js';
+import type { ActiveConcern } from '../../intention/concerns.js';
+import type { ActiveConcernContextProvider } from '../../intention/concern-store-port.js';
 import {
   filterPendingFollowUpsForActiveChannel,
   type PendingFollowUp,

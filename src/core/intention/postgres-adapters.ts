@@ -12,14 +12,16 @@ import {
   type BehavioralStrategySummary,
 } from './patterns.js';
 import {
-  type ActiveConcernContextProvider,
   createConcernStorePort,
-  type ActiveConcern,
-  type ActiveConcernCreateInput,
-  type ActiveConcernListOptions,
-  type ActiveConcernRecentResolutionOptions,
-  type ActiveConcernResolveOptions,
+  type ActiveConcernContextProvider,
   type ConcernStorePort,
+} from './concern-store-port.js';
+import type {
+  ActiveConcern,
+  ActiveConcernCreateInput,
+  ActiveConcernListOptions,
+  ActiveConcernRecentResolutionOptions,
+  ActiveConcernResolveOptions,
 } from './concerns.js';
 import {
   createPendingFollowUpStorePort,

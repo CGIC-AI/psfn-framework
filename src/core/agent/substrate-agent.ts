@@ -77,7 +77,7 @@ import type { TurnPromptSnapshot } from '../turns/snapshot.js';
 import { EmotionState } from '../emotion/state.js';
 import type { EmotionObserver } from '../emotion/observer.js';
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
-import type { ActiveConcernContextProvider } from '../intention/concerns.js';
+import type { ActiveConcernContextProvider } from '../intention/concern-store-port.js';
 import type { PendingFollowUpContextProvider } from '../intention/pending-follow-ups.js';
 import type { BehavioralPatternContextProvider } from '../intention/patterns.js';
 import {

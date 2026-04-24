@@ -3,10 +3,10 @@ import type { ChannelType } from '../../shared/contracts/runtime.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
 import type { IntentionPostTurnHook } from '../agent/substrate-agent.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
-import {
-  type ActiveConcernContextProvider,
-  type ConcernStorePort,
-} from './concerns.js';
+import type {
+  ActiveConcernContextProvider,
+  ConcernStorePort,
+} from './concern-store-port.js';
 import {
   type PendingFollowUpContextProvider,
   type PendingFollowUpStorePort,

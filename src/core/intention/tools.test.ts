@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { ActiveConcernStore, createConcernStorePort } from './concerns.js';
+import { ActiveConcernStore } from './concerns.js';
+import { createConcernStorePort } from './concern-store-port.js';
 import {
   createCreateConcernTool,
   createListConcernsTool,

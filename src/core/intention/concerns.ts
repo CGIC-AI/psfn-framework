@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js';
 import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
 import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
+import type { ActiveConcernContextProvider } from './concern-store-port.js';
 
 export const ACTIVE_CONCERN_PRIORITIES = ['high', 'medium', 'low'] as const;
 export type ActiveConcernPriority = typeof ACTIVE_CONCERN_PRIORITIES[number];
@@ -64,10 +65,6 @@ export interface ActiveConcernStoreOptions {
   ttlMsByPriority?: Partial<Record<ActiveConcernPriority, number>>;
 }
 
-export interface ActiveConcernContextProvider {
-  getActiveConcerns(contactId?: string): ActiveConcern[];
-}
-
 export interface ActiveConcernRuntimeData {
   totalCount: number;
   topLines: string[];
@@ -80,46 +77,6 @@ export const OPEN_THREADS_BODY_TEMPLATE = [
   '{{runtime_concerns_top_lines}}',
   '{{#if runtime_concerns_omitted_count}}- {{runtime_concerns_omitted_count}} additional lower-salience thread{{runtime_concerns_omitted_plural_suffix}} omitted.{{/if}}',
 ].join('\n');
-
-type Awaitable<T> = T | Promise<T>;
-
-interface ConcernStorePortBackend extends ActiveConcernContextProvider {
-  create(input: ActiveConcernCreateInput): Awaitable<ActiveConcern>;
-  getById(id: string): Awaitable<ActiveConcern | null>;
-  list(options?: ActiveConcernListOptions): Awaitable<ActiveConcern[]>;
-  listRecentlyResolvedConcerns(
-    contactId?: string,
-    options?: ActiveConcernRecentResolutionOptions,
-  ): Awaitable<ActiveConcern[]>;
-  findRecentlyResolvedSimilarConcern(input: {
-    text: string;
-    contactId?: string;
-    withinMs?: number;
-    asOf?: string;
-  }): Awaitable<ActiveConcern | null>;
-  resolveConcern(
-    id: string,
-    options?: ActiveConcernResolveOptions,
-  ): Awaitable<ActiveConcern | null>;
-}
-
-export interface ConcernStorePort {
-  create(input: ActiveConcernCreateInput): Promise<ActiveConcern>;
-  getById(id: string): Promise<ActiveConcern | null>;
-  getActiveConcerns(contactId?: string): Promise<ActiveConcern[]>;
-  list(options?: ActiveConcernListOptions): Promise<ActiveConcern[]>;
-  listRecentlyResolvedConcerns(
-    contactId?: string,
-    options?: ActiveConcernRecentResolutionOptions,
-  ): Promise<ActiveConcern[]>;
-  findRecentlyResolvedSimilarConcern(input: {
-    text: string;
-    contactId?: string;
-    withinMs?: number;
-    asOf?: string;
-  }): Promise<ActiveConcern | null>;
-  resolveConcern(id: string, options?: ActiveConcernResolveOptions): Promise<ActiveConcern | null>;
-}
 
 interface ActiveConcernRow {
   id: string;
@@ -467,22 +424,6 @@ export function buildActiveConcernsRuntimeData(
     topLines,
     topPriorities: selected.map(concern => concern.priority),
     omittedCount: Math.max(0, deduped.length - selected.length),
-  };
-}
-
-export function createConcernStorePort(store: ConcernStorePortBackend): ConcernStorePort {
-  return {
-    create: async (input) => await store.create(input),
-    getById: async (id) => await store.getById(id),
-    getActiveConcerns: async (contactId) => await store.getActiveConcerns(contactId),
-    list: async (options) => await store.list(options),
-    listRecentlyResolvedConcerns: async (contactId, options) => (
-      await store.listRecentlyResolvedConcerns(contactId, options)
-    ),
-    findRecentlyResolvedSimilarConcern: async (input) => (
-      await store.findRecentlyResolvedSimilarConcern(input)
-    ),
-    resolveConcern: async (id, options) => await store.resolveConcern(id, options),
   };
 }
 

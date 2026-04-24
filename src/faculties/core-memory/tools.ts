@@ -4,8 +4,8 @@ import { textResult, textResultWithError } from '../../core/tools/results.js';
 import {
   ACTIVE_CONCERN_PRIORITIES,
   type ActiveConcernPriority,
-  type ConcernStorePort,
 } from '../../core/intention/concerns.js';
+import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import {
   createCreateConcernTool,
   createListConcernsTool,

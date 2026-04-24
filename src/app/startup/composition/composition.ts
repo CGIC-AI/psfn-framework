@@ -62,7 +62,7 @@ import type { ShardAuditTrail } from '../../../faculties/shards/manager.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { RuntimeMode } from '../../../core/agent/tool-wiring-validator.js';
-import type { ConcernStorePort } from '../../../core/intention/concerns.js';
+import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
 import {
   migrateLegacyPersistenceLayout,
   resolveConfiguredCompanionDataDir,

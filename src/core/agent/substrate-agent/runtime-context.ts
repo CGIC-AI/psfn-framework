@@ -17,7 +17,7 @@ import type { Contact } from '../../contacts/types.js';
 import type { ScratchpadProvider } from '../contracts.js';
 import type { EmotionAppraisalEntry } from '../../emotion/appraisal.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
-import type { ActiveConcernContextProvider } from '../../intention/concerns.js';
+import type { ActiveConcernContextProvider } from '../../intention/concern-store-port.js';
 import { formatActiveConcernsContextBlock, OPEN_THREADS_BODY_TEMPLATE } from '../../intention/concerns.js';
 import type { BehavioralPatternContextProvider } from '../../intention/patterns.js';
 import {

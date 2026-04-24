@@ -1,10 +1,10 @@
 import type Database from 'better-sqlite3';
+import { ActiveConcernStore } from './concerns.js';
 import {
-  ActiveConcernStore,
   createConcernStorePort,
   type ActiveConcernContextProvider,
   type ConcernStorePort,
-} from './concerns.js';
+} from './concern-store-port.js';
 import {
   PendingFollowUpStore,
   createPendingFollowUpStorePort,

@@ -3,8 +3,8 @@ import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import {
   ACTIVE_CONCERN_PRIORITIES,
   type ActiveConcernPriority,
-  type ConcernStorePort,
 } from './concerns.js';
+import type { ConcernStorePort } from './concern-store-port.js';
 import { textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 

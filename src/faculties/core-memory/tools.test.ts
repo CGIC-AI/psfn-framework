@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createOrientTool,
 } from './tools.js';
-import { ActiveConcernStore, createConcernStorePort } from '../../core/intention/concerns.js';
+import { ActiveConcernStore } from '../../core/intention/concerns.js';
+import { createConcernStorePort } from '../../core/intention/concern-store-port.js';
 import { ValuesJournalStore } from '../values/store.js';
 import type {
   CoreMemoryAppendOptions,

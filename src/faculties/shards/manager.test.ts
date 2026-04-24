@@ -7,6 +7,7 @@ import { Type } from '@sinclair/typebox';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { getRunChargeSnapshot, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import { buildSessionMetadataWithTurn } from '../../core/session/turn-provenance.js';
 import { buildFocusMemoryScopeQuery } from '../../core/session/focus-knowledge.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
@@ -261,7 +262,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'You are a helpful assistant.',
     });
 
-    await runWithRequestContext(
+    const parentSnapshot = await runWithRequestContext(
       {
         requestId: 'launch-request',
         turnId: 'turn-launch',
@@ -269,9 +270,17 @@ describe('ShardManager', () => {
         callType: 'tool',
         purpose: 'shard',
       } as any,
-      async () => manager.executeSubagent({
-        name: 'launch-charge',
-        task: 'Do charged work',
+      async () => runWithChargeContext({
+        chargePolicy: makeChargePolicy(),
+        eventBus,
+        lane: 'interactive',
+        runId: 'launch-request',
+      }, async () => {
+        await manager.executeSubagent({
+          name: 'launch-charge',
+          task: 'Do charged work',
+        });
+        return getRunChargeSnapshot();
       }),
     );
 
@@ -279,12 +288,193 @@ describe('ShardManager', () => {
       'subagentLaunch',
       'shardLaunch',
     ]);
+    expect(chargeEvents[0].spentAfter).toBe(1);
+    expect(chargeEvents[1].spentAfter).toBe(8);
     expect(chargeEvents[0].lineage).toEqual(expect.objectContaining({
       runId: 'launch-request',
       rootRunId: 'launch-request',
     }));
     expect(chargeEvents[1].lineage).toEqual(expect.objectContaining({
+      runId: expect.stringMatching(/^shard-/),
       parentRunId: 'launch-request',
+      rootRunId: 'launch-request',
+    }));
+    expect(parentSnapshot).toEqual(expect.objectContaining({
+      spentByLane: expect.objectContaining({
+        interactive: 1,
+        shard: 8,
+      }),
+      directSpentByLane: expect.objectContaining({
+        interactive: 1,
+      }),
+      foldedSpentByLane: expect.objectContaining({
+        shard: 8,
+      }),
+      foldBacks: [
+        expect.objectContaining({
+          disposition: 'folded',
+          lineage: expect.objectContaining({
+            runId: chargeEvents[1].lineage.runId,
+            parentRunId: 'launch-request',
+            rootRunId: 'launch-request',
+          }),
+          spentByLane: expect.objectContaining({
+            shard: 8,
+          }),
+          directSpentByLane: expect.objectContaining({
+            shard: 8,
+          }),
+        }),
+      ],
+      orphanedChildren: [],
+      quotaSpentByLane: expect.objectContaining({
+        interactive: 1,
+        shard: 8,
+      }),
+    }));
+  });
+
+  it('folds completed shard spend back into the parent without double-counting follow-up spend', async () => {
+    mockShardContent = 'fold child charge once';
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: {
+        ...TEST_CONFIG,
+        chargePolicy: makeChargePolicy(),
+      },
+      parentSystemPrompt: 'You are a helpful assistant.',
+    });
+
+    const outcome = await runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      eventBus,
+      lane: 'interactive',
+      runId: 'parent-run',
+    }, async () => {
+      await manager.executeSubagent({
+        name: 'parent-fold',
+        task: 'Charge once',
+      });
+      const afterFold = getRunChargeSnapshot();
+      const followUpCharge = manager.executeSubagent({
+        name: 'parent-follow-up',
+        task: 'Charge twice',
+      });
+      const secondResult = await followUpCharge;
+      return {
+        afterFold,
+        afterSecondShard: getRunChargeSnapshot(),
+        secondShardId: secondResult.subagentId,
+      };
+    });
+
+    expect(outcome.afterFold).toEqual(expect.objectContaining({
+      spentByLane: expect.objectContaining({
+        interactive: 1,
+        shard: 8,
+      }),
+    }));
+    expect(outcome.afterSecondShard).toEqual(expect.objectContaining({
+      spentByLane: expect.objectContaining({
+        interactive: 2,
+        shard: 16,
+      }),
+      directSpentByLane: expect.objectContaining({
+        interactive: 2,
+      }),
+      foldedSpentByLane: expect.objectContaining({
+        shard: 16,
+      }),
+      foldBacks: [
+        expect.objectContaining({
+          disposition: 'folded',
+          spentByLane: expect.objectContaining({ shard: 8 }),
+        }),
+        expect.objectContaining({
+          disposition: 'folded',
+          lineage: expect.objectContaining({ runId: outcome.secondShardId }),
+          spentByLane: expect.objectContaining({ shard: 8 }),
+        }),
+      ],
+      quotaSpentByLane: expect.objectContaining({
+        interactive: 2,
+        shard: 16,
+      }),
+    }));
+  });
+
+  it('keeps failed shard spend visible as orphaned provenance without folding it into the parent', async () => {
+    mockShardError = new Error('LLM failed before fold-back');
+    const chargeEvents: Array<Record<string, unknown>> = [];
+    eventBus.on('agent.charge', (event) => {
+      chargeEvents.push(event as unknown as Record<string, unknown>);
+    });
+
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: {
+        ...TEST_CONFIG,
+        chargePolicy: makeChargePolicy(),
+      },
+      parentSystemPrompt: 'You are a helpful assistant.',
+    });
+
+    const parentSnapshot = await runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      eventBus,
+      lane: 'interactive',
+      runId: 'parent-run-orphan',
+    }, async () => {
+      await expect(manager.executeSubagent({
+        name: 'failed-child',
+        task: 'Charge and fail',
+      })).rejects.toThrow('LLM failed before fold-back');
+      return getRunChargeSnapshot();
+    });
+
+    expect(chargeEvents.map((event) => event.surface)).toEqual([
+      'subagentLaunch',
+      'shardLaunch',
+    ]);
+    expect(chargeEvents[0].spentAfter).toBe(1);
+    expect(chargeEvents[1].spentAfter).toBe(8);
+    expect(parentSnapshot).toEqual(expect.objectContaining({
+      spentByLane: expect.objectContaining({
+        interactive: 1,
+      }),
+      directSpentByLane: expect.objectContaining({
+        interactive: 1,
+      }),
+      foldedSpentByLane: {},
+      foldBacks: [],
+      orphanedChildren: [
+        expect.objectContaining({
+          disposition: 'orphaned',
+          lineage: expect.objectContaining({
+            runId: chargeEvents[1].lineage.runId,
+            parentRunId: 'parent-run-orphan',
+            rootRunId: 'parent-run-orphan',
+          }),
+          spentByLane: expect.objectContaining({
+            shard: 8,
+          }),
+          directSpentByLane: expect.objectContaining({
+            shard: 8,
+          }),
+        }),
+      ],
+      quotaSpentByLane: expect.objectContaining({
+        interactive: 1,
+        shard: 8,
+      }),
     }));
   });
 

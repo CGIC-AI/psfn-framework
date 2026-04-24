@@ -11,6 +11,35 @@ import { getRequestContext } from '../../primitives/llm/request-context.js';
 
 interface RunChargeAccount {
   spentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+  directSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+  foldedSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+  foldBacks: RunChargeLineageProvenance[];
+  orphanedChildren: RunChargeLineageProvenance[];
+}
+
+interface RunChargeQuotaAccount {
+  spentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+}
+
+export interface RunChargeLineageProvenance {
+  disposition: 'folded' | 'orphaned';
+  lineage: RunChargeLineage;
+  spentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+  directSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+  foldedSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+  foldBacks: RunChargeLineageProvenance[];
+  orphanedChildren: RunChargeLineageProvenance[];
+}
+
+export interface RunChargeSnapshot {
+  lineage: RunChargeLineage;
+  lane: ChargePolicyRuntimeLane;
+  spentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+  directSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+  foldedSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+  foldBacks: RunChargeLineageProvenance[];
+  orphanedChildren: RunChargeLineageProvenance[];
+  quotaSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
 }
 
 interface RunChargeContextState {
@@ -19,6 +48,7 @@ interface RunChargeContextState {
   lane: ChargePolicyRuntimeLane;
   lineage: RunChargeLineage;
   account: RunChargeAccount;
+  quotaAccount: RunChargeQuotaAccount;
   correlation?: Partial<CorrelationMetadata>;
 }
 
@@ -53,6 +83,8 @@ export interface ChargeSurfaceInspection {
   spentAfter: number;
   remainingBefore: number;
   remainingAfter: number;
+  quotaSpentBefore: number;
+  quotaSpentAfter: number;
   allowed: boolean;
 }
 
@@ -66,7 +98,88 @@ function normalizePositiveNumber(value: unknown): number {
 }
 
 function createRunChargeAccount(): RunChargeAccount {
+  return {
+    spentByLane: {},
+    directSpentByLane: {},
+    foldedSpentByLane: {},
+    foldBacks: [],
+    orphanedChildren: [],
+  };
+}
+
+function createRunChargeQuotaAccount(): RunChargeQuotaAccount {
   return { spentByLane: {} };
+}
+
+function addSpentByLane(
+  target: Partial<Record<ChargePolicyRuntimeLane, number>>,
+  lane: ChargePolicyRuntimeLane,
+  amount: number,
+): void {
+  if (amount <= 0) {
+    return;
+  }
+  target[lane] = (target[lane] ?? 0) + amount;
+}
+
+function cloneSpentByLane(
+  source: Partial<Record<ChargePolicyRuntimeLane, number>>,
+): Partial<Record<ChargePolicyRuntimeLane, number>> {
+  return { ...source };
+}
+
+function cloneLineageProvenance(record: RunChargeLineageProvenance): RunChargeLineageProvenance {
+  return {
+    disposition: record.disposition,
+    lineage: { ...record.lineage },
+    spentByLane: cloneSpentByLane(record.spentByLane),
+    directSpentByLane: cloneSpentByLane(record.directSpentByLane),
+    foldedSpentByLane: cloneSpentByLane(record.foldedSpentByLane),
+    foldBacks: record.foldBacks.map(cloneLineageProvenance),
+    orphanedChildren: record.orphanedChildren.map(cloneLineageProvenance),
+  };
+}
+
+function snapshotAccountLineage(
+  lineage: RunChargeLineage,
+  account: RunChargeAccount,
+  disposition: RunChargeLineageProvenance['disposition'],
+): RunChargeLineageProvenance {
+  return {
+    disposition,
+    lineage: { ...lineage },
+    spentByLane: cloneSpentByLane(account.spentByLane),
+    directSpentByLane: cloneSpentByLane(account.directSpentByLane),
+    foldedSpentByLane: cloneSpentByLane(account.foldedSpentByLane),
+    foldBacks: account.foldBacks.map(cloneLineageProvenance),
+    orphanedChildren: account.orphanedChildren.map(cloneLineageProvenance),
+  };
+}
+
+function foldChildAccountIntoParent(
+  parent: RunChargeAccount,
+  child: RunChargeAccount,
+  childLineage: RunChargeLineage,
+): void {
+  const childSnapshot = snapshotAccountLineage(childLineage, child, 'folded');
+  for (const [lane, amount] of Object.entries(childSnapshot.spentByLane)) {
+    addSpentByLane(parent.spentByLane, lane as ChargePolicyRuntimeLane, amount);
+    addSpentByLane(parent.foldedSpentByLane, lane as ChargePolicyRuntimeLane, amount);
+  }
+  parent.foldBacks.push(childSnapshot);
+}
+
+function recordOrphanedChildAccount(
+  parent: RunChargeAccount,
+  child: RunChargeAccount,
+  childLineage: RunChargeLineage,
+): void {
+  const childSnapshot = snapshotAccountLineage(childLineage, child, 'orphaned');
+  const hasSpend = Object.values(childSnapshot.spentByLane).some((amount) => amount > 0);
+  if (!hasSpend) {
+    return;
+  }
+  parent.orphanedChildren.push(childSnapshot);
 }
 
 function createFallbackRunId(prefix = 'run-charge'): string {
@@ -170,6 +283,8 @@ export function inspectChargeSurface(
   const quota = chargePolicy.runChargeQuotaByLane[lane];
   const spentBefore = context?.account.spentByLane[lane] ?? 0;
   const spentAfter = spentBefore + amount;
+  const quotaSpentBefore = context?.quotaAccount.spentByLane[lane] ?? spentBefore;
+  const quotaSpentAfter = quotaSpentBefore + amount;
   return {
     lane,
     surface,
@@ -179,12 +294,31 @@ export function inspectChargeSurface(
     spentAfter,
     remainingBefore: Math.max(0, quota - spentBefore),
     remainingAfter: Math.max(0, quota - spentAfter),
-    allowed: spentAfter <= quota,
+    quotaSpentBefore,
+    quotaSpentAfter,
+    allowed: quotaSpentAfter <= quota,
   };
 }
 
 export function getRunChargeContext(): RunChargeContextState | undefined {
   return runChargeStorage.getStore();
+}
+
+export function getRunChargeSnapshot(): RunChargeSnapshot | undefined {
+  const context = getRunChargeContext();
+  if (!context) {
+    return undefined;
+  }
+  return {
+    lineage: { ...context.lineage },
+    lane: context.lane,
+    spentByLane: cloneSpentByLane(context.account.spentByLane),
+    directSpentByLane: cloneSpentByLane(context.account.directSpentByLane),
+    foldedSpentByLane: cloneSpentByLane(context.account.foldedSpentByLane),
+    foldBacks: context.account.foldBacks.map(cloneLineageProvenance),
+    orphanedChildren: context.account.orphanedChildren.map(cloneLineageProvenance),
+    quotaSpentByLane: cloneSpentByLane(context.quotaAccount.spentByLane),
+  };
 }
 
 export function runWithChargeContext<T>(
@@ -197,14 +331,29 @@ export function runWithChargeContext<T>(
     throw new Error('runWithChargeContext requires a charge policy');
   }
   const runId = resolveRunId(parent, input);
-  return runChargeStorage.run({
+  const state: RunChargeContextState = {
     chargePolicy,
     eventBus: input.eventBus ?? parent?.eventBus,
     lane: input.lane,
     lineage: resolveLineage(parent, input, runId),
-    account: parent?.account ?? createRunChargeAccount(),
+    account: createRunChargeAccount(),
+    quotaAccount: parent?.quotaAccount ?? createRunChargeQuotaAccount(),
     correlation: resolveCorrelation(parent, input),
-  }, fn);
+  };
+  return runChargeStorage.run(state, async () => {
+    try {
+      const result = await fn();
+      if (parent) {
+        foldChildAccountIntoParent(parent.account, state.account, state.lineage);
+      }
+      return result;
+    } catch (error) {
+      if (parent) {
+        recordOrphanedChildAccount(parent.account, state.account, state.lineage);
+      }
+      throw error;
+    }
+  });
 }
 
 export function chargeSurface(
@@ -225,7 +374,9 @@ export function chargeSurface(
   }
 
   if (context) {
-    context.account.spentByLane[inspection.lane] = inspection.spentAfter;
+    addSpentByLane(context.account.spentByLane, inspection.lane, inspection.amount);
+    addSpentByLane(context.account.directSpentByLane, inspection.lane, inspection.amount);
+    addSpentByLane(context.quotaAccount.spentByLane, inspection.lane, inspection.amount);
   }
 
   const lineage = {

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import type { InferredPostTurnAction } from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
@@ -82,6 +82,12 @@ const PERSISTED_QUEUE_VERSION = 1;
 interface PersistedQueueFile {
   version: number;
   entries: unknown[];
+}
+
+interface QuarantinedPersistedQueueEntry {
+  entryNumber: number;
+  error: string;
+  raw: unknown;
 }
 
 export function wirePostTurnActionRuntime(
@@ -233,6 +239,38 @@ export function wirePostTurnActionRuntime(
     }
   };
 
+  const quarantineSidecarPath = (filePath: string): string => `${filePath}.quarantine`;
+
+  const persistQuarantinedEntries = (
+    quarantinedEntries: QuarantinedPersistedQueueEntry[],
+  ): boolean => {
+    if (!persistencePath) {
+      return true;
+    }
+
+    const sidecarPath = quarantineSidecarPath(persistencePath);
+    try {
+      if (quarantinedEntries.length === 0) {
+        if (existsSync(sidecarPath)) {
+          unlinkSync(sidecarPath);
+        }
+        return true;
+      }
+
+      const body = quarantinedEntries.map((entry) => JSON.stringify(entry)).join('\n') + '\n';
+      writeFileSync(sidecarPath, body, 'utf-8');
+      return true;
+    } catch (error) {
+      log.error('Failed to persist deferred post-turn action quarantine sidecar', {
+        persistencePath,
+        sidecarPath,
+        quarantinedEntries: quarantinedEntries.length,
+        error: String(error),
+      });
+      return false;
+    }
+  };
+
   const hydrateQueue = (): void => {
     if (!persistencePath || !existsSync(persistencePath)) {
       return;
@@ -257,15 +295,23 @@ export function wirePostTurnActionRuntime(
     }
 
     let loaded = 0;
-    let dropped = 0;
-    for (const rawEntry of parsed.entries) {
+    const quarantinedEntries: QuarantinedPersistedQueueEntry[] = [];
+    for (const [index, rawEntry] of parsed.entries.entries()) {
       const entry = normalizePersistedQueueEntry(rawEntry);
       if (!entry) {
-        dropped += 1;
+        quarantinedEntries.push({
+          entryNumber: index + 1,
+          error: 'Invalid deferred post-turn action queue entry payload',
+          raw: rawEntry,
+        });
         continue;
       }
       if (queue.has(entry.action.dedupeKey)) {
-        dropped += 1;
+        quarantinedEntries.push({
+          entryNumber: index + 1,
+          error: `Duplicate deferred post-turn action dedupe key "${entry.action.dedupeKey}"`,
+          raw: rawEntry,
+        });
         continue;
       }
       queue.set(entry.action.dedupeKey, entry);
@@ -278,12 +324,16 @@ export function wirePostTurnActionRuntime(
         loaded,
       });
     }
-    if (dropped > 0) {
-      log.warn('Dropped invalid deferred post-turn action queue entries during load', {
+    const quarantinePersisted = persistQuarantinedEntries(quarantinedEntries);
+    if (quarantinedEntries.length > 0) {
+      log.warn('Quarantined deferred post-turn action queue entries during load', {
         persistencePath,
-        dropped,
+        quarantined: quarantinedEntries.length,
+        loaded,
       });
-      persistQueue();
+      if (quarantinePersisted) {
+        persistQueue();
+      }
     }
   };
 

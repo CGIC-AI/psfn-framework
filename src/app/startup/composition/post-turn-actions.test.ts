@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it, expect, vi } from 'vitest';
@@ -60,6 +60,22 @@ function makeAction(overrides: Partial<InferredPostTurnAction> = {}): InferredPo
 
 function readPersistedQueue(path: string): { version: number; entries: unknown[] } {
   return JSON.parse(readFileSync(path, 'utf-8')) as { version: number; entries: unknown[] };
+}
+
+function readQuarantineSidecar(path: string): Array<{
+  entryNumber: number;
+  error: string;
+  raw: unknown;
+}> {
+  return readFileSync(path, 'utf-8')
+    .trim()
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as {
+      entryNumber: number;
+      error: string;
+      raw: unknown;
+    });
 }
 
 describe('wirePostTurnActionRuntime', () => {
@@ -532,6 +548,7 @@ describe('wirePostTurnActionRuntime', () => {
   it('fails closed when persisted queue entries are invalid', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-actions-invalid-'));
     const persistencePath = join(tempDir, 'queue.json');
+    const quarantinePath = `${persistencePath}.quarantine`;
     writeFileSync(persistencePath, JSON.stringify({
       version: 1,
       entries: [{
@@ -570,9 +587,117 @@ describe('wirePostTurnActionRuntime', () => {
       runtime.registerHandler('heartbeat.run_template', handler);
 
       expect(runtime.listQueued()).toHaveLength(0);
+      expect(existsSync(quarantinePath)).toBe(true);
+      expect(readQuarantineSidecar(quarantinePath)).toEqual([
+        expect.objectContaining({
+          entryNumber: 1,
+          error: 'Invalid deferred post-turn action queue entry payload',
+          raw: expect.objectContaining({
+            action: expect.objectContaining({
+              id: 'invalid-action',
+            }),
+            nextRunAt: 'not-a-timestamp',
+          }),
+        }),
+      ]);
+      expect(readPersistedQueue(persistencePath).entries).toHaveLength(0);
       await scheduler.tick();
       expect(handler).not.toHaveBeenCalled();
     } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads valid persisted queue entries and quarantines invalid entries during hydrate', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-actions-mixed-'));
+    const persistencePath = join(tempDir, 'queue.json');
+    const quarantinePath = `${persistencePath}.quarantine`;
+
+    try {
+      nowSpy.mockReturnValue(1_700_000_400_000);
+      writeFileSync(persistencePath, JSON.stringify({
+        version: 1,
+        entries: [
+          {
+            action: {
+              id: 'valid-action',
+              kind: 'heartbeat.run_template',
+              payload: { templateId: 'musing' },
+              dedupeKey: 'valid:key',
+              channelId: 'test-channel',
+              sourceMessageId: 'msg-1',
+              inferredAt: 1_700_000_399_000,
+            },
+            runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+            attempt: 0,
+            nextRunAt: 1_700_000_400_000,
+            maxRetries: 1,
+          },
+          {
+            action: {
+              id: 'invalid-action',
+              kind: 'heartbeat.run_template',
+              payload: { templateId: 'musing' },
+              dedupeKey: 'invalid:key',
+              channelId: 'test-channel',
+              sourceMessageId: 'msg-1',
+              inferredAt: 1_700_000_399_100,
+            },
+            attempt: 0,
+            nextRunAt: 'not-a-timestamp',
+            maxRetries: 1,
+          },
+        ],
+      }), 'utf-8');
+
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const agentLoop = {
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+      };
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop,
+        intervalMs: 10,
+        persistencePath,
+      });
+      const handler = vi.fn().mockResolvedValue(undefined);
+      runtime.registerHandler('heartbeat.run_template', handler);
+
+      expect(runtime.listQueued()).toEqual([
+        expect.objectContaining({
+          actionId: 'valid-action',
+          dedupeKey: 'valid:key',
+          runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+          attempt: 0,
+          maxAttempts: 2,
+        }),
+      ]);
+      expect(existsSync(quarantinePath)).toBe(true);
+      expect(readQuarantineSidecar(quarantinePath)).toEqual([
+        expect.objectContaining({
+          entryNumber: 2,
+          error: 'Invalid deferred post-turn action queue entry payload',
+          raw: expect.objectContaining({
+            action: expect.objectContaining({
+              id: 'invalid-action',
+            }),
+            nextRunAt: 'not-a-timestamp',
+          }),
+        }),
+      ]);
+      expect(readPersistedQueue(persistencePath).entries).toHaveLength(1);
+
+      await scheduler.tick();
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(runtime.listQueued()).toHaveLength(0);
+    } finally {
+      nowSpy.mockRestore();
       rmSync(tempDir, { recursive: true, force: true });
     }
   });

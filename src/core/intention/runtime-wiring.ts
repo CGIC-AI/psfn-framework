@@ -16,6 +16,11 @@ import type {
   IntentionActionDecision,
 } from './appraisal.js';
 import {
+  createConcernFromDecision,
+  getActiveConcernSnapshots,
+  getRecentlyResolvedConcernSnapshots,
+} from './appraisal/concern-matching.js';
+import {
   scoreBehavioralOutcomeFromEmotion,
   type BehavioralPatternContextProvider,
   type BehavioralPatternStorePort,
@@ -24,9 +29,6 @@ import {
   createSQLiteIntentionRuntimeStores,
   type SQLiteIntentionRuntimeStores,
 } from './sqlite-adapters.js';
-
-const RECENT_RESOLVED_CONCERN_WINDOW_MS = 6 * 60 * 60 * 1_000;
-const RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT = 3;
 
 export interface IntentionRuntimeTarget {
   activeConcernProvider: ActiveConcernContextProvider | null;
@@ -101,25 +103,6 @@ function normalizeOptionalText(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function resolveConcernDecisionText(decision: IntentionActionDecision): string {
-  if (decision.type !== 'concern') {
-    throw new Error(`Expected concern decision, received "${decision.type}"`);
-  }
-  if (!decision.concern) {
-    throw new Error('Concern decision is missing concern payload');
-  }
-
-  const title = normalizeOptionalText(decision.concern.title);
-  const summary = normalizeOptionalText(decision.concern.summary);
-  if (!title && !summary) {
-    throw new Error('Concern decision must include title or summary');
-  }
-  if (title && summary) {
-    return `${title}: ${summary}`;
-  }
-  return title ?? summary ?? '';
-}
-
 function resolveFollowUpDecisionContent(decision: IntentionActionDecision): string {
   if (decision.type !== 'followUp') {
     throw new Error(`Expected followUp decision, received "${decision.type}"`);
@@ -142,35 +125,6 @@ function normalizeFutureIsoTimestamp(value: number | undefined): string | undefi
   return new Date(normalized).toISOString();
 }
 
-function toActiveConcernSnapshot(
-  concern: Awaited<ReturnType<ConcernStorePort['getActiveConcerns']>>[number],
-): ActiveConcernSnapshot {
-  const dueAtMs = Date.parse(concern.expiresAt);
-  return {
-    id: concern.id,
-    title: concern.text,
-    status: 'open',
-    ...(Number.isFinite(dueAtMs) ? { dueAt: dueAtMs } : {}),
-    priority: concern.priority,
-  };
-}
-
-function toRecentlyResolvedConcernSnapshot(
-  concern: Awaited<ReturnType<ConcernStorePort['listRecentlyResolvedConcerns']>>[number],
-): ActiveConcernSnapshot {
-  const resolvedAtMs = concern.resolvedAt ? Date.parse(concern.resolvedAt) : Number.NaN;
-  return {
-    id: concern.id,
-    title: concern.text,
-    status: 'resolved',
-    priority: concern.priority,
-    ...(Number.isFinite(resolvedAtMs) ? { resolvedAt: resolvedAtMs } : {}),
-    ...(concern.resolutionOutcome
-      ? { summary: concern.resolutionOutcome }
-      : { summary: 'Resolved recently.' }),
-  };
-}
-
 function normalizeObservedAtIso(value: number | undefined): string | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
     return undefined;
@@ -184,15 +138,16 @@ export function createIntentionAppraisalHooks(
 ): IntentionAppraisalHooks {
   return {
     getActiveConcerns: async ({ canonicalContactKey }) => (
-      (await concernStore.getActiveConcerns(canonicalContactKey))
-        .map(concern => toActiveConcernSnapshot(concern))
+      await getActiveConcernSnapshots({
+        concernStore,
+        ...(canonicalContactKey !== undefined ? { contactId: canonicalContactKey } : {}),
+      })
     ),
     getRecentResolvedConcerns: async ({ canonicalContactKey }) => (
-      (await concernStore.listRecentlyResolvedConcerns(canonicalContactKey, {
-        withinMs: RECENT_RESOLVED_CONCERN_WINDOW_MS,
-        limit: RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT,
-      }))
-        .map(concern => toRecentlyResolvedConcernSnapshot(concern))
+      await getRecentlyResolvedConcernSnapshots({
+        concernStore,
+        ...(canonicalContactKey !== undefined ? { contactId: canonicalContactKey } : {}),
+      })
     ),
     onIntentionConcernDecision: async ({
       decision,
@@ -201,21 +156,12 @@ export function createIntentionAppraisalHooks(
       if (decision.type !== 'concern') {
         return;
       }
-      const text = resolveConcernDecisionText(decision);
       const expiresAt = normalizeFutureIsoTimestamp(
         decision.concern?.dueAt ?? decision.dueAt,
       );
-      const recentMatch = await concernStore.findRecentlyResolvedSimilarConcern({
-        text,
-        ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
-      });
-      if (recentMatch) {
-        return;
-      }
-      await concernStore.create({
-        text,
-        priority: decision.concern?.priority ?? decision.priority,
-        source: 'appraisal',
+      await createConcernFromDecision({
+        concernStore,
+        decision,
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         ...(expiresAt ? { expiresAt } : {}),
       });

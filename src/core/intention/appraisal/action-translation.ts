@@ -1,0 +1,274 @@
+import { createHash } from 'node:crypto';
+import type {
+  InferredPostTurnAction,
+  PostTurnActionCandidate,
+  SubstrateMessage,
+} from '../../../shared/contracts/runtime.js';
+import type { PendingFollowUp } from '../pending-follow-ups.js';
+import {
+  DEFAULT_FOLLOW_UP_PENDING_DELAY_MS,
+  INTENTION_FOLLOW_UP_ACTION_KIND,
+  INTENTION_FOLLOW_UP_AUTHOR_ID,
+  INTENTION_FOLLOW_UP_AUTHOR_NAME,
+  INTENTION_REMINDER_ACTION_KIND,
+  type IntentionActionDecision,
+  type IntentionDecisionActionContext,
+  type IntentionDecisionActionOptions,
+  type IntentionFollowUpActionPayload,
+  type IntentionReminderActionPayload,
+} from './types.js';
+import {
+  hashString,
+  isRecord,
+  normalizeActionRunAt,
+  stableStringify,
+} from './shared.js';
+
+function resolveFollowUpRunAt(
+  decision: IntentionActionDecision,
+  now: number,
+  options: IntentionDecisionActionOptions = {},
+): number | undefined {
+  const runAt = normalizeActionRunAt(decision.dueAt);
+  if (decision.timing === 'immediate') {
+    return runAt ?? now;
+  }
+
+  if (decision.timing === 'soon') {
+    if (runAt !== undefined) {
+      return Math.max(now, runAt);
+    }
+    if (options.surfacePendingFollowUpsImmediately) {
+      return now;
+    }
+    return now + DEFAULT_FOLLOW_UP_PENDING_DELAY_MS;
+  }
+
+  if (decision.timing === 'scheduled') {
+    if (runAt !== undefined) {
+      return Math.max(now, runAt);
+    }
+    if (options.surfacePendingFollowUpsImmediately) {
+      return now;
+    }
+    return now + DEFAULT_FOLLOW_UP_PENDING_DELAY_MS;
+  }
+
+  return undefined;
+}
+
+function resolveReminderRunAt(
+  decision: IntentionActionDecision,
+  now: number,
+): number | undefined {
+  const runAt = normalizeActionRunAt(decision.dueAt);
+  if (runAt !== undefined) {
+    return Math.max(now, runAt);
+  }
+  if (decision.timing === 'immediate') {
+    return now;
+  }
+  if (decision.timing === 'soon' || decision.timing === 'scheduled') {
+    return now + DEFAULT_FOLLOW_UP_PENDING_DELAY_MS;
+  }
+  return undefined;
+}
+
+function normalizeCandidatePayload(payload: PostTurnActionCandidate['payload']): Record<string, unknown> {
+  if (!isRecord(payload)) return {};
+  const normalizedEntries = Object.entries(payload)
+    .filter(([, value]) => value !== undefined)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return Object.fromEntries(normalizedEntries);
+}
+
+export function decisionsToPostTurnActionCandidates(
+  decisions: readonly IntentionActionDecision[],
+  context: IntentionDecisionActionContext,
+  options: IntentionDecisionActionOptions = {},
+): PostTurnActionCandidate[] {
+  const candidates: PostTurnActionCandidate[] = [];
+
+  for (const decision of decisions) {
+    if (decision.type === 'followUp') {
+      const content = decision.followUp?.content.trim() ?? '';
+      if (!content) continue;
+      const hasStateWakeConditions = Array.isArray(decision.followUp?.wakeConditions)
+        && decision.followUp.wakeConditions.length > 0;
+      if (hasStateWakeConditions && decision.dueAt === undefined && decision.timing !== 'immediate') {
+        continue;
+      }
+      const runAt = resolveFollowUpRunAt(decision, Date.now(), options);
+      const channelId = decision.followUp?.channelId?.trim() || context.message.channelId;
+      const channelType = decision.followUp?.channelType ?? context.message.channelType;
+      const dedupeKey = `${INTENTION_FOLLOW_UP_ACTION_KIND}:${context.message.id}:${hashString(content)}`;
+      candidates.push({
+        kind: INTENTION_FOLLOW_UP_ACTION_KIND,
+        dedupeKey,
+        payload: {
+          channelId,
+          channelType,
+          authorId: INTENTION_FOLLOW_UP_AUTHOR_ID,
+          authorName: INTENTION_FOLLOW_UP_AUTHOR_NAME,
+          content,
+          ...(decision.followUp?.pendingFollowUpId
+            ? { pendingFollowUpId: decision.followUp.pendingFollowUpId }
+            : {}),
+        } satisfies IntentionFollowUpActionPayload,
+        maxRetries: 1,
+        ...(runAt !== undefined ? { runAt } : {}),
+      });
+      continue;
+    }
+
+    if (decision.type === 'schedule') {
+      const templateId = decision.schedule?.templateId.trim() ?? '';
+      if (!templateId) continue;
+      candidates.push({
+        kind: 'heartbeat.run_template',
+        dedupeKey: `heartbeat.run_template:${templateId}:${context.message.id}`,
+        payload: {
+          templateId,
+          ...(decision.schedule?.sendToDiscordOverride !== undefined
+            ? { sendToDiscordOverride: decision.schedule.sendToDiscordOverride }
+            : {}),
+        },
+        maxRetries: 2,
+      });
+      continue;
+    }
+
+    if (decision.type === 'reminder') {
+      const reminderId = decision.reminder?.reminderId?.trim() ?? '';
+      if (!reminderId) continue;
+      const runAt = resolveReminderRunAt(decision, Date.now());
+      const dedupeSuffix = typeof runAt === 'number' && Number.isFinite(runAt)
+        ? String(runAt)
+        : 'unscheduled';
+      candidates.push({
+        kind: INTENTION_REMINDER_ACTION_KIND,
+        dedupeKey: `${INTENTION_REMINDER_ACTION_KIND}:${reminderId}:${dedupeSuffix}`,
+        payload: {
+          reminderId,
+        } satisfies IntentionReminderActionPayload,
+        maxRetries: 1,
+        ...(runAt !== undefined ? { runAt } : {}),
+      });
+    }
+  }
+
+  return candidates;
+}
+
+export function pendingFollowUpsToPostTurnActionCandidates(
+  followUps: readonly PendingFollowUp[],
+): PostTurnActionCandidate[] {
+  const candidates: PostTurnActionCandidate[] = [];
+  for (const followUp of followUps) {
+    const content = followUp.content.trim();
+    if (!content) {
+      continue;
+    }
+    candidates.push({
+      kind: INTENTION_FOLLOW_UP_ACTION_KIND,
+      dedupeKey: `${INTENTION_FOLLOW_UP_ACTION_KIND}:pending:${followUp.id}`,
+      payload: {
+        channelId: followUp.channelId,
+        channelType: followUp.channelType,
+        authorId: followUp.authorId,
+        authorName: followUp.authorName,
+        content,
+        pendingFollowUpId: followUp.id,
+      } satisfies IntentionFollowUpActionPayload,
+      maxRetries: 1,
+    });
+  }
+  return candidates;
+}
+
+export function normalizeIntentionFollowUpActionPayload(payload: unknown): IntentionFollowUpActionPayload | null {
+  if (!isRecord(payload)) return null;
+  const channelId = typeof payload.channelId === 'string' ? payload.channelId.trim() : '';
+  const authorId = typeof payload.authorId === 'string' ? payload.authorId.trim() : '';
+  const authorName = typeof payload.authorName === 'string' ? payload.authorName.trim() : '';
+  const content = typeof payload.content === 'string' ? payload.content.trim() : '';
+  const pendingFollowUpId = typeof payload.pendingFollowUpId === 'string'
+    ? payload.pendingFollowUpId.trim()
+    : '';
+  const channelType = payload.channelType;
+  if (!channelId || !authorId || !authorName || !content) return null;
+  if (
+    channelType !== 'terminal'
+    && channelType !== 'api'
+    && channelType !== 'discord'
+    && channelType !== 'telegram'
+    && channelType !== 'psfn-amica'
+  ) {
+    return null;
+  }
+
+  return {
+    channelId,
+    channelType,
+    authorId,
+    authorName,
+    content,
+    ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
+  };
+}
+
+export function normalizeIntentionReminderActionPayload(payload: unknown): IntentionReminderActionPayload | null {
+  if (!isRecord(payload)) return null;
+  const reminderId = typeof payload.reminderId === 'string' ? payload.reminderId.trim() : '';
+  if (!reminderId) {
+    return null;
+  }
+  return { reminderId };
+}
+
+export function toInferredPostTurnActions(
+  candidates: readonly PostTurnActionCandidate[],
+  message: Pick<SubstrateMessage, 'id' | 'channelId'>,
+): InferredPostTurnAction[] {
+  const inferred: InferredPostTurnAction[] = [];
+  const seenDedupeKeys = new Set<string>();
+
+  for (const [ordinal, candidate] of candidates.entries()) {
+    if (typeof candidate.kind !== 'string') continue;
+    const kind = candidate.kind.trim();
+    if (!kind) continue;
+    const payload = normalizeCandidatePayload(candidate.payload);
+    const explicitDedupeKey = typeof candidate.dedupeKey === 'string' ? candidate.dedupeKey.trim() : '';
+    const dedupeKey = explicitDedupeKey
+      || `${kind}:${message.channelId}:${hashString(stableStringify(payload))}`;
+    if (seenDedupeKeys.has(dedupeKey)) continue;
+    seenDedupeKeys.add(dedupeKey);
+
+    const id = createHash('sha256')
+      .update(`${message.id}:${kind}:${dedupeKey}:${ordinal}`)
+      .digest('hex')
+      .slice(0, 24);
+    const maxRetries = (
+      typeof candidate.maxRetries === 'number'
+      && Number.isFinite(candidate.maxRetries)
+      && candidate.maxRetries >= 0
+    )
+      ? Math.floor(candidate.maxRetries)
+      : undefined;
+    const runAt = normalizeActionRunAt(candidate.runAt);
+
+    inferred.push({
+      id,
+      kind,
+      payload,
+      dedupeKey,
+      channelId: message.channelId,
+      sourceMessageId: message.id,
+      inferredAt: Date.now(),
+      ...(maxRetries !== undefined ? { maxRetries } : {}),
+      ...(runAt !== undefined ? { runAt } : {}),
+    });
+  }
+
+  return inferred;
+}

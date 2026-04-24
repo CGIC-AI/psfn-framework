@@ -466,11 +466,27 @@ export interface AdminVoiceProviderData {
   tts: AdminVoiceProviderOption[];
 }
 
+export type AdminSettingsStatusLevel = 'healthy' | 'degraded';
+
+export interface AdminSettingsDivergence {
+  key: 'models' | 'capabilities';
+  state: 'diverged';
+  detail: string;
+  updatedAt: number;
+}
+
+export interface AdminSettingsStatus {
+  status: AdminSettingsStatusLevel;
+  detail: string;
+  divergences: AdminSettingsDivergence[];
+}
+
 export interface AdminSettingsData {
   config: EditableSettings;
   env: EnvInfo;
   editors: SettingsConfigEditors;
   voiceProviders: AdminVoiceProviderData;
+  status: AdminSettingsStatus;
 }
 
 export interface SettingsValidationError {
@@ -483,6 +499,7 @@ export interface ConfigUpdateResult {
   ok: boolean;
   message: string;
   validationErrors?: SettingsValidationError[];
+  status?: AdminSettingsStatus;
 }
 
 export interface AdminSettingsService {

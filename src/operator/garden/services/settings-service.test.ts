@@ -185,6 +185,11 @@ describe('AdminSettingsDataService', () => {
     expect(result).toEqual({
       ok: true,
       message: 'Settings updated',
+      status: {
+        status: 'healthy',
+        detail: 'Persisted settings match the live Garden runtime.',
+        divergences: [],
+      },
     });
 
     const settingsData = await service.getSettingsData();
@@ -233,6 +238,11 @@ describe('AdminSettingsDataService', () => {
     expect(result).toEqual({
       ok: true,
       message: 'Settings updated',
+      status: {
+        status: 'healthy',
+        detail: 'Persisted settings match the live Garden runtime.',
+        divergences: [],
+      },
     });
     expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
     expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
@@ -325,6 +335,11 @@ describe('AdminSettingsDataService', () => {
     expect(result).toEqual({
       ok: true,
       message: 'Settings updated',
+      status: {
+        status: 'healthy',
+        detail: 'Persisted settings match the live Garden runtime.',
+        divergences: [],
+      },
     });
     expect(config.extractionThresholdPct).toBe(34);
     expect(config.compactionThresholdPct).toBe(76);
@@ -420,6 +435,11 @@ describe('AdminSettingsDataService', () => {
     expect(capabilitiesResult).toEqual({
       ok: true,
       message: 'capability-tier.json saved',
+      status: {
+        status: 'healthy',
+        detail: 'Persisted settings match the live Garden runtime.',
+        divergences: [],
+      },
     });
     expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(1);
 
@@ -468,6 +488,11 @@ describe('AdminSettingsDataService', () => {
     expect(result).toEqual({
       ok: true,
       message: 'models.json saved',
+      status: {
+        status: 'healthy',
+        detail: 'Persisted settings match the live Garden runtime.',
+        divergences: [],
+      },
     });
     expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
     expect(loadModelsConfig(root, {
@@ -475,6 +500,95 @@ describe('AdminSettingsDataService', () => {
     }).modelRegistry).toEqual(nextRegistry);
     expect(config.primaryModel).toBe('openai/gpt-4.1-mini');
     expect(config.primaryProvider).toBe('openai');
+  });
+
+  it('returns degraded success and exposes model divergence when live model refresh fails', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root, {
+      refreshModels: () => {
+        throw new Error('model cache rebuild exploded');
+      },
+    });
+    const service = buildService(config);
+    const currentModels = JSON.parse(service.getSubConfigJson('models') ?? '{}') as {
+      modelRegistry: Record<string, unknown>;
+    };
+    const nextRegistry = structuredClone(currentModels.modelRegistry);
+    const primary = Array.isArray((nextRegistry as { models?: unknown[] }).models)
+      ? (nextRegistry as { models: Array<Record<string, unknown>> }).models.find((entry) => entry.id === 'primary')
+      : null;
+    expect(primary).toBeTruthy();
+    if (!primary) {
+      throw new Error('expected primary model in seeded model registry');
+    }
+    primary.identity = {
+      ...(primary.identity as Record<string, unknown>),
+      model: 'openai/gpt-4.1-mini',
+      provider: 'openai',
+    };
+
+    const result = service.saveSubConfigJson('models', JSON.stringify(nextRegistry));
+
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain('models.json saved with divergence');
+    expect(result.status).toEqual(expect.objectContaining({
+      status: 'degraded',
+      divergences: [
+        expect.objectContaining({
+          key: 'models',
+          state: 'diverged',
+        }),
+      ],
+    }));
+
+    const settingsData = await service.getSettingsData();
+    expect(settingsData.status).toEqual(expect.objectContaining({
+      status: 'degraded',
+      divergences: [
+        expect.objectContaining({
+          key: 'models',
+          detail: expect.stringContaining('model cache rebuild exploded'),
+        }),
+      ],
+    }));
+  });
+
+  it('returns degraded success and exposes capability divergence when live capability refresh fails', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root, {
+      refreshCapabilities: () => {
+        throw new Error('capability runtime reload exploded');
+      },
+    });
+    const service = buildService(config);
+
+    const result = service.saveSubConfigJson('capabilities', JSON.stringify({
+      tier: 'custom',
+      customTokens: ['identity.read'],
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(result.message).toContain('capability-tier.json saved with divergence');
+    expect(result.status).toEqual(expect.objectContaining({
+      status: 'degraded',
+      divergences: [
+        expect.objectContaining({
+          key: 'capabilities',
+          state: 'diverged',
+        }),
+      ],
+    }));
+
+    const settingsData = await service.getSettingsData();
+    expect(settingsData.status).toEqual(expect.objectContaining({
+      status: 'degraded',
+      divergences: [
+        expect.objectContaining({
+          key: 'capabilities',
+          detail: expect.stringContaining('capability runtime reload exploded'),
+        }),
+      ],
+    }));
   });
 
   it('round-trips backup controls through backup.json owner-file saves', async () => {
@@ -691,6 +805,11 @@ describe('AdminSettingsDataService', () => {
     expect(result).toEqual({
       ok: true,
       message: 'providers.json saved',
+      status: {
+        status: 'healthy',
+        detail: 'Persisted settings match the live Garden runtime.',
+        divergences: [],
+      },
     });
     expect(refreshModelsSpy).toHaveBeenCalledTimes(1);
     expect(loadProvidersConfig(root).registry).toEqual(payload);

@@ -43,6 +43,8 @@ import {
 } from '../../../primitives/voice/connectors/tts/index.js';
 import type {
   AdminSettingsData,
+  AdminSettingsDivergence,
+  AdminSettingsStatus,
   AdminSettingsService,
   AdminVoiceProviderData,
   AdminVoiceProviderOption,
@@ -70,26 +72,38 @@ const REMOVED_RUNTIME_SETTINGS_MESSAGES: Partial<Record<string, string>> = {
 const log = createComponentLogger('AdminSettingsService');
 
 type SettingsMutationResult =
-  | { ok: true }
+  | { ok: true; refreshedKeys: AdminSettingsDivergence['key'][]; divergences: AdminSettingsDivergence[] }
   | { ok: false; message: string };
 
-function refreshModels(config: SubstrateConfig): void {
+function refreshModels(config: SubstrateConfig): AdminSettingsDivergence | null {
   try {
     config.runtimeHooks?.refreshModels?.();
+    return null;
   } catch (error) {
-    log.warn('Runtime model refresh hook failed after settings mutation', {
-      error: toErrorMessage(error),
-    });
+    const message = toErrorMessage(error);
+    log.warn('Runtime model refresh hook failed after settings mutation', { error: message });
+    return {
+      key: 'models',
+      state: 'diverged',
+      detail: `models.json persisted but live model refresh failed: ${message}`,
+      updatedAt: Date.now(),
+    };
   }
 }
 
-function refreshCapabilities(config: SubstrateConfig): void {
+function refreshCapabilities(config: SubstrateConfig): AdminSettingsDivergence | null {
   try {
     config.runtimeHooks?.refreshCapabilities?.();
+    return null;
   } catch (error) {
-    log.warn('Runtime capability refresh hook failed after settings mutation', {
-      error: toErrorMessage(error),
-    });
+    const message = toErrorMessage(error);
+    log.warn('Runtime capability refresh hook failed after settings mutation', { error: message });
+    return {
+      key: 'capabilities',
+      state: 'diverged',
+      detail: `capability-tier.json persisted but live capability refresh failed: ${message}`,
+      updatedAt: Date.now(),
+    };
   }
 }
 
@@ -102,8 +116,12 @@ export function applyAdminModelsConfigMutation(options: {
   try {
     const saved = configStore.saveModels(payload);
     applySettings(config, saved);
-    refreshModels(config);
-    return { ok: true };
+    const divergence = refreshModels(config);
+    return {
+      ok: true,
+      refreshedKeys: ['models'],
+      divergences: divergence ? [divergence] : [],
+    };
   } catch (error) {
     return {
       ok: false,
@@ -121,8 +139,12 @@ export function applyAdminCapabilityTierMutation(options: {
   try {
     const saved = configStore.saveCapabilityTier(payload);
     config.capabilityTier = saved.tier;
-    refreshCapabilities(config);
-    return { ok: true };
+    const divergence = refreshCapabilities(config);
+    return {
+      ok: true,
+      refreshedKeys: ['capabilities'],
+      divergences: divergence ? [divergence] : [],
+    };
   } catch (error) {
     return {
       ok: false,
@@ -138,6 +160,8 @@ export function applyAdminSettingsMutation(options: {
   capabilityCustomTokens?: readonly CapabilityToken[];
 }): SettingsMutationResult {
   const { config, configStore, settings, capabilityCustomTokens } = options;
+  const refreshedKeys = new Set<AdminSettingsDivergence['key']>();
+  const divergences: AdminSettingsDivergence[] = [];
 
   const currentRuntimeSettings = splitSettingsByDomain(configStore.loadRuntimeSettings()).runtime;
   const domainSplit = splitSettingsByDomain(settings);
@@ -222,6 +246,10 @@ export function applyAdminSettingsMutation(options: {
           message: `Settings saved but models config update failed: ${modelMutation.message}`,
         };
       }
+      for (const key of modelMutation.refreshedKeys) {
+        refreshedKeys.add(key);
+      }
+      divergences.push(...modelMutation.divergences);
     } catch (error) {
       return {
         ok: false,
@@ -266,6 +294,10 @@ export function applyAdminSettingsMutation(options: {
           message: `Settings saved but capability tier update failed: ${capabilityMutation.message}`,
         };
       }
+      for (const key of capabilityMutation.refreshedKeys) {
+        refreshedKeys.add(key);
+      }
+      divergences.push(...capabilityMutation.divergences);
     } catch (error) {
       return {
         ok: false,
@@ -274,14 +306,56 @@ export function applyAdminSettingsMutation(options: {
     }
   }
 
-  return { ok: true };
+  return { ok: true, refreshedKeys: [...refreshedKeys], divergences };
 }
 
 export class AdminSettingsDataService implements AdminSettingsService {
+  private readonly divergences = new Map<AdminSettingsDivergence['key'], AdminSettingsDivergence>();
+
   constructor(private readonly deps: {
     config: SubstrateConfig;
     configStore: ConfigStorePort;
   }) {}
+
+  private updateDivergences(
+    refreshedKeys: readonly AdminSettingsDivergence['key'][],
+    divergences: readonly AdminSettingsDivergence[],
+  ): AdminSettingsStatus {
+    for (const key of refreshedKeys) {
+      this.divergences.delete(key);
+    }
+    for (const divergence of divergences) {
+      this.divergences.set(divergence.key, divergence);
+    }
+    return this.buildSettingsStatus();
+  }
+
+  private buildSettingsStatus(): AdminSettingsStatus {
+    const divergences = [...this.divergences.values()].sort((a, b) => a.key.localeCompare(b.key));
+    if (divergences.length === 0) {
+      return {
+        status: 'healthy',
+        detail: 'Persisted settings match the live Garden runtime.',
+        divergences: [],
+      };
+    }
+
+    return {
+      status: 'degraded',
+      detail: divergences.map(entry => entry.detail).join(' '),
+      divergences,
+    };
+  }
+
+  private buildSuccessfulSaveResult(baseMessage: string, status: AdminSettingsStatus): ConfigUpdateResult {
+    return {
+      ok: true,
+      message: status.status === 'degraded'
+        ? `${baseMessage} with divergence: ${status.detail}`
+        : baseMessage,
+      status,
+    };
+  }
 
   private getEnvInfo() {
     return {
@@ -704,6 +778,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       env: this.getEnvInfo(),
       editors: this.loadSettingsConfigEditors(),
       voiceProviders: this.loadVoiceProviderData(),
+      status: this.buildSettingsStatus(),
     };
   }
 
@@ -751,7 +826,8 @@ export class AdminSettingsDataService implements AdminSettingsService {
       if (!mutationResult.ok) {
         return { ok: false, message: mutationResult.message };
       }
-      return { ok: true, message: 'Settings updated' };
+      const status = this.updateDivergences(mutationResult.refreshedKeys, mutationResult.divergences);
+      return this.buildSuccessfulSaveResult('Settings updated', status);
     } catch (error) {
       return { ok: false, message: toErrorMessage(error) };
     }
@@ -814,7 +890,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
             payload: parsed,
           });
           return result.ok
-            ? { ok: true, message: 'models.json saved' }
+            ? this.buildSuccessfulSaveResult(
+              'models.json saved',
+              this.updateDivergences(result.refreshedKeys, result.divergences),
+            )
             : { ok: false, message: result.message };
         }
         case 'scheduler': {
@@ -829,7 +908,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
             payload: parsed,
           });
           return result.ok
-            ? { ok: true, message: 'capability-tier.json saved' }
+            ? this.buildSuccessfulSaveResult(
+              'capability-tier.json saved',
+              this.updateDivergences(result.refreshedKeys, result.divergences),
+            )
             : { ok: false, message: result.message };
         }
         case 'charge-policy': {
@@ -844,8 +926,9 @@ export class AdminSettingsDataService implements AdminSettingsService {
         case 'providers': {
           const saved = this.deps.configStore.saveProviders(parsed);
           applyProvidersRuntimeConfig(this.deps.config, saved);
-          refreshModels(this.deps.config);
-          return { ok: true, message: 'providers.json saved' };
+          const refreshDivergence = refreshModels(this.deps.config);
+          const status = this.updateDivergences(['models'], refreshDivergence ? [refreshDivergence] : []);
+          return this.buildSuccessfulSaveResult('providers.json saved', status);
         }
         case 'channels': {
           this.deps.configStore.saveChannelsOwnerFile(parsed);

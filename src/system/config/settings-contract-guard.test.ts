@@ -9,6 +9,8 @@ import {
   SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS,
   SETTINGS_GARDEN_SECTION_FIELDS,
   listGardenSettingsFieldExposureKeys,
+  listGardenSettingsOwnerFileCoverage,
+  listGardenSettingsTunableFieldCoverage,
 } from '../../shared/contracts/settings-garden-contract.js';
 import { buildSettingsContractData } from './settings-contract.js';
 import { verifySettingsContractGuard } from './settings-contract-guard.js';
@@ -35,6 +37,67 @@ describe('settings contract guard', () => {
     );
     expect(adminUiGardenContract.SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS).toBe(SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS);
     expect(adminUiGardenContract.listGardenSettingsFieldExposureKeys).toBe(listGardenSettingsFieldExposureKeys);
+    expect(adminUiGardenContract.listGardenSettingsOwnerFileCoverage).toBe(listGardenSettingsOwnerFileCoverage);
+    expect(adminUiGardenContract.listGardenSettingsTunableFieldCoverage).toBe(listGardenSettingsTunableFieldCoverage);
+  });
+
+  it('keeps the Garden tunable-setting inventory aligned to backend owner metadata', () => {
+    const contractData = buildSettingsContractData();
+    const inventory = listGardenSettingsTunableFieldCoverage();
+    const inventoryKeys = inventory.map((entry) => entry.fieldKey);
+    const nonDeprecatedContractKeys = Object.values(contractData.fields)
+      .filter((field) => field.deprecated !== true)
+      .map((field) => field.key)
+      .sort();
+
+    expect(inventoryKeys).toEqual(nonDeprecatedContractKeys);
+    expect(inventoryKeys).toEqual(listGardenSettingsFieldExposureKeys());
+
+    for (const entry of inventory) {
+      const field = contractData.fields[entry.fieldKey];
+      expect(field).toBeDefined();
+      expect(SETTINGS_GARDEN_SECTION_FIELDS[entry.sectionId]).toContain(entry.fieldKey);
+
+      if (entry.surface === 'advanced') {
+        expect(field.ownerFile).toBe('settings.json');
+      }
+      if (entry.editorId === 'models') {
+        expect(field.ownerFile).toBe('models.json');
+      }
+      if (entry.editorId === 'scheduler') {
+        expect(field.ownerFile).toBe('scheduler.json');
+      }
+      if (entry.editorId === 'capabilities') {
+        expect(field.ownerFile).toBe('capability-tier.json');
+      }
+    }
+  });
+
+  it('keeps the Garden owner-file inventory exact and aligned to backend subsystems', () => {
+    const contractData = buildSettingsContractData();
+    const inventory = listGardenSettingsOwnerFileCoverage();
+
+    expect(inventory).toEqual([
+      { rawEditorKey: 'settings', subsystemId: 'runtime', ownerFile: 'settings.json' },
+      { rawEditorKey: 'models', subsystemId: 'models', ownerFile: 'models.json' },
+      { rawEditorKey: 'providers', subsystemId: 'providers', ownerFile: 'providers.json' },
+      { rawEditorKey: 'channels', subsystemId: 'channels', ownerFile: 'channels.json' },
+      { rawEditorKey: 'skills', subsystemId: 'skills', ownerFile: 'skills.json' },
+      { rawEditorKey: 'scheduler', subsystemId: 'scheduler', ownerFile: 'scheduler.json' },
+      { rawEditorKey: 'trust-policy', subsystemId: 'trustPolicy', ownerFile: 'trust-policy.json' },
+      { rawEditorKey: 'capabilities', subsystemId: 'capabilities', ownerFile: 'capability-tier.json' },
+      { rawEditorKey: 'charge-policy', subsystemId: 'chargePolicy', ownerFile: 'charge-policy.json' },
+      { rawEditorKey: 'backup', subsystemId: 'backup', ownerFile: 'backup.json' },
+    ]);
+
+    for (const entry of inventory) {
+      expect(contractData.subsystems[entry.subsystemId]).toEqual(
+        expect.objectContaining({
+          id: entry.subsystemId,
+          ownerFile: entry.ownerFile,
+        }),
+      );
+    }
   });
 
   it('declares channels as a raw-only owner-file subsystem', () => {

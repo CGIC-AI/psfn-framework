@@ -27,7 +27,12 @@
     resolveBudgetContextWindowAuthority,
     resolveSettingAuthority,
   } from '$lib/settings/authority';
+  import AdvancedSettingsMode from '$lib/components/settings/AdvancedSettingsMode.svelte';
+  import ProviderRegistrySection from '$lib/components/settings/ProviderRegistrySection.svelte';
+  import RawSettingsMode from '$lib/components/settings/RawSettingsMode.svelte';
   import SettingAuthorityHint from '$lib/components/settings/SettingAuthorityHint.svelte';
+  import SettingsEnvironmentSummary from '$lib/components/settings/SettingsEnvironmentSummary.svelte';
+  import SettingsPageChrome from '$lib/components/settings/SettingsPageChrome.svelte';
   import SettingsSidebarNav from '$lib/components/settings/SettingsSidebarNav.svelte';
   import {
     buildSettingsSimpleSectionGroups,
@@ -42,16 +47,11 @@
   import { buildContextBudgetPreview } from '$lib/settings/context-budget-preview';
   import {
     normalizeProvidersRuntimeConfig,
-    PROVIDER_TYPE_LABELS,
-    PROVIDER_TYPES,
-    providerSupportsModelsApi,
   } from '$lib/providers/registry';
   import {
     appendProviderEntry,
     cloneProviderRegistry,
     providerRegistryIsDirty,
-    providerRuntimeRole,
-    providerTypeSummary,
     removeProviderEntry as removeProviderRegistryEntry,
     serializeProviderRegistry,
     setProviderField as setProviderRegistryField,
@@ -437,6 +437,10 @@
     },
   ];
 
+  let advancedSectionSummaries = $derived.by(() => Object.fromEntries(
+    SECTIONS.map((section) => [section.id, section.summary()]),
+  ));
+
   const RAW_EDITORS = SETTINGS_GARDEN_RAW_EDITOR_KEYS
     .filter(
       (key): key is Exclude<RawEditorKey, 'settings' | 'models'> => (
@@ -533,7 +537,7 @@
     return settingsSchema?.fields?.[key];
   }
 
-  function subsystemOwnerFile(subsystemId: string): string | undefined {
+  function subsystemOwnerFile(subsystemId: keyof SettingsContractData['subsystems']): string | undefined {
     return settingsSchema?.subsystems?.[subsystemId]?.ownerFile;
   }
 
@@ -861,6 +865,10 @@
     openSections = next;
   }
 
+  function setMode(nextMode: ViewMode): void {
+    mode = nextMode;
+  }
+
   function syncActiveSimpleSection(): void {
     if (mode !== 'simple') return;
     if (typeof window === 'undefined') return;
@@ -964,6 +972,10 @@
     }
   }
 
+  function setSettingsJson(value: string): void {
+    settingsJson = value;
+  }
+
   function currentRawJsonByKey(): Record<RawEditorKey, string> {
     return buildRawEditorJsonMap((key) => getRawJson(key));
   }
@@ -978,6 +990,11 @@
   function rawEditorLabel(key: RawEditorKey): string {
     return rawEditorOwnerFile(key);
   }
+
+  let rawEditorViews = $derived.by(() => RAW_EDITORS.map((editor) => ({
+    key: editor.key,
+    ownerFile: rawEditorLabel(editor.key),
+  })));
 
   function resetDirtyTracking(): void {
     initialSnapshot = computeSnapshot();
@@ -1470,44 +1487,13 @@
 </datalist>
 
 <div class="space-y-5">
-  <!-- Header -->
-  <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-    <div class="flex items-center gap-3">
-      <div>
-        <h1 class="text-2xl font-serif font-bold text-bark-900">The Climate</h1>
-        <p class="text-sm text-bark-700 mt-1">Runtime configuration and tuning</p>
-      </div>
-      {#if dirty}
-        <span class="px-2.5 py-1 rounded-full text-sm font-medium bg-gold-100 text-gold-700 border border-gold-300">
-          Unsaved changes
-        </span>
-      {/if}
-    </div>
-
-    <div class="flex items-center gap-3">
-      <div class="flex rounded-lg border border-bark-300 overflow-hidden">
-        {#each (['simple', 'advanced', 'raw'] as const) as m}
-          <button
-            onclick={() => mode = m}
-            class="px-3 py-1.5 text-sm font-medium capitalize transition-colors
-              {mode === m ? 'bg-gold-600 text-white' : 'bg-white text-shadow-700 hover:bg-bark-200'}"
-          >
-            {m}
-          </button>
-        {/each}
-      </div>
-    </div>
-  </div>
-
-  <!-- Flash message -->
-  {#if saveMessage}
-    <div class="px-4 py-2.5 rounded-lg text-sm font-medium
-      {saveOk
-        ? 'bg-moss-50 text-moss-700 border border-moss-300'
-        : 'bg-wilt-50 text-wilt-600 border border-wilt-400'}">
-      {saveMessage}
-    </div>
-  {/if}
+  <SettingsPageChrome
+    {dirty}
+    {mode}
+    {saveMessage}
+    {saveOk}
+    onModeChange={setMode}
+  />
 
   <!-- Loading -->
   {#if loading}
@@ -1601,189 +1587,24 @@
             class="card-garden p-5 space-y-4"
             data-settings-section="providers"
           >
-            <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
-              <div class="space-y-2">
-                <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Providers</p>
-                <h2 class="text-sm font-serif font-semibold text-shadow-800">Provider Registry and Backend Wiring</h2>
-                <p class="text-sm text-shadow-600">
-                  Manage canonical provider ids, backend base URLs, and API key env wiring in <span class="font-mono">providers.json</span>.
-                  Models reference these ids directly.
-                </p>
-              </div>
-              <div class="flex flex-wrap items-center gap-2">
-                <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-sm text-shadow-700">
-                  {providerRegistry.providers.filter((entry) => entry.enabled).length} enabled / {providerRegistry.providers.length} total
-                </span>
-                <a
-                  href={`${base}/models`}
-                  class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
-                >
-                  Open Models
-                </a>
-                <button
-                  onclick={addProviderEntry}
-                  type="button"
-                  class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors"
-                >
-                  Add Provider
-                </button>
-              </div>
-            </div>
-
-            {#if providerValidationErrors.length > 0}
-              <div class="rounded-2xl border border-wilt-300 bg-wilt-50/60 p-4 space-y-2">
-                <h3 class="text-sm font-medium text-wilt-700">Provider validation</h3>
-                <ul class="space-y-1 text-sm text-wilt-700">
-                  {#each providerValidationErrors as issue}
-                    <li>{issue}</li>
-                  {/each}
-                </ul>
-              </div>
-            {/if}
-
-            <div class="space-y-4">
-              {#each providerRegistry.providers as entry, index (entry.id)}
-                <article class={PROVIDER_CARD_CLS}>
-                  <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div class="space-y-2">
-                      <div class="flex flex-wrap items-center gap-2">
-                        <span class="rounded-full border px-2.5 py-1 text-xs font-medium {entry.enabled ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
-                          {entry.enabled ? 'enabled' : 'disabled'}
-                        </span>
-                        <span class="rounded-full border border-bark-300 bg-bark-100 px-2.5 py-1 text-xs font-medium text-shadow-700">
-                          {PROVIDER_TYPE_LABELS[entry.type]}
-                        </span>
-                        {#each providerRuntimeRole(entry) as role}
-                          <span class="rounded-full border border-gold-300 bg-gold-50 px-2.5 py-1 text-xs text-gold-800">{role}</span>
-                        {/each}
-                      </div>
-                      <p class="text-sm text-shadow-600">{providerTypeSummary(entry.type)}</p>
-                    </div>
-                    <div class="flex flex-wrap items-center gap-3">
-                      <label class="inline-flex items-center gap-2 text-sm text-shadow-700">
-                        <input
-                          type="checkbox"
-                          checked={entry.enabled}
-                          onchange={(event) => updateProviderEntry(index, (nextEntry) => ({
-                            ...nextEntry,
-                            enabled: (event.currentTarget as HTMLInputElement).checked,
-                          }))}
-                          class={TOGGLE_CLS}
-                        />
-                        Enabled
-                      </label>
-                      <button
-                        onclick={() => removeProviderEntry(index)}
-                        type="button"
-                        class="inline-flex items-center rounded-lg border border-wilt-300 px-3 py-1.5 text-sm font-medium text-wilt-600 hover:bg-wilt-50 transition-colors"
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-
-                  <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                    <div>
-                      <label class={LABEL_CLS}>Provider Id</label>
-                      <input
-                        type="text"
-                        value={entry.id}
-                        oninput={(event) => setProviderField(index, 'id', (event.currentTarget as HTMLInputElement).value)}
-                        class={INPUT_CLS}
-                        placeholder="openrouter"
-                      />
-                      <p class="mt-1 text-sm text-shadow-500">Models and routing provider orders reference this id directly.</p>
-                    </div>
-                    <div>
-                      <label class={LABEL_CLS}>Provider Type</label>
-                      <select
-                        value={entry.type}
-                        onchange={(event) => setProviderType(index, (event.currentTarget as HTMLSelectElement).value)}
-                        class={INPUT_CLS}
-                      >
-                        {#each PROVIDER_TYPES as type}
-                          <option value={type}>{PROVIDER_TYPE_LABELS[type]}</option>
-                        {/each}
-                      </select>
-                    </div>
-                    <div>
-                      <label class={LABEL_CLS}>Label</label>
-                      <input
-                        type="text"
-                        value={entry.label ?? ''}
-                        oninput={(event) => setProviderField(index, 'label', (event.currentTarget as HTMLInputElement).value)}
-                        class={INPUT_CLS}
-                        placeholder="OpenRouter primary"
-                      />
-                    </div>
-                    <div>
-                      <label class={LABEL_CLS}>API Base URL</label>
-                      <input
-                        type="text"
-                        value={entry.apiBaseUrl ?? ''}
-                        oninput={(event) => setProviderField(index, 'apiBaseUrl', (event.currentTarget as HTMLInputElement).value)}
-                        class={INPUT_CLS}
-                        placeholder="https://..."
-                      />
-                    </div>
-                    <div>
-                      <label class={LABEL_CLS}>Models API URL</label>
-                      <input
-                        type="text"
-                        value={entry.modelsApiUrl ?? ''}
-                        oninput={(event) => setProviderField(index, 'modelsApiUrl', (event.currentTarget as HTMLInputElement).value)}
-                        class={INPUT_CLS}
-                        placeholder={providerSupportsModelsApi(entry.type) ? 'https://.../models' : 'Only used for OpenRouter'}
-                        disabled={!providerSupportsModelsApi(entry.type)}
-                      />
-                    </div>
-                    <div>
-                      <label class={LABEL_CLS}>API Key Ref</label>
-                      <input
-                        type="text"
-                        value={entry.apiKeyRef?.kind === 'env' ? entry.apiKeyRef.envName : ''}
-                        oninput={(event) => setProviderField(index, 'apiKeyRef', (event.currentTarget as HTMLInputElement).value)}
-                        class={INPUT_CLS}
-                        placeholder="OPENROUTER_API_KEY"
-                      />
-                    </div>
-                  </div>
-
-                  {#if entry.metadata && Object.keys(entry.metadata).length > 0}
-                    <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
-                      <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Metadata</p>
-                      <pre class="mt-2 overflow-x-auto text-xs text-shadow-700">{JSON.stringify(entry.metadata, null, 2)}</pre>
-                    </div>
-                  {/if}
-                </article>
-              {/each}
-            </div>
-
-            {#if providerRegistry.providers.length === 0}
-              <div class="rounded-2xl border border-dashed border-bark-300 bg-bark-50/60 p-5 text-sm text-shadow-600">
-                No providers configured yet. Add at least one provider before wiring models to backend endpoints.
-              </div>
-            {/if}
-
-            <div class="flex flex-wrap items-center gap-3 pt-1">
-              <button
-                onclick={saveProviderRegistry}
-                disabled={saving || !providerRegistryDirty()}
-                class="px-4 py-2 rounded-lg bg-gold-600 text-white text-sm font-medium hover:bg-gold-700 disabled:opacity-50 transition-colors"
-              >
-                {saving ? 'Saving...' : 'Save providers.json'}
-              </button>
-              <button
-                onclick={discardProviderRegistryChanges}
-                disabled={!providerRegistryDirty() || saving}
-                class="px-4 py-2 rounded-lg border border-bark-300 bg-white text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50 transition-colors"
-              >
-                Discard
-              </button>
-              {#if providerRegistryDirty()}
-                <span class="text-sm text-shadow-500">Provider changes can be saved here immediately or along with the general settings save.</span>
-              {/if}
-            </div>
+            <ProviderRegistrySection
+              modelsHref={`${base}/models`}
+              {providerRegistry}
+              {providerValidationErrors}
+              {saving}
+              isDirty={providerRegistryDirty()}
+              inputClass={INPUT_CLS}
+              labelClass={LABEL_CLS}
+              toggleClass={TOGGLE_CLS}
+              providerCardClass={PROVIDER_CARD_CLS}
+              {addProviderEntry}
+              {removeProviderEntry}
+              {updateProviderEntry}
+              {setProviderType}
+              {setProviderField}
+              {saveProviderRegistry}
+              {discardProviderRegistryChanges}
+            />
           </section>
 
           <section
@@ -2732,7 +2553,7 @@
 
       <!-- Secrets display -->
       {#if data?.env}
-        {@const env = data.env as Record<string, unknown>}
+        {@const env = data.env as unknown as Record<string, unknown>}
         <section
           id={settingsSimpleSectionAnchorId('advanced-secrets')}
           use:simpleSectionAnchor={'advanced-secrets'}
@@ -2802,420 +2623,52 @@
 
   <!-- ADVANCED MODE -->
   {:else if mode === 'advanced'}
-    <div class="space-y-3">
-      <div class="rounded-2xl border border-bark-300 bg-bark-100/70 px-4 py-3 text-sm text-shadow-700">
-        Legacy and removed runtime keys are hidden here. Garden only shows canonical settings; if an old key is submitted through a raw editor or API call, save validation will return migration guidance instead of silently accepting it.
-      </div>
-      {#each SECTIONS as section}
-        {@const sectionKeys = section.keys.filter((k) => (
-          data
-          && k in (data.config as Record<string, unknown>)
-          && !MODEL_OWNED_FIELDS.has(k)
-          && !isDeprecatedField(k)
-        ))}
-        {#if sectionKeys.length > 0}
-          <div class="card-garden overflow-hidden">
-            <button
-              onclick={() => toggleSection(section.id)}
-              class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
-            >
-              <div class="flex items-center gap-3">
-                <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">
-                  {section.icon}
-                </span>
-                <h2 class="text-sm font-serif font-semibold text-shadow-800">{section.title}</h2>
-                <span class="text-sm text-shadow-500">({sectionKeys.length} fields)</span>
-              </div>
-              <div class="flex items-center gap-3">
-                {#if !openSections.has(section.id)}
-                  <span class="text-sm text-shadow-500 hidden md:inline">{section.summary()}</span>
-                {/if}
-                <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has(section.id) ? 'rotate-180' : ''}">
-                  &#9660;
-                </span>
-              </div>
-            </button>
-            {#if openSections.has(section.id)}
-              <div class="px-5 pb-5 space-y-3 border-t border-bark-300 pt-4">
-                {#each sectionKeys as key}
-                  {@const value = configValue(key)}
-                  {@const editorType = fieldEditorType(key, value)}
-                  {@const enumValues = fieldEnumValues(key, typeof value === 'string' ? [value] : [])}
-                  {@const fieldSchema = fieldContract(key)}
-                  <div class="flex flex-col sm:flex-row sm:items-start gap-2">
-                    <div class="sm:w-60 shrink-0 flex items-center gap-2">
-                      <label class="text-sm font-mono text-shadow-700">{key}</label>
-                      <span class="text-shadow-400 text-sm">({getSource(key)})</span>
-                      {#if fieldSchema?.deprecated}
-                        <span class="rounded-full border border-wilt-300 bg-wilt-50 px-2 py-0.5 text-xs font-medium text-wilt-600">deprecated</span>
-                      {/if}
-                    </div>
-                    {#if key === 'compositionalPolicy'}
-                      {@const policy = getCompositionalPolicy()}
-                      <div class="flex-1 space-y-4 rounded-2xl border border-bark-300 bg-bark-100/60 p-4">
-                        <div class="space-y-2">
-                          <p class="text-sm text-shadow-600">
-                            Gate compositional cognition by capability tier, channel type, and purpose.
-                            This remains JSON-backed runtime config; secrets stay in the environment.
-                          </p>
-                          <label class="inline-flex items-center gap-3 rounded-full border border-gold-300 bg-gold-50 px-3 py-2 text-sm font-medium text-shadow-800 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={policy.enabled}
-                              onchange={(e) => setCompositionalPolicyEnabled((e.target as HTMLInputElement).checked)}
-                              class={TOGGLE_CLS}
-                            />
-                            <span>Enable compositional cognition</span>
-                          </label>
-                        </div>
-
-                        <div class="grid grid-cols-1 xl:grid-cols-3 gap-4">
-                          <div class="space-y-2">
-                            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-shadow-500">Allowed Tiers</p>
-                            <div class="flex flex-wrap gap-2">
-                              {#each capabilityTierOptions as option}
-                                <label
-                                  class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedTiers', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={hasCompositionalPolicyValue('allowedTiers', option)}
-                                    onchange={() => toggleCompositionalPolicyValue('allowedTiers', option)}
-                                    class="sr-only"
-                                  />
-                                  <span>{formatSettingOptionLabel('capabilityTier', option)}</span>
-                                </label>
-                              {/each}
-                            </div>
-                          </div>
-
-                          <div class="space-y-2">
-                            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-shadow-500">Allowed Channels</p>
-                            <div class="flex flex-wrap gap-2">
-                              {#each COMPOSITIONAL_CHANNEL_TYPE_OPTIONS as option}
-                                <label
-                                  class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedChannelTypes', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={hasCompositionalPolicyValue('allowedChannelTypes', option)}
-                                    onchange={() => toggleCompositionalPolicyValue('allowedChannelTypes', option)}
-                                    class="sr-only"
-                                  />
-                                  <span>{humanizeSettingValue(option)}</span>
-                                </label>
-                              {/each}
-                            </div>
-                          </div>
-
-                          <div class="space-y-2">
-                            <p class="text-xs font-semibold uppercase tracking-[0.18em] text-shadow-500">Allowed Purposes</p>
-                            <div class="flex flex-wrap gap-2">
-                              {#each COMPOSITIONAL_PURPOSE_OPTIONS as option}
-                                <label
-                                  class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedPurposes', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={hasCompositionalPolicyValue('allowedPurposes', option)}
-                                    onchange={() => toggleCompositionalPolicyValue('allowedPurposes', option)}
-                                    class="sr-only"
-                                  />
-                                  <span>{humanizeSettingValue(option)}</span>
-                                </label>
-                              {/each}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    {:else if editorType === 'checkbox'}
-                      <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox"
-                          checked={Boolean(value)}
-                          onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).checked)}
-                          class="sr-only peer" />
-                        <div class="w-9 h-5 bg-bark-400 rounded-full peer
-                                    peer-checked:bg-gold-500 peer-focus:ring-2 peer-focus:ring-gold-300
-                                    after:content-[''] after:absolute after:top-0.5 after:start-[2px]
-                                    after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all
-                                    peer-checked:after:translate-x-full"></div>
-                      </label>
-                    {:else if editorType === 'enum'}
-                      <select
-                        value={String(value ?? '')}
-                        onchange={(e) => setConfigValue(key, (e.target as HTMLSelectElement).value)}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
-                      >
-                        {#each enumValues as option}
-                          <option value={option}>{formatSettingOptionLabel(key, option)}</option>
-                        {/each}
-                      </select>
-                    {:else if editorType === 'number'}
-                      <input type="number"
-                        value={Number(value)}
-                        min={fieldMinimum(key)}
-                        max={fieldMaximum(key)}
-                        onchange={(e) => setConfigValue(key, Number((e.target as HTMLInputElement).value))}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
-                    {:else if editorType === 'array'}
-                      <input type="text"
-                        value={Array.isArray(value) ? value.join(', ') : ''}
-                        onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean))}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
-                        placeholder="comma-separated values" />
-                    {:else if editorType === 'object'}
-                      <textarea
-                        value={JSON.stringify(value, null, 2)}
-                        onchange={(e) => { try { setConfigValue(key, JSON.parse((e.target as HTMLTextAreaElement).value)); } catch { /* ignore */ } }}
-                        rows="3"
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300 resize-y"
-                        spellcheck="false"
-                      ></textarea>
-                    {:else}
-                      <input type="text"
-                        value={String(value ?? '')}
-                        onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value)}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
-                    {/if}
-                  </div>
-                  {#if hasFieldErrors(key)}
-                    <div class="sm:pl-60 space-y-1">
-                      {#each fieldErrors(key) as fieldError}
-                        <p class="text-sm text-wilt-600">{fieldError}</p>
-                      {/each}
-                    </div>
-                  {/if}
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
-      {/each}
-
-      <!-- Other (uncategorized) keys -->
-      {#if data}
-        {@const allCategorized = new Set(SECTIONS.flatMap(s => s.keys))}
-        {@const otherKeys = Object.keys(data.config as Record<string, unknown>).filter((k) => (
-          !allCategorized.has(k)
-          && !MODEL_OWNED_FIELDS.has(k)
-          && !isDeprecatedField(k)
-        ))}
-        {#if otherKeys.length > 0}
-          <div class="card-garden overflow-hidden">
-            <button
-              onclick={() => toggleSection('other')}
-              class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
-            >
-              <div class="flex items-center gap-3">
-                <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">
-                  ?
-                </span>
-                <h2 class="text-sm font-serif font-semibold text-shadow-800">Other Settings</h2>
-                <span class="text-sm text-shadow-500">({otherKeys.length} fields)</span>
-              </div>
-              <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('other') ? 'rotate-180' : ''}">
-                &#9660;
-              </span>
-            </button>
-            {#if openSections.has('other')}
-              <div class="px-5 pb-5 space-y-3 border-t border-bark-300 pt-4">
-                {#each otherKeys as key}
-                  {@const value = configValue(key)}
-                  {@const editorType = fieldEditorType(key, value)}
-                  {@const enumValues = fieldEnumValues(key, typeof value === 'string' ? [value] : [])}
-                  {@const fieldSchema = fieldContract(key)}
-                  <div class="flex flex-col sm:flex-row sm:items-center gap-2">
-                    <div class="sm:w-60 shrink-0 flex items-center gap-2">
-                      <label class="text-sm font-mono text-shadow-700">{key}</label>
-                      <span class="text-shadow-400 text-sm">({getSource(key)})</span>
-                      {#if fieldSchema?.deprecated}
-                        <span class="rounded-full border border-wilt-300 bg-wilt-50 px-2 py-0.5 text-xs font-medium text-wilt-600">deprecated</span>
-                      {/if}
-                    </div>
-                    {#if editorType === 'checkbox'}
-                      <label class="relative inline-flex items-center cursor-pointer">
-                        <input type="checkbox"
-                          checked={Boolean(value)}
-                          onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).checked)}
-                          class="sr-only peer" />
-                        <div class="w-9 h-5 bg-bark-400 rounded-full peer
-                                    peer-checked:bg-gold-500 peer-focus:ring-2 peer-focus:ring-gold-300
-                                    after:content-[''] after:absolute after:top-0.5 after:start-[2px]
-                                    after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all
-                                    peer-checked:after:translate-x-full"></div>
-                      </label>
-                    {:else if editorType === 'enum'}
-                      <select
-                        value={String(value ?? '')}
-                        onchange={(e) => setConfigValue(key, (e.target as HTMLSelectElement).value)}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
-                      >
-                        {#each enumValues as option}
-                          <option value={option}>{formatSettingOptionLabel(key, option)}</option>
-                        {/each}
-                      </select>
-                    {:else if editorType === 'number'}
-                      <input type="number"
-                        value={Number(value)}
-                        min={fieldMinimum(key)}
-                        max={fieldMaximum(key)}
-                        onchange={(e) => setConfigValue(key, Number((e.target as HTMLInputElement).value))}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
-                    {:else if editorType === 'array'}
-                      <input type="text"
-                        value={Array.isArray(value) ? value.join(', ') : ''}
-                        onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value.split(',').map(s => s.trim()).filter(Boolean))}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300"
-                        placeholder="comma-separated values" />
-                    {:else if editorType === 'object'}
-                      <textarea
-                        value={JSON.stringify(value, null, 2)}
-                        onchange={(e) => { try { setConfigValue(key, JSON.parse((e.target as HTMLTextAreaElement).value)); } catch { /* ignore */ } }}
-                        rows="3"
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300 resize-y"
-                        spellcheck="false"
-                      ></textarea>
-                    {:else}
-                      <input type="text"
-                        value={String(value ?? '')}
-                        onchange={(e) => setConfigValue(key, (e.target as HTMLInputElement).value)}
-                        class="flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-white text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300" />
-                    {/if}
-                  </div>
-                  {#if hasFieldErrors(key)}
-                    <div class="sm:pl-60 space-y-1">
-                      {#each fieldErrors(key) as fieldError}
-                        <p class="text-sm text-wilt-600">{fieldError}</p>
-                      {/each}
-                    </div>
-                  {/if}
-                {/each}
-              </div>
-            {/if}
-          </div>
-        {/if}
-      {/if}
-
-      <div class="flex items-center gap-3 pt-2">
-        <button onclick={saveAdvanced} disabled={saving}
-          class="px-5 py-2.5 rounded-lg bg-gold-600 text-white text-sm font-medium
-                 hover:bg-gold-700 disabled:opacity-50 transition-colors shadow-sm">
-          {saving ? 'Saving...' : 'Save All Settings'}
-        </button>
-      </div>
-    </div>
+    <AdvancedSettingsMode
+      {data}
+      sections={SECTIONS}
+      sectionSummaries={advancedSectionSummaries}
+      {openSections}
+      modelOwnedFields={MODEL_OWNED_FIELDS}
+      {saving}
+      {capabilityTierOptions}
+      compositionalChannelTypeOptions={COMPOSITIONAL_CHANNEL_TYPE_OPTIONS}
+      compositionalPurposeOptions={COMPOSITIONAL_PURPOSE_OPTIONS}
+      {toggleSection}
+      {configValue}
+      {setConfigValue}
+      {fieldEditorType}
+      {fieldEnumValues}
+      {fieldContract}
+      {fieldMinimum}
+      {fieldMaximum}
+      {isDeprecatedField}
+      {getSource}
+      {hasFieldErrors}
+      {fieldErrors}
+      {formatSettingOptionLabel}
+      {humanizeSettingValue}
+      {getCompositionalPolicy}
+      {setCompositionalPolicyEnabled}
+      {toggleCompositionalPolicyValue}
+      {hasCompositionalPolicyValue}
+      {saveAdvanced}
+    />
 
   <!-- RAW MODE -->
   {:else}
-    <div class="space-y-4">
-      <div class="card-garden overflow-hidden">
-        <div class="flex items-center justify-between px-5 py-3 border-b border-bark-300">
-          <h3 class="text-sm font-serif font-semibold text-shadow-800">settings.json (full runtime object)</h3>
-          <div class="flex items-center gap-3">
-            {#if rawSaveStatus['settings']}
-              <span class="text-sm font-medium {rawSaveStatus['settings'].ok ? 'text-moss-600' : 'text-wilt-600'}">
-                {rawSaveStatus['settings'].msg}
-              </span>
-            {/if}
-            <button
-              onclick={saveRawSettings}
-              disabled={saving}
-              class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium
-                     hover:bg-gold-700 disabled:opacity-50 transition-colors"
-            >
-              {saving ? 'Saving...' : 'Save'}
-            </button>
-          </div>
-        </div>
-        <textarea
-          bind:value={settingsJson}
-          rows="18"
-          class="w-full font-mono text-sm text-shadow-800 bg-white p-4
-                 focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset
-                 resize-y border-0"
-          spellcheck="false"
-        ></textarea>
-        {#if Object.keys(validationErrorsByField).length > 0}
-          <div class="px-5 pb-4 border-t border-bark-300 space-y-1">
-            {#each Object.entries(validationErrorsByField) as [field, messages]}
-              {#each messages as message}
-                <p class="text-sm text-wilt-600">
-                  <span class="font-mono">{field}</span>: {message}
-                </p>
-              {/each}
-            {/each}
-          </div>
-        {/if}
-      </div>
-
-      {#each RAW_EDITORS as editor}
-        {@const status = rawSaveStatus[editor.key]}
-        {@const ownerFile = rawEditorLabel(editor.key)}
-        <div class="card-garden overflow-hidden">
-          <div class="flex items-center justify-between px-5 py-3 border-b border-bark-300">
-            <h3 class="text-sm font-serif font-semibold text-shadow-800">{ownerFile}</h3>
-            <div class="flex items-center gap-3">
-              {#if status}
-                <span class="text-sm font-medium {status.ok ? 'text-moss-600' : 'text-wilt-600'}">
-                  {status.msg}
-                </span>
-              {/if}
-              <button
-                onclick={() => saveRawConfig(editor.key, ownerFile)}
-                disabled={saving}
-                class="px-3 py-1.5 rounded-lg bg-gold-600 text-white text-sm font-medium
-                       hover:bg-gold-700 disabled:opacity-50 transition-colors"
-              >
-                {saving ? 'Saving...' : 'Save'}
-              </button>
-            </div>
-          </div>
-          <textarea
-            value={getRawJson(editor.key)}
-            oninput={(e) => setRawJson(editor.key, (e.target as HTMLTextAreaElement).value)}
-            rows="14"
-            class="w-full font-mono text-sm text-shadow-800 bg-white p-4
-                   focus:outline-none focus:ring-2 focus:ring-gold-300 focus:ring-inset
-                   resize-y border-0"
-            spellcheck="false"
-          ></textarea>
-        </div>
-      {/each}
-    </div>
+    <RawSettingsMode
+      {settingsJson}
+      rawEditors={rawEditorViews}
+      {rawSaveStatus}
+      {saving}
+      {validationErrorsByField}
+      {setSettingsJson}
+      {getRawJson}
+      {setRawJson}
+      {saveRawSettings}
+      {saveRawConfig}
+    />
   {/if}
 
-  <!-- Environment info (always visible) -->
-  {#if data?.env}
-    {@const env = data.env as Record<string, unknown>}
-    <div class="card-garden px-5 py-4">
-      <h2 class="text-sm font-serif font-semibold text-shadow-700 mb-2 uppercase tracking-wider">Environment</h2>
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm text-shadow-700">
-        {#if env.nodeVersion}
-          <div>
-            <span class="text-shadow-500">Node</span>
-            <span class="font-mono ml-1 text-shadow-800">{env.nodeVersion}</span>
-          </div>
-        {/if}
-        {#if env.platform}
-          <div>
-            <span class="text-shadow-500">Platform</span>
-            <span class="font-mono ml-1 text-shadow-800">{env.platform}/{env.arch}</span>
-          </div>
-        {/if}
-        {#if env.uptime !== undefined}
-          <div>
-            <span class="text-shadow-500">Uptime</span>
-            <span class="ml-1 text-shadow-800">{Math.floor(Number(env.uptime) / 3600)}h {Math.floor((Number(env.uptime) % 3600) / 60)}m</span>
-          </div>
-        {/if}
-        {#if env.memoryUsage && typeof env.memoryUsage === 'object'}
-          {@const mem = env.memoryUsage as Record<string, number>}
-          <div>
-            <span class="text-shadow-500">Heap</span>
-            <span class="ml-1 text-shadow-800">{(mem.heapUsed / 1_048_576).toFixed(0)}MB / {(mem.heapTotal / 1_048_576).toFixed(0)}MB</span>
-          </div>
-        {/if}
-      </div>
-    </div>
-  {/if}
+  <SettingsEnvironmentSummary env={data?.env as unknown as Record<string, unknown> | undefined} />
 </div>

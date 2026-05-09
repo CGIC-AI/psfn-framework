@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
+  import GardenDebugStream, { type GardenDebugStreamItem } from '$lib/components/garden/GardenDebugStream.svelte';
+  import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
+  import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import AuditSurfaceMap from '$lib/components/telemetry/AuditSurfaceMap.svelte';
   import {
     getEvents,
@@ -26,7 +29,7 @@
   let filterDebounce: ReturnType<typeof setTimeout> | undefined;
   let scrollContainer: HTMLDivElement | undefined = $state();
   let autoScroll = $state(true);
-  let expandedIdx = $state<number | null>(null);
+  let expandedEventId = $state<string | null>(null);
   let connectedSince = $state<number | null>(null);
   let uptimeDisplay = $state('00:00');
   let uptimeInterval: ReturnType<typeof setInterval> | undefined;
@@ -85,6 +88,14 @@
     evts = evts.filter(e => isCategoryEnabled(categorize(e.type)));
     return evts;
   });
+
+  let liveEventRows: GardenDebugStreamItem[] = $derived.by(() => filteredEvents.map((event, i) => ({
+    id: event.timestamp.toString() + event.type + i,
+    timestamp: formatTime(event.timestamp),
+    label: event.type,
+    summary: formatEventKv(event.data),
+    detail: formatJson(event.data),
+  })));
 
   // Stats
   let totalCount = $derived(getEvents().length);
@@ -263,6 +274,16 @@
     }).reverse(); // newest first
   });
 
+  const TELEMETRY_TABS = [
+    { id: 'live', label: 'Live Events' },
+    { id: 'audit', label: 'Audit Trail' },
+  ] satisfies GardenTabItem[];
+
+  let telemetryTabs: GardenTabItem[] = $derived.by(() => TELEMETRY_TABS.map(tab => {
+    if (tab.id !== 'audit' || auditEntries.length === 0) return tab;
+    return { ...tab, count: auditEntries.length };
+  }));
+
   const DECISION_BADGE: Record<AuditDecision, string> = {
     allowed: 'bg-moss-100 text-moss-700',
     denied: 'bg-wilt-100 text-wilt-600',
@@ -393,6 +414,16 @@
     activeTab = tab;
   }
 
+  function selectTelemetryTabId(id: string): void {
+    if (id === 'live' || id === 'audit') {
+      selectTelemetryTab(id);
+    }
+  }
+
+  function toggleExpandedEvent(id: string): void {
+    expandedEventId = expandedEventId === id ? null : id;
+  }
+
   // ── Lifecycle ──
   onMount(() => {
     uptimeInterval = setInterval(updateUptime, 1000);
@@ -409,61 +440,38 @@
 </script>
 
 <div class="space-y-5 h-full flex flex-col">
-  <!-- Header -->
-  <div class="flex items-center justify-between flex-wrap gap-3">
-    <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">Events & Audit</h1>
-      <p class="text-sm text-shadow-600 mt-1">
-        Live telemetry, derived audit trail, and observability map. Garden context: The Sap.
-      </p>
+  {#snippet telemetryHeaderActions()}
+    <div class="flex items-center gap-2">
+      {#if isConnected()}
+        <span class="relative flex h-2.5 w-2.5">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-moss-400 opacity-75"></span>
+          <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-moss-500"></span>
+        </span>
+        <span class="text-sm text-moss-700 font-medium">Connected</span>
+      {:else}
+        <span class="inline-flex rounded-full h-2.5 w-2.5 bg-wilt-400"></span>
+        <span class="text-sm text-wilt-600 font-medium">Disconnected</span>
+      {/if}
     </div>
+  {/snippet}
 
-    <!-- Connection indicator -->
-    <div class="flex items-center gap-3">
-      <div class="flex items-center gap-2">
-        {#if isConnected()}
-          <span class="relative flex h-2.5 w-2.5">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-moss-400 opacity-75"></span>
-            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-moss-500"></span>
-          </span>
-          <span class="text-sm text-moss-700 font-medium">Connected</span>
-        {:else}
-          <span class="inline-flex rounded-full h-2.5 w-2.5 bg-wilt-400"></span>
-          <span class="text-sm text-wilt-600 font-medium">Disconnected</span>
-        {/if}
-      </div>
-    </div>
-  </div>
+  <GardenPageHeader
+    title="Events & Audit"
+    description="Live telemetry, derived audit trail, and observability map. Garden context: The Sap."
+    actions={telemetryHeaderActions}
+  />
 
   <AuditSurfaceMap
     {activeTab}
     onSelectTelemetryTab={selectTelemetryTab}
   />
 
-  <!-- Tab bar -->
-  <div class="flex gap-1 border-b border-bark-300">
-    <button
-      onclick={() => activeTab = 'live'}
-      class="px-5 py-2.5 text-sm font-medium rounded-t-lg transition-colors
-             {activeTab === 'live'
-               ? 'bg-white border border-bark-300 border-b-white -mb-px text-shadow-900'
-               : 'text-shadow-600 hover:text-shadow-800 hover:bg-bark-100'}"
-    >
-      Live Events
-    </button>
-    <button
-      onclick={() => activeTab = 'audit'}
-      class="px-5 py-2.5 text-sm font-medium rounded-t-lg transition-colors
-             {activeTab === 'audit'
-               ? 'bg-white border border-bark-300 border-b-white -mb-px text-shadow-900'
-               : 'text-shadow-600 hover:text-shadow-800 hover:bg-bark-100'}"
-    >
-      Audit Trail
-      {#if auditEntries.length > 0}
-        <span class="ml-1.5 text-xs px-1.5 py-0.5 rounded-full bg-gold-100 text-gold-700">{auditEntries.length}</span>
-      {/if}
-    </button>
-  </div>
+  <GardenTabBar
+    tabs={telemetryTabs}
+    activeId={activeTab}
+    onSelect={selectTelemetryTabId}
+    label="Telemetry views"
+  />
 
   <!-- ══════════════════════════════════════════════ -->
   <!-- LIVE EVENTS TAB                               -->
@@ -598,59 +606,28 @@
       {/if}
     </div>
 
-    <!-- Terminal-style event stream -->
-    <div
-      class="flex-1 min-h-0 overflow-y-auto rounded-lg border border-shadow-800 bg-shadow-900"
-      style="min-height: 400px;"
-      bind:this={scrollContainer}
-      onscroll={handleScroll}
-    >
-      {#if filteredEvents.length === 0}
-        <div class="p-12 text-center">
-          <p class="text-sm italic font-sans text-bark-400">
-            No sap flows yet -- events will appear as the substrate runs
-          </p>
-          {#if !isConnected()}
-            <button
-              onclick={handleConnect}
-              class="mt-3 text-sm font-sans font-medium text-gold-400 hover:text-gold-300"
-            >
-              Connect to start
-            </button>
-          {/if}
-        </div>
-      {:else}
-        <div class="p-3 space-y-0">
-          {#each filteredEvents as event, i (event.timestamp.toString() + event.type + i)}
-            <div
-              role="button"
-              tabindex="0"
-              class="flex items-start gap-3 py-1 px-2 font-mono text-sm rounded transition-colors cursor-pointer hover:bg-shadow-800"
-              onclick={() => expandedIdx = expandedIdx === i ? null : i}
-              onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); expandedIdx = expandedIdx === i ? null : i; } }}
-            >
-              <!-- Timestamp -->
-              <span class="shrink-0 w-28 text-bark-500">
-                {formatTime(event.timestamp)}
-              </span>
-              <!-- Event type (gold) -->
-              <span class="shrink-0 w-56 font-medium truncate text-gold-400">
-                {event.type}
-              </span>
-              <!-- Key-value data -->
-              <span class="flex-1 truncate text-bark-300">
-                {formatEventKv(event.data)}
-              </span>
-            </div>
-            {#if expandedIdx === i}
-              <pre
-                class="mx-2 mb-1 p-3 rounded text-sm font-mono overflow-x-auto max-h-64 overflow-y-auto bg-shadow-950 text-bark-300"
-              >{formatJson(event.data)}</pre>
-            {/if}
-          {/each}
-        </div>
+    {#snippet liveStreamEmptyAction()}
+      {#if !isConnected()}
+        <button
+          type="button"
+          onclick={handleConnect}
+          class="text-sm font-sans font-medium text-gold-400 hover:text-gold-300"
+        >
+          Connect to start
+        </button>
       {/if}
-    </div>
+    {/snippet}
+
+    <GardenDebugStream
+      class="flex-1 min-h-0 border border-shadow-800"
+      items={liveEventRows}
+      expandedId={expandedEventId}
+      onToggle={toggleExpandedEvent}
+      bind:scroller={scrollContainer}
+      onScroll={handleScroll}
+      emptyText="No sap flows yet -- events will appear as the substrate runs"
+      emptyAction={liveStreamEmptyAction}
+    />
   {/if}
 
   <!-- ══════════════════════════════════════════════ -->

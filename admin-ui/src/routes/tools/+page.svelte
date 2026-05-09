@@ -5,7 +5,18 @@
   import ServiceHealthPanel from '$lib/components/tools/ServiceHealthPanel.svelte';
   import ToolCard from '$lib/components/tools/ToolCard.svelte';
   import {
+    ALL_TOOL_FILTERS,
+    countInventoryTools,
+    defaultToolInventoryFilters,
+    deriveToolInventoryFilterOptions,
+    filterInventoryGroups,
+    hasActiveToolInventoryFilters,
+    type ToolInventoryFilterOption,
+  } from '$lib/components/tools/filter-tools';
+  import {
+    AVAILABILITY_LABELS,
     formatTimestamp,
+    HEALTH_LABELS,
     telemetryEventDetail,
     telemetryEventMeta,
     telemetryEventTitle,
@@ -58,6 +69,7 @@
   let loading = $state(true);
   let refreshing = $state(false);
   let errorMessage = $state('');
+  let inventoryFilters = $state(defaultToolInventoryFilters());
 
   let toolHealthByName = $derived.by(() => (
     new Map((data?.toolHealth ?? []).map((tool) => [tool.name, tool] as const))
@@ -74,6 +86,18 @@
   ));
 
   let inventoryGroups = $derived.by(() => (data?.inventory ?? ([] as AdminToolInventoryGroup[])));
+
+  let inventoryFilterOptions = $derived.by(() => (
+    deriveToolInventoryFilterOptions(inventoryGroups)
+  ));
+
+  let filteredInventoryGroups = $derived.by(() => (
+    filterInventoryGroups(inventoryGroups, inventoryFilters)
+  ));
+
+  let inventoryTotalCount = $derived.by(() => countInventoryTools(inventoryGroups));
+  let inventoryFilteredCount = $derived.by(() => countInventoryTools(filteredInventoryGroups));
+  let hasInventoryFilters = $derived(hasActiveToolInventoryFilters(inventoryFilters));
 
   let recentTelemetry = $derived.by(() => (
     (data?.recentTelemetry ?? []).slice().reverse()
@@ -103,6 +127,35 @@
   async function refreshData() {
     refreshing = true;
     await loadData();
+  }
+
+  function clearInventoryFilters() {
+    const next = defaultToolInventoryFilters();
+    inventoryFilters.query = next.query;
+    inventoryFilters.groupKey = next.groupKey;
+    inventoryFilters.scope = next.scope;
+    inventoryFilters.healthStatus = next.healthStatus;
+    inventoryFilters.chatStatus = next.chatStatus;
+    inventoryFilters.heartbeatStatus = next.heartbeatStatus;
+  }
+
+  function optionWithCount(label: string, option: ToolInventoryFilterOption): string {
+    return `${label} (${option.count})`;
+  }
+
+  function scopeLabel(scope: string): string {
+    if (scope === 'core') return 'Core';
+    if (scope === 'extended') return 'Extended';
+    if (scope === 'conditional') return 'Conditional';
+    return scope;
+  }
+
+  function healthStatusLabel(status: string): string {
+    return HEALTH_LABELS[status as keyof typeof HEALTH_LABELS] ?? status;
+  }
+
+  function availabilityStatusLabel(status: string): string {
+    return AVAILABILITY_LABELS[status as keyof typeof AVAILABILITY_LABELS] ?? status;
   }
 
   onMount(() => {
@@ -212,8 +265,124 @@
           Tool catalog by runtime role
         </h2>
       </div>
-      <span class="text-sm text-shadow-600">{data?.toolHealth.length ?? 0} runtime-derived rows</span>
+      <span class="text-sm text-shadow-600">
+        {inventoryFilteredCount} / {inventoryTotalCount} runtime-derived rows
+      </span>
     </div>
+
+    {#if !loading && inventoryGroups.length}
+      <div class="card-garden p-5 space-y-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 class="text-base font-serif font-semibold text-shadow-900">Inventory Filters</h3>
+            <p class="mt-1 text-sm text-shadow-600">
+              Showing {inventoryFilteredCount} of {inventoryTotalCount} tools
+              {#if filteredInventoryGroups.length}
+                across {filteredInventoryGroups.length} groups.
+              {:else}
+                across 0 groups.
+              {/if}
+            </p>
+          </div>
+          <button
+            type="button"
+            onclick={clearInventoryFilters}
+            disabled={!hasInventoryFilters}
+            class="rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Clear filters
+          </button>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <label class="block md:col-span-2 xl:col-span-1">
+            <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Search</span>
+            <input
+              data-search-shortcut
+              type="search"
+              bind:value={inventoryFilters.query}
+              placeholder="Search name or description"
+              class="mt-2 w-full rounded-xl border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 outline-none transition-colors placeholder:text-shadow-400 focus:border-gold-400"
+            />
+          </label>
+
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Inventory Group</span>
+            <select
+              bind:value={inventoryFilters.groupKey}
+              class="mt-2 w-full rounded-xl border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
+            >
+              <option value={ALL_TOOL_FILTERS}>All groups ({inventoryTotalCount})</option>
+              {#each inventoryFilterOptions.groups as option}
+                <option value={option.value}>
+                  {optionWithCount(option.label ?? option.value, option)}
+                </option>
+              {/each}
+            </select>
+          </label>
+
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Scope</span>
+            <select
+              bind:value={inventoryFilters.scope}
+              class="mt-2 w-full rounded-xl border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
+            >
+              <option value={ALL_TOOL_FILTERS}>All scopes ({inventoryTotalCount})</option>
+              {#each inventoryFilterOptions.scopes as option}
+                <option value={option.value}>
+                  {optionWithCount(scopeLabel(option.value), option)}
+                </option>
+              {/each}
+            </select>
+          </label>
+
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Health</span>
+            <select
+              bind:value={inventoryFilters.healthStatus}
+              class="mt-2 w-full rounded-xl border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
+            >
+              <option value={ALL_TOOL_FILTERS}>All health states ({inventoryTotalCount})</option>
+              {#each inventoryFilterOptions.healthStatuses as option}
+                <option value={option.value}>
+                  {optionWithCount(healthStatusLabel(option.value), option)}
+                </option>
+              {/each}
+            </select>
+          </label>
+
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Chat Availability</span>
+            <select
+              bind:value={inventoryFilters.chatStatus}
+              class="mt-2 w-full rounded-xl border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
+            >
+              <option value={ALL_TOOL_FILTERS}>All chat states ({inventoryTotalCount})</option>
+              {#each inventoryFilterOptions.chatStatuses as option}
+                <option value={option.value}>
+                  {optionWithCount(availabilityStatusLabel(option.value), option)}
+                </option>
+              {/each}
+            </select>
+          </label>
+
+          <label class="block">
+            <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Heartbeat Availability</span>
+            <select
+              bind:value={inventoryFilters.heartbeatStatus}
+              class="mt-2 w-full rounded-xl border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 outline-none transition-colors focus:border-gold-400"
+            >
+              <option value={ALL_TOOL_FILTERS}>All heartbeat states ({inventoryTotalCount})</option>
+              {#each inventoryFilterOptions.heartbeatStatuses as option}
+                <option value={option.value}>
+                  {optionWithCount(availabilityStatusLabel(option.value), option)}
+                </option>
+              {/each}
+            </select>
+          </label>
+        </div>
+      </div>
+    {/if}
 
     {#if loading}
       <div class="grid gap-4 lg:grid-cols-2">
@@ -229,14 +398,21 @@
           </div>
         {/each}
       </div>
-    {:else if inventoryGroups.length}
-      {#each inventoryGroups as group}
+    {:else if filteredInventoryGroups.length}
+      {#each filteredInventoryGroups as group}
         <section class="space-y-3">
-          <div class="flex items-center gap-3">
-            <span class="inline-block h-2.5 w-2.5 rounded-full {group.accent}"></span>
+          <div class="flex items-center justify-between gap-3 flex-wrap">
+            <div class="flex items-center gap-3">
+              <span class="inline-block h-2.5 w-2.5 rounded-full {group.accent}"></span>
+              <div>
+                <h3 class="text-base font-semibold text-shadow-900">{group.title}</h3>
+                <p class="text-sm text-shadow-600">{group.detail}</p>
+              </div>
+            </div>
             <div>
-              <h3 class="text-base font-semibold text-shadow-900">{group.title}</h3>
-              <p class="text-sm text-shadow-600">{group.detail}</p>
+              <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-xs font-medium text-shadow-700">
+                {group.tools.length} shown
+              </span>
             </div>
           </div>
 
@@ -247,6 +423,20 @@
           </div>
         </section>
       {/each}
+    {:else if inventoryGroups.length}
+      <div class="card-garden border-l-4 border-l-gold-400 p-5">
+        <h3 class="text-base font-serif font-semibold text-shadow-900">No tools match these filters</h3>
+        <p class="mt-2 text-sm text-shadow-600">
+          Adjust the search or selectors to widen the inventory view.
+        </p>
+        <button
+          type="button"
+          onclick={clearInventoryFilters}
+          class="mt-4 rounded-xl border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100"
+        >
+          Clear filters
+        </button>
+      </div>
     {:else}
       <div class="card-garden p-5">
         <p class="text-sm text-shadow-500">No tool health rows are available for this runtime.</p>

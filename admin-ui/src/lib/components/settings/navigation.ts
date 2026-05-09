@@ -7,6 +7,7 @@ export const SETTINGS_IA_GROUPS = [
   { id: 'runtime', label: 'Runtime' },
   { id: 'integrations', label: 'Integrations' },
   { id: 'advanced', label: 'Advanced' },
+  { id: 'owner-files', label: 'Owner Files' },
 ] as const;
 
 export const SETTINGS_SIMPLE_SECTIONS = [
@@ -113,10 +114,22 @@ export const SETTINGS_SIMPLE_SECTIONS = [
     groupId: 'advanced',
   },
   {
+    id: 'advanced-fields',
+    title: 'Advanced Canonical Fields',
+    description: 'Full settings contract fields with owner-source context',
+    groupId: 'advanced',
+  },
+  {
     id: 'advanced-secrets',
     title: 'Secrets Snapshot',
     description: 'Read-only runtime environment values',
     groupId: 'advanced',
+  },
+  {
+    id: 'owner-files',
+    title: 'Owner-File Editors',
+    description: 'Raw JSON editors for canonical config owner files',
+    groupId: 'owner-files',
   },
 ] as const;
 

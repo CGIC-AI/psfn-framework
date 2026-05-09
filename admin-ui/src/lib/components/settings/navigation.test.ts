@@ -20,11 +20,17 @@ test('settings IA groups stay in required order', () => {
 test('settings groups keep deterministic section order', () => {
   const groups = buildSettingsSimpleSectionGroups();
   const memory = groups.find((group) => group.id === 'memory');
+  const advanced = groups.find((group) => group.id === 'advanced');
+  const ownerFiles = groups.find((group) => group.id === 'owner-files');
   assert.ok(memory);
+  assert.ok(advanced);
+  assert.ok(ownerFiles);
   assert.deepEqual(
     memory.sections.map((section) => section.id),
     ['memory-budget', 'memory-extraction', 'memory-sessions', 'memory-tuning', 'memory-profile'],
   );
+  assert.ok(advanced.sections.some((section) => section.id === 'advanced-fields'));
+  assert.deepEqual(ownerFiles.sections.map((section) => section.id), ['owner-files']);
 });
 
 test('group filtering drops empty groups and preserves relative order', () => {
@@ -42,6 +48,8 @@ test('group filtering drops empty groups and preserves relative order', () => {
 
 test('hash parsing accepts only known settings section anchors', () => {
   assert.equal(parseSettingsSimpleSectionHash('#settings-memory-budget'), 'memory-budget');
+  assert.equal(parseSettingsSimpleSectionHash('#settings-advanced-fields'), 'advanced-fields');
+  assert.equal(parseSettingsSimpleSectionHash('#settings-owner-files'), 'owner-files');
   assert.equal(parseSettingsSimpleSectionHash('#settings-missing'), null);
   assert.equal(parseSettingsSimpleSectionHash('#not-settings-memory-budget'), null);
 });

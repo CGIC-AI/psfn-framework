@@ -61,8 +61,6 @@
     validateProviderRegistry,
   } from '$lib/providers/editor';
 
-  type ViewMode = 'simple' | 'advanced' | 'raw';
-
   const DISABLED_PROVIDER_ID = 'disabled';
   const COMPOSITIONAL_TIER_OPTIONS = ['nursery', 'apprentice', 'autonomous', 'custom'] as const;
   const COMPOSITIONAL_CHANNEL_TYPE_OPTIONS = ['discord', 'terminal', 'api', 'telegram'] as const;
@@ -101,7 +99,6 @@
   let data = $state<AdminSettingsData | null>(null);
   let loading = $state(true);
   let error = $state('');
-  let mode = $state<ViewMode>('simple');
   let saving = $state(false);
   let saveMessage = $state('');
   let saveOk = $state(true);
@@ -112,7 +109,12 @@
 
   // ── Dirty tracking ──
   let initialSnapshot = $state('');
+  let initialAdvancedSnapshot = $state('');
   let dirty = $state(false);
+  let curatedDirty = $state(false);
+  let advancedDirty = $state(false);
+  let rawDirty = $state(false);
+  let generalSettingsSaveDirty = $derived(curatedDirty || rawDirty);
   type RawEditorKey = GardenSettingsRawEditorKey;
 
   function buildRawEditorJsonMap(
@@ -172,9 +174,16 @@
     });
   }
 
+  function computeAdvancedSnapshot(): string {
+    return JSON.stringify(data?.config ?? null);
+  }
+
   $effect(() => {
     if (initialSnapshot) {
-      dirty = computeSnapshot() !== initialSnapshot || dirtyRawEditorKeys().length > 0;
+      curatedDirty = computeSnapshot() !== initialSnapshot;
+      advancedDirty = initialAdvancedSnapshot !== '' && computeAdvancedSnapshot() !== initialAdvancedSnapshot;
+      rawDirty = dirtyRawEditorKeys().length > 0;
+      dirty = curatedDirty || advancedDirty || rawDirty;
     }
   });
 
@@ -184,7 +193,7 @@
     }
   }
 
-  // ── Simple mode fields ──
+  // ── Curated workspace fields ──
   let sessionRestartBehavior = $state<'reuse_latest_session' | 'new_session'>('reuse_latest_session');
   let sessionHistoryBudgetPct = $state(6);
   let memoryRetrievalBudgetPct = $state(2);
@@ -286,7 +295,7 @@
   let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
   let validationErrorsByField = $state<Record<string, string[]>>({});
 
-  // ── Simple mode IA navigation ──
+  // ── Section IA navigation ──
   const SIMPLE_SECTION_ORDER: readonly SettingsSimpleSectionId[] = [
     'models',
     'providers',
@@ -306,6 +315,8 @@
     'integrations-obsidian',
     'channels',
     'advanced-secrets',
+    'advanced-fields',
+    'owner-files',
   ];
   const SIMPLE_SECTION_SCROLL_OFFSET_PX = 108;
   const SIMPLE_SECTION_ACTIVE_THRESHOLD_PX = 168;
@@ -334,7 +345,7 @@
   // ── Collapsible sections ──
   let openSections = $state(new Set<string>(['budget']));
 
-  // ── Section definitions for advanced mode ──
+  // ── Section definitions for advanced canonical fields ──
   interface SectionDef {
     id: string;
     title: string;
@@ -853,9 +864,201 @@
     return (data.config as Record<string, unknown>)[key];
   }
 
+  function stringFromConfigValue(value: unknown): string {
+    if (Array.isArray(value)) {
+      return value
+        .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+        .join(', ');
+    }
+    return typeof value === 'string' ? value : String(value ?? '');
+  }
+
+  function numberFromConfigValue(value: unknown, fallback: number): number {
+    const next = Number(value);
+    return Number.isFinite(next) ? next : fallback;
+  }
+
+  // Advanced editors write data.config directly; keep overlapping curated controls from saving stale values.
+  function syncCuratedFieldFromConfig(key: string, value: unknown): void {
+    switch (key) {
+      case 'sessionRestartBehavior':
+        sessionRestartBehavior = value === 'new_session' ? 'new_session' : 'reuse_latest_session';
+        break;
+      case 'sessionHistoryBudgetPct':
+        sessionHistoryBudgetPct = numberFromConfigValue(value, sessionHistoryBudgetPct);
+        break;
+      case 'memoryRetrievalBudgetPct':
+        memoryRetrievalBudgetPct = numberFromConfigValue(value, memoryRetrievalBudgetPct);
+        break;
+      case 'extractionThresholdPct':
+        extractionThresholdPct = numberFromConfigValue(value, extractionThresholdPct);
+        break;
+      case 'compactionThresholdPct':
+        compactionThresholdPct = numberFromConfigValue(value, compactionThresholdPct);
+        break;
+      case 'primaryMaxTokens':
+      case 'extractionMaxTokens':
+        maxResponseTokens = numberFromConfigValue(value, maxResponseTokens);
+        break;
+      case 'retryMaxAttempts':
+        retryMaxAttempts = numberFromConfigValue(value, retryMaxAttempts);
+        break;
+      case 'retryBaseDelayMs':
+        retryBaseDelayMs = numberFromConfigValue(value, retryBaseDelayMs);
+        break;
+      case 'importProcessingRouteMode':
+        importRouteMode = stringFromConfigValue(value);
+        break;
+      case 'importProcessingStrictPolicy':
+        importStrictPolicy = value === true;
+        break;
+      case 'importProcessingLocalEndpointUrl':
+        importLocalEndpointUrl = stringFromConfigValue(value);
+        break;
+      case 'importProcessingLocalModel':
+        importLocalModel = stringFromConfigValue(value);
+        break;
+      case 'openRouterProviderOrder':
+        openRouterProviderOrder = stringFromConfigValue(value);
+        break;
+      case 'webFetchAllowHttp':
+        webFetchAllowHttp = value === true;
+        break;
+      case 'webFetchDomainAllowlist':
+        webFetchDomainAllowlist = stringFromConfigValue(value);
+        break;
+      case 'webFetchAllowInternalNetwork':
+        webFetchAllowInternalNetwork = value === true;
+        break;
+      case 'webFetchTlsCaCertPaths':
+        webFetchTlsCaCertPaths = stringFromConfigValue(value);
+        break;
+      case 'capabilityTier':
+        capabilityTier = stringFromConfigValue(value);
+        break;
+      case 'customTokens':
+        capabilityCustomTokens = stringFromConfigValue(value);
+        break;
+      case 'extractionInterval':
+        extractionInterval = numberFromConfigValue(value, extractionInterval);
+        break;
+      case 'compactionEmotionalSalienceThresholdPct':
+        compactionEmotionalSalienceThresholdPct = numberFromConfigValue(value, compactionEmotionalSalienceThresholdPct);
+        break;
+      case 'maintenanceIntervalMs':
+        maintenanceIntervalMs = numberFromConfigValue(value, maintenanceIntervalMs);
+        break;
+      case 'memoryExtractionMinImportance':
+        memoryExtractionMinImportance = numberFromConfigValue(value, memoryExtractionMinImportance);
+        break;
+      case 'memoryExtractionMinConfidence':
+        memoryExtractionMinConfidence = numberFromConfigValue(value, memoryExtractionMinConfidence);
+        break;
+      case 'memoryExtractionMinNovelty':
+        memoryExtractionMinNovelty = numberFromConfigValue(value, memoryExtractionMinNovelty);
+        break;
+      case 'memoryExtractionMaxWrites':
+        memoryExtractionMaxWrites = numberFromConfigValue(value, memoryExtractionMaxWrites);
+        break;
+      case 'memoryExtractionTelemetryEnabled':
+        memoryExtractionTelemetryEnabled = value === true;
+        break;
+      case 'memoryRetrievalTelemetryEnabled':
+        memoryRetrievalTelemetryEnabled = value === true;
+        break;
+      case 'profileSynthesisEnabled':
+        profileSynthesisEnabled = value === true;
+        break;
+      case 'profileSynthesisRefreshIntervalMs':
+        profileSynthesisRefreshIntervalMs = numberFromConfigValue(value, profileSynthesisRefreshIntervalMs);
+        break;
+      case 'profileSynthesisCooldownMs':
+        profileSynthesisCooldownMs = numberFromConfigValue(value, profileSynthesisCooldownMs);
+        break;
+      case 'profileSynthesisMinWrites':
+        profileSynthesisMinWrites = numberFromConfigValue(value, profileSynthesisMinWrites);
+        break;
+      case 'profileSynthesisMinImportance':
+        profileSynthesisMinImportance = numberFromConfigValue(value, profileSynthesisMinImportance);
+        break;
+      case 'profileSynthesisMinConfidence':
+        profileSynthesisMinConfidence = numberFromConfigValue(value, profileSynthesisMinConfidence);
+        break;
+      case 'profileSynthesisMinNovelty':
+        profileSynthesisMinNovelty = numberFromConfigValue(value, profileSynthesisMinNovelty);
+        break;
+      case 'profileSynthesisSourceMemoryLimit':
+        profileSynthesisSourceMemoryLimit = numberFromConfigValue(value, profileSynthesisSourceMemoryLimit);
+        break;
+      case 'profileSynthesisMinSourceMemories':
+        profileSynthesisMinSourceMemories = numberFromConfigValue(value, profileSynthesisMinSourceMemories);
+        break;
+      case 'thinkMaxTokens':
+        thinkMaxTokens = numberFromConfigValue(value, thinkMaxTokens);
+        break;
+      case 'thinkMaxWallTimeMs':
+        thinkMaxWallTimeMs = numberFromConfigValue(value, thinkMaxWallTimeMs);
+        break;
+      case 'thinkMaxSubQueries':
+        thinkMaxSubQueries = numberFromConfigValue(value, thinkMaxSubQueries);
+        break;
+      case 'ttsProvider':
+        ttsProvider = stringFromConfigValue(value);
+        break;
+      case 'voiceId':
+        voiceId = stringFromConfigValue(value);
+        break;
+      case 'echoTtsUrl':
+        echoTtsUrl = stringFromConfigValue(value);
+        break;
+      case 'echoTtsVoice':
+        echoTtsVoice = stringFromConfigValue(value);
+        break;
+      case 'echoTtsPreset':
+        echoTtsPreset = stringFromConfigValue(value);
+        break;
+      case 'sttProvider':
+        sttProvider = stringFromConfigValue(value);
+        break;
+      case 'deepgramModel':
+        deepgramModel = stringFromConfigValue(value);
+        break;
+      case 'obsidianVaultName':
+        obsidianVaultName = stringFromConfigValue(value);
+        break;
+      case 'obsidianCliPath':
+        obsidianCliPath = stringFromConfigValue(value);
+        break;
+      case 'obsidianAutoPublish':
+        obsidianAutoPublish = value === true;
+        break;
+      case 'obsidianTimeoutMs':
+        obsidianTimeoutMs = numberFromConfigValue(value, obsidianTimeoutMs);
+        break;
+      case 'discordTriggerWords':
+        discordTriggerWords = stringFromConfigValue(value);
+        break;
+      case 'discordTriggerReactions':
+        discordTriggerReactions = stringFromConfigValue(value);
+        break;
+      case 'discordTriggerListenWindowMs':
+        discordTriggerListenWindowSeconds = normalizeDiscordListenWindowSeconds(
+          numberFromConfigValue(value, discordTriggerListenWindowSeconds * 1000) / 1000,
+        );
+        break;
+      case 'telegramEnabled':
+        telegramEnabled = value === true;
+        break;
+      case 'telegramAuthorizedUsers':
+        telegramAuthorizedUsers = stringFromConfigValue(value);
+        break;
+    }
+  }
+
   function setConfigValue(key: string, value: unknown) {
     if (!data) return;
     (data.config as Record<string, unknown>)[key] = value;
+    syncCuratedFieldFromConfig(key, value);
   }
 
   function toggleSection(id: string) {
@@ -865,12 +1068,7 @@
     openSections = next;
   }
 
-  function setMode(nextMode: ViewMode): void {
-    mode = nextMode;
-  }
-
   function syncActiveSimpleSection(): void {
-    if (mode !== 'simple') return;
     if (typeof window === 'undefined') return;
     if (Date.now() < suppressSimpleSectionSyncUntil) return;
 
@@ -998,6 +1196,7 @@
 
   function resetDirtyTracking(): void {
     initialSnapshot = computeSnapshot();
+    initialAdvancedSnapshot = computeAdvancedSnapshot();
     initialRawJsonByKey = currentRawJsonByKey();
   }
 
@@ -1105,6 +1304,13 @@
       discordTriggerListenWindowMs,
       telegramEnabled,
       telegramAuthorizedUsers,
+    };
+  }
+
+  function collectCanonicalPayload(): Record<string, unknown> {
+    return {
+      ...((data?.config as Record<string, unknown> | undefined) ?? {}),
+      ...collectSimplePayload(),
     };
   }
 
@@ -1313,10 +1519,12 @@
     saving = true;
     try {
       if (!ensureNoDirtyRawEditorsForGeneralSave()) return;
-      const result = await saveSettingsContract(collectSimplePayload());
+      const result = await saveSettingsContract(
+        advancedDirty ? collectCanonicalPayload() : collectSimplePayload(),
+      );
       flash(result.ok, result.message);
       if (!result.ok && result.invalidFieldCount > 0) {
-        mode = 'advanced';
+        jumpToSimpleSection('advanced-fields');
       }
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Failed to save');
@@ -1330,10 +1538,10 @@
     saving = true;
     try {
       if (!ensureNoDirtyRawEditorsForGeneralSave()) return;
-      const result = await saveSettingsContract(data.config as Record<string, unknown>);
+      const result = await saveSettingsContract(collectCanonicalPayload());
       flash(result.ok, result.message);
       if (!result.ok && result.invalidFieldCount > 0) {
-        mode = 'advanced';
+        jumpToSimpleSection('advanced-fields');
       }
     } catch (e) {
       flash(false, e instanceof Error ? e.message : 'Failed to save');
@@ -1393,7 +1601,6 @@
   }
 
   $effect(() => {
-    if (mode !== 'simple') return;
     if (!visibleSimpleSectionIds.has(activeSimpleSectionId)) {
       const fallback = simpleQuickJumpSections[0];
       if (fallback) {
@@ -1489,10 +1696,8 @@
 <div class="space-y-5">
   <SettingsPageChrome
     {dirty}
-    {mode}
     {saveMessage}
     {saveOk}
-    onModeChange={setMode}
   />
 
   <!-- Loading -->
@@ -1510,8 +1715,7 @@
       <p class="text-wilt-600 text-sm">{error}</p>
     </div>
 
-  <!-- SIMPLE MODE -->
-  {:else if mode === 'simple'}
+  {:else}
     <div class="space-y-5">
       <div class="card-garden p-3 lg:hidden">
         <label class="block text-sm font-medium text-shadow-700 mb-1.5" for="settings-jump-select">
@@ -2605,69 +2809,95 @@
 
       <!-- Save -->
       <div class="flex items-center gap-3 pt-2">
-        <button onclick={saveSimple} disabled={saving || !dirty}
+        <button onclick={saveSimple} disabled={saving || !generalSettingsSaveDirty}
           class="px-5 py-2.5 rounded-lg text-sm font-medium transition-colors shadow-sm
-            {dirty
+            {generalSettingsSaveDirty
               ? 'bg-gold-600 text-white hover:bg-gold-700'
               : 'bg-bark-300 text-shadow-500 cursor-not-allowed'}"
         >
-          {saving ? 'Saving...' : 'Save Settings'}
+          {saving ? 'Saving...' : 'Save Curated Settings'}
         </button>
         {#if dirty}
           <span class="text-sm text-shadow-500">You have unsaved changes</span>
         {/if}
       </div>
+
+          <section
+            id={settingsSimpleSectionAnchorId('advanced-fields')}
+            use:simpleSectionAnchor={'advanced-fields'}
+            class="space-y-4"
+            data-settings-section="advanced-fields"
+          >
+            <div class="card-garden p-5 space-y-2">
+              <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Advanced</p>
+              <h2 class="text-sm font-serif font-semibold text-shadow-800">Advanced Canonical Fields</h2>
+              <p class="text-sm text-shadow-600">
+                Full contract-backed runtime fields stay in this workspace for operator access.
+                Validation errors open the owning canonical group instead of switching modes.
+              </p>
+            </div>
+            <AdvancedSettingsMode
+              {data}
+              sections={SECTIONS}
+              sectionSummaries={advancedSectionSummaries}
+              {openSections}
+              modelOwnedFields={MODEL_OWNED_FIELDS}
+              {saving}
+              {capabilityTierOptions}
+              compositionalChannelTypeOptions={COMPOSITIONAL_CHANNEL_TYPE_OPTIONS}
+              compositionalPurposeOptions={COMPOSITIONAL_PURPOSE_OPTIONS}
+              {toggleSection}
+              {configValue}
+              {setConfigValue}
+              {fieldEditorType}
+              {fieldEnumValues}
+              {fieldContract}
+              {fieldMinimum}
+              {fieldMaximum}
+              {isDeprecatedField}
+              {getSource}
+              {hasFieldErrors}
+              {fieldErrors}
+              {formatSettingOptionLabel}
+              {humanizeSettingValue}
+              {getCompositionalPolicy}
+              {setCompositionalPolicyEnabled}
+              {toggleCompositionalPolicyValue}
+              {hasCompositionalPolicyValue}
+              {saveAdvanced}
+            />
+          </section>
+
+          <section
+            id={settingsSimpleSectionAnchorId('owner-files')}
+            use:simpleSectionAnchor={'owner-files'}
+            class="space-y-4"
+            data-settings-section="owner-files"
+          >
+            <div class="card-garden p-5 space-y-2">
+              <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Owner Files</p>
+              <h2 class="text-sm font-serif font-semibold text-shadow-800">Raw Owner-File Editors</h2>
+              <p class="text-sm text-shadow-600">
+                JSON owner files remain editable in place. Raw edits are dirty-guarded so general settings saves
+                do not overwrite staged file changes.
+              </p>
+            </div>
+            <RawSettingsMode
+              {settingsJson}
+              rawEditors={rawEditorViews}
+              {rawSaveStatus}
+              {saving}
+              {validationErrorsByField}
+              {setSettingsJson}
+              {getRawJson}
+              {setRawJson}
+              {saveRawSettings}
+              {saveRawConfig}
+            />
+          </section>
         </div>
       </div>
     </div>
-
-  <!-- ADVANCED MODE -->
-  {:else if mode === 'advanced'}
-    <AdvancedSettingsMode
-      {data}
-      sections={SECTIONS}
-      sectionSummaries={advancedSectionSummaries}
-      {openSections}
-      modelOwnedFields={MODEL_OWNED_FIELDS}
-      {saving}
-      {capabilityTierOptions}
-      compositionalChannelTypeOptions={COMPOSITIONAL_CHANNEL_TYPE_OPTIONS}
-      compositionalPurposeOptions={COMPOSITIONAL_PURPOSE_OPTIONS}
-      {toggleSection}
-      {configValue}
-      {setConfigValue}
-      {fieldEditorType}
-      {fieldEnumValues}
-      {fieldContract}
-      {fieldMinimum}
-      {fieldMaximum}
-      {isDeprecatedField}
-      {getSource}
-      {hasFieldErrors}
-      {fieldErrors}
-      {formatSettingOptionLabel}
-      {humanizeSettingValue}
-      {getCompositionalPolicy}
-      {setCompositionalPolicyEnabled}
-      {toggleCompositionalPolicyValue}
-      {hasCompositionalPolicyValue}
-      {saveAdvanced}
-    />
-
-  <!-- RAW MODE -->
-  {:else}
-    <RawSettingsMode
-      {settingsJson}
-      rawEditors={rawEditorViews}
-      {rawSaveStatus}
-      {saving}
-      {validationErrorsByField}
-      {setSettingsJson}
-      {getRawJson}
-      {setRawJson}
-      {saveRawSettings}
-      {saveRawConfig}
-    />
   {/if}
 
   <SettingsEnvironmentSummary env={data?.env as unknown as Record<string, unknown> | undefined} />

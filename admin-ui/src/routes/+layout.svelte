@@ -4,7 +4,7 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { base } from '$app/paths';
-  import { navItems } from '$lib/nav';
+  import { navGroups } from '$lib/nav';
   import { resolveThemeMenuLabel, resolveThemeTemplate } from '$lib/theme/loader';
   import {
     getToken,
@@ -33,13 +33,16 @@
   const sidebarTitle = $derived(resolveThemeTemplate(activeTheme.ui.sidebarTitleTemplate, { companionName }));
   const sidebarSubtitle = $derived(resolveThemeTemplate(activeTheme.ui.sidebarSubtitleTemplate, { companionName }));
   const appTitle = $derived(resolveThemeTemplate(activeTheme.ui.appTitleTemplate, { companionName }));
-  const themedNavItems = $derived(navItems.map((item) => {
-    const labels = resolveThemeMenuLabel(activeTheme, item.id, item.defaultLabel, { companionName });
-    return {
-      ...item,
-      ...labels,
-    };
-  }));
+  const themedNavGroups = $derived(navGroups.map((group) => ({
+    ...group,
+    items: group.items.map((item) => {
+      const labels = resolveThemeMenuLabel(activeTheme, item.id, item.defaultLabel, { companionName });
+      return {
+        ...item,
+        ...labels,
+      };
+    }),
+  })));
 
   // Check if current path is the login page
   // SvelteKit strips the base path from $page.url.pathname, so we check for '/login'
@@ -203,34 +206,50 @@
 
       <!-- Navigation -->
       <nav class="flex-1 overflow-y-auto py-2">
-        {#each themedNavItems as item}
-          <a
-            href={item.path}
-            onclick={() => { if (!isDesktop) mobileNavOpen = false; }}
-            class="flex items-start gap-3 px-4 py-2.5 mx-2 my-0.5 rounded-lg transition-colors group"
-            class:bg-gold-50={isActive(item.path)}
-            class:border-l-3={isActive(item.path)}
-            class:border-gold-400={isActive(item.path)}
-            class:hover:bg-bark-200={!isActive(item.path)}
-          >
-            <span class="text-lg shrink-0 mt-0.5">{item.icon}</span>
+        {#each themedNavGroups as group, groupIndex}
+          {#if isDesktop && !sidebarOpen && groupIndex > 0}
+            <div class="mx-4 my-2 border-t border-bark-200"></div>
+          {/if}
+
+          <div class="px-2 py-1.5">
             {#if sidebarOpen || !isDesktop}
-              <div class="min-w-0">
-                <span
-                  class="font-serif text-sm font-medium block"
-                  class:text-gold-700={isActive(item.path)}
-                  class:text-bark-700={!isActive(item.path)}
-                >
-                  {item.primaryLabel}
-                </span>
-                {#if item.secondaryLabel}
-                  <span class="text-sm text-bark-600 block">
-                    {item.secondaryLabel}
-                  </span>
-                {/if}
-              </div>
+              <p class="px-2 pb-1.5 text-[0.68rem] font-semibold uppercase tracking-[0.18em] text-shadow-400">
+                {group.defaultLabel}
+              </p>
             {/if}
-          </a>
+
+            <div class="space-y-0.5">
+              {#each group.items as item}
+                <a
+                  href={item.path}
+                  onclick={() => { if (!isDesktop) mobileNavOpen = false; }}
+                  class="flex items-start gap-3 rounded-lg px-3 py-2.5 transition-colors group"
+                  class:bg-gold-50={isActive(item.path)}
+                  class:border-l-3={isActive(item.path)}
+                  class:border-gold-400={isActive(item.path)}
+                  class:hover:bg-bark-200={!isActive(item.path)}
+                >
+                  <span class="text-lg shrink-0 mt-0.5">{item.icon}</span>
+                  {#if sidebarOpen || !isDesktop}
+                    <div class="min-w-0">
+                      <span
+                        class="block text-sm font-semibold"
+                        class:text-gold-700={isActive(item.path)}
+                        class:text-bark-700={!isActive(item.path)}
+                      >
+                        {item.primaryLabel}
+                      </span>
+                      {#if item.secondaryLabel}
+                        <span class="font-serif text-sm text-bark-600 block">
+                          {item.secondaryLabel}
+                        </span>
+                      {/if}
+                    </div>
+                  {/if}
+                </a>
+              {/each}
+            </div>
+          </div>
         {/each}
       </nav>
 

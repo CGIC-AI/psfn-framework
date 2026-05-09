@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
+  import AuditSurfaceMap from '$lib/components/telemetry/AuditSurfaceMap.svelte';
   import {
     getEvents,
     isConnected,
@@ -388,6 +389,10 @@
     connectedSince = null;
   }
 
+  function selectTelemetryTab(tab: TabId): void {
+    activeTab = tab;
+  }
+
   // ── Lifecycle ──
   onMount(() => {
     uptimeInterval = setInterval(updateUptime, 1000);
@@ -407,8 +412,10 @@
   <!-- Header -->
   <div class="flex items-center justify-between flex-wrap gap-3">
     <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">The Sap</h1>
-      <p class="text-sm text-shadow-600 mt-1">Real-time telemetry and audit trail flowing through the substrate</p>
+      <h1 class="text-2xl font-serif font-bold text-shadow-900">Events & Audit</h1>
+      <p class="text-sm text-shadow-600 mt-1">
+        Live telemetry, derived audit trail, and observability map. Garden context: The Sap.
+      </p>
     </div>
 
     <!-- Connection indicator -->
@@ -427,6 +434,11 @@
       </div>
     </div>
   </div>
+
+  <AuditSurfaceMap
+    {activeTab}
+    onSelectTelemetryTab={selectTelemetryTab}
+  />
 
   <!-- Tab bar -->
   <div class="flex gap-1 border-b border-bark-300">

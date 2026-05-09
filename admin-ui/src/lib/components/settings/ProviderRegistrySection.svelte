@@ -13,6 +13,7 @@
     providerTypeSummary,
     type ProviderEditableField,
   } from '$lib/providers/editor';
+  import SettingFieldLabel from './SettingFieldLabel.svelte';
 
   let {
     modelsHref,
@@ -149,7 +150,7 @@
 
       <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         <div>
-          <label class={labelClass}>Provider Id</label>
+          <SettingFieldLabel label="Provider Id" keys="id" class={labelClass} />
           <input
             type="text"
             value={entry.id}
@@ -160,7 +161,7 @@
           <p class="mt-1 text-sm text-shadow-500">Models and routing provider orders reference this id directly.</p>
         </div>
         <div>
-          <label class={labelClass}>Provider Type</label>
+          <SettingFieldLabel label="Provider Type" keys="type" class={labelClass} />
           <select
             value={entry.type}
             onchange={(event) => setProviderType(index, (event.currentTarget as HTMLSelectElement).value)}
@@ -172,7 +173,7 @@
           </select>
         </div>
         <div>
-          <label class={labelClass}>Label</label>
+          <SettingFieldLabel label="Label" keys="label" class={labelClass} />
           <input
             type="text"
             value={entry.label ?? ''}
@@ -182,7 +183,7 @@
           />
         </div>
         <div>
-          <label class={labelClass}>API Base URL</label>
+          <SettingFieldLabel label="API Base URL" keys="apiBaseUrl" class={labelClass} />
           <input
             type="text"
             value={entry.apiBaseUrl ?? ''}
@@ -192,7 +193,7 @@
           />
         </div>
         <div>
-          <label class={labelClass}>Models API URL</label>
+          <SettingFieldLabel label="Models API URL" keys="modelsApiUrl" class={labelClass} />
           <input
             type="text"
             value={entry.modelsApiUrl ?? ''}
@@ -203,7 +204,7 @@
           />
         </div>
         <div>
-          <label class={labelClass}>API Key Ref</label>
+          <SettingFieldLabel label="API Key Ref" keys="apiKeyRef.envName" class={labelClass} />
           <input
             type="text"
             value={entry.apiKeyRef?.kind === 'env' ? entry.apiKeyRef.envName : ''}

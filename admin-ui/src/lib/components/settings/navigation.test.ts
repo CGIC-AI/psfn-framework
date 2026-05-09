@@ -20,16 +20,25 @@ test('settings IA groups stay in required order', () => {
 test('settings groups keep deterministic section order', () => {
   const groups = buildSettingsSimpleSectionGroups();
   const memory = groups.find((group) => group.id === 'memory');
-  const advanced = groups.find((group) => group.id === 'advanced');
+  const sessions = groups.find((group) => group.id === 'sessions');
+  const runtime = groups.find((group) => group.id === 'runtime');
+  const trust = groups.find((group) => group.id === 'trust');
+  const backups = groups.find((group) => group.id === 'backups');
   const ownerFiles = groups.find((group) => group.id === 'owner-files');
   assert.ok(memory);
-  assert.ok(advanced);
+  assert.ok(sessions);
+  assert.ok(runtime);
+  assert.ok(trust);
+  assert.ok(backups);
   assert.ok(ownerFiles);
   assert.deepEqual(
     memory.sections.map((section) => section.id),
-    ['memory-budget', 'memory-extraction', 'memory-sessions', 'memory-tuning', 'memory-profile'],
+    ['memory-budget', 'memory-extraction', 'memory-tuning', 'memory-profile'],
   );
-  assert.ok(advanced.sections.some((section) => section.id === 'advanced-fields'));
+  assert.deepEqual(sessions.sections.map((section) => section.id), ['memory-sessions']);
+  assert.ok(runtime.sections.some((section) => section.id === 'advanced-fields'));
+  assert.deepEqual(trust.sections.map((section) => section.id), ['advanced-trust', 'advanced-secrets']);
+  assert.deepEqual(backups.sections.map((section) => section.id), ['advanced-backup']);
   assert.deepEqual(ownerFiles.sections.map((section) => section.id), ['owner-files']);
 });
 
@@ -42,7 +51,7 @@ test('group filtering drops empty groups and preserves relative order', () => {
   const groups = buildSettingsSimpleSectionGroups({ includeSections: include });
   assert.deepEqual(
     groups.map((group) => group.id),
-    ['channels', 'memory', 'advanced'],
+    ['memory', 'channels', 'trust'],
   );
 });
 

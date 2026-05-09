@@ -30,6 +30,7 @@
   import AdvancedSettingsMode from '$lib/components/settings/AdvancedSettingsMode.svelte';
   import ProviderRegistrySection from '$lib/components/settings/ProviderRegistrySection.svelte';
   import RawSettingsMode from '$lib/components/settings/RawSettingsMode.svelte';
+  import SettingFieldLabel from '$lib/components/settings/SettingFieldLabel.svelte';
   import SettingAuthorityHint from '$lib/components/settings/SettingAuthorityHint.svelte';
   import SettingsEnvironmentSummary from '$lib/components/settings/SettingsEnvironmentSummary.svelte';
   import SettingsPageChrome from '$lib/components/settings/SettingsPageChrome.svelte';
@@ -70,6 +71,38 @@
     'appraisal',
     'think',
     'shard_context',
+  ] as const;
+  const DELEGATED_WORKSPACES = [
+    {
+      label: 'Models',
+      href: '/models',
+      description: 'Purpose slots, rosters, context windows',
+    },
+    {
+      label: 'Prompts',
+      href: '/prompts',
+      description: 'Prompt layers and authoring',
+    },
+    {
+      label: 'Scheduler',
+      href: '/scheduler',
+      description: 'Heartbeat, timers, maintenance work',
+    },
+    {
+      label: 'Theme',
+      href: '/theme',
+      description: 'Garden appearance controls',
+    },
+    {
+      label: 'Tools',
+      href: '/tools',
+      description: 'Tool registry, health, failures',
+    },
+    {
+      label: 'Prompt Monitor',
+      href: '/prompt-monitor',
+      description: 'Prompt assembly and turn observability',
+    },
   ] as const;
 
   type CompositionalListKey = 'allowedTiers' | 'allowedChannelTypes' | 'allowedPurposes';
@@ -302,20 +335,20 @@
     'prompting',
     'memory-budget',
     'memory-extraction',
-    'memory-sessions',
     'memory-tuning',
     'memory-profile',
+    'memory-sessions',
     'tools-think',
-    'advanced-trust',
-    'advanced-backup',
     'runtime-llm',
     'runtime-import',
     'runtime-fetch',
+    'advanced-fields',
     'integrations-voice',
     'integrations-obsidian',
     'channels',
+    'advanced-trust',
     'advanced-secrets',
-    'advanced-fields',
+    'advanced-backup',
     'owner-files',
   ];
   const SIMPLE_SECTION_SCROLL_OFFSET_PX = 108;
@@ -1737,6 +1770,26 @@
         </select>
       </div>
 
+      <div class="card-garden p-4 space-y-3">
+        <div>
+          <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Delegated Workspaces</p>
+          <p class="text-sm text-shadow-700 mt-1">
+            Settings keeps runtime owner-file controls here; related operator surfaces stay in their dedicated workspaces.
+          </p>
+        </div>
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {#each DELEGATED_WORKSPACES as workspace}
+            <a
+              href={`${base}${workspace.href}`}
+              class="rounded-xl border border-bark-200 bg-white px-3 py-2 text-sm transition-colors hover:border-gold-300 hover:bg-gold-50"
+            >
+              <span class="block font-medium text-shadow-800">{workspace.label}</span>
+              <span class="block text-xs text-shadow-600 mt-0.5">{workspace.description}</span>
+            </a>
+          {/each}
+        </div>
+      </div>
+
       <div class="grid grid-cols-1 lg:grid-cols-[18rem_minmax(0,1fr)] gap-5 items-start">
         <aside class="hidden lg:block lg:sticky lg:top-4">
           <SettingsSidebarNav
@@ -1756,7 +1809,7 @@
             <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Models</p>
             <h2 class="text-sm font-serif font-semibold text-shadow-800">Model Registry and Purpose Routing</h2>
             <p class="text-sm text-shadow-600">
-              Purpose-tagged primary/fallback models are managed in the dedicated Models workspace.
+              Purpose-tagged primary/fallback models, model rosters, and context windows are managed in the dedicated Models workspace.
             </p>
             <a
               href={`${base}/models`}
@@ -1775,14 +1828,22 @@
             <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Prompting</p>
             <h2 class="text-sm font-serif font-semibold text-shadow-800">Prompt Stack and Authoring</h2>
             <p class="text-sm text-shadow-600">
-              Prompt layers and authoring controls live in Prompts so runtime tuning stays focused here.
+              Prompt layers and authoring controls live in Prompts. Prompt assembly debugging lives in Prompt Monitor.
             </p>
-            <a
-              href={`${base}/prompts`}
-              class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors"
-            >
-              Open Prompts
-            </a>
+            <div class="flex flex-wrap gap-2">
+              <a
+                href={`${base}/prompts`}
+                class="inline-flex items-center rounded-lg border border-gold-400 bg-gold-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-gold-100 transition-colors"
+              >
+                Open Prompts
+              </a>
+              <a
+                href={`${base}/prompt-monitor`}
+                class="inline-flex items-center rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm font-medium text-shadow-700 hover:bg-bark-100 transition-colors"
+              >
+                Open Prompt Monitor
+              </a>
+            </div>
           </section>
 
           <section
@@ -1961,10 +2022,12 @@
         <hr class="divider-filigree" />
         <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
-            <label class={LABEL_CLS}>
-              Session History Budget %
-              <span class="text-shadow-400 font-normal ml-1">({getSource('sessionHistoryBudgetPct')})</span>
-            </label>
+            <SettingFieldLabel
+              label="Session History Budget %"
+              keys="sessionHistoryBudgetPct"
+              source={getSource('sessionHistoryBudgetPct')}
+              class={LABEL_CLS}
+            />
             <div class="flex items-center gap-3">
               <input type="range" min="1" max="80" step="1" bind:value={sessionHistoryBudgetPct} class={SLIDER_CLS} />
               <input type="number" min="1" max="80" bind:value={sessionHistoryBudgetPct} class={COMPACT_INPUT_CLS} />
@@ -1972,10 +2035,12 @@
             <p class="text-sm text-shadow-500 mt-1">% of context window for session history (default: 6%). Runtime keeps whole messages within this token budget.</p>
           </div>
           <div>
-            <label class={LABEL_CLS}>
-              Memory Retrieval Budget %
-              <span class="text-shadow-400 font-normal ml-1">({getSource('memoryRetrievalBudgetPct')})</span>
-            </label>
+            <SettingFieldLabel
+              label="Memory Retrieval Budget %"
+              keys="memoryRetrievalBudgetPct"
+              source={getSource('memoryRetrievalBudgetPct')}
+              class={LABEL_CLS}
+            />
             <div class="flex items-center gap-3">
               <input type="range" min="1" max="50" step="1" bind:value={memoryRetrievalBudgetPct} class={SLIDER_CLS} />
               <input type="number" min="1" max="50" bind:value={memoryRetrievalBudgetPct} class={COMPACT_INPUT_CLS} />
@@ -1997,10 +2062,12 @@
         <hr class="divider-filigree" />
         <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
-            <label class={LABEL_CLS}>
-              Extraction Threshold %
-              <span class="text-shadow-400 font-normal ml-1">({getSource('extractionThresholdPct')})</span>
-            </label>
+            <SettingFieldLabel
+              label="Extraction Threshold %"
+              keys="extractionThresholdPct"
+              source={getSource('extractionThresholdPct')}
+              class={LABEL_CLS}
+            />
             <div class="flex items-center gap-3">
               <input type="range" min="10" max="80" step="1" bind:value={extractionThresholdPct} class={SLIDER_CLS} />
               <input type="number" min="10" max="80" bind:value={extractionThresholdPct} class={COMPACT_INPUT_CLS} />
@@ -2008,12 +2075,16 @@
             <p class="text-sm text-shadow-500 mt-1">Triggers extraction when session exceeds this % of context</p>
           </div>
           <div>
-            <label class={LABEL_CLS}>Extraction Interval (messages)</label>
+            <SettingFieldLabel label="Extraction Interval (messages)" keys="extractionInterval" class={LABEL_CLS} />
             <input type="number" min="1" max="50" bind:value={extractionInterval} class={INPUT_CLS} />
             <p class="text-sm text-shadow-500 mt-1">Run extraction every N messages (1-50)</p>
           </div>
           <div>
-            <label class={LABEL_CLS}>Emotional Salience Threshold %</label>
+            <SettingFieldLabel
+              label="Emotional Salience Threshold %"
+              keys="compactionEmotionalSalienceThresholdPct"
+              class={LABEL_CLS}
+            />
             <div class="flex items-center gap-3">
               <input type="range" min="0" max="100" step="1" bind:value={compactionEmotionalSalienceThresholdPct} class={SLIDER_CLS} />
               <input type="number" min="0" max="100" bind:value={compactionEmotionalSalienceThresholdPct} class={COMPACT_INPUT_CLS} />
@@ -2035,10 +2106,12 @@
         <hr class="divider-filigree" />
         <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
           <div>
-            <label class={LABEL_CLS}>
-              Compaction Threshold %
-              <span class="text-shadow-400 font-normal ml-1">({getSource('compactionThresholdPct')})</span>
-            </label>
+            <SettingFieldLabel
+              label="Compaction Threshold %"
+              keys="compactionThresholdPct"
+              source={getSource('compactionThresholdPct')}
+              class={LABEL_CLS}
+            />
             <div class="flex items-center gap-3">
               <input type="range" min="30" max="90" step="1" bind:value={compactionThresholdPct} class={SLIDER_CLS} />
               <input type="number" min="30" max="90" bind:value={compactionThresholdPct} class={COMPACT_INPUT_CLS} />
@@ -2046,19 +2119,23 @@
             <p class="text-sm text-shadow-500 mt-1">Auto-compacts oldest 50% when context exceeds this %</p>
           </div>
           <div>
-            <label class={LABEL_CLS}>
-              Maintenance Interval (ms)
-              <span class="text-shadow-400 font-normal ml-1">({getSource('maintenanceIntervalMs')})</span>
-            </label>
+            <SettingFieldLabel
+              label="Maintenance Interval (ms)"
+              keys="maintenanceIntervalMs"
+              source={getSource('maintenanceIntervalMs')}
+              class={LABEL_CLS}
+            />
             <input type="number" min="10000" step="1000" bind:value={maintenanceIntervalMs} class={INPUT_CLS} />
             <p class="text-sm text-shadow-500 mt-1">Scheduler tick interval in milliseconds (default: 300,000 = 5min)</p>
             <SettingAuthorityHint info={getSettingAuthority('maintenanceIntervalMs')} />
           </div>
           <div>
-            <label class={LABEL_CLS}>
-              Restart Behavior
-              <span class="text-shadow-400 font-normal ml-1">({getSource('sessionRestartBehavior')})</span>
-            </label>
+            <SettingFieldLabel
+              label="Restart Behavior"
+              keys="sessionRestartBehavior"
+              source={getSource('sessionRestartBehavior')}
+              class={LABEL_CLS}
+            />
             <select bind:value={sessionRestartBehavior} class={INPUT_CLS}>
               {#each sessionRestartBehaviorOptions as option}
                 <option value={option}>{formatSettingOptionLabel('sessionRestartBehavior', option)}</option>
@@ -2066,6 +2143,10 @@
             </select>
             <p class="text-sm text-shadow-500 mt-1">Choose whether startup resumes the latest session or seeds a fresh one.</p>
           </div>
+        </div>
+        <div class="rounded-xl border border-bark-200 bg-bark-50 p-3 text-sm text-shadow-700">
+          Heartbeat schedules, one-shot timers, and maintenance queue state are delegated to Scheduler.
+          <a href={`${base}/scheduler`} class="ml-1 font-medium text-gold-700 hover:text-gold-800">Open Scheduler</a>
         </div>
       </div>
       </section>
@@ -2096,34 +2177,34 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>Min Importance</label>
+                <SettingFieldLabel label="Min Importance" keys="memoryExtractionMinImportance" class={LABEL_CLS} />
                 <input type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinImportance} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum importance score to write a memory (0-1)</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Min Confidence</label>
+                <SettingFieldLabel label="Min Confidence" keys="memoryExtractionMinConfidence" class={LABEL_CLS} />
                 <input type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinConfidence} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum confidence score to write a memory (0-1)</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Min Novelty</label>
+                <SettingFieldLabel label="Min Novelty" keys="memoryExtractionMinNovelty" class={LABEL_CLS} />
                 <input type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinNovelty} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum novelty score to write a memory (0-1)</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Max Writes per Extraction</label>
+                <SettingFieldLabel label="Max Writes per Extraction" keys="memoryExtractionMaxWrites" class={LABEL_CLS} />
                 <input type="number" min="1" max="100" step="1" bind:value={memoryExtractionMaxWrites} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Maximum memories written per extraction cycle</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Extraction Telemetry</label>
+                <SettingFieldLabel label="Extraction Telemetry" keys="memoryExtractionTelemetryEnabled" class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
                   <input type="checkbox" bind:checked={memoryExtractionTelemetryEnabled} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Log extraction telemetry data</span>
                 </label>
               </div>
               <div>
-                <label class={LABEL_CLS}>Retrieval Telemetry</label>
+                <SettingFieldLabel label="Retrieval Telemetry" keys="memoryRetrievalTelemetryEnabled" class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
                   <input type="checkbox" bind:checked={memoryRetrievalTelemetryEnabled} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Log retrieval telemetry data</span>
@@ -2161,49 +2242,49 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>Enabled</label>
+                <SettingFieldLabel label="Enabled" keys="profileSynthesisEnabled" class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
                   <input type="checkbox" bind:checked={profileSynthesisEnabled} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Enable automatic profile synthesis</span>
                 </label>
               </div>
               <div>
-                <label class={LABEL_CLS}>Refresh Interval (ms)</label>
+                <SettingFieldLabel label="Refresh Interval (ms)" keys="profileSynthesisRefreshIntervalMs" class={LABEL_CLS} />
                 <input type="number" min="60000" step="60000" bind:value={profileSynthesisRefreshIntervalMs} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">How often to refresh profiles ({fmtMs(profileSynthesisRefreshIntervalMs)})</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Cooldown (ms)</label>
+                <SettingFieldLabel label="Cooldown (ms)" keys="profileSynthesisCooldownMs" class={LABEL_CLS} />
                 <input type="number" min="10000" step="10000" bind:value={profileSynthesisCooldownMs} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum wait between profile updates ({fmtMs(profileSynthesisCooldownMs)})</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Min Writes</label>
+                <SettingFieldLabel label="Min Writes" keys="profileSynthesisMinWrites" class={LABEL_CLS} />
                 <input type="number" min="1" max="100" step="1" bind:value={profileSynthesisMinWrites} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum memory writes before triggering synthesis</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Min Importance</label>
+                <SettingFieldLabel label="Min Importance" keys="profileSynthesisMinImportance" class={LABEL_CLS} />
                 <input type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinImportance} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum importance for source memories (0-1)</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Min Confidence</label>
+                <SettingFieldLabel label="Min Confidence" keys="profileSynthesisMinConfidence" class={LABEL_CLS} />
                 <input type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinConfidence} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum confidence for source memories (0-1)</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Min Novelty</label>
+                <SettingFieldLabel label="Min Novelty" keys="profileSynthesisMinNovelty" class={LABEL_CLS} />
                 <input type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinNovelty} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum novelty for source memories (0-1)</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Source Memory Limit</label>
+                <SettingFieldLabel label="Source Memory Limit" keys="profileSynthesisSourceMemoryLimit" class={LABEL_CLS} />
                 <input type="number" min="1" max="200" step="1" bind:value={profileSynthesisSourceMemoryLimit} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Max source memories to consider per synthesis</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Min Source Memories</label>
+                <SettingFieldLabel label="Min Source Memories" keys="profileSynthesisMinSourceMemories" class={LABEL_CLS} />
                 <input type="number" min="1" max="50" step="1" bind:value={profileSynthesisMinSourceMemories} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum source memories required to run synthesis</p>
               </div>
@@ -2239,20 +2320,24 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
               <div>
-                <label class={LABEL_CLS}>Max Tokens</label>
+                <SettingFieldLabel label="Max Tokens" keys="thinkMaxTokens" class={LABEL_CLS} />
                 <input type="number" min="1000" max="1000000" step="1000" bind:value={thinkMaxTokens} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Max tokens for RLM sandbox (1K-1M)</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Max Wall Time (ms)</label>
+                <SettingFieldLabel label="Max Wall Time (ms)" keys="thinkMaxWallTimeMs" class={LABEL_CLS} />
                 <input type="number" min="5000" max="600000" step="1000" bind:value={thinkMaxWallTimeMs} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Max wall-clock time ({fmtMs(thinkMaxWallTimeMs)})</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Max Sub-Queries</label>
+                <SettingFieldLabel label="Max Sub-Queries" keys="thinkMaxSubQueries" class={LABEL_CLS} />
                 <input type="number" min="1" max="100" step="1" bind:value={thinkMaxSubQueries} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Max LLM sub-queries per think (1-100)</p>
               </div>
+            </div>
+            <div class="mt-4 rounded-xl border border-bark-200 bg-bark-50 p-3 text-sm text-shadow-700">
+              Tool availability, health, and recent failures are delegated to Tools.
+              <a href={`${base}/tools`} class="ml-1 font-medium text-gold-700 hover:text-gold-800">Open Tools</a>
             </div>
           </div>
         {/if}
@@ -2285,10 +2370,12 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>
-                  Capability Tier
-                  <span class="text-shadow-400 font-normal ml-1">({getSource('capabilityTier')})</span>
-                </label>
+                <SettingFieldLabel
+                  label="Capability Tier"
+                  keys="capabilityTier"
+                  source={getSource('capabilityTier')}
+                  class={LABEL_CLS}
+                />
                 <select bind:value={capabilityTier} class={INPUT_CLS}>
                   {#each capabilityTierOptions as tier}
                     <option value={tier}>{formatSettingOptionLabel('capabilityTier', tier)}</option>
@@ -2298,10 +2385,12 @@
                 <SettingAuthorityHint info={getSettingAuthority('capabilityTier')} />
               </div>
               <div class="md:col-span-2">
-                <label class={LABEL_CLS}>
-                  Custom Capability Tokens
-                  <span class="text-shadow-400 font-normal ml-1">({getSource('customTokens')})</span>
-                </label>
+                <SettingFieldLabel
+                  label="Custom Capability Tokens"
+                  keys="customTokens"
+                  source={getSource('customTokens')}
+                  class={LABEL_CLS}
+                />
                 <input
                   type="text"
                   bind:value={capabilityCustomTokens}
@@ -2333,7 +2422,7 @@
         >
           <div class="flex items-center gap-3">
             <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">B</span>
-            <h2 class="text-sm font-serif font-semibold text-shadow-800">Memory Backup</h2>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Backups</h2>
           </div>
           <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('backup') ? 'rotate-180' : ''}">&#9660;</span>
         </button>
@@ -2341,33 +2430,36 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>Interval (hours)</label>
+                <SettingFieldLabel label="Interval (hours)" keys="intervalHours" class={LABEL_CLS} />
                 <input type="number" min="1" max="168" bind:value={backupIntervalHours} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">How often to run a backup cycle</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Rotating backups</label>
+                <SettingFieldLabel label="Rotating backups" keys="maxRotatingBackups" class={LABEL_CLS} />
                 <input type="number" min="1" max="99" bind:value={backupMaxRotating} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Most-recent backups to keep</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Weekly backups</label>
+                <SettingFieldLabel label="Weekly backups" keys="maxWeeklyBackups" class={LABEL_CLS} />
                 <input type="number" min="0" max="52" bind:value={backupMaxWeekly} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Weekly slots (derived from rotating cycle)</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Monthly backups</label>
+                <SettingFieldLabel label="Monthly backups" keys="maxMonthlyBackups" class={LABEL_CLS} />
                 <input type="number" min="0" max="24" bind:value={backupMaxMonthly} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Monthly slots (derived from rotating cycle)</p>
               </div>
               <div class="md:col-span-2">
-                <label class={LABEL_CLS}>Mirror directory</label>
+                <SettingFieldLabel label="Mirror directory" keys="mirrorDir" class={LABEL_CLS} />
                 <input type="text" bind:value={backupMirrorDir} class={INPUT_CLS} placeholder="/mnt/ai/psfn-bak" />
                 <p class="text-sm text-shadow-500 mt-1">Secondary backup mirror path (leave blank to disable)</p>
               </div>
               <div class="md:col-span-2 flex items-center gap-3">
                 <input type="checkbox" id="backup-verify-restore" bind:checked={backupVerifyRestore} class={TOGGLE_CLS} />
-                <label for="backup-verify-restore" class="text-sm text-shadow-700">Verify restore integrity after each backup</label>
+                <label for="backup-verify-restore" class="text-sm text-shadow-700">
+                  Verify restore integrity after each backup
+                  <code class="ml-1.5 rounded-md border border-bark-200 bg-bark-100 px-1.5 py-0.5 font-mono text-[0.7rem] font-semibold text-shadow-600">verifyRestore</code>
+                </label>
               </div>
             </div>
           </div>
@@ -2401,12 +2493,12 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>LLM Max Retries</label>
+                <SettingFieldLabel label="LLM Max Retries" keys="retryMaxAttempts" class={LABEL_CLS} />
                 <input type="number" min="0" max="10" bind:value={retryMaxAttempts} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Maximum retry attempts (0-10)</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Retry Base Delay (ms)</label>
+                <SettingFieldLabel label="Retry Base Delay (ms)" keys="retryBaseDelayMs" class={LABEL_CLS} />
                 <input type="number" min="500" max="30000" step="100" bind:value={retryBaseDelayMs} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Base delay between retries (500-30,000ms)</p>
               </div>
@@ -2442,10 +2534,12 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>
-                  Route Mode
-                  <span class="text-shadow-400 font-normal ml-1">({getSource('importProcessingRouteMode')})</span>
-                </label>
+                <SettingFieldLabel
+                  label="Route Mode"
+                  keys="importProcessingRouteMode"
+                  source={getSource('importProcessingRouteMode')}
+                  class={LABEL_CLS}
+                />
                 <select bind:value={importRouteMode} class={INPUT_CLS}>
                   {#each importRouteModeOptions as option}
                     <option value={option}>{formatSettingOptionLabel('importProcessingRouteMode', option)}</option>
@@ -2453,23 +2547,23 @@
                 </select>
               </div>
               <div>
-                <label class={LABEL_CLS}>Strict Policy</label>
+                <SettingFieldLabel label="Strict Policy" keys="importProcessingStrictPolicy" class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
                   <input type="checkbox" bind:checked={importStrictPolicy} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Enforce strict ZDR compliance</span>
                 </label>
               </div>
               <div>
-                <label class={LABEL_CLS}>OpenRouter Provider Order</label>
+                <SettingFieldLabel label="OpenRouter Provider Order" keys="openRouterProviderOrder" class={LABEL_CLS} />
                 <input type="text" bind:value={openRouterProviderOrder} class={INPUT_CLS} placeholder="comma-separated providers" />
                 <p class="text-sm text-shadow-500 mt-1">Global/import fallback order for provider routing.</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Local Endpoint URL</label>
+                <SettingFieldLabel label="Local Endpoint URL" keys="importProcessingLocalEndpointUrl" class={LABEL_CLS} />
                 <input type="text" bind:value={importLocalEndpointUrl} class={INPUT_CLS} placeholder="http://localhost:8080" />
               </div>
               <div>
-                <label class={LABEL_CLS}>Local Model</label>
+                <SettingFieldLabel label="Local Model" keys="importProcessingLocalModel" class={LABEL_CLS} />
                 <input type="text" bind:value={importLocalModel} class={INPUT_CLS} placeholder="model name" />
               </div>
             </div>
@@ -2504,25 +2598,25 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>Allow Internal Network Access</label>
+                <SettingFieldLabel label="Allow Internal Network Access" keys="webFetchAllowInternalNetwork" class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
                   <input type="checkbox" bind:checked={webFetchAllowInternalNetwork} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Allow fetching from RFC1918 / LAN hosts (cloud metadata still blocked)</span>
                 </label>
               </div>
               <div>
-                <label class={LABEL_CLS}>Allow Non-HTTPS</label>
+                <SettingFieldLabel label="Allow Non-HTTPS" keys="webFetchAllowHttp" class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
                   <input type="checkbox" bind:checked={webFetchAllowHttp} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Allow HTTP (non-encrypted) web fetch requests</span>
                 </label>
               </div>
               <div>
-                <label class={LABEL_CLS}>Domain Allowlist</label>
+                <SettingFieldLabel label="Domain Allowlist" keys="webFetchDomainAllowlist" class={LABEL_CLS} />
                 <input type="text" bind:value={webFetchDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains (e.g. example.local, internal.corp)" />
               </div>
               <div>
-                <label class={LABEL_CLS}>TLS CA Cert Paths</label>
+                <SettingFieldLabel label="TLS CA Cert Paths" keys="webFetchTlsCaCertPaths" class={LABEL_CLS} />
                 <input type="text" bind:value={webFetchTlsCaCertPaths} class={INPUT_CLS} placeholder="comma-separated file paths" />
               </div>
             </div>
@@ -2557,35 +2651,35 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <label class={LABEL_CLS}>TTS Provider</label>
+                <SettingFieldLabel label="TTS Provider" keys="ttsProvider" class={LABEL_CLS} />
                 <input type="text" bind:value={ttsProvider} list="tts-provider-list" class={INPUT_CLS} placeholder="disabled or provider id" />
                 <p class="text-sm text-shadow-500 mt-1">Registered provider ids from the backend registry are suggested, and any current provider id is preserved and sent back unchanged.</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>STT Provider</label>
+                <SettingFieldLabel label="STT Provider" keys="sttProvider" class={LABEL_CLS} />
                 <input type="text" bind:value={sttProvider} list="stt-provider-list" class={INPUT_CLS} placeholder="disabled or provider id" />
                 <p class="text-sm text-shadow-500 mt-1">Registered provider ids from the backend registry are suggested, and plugin ids are preserved instead of being coerced to disabled.</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>ElevenLabs Voice ID</label>
+                <SettingFieldLabel label="ElevenLabs Voice ID" keys="voiceId" class={LABEL_CLS} />
                 <input type="text" bind:value={voiceId} class={INPUT_CLS} placeholder="your-voice-id" />
                 <p class="text-sm text-shadow-500 mt-1">Leave blank to clear persisted voice override.</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Deepgram Model</label>
+                <SettingFieldLabel label="Deepgram Model" keys="deepgramModel" class={LABEL_CLS} />
                 <input type="text" bind:value={deepgramModel} class={INPUT_CLS} placeholder="Deepgram model id" />
                 <p class="text-sm text-shadow-500 mt-1">Leave blank to clear persisted model override.</p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Echo TTS URL</label>
+                <SettingFieldLabel label="Echo TTS URL" keys="echoTtsUrl" class={LABEL_CLS} />
                 <input type="text" bind:value={echoTtsUrl} class={INPUT_CLS} placeholder="http://127.0.0.1:8001/v1/audio/speech" />
               </div>
               <div>
-                <label class={LABEL_CLS}>Echo TTS Voice</label>
+                <SettingFieldLabel label="Echo TTS Voice" keys="echoTtsVoice" class={LABEL_CLS} />
                 <input type="text" bind:value={echoTtsVoice} class={INPUT_CLS} placeholder="11labs-Allison" />
               </div>
               <div class="md:col-span-2">
-                <label class={LABEL_CLS}>Echo TTS Preset</label>
+                <SettingFieldLabel label="Echo TTS Preset" keys="echoTtsPreset" class={LABEL_CLS} />
                 <input type="text" bind:value={echoTtsPreset} class={INPUT_CLS} placeholder="Independent-High-Speaker-CFG" />
               </div>
             </div>
@@ -2634,21 +2728,39 @@
         {#if openSections.has('obsidian')}
           <div class="px-5 py-4 space-y-4 border-t border-bark-200">
             <div>
-              <label class="block text-xs font-semibold text-shadow-700 mb-1" for="obsidianVaultName">Vault Name</label>
+              <SettingFieldLabel
+                label="Vault Name"
+                keys="obsidianVaultName"
+                forId="obsidianVaultName"
+                class="block text-xs font-semibold text-shadow-700 mb-1"
+              />
               <input type="text" id="obsidianVaultName" class="input-garden w-full" bind:value={obsidianVaultName} placeholder="e.g. companion" />
               <p class="text-xs text-shadow-500 mt-0.5">Leave empty to disable vault tools. Must match the name in Obsidian.</p>
             </div>
             <div>
-              <label class="block text-xs font-semibold text-shadow-700 mb-1" for="obsidianCliPath">CLI Path</label>
+              <SettingFieldLabel
+                label="CLI Path"
+                keys="obsidianCliPath"
+                forId="obsidianCliPath"
+                class="block text-xs font-semibold text-shadow-700 mb-1"
+              />
               <input type="text" id="obsidianCliPath" class="input-garden w-full" bind:value={obsidianCliPath} placeholder="obsidian" />
               <p class="text-xs text-shadow-500 mt-0.5">Path to the Obsidian CLI binary. Default: obsidian</p>
             </div>
             <div class="flex items-center gap-3">
               <input type="checkbox" id="obsidianAutoPublish" class="rounded border-bark-400" bind:checked={obsidianAutoPublish} />
-              <label class="text-xs font-semibold text-shadow-700" for="obsidianAutoPublish">Auto-publish reflections to vault</label>
+              <label class="text-xs font-semibold text-shadow-700" for="obsidianAutoPublish">
+                Auto-publish reflections to vault
+                <code class="ml-1.5 rounded-md border border-bark-200 bg-bark-100 px-1.5 py-0.5 font-mono text-[0.7rem] font-semibold text-shadow-600">obsidianAutoPublish</code>
+              </label>
             </div>
             <div>
-              <label class="block text-xs font-semibold text-shadow-700 mb-1" for="obsidianTimeoutMs">CLI Timeout (ms)</label>
+              <SettingFieldLabel
+                label="CLI Timeout (ms)"
+                keys="obsidianTimeoutMs"
+                forId="obsidianTimeoutMs"
+                class="block text-xs font-semibold text-shadow-700 mb-1"
+              />
               <input type="number" id="obsidianTimeoutMs" class="input-garden w-28" bind:value={obsidianTimeoutMs} min={1000} max={30000} step={1000} />
               <p class="text-xs text-shadow-500 mt-0.5">Timeout for CLI commands (1000-30000ms)</p>
             </div>
@@ -2685,21 +2797,21 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4 space-y-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div class="md:col-span-2">
-                <label class={LABEL_CLS}>Discord Trigger Words</label>
+                <SettingFieldLabel label="Discord Trigger Words" keys="discordTriggerWords" class={LABEL_CLS} />
                 <input type="text" bind:value={discordTriggerWords} class={INPUT_CLS} placeholder="pixie, hey companion" />
                 <p class="text-sm text-shadow-500 mt-1">
                   Comma-separated words or phrases that trigger replies in guild channels.
                 </p>
               </div>
               <div class="md:col-span-2">
-                <label class={LABEL_CLS}>Discord Trigger Reactions</label>
+                <SettingFieldLabel label="Discord Trigger Reactions" keys="discordTriggerReactions" class={LABEL_CLS} />
                 <input type="text" bind:value={discordTriggerReactions} class={INPUT_CLS} placeholder="👆, 🔥, 👀" />
                 <p class="text-sm text-shadow-500 mt-1">
                   Comma-separated emoji reactions that open a Discord follow-up window.
                 </p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Discord Listen Window (seconds)</label>
+                <SettingFieldLabel label="Discord Listen Window (seconds)" keys="discordTriggerListenWindowMs" class={LABEL_CLS} />
                 <input
                   type="number"
                   min="10"
@@ -2718,14 +2830,14 @@
                 </p>
               </div>
               <div>
-                <label class={LABEL_CLS}>Telegram Enabled</label>
+                <SettingFieldLabel label="Telegram Enabled" keys="telegramEnabled" class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
                   <input type="checkbox" bind:checked={telegramEnabled} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Enable Telegram channel bridge</span>
                 </label>
               </div>
               <div class="md:col-span-2">
-                <label class={LABEL_CLS}>Telegram Authorized Users</label>
+                <SettingFieldLabel label="Telegram Authorized Users" keys="telegramAuthorizedUsers" class={LABEL_CLS} />
                 <input type="text" bind:value={telegramAuthorizedUsers} class={INPUT_CLS} placeholder="12345678, 87654321" />
                 <p class="text-sm text-shadow-500 mt-1">Comma-separated Telegram user IDs allowed to interact.</p>
               </div>
@@ -2829,8 +2941,8 @@
             data-settings-section="advanced-fields"
           >
             <div class="card-garden p-5 space-y-2">
-              <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Advanced</p>
-              <h2 class="text-sm font-serif font-semibold text-shadow-800">Advanced Canonical Fields</h2>
+              <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Runtime</p>
+              <h2 class="text-sm font-serif font-semibold text-shadow-800">All Canonical Fields</h2>
               <p class="text-sm text-shadow-600">
                 Full contract-backed runtime fields stay in this workspace for operator access.
                 Validation errors open the owning canonical group instead of switching modes.

@@ -143,7 +143,7 @@
               {@const fieldSchema = fieldContract(key)}
               <div class="flex flex-col sm:flex-row sm:items-start gap-2">
                 <div class="sm:w-60 shrink-0 flex items-center gap-2">
-                  <label class="text-sm font-mono text-shadow-700">{key}</label>
+                  <span class="text-sm font-mono text-shadow-700">{key}</span>
                   <span class="text-shadow-400 text-sm">({getSource(key)})</span>
                   {#if fieldSchema?.deprecated}
                     <span class="rounded-full border border-wilt-300 bg-wilt-50 px-2 py-0.5 text-xs font-medium text-wilt-600">deprecated</span>
@@ -319,7 +319,7 @@
               {@const fieldSchema = fieldContract(key)}
               <div class="flex flex-col sm:flex-row sm:items-center gap-2">
                 <div class="sm:w-60 shrink-0 flex items-center gap-2">
-                  <label class="text-sm font-mono text-shadow-700">{key}</label>
+                  <span class="text-sm font-mono text-shadow-700">{key}</span>
                   <span class="text-shadow-400 text-sm">({getSource(key)})</span>
                   {#if fieldSchema?.deprecated}
                     <span class="rounded-full border border-wilt-300 bg-wilt-50 px-2 py-0.5 text-xs font-medium text-wilt-600">deprecated</span>

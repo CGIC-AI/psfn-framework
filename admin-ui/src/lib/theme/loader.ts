@@ -86,8 +86,8 @@ export function resolveThemeMenuLabel(
   }
 
   return {
-    primaryLabel: resolvedLabel,
-    secondaryLabel: fallbackLabel,
+    primaryLabel: fallbackLabel,
+    secondaryLabel: resolvedLabel,
   };
 }
 

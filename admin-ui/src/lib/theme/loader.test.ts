@@ -77,6 +77,20 @@ test('falls back to standard menu labels when a theme has no cute labels', () =>
   });
 });
 
+test('keeps technical menu labels primary when a theme provides cute labels', () => {
+  const garden = resolveThemePack('garden');
+  const resolved = resolveThemeMenuLabel(
+    garden,
+    'tools',
+    'Tools',
+    { companionName: 'Orchid' },
+  );
+  assert.deepEqual(resolved, {
+    primaryLabel: 'Tools',
+    secondaryLabel: 'The Shed',
+  });
+});
+
 test('supports companion-name template substitution', () => {
   const garden = resolveThemePack('garden');
   assert.equal(

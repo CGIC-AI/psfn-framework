@@ -1,49 +1,21 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { base } from '$app/paths';
+  import FailureRow from '$lib/components/tools/FailureRow.svelte';
+  import ServiceHealthPanel from '$lib/components/tools/ServiceHealthPanel.svelte';
+  import ToolCard from '$lib/components/tools/ToolCard.svelte';
+  import {
+    formatTimestamp,
+    telemetryEventDetail,
+    telemetryEventMeta,
+    telemetryEventTitle,
+  } from '$lib/components/tools/tool-display';
   import { getAdaptiveTools } from '$lib/api/endpoints/tools';
   import type {
     AdminAdaptiveToolsData,
-    AdminToolAvailabilityStatus,
-    AdminToolInventoryGroup,
     AdminToolHealthView,
-    RuntimeServiceHealth,
-    RuntimeServiceHealthStatus,
+    AdminToolInventoryGroup,
   } from '$lib/types/tools';
-
-  const SERVICE_LABELS: Record<RuntimeServiceHealth['serviceId'], string> = {
-    gateway: 'Gateway RPC',
-    vault: 'Vault',
-    ntfy: 'ntfy',
-  };
-
-  const HEALTH_LABELS: Record<RuntimeServiceHealthStatus, string> = {
-    healthy: 'Healthy',
-    degraded: 'Degraded',
-    unavailable: 'Unavailable',
-    not_applicable: 'N/A',
-  };
-
-  const HEALTH_BADGE: Record<RuntimeServiceHealthStatus, string> = {
-    healthy: 'border-moss-300 bg-moss-100 text-moss-700',
-    degraded: 'border-gold-300 bg-gold-100 text-gold-700',
-    unavailable: 'border-wilt-300 bg-wilt-100 text-wilt-700',
-    not_applicable: 'border-bark-300 bg-bark-100 text-shadow-700',
-  };
-
-  const AVAILABILITY_LABELS: Record<AdminToolAvailabilityStatus, string> = {
-    active: 'Active',
-    available: 'Available',
-    unavailable: 'Unavailable',
-    not_applicable: 'N/A',
-  };
-
-  const AVAILABILITY_BADGE: Record<AdminToolAvailabilityStatus, string> = {
-    active: 'border-petal-300 bg-petal-100 text-petal-700',
-    available: 'border-moss-300 bg-moss-100 text-moss-700',
-    unavailable: 'border-wilt-300 bg-wilt-100 text-wilt-700',
-    not_applicable: 'border-bark-300 bg-bark-100 text-shadow-700',
-  };
 
   const MEMORY_WORKFLOW_TOOL_NAMES = [
     'memory_write',
@@ -103,6 +75,10 @@
 
   let inventoryGroups = $derived.by(() => (data?.inventory ?? ([] as AdminToolInventoryGroup[])));
 
+  let recentTelemetry = $derived.by(() => (
+    (data?.recentTelemetry ?? []).slice().reverse()
+  ));
+
   let summary = $derived.by(() => ({
     registeredTools: data?.catalog?.tools.length ?? 0,
     activeTools: data?.state?.activeTools.length ?? 0,
@@ -129,34 +105,18 @@
     await loadData();
   }
 
-  function formatTimestamp(timestamp: number | undefined): string {
-    if (!Number.isFinite(timestamp)) return 'Unknown';
-    return new Date(timestamp as number).toLocaleString('en-US', {
-      month: 'short',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false,
-    });
-  }
-
-  function availableActionSummary(service: RuntimeServiceHealth): string | null {
-    if (!service.availableActions?.length) return null;
-    return `Enabled actions: ${service.availableActions.join(', ')}`;
-  }
-
   onMount(() => {
     void loadData();
   });
 </script>
 
-<div class="space-y-6">
+<div class="space-y-8">
   <div class="flex items-start justify-between gap-4 flex-wrap">
     <div>
-      <h1 class="text-2xl font-serif font-bold text-shadow-900">The Shed</h1>
+      <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">The Shed</p>
+      <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Tools</h1>
       <p class="mt-1 text-sm text-shadow-600">
-        Direct runtime tool availability and health derived from the live agent catalog.
+        Operator view for live tool availability, service health, adaptive activation, and audit signals.
       </p>
     </div>
     <button
@@ -174,167 +134,50 @@
     </div>
   {/if}
 
-  <div class="grid gap-4 md:grid-cols-4">
-    <div class="card-garden overflow-hidden p-5">
-      <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Registered</p>
-      <p class="mt-3 text-4xl font-serif font-bold text-shadow-900">{summary.registeredTools}</p>
-      <p class="mt-2 text-sm text-shadow-600">Direct tools currently in the runtime catalog.</p>
-    </div>
-    <div class="card-garden overflow-hidden p-5">
-      <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Active Now</p>
-      <p class="mt-3 text-4xl font-serif font-bold text-petal-500">{summary.activeTools}</p>
-      <p class="mt-2 text-sm text-shadow-600">Tools active in the current adaptive runtime snapshot.</p>
-    </div>
-    <div class="card-garden overflow-hidden p-5">
-      <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Promoted Active</p>
-      <p class="mt-3 text-4xl font-serif font-bold text-gold-600">{summary.promotedActive}</p>
-      <p class="mt-2 text-sm text-shadow-600">Promoted extended tools currently in the active set.</p>
-    </div>
-    <div class="card-garden overflow-hidden p-5">
-      <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Recent Failures</p>
-      <p class="mt-3 text-4xl font-serif font-bold text-wilt-500">{summary.recentFailures}</p>
-      <p class="mt-2 text-sm text-shadow-600">Latest soft and hard tool failures observed by admin telemetry.</p>
-    </div>
-  </div>
-
-  <div class="grid gap-4 lg:grid-cols-[1.2fr,0.8fr]">
-    <div class="card-garden p-5">
-      <div class="flex items-baseline justify-between gap-3 flex-wrap">
-        <div>
-          <h2 class="text-lg font-serif font-semibold text-shadow-900">Memory / Social Workflow</h2>
-          <p class="mt-1 text-sm text-shadow-600">
-            Spotlight on the runtime tools that affect memory, focus, and contacts.
-          </p>
-        </div>
-        <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-xs font-medium text-shadow-700">
-          {memoryWorkflowTools.length} visible / {MEMORY_WORKFLOW_TOOL_NAMES.length} expected
-        </span>
-      </div>
-
-      <div class="mt-4 space-y-3">
-        {#each memoryWorkflowTools as tool}
-          <div class="rounded-2xl border border-bark-200 bg-bark-50 px-4 py-3">
-            <div class="flex items-start justify-between gap-3">
-              <div>
-                <code class="text-sm font-medium text-shadow-900">{tool.name}</code>
-                <p class="mt-1 text-sm text-shadow-700">{tool.description}</p>
-              </div>
-              <span class="rounded-full border px-2.5 py-1 text-xs font-medium {HEALTH_BADGE[tool.health.status]}">
-                {HEALTH_LABELS[tool.health.status]}
-              </span>
-            </div>
-            <div class="mt-3 flex flex-wrap gap-2 text-xs">
-              <span class="rounded-full border border-bark-300 bg-white px-2.5 py-1 text-shadow-700">
-                scope: {tool.scope}
-              </span>
-              <span class="rounded-full border px-2.5 py-1 {AVAILABILITY_BADGE[tool.contexts.chat.status]}">
-                chat: {AVAILABILITY_LABELS[tool.contexts.chat.status]}
-              </span>
-              <span class="rounded-full border px-2.5 py-1 {AVAILABILITY_BADGE[tool.contexts.internalHeartbeat.status]}">
-                heartbeat: {AVAILABILITY_LABELS[tool.contexts.internalHeartbeat.status]}
-              </span>
-            </div>
-          </div>
-        {/each}
-        {#if memoryWorkflowTools.length === 0}
-          <p class="text-sm text-shadow-500">No memory-oriented tools are visible in the runtime catalog.</p>
-        {/if}
-      </div>
-
-      {#if missingMemoryWorkflowTools.length > 0}
-        <div class="mt-4 rounded-2xl border border-wilt-200 bg-wilt-50 px-4 py-3">
-          <p class="text-sm font-medium text-wilt-700">Expected but not registered</p>
-          <div class="mt-3 flex flex-wrap gap-2">
-            {#each missingMemoryWorkflowTools as toolName}
-              <span class="rounded-full border border-wilt-200 bg-white px-2.5 py-1 text-xs font-medium text-wilt-700">
-                {toolName}
-              </span>
-            {/each}
-          </div>
-        </div>
-      {/if}
-    </div>
-
-    <div class="card-garden p-5">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900">Admin Surfaces</h2>
+  <section class="space-y-4" aria-labelledby="tools-overview-heading">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Overview</p>
+      <h2 id="tools-overview-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+        Runtime command board
+      </h2>
       <p class="mt-1 text-sm text-shadow-600">
-        The memory-system admin controls live across a few dedicated pages. These links keep them one click away from the runtime tool view.
+        Counts from the live agent catalog and the current adaptive runtime snapshot.
       </p>
-      <div class="mt-4 space-y-3">
-        {#each MEMORY_ADMIN_LINKS as link}
-          <a
-            href={link.href}
-            class="block rounded-2xl border border-bark-200 bg-bark-50 px-4 py-3 transition-colors hover:bg-bark-100"
-          >
-            <p class="text-sm font-medium text-shadow-900">{link.title}</p>
-            <p class="mt-1 text-sm text-shadow-600">{link.detail}</p>
-          </a>
-        {/each}
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-4">
+      <div class="card-garden overflow-hidden p-5">
+        <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Registered</p>
+        <p class="mt-3 text-4xl font-serif font-bold text-shadow-900">{summary.registeredTools}</p>
+        <p class="mt-2 text-sm text-shadow-600">Direct tools currently in the runtime catalog.</p>
+      </div>
+      <div class="card-garden overflow-hidden p-5">
+        <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Active Now</p>
+        <p class="mt-3 text-4xl font-serif font-bold text-petal-500">{summary.activeTools}</p>
+        <p class="mt-2 text-sm text-shadow-600">Tools active in the current adaptive runtime snapshot.</p>
+      </div>
+      <div class="card-garden overflow-hidden p-5">
+        <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Promoted Active</p>
+        <p class="mt-3 text-4xl font-serif font-bold text-gold-600">{summary.promotedActive}</p>
+        <p class="mt-2 text-sm text-shadow-600">Promoted extended tools currently in the active set.</p>
+      </div>
+      <div class="card-garden overflow-hidden p-5">
+        <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Recent Failures</p>
+        <p class="mt-3 text-4xl font-serif font-bold text-wilt-500">{summary.recentFailures}</p>
+        <p class="mt-2 text-sm text-shadow-600">Latest soft and hard tool failures observed by admin telemetry.</p>
       </div>
     </div>
-  </div>
+  </section>
 
-  <div class="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
-    <div class="card-garden p-5">
-      <div class="flex items-baseline justify-between gap-4">
-        <div>
-          <h2 class="text-lg font-serif font-semibold text-shadow-900">Runtime Snapshot</h2>
-          <p class="mt-1 text-sm text-shadow-600">
-            Catalog generated {formatTimestamp(data?.catalog?.generatedAt)}.
-          </p>
-        </div>
-        {#if loading}
-          <span class="text-sm text-shadow-500">Loading...</span>
-        {/if}
+  <section class="space-y-4" aria-labelledby="tools-health-heading">
+    <div class="flex items-baseline gap-3">
+      <div>
+        <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Health</p>
+        <h2 id="tools-health-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+          Runtime dependencies
+        </h2>
       </div>
-
-      {#if data?.state}
-        <div class="mt-4 flex flex-wrap gap-2">
-          {#each data.state.activeTools as tool}
-            <span class="rounded-full border border-petal-200 bg-petal-50 px-3 py-1 text-xs font-medium text-petal-700">
-              {tool.toolName} · {tool.source}
-            </span>
-          {/each}
-          {#if data.state.activeTools.length === 0}
-            <span class="text-sm text-shadow-500">No active tool snapshot available.</span>
-          {/if}
-        </div>
-      {:else}
-        <p class="mt-4 text-sm text-shadow-500">Adaptive tool telemetry is not available in this runtime.</p>
-      {/if}
-    </div>
-
-    <div class="card-garden p-5">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900">Promotion Notes</h2>
-      {#if data?.state?.promotedToolsSkipped.length}
-        <div class="mt-4 space-y-3">
-          {#each data.state.promotedToolsSkipped as skip}
-            <div class="rounded-2xl border border-gold-200 bg-gold-50 px-4 py-3">
-              <div class="flex items-center justify-between gap-3">
-                <code class="text-sm font-medium text-shadow-900">{skip.toolName}</code>
-                <span class="rounded-full border border-gold-200 bg-white px-2 py-0.5 text-xs font-medium text-gold-700">
-                  {skip.reason}
-                </span>
-              </div>
-              <p class="mt-2 text-sm text-shadow-600">Source: {skip.source}</p>
-              {#if skip.missingTokens?.length}
-                <p class="mt-2 text-sm text-shadow-600">
-                  Missing tokens: {skip.missingTokens.join(', ')}
-                </p>
-              {/if}
-            </div>
-          {/each}
-        </div>
-      {:else}
-        <p class="mt-4 text-sm text-shadow-500">No promoted tools are currently being skipped.</p>
-      {/if}
-    </div>
-  </div>
-
-  <div>
-    <div class="mb-4 flex items-baseline gap-3">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900">Service Health</h2>
-      <span class="text-sm text-shadow-600">{data?.serviceHealth.length ?? 0} runtime dependencies</span>
+      <span class="text-sm text-shadow-600">{data?.serviceHealth.length ?? 0} services</span>
     </div>
 
     {#if loading}
@@ -351,34 +194,7 @@
     {:else if data?.serviceHealth.length}
       <div class="grid gap-4 md:grid-cols-3">
         {#each data.serviceHealth as service}
-          <div class="card-garden p-5">
-            <div class="flex items-start justify-between gap-3">
-              <div>
-                <h3 class="text-sm font-semibold uppercase tracking-[0.16em] text-shadow-500">
-                  {SERVICE_LABELS[service.serviceId]}
-                </h3>
-                <p class="mt-1 text-xs text-shadow-500">Checked {formatTimestamp(service.checkedAt)}</p>
-              </div>
-              <span class="rounded-full border px-2.5 py-1 text-xs font-medium {HEALTH_BADGE[service.status]}">
-                {HEALTH_LABELS[service.status]}
-              </span>
-            </div>
-            <p class="mt-4 text-sm leading-relaxed text-shadow-700">{service.detail}</p>
-            {#if availableActionSummary(service)}
-              <p class="mt-3 rounded-xl border border-bark-200 bg-bark-50 px-3 py-2 text-xs text-shadow-700">
-                {availableActionSummary(service)}
-              </p>
-            {/if}
-            {#if service.lastFailure}
-              <div class="mt-4 rounded-2xl border border-wilt-200 bg-wilt-50 px-3 py-3">
-                <div class="flex items-center justify-between gap-3">
-                  <span class="text-xs font-semibold uppercase tracking-[0.16em] text-wilt-700">Last failure</span>
-                  <span class="text-xs text-wilt-700">{formatTimestamp(service.lastFailure.at)}</span>
-                </div>
-                <p class="mt-2 text-sm text-wilt-700">{service.lastFailure.message}</p>
-              </div>
-            {/if}
-          </div>
+          <ServiceHealthPanel {service} />
         {/each}
       </div>
     {:else}
@@ -386,11 +202,16 @@
         <p class="text-sm text-shadow-500">No runtime service health data is available.</p>
       </div>
     {/if}
-  </div>
+  </section>
 
-  <div class="space-y-5">
+  <section class="space-y-5" aria-labelledby="tools-inventory-heading">
     <div class="flex items-baseline gap-3">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900">Tool Inventory</h2>
+      <div>
+        <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Inventory</p>
+        <h2 id="tools-inventory-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+          Tool catalog by runtime role
+        </h2>
+      </div>
       <span class="text-sm text-shadow-600">{data?.toolHealth.length ?? 0} runtime-derived rows</span>
     </div>
 
@@ -421,68 +242,7 @@
 
           <div class="grid gap-4 lg:grid-cols-2">
             {#each group.tools as tool}
-              <div class="card-garden p-5">
-                <div class="flex items-start justify-between gap-3">
-                  <div>
-                    <div class="flex flex-wrap items-center gap-2">
-                      <code class="text-sm font-medium text-shadow-900">{tool.name}</code>
-                      <span class="rounded-full border border-bark-200 bg-bark-50 px-2 py-0.5 text-xs font-medium text-shadow-600">
-                        {tool.scope}
-                      </span>
-                      {#if tool.scope === 'extended'}
-                        <span class="rounded-full border border-gold-200 bg-gold-50 px-2 py-0.5 text-xs font-medium text-gold-700">
-                          toolset member
-                        </span>
-                      {/if}
-                      {#if (tool.scope === 'core' && tool.name === 'tool_search') || (tool.scope === 'core' && tool.name === 'toolset')}
-                        <span class="rounded-full border border-moss-200 bg-moss-50 px-2 py-0.5 text-xs font-medium text-moss-700">
-                          control surface
-                        </span>
-                      {/if}
-                    </div>
-                    <p class="mt-3 text-sm leading-relaxed text-shadow-700">{tool.description}</p>
-                  </div>
-                  <span class="rounded-full border px-2.5 py-1 text-xs font-medium {HEALTH_BADGE[tool.health.status]}">
-                    {HEALTH_LABELS[tool.health.status]}
-                  </span>
-                </div>
-
-                <div class="mt-4 rounded-2xl border border-bark-200 bg-bark-50 px-3 py-3 text-sm text-shadow-700">
-                  {tool.health.detail}
-                </div>
-
-                <div class="mt-4 grid gap-3 md:grid-cols-2">
-                  <div class="rounded-2xl border border-bark-200 bg-white px-4 py-3">
-                    <div class="flex items-center justify-between gap-3">
-                      <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Chat</span>
-                      <span class="rounded-full border px-2 py-0.5 text-xs font-medium {AVAILABILITY_BADGE[tool.contexts.chat.status]}">
-                        {AVAILABILITY_LABELS[tool.contexts.chat.status]}
-                      </span>
-                    </div>
-                    <p class="mt-2 text-sm text-shadow-700">{tool.contexts.chat.detail}</p>
-                  </div>
-
-                  <div class="rounded-2xl border border-bark-200 bg-white px-4 py-3">
-                    <div class="flex items-center justify-between gap-3">
-                      <span class="text-xs font-semibold uppercase tracking-[0.16em] text-shadow-500">Internal Heartbeat</span>
-                      <span class="rounded-full border px-2 py-0.5 text-xs font-medium {AVAILABILITY_BADGE[tool.contexts.internalHeartbeat.status]}">
-                        {AVAILABILITY_LABELS[tool.contexts.internalHeartbeat.status]}
-                      </span>
-                    </div>
-                    <p class="mt-2 text-sm text-shadow-700">{tool.contexts.internalHeartbeat.detail}</p>
-                  </div>
-                </div>
-
-                {#if tool.lastFailure}
-                  <div class="mt-4 rounded-2xl border border-wilt-200 bg-wilt-50 px-4 py-3">
-                    <div class="flex items-center justify-between gap-3">
-                      <span class="text-xs font-semibold uppercase tracking-[0.16em] text-wilt-700">Recent failure</span>
-                      <span class="text-xs text-wilt-700">{formatTimestamp(tool.lastFailure.timestamp)}</span>
-                    </div>
-                    <p class="mt-2 text-sm text-wilt-700">{tool.lastFailure.message}</p>
-                  </div>
-                {/if}
-              </div>
+              <ToolCard {tool} />
             {/each}
           </div>
         </section>
@@ -492,36 +252,208 @@
         <p class="text-sm text-shadow-500">No tool health rows are available for this runtime.</p>
       </div>
     {/if}
-  </div>
+  </section>
 
-  <div class="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
-    <div class="card-garden p-5">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900">Recent Failures</h2>
-      {#if data?.recentFailures.length}
-        <div class="mt-4 space-y-3">
-          {#each data.recentFailures as failure}
-            <div class="rounded-2xl border border-wilt-200 bg-wilt-50 px-4 py-3">
-              <div class="flex items-center justify-between gap-3">
-                <code class="text-sm font-medium text-wilt-700">{failure.toolName}</code>
-                <span class="text-xs text-wilt-700">{formatTimestamp(failure.timestamp)}</span>
+  <section class="space-y-4" aria-labelledby="tools-adaptive-runtime-heading">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Adaptive Runtime</p>
+      <h2 id="tools-adaptive-runtime-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+        Activation snapshot
+      </h2>
+      <p class="mt-1 text-sm text-shadow-600">
+        What the adaptive tool selector currently made active, promoted, or skipped.
+      </p>
+    </div>
+
+    <div class="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
+      <div class="card-garden p-5">
+        <div class="flex items-baseline justify-between gap-4">
+          <div>
+            <h3 class="text-base font-serif font-semibold text-shadow-900">Runtime Snapshot</h3>
+            <p class="mt-1 text-sm text-shadow-600">
+              Catalog generated {formatTimestamp(data?.catalog?.generatedAt)}.
+            </p>
+          </div>
+          {#if loading}
+            <span class="text-sm text-shadow-500">Loading...</span>
+          {/if}
+        </div>
+
+        {#if data?.state}
+          <div class="mt-4 flex flex-wrap gap-2">
+            {#each data.state.activeTools as tool}
+              <span class="rounded-full border border-petal-200 bg-petal-50 px-3 py-1 text-xs font-medium text-petal-700">
+                {tool.toolName} | {tool.source}
+              </span>
+            {/each}
+            {#if data.state.activeTools.length === 0}
+              <span class="text-sm text-shadow-500">No active tool snapshot available.</span>
+            {/if}
+          </div>
+        {:else}
+          <p class="mt-4 text-sm text-shadow-500">Adaptive tool telemetry is not available in this runtime.</p>
+        {/if}
+      </div>
+
+      <div class="card-garden p-5">
+        <h3 class="text-base font-serif font-semibold text-shadow-900">Promotion Notes</h3>
+        {#if data?.state?.promotedToolsSkipped.length}
+          <div class="mt-4 space-y-3">
+            {#each data.state.promotedToolsSkipped as skip}
+              <div class="rounded-2xl border border-gold-200 bg-gold-50 px-4 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <code class="text-sm font-medium text-shadow-900">{skip.toolName}</code>
+                  <span class="rounded-full border border-gold-200 bg-white px-2 py-0.5 text-xs font-medium text-gold-700">
+                    {skip.reason}
+                  </span>
+                </div>
+                <p class="mt-2 text-sm text-shadow-600">Source: {skip.source}</p>
+                {#if skip.missingTokens?.length}
+                  <p class="mt-2 text-sm text-shadow-600">
+                    Missing tokens: {skip.missingTokens.join(', ')}
+                  </p>
+                {/if}
               </div>
-              <p class="mt-2 text-sm text-wilt-700">{failure.message}</p>
-              <p class="mt-2 text-xs uppercase tracking-[0.16em] text-wilt-600">{failure.channelId}</p>
+            {/each}
+          </div>
+        {:else}
+          <p class="mt-4 text-sm text-shadow-500">No promoted tools are currently being skipped.</p>
+        {/if}
+      </div>
+    </div>
+  </section>
+
+  <section class="space-y-4" aria-labelledby="tools-workflows-heading">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Workflows</p>
+      <h2 id="tools-workflows-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+        Memory and social operations
+      </h2>
+      <p class="mt-1 text-sm text-shadow-600">
+        Focused checks for tools and admin surfaces operators use when memory, focus, or contacts are involved.
+      </p>
+    </div>
+
+    <div class="grid gap-4 lg:grid-cols-[1.2fr,0.8fr]">
+      <div class="card-garden p-5">
+        <div class="flex items-baseline justify-between gap-3 flex-wrap">
+          <div>
+            <h3 class="text-base font-serif font-semibold text-shadow-900">Memory / Social Workflow</h3>
+            <p class="mt-1 text-sm text-shadow-600">
+              Spotlight on runtime tools that affect memory, focus, and contacts.
+            </p>
+          </div>
+          <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-xs font-medium text-shadow-700">
+            {memoryWorkflowTools.length} visible / {MEMORY_WORKFLOW_TOOL_NAMES.length} expected
+          </span>
+        </div>
+
+        <div class="mt-4 space-y-3">
+          {#if loading}
+            <p class="text-sm text-shadow-500">Loading workflow tool visibility...</p>
+          {:else if memoryWorkflowTools.length}
+            {#each memoryWorkflowTools as tool}
+              <ToolCard {tool} density="compact" />
+            {/each}
+          {:else}
+            <p class="text-sm text-shadow-500">No memory-oriented tools are visible in the runtime catalog.</p>
+          {/if}
+        </div>
+
+        {#if !loading && missingMemoryWorkflowTools.length > 0}
+          <div class="mt-4 rounded-2xl border border-wilt-200 bg-wilt-50 px-4 py-3">
+            <p class="text-sm font-medium text-wilt-700">Expected but not registered</p>
+            <div class="mt-3 flex flex-wrap gap-2">
+              {#each missingMemoryWorkflowTools as toolName}
+                <span class="rounded-full border border-wilt-200 bg-white px-2.5 py-1 text-xs font-medium text-wilt-700">
+                  {toolName}
+                </span>
+              {/each}
             </div>
+          </div>
+        {/if}
+      </div>
+
+      <div class="card-garden p-5">
+        <h3 class="text-base font-serif font-semibold text-shadow-900">Admin Surfaces</h3>
+        <p class="mt-1 text-sm text-shadow-600">
+          The memory-system admin controls live across a few dedicated pages. These links keep them one click away from the runtime tool view.
+        </p>
+        <div class="mt-4 space-y-3">
+          {#each MEMORY_ADMIN_LINKS as link}
+            <a
+              href={link.href}
+              class="block rounded-2xl border border-bark-200 bg-bark-50 px-4 py-3 transition-colors hover:bg-bark-100"
+            >
+              <p class="text-sm font-medium text-shadow-900">{link.title}</p>
+              <p class="mt-1 text-sm text-shadow-600">{link.detail}</p>
+            </a>
           {/each}
         </div>
-      {:else}
-        <p class="mt-4 text-sm text-shadow-500">No recent tool failures have been observed.</p>
-      {/if}
+      </div>
+    </div>
+  </section>
+
+  <section class="space-y-4" aria-labelledby="tools-failures-audit-heading">
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Failures / Audit</p>
+      <h2 id="tools-failures-audit-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+        Recent failures and telemetry trail
+      </h2>
+      <p class="mt-1 text-sm text-shadow-600">
+        Latest error rows and adaptive selector events retained by admin telemetry.
+      </p>
+    </div>
+
+    <div class="grid gap-4 lg:grid-cols-[1.1fr,0.9fr]">
+      <div class="card-garden p-5">
+        <h3 class="text-base font-serif font-semibold text-shadow-900">Recent Failures</h3>
+        {#if data?.recentFailures.length}
+          <div class="mt-4 space-y-3">
+            {#each data.recentFailures as failure}
+              <FailureRow
+                title={failure.toolName}
+                message={failure.message}
+                timestamp={failure.timestamp}
+                meta={failure.channelId}
+              />
+            {/each}
+          </div>
+        {:else}
+          <p class="mt-4 text-sm text-shadow-500">No recent tool failures have been observed.</p>
+        {/if}
+      </div>
+
+      <div class="card-garden p-5">
+        <h3 class="text-base font-serif font-semibold text-shadow-900">Adaptive Audit Events</h3>
+        {#if recentTelemetry.length}
+          <div class="mt-4 space-y-3">
+            {#each recentTelemetry.slice(0, 8) as event}
+              <div class="rounded-2xl border border-bark-200 bg-bark-50 px-4 py-3">
+                <div class="flex items-center justify-between gap-3">
+                  <code class="text-sm font-medium text-shadow-900">{telemetryEventTitle(event)}</code>
+                  <span class="text-xs text-shadow-600">{formatTimestamp(event.timestamp)}</span>
+                </div>
+                <p class="mt-2 text-sm text-shadow-700">{telemetryEventDetail(event)}</p>
+                <p class="mt-2 text-xs uppercase tracking-[0.16em] text-shadow-500">
+                  {telemetryEventMeta(event)}
+                </p>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="mt-4 text-sm text-shadow-500">No adaptive tool telemetry events have been retained yet.</p>
+        {/if}
+      </div>
     </div>
 
     <div class="card-garden p-5">
-      <h2 class="text-lg font-serif font-semibold text-shadow-900">Scope Note</h2>
+      <h3 class="text-base font-serif font-semibold text-shadow-900">Scope Note</h3>
       <p class="mt-4 text-sm leading-relaxed text-shadow-700">
         This page is derived from the direct runtime tool catalog and admin telemetry. Helpers that only exist inside
         <code class="rounded bg-bark-100 px-1.5 py-0.5 text-xs text-gold-700">think</code>
         are intentionally excluded because they are not registered as direct agent tools.
       </p>
     </div>
-  </div>
+  </section>
 </div>

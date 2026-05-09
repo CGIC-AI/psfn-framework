@@ -34,6 +34,13 @@ export interface GardenSettingsFieldExposure {
   editorId?: GardenSettingsCustomEditorId;
 }
 
+export interface GardenSettingsTunableFieldCoverage {
+  fieldKey: string;
+  sectionId: GardenSettingsSectionId;
+  surface: GardenSettingsFieldSurface;
+  editorId?: GardenSettingsCustomEditorId;
+}
+
 export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   modelCatalog: { sectionId: 'models', surface: 'custom', editorId: 'models' },
   sessionHistoryBudgetPct: { sectionId: 'budget', surface: 'advanced' },
@@ -196,6 +203,12 @@ export const SETTINGS_GARDEN_RAW_EDITOR_KEYS = Object.keys(
   SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
 ) as GardenSettingsRawEditorKey[];
 
+export interface GardenSettingsOwnerFileCoverage {
+  rawEditorKey: GardenSettingsRawEditorKey;
+  subsystemId: (typeof SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY)[GardenSettingsRawEditorKey];
+  ownerFile: string;
+}
+
 export const SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY: Record<GardenSettingsRawEditorKey, string> = {
   settings: 'settings.json',
   models: 'models.json',
@@ -221,3 +234,22 @@ export const SETTINGS_GARDEN_RAW_SUBSYSTEM_IDS = [
   'trustPolicy',
   'backup',
 ] as const;
+
+export function listGardenSettingsTunableFieldCoverage(): GardenSettingsTunableFieldCoverage[] {
+  return Object.entries(SETTINGS_GARDEN_FIELD_EXPOSURE)
+    .map(([fieldKey, exposure]) => ({
+      fieldKey,
+      sectionId: exposure.sectionId,
+      surface: exposure.surface,
+      ...('editorId' in exposure ? { editorId: exposure.editorId } : {}),
+    }))
+    .sort((a, b) => a.fieldKey.localeCompare(b.fieldKey));
+}
+
+export function listGardenSettingsOwnerFileCoverage(): GardenSettingsOwnerFileCoverage[] {
+  return SETTINGS_GARDEN_RAW_EDITOR_KEYS.map((rawEditorKey) => ({
+    rawEditorKey,
+    subsystemId: SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY[rawEditorKey],
+    ownerFile: SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY[rawEditorKey],
+  }));
+}

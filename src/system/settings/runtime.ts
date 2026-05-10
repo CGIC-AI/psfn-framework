@@ -1,4 +1,8 @@
-import { DEFAULT_MOOD_CONGRUENCE_WEIGHT, DEFAULT_UI_THEME_ID, type SubstrateConfig } from '../config/runtime-config-contracts.js';
+import {
+  DEFAULT_MOOD_CONGRUENCE_WEIGHT,
+  DEFAULT_UI_THEME_ID,
+  type SubstrateConfig,
+} from '../config/runtime-config-contracts.js';
 import {
   cloneImageWorkflowSettings,
   normalizeImageWorkflowSettings,
@@ -32,25 +36,71 @@ import {
   type RuntimeSettingsSnapshot,
 } from './contracts.js';
 
-function mergeModelSettingsWithConfig(config: SubstrateConfig, settings: EditableSettings): EditableSettings {
+function mergeModelSettingsWithConfig(
+  config: SubstrateConfig,
+  settings: EditableSettings,
+): EditableSettings {
   return {
     ...(settings.modelRegistry !== undefined
       ? { modelRegistry: settings.modelRegistry }
       : {}),
-    ...(settings.modelRegistry === undefined && config.modelRegistry !== undefined
+    ...(settings.modelRegistry === undefined &&
+    config.modelRegistry !== undefined
       ? { modelRegistry: config.modelRegistry }
       : {}),
   };
 }
 
-export function isRuntimeSettingKey(value: string): value is RuntimeSettingKey {
-  return (RUNTIME_SETTINGS_KEYS as readonly string[]).includes(value);
-}
+type SnapshotSection<K extends RuntimeSettingKey> = Pick<
+  RuntimeSettingsSnapshot,
+  K
+>;
+type SharedConfigSettingKey = Extract<
+  keyof EditableSettings & keyof SubstrateConfig,
+  string
+>;
 
-export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSettingsSnapshot {
-  const sessionBudgetPct = resolveSessionHistoryBudgetPct(config);
-  const retrievalBudgetPct = resolveMemoryRetrievalBudgetPct(config);
+const DIRECT_DEFINED_CONFIG_SETTINGS = [
+  'sessionHistoryBudgetPct',
+  'memoryRetrievalBudgetPct',
+  'moodCongruenceWeight',
+  'adaptiveContextBudgetsEnabled',
+  'sessionMirrorEnabled',
+  'sessionMirrorMaxChars',
+  'sessionMirrorActiveWindowMs',
+  'continuityMessageLimit',
+  'extractionInterval',
+  'extractionThresholdPct',
+  'compactionThresholdPct',
+  'observationMaskingWindow',
+  'compactionEmotionalSalienceThresholdPct',
+  'memoryExtractionMinImportance',
+  'memoryExtractionMinConfidence',
+  'memoryExtractionMinNovelty',
+  'memoryExtractionEmotionalIntensityWeight',
+  'memoryExtractionMaxWrites',
+  'memoryExtractionTelemetryEnabled',
+  'memoryRetrievalTelemetryEnabled',
+  'profileSynthesisEnabled',
+  'profileSynthesisRefreshIntervalMs',
+  'profileSynthesisCooldownMs',
+  'profileSynthesisMinWrites',
+  'profileSynthesisMinImportance',
+  'profileSynthesisMinConfidence',
+  'profileSynthesisMinNovelty',
+  'profileSynthesisSourceMemoryLimit',
+  'profileSynthesisMinSourceMemories',
+  'thinkMaxTokens',
+  'thinkMaxWallTimeMs',
+  'thinkMaxSubQueries',
+  'retryMaxAttempts',
+  'retryBaseDelayMs',
+  'moaMaxRounds',
+  'moaMaxTokensPerRound',
+  'moaTimeoutMs',
+] as const satisfies readonly SharedConfigSettingKey[];
 
+function getModelSettingsSnapshot(config: SubstrateConfig) {
   return {
     primaryModel: config.primaryModel,
     primaryProvider: config.primaryProvider,
@@ -58,48 +108,123 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     extractionModel: config.extractionModel,
     extractionProvider: config.extractionProvider,
     extractionMaxTokens: config.extractionMaxTokens,
-    sessionHistoryBudgetPct: sessionBudgetPct,
-    memoryRetrievalBudgetPct: retrievalBudgetPct,
-    moodCongruenceWeight: config.moodCongruenceWeight ?? DEFAULT_MOOD_CONGRUENCE_WEIGHT,
-    adaptiveContextBudgetsEnabled: config.adaptiveContextBudgetsEnabled ?? false,
+  } satisfies SnapshotSection<
+    | 'primaryModel'
+    | 'primaryProvider'
+    | 'primaryMaxTokens'
+    | 'extractionModel'
+    | 'extractionProvider'
+    | 'extractionMaxTokens'
+  >;
+}
+
+function getContextSettingsSnapshot(config: SubstrateConfig) {
+  return {
+    sessionHistoryBudgetPct: resolveSessionHistoryBudgetPct(config),
+    memoryRetrievalBudgetPct: resolveMemoryRetrievalBudgetPct(config),
+    moodCongruenceWeight:
+      config.moodCongruenceWeight ?? DEFAULT_MOOD_CONGRUENCE_WEIGHT,
+    adaptiveContextBudgetsEnabled:
+      config.adaptiveContextBudgetsEnabled ?? false,
     sessionMirrorEnabled: config.sessionMirrorEnabled ?? true,
     sessionMirrorMaxChars: config.sessionMirrorMaxChars ?? 220,
-    sessionMirrorActiveWindowMs: config.sessionMirrorActiveWindowMs ?? 30 * 60 * 1000,
-    sessionMirrorChannelOverrides: structuredClone(config.sessionMirrorChannelOverrides ?? {}),
+    sessionMirrorActiveWindowMs:
+      config.sessionMirrorActiveWindowMs ?? 30 * 60 * 1000,
+    sessionMirrorChannelOverrides: structuredClone(
+      config.sessionMirrorChannelOverrides ?? {},
+    ),
     continuityMessageLimit: config.continuityMessageLimit ?? 10,
-    sessionRestartBehavior: config.sessionRestartBehavior ?? 'reuse_latest_session',
+    sessionRestartBehavior:
+      config.sessionRestartBehavior ?? 'reuse_latest_session',
     extractionInterval: config.extractionInterval,
     maintenanceIntervalMs: config.maintenanceIntervalMs,
     extractionThresholdPct: config.extractionThresholdPct,
     compactionThresholdPct: config.compactionThresholdPct,
     observationMaskingWindow: config.observationMaskingWindow ?? 1,
-    compactionEmotionalSalienceThresholdPct: config.compactionEmotionalSalienceThresholdPct ?? 75,
+    compactionEmotionalSalienceThresholdPct:
+      config.compactionEmotionalSalienceThresholdPct ?? 75,
+  } satisfies SnapshotSection<
+    | 'sessionHistoryBudgetPct'
+    | 'memoryRetrievalBudgetPct'
+    | 'moodCongruenceWeight'
+    | 'adaptiveContextBudgetsEnabled'
+    | 'sessionMirrorEnabled'
+    | 'sessionMirrorMaxChars'
+    | 'sessionMirrorActiveWindowMs'
+    | 'sessionMirrorChannelOverrides'
+    | 'continuityMessageLimit'
+    | 'sessionRestartBehavior'
+    | 'extractionInterval'
+    | 'maintenanceIntervalMs'
+    | 'extractionThresholdPct'
+    | 'compactionThresholdPct'
+    | 'observationMaskingWindow'
+    | 'compactionEmotionalSalienceThresholdPct'
+  >;
+}
+
+function getMemorySettingsSnapshot(config: SubstrateConfig) {
+  return {
     memoryExtractionMinImportance: config.memoryExtractionMinImportance ?? null,
     memoryExtractionMinConfidence: config.memoryExtractionMinConfidence ?? null,
     memoryExtractionMinNovelty: config.memoryExtractionMinNovelty ?? null,
-    memoryExtractionEmotionalIntensityWeight: config.memoryExtractionEmotionalIntensityWeight ?? null,
+    memoryExtractionEmotionalIntensityWeight:
+      config.memoryExtractionEmotionalIntensityWeight ?? null,
     memoryExtractionMaxWrites: config.memoryExtractionMaxWrites ?? null,
-    memoryExtractionTelemetryEnabled: config.memoryExtractionTelemetryEnabled ?? true,
-    memoryRetrievalTelemetryEnabled: config.memoryRetrievalTelemetryEnabled ?? true,
+    memoryExtractionTelemetryEnabled:
+      config.memoryExtractionTelemetryEnabled ?? true,
+    memoryRetrievalTelemetryEnabled:
+      config.memoryRetrievalTelemetryEnabled ?? true,
     profileSynthesisEnabled: config.profileSynthesisEnabled ?? true,
-    profileSynthesisRefreshIntervalMs: config.profileSynthesisRefreshIntervalMs ?? null,
+    profileSynthesisRefreshIntervalMs:
+      config.profileSynthesisRefreshIntervalMs ?? null,
     profileSynthesisCooldownMs: config.profileSynthesisCooldownMs ?? null,
     profileSynthesisMinWrites: config.profileSynthesisMinWrites ?? null,
     profileSynthesisMinImportance: config.profileSynthesisMinImportance ?? null,
     profileSynthesisMinConfidence: config.profileSynthesisMinConfidence ?? null,
     profileSynthesisMinNovelty: config.profileSynthesisMinNovelty ?? null,
-    profileSynthesisSourceMemoryLimit: config.profileSynthesisSourceMemoryLimit ?? null,
-    profileSynthesisMinSourceMemories: config.profileSynthesisMinSourceMemories ?? null,
+    profileSynthesisSourceMemoryLimit:
+      config.profileSynthesisSourceMemoryLimit ?? null,
+    profileSynthesisMinSourceMemories:
+      config.profileSynthesisMinSourceMemories ?? null,
     thinkMaxTokens: config.thinkMaxTokens ?? null,
     thinkMaxWallTimeMs: config.thinkMaxWallTimeMs ?? null,
     thinkMaxSubQueries: config.thinkMaxSubQueries ?? null,
     retryMaxAttempts: config.retryMaxAttempts ?? null,
     retryBaseDelayMs: config.retryBaseDelayMs ?? null,
+  } satisfies SnapshotSection<
+    | 'memoryExtractionMinImportance'
+    | 'memoryExtractionMinConfidence'
+    | 'memoryExtractionMinNovelty'
+    | 'memoryExtractionEmotionalIntensityWeight'
+    | 'memoryExtractionMaxWrites'
+    | 'memoryExtractionTelemetryEnabled'
+    | 'memoryRetrievalTelemetryEnabled'
+    | 'profileSynthesisEnabled'
+    | 'profileSynthesisRefreshIntervalMs'
+    | 'profileSynthesisCooldownMs'
+    | 'profileSynthesisMinWrites'
+    | 'profileSynthesisMinImportance'
+    | 'profileSynthesisMinConfidence'
+    | 'profileSynthesisMinNovelty'
+    | 'profileSynthesisSourceMemoryLimit'
+    | 'profileSynthesisMinSourceMemories'
+    | 'thinkMaxTokens'
+    | 'thinkMaxWallTimeMs'
+    | 'thinkMaxSubQueries'
+    | 'retryMaxAttempts'
+    | 'retryBaseDelayMs'
+  >;
+}
+
+function getProviderSettingsSnapshot(config: SubstrateConfig) {
+  return {
     openRouterProviderOrder: config.openRouterProviderOrder ?? [],
     openRouterModelsApiUrl: config.openRouterModelsApiUrl ?? null,
     importProcessingRouteMode: config.importProcessingRouteMode ?? 'background',
     importProcessingStrictPolicy: config.importProcessingStrictPolicy ?? false,
-    importProcessingLocalEndpointUrl: config.importProcessingLocalEndpointUrl ?? null,
+    importProcessingLocalEndpointUrl:
+      config.importProcessingLocalEndpointUrl ?? null,
     importProcessingLocalModel: config.importProcessingLocalModel ?? null,
     embeddingProvider: config.embeddingProvider ?? 'transformers',
     embeddingModel: config.embeddingModel ?? null,
@@ -113,26 +238,76 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     embeddingApiUrl: config.embeddingApiUrl ?? null,
     embeddingApiModel: config.embeddingApiModel ?? null,
     embeddingApiDims: config.embeddingApiDims ?? null,
+  } satisfies SnapshotSection<
+    | 'openRouterProviderOrder'
+    | 'openRouterModelsApiUrl'
+    | 'importProcessingRouteMode'
+    | 'importProcessingStrictPolicy'
+    | 'importProcessingLocalEndpointUrl'
+    | 'importProcessingLocalModel'
+    | 'embeddingProvider'
+    | 'embeddingModel'
+    | 'embeddingDims'
+    | 'embeddingOllamaUrl'
+    | 'transformersModel'
+    | 'transformersCacheDir'
+    | 'textEmotionModel'
+    | 'textEmotionCacheDir'
+    | 'textEmotionDtype'
+    | 'embeddingApiUrl'
+    | 'embeddingApiModel'
+    | 'embeddingApiDims'
+  >;
+}
+
+function getWebAndGardenSettingsSnapshot(config: SubstrateConfig) {
+  return {
     compositionalPolicy: cloneCompositionalPolicyConfig(
       config.compositionalPolicy ?? createDefaultCompositionalPolicyConfig(),
     ),
     webFetchAllowHttp: config.webFetchAllowHttp ?? false,
     webFetchDomainAllowlist: config.webFetchDomainAllowlist ?? [],
-    webFetchAllowInternalNetwork: config.webFetchAllowInternalNetwork
-      ?? config.webFetchLocalCrawlerEnabled
-      ?? false,
+    webFetchAllowInternalNetwork:
+      config.webFetchAllowInternalNetwork ??
+      config.webFetchLocalCrawlerEnabled ??
+      false,
     webFetchLocalCrawlerEnabled: config.webFetchLocalCrawlerEnabled ?? false,
-    webFetchLocalCrawlerAllowHttp: config.webFetchLocalCrawlerAllowHttp ?? false,
-    webFetchLocalCrawlerHostAllowlist: config.webFetchLocalCrawlerHostAllowlist ?? [],
-    webFetchLocalCrawlerDomainAllowlist: config.webFetchLocalCrawlerDomainAllowlist ?? [],
+    webFetchLocalCrawlerAllowHttp:
+      config.webFetchLocalCrawlerAllowHttp ?? false,
+    webFetchLocalCrawlerHostAllowlist:
+      config.webFetchLocalCrawlerHostAllowlist ?? [],
+    webFetchLocalCrawlerDomainAllowlist:
+      config.webFetchLocalCrawlerDomainAllowlist ?? [],
     webFetchTlsCaCertPaths: config.webFetchTlsCaCertPaths ?? [],
     capabilityTier: config.capabilityTier ?? 'nursery',
     promotedExtendedTools: config.promotedExtendedTools ?? [],
-    chatApiBaseUrl: (config as SubstrateConfig & { chatApiBaseUrl?: string }).chatApiBaseUrl ?? null,
+    chatApiBaseUrl:
+      (config as SubstrateConfig & { chatApiBaseUrl?: string })
+        .chatApiBaseUrl ?? null,
     comfyUiBaseUrl: config.comfyUiBaseUrl ?? null,
     imageWorkflows: cloneImageWorkflowSettings(config.imageWorkflows),
     uiThemeId: toNonEmptyString(config.uiThemeId) ?? DEFAULT_UI_THEME_ID,
-    // Voice / TTS
+  } satisfies SnapshotSection<
+    | 'compositionalPolicy'
+    | 'webFetchAllowHttp'
+    | 'webFetchDomainAllowlist'
+    | 'webFetchAllowInternalNetwork'
+    | 'webFetchLocalCrawlerEnabled'
+    | 'webFetchLocalCrawlerAllowHttp'
+    | 'webFetchLocalCrawlerHostAllowlist'
+    | 'webFetchLocalCrawlerDomainAllowlist'
+    | 'webFetchTlsCaCertPaths'
+    | 'capabilityTier'
+    | 'promotedExtendedTools'
+    | 'chatApiBaseUrl'
+    | 'comfyUiBaseUrl'
+    | 'imageWorkflows'
+    | 'uiThemeId'
+  >;
+}
+
+function getVoiceSettingsSnapshot(config: SubstrateConfig) {
+  return {
     voiceEnabled: config.voiceEnabled ?? false,
     ttsProvider: resolveRuntimeTtsProvider(config),
     voiceId: config.elevenLabsVoiceId ?? '',
@@ -148,354 +323,448 @@ export function getRuntimeSettingsSnapshot(config: SubstrateConfig): RuntimeSett
     deepgramListenEndpoint: config.deepgramListenEndpoint ?? null,
     elevenLabsModelId: config.elevenLabsModelId ?? null,
     elevenLabsEndpointBase: config.elevenLabsEndpointBase ?? null,
-    // Channels
+  } satisfies SnapshotSection<
+    | 'voiceEnabled'
+    | 'ttsProvider'
+    | 'voiceId'
+    | 'voiceTargetGuildId'
+    | 'voiceTargetUserId'
+    | 'voiceReadyCueText'
+    | 'echoTtsUrl'
+    | 'echoTtsVoice'
+    | 'echoTtsPreset'
+    | 'sttProvider'
+    | 'deepgramModel'
+    | 'deepgramSttEndpoint'
+    | 'deepgramListenEndpoint'
+    | 'elevenLabsModelId'
+    | 'elevenLabsEndpointBase'
+  >;
+}
+
+function getChannelSettingsSnapshot(config: SubstrateConfig) {
+  return {
     discordTriggerWords: config.discordTriggerWords?.join(', ') ?? null,
     discordTriggerReactions: config.discordTriggerReactions?.join(', ') ?? '👆',
-    discordTriggerListenWindowMs: config.discordTriggerListenWindowMs ?? 120_000,
+    discordTriggerListenWindowMs:
+      config.discordTriggerListenWindowMs ?? 120_000,
     telegramEnabled: config.telegramEnabled ?? false,
     telegramAuthorizedUsers: config.telegramAuthorizedUsers?.join(', ') ?? null,
-    wyomingShardRouting: structuredClone(config.wyomingShardRouting ?? { enabled: false }),
+    wyomingShardRouting: structuredClone(
+      config.wyomingShardRouting ?? { enabled: false },
+    ),
     shardToolsets: structuredClone(config.shardToolsets ?? {}),
-    // Obsidian vault
+  } satisfies SnapshotSection<
+    | 'discordTriggerWords'
+    | 'discordTriggerReactions'
+    | 'discordTriggerListenWindowMs'
+    | 'telegramEnabled'
+    | 'telegramAuthorizedUsers'
+    | 'wyomingShardRouting'
+    | 'shardToolsets'
+  >;
+}
+
+function getObsidianAndMoaSettingsSnapshot(config: SubstrateConfig) {
+  return {
     obsidianVaultName: config.obsidianVaultName ?? null,
     obsidianCliPath: config.obsidianCliPath ?? 'obsidian',
     obsidianAutoPublish: config.obsidianAutoPublish ?? false,
     obsidianTimeoutMs: config.obsidianTimeoutMs ?? 10000,
-    // MoA (Mixture of Agents)
     moaEnabled: config.moaEnabled ?? false,
     moaReferenceModels: config.moaReferenceModels ?? [],
     moaAggregatorModel: config.moaAggregatorModel ?? null,
     moaMaxRounds: config.moaMaxRounds ?? null,
     moaMaxTokensPerRound: config.moaMaxTokensPerRound ?? null,
     moaTimeoutMs: config.moaTimeoutMs ?? null,
+  } satisfies SnapshotSection<
+    | 'obsidianVaultName'
+    | 'obsidianCliPath'
+    | 'obsidianAutoPublish'
+    | 'obsidianTimeoutMs'
+    | 'moaEnabled'
+    | 'moaReferenceModels'
+    | 'moaAggregatorModel'
+    | 'moaMaxRounds'
+    | 'moaMaxTokensPerRound'
+    | 'moaTimeoutMs'
+  >;
+}
+
+function hasSetting(settings: EditableSettings, key: string): boolean {
+  return key in settings;
+}
+
+function setConfigValue(
+  config: SubstrateConfig,
+  key: string,
+  value: unknown,
+): void {
+  (config as Record<string, unknown>)[key] = value;
+}
+
+function copyDefinedConfigSettings(
+  config: SubstrateConfig,
+  settings: EditableSettings,
+  keys: readonly SharedConfigSettingKey[],
+): void {
+  for (const key of keys) {
+    const value = settings[key];
+    if (value !== undefined) {
+      setConfigValue(config, key, value);
+    }
+  }
+}
+
+function copyListOrClear(value: string[] | undefined): string[] | undefined {
+  return value && value.length > 0 ? [...value] : undefined;
+}
+
+function getRawSetting(settings: EditableSettings, key: string): unknown {
+  return (settings as Record<string, unknown>)[key];
+}
+
+function trimmedSetting(settings: EditableSettings, key: string): string {
+  const value = getRawSetting(settings, key);
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function applyTrimmedSetting(
+  config: SubstrateConfig,
+  configKey: string,
+  settings: EditableSettings,
+  settingsKey: string,
+  emptyValue: string | undefined = undefined,
+): void {
+  if (!hasSetting(settings, settingsKey)) return;
+  setConfigValue(
+    config,
+    configKey,
+    trimmedSetting(settings, settingsKey) || emptyValue,
+  );
+}
+
+function parseCsvList(value: string | undefined): string[] {
+  const csv = value?.trim() ?? '';
+  return csv
+    ? [
+        ...new Set(
+          csv
+            .split(',')
+            .map((s) => s.trim())
+            .filter(Boolean),
+        ),
+      ]
+    : [];
+}
+
+export function isRuntimeSettingKey(value: string): value is RuntimeSettingKey {
+  return (RUNTIME_SETTINGS_KEYS as readonly string[]).includes(value);
+}
+
+export function getRuntimeSettingsSnapshot(
+  config: SubstrateConfig,
+): RuntimeSettingsSnapshot {
+  return {
+    ...getModelSettingsSnapshot(config),
+    ...getContextSettingsSnapshot(config),
+    ...getMemorySettingsSnapshot(config),
+    ...getProviderSettingsSnapshot(config),
+    ...getWebAndGardenSettingsSnapshot(config),
+    ...getVoiceSettingsSnapshot(config),
+    ...getChannelSettingsSnapshot(config),
+    ...getObsidianAndMoaSettingsSnapshot(config),
   };
 }
 
-/** Mutate config in place with defined settings values. */
-export function applySettings(config: SubstrateConfig, settings: EditableSettings): void {
-  if (settings.sessionHistoryBudgetPct !== undefined) {
-    config.sessionHistoryBudgetPct = settings.sessionHistoryBudgetPct;
-  }
-  if (settings.memoryRetrievalBudgetPct !== undefined) {
-    config.memoryRetrievalBudgetPct = settings.memoryRetrievalBudgetPct;
-  }
-  if (settings.moodCongruenceWeight !== undefined) {
-    config.moodCongruenceWeight = settings.moodCongruenceWeight;
-  }
-  if (settings.adaptiveContextBudgetsEnabled !== undefined) {
-    config.adaptiveContextBudgetsEnabled = settings.adaptiveContextBudgetsEnabled;
-  }
-  if (settings.sessionMirrorEnabled !== undefined) {
-    config.sessionMirrorEnabled = settings.sessionMirrorEnabled;
-  }
-  if (settings.sessionMirrorMaxChars !== undefined) {
-    config.sessionMirrorMaxChars = settings.sessionMirrorMaxChars;
-  }
-  if (settings.sessionMirrorActiveWindowMs !== undefined) {
-    config.sessionMirrorActiveWindowMs = settings.sessionMirrorActiveWindowMs;
-  }
+function applyCoreSettings(
+  config: SubstrateConfig,
+  settings: EditableSettings,
+): void {
+  copyDefinedConfigSettings(config, settings, DIRECT_DEFINED_CONFIG_SETTINGS);
   if ('sessionMirrorChannelOverrides' in settings) {
-    config.sessionMirrorChannelOverrides = structuredClone(settings.sessionMirrorChannelOverrides ?? {});
-  }
-  if (settings.continuityMessageLimit !== undefined) {
-    config.continuityMessageLimit = settings.continuityMessageLimit;
+    config.sessionMirrorChannelOverrides = structuredClone(
+      settings.sessionMirrorChannelOverrides ?? {},
+    );
   }
   if ('sessionRestartBehavior' in settings) {
     const behavior = settings.sessionRestartBehavior;
-    config.sessionRestartBehavior = behavior === 'new_session' ? 'new_session' : 'reuse_latest_session';
+    config.sessionRestartBehavior =
+      behavior === 'new_session' ? 'new_session' : 'reuse_latest_session';
   }
-  if (settings.extractionInterval !== undefined) config.extractionInterval = settings.extractionInterval;
-  if (settings.extractionThresholdPct !== undefined) {
-    config.extractionThresholdPct = settings.extractionThresholdPct;
-  }
-  if (settings.compactionThresholdPct !== undefined) {
-    config.compactionThresholdPct = settings.compactionThresholdPct;
-  }
-  if (settings.observationMaskingWindow !== undefined) {
-    config.observationMaskingWindow = settings.observationMaskingWindow;
-  }
-  if (settings.compactionEmotionalSalienceThresholdPct !== undefined) {
-    config.compactionEmotionalSalienceThresholdPct = settings.compactionEmotionalSalienceThresholdPct;
-  }
-  if (settings.memoryExtractionMinImportance !== undefined) {
-    config.memoryExtractionMinImportance = settings.memoryExtractionMinImportance;
-  }
-  if (settings.memoryExtractionMinConfidence !== undefined) {
-    config.memoryExtractionMinConfidence = settings.memoryExtractionMinConfidence;
-  }
-  if (settings.memoryExtractionMinNovelty !== undefined) {
-    config.memoryExtractionMinNovelty = settings.memoryExtractionMinNovelty;
-  }
-  if (settings.memoryExtractionEmotionalIntensityWeight !== undefined) {
-    config.memoryExtractionEmotionalIntensityWeight = settings.memoryExtractionEmotionalIntensityWeight;
-  }
-  if (settings.memoryExtractionMaxWrites !== undefined) {
-    config.memoryExtractionMaxWrites = settings.memoryExtractionMaxWrites;
-  }
-  if (settings.memoryExtractionTelemetryEnabled !== undefined) {
-    config.memoryExtractionTelemetryEnabled = settings.memoryExtractionTelemetryEnabled;
-  }
-  if (settings.memoryRetrievalTelemetryEnabled !== undefined) {
-    config.memoryRetrievalTelemetryEnabled = settings.memoryRetrievalTelemetryEnabled;
-  }
-  if (settings.profileSynthesisEnabled !== undefined) {
-    config.profileSynthesisEnabled = settings.profileSynthesisEnabled;
-  }
-  if (settings.profileSynthesisRefreshIntervalMs !== undefined) {
-    config.profileSynthesisRefreshIntervalMs = settings.profileSynthesisRefreshIntervalMs;
-  }
-  if (settings.profileSynthesisCooldownMs !== undefined) {
-    config.profileSynthesisCooldownMs = settings.profileSynthesisCooldownMs;
-  }
-  if (settings.profileSynthesisMinWrites !== undefined) {
-    config.profileSynthesisMinWrites = settings.profileSynthesisMinWrites;
-  }
-  if (settings.profileSynthesisMinImportance !== undefined) {
-    config.profileSynthesisMinImportance = settings.profileSynthesisMinImportance;
-  }
-  if (settings.profileSynthesisMinConfidence !== undefined) {
-    config.profileSynthesisMinConfidence = settings.profileSynthesisMinConfidence;
-  }
-  if (settings.profileSynthesisMinNovelty !== undefined) {
-    config.profileSynthesisMinNovelty = settings.profileSynthesisMinNovelty;
-  }
-  if (settings.profileSynthesisSourceMemoryLimit !== undefined) {
-    config.profileSynthesisSourceMemoryLimit = settings.profileSynthesisSourceMemoryLimit;
-  }
-  if (settings.profileSynthesisMinSourceMemories !== undefined) {
-    config.profileSynthesisMinSourceMemories = settings.profileSynthesisMinSourceMemories;
-  }
-  if (settings.thinkMaxTokens !== undefined) config.thinkMaxTokens = settings.thinkMaxTokens;
-  if (settings.thinkMaxWallTimeMs !== undefined) config.thinkMaxWallTimeMs = settings.thinkMaxWallTimeMs;
-  if (settings.thinkMaxSubQueries !== undefined) config.thinkMaxSubQueries = settings.thinkMaxSubQueries;
-  if (settings.retryMaxAttempts !== undefined) config.retryMaxAttempts = settings.retryMaxAttempts;
-  if (settings.retryBaseDelayMs !== undefined) config.retryBaseDelayMs = settings.retryBaseDelayMs;
+}
+
+function applyProviderSettings(
+  config: SubstrateConfig,
+  settings: EditableSettings,
+): void {
   if ('openRouterProviderOrder' in settings) {
-    config.openRouterProviderOrder = settings.openRouterProviderOrder && settings.openRouterProviderOrder.length > 0
-      ? [...settings.openRouterProviderOrder]
-      : undefined;
+    config.openRouterProviderOrder = copyListOrClear(
+      settings.openRouterProviderOrder,
+    );
   }
-  if ('openRouterModelsApiUrl' in settings) {
-    const trimmed = settings.openRouterModelsApiUrl?.trim() ?? '';
-    config.openRouterModelsApiUrl = trimmed || undefined;
-  }
+  applyTrimmedSetting(
+    config,
+    'openRouterModelsApiUrl',
+    settings,
+    'openRouterModelsApiUrl',
+  );
   if ('importProcessingRouteMode' in settings) {
-    config.importProcessingRouteMode = settings.importProcessingRouteMode ?? 'background';
+    config.importProcessingRouteMode =
+      settings.importProcessingRouteMode ?? 'background';
   }
   if ('importProcessingStrictPolicy' in settings) {
-    config.importProcessingStrictPolicy = settings.importProcessingStrictPolicy ?? false;
+    config.importProcessingStrictPolicy =
+      settings.importProcessingStrictPolicy ?? false;
   }
-  if ('importProcessingLocalEndpointUrl' in settings) {
-    const trimmed = settings.importProcessingLocalEndpointUrl?.trim() ?? '';
-    config.importProcessingLocalEndpointUrl = trimmed || undefined;
-  }
-  if ('importProcessingLocalModel' in settings) {
-    const trimmed = settings.importProcessingLocalModel?.trim() ?? '';
-    config.importProcessingLocalModel = trimmed || undefined;
-  }
+  applyTrimmedSetting(
+    config,
+    'importProcessingLocalEndpointUrl',
+    settings,
+    'importProcessingLocalEndpointUrl',
+  );
+  applyTrimmedSetting(
+    config,
+    'importProcessingLocalModel',
+    settings,
+    'importProcessingLocalModel',
+  );
   if ('embeddingProvider' in settings) {
     config.embeddingProvider = settings.embeddingProvider ?? 'transformers';
   }
-  if ('embeddingModel' in settings) {
-    const trimmed = settings.embeddingModel?.trim() ?? '';
-    config.embeddingModel = trimmed || undefined;
-  }
+  applyTrimmedSetting(config, 'embeddingModel', settings, 'embeddingModel');
   if ('embeddingDims' in settings) {
     config.embeddingDims = settings.embeddingDims ?? undefined;
   }
-  if ('embeddingOllamaUrl' in settings) {
-    const trimmed = settings.embeddingOllamaUrl?.trim() ?? '';
-    config.embeddingOllamaUrl = trimmed || undefined;
-  }
-  if ('transformersModel' in settings) {
-    const trimmed = settings.transformersModel?.trim() ?? '';
-    config.transformersModel = trimmed || undefined;
-  }
-  if ('transformersCacheDir' in settings) {
-    const trimmed = settings.transformersCacheDir?.trim() ?? '';
-    config.transformersCacheDir = trimmed || undefined;
-  }
-  if ('textEmotionModel' in settings) {
-    const trimmed = settings.textEmotionModel?.trim() ?? '';
-    config.textEmotionModel = trimmed || undefined;
-  }
-  if ('textEmotionCacheDir' in settings) {
-    const trimmed = settings.textEmotionCacheDir?.trim() ?? '';
-    config.textEmotionCacheDir = trimmed || undefined;
-  }
+  applyTrimmedSetting(
+    config,
+    'embeddingOllamaUrl',
+    settings,
+    'embeddingOllamaUrl',
+  );
+  applyTrimmedSetting(
+    config,
+    'transformersModel',
+    settings,
+    'transformersModel',
+  );
+  applyTrimmedSetting(
+    config,
+    'transformersCacheDir',
+    settings,
+    'transformersCacheDir',
+  );
+  applyTrimmedSetting(config, 'textEmotionModel', settings, 'textEmotionModel');
+  applyTrimmedSetting(
+    config,
+    'textEmotionCacheDir',
+    settings,
+    'textEmotionCacheDir',
+  );
   if ('textEmotionDtype' in settings) {
     config.textEmotionDtype = settings.textEmotionDtype ?? undefined;
   }
-  if ('embeddingApiUrl' in settings) {
-    const trimmed = settings.embeddingApiUrl?.trim() ?? '';
-    config.embeddingApiUrl = trimmed || undefined;
-  }
-  if ('embeddingApiModel' in settings) {
-    const trimmed = settings.embeddingApiModel?.trim() ?? '';
-    config.embeddingApiModel = trimmed || undefined;
-  }
+  applyTrimmedSetting(config, 'embeddingApiUrl', settings, 'embeddingApiUrl');
+  applyTrimmedSetting(
+    config,
+    'embeddingApiModel',
+    settings,
+    'embeddingApiModel',
+  );
   if ('embeddingApiDims' in settings) {
     config.embeddingApiDims = settings.embeddingApiDims ?? undefined;
   }
   if ('compositionalPolicy' in settings) {
-    config.compositionalPolicy = cloneCompositionalPolicyConfig(settings.compositionalPolicy);
+    config.compositionalPolicy = cloneCompositionalPolicyConfig(
+      settings.compositionalPolicy,
+    );
   }
+}
+
+function applyWebAndGardenSettings(
+  config: SubstrateConfig,
+  settings: EditableSettings,
+): void {
   if ('webFetchAllowHttp' in settings) {
     config.webFetchAllowHttp = settings.webFetchAllowHttp ?? false;
   }
   if ('webFetchDomainAllowlist' in settings) {
-    config.webFetchDomainAllowlist = settings.webFetchDomainAllowlist && settings.webFetchDomainAllowlist.length > 0
-      ? [...settings.webFetchDomainAllowlist]
-      : undefined;
+    config.webFetchDomainAllowlist = copyListOrClear(
+      settings.webFetchDomainAllowlist,
+    );
   }
   if ('webFetchAllowInternalNetwork' in settings) {
-    config.webFetchAllowInternalNetwork = settings.webFetchAllowInternalNetwork ?? false;
+    config.webFetchAllowInternalNetwork =
+      settings.webFetchAllowInternalNetwork ?? false;
   }
   if ('webFetchLocalCrawlerEnabled' in settings) {
-    config.webFetchLocalCrawlerEnabled = settings.webFetchLocalCrawlerEnabled ?? false;
+    config.webFetchLocalCrawlerEnabled =
+      settings.webFetchLocalCrawlerEnabled ?? false;
   }
   if ('webFetchLocalCrawlerAllowHttp' in settings) {
-    config.webFetchLocalCrawlerAllowHttp = settings.webFetchLocalCrawlerAllowHttp ?? false;
+    config.webFetchLocalCrawlerAllowHttp =
+      settings.webFetchLocalCrawlerAllowHttp ?? false;
   }
   if ('webFetchLocalCrawlerHostAllowlist' in settings) {
-    config.webFetchLocalCrawlerHostAllowlist =
-      settings.webFetchLocalCrawlerHostAllowlist && settings.webFetchLocalCrawlerHostAllowlist.length > 0
-        ? [...settings.webFetchLocalCrawlerHostAllowlist]
-        : undefined;
+    config.webFetchLocalCrawlerHostAllowlist = copyListOrClear(
+      settings.webFetchLocalCrawlerHostAllowlist,
+    );
   }
   if ('webFetchLocalCrawlerDomainAllowlist' in settings) {
-    config.webFetchLocalCrawlerDomainAllowlist =
-      settings.webFetchLocalCrawlerDomainAllowlist && settings.webFetchLocalCrawlerDomainAllowlist.length > 0
-        ? [...settings.webFetchLocalCrawlerDomainAllowlist]
-        : undefined;
+    config.webFetchLocalCrawlerDomainAllowlist = copyListOrClear(
+      settings.webFetchLocalCrawlerDomainAllowlist,
+    );
   }
   if ('webFetchTlsCaCertPaths' in settings) {
-    config.webFetchTlsCaCertPaths = settings.webFetchTlsCaCertPaths && settings.webFetchTlsCaCertPaths.length > 0
-      ? [...settings.webFetchTlsCaCertPaths]
-      : undefined;
+    config.webFetchTlsCaCertPaths = copyListOrClear(
+      settings.webFetchTlsCaCertPaths,
+    );
   }
 
-  if (settings.capabilityTier !== undefined && isCapabilityTier(settings.capabilityTier)) {
+  if (
+    settings.capabilityTier !== undefined &&
+    isCapabilityTier(settings.capabilityTier)
+  ) {
     config.capabilityTier = settings.capabilityTier;
   }
   if ('promotedExtendedTools' in settings) {
-    config.promotedExtendedTools = toPromotedToolList(settings.promotedExtendedTools);
+    config.promotedExtendedTools = toPromotedToolList(
+      settings.promotedExtendedTools,
+    );
   }
-  if ('chatApiBaseUrl' in settings) {
-    const trimmed = settings.chatApiBaseUrl?.trim() ?? '';
-    (config as SubstrateConfig & { chatApiBaseUrl?: string }).chatApiBaseUrl = trimmed || undefined;
-  }
-  if ('comfyUiBaseUrl' in settings) {
-    const trimmed = settings.comfyUiBaseUrl?.trim() ?? '';
-    config.comfyUiBaseUrl = trimmed || undefined;
-  }
+  applyTrimmedSetting(config, 'chatApiBaseUrl', settings, 'chatApiBaseUrl');
+  applyTrimmedSetting(config, 'comfyUiBaseUrl', settings, 'comfyUiBaseUrl');
   if ('imageWorkflows' in settings) {
-    config.imageWorkflows = normalizeImageWorkflowSettings(settings.imageWorkflows);
+    config.imageWorkflows = normalizeImageWorkflowSettings(
+      settings.imageWorkflows,
+    );
   }
   if ('uiThemeId' in settings) {
     const trimmedThemeId = settings.uiThemeId?.trim() ?? '';
     config.uiThemeId = trimmedThemeId || DEFAULT_UI_THEME_ID;
   }
+}
 
-  // Voice / TTS
-  if (settings.voiceEnabled !== undefined) {
-    config.voiceEnabled = settings.voiceEnabled;
+function applyVoiceSettings(
+  config: SubstrateConfig,
+  settings: EditableSettings,
+): void {
+  if ('voiceEnabled' in settings) {
+    const voiceEnabled = getRawSetting(settings, 'voiceEnabled');
+    if (voiceEnabled !== undefined) {
+      setConfigValue(config, 'voiceEnabled', voiceEnabled);
+    }
   }
   if ('ttsProvider' in settings) {
     config.ttsProvider = normalizeTtsProvider(settings.ttsProvider);
   }
-  if ('voiceId' in settings) {
-    const trimmed = settings.voiceId?.trim() ?? '';
-    config.elevenLabsVoiceId = trimmed || undefined;
-  }
-  if ('voiceTargetGuildId' in settings) {
-    const trimmed = settings.voiceTargetGuildId?.trim() ?? '';
-    config.voiceTargetGuildId = trimmed || '';
-  }
-  if ('voiceTargetUserId' in settings) {
-    const trimmed = settings.voiceTargetUserId?.trim() ?? '';
-    config.voiceTargetUserId = trimmed || '';
-  }
-  if ('voiceReadyCueText' in settings) {
-    const trimmed = settings.voiceReadyCueText?.trim() ?? '';
-    config.voiceReadyCueText = trimmed || '';
-  }
-  if ('echoTtsUrl' in settings) {
-    const trimmed = settings.echoTtsUrl?.trim() ?? '';
-    config.echoTtsUrl = trimmed || undefined;
-  }
-  if ('echoTtsVoice' in settings) {
-    const trimmed = settings.echoTtsVoice?.trim() ?? '';
-    config.echoTtsVoice = trimmed || undefined;
-  }
-  if ('echoTtsPreset' in settings) {
-    const trimmed = settings.echoTtsPreset?.trim() ?? '';
-    config.echoTtsPreset = trimmed || undefined;
-  }
+  applyTrimmedSetting(config, 'elevenLabsVoiceId', settings, 'voiceId');
+  applyTrimmedSetting(
+    config,
+    'voiceTargetGuildId',
+    settings,
+    'voiceTargetGuildId',
+    '',
+  );
+  applyTrimmedSetting(
+    config,
+    'voiceTargetUserId',
+    settings,
+    'voiceTargetUserId',
+    '',
+  );
+  applyTrimmedSetting(
+    config,
+    'voiceReadyCueText',
+    settings,
+    'voiceReadyCueText',
+    '',
+  );
+  applyTrimmedSetting(config, 'echoTtsUrl', settings, 'echoTtsUrl');
+  applyTrimmedSetting(config, 'echoTtsVoice', settings, 'echoTtsVoice');
+  applyTrimmedSetting(config, 'echoTtsPreset', settings, 'echoTtsPreset');
   if ('sttProvider' in settings) {
     config.sttProvider = normalizeSttProvider(settings.sttProvider);
   }
-  if ('deepgramModel' in settings) {
-    const trimmed = settings.deepgramModel?.trim() ?? '';
-    config.deepgramModel = trimmed || undefined;
-  }
-  if ('deepgramSttEndpoint' in settings) {
-    const trimmed = settings.deepgramSttEndpoint?.trim() ?? '';
-    config.deepgramSttEndpoint = trimmed || undefined;
-  }
-  if ('deepgramListenEndpoint' in settings) {
-    const trimmed = settings.deepgramListenEndpoint?.trim() ?? '';
-    config.deepgramListenEndpoint = trimmed || undefined;
-  }
-  if ('elevenLabsModelId' in settings) {
-    const trimmed = settings.elevenLabsModelId?.trim() ?? '';
-    config.elevenLabsModelId = trimmed || undefined;
-  }
-  if ('elevenLabsEndpointBase' in settings) {
-    const trimmed = settings.elevenLabsEndpointBase?.trim() ?? '';
-    config.elevenLabsEndpointBase = trimmed || undefined;
-  }
+  applyTrimmedSetting(config, 'deepgramModel', settings, 'deepgramModel');
+  applyTrimmedSetting(
+    config,
+    'deepgramSttEndpoint',
+    settings,
+    'deepgramSttEndpoint',
+  );
+  applyTrimmedSetting(
+    config,
+    'deepgramListenEndpoint',
+    settings,
+    'deepgramListenEndpoint',
+  );
+  applyTrimmedSetting(
+    config,
+    'elevenLabsModelId',
+    settings,
+    'elevenLabsModelId',
+  );
+  applyTrimmedSetting(
+    config,
+    'elevenLabsEndpointBase',
+    settings,
+    'elevenLabsEndpointBase',
+  );
   if ('wyomingShardRouting' in settings) {
-    config.wyomingShardRouting = structuredClone(settings.wyomingShardRouting ?? { enabled: false });
+    config.wyomingShardRouting = structuredClone(
+      (getRawSetting(
+        settings,
+        'wyomingShardRouting',
+      ) as SubstrateConfig['wyomingShardRouting']) ?? { enabled: false },
+    );
   }
   if ('shardToolsets' in settings) {
-    config.shardToolsets = structuredClone(settings.shardToolsets);
+    config.shardToolsets = structuredClone(
+      getRawSetting(
+        settings,
+        'shardToolsets',
+      ) as SubstrateConfig['shardToolsets'],
+    );
   }
+}
 
-  // Channels
+function applyChannelSettings(
+  config: SubstrateConfig,
+  settings: EditableSettings,
+): void {
   if ('discordTriggerWords' in settings) {
-    const csv = settings.discordTriggerWords?.trim() ?? '';
-    config.discordTriggerWords = csv
-      ? [...new Set(csv.split(',').map(s => s.trim()).filter(Boolean))]
-      : [];
+    config.discordTriggerWords = parseCsvList(settings.discordTriggerWords);
   }
   if ('discordTriggerReactions' in settings) {
-    const csv = settings.discordTriggerReactions?.trim() ?? '';
-    const reactions = csv
-      ? [...new Set(csv.split(',').map(s => s.trim()).filter(Boolean))]
-      : [];
+    const reactions = parseCsvList(settings.discordTriggerReactions);
     config.discordTriggerReactions = reactions.length > 0 ? reactions : ['👆'];
   }
   if ('discordTriggerListenWindowMs' in settings) {
-    config.discordTriggerListenWindowMs = settings.discordTriggerListenWindowMs ?? 120_000;
+    config.discordTriggerListenWindowMs =
+      settings.discordTriggerListenWindowMs ?? 120_000;
   }
   if ('telegramEnabled' in settings) {
     config.telegramEnabled = settings.telegramEnabled ?? false;
   }
   if ('telegramAuthorizedUsers' in settings) {
-    const csv = settings.telegramAuthorizedUsers?.trim() ?? '';
-    config.telegramAuthorizedUsers = csv
-      ? [...new Set(csv.split(',').map(s => s.trim()).filter(Boolean))]
-      : undefined;
+    config.telegramAuthorizedUsers = copyListOrClear(
+      parseCsvList(settings.telegramAuthorizedUsers),
+    );
   }
+}
 
-  // Obsidian vault
-  if ('obsidianVaultName' in settings) {
-    config.obsidianVaultName = settings.obsidianVaultName?.trim() || undefined;
-  }
-  if ('obsidianCliPath' in settings) {
-    config.obsidianCliPath = settings.obsidianCliPath?.trim() || undefined;
-  }
+function applyObsidianAndMoaSettings(
+  config: SubstrateConfig,
+  settings: EditableSettings,
+): void {
+  applyTrimmedSetting(
+    config,
+    'obsidianVaultName',
+    settings,
+    'obsidianVaultName',
+  );
+  applyTrimmedSetting(config, 'obsidianCliPath', settings, 'obsidianCliPath');
   if ('obsidianAutoPublish' in settings) {
     config.obsidianAutoPublish = settings.obsidianAutoPublish ?? false;
   }
@@ -503,29 +772,35 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
     config.obsidianTimeoutMs = settings.obsidianTimeoutMs;
   }
 
-  // MoA (Mixture of Agents)
   if ('moaEnabled' in settings) {
     config.moaEnabled = settings.moaEnabled ?? false;
   }
   if ('moaReferenceModels' in settings) {
-    config.moaReferenceModels = settings.moaReferenceModels && settings.moaReferenceModels.length > 0
-      ? [...settings.moaReferenceModels]
-      : undefined;
+    config.moaReferenceModels = copyListOrClear(settings.moaReferenceModels);
   }
-  if ('moaAggregatorModel' in settings) {
-    const trimmed = settings.moaAggregatorModel?.trim() ?? '';
-    config.moaAggregatorModel = trimmed || undefined;
-  }
-  if (settings.moaMaxRounds !== undefined) config.moaMaxRounds = settings.moaMaxRounds;
-  if (settings.moaMaxTokensPerRound !== undefined) config.moaMaxTokensPerRound = settings.moaMaxTokensPerRound;
-  if (settings.moaTimeoutMs !== undefined) config.moaTimeoutMs = settings.moaTimeoutMs;
+  applyTrimmedSetting(
+    config,
+    'moaAggregatorModel',
+    settings,
+    'moaAggregatorModel',
+  );
+}
 
-  if (hasLegacyModelSettingsPayload(settings) && settings.modelRegistry === undefined) {
-    throw new Error('Legacy model settings payloads are unsupported; use modelRegistry');
+function applyModelSettings(
+  config: SubstrateConfig,
+  settings: EditableSettings,
+): void {
+  if (
+    hasLegacyModelSettingsPayload(settings) &&
+    settings.modelRegistry === undefined
+  ) {
+    throw new Error(
+      'Legacy model settings payloads are unsupported; use modelRegistry',
+    );
   }
 
-  const shouldSyncModels = hasModelSettings(settings)
-    || config.modelRegistry !== undefined;
+  const shouldSyncModels =
+    hasModelSettings(settings) || config.modelRegistry !== undefined;
 
   if (!shouldSyncModels) return;
 
@@ -534,18 +809,41 @@ export function applySettings(config: SubstrateConfig, settings: EditableSetting
     defaultContextWindow: config.defaultContextWindow,
   });
 
-  if (normalized.primaryModel !== undefined) config.primaryModel = normalized.primaryModel;
-  if (normalized.primaryProvider !== undefined) config.primaryProvider = normalized.primaryProvider;
-  if (normalized.primaryMaxTokens !== undefined) config.primaryMaxTokens = normalized.primaryMaxTokens;
+  if (normalized.primaryModel !== undefined)
+    config.primaryModel = normalized.primaryModel;
+  if (normalized.primaryProvider !== undefined)
+    config.primaryProvider = normalized.primaryProvider;
+  if (normalized.primaryMaxTokens !== undefined)
+    config.primaryMaxTokens = normalized.primaryMaxTokens;
 
-  if (normalized.extractionModel !== undefined) config.extractionModel = normalized.extractionModel;
-  if (normalized.extractionProvider !== undefined) config.extractionProvider = normalized.extractionProvider;
-  if (normalized.extractionMaxTokens !== undefined) config.extractionMaxTokens = normalized.extractionMaxTokens;
+  if (normalized.extractionModel !== undefined)
+    config.extractionModel = normalized.extractionModel;
+  if (normalized.extractionProvider !== undefined)
+    config.extractionProvider = normalized.extractionProvider;
+  if (normalized.extractionMaxTokens !== undefined)
+    config.extractionMaxTokens = normalized.extractionMaxTokens;
 
-  if (normalized.modelRegistry !== undefined) config.modelRegistry = normalized.modelRegistry;
-  if (normalized.modelRoster !== undefined) config.modelRoster = normalized.modelRoster;
-  if (normalized.modelCatalog !== undefined) config.modelCatalog = normalized.modelCatalog;
+  if (normalized.modelRegistry !== undefined)
+    config.modelRegistry = normalized.modelRegistry;
+  if (normalized.modelRoster !== undefined)
+    config.modelRoster = normalized.modelRoster;
+  if (normalized.modelCatalog !== undefined)
+    config.modelCatalog = normalized.modelCatalog;
   if (normalized.modelRoleAssignments !== undefined) {
     config.modelRoleAssignments = normalized.modelRoleAssignments;
   }
+}
+
+/** Mutate config in place with defined settings values. */
+export function applySettings(
+  config: SubstrateConfig,
+  settings: EditableSettings,
+): void {
+  applyCoreSettings(config, settings);
+  applyProviderSettings(config, settings);
+  applyWebAndGardenSettings(config, settings);
+  applyVoiceSettings(config, settings);
+  applyChannelSettings(config, settings);
+  applyObsidianAndMoaSettings(config, settings);
+  applyModelSettings(config, settings);
 }

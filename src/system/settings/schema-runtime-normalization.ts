@@ -48,7 +48,9 @@ const TEXT_EMOTION_DTYPE_VALUES = [
 ] as const;
 const TEXT_EMOTION_DTYPE_SET = new Set<string>(TEXT_EMOTION_DTYPE_VALUES);
 
-function normalizeTextEmotionDtype(value: unknown): EditableSettings['textEmotionDtype'] | undefined {
+function normalizeTextEmotionDtype(
+  value: unknown,
+): EditableSettings['textEmotionDtype'] | undefined {
   if (typeof value !== 'string') {
     return undefined;
   }
@@ -76,7 +78,9 @@ function normalizeBooleanMap(
     if (!key) continue;
     const normalized = toBoolean(rawValue);
     if (normalized === undefined) {
-      throw new Error(`Invalid settings at ${fieldPath}.${rawKey}: expected boolean`);
+      throw new Error(
+        `Invalid settings at ${fieldPath}.${rawKey}: expected boolean`,
+      );
     }
     parsed[key] = normalized;
   }
@@ -95,20 +99,25 @@ function normalizeWyomingShardRoutingConfig(
     throw new Error(`Invalid settings at ${fieldPath}: expected object`);
   }
 
-  const enabled = value.enabled === undefined
-    ? false
-    : toBoolean(value.enabled);
+  const enabled =
+    value.enabled === undefined ? false : toBoolean(value.enabled);
   if (enabled === undefined) {
-    throw new Error(`Invalid settings at ${fieldPath}.enabled: expected boolean`);
+    throw new Error(
+      `Invalid settings at ${fieldPath}.enabled: expected boolean`,
+    );
   }
 
-  const parseAllowlist = (name: 'siteAllowlist' | 'satelliteAllowlist'): string[] | undefined => {
+  const parseAllowlist = (
+    name: 'siteAllowlist' | 'satelliteAllowlist',
+  ): string[] | undefined => {
     const raw = value[name];
     if (raw === undefined) {
       return undefined;
     }
     if (!Array.isArray(raw)) {
-      throw new Error(`Invalid settings at ${fieldPath}.${name}: expected array of strings`);
+      throw new Error(
+        `Invalid settings at ${fieldPath}.${name}: expected array of strings`,
+      );
     }
     return toStringList(raw) ?? [];
   };
@@ -135,11 +144,18 @@ function normalizeShardToolsetConfig(
   }
 
   const parsed: NonNullable<EditableSettings['shardToolsets']> = {};
-  for (const tier of ['nursery', 'apprentice', 'autonomous', 'custom'] as const) {
+  for (const tier of [
+    'nursery',
+    'apprentice',
+    'autonomous',
+    'custom',
+  ] as const) {
     const raw = value[tier];
     if (raw === undefined) continue;
     if (!Array.isArray(raw)) {
-      throw new Error(`Invalid settings at ${fieldPath}.${tier}: expected array of strings`);
+      throw new Error(
+        `Invalid settings at ${fieldPath}.${tier}: expected array of strings`,
+      );
     }
     parsed[tier] = toStringList(raw) ?? [];
   }
@@ -147,55 +163,129 @@ function normalizeShardToolsetConfig(
   return parsed;
 }
 
-export function normalizeContextControlSettings(settings: EditableSettings): EditableSettings {
-  const normalized: EditableSettings = { ...settings };
+function hasSetting(settings: EditableSettings, key: string): boolean {
+  return key in settings;
+}
+
+function getSetting(settings: EditableSettings, key: string): unknown {
+  return (settings as Record<string, unknown>)[key];
+}
+
+function setSetting(
+  settings: EditableSettings,
+  key: string,
+  value: unknown,
+): void {
+  (settings as Record<string, unknown>)[key] = value;
+}
+
+function deleteSetting(settings: EditableSettings, key: string): void {
+  delete (settings as Record<string, unknown>)[key];
+}
+
+function trimStringSetting(settings: EditableSettings, key: string): string {
+  const value = getSetting(settings, key);
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeIntegerRangeSetting(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+  key: string,
+  min: number,
+  max: number,
+): void {
+  const value = toIntegerInRange(getSetting(settings, key), min, max);
+  if (value !== undefined) {
+    setSetting(normalized, key, value);
+  } else {
+    deleteSetting(normalized, key);
+  }
+}
+
+function normalizeTrimmedStringSetting(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+  key: string,
+): void {
+  if (hasSetting(settings, key)) {
+    setSetting(normalized, key, trimStringSetting(settings, key));
+  }
+}
+
+function normalizeStringListSetting(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+  key: string,
+): void {
+  if (hasSetting(settings, key)) {
+    setSetting(normalized, key, toStringList(getSetting(settings, key)) ?? []);
+  }
+}
+
+function normalizeBooleanSetting(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+  key: string,
+): void {
+  if (hasSetting(settings, key)) {
+    setSetting(normalized, key, toBoolean(getSetting(settings, key)) ?? false);
+  }
+}
+
+function normalizeEndpointAndGardenSettings(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+): void {
+  normalizeTrimmedStringSetting(normalized, settings, 'chatApiBaseUrl');
+  normalizeTrimmedStringSetting(normalized, settings, 'comfyUiBaseUrl');
+  if ('imageWorkflows' in settings) {
+    normalized.imageWorkflows = normalizeImageWorkflowSettings(
+      settings.imageWorkflows,
+    );
+  }
+  if ('uiThemeId' in settings) {
+    normalized.uiThemeId =
+      toNonEmptyString(settings.uiThemeId) ?? DEFAULT_UI_THEME_ID;
+  }
+}
+
+function normalizeBudgetAndThresholdSettings(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+): void {
   for (const key of REMOVED_RUNTIME_SETTINGS_KEYS) {
-    delete (normalized as Record<string, unknown>)[key];
+    deleteSetting(normalized, key);
   }
 
-  const sessionBudgetPct = toIntegerInRange(
-    settings.sessionHistoryBudgetPct,
+  normalizeIntegerRangeSetting(
+    normalized,
+    settings,
+    'sessionHistoryBudgetPct',
     SESSION_HISTORY_BUDGET_PCT_RANGE.min,
     SESSION_HISTORY_BUDGET_PCT_RANGE.max,
   );
-  if (sessionBudgetPct !== undefined) {
-    normalized.sessionHistoryBudgetPct = sessionBudgetPct;
-  } else {
-    delete normalized.sessionHistoryBudgetPct;
-  }
-
-  const retrievalBudgetPct = toIntegerInRange(
-    settings.memoryRetrievalBudgetPct,
+  normalizeIntegerRangeSetting(
+    normalized,
+    settings,
+    'memoryRetrievalBudgetPct',
     MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.min,
     MEMORY_RETRIEVAL_BUDGET_PCT_RANGE.max,
   );
-  if (retrievalBudgetPct !== undefined) {
-    normalized.memoryRetrievalBudgetPct = retrievalBudgetPct;
-  } else {
-    delete normalized.memoryRetrievalBudgetPct;
-  }
-
-  const extractionThresholdPct = toIntegerInRange(
-    settings.extractionThresholdPct,
+  normalizeIntegerRangeSetting(
+    normalized,
+    settings,
+    'extractionThresholdPct',
     EXTRACTION_THRESHOLD_PCT_RANGE.min,
     EXTRACTION_THRESHOLD_PCT_RANGE.max,
   );
-  if (extractionThresholdPct !== undefined) {
-    normalized.extractionThresholdPct = extractionThresholdPct;
-  } else {
-    delete normalized.extractionThresholdPct;
-  }
-
-  const compactionThresholdPct = toIntegerInRange(
-    settings.compactionThresholdPct,
+  normalizeIntegerRangeSetting(
+    normalized,
+    settings,
+    'compactionThresholdPct',
     COMPACTION_THRESHOLD_PCT_RANGE.min,
     COMPACTION_THRESHOLD_PCT_RANGE.max,
   );
-  if (compactionThresholdPct !== undefined) {
-    normalized.compactionThresholdPct = compactionThresholdPct;
-  } else {
-    delete normalized.compactionThresholdPct;
-  }
 
   const moodCongruenceWeight = toNumberInRange(
     settings.moodCongruenceWeight,
@@ -205,130 +295,124 @@ export function normalizeContextControlSettings(settings: EditableSettings): Edi
   if (moodCongruenceWeight !== undefined) {
     normalized.moodCongruenceWeight = moodCongruenceWeight;
   } else {
-    delete normalized.moodCongruenceWeight;
+    deleteSetting(normalized, 'moodCongruenceWeight');
   }
 
   if ('adaptiveContextBudgetsEnabled' in settings) {
-    const adaptiveContextBudgetsEnabled = toBoolean(settings.adaptiveContextBudgetsEnabled);
+    const adaptiveContextBudgetsEnabled = toBoolean(
+      settings.adaptiveContextBudgetsEnabled,
+    );
     if (adaptiveContextBudgetsEnabled !== undefined) {
       normalized.adaptiveContextBudgetsEnabled = adaptiveContextBudgetsEnabled;
     } else {
-      delete normalized.adaptiveContextBudgetsEnabled;
+      deleteSetting(normalized, 'adaptiveContextBudgetsEnabled');
     }
   }
 
-  const emotionalSalienceThresholdPct = toIntegerInRange(
-    settings.compactionEmotionalSalienceThresholdPct,
+  normalizeIntegerRangeSetting(
+    normalized,
+    settings,
+    'compactionEmotionalSalienceThresholdPct',
     0,
     100,
   );
-  if (emotionalSalienceThresholdPct !== undefined) {
-    normalized.compactionEmotionalSalienceThresholdPct = emotionalSalienceThresholdPct;
-  } else {
-    delete normalized.compactionEmotionalSalienceThresholdPct;
-  }
-
-  const observationMaskingWindow = toIntegerInRange(
-    settings.observationMaskingWindow,
+  normalizeIntegerRangeSetting(
+    normalized,
+    settings,
+    'observationMaskingWindow',
     0,
     200,
   );
-  if (observationMaskingWindow !== undefined) {
-    normalized.observationMaskingWindow = observationMaskingWindow;
-  } else {
-    delete normalized.observationMaskingWindow;
-  }
+}
 
+function normalizeRouterAndProfileSettings(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+): void {
   if ('openRouterProviderOrder' in settings) {
-    normalized.openRouterProviderOrder = toStringList(settings.openRouterProviderOrder) ?? [];
+    normalized.openRouterProviderOrder =
+      toStringList(settings.openRouterProviderOrder) ?? [];
   }
+  normalizeTrimmedStringSetting(normalized, settings, 'openRouterModelsApiUrl');
 
-  if ('openRouterModelsApiUrl' in settings) {
-    normalized.openRouterModelsApiUrl = typeof settings.openRouterModelsApiUrl === 'string'
-      ? settings.openRouterModelsApiUrl.trim()
-      : '';
-  }
-
-  const profileSynthesisSourceMemoryLimit = toPositiveInteger(settings.profileSynthesisSourceMemoryLimit);
-  const profileSynthesisMinSourceMemories = toPositiveInteger(settings.profileSynthesisMinSourceMemories);
+  const profileSynthesisSourceMemoryLimit = toPositiveInteger(
+    settings.profileSynthesisSourceMemoryLimit,
+  );
+  const profileSynthesisMinSourceMemories = toPositiveInteger(
+    settings.profileSynthesisMinSourceMemories,
+  );
   if (profileSynthesisMinSourceMemories !== undefined) {
-    normalized.profileSynthesisMinSourceMemories = profileSynthesisMinSourceMemories;
+    normalized.profileSynthesisMinSourceMemories =
+      profileSynthesisMinSourceMemories;
   } else {
-    delete normalized.profileSynthesisMinSourceMemories;
+    deleteSetting(normalized, 'profileSynthesisMinSourceMemories');
   }
   if (
-    profileSynthesisSourceMemoryLimit !== undefined
-    || profileSynthesisMinSourceMemories !== undefined
+    profileSynthesisSourceMemoryLimit !== undefined ||
+    profileSynthesisMinSourceMemories !== undefined
   ) {
-    const effectiveSourceMemoryLimit = profileSynthesisSourceMemoryLimit !== undefined
-      && profileSynthesisMinSourceMemories !== undefined
-      ? Math.max(profileSynthesisSourceMemoryLimit, profileSynthesisMinSourceMemories)
-      : profileSynthesisSourceMemoryLimit;
+    const effectiveSourceMemoryLimit =
+      profileSynthesisSourceMemoryLimit !== undefined &&
+      profileSynthesisMinSourceMemories !== undefined
+        ? Math.max(
+            profileSynthesisSourceMemoryLimit,
+            profileSynthesisMinSourceMemories,
+          )
+        : profileSynthesisSourceMemoryLimit;
     if (effectiveSourceMemoryLimit !== undefined) {
       normalized.profileSynthesisSourceMemoryLimit = effectiveSourceMemoryLimit;
     } else {
-      delete normalized.profileSynthesisSourceMemoryLimit;
+      deleteSetting(normalized, 'profileSynthesisSourceMemoryLimit');
     }
   }
+}
 
+function normalizeImportProcessingSettings(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+): void {
   if ('importProcessingRouteMode' in settings) {
-    normalized.importProcessingRouteMode = toImportProcessingRouteMode(settings.importProcessingRouteMode);
+    normalized.importProcessingRouteMode = toImportProcessingRouteMode(
+      settings.importProcessingRouteMode,
+    );
   }
 
   if ('importProcessingStrictPolicy' in settings) {
-    normalized.importProcessingStrictPolicy = toBoolean(settings.importProcessingStrictPolicy) ?? false;
+    normalized.importProcessingStrictPolicy =
+      toBoolean(settings.importProcessingStrictPolicy) ?? false;
   }
+  normalizeTrimmedStringSetting(
+    normalized,
+    settings,
+    'importProcessingLocalEndpointUrl',
+  );
+  normalizeTrimmedStringSetting(
+    normalized,
+    settings,
+    'importProcessingLocalModel',
+  );
+}
 
-  if ('importProcessingLocalEndpointUrl' in settings) {
-    normalized.importProcessingLocalEndpointUrl =
-      typeof settings.importProcessingLocalEndpointUrl === 'string'
-        ? settings.importProcessingLocalEndpointUrl.trim()
-        : '';
-  }
-
-  if ('importProcessingLocalModel' in settings) {
-    normalized.importProcessingLocalModel =
-      typeof settings.importProcessingLocalModel === 'string'
-        ? settings.importProcessingLocalModel.trim()
-        : '';
-  }
-
+function normalizeEmbeddingSettings(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+): void {
   if ('embeddingProvider' in settings) {
     const provider = toEmbeddingProvider(settings.embeddingProvider);
     if (provider) {
       normalized.embeddingProvider = provider;
     } else {
-      delete normalized.embeddingProvider;
+      deleteSetting(normalized, 'embeddingProvider');
     }
   }
 
-  if ('embeddingModel' in settings) {
-    normalized.embeddingModel = typeof settings.embeddingModel === 'string'
-      ? settings.embeddingModel.trim()
-      : '';
-  }
-
+  normalizeTrimmedStringSetting(normalized, settings, 'embeddingModel');
   if ('embeddingDims' in settings) {
     normalized.embeddingDims = toPositiveInteger(settings.embeddingDims);
   }
-
-  if ('embeddingOllamaUrl' in settings) {
-    normalized.embeddingOllamaUrl = typeof settings.embeddingOllamaUrl === 'string'
-      ? settings.embeddingOllamaUrl.trim()
-      : '';
-  }
-
-  if ('transformersModel' in settings) {
-    normalized.transformersModel = typeof settings.transformersModel === 'string'
-      ? settings.transformersModel.trim()
-      : '';
-  }
-
-  if ('transformersCacheDir' in settings) {
-    normalized.transformersCacheDir = typeof settings.transformersCacheDir === 'string'
-      ? settings.transformersCacheDir.trim()
-      : '';
-  }
+  normalizeTrimmedStringSetting(normalized, settings, 'embeddingOllamaUrl');
+  normalizeTrimmedStringSetting(normalized, settings, 'transformersModel');
+  normalizeTrimmedStringSetting(normalized, settings, 'transformersCacheDir');
 
   if ('textEmotionModel' in settings) {
     const textEmotionModel = toNonEmptyString(settings.textEmotionModel);
@@ -338,14 +422,12 @@ export function normalizeContextControlSettings(settings: EditableSettings): Edi
     normalized.textEmotionModel = textEmotionModel;
   }
 
-  if ('textEmotionCacheDir' in settings) {
-    normalized.textEmotionCacheDir = typeof settings.textEmotionCacheDir === 'string'
-      ? settings.textEmotionCacheDir.trim()
-      : '';
-  }
+  normalizeTrimmedStringSetting(normalized, settings, 'textEmotionCacheDir');
 
   if ('textEmotionDtype' in settings) {
-    const textEmotionDtype = normalizeTextEmotionDtype(settings.textEmotionDtype);
+    const textEmotionDtype = normalizeTextEmotionDtype(
+      settings.textEmotionDtype,
+    );
     if (textEmotionDtype === undefined) {
       throw new Error(
         `textEmotionDtype must be one of: ${TEXT_EMOTION_DTYPE_VALUES.join(', ')}`,
@@ -354,71 +436,61 @@ export function normalizeContextControlSettings(settings: EditableSettings): Edi
     normalized.textEmotionDtype = textEmotionDtype;
   }
 
-  if ('embeddingApiUrl' in settings) {
-    normalized.embeddingApiUrl = typeof settings.embeddingApiUrl === 'string'
-      ? settings.embeddingApiUrl.trim()
-      : '';
-  }
-
-  if ('embeddingApiModel' in settings) {
-    normalized.embeddingApiModel = typeof settings.embeddingApiModel === 'string'
-      ? settings.embeddingApiModel.trim()
-      : '';
-  }
-
+  normalizeTrimmedStringSetting(normalized, settings, 'embeddingApiUrl');
+  normalizeTrimmedStringSetting(normalized, settings, 'embeddingApiModel');
   if ('embeddingApiDims' in settings) {
     normalized.embeddingApiDims = toPositiveInteger(settings.embeddingApiDims);
   }
+}
 
+function normalizeWebFetchSettings(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+): void {
   if ('compositionalPolicy' in settings) {
-    normalized.compositionalPolicy = normalizeCompositionalPolicyConfig(settings.compositionalPolicy);
+    normalized.compositionalPolicy = normalizeCompositionalPolicyConfig(
+      settings.compositionalPolicy,
+    );
   }
+  normalizeBooleanSetting(normalized, settings, 'webFetchAllowHttp');
+  normalizeStringListSetting(normalized, settings, 'webFetchDomainAllowlist');
+  normalizeBooleanSetting(normalized, settings, 'webFetchAllowInternalNetwork');
+  normalizeBooleanSetting(normalized, settings, 'webFetchLocalCrawlerEnabled');
+  normalizeBooleanSetting(
+    normalized,
+    settings,
+    'webFetchLocalCrawlerAllowHttp',
+  );
+  normalizeStringListSetting(
+    normalized,
+    settings,
+    'webFetchLocalCrawlerHostAllowlist',
+  );
+  normalizeStringListSetting(
+    normalized,
+    settings,
+    'webFetchLocalCrawlerDomainAllowlist',
+  );
+  normalizeStringListSetting(normalized, settings, 'webFetchTlsCaCertPaths');
+}
 
-  if ('webFetchAllowHttp' in settings) {
-    normalized.webFetchAllowHttp = toBoolean(settings.webFetchAllowHttp) ?? false;
-  }
-
-  if ('webFetchDomainAllowlist' in settings) {
-    normalized.webFetchDomainAllowlist = toStringList(settings.webFetchDomainAllowlist) ?? [];
-  }
-
-  if ('webFetchAllowInternalNetwork' in settings) {
-    normalized.webFetchAllowInternalNetwork = toBoolean(settings.webFetchAllowInternalNetwork) ?? false;
-  }
-
-  if ('webFetchLocalCrawlerEnabled' in settings) {
-    normalized.webFetchLocalCrawlerEnabled = toBoolean(settings.webFetchLocalCrawlerEnabled) ?? false;
-  }
-
-  if ('webFetchLocalCrawlerAllowHttp' in settings) {
-    normalized.webFetchLocalCrawlerAllowHttp = toBoolean(settings.webFetchLocalCrawlerAllowHttp) ?? false;
-  }
-
-  if ('webFetchLocalCrawlerHostAllowlist' in settings) {
-    normalized.webFetchLocalCrawlerHostAllowlist =
-      toStringList(settings.webFetchLocalCrawlerHostAllowlist) ?? [];
-  }
-
-  if ('webFetchLocalCrawlerDomainAllowlist' in settings) {
-    normalized.webFetchLocalCrawlerDomainAllowlist =
-      toStringList(settings.webFetchLocalCrawlerDomainAllowlist) ?? [];
-  }
-
-  if ('webFetchTlsCaCertPaths' in settings) {
-    normalized.webFetchTlsCaCertPaths = toStringList(settings.webFetchTlsCaCertPaths) ?? [];
-  }
-
+function normalizeCapabilityAndSessionSettings(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+): void {
   if ('capabilityTier' in settings) {
     const tier = settings.capabilityTier;
     if (tier !== undefined && isCapabilityTier(tier)) {
       normalized.capabilityTier = tier;
     } else {
-      delete normalized.capabilityTier;
+      deleteSetting(normalized, 'capabilityTier');
     }
   }
 
   if ('promotedExtendedTools' in settings) {
-    normalized.promotedExtendedTools = toPromotedToolList(settings.promotedExtendedTools);
+    normalized.promotedExtendedTools = toPromotedToolList(
+      settings.promotedExtendedTools,
+    );
   }
 
   if ('sessionRestartBehavior' in settings) {
@@ -426,15 +498,17 @@ export function normalizeContextControlSettings(settings: EditableSettings): Edi
     if (behavior) {
       normalized.sessionRestartBehavior = behavior;
     } else {
-      delete normalized.sessionRestartBehavior;
+      deleteSetting(normalized, 'sessionRestartBehavior');
     }
   }
 
-  if ('sessionMirrorEnabled' in settings) {
-    normalized.sessionMirrorEnabled = toBoolean(settings.sessionMirrorEnabled) ?? false;
-  }
+  normalizeBooleanSetting(normalized, settings, 'sessionMirrorEnabled');
   if ('sessionMirrorMaxChars' in settings) {
-    normalized.sessionMirrorMaxChars = toIntegerInRange(settings.sessionMirrorMaxChars, 32, 1_000_000);
+    normalized.sessionMirrorMaxChars = toIntegerInRange(
+      settings.sessionMirrorMaxChars,
+      32,
+      1_000_000,
+    );
   }
   if ('sessionMirrorActiveWindowMs' in settings) {
     normalized.sessionMirrorActiveWindowMs = toIntegerInRange(
@@ -450,113 +524,85 @@ export function normalizeContextControlSettings(settings: EditableSettings): Edi
     );
   }
   if ('continuityMessageLimit' in settings) {
-    normalized.continuityMessageLimit = toIntegerInRange(settings.continuityMessageLimit, 1, 1_000);
+    normalized.continuityMessageLimit = toIntegerInRange(
+      settings.continuityMessageLimit,
+      1,
+      1_000,
+    );
   }
+}
 
-  if ('chatApiBaseUrl' in settings) {
-    normalized.chatApiBaseUrl = typeof settings.chatApiBaseUrl === 'string'
-      ? settings.chatApiBaseUrl.trim()
-      : '';
-  }
-
-  if ('comfyUiBaseUrl' in settings) {
-    normalized.comfyUiBaseUrl = typeof settings.comfyUiBaseUrl === 'string'
-      ? settings.comfyUiBaseUrl.trim()
-      : '';
-  }
-
-  if ('imageWorkflows' in settings) {
-    normalized.imageWorkflows = normalizeImageWorkflowSettings(settings.imageWorkflows);
-  }
-
-  if ('uiThemeId' in settings) {
-    normalized.uiThemeId = toNonEmptyString(settings.uiThemeId) ?? DEFAULT_UI_THEME_ID;
-  }
-
-  // Voice / TTS
-  if ('voiceEnabled' in settings) {
-    normalized.voiceEnabled = toBoolean(settings.voiceEnabled) ?? false;
-  }
+function normalizeVoiceSettings(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+): void {
+  normalizeBooleanSetting(normalized, settings, 'voiceEnabled');
   if ('ttsProvider' in settings) {
     const provider = normalizeTtsProvider(settings.ttsProvider);
     if (provider !== undefined) {
       normalized.ttsProvider = provider;
     } else {
-      delete normalized.ttsProvider;
+      deleteSetting(normalized, 'ttsProvider');
     }
   }
-  if ('voiceId' in settings) {
-    normalized.voiceId = typeof settings.voiceId === 'string' ? settings.voiceId.trim() : '';
-  }
-  if ('voiceTargetGuildId' in settings) {
-    normalized.voiceTargetGuildId = typeof settings.voiceTargetGuildId === 'string'
-      ? settings.voiceTargetGuildId.trim()
-      : '';
-  }
-  if ('voiceTargetUserId' in settings) {
-    normalized.voiceTargetUserId = typeof settings.voiceTargetUserId === 'string'
-      ? settings.voiceTargetUserId.trim()
-      : '';
-  }
-  if ('voiceReadyCueText' in settings) {
-    normalized.voiceReadyCueText = typeof settings.voiceReadyCueText === 'string'
-      ? settings.voiceReadyCueText.trim()
-      : '';
-  }
-  if ('echoTtsUrl' in settings) {
-    normalized.echoTtsUrl = typeof settings.echoTtsUrl === 'string' ? settings.echoTtsUrl.trim() : '';
-  }
-  if ('echoTtsVoice' in settings) {
-    normalized.echoTtsVoice = typeof settings.echoTtsVoice === 'string' ? settings.echoTtsVoice.trim() : '';
-  }
-  if ('echoTtsPreset' in settings) {
-    normalized.echoTtsPreset = typeof settings.echoTtsPreset === 'string' ? settings.echoTtsPreset.trim() : '';
-  }
+  normalizeTrimmedStringSetting(normalized, settings, 'voiceId');
+  normalizeTrimmedStringSetting(normalized, settings, 'voiceTargetGuildId');
+  normalizeTrimmedStringSetting(normalized, settings, 'voiceTargetUserId');
+  normalizeTrimmedStringSetting(normalized, settings, 'voiceReadyCueText');
+  normalizeTrimmedStringSetting(normalized, settings, 'echoTtsUrl');
+  normalizeTrimmedStringSetting(normalized, settings, 'echoTtsVoice');
+  normalizeTrimmedStringSetting(normalized, settings, 'echoTtsPreset');
   if ('sttProvider' in settings) {
     const provider = normalizeSttProvider(settings.sttProvider);
     if (provider !== undefined) {
       normalized.sttProvider = provider;
     } else {
-      delete normalized.sttProvider;
+      deleteSetting(normalized, 'sttProvider');
     }
   }
-  if ('deepgramModel' in settings) {
-    normalized.deepgramModel = typeof settings.deepgramModel === 'string' ? settings.deepgramModel.trim() : '';
-  }
-  if ('deepgramSttEndpoint' in settings) {
-    normalized.deepgramSttEndpoint =
-      typeof settings.deepgramSttEndpoint === 'string' ? settings.deepgramSttEndpoint.trim() : '';
-  }
-  if ('deepgramListenEndpoint' in settings) {
-    normalized.deepgramListenEndpoint =
-      typeof settings.deepgramListenEndpoint === 'string' ? settings.deepgramListenEndpoint.trim() : '';
-  }
-  if ('elevenLabsModelId' in settings) {
-    normalized.elevenLabsModelId =
-      typeof settings.elevenLabsModelId === 'string' ? settings.elevenLabsModelId.trim() : '';
-  }
-  if ('elevenLabsEndpointBase' in settings) {
-    normalized.elevenLabsEndpointBase =
-      typeof settings.elevenLabsEndpointBase === 'string' ? settings.elevenLabsEndpointBase.trim() : '';
-  }
+  normalizeTrimmedStringSetting(normalized, settings, 'deepgramModel');
+  normalizeTrimmedStringSetting(normalized, settings, 'deepgramSttEndpoint');
+  normalizeTrimmedStringSetting(normalized, settings, 'deepgramListenEndpoint');
+  normalizeTrimmedStringSetting(normalized, settings, 'elevenLabsModelId');
+  normalizeTrimmedStringSetting(normalized, settings, 'elevenLabsEndpointBase');
+}
 
+function normalizeShardSettings(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+): void {
   if ('wyomingShardRouting' in settings) {
-    normalized.wyomingShardRouting = normalizeWyomingShardRoutingConfig(
-      settings.wyomingShardRouting,
+    setSetting(
+      normalized,
       'wyomingShardRouting',
+      normalizeWyomingShardRoutingConfig(
+        getSetting(settings, 'wyomingShardRouting'),
+        'wyomingShardRouting',
+      ),
     );
   }
   if ('shardToolsets' in settings) {
-    normalized.shardToolsets = normalizeShardToolsetConfig(settings.shardToolsets, 'shardToolsets');
+    setSetting(
+      normalized,
+      'shardToolsets',
+      normalizeShardToolsetConfig(
+        getSetting(settings, 'shardToolsets'),
+        'shardToolsets',
+      ),
+    );
   }
+}
 
-  // Channels
+function normalizeChannelSettings(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+): void {
   if ('discordTriggerWords' in settings) {
-    const trimmed = typeof settings.discordTriggerWords === 'string' ? settings.discordTriggerWords.trim() : '';
+    const trimmed = trimStringSetting(settings, 'discordTriggerWords');
     normalized.discordTriggerWords = trimmed || undefined;
   }
   if ('discordTriggerReactions' in settings) {
-    const trimmed = typeof settings.discordTriggerReactions === 'string' ? settings.discordTriggerReactions.trim() : '';
+    const trimmed = trimStringSetting(settings, 'discordTriggerReactions');
     normalized.discordTriggerReactions = trimmed || undefined;
   }
   if ('discordTriggerListenWindowMs' in settings) {
@@ -566,39 +612,59 @@ export function normalizeContextControlSettings(settings: EditableSettings): Edi
       600_000,
     );
   }
-  if ('telegramEnabled' in settings) {
-    normalized.telegramEnabled = toBoolean(settings.telegramEnabled) ?? false;
-  }
+  normalizeBooleanSetting(normalized, settings, 'telegramEnabled');
   if ('telegramAuthorizedUsers' in settings) {
-    const trimmed = typeof settings.telegramAuthorizedUsers === 'string' ? settings.telegramAuthorizedUsers.trim() : '';
+    const trimmed = trimStringSetting(settings, 'telegramAuthorizedUsers');
     normalized.telegramAuthorizedUsers = trimmed || undefined;
   }
+}
 
-  // Obsidian vault
+function normalizeObsidianAndMoaSettings(
+  normalized: EditableSettings,
+  settings: EditableSettings,
+): void {
   if ('obsidianVaultName' in settings) {
     normalized.obsidianVaultName = toNonEmptyString(settings.obsidianVaultName);
   }
   if ('obsidianCliPath' in settings) {
-    normalized.obsidianCliPath = toNonEmptyString(settings.obsidianCliPath) ?? 'obsidian';
+    normalized.obsidianCliPath =
+      toNonEmptyString(settings.obsidianCliPath) ?? 'obsidian';
   }
   if ('obsidianAutoPublish' in settings) {
-    normalized.obsidianAutoPublish = toBoolean(settings.obsidianAutoPublish) ?? false;
+    normalized.obsidianAutoPublish =
+      toBoolean(settings.obsidianAutoPublish) ?? false;
   }
   if ('obsidianTimeoutMs' in settings) {
-    normalized.obsidianTimeoutMs = toIntegerInRange(settings.obsidianTimeoutMs, 1000, 30000);
+    normalized.obsidianTimeoutMs = toIntegerInRange(
+      settings.obsidianTimeoutMs,
+      1000,
+      30000,
+    );
   }
 
-  // MoA (Mixture of Agents)
-  if ('moaEnabled' in settings) {
-    normalized.moaEnabled = toBoolean(settings.moaEnabled) ?? false;
-  }
-  if ('moaReferenceModels' in settings) {
-    normalized.moaReferenceModels = toStringList(settings.moaReferenceModels) ?? [];
-  }
+  normalizeBooleanSetting(normalized, settings, 'moaEnabled');
+  normalizeStringListSetting(normalized, settings, 'moaReferenceModels');
   if ('moaAggregatorModel' in settings) {
-    const trimmed = typeof settings.moaAggregatorModel === 'string' ? settings.moaAggregatorModel.trim() : '';
+    const trimmed = trimStringSetting(settings, 'moaAggregatorModel');
     normalized.moaAggregatorModel = trimmed || undefined;
   }
+}
+
+export function normalizeContextControlSettings(
+  settings: EditableSettings,
+): EditableSettings {
+  const normalized: EditableSettings = { ...settings };
+  normalizeBudgetAndThresholdSettings(normalized, settings);
+  normalizeRouterAndProfileSettings(normalized, settings);
+  normalizeImportProcessingSettings(normalized, settings);
+  normalizeEmbeddingSettings(normalized, settings);
+  normalizeWebFetchSettings(normalized, settings);
+  normalizeCapabilityAndSessionSettings(normalized, settings);
+  normalizeEndpointAndGardenSettings(normalized, settings);
+  normalizeVoiceSettings(normalized, settings);
+  normalizeShardSettings(normalized, settings);
+  normalizeChannelSettings(normalized, settings);
+  normalizeObsidianAndMoaSettings(normalized, settings);
 
   return normalized;
 }

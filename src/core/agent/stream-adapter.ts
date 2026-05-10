@@ -32,6 +32,7 @@ import {
 import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
+import { countMessageTokens } from '../../primitives/llm/tokens.js';
 
 const log = createComponentLogger('StreamAdapter');
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
@@ -740,19 +741,28 @@ function resolveEstimatedBudgetInputTokens(
 }
 
 function estimateContextInputTokens(context: unknown): number {
-  const countChars = (value: unknown): number => {
-    if (typeof value === 'string') return value.length;
-    if (Array.isArray(value)) return value.reduce((sum, entry) => sum + countChars(entry), 0);
-    if (value && typeof value === 'object') {
-      return Object.values(value as Record<string, unknown>).reduce<number>(
-        (sum, entry) => sum + countChars(entry),
-        0,
-      );
+  const llmContext = context as Partial<LLMContext>;
+  const budgetMessages: Array<{ role: string; content: string }> = [];
+
+  if (typeof llmContext.systemPrompt === 'string' && llmContext.systemPrompt) {
+    budgetMessages.push({
+      role: 'system',
+      content: llmContext.systemPrompt,
+    });
+  }
+
+  if (Array.isArray(llmContext.messages)) {
+    for (const message of llmContext.messages) {
+      budgetMessages.push({
+        role: message.role,
+        content: typeof message.content === 'string'
+          ? message.content
+          : JSON.stringify(message.content),
+      });
     }
-    return 0;
-  };
-  const charCount = countChars(context);
-  return Math.max(1, Math.ceil(charCount / 4));
+  }
+
+  return Math.max(1, countMessageTokens(budgetMessages));
 }
 
 function resolveStreamReasoningLevel(candidate: RoutingCandidate): ThinkingLevel | undefined {

@@ -14,6 +14,7 @@ import {
 } from './route-matchers.js';
 import type {
   AdminAdaptiveToolsService,
+  AdminChargeLedgerService,
   AdminContactsService,
   AdminDashboardService,
   AdminIdentityService,
@@ -121,10 +122,40 @@ const ADMIN_CHAT_BOOTSTRAP_API_PATH = '/api/admin/chat/bootstrap';
 const ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH = '/api/admin/chat/model-room/bootstrap';
 const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
 const ADMIN_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
+const CHARGE_LEDGER_UNAVAILABLE_ERROR = 'Charge ledger backend unavailable';
+
+function toFiniteQueryNumber(
+  value: string | null,
+  fieldName: string,
+): { ok: true; value?: number } | { ok: false; error: string } {
+  if (value === null) return { ok: true };
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: true };
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return { ok: false, error: `Invalid ${fieldName} query parameter. Expected a finite number >= 0.` };
+  }
+  return { ok: true, value: parsed };
+}
+
+function toPositiveIntegerQueryNumber(
+  value: string | null,
+  fieldName: string,
+): { ok: true; value?: number } | { ok: false; error: string } {
+  if (value === null) return { ok: true };
+  const trimmed = value.trim();
+  if (!trimmed) return { ok: true };
+  const parsed = Number(trimmed);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    return { ok: false, error: `Invalid ${fieldName} query parameter. Expected a positive integer.` };
+  }
+  return { ok: true, value: parsed };
+}
 
 export function buildAdminApiRoutes(options: {
   config: SubstrateConfig;
   dashboardService: AdminDashboardService;
+  chargeLedgerService?: AdminChargeLedgerService | null;
   shardFoldReviewService: AdminShardFoldReviewService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
   memoryService: AdminMemoryService;
@@ -151,6 +182,7 @@ export function buildAdminApiRoutes(options: {
   const {
     config,
     dashboardService,
+    chargeLedgerService,
     shardFoldReviewService,
     adaptiveToolsService,
     memoryService,
@@ -283,6 +315,46 @@ export function buildAdminApiRoutes(options: {
               error: `Failed to load dashboard data: ${toSanitizedMessage(error, 'unknown error')}`,
             });
           },
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/charges'),
+      handle: (req, res) => {
+        if (!chargeLedgerService) {
+          sendJson(res, 503, { error: CHARGE_LEDGER_UNAVAILABLE_ERROR });
+          return;
+        }
+
+        const url = parseRequestUrl(req, '/api/admin/charges');
+        const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+        if (!limit.ok) {
+          sendJson(res, 400, { error: limit.error });
+          return;
+        }
+        const sinceMs = toFiniteQueryNumber(url.searchParams.get('sinceMs'), 'sinceMs');
+        if (!sinceMs.ok) {
+          sendJson(res, 400, { error: sinceMs.error });
+          return;
+        }
+        const untilMs = toFiniteQueryNumber(url.searchParams.get('untilMs'), 'untilMs');
+        if (!untilMs.ok) {
+          sendJson(res, 400, { error: untilMs.error });
+          return;
+        }
+        const runId = url.searchParams.get('runId')?.trim() || undefined;
+
+        chargeLedgerService.getChargeLedgerData({
+          ...(limit.value !== undefined ? { limit: limit.value } : {}),
+          ...(sinceMs.value !== undefined ? { sinceMs: sinceMs.value } : {}),
+          ...(untilMs.value !== undefined ? { untilMs: untilMs.value } : {}),
+          ...(runId ? { runId } : {}),
+        }).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to load charge ledger data'),
+          }),
         );
       },
     },

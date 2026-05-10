@@ -19,6 +19,7 @@ import type {
 } from './chat/types.js';
 import type {
   AdminAdaptiveToolsService,
+  AdminChargeLedgerService,
   AdminContactsService,
   AdminDashboardService,
   AdminIdentityService,
@@ -116,6 +117,7 @@ export interface AdminChatBootstrapApi {
 
 export interface GardenAdminDomainServices {
   dashboard: AdminDashboardService;
+  charges?: AdminChargeLedgerService | null;
   shards: AdminShardFoldReviewService;
   adaptiveTools?: AdminAdaptiveToolsService | null;
   memory: AdminMemoryService;

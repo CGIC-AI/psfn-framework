@@ -663,6 +663,10 @@ export function resolveSafeguardAuditTrailPath(companionDataDir: string): string
   return join(resolveCompanionStateDir(companionDataDir), 'safeguards-audit.jsonl');
 }
 
+export function resolveChargeLedgerPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'charge-ledger.jsonl');
+}
+
 export function resolveShardSessionMemorySyncAuditPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'shard-session-memory-sync-audit.jsonl');
 }
@@ -751,6 +755,7 @@ function migrateLegacyCompanionStateLayout(companionDataDir: string): void {
     ['heartbeat-policy.json', resolveHeartbeatPolicyPath(companionDataDir)],
     ['post-turn-actions.queue.json', resolvePostTurnActionQueuePath(companionDataDir)],
     ['safeguards-audit.jsonl', resolveSafeguardAuditTrailPath(companionDataDir)],
+    ['charge-ledger.jsonl', resolveChargeLedgerPath(companionDataDir)],
     ['shard-session-memory-sync-audit.jsonl', resolveShardSessionMemorySyncAuditPath(companionDataDir)],
     ['shard-fold-reviews.json', resolveShardFoldReviewStorePath(companionDataDir)],
     ['last_active_channel.json', resolveLastActiveSessionPath(companionDataDir)],

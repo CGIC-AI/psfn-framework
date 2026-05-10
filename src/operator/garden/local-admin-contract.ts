@@ -20,6 +20,7 @@ import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
 import {
   resolveConfiguredCompanionDataDir,
+  resolveChargeLedgerPath,
   resolveLegacyValuesJournalPath,
   resolveNorthStarPath,
   resolveValuesJournalPath,
@@ -27,6 +28,7 @@ import {
 import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
@@ -37,6 +39,7 @@ import type {
 } from './admin-contract.js';
 import { AdminChatBootstrapService } from './chat/bootstrap.js';
 import { AdminAdaptiveToolsDataService } from './services/adaptive-tools-service.js';
+import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
 import { AdminIdentityDataService } from './services/identity-service.js';
@@ -86,6 +89,7 @@ export function createInProcessGardenAdminContract(
     legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
   });
   const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
+  const chargeLedger = new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
   const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
     resolvePromptRuntimeLayoutPath(companionDataDir),
   );
@@ -100,6 +104,7 @@ export function createInProcessGardenAdminContract(
       eventBus: options.eventBus,
       resolveLastActiveSessionId,
     }),
+    charges: new AdminChargeLedgerDataService(chargeLedger),
     shards: new AdminShardFoldReviewDataService(options.shardManager),
     adaptiveTools: new AdminAdaptiveToolsDataService({
       eventBus: options.eventBus,

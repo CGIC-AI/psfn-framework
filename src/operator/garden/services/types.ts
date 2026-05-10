@@ -28,6 +28,10 @@ import type { SessionEntry } from '../../../core/session/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import type {
+  RunChargeLedgerData,
+  RunChargeLedgerQuery,
+} from '../../../shared/telemetry/charge-ledger.js';
+import type {
   Contact,
   ContactIdentityLinkVerification,
   ContactMutationAuditEntry,
@@ -95,6 +99,10 @@ export interface AdminDashboardData {
 
 export interface AdminDashboardService {
   getDashboardData(options?: { costWindow?: DashboardCostWindow }): Promise<AdminDashboardData>;
+}
+
+export interface AdminChargeLedgerService {
+  getChargeLedgerData(query?: RunChargeLedgerQuery): Promise<RunChargeLedgerData>;
 }
 
 export interface AdminShardFoldReviewSummary {

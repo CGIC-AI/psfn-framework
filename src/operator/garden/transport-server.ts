@@ -54,6 +54,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       dashboardService: config.services.dashboard,
       shardFoldReviewService: config.services.shards,
       adaptiveToolsService: config.services.adaptiveTools,
+      episodicMemoryService: config.services.episodicMemory,
       memoryService: config.services.memory,
       sessionService: config.services.sessions,
       contactsService: config.services.contacts,

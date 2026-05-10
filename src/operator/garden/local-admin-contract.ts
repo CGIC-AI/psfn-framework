@@ -15,6 +15,7 @@ import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import type { EpisodicStore } from '../../faculties/memory/episodic/store.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
@@ -42,6 +43,7 @@ import { AdminAdaptiveToolsDataService } from './services/adaptive-tools-service
 import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
+import { AdminEpisodicMemoryDataService } from './services/episodic-memory-service.js';
 import { AdminIdentityDataService } from './services/identity-service.js';
 import { AdminMemoryDataService } from './services/memory-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
@@ -56,6 +58,10 @@ export interface InProcessGardenAdminContractOptions {
   apiHost?: string;
   apiPort?: number;
   memoryStore: MemoryStorePort;
+  episodicStore?: Pick<
+    EpisodicStore,
+    'getEpisode' | 'listEpisodeArcsForEpisode' | 'listEpisodes' | 'searchByThread' | 'searchByTime'
+  > | null;
   sessionStore: SessionStore;
   sessionManager: SessionManager;
   scheduler: Scheduler;
@@ -111,6 +117,9 @@ export function createInProcessGardenAdminContract(
       stateProvider: options.adaptiveToolsStateProvider ?? null,
       toolHealthProvider: options.toolHealthProvider ?? null,
     }),
+    episodicMemory: options.episodicStore
+      ? new AdminEpisodicMemoryDataService(options.episodicStore)
+      : null,
     memory: new AdminMemoryDataService({
       memoryStore: options.memoryStore,
       contactStore: options.contactStore,

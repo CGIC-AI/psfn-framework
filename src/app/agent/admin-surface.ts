@@ -11,6 +11,7 @@ import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
+import type { EpisodicStore } from '../../faculties/memory/episodic/store.js';
 import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';
 import { resolveAdminTransportSocketPath } from '../../operator/garden/transport-paths.js';
 
@@ -23,6 +24,7 @@ export interface StartOptionalAdminTransportServerOptions {
   gateway: GatewayClient;
   eventBus: EventBus;
   scheduler: Scheduler;
+  episodicStore?: EpisodicStore | null;
   card: CharacterCardV2;
   shardManager: ShardExecutionPort;
   cardVersionStore: CharacterCardVersionStore;
@@ -53,6 +55,7 @@ export async function startOptionalAdminTransportServer(
     apiHost: options.apiHost,
     apiPort: options.apiPort,
     memoryStore: options.coreRuntime.memoryStore,
+    episodicStore: options.episodicStore ?? null,
     sessionStore: options.coreRuntime.sessionStore,
     sessionManager: options.coreRuntime.sessionManager,
     scheduler: options.scheduler,

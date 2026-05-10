@@ -56,6 +56,25 @@ export type {
   SettingsContractSubsystem,
 } from '../../../../src/system/config/settings-contract.js';
 export type {
+  Episode,
+  EpisodeAffect,
+  EpisodeArc,
+  EpisodeArcKind,
+  EpisodeArtifactRef,
+  EpisodeProvenanceRef,
+  EpisodeSalience,
+  EpisodeSpanRef,
+} from '../../../../src/shared/contracts/episodic-memory.js';
+export type {
+  AdminEpisodicEpisodeDetailData,
+  AdminEpisodicEpisodeListData,
+  AdminEpisodicEpisodeProvenanceData,
+  AdminEpisodicRelatedArcView,
+  AdminEpisodicThreadDetailData,
+  AdminEpisodicThreadListData,
+  AdminEpisodicThreadSummary,
+} from '../../../../src/operator/garden/services/types.js';
+export type {
   AdminDashboardData,
   AdminPromptDetailData,
   AdminPromptListData,

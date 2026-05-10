@@ -9,6 +9,7 @@ const GARDEN_CLIENT_ROUTES = new Set([
   '/chat',
   '/confirmations',
   '/contacts',
+  '/episodic-memory',
   '/identity',
   '/memory',
   '/model-room',

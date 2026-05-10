@@ -18,7 +18,7 @@ function makeResponse(): ServerResponse {
 
 describe('handleAdminRequest', () => {
   it('serves the Garden SPA for canonical root-served client routes', () => {
-    const req = makeRequest('GET', '/memory');
+    const req = makeRequest('GET', '/episodic-memory');
     const res = makeResponse();
     const serveGardenPage = vi.fn();
     const serveGardenBuildAsset = vi.fn();
@@ -36,8 +36,8 @@ describe('handleAdminRequest', () => {
       onRequestError: vi.fn(),
     });
 
-    expect(route).toHaveBeenCalledWith('GET', '/memory', req, res);
-    expect(serveGardenPage).toHaveBeenCalledWith('/memory', res);
+    expect(route).toHaveBeenCalledWith('GET', '/episodic-memory', req, res);
+    expect(serveGardenPage).toHaveBeenCalledWith('/episodic-memory', res);
     expect(serveGardenBuildAsset).not.toHaveBeenCalled();
     expect(sendNotFound).not.toHaveBeenCalled();
   });

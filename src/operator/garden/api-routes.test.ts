@@ -12,6 +12,7 @@ import { AdminServer } from './server.js';
 import { createInProcessGardenAdminContract } from './local-admin-contract.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
+import { EpisodicStore, type EpisodeCreateInput } from '../../faculties/memory/episodic/store.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -432,6 +433,7 @@ describe('AdminServer JSON API routes', () => {
   let db: Database.Database;
   let eventBus: EventBus;
   let memoryStore: MemoryStore;
+  let episodicStore: EpisodicStore;
   let sessionStore: SessionStore;
   let sessionManager: SessionManager;
   let scheduler: Scheduler;
@@ -470,6 +472,7 @@ describe('AdminServer JSON API routes', () => {
     sqliteVec.load(db);
     eventBus = new EventBus();
     memoryStore = new MemoryStore(db, 3);
+    episodicStore = new EpisodicStore(db);
     sessionStore = new SessionStore(sessionsDir);
     sessionManager = new SessionManager(sessionStore, testConfig, eventBus);
     scheduler = new Scheduler(eventBus);
@@ -649,6 +652,7 @@ describe('AdminServer JSON API routes', () => {
     port = await allocatePort();
     const services = createInProcessGardenAdminContract({
       memoryStore,
+      episodicStore,
       sessionStore,
       sessionManager,
       scheduler,
@@ -1653,6 +1657,186 @@ describe('AdminServer JSON API routes', () => {
       authHeaders,
     );
     expect(badRange.status).toBe(400);
+  });
+
+  it('exposes L0.1 episodic episodes, provenance, arcs, and threads', async () => {
+    const baseEpisode = (overrides: Partial<EpisodeCreateInput> = {}): EpisodeCreateInput => ({
+      title: 'Operator reviewed a woven thread',
+      landmark: 'The operator inspected canonical episodic memory visibility and provenance.',
+      startedAt: '2026-03-10T10:00:00.000Z',
+      endedAt: '2026-03-10T10:08:00.000Z',
+      threadId: 'thread-alpha',
+      channelId: 'api:test',
+      participantContactIds: ['contact-admin'],
+      salience: { score: 0.73, novelty: 0.44, emotionalIntensity: 0.2 },
+      affect: { valence: 0.1, arousal: 0.25, dominance: 0.5, labels: ['focused'] },
+      themes: ['operator-visibility', 'episodic-memory'],
+      spanRefs: [{
+        spanId: 'span-alpha-1',
+        threadId: 'thread-alpha',
+        channelId: 'api:test',
+        startedAt: '2026-03-10T10:00:00.000Z',
+        endedAt: '2026-03-10T10:08:00.000Z',
+      }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-alpha-1', note: 'Seeded by API route test' }],
+      ...overrides,
+    });
+
+    episodicStore.createEpisode(baseEpisode({ id: 'episode-alpha-1' }));
+    episodicStore.createEpisode(baseEpisode({
+      id: 'episode-alpha-2',
+      title: 'Operator followed a related arc',
+      startedAt: '2026-03-11T11:00:00.000Z',
+      endedAt: '2026-03-11T11:05:00.000Z',
+      spanRefs: [{
+        spanId: 'span-alpha-2',
+        threadId: 'thread-alpha',
+        channelId: 'api:test',
+        startedAt: '2026-03-11T11:00:00.000Z',
+        endedAt: '2026-03-11T11:05:00.000Z',
+      }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-alpha-2' }],
+    }));
+    episodicStore.createEpisode(baseEpisode({
+      id: 'episode-beta-1',
+      title: 'Unrelated thread remains filterable',
+      threadId: 'thread-beta',
+      startedAt: '2026-03-12T12:00:00.000Z',
+      endedAt: '2026-03-12T12:05:00.000Z',
+      spanRefs: [{
+        spanId: 'span-beta-1',
+        threadId: 'thread-beta',
+        channelId: 'api:test',
+      }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-beta-1' }],
+    }));
+    episodicStore.writeEpisodeArc({
+      id: 'arc-alpha-1',
+      sourceEpisodeId: 'episode-alpha-1',
+      targetEpisodeId: 'episode-alpha-2',
+      arcKind: 'continuation',
+      salience: 0.82,
+      confidence: 0.76,
+      themes: ['operator-visibility'],
+      spanRefs: [{ spanId: 'span-alpha-2' }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-alpha-2' }],
+    });
+
+    const listRes = await request(
+      port,
+      'GET',
+      '/api/admin/episodic-memory/episodes?threadId=thread-alpha',
+      undefined,
+      authHeaders,
+    );
+    expect(listRes.status).toBe(200);
+    const listPayload = JSON.parse(listRes.body) as {
+      episodes: Array<{ id: string; threadId: string }>;
+      pagination: { total: number };
+    };
+    expect(listPayload.pagination.total).toBe(2);
+    expect(listPayload.episodes.map(episode => episode.id)).toEqual(['episode-alpha-2', 'episode-alpha-1']);
+    expect(listPayload.episodes.every(episode => episode.threadId === 'thread-alpha')).toBe(true);
+
+    const detailRes = await request(
+      port,
+      'GET',
+      '/api/admin/episodic-memory/episodes/episode-alpha-1',
+      undefined,
+      authHeaders,
+    );
+    expect(detailRes.status).toBe(200);
+    const detailPayload = JSON.parse(detailRes.body) as {
+      episode: { id: string };
+      spanRefs: Array<{ spanId: string }>;
+      provenanceRefs: Array<{ kind: string; refId: string }>;
+      relatedArcs: Array<{ direction: string; relatedEpisode: { id: string } | null }>;
+      threadEpisodes: Array<{ id: string }>;
+    };
+    expect(detailPayload.episode.id).toBe('episode-alpha-1');
+    expect(detailPayload.spanRefs[0]?.spanId).toBe('span-alpha-1');
+    expect(detailPayload.provenanceRefs[0]).toMatchObject({ kind: 'l0_span', refId: 'span-alpha-1' });
+    expect(detailPayload.relatedArcs[0]).toMatchObject({
+      direction: 'outgoing',
+      relatedEpisode: { id: 'episode-alpha-2' },
+    });
+    expect(detailPayload.threadEpisodes.map(episode => episode.id)).toEqual(['episode-alpha-1', 'episode-alpha-2']);
+
+    const provenanceRes = await request(
+      port,
+      'GET',
+      '/api/admin/episodic-memory/episodes/episode-alpha-1/provenance',
+      undefined,
+      authHeaders,
+    );
+    expect(provenanceRes.status).toBe(200);
+    const provenancePayload = JSON.parse(provenanceRes.body) as {
+      episodeId: string;
+      provenanceRefs: Array<{ refId: string }>;
+    };
+    expect(provenancePayload.episodeId).toBe('episode-alpha-1');
+    expect(provenancePayload.provenanceRefs[0]?.refId).toBe('span-alpha-1');
+
+    const arcsRes = await request(
+      port,
+      'GET',
+      '/api/admin/episodic-memory/episodes/episode-alpha-1/arcs?direction=outgoing&arcKind=continuation',
+      undefined,
+      authHeaders,
+    );
+    expect(arcsRes.status).toBe(200);
+    const arcsPayload = JSON.parse(arcsRes.body) as {
+      relatedArcs: Array<{ arc: { id: string; arcKind: string } }>;
+    };
+    expect(arcsPayload.relatedArcs).toHaveLength(1);
+    expect(arcsPayload.relatedArcs[0]?.arc).toMatchObject({ id: 'arc-alpha-1', arcKind: 'continuation' });
+
+    const threadsRes = await request(port, 'GET', '/api/admin/episodic-memory/threads', undefined, authHeaders);
+    expect(threadsRes.status).toBe(200);
+    const threadsPayload = JSON.parse(threadsRes.body) as {
+      threads: Array<{ threadId: string; episodeCount: number; arcCount: number }>;
+    };
+    expect(threadsPayload.threads).toEqual(expect.arrayContaining([
+      expect.objectContaining({ threadId: 'thread-alpha', episodeCount: 2, arcCount: 1 }),
+      expect.objectContaining({ threadId: 'thread-beta', episodeCount: 1, arcCount: 0 }),
+    ]));
+
+    const threadDetailRes = await request(
+      port,
+      'GET',
+      '/api/admin/episodic-memory/threads/thread-alpha',
+      undefined,
+      authHeaders,
+    );
+    expect(threadDetailRes.status).toBe(200);
+    const threadDetailPayload = JSON.parse(threadDetailRes.body) as {
+      thread: { threadId: string; episodeCount: number; arcCount: number };
+      episodes: Array<{ id: string }>;
+      arcs: Array<{ id: string }>;
+    };
+    expect(threadDetailPayload.thread).toMatchObject({ threadId: 'thread-alpha', episodeCount: 2, arcCount: 1 });
+    expect(threadDetailPayload.episodes.map(episode => episode.id)).toEqual(['episode-alpha-1', 'episode-alpha-2']);
+    expect(threadDetailPayload.arcs.map(arc => arc.id)).toEqual(['arc-alpha-1']);
+
+    const badArcKind = await request(
+      port,
+      'GET',
+      '/api/admin/episodic-memory/episodes/episode-alpha-1/arcs?arcKind=not-supported',
+      undefined,
+      authHeaders,
+    );
+    expect(badArcKind.status).toBe(400);
+
+    const missingEpisode = await request(
+      port,
+      'GET',
+      '/api/admin/episodic-memory/episodes/missing-episode',
+      undefined,
+      authHeaders,
+    );
+    expect(missingEpisode.status).toBe(404);
   });
 
   it('supports memory bulk update/delete and link/unlink endpoints', async () => {

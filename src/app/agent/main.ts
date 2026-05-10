@@ -260,8 +260,9 @@ async function main(): Promise<void> {
 
   // Memory write/import tools — intentional memory creation
   const memoryWriter = new MemoryWriter(memoryStore, gateway);
-  const episodicSynthesizer = db
-    ? new EpisodicSynthesizer(new EpisodicStore(db), sessionManager)
+  const episodicStore = db ? new EpisodicStore(db) : null;
+  const episodicSynthesizer = episodicStore
+    ? new EpisodicSynthesizer(episodicStore, sessionManager)
     : null;
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
@@ -338,6 +339,7 @@ async function main(): Promise<void> {
     gateway,
     eventBus,
     scheduler,
+    episodicStore,
     card,
     shardManager,
     cardVersionStore,

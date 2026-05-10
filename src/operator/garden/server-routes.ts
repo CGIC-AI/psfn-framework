@@ -103,6 +103,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       chargeLedgerService: deps.services.charges,
       shardFoldReviewService: deps.services.shards,
       adaptiveToolsService: deps.services.adaptiveTools,
+      episodicMemoryService: deps.services.episodicMemory,
       memoryService: deps.services.memory,
       sessionService: deps.services.sessions,
       contactsService: deps.services.contacts,

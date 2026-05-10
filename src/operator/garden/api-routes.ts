@@ -3,6 +3,7 @@ import { sendJson } from '../../channels/backplane/http/primitives.js';
 import { VALID_MEMORY_TYPES, type MemoryType } from '../../faculties/memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../system/trust/types.js';
 import { handleMultipartUpload, validateAndParseCharacterCardFile } from './multipart.js';
+import { buildAdminEpisodicMemoryRoutes } from './api-routes-episodic-memory.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { parseRequestUrl, resolveRequestOrigin } from './request-url.js';
 import {
@@ -17,6 +18,7 @@ import type {
   AdminChargeLedgerService,
   AdminContactsService,
   AdminDashboardService,
+  AdminEpisodicMemoryService,
   AdminIdentityService,
   AdminMemoryService,
   AdminPromptsService,
@@ -158,6 +160,7 @@ export function buildAdminApiRoutes(options: {
   chargeLedgerService?: AdminChargeLedgerService | null;
   shardFoldReviewService: AdminShardFoldReviewService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
+  episodicMemoryService?: AdminEpisodicMemoryService | null;
   memoryService: AdminMemoryService;
   sessionService: AdminSessionService;
   contactsService: AdminContactsService;
@@ -185,6 +188,7 @@ export function buildAdminApiRoutes(options: {
     chargeLedgerService,
     shardFoldReviewService,
     adaptiveToolsService,
+    episodicMemoryService,
     memoryService,
     sessionService,
     contactsService,
@@ -889,6 +893,7 @@ export function buildAdminApiRoutes(options: {
         );
       },
     },
+    ...buildAdminEpisodicMemoryRoutes({ episodicMemoryService }),
     {
       method: 'GET',
       match: exactPath('/api/admin/sessions'),

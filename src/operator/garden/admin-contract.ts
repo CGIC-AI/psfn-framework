@@ -22,6 +22,7 @@ import type {
   AdminChargeLedgerService,
   AdminContactsService,
   AdminDashboardService,
+  AdminEpisodicMemoryService,
   AdminIdentityService,
   AdminMemoryService,
   AdminPromptsService,
@@ -120,6 +121,7 @@ export interface GardenAdminDomainServices {
   charges?: AdminChargeLedgerService | null;
   shards: AdminShardFoldReviewService;
   adaptiveTools?: AdminAdaptiveToolsService | null;
+  episodicMemory?: AdminEpisodicMemoryService | null;
   memory: AdminMemoryService;
   sessions: AdminSessionService;
   contacts: AdminContactsService;

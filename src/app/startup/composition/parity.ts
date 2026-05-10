@@ -2,6 +2,7 @@
 // Common primitives used by both split-runtime and gateway agent mode.
 
 import type { CapabilityTier, CompositionalPolicyConfig, SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { EpisodicProcessingRestWindowConfig } from '../../../system/config/scheduler-config.js';
 import type {
   ObservabilityCallType,
   PostTurnActionCandidate,
@@ -223,6 +224,7 @@ interface HeartbeatRuntimeOptions {
   careReminderStore?: CareReminderStore | null;
   coreMemoryStore?: Pick<CoreMemoryStorePort, 'getSnapshot' | 'rethink'>;
   sleeptimeCadenceTurns?: number;
+  episodicProcessingRestWindow?: EpisodicProcessingRestWindowConfig;
   intentionAppraisalEnabled?: boolean;
   postTurnActions?: PostTurnActionRuntime;
   reflectionStore?: ReflectionMetacognitionJournalStore;
@@ -465,6 +467,7 @@ export function wireHeartbeatRuntime(
       coreMemoryStore: runtimeOptions.coreMemoryStore,
       memoryWriter: runtimeOptions.memoryWriter,
       cadenceTurns: runtimeOptions.sleeptimeCadenceTurns,
+      restWindow: runtimeOptions.episodicProcessingRestWindow,
     })
     : null;
   const intentionAppraisalEnabled = runtimeOptions.intentionAppraisalEnabled !== false;

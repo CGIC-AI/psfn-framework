@@ -1,8 +1,10 @@
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import { evaluateRestWindowEligibility } from '../../core/scheduler/rest-window.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SessionManager } from '../../core/session/manager.js';
+import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
 import type { CoreMemoryStorePort } from './memory-store-port.js';
 import type { MemoryWriteOptions, MemoryWriter } from './writer.js';
 import {
@@ -52,6 +54,7 @@ export interface SleeptimeMemoryAgentOptions {
   cadenceTurns?: number;
   transcriptMessageLimit?: number;
   maxMemoryWrites?: number;
+  restWindow?: EpisodicProcessingRestWindowConfig;
 }
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
@@ -219,6 +222,7 @@ export class SleeptimeMemoryAgent {
   private readonly cadenceTurns: number;
   private readonly transcriptMessageLimit: number;
   private readonly maxMemoryWrites: number;
+  private readonly restWindow?: EpisodicProcessingRestWindowConfig;
   private readonly turnCountBySession = new Map<string, number>();
 
   constructor(options: SleeptimeMemoryAgentOptions) {
@@ -235,17 +239,18 @@ export class SleeptimeMemoryAgent {
       options.maxMemoryWrites,
       DEFAULT_MAX_MEMORY_WRITES,
     );
+    this.restWindow = options.restWindow;
   }
 
   inferPostTurnActions(input: {
-    message: Pick<SubstrateMessage, 'id' | 'channelId'>;
+    message: Pick<SubstrateMessage, 'id' | 'channelId'> & { timestamp?: Date };
   }): PostTurnActionCandidate[] {
     const candidate = this.inferPostTurnAction(input.message);
     return candidate ? [candidate] : [];
   }
 
   inferPostTurnAction(
-    message: Pick<SubstrateMessage, 'id' | 'channelId'>,
+    message: Pick<SubstrateMessage, 'id' | 'channelId'> & { timestamp?: Date },
   ): PostTurnActionCandidate | null {
     if (message.channelId.startsWith('internal:')) {
       return null;
@@ -258,20 +263,54 @@ export class SleeptimeMemoryAgent {
       return null;
     }
 
+    const lastUserActivityAtMs = message.timestamp instanceof Date
+      ? message.timestamp.getTime()
+      : Date.now();
+    const restWindowDecision = this.restWindow
+      ? evaluateRestWindowEligibility({
+        config: this.restWindow,
+        nowMs: lastUserActivityAtMs,
+        lastUserActivityAtMs,
+      })
+      : null;
+
     return {
       kind: SLEEPTIME_MEMORY_ACTION_KIND,
       payload: {
         sessionId,
         sourceChannelId: message.channelId,
         cadenceTurn: nextCount,
+        lastUserActivityAtMs,
       },
       dedupeKey: `${SLEEPTIME_MEMORY_ACTION_KIND}:${sessionId}`,
       maxRetries: 1,
+      ...(restWindowDecision?.nextEligibleAtMs !== undefined
+        ? { runAt: restWindowDecision.nextEligibleAtMs }
+        : {}),
     };
   }
 
   async execute(action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>): Promise<void> {
     const sessionId = this.resolveActionSessionId(action);
+    const restWindowDecision = this.restWindow
+      ? evaluateRestWindowEligibility({
+        config: this.restWindow,
+        lastUserActivityAtMs: this.resolveActionLastUserActivityAtMs(action),
+      })
+      : null;
+    if (restWindowDecision && !restWindowDecision.allowed) {
+      log.info('Skipping sleeptime run outside rest-window eligibility', {
+        sessionId,
+        actionId: action.id,
+        reasonCode: restWindowDecision.reasonCode,
+        nextEligibleAtMs: restWindowDecision.nextEligibleAtMs,
+        inactiveForMs: restWindowDecision.inactiveForMs,
+        requiredInactiveMs: restWindowDecision.requiredInactiveMs,
+        timeZone: restWindowDecision.timeZone,
+      });
+      return;
+    }
+
     const recentEntries = this.sessionManager
       .getRecentMessages(sessionId, this.transcriptMessageLimit)
       .filter(entry => entry.role === 'user' || entry.role === 'assistant');
@@ -381,5 +420,13 @@ export class SleeptimeMemoryAgent {
       return payloadSession.trim();
     }
     return this.sessionManager.resolveSessionChannelId(action.channelId);
+  }
+
+  private resolveActionLastUserActivityAtMs(action: Pick<InferredPostTurnAction, 'payload'>): number | undefined {
+    const value = action.payload['lastUserActivityAtMs'];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      return value;
+    }
+    return undefined;
   }
 }

@@ -3502,6 +3502,13 @@ describe('AdminServer JSON API routes', () => {
         workspaceTempRetentionDays: 14,
         cleanupBatchSize: 128,
       },
+      episodicProcessing: {
+        enabled: true,
+        startLocalTime: '00:00',
+        endLocalTime: '09:00',
+        timeZone: 'local',
+        inactivityThresholdMinutes: 60,
+      },
     });
     const expectedSkills = saveSkillsConfig(tempDir, {
       enabled: true,

@@ -4,6 +4,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
 import type { CompositionalPolicyConfig } from '../../system/config/runtime-config-contracts.js';
+import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { LLMProvider } from '../agent/contracts.js';
 import type {
@@ -137,6 +138,7 @@ export interface HeartbeatRuntimeOptions {
   }) => Promise<void> | void;
   coreMemoryStore?: Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
   sleeptimeCadenceTurns?: number;
+  episodicProcessingRestWindow?: EpisodicProcessingRestWindowConfig;
   intentionAppraisalEnabled?: boolean;
   postTurnActions?: PostTurnActionRuntime;
   vaultAutoPublisher?: { publishReflection(input: {

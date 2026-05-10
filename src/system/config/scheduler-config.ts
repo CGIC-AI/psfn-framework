@@ -16,11 +16,20 @@ export interface ArtifactLifecyclePolicyConfig {
   cleanupBatchSize: number;
 }
 
+export interface EpisodicProcessingRestWindowConfig {
+  enabled: boolean;
+  startLocalTime: string;
+  endLocalTime: string;
+  timeZone: string;
+  inactivityThresholdMinutes: number;
+}
+
 export interface SchedulerRuntimeConfig {
   tickIntervalMs: number;
   heartbeatIntervalMs: number;
   salienceDecayIntervalMs: number;
   artifactLifecycle: ArtifactLifecyclePolicyConfig;
+  episodicProcessing: EpisodicProcessingRestWindowConfig;
 }
 
 interface SchedulerRuntimeLoadOptions {
@@ -49,6 +58,43 @@ function toPositiveInteger(value: unknown, field: string, minimum: number): numb
   return value;
 }
 
+function toBoolean(value: unknown, field: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new Error(`Invalid scheduler config: ${field} must be true or false`);
+  }
+  return value;
+}
+
+function toLocalTime(value: unknown, field: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid scheduler config: ${field} must be HH:mm local time`);
+  }
+  const trimmed = value.trim();
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(trimmed)) {
+    throw new Error(`Invalid scheduler config: ${field} must be HH:mm local time`);
+  }
+  return trimmed;
+}
+
+function toTimeZone(value: unknown, field: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid scheduler config: ${field} must be "local" or a valid IANA time zone`);
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`Invalid scheduler config: ${field} must be "local" or a valid IANA time zone`);
+  }
+  if (trimmed === 'local') {
+    return trimmed;
+  }
+  try {
+    void new Intl.DateTimeFormat('en-US', { timeZone: trimmed }).format(new Date());
+  } catch {
+    throw new Error(`Invalid scheduler config: ${field} must be "local" or a valid IANA time zone`);
+  }
+  return trimmed;
+}
+
 function validateArtifactLifecycleConfig(
   raw: unknown,
   sourcePath: string,
@@ -65,6 +111,27 @@ function validateArtifactLifecycleConfig(
   };
 }
 
+function validateEpisodicProcessingConfig(
+  raw: unknown,
+  sourcePath: string,
+): EpisodicProcessingRestWindowConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: episodicProcessing must be an object`);
+  }
+
+  return {
+    enabled: toBoolean(raw.enabled, 'episodicProcessing.enabled'),
+    startLocalTime: toLocalTime(raw.startLocalTime, 'episodicProcessing.startLocalTime'),
+    endLocalTime: toLocalTime(raw.endLocalTime, 'episodicProcessing.endLocalTime'),
+    timeZone: toTimeZone(raw.timeZone, 'episodicProcessing.timeZone'),
+    inactivityThresholdMinutes: toPositiveInteger(
+      raw.inactivityThresholdMinutes,
+      'episodicProcessing.inactivityThresholdMinutes',
+      1,
+    ),
+  };
+}
+
 function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRuntimeConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: expected object`);
@@ -75,6 +142,7 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     heartbeatIntervalMs: toInterval(raw.heartbeatIntervalMs, 'heartbeatIntervalMs'),
     salienceDecayIntervalMs: toInterval(raw.salienceDecayIntervalMs, 'salienceDecayIntervalMs'),
     artifactLifecycle: validateArtifactLifecycleConfig(raw.artifactLifecycle, sourcePath),
+    episodicProcessing: validateEpisodicProcessingConfig(raw.episodicProcessing, sourcePath),
   };
 }
 

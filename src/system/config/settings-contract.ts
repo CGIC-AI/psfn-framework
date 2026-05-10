@@ -134,6 +134,11 @@ export const SETTINGS_OWNER_FILE_BY_FIELD = new Map<string, string>([
   ['modelRoleAssignments', MODELS_FILE_NAME],
   ['modelRoster', MODELS_FILE_NAME],
   ['maintenanceIntervalMs', SCHEDULER_FILE_NAME],
+  ['episodicProcessingEnabled', SCHEDULER_FILE_NAME],
+  ['episodicProcessingRestWindowStartLocalTime', SCHEDULER_FILE_NAME],
+  ['episodicProcessingRestWindowEndLocalTime', SCHEDULER_FILE_NAME],
+  ['episodicProcessingRestWindowTimeZone', SCHEDULER_FILE_NAME],
+  ['episodicProcessingInactivityThresholdMinutes', SCHEDULER_FILE_NAME],
   ['capabilityTier', CAPABILITY_TIER_FILE_NAME],
   ['customTokens', CAPABILITY_TIER_FILE_NAME],
 ]);
@@ -149,6 +154,11 @@ const SETTINGS_OWNER_SUBSYSTEM_BY_FIELD = new Map<string, SettingsSubsystemId>([
   ['modelRoleAssignments', 'models'],
   ['modelRoster', 'models'],
   ['maintenanceIntervalMs', 'scheduler'],
+  ['episodicProcessingEnabled', 'scheduler'],
+  ['episodicProcessingRestWindowStartLocalTime', 'scheduler'],
+  ['episodicProcessingRestWindowEndLocalTime', 'scheduler'],
+  ['episodicProcessingRestWindowTimeZone', 'scheduler'],
+  ['episodicProcessingInactivityThresholdMinutes', 'scheduler'],
   ['capabilityTier', 'capabilities'],
   ['customTokens', 'capabilities'],
 ]);
@@ -167,6 +177,7 @@ export const SETTINGS_BOOLEAN_FIELDS = new Set<string>([
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
   'profileSynthesisEnabled',
+  'episodicProcessingEnabled',
   'voiceEnabled',
 ]);
 
@@ -191,6 +202,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'continuityMessageLimit',
   'extractionInterval',
   'maintenanceIntervalMs',
+  'episodicProcessingInactivityThresholdMinutes',
   'extractionThresholdPct',
   'compactionThresholdPct',
   'observationMaskingWindow',
@@ -268,6 +280,7 @@ const BASE_ENUM_VALUES_BY_FIELD = new Map<string, readonly string[]>([
 
 const EXTRA_NUMERIC_RANGES = new Map<string, { min?: number; max?: number }>([
   ['maintenanceIntervalMs', { min: 1_000 }],
+  ['episodicProcessingInactivityThresholdMinutes', { min: 1 }],
   ['moodCongruenceWeight', { min: 0, max: 1 }],
   ['memoryExtractionEmotionalIntensityWeight', { min: 0, max: 1 }],
 ]);

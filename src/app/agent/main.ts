@@ -431,6 +431,7 @@ async function main(): Promise<void> {
       pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
       coreMemoryStore,
       postTurnActions,
+      episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
       intentionAppraisalEnabled: config.intentionAppraisalEnabled !== false,
       ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
     },

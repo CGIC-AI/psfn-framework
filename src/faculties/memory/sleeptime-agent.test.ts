@@ -116,6 +116,48 @@ describe('SleeptimeMemoryAgent', () => {
     expect(agent.inferPostTurnAction({ id: 'm4', channelId: 'internal:reflection:whisper' })).toBeNull();
   });
 
+  it('schedules sleeptime actions for the next rest-window and inactivity threshold', () => {
+    const llmProvider = makeLLMProvider('{}');
+    const sessionManager = {
+      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getRecentMessages: vi.fn().mockReturnValue([]),
+    };
+    const coreMemoryStore = {
+      getSnapshot: vi.fn(),
+      rethink: vi.fn(),
+    };
+    const memoryWriter = {
+      write: vi.fn(),
+    };
+    const agent = new SleeptimeMemoryAgent({
+      llmProvider,
+      sessionManager,
+      coreMemoryStore,
+      memoryWriter,
+      cadenceTurns: 1,
+      restWindow: {
+        enabled: true,
+        startLocalTime: '00:00',
+        endLocalTime: '09:00',
+        timeZone: 'UTC',
+        inactivityThresholdMinutes: 60,
+      },
+    });
+
+    const action = agent.inferPostTurnAction({
+      id: 'm1',
+      channelId: 'terminal:alpha',
+      timestamp: new Date('2026-03-16T23:30:00.000Z'),
+    });
+
+    expect(action).toEqual(expect.objectContaining({
+      runAt: Date.parse('2026-03-17T00:30:00.000Z'),
+      payload: expect.objectContaining({
+        lastUserActivityAtMs: Date.parse('2026-03-16T23:30:00.000Z'),
+      }),
+    }));
+  });
+
   it('reorients active blocks and writes long-term memory facts from a sleeptime plan', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'sleeptime-core-memory-'));
     try {

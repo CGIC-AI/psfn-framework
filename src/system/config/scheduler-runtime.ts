@@ -28,5 +28,6 @@ export function resolveRuntimeSchedulerConfig(
     heartbeatIntervalMs: persisted.heartbeatIntervalMs,
     salienceDecayIntervalMs: persisted.salienceDecayIntervalMs,
     artifactLifecycle: { ...persisted.artifactLifecycle },
+    episodicProcessing: { ...persisted.episodicProcessing },
   };
 }

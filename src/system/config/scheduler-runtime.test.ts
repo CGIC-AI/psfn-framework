@@ -34,6 +34,13 @@ describe('resolveRuntimeSchedulerConfig', () => {
           workspaceTempRetentionDays: 14,
           cleanupBatchSize: 128,
         },
+        episodicProcessing: {
+          enabled: true,
+          startLocalTime: '00:00',
+          endLocalTime: '09:00',
+          timeZone: 'local',
+          inactivityThresholdMinutes: 60,
+        },
       });
       writeJson(join(dataDir, 'scheduler.json'), {
         tickIntervalMs: 45_000,
@@ -44,6 +51,13 @@ describe('resolveRuntimeSchedulerConfig', () => {
           generatedMediaRetentionDays: 21,
           workspaceTempRetentionDays: 9,
           cleanupBatchSize: 64,
+        },
+        episodicProcessing: {
+          enabled: true,
+          startLocalTime: '23:00',
+          endLocalTime: '07:00',
+          timeZone: 'America/New_York',
+          inactivityThresholdMinutes: 45,
         },
       });
 
@@ -61,6 +75,13 @@ describe('resolveRuntimeSchedulerConfig', () => {
           generatedMediaRetentionDays: 21,
           workspaceTempRetentionDays: 9,
           cleanupBatchSize: 64,
+        },
+        episodicProcessing: {
+          enabled: true,
+          startLocalTime: '23:00',
+          endLocalTime: '07:00',
+          timeZone: 'America/New_York',
+          inactivityThresholdMinutes: 45,
         },
       });
     } finally {
@@ -86,6 +107,13 @@ describe('resolveRuntimeSchedulerConfig', () => {
           workspaceTempRetentionDays: 14,
           cleanupBatchSize: 128,
         },
+        episodicProcessing: {
+          enabled: true,
+          startLocalTime: '00:00',
+          endLocalTime: '09:00',
+          timeZone: 'local',
+          inactivityThresholdMinutes: 60,
+        },
       });
       writeJson(join(dataDir, 'scheduler.json'), {
         tickIntervalMs: 10_000,
@@ -96,6 +124,13 @@ describe('resolveRuntimeSchedulerConfig', () => {
           generatedMediaRetentionDays: 4,
           workspaceTempRetentionDays: 5,
           cleanupBatchSize: 6,
+        },
+        episodicProcessing: {
+          enabled: false,
+          startLocalTime: '01:00',
+          endLocalTime: '02:00',
+          timeZone: 'UTC',
+          inactivityThresholdMinutes: 15,
         },
       });
 
@@ -113,6 +148,13 @@ describe('resolveRuntimeSchedulerConfig', () => {
           generatedMediaRetentionDays: 4,
           workspaceTempRetentionDays: 5,
           cleanupBatchSize: 6,
+        },
+        episodicProcessing: {
+          enabled: false,
+          startLocalTime: '01:00',
+          endLocalTime: '02:00',
+          timeZone: 'UTC',
+          inactivityThresholdMinutes: 15,
         },
       });
     } finally {

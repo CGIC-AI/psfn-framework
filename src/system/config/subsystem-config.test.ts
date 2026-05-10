@@ -230,6 +230,13 @@ describe('subsystem config round-trip', () => {
         workspaceTempRetentionDays: 14,
         cleanupBatchSize: 128,
       },
+      episodicProcessing: {
+        enabled: true,
+        startLocalTime: '00:00',
+        endLocalTime: '09:00',
+        timeZone: 'local',
+        inactivityThresholdMinutes: 60,
+      },
     };
 
     expect(saveSchedulerConfig(dataDir, expected)).toEqual(expected);

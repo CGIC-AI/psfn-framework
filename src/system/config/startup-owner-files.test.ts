@@ -59,6 +59,13 @@ describe('startup owner-file loaders', () => {
         workspaceTempRetentionDays: 3,
         cleanupBatchSize: 50,
       },
+      episodicProcessing: {
+        enabled: true,
+        startLocalTime: '00:00',
+        endLocalTime: '09:00',
+        timeZone: 'local',
+        inactivityThresholdMinutes: 60,
+      },
     };
     saveSchedulerConfig(rootDir, scheduler);
 

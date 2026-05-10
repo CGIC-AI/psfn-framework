@@ -340,10 +340,18 @@ def transformers_activations(*, model: Any, tokenizer: Any, text: str, layers: l
     if not hidden_states:
         raise ContractError("Transformers returned no hidden states")
     activations: dict[int, list[float]] = {}
+    attention_mask = inputs.get("attention_mask")
     for layer in layers:
         if layer >= len(hidden_states):
             raise ContractError(f"requested layer {layer}, but model returned {len(hidden_states)} hidden-state entries")
-        tensor = hidden_states[layer][0, -1, :].detach().float().cpu()
+        layer_tensor = hidden_states[layer][0]
+        if attention_mask is None:
+            tensor = layer_tensor.mean(dim=0)
+        else:
+            weights = attention_mask[0].to(layer_tensor.dtype).unsqueeze(-1)
+            token_count = weights.sum().clamp_min(1)
+            tensor = (layer_tensor * weights).sum(dim=0) / token_count
+        tensor = tensor.detach().float().cpu()
         activations[layer] = [float(value) for value in tensor.tolist()]
     return activations
 

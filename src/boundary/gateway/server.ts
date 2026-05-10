@@ -21,6 +21,7 @@ import {
 } from './protocol.js';
 import type { GitOperations } from '../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../primitives/images/types.js';
+import type { ModelDiscoveryBackend } from '../../primitives/llm/discovery.js';
 import type { GatewayAuditStorePort } from './audit-port.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -81,10 +82,7 @@ export interface GatewayServerOptions {
   socketPath: string;
   llmProvider: LLMProviderPort;
   embeddingService: EmbeddingProviderPort;
-  modelDiscovery?: {
-    getAvailableModels(): Promise<unknown[]>;
-    invalidateCache(): void;
-  };
+  modelDiscovery?: ModelDiscoveryBackend;
   discordAdapter: ChannelOutboundDock;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;

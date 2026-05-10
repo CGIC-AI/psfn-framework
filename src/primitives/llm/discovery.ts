@@ -29,7 +29,7 @@ export interface ModelDiscoveryBackend {
 }
 
 export interface GatewayModelDiscoveryTransport {
-  getAvailableModels(): Promise<unknown[]>;
+  getAvailableModels(): Promise<DiscoveredModel[]>;
   invalidateModelDiscoveryCache(): Promise<void>;
 }
 
@@ -370,7 +370,7 @@ export class GatewayModelDiscovery implements ModelDiscoveryBackend {
     if (this.pendingInvalidation) {
       await this.pendingInvalidation;
     }
-    return await this.transport.getAvailableModels() as DiscoveredModel[];
+    return await this.transport.getAvailableModels();
   }
 
   invalidateCache(): void {

@@ -1,7 +1,4 @@
-interface ModelDiscoveryBackend {
-  getAvailableModels: () => Promise<unknown[]>;
-  invalidateCache: () => void;
-}
+import type { ModelDiscoveryBackend } from '../../../primitives/llm/discovery.js';
 
 interface LegacySettingsContext {
   modelDiscovery?: ModelDiscoveryBackend | null;

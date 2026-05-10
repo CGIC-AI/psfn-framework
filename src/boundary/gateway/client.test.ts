@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { GatewayClient } from './client.js';
 import type { NdjsonConnection } from './transport.js';
 
@@ -280,7 +281,8 @@ describe('GatewayClient streaming', () => {
         models: [{ id: 'model-1' }],
       },
     });
-    await expect(discoverPromise).resolves.toEqual([{ id: 'model-1' }]);
+    const discoveredModels: DiscoveredModel[] = await discoverPromise;
+    expect(discoveredModels).toEqual([{ id: 'model-1' }]);
 
     const invalidatePromise = client.invalidateModelDiscoveryCache();
     const invalidateReq = conn.sent[1] as { id: number; method: string };

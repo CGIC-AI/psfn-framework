@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { DiscoveredModel } from '../../../primitives/llm/discovery.js';
 import type { GatewayMethodRuntime } from './types.js';
 import { registerLLMMethods } from './llm.js';
 
@@ -56,7 +57,7 @@ function createHarness() {
     stopReason: 'stop',
   }));
   const modelDiscovery = {
-    getAvailableModels: vi.fn(async () => [{ id: 'model-1' }]),
+    getAvailableModels: vi.fn<() => Promise<DiscoveredModel[]>>(async () => [{ id: 'model-1' }]),
     invalidateCache: vi.fn(),
   };
 

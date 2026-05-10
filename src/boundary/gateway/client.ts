@@ -34,6 +34,7 @@ import type {
   ImageCreateParams,
   ImageEditParams,
 } from '../../primitives/images/types.js';
+import type { DiscoveredModel, GatewayModelDiscoveryTransport } from '../../primitives/llm/discovery.js';
 import type {
   VaultDailyResult,
   VaultReadResult,
@@ -311,7 +312,7 @@ export interface GatewayConnectionCloseEvent {
   error?: Error;
 }
 
-export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
+export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, GatewayModelDiscoveryTransport {
   private rpcInstance: JSONRPCServerAndClient;
   private conn: NdjsonConnection;
   private embeddingDims: number;
@@ -574,7 +575,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort {
     return result.embeddings.map(e => new Float32Array(e));
   }
 
-  async getAvailableModels(): Promise<unknown[]> {
+  async getAvailableModels(): Promise<DiscoveredModel[]> {
     const result = await this.rpcInstance.request('llm.discover_models', {}) as LLMDiscoverModelsResult;
     return result.models;
   }

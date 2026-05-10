@@ -20,6 +20,7 @@ import { formatPossessiveCompanionName } from '../../core/identity/companion-nam
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 
 function request(
@@ -203,7 +204,7 @@ async function createHarness(options: {
   token?: string;
   allowInsecureWithoutToken?: boolean;
   modelDiscovery?: {
-    getAvailableModels: () => Promise<unknown[]>;
+    getAvailableModels: () => Promise<DiscoveredModel[]>;
     invalidateCache: () => void;
   } | null;
 }): Promise<ServerHarness> {
@@ -496,7 +497,7 @@ describe('AdminServer Garden routing', () => {
 
   describe('canonical model discovery endpoints with backend configured', () => {
     let harness: ServerHarness;
-    const getAvailableModels = vi.fn<() => Promise<unknown[]>>(async () => [
+    const getAvailableModels = vi.fn<() => Promise<DiscoveredModel[]>>(async () => [
       { id: 'openai/gpt-4.1-mini' },
       { id: 'anthropic/claude-3.7-sonnet' },
     ]);

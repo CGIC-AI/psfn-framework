@@ -11,7 +11,12 @@ import type { ReflectionTemplate } from '../../core/scheduler/heartbeat-policy.j
 import type { RecurringCadence, ScheduledTask, TaskType } from '../../core/scheduler/types.js';
 import type { SkillSnapshot } from '../../faculties/skills/types.js';
 import type { ValuesJournalEntry } from '../../faculties/values/store.js';
-import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
+import type { ModelDiscoveryBackend } from '../../primitives/llm/discovery.js';
+import type {
+  AdminChatBootstrapResponse,
+  AdminChatBootstrapUpdateInput,
+  AdminModelRoomBootstrapResponse,
+} from './chat/types.js';
 import type {
   AdminAdaptiveToolsService,
   AdminContactsService,
@@ -34,10 +39,7 @@ export interface AdaptiveToolsStateProvider {
   getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot;
 }
 
-export interface AdminModelDiscoveryApi {
-  getAvailableModels(): Promise<unknown[]>;
-  invalidateCache(): void;
-}
+export type AdminModelDiscoveryApi = ModelDiscoveryBackend;
 
 export type AdminTaskCadence = RecurringCadence;
 
@@ -101,15 +103,15 @@ export interface AdminValuesJournalApi {
 }
 
 export interface AdminChatBootstrapApi {
-  buildBootstrap(options?: { requestOrigin?: string; settingsApiBaseUrl?: string }): Promise<unknown>;
+  buildBootstrap(options?: { requestOrigin?: string; settingsApiBaseUrl?: string }): Promise<AdminChatBootstrapResponse>;
   updateSelection(
     input: AdminChatBootstrapUpdateInput,
     options?: { requestOrigin?: string; settingsApiBaseUrl?: string },
-  ): Promise<unknown>;
+  ): Promise<AdminChatBootstrapResponse>;
   buildModelRoomBootstrap(
     config: SubstrateConfig,
     options?: { requestOrigin?: string; settingsApiBaseUrl?: string },
-  ): Promise<unknown>;
+  ): Promise<AdminModelRoomBootstrapResponse>;
 }
 
 export interface GardenAdminDomainServices {

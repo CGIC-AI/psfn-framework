@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { DiscoveredModel } from '../../../primitives/llm/discovery.js';
 import { AdminSettingsHandlers } from './settings.js';
 
 function createHandler(modelDiscovery?: {
-  getAvailableModels: () => Promise<unknown[]>;
+  getAvailableModels: () => Promise<DiscoveredModel[]>;
   invalidateCache: () => void;
 }) {
   const legacy = {

@@ -16,6 +16,7 @@ import type {
   ImageCreateParams as PrimitiveImageCreateParams,
   ImageEditParams as PrimitiveImageEditParams,
 } from '../../primitives/images/types.js';
+import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import type {
   ConfirmationDecision,
   ConfirmationQueueEntry,
@@ -358,7 +359,7 @@ export interface LLMEmbedResult {
 }
 
 export interface LLMDiscoverModelsResult {
-  models: unknown[];
+  models: DiscoveredModel[];
 }
 
 export interface LLMInvalidateModelDiscoveryResult {
@@ -533,6 +534,8 @@ export interface GatewayMethods {
   'llm.chat': [LLMChatParams, LLMChatResult];
   'llm.complete': [LLMCompleteParams, LLMCompleteResult];
   'llm.embed': [LLMEmbedParams, LLMEmbedResult];
+  'llm.discover_models': [LLMDiscoverModelsParams, LLMDiscoverModelsResult];
+  'llm.invalidate_model_discovery': [LLMInvalidateModelDiscoveryParams, LLMInvalidateModelDiscoveryResult];
   'discord.send': [DiscordSendParams, DiscordSendResult];
   'discord.sendMedia': [DiscordSendMediaParams, DiscordSendMediaResult];
   'discord.typing': [DiscordTypingParams, DiscordTypingResult];

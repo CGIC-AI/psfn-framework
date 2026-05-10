@@ -3,6 +3,7 @@ import type { LLMProviderPort, EmbeddingProviderPort } from '../../../core/agent
 import type { ChannelOutboundDock } from '../../../channels/backplane/types.js';
 import type { GitOperations } from '../../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../../primitives/images/types.js';
+import type { ModelDiscoveryBackend } from '../../../primitives/llm/discovery.js';
 import type {
   ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
@@ -23,10 +24,7 @@ export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
   llmProvider: LLMProviderPort;
   embeddingService: EmbeddingProviderPort;
-  modelDiscovery?: {
-    getAvailableModels(): Promise<unknown[]>;
-    invalidateCache(): void;
-  };
+  modelDiscovery?: ModelDiscoveryBackend;
   discordAdapter: ChannelOutboundDock;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;

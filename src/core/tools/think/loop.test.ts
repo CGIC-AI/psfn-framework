@@ -566,6 +566,7 @@ describe('runRLMLoop', () => {
           codeExecutionBoundary: {
             kind: 'node_vm',
             isolatedFromGatewaySecrets: false,
+            securityPosture: 'non_isolated',
             reason: 'test execution spy',
           },
           executeCode,

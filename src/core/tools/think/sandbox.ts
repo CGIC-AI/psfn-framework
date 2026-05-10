@@ -1,6 +1,6 @@
 // ── RLM Sandbox ──
 // node:vm-based code execution with injected context functions.
-// The real security boundary is Docker --network=none; vm is convenience isolation.
+// This host-side runner is a constrained REPL, not a security boundary.
 
 import vm from 'node:vm';
 import type { ThinkEvidence } from './types.js';
@@ -8,6 +8,7 @@ import * as helpers from './helpers.js';
 import type {
   ExecuteResult,
   GatewayREPLCapabilities,
+  SandboxCodeExecutionBoundary,
   SandboxBudgetRef,
   SandboxDeps,
   SandboxExecutionPort,
@@ -248,6 +249,10 @@ export class REPLSandbox {
     const evidence = this.currentEvidence;
     this.currentEvidence = [];
     return evidence;
+  }
+
+  getExecutionBoundary(): SandboxCodeExecutionBoundary {
+    return this.executionPort.codeExecutionBoundary;
   }
 
   private snapshotUserVars(): Map<string, unknown> {

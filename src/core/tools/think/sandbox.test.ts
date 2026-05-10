@@ -427,6 +427,7 @@ describe('REPLSandbox', () => {
       codeExecutionBoundary: {
         kind: 'node_vm',
         isolatedFromGatewaySecrets: false,
+        securityPosture: 'non_isolated',
         reason: 'test execution spy',
       },
     })));
@@ -444,6 +445,54 @@ describe('REPLSandbox', () => {
       timeoutMs: 5000,
       code: expect.stringContaining('globalThis.counter = 1;'),
     }));
+  });
+
+  it('reports host-side node:vm code execution as non-isolated even when shell uses a broker', () => {
+    const executionPort = withNodeVmSandboxExecutionPort({
+      boundary: {
+        kind: 'sandbox_broker',
+        isolatedFromGatewaySecrets: true,
+        brokerId: 'brokered-shell-only',
+      },
+      shellExec: vi.fn(async () => ({
+        command: 'node',
+        args: ['-v'],
+        cwd: '/app/workspace',
+        exitCode: 0,
+        stdout: 'v22.0.0',
+        stderr: '',
+        timedOut: false,
+        truncated: false,
+        durationMs: 12,
+      })),
+    });
+    const sandbox = new REPLSandbox(nullDeps(mockLLM(), executionPort));
+
+    expect(executionPort.boundary).toMatchObject({
+      kind: 'sandbox_broker',
+      isolatedFromGatewaySecrets: true,
+    });
+    expect(sandbox.getExecutionBoundary()).toEqual({
+      kind: 'node_vm',
+      isolatedFromGatewaySecrets: false,
+      securityPosture: 'non_isolated',
+      reason: expect.stringContaining('not a security boundary'),
+    });
+  });
+
+  it('fails closed when a node:vm code boundary claims gateway-secret isolation', () => {
+    expect(() => withNodeVmSandboxExecutionPort({
+      boundary: {
+        kind: 'sandbox_broker',
+        isolatedFromGatewaySecrets: true,
+      },
+      shellExec: vi.fn(),
+      codeExecutionBoundary: {
+        kind: 'node_vm',
+        isolatedFromGatewaySecrets: true,
+        reason: 'legacy false claim',
+      } as any,
+    })).toThrow('node:vm code execution cannot be marked isolatedFromGatewaySecrets=true');
   });
 
   it('shell_exec helper calls the sandbox execution port when allowed', async () => {
@@ -465,7 +514,8 @@ describe('REPLSandbox', () => {
       })),
       codeExecutionBoundary: {
         kind: 'node_vm',
-        isolatedFromGatewaySecrets: true,
+        isolatedFromGatewaySecrets: false,
+        securityPosture: 'non_isolated',
         reason: 'test node:vm adapter',
       },
     });
@@ -490,7 +540,8 @@ describe('REPLSandbox', () => {
       shellExec: vi.fn(async () => ({ exitCode: 0 })),
       codeExecutionBoundary: {
         kind: 'node_vm',
-        isolatedFromGatewaySecrets: true,
+        isolatedFromGatewaySecrets: false,
+        securityPosture: 'non_isolated',
         reason: 'test node:vm adapter',
       },
     });
@@ -527,6 +578,7 @@ describe('REPLSandbox', () => {
       codeExecutionBoundary: {
         kind: 'node_vm',
         isolatedFromGatewaySecrets: false,
+        securityPosture: 'non_isolated',
         reason: 'legacy node:vm path',
       },
     })));

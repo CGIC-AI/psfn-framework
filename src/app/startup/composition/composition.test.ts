@@ -407,7 +407,8 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
         })),
         codeExecutionBoundary: {
           kind: 'node_vm',
-          isolatedFromGatewaySecrets: true,
+          isolatedFromGatewaySecrets: false,
+          securityPosture: 'non_isolated',
           reason: 'test think adapter',
         },
       });
@@ -447,7 +448,8 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
         },
         codeExecutionBoundary: {
           kind: 'node_vm',
-          isolatedFromGatewaySecrets: true,
+          isolatedFromGatewaySecrets: false,
+          securityPosture: 'non_isolated',
           reason: 'test think adapter',
         },
         executeCode,

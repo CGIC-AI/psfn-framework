@@ -11,6 +11,9 @@ type SandboxExecutionPortSeed =
   & Partial<Pick<SandboxExecutionPort, 'codeExecutionBoundary' | 'executeCode'>>;
 
 const DEFAULT_SHELL_UNAVAILABLE_REASON = 'shell_exec unavailable: requires sandbox broker boundary and audit path';
+const NODE_VM_NON_ISOLATED_REASON =
+  'in-process node:vm REPL code execution is degraded/non-isolated; '
+  + 'node:vm is not a security boundary and must not be treated as isolated from gateway secrets';
 
 function createUnavailableShellBoundary(): GatewayProcessExecutionBoundary {
   return {
@@ -24,16 +27,34 @@ function deriveCodeExecutionBoundary(
   port: SandboxExecutionPortSeed | null,
 ): SandboxCodeExecutionBoundary {
   if (port?.codeExecutionBoundary) {
-    return port.codeExecutionBoundary;
+    return normalizeNodeVmCodeExecutionBoundary(port.codeExecutionBoundary);
   }
 
-  const isolatedFromGatewaySecrets = port?.boundary.isolatedFromGatewaySecrets === true;
   return {
     kind: 'node_vm',
-    isolatedFromGatewaySecrets,
-    reason: isolatedFromGatewaySecrets
-      ? 'in-process node:vm execution inside isolated agent runtime'
-      : 'in-process node:vm execution without isolated sandbox boundary',
+    isolatedFromGatewaySecrets: false,
+    securityPosture: 'non_isolated',
+    reason: NODE_VM_NON_ISOLATED_REASON,
+  };
+}
+
+function normalizeNodeVmCodeExecutionBoundary(
+  boundary: SandboxCodeExecutionBoundary,
+): SandboxCodeExecutionBoundary {
+  const rawBoundary = boundary as { isolatedFromGatewaySecrets?: boolean; reason?: unknown };
+  if (rawBoundary.isolatedFromGatewaySecrets !== false) {
+    throw new Error(
+      'node:vm code execution cannot be marked isolatedFromGatewaySecrets=true; '
+      + 'node:vm is not a security boundary',
+    );
+  }
+
+  const reason = typeof rawBoundary.reason === 'string' ? rawBoundary.reason.trim() : '';
+  return {
+    ...boundary,
+    isolatedFromGatewaySecrets: false,
+    securityPosture: 'non_isolated',
+    reason: reason || NODE_VM_NON_ISOLATED_REASON,
   };
 }
 
@@ -92,7 +113,7 @@ export function withNodeVmSandboxExecutionPort(
   if (port?.executeCode && port.codeExecutionBoundary) {
     return {
       boundary: port.boundary,
-      codeExecutionBoundary: port.codeExecutionBoundary,
+      codeExecutionBoundary: normalizeNodeVmCodeExecutionBoundary(port.codeExecutionBoundary),
       shellExec: port.shellExec,
       executeCode: port.executeCode,
     };

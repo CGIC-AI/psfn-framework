@@ -60,7 +60,8 @@ export type SandboxExecutionBoundary =
 
 export interface NodeVmCodeExecutionBoundary {
   kind: 'node_vm';
-  isolatedFromGatewaySecrets: boolean;
+  isolatedFromGatewaySecrets: false;
+  securityPosture: 'non_isolated';
   reason: string;
 }
 

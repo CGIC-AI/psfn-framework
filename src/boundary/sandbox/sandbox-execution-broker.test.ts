@@ -31,6 +31,12 @@ describe('createSandboxBrokerExecutionPort', () => {
       isolatedFromGatewaySecrets: true,
       brokerId: 'test-broker',
     });
+    expect(port?.codeExecutionBoundary).toMatchObject({
+      kind: 'node_vm',
+      isolatedFromGatewaySecrets: false,
+      securityPosture: 'non_isolated',
+    });
+    expect(port?.codeExecutionBoundary.reason).toContain('not a security boundary');
 
     const result = await port?.shellExec('node', ['-e', 'process.stdout.write("ok")'], {});
 

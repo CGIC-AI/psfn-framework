@@ -14,6 +14,7 @@ import {
   type RouteParams,
 } from './route-matchers.js';
 import type {
+  AdminActionPipeService,
   AdminAdaptiveToolsService,
   AdminChargeLedgerService,
   AdminContactsService,
@@ -125,6 +126,7 @@ const ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH = '/api/admin/chat/model-room/boo
 const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
 const ADMIN_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
 const CHARGE_LEDGER_UNAVAILABLE_ERROR = 'Charge ledger backend unavailable';
+const ACTION_PIPE_UNAVAILABLE_ERROR = 'Action pipe backend unavailable';
 
 function toFiniteQueryNumber(
   value: string | null,
@@ -158,6 +160,7 @@ export function buildAdminApiRoutes(options: {
   config: SubstrateConfig;
   dashboardService: AdminDashboardService;
   chargeLedgerService?: AdminChargeLedgerService | null;
+  actionPipeService?: AdminActionPipeService | null;
   shardFoldReviewService: AdminShardFoldReviewService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
   episodicMemoryService?: AdminEpisodicMemoryService | null;
@@ -186,6 +189,7 @@ export function buildAdminApiRoutes(options: {
     config,
     dashboardService,
     chargeLedgerService,
+    actionPipeService,
     shardFoldReviewService,
     adaptiveToolsService,
     episodicMemoryService,
@@ -360,6 +364,74 @@ export function buildAdminApiRoutes(options: {
             error: toSanitizedMessage(error, 'Failed to load charge ledger data'),
           }),
         );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/action-pipe'),
+      handle: (_req, res) => {
+        if (!actionPipeService) {
+          sendJson(res, 503, { error: ACTION_PIPE_UNAVAILABLE_ERROR });
+          return;
+        }
+        actionPipeService.getActionPipeStatus().then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to load action pipe status'),
+          }),
+        );
+      },
+    },
+    {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/action-pipe/actions/', 'actionRef', '/cancel'),
+      handle: (req, res, { actionRef }) => {
+        if (!actionPipeService) {
+          sendJson(res, 503, { ok: false, message: ACTION_PIPE_UNAVAILABLE_ERROR });
+          return;
+        }
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { ok: false, message: parsed.error });
+            return;
+          }
+          const payload = parsed.value as Record<string, unknown>;
+          const reason = typeof payload.reason === 'string' ? payload.reason : undefined;
+          actionPipeService.cancelAction({ actionRef, reason }).then(
+            result => sendJson(res, result.ok ? 200 : 400, result, ADMIN_DYNAMIC_JSON_HEADERS),
+            error => sendJson(res, 500, {
+              ok: false,
+              message: toSanitizedMessage(error, 'Failed to cancel action'),
+            }),
+          );
+        });
+      },
+    },
+    {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/action-pipe/actions/', 'actionRef', '/acknowledge'),
+      handle: (req, res, { actionRef }) => {
+        if (!actionPipeService) {
+          sendJson(res, 503, { ok: false, message: ACTION_PIPE_UNAVAILABLE_ERROR });
+          return;
+        }
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { ok: false, message: parsed.error });
+            return;
+          }
+          const payload = parsed.value as Record<string, unknown>;
+          const detail = typeof payload.detail === 'string' ? payload.detail : undefined;
+          actionPipeService.acknowledgeAction({ actionRef, detail }).then(
+            result => sendJson(res, result.ok ? 200 : 400, result, ADMIN_DYNAMIC_JSON_HEADERS),
+            error => sendJson(res, 500, {
+              ok: false,
+              message: toSanitizedMessage(error, 'Failed to acknowledge action'),
+            }),
+          );
+        });
       },
     },
     {

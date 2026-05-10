@@ -52,6 +52,8 @@ export class GardenAdminTransportServer implements Lifecycle {
     this.routes = buildAdminApiRoutes({
       config: config.config,
       dashboardService: config.services.dashboard,
+      chargeLedgerService: config.services.charges,
+      actionPipeService: config.services.actionPipe,
       shardFoldReviewService: config.services.shards,
       adaptiveToolsService: config.services.adaptiveTools,
       episodicMemoryService: config.services.episodicMemory,

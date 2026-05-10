@@ -620,6 +620,14 @@
     return ENUM_LABELS_BY_FIELD[field]?.[value] ?? humanizeSettingValue(value);
   }
 
+  function settingControlId(key: string, suffix = 'input'): string {
+    return `settings-${key.replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()}-${suffix}`;
+  }
+
+  function settingLabelId(key: string): string {
+    return settingControlId(key, 'label');
+  }
+
   function rawEditorOwnerFile(key: RawEditorKey): string {
     const subsystemId = SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY[key];
     return subsystemOwnerFile(subsystemId) ?? SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY[key];
@@ -2026,11 +2034,12 @@
               label="Session History Budget %"
               keys="sessionHistoryBudgetPct"
               source={getSource('sessionHistoryBudgetPct')}
+              labelId={settingLabelId('sessionHistoryBudgetPct')}
               class={LABEL_CLS}
             />
             <div class="flex items-center gap-3">
-              <input type="range" min="1" max="80" step="1" bind:value={sessionHistoryBudgetPct} class={SLIDER_CLS} />
-              <input type="number" min="1" max="80" bind:value={sessionHistoryBudgetPct} class={COMPACT_INPUT_CLS} />
+              <input id={settingControlId('sessionHistoryBudgetPct', 'range')} aria-labelledby={settingLabelId('sessionHistoryBudgetPct')} type="range" min="1" max="80" step="1" bind:value={sessionHistoryBudgetPct} class={SLIDER_CLS} />
+              <input id={settingControlId('sessionHistoryBudgetPct', 'number')} aria-labelledby={settingLabelId('sessionHistoryBudgetPct')} type="number" min="1" max="80" bind:value={sessionHistoryBudgetPct} class={COMPACT_INPUT_CLS} />
             </div>
             <p class="text-sm text-shadow-500 mt-1">% of context window for session history (default: 6%). Runtime keeps whole messages within this token budget.</p>
           </div>
@@ -2039,11 +2048,12 @@
               label="Memory Retrieval Budget %"
               keys="memoryRetrievalBudgetPct"
               source={getSource('memoryRetrievalBudgetPct')}
+              labelId={settingLabelId('memoryRetrievalBudgetPct')}
               class={LABEL_CLS}
             />
             <div class="flex items-center gap-3">
-              <input type="range" min="1" max="50" step="1" bind:value={memoryRetrievalBudgetPct} class={SLIDER_CLS} />
-              <input type="number" min="1" max="50" bind:value={memoryRetrievalBudgetPct} class={COMPACT_INPUT_CLS} />
+              <input id={settingControlId('memoryRetrievalBudgetPct', 'range')} aria-labelledby={settingLabelId('memoryRetrievalBudgetPct')} type="range" min="1" max="50" step="1" bind:value={memoryRetrievalBudgetPct} class={SLIDER_CLS} />
+              <input id={settingControlId('memoryRetrievalBudgetPct', 'number')} aria-labelledby={settingLabelId('memoryRetrievalBudgetPct')} type="number" min="1" max="50" bind:value={memoryRetrievalBudgetPct} class={COMPACT_INPUT_CLS} />
             </div>
             <p class="text-sm text-shadow-500 mt-1">% of context window for memory retrieval (default: 2%). Runtime keeps whole memories within this token budget.</p>
           </div>
@@ -2066,28 +2076,30 @@
               label="Extraction Threshold %"
               keys="extractionThresholdPct"
               source={getSource('extractionThresholdPct')}
+              labelId={settingLabelId('extractionThresholdPct')}
               class={LABEL_CLS}
             />
             <div class="flex items-center gap-3">
-              <input type="range" min="10" max="80" step="1" bind:value={extractionThresholdPct} class={SLIDER_CLS} />
-              <input type="number" min="10" max="80" bind:value={extractionThresholdPct} class={COMPACT_INPUT_CLS} />
+              <input id={settingControlId('extractionThresholdPct', 'range')} aria-labelledby={settingLabelId('extractionThresholdPct')} type="range" min="10" max="80" step="1" bind:value={extractionThresholdPct} class={SLIDER_CLS} />
+              <input id={settingControlId('extractionThresholdPct', 'number')} aria-labelledby={settingLabelId('extractionThresholdPct')} type="number" min="10" max="80" bind:value={extractionThresholdPct} class={COMPACT_INPUT_CLS} />
             </div>
             <p class="text-sm text-shadow-500 mt-1">Triggers extraction when session exceeds this % of context</p>
           </div>
           <div>
-            <SettingFieldLabel label="Extraction Interval (messages)" keys="extractionInterval" class={LABEL_CLS} />
-            <input type="number" min="1" max="50" bind:value={extractionInterval} class={INPUT_CLS} />
+            <SettingFieldLabel label="Extraction Interval (messages)" keys="extractionInterval" forId={settingControlId('extractionInterval')} class={LABEL_CLS} />
+            <input id={settingControlId('extractionInterval')} type="number" min="1" max="50" bind:value={extractionInterval} class={INPUT_CLS} />
             <p class="text-sm text-shadow-500 mt-1">Run extraction every N messages (1-50)</p>
           </div>
           <div>
             <SettingFieldLabel
               label="Emotional Salience Threshold %"
               keys="compactionEmotionalSalienceThresholdPct"
+              labelId={settingLabelId('compactionEmotionalSalienceThresholdPct')}
               class={LABEL_CLS}
             />
             <div class="flex items-center gap-3">
-              <input type="range" min="0" max="100" step="1" bind:value={compactionEmotionalSalienceThresholdPct} class={SLIDER_CLS} />
-              <input type="number" min="0" max="100" bind:value={compactionEmotionalSalienceThresholdPct} class={COMPACT_INPUT_CLS} />
+              <input id={settingControlId('compactionEmotionalSalienceThresholdPct', 'range')} aria-labelledby={settingLabelId('compactionEmotionalSalienceThresholdPct')} type="range" min="0" max="100" step="1" bind:value={compactionEmotionalSalienceThresholdPct} class={SLIDER_CLS} />
+              <input id={settingControlId('compactionEmotionalSalienceThresholdPct', 'number')} aria-labelledby={settingLabelId('compactionEmotionalSalienceThresholdPct')} type="number" min="0" max="100" bind:value={compactionEmotionalSalienceThresholdPct} class={COMPACT_INPUT_CLS} />
             </div>
             <p class="text-sm text-shadow-500 mt-1">Preserve messages above this emotional salience during compaction (0-100)</p>
           </div>
@@ -2110,11 +2122,12 @@
               label="Compaction Threshold %"
               keys="compactionThresholdPct"
               source={getSource('compactionThresholdPct')}
+              labelId={settingLabelId('compactionThresholdPct')}
               class={LABEL_CLS}
             />
             <div class="flex items-center gap-3">
-              <input type="range" min="30" max="90" step="1" bind:value={compactionThresholdPct} class={SLIDER_CLS} />
-              <input type="number" min="30" max="90" bind:value={compactionThresholdPct} class={COMPACT_INPUT_CLS} />
+              <input id={settingControlId('compactionThresholdPct', 'range')} aria-labelledby={settingLabelId('compactionThresholdPct')} type="range" min="30" max="90" step="1" bind:value={compactionThresholdPct} class={SLIDER_CLS} />
+              <input id={settingControlId('compactionThresholdPct', 'number')} aria-labelledby={settingLabelId('compactionThresholdPct')} type="number" min="30" max="90" bind:value={compactionThresholdPct} class={COMPACT_INPUT_CLS} />
             </div>
             <p class="text-sm text-shadow-500 mt-1">Auto-compacts oldest 50% when context exceeds this %</p>
           </div>
@@ -2123,9 +2136,10 @@
               label="Maintenance Interval (ms)"
               keys="maintenanceIntervalMs"
               source={getSource('maintenanceIntervalMs')}
+              forId={settingControlId('maintenanceIntervalMs')}
               class={LABEL_CLS}
             />
-            <input type="number" min="10000" step="1000" bind:value={maintenanceIntervalMs} class={INPUT_CLS} />
+            <input id={settingControlId('maintenanceIntervalMs')} type="number" min="10000" step="1000" bind:value={maintenanceIntervalMs} class={INPUT_CLS} />
             <p class="text-sm text-shadow-500 mt-1">Scheduler tick interval in milliseconds (default: 300,000 = 5min)</p>
             <SettingAuthorityHint info={getSettingAuthority('maintenanceIntervalMs')} />
           </div>
@@ -2134,9 +2148,10 @@
               label="Restart Behavior"
               keys="sessionRestartBehavior"
               source={getSource('sessionRestartBehavior')}
+              forId={settingControlId('sessionRestartBehavior')}
               class={LABEL_CLS}
             />
-            <select bind:value={sessionRestartBehavior} class={INPUT_CLS}>
+            <select id={settingControlId('sessionRestartBehavior')} bind:value={sessionRestartBehavior} class={INPUT_CLS}>
               {#each sessionRestartBehaviorOptions as option}
                 <option value={option}>{formatSettingOptionLabel('sessionRestartBehavior', option)}</option>
               {/each}
@@ -2177,36 +2192,36 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <SettingFieldLabel label="Min Importance" keys="memoryExtractionMinImportance" class={LABEL_CLS} />
-                <input type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinImportance} class={INPUT_CLS} />
+                <SettingFieldLabel label="Min Importance" keys="memoryExtractionMinImportance" forId={settingControlId('memoryExtractionMinImportance')} class={LABEL_CLS} />
+                <input id={settingControlId('memoryExtractionMinImportance')} type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinImportance} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum importance score to write a memory (0-1)</p>
               </div>
               <div>
-                <SettingFieldLabel label="Min Confidence" keys="memoryExtractionMinConfidence" class={LABEL_CLS} />
-                <input type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinConfidence} class={INPUT_CLS} />
+                <SettingFieldLabel label="Min Confidence" keys="memoryExtractionMinConfidence" forId={settingControlId('memoryExtractionMinConfidence')} class={LABEL_CLS} />
+                <input id={settingControlId('memoryExtractionMinConfidence')} type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinConfidence} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum confidence score to write a memory (0-1)</p>
               </div>
               <div>
-                <SettingFieldLabel label="Min Novelty" keys="memoryExtractionMinNovelty" class={LABEL_CLS} />
-                <input type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinNovelty} class={INPUT_CLS} />
+                <SettingFieldLabel label="Min Novelty" keys="memoryExtractionMinNovelty" forId={settingControlId('memoryExtractionMinNovelty')} class={LABEL_CLS} />
+                <input id={settingControlId('memoryExtractionMinNovelty')} type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinNovelty} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum novelty score to write a memory (0-1)</p>
               </div>
               <div>
-                <SettingFieldLabel label="Max Writes per Extraction" keys="memoryExtractionMaxWrites" class={LABEL_CLS} />
-                <input type="number" min="1" max="100" step="1" bind:value={memoryExtractionMaxWrites} class={INPUT_CLS} />
+                <SettingFieldLabel label="Max Writes per Extraction" keys="memoryExtractionMaxWrites" forId={settingControlId('memoryExtractionMaxWrites')} class={LABEL_CLS} />
+                <input id={settingControlId('memoryExtractionMaxWrites')} type="number" min="1" max="100" step="1" bind:value={memoryExtractionMaxWrites} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Maximum memories written per extraction cycle</p>
               </div>
               <div>
-                <SettingFieldLabel label="Extraction Telemetry" keys="memoryExtractionTelemetryEnabled" class={LABEL_CLS} />
+                <SettingFieldLabel label="Extraction Telemetry" keys="memoryExtractionTelemetryEnabled" labelId={settingLabelId('memoryExtractionTelemetryEnabled')} class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={memoryExtractionTelemetryEnabled} class={TOGGLE_CLS} />
+                  <input id={settingControlId('memoryExtractionTelemetryEnabled')} aria-labelledby={settingLabelId('memoryExtractionTelemetryEnabled')} type="checkbox" bind:checked={memoryExtractionTelemetryEnabled} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Log extraction telemetry data</span>
                 </label>
               </div>
               <div>
-                <SettingFieldLabel label="Retrieval Telemetry" keys="memoryRetrievalTelemetryEnabled" class={LABEL_CLS} />
+                <SettingFieldLabel label="Retrieval Telemetry" keys="memoryRetrievalTelemetryEnabled" labelId={settingLabelId('memoryRetrievalTelemetryEnabled')} class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={memoryRetrievalTelemetryEnabled} class={TOGGLE_CLS} />
+                  <input id={settingControlId('memoryRetrievalTelemetryEnabled')} aria-labelledby={settingLabelId('memoryRetrievalTelemetryEnabled')} type="checkbox" bind:checked={memoryRetrievalTelemetryEnabled} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Log retrieval telemetry data</span>
                 </label>
               </div>
@@ -2242,50 +2257,50 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <SettingFieldLabel label="Enabled" keys="profileSynthesisEnabled" class={LABEL_CLS} />
+                <SettingFieldLabel label="Enabled" keys="profileSynthesisEnabled" labelId={settingLabelId('profileSynthesisEnabled')} class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={profileSynthesisEnabled} class={TOGGLE_CLS} />
+                  <input id={settingControlId('profileSynthesisEnabled')} aria-labelledby={settingLabelId('profileSynthesisEnabled')} type="checkbox" bind:checked={profileSynthesisEnabled} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Enable automatic profile synthesis</span>
                 </label>
               </div>
               <div>
-                <SettingFieldLabel label="Refresh Interval (ms)" keys="profileSynthesisRefreshIntervalMs" class={LABEL_CLS} />
-                <input type="number" min="60000" step="60000" bind:value={profileSynthesisRefreshIntervalMs} class={INPUT_CLS} />
+                <SettingFieldLabel label="Refresh Interval (ms)" keys="profileSynthesisRefreshIntervalMs" forId={settingControlId('profileSynthesisRefreshIntervalMs')} class={LABEL_CLS} />
+                <input id={settingControlId('profileSynthesisRefreshIntervalMs')} type="number" min="60000" step="60000" bind:value={profileSynthesisRefreshIntervalMs} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">How often to refresh profiles ({fmtMs(profileSynthesisRefreshIntervalMs)})</p>
               </div>
               <div>
-                <SettingFieldLabel label="Cooldown (ms)" keys="profileSynthesisCooldownMs" class={LABEL_CLS} />
-                <input type="number" min="10000" step="10000" bind:value={profileSynthesisCooldownMs} class={INPUT_CLS} />
+                <SettingFieldLabel label="Cooldown (ms)" keys="profileSynthesisCooldownMs" forId={settingControlId('profileSynthesisCooldownMs')} class={LABEL_CLS} />
+                <input id={settingControlId('profileSynthesisCooldownMs')} type="number" min="10000" step="10000" bind:value={profileSynthesisCooldownMs} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum wait between profile updates ({fmtMs(profileSynthesisCooldownMs)})</p>
               </div>
               <div>
-                <SettingFieldLabel label="Min Writes" keys="profileSynthesisMinWrites" class={LABEL_CLS} />
-                <input type="number" min="1" max="100" step="1" bind:value={profileSynthesisMinWrites} class={INPUT_CLS} />
+                <SettingFieldLabel label="Min Writes" keys="profileSynthesisMinWrites" forId={settingControlId('profileSynthesisMinWrites')} class={LABEL_CLS} />
+                <input id={settingControlId('profileSynthesisMinWrites')} type="number" min="1" max="100" step="1" bind:value={profileSynthesisMinWrites} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum memory writes before triggering synthesis</p>
               </div>
               <div>
-                <SettingFieldLabel label="Min Importance" keys="profileSynthesisMinImportance" class={LABEL_CLS} />
-                <input type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinImportance} class={INPUT_CLS} />
+                <SettingFieldLabel label="Min Importance" keys="profileSynthesisMinImportance" forId={settingControlId('profileSynthesisMinImportance')} class={LABEL_CLS} />
+                <input id={settingControlId('profileSynthesisMinImportance')} type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinImportance} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum importance for source memories (0-1)</p>
               </div>
               <div>
-                <SettingFieldLabel label="Min Confidence" keys="profileSynthesisMinConfidence" class={LABEL_CLS} />
-                <input type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinConfidence} class={INPUT_CLS} />
+                <SettingFieldLabel label="Min Confidence" keys="profileSynthesisMinConfidence" forId={settingControlId('profileSynthesisMinConfidence')} class={LABEL_CLS} />
+                <input id={settingControlId('profileSynthesisMinConfidence')} type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinConfidence} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum confidence for source memories (0-1)</p>
               </div>
               <div>
-                <SettingFieldLabel label="Min Novelty" keys="profileSynthesisMinNovelty" class={LABEL_CLS} />
-                <input type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinNovelty} class={INPUT_CLS} />
+                <SettingFieldLabel label="Min Novelty" keys="profileSynthesisMinNovelty" forId={settingControlId('profileSynthesisMinNovelty')} class={LABEL_CLS} />
+                <input id={settingControlId('profileSynthesisMinNovelty')} type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinNovelty} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum novelty for source memories (0-1)</p>
               </div>
               <div>
-                <SettingFieldLabel label="Source Memory Limit" keys="profileSynthesisSourceMemoryLimit" class={LABEL_CLS} />
-                <input type="number" min="1" max="200" step="1" bind:value={profileSynthesisSourceMemoryLimit} class={INPUT_CLS} />
+                <SettingFieldLabel label="Source Memory Limit" keys="profileSynthesisSourceMemoryLimit" forId={settingControlId('profileSynthesisSourceMemoryLimit')} class={LABEL_CLS} />
+                <input id={settingControlId('profileSynthesisSourceMemoryLimit')} type="number" min="1" max="200" step="1" bind:value={profileSynthesisSourceMemoryLimit} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Max source memories to consider per synthesis</p>
               </div>
               <div>
-                <SettingFieldLabel label="Min Source Memories" keys="profileSynthesisMinSourceMemories" class={LABEL_CLS} />
-                <input type="number" min="1" max="50" step="1" bind:value={profileSynthesisMinSourceMemories} class={INPUT_CLS} />
+                <SettingFieldLabel label="Min Source Memories" keys="profileSynthesisMinSourceMemories" forId={settingControlId('profileSynthesisMinSourceMemories')} class={LABEL_CLS} />
+                <input id={settingControlId('profileSynthesisMinSourceMemories')} type="number" min="1" max="50" step="1" bind:value={profileSynthesisMinSourceMemories} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Minimum source memories required to run synthesis</p>
               </div>
             </div>
@@ -2320,18 +2335,18 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
               <div>
-                <SettingFieldLabel label="Max Tokens" keys="thinkMaxTokens" class={LABEL_CLS} />
-                <input type="number" min="1000" max="1000000" step="1000" bind:value={thinkMaxTokens} class={INPUT_CLS} />
+                <SettingFieldLabel label="Max Tokens" keys="thinkMaxTokens" forId={settingControlId('thinkMaxTokens')} class={LABEL_CLS} />
+                <input id={settingControlId('thinkMaxTokens')} type="number" min="1000" max="1000000" step="1000" bind:value={thinkMaxTokens} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Max tokens for RLM sandbox (1K-1M)</p>
               </div>
               <div>
-                <SettingFieldLabel label="Max Wall Time (ms)" keys="thinkMaxWallTimeMs" class={LABEL_CLS} />
-                <input type="number" min="5000" max="600000" step="1000" bind:value={thinkMaxWallTimeMs} class={INPUT_CLS} />
+                <SettingFieldLabel label="Max Wall Time (ms)" keys="thinkMaxWallTimeMs" forId={settingControlId('thinkMaxWallTimeMs')} class={LABEL_CLS} />
+                <input id={settingControlId('thinkMaxWallTimeMs')} type="number" min="5000" max="600000" step="1000" bind:value={thinkMaxWallTimeMs} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Max wall-clock time ({fmtMs(thinkMaxWallTimeMs)})</p>
               </div>
               <div>
-                <SettingFieldLabel label="Max Sub-Queries" keys="thinkMaxSubQueries" class={LABEL_CLS} />
-                <input type="number" min="1" max="100" step="1" bind:value={thinkMaxSubQueries} class={INPUT_CLS} />
+                <SettingFieldLabel label="Max Sub-Queries" keys="thinkMaxSubQueries" forId={settingControlId('thinkMaxSubQueries')} class={LABEL_CLS} />
+                <input id={settingControlId('thinkMaxSubQueries')} type="number" min="1" max="100" step="1" bind:value={thinkMaxSubQueries} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Max LLM sub-queries per think (1-100)</p>
               </div>
             </div>
@@ -2374,9 +2389,10 @@
                   label="Capability Tier"
                   keys="capabilityTier"
                   source={getSource('capabilityTier')}
+                  forId={settingControlId('capabilityTier')}
                   class={LABEL_CLS}
                 />
-                <select bind:value={capabilityTier} class={INPUT_CLS}>
+                <select id={settingControlId('capabilityTier')} bind:value={capabilityTier} class={INPUT_CLS}>
                   {#each capabilityTierOptions as tier}
                     <option value={tier}>{formatSettingOptionLabel('capabilityTier', tier)}</option>
                   {/each}
@@ -2389,9 +2405,11 @@
                   label="Custom Capability Tokens"
                   keys="customTokens"
                   source={getSource('customTokens')}
+                  forId={settingControlId('customTokens')}
                   class={LABEL_CLS}
                 />
                 <input
+                  id={settingControlId('customTokens')}
                   type="text"
                   bind:value={capabilityCustomTokens}
                   class={INPUT_CLS}
@@ -2430,28 +2448,28 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <SettingFieldLabel label="Interval (hours)" keys="intervalHours" class={LABEL_CLS} />
-                <input type="number" min="1" max="168" bind:value={backupIntervalHours} class={INPUT_CLS} />
+                <SettingFieldLabel label="Interval (hours)" keys="intervalHours" forId={settingControlId('intervalHours')} class={LABEL_CLS} />
+                <input id={settingControlId('intervalHours')} type="number" min="1" max="168" bind:value={backupIntervalHours} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">How often to run a backup cycle</p>
               </div>
               <div>
-                <SettingFieldLabel label="Rotating backups" keys="maxRotatingBackups" class={LABEL_CLS} />
-                <input type="number" min="1" max="99" bind:value={backupMaxRotating} class={INPUT_CLS} />
+                <SettingFieldLabel label="Rotating backups" keys="maxRotatingBackups" forId={settingControlId('maxRotatingBackups')} class={LABEL_CLS} />
+                <input id={settingControlId('maxRotatingBackups')} type="number" min="1" max="99" bind:value={backupMaxRotating} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Most-recent backups to keep</p>
               </div>
               <div>
-                <SettingFieldLabel label="Weekly backups" keys="maxWeeklyBackups" class={LABEL_CLS} />
-                <input type="number" min="0" max="52" bind:value={backupMaxWeekly} class={INPUT_CLS} />
+                <SettingFieldLabel label="Weekly backups" keys="maxWeeklyBackups" forId={settingControlId('maxWeeklyBackups')} class={LABEL_CLS} />
+                <input id={settingControlId('maxWeeklyBackups')} type="number" min="0" max="52" bind:value={backupMaxWeekly} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Weekly slots (derived from rotating cycle)</p>
               </div>
               <div>
-                <SettingFieldLabel label="Monthly backups" keys="maxMonthlyBackups" class={LABEL_CLS} />
-                <input type="number" min="0" max="24" bind:value={backupMaxMonthly} class={INPUT_CLS} />
+                <SettingFieldLabel label="Monthly backups" keys="maxMonthlyBackups" forId={settingControlId('maxMonthlyBackups')} class={LABEL_CLS} />
+                <input id={settingControlId('maxMonthlyBackups')} type="number" min="0" max="24" bind:value={backupMaxMonthly} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Monthly slots (derived from rotating cycle)</p>
               </div>
               <div class="md:col-span-2">
-                <SettingFieldLabel label="Mirror directory" keys="mirrorDir" class={LABEL_CLS} />
-                <input type="text" bind:value={backupMirrorDir} class={INPUT_CLS} placeholder="/mnt/ai/psfn-bak" />
+                <SettingFieldLabel label="Mirror directory" keys="mirrorDir" forId={settingControlId('mirrorDir')} class={LABEL_CLS} />
+                <input id={settingControlId('mirrorDir')} type="text" bind:value={backupMirrorDir} class={INPUT_CLS} placeholder="/mnt/ai/psfn-bak" />
                 <p class="text-sm text-shadow-500 mt-1">Secondary backup mirror path (leave blank to disable)</p>
               </div>
               <div class="md:col-span-2 flex items-center gap-3">
@@ -2493,13 +2511,13 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <SettingFieldLabel label="LLM Max Retries" keys="retryMaxAttempts" class={LABEL_CLS} />
-                <input type="number" min="0" max="10" bind:value={retryMaxAttempts} class={INPUT_CLS} />
+                <SettingFieldLabel label="LLM Max Retries" keys="retryMaxAttempts" forId={settingControlId('retryMaxAttempts')} class={LABEL_CLS} />
+                <input id={settingControlId('retryMaxAttempts')} type="number" min="0" max="10" bind:value={retryMaxAttempts} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Maximum retry attempts (0-10)</p>
               </div>
               <div>
-                <SettingFieldLabel label="Retry Base Delay (ms)" keys="retryBaseDelayMs" class={LABEL_CLS} />
-                <input type="number" min="500" max="30000" step="100" bind:value={retryBaseDelayMs} class={INPUT_CLS} />
+                <SettingFieldLabel label="Retry Base Delay (ms)" keys="retryBaseDelayMs" forId={settingControlId('retryBaseDelayMs')} class={LABEL_CLS} />
+                <input id={settingControlId('retryBaseDelayMs')} type="number" min="500" max="30000" step="100" bind:value={retryBaseDelayMs} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Base delay between retries (500-30,000ms)</p>
               </div>
             </div>
@@ -2538,33 +2556,34 @@
                   label="Route Mode"
                   keys="importProcessingRouteMode"
                   source={getSource('importProcessingRouteMode')}
+                  forId={settingControlId('importProcessingRouteMode')}
                   class={LABEL_CLS}
                 />
-                <select bind:value={importRouteMode} class={INPUT_CLS}>
+                <select id={settingControlId('importProcessingRouteMode')} bind:value={importRouteMode} class={INPUT_CLS}>
                   {#each importRouteModeOptions as option}
                     <option value={option}>{formatSettingOptionLabel('importProcessingRouteMode', option)}</option>
                   {/each}
                 </select>
               </div>
               <div>
-                <SettingFieldLabel label="Strict Policy" keys="importProcessingStrictPolicy" class={LABEL_CLS} />
+                <SettingFieldLabel label="Strict Policy" keys="importProcessingStrictPolicy" labelId={settingLabelId('importProcessingStrictPolicy')} class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={importStrictPolicy} class={TOGGLE_CLS} />
+                  <input id={settingControlId('importProcessingStrictPolicy')} aria-labelledby={settingLabelId('importProcessingStrictPolicy')} type="checkbox" bind:checked={importStrictPolicy} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Enforce strict ZDR compliance</span>
                 </label>
               </div>
               <div>
-                <SettingFieldLabel label="OpenRouter Provider Order" keys="openRouterProviderOrder" class={LABEL_CLS} />
-                <input type="text" bind:value={openRouterProviderOrder} class={INPUT_CLS} placeholder="comma-separated providers" />
+                <SettingFieldLabel label="OpenRouter Provider Order" keys="openRouterProviderOrder" forId={settingControlId('openRouterProviderOrder')} class={LABEL_CLS} />
+                <input id={settingControlId('openRouterProviderOrder')} type="text" bind:value={openRouterProviderOrder} class={INPUT_CLS} placeholder="comma-separated providers" />
                 <p class="text-sm text-shadow-500 mt-1">Global/import fallback order for provider routing.</p>
               </div>
               <div>
-                <SettingFieldLabel label="Local Endpoint URL" keys="importProcessingLocalEndpointUrl" class={LABEL_CLS} />
-                <input type="text" bind:value={importLocalEndpointUrl} class={INPUT_CLS} placeholder="http://localhost:8080" />
+                <SettingFieldLabel label="Local Endpoint URL" keys="importProcessingLocalEndpointUrl" forId={settingControlId('importProcessingLocalEndpointUrl')} class={LABEL_CLS} />
+                <input id={settingControlId('importProcessingLocalEndpointUrl')} type="text" bind:value={importLocalEndpointUrl} class={INPUT_CLS} placeholder="http://localhost:8080" />
               </div>
               <div>
-                <SettingFieldLabel label="Local Model" keys="importProcessingLocalModel" class={LABEL_CLS} />
-                <input type="text" bind:value={importLocalModel} class={INPUT_CLS} placeholder="model name" />
+                <SettingFieldLabel label="Local Model" keys="importProcessingLocalModel" forId={settingControlId('importProcessingLocalModel')} class={LABEL_CLS} />
+                <input id={settingControlId('importProcessingLocalModel')} type="text" bind:value={importLocalModel} class={INPUT_CLS} placeholder="model name" />
               </div>
             </div>
           </div>
@@ -2598,26 +2617,26 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <SettingFieldLabel label="Allow Internal Network Access" keys="webFetchAllowInternalNetwork" class={LABEL_CLS} />
+                <SettingFieldLabel label="Allow Internal Network Access" keys="webFetchAllowInternalNetwork" labelId={settingLabelId('webFetchAllowInternalNetwork')} class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={webFetchAllowInternalNetwork} class={TOGGLE_CLS} />
+                  <input id={settingControlId('webFetchAllowInternalNetwork')} aria-labelledby={settingLabelId('webFetchAllowInternalNetwork')} type="checkbox" bind:checked={webFetchAllowInternalNetwork} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Allow fetching from RFC1918 / LAN hosts (cloud metadata still blocked)</span>
                 </label>
               </div>
               <div>
-                <SettingFieldLabel label="Allow Non-HTTPS" keys="webFetchAllowHttp" class={LABEL_CLS} />
+                <SettingFieldLabel label="Allow Non-HTTPS" keys="webFetchAllowHttp" labelId={settingLabelId('webFetchAllowHttp')} class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={webFetchAllowHttp} class={TOGGLE_CLS} />
+                  <input id={settingControlId('webFetchAllowHttp')} aria-labelledby={settingLabelId('webFetchAllowHttp')} type="checkbox" bind:checked={webFetchAllowHttp} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Allow HTTP (non-encrypted) web fetch requests</span>
                 </label>
               </div>
               <div>
-                <SettingFieldLabel label="Domain Allowlist" keys="webFetchDomainAllowlist" class={LABEL_CLS} />
-                <input type="text" bind:value={webFetchDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains (e.g. example.local, internal.corp)" />
+                <SettingFieldLabel label="Domain Allowlist" keys="webFetchDomainAllowlist" forId={settingControlId('webFetchDomainAllowlist')} class={LABEL_CLS} />
+                <input id={settingControlId('webFetchDomainAllowlist')} type="text" bind:value={webFetchDomainAllowlist} class={INPUT_CLS} placeholder="comma-separated domains (e.g. example.local, internal.corp)" />
               </div>
               <div>
-                <SettingFieldLabel label="TLS CA Cert Paths" keys="webFetchTlsCaCertPaths" class={LABEL_CLS} />
-                <input type="text" bind:value={webFetchTlsCaCertPaths} class={INPUT_CLS} placeholder="comma-separated file paths" />
+                <SettingFieldLabel label="TLS CA Cert Paths" keys="webFetchTlsCaCertPaths" forId={settingControlId('webFetchTlsCaCertPaths')} class={LABEL_CLS} />
+                <input id={settingControlId('webFetchTlsCaCertPaths')} type="text" bind:value={webFetchTlsCaCertPaths} class={INPUT_CLS} placeholder="comma-separated file paths" />
               </div>
             </div>
           </div>
@@ -2651,36 +2670,36 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div>
-                <SettingFieldLabel label="TTS Provider" keys="ttsProvider" class={LABEL_CLS} />
-                <input type="text" bind:value={ttsProvider} list="tts-provider-list" class={INPUT_CLS} placeholder="disabled or provider id" />
+                <SettingFieldLabel label="TTS Provider" keys="ttsProvider" forId={settingControlId('ttsProvider')} class={LABEL_CLS} />
+                <input id={settingControlId('ttsProvider')} type="text" bind:value={ttsProvider} list="tts-provider-list" class={INPUT_CLS} placeholder="disabled or provider id" />
                 <p class="text-sm text-shadow-500 mt-1">Registered provider ids from the backend registry are suggested, and any current provider id is preserved and sent back unchanged.</p>
               </div>
               <div>
-                <SettingFieldLabel label="STT Provider" keys="sttProvider" class={LABEL_CLS} />
-                <input type="text" bind:value={sttProvider} list="stt-provider-list" class={INPUT_CLS} placeholder="disabled or provider id" />
+                <SettingFieldLabel label="STT Provider" keys="sttProvider" forId={settingControlId('sttProvider')} class={LABEL_CLS} />
+                <input id={settingControlId('sttProvider')} type="text" bind:value={sttProvider} list="stt-provider-list" class={INPUT_CLS} placeholder="disabled or provider id" />
                 <p class="text-sm text-shadow-500 mt-1">Registered provider ids from the backend registry are suggested, and plugin ids are preserved instead of being coerced to disabled.</p>
               </div>
               <div>
-                <SettingFieldLabel label="ElevenLabs Voice ID" keys="voiceId" class={LABEL_CLS} />
-                <input type="text" bind:value={voiceId} class={INPUT_CLS} placeholder="your-voice-id" />
+                <SettingFieldLabel label="ElevenLabs Voice ID" keys="voiceId" forId={settingControlId('voiceId')} class={LABEL_CLS} />
+                <input id={settingControlId('voiceId')} type="text" bind:value={voiceId} class={INPUT_CLS} placeholder="your-voice-id" />
                 <p class="text-sm text-shadow-500 mt-1">Leave blank to clear persisted voice override.</p>
               </div>
               <div>
-                <SettingFieldLabel label="Deepgram Model" keys="deepgramModel" class={LABEL_CLS} />
-                <input type="text" bind:value={deepgramModel} class={INPUT_CLS} placeholder="Deepgram model id" />
+                <SettingFieldLabel label="Deepgram Model" keys="deepgramModel" forId={settingControlId('deepgramModel')} class={LABEL_CLS} />
+                <input id={settingControlId('deepgramModel')} type="text" bind:value={deepgramModel} class={INPUT_CLS} placeholder="Deepgram model id" />
                 <p class="text-sm text-shadow-500 mt-1">Leave blank to clear persisted model override.</p>
               </div>
               <div>
-                <SettingFieldLabel label="Echo TTS URL" keys="echoTtsUrl" class={LABEL_CLS} />
-                <input type="text" bind:value={echoTtsUrl} class={INPUT_CLS} placeholder="http://127.0.0.1:8001/v1/audio/speech" />
+                <SettingFieldLabel label="Echo TTS URL" keys="echoTtsUrl" forId={settingControlId('echoTtsUrl')} class={LABEL_CLS} />
+                <input id={settingControlId('echoTtsUrl')} type="text" bind:value={echoTtsUrl} class={INPUT_CLS} placeholder="http://127.0.0.1:8001/v1/audio/speech" />
               </div>
               <div>
-                <SettingFieldLabel label="Echo TTS Voice" keys="echoTtsVoice" class={LABEL_CLS} />
-                <input type="text" bind:value={echoTtsVoice} class={INPUT_CLS} placeholder="11labs-Allison" />
+                <SettingFieldLabel label="Echo TTS Voice" keys="echoTtsVoice" forId={settingControlId('echoTtsVoice')} class={LABEL_CLS} />
+                <input id={settingControlId('echoTtsVoice')} type="text" bind:value={echoTtsVoice} class={INPUT_CLS} placeholder="11labs-Allison" />
               </div>
               <div class="md:col-span-2">
-                <SettingFieldLabel label="Echo TTS Preset" keys="echoTtsPreset" class={LABEL_CLS} />
-                <input type="text" bind:value={echoTtsPreset} class={INPUT_CLS} placeholder="Independent-High-Speaker-CFG" />
+                <SettingFieldLabel label="Echo TTS Preset" keys="echoTtsPreset" forId={settingControlId('echoTtsPreset')} class={LABEL_CLS} />
+                <input id={settingControlId('echoTtsPreset')} type="text" bind:value={echoTtsPreset} class={INPUT_CLS} placeholder="Independent-High-Speaker-CFG" />
               </div>
             </div>
             <div class="mt-4 bg-bark-100 rounded-lg p-4 border border-bark-200">
@@ -2797,22 +2816,23 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4 space-y-4">
             <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
               <div class="md:col-span-2">
-                <SettingFieldLabel label="Discord Trigger Words" keys="discordTriggerWords" class={LABEL_CLS} />
-                <input type="text" bind:value={discordTriggerWords} class={INPUT_CLS} placeholder="pixie, hey companion" />
+                <SettingFieldLabel label="Discord Trigger Words" keys="discordTriggerWords" forId={settingControlId('discordTriggerWords')} class={LABEL_CLS} />
+                <input id={settingControlId('discordTriggerWords')} type="text" bind:value={discordTriggerWords} class={INPUT_CLS} placeholder="pixie, hey companion" />
                 <p class="text-sm text-shadow-500 mt-1">
                   Comma-separated words or phrases that trigger replies in guild channels.
                 </p>
               </div>
               <div class="md:col-span-2">
-                <SettingFieldLabel label="Discord Trigger Reactions" keys="discordTriggerReactions" class={LABEL_CLS} />
-                <input type="text" bind:value={discordTriggerReactions} class={INPUT_CLS} placeholder="👆, 🔥, 👀" />
+                <SettingFieldLabel label="Discord Trigger Reactions" keys="discordTriggerReactions" forId={settingControlId('discordTriggerReactions')} class={LABEL_CLS} />
+                <input id={settingControlId('discordTriggerReactions')} type="text" bind:value={discordTriggerReactions} class={INPUT_CLS} placeholder="👆, 🔥, 👀" />
                 <p class="text-sm text-shadow-500 mt-1">
                   Comma-separated emoji reactions that open a Discord follow-up window.
                 </p>
               </div>
               <div>
-                <SettingFieldLabel label="Discord Listen Window (seconds)" keys="discordTriggerListenWindowMs" class={LABEL_CLS} />
+                <SettingFieldLabel label="Discord Listen Window (seconds)" keys="discordTriggerListenWindowMs" forId={settingControlId('discordTriggerListenWindowMs')} class={LABEL_CLS} />
                 <input
+                  id={settingControlId('discordTriggerListenWindowMs')}
                   type="number"
                   min="10"
                   max="600"
@@ -2830,15 +2850,15 @@
                 </p>
               </div>
               <div>
-                <SettingFieldLabel label="Telegram Enabled" keys="telegramEnabled" class={LABEL_CLS} />
+                <SettingFieldLabel label="Telegram Enabled" keys="telegramEnabled" labelId={settingLabelId('telegramEnabled')} class={LABEL_CLS} />
                 <label class="flex items-center gap-2 mt-2 cursor-pointer">
-                  <input type="checkbox" bind:checked={telegramEnabled} class={TOGGLE_CLS} />
+                  <input id={settingControlId('telegramEnabled')} aria-labelledby={settingLabelId('telegramEnabled')} type="checkbox" bind:checked={telegramEnabled} class={TOGGLE_CLS} />
                   <span class="text-sm text-shadow-700">Enable Telegram channel bridge</span>
                 </label>
               </div>
               <div class="md:col-span-2">
-                <SettingFieldLabel label="Telegram Authorized Users" keys="telegramAuthorizedUsers" class={LABEL_CLS} />
-                <input type="text" bind:value={telegramAuthorizedUsers} class={INPUT_CLS} placeholder="12345678, 87654321" />
+                <SettingFieldLabel label="Telegram Authorized Users" keys="telegramAuthorizedUsers" forId={settingControlId('telegramAuthorizedUsers')} class={LABEL_CLS} />
+                <input id={settingControlId('telegramAuthorizedUsers')} type="text" bind:value={telegramAuthorizedUsers} class={INPUT_CLS} placeholder="12345678, 87654321" />
                 <p class="text-sm text-shadow-500 mt-1">Comma-separated Telegram user IDs allowed to interact.</p>
               </div>
             </div>

@@ -13,6 +13,7 @@ import {
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { SessionManager } from '../../core/session/manager.js';
+import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { EpisodicStore } from '../../faculties/memory/episodic/store.js';
@@ -39,6 +40,7 @@ import type {
   GardenAdminDomainServices,
 } from './admin-contract.js';
 import { AdminChatBootstrapService } from './chat/bootstrap.js';
+import { AdminActionPipeDataService } from './services/action-pipe-service.js';
 import { AdminAdaptiveToolsDataService } from './services/adaptive-tools-service.js';
 import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
@@ -78,6 +80,7 @@ export interface InProcessGardenAdminContractOptions {
   confirmationQueueApi?: ConfirmationQueueAdminApi | null;
   adaptiveToolsStateProvider?: AdaptiveToolsStateProvider | null;
   toolHealthProvider?: AdminToolHealthProvider | null;
+  postTurnActions?: PostTurnActionRuntime | null;
 }
 
 export function createInProcessGardenAdminContract(
@@ -111,6 +114,9 @@ export function createInProcessGardenAdminContract(
       resolveLastActiveSessionId,
     }),
     charges: new AdminChargeLedgerDataService(chargeLedger),
+    actionPipe: options.postTurnActions
+      ? new AdminActionPipeDataService(options.postTurnActions)
+      : null,
     shards: new AdminShardFoldReviewDataService(options.shardManager),
     adaptiveTools: new AdminAdaptiveToolsDataService({
       eventBus: options.eventBus,

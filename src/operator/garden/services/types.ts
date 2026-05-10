@@ -39,6 +39,10 @@ import type {
   RunChargeLedgerQuery,
 } from '../../../shared/telemetry/charge-ledger.js';
 import type {
+  PostTurnActionQueueStatus,
+  PostTurnActionStatusRecord,
+} from '../../../core/agent/post-turn-action-runtime.js';
+import type {
   Contact,
   ContactIdentityLinkVerification,
   ContactMutationAuditEntry,
@@ -110,6 +114,19 @@ export interface AdminDashboardService {
 
 export interface AdminChargeLedgerService {
   getChargeLedgerData(query?: RunChargeLedgerQuery): Promise<RunChargeLedgerData>;
+}
+
+export interface AdminActionPipeMutationResult {
+  ok: boolean;
+  message: string;
+  action?: PostTurnActionStatusRecord;
+  status: PostTurnActionQueueStatus;
+}
+
+export interface AdminActionPipeService {
+  getActionPipeStatus(): Promise<PostTurnActionQueueStatus>;
+  cancelAction(input: { actionRef: string; reason?: string }): Promise<AdminActionPipeMutationResult>;
+  acknowledgeAction(input: { actionRef: string; detail?: string }): Promise<AdminActionPipeMutationResult>;
 }
 
 export interface AdminShardFoldReviewSummary {

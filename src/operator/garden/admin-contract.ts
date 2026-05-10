@@ -18,6 +18,7 @@ import type {
   AdminModelRoomBootstrapResponse,
 } from './chat/types.js';
 import type {
+  AdminActionPipeService,
   AdminAdaptiveToolsService,
   AdminChargeLedgerService,
   AdminContactsService,
@@ -119,6 +120,7 @@ export interface AdminChatBootstrapApi {
 export interface GardenAdminDomainServices {
   dashboard: AdminDashboardService;
   charges?: AdminChargeLedgerService | null;
+  actionPipe?: AdminActionPipeService | null;
   shards: AdminShardFoldReviewService;
   adaptiveTools?: AdminAdaptiveToolsService | null;
   episodicMemory?: AdminEpisodicMemoryService | null;

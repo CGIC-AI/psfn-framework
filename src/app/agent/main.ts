@@ -339,6 +339,7 @@ async function main(): Promise<void> {
     gateway,
     eventBus,
     scheduler,
+    postTurnActions,
     episodicStore,
     card,
     shardManager,

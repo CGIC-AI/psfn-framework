@@ -4,12 +4,14 @@
     keys,
     source,
     forId,
+    labelId,
     class: className = 'block text-sm font-medium text-shadow-700 mb-1.5',
   } = $props<{
     label: string;
     keys?: string | readonly string[];
     source?: string;
     forId?: string;
+    labelId?: string;
     class?: string;
   }>();
 
@@ -33,11 +35,11 @@
 {/snippet}
 
 {#if forId}
-  <label class={className} for={forId}>
+  <label id={labelId} class={className} for={forId}>
     {@render labelContent()}
   </label>
 {:else}
-  <div class={className}>
+  <div id={labelId} class={className}>
     {@render labelContent()}
   </div>
 {/if}

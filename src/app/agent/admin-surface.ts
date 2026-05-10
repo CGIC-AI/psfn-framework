@@ -6,6 +6,7 @@ import type { GatewayClient } from '../../boundary/gateway/client.js';
 import { GatewayModelDiscovery } from '../../primitives/llm/discovery.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
+import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import type { AgentCoreRuntime } from './core-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -24,6 +25,7 @@ export interface StartOptionalAdminTransportServerOptions {
   gateway: GatewayClient;
   eventBus: EventBus;
   scheduler: Scheduler;
+  postTurnActions: PostTurnActionRuntime;
   episodicStore?: EpisodicStore | null;
   card: CharacterCardV2;
   shardManager: ShardExecutionPort;
@@ -59,6 +61,7 @@ export async function startOptionalAdminTransportServer(
     sessionStore: options.coreRuntime.sessionStore,
     sessionManager: options.coreRuntime.sessionManager,
     scheduler: options.scheduler,
+    postTurnActions: options.postTurnActions,
     shardManager: options.shardManager,
     eventBus: options.eventBus,
     contactStore: options.coreRuntime.contactStore,

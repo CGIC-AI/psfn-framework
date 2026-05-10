@@ -104,6 +104,14 @@
       && !isDeprecatedField(key)
     ));
   }
+
+  function advancedControlId(key: string, suffix = 'input'): string {
+    return `advanced-setting-${key.replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()}-${suffix}`;
+  }
+
+  function advancedLabelId(key: string): string {
+    return advancedControlId(key, 'label');
+  }
 </script>
 
 <div class="space-y-3">
@@ -142,7 +150,7 @@
               {@const enumValues = fieldEnumValues(key, typeof value === 'string' ? [value] : [])}
               {@const fieldSchema = fieldContract(key)}
               <div class="flex flex-col sm:flex-row sm:items-start gap-2">
-                <div class="sm:w-60 shrink-0 flex items-center gap-2">
+                <div id={advancedLabelId(key)} class="sm:w-60 shrink-0 flex items-center gap-2">
                   <span class="text-sm font-mono text-shadow-700">{key}</span>
                   <span class="text-shadow-400 text-sm">({getSource(key)})</span>
                   {#if fieldSchema?.deprecated}
@@ -159,6 +167,8 @@
                       </p>
                       <label class="inline-flex items-center gap-3 rounded-full border border-gold-300 bg-gold-50 px-3 py-2 text-sm font-medium text-shadow-800 cursor-pointer">
                         <input
+                          id={advancedControlId('compositionalPolicy', 'enabled')}
+                          aria-labelledby={advancedLabelId('compositionalPolicy')}
                           type="checkbox"
                           checked={policy.enabled}
                           onchange={(event) => setCompositionalPolicyEnabled((event.target as HTMLInputElement).checked)}
@@ -177,6 +187,7 @@
                               class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedTiers', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
                             >
                               <input
+                                aria-label={`Toggle ${option} compositional tier`}
                                 type="checkbox"
                                 checked={hasCompositionalPolicyValue('allowedTiers', option)}
                                 onchange={() => toggleCompositionalPolicyValue('allowedTiers', option)}
@@ -196,6 +207,7 @@
                               class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedChannelTypes', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
                             >
                               <input
+                                aria-label={`Toggle ${option} compositional channel`}
                                 type="checkbox"
                                 checked={hasCompositionalPolicyValue('allowedChannelTypes', option)}
                                 onchange={() => toggleCompositionalPolicyValue('allowedChannelTypes', option)}
@@ -215,6 +227,7 @@
                               class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm cursor-pointer transition-colors {hasCompositionalPolicyValue('allowedPurposes', option) ? 'border-gold-400 bg-gold-100 text-shadow-800' : 'border-bark-300 bg-white text-shadow-600 hover:bg-bark-100'}"
                             >
                               <input
+                                aria-label={`Toggle ${option} compositional purpose`}
                                 type="checkbox"
                                 checked={hasCompositionalPolicyValue('allowedPurposes', option)}
                                 onchange={() => toggleCompositionalPolicyValue('allowedPurposes', option)}
@@ -229,7 +242,10 @@
                   </div>
                 {:else if editorType === 'checkbox'}
                   <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox"
+                    <input
+                      id={advancedControlId(key)}
+                      aria-labelledby={advancedLabelId(key)}
+                      type="checkbox"
                       checked={Boolean(value)}
                       onchange={(event) => setConfigValue(key, (event.target as HTMLInputElement).checked)}
                       class="sr-only peer" />
@@ -241,6 +257,8 @@
                   </label>
                 {:else if editorType === 'enum'}
                   <select
+                    id={advancedControlId(key)}
+                    aria-labelledby={advancedLabelId(key)}
                     value={String(value ?? '')}
                     onchange={(event) => setConfigValue(key, (event.target as HTMLSelectElement).value)}
                     class={FIELD_INPUT_CLASS}
@@ -250,20 +268,28 @@
                     {/each}
                   </select>
                 {:else if editorType === 'number'}
-                  <input type="number"
+                  <input
+                    id={advancedControlId(key)}
+                    aria-labelledby={advancedLabelId(key)}
+                    type="number"
                     value={Number(value)}
                     min={fieldMinimum(key)}
                     max={fieldMaximum(key)}
                     onchange={(event) => setConfigValue(key, Number((event.target as HTMLInputElement).value))}
                     class={FIELD_INPUT_CLASS} />
                 {:else if editorType === 'array'}
-                  <input type="text"
+                  <input
+                    id={advancedControlId(key)}
+                    aria-labelledby={advancedLabelId(key)}
+                    type="text"
                     value={Array.isArray(value) ? value.join(', ') : ''}
                     onchange={(event) => setConfigValue(key, (event.target as HTMLInputElement).value.split(',').map((entry) => entry.trim()).filter(Boolean))}
                     class={FIELD_INPUT_CLASS}
                     placeholder="comma-separated values" />
                 {:else if editorType === 'object'}
                   <textarea
+                    id={advancedControlId(key)}
+                    aria-labelledby={advancedLabelId(key)}
                     value={JSON.stringify(value, null, 2)}
                     onchange={(event) => { try { setConfigValue(key, JSON.parse((event.target as HTMLTextAreaElement).value)); } catch { /* ignore */ } }}
                     rows="3"
@@ -271,7 +297,10 @@
                     spellcheck="false"
                   ></textarea>
                 {:else}
-                  <input type="text"
+                  <input
+                    id={advancedControlId(key)}
+                    aria-labelledby={advancedLabelId(key)}
+                    type="text"
                     value={String(value ?? '')}
                     onchange={(event) => setConfigValue(key, (event.target as HTMLInputElement).value)}
                     class={FIELD_INPUT_CLASS} />
@@ -318,7 +347,7 @@
               {@const enumValues = fieldEnumValues(key, typeof value === 'string' ? [value] : [])}
               {@const fieldSchema = fieldContract(key)}
               <div class="flex flex-col sm:flex-row sm:items-center gap-2">
-                <div class="sm:w-60 shrink-0 flex items-center gap-2">
+                <div id={advancedLabelId(key)} class="sm:w-60 shrink-0 flex items-center gap-2">
                   <span class="text-sm font-mono text-shadow-700">{key}</span>
                   <span class="text-shadow-400 text-sm">({getSource(key)})</span>
                   {#if fieldSchema?.deprecated}
@@ -327,7 +356,10 @@
                 </div>
                 {#if editorType === 'checkbox'}
                   <label class="relative inline-flex items-center cursor-pointer">
-                    <input type="checkbox"
+                    <input
+                      id={advancedControlId(key)}
+                      aria-labelledby={advancedLabelId(key)}
+                      type="checkbox"
                       checked={Boolean(value)}
                       onchange={(event) => setConfigValue(key, (event.target as HTMLInputElement).checked)}
                       class="sr-only peer" />
@@ -339,6 +371,8 @@
                   </label>
                 {:else if editorType === 'enum'}
                   <select
+                    id={advancedControlId(key)}
+                    aria-labelledby={advancedLabelId(key)}
                     value={String(value ?? '')}
                     onchange={(event) => setConfigValue(key, (event.target as HTMLSelectElement).value)}
                     class={FIELD_INPUT_CLASS}
@@ -348,20 +382,28 @@
                     {/each}
                   </select>
                 {:else if editorType === 'number'}
-                  <input type="number"
+                  <input
+                    id={advancedControlId(key)}
+                    aria-labelledby={advancedLabelId(key)}
+                    type="number"
                     value={Number(value)}
                     min={fieldMinimum(key)}
                     max={fieldMaximum(key)}
                     onchange={(event) => setConfigValue(key, Number((event.target as HTMLInputElement).value))}
                     class={FIELD_INPUT_CLASS} />
                 {:else if editorType === 'array'}
-                  <input type="text"
+                  <input
+                    id={advancedControlId(key)}
+                    aria-labelledby={advancedLabelId(key)}
+                    type="text"
                     value={Array.isArray(value) ? value.join(', ') : ''}
                     onchange={(event) => setConfigValue(key, (event.target as HTMLInputElement).value.split(',').map((entry) => entry.trim()).filter(Boolean))}
                     class={FIELD_INPUT_CLASS}
                     placeholder="comma-separated values" />
                 {:else if editorType === 'object'}
                   <textarea
+                    id={advancedControlId(key)}
+                    aria-labelledby={advancedLabelId(key)}
                     value={JSON.stringify(value, null, 2)}
                     onchange={(event) => { try { setConfigValue(key, JSON.parse((event.target as HTMLTextAreaElement).value)); } catch { /* ignore */ } }}
                     rows="3"
@@ -369,7 +411,10 @@
                     spellcheck="false"
                   ></textarea>
                 {:else}
-                  <input type="text"
+                  <input
+                    id={advancedControlId(key)}
+                    aria-labelledby={advancedLabelId(key)}
+                    type="text"
                     value={String(value ?? '')}
                     onchange={(event) => setConfigValue(key, (event.target as HTMLInputElement).value)}
                     class={FIELD_INPUT_CLASS} />

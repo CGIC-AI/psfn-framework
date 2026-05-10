@@ -68,6 +68,10 @@
       enabled,
     }));
   }
+
+  function providerControlId(index: number, field: string): string {
+    return `settings-provider-${index}-${field.replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase()}`;
+  }
 </script>
 
 <div class="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
@@ -129,8 +133,9 @@
           <p class="text-sm text-shadow-600">{providerTypeSummary(entry.type)}</p>
         </div>
         <div class="flex flex-wrap items-center gap-3">
-          <label class="inline-flex items-center gap-2 text-sm text-shadow-700">
+          <label class="inline-flex items-center gap-2 text-sm text-shadow-700" for={providerControlId(index, 'enabled')}>
             <input
+              id={providerControlId(index, 'enabled')}
               type="checkbox"
               checked={entry.enabled}
               onchange={(event) => setProviderEnabled(index, (event.currentTarget as HTMLInputElement).checked)}
@@ -150,8 +155,9 @@
 
       <div class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         <div>
-          <SettingFieldLabel label="Provider Id" keys="id" class={labelClass} />
+          <SettingFieldLabel label="Provider Id" keys="id" forId={providerControlId(index, 'id')} class={labelClass} />
           <input
+            id={providerControlId(index, 'id')}
             type="text"
             value={entry.id}
             oninput={(event) => setProviderField(index, 'id', (event.currentTarget as HTMLInputElement).value)}
@@ -161,8 +167,9 @@
           <p class="mt-1 text-sm text-shadow-500">Models and routing provider orders reference this id directly.</p>
         </div>
         <div>
-          <SettingFieldLabel label="Provider Type" keys="type" class={labelClass} />
+          <SettingFieldLabel label="Provider Type" keys="type" forId={providerControlId(index, 'type')} class={labelClass} />
           <select
+            id={providerControlId(index, 'type')}
             value={entry.type}
             onchange={(event) => setProviderType(index, (event.currentTarget as HTMLSelectElement).value)}
             class={inputClass}
@@ -173,8 +180,9 @@
           </select>
         </div>
         <div>
-          <SettingFieldLabel label="Label" keys="label" class={labelClass} />
+          <SettingFieldLabel label="Label" keys="label" forId={providerControlId(index, 'label')} class={labelClass} />
           <input
+            id={providerControlId(index, 'label')}
             type="text"
             value={entry.label ?? ''}
             oninput={(event) => setProviderField(index, 'label', (event.currentTarget as HTMLInputElement).value)}
@@ -183,8 +191,9 @@
           />
         </div>
         <div>
-          <SettingFieldLabel label="API Base URL" keys="apiBaseUrl" class={labelClass} />
+          <SettingFieldLabel label="API Base URL" keys="apiBaseUrl" forId={providerControlId(index, 'apiBaseUrl')} class={labelClass} />
           <input
+            id={providerControlId(index, 'apiBaseUrl')}
             type="text"
             value={entry.apiBaseUrl ?? ''}
             oninput={(event) => setProviderField(index, 'apiBaseUrl', (event.currentTarget as HTMLInputElement).value)}
@@ -193,8 +202,9 @@
           />
         </div>
         <div>
-          <SettingFieldLabel label="Models API URL" keys="modelsApiUrl" class={labelClass} />
+          <SettingFieldLabel label="Models API URL" keys="modelsApiUrl" forId={providerControlId(index, 'modelsApiUrl')} class={labelClass} />
           <input
+            id={providerControlId(index, 'modelsApiUrl')}
             type="text"
             value={entry.modelsApiUrl ?? ''}
             oninput={(event) => setProviderField(index, 'modelsApiUrl', (event.currentTarget as HTMLInputElement).value)}
@@ -204,8 +214,9 @@
           />
         </div>
         <div>
-          <SettingFieldLabel label="API Key Ref" keys="apiKeyRef.envName" class={labelClass} />
+          <SettingFieldLabel label="API Key Ref" keys="apiKeyRef.envName" forId={providerControlId(index, 'apiKeyRef-envName')} class={labelClass} />
           <input
+            id={providerControlId(index, 'apiKeyRef-envName')}
             type="text"
             value={entry.apiKeyRef?.kind === 'env' ? entry.apiKeyRef.envName : ''}
             oninput={(event) => setProviderField(index, 'apiKeyRef', (event.currentTarget as HTMLInputElement).value)}

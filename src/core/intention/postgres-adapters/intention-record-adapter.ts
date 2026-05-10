@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import { wrapPromptSectionXml } from '../../identity/prompt-sections.js';
 import { queryOne, queryRows } from './connection.js';
 import type { PostgresIntentionPortOptions } from './types.js';
+import type { BehavioralPatternStorePortBackend } from '../behavioral-pattern-store-port.js';
 import type {
   BehavioralPatternPromotionHook,
   BehavioralPatternSample,
@@ -32,7 +33,7 @@ import {
   toProceduralMemoryText,
 } from './shared.js';
 
-export class PostgresBehavioralPatternTracker {
+export class PostgresBehavioralPatternTracker implements BehavioralPatternStorePortBackend {
   private promotionHook: BehavioralPatternPromotionHook | null;
   private sampleCache = new Map<string, BehavioralPatternSample>();
 

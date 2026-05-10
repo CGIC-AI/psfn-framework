@@ -5,6 +5,10 @@ import {
   createBehavioralPatternMemoryPromotionHook,
   type BehavioralPatternPromotionCandidate,
 } from './patterns.js';
+import {
+  createBehavioralPatternStorePort,
+  type BehavioralPatternStorePort,
+} from './behavioral-pattern-store-port.js';
 
 describe('BehavioralPatternTracker', () => {
   let db: Database.Database;
@@ -53,6 +57,40 @@ describe('BehavioralPatternTracker', () => {
     });
     expect(contactBSamples).toHaveLength(1);
     expect(contactBSamples[0]?.contactId).toBe('contact-b');
+  });
+
+  it('adapts the tracker behind the async behavioral pattern store port', async () => {
+    const port: BehavioralPatternStorePort = createBehavioralPatternStorePort(tracker);
+
+    const sample = await port.recordResponseStrategy({
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-a-1',
+      responseContent: 'Could you tell me more about what happened?',
+    });
+    expect(sample.strategy).toBe('questioning');
+
+    await expect(port.listSamples({
+      contactId: 'contact-a',
+      includePending: true,
+    })).resolves.toHaveLength(1);
+
+    const resolved = await port.tryRecordOutcomeForLatestPending({
+      contactId: 'contact-a',
+      outcomeScore: 0.4,
+      outcomeSourceMessageId: 'msg-a-2',
+    });
+    expect(resolved).toMatchObject({
+      strategy: 'questioning',
+      outcomeScore: 0.4,
+      outcomeSourceMessageId: 'msg-a-2',
+    });
+
+    await expect(port.listStrategySummaries('contact-a')).resolves.toEqual([
+      expect.objectContaining({
+        strategy: 'questioning',
+        resolvedCount: 1,
+      }),
+    ]);
   });
 
   it('records outcomes and surfaces behavioral notes only for resolved data', async () => {

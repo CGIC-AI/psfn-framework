@@ -99,44 +99,6 @@ export interface BehavioralPatternContextProvider {
   getBehavioralNotes(contactId?: string, limit?: number): string;
 }
 
-type Awaitable<T> = T | Promise<T>;
-
-interface BehavioralPatternStorePortBackend {
-  setPromotionHook(hook: BehavioralPatternPromotionHook | null): void;
-  recordResponseStrategy(input: BehavioralPatternRecordInput): Awaitable<BehavioralPatternSample>;
-  recordOutcomeForSample(input: BehavioralPatternOutcomeInput): Awaitable<BehavioralPatternSample>;
-  tryRecordOutcomeForLatestPending(input: {
-    contactId: string;
-    outcomeScore: number;
-    observedAt?: string;
-    strategy?: BehavioralResponseStrategy;
-    outcomeSourceMessageId?: string;
-  }): Awaitable<BehavioralPatternSample | null>;
-  listSamples(options: BehavioralPatternListOptions): Awaitable<BehavioralPatternSample[]>;
-  listStrategySummaries(
-    contactId: string,
-    options?: BehavioralPatternSummaryOptions,
-  ): Awaitable<BehavioralStrategySummary[]>;
-}
-
-export interface BehavioralPatternStorePort {
-  setPromotionHook(hook: BehavioralPatternPromotionHook | null): void;
-  recordResponseStrategy(input: BehavioralPatternRecordInput): Promise<BehavioralPatternSample>;
-  recordOutcomeForSample(input: BehavioralPatternOutcomeInput): Promise<BehavioralPatternSample>;
-  tryRecordOutcomeForLatestPending(input: {
-    contactId: string;
-    outcomeScore: number;
-    observedAt?: string;
-    strategy?: BehavioralResponseStrategy;
-    outcomeSourceMessageId?: string;
-  }): Promise<BehavioralPatternSample | null>;
-  listSamples(options: BehavioralPatternListOptions): Promise<BehavioralPatternSample[]>;
-  listStrategySummaries(
-    contactId: string,
-    options?: BehavioralPatternSummaryOptions,
-  ): Promise<BehavioralStrategySummary[]>;
-}
-
 interface BehavioralPatternRow {
   id: string;
   contact_id: string;
@@ -406,25 +368,6 @@ function toProceduralMemoryText(candidate: {
     + `(avg emotional outcome ${formatSigned(candidate.averageOutcome)} `
     + `across ${candidate.sampleCount} observations; positive rate ${Math.round(candidate.positiveRate * 100)}%).`
   );
-}
-
-export function createBehavioralPatternStorePort(
-  store: BehavioralPatternStorePortBackend,
-): BehavioralPatternStorePort {
-  return {
-    setPromotionHook: (hook) => {
-      store.setPromotionHook(hook);
-    },
-    recordResponseStrategy: async (input) => await store.recordResponseStrategy(input),
-    recordOutcomeForSample: async (input) => await store.recordOutcomeForSample(input),
-    tryRecordOutcomeForLatestPending: async (input) => (
-      await store.tryRecordOutcomeForLatestPending(input)
-    ),
-    listSamples: async (options) => await store.listSamples(options),
-    listStrategySummaries: async (contactId, options) => (
-      await store.listStrategySummaries(contactId, options)
-    ),
-  };
 }
 
 export class BehavioralPatternTracker implements BehavioralPatternContextProvider {

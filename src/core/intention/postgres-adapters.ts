@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
-import { createBehavioralPatternStorePort } from './patterns.js';
+import { createBehavioralPatternStorePort } from './behavioral-pattern-store-port.js';
 import { createConcernStorePort } from './concern-store-port.js';
 import { createPendingFollowUpStorePort } from './pending-follow-up-store-port.js';
 import { PostgresPendingFollowUpStore } from './postgres-adapters/appraisal-trace-adapter.js';

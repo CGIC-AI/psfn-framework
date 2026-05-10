@@ -14,10 +14,12 @@ import {
   type PendingFollowUpStorePort,
 } from './pending-follow-up-store-port.js';
 import {
-  BehavioralPatternTracker,
   createBehavioralPatternStorePort,
-  type BehavioralPatternContextProvider,
   type BehavioralPatternStorePort,
+} from './behavioral-pattern-store-port.js';
+import {
+  BehavioralPatternTracker,
+  type BehavioralPatternContextProvider,
 } from './patterns.js';
 
 export interface SQLiteIntentionRuntimeStores {

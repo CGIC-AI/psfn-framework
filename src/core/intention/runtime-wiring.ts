@@ -23,8 +23,8 @@ import {
 import {
   scoreBehavioralOutcomeFromEmotion,
   type BehavioralPatternContextProvider,
-  type BehavioralPatternStorePort,
 } from './patterns.js';
+import type { BehavioralPatternStorePort } from './behavioral-pattern-store-port.js';
 import {
   createSQLiteIntentionRuntimeStores,
   type SQLiteIntentionRuntimeStores,

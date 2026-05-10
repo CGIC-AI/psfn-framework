@@ -56,15 +56,19 @@ The agent talks to the gateway through `GatewayClient`, which acts as the LLM an
 
 - L0 session history is append-only JSONL under `sessions/`.
 - The archive/projection split is intentional: canonical archive truth stays in JSONL, while fast-search copies belong behind projection/search ports.
-- `SessionManager` handles compaction, token budgeting, continuity, internal role envelopes, and prompt-aware context assembly.
+- `SessionManager` handles the sliding active context window, token budgeting, continuity, internal role envelopes, focus knowledge, observation masking, and prompt-aware context assembly.
+- Auto-compaction is deferred between turns by default. It summarizes older selected context into untrusted carry-forward notes, retains a recent verbatim tail, and leaves canonical L0 history intact.
 - Session integrity can be HMAC-backed in split mode through the gateway-provided integrity provider.
 
 ### Memory
 
 - `MemoryStore` uses SQLite plus `sqlite-vec`.
 - The intended backend shape is port-driven so SQLite can remain the default while PostgreSQL or future backends swap behind `MemoryStorePort`.
-- `MemoryRetriever` combines semantic retrieval, lexical fallback, trust filtering, emotional continuity, and optional compositional reranking.
+- `EpisodicStore` owns the L0.1 `l01_episodes` and `l01_episode_arcs` tables. These records are bounded landmarks with L0 span/artifact provenance, not generic transcript summaries and not L2 typed memories.
+- `EpisodicSynthesizer` runs from rest/me-time sleeptime work after user inactivity. It can create multiple episodes for one day and links longer themes as graph arcs.
+- `MemoryRetriever` combines L0.1 landmark-chain retrieval, semantic retrieval, lexical fallback, trust filtering, emotional continuity, and optional compositional reranking.
 - `MemoryExtractor` runs post-turn extraction, crash-recovery extraction, compaction extraction, and profile refresh flows.
+- Garden exposes episodic memory through a dedicated operator page for episode, provenance, arc, and thread inspection.
 
 See [`docs/memory.md`](./memory.md) for the memory contract.
 
@@ -89,6 +93,7 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 ### Scheduler and background work
 
 - `Scheduler` handles heartbeat/reflection tasks, maintenance, one-shot tasks, backups, and deferred work.
+- Rest/me-time configuration gates sleeptime episodic processing so background review can happen during explicit inactive windows without blocking foreground chat.
 - Post-turn actions and intention appraisal live outside the main response path but stay in the same audited runtime.
 
 ## Persistence Topology

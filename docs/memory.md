@@ -7,15 +7,26 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 ### L0: Session history
 
 - Per-channel append-only JSONL in `sessions/`
-- Built and compacted by `SessionStore` and `SessionManager`
+- Built by `SessionStore` and assembled by `SessionManager`
 - Remains the canonical turn history
 - The archive seam should be `SessionArchivePort`; DB mirrors and searches belong behind projection/search ports, not as alternate archive truth.
+
+### L0.1: Episodic landmarks
+
+- Stored in SQLite through `EpisodicStore` tables `l01_episodes` and `l01_episode_arcs`
+- Represents bounded lived episodes with L0 span/artifact provenance, salience, affect, themes, participants, thread IDs, and channel IDs
+- Created during configured rest/me-time windows after user inactivity by the sleeptime episodic synthesizer
+- Allows multiple episodes per day; a long-running theme is a graph of linked episodes, not one large aggregate record
+- Retrieved before raw span/artifact drill-down so L1 can search a scoped episode chain instead of all chats and all memories
+- Exposed in Garden through the episodic memory page for episode, provenance, arc, and thread inspection
+- Must stay separate from L2 typed memories and from generic transcript summary/vector caches
 
 ### L1: Active context assembly
 
 - Built on demand by `SessionManager`
-- Mixes recent session entries, continuity, prompt layers, active orientation, and retrieved long-term memory
-- Applies token budgets, compaction thresholds, and observation masking
+- Mixes recent session entries, continuity, prompt layers, active orientation, retrieved L2 memory, and L0.1 episodic landmarks
+- Applies token budgets, temporal history bounds, compaction thresholds, focus compaction ranges, and observation masking
+- Operates as a sliding active context window. It can retain a recent verbatim tail, summarize older in-window entries, and carry forward previous compaction summaries without changing L0 canonical history.
 
 ### L2: Typed long-term memories
 
@@ -73,6 +84,8 @@ The current runtime supports seven memory types:
 
 This is broader than the older six-type description. `boundary` is a first-class memory type and matters for trust, consent, and retrieval gating.
 
+`episodic` as an L2 memory type is still a typed long-term memory category. It is not the same as L0.1 `l01_episodes`. L0.1 episodes are provenance-bearing landmarks and graph edges used to scope recall; L2 episodic memories are ordinary rows in the typed long-term memory store.
+
 ## Stored Memory Metadata
 
 Each memory can carry:
@@ -103,10 +116,25 @@ The current write pipeline is:
 
 Extraction can also run in crash recovery and pre-compaction paths, not only after a normal turn.
 
+## Compaction And Carry-Forward
+
+Compaction is context-window maintenance, not a replacement memory layer.
+
+- L0 session JSONL remains canonical. Compaction changes what is carried into L1 context; it does not delete or rewrite the source archive.
+- Between turns, `SessionManager.scheduleAutoCompactionBetweenTurns()` can queue background compaction after a turn. Foreground context assembly reports pending compaction and normally runs in deferred mode.
+- When compaction runs, the oldest half of the selected recent context is summarized, the newer half remains available as recent verbatim history, and the summary is stored with source-hash and preservation metadata.
+- Before compaction summarizes entries, the memory extractor gets a pre-compaction flush opportunity so salient facts are not lost before the active window shrinks.
+- Stored compaction summaries are wrapped as untrusted context before prompt injection. The model must treat them as derived carry-forward notes, not authoritative transcript text.
+- Focus knowledge can mark ranges already distilled into project context so those ranges do not keep consuming the active window.
+- L0.1 episodic synthesis is separate rest-window work. It creates bounded episode landmarks with provenance and graph links; compaction summaries do not become episodes automatically.
+
+The open design boundary is richer L1/L2 integration: future work can let contextual memory agents traverse an L0.1 chain and then selectively expand L0 spans, artifacts, or L2 memories. That expansion must stay bounded, provenance-preserving, and trust-gated.
+
 ## Retrieval Path
 
 `MemoryRetriever` combines multiple filters and ranking stages:
 
+- L0.1 episodic landmark-chain search
 - semantic vector search
 - lexical fallback when semantic candidates miss
 - privacy and trust-policy filtering
@@ -119,6 +147,8 @@ Extraction can also run in crash recovery and pre-compaction paths, not only aft
 The searchable copy of L0 should be treated as a projection that can be rebuilt from canonical archive truth if drift or corruption is detected.
 
 When memories are withheld, the retriever can return withheld summaries instead of silently dropping context.
+
+Episodic retrieval is landmark-first. A cue such as a wedding cake question should select the cake/bakery episode chain and its raw references, not the entire wedding-planning history and not one giant wedding memory. If no episodic landmarks match, normal L2 retrieval behavior remains intact.
 
 ## Trust And Privacy
 
@@ -151,4 +181,7 @@ Start here when behavior matters:
 - `src/faculties/memory/writer.ts`
 - `src/faculties/memory/extraction.ts`
 - `src/faculties/memory/retrieval.ts`
+- `src/faculties/memory/episodic/store.ts`
+- `src/faculties/memory/episodic/synthesis.ts`
+- `src/faculties/memory/retrieval/episodic.ts`
 - `src/app/startup/composition/composition.ts`

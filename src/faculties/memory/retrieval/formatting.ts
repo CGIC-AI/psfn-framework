@@ -8,6 +8,7 @@ import {
   listMemoryWithheldReasonEntries,
   type MemoryWithheldSummary,
 } from '../withheld-summary.js';
+import type { EpisodicRetrievalChain } from './episodic.js';
 import type {
   RetrievalContactContext,
   RetrievalSocialContext,
@@ -23,6 +24,7 @@ export function renderPromptBlock(
     withheldSummary?: MemoryWithheldSummary;
     socialContext?: RetrievalSocialContext;
     contactContextById?: ReadonlyMap<string, RetrievalContactContext>;
+    episodicChains?: EpisodicRetrievalChain[];
   },
 ): string {
   const sections: string[] = [];
@@ -43,6 +45,9 @@ export function renderPromptBlock(
   }
   if (options?.withheldSummary && options.withheldSummary.totalCount > 0) {
     sections.push(renderWithheldSummary(options.withheldSummary));
+  }
+  if ((options?.episodicChains?.length ?? 0) > 0) {
+    sections.push(renderEpisodicLandmarkChains(options?.episodicChains ?? []));
   }
   if (scored.length > 0) {
     sections.push(formatMemoriesForPrompt(
@@ -131,6 +136,75 @@ function renderWithheldSummary(summary: MemoryWithheldSummary): string {
       '- Do not infer or disclose missing details. Ask for consent or clarification if needed.',
     ].join('\n'),
   });
+}
+
+function renderEpisodicLandmarkChains(chains: readonly EpisodicRetrievalChain[]): string {
+  const lines = ['Episodic landmark chains selected before raw span/artifact drill-down:'];
+  chains.forEach((chain, chainIndex) => {
+    const chainTerms = chain.matchedTerms.length > 0
+      ? `; matched: ${chain.matchedTerms.join(', ')}`
+      : '';
+    lines.push(`Chain ${chainIndex + 1} (${chain.episodes.length} episode${chain.episodes.length === 1 ? '' : 's'}${chainTerms}):`);
+
+    chain.episodes.forEach((episode, episodeIndex) => {
+      const incomingArc = episodeIndex === 0
+        ? undefined
+        : chain.arcs.find(arc => (
+          arc.sourceEpisodeId === episode.id
+          || arc.targetEpisodeId === episode.id
+        ));
+      const arcPrefix = incomingArc
+        ? `${incomingArc.arcKind} from ${otherEpisodeId(incomingArc, episode.id)} -> `
+        : '';
+      const themes = episode.themes.length > 0 ? episode.themes.slice(0, 5).join(', ') : 'none';
+      lines.push(
+        `- ${arcPrefix}${compactPromptLine(episode.title, 96)} (${episode.startedAt} to ${episode.endedAt}; themes: ${themes}; salience ${episode.salience.score.toFixed(2)})`,
+      );
+      lines.push(`  Landmark: ${compactPromptLine(episode.landmark, 260)}`);
+      const refs = formatEpisodeRawRefs(episode);
+      if (refs) {
+        lines.push(`  Raw refs for drill-down: ${refs}`);
+      }
+    });
+  });
+
+  lines.push('Use these landmarks as scoped recall waypoints; drill into raw span/artifact refs only when needed.');
+  return wrapPromptSectionXml({
+    id: 'episodic_landmark_chains',
+    content: lines.join('\n'),
+  });
+}
+
+function otherEpisodeId(
+  arc: EpisodicRetrievalChain['arcs'][number],
+  episodeId: string,
+): string {
+  return arc.sourceEpisodeId === episodeId ? arc.targetEpisodeId : arc.sourceEpisodeId;
+}
+
+function formatEpisodeRawRefs(
+  episode: EpisodicRetrievalChain['episodes'][number],
+): string {
+  const parts: string[] = [];
+  if (episode.spanRefs.length > 0) {
+    parts.push(`spans ${episode.spanRefs.slice(0, 4).map(ref => ref.spanId).join(', ')}`);
+  }
+  if (episode.artifactRefs.length > 0) {
+    parts.push(`artifacts ${episode.artifactRefs.slice(0, 4).map(ref => ref.artifactId).join(', ')}`);
+  }
+  const provenanceRefs = episode.provenanceRefs
+    .slice(0, 6)
+    .map(ref => `${ref.kind}:${ref.refId}`);
+  if (provenanceRefs.length > 0) {
+    parts.push(`provenance ${provenanceRefs.join(', ')}`);
+  }
+  return parts.join('; ');
+}
+
+function compactPromptLine(value: string, maxChars: number): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxChars) return compact;
+  return `${compact.slice(0, maxChars - 3)}...`;
 }
 
 function formatMemoriesForPrompt(

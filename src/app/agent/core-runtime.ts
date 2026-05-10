@@ -3,6 +3,7 @@ import type { CoreSubstrateConfig } from '../../system/config/runtime-config-con
 import type { EventBus } from '../../shared/event-bus.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { MemoryJournal } from '../../faculties/memory/journal.js';
+import { EpisodicStore } from '../../faculties/memory/episodic/index.js';
 import {
   createMemoryStorePort,
   type CoreMemoryStorePort,
@@ -265,6 +266,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     config,
     promptRegistry,
     contactStore,
+    episodicStore: db ? new EpisodicStore(db) : null,
   });
   const promptState = createPromptStatePort({
     layers: promptStore,

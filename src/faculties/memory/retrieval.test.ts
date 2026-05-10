@@ -12,6 +12,11 @@ import type { SensitivityLevel } from '../../system/trust/types.js';
 import type { ConsentFlags } from '../../system/trust/types.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import {
+  EPISODIC_CONTRACT_VERSION,
+  type Episode,
+  type EpisodeArc,
+} from '../../shared/contracts/episodic-memory.js';
 import { ContactStore } from '../../core/contacts/store.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import { __test as tokenTestUtils } from '../../primitives/llm/tokens.js';
@@ -52,6 +57,54 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
     getMemoriesByChannel: vi.fn().mockReturnValue([]),
     getAllActiveMemories: vi.fn().mockReturnValue(memories),
   } as unknown as MemoryStorePort;
+}
+
+function makeEpisode(overrides: Partial<Episode> & { id: string; title: string; landmark: string }): Episode {
+  const now = '2026-02-01T12:00:00.000Z';
+  return {
+    schemaVersion: EPISODIC_CONTRACT_VERSION,
+    id: overrides.id,
+    title: overrides.title,
+    landmark: overrides.landmark,
+    startedAt: '2026-01-10T10:00:00.000Z',
+    endedAt: '2026-01-10T10:30:00.000Z',
+    threadId: 'thread-1',
+    channelId: 'api:test',
+    participantContactIds: [],
+    salience: { score: 0.72, novelty: 0.4, emotionalIntensity: 0.2 },
+    affect: { valence: 0.2, arousal: 0.3, dominance: 0.5, labels: ['focused'] },
+    themes: [],
+    spanRefs: [{ spanId: `${overrides.id}:span`, sessionId: 'thread-1' }],
+    artifactRefs: [],
+    provenanceRefs: [{ kind: 'l0_span', refId: `${overrides.id}:span` }],
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
+}
+
+function makeEpisodeArc(overrides: Partial<EpisodeArc> & {
+  id: string;
+  sourceEpisodeId: string;
+  targetEpisodeId: string;
+}): EpisodeArc {
+  const now = '2026-02-01T12:00:00.000Z';
+  return {
+    schemaVersion: EPISODIC_CONTRACT_VERSION,
+    id: overrides.id,
+    sourceEpisodeId: overrides.sourceEpisodeId,
+    targetEpisodeId: overrides.targetEpisodeId,
+    arcKind: 'same_theme',
+    salience: 0.7,
+    confidence: 0.8,
+    themes: ['vacation'],
+    spanRefs: [{ spanId: `${overrides.id}:span`, sessionId: 'thread-1' }],
+    artifactRefs: [],
+    provenanceRefs: [{ kind: 'l0_span', refId: `${overrides.id}:span` }],
+    createdAt: now,
+    updatedAt: now,
+    ...overrides,
+  };
 }
 
 function makeMockEmbedding(): EmbeddingProviderPort {
@@ -204,6 +257,169 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Personal detail');
     expect(result).not.toContain('Intimate memory');
     expect(result).not.toContain('Confidential secret');
+  });
+
+  it('retrieves scoped episodic landmark chains and preserves raw refs for drill-down', async () => {
+    const store = makeMockStore([]);
+    const embedding = makeMockEmbedding();
+    const vacationStart = makeEpisode({
+      id: 'episode-vacation-start',
+      title: 'Sicily vacation planning',
+      landmark: 'The user narrowed the Sicily vacation to Palermo flights and asked to preserve the planning thread.',
+      themes: ['vacation', 'sicily', 'palermo'],
+      spanRefs: [{ spanId: 'span-vacation-start', sessionId: 'thread-1', startTurnId: 'turn-v1' }],
+      artifactRefs: [{ artifactId: 'artifact-flight-options', artifactType: 'note' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-vacation-start' },
+        { kind: 'turn', refId: 'turn-v1' },
+      ],
+    });
+    const vacationResolution = makeEpisode({
+      id: 'episode-vacation-resolution',
+      title: 'Sicily hotel resolution',
+      landmark: 'The vacation chain continued when the user selected a quiet hotel near Palermo.',
+      themes: ['vacation', 'sicily', 'hotel'],
+      startedAt: '2026-01-14T10:00:00.000Z',
+      endedAt: '2026-01-14T10:20:00.000Z',
+      spanRefs: [{ spanId: 'span-vacation-resolution', sessionId: 'thread-1', startTurnId: 'turn-v2' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-vacation-resolution' },
+        { kind: 'turn', refId: 'turn-v2' },
+      ],
+    });
+    const unrelated = makeEpisode({
+      id: 'episode-pregnancy',
+      title: 'Pregnancy appointment logistics',
+      landmark: 'A separate prenatal appointment discussion.',
+      themes: ['pregnancy', 'appointment'],
+    });
+    const arc = makeEpisodeArc({
+      id: 'arc-vacation-resolution',
+      sourceEpisodeId: vacationStart.id,
+      targetEpisodeId: vacationResolution.id,
+      themes: ['vacation', 'sicily'],
+    });
+    const episodes = [vacationStart, vacationResolution, unrelated];
+    const episodicStore = {
+      listEpisodes: vi.fn().mockReturnValue(episodes),
+      getEpisode: vi.fn((id: string) => episodes.find(episode => episode.id === id)),
+      listEpisodeArcsForEpisode: vi.fn((id: string) => (id === vacationStart.id ? [arc] : [])),
+    };
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      { retrievalLimit: 20 },
+      undefined,
+      null,
+      null,
+      episodicStore,
+    );
+
+    const snapshot = await retriever.captureTurnMemorySnapshot(
+      'Can you recall the Sicily vacation chain?',
+      'api:test',
+      'primary',
+    );
+    expect(snapshot.episodicChains?.[0]?.episodes.map(episode => episode.id)).toEqual([
+      vacationStart.id,
+      vacationResolution.id,
+    ]);
+
+    episodicStore.listEpisodes.mockImplementation(() => {
+      throw new Error('episodic store should not be read after snapshot capture');
+    });
+    const result = await retriever.retrieve(
+      'Can you recall the Sicily vacation chain?',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      snapshot,
+    );
+
+    expect(result).toContain('Episodic landmark chains selected before raw span/artifact drill-down');
+    expect(result).toContain('Sicily vacation planning');
+    expect(result).toContain('Sicily hotel resolution');
+    expect(result).toContain('span-vacation-start');
+    expect(result).toContain('artifact-flight-options');
+    expect(result).not.toContain('Pregnancy appointment logistics');
+    expect(episodicStore.listEpisodeArcsForEpisode).toHaveBeenCalledWith(vacationStart.id, {
+      direction: 'both',
+      limit: 8,
+    });
+  });
+
+  it('keeps existing retrieval behavior when no episodic landmarks match', async () => {
+    const memories = [
+      makeMemory({ text: 'User likes oolong tea in the afternoon.', sensitivity: 'public', similarity: 0.95 }),
+    ];
+    const store = makeMockStore(memories);
+    const embedding = makeMockEmbedding();
+    const unrelated = makeEpisode({
+      id: 'episode-wedding',
+      title: 'Wedding venue walkthrough',
+      landmark: 'A separate wedding venue thread.',
+      themes: ['wedding', 'venue'],
+    });
+    const episodicStore = {
+      listEpisodes: vi.fn().mockReturnValue([unrelated]),
+      getEpisode: vi.fn(),
+      listEpisodeArcsForEpisode: vi.fn().mockReturnValue([]),
+    };
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      { retrievalLimit: 20 },
+      undefined,
+      null,
+      null,
+      episodicStore,
+    );
+
+    const result = await retriever.retrieve('What tea does the user like?', 'api:test', 'primary');
+
+    expect(result).toContain('User likes oolong tea in the afternoon.');
+    expect(result).not.toContain('Episodic landmark chains');
+    expect(countRenderedMemories(result)).toBe(1);
+  });
+
+  it('fails closed when configured episodic data is malformed', async () => {
+    const store = makeMockStore([]);
+    const embedding = makeMockEmbedding();
+    const malformed = makeEpisode({
+      id: 'episode-malformed',
+      title: 'Malformed vacation episode',
+      landmark: 'This row lost its raw L0 refs.',
+      themes: ['vacation'],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+    });
+    const episodicStore = {
+      listEpisodes: vi.fn().mockReturnValue([malformed]),
+      getEpisode: vi.fn(),
+      listEpisodeArcsForEpisode: vi.fn().mockReturnValue([]),
+    };
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      { retrievalLimit: 20 },
+      undefined,
+      null,
+      null,
+      episodicStore,
+    );
+
+    await expect(retriever.retrieve('Recall the vacation episode', 'api:test', 'primary'))
+      .rejects
+      .toMatchObject({
+        name: 'RetrievalIntegrityError',
+        context: {
+          stage: 'episodic_retrieve',
+          channelId: 'api:test',
+          trustLevel: 'primary',
+        },
+      });
   });
 
   it('excludes context_feedback artifacts from retrieval candidates', async () => {

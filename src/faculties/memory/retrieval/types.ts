@@ -63,6 +63,8 @@ export interface RetrievalTelemetry {
   candidateCount: number;
   semanticCandidateCount: number;
   lexicalCandidateCount: number;
+  episodicChainCount?: number;
+  episodicEpisodeCount?: number;
   rankedCount: number;
   returnedCount: number;
   retrievalLimit: number;

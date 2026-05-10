@@ -4,6 +4,10 @@ import { cloneMemoryWithheldSummary } from '../../faculties/memory/withheld-summ
 import type { MemoryWithheldSummary } from '../../faculties/memory/withheld-summary.js';
 import type { ContactProfileArtifact } from '../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../faculties/memory/types.js';
+import {
+  cloneEpisodicRetrievalChain,
+  type EpisodicRetrievalChain,
+} from '../../faculties/memory/retrieval/episodic.js';
 import type { SessionEntry } from '../session/types.js';
 import type {
   TurnToolContextSnapshot,
@@ -57,6 +61,7 @@ export interface TurnMemorySnapshotRecord {
   contactEmotionalMemories: ObservedMemory[];
   semanticCandidates: ObservedScoredMemory[];
   lexicalCandidates: ObservedScoredMemory[];
+  episodicChains?: EpisodicRetrievalChain[];
   proactiveCandidates: ObservedMemory[];
   withheldSummary?: MemoryWithheldSummary;
   versionPointer: string;
@@ -281,6 +286,9 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
             snapshot.memory.lexicalCandidates,
             withheldIds,
           ).map(sanitizeObservedScoredMemory),
+          ...(snapshot.memory.episodicChains
+            ? { episodicChains: snapshot.memory.episodicChains.map(cloneEpisodicRetrievalChain) }
+            : {}),
           proactiveCandidates: filterObservedMemories(
             snapshot.memory.proactiveCandidates,
             withheldIds,
@@ -374,6 +382,9 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
           contactEmotionalMemories: snapshot.memory.contactEmotionalMemories.map(cloneObservedMemory),
           semanticCandidates: snapshot.memory.semanticCandidates.map(cloneObservedScoredMemory),
           lexicalCandidates: snapshot.memory.lexicalCandidates.map(cloneObservedScoredMemory),
+          ...(snapshot.memory.episodicChains
+            ? { episodicChains: snapshot.memory.episodicChains.map(cloneEpisodicRetrievalChain) }
+            : {}),
           proactiveCandidates: snapshot.memory.proactiveCandidates.map(cloneObservedMemory),
           ...(snapshot.memory.withheldSummary
             ? { withheldSummary: cloneMemoryWithheldSummary(snapshot.memory.withheldSummary) }

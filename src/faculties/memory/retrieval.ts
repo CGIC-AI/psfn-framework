@@ -81,6 +81,14 @@ import {
   serializeRetrievalModes,
 } from './retrieval/modes.js';
 import {
+  cloneEpisodicRetrievalChain,
+  collectEpisodicChainProvenanceRefs,
+  countEpisodicChainEpisodes,
+  retrieveEpisodicChains,
+  type EpisodicRetrievalChain,
+  type EpisodicRetrievalStore,
+} from './retrieval/episodic.js';
+import {
   computeProactiveRecallWeight,
   selectWeightedMemory,
 } from './retrieval/proactive.js';
@@ -112,6 +120,7 @@ const log = createComponentLogger('Retrieval');
 
 type RetrievalIntegrityErrorStage =
   | 'retrieve'
+  | 'episodic_retrieve'
   | 'selected_access_update'
   | 'proactive_access_update';
 
@@ -164,6 +173,7 @@ export class MemoryRetriever implements MemoryProvider {
   private contactStore: ContactStorePort | null;
   private telemetryEnabled: boolean;
   private llmProvider: LLMProviderPort | null;
+  private episodicStore: EpisodicRetrievalStore | null;
   private moodCongruenceWeight: number;
   private proactiveRecallProbability: number;
   private proactiveRecallMinTurnsBetween: number;
@@ -177,6 +187,7 @@ export class MemoryRetriever implements MemoryProvider {
     costTelemetry?: CostTelemetryInput,
     contactStore?: ContactStorePort | null,
     llmProvider?: LLMProviderPort | null,
+    episodicStore?: EpisodicRetrievalStore | null,
   ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
@@ -208,6 +219,7 @@ export class MemoryRetriever implements MemoryProvider {
     }
     this.contactStore = contactStore ?? null;
     this.llmProvider = llmProvider ?? null;
+    this.episodicStore = episodicStore ?? null;
     this.proactiveTurnCounter = 0;
     this.lastProactiveRecallTurn = Number.NEGATIVE_INFINITY;
   }
@@ -292,6 +304,14 @@ export class MemoryRetriever implements MemoryProvider {
       channelId,
       canonicalContactId,
     )).map(cloneMemory);
+    const episodicChains = await this.resolveEpisodicChains({
+      contextText,
+      channelId,
+      trustLevel: effectiveTrust,
+      channelVisibility,
+      canonicalContactId,
+      scopeQuery: normalizedScopeQuery,
+    });
     const retrievalCandidates = semanticCandidates.length > 0 ? semanticCandidates : lexicalCandidates;
     const {
       summary: withheldSummary,
@@ -314,6 +334,7 @@ export class MemoryRetriever implements MemoryProvider {
       contactEmotionalMemories: contactEmotionalMemories.map(cloneMemory),
       semanticCandidates,
       lexicalCandidates,
+      episodicChains: episodicChains.map(cloneEpisodicRetrievalChain),
       proactiveCandidates,
       ...(withheldSummary ? { withheldSummary } : {}),
       ...(withheldCandidateIds.length > 0 ? { withheldCandidateIds } : {}),
@@ -332,6 +353,7 @@ export class MemoryRetriever implements MemoryProvider {
         contactEmotionalMemories.map(memory => memory.id).join(','),
         semanticCandidates.map(memory => `${memory.id}:${memory.similarity.toFixed(4)}`).join(','),
         lexicalCandidates.map(memory => `${memory.id}:${memory.similarity.toFixed(4)}`).join(','),
+        episodicChains.map(chain => `${chain.rootEpisodeId}:${chain.score.toFixed(4)}:${chain.episodes.map(episode => episode.id).join(',')}`).join(','),
         proactiveCandidates.map(memory => memory.id).join(','),
         serializeMemoryWithheldSummary(withheldSummary),
         serializeRetrievalModes(callerContext, retrievalMode),
@@ -413,6 +435,19 @@ export class MemoryRetriever implements MemoryProvider {
     const contactEmotionalSource = turnSnapshot?.contactEmotionalMemories.map(cloneMemory)
       ?? (canonicalContactId ? await this.collectContactEmotionalMemories(canonicalContactId) : []);
     const proactiveSource = turnSnapshot?.proactiveCandidates.map(cloneMemory) ?? [];
+    const episodicChains = Array.isArray(turnSnapshot?.episodicChains)
+      ? turnSnapshot.episodicChains.map(cloneEpisodicRetrievalChain)
+      : await this.resolveEpisodicChains({
+        contextText,
+        channelId,
+        trustLevel: effectiveTrust,
+        channelVisibility,
+        canonicalContactId,
+        scopeQuery: normalizedScopeQuery,
+      });
+    const episodicEpisodeCount = countEpisodicChainEpisodes(episodicChains);
+    telemetry.episodicChainCount = episodicChains.length;
+    telemetry.episodicEpisodeCount = episodicEpisodeCount;
     let withheldSummary = cloneMemoryWithheldSummary(turnSnapshot?.withheldSummary);
 
     const emptySelectedIds = new Set<string>();
@@ -453,6 +488,7 @@ export class MemoryRetriever implements MemoryProvider {
         emotionalContinuityMemories: fallbackEmotionalContinuity,
         withheldSummary,
         socialContext,
+        episodicChains,
       });
     }
 
@@ -510,6 +546,21 @@ export class MemoryRetriever implements MemoryProvider {
           if (withheldSummary?.reasonCounts && Object.keys(withheldSummary.reasonCounts).length > 0) {
             telemetry.withheldReasonCounts = { ...withheldSummary.reasonCounts };
           }
+          if (episodicChains.length > 0) {
+            telemetry.reason = 'ok';
+            telemetry.returnedCount = episodicEpisodeCount;
+            telemetry.count = episodicEpisodeCount;
+            telemetry.selectedTypes = { episodic: episodicEpisodeCount };
+            telemetry.provenanceRefs = collectEpisodicChainProvenanceRefs(episodicChains);
+            await this.emitRetrievalTelemetry(telemetry);
+            return renderPromptBlock(profile, [], {
+              emotionalSnapshot,
+              emotionalContinuityMemories: fallbackEmotionalContinuity,
+              withheldSummary,
+              socialContext,
+              episodicChains,
+            });
+          }
           log.info('Retrieval: no candidates (semantic + lexical)', {
             channelId,
             trustLevel: effectiveTrust,
@@ -524,6 +575,7 @@ export class MemoryRetriever implements MemoryProvider {
             emotionalContinuityMemories: fallbackEmotionalContinuity,
             withheldSummary,
             socialContext,
+            episodicChains,
           });
         }
       }
@@ -603,6 +655,21 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.policyRejectedReasonTags = diagnostics.rejectedByPolicyReasonTag;
 
       if (policyAllowed.length === 0) {
+        if (episodicChains.length > 0) {
+          telemetry.reason = 'ok';
+          telemetry.returnedCount = episodicEpisodeCount;
+          telemetry.count = episodicEpisodeCount;
+          telemetry.selectedTypes = { episodic: episodicEpisodeCount };
+          telemetry.provenanceRefs = collectEpisodicChainProvenanceRefs(episodicChains);
+          await this.emitRetrievalTelemetry(telemetry);
+          return renderPromptBlock(profile, [], {
+            emotionalSnapshot,
+            emotionalContinuityMemories: fallbackEmotionalContinuity,
+            withheldSummary,
+            socialContext,
+            episodicChains,
+          });
+        }
         telemetry.reason = 'trust_filtered';
         await this.emitRetrievalTelemetry(telemetry);
         log.info('Retrieval: all candidates filtered by trust policy', {
@@ -620,6 +687,7 @@ export class MemoryRetriever implements MemoryProvider {
           emotionalContinuityMemories: fallbackEmotionalContinuity,
           withheldSummary,
           socialContext,
+          episodicChains,
         });
       }
 
@@ -693,6 +761,21 @@ export class MemoryRetriever implements MemoryProvider {
       }
 
       if (ranked.length === 0) {
+        if (episodicChains.length > 0) {
+          telemetry.reason = 'ok';
+          telemetry.returnedCount = episodicEpisodeCount;
+          telemetry.count = episodicEpisodeCount;
+          telemetry.selectedTypes = { episodic: episodicEpisodeCount };
+          telemetry.provenanceRefs = collectEpisodicChainProvenanceRefs(episodicChains);
+          await this.emitRetrievalTelemetry(telemetry);
+          return renderPromptBlock(profile, [], {
+            emotionalSnapshot,
+            emotionalContinuityMemories: fallbackEmotionalContinuity,
+            withheldSummary,
+            socialContext,
+            episodicChains,
+          });
+        }
         telemetry.reason = 'score_filtered';
         await this.emitRetrievalTelemetry(telemetry);
         log.info('Retrieval: all policy-allowed memories scored zero', {
@@ -705,6 +788,7 @@ export class MemoryRetriever implements MemoryProvider {
           emotionalContinuityMemories: fallbackEmotionalContinuity,
           withheldSummary,
           socialContext,
+          episodicChains,
         });
       }
 
@@ -716,12 +800,20 @@ export class MemoryRetriever implements MemoryProvider {
       );
       const selected = selection.selected;
 
-      telemetry.returnedCount = selected.length;
+      telemetry.returnedCount = selected.length + episodicEpisodeCount;
       telemetry.selectionStopReason = selection.stopReason;
       telemetry.selectionScoreFloor = selection.relevanceScoreFloor;
       telemetry.relevanceStoppedCount = selection.relevanceStoppedCount;
       telemetry.budgetCappedCount = selection.budgetCappedCount;
       telemetry.selectedTypes = countSelectedMemoryTypes(selected);
+      if (episodicEpisodeCount > 0) {
+        const previousEpisodicCount = Object.entries(telemetry.selectedTypes)
+          .find(([type]) => type === 'episodic')?.[1] ?? 0;
+        telemetry.selectedTypes = {
+          ...telemetry.selectedTypes,
+          episodic: previousEpisodicCount + episodicEpisodeCount,
+        };
+      }
       diagnostics.selectedCount = selected.length;
       diagnostics.topSelected = selected.slice(0, 3).map((item) => ({
         id: item.memory.id,
@@ -745,7 +837,9 @@ export class MemoryRetriever implements MemoryProvider {
         retrievalSource: telemetry.retrievalSource,
         semanticCandidates: telemetry.semanticCandidateCount,
         lexicalCandidates: telemetry.lexicalCandidateCount,
-        pipeline: `${diagnostics.candidateCount} candidates -> ${diagnostics.policyAllowedCount} policy-allowed -> ${scored.length} scored -> ${ranked.length} ranked -> ${selected.length} selected`,
+        episodicChains: telemetry.episodicChainCount,
+        episodicEpisodes: telemetry.episodicEpisodeCount,
+        pipeline: `${diagnostics.candidateCount} candidates -> ${diagnostics.policyAllowedCount} policy-allowed -> ${scored.length} scored -> ${ranked.length} ranked -> ${selected.length} selected + ${episodicEpisodeCount} episodic episodes`,
         selectionStopReason: telemetry.selectionStopReason,
         selectionScoreFloor: telemetry.selectionScoreFloor,
         relevanceStoppedCount: telemetry.relevanceStoppedCount,
@@ -787,10 +881,13 @@ export class MemoryRetriever implements MemoryProvider {
         )
         : [];
       telemetry.emotionalContinuityCount = emotionalContinuityMemories.length;
-      telemetry.provenanceRefs = collectSelectedProvenanceRefs(
-        selected,
-        telemetry.retrievalSource,
-      );
+      telemetry.provenanceRefs = [
+        ...collectSelectedProvenanceRefs(
+          selected,
+          telemetry.retrievalSource,
+        ),
+        ...collectEpisodicChainProvenanceRefs(episodicChains),
+      ];
       const selectedContactContextById = await this.buildSelectedContactContext(selected, socialContext);
 
       // Update access stats; fail closed if persistence fails.
@@ -814,7 +911,7 @@ export class MemoryRetriever implements MemoryProvider {
         }
       }
 
-      telemetry.count = selected.length;
+      telemetry.count = selected.length + episodicEpisodeCount;
       telemetry.reason = 'ok';
       await this.emitRetrievalTelemetry(telemetry);
       return renderPromptBlock(profile, selected, {
@@ -823,6 +920,7 @@ export class MemoryRetriever implements MemoryProvider {
         withheldSummary,
         socialContext,
         contactContextById: selectedContactContextById,
+        episodicChains,
       });
     } catch (error) {
       telemetry.reason = 'error';
@@ -921,6 +1019,34 @@ export class MemoryRetriever implements MemoryProvider {
     }
 
     return renderProactiveRecall(selected);
+  }
+
+  private async resolveEpisodicChains(input: {
+    contextText: string;
+    channelId: string;
+    trustLevel: TrustLevel;
+    channelVisibility: ChannelVisibility;
+    canonicalContactId?: string;
+    scopeQuery?: MemoryScopeQuery;
+  }): Promise<EpisodicRetrievalChain[]> {
+    if (!this.episodicStore) {
+      return [];
+    }
+
+    try {
+      return (await retrieveEpisodicChains(this.episodicStore, input))
+        .map(cloneEpisodicRetrievalChain);
+    } catch (error) {
+      throw new RetrievalIntegrityError(
+        'Episodic landmark retrieval failed',
+        {
+          stage: 'episodic_retrieve',
+          channelId: input.channelId,
+          trustLevel: input.trustLevel,
+        },
+        error,
+      );
+    }
   }
 
   private async resolveEmotionalSnapshot(contactId: string): Promise<EmotionalSnapshot | undefined> {

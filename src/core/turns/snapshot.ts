@@ -8,6 +8,7 @@ import type {
   RetrievalCallerContext,
   RetrievalModeInput,
 } from '../../faculties/memory/types.js';
+import type { EpisodicRetrievalChain } from '../../faculties/memory/retrieval/episodic.js';
 import type { SessionEntry } from '../session/types.js';
 import type {
   ContextMessage,
@@ -94,6 +95,7 @@ export interface TurnMemorySnapshot {
   contactEmotionalMemories: PurrMemory[];
   semanticCandidates: Array<PurrMemory & { similarity: number }>;
   lexicalCandidates: Array<PurrMemory & { similarity: number }>;
+  episodicChains?: EpisodicRetrievalChain[];
   proactiveCandidates: PurrMemory[];
   withheldSummary?: MemoryWithheldSummary;
   withheldCandidateIds?: string[];

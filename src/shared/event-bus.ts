@@ -254,6 +254,8 @@ export interface EventMap {
     ranked?: number;
     returned?: number;
     candidateCount?: number;
+    episodicChainCount?: number;
+    episodicEpisodeCount?: number;
     rankedCount?: number;
     returnedCount?: number;
     reason?: string;

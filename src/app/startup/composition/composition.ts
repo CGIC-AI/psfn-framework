@@ -28,6 +28,7 @@ import {
   type SubstrateAgentOptions,
 } from '../../../core/agent/substrate-agent.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
+import type { EpisodicRetrievalStore } from '../../../faculties/memory/retrieval/episodic.js';
 import { MemoryExtractor } from '../../../faculties/memory/extraction.js';
 import { MemoryWriter } from '../../../faculties/memory/writer.js';
 import type {
@@ -262,6 +263,7 @@ export interface MemoryRuntimeOptions {
   config?: SubstrateConfig;
   promptRegistry?: PromptRegistryStatePort | null;
   contactStore?: ContactStorePort | null;
+  episodicStore?: EpisodicRetrievalStore | null;
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
@@ -274,6 +276,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       costTelemetry,
       options.contactStore ?? null,
       options.llmProvider,
+      options.episodicStore ?? null,
     )
     : new MemoryRetriever(
       options.memoryStore,
@@ -282,6 +285,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       costTelemetry,
       options.contactStore ?? null,
       options.llmProvider,
+      options.episodicStore ?? null,
     );
 
   const memoryExtractor = options.config

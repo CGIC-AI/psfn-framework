@@ -6,6 +6,7 @@ import type {
   MemoryLink,
   MemoryPatchEvent,
   ScratchpadEntry,
+  MemoryMaintenanceReview,
 } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 
@@ -73,6 +74,18 @@ export interface MemoryPatchEventRow {
   created_at: number;
 }
 
+export interface MemoryMaintenanceReviewRow {
+  id: string;
+  kind: string;
+  status: string;
+  subject_memory_id: string;
+  candidate_memory_ids: string | null;
+  state_json: string | null;
+  quarantine_reason: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface MemoryLinkRow {
   id1: string;
   id2: string;
@@ -110,5 +123,6 @@ export type {
   MemoryDeleteVersion,
   MemoryLink,
   MemoryPatchEvent,
+  MemoryMaintenanceReview,
   ScratchpadEntry,
 };

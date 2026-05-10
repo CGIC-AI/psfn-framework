@@ -83,6 +83,22 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_l2_memory_abstraction_source ON l2_memory_abstraction_links(source_memory_id, created_at DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memory_abstraction_abstracted ON l2_memory_abstraction_links(abstracted_memory_id, created_at DESC);`,
   `
+  CREATE TABLE IF NOT EXISTS l2_memory_maintenance_reviews (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL,
+    subject_memory_id TEXT NOT NULL,
+    candidate_memory_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    state_json JSONB NOT NULL,
+    quarantine_reason TEXT,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_l2_memory_maintenance_reviews_status ON l2_memory_maintenance_reviews(status, updated_at DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_l2_memory_maintenance_reviews_kind ON l2_memory_maintenance_reviews(kind, updated_at DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_l2_memory_maintenance_reviews_subject ON l2_memory_maintenance_reviews(subject_memory_id, updated_at DESC);`,
+  `
   CREATE TABLE IF NOT EXISTS scratchpad_entries (
     id TEXT PRIMARY KEY,
     content TEXT NOT NULL,

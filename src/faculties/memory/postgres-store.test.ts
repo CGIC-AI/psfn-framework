@@ -78,6 +78,7 @@ function cosineSimilarity(left: readonly number[], right: readonly number[]): nu
 
 class FakeMemoryPool {
   readonly memories = new Map<string, MemoryRow>();
+  readonly maintenanceReviews = new Map<string, Record<string, unknown>>();
   readonly queryFailures: Array<{ fragment: string; error: Error }>;
   readonly schemaHasEmbeddingColumn: boolean;
   readonly schemaHasLegacyEmbeddingTable: boolean;
@@ -192,6 +193,11 @@ class FakeMemoryPool {
       return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
     }
 
+    if (normalized.includes('from l2_memory_maintenance_reviews')) {
+      const rows = [...this.maintenanceReviews.values()];
+      return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
+    }
+
     if (normalized.includes('from contact_profiles')) {
       return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
     }
@@ -231,6 +237,22 @@ class FakeMemoryPool {
         embedding: typeof values[26] === 'string' ? values[26] : null,
       };
       this.memories.set(row.id, row);
+      return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (normalized.startsWith('insert into l2_memory_maintenance_reviews')) {
+      const row = {
+        id: String(values[0] ?? ''),
+        kind: String(values[1] ?? ''),
+        status: String(values[2] ?? ''),
+        subject_memory_id: String(values[3] ?? ''),
+        candidate_memory_ids: values[4] ? JSON.parse(String(values[4])) : [],
+        state_json: values[5] ? JSON.parse(String(values[5])) : {},
+        quarantine_reason: values[6] == null ? null : String(values[6]),
+        created_at: Number(values[7] ?? 0),
+        updated_at: Number(values[8] ?? 0),
+      };
+      this.maintenanceReviews.set(row.id, row);
       return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
     }
 

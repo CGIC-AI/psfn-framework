@@ -19,6 +19,9 @@ import type {
   MemoryDeleteVersion,
   MemoryListOptions,
   MemoryLink,
+  MemoryMaintenanceReview,
+  MemoryMaintenanceReviewInput,
+  MemoryMaintenanceReviewListOptions,
   MemorySoftDeleteOptions,
   MemoryStorePort,
   MemoryStoreStats,
@@ -39,6 +42,10 @@ import {
   type MemoryScopeQuery,
   type PurrMemory,
 } from './types.js';
+import {
+  mapStoredMemoryMaintenanceReviewRow,
+  normalizeMemoryMaintenanceReviewInput,
+} from './maintenance-review.js';
 
 interface MemoryRow {
   id: string;
@@ -110,6 +117,18 @@ interface MemoryLinkRow {
   id2: string;
   link_type: string;
   created_at: number;
+}
+
+interface MemoryMaintenanceReviewPgRow {
+  id: string;
+  kind: string;
+  status: string;
+  subject_memory_id: string;
+  candidate_memory_ids: unknown;
+  state_json: unknown;
+  quarantine_reason: string | null;
+  created_at: number;
+  updated_at: number;
 }
 
 interface ContactProfileRow {
@@ -280,6 +299,20 @@ function fromMemoryRow(row: MemoryRow): PurrMemory {
   };
 }
 
+function fromMaintenanceReviewRow(row: MemoryMaintenanceReviewPgRow): MemoryMaintenanceReview {
+  return mapStoredMemoryMaintenanceReviewRow({
+    id: row.id,
+    kind: row.kind,
+    status: row.status,
+    subjectMemoryId: row.subject_memory_id,
+    candidateMemoryIdsJson: serializeJsonValue(row.candidate_memory_ids),
+    stateJson: serializeJsonValue(row.state_json),
+    quarantineReason: row.quarantine_reason,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+}
+
 function lexicalScore(memory: PurrMemory, query: string): number {
   const tokens = query
     .toLowerCase()
@@ -361,6 +394,7 @@ class PostgresMemoryStore implements MemoryStorePort {
   private deleteVersions = new Map<string, MemoryDeleteVersion>();
   private abstractionLinks = new Map<string, MemoryAbstractionLink>();
   private memoryLinks = new Map<string, MemoryLink>();
+  private maintenanceReviews = new Map<string, MemoryMaintenanceReview>();
   private contactProfiles = new Map<string, ContactProfileArtifact>();
   private scratchpadEntries = new Map<string, ScratchpadEntry>();
 
@@ -445,6 +479,17 @@ class PostgresMemoryStore implements MemoryStorePort {
         linkType: row.link_type,
         createdAt: row.created_at,
       });
+    }
+
+    const maintenanceReviewRows = await queryRows<MemoryMaintenanceReviewPgRow>(this.pool, `
+      SELECT
+        id, kind, status, subject_memory_id, candidate_memory_ids, state_json,
+        quarantine_reason, created_at, updated_at
+      FROM l2_memory_maintenance_reviews
+    `);
+    for (const row of maintenanceReviewRows) {
+      const review = fromMaintenanceReviewRow(row);
+      this.maintenanceReviews.set(review.id, review);
     }
 
     const contactProfiles = await queryRows<ContactProfileRow>(this.pool, `
@@ -849,6 +894,52 @@ class PostgresMemoryStore implements MemoryStorePort {
       byType,
       avgSalience: active.length > 0 ? salience / active.length : 0,
     };
+  }
+
+  async upsertMemoryMaintenanceReview(input: MemoryMaintenanceReviewInput): Promise<MemoryMaintenanceReview> {
+    const review = normalizeMemoryMaintenanceReviewInput(input);
+    await this.persist(async () => {
+      await executeQuery(this.pool, `
+        INSERT INTO l2_memory_maintenance_reviews (
+          id, kind, status, subject_memory_id, candidate_memory_ids, state_json,
+          quarantine_reason, created_at, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        ON CONFLICT (id) DO UPDATE SET
+          kind = EXCLUDED.kind,
+          status = EXCLUDED.status,
+          subject_memory_id = EXCLUDED.subject_memory_id,
+          candidate_memory_ids = EXCLUDED.candidate_memory_ids,
+          state_json = EXCLUDED.state_json,
+          quarantine_reason = EXCLUDED.quarantine_reason,
+          updated_at = EXCLUDED.updated_at
+      `, [
+        review.id,
+        review.kind,
+        review.status,
+        review.subjectMemoryId,
+        serializeJsonValue(review.candidateMemoryIds),
+        serializeJsonValue(review.state),
+        review.quarantineReason ?? null,
+        review.createdAt,
+        review.updatedAt,
+      ]);
+    });
+    this.maintenanceReviews.set(review.id, review);
+    return review;
+  }
+
+  async listMemoryMaintenanceReviews(
+    options: MemoryMaintenanceReviewListOptions = {},
+  ): Promise<MemoryMaintenanceReview[]> {
+    return Array.from(this.maintenanceReviews.values())
+      .filter(review => options.status === undefined || review.status === options.status)
+      .filter(review => options.kind === undefined || review.kind === options.kind)
+      .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt)
+      .slice(0, clampLimit(options.limit, 100, 1, 500));
+  }
+
+  async getMemoryMaintenanceReview(id: string): Promise<MemoryMaintenanceReview | undefined> {
+    return this.maintenanceReviews.get(id.trim());
   }
 
   async getMemoriesByChannel(channelId: string, limit: number): Promise<PurrMemory[]> {

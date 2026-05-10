@@ -36,6 +36,10 @@ import {
   resolveConsentRedactionBehavior,
 } from './types.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import {
+  MemoryMaintenanceScheduler,
+  type MemoryMaintenanceSchedulerOptions,
+} from './maintenance-review.js';
 
 const log = createComponentLogger('MemoryWriter');
 const IMPORT_BATCH_EMBED_CHUNK_SIZE = 200;
@@ -106,6 +110,13 @@ export interface BatchImportResult {
   superseded: number;
   errors: number;
   results: WriteResult[];
+}
+
+export interface MemoryWriterOptions {
+  maintenanceScheduler?: MemoryMaintenanceScheduler | null;
+  maintenanceSchedule?: MemoryMaintenanceSchedulerOptions['schedule'];
+  maintenanceNow?: MemoryMaintenanceSchedulerOptions['now'];
+  onMaintenanceError?: MemoryMaintenanceSchedulerOptions['onError'];
 }
 
 export type MemoryWritePolicyReason =
@@ -408,15 +419,33 @@ function evaluateSensitivityWritePolicy(input: {
 }
 
 export class MemoryWriter {
+  private readonly maintenanceScheduler: MemoryMaintenanceScheduler | null;
+
   constructor(
     private memoryStore: MemoryStorePort,
     private embeddingService: EmbeddingProviderPort,
-  ) {}
+    options: MemoryWriterOptions = {},
+  ) {
+    this.maintenanceScheduler = options.maintenanceScheduler === undefined
+      ? new MemoryMaintenanceScheduler(memoryStore, {
+        schedule: options.maintenanceSchedule,
+        now: options.maintenanceNow,
+        onError: options.onMaintenanceError,
+      })
+      : options.maintenanceScheduler;
+  }
 
   private validateEmbedding(embedding: Float32Array, operation: string): void {
     if (Number.isFinite(this.embeddingService.dims) && this.embeddingService.dims > 0) {
       validateEmbeddingDimensions(embedding, this.embeddingService.dims, operation);
     }
+  }
+
+  private queueMaintenanceReview(input: {
+    memory: PurrMemory;
+    candidates: Array<PurrMemory & { similarity: number }>;
+  }): void {
+    this.maintenanceScheduler?.queuePostWriteReview(input);
   }
 
   /**
@@ -676,6 +705,10 @@ export class MemoryWriter {
       embedding,
       supersededMemoryIds: supersededMemories.map(old => old.id),
     });
+    this.queueMaintenanceReview({
+      memory,
+      candidates: sameContactBroader,
+    });
 
     for (const old of supersededMemories) {
       log.debug('Superseded memory', { oldId: old.id, replacementId: memory.id, text: text.slice(0, 60) });
@@ -832,6 +865,10 @@ export class MemoryWriter {
       memory,
       embedding,
       supersededMemoryIds: supersededMemories.map(old => old.id),
+    });
+    this.queueMaintenanceReview({
+      memory,
+      candidates: sameType,
     });
     for (const old of supersededMemories) {
       log.debug('Upsert superseded memory', { oldId: old.id, replacementId: memory.id, text: text.slice(0, 60) });

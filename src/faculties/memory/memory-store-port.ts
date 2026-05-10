@@ -81,6 +81,70 @@ export interface ScratchpadAddResult {
   evictedIds: string[];
 }
 
+export type MemoryMaintenanceReviewKind = 'near_duplicate' | 'provenance_confidence';
+
+export type MemoryMaintenanceReviewStatus = 'pending' | 'quarantined' | 'resolved' | 'dismissed';
+
+export type MemoryMaintenanceRecommendedAction =
+  | 'review'
+  | 'merge_candidate'
+  | 'corroborate_or_dismiss';
+
+export interface MemoryMaintenanceReviewCandidate {
+  memoryId: string;
+  text: string;
+  textPreview: string;
+  sourceRef: string;
+  provenanceRefs: string[];
+  confidence: number;
+  uniqueDetails: string[];
+  similarity?: number;
+}
+
+export interface MemoryMaintenanceReviewState {
+  schemaVersion: 1;
+  kind: MemoryMaintenanceReviewKind;
+  status: MemoryMaintenanceReviewStatus;
+  subjectMemoryId: string;
+  candidateMemoryIds: string[];
+  reason: string;
+  recommendedAction: MemoryMaintenanceRecommendedAction;
+  sourceRefs: string[];
+  provenanceRefs: string[];
+  uniqueDetails: Record<string, string[]>;
+  candidates: MemoryMaintenanceReviewCandidate[];
+  createdBy: 'memory_maintenance';
+  metadata?: Record<string, unknown>;
+}
+
+export interface MemoryMaintenanceReview {
+  id: string;
+  kind: MemoryMaintenanceReviewKind;
+  status: MemoryMaintenanceReviewStatus;
+  subjectMemoryId: string;
+  candidateMemoryIds: string[];
+  state: MemoryMaintenanceReviewState;
+  createdAt: number;
+  updatedAt: number;
+  quarantineReason?: string;
+}
+
+export interface MemoryMaintenanceReviewInput {
+  id?: string;
+  kind: MemoryMaintenanceReviewKind;
+  subjectMemoryId: string;
+  candidateMemoryIds?: string[];
+  state: MemoryMaintenanceReviewState;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface MemoryMaintenanceReviewListOptions {
+  status?: MemoryMaintenanceReviewStatus;
+  kind?: MemoryMaintenanceReviewKind;
+  limit?: number;
+}
+
 export type MemorySearchResult = PurrMemory & { similarity: number };
 
 export interface MemoryStoreStats {
@@ -226,6 +290,11 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   ): Awaitable<ScratchpadEntry | null>;
   removeScratchpadEntry(id: string): Awaitable<boolean>;
   getScratchpadEntry(id: string): Awaitable<ScratchpadEntry | undefined>;
+  upsertMemoryMaintenanceReview?(input: MemoryMaintenanceReviewInput): Awaitable<MemoryMaintenanceReview>;
+  listMemoryMaintenanceReviews?(
+    options?: MemoryMaintenanceReviewListOptions,
+  ): Awaitable<MemoryMaintenanceReview[]>;
+  getMemoryMaintenanceReview?(id: string): Awaitable<MemoryMaintenanceReview | undefined>;
 }
 
 export interface MemoryStorePort extends ScratchpadProvider {
@@ -283,6 +352,9 @@ export interface MemoryStorePort extends ScratchpadProvider {
   removeScratchpadEntry(id: string): Promise<boolean>;
   getScratchpadEntry(id: string): Promise<ScratchpadEntry | undefined>;
   listScratchpadEntries(limit?: number): ScratchpadEntry[];
+  upsertMemoryMaintenanceReview?(input: MemoryMaintenanceReviewInput): Promise<MemoryMaintenanceReview>;
+  listMemoryMaintenanceReviews?(options?: MemoryMaintenanceReviewListOptions): Promise<MemoryMaintenanceReview[]>;
+  getMemoryMaintenanceReview?(id: string): Promise<MemoryMaintenanceReview | undefined>;
 }
 
 export interface CoreMemoryStorePort {
@@ -356,6 +428,21 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     removeScratchpadEntry: async (id) => await store.removeScratchpadEntry(id),
     getScratchpadEntry: async (id) => await store.getScratchpadEntry(id),
     listScratchpadEntries: (limit) => store.listScratchpadEntries(limit),
+    ...(store.upsertMemoryMaintenanceReview
+      ? {
+        upsertMemoryMaintenanceReview: async (input) => await store.upsertMemoryMaintenanceReview!(input),
+      }
+      : {}),
+    ...(store.listMemoryMaintenanceReviews
+      ? {
+        listMemoryMaintenanceReviews: async (options) => await store.listMemoryMaintenanceReviews!(options),
+      }
+      : {}),
+    ...(store.getMemoryMaintenanceReview
+      ? {
+        getMemoryMaintenanceReview: async (id) => await store.getMemoryMaintenanceReview!(id),
+      }
+      : {}),
   };
 }
 

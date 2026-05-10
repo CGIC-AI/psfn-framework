@@ -17,6 +17,9 @@ import type {
   ScratchpadEntry,
   ScratchpadEntryCreateOptions,
   ScratchpadEntryReplaceOptions,
+  MemoryMaintenanceReview,
+  MemoryMaintenanceReviewInput,
+  MemoryMaintenanceReviewListOptions,
   MemoryWriteCommit,
 } from './memory-store-port.js';
 import type { MemoryScopeQuery, PurrMemory } from './types.js';
@@ -25,7 +28,6 @@ import { loadSqliteVecExtension } from './store/embeddings.js';
 import { linkMemories, unlinkMemories, getLinkedMemories } from './store/links.js';
 import {
   insertMemory,
-  persistMemoryWrite,
   updateMemory,
   runInTransaction,
   recordPatchEvent,
@@ -60,6 +62,11 @@ import {
   syncScratchpadMirror,
 } from './store/scratchpad.js';
 import { searchByText } from './store/lexical-search.js';
+import {
+  upsertMemoryMaintenanceReview,
+  listMemoryMaintenanceReviews,
+  getMemoryMaintenanceReview,
+} from './store/maintenance-reviews.js';
 import type { MemoryStoreOptions } from './store/types.js';
 import { searchByEmbedding } from './store/vector-search.js';
 
@@ -89,7 +96,13 @@ export class MemoryStore {
   }
 
   persistMemoryWrite(input: MemoryWriteCommit): void {
-    persistMemoryWrite(this.db, this.embeddingDims, this.journal, input);
+    const supersededMemoryIds = [...new Set(input.supersededMemoryIds ?? [])];
+    this.runInTransaction(() => {
+      for (const memoryId of supersededMemoryIds) {
+        this.updateMemory(memoryId, { supersededBy: input.memory.id });
+      }
+      this.insertMemory(input.memory, input.embedding);
+    });
   }
 
   searchByEmbedding(
@@ -173,6 +186,20 @@ export class MemoryStore {
 
   getStats(): { total: number; byType: Record<string, number>; avgSalience: number } {
     return getStats(this.db);
+  }
+
+  upsertMemoryMaintenanceReview(input: MemoryMaintenanceReviewInput): MemoryMaintenanceReview {
+    return upsertMemoryMaintenanceReview(this.db, input);
+  }
+
+  listMemoryMaintenanceReviews(
+    options: MemoryMaintenanceReviewListOptions = {},
+  ): MemoryMaintenanceReview[] {
+    return listMemoryMaintenanceReviews(this.db, options);
+  }
+
+  getMemoryMaintenanceReview(id: string): MemoryMaintenanceReview | undefined {
+    return getMemoryMaintenanceReview(this.db, id);
   }
 
   getMemoriesByChannel(channelId: string, limit: number): PurrMemory[] {

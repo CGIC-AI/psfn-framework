@@ -82,6 +82,21 @@ export function createMemoryStoreSchema(db: Database.Database, embeddingDims: nu
     );
     CREATE INDEX IF NOT EXISTS idx_l2_patch_events_memory ON l2_memory_patch_events(memory_id, created_at DESC);
 
+    CREATE TABLE IF NOT EXISTS l2_memory_maintenance_reviews (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      subject_memory_id TEXT NOT NULL,
+      candidate_memory_ids TEXT NOT NULL DEFAULT '[]',
+      state_json TEXT NOT NULL,
+      quarantine_reason TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_l2_maintenance_reviews_status ON l2_memory_maintenance_reviews(status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_l2_maintenance_reviews_kind ON l2_memory_maintenance_reviews(kind, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_l2_maintenance_reviews_subject ON l2_memory_maintenance_reviews(subject_memory_id, updated_at DESC);
+
     CREATE TABLE IF NOT EXISTS memory_links (
       id1 TEXT NOT NULL,
       id2 TEXT NOT NULL,
@@ -194,6 +209,23 @@ export function migrateMemoryStoreSchema(db: Database.Database): void {
     );
   `);
   db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_patch_events_memory ON l2_memory_patch_events(memory_id, created_at DESC)`);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS l2_memory_maintenance_reviews (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      subject_memory_id TEXT NOT NULL,
+      candidate_memory_ids TEXT NOT NULL DEFAULT '[]',
+      state_json TEXT NOT NULL,
+      quarantine_reason TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+  `);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_maintenance_reviews_status ON l2_memory_maintenance_reviews(status, updated_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_maintenance_reviews_kind ON l2_memory_maintenance_reviews(kind, updated_at DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_maintenance_reviews_subject ON l2_memory_maintenance_reviews(subject_memory_id, updated_at DESC)`);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS l2_memory_abstraction_links (

@@ -1650,7 +1650,7 @@ export function createHeartbeatTemplateRuntime(
       buildInternalStatePromptBundle(reflectionPromptContext.internalState ?? null),
       reflectionPromptContext.substrateContext,
     );
-    const reflectionGroundingProvenanceRefs = reflectionPromptBundle?.provenanceRefs ?? [];
+    let reflectionGroundingProvenanceRefs = reflectionPromptBundle?.provenanceRefs ?? [];
     const reflectionPrompt = formatNarrativePromptInput(
       template.prompt,
       reflectionPromptBundle,
@@ -1778,6 +1778,13 @@ export function createHeartbeatTemplateRuntime(
       const responseContext = captureResponseInternalStateContext(response);
       if (responseContext) {
         persistenceContext = responseContext;
+      }
+      const responseRetrievalProvenanceRefs = response.metadata?.retrievalProvenanceRefs ?? [];
+      if (responseRetrievalProvenanceRefs.length > 0) {
+        reflectionGroundingProvenanceRefs = [...new Set([
+          ...reflectionGroundingProvenanceRefs,
+          ...responseRetrievalProvenanceRefs.map(ref => ref.trim()).filter(Boolean),
+        ])];
       }
     }
 

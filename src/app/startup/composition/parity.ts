@@ -162,6 +162,7 @@ interface HeartbeatAgentResponse {
     internalState?: InternalState;
     internalStateSnapshotRef?: string;
     metacognitiveFlags?: unknown;
+    retrievalProvenanceRefs?: string[];
   };
 }
 
@@ -927,6 +928,7 @@ export function wireHeartbeatRuntime(
     const reflectionChannelId = `internal:reflection:${template.id}`;
     const internalStateContext = resolveInternalStateContext(template);
     const reflectionPrompt = formatNarrativePromptInput(template.prompt, internalStateContext);
+    let reflectionGroundingProvenanceRefs: string[] = [];
     const reflectionOccurredAt = new Date().toISOString();
     let reflectionText = '';
     let deliberationMetadata: ValuesDeliberationMetadata | undefined;
@@ -958,6 +960,12 @@ export function wireHeartbeatRuntime(
       if (responseContext) {
         persistenceContext = responseContext;
       }
+      const responseRetrievalProvenanceRefs = response.metadata?.retrievalProvenanceRefs ?? [];
+      if (responseRetrievalProvenanceRefs.length > 0) {
+        reflectionGroundingProvenanceRefs = [...new Set(
+          responseRetrievalProvenanceRefs.map(ref => ref.trim()).filter(Boolean),
+        )];
+      }
     }
 
     let reflectionJournalEntryId: string | undefined;
@@ -982,6 +990,9 @@ export function wireHeartbeatRuntime(
             },
           } : {}),
         },
+        ...(reflectionGroundingProvenanceRefs.length > 0 ? {
+          substrateProvenanceRefs: reflectionGroundingProvenanceRefs,
+        } : {}),
       });
       reflectionJournalEntryId = reflectionEntry.id;
     } catch (error) {
@@ -1016,6 +1027,9 @@ export function wireHeartbeatRuntime(
       } : {}),
       ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
       ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
+      ...(reflectionGroundingProvenanceRefs.length > 0 ? {
+        substrateProvenanceRefs: reflectionGroundingProvenanceRefs,
+      } : {}),
     });
 
     if (template.id === 'values-reflection') {

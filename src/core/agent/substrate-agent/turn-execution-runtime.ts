@@ -524,6 +524,7 @@ export async function handleMessageForTurn(
       log.info('Broadcast provenance', provenancePayload);
     }
 
+    const retrievalProvenanceRefs = observability.getRetrievalProvenanceRefs();
     const internalState = await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
       message,
       responseText,
@@ -539,7 +540,7 @@ export async function handleMessageForTurn(
       responseText,
       toolCallCount: turnUsage.toolCalls,
       sessionChannelId: emotionSessionId,
-      retrievalProvenanceRefs: observability.getRetrievalProvenanceRefs(),
+      retrievalProvenanceRefs,
     });
     runtime.setCurrentSelfModelState(
       internalState,
@@ -599,6 +600,7 @@ export async function handleMessageForTurn(
         internalState: cloneInternalState(internalState),
         internalStateSnapshotRef,
         metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),
+        ...(retrievalProvenanceRefs.length > 0 ? { retrievalProvenanceRefs } : {}),
         ...(Object.keys(responseDiagnostics).length > 0 ? { diagnostics: responseDiagnostics } : {}),
         ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
       },

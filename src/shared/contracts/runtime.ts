@@ -262,6 +262,7 @@ export interface ResponseMetadata {
   internalState?: import('../../core/self-model/state.js').InternalState;
   internalStateSnapshotRef?: string;
   metacognitiveFlags?: import('../../core/self-model/metacognition.js').MetacognitiveFlag[];
+  retrievalProvenanceRefs?: string[];
   diagnostics?: {
     fallback?: {
       code: 'vision_empty_response';

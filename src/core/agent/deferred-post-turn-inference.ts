@@ -13,6 +13,7 @@ import {
 import { createSignalWisePostTurnAppraiser } from '../intention/post-turn-appraisal.js';
 
 const HEARTBEAT_RUN_TEMPLATE_TOOL_NAME = 'heartbeat_run_template';
+const SCHEDULE_TOOL_NAME = 'schedule';
 const TOOLSET_TOOL_NAME = 'toolset';
 const LEGACY_LOAD_TOOLS_TOOL_NAME = 'load_tools';
 
@@ -92,7 +93,7 @@ function extractDeferredActionCandidate(message: unknown): PostTurnActionCandida
   return null;
 }
 
-function isHeartbeatRunTemplateToolResult(message: unknown): boolean {
+function isDeferredHeartbeatActionToolResult(message: unknown): boolean {
   if (!message || typeof message !== 'object' || Array.isArray(message)) {
     return false;
   }
@@ -100,7 +101,10 @@ function isHeartbeatRunTemplateToolResult(message: unknown): boolean {
   const candidate = message as Record<string, unknown>;
   return (
     candidate.role === 'toolResult'
-    && candidate.toolName === HEARTBEAT_RUN_TEMPLATE_TOOL_NAME
+    && (
+      candidate.toolName === HEARTBEAT_RUN_TEMPLATE_TOOL_NAME
+      || candidate.toolName === SCHEDULE_TOOL_NAME
+    )
   );
 }
 
@@ -161,7 +165,7 @@ function inferDeferredHeartbeatActions(
 ): PostTurnActionCandidate[] {
   const inferred: PostTurnActionCandidate[] = [];
   for (const turnMessage of turnMessages) {
-    if (!isHeartbeatRunTemplateToolResult(turnMessage)) continue;
+    if (!isDeferredHeartbeatActionToolResult(turnMessage)) continue;
     const candidate = extractDeferredActionCandidate(turnMessage);
     if (candidate && candidate.kind === deferredHeartbeatActionKind) {
       inferred.push(candidate);
@@ -202,7 +206,7 @@ export function inferDeferredPostTurnActions({
   const callType = resolvePostTurnCallType(message);
   const inferred: PostTurnActionCandidate[] = [];
   for (const turnMessage of turnMessages) {
-    if (isHeartbeatRunTemplateToolResult(turnMessage)) {
+    if (isDeferredHeartbeatActionToolResult(turnMessage)) {
       const candidate = extractDeferredActionCandidate(turnMessage);
       if (candidate && candidate.kind === deferredHeartbeatActionKind) {
         inferred.push(candidate);

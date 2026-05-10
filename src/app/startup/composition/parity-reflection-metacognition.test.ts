@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../../shared/event-bus.js';
 import { Scheduler } from '../../../core/scheduler/scheduler.js';
 import { InternalStateComputer, buildInternalStateSnapshotRef } from '../../../core/self-model/state.js';
-import { resolveReflectionMetacognitionJournalPath } from '../../../persistence/layout.js';
+import {
+  resolveReflectionJournalPath,
+  resolveReflectionMetacognitionJournalPath,
+} from '../../../persistence/layout.js';
 import { wireHeartbeatRuntime } from './parity.js';
 
 describe('wireHeartbeatRuntime reflection metacognition journal', () => {
@@ -54,6 +57,9 @@ describe('wireHeartbeatRuntime reflection metacognition journal', () => {
           internalState,
           internalStateSnapshotRef: snapshotRef,
           metacognitiveFlags,
+          retrievalProvenanceRefs: [
+            'source:tool:memory|action:import|invocation:call-parity-grounding',
+          ],
         },
       }),
       getCurrentInternalState: vi.fn(() => internalState),
@@ -91,6 +97,7 @@ describe('wireHeartbeatRuntime reflection metacognition journal', () => {
       internalStateSnapshotRef?: string;
       metacognitiveFlags?: Array<{ flag: string; confidence: number }>;
       reflectionJournalEntryId?: string;
+      substrateProvenanceRefs?: string[];
     };
 
     expect(entry.kind).toBe('reflection_run');
@@ -103,5 +110,16 @@ describe('wireHeartbeatRuntime reflection metacognition journal', () => {
     expect(entry.internalStateSnapshotRef).toBe(snapshotRef);
     expect(entry.metacognitiveFlags).toEqual(metacognitiveFlags);
     expect(entry.reflectionJournalEntryId).toBeDefined();
+    expect(entry.substrateProvenanceRefs).toEqual([
+      'source:tool:memory|action:import|invocation:call-parity-grounding',
+    ]);
+
+    const reflectionRaw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
+    const reflectionEntry = JSON.parse(reflectionRaw.split('\n').at(-1) ?? '{}') as {
+      substrateProvenanceRefs?: string[];
+    };
+    expect(reflectionEntry.substrateProvenanceRefs).toEqual([
+      'source:tool:memory|action:import|invocation:call-parity-grounding',
+    ]);
   });
 });

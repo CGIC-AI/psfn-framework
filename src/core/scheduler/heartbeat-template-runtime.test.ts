@@ -978,6 +978,54 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     ]);
   });
 
+  it('persists response retrieval provenance for contactless musing turns', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage: vi.fn(async () => ({
+          content: 'I feel the blocked anticipation, but I can see the memory evidence underneath it.',
+          metadata: {
+            retrievalProvenanceRefs: [
+              'source:tool:memory|action:import|invocation:call-grounded',
+              ' memory:grounded-emotional-context ',
+            ],
+          },
+        })),
+      } as any,
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+    });
+
+    await runtime.runTemplateNow('musing', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    const journalRaw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
+    const journalEntry = JSON.parse(journalRaw.split('\n').at(-1) ?? '{}') as {
+      substrateProvenanceRefs?: string[];
+    };
+    expect(journalEntry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
+      'source:tool:memory|action:import|invocation:call-grounded',
+      'memory:grounded-emotional-context',
+    ]));
+
+    const metacognitionRaw = readFileSync(resolveReflectionMetacognitionJournalPath(tempDir), 'utf-8').trim();
+    const metacognitionEntry = JSON.parse(metacognitionRaw.split('\n').at(-1) ?? '{}') as {
+      metacognitiveFlags?: Array<{ flag: string }>;
+      substrateProvenanceRefs?: string[];
+    };
+    expect(metacognitionEntry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
+      'source:tool:memory|action:import|invocation:call-grounded',
+      'memory:grounded-emotional-context',
+    ]));
+    expect(metacognitionEntry.metacognitiveFlags ?? []).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ flag: 'support_gap_confabulation_risk' }),
+    ]));
+  });
+
   it('emits null-contact and synthesized snapshot guardrail telemetry when canonical contact binding is absent', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
     const telemetryEvents: EventMap['reflection.guardrail'][] = [];

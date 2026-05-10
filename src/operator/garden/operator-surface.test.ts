@@ -126,6 +126,26 @@ function allocatePort(): Promise<number> {
   });
 }
 
+function listenSocketServer(socketPath: string, handler: http.RequestListener): Promise<http.Server> {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer(handler);
+    server.once('error', reject);
+    server.listen(socketPath, () => {
+      server.off('error', reject);
+      resolve(server);
+    });
+  });
+}
+
+function closeServer(server: http.Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
 interface Harness {
   tempDir: string;
   socketPath: string;
@@ -306,6 +326,36 @@ describe('Garden operator surface', () => {
     });
   });
 
+  it('reports degraded health when the admin transport probe reports an error', async () => {
+    await harness.transportServer.stop();
+    harness.transportStopped = true;
+
+    const unhealthyTransport = await listenSocketServer(harness.socketPath, (_req, res) => {
+      res.writeHead(503, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ status: 'error', error: 'transport unavailable' }));
+    });
+
+    try {
+      const res = await requestPort(harness.port, 'GET', '/health');
+      expect(res.status).toBe(503);
+      expect(JSON.parse(res.body)).toEqual({
+        status: 'degraded',
+        uptime: expect.any(Number),
+        dependencies: {
+          adminTransport: {
+            reachable: true,
+            status: 'error',
+            httpStatus: 503,
+            error: 'transport unavailable',
+          },
+        },
+      });
+    } finally {
+      await closeServer(unhealthyTransport);
+      rmSync(harness.socketPath, { force: true });
+    }
+  });
+
   it('reports healthy transport status in operator health', async () => {
     const res = await requestPort(harness.port, 'GET', '/health');
     expect(res.status).toBe(200);
@@ -316,7 +366,7 @@ describe('Garden operator surface', () => {
         adminTransport: {
           reachable: true,
           status: 'ok',
-          httpStatus: 404,
+          httpStatus: 200,
         },
       },
     });

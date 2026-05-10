@@ -5,13 +5,14 @@ import type { Duplex } from 'node:stream';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { readBodyWithLimit, sendText } from '../../channels/backplane/http/primitives.js';
+import { readBodyWithLimit, sendJson, sendText } from '../../channels/backplane/http/primitives.js';
 import type { AdminApiRoute } from './api-routes.js';
 import { buildAdminApiRoutes } from './api-routes.js';
 import type { GardenAdminDomainServices } from './admin-contract.js';
 import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { HEALTH_PROBE_PATH } from './transport-client.js';
 
 const log = createComponentLogger('GardenAdminTransport');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -155,6 +156,11 @@ export class GardenAdminTransportServer implements Lifecycle {
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const requestPath = new URL(req.url ?? '/', 'http://localhost').pathname;
+
+    if ((req.method ?? 'GET') === 'GET' && requestPath === HEALTH_PROBE_PATH) {
+      sendJson(res, 200, { status: 'ok' });
+      return;
+    }
 
     try {
       const handled = dispatchAdminApiRoute(

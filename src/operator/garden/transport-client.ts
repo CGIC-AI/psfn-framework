@@ -8,13 +8,18 @@ import { sendText } from '../../channels/backplane/http/primitives.js';
 
 const log = createComponentLogger('GardenAdminTransportProxy');
 const HEALTH_PROBE_TIMEOUT_MS = 1_500;
-const HEALTH_PROBE_PATH = '/api/admin/__transport_probe__';
+export const HEALTH_PROBE_PATH = '/api/admin/__transport_probe__';
 
 export interface GardenAdminTransportHealth {
   reachable: boolean;
   status: 'ok' | 'error';
   httpStatus?: number;
   error?: string;
+}
+
+interface TransportProbePayload {
+  status?: unknown;
+  error?: unknown;
 }
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
@@ -38,6 +43,20 @@ function buildProxyHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
   return forwardedHeaders;
 }
 
+function parseTransportProbePayload(body: string): { status?: string; error?: string } | null {
+  if (!body.trim()) return null;
+
+  try {
+    const payload = JSON.parse(body) as TransportProbePayload;
+    return {
+      status: typeof payload.status === 'string' ? payload.status : undefined,
+      error: typeof payload.error === 'string' ? payload.error : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export class GardenAdminTransportProxy {
   private readonly webSocketServer = new WebSocketServer({ noServer: true });
 
@@ -54,12 +73,50 @@ export class GardenAdminTransportProxy {
         path: HEALTH_PROBE_PATH,
         method: 'GET',
       }, (proxyResponse) => {
-        proxyResponse.resume();
-        const httpStatus = proxyResponse.statusCode ?? 502;
-        resolve({
-          reachable: true,
-          status: 'ok',
-          httpStatus,
+        let body = '';
+        proxyResponse.setEncoding('utf8');
+        proxyResponse.on('data', (chunk: string) => {
+          body += chunk;
+          if (body.length > 4096) {
+            proxyRequest.destroy(new Error('Transport health probe response exceeded 4096 bytes'));
+          }
+        });
+        proxyResponse.on('end', () => {
+          const httpStatus = proxyResponse.statusCode ?? 502;
+          const payload = parseTransportProbePayload(body);
+          if (httpStatus < 200 || httpStatus >= 300) {
+            resolve({
+              reachable: true,
+              status: 'error',
+              httpStatus,
+              error: payload?.error ?? payload?.status ?? `Transport health probe returned HTTP ${httpStatus}`,
+            });
+            return;
+          }
+
+          if (payload?.status !== 'ok') {
+            resolve({
+              reachable: true,
+              status: 'error',
+              httpStatus,
+              error: payload?.error ?? payload?.status ?? 'Transport health probe did not report ok',
+            });
+            return;
+          }
+
+          resolve({
+            reachable: true,
+            status: 'ok',
+            httpStatus,
+          });
+        });
+        proxyResponse.on('error', (error) => {
+          resolve({
+            reachable: true,
+            status: 'error',
+            httpStatus: proxyResponse.statusCode,
+            error: String(error),
+          });
         });
       });
 

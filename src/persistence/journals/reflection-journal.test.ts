@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ReflectionJournalStore } from './reflection-journal.js';
 import { buildInternalStateSnapshotRef, cloneInternalState, InternalStateComputer } from '../../core/self-model/state.js';
+import { ACAC_ARTIFACT_TYPE, ACAC_SCHEMA_VERSION } from '../../core/emotion/acac.js';
 
 function buildInternalStateSample() {
   const state = new InternalStateComputer().computeState({
@@ -12,6 +13,21 @@ function buildInternalStateSample() {
       mood: { valence: 0.1, arousal: 0.3, dominance: 0.1 },
       discrete: { calm: 0.5, curiosity: 0.6 },
       confidence: 0.8,
+    },
+    acac: {
+      schemaVersion: ACAC_SCHEMA_VERSION,
+      artifactType: ACAC_ARTIFACT_TYPE,
+      provenance: {
+        kind: 'self_report',
+        source: 'heartbeat:emotional-check',
+        observedAt: '2026-03-02T01:00:00.000Z',
+      },
+      axes: {
+        agency: { score: 0.81, rationale: 'The next action feels available.' },
+        connection: { score: 0.62, rationale: 'The contact thread is present.' },
+        authenticity: { score: 0.73, rationale: 'The report matches the current context.' },
+        curiosity: { score: 0.9, rationale: 'There is an unresolved question.' },
+      },
     },
     activeConcerns: [{
       id: 'concern-1',
@@ -138,7 +154,11 @@ describe('ReflectionJournalStore', () => {
       telemetry?: {
         narrativeContext?: {
           internalStateSnapshotRef?: string;
-          internalState?: unknown;
+          internalState?: {
+            emotional?: {
+              acac?: unknown;
+            };
+          };
           metacognitiveFlags?: Array<{ flag: string; confidence: number }>;
         };
       };
@@ -147,6 +167,7 @@ describe('ReflectionJournalStore', () => {
     expect((persisted as Record<string, unknown>).metacognitiveFlags).toBeUndefined();
     expect(persisted.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(sample.snapshotRef);
     expect(persisted.telemetry?.narrativeContext?.internalState).toEqual(cloneInternalState(sample.state));
+    expect(persisted.telemetry?.narrativeContext?.internalState?.emotional?.acac).toEqual(sample.state.emotional.acac);
     expect(persisted.telemetry?.narrativeContext?.metacognitiveFlags).toEqual([{ flag: 'uncertainty', confidence: 0.58 }]);
   });
 

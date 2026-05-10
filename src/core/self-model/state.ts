@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
+import { normalizeAcacSnapshot, type AcacSnapshot } from '../emotion/acac.js';
 import type { EmotionStateSnapshot, VADVector } from '../emotion/state.js';
 import {
   ACTIVE_CONCERN_PRIORITIES,
@@ -44,6 +45,7 @@ export interface InternalState {
     mood: VADVector;
     discreteEmotions: Record<string, number>;
     confidence: number;
+    acac?: AcacSnapshot;
   };
   cognitive: {
     certaintyLevel: number;
@@ -77,6 +79,7 @@ export interface InternalStateSessionMetrics {
 
 export interface InternalStateComputeInput {
   emotionState: EmotionStateSnapshot;
+  acac?: AcacSnapshot;
   activeConcerns: readonly ActiveConcern[];
   pendingFollowUps?: readonly PendingFollowUp[];
   careReminders?: readonly CareReminder[];
@@ -88,6 +91,7 @@ export interface InternalStateComputeInput {
 
 interface NormalizedInternalStateComputeInput {
   emotionState: EmotionStateSnapshot;
+  acac?: AcacSnapshot;
   activeConcerns: ActiveConcern[];
   pendingFollowUps: PendingFollowUp[];
   careReminders: CareReminder[];
@@ -207,6 +211,7 @@ export class InternalStateComputer {
         mood: { ...normalized.emotionState.mood },
         discreteEmotions: { ...normalized.emotionState.discrete },
         confidence: normalized.emotionState.confidence,
+        ...(normalized.acac ? { acac: normalized.acac } : {}),
       },
       cognitive: {
         certaintyLevel,
@@ -266,6 +271,9 @@ function normalizeComputeInput(input: InternalStateComputeInput): NormalizedInte
   }
   return {
     emotionState: normalizeEmotionStateSnapshot(input.emotionState),
+    acac: input.acac === undefined
+      ? undefined
+      : normalizeAcacSnapshot(input.acac, 'InternalState acac'),
     activeConcerns: normalizeActiveConcerns(input.activeConcerns),
     pendingFollowUps: normalizePendingFollowUps(input.pendingFollowUps ?? []),
     careReminders: normalizeCareReminders(input.careReminders ?? []),
@@ -693,19 +701,22 @@ function normalizeInternalState(state: InternalState): InternalState {
   }
 
   return {
-      emotional: {
-        vad: {
-          valence: parseSigned(state.emotional.vad.valence, 'emotional.vad.valence'),
-          arousal: parseSigned(state.emotional.vad.arousal, 'emotional.vad.arousal'),
-          dominance: parseSigned(state.emotional.vad.dominance, 'emotional.vad.dominance'),
-        },
-        mood: {
-          valence: parseSigned(state.emotional.mood.valence, 'emotional.mood.valence'),
-          arousal: parseSigned(state.emotional.mood.arousal, 'emotional.mood.arousal'),
-          dominance: parseSigned(state.emotional.mood.dominance, 'emotional.mood.dominance'),
-        },
+    emotional: {
+      vad: {
+        valence: parseSigned(state.emotional.vad.valence, 'emotional.vad.valence'),
+        arousal: parseSigned(state.emotional.vad.arousal, 'emotional.vad.arousal'),
+        dominance: parseSigned(state.emotional.vad.dominance, 'emotional.vad.dominance'),
+      },
+      mood: {
+        valence: parseSigned(state.emotional.mood.valence, 'emotional.mood.valence'),
+        arousal: parseSigned(state.emotional.mood.arousal, 'emotional.mood.arousal'),
+        dominance: parseSigned(state.emotional.mood.dominance, 'emotional.mood.dominance'),
+      },
       discreteEmotions: normalizeDiscreteEmotions(state.emotional.discreteEmotions),
       confidence: parseUnit(state.emotional.confidence, 'emotional.confidence'),
+      ...(state.emotional.acac === undefined
+        ? {}
+        : { acac: normalizeAcacSnapshot(state.emotional.acac, 'InternalState emotional.acac') }),
     },
     cognitive: {
       certaintyLevel: parseUnit(state.cognitive.certaintyLevel, 'cognitive.certaintyLevel'),

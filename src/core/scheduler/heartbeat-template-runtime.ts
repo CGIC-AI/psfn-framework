@@ -178,6 +178,28 @@ function joinReflectionPromptSections(...sections: Array<string | undefined>): s
     .join('\n\n');
 }
 
+function formatAcacSelfReportBlock(internalState: InternalState): string | null {
+  const acac = internalState.emotional.acac;
+  if (!acac) {
+    return null;
+  }
+
+  return [
+    '[ACAC Self-Report]',
+    `provenance_kind: ${acac.provenance.kind}`,
+    `provenance_source: ${acac.provenance.source}`,
+    ...(acac.provenance.observedAt ? [`observed_at: ${acac.provenance.observedAt}`] : []),
+    ...([
+      'agency',
+      'connection',
+      'authenticity',
+      'curiosity',
+    ] as const).map((axis) => (
+      `${axis}_score: ${acac.axes[axis].score.toFixed(4)} rationale: ${acac.axes[axis].rationale}`
+    )),
+  ].join('\n');
+}
+
 function promptUsesReflectionMacros(prompt: string): boolean {
   return Object.values(REFLECTION_PROMPT_TOKENS).some(token => prompt.includes(token));
 }
@@ -515,10 +537,13 @@ export function createHeartbeatTemplateRuntime(
         .join('\n')
       : '- none exposed';
 
+    const acacSection = formatAcacSelfReportBlock(context.internalState);
+
     return [
       '[Internal State Input]',
       `snapshot_ref: ${context.internalStateSnapshotRef}`,
       `serialized_internal_state: ${serializeInternalState(context.internalState)}`,
+      ...(acacSection ? [acacSection] : []),
       '[Recent Metacognitive Flags]',
       metacognitiveSection,
       '[Active Concerns]',

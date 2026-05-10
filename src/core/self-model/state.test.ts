@@ -3,7 +3,13 @@ import type { ActiveConcern } from '../intention/concerns.js';
 import type { CareReminder } from '../intention/care-reminders.js';
 import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import {
+  ACAC_ARTIFACT_TYPE,
+  ACAC_SCHEMA_VERSION,
+  type AcacSnapshot,
+} from '../emotion/acac.js';
+import {
   buildInternalStateSnapshotRef,
+  cloneInternalState,
   InternalStateComputer,
   serializeInternalState,
 } from './state.js';
@@ -54,6 +60,25 @@ function makeCareReminder(overrides?: Partial<CareReminder>): CareReminder {
     provenanceSource: 'companion_appraisal',
     provenanceReason: 'Partner birthday mentioned explicitly.',
     activationCount: 0,
+    ...overrides,
+  };
+}
+
+function makeAcacSnapshot(overrides?: Partial<AcacSnapshot>): AcacSnapshot {
+  return {
+    schemaVersion: ACAC_SCHEMA_VERSION,
+    artifactType: ACAC_ARTIFACT_TYPE,
+    provenance: {
+      kind: 'self_report',
+      source: 'heartbeat:emotional-check',
+      observedAt: '2026-03-02T01:00:00.000Z',
+    },
+    axes: {
+      agency: { score: 0.81, rationale: 'The next action feels available.' },
+      connection: { score: 0.62, rationale: 'The contact thread is present.' },
+      authenticity: { score: 0.73, rationale: 'The report matches the current context.' },
+      curiosity: { score: 0.9, rationale: 'There is an unresolved question.' },
+    },
     ...overrides,
   };
 }
@@ -180,6 +205,51 @@ describe('InternalStateComputer', () => {
     expect(buildInternalStateSnapshotRef(first)).toBe(buildInternalStateSnapshotRef(second));
   });
 
+  it('clones and serializes optional ACAC snapshots without mutating the source', () => {
+    const computer = new InternalStateComputer();
+    const acac = makeAcacSnapshot();
+    const state = computer.computeState({
+      emotionState: {
+        vad: { valence: 0.1, arousal: -0.1, dominance: 0.2 },
+        mood: { valence: 0.05, arousal: -0.05, dominance: 0.1 },
+        discrete: { curiosity: 0.4 },
+        confidence: 0.6,
+      },
+      acac,
+      activeConcerns: [],
+      pendingFollowUps: [],
+      careReminders: [],
+      trustLevel: 'regular',
+      sessionMetrics: {
+        userMessageText: 'What should I notice?',
+        responseText: 'Notice agency and curiosity.',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+      },
+    });
+
+    expect(state.emotional.acac).toEqual(acac);
+    const cloned = cloneInternalState(state);
+    expect(cloned.emotional.acac).toEqual(acac);
+    expect(cloned.emotional.acac).not.toBe(acac);
+    expect(JSON.parse(serializeInternalState(state)) as unknown).toMatchObject({
+      emotional: {
+        acac: {
+          provenance: {
+            kind: 'self_report',
+            source: 'heartbeat:emotional-check',
+          },
+          axes: {
+            agency: { score: 0.81 },
+            connection: { score: 0.62 },
+            authenticity: { score: 0.73 },
+            curiosity: { score: 0.9 },
+          },
+        },
+      },
+    });
+  });
+
   it('fails closed for invalid emotion payloads', () => {
     const computer = new InternalStateComputer();
     expect(() => computer.computeState({
@@ -200,6 +270,36 @@ describe('InternalStateComputer', () => {
         recentTurnCount: 0,
       },
     })).toThrow('emotionState.confidence');
+  });
+
+  it('fails closed for malformed ACAC payloads', () => {
+    const computer = new InternalStateComputer();
+    expect(() => computer.computeState({
+      emotionState: {
+        vad: { valence: 0, arousal: 0, dominance: 0 },
+        mood: { valence: 0, arousal: 0, dominance: 0 },
+        discrete: {},
+        confidence: 0.5,
+      },
+      acac: makeAcacSnapshot({
+        axes: {
+          agency: { score: 0.5, rationale: 'ok' },
+          connection: { score: 0.5, rationale: 'ok' },
+          authenticity: { score: 0.5, rationale: 'ok' },
+          curiosity: { score: -0.1, rationale: 'invalid' },
+        },
+      }),
+      activeConcerns: [],
+      pendingFollowUps: [],
+      careReminders: [],
+      trustLevel: 'public',
+      sessionMetrics: {
+        userMessageText: 'hello',
+        responseText: 'hi',
+        toolCallCount: 0,
+        recentTurnCount: 0,
+      },
+    })).toThrow('InternalState acac.axes.curiosity.score');
   });
 
   it('fails closed for invalid concern timestamps', () => {

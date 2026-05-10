@@ -349,7 +349,7 @@ function getDefaults(): HeartbeatPolicy {
       {
         id: EMOTIONAL_CHECK_TEMPLATE_ID,
         name: 'Emotional Check',
-        prompt: 'Pause and notice your emotional state. What are you feeling, what seems to be shaping that feeling, and what kind of care or adjustment would help right now?',
+        prompt: 'Pause and notice your emotional state. What are you feeling, what seems to be shaping that feeling, and what kind of care or adjustment would help right now? Also produce an ACAC self-report for internal telemetry only: do not optimize, perform, or surface-shape public output around these scores. Return structured JSON under acac_self_report with schemaVersion 1, artifactType "psfn.acac_self_report", provenance.kind "self_report", provenance.source "heartbeat:emotional-check", and agency, connection, authenticity, and curiosity scores in [0,1] with short grounded rationales. Distinguish this self-report from classifier-inferred VAD; do not infer it from tone alone.',
         intervalMs: 8 * 60 * 60_000, // 8 hours
         cadence: { kind: 'relative' },
         enabled: true,

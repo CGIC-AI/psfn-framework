@@ -81,6 +81,17 @@ describe('HeartbeatPolicyStore', () => {
     },
   );
 
+  it('emotional-check prompts for ACAC self-report without surface-output shaping', () => {
+    const policy = store.load();
+    const template = policy.templates.find(t => t.id === 'emotional-check');
+    expect(template?.prompt).toContain('ACAC self-report');
+    expect(template?.prompt).toContain('do not optimize, perform, or surface-shape public output');
+    expect(template?.prompt).toContain('artifactType "psfn.acac_self_report"');
+    expect(template?.prompt).toContain('provenance.kind "self_report"');
+    expect(template?.prompt).toContain('classifier-inferred VAD');
+    expect(template?.prompt).toContain('agency, connection, authenticity, and curiosity');
+  });
+
   it('non-musing templates do not send to Discord', () => {
     const policy = store.load();
     const nonMusings = policy.templates.filter(t => t.id !== 'musing');

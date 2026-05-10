@@ -9,6 +9,10 @@ import {
   ReflectionJournalStore,
 } from '../../persistence/journals/reflection-journal.js';
 import {
+  ACAC_ARTIFACT_TYPE,
+  ACAC_SCHEMA_VERSION,
+} from '../emotion/acac.js';
+import {
   ReflectionDailyJournalStore,
   ReflectionProcessLogStore,
   buildReflectionProcessId,
@@ -50,6 +54,101 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       .map(line => line.trim())
       .filter(line => line.startsWith('- '));
   }
+
+  it('includes ACAC self-report context in heartbeat internal-state prompts and persisted telemetry', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const capturedPrompts: string[] = [];
+    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policy = policyStore.load();
+    const template = policy.templates.find((candidate) => candidate.id === 'musing');
+    expect(template).toBeDefined();
+    if (!template) {
+      throw new Error('musing template missing from defaults');
+    }
+    template.internalStateInput = true;
+    template.sendToDiscord = false;
+    policyStore.save(policy);
+
+    const internalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.2, arousal: 0.15, dominance: 0.1 },
+        mood: { valence: 0.25, arousal: 0.2, dominance: 0.15 },
+        discrete: { curiosity: 0.5, calm: 0.4 },
+        confidence: 0.75,
+      },
+      acac: {
+        schemaVersion: ACAC_SCHEMA_VERSION,
+        artifactType: ACAC_ARTIFACT_TYPE,
+        provenance: {
+          kind: 'self_report',
+          source: 'heartbeat:emotional-check',
+          observedAt: '2026-03-02T01:00:00.000Z',
+        },
+        axes: {
+          agency: { score: 0.81, rationale: 'The next action feels available.' },
+          connection: { score: 0.62, rationale: 'The contact thread is present.' },
+          authenticity: { score: 0.73, rationale: 'The report matches the current context.' },
+          curiosity: { score: 0.9, rationale: 'There is an unresolved question.' },
+        },
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'Recent conversations matter.',
+        responseText: 'Keep continuity with the primary contact.',
+        toolCallCount: 0,
+        recentTurnCount: 3,
+        lastSeenDeltaSeconds: 120,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(internalState);
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage: vi.fn(async (message: { content: string }) => {
+          capturedPrompts.push(message.content);
+          return { content: 'ACAC context was captured.' };
+        }),
+        getCurrentInternalState: () => internalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      } as any,
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+    });
+
+    await runtime.runTemplateNow('musing', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    const internalStateSection = getPromptSection(capturedPrompts[0] ?? '', '[Internal State Input]');
+    expect(internalStateSection).toContain('[ACAC Self-Report]');
+    expect(internalStateSection).toContain('provenance_kind: self_report');
+    expect(internalStateSection).toContain('provenance_source: heartbeat:emotional-check');
+    expect(internalStateSection).toContain('agency_score: 0.8100 rationale: The next action feels available.');
+    expect(internalStateSection).toContain('connection_score: 0.6200 rationale: The contact thread is present.');
+    expect(internalStateSection).toContain('authenticity_score: 0.7300 rationale: The report matches the current context.');
+    expect(internalStateSection).toContain('curiosity_score: 0.9000 rationale: There is an unresolved question.');
+
+    const raw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
+    const entry = JSON.parse(raw.split('\n').at(-1) ?? '{}') as {
+      telemetry?: {
+        narrativeContext?: {
+          internalState?: {
+            emotional?: {
+              acac?: unknown;
+            };
+          };
+        };
+      };
+    };
+    expect(entry.telemetry?.narrativeContext?.internalState?.emotional?.acac).toEqual(
+      internalState.emotional.acac,
+    );
+  });
 
   it('records manual deliberation runs with provenance and process ids', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));

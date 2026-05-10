@@ -73,6 +73,7 @@ import {
   resolveReflectionIntrospectionPolicy,
   type ReflectionIntrospectionPolicy,
 } from './reflection-introspection-policy.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
 const log = createComponentLogger('HeartbeatTemplates');
 
@@ -117,6 +118,11 @@ interface ReflectionPromptContext {
   internalState?: ReflectionInternalStateContext;
   contactBundle?: ReflectionContactContextBundle;
   substrateContext?: ReflectionSubstrateContext;
+}
+
+interface ReflectionMemoryRetrievalResult {
+  memoryBlock?: string;
+  provenanceRefs: string[];
 }
 
 interface ReflectionContactTelemetryDiagnostics {
@@ -344,6 +350,34 @@ function mergeReflectionPromptBundles(
     affect,
     provenanceRefs,
   };
+}
+
+function hasAssertionHeavyIntrospectiveOutput(reflection: string): boolean {
+  const normalized = reflection.replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!normalized) return false;
+  const firstPersonSignals = (normalized.match(/\b(i|i'm|i’ve|i am|my|me|myself)\b/g) ?? []).length;
+  if (firstPersonSignals === 0) return false;
+  const assertionSignals = [
+    /\bi (?:feel|felt|notice|noticed|sense|sensed|believe|know|realize|realized|want|need|learned|remember|understand)\b/,
+    /\bmy (?:inner world|feeling|feelings|mood|memory|experience|processing|attention|care|connection|curiosity)\b/,
+    /\bthis (?:means|shows|suggests|reveals)\b/,
+  ];
+  return assertionSignals.some(pattern => pattern.test(normalized));
+}
+
+function buildUnsupportedReflectionSupportFlags(
+  reflection: string,
+  supportProvenanceRefs: readonly string[],
+): ReflectionMetacognitiveFlag[] {
+  if (supportProvenanceRefs.length > 0 || !hasAssertionHeavyIntrospectiveOutput(reflection)) {
+    return [];
+  }
+
+  return [{
+    flag: 'support_gap_confabulation_risk',
+    confidence: 0.82,
+    evidence: 'Reflection contains first-person introspective assertions but no persisted grounding provenance refs were available.',
+  }];
 }
 
 export interface HeartbeatTemplateRuntime {
@@ -729,6 +763,56 @@ export function createHeartbeatTemplateRuntime(
     };
   };
 
+  const retrieveReflectionMemoryBlock = async (input: {
+    memoryProvider: { retrieve: (...args: any[]) => Promise<string> };
+    queryText: string;
+    reflectionChannelId: string;
+    trustLevel?: string;
+    reflectionCanonicalContactId: string;
+    currentVAD?: { valence: number; arousal: number; dominance: number };
+    reflectionPolicy: ReflectionIntrospectionPolicy;
+  }): Promise<ReflectionMemoryRetrievalResult> => {
+    const provenanceRefs = new Set<string>();
+    const unsubscribe = runtimeOptions.eventBus?.on('memory.retrieval', (payload) => {
+      if (payload.channelId !== input.reflectionChannelId) {
+        return;
+      }
+      for (const ref of payload.provenanceRefs ?? []) {
+        const normalized = ref.trim();
+        if (normalized) provenanceRefs.add(normalized);
+      }
+    });
+
+    try {
+      const memoryBlock = await runWithRequestContext({
+        channelId: input.reflectionChannelId,
+        callType: 'background',
+        originType: 'background',
+        originStage: 'heartbeat.reflection.memory_retrieval',
+        purpose: 'heartbeat.reflection.memory_retrieval',
+      }, () => input.memoryProvider.retrieve(
+        input.queryText,
+        input.reflectionChannelId,
+        input.trustLevel,
+        undefined,
+        input.reflectionCanonicalContactId,
+        undefined,
+        undefined,
+        input.currentVAD,
+        undefined,
+        { retrievalMode: input.reflectionPolicy.memoryRetrievalModes },
+        input.reflectionPolicy.memoryRetrievalModes,
+      ));
+
+      return {
+        memoryBlock,
+        provenanceRefs: [...provenanceRefs],
+      };
+    } finally {
+      unsubscribe?.();
+    }
+  };
+
   const resolveReflectionContactContextBundle = async (
     template: ReflectionTemplate,
     reflectionPolicy: ReflectionIntrospectionPolicy,
@@ -831,24 +915,20 @@ export function createHeartbeatTemplateRuntime(
       };
     }).memoryProvider;
 
-    const memoryBlock = memoryProvider
-      ? await memoryProvider.retrieve(
-        [
+    const memoryRetrieval = memoryProvider
+      ? await retrieveReflectionMemoryBlock({
+        memoryProvider,
+        queryText: [
           template.prompt,
           recentSessionMessages.map((message) => `${message.role}: ${message.content}`).join('\n'),
         ].filter(Boolean).join('\n\n'),
         reflectionChannelId,
         trustLevel,
-        undefined,
         reflectionCanonicalContactId,
-        undefined,
-        undefined,
         currentVAD,
-        undefined,
-        { retrievalMode: reflectionPolicy.memoryRetrievalModes },
-        reflectionPolicy.memoryRetrievalModes,
-      )
-      : undefined;
+        reflectionPolicy,
+      })
+      : { provenanceRefs: [] };
 
     return {
       bundle: assembleReflectionContactContextBundle({
@@ -861,7 +941,8 @@ export function createHeartbeatTemplateRuntime(
         emotionalSnapshot,
         emotionalTimeSeries,
         recentSessionMessages,
-        memoryBlock,
+        memoryBlock: memoryRetrieval.memoryBlock,
+        memoryProvenanceRefs: memoryRetrieval.provenanceRefs,
         activeConcerns,
         pendingFollowUps,
       }),
@@ -897,15 +978,9 @@ export function createHeartbeatTemplateRuntime(
 
   const formatNarrativePromptInput = (
     prompt: string,
-    context: ReflectionPromptContext,
+    reflectionBundle: ReflectionPromptSectionBundle | null,
     reflectionPolicyBlock: string,
   ): string => {
-    const reflectionBundle = mergeReflectionPromptBundles(
-      context.contactBundle,
-      buildInternalStatePromptBundle(context.internalState ?? null),
-      context.substrateContext,
-    );
-
     if (promptUsesReflectionMacros(prompt)) {
       const expandedPrompt = prompt
         .split(REFLECTION_PROMPT_TOKENS.self).join(reflectionBundle?.self ?? '')
@@ -1565,13 +1640,20 @@ export function createHeartbeatTemplateRuntime(
     const reflectionContactContext = reflectionContactResolution.bundle;
     const reflectionSubstrateContext = resolveReflectionSubstratePromptContext(template);
     const reflectionCreatedAt = new Date(Date.now()).toISOString();
+    const reflectionPromptContext: ReflectionPromptContext = {
+      internalState: internalStateContext ?? undefined,
+      contactBundle: reflectionContactContext ?? undefined,
+      substrateContext: reflectionSubstrateContext ?? undefined,
+    };
+    const reflectionPromptBundle = mergeReflectionPromptBundles(
+      reflectionPromptContext.contactBundle,
+      buildInternalStatePromptBundle(reflectionPromptContext.internalState ?? null),
+      reflectionPromptContext.substrateContext,
+    );
+    const reflectionGroundingProvenanceRefs = reflectionPromptBundle?.provenanceRefs ?? [];
     const reflectionPrompt = formatNarrativePromptInput(
       template.prompt,
-      {
-        internalState: internalStateContext ?? undefined,
-        contactBundle: reflectionContactContext ?? undefined,
-        substrateContext: reflectionSubstrateContext ?? undefined,
-      },
+      reflectionPromptBundle,
       formatReflectionIntrospectionPolicyBlock(reflectionPolicy),
     );
     let reflectionText = '';
@@ -1730,6 +1812,21 @@ export function createHeartbeatTemplateRuntime(
       summary: guardrailSummary,
     });
 
+    const supportGapFlags = buildUnsupportedReflectionSupportFlags(
+      reflectionText,
+      reflectionGroundingProvenanceRefs,
+    );
+    const persistedMetacognitiveFlags = mergeMetacognitiveFlags(
+      persistenceContext?.metacognitiveFlags,
+      supportGapFlags,
+    );
+    const persistenceContextForJournal = persistenceContext
+      ? {
+        ...persistenceContext,
+        metacognitiveFlags: persistedMetacognitiveFlags,
+      }
+      : null;
+
     let reflectionJournalEntryId: string | undefined;
     let dailyJournalEntryId: string | undefined;
     if (!silentInterval) {
@@ -1743,14 +1840,14 @@ export function createHeartbeatTemplateRuntime(
           mode: reflectionMode,
           createdAt: reflectionCreatedAt,
           ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-          ...(persistenceContext ? {
-            internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
-            internalState: persistenceContext.internalState,
-            metacognitiveFlags: persistenceContext.metacognitiveFlags,
+          ...(persistenceContextForJournal ? {
+            internalStateSnapshotRef: persistenceContextForJournal.internalStateSnapshotRef,
+            internalState: persistenceContextForJournal.internalState,
+            metacognitiveFlags: persistenceContextForJournal.metacognitiveFlags,
           } : {}),
-          ...(reflectionSubstrateContext ? {
-            substrateBoundary: reflectionSubstrateContext.canonicalTruthBoundary,
-            substrateProvenanceRefs: reflectionSubstrateContext.provenanceRefs,
+          ...(reflectionGroundingProvenanceRefs.length > 0 ? {
+            ...(reflectionSubstrateContext ? { substrateBoundary: reflectionSubstrateContext.canonicalTruthBoundary } : {}),
+            substrateProvenanceRefs: reflectionGroundingProvenanceRefs,
           } : {}),
         });
         reflectionJournalEntryId = reflectionEntry.id;
@@ -1800,19 +1897,19 @@ export function createHeartbeatTemplateRuntime(
         mode: reflectionMode,
         prompt: reflectionPrompt,
         reflection: reflectionText,
-        ...(persistenceContext ? {
-          internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
-          ...(persistenceContext.metacognitiveFlags.length > 0
-            ? { metacognitiveFlags: persistenceContext.metacognitiveFlags }
-            : {}),
+        ...(persistenceContextForJournal ? {
+          internalStateSnapshotRef: persistenceContextForJournal.internalStateSnapshotRef,
         } : {}),
+        ...(persistedMetacognitiveFlags.length > 0
+          ? { metacognitiveFlags: persistedMetacognitiveFlags }
+          : {}),
         ...(reflectionJournalEntryId ? { reflectionJournalEntryId } : {}),
         ...(dailyJournalEntryId ? { dailyJournalEntryId } : {}),
         ...(reflectionProcessId ? { processId: reflectionProcessId } : {}),
         ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-        ...(reflectionSubstrateContext ? {
-          substrateBoundary: reflectionSubstrateContext.canonicalTruthBoundary,
-          substrateProvenanceRefs: reflectionSubstrateContext.provenanceRefs,
+        ...(reflectionGroundingProvenanceRefs.length > 0 ? {
+          ...(reflectionSubstrateContext ? { substrateBoundary: reflectionSubstrateContext.canonicalTruthBoundary } : {}),
+          substrateProvenanceRefs: reflectionGroundingProvenanceRefs,
         } : {}),
       });
 
@@ -1823,10 +1920,10 @@ export function createHeartbeatTemplateRuntime(
           prompt: reflectionPrompt,
           reflection: reflectionText,
           ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-          ...(persistenceContext ? {
-            internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef,
-            internalState: persistenceContext.internalState,
-            metacognitiveFlags: persistenceContext.metacognitiveFlags,
+          ...(persistenceContextForJournal ? {
+            internalStateSnapshotRef: persistenceContextForJournal.internalStateSnapshotRef,
+            internalState: persistenceContextForJournal.internalState,
+            metacognitiveFlags: persistenceContextForJournal.metacognitiveFlags,
           } : {}),
           provenance: {
             source: 'companion_reflection',

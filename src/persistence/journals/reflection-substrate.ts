@@ -166,6 +166,7 @@ export interface ReflectionContactContextBundleInput {
   emotionalTimeSeries?: readonly EmotionalTimeSeriesPoint[];
   recentSessionMessages?: readonly ReflectionContactRecentMessage[];
   memoryBlock?: string;
+  memoryProvenanceRefs?: readonly string[];
   activeConcerns?: readonly ReflectionContactActiveConcern[];
   pendingFollowUps?: readonly ReflectionContactPendingFollowUp[];
   internalStateBlock?: string;
@@ -541,6 +542,10 @@ export function assembleReflectionContactContextBundle(
   if (memoryBlock) {
     selfSections.push('[Reflection Memory Retrieval]', memoryBlock);
     provenanceRefs.add(`reflection_contact_memory:${input.contactId}`);
+    for (const ref of input.memoryProvenanceRefs ?? []) {
+      const normalized = ref.trim();
+      if (normalized) provenanceRefs.add(normalized);
+    }
   } else {
     const tailBlock = formatRecentSessionTailBlock(input.recentSessionMessages, input.primarySessionId);
     if (tailBlock.block) {

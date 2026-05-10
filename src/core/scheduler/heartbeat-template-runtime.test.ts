@@ -724,7 +724,18 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           authorName: 'Companion',
         },
       ];
-      const memoryRetrieve = vi.fn(async () => '[Reflection Memory Retrieval]\n- trust-filtered contact memory');
+      const eventBus = new EventBus();
+      const memoryRetrieve = vi.fn(async (_contextText: string, channelId: string) => {
+        await eventBus.emit('memory.retrieval', {
+          channelId,
+          count: 1,
+          provenanceRefs: [
+            'memory:seeded-public-profile',
+            'source:daily_status|date:2026-04-18',
+          ],
+        });
+        return '[Reflection Memory Retrieval]\n- trust-filtered contact memory';
+      });
       const currentContact = {
         id: 'contact-1',
         displayName: 'Ari',
@@ -803,6 +814,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         sender: { send: vi.fn(async () => undefined) },
         dataDir: tempDir,
         runtimeOptions: {
+          eventBus,
           sessionManager: {
             resolveSessionChannelId: (channelId: string) => channelId,
             getRecentMessages: (channelId: string, limit?: number) => (
@@ -910,10 +922,61 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
             };
           };
         };
+        substrateProvenanceRefs?: string[];
       };
       expect(entry.telemetry?.narrativeContext?.internalState?.relational?.contactId).toBe('contact-1');
+      expect(entry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
+        'reflection_contact:contact-1',
+        'reflection_contact_memory:contact-1',
+        'memory:seeded-public-profile',
+        'source:daily_status|date:2026-04-18',
+      ]));
+
+      const metacognitionRaw = readFileSync(resolveReflectionMetacognitionJournalPath(tempDir), 'utf-8').trim();
+      const metacognitionEntry = JSON.parse(metacognitionRaw.split('\n').at(-1) ?? '{}') as {
+        substrateProvenanceRefs?: string[];
+      };
+      expect(metacognitionEntry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
+        'reflection_contact:contact-1',
+        'reflection_contact_memory:contact-1',
+        'memory:seeded-public-profile',
+        'source:daily_status|date:2026-04-18',
+      ]));
     },
   );
+
+  it('flags assertion-heavy musing output when no grounding support is available', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage: vi.fn(async () => ({
+          content: 'I feel a quiet tenderness in my inner world, and I know it means I need more connection today.',
+        })),
+      } as any,
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+    });
+
+    await runtime.runTemplateNow('musing', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    const metacognitionRaw = readFileSync(resolveReflectionMetacognitionJournalPath(tempDir), 'utf-8').trim();
+    const metacognitionEntry = JSON.parse(metacognitionRaw.split('\n').at(-1) ?? '{}') as {
+      metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
+      substrateProvenanceRefs?: string[];
+    };
+    expect(metacognitionEntry.substrateProvenanceRefs).toBeUndefined();
+    expect(metacognitionEntry.metacognitiveFlags).toEqual([
+      expect.objectContaining({
+        flag: 'support_gap_confabulation_risk',
+        evidence: expect.stringContaining('no persisted grounding provenance refs'),
+      }),
+    ]);
+  });
 
   it('emits null-contact and synthesized snapshot guardrail telemetry when canonical contact binding is absent', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));

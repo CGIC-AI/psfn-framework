@@ -110,4 +110,96 @@ describe('EpisodicSynthesizer', () => {
     expect(second.skippedEpisodeIds).toEqual([first.createdEpisodes[0].id]);
     expect(store.listEpisodes()).toHaveLength(1);
   });
+
+  it('synthesizes a month-long trip plan as linked bounded episodes instead of one aggregate memory', () => {
+    const store = makeStore();
+    const sessionReader = {
+      getRecentMessages: () => [
+        entry(
+          101,
+          '2026-04-01T09:00:00.000Z',
+          'user',
+          'Sicily trip planning kickoff: Palermo flights, flexible dates, and a month-long planning arc.',
+        ),
+        entry(
+          102,
+          '2026-04-01T09:03:00.000Z',
+          'assistant',
+          'I captured the Sicily trip kickoff and Palermo flight constraints as the first planning step.',
+        ),
+        entry(
+          103,
+          '2026-04-10T19:00:00.000Z',
+          'user',
+          'Sicily trip planning update: compare Palermo hotels and keep this linked to the earlier flight plan.',
+        ),
+        entry(
+          104,
+          '2026-04-10T19:04:00.000Z',
+          'assistant',
+          'The Sicily hotel decision stays connected to Palermo flights without merging the whole month.',
+        ),
+        entry(
+          105,
+          '2026-04-20T13:00:00.000Z',
+          'user',
+          'Sicily trip planning checkpoint: book train day trips from Palermo to Cefalu.',
+        ),
+        entry(
+          106,
+          '2026-04-20T13:05:00.000Z',
+          'assistant',
+          'I linked the Cefalu day-trip plan to the prior Sicily travel decisions.',
+        ),
+        entry(
+          107,
+          '2026-04-30T20:00:00.000Z',
+          'user',
+          'Sicily trip planning final pass: packing, airport timing, and what changed since Palermo flights.',
+        ),
+        entry(
+          108,
+          '2026-04-30T20:06:00.000Z',
+          'assistant',
+          'The final Sicily packing pass remains a separate waypoint with references back to the month arc.',
+        ),
+      ],
+    };
+    const synthesizer = new EpisodicSynthesizer(store, sessionReader, {
+      gapSplitMinutes: 45,
+      maxEpisodesPerRun: 10,
+      transcriptMessageLimit: 20,
+    });
+
+    const result = synthesizer.run({
+      sessionId: 'terminal:trip-month',
+      sourceMessageId: 'turn:108',
+    });
+
+    expect(result.consideredEntries).toBe(8);
+    expect(result.createdEpisodes).toHaveLength(4);
+    expect(result.linkedArcs).toHaveLength(3);
+    expect(result.linkedArcs.map(arc => arc.arcKind)).toEqual(['same_theme', 'same_theme', 'same_theme']);
+
+    const episodes = store.searchByThread('terminal:trip-month', { limit: 10 });
+    expect(episodes.map(episode => episode.startedAt.slice(0, 10))).toEqual([
+      '2026-04-01',
+      '2026-04-10',
+      '2026-04-20',
+      '2026-04-30',
+    ]);
+    expect(episodes.every(episode => episode.startedAt.slice(0, 10) === episode.endedAt.slice(0, 10)))
+      .toBe(true);
+    expect(episodes.every(episode => episode.spanRefs.length === 1)).toBe(true);
+    expect(episodes.flatMap(episode => episode.spanRefs.map(ref => ref.startTurnId))).toEqual([
+      '00000000-0000-7000-a000-000000000101',
+      '00000000-0000-7000-a000-000000000103',
+      '00000000-0000-7000-a000-000000000105',
+      '00000000-0000-7000-a000-000000000107',
+    ]);
+    expect(episodes.some(episode => (
+      episode.startedAt === '2026-04-01T09:00:00.000Z'
+      && episode.endedAt === '2026-04-30T20:06:00.000Z'
+    ))).toBe(false);
+  });
 });

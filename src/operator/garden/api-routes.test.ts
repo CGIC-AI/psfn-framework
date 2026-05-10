@@ -1839,6 +1839,226 @@ describe('AdminServer JSON API routes', () => {
     expect(missingEpisode.status).toBe(404);
   });
 
+  it('exposes wedding cake subtopic visibility without collapsing the wider thread', async () => {
+    const baseEpisode = (overrides: Partial<EpisodeCreateInput> = {}): EpisodeCreateInput => ({
+      title: 'Wedding planning waypoint',
+      landmark: 'A bounded wedding planning episode with raw references for operator drill-down.',
+      startedAt: '2026-04-01T10:00:00.000Z',
+      endedAt: '2026-04-01T10:20:00.000Z',
+      threadId: 'thread-wedding',
+      channelId: 'api:test',
+      participantContactIds: ['contact-admin', 'contact-partner'],
+      salience: { score: 0.82, novelty: 0.5, emotionalIntensity: 0.35 },
+      affect: { valence: 0.25, arousal: 0.34, dominance: 0.5, labels: ['focused', 'positive'] },
+      themes: ['wedding'],
+      spanRefs: [{
+        spanId: 'span-wedding-base',
+        threadId: 'thread-wedding',
+        channelId: 'api:test',
+        startedAt: '2026-04-01T10:00:00.000Z',
+        endedAt: '2026-04-01T10:20:00.000Z',
+      }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-wedding-base' }],
+      ...overrides,
+    });
+
+    episodicStore.createEpisode(baseEpisode({
+      id: 'episode-wedding-venue',
+      title: 'Wedding venue walkthrough',
+      landmark: 'The venue walkthrough stayed separate from later cake and music decisions.',
+      startedAt: '2026-04-01T10:00:00.000Z',
+      endedAt: '2026-04-01T10:20:00.000Z',
+      themes: ['wedding', 'venue'],
+      spanRefs: [{ spanId: 'span-wedding-venue', threadId: 'thread-wedding', channelId: 'api:test' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-wedding-venue' }],
+    }));
+    episodicStore.createEpisode(baseEpisode({
+      id: 'episode-wedding-cake',
+      title: 'Wedding cake tasting shortlist',
+      landmark: 'The cake tasting narrowed flavors and preserved the bakery shortlist.',
+      startedAt: '2026-04-08T18:00:00.000Z',
+      endedAt: '2026-04-08T18:30:00.000Z',
+      themes: ['wedding', 'cake', 'bakery'],
+      spanRefs: [{ spanId: 'span-wedding-cake', threadId: 'thread-wedding', channelId: 'api:test' }],
+      artifactRefs: [{ artifactId: 'artifact-cake-shortlist', artifactType: 'note' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-wedding-cake' },
+        { kind: 'l0_artifact', refId: 'artifact-cake-shortlist' },
+      ],
+    }));
+    episodicStore.createEpisode(baseEpisode({
+      id: 'episode-wedding-bakery',
+      title: 'Bakery deposit follow-up',
+      landmark: 'The bakery follow-up captured deposit timing without replacing the cake tasting episode.',
+      startedAt: '2026-04-22T18:00:00.000Z',
+      endedAt: '2026-04-22T18:18:00.000Z',
+      themes: ['wedding', 'cake', 'bakery'],
+      spanRefs: [{ spanId: 'span-wedding-bakery', threadId: 'thread-wedding', channelId: 'api:test' }],
+      artifactRefs: [{ artifactId: 'artifact-bakery-contract', artifactType: 'document' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-wedding-bakery' },
+        { kind: 'l0_artifact', refId: 'artifact-bakery-contract' },
+      ],
+    }));
+    episodicStore.createEpisode(baseEpisode({
+      id: 'episode-wedding-song',
+      title: 'Our song first-dance idea',
+      landmark: 'A music subtopic about using their anniversary song for the first dance.',
+      startedAt: '2026-04-27T20:00:00.000Z',
+      endedAt: '2026-04-27T20:12:00.000Z',
+      themes: ['wedding', 'anniversary', 'our-song', 'music'],
+      spanRefs: [{ spanId: 'span-wedding-song', threadId: 'thread-wedding', channelId: 'api:test' }],
+      artifactRefs: [{ artifactId: 'artifact-song-list', artifactType: 'note' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-wedding-song' },
+        { kind: 'l0_artifact', refId: 'artifact-song-list' },
+      ],
+    }));
+    episodicStore.writeEpisodeArc({
+      id: 'arc-wedding-venue-cake',
+      sourceEpisodeId: 'episode-wedding-venue',
+      targetEpisodeId: 'episode-wedding-cake',
+      arcKind: 'same_theme',
+      salience: 0.72,
+      confidence: 0.68,
+      themes: ['wedding'],
+      spanRefs: [{ spanId: 'span-wedding-cake' }],
+      artifactRefs: [{ artifactId: 'artifact-cake-shortlist', artifactType: 'note' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-wedding-cake' },
+        { kind: 'l0_artifact', refId: 'artifact-cake-shortlist' },
+      ],
+    });
+    episodicStore.writeEpisodeArc({
+      id: 'arc-wedding-cake-bakery',
+      sourceEpisodeId: 'episode-wedding-cake',
+      targetEpisodeId: 'episode-wedding-bakery',
+      arcKind: 'same_theme',
+      salience: 0.91,
+      confidence: 0.86,
+      themes: ['cake', 'bakery'],
+      spanRefs: [{ spanId: 'span-wedding-bakery' }],
+      artifactRefs: [{ artifactId: 'artifact-bakery-contract', artifactType: 'document' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-wedding-bakery' },
+        { kind: 'l0_artifact', refId: 'artifact-bakery-contract' },
+      ],
+    });
+    episodicStore.writeEpisodeArc({
+      id: 'arc-wedding-venue-song',
+      sourceEpisodeId: 'episode-wedding-venue',
+      targetEpisodeId: 'episode-wedding-song',
+      arcKind: 'same_theme',
+      salience: 0.74,
+      confidence: 0.71,
+      themes: ['music', 'our-song'],
+      spanRefs: [{ spanId: 'span-wedding-song' }],
+      artifactRefs: [{ artifactId: 'artifact-song-list', artifactType: 'note' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-wedding-song' },
+        { kind: 'l0_artifact', refId: 'artifact-song-list' },
+      ],
+    });
+
+    const listRes = await request(
+      port,
+      'GET',
+      '/api/admin/episodic-memory/episodes?threadId=thread-wedding',
+      undefined,
+      authHeaders,
+    );
+    expect(listRes.status).toBe(200);
+    const listPayload = JSON.parse(listRes.body) as {
+      episodes: Array<{ id: string; title: string }>;
+      pagination: { total: number };
+    };
+    expect(listPayload.pagination.total).toBe(4);
+    expect(listPayload.episodes.map(episode => episode.id)).toEqual([
+      'episode-wedding-song',
+      'episode-wedding-bakery',
+      'episode-wedding-cake',
+      'episode-wedding-venue',
+    ]);
+    expect(listPayload.episodes.map(episode => episode.title)).not.toContain('Wedding aggregate memory');
+
+    const cakeDetailRes = await request(
+      port,
+      'GET',
+      '/api/admin/episodic-memory/episodes/episode-wedding-cake',
+      undefined,
+      authHeaders,
+    );
+    expect(cakeDetailRes.status).toBe(200);
+    const cakeDetailPayload = JSON.parse(cakeDetailRes.body) as {
+      episode: { id: string };
+      artifactRefs: Array<{ artifactId: string }>;
+      relatedArcs: Array<{ arc: { id: string }; relatedEpisode: { id: string } | null }>;
+      threadEpisodes: Array<{ id: string }>;
+    };
+    expect(cakeDetailPayload.episode.id).toBe('episode-wedding-cake');
+    expect(cakeDetailPayload.artifactRefs.map(ref => ref.artifactId)).toEqual(['artifact-cake-shortlist']);
+    expect(cakeDetailPayload.relatedArcs.map(view => view.arc.id)).toEqual(expect.arrayContaining([
+      'arc-wedding-venue-cake',
+      'arc-wedding-cake-bakery',
+    ]));
+    expect(cakeDetailPayload.relatedArcs.map(view => view.relatedEpisode?.id)).toEqual(expect.arrayContaining([
+      'episode-wedding-venue',
+      'episode-wedding-bakery',
+    ]));
+    expect(cakeDetailPayload.threadEpisodes.map(episode => episode.id)).toEqual([
+      'episode-wedding-venue',
+      'episode-wedding-cake',
+      'episode-wedding-bakery',
+      'episode-wedding-song',
+    ]);
+
+    const cakeArcsRes = await request(
+      port,
+      'GET',
+      '/api/admin/episodic-memory/episodes/episode-wedding-cake/arcs?arcKind=same_theme',
+      undefined,
+      authHeaders,
+    );
+    expect(cakeArcsRes.status).toBe(200);
+    const cakeArcsPayload = JSON.parse(cakeArcsRes.body) as {
+      relatedArcs: Array<{ arc: { id: string; themes: string[] } }>;
+    };
+    expect(cakeArcsPayload.relatedArcs.map(view => view.arc.id)).toEqual(expect.arrayContaining([
+      'arc-wedding-venue-cake',
+      'arc-wedding-cake-bakery',
+    ]));
+    expect(cakeArcsPayload.relatedArcs.find(view => view.arc.id === 'arc-wedding-cake-bakery')?.arc.themes)
+      .toEqual(['cake', 'bakery']);
+
+    const threadRes = await request(
+      port,
+      'GET',
+      '/api/admin/episodic-memory/threads/thread-wedding',
+      undefined,
+      authHeaders,
+    );
+    expect(threadRes.status).toBe(200);
+    const threadPayload = JSON.parse(threadRes.body) as {
+      thread: { episodeCount: number; arcCount: number; topThemes: string[] };
+      episodes: Array<{ id: string }>;
+      arcs: Array<{ id: string }>;
+    };
+    expect(threadPayload.thread).toMatchObject({ episodeCount: 4, arcCount: 3 });
+    expect(threadPayload.thread.topThemes).toEqual(expect.arrayContaining(['wedding', 'cake', 'bakery']));
+    expect(threadPayload.episodes.map(episode => episode.id)).toEqual([
+      'episode-wedding-venue',
+      'episode-wedding-cake',
+      'episode-wedding-bakery',
+      'episode-wedding-song',
+    ]);
+    expect(threadPayload.arcs.map(arc => arc.id)).toEqual(expect.arrayContaining([
+      'arc-wedding-venue-cake',
+      'arc-wedding-cake-bakery',
+      'arc-wedding-venue-song',
+    ]));
+  });
+
   it('supports memory bulk update/delete and link/unlink endpoints', async () => {
     const now = Date.now();
     memoryStore.insertMemory({

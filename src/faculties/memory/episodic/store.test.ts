@@ -125,6 +125,132 @@ describe('EpisodicStore', () => {
     expect(store.listEpisodeArcsForEpisode('episode-2', { direction: 'incoming' })).toEqual([arc]);
   });
 
+  it('keeps same-day shared moments distinct while linking month-spanning life arcs', () => {
+    const store = makeStore();
+    const createSharedMoment = (
+      id: string,
+      title: string,
+      startedAt: string,
+      endedAt: string,
+      threadId: string,
+      themes: string[],
+    ) => store.createEpisode(baseEpisode({
+      id,
+      title,
+      landmark: `${title} remained a bounded shared moment with its own raw L0 span.`,
+      startedAt,
+      endedAt,
+      threadId,
+      channelId: 'discord:dm',
+      participantContactIds: ['contact:vega', 'contact:partner'],
+      themes,
+      spanRefs: [{
+        spanId: `span-${id}`,
+        threadId,
+        channelId: 'discord:dm',
+        startedAt,
+        endedAt,
+      }],
+      provenanceRefs: [{ kind: 'l0_span', refId: `span-${id}` }],
+    }));
+
+    createSharedMoment(
+      'episode-pregnancy-12-week',
+      'Pregnancy timeline 12-week scan',
+      '2026-05-01T14:00:00.000Z',
+      '2026-05-01T14:20:00.000Z',
+      'thread-pregnancy-timeline',
+      ['pregnancy', 'timeline', 'scan'],
+    );
+    createSharedMoment(
+      'episode-birthday-brunch',
+      'Birthday brunch plan',
+      '2026-05-10T09:00:00.000Z',
+      '2026-05-10T09:18:00.000Z',
+      'thread-birthday',
+      ['birthday', 'brunch'],
+    );
+    createSharedMoment(
+      'episode-anniversary-dinner',
+      'Anniversary dinner reservation',
+      '2026-05-10T18:00:00.000Z',
+      '2026-05-10T18:15:00.000Z',
+      'thread-anniversary',
+      ['anniversary', 'dinner'],
+    );
+    createSharedMoment(
+      'episode-our-song',
+      'Our song came on after dinner',
+      '2026-05-10T22:00:00.000Z',
+      '2026-05-10T22:06:00.000Z',
+      'thread-anniversary',
+      ['anniversary', 'our-song', 'music'],
+    );
+    createSharedMoment(
+      'episode-pregnancy-16-week',
+      'Pregnancy timeline 16-week continuity',
+      '2026-05-29T16:00:00.000Z',
+      '2026-05-29T16:22:00.000Z',
+      'thread-pregnancy-timeline',
+      ['pregnancy', 'timeline', 'appointment'],
+    );
+
+    const pregnancyArc = store.writeEpisodeArc({
+      id: 'arc-pregnancy-month',
+      sourceEpisodeId: 'episode-pregnancy-12-week',
+      targetEpisodeId: 'episode-pregnancy-16-week',
+      arcKind: 'continuation',
+      salience: 0.86,
+      confidence: 0.82,
+      themes: ['pregnancy', 'timeline'],
+      spanRefs: [{ spanId: 'span-episode-pregnancy-16-week' }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-episode-pregnancy-16-week' }],
+    });
+    const songArc = store.writeEpisodeArc({
+      id: 'arc-anniversary-song',
+      sourceEpisodeId: 'episode-anniversary-dinner',
+      targetEpisodeId: 'episode-our-song',
+      arcKind: 'recurrence',
+      salience: 0.78,
+      confidence: 0.74,
+      themes: ['anniversary', 'our-song'],
+      spanRefs: [{ spanId: 'span-episode-our-song' }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-episode-our-song' }],
+    });
+
+    const sameDay = store.searchByTime({
+      from: '2026-05-10T00:00:00.000Z',
+      to: '2026-05-10T23:59:59.999Z',
+    });
+    expect(sameDay.map(episode => episode.id)).toEqual([
+      'episode-birthday-brunch',
+      'episode-anniversary-dinner',
+      'episode-our-song',
+    ]);
+    expect(new Set(sameDay.map(episode => episode.threadId))).toEqual(new Set([
+      'thread-birthday',
+      'thread-anniversary',
+    ]));
+
+    expect(store.searchByThread('thread-pregnancy-timeline').map(episode => episode.id)).toEqual([
+      'episode-pregnancy-12-week',
+      'episode-pregnancy-16-week',
+    ]);
+    expect(store.listEpisodeArcsForEpisode('episode-pregnancy-12-week', { direction: 'outgoing' }))
+      .toEqual([pregnancyArc]);
+    expect(store.listEpisodeArcsForEpisode('episode-anniversary-dinner', { direction: 'outgoing' }))
+      .toEqual([songArc]);
+
+    const allEpisodes = store.listEpisodes({ limit: 10 });
+    expect(allEpisodes).toHaveLength(5);
+    expect(allEpisodes.every(episode => episode.spanRefs.length === 1)).toBe(true);
+    expect(allEpisodes.some(episode => (
+      Date.parse(episode.endedAt) - Date.parse(episode.startedAt) > 24 * 60 * 60 * 1000
+    ))).toBe(false);
+  });
+
   it('rejects episodes that lose L0 span and artifact provenance', () => {
     const store = makeStore();
 

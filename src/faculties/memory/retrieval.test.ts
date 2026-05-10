@@ -349,6 +349,180 @@ describe('MemoryRetriever trust-gated filtering', () => {
     });
   });
 
+  it('focuses wedding cake and bakery recall inside a longer arc without rendering unrelated episodes', async () => {
+    const store = makeMockStore([]);
+    const embedding = makeMockEmbedding();
+    const venue = makeEpisode({
+      id: 'episode-wedding-venue',
+      title: 'Wedding venue walkthrough',
+      landmark: 'The couple compared ceremony layouts and reception room constraints.',
+      themes: ['wedding', 'venue', 'reception'],
+      startedAt: '2026-02-01T16:00:00.000Z',
+      endedAt: '2026-02-01T17:00:00.000Z',
+      spanRefs: [{ spanId: 'span-wedding-venue', sessionId: 'thread-wedding', startTurnId: 'turn-venue' }],
+      artifactRefs: [{ artifactId: 'artifact-venue-layout', artifactType: 'note' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-wedding-venue' },
+        { kind: 'l0_artifact', refId: 'artifact-venue-layout' },
+      ],
+    });
+    const cake = makeEpisode({
+      id: 'episode-wedding-cake',
+      title: 'Wedding cake tasting shortlist',
+      landmark: 'The couple narrowed cake flavors and asked to remember the bakery shortlist.',
+      themes: ['cake', 'bakery', 'dessert'],
+      startedAt: '2026-02-12T18:00:00.000Z',
+      endedAt: '2026-02-12T18:25:00.000Z',
+      salience: { score: 0.93, novelty: 0.5, emotionalIntensity: 0.35 },
+      spanRefs: [{ spanId: 'span-wedding-cake', sessionId: 'thread-wedding', startTurnId: 'turn-cake' }],
+      artifactRefs: [{ artifactId: 'artifact-cake-shortlist', artifactType: 'note' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-wedding-cake' },
+        { kind: 'l0_artifact', refId: 'artifact-cake-shortlist' },
+      ],
+    });
+    const bakery = makeEpisode({
+      id: 'episode-bakery-deposit',
+      title: 'Bakery deposit and tasting appointment',
+      landmark: 'The bakery appointment continued the cake thread with deposit timing and sample boxes.',
+      themes: ['cake', 'bakery', 'dessert'],
+      startedAt: '2026-02-19T18:00:00.000Z',
+      endedAt: '2026-02-19T18:20:00.000Z',
+      salience: { score: 0.88, novelty: 0.45, emotionalIntensity: 0.32 },
+      spanRefs: [{ spanId: 'span-bakery-deposit', sessionId: 'thread-wedding', startTurnId: 'turn-bakery' }],
+      artifactRefs: [{ artifactId: 'artifact-bakery-contract', artifactType: 'document' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-bakery-deposit' },
+        { kind: 'l0_artifact', refId: 'artifact-bakery-contract' },
+      ],
+    });
+    const firstDance = makeEpisode({
+      id: 'episode-first-dance-song',
+      title: 'First dance our song idea',
+      landmark: 'A separate wedding music thread about using their anniversary song for the first dance.',
+      themes: ['anniversary', 'our-song', 'music'],
+      startedAt: '2026-02-25T20:00:00.000Z',
+      endedAt: '2026-02-25T20:15:00.000Z',
+      spanRefs: [{ spanId: 'span-first-dance-song', sessionId: 'thread-wedding', startTurnId: 'turn-song' }],
+      artifactRefs: [{ artifactId: 'artifact-song-list', artifactType: 'note' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-first-dance-song' },
+        { kind: 'l0_artifact', refId: 'artifact-song-list' },
+      ],
+    });
+    const pregnancy = makeEpisode({
+      id: 'episode-pregnancy-timeline',
+      title: 'Pregnancy timeline check-in',
+      landmark: 'A separate pregnancy continuity discussion with appointment timing.',
+      themes: ['pregnancy', 'timeline', 'appointment'],
+      startedAt: '2026-02-26T10:00:00.000Z',
+      endedAt: '2026-02-26T10:18:00.000Z',
+      spanRefs: [{ spanId: 'span-pregnancy-timeline', sessionId: 'thread-family', startTurnId: 'turn-pregnancy' }],
+      artifactRefs: [{ artifactId: 'artifact-prenatal-calendar', artifactType: 'calendar' }],
+      provenanceRefs: [
+        { kind: 'l0_span', refId: 'span-pregnancy-timeline' },
+        { kind: 'l0_artifact', refId: 'artifact-prenatal-calendar' },
+      ],
+    });
+    const arcs = [
+      makeEpisodeArc({
+        id: 'arc-wedding-venue-cake',
+        sourceEpisodeId: venue.id,
+        targetEpisodeId: cake.id,
+        arcKind: 'same_theme',
+        themes: ['wedding'],
+        salience: 0.72,
+        confidence: 0.7,
+      }),
+      makeEpisodeArc({
+        id: 'arc-wedding-cake-bakery',
+        sourceEpisodeId: cake.id,
+        targetEpisodeId: bakery.id,
+        arcKind: 'same_theme',
+        themes: ['cake', 'bakery'],
+        salience: 0.91,
+        confidence: 0.86,
+      }),
+      makeEpisodeArc({
+        id: 'arc-wedding-venue-song',
+        sourceEpisodeId: venue.id,
+        targetEpisodeId: firstDance.id,
+        arcKind: 'same_theme',
+        themes: ['wedding', 'music'],
+        salience: 0.74,
+        confidence: 0.72,
+      }),
+    ];
+    const episodes = [venue, cake, bakery, firstDance, pregnancy];
+    const episodicStore = {
+      listEpisodes: vi.fn().mockReturnValue(episodes),
+      getEpisode: vi.fn((id: string) => episodes.find(episode => episode.id === id)),
+      listEpisodeArcsForEpisode: vi.fn((id: string) => arcs.filter(arc => (
+        arc.sourceEpisodeId === id || arc.targetEpisodeId === id
+      ))),
+    };
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      store,
+      embedding,
+      { retrievalLimit: 20 },
+      eventBus,
+      null,
+      null,
+      episodicStore,
+    );
+
+    const snapshot = await retriever.captureTurnMemorySnapshot(
+      'Can you recall the cake bakery tasting details?',
+      'api:test',
+      'primary',
+    );
+    expect(snapshot.episodicChains).toHaveLength(1);
+    expect(snapshot.episodicChains?.[0]?.episodes.map(episode => episode.id)).toEqual([
+      cake.id,
+      bakery.id,
+    ]);
+
+    const result = await retriever.retrieve(
+      'Can you recall the cake bakery tasting details?',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      snapshot,
+    );
+
+    expect(result).toContain('Wedding cake tasting shortlist');
+    expect(result).toContain('Bakery deposit and tasting appointment');
+    expect(result).toContain('span-wedding-cake');
+    expect(result).toContain('span-bakery-deposit');
+    expect(result).toContain('artifact-cake-shortlist');
+    expect(result).toContain('artifact-bakery-contract');
+    expect(result).not.toContain('Wedding venue walkthrough');
+    expect(result).not.toContain('First dance our song idea');
+    expect(result).not.toContain('Pregnancy timeline check-in');
+    expect(result).not.toContain('artifact-venue-layout');
+    expect(result).not.toContain('artifact-song-list');
+    expect(result).not.toContain('artifact-prenatal-calendar');
+
+    const telemetryPayloads = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls
+      .map(([, payload]) => payload as { provenanceRefs?: string[] });
+    expect(telemetryPayloads.at(-1)?.provenanceRefs).toEqual(expect.arrayContaining([
+      `l01_episode:${cake.id}`,
+      `l01_episode:${bakery.id}`,
+      'l0_span:span-wedding-cake',
+      'l0_span:span-bakery-deposit',
+      'l0_artifact:artifact-cake-shortlist',
+      'l0_artifact:artifact-bakery-contract',
+      `l01_episode_arc:${arcs[1].id}`,
+    ]));
+    expect(telemetryPayloads.at(-1)?.provenanceRefs).not.toEqual(expect.arrayContaining([
+      `l01_episode:${venue.id}`,
+      `l01_episode:${firstDance.id}`,
+      `l01_episode:${pregnancy.id}`,
+    ]));
+  });
+
   it('keeps existing retrieval behavior when no episodic landmarks match', async () => {
     const memories = [
       makeMemory({ text: 'User likes oolong tea in the afternoon.', sensitivity: 'public', similarity: 0.95 }),

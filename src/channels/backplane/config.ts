@@ -10,8 +10,8 @@ import {
 } from '../../boundary/custody/credential-vault.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { parseBooleanEnv } from '../../shared/utils/env.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
-import { writeJsonAtomic } from '../../system/config/load-or-seed.js';
 import {
   normalizeChannelVisibility,
   type ChannelVisibility,

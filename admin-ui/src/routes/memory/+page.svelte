@@ -23,7 +23,7 @@
     AdminMemorySearchResult,
     AdminMemoryScopeDetailData,
     AdminMemoryScopeSummary,
-    PurrMemory,
+    AdminUiPurrMemory,
   } from '$lib/types';
 
   const MEMORY_TYPES = ['', 'episodic', 'semantic', 'emotional', 'procedural', 'reflection', 'relational'];
@@ -85,7 +85,7 @@
     data ? data.contactsById : {}
   );
 
-  let memories = $derived<PurrMemory[]>(
+  let memories = $derived<AdminUiPurrMemory[]>(
     searchActive && searchResults ? searchResults.results :
     data ? data.memories : []
   );
@@ -446,32 +446,32 @@
   }
 
   // Backend uses `text`, old frontend used `content` -- handle both
-  function memText(m: PurrMemory): string {
+  function memText(m: AdminUiPurrMemory): string {
     return m.text ?? m.content ?? '';
   }
 
   // Backend uses `extractedAt`, old frontend used `createdAt`
-  function memCreated(m: PurrMemory): number | undefined {
+  function memCreated(m: AdminUiPurrMemory): number | undefined {
     return m.extractedAt ?? m.createdAt;
   }
 
   // Backend uses `lastAccessed`, old frontend used `updatedAt`
-  function memUpdated(m: PurrMemory): number | undefined {
+  function memUpdated(m: AdminUiPurrMemory): number | undefined {
     return m.lastAccessed ?? m.updatedAt;
   }
 
   // Backend uses `emotionalValence`, old frontend used `emotionalWeight`
-  function memEmotion(m: PurrMemory): number {
+  function memEmotion(m: AdminUiPurrMemory): number {
     return m.emotionalValence ?? m.emotionalWeight ?? 0;
   }
 
   // Backend uses `deletedAt` for superseded, old frontend used `supersededAt`
-  function memSuperseded(m: PurrMemory): number | undefined {
+  function memSuperseded(m: AdminUiPurrMemory): number | undefined {
     return m.deletedAt ?? m.supersededAt;
   }
 
   // Tags are array in backend, string in old frontend
-  function memTags(m: PurrMemory): string {
+  function memTags(m: AdminUiPurrMemory): string {
     if (Array.isArray(m.tags)) return m.tags.join(', ');
     return String(m.tags ?? '');
   }
@@ -532,7 +532,7 @@
     }
   }
 
-  async function refreshScopeViewsForMemory(memory: PurrMemory): Promise<void> {
+  async function refreshScopeViewsForMemory(memory: AdminUiPurrMemory): Promise<void> {
     const managedAssignments = detailModalData?.scopeAssignments ?? [];
     const memoryManagedScopeKey = managedAssignments[0]
       ? managedScopeKey(managedAssignments[0].kind, managedAssignments[0].id)

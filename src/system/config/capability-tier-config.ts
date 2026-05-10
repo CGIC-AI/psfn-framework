@@ -6,8 +6,8 @@ import { normalizeCapabilityTokens } from '../capabilities/tokens.js';
 import {
   loadOrSeedJson,
   loadSeedJson,
-  writeJsonAtomic,
 } from './load-or-seed.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 
 export const CAPABILITY_TIER_FILE_NAME = 'capability-tier.json';

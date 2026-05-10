@@ -24,6 +24,22 @@ import type {
 } from '../../channels/api/types.js';
 import type { SessionIntegrityProvider } from '../../persistence/sessions/store.js';
 import type { JournalEntry } from '../../core/session/types.js';
+import type { ConfirmationResolveResult } from '../../system/capabilities/confirmation-queue.js';
+import type {
+  GitCommitResult,
+  GitDiffResult,
+  GitStatusResult,
+} from '../integrations/git/ops.js';
+import type {
+  ImageCreateParams,
+  ImageEditParams,
+} from '../../primitives/images/types.js';
+import type {
+  VaultDailyResult,
+  VaultReadResult,
+  VaultSearchResult,
+  VaultWriteResult,
+} from '../integrations/vault/ops.js';
 import type {
   LLMChatResult,
   LLMCompleteResult,
@@ -39,10 +55,6 @@ import type {
   ShellExecResult,
   ShardBackendRequestParams,
   ShardBackendRequestResult,
-  VaultWriteResult,
-  VaultReadResult,
-  VaultSearchResult,
-  VaultDailyResult,
   FsReadResult,
   FsWriteResult,
   FsListResult,
@@ -57,7 +69,6 @@ import type {
   NotifyNtfyResult,
   ConfirmationListResult,
   ConfirmationResolveParams,
-  ConfirmationResolveResult,
   RuntimeHealthResult,
   RpcSubstrateMessage,
   VoiceStreamStartParams,
@@ -70,11 +81,8 @@ import type {
   SessionHmacSignResult,
   SessionHmacVerifyResult,
   GitDiffParams,
-  GitDiffResult,
-  GitStatusResult,
   GitCreateBranchResult,
   GitApplyPatchResult,
-  GitCommitResult,
   GitOpenPRResult,
   BeadsReadyParams,
   BeadsShowParams,
@@ -83,8 +91,6 @@ import type {
   BeadsCloseParams,
   BeadsSyncParams,
   BeadsActionResult,
-  ImageCreateParams,
-  ImageEditParams,
   ImageGenerationRpcResult,
 } from './protocol.js';
 import { GatewayErrors } from './protocol.js';

@@ -12,12 +12,27 @@ import type {
   ToolSchema,
 } from '../../shared/contracts/runtime.js';
 import type {
-  FalCreateModel,
-  FalEditModel,
-  ImageAspectRatio,
   ImageGenerationResult,
-  ImageProviderPreference,
+  ImageCreateParams as PrimitiveImageCreateParams,
+  ImageEditParams as PrimitiveImageEditParams,
 } from '../../primitives/images/types.js';
+import type {
+  ConfirmationDecision,
+  ConfirmationQueueEntry,
+  ConfirmationQueueHistoryEntry,
+  ConfirmationResolveResult,
+} from '../../system/capabilities/confirmation-queue.js';
+import type {
+  GitCommitResult,
+  GitDiffResult,
+  GitStatusResult,
+} from '../integrations/git/ops.js';
+import type {
+  VaultDailyResult,
+  VaultReadResult,
+  VaultSearchResult,
+  VaultWriteResult,
+} from '../integrations/vault/ops.js';
 import type { JournalEntry } from '../../core/session/types.js';
 import type { JournalIntegrityVerificationResult } from '../../persistence/journals/journal-utils.js';
 import type {
@@ -220,45 +235,9 @@ export interface BeadsCloseParams extends BeadsBaseParams {
 
 export interface BeadsSyncParams extends BeadsBaseParams {}
 
-export interface ImageCreateParams extends GatewayCorrelationParams {
-  prompt: string;
-  provider?: ImageProviderPreference;
-  model?: FalCreateModel;
-  numImages?: number;
-  width?: number;
-  height?: number;
-  aspectRatio?: ImageAspectRatio;
-  resolution?: string;
-  imageSize?: string;
-  background?: string;
-  outputFormat?: string;
-  seed?: number;
-  guidanceScale?: number;
-  numInferenceSteps?: number;
-  acceleration?: string;
-  enablePromptExpansion?: boolean;
-  enableSafetyChecker?: boolean;
-  negativePrompt?: string;
-  useTurbo?: boolean;
-}
+interface ImageCreateRpcParams extends PrimitiveImageCreateParams, GatewayCorrelationParams {}
 
-export interface ImageEditParams extends GatewayCorrelationParams {
-  prompt: string;
-  imageUrls: string[];
-  provider?: ImageProviderPreference;
-  model?: FalEditModel;
-  numImages?: number;
-  width?: number;
-  height?: number;
-  aspectRatio?: ImageAspectRatio;
-  resolution?: string;
-  imageSize?: string;
-  background?: string;
-  outputFormat?: string;
-  maskImageUrl?: string;
-  inputFidelity?: string;
-  seed?: number;
-}
+interface ImageEditRpcParams extends PrimitiveImageEditParams, GatewayCorrelationParams {}
 
 export interface ShellExecParams {
   command: string;
@@ -330,30 +309,6 @@ export interface SessionHmacVerifyParams {
 
 export type SessionHmacVerifyResult = JournalIntegrityVerificationResult;
 
-export type ConfirmationDecision = 'approve' | 'deny' | 'modify';
-
-export interface ConfirmationQueueEntry {
-  id: string;
-  method: string;
-  action: string;
-  scope: string;
-  params: Record<string, unknown>;
-  companionReason: string;
-  requestedAt: number;
-  expiresAt: number;
-}
-
-export interface ConfirmationQueueHistoryEntry extends Partial<ConfirmationQueueEntry> {
-  id: string;
-  status: ConfirmationResolutionStatus;
-  resolvedAt: number;
-  executed: boolean;
-  message: string;
-  decision?: ConfirmationDecision;
-  appliedParams?: Record<string, unknown>;
-  error?: string;
-}
-
 export type ConfirmationListParams = Record<string, never>;
 export type ConfirmationHistoryListParams = Record<string, never>;
 export type RuntimeHealthParams = Record<string, never>;
@@ -372,13 +327,6 @@ export interface ConfirmationResolveParams {
   id: string;
   decision: ConfirmationDecision;
   modifiedParams?: Record<string, unknown>;
-}
-
-export interface ConfirmationResolveResult {
-  id: string;
-  status: 'approved' | 'denied' | 'modified' | 'expired' | 'failed' | 'not_found';
-  message: string;
-  executed: boolean;
 }
 
 // ── Result types (gateway → agent) ──
@@ -483,32 +431,12 @@ export interface FsEditResult {
   replacements: number;
 }
 
-export interface GitStatusResult {
-  branch: string;
-  ahead: number;
-  behind: number;
-  staged: string[];
-  modified: string[];
-  untracked: string[];
-}
-
-export interface GitDiffResult {
-  staged: string;
-  unstaged: string;
-}
-
 export interface GitCreateBranchResult {
   name: string;
 }
 
 export interface GitApplyPatchResult {
   success: boolean;
-}
-
-export interface GitCommitResult {
-  hash: string;
-  message: string;
-  filesChanged: number;
 }
 
 export interface GitOpenPRResult {
@@ -577,28 +505,6 @@ export interface ShellExecResult {
   durationMs: number;
 }
 
-export interface VaultWriteResult {
-  name: string;
-  folder?: string;
-  mode: VaultWriteMode;
-}
-
-export interface VaultReadResult {
-  name: string;
-  content: string;
-}
-
-export interface VaultSearchResult {
-  query: string;
-  results: Array<{ path: string; snippet?: string }>;
-}
-
-export interface VaultDailyResult {
-  date: string;
-  content?: string;
-  mode: 'read' | 'append';
-}
-
 export interface ApprovalResult {
   granted: boolean;
   capabilityToken?: string;
@@ -655,8 +561,8 @@ export interface GatewayMethods {
   'beads.update': [BeadsUpdateParams, BeadsActionResult];
   'beads.close': [BeadsCloseParams, BeadsActionResult];
   'beads.sync': [BeadsSyncParams, BeadsActionResult];
-  'image.create': [ImageCreateParams, ImageGenerationRpcResult];
-  'image.edit': [ImageEditParams, ImageGenerationRpcResult];
+  'image.create': [ImageCreateRpcParams, ImageGenerationRpcResult];
+  'image.edit': [ImageEditRpcParams, ImageGenerationRpcResult];
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
   'shard.backend.request': [ShardBackendRequestParams, ShardBackendRequestResult];

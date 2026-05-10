@@ -1,63 +1,31 @@
-import type {
-  ConfirmationDecision as CanonicalConfirmationDecision,
-  ConfirmationQueueEntry as CanonicalConfirmationQueueEntry,
-  ConfirmationResolveResult as CanonicalConfirmationResolveResult,
-} from '../../../../src/boundary/gateway/protocol.js';
+import type { ConfirmationQueueEntry } from '../../../../src/system/capabilities/confirmation-queue.js';
 import type {
   PurrMemory as CanonicalPurrMemory,
   MemoryScopeRef as CanonicalMemoryScopeRef,
 } from '../../../../src/faculties/memory/types.js';
-import type { ReflectionTemplate as CanonicalReflectionTemplate } from '../../../../src/core/scheduler/heartbeat-policy.js';
 import type {
   RecurringCadence as CanonicalRecurringCadence,
   ScheduledTask as CanonicalScheduledTask,
-  TaskState as CanonicalTaskState,
-  TaskType as CanonicalTaskType,
 } from '../../../../src/core/scheduler/types.js';
-import type {
-  PromptRegistryEntry as CanonicalPromptRegistryEntry,
-  PromptRegistryHistoryEntry as CanonicalPromptRegistryHistoryEntry,
-} from '../../../../src/core/identity/prompt-registry.js';
+import type { PromptRegistryEntry as CanonicalPromptRegistryEntry } from '../../../../src/core/identity/prompt-registry.js';
 import type {
   PromptRuntimeBlockId,
   PromptRuntimeBlockPlacement,
   PromptRuntimeBlockSchemaClassification,
   PromptRuntimeBlockVisibility,
   PromptRuntimeEditableBlockId,
-  PromptRuntimeMacroHint as CanonicalPromptRuntimeMacroHint,
 } from '../../../../src/core/identity/prompt-runtime.js';
-import type { PromptLayer, PromptHistoryEntry } from '../../../../src/core/identity/prompt-types.js';
+import type { PromptLayer } from '../../../../src/core/identity/prompt-types.js';
 import type { RuntimePromptLayerSchemaClassification } from '../../../../src/core/identity/runtime-prompt-layers.js';
-import type { NorthStarItem as CanonicalNorthStarItem } from '../../../../src/faculties/north-star/store.js';
-import type { SkillEntry as CanonicalSkillEntry, SkillSnapshot as CanonicalSkillSnapshot, SkillSkipRecord as CanonicalSkillSkipRecord } from '../../../../src/faculties/skills/types.js';
-import type { ValuesJournalEntry as CanonicalValuesJournalEntry } from '../../../../src/faculties/values/store.js';
+import type { NorthStarItem } from '../../../../src/faculties/north-star/store.js';
+import type { SkillEntry, SkillSnapshot } from '../../../../src/faculties/skills/types.js';
+import type { ValuesJournalEntry } from '../../../../src/faculties/values/store.js';
+import type { ReflectionTemplate } from '../../../../src/core/scheduler/heartbeat-policy.js';
 import type {
-  AdminChatBootstrapResponse as CanonicalAdminChatBootstrapResponse,
-  AdminModelRoomBootstrapResponse as CanonicalAdminModelRoomBootstrapResponse,
-  AdminModelRoomParticipant as CanonicalAdminModelRoomParticipant,
-} from '../../../../src/operator/garden/chat/types.js';
-import type {
-  AdminDashboardData as CanonicalAdminDashboardData,
-  AdminPromptDetailData as CanonicalAdminPromptDetailData,
-  AdminPromptListData as CanonicalAdminPromptListData,
   AdminSessionListData as CanonicalAdminSessionListData,
   AdminSessionMessagesData as CanonicalAdminSessionMessagesData,
-  AdminSessionTurnData as CanonicalAdminSessionTurnData,
-  AdminSettingsData as CanonicalAdminSettingsData,
-  ConfigUpdateResult as CanonicalConfigUpdateResult,
-  ConstitutionUpdateResult as CanonicalConstitutionUpdateResult,
-  FoundationUpdateResult as CanonicalFoundationUpdateResult,
-  NorthStarUpdateResult as CanonicalNorthStarUpdateResult,
-  PromptUpdateResult as CanonicalPromptUpdateResult,
   RuntimePromptUpdateResult as CanonicalRuntimePromptUpdateResult,
-  SettingsConfigEditors as CanonicalSettingsConfigEditors,
-  SettingsValidationError as CanonicalSettingsValidationError,
 } from '../../../../src/operator/garden/services/types.js';
-import type {
-  SettingsContractData as CanonicalSettingsContractData,
-  SettingsContractField as CanonicalSettingsContractField,
-  SettingsContractSubsystem as CanonicalSettingsContractSubsystem,
-} from '../../../../src/system/config/settings-contract.js';
 
 export type {
   CredentialReference,
@@ -77,14 +45,67 @@ export type {
   CanonicalProviderType,
   ProviderRegistryEntry,
 } from '../../../../src/shared/contracts/runtime.js';
-
-// Dashboard
-export type AdminDashboardData = CanonicalAdminDashboardData;
+export type {
+  ConfirmationDecision,
+  ConfirmationQueueEntry,
+  ConfirmationResolveResult,
+} from '../../../../src/system/capabilities/confirmation-queue.js';
+export type {
+  SettingsContractData,
+  SettingsContractField,
+  SettingsContractSubsystem,
+} from '../../../../src/system/config/settings-contract.js';
+export type {
+  AdminDashboardData,
+  AdminPromptDetailData,
+  AdminPromptListData,
+  AdminSessionListData,
+  AdminSessionMessagesData,
+  AdminSessionTurnData,
+  AdminTurnRetrievalTelemetry,
+  AdminTurnStageTelemetry,
+  AdminSettingsData,
+  ConfigUpdateResult,
+  ConstitutionUpdateResult,
+  FoundationUpdateResult,
+  NorthStarUpdateResult,
+  PromptUpdateResult,
+  SettingsConfigEditors,
+  SettingsValidationError,
+} from '../../../../src/operator/garden/services/types.js';
+export type {
+  AdminChatBootstrapResponse,
+  AdminModelRoomBootstrapResponse,
+  AdminModelRoomParticipant,
+} from '../../../../src/operator/garden/chat/types.js';
+export type { PromptRegistryHistoryEntry } from '../../../../src/core/identity/prompt-registry.js';
+export type { PromptRuntimeMacroHint } from '../../../../src/core/identity/prompt-runtime.js';
+export type { PromptHistoryEntry, PromptLayer } from '../../../../src/core/identity/prompt-types.js';
+export type {
+  DailyRecurringCadence,
+  HourlyRecurringCadence,
+  RecurringCadence,
+  RelativeRecurringCadence,
+  TaskState,
+  TaskType,
+} from '../../../../src/core/scheduler/types.js';
+export type {
+  ReflectionDeliberationConfig,
+  ReflectionTemplate,
+} from '../../../../src/core/scheduler/heartbeat-policy.js';
+export type {
+  SkillDirectorySpec,
+  SkillEntry,
+  SkillSkipRecord,
+  SkillSnapshot,
+} from '../../../../src/faculties/skills/types.js';
+export type { NorthStarItem, NorthStarScope } from '../../../../src/faculties/north-star/store.js';
+export type { ValuesJournalEntry } from '../../../../src/faculties/values/store.js';
 
 // Memory -- backend-owned with UI compatibility overlays for legacy wire shapes.
-export type PurrMemory = Omit<CanonicalPurrMemory, 'type' | 'scopeRef' | 'sensitivity'> & {
+export type AdminUiPurrMemory = Omit<CanonicalPurrMemory, 'type' | 'scopeRef' | 'sensitivity'> & {
   type: CanonicalPurrMemory['type'] | string;
-  scopeRef?: MemoryScopeRef;
+  scopeRef?: AdminUiMemoryScopeRef;
   sensitivity?: CanonicalPurrMemory['sensitivity'] | string;
   content?: string;
   createdAt?: number;
@@ -93,7 +114,7 @@ export type PurrMemory = Omit<CanonicalPurrMemory, 'type' | 'scopeRef' | 'sensit
   supersededAt?: number;
 };
 
-export type MemoryScopeRef = Omit<CanonicalMemoryScopeRef, 'kind'> & {
+export type AdminUiMemoryScopeRef = Omit<CanonicalMemoryScopeRef, 'kind'> & {
   kind: CanonicalMemoryScopeRef['kind'] | string;
 };
 
@@ -103,7 +124,7 @@ export interface AdminMemoryContactSummary {
 }
 
 export interface AdminMemoryListData {
-  memories: PurrMemory[];
+  memories: AdminUiPurrMemory[];
   contactsById: Record<string, AdminMemoryContactSummary>;
   pagination: {
     limit: number;
@@ -115,7 +136,7 @@ export interface AdminMemoryListData {
 }
 
 export interface AdminMemoryDetailData {
-  memory: PurrMemory;
+  memory: AdminUiPurrMemory;
   linkedContact?: AdminMemoryContactSummary;
   scopeAssignments: AdminMemoryScopeAssignmentView[];
   scopeRepair?: AdminMemoryScopeRepairView;
@@ -123,7 +144,7 @@ export interface AdminMemoryDetailData {
 
 export interface AdminMemorySearchResult {
   query: string;
-  results: PurrMemory[];
+  results: AdminUiPurrMemory[];
   contactsById: Record<string, AdminMemoryContactSummary>;
 }
 
@@ -162,7 +183,7 @@ export interface AdminMemoryScopeAssignmentView {
 
 export interface AdminMemoryScopeRepairView {
   needsRepair: boolean;
-  suggestedScopeRef?: MemoryScopeRef;
+  suggestedScopeRef?: AdminUiMemoryScopeRef;
   suggestedScopeTags: string[];
   notes: string[];
 }
@@ -177,7 +198,7 @@ export interface AdminMemoryScopeSummary {
 }
 
 export interface AdminMemoryScopedMemoryView {
-  memory: PurrMemory;
+  memory: AdminUiPurrMemory;
   evidence: AdminMemoryScopeEvidenceItem[];
   repair: AdminMemoryScopeRepairView;
 }
@@ -194,7 +215,7 @@ export interface AdminMemoryScopeDetailData {
 export interface AdminMemoryScopeMutationResult {
   ok: boolean;
   message?: string;
-  memory?: PurrMemory;
+  memory?: AdminUiPurrMemory;
   scopeAssignments?: AdminMemoryScopeAssignmentView[];
   scopeRepair?: AdminMemoryScopeRepairView;
 }
@@ -214,12 +235,6 @@ export interface SessionEntry {
 }
 
 export type CompactionAuditView = CanonicalAdminSessionMessagesData['compactionAuditViews'][number];
-
-export type AdminSessionListData = CanonicalAdminSessionListData;
-
-export type AdminTurnStageTelemetry = CanonicalAdminSessionTurnData['stages'][number];
-
-export type AdminTurnRetrievalTelemetry = CanonicalAdminSessionTurnData['retrievals'][number];
 
 export interface MemoryWithheldSummary {
   totalCount: number;
@@ -443,8 +458,6 @@ export interface AdminTurnSnapshotData {
   memory?: AdminTurnMemorySnapshotData;
 }
 
-export type AdminSessionTurnData = CanonicalAdminSessionTurnData;
-
 export interface SessionRoleEnvelopePreview {
   schemaVersion: 1;
   envelopeId: string;
@@ -469,8 +482,6 @@ export interface AdminSessionMessageOntologyView {
   promptVisibility: 'prompt_visible' | 'operator_only';
   displayLabel: string;
 }
-
-export type AdminSessionMessagesData = CanonicalAdminSessionMessagesData;
 
 // Contacts
 export interface ContactChannelIdentity {
@@ -642,21 +653,6 @@ export interface ContactMutationAuditEntry {
   timestamp: string;
 }
 
-// Settings
-export type SettingsContractSubsystem = CanonicalSettingsContractSubsystem;
-
-export type SettingsContractField = CanonicalSettingsContractField;
-
-export type SettingsContractData = CanonicalSettingsContractData;
-
-export type SettingsConfigEditors = CanonicalSettingsConfigEditors;
-
-export type AdminSettingsData = CanonicalAdminSettingsData;
-
-export type SettingsValidationError = CanonicalSettingsValidationError;
-
-export type ConfigUpdateResult = CanonicalConfigUpdateResult;
-
 // Identity
 export interface CharacterCardV2 {
   spec: string;
@@ -703,41 +699,6 @@ export interface AdminIdentityData {
 }
 
 // Prompts
-export interface PromptLayer {
-  id: string;
-  type: string;
-  name: string;
-  content: string;
-  enabled: boolean;
-  priority: number;
-  identifier?: string;
-  role?: string;
-  promptOrder?: number;
-  channelType?: string;
-  taskKind?: string;
-  version: number;
-  updatedAt: string;
-  updatedBy: string;
-  checksum: string;
-}
-
-export interface PromptHistoryEntry {
-  layerId: string;
-  layerName: string;
-  previousContent: string;
-  previousChecksum: string;
-  newContent: string;
-  newChecksum: string;
-  updatedBy: string;
-  reason?: string;
-  timestamp: string;
-  version: number;
-}
-
-export type AdminPromptDetailData = CanonicalAdminPromptDetailData;
-
-export type PromptRegistryHistoryEntry = CanonicalPromptRegistryHistoryEntry;
-
 export interface PromptDiffResult {
   oldContent: string;
   newContent: string;
@@ -774,10 +735,6 @@ export interface PromptRuntimeLayerCoverageEntry {
   status: 'valid' | 'missing' | 'disabled' | 'empty';
   layerId?: string;
 }
-
-export type PromptRuntimeMacroHint = CanonicalPromptRuntimeMacroHint;
-
-export type AdminPromptListData = CanonicalAdminPromptListData;
 
 export interface ConstitutionImmutableBlock {
   id: string;
@@ -831,14 +788,6 @@ export interface ConstitutionSnapshotData {
   };
 }
 
-export type ConstitutionUpdateResult = CanonicalConstitutionUpdateResult;
-
-export type FoundationUpdateResult = CanonicalFoundationUpdateResult;
-
-export type NorthStarScope = 'shared' | 'companion';
-
-export type NorthStarItem = CanonicalNorthStarItem;
-
 export interface NorthStarSnapshotData {
   items: NorthStarItem[];
   limit: number;
@@ -848,20 +797,9 @@ export interface NorthStarSnapshotData {
   };
 }
 
-export type NorthStarUpdateResult = CanonicalNorthStarUpdateResult;
-
 export type RuntimePromptUpdateResult = Omit<CanonicalRuntimePromptUpdateResult, 'updated'> & {
   updated?: Array<PromptRuntimeEditableBlockId | string>;
 };
-
-export type PromptUpdateResult = CanonicalPromptUpdateResult;
-
-// Chat
-export type AdminChatBootstrapResponse = CanonicalAdminChatBootstrapResponse;
-
-export type AdminModelRoomParticipant = CanonicalAdminModelRoomParticipant;
-
-export type AdminModelRoomBootstrapResponse = CanonicalAdminModelRoomBootstrapResponse;
 
 // Models
 export interface DiscoveredModel {
@@ -876,29 +814,9 @@ export interface DiscoveredModel {
 }
 
 // Scheduler
-export type TaskType = CanonicalTaskType;
-export type TaskState = CanonicalTaskState;
 export type SchedulerCadenceTimezone = Extract<CanonicalRecurringCadence, { timezone: 'local' | 'utc' }>['timezone'];
-export type RelativeRecurringCadence = Extract<CanonicalRecurringCadence, { kind: 'relative' }>;
-export type HourlyRecurringCadence = Extract<CanonicalRecurringCadence, { kind: 'hourly' }>;
-export type DailyRecurringCadence = Extract<CanonicalRecurringCadence, { kind: 'daily' }>;
-export type RecurringCadence = CanonicalRecurringCadence;
 
 export type ScheduledTask = Omit<CanonicalScheduledTask, 'handler' | 'eligibility'>;
-
-export interface ReflectionDeliberationConfig {
-  maxRounds?: number;
-  maxTotalTokens?: number;
-  maxWallTimeMs?: number;
-  voices?: Array<'background' | 'reasoning'>;
-  inputUsdPerMillionTokens?: number;
-  outputUsdPerMillionTokens?: number;
-}
-
-export type ReflectionTemplate = Omit<CanonicalReflectionTemplate, 'cadence' | 'deliberation'> & {
-  cadence?: RecurringCadence;
-  deliberation?: ReflectionDeliberationConfig;
-};
 
 export interface AdminSchedulerData {
   tasks: ScheduledTask[];
@@ -911,25 +829,7 @@ export interface SchedulerMutationResult {
 }
 
 // Skills
-export type SkillRequirements = CanonicalSkillEntry['requires'];
-
-export type SkillEntry = Pick<
-  CanonicalSkillEntry,
-  'id' | 'name' | 'description' | 'category' | 'relativePath' | 'source' | 'always' | 'requires' | 'content' | 'size'
->;
-
-export type SkillSkipRecord = Pick<
-  CanonicalSkillSkipRecord,
-  'kind' | 'name' | 'relativePath' | 'source' | 'reason' | 'details'
->;
-
-export type SkillDirectorySpec = Pick<CanonicalSkillSnapshot['directories'][number], 'relativePath' | 'source'>;
-
-export type SkillSnapshot = Omit<CanonicalSkillSnapshot, 'directories' | 'includedSkills' | 'skipped'> & {
-  directories: SkillDirectorySpec[];
-  includedSkills: SkillEntry[];
-  skipped: SkillSkipRecord[];
-};
+export type SkillRequirements = SkillEntry['requires'];
 
 export interface ManagedSkill {
   name: string;
@@ -947,21 +847,11 @@ export interface AdminSkillsData {
   disabledSkills: string[];
 }
 
-// Confirmations
-export type ConfirmationDecision = CanonicalConfirmationDecision;
-
-export type ConfirmationQueueEntry = CanonicalConfirmationQueueEntry;
-
 export interface AdminConfirmationsData {
   entries: ConfirmationQueueEntry[];
   available: boolean;
   message?: string;
 }
-
-export type ConfirmationResolveResult = CanonicalConfirmationResolveResult;
-
-// Values Timeline
-export type ValuesJournalEntry = CanonicalValuesJournalEntry;
 
 export interface AdminValuesData {
   entries: ValuesJournalEntry[];

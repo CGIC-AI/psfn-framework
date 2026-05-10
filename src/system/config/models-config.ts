@@ -6,7 +6,7 @@ import {
 } from '../settings.js';
 import { MODELS_SEED_FILE_NAME } from './seed-defaults.js';
 import type { CanonicalModelRegistry, ModelCatalogEntry, ModelRoleAssignments, ModelPurpose, ModelSlot } from '../../shared/contracts/runtime.js';
-import { writeJsonAtomic } from './load-or-seed.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 
 export const MODELS_FILE_NAME = 'models.json';
 export { MODELS_SEED_FILE_NAME };

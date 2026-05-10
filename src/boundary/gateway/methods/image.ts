@@ -1,8 +1,5 @@
-import type {
-  ImageCreateParams,
-  ImageEditParams,
-  ImageGenerationRpcResult,
-} from '../protocol.js';
+import type { ImageGenerationRpcResult } from '../protocol.js';
+import type { ImageCreateParams, ImageEditParams } from '../../../primitives/images/types.js';
 import { ImageService } from '../../../primitives/images/service.js';
 import type { GatewayMethodRuntime, AuditedMethodDescriptor } from './types.js';
 import { registerAuditedDescriptors } from './register.js';

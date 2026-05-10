@@ -9,7 +9,7 @@ import type {
   AdminMemoryScopeDetailData,
   AdminMemoryScopeListData,
   AdminMemoryScopeMutationResult,
-  MemoryScopeRef,
+  AdminUiMemoryScopeRef,
 } from '$lib/types';
 
 export interface MemoryListParams {
@@ -66,7 +66,7 @@ export function getManagedMemoryScopeDetail(
 export function updateMemoryScope(
   id: string,
   fields: {
-    scopeRef?: MemoryScopeRef | null;
+    scopeRef?: AdminUiMemoryScopeRef | null;
     scopeTags?: string[];
     repair?: boolean;
   }

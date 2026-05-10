@@ -1,8 +1,8 @@
 import { join } from 'node:path';
 import {
   loadOrSeedJson,
-  writeJsonAtomic,
 } from './load-or-seed.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord, normalizeStringArray } from '../../shared/utils/types.js';
 
 export const SKILLS_FILE_NAME = 'skills.json';

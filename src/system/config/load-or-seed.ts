@@ -1,6 +1,5 @@
 import * as fs from 'node:fs';
-import { dirname } from 'node:path';
-import { writeJsonAtomic as writeJsonAtomicFile } from '../../shared/utils/fs.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 
 export type JsonValidator<T> = (value: unknown, sourcePath: string) => T;
 
@@ -81,11 +80,6 @@ function sameFingerprint(
 function parseJsonFile(path: string): unknown {
   const raw = fs.readFileSync(path, 'utf-8');
   return JSON.parse(raw);
-}
-
-export function writeJsonAtomic(path: string, value: unknown): void {
-  fs.mkdirSync(dirname(path), { recursive: true });
-  writeJsonAtomicFile(path, value);
 }
 
 export function loadOrSeedJson<T>(options: LoadOrSeedJsonOptions<T>): T {

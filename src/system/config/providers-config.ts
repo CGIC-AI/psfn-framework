@@ -6,7 +6,8 @@ import {
   envCredential,
   resolveOptionalCredentialReference,
 } from '../../boundary/custody/credential-vault.js';
-import { writeJsonAtomic, loadOrSeedJson } from './load-or-seed.js';
+import { loadOrSeedJson } from './load-or-seed.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 
 export const PROVIDERS_FILE_NAME = 'providers.json';

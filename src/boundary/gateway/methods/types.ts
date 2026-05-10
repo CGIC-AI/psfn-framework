@@ -6,8 +6,10 @@ import type { ImageRuntimeConfig } from '../../../primitives/images/types.js';
 import type {
   ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
-  ConfirmationResolveParams,
   ConfirmationResolveResult,
+} from '../../../system/capabilities/confirmation-queue.js';
+import type {
+  ConfirmationResolveParams,
   NotifyNtfyParams,
   NotifyNtfyResult,
   PolicyDecision,

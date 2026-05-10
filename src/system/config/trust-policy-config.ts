@@ -6,8 +6,8 @@ import type {
 } from '../trust/types.js';
 import {
   loadOrSeedJson,
-  writeJsonAtomic,
 } from './load-or-seed.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 
 export const TRUST_POLICY_FILE_NAME = 'trust-policy.json';

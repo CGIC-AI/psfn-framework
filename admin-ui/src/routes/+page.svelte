@@ -5,10 +5,9 @@
     DASHBOARD_COST_WINDOW_OPTIONS,
     resolveDashboardCostWindow,
     resolveSelectedDashboardCostWindowUsage,
-    type DashboardCostWindow,
   } from '$lib/dashboard/cost-window';
   import { resolveSessionContextPressureView } from '$lib/dashboard/session-context-pressure';
-  import type { AdminDashboardData } from '$lib/types';
+  import type { AdminDashboardData, DashboardCostWindow } from '$lib/types';
 
   let data = $state<AdminDashboardData | null>(null);
   let error = $state('');

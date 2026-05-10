@@ -4,8 +4,8 @@ import type {
   ConfirmationListResult,
   ConfirmationHistoryListResult,
   ConfirmationResolveParams,
-  ConfirmationResolveResult,
 } from '../protocol.js';
+import type { ConfirmationResolveResult } from '../../../system/capabilities/confirmation-queue.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
 import { registerAuditedDescriptors } from './register.js';
 

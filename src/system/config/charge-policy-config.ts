@@ -2,8 +2,8 @@ import { join } from 'node:path';
 import {
   loadOrSeedJson,
   loadSeedJson,
-  writeJsonAtomic,
 } from './load-or-seed.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 
 export const CHARGE_POLICY_FILE_NAME = 'charge-policy.json';

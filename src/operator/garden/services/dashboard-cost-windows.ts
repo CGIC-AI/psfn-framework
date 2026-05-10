@@ -1,18 +1,10 @@
-export const DASHBOARD_COST_WINDOWS = ['today', 'week', 'month'] as const;
-export type DashboardCostWindow = typeof DASHBOARD_COST_WINDOWS[number];
+import type {
+  DashboardCostWindow,
+  DashboardCostWindowTotals,
+  DashboardCostWindowUsage,
+} from '../types.js';
 
-export interface DashboardCostWindowUsage {
-  turns: number;
-  llmCalls: number;
-  toolCalls: number;
-  estimatedCostUsd: number;
-}
-
-export interface DashboardCostWindowTotals {
-  today: DashboardCostWindowUsage;
-  week: DashboardCostWindowUsage;
-  month: DashboardCostWindowUsage;
-}
+export const DASHBOARD_COST_WINDOWS: readonly DashboardCostWindow[] = ['today', 'week', 'month'];
 
 export interface DashboardUsageSample {
   timestampMs: number;

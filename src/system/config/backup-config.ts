@@ -1,8 +1,8 @@
 import { join } from 'node:path';
 import {
   loadOrSeedJson,
-  writeJsonAtomic,
 } from './load-or-seed.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 
 export const BACKUP_FILE_NAME = 'backup.json';

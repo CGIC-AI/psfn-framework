@@ -2,6 +2,22 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 import { channelsShareActiveSessionThread } from '../session/cross-channel-continuity-port.js';
+import type {
+  PendingFollowUpQuarantineInput,
+  PendingFollowUpQuarantineListOptions,
+  PendingFollowUpQuarantineRecord,
+  PendingFollowUpStorePort,
+} from './pending-follow-up-store-port.js';
+
+export {
+  createPendingFollowUpStorePort,
+} from './pending-follow-up-store-port.js';
+export type {
+  PendingFollowUpQuarantineInput,
+  PendingFollowUpQuarantineListOptions,
+  PendingFollowUpQuarantineRecord,
+  PendingFollowUpStorePort,
+} from './pending-follow-up-store-port.js';
 
 export const PENDING_FOLLOW_UP_PRIORITIES = ['low', 'medium', 'high'] as const;
 export type PendingFollowUpPriority = typeof PENDING_FOLLOW_UP_PRIORITIES[number];
@@ -88,41 +104,6 @@ export interface PendingFollowUpContextProvider {
   getPendingFollowUps(contactId?: string): PendingFollowUp[];
 }
 
-type Awaitable<T> = T | Promise<T>;
-
-interface PendingFollowUpStorePortBackend extends PendingFollowUpContextProvider {
-  create(input: PendingFollowUpCreateInput): Awaitable<PendingFollowUp>;
-  getById(id: string): Awaitable<PendingFollowUp | null>;
-  list(options?: PendingFollowUpListOptions): Awaitable<PendingFollowUp[]>;
-  markActivated(
-    id: string,
-    options?: PendingFollowUpActivateOptions,
-  ): Awaitable<PendingFollowUp | null>;
-}
-
-export interface PendingFollowUpStorePort {
-  create(input: PendingFollowUpCreateInput): Promise<PendingFollowUp>;
-  getById(id: string): Promise<PendingFollowUp | null>;
-  getPendingFollowUps(contactId?: string): Promise<PendingFollowUp[]>;
-  list(options?: PendingFollowUpListOptions): Promise<PendingFollowUp[]>;
-  markActivated(
-    id: string,
-    options?: PendingFollowUpActivateOptions,
-  ): Promise<PendingFollowUp | null>;
-}
-
-export function createPendingFollowUpStorePort(
-  store: PendingFollowUpStorePortBackend,
-): PendingFollowUpStorePort {
-  return {
-    create: async (input) => await store.create(input),
-    getById: async (id) => await store.getById(id),
-    getPendingFollowUps: async (contactId) => await store.getPendingFollowUps(contactId),
-    list: async (options) => await store.list(options),
-    markActivated: async (id, options) => await store.markActivated(id, options),
-  };
-}
-
 export function filterPendingFollowUpsForActiveChannel(
   followUps: readonly PendingFollowUp[],
   activeChannelId?: string,
@@ -170,14 +151,26 @@ interface PendingFollowUpRow {
   activation_reason: string | null;
 }
 
+interface PendingFollowUpQuarantineRow {
+  id: string;
+  follow_up_id: string | null;
+  reason: string;
+  source: string | null;
+  raw_entry: string;
+  quarantined_at: string;
+}
+
 const MAX_TEXT_CHARS = 500;
 const MAX_ID_CHARS = 128;
 const MAX_SUMMARY_CHARS = 320;
 const MAX_REASON_CHARS = 240;
+const MAX_QUARANTINE_REASON_CHARS = 1000;
+const MAX_QUARANTINE_SOURCE_CHARS = 128;
 const DEFAULT_LIST_LIMIT = 32;
 const MAX_LIST_LIMIT = 200;
 const NEGATIVE_MOOD_WAKE_THRESHOLD = -0.2;
 const PENDING_FOLLOW_UPS_TABLE = 'intention_pending_follow_ups';
+const PENDING_FOLLOW_UP_QUARANTINE_TABLE = 'intention_pending_follow_up_quarantine';
 const PENDING_FOLLOW_UP_STALE_MS_BY_PRIORITY: Record<PendingFollowUpPriority, number> = {
   low: 8 * 60 * 60 * 1000,
   medium: 24 * 60 * 60 * 1000,
@@ -308,6 +301,40 @@ function clampListLimit(limit: number | undefined): number {
   return Math.min(floored, MAX_LIST_LIMIT);
 }
 
+function normalizeQuarantineReason(value: string): string {
+  const normalized = compactWhitespace(value);
+  if (!normalized) {
+    return 'Invalid pending follow-up entry';
+  }
+  return normalized.length > MAX_QUARANTINE_REASON_CHARS
+    ? normalized.slice(0, MAX_QUARANTINE_REASON_CHARS)
+    : normalized;
+}
+
+function serializeQuarantineRawEntry(value: unknown): string {
+  try {
+    const serialized = JSON.stringify(value ?? null);
+    return typeof serialized === 'string' ? serialized : 'null';
+  } catch (error) {
+    return JSON.stringify({
+      serializationError: String(error),
+      value: String(value),
+    });
+  }
+}
+
+function deserializeQuarantineRawEntry(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function toQuarantineReason(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function mapRow(row: PendingFollowUpRow): PendingFollowUp {
   const dueAt = row.due_at === null ? undefined : normalizeIsoTimestamp(row.due_at, 'due_at');
   const contactId = row.contact_id === null ? undefined : normalizeOptionalId(row.contact_id);
@@ -342,6 +369,21 @@ function mapRow(row: PendingFollowUpRow): PendingFollowUp {
     ...(wakeConditions ? { wakeConditions } : {}),
     ...(activatedAt ? { activatedAt } : {}),
     ...(activationReason ? { activationReason } : {}),
+  };
+}
+
+function mapQuarantineRow(row: PendingFollowUpQuarantineRow): PendingFollowUpQuarantineRecord {
+  const followUpId = row.follow_up_id === null ? undefined : normalizeOptionalId(row.follow_up_id);
+  const source = row.source === null
+    ? undefined
+    : normalizeOptionalText(row.source, 'quarantine_source', MAX_QUARANTINE_SOURCE_CHARS);
+  return {
+    id: normalizeRequiredText(row.id, 'quarantine_id', MAX_ID_CHARS),
+    reason: normalizeRequiredText(row.reason, 'quarantine_reason', MAX_QUARANTINE_REASON_CHARS),
+    raw: deserializeQuarantineRawEntry(row.raw_entry),
+    quarantinedAt: normalizeIsoTimestamp(row.quarantined_at, 'quarantined_at'),
+    ...(followUpId ? { followUpId } : {}),
+    ...(source ? { source } : {}),
   };
 }
 
@@ -413,7 +455,7 @@ export function evaluatePendingFollowUpWakeState(
   };
 }
 
-export class PendingFollowUpStore implements PendingFollowUpContextProvider {
+export class PendingFollowUpStore implements PendingFollowUpContextProvider, PendingFollowUpStorePort {
   private readonly db: Database.Database;
   private readonly now: () => Date;
   private readonly idFactory: () => string;
@@ -499,6 +541,10 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
     return this.requireById(id);
   }
 
+  enqueue(input: PendingFollowUpCreateInput): PendingFollowUp {
+    return this.create(input);
+  }
+
   update(id: string, input: PendingFollowUpUpdateInput): PendingFollowUp | null {
     const normalizedId = normalizeRequiredText(id, 'id', MAX_ID_CHARS);
     const content = normalizeRequiredText(input.content, 'content', MAX_TEXT_CHARS);
@@ -581,7 +627,11 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
       FROM ${PENDING_FOLLOW_UPS_TABLE}
       WHERE id = @id
     `).get({ id: normalizedId }) as PendingFollowUpRow | undefined;
-    return row ? mapRow(row) : null;
+    return row ? this.mapRowOrQuarantine(row, 'peek') : null;
+  }
+
+  peek(id: string): PendingFollowUp | null {
+    return this.getById(id);
   }
 
   getPendingFollowUps(contactId?: string): PendingFollowUp[] {
@@ -638,7 +688,8 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
     }) as PendingFollowUpRow[];
 
     const followUps = rows
-      .map(mapRow)
+      .map(row => this.mapRowOrQuarantine(row, 'list'))
+      .filter((followUp): followUp is PendingFollowUp => followUp !== null)
       .filter(followUp => includeExpired || !isPendingFollowUpExpired(followUp, asOfMs));
     return followUps.slice(0, limit);
   }
@@ -674,12 +725,132 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
     return this.requireById(normalizedId);
   }
 
+  dequeue(id: string, options: PendingFollowUpActivateOptions = {}): PendingFollowUp | null {
+    return this.markActivated(id, options);
+  }
+
+  quarantine(input: PendingFollowUpQuarantineInput): PendingFollowUpQuarantineRecord {
+    const id = normalizeRequiredText(randomUUID(), 'quarantine_id', MAX_ID_CHARS);
+    const followUpId = normalizeOptionalId(input.followUpId);
+    const reason = normalizeQuarantineReason(input.reason);
+    const source = normalizeOptionalText(input.source, 'quarantine_source', MAX_QUARANTINE_SOURCE_CHARS);
+    const quarantinedAt = input.quarantinedAt
+      ? normalizeIsoTimestamp(input.quarantinedAt, 'quarantinedAt')
+      : this.now().toISOString();
+    const rawEntry = serializeQuarantineRawEntry(input.raw);
+
+    this.db.prepare(`
+      INSERT INTO ${PENDING_FOLLOW_UP_QUARANTINE_TABLE} (
+        id,
+        follow_up_id,
+        reason,
+        source,
+        raw_entry,
+        quarantined_at
+      ) VALUES (
+        @id,
+        @follow_up_id,
+        @reason,
+        @source,
+        @raw_entry,
+        @quarantined_at
+      )
+    `).run({
+      id,
+      follow_up_id: followUpId ?? null,
+      reason,
+      source: source ?? null,
+      raw_entry: rawEntry,
+      quarantined_at: quarantinedAt,
+    });
+
+    if (followUpId) {
+      this.deleteRawFollowUp(followUpId);
+    }
+    return this.requireQuarantineById(id);
+  }
+
+  listQuarantined(
+    options: PendingFollowUpQuarantineListOptions = {},
+  ): PendingFollowUpQuarantineRecord[] {
+    const followUpId = normalizeOptionalId(options.followUpId);
+    const source = normalizeOptionalText(options.source, 'quarantine_source', MAX_QUARANTINE_SOURCE_CHARS);
+    const limit = clampListLimit(options.limit);
+    const whereClauses: string[] = [];
+    if (followUpId) {
+      whereClauses.push('follow_up_id = @followUpId');
+    }
+    if (source) {
+      whereClauses.push('source = @source');
+    }
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const rows = this.db.prepare(`
+      SELECT
+        id,
+        follow_up_id,
+        reason,
+        source,
+        raw_entry,
+        quarantined_at
+      FROM ${PENDING_FOLLOW_UP_QUARANTINE_TABLE}
+      ${whereSql}
+      ORDER BY
+        quarantined_at ASC,
+        id ASC
+      LIMIT @limit
+    `).all({
+      followUpId: followUpId ?? null,
+      source: source ?? null,
+      limit,
+    }) as PendingFollowUpQuarantineRow[];
+    return rows.map(mapQuarantineRow);
+  }
+
   private requireById(id: string): PendingFollowUp {
     const record = this.getById(id);
     if (!record) {
       throw new Error(`Failed to load pending follow-up "${id}" after write`);
     }
     return record;
+  }
+
+  private requireQuarantineById(id: string): PendingFollowUpQuarantineRecord {
+    const row = this.db.prepare(`
+      SELECT
+        id,
+        follow_up_id,
+        reason,
+        source,
+        raw_entry,
+        quarantined_at
+      FROM ${PENDING_FOLLOW_UP_QUARANTINE_TABLE}
+      WHERE id = @id
+    `).get({ id }) as PendingFollowUpQuarantineRow | undefined;
+    if (!row) {
+      throw new Error(`Failed to load pending follow-up quarantine "${id}" after write`);
+    }
+    return mapQuarantineRow(row);
+  }
+
+  private mapRowOrQuarantine(row: PendingFollowUpRow, source: string): PendingFollowUp | null {
+    try {
+      return mapRow(row);
+    } catch (error) {
+      this.quarantine({
+        followUpId: row.id,
+        reason: toQuarantineReason(error),
+        raw: row,
+        source,
+      });
+      return null;
+    }
+  }
+
+  private deleteRawFollowUp(id: string): void {
+    this.db.prepare(`
+      DELETE FROM ${PENDING_FOLLOW_UPS_TABLE}
+      WHERE id = @id
+    `).run({ id });
   }
 
   private initializeSchema(): void {
@@ -711,6 +882,18 @@ export class PendingFollowUpStore implements PendingFollowUpContextProvider {
 
       CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_contact
       ON ${PENDING_FOLLOW_UPS_TABLE} (contact_id, activated_at, created_at, id);
+
+      CREATE TABLE IF NOT EXISTS ${PENDING_FOLLOW_UP_QUARANTINE_TABLE} (
+        id TEXT PRIMARY KEY,
+        follow_up_id TEXT,
+        reason TEXT NOT NULL,
+        source TEXT,
+        raw_entry TEXT NOT NULL,
+        quarantined_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_up_quarantine_follow_up
+      ON ${PENDING_FOLLOW_UP_QUARANTINE_TABLE} (follow_up_id, quarantined_at, id);
     `);
     this.ensureColumn('context_summary', 'TEXT');
     this.ensureColumn('wake_conditions', 'TEXT');

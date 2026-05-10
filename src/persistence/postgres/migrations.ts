@@ -258,6 +258,8 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     due_at TEXT,
     contact_id TEXT,
     source_message_id TEXT,
+    context_summary TEXT,
+    wake_conditions TEXT,
     activated_at TEXT,
     activation_reason TEXT,
     CHECK (priority IN ('low', 'medium', 'high')),
@@ -265,8 +267,21 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     CHECK (channel_type IN ('terminal', 'api', 'discord', 'telegram', 'psfn-amica'))
   );
   `,
+  `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS context_summary TEXT;`,
+  `ALTER TABLE intention_pending_follow_ups ADD COLUMN IF NOT EXISTS wake_conditions TEXT;`,
   `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_active ON intention_pending_follow_ups (activated_at, created_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_ups_contact ON intention_pending_follow_ups (contact_id, activated_at, created_at, id);`,
+  `
+  CREATE TABLE IF NOT EXISTS intention_pending_follow_up_quarantine (
+    id TEXT PRIMARY KEY,
+    follow_up_id TEXT,
+    reason TEXT NOT NULL,
+    source TEXT,
+    raw_entry TEXT NOT NULL,
+    quarantined_at TEXT NOT NULL
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_intention_pending_follow_up_quarantine_follow_up ON intention_pending_follow_up_quarantine (follow_up_id, quarantined_at, id);`,
   `
   CREATE TABLE IF NOT EXISTS behavioral_pattern_events (
     id TEXT PRIMARY KEY,

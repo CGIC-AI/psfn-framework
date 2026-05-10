@@ -7,10 +7,12 @@ import {
 } from './concern-store-port.js';
 import {
   PendingFollowUpStore,
-  createPendingFollowUpStorePort,
   type PendingFollowUpContextProvider,
-  type PendingFollowUpStorePort,
 } from './pending-follow-ups.js';
+import {
+  createPendingFollowUpStorePort,
+  type PendingFollowUpStorePort,
+} from './pending-follow-up-store-port.js';
 import {
   BehavioralPatternTracker,
   createBehavioralPatternStorePort,

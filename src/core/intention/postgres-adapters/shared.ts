@@ -1,5 +1,5 @@
 import type { ActiveConcern } from '../concerns.js';
-import type { PendingFollowUp } from '../pending-follow-ups.js';
+import type { PendingFollowUp, PendingFollowUpWakeCondition } from '../pending-follow-ups.js';
 import type { BehavioralPatternSample, BehavioralStrategySummary } from '../patterns.js';
 
 export interface ActiveConcernRow {
@@ -28,6 +28,8 @@ export interface PendingFollowUpRow {
   due_at: string | null;
   contact_id: string | null;
   source_message_id: string | null;
+  context_summary: string | null;
+  wake_conditions: string | null;
   activated_at: string | null;
   activation_reason: string | null;
 }
@@ -61,6 +63,11 @@ export const ACTIVE_CONCERN_PRIORITIES = ['high', 'medium', 'low'] as const;
 export const ACTIVE_CONCERN_SOURCES = ['appraisal', 'agent', 'heartbeat'] as const;
 export const PENDING_FOLLOW_UP_PRIORITIES = ['low', 'medium', 'high'] as const;
 export const PENDING_FOLLOW_UP_TIMINGS = ['immediate', 'soon', 'scheduled'] as const;
+export const PENDING_FOLLOW_UP_WAKE_CONDITIONS = [
+  'next_user_turn',
+  'background_recheck',
+  'sustained_negative_mood',
+] as const;
 export const CHANNEL_TYPES = ['terminal', 'api', 'discord', 'telegram', 'psfn-amica'] as const;
 export const BEHAVIORAL_RESPONSE_STRATEGIES = [
   'empathy',
@@ -78,6 +85,7 @@ export const MAX_CONCERN_RESOLUTION_CHARS = 400;
 export const MAX_PENDING_TEXT_CHARS = 500;
 export const MAX_PENDING_ID_CHARS = 128;
 export const MAX_PENDING_REASON_CHARS = 240;
+export const MAX_PENDING_SUMMARY_CHARS = 320;
 export const MAX_CONTACT_ID_CHARS = 160;
 export const MAX_MESSAGE_ID_CHARS = 200;
 export const MAX_RESPONSE_EXCERPT_CHARS = 240;
@@ -157,6 +165,56 @@ export function normalizeTiming(value: string): 'immediate' | 'soon' | 'schedule
     throw new Error(`Unsupported pending follow-up timing: ${value}`);
   }
   return value as 'immediate' | 'soon' | 'scheduled';
+}
+
+export function normalizeWakeCondition(value: string): PendingFollowUpWakeCondition {
+  if (!PENDING_FOLLOW_UP_WAKE_CONDITIONS.includes(value as PendingFollowUpWakeCondition)) {
+    throw new Error(`Unsupported pending follow-up wake condition: ${value}`);
+  }
+  return value as PendingFollowUpWakeCondition;
+}
+
+export function normalizeWakeConditions(
+  value: readonly PendingFollowUpWakeCondition[] | undefined,
+): PendingFollowUpWakeCondition[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const normalized = [...new Set(
+    value
+      .filter((condition): condition is PendingFollowUpWakeCondition => typeof condition === 'string')
+      .map(condition => normalizeWakeCondition(condition)),
+  )];
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  return PENDING_FOLLOW_UP_WAKE_CONDITIONS.filter(condition => normalized.includes(condition));
+}
+
+export function encodeWakeConditions(
+  value: readonly PendingFollowUpWakeCondition[] | undefined,
+): string | null {
+  const normalized = normalizeWakeConditions(value);
+  return normalized ? JSON.stringify(normalized) : null;
+}
+
+export function decodeWakeConditions(
+  value: string | null,
+  fieldName: string,
+): PendingFollowUpWakeCondition[] | undefined {
+  if (value === null) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch (error) {
+    throw new Error(`Field "${fieldName}" must be valid JSON: ${String(error)}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`Field "${fieldName}" must be a JSON array`);
+  }
+  return normalizeWakeConditions(parsed as PendingFollowUpWakeCondition[]);
 }
 
 export function normalizeChannelType(value: string): 'terminal' | 'api' | 'discord' | 'telegram' | 'psfn-amica' {
@@ -282,6 +340,10 @@ export function mapPendingFollowUpRow(row: PendingFollowUpRow): PendingFollowUp 
   const dueAt = row.due_at === null ? undefined : normalizeIsoTimestamp(row.due_at, 'due_at');
   const contactId = row.contact_id === null ? undefined : normalizeContactId(row.contact_id);
   const sourceMessageId = row.source_message_id === null ? undefined : normalizeContactId(row.source_message_id);
+  const contextSummary = row.context_summary === null
+    ? undefined
+    : normalizeOptionalText(row.context_summary, 'context_summary', MAX_PENDING_SUMMARY_CHARS);
+  const wakeConditions = decodeWakeConditions(row.wake_conditions, 'wake_conditions');
   const activatedAt = row.activated_at === null ? undefined : normalizeIsoTimestamp(row.activated_at, 'activated_at');
   const activationReason = row.activation_reason === null
     ? undefined
@@ -299,6 +361,8 @@ export function mapPendingFollowUpRow(row: PendingFollowUpRow): PendingFollowUp 
     ...(dueAt ? { dueAt } : {}),
     ...(contactId ? { contactId } : {}),
     ...(sourceMessageId ? { sourceMessageId } : {}),
+    ...(contextSummary ? { contextSummary } : {}),
+    ...(wakeConditions ? { wakeConditions } : {}),
     ...(activatedAt ? { activatedAt } : {}),
     ...(activationReason ? { activationReason } : {}),
   };

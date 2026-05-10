@@ -21,7 +21,8 @@ import type {
   ActiveConcernSnapshot,
   IntentionActionDecision,
 } from '../intention/appraisal.js';
-import type { PendingFollowUp, PendingFollowUpStorePort } from '../intention/pending-follow-ups.js';
+import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
+import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
 import type { CareReminderStore } from '../intention/care-reminders.js';
 import type { PostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import type { InternalState } from '../self-model/state.js';

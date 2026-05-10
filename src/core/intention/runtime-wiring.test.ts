@@ -174,7 +174,7 @@ describe('wireIntentionRuntime', () => {
     });
     expect(pendingFollowUpId).toBeTruthy();
 
-    const pending = await runtime.pendingFollowUpStore.getPendingFollowUps('contact-a');
+    const pending = await runtime.pendingFollowUpStore.list({ contactId: 'contact-a' });
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({
       id: pendingFollowUpId,
@@ -189,7 +189,7 @@ describe('wireIntentionRuntime', () => {
       pendingFollowUpId: pendingFollowUpId!,
       activationReason: 'post_turn_action',
     });
-    const activated = await runtime.pendingFollowUpStore.getById(pendingFollowUpId!);
+    const activated = await runtime.pendingFollowUpStore.peek(pendingFollowUpId!);
     expect(activated?.activatedAt).toBeTruthy();
     expect(activated?.activationReason).toBe('post_turn_action');
   });

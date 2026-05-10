@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
 import { createBehavioralPatternStorePort } from './patterns.js';
 import { createConcernStorePort } from './concern-store-port.js';
-import { createPendingFollowUpStorePort } from './pending-follow-ups.js';
+import { createPendingFollowUpStorePort } from './pending-follow-up-store-port.js';
 import { PostgresPendingFollowUpStore } from './postgres-adapters/appraisal-trace-adapter.js';
 import { PostgresActiveConcernStore } from './postgres-adapters/concerns-adapter.js';
 import { createIntentionPostgresPool, ensureIntentionPostgresSchema } from './postgres-adapters/connection.js';

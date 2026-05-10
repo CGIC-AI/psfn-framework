@@ -122,7 +122,7 @@ import {
   type ActiveConcernSnapshot,
   type IntentionActionDecision,
 } from '../../../core/intention/appraisal.js';
-import type { PendingFollowUpStorePort } from '../../../core/intention/pending-follow-ups.js';
+import type { PendingFollowUpStorePort } from '../../../core/intention/pending-follow-up-store-port.js';
 import type { CareReminderStore } from '../../../core/intention/care-reminders.js';
 import { MotivationBridge } from '../../../core/intention/motivation.js';
 import {

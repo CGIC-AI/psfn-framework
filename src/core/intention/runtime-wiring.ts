@@ -9,8 +9,8 @@ import type {
 } from './concern-store-port.js';
 import {
   type PendingFollowUpContextProvider,
-  type PendingFollowUpStorePort,
 } from './pending-follow-ups.js';
+import type { PendingFollowUpStorePort } from './pending-follow-up-store-port.js';
 import type {
   ActiveConcernSnapshot,
   IntentionActionDecision,
@@ -180,7 +180,7 @@ export function createIntentionAppraisalHooks(
         throw new Error('PendingFollowUpStorePort is required for follow-up decisions');
       }
       const content = resolveFollowUpDecisionContent(decision);
-      const followUp = await pendingFollowUpStore.create({
+      const followUp = await pendingFollowUpStore.enqueue({
         content,
         priority: decision.priority,
         timing: decision.timing === 'none' ? 'immediate' : decision.timing,
@@ -201,7 +201,7 @@ export function createIntentionAppraisalHooks(
       if (!pendingFollowUpStore) {
         throw new Error('PendingFollowUpStorePort is required for follow-up activation');
       }
-      await pendingFollowUpStore.markActivated(pendingFollowUpId, {
+      await pendingFollowUpStore.dequeue(pendingFollowUpId, {
         ...(activationReason ? { activationReason } : {}),
       });
     },

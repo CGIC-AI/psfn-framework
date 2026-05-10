@@ -747,8 +747,8 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
               : []
           ),
           pendingFollowUpStore: {
-            getPendingFollowUps: async (contactId?: string) => (
-              contactId === 'contact-1'
+            list: async (options?: { contactId?: string }) => (
+              options?.contactId === 'contact-1'
                 ? [{
                   id: 'follow-up-1',
                   content: 'Check in about the recovery plan',

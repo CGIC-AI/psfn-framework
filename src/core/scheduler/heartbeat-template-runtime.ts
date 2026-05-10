@@ -794,8 +794,10 @@ export function createHeartbeatTemplateRuntime(
       .map(normalizeReflectionConcern)
       .filter((concern): concern is ReflectionContactActiveConcern => concern !== null);
 
-    const pendingFollowUps = runtimeOptions.pendingFollowUpStore?.getPendingFollowUps
-      ? await runtimeOptions.pendingFollowUpStore.getPendingFollowUps(reflectionCanonicalContactId)
+    const pendingFollowUps = runtimeOptions.pendingFollowUpStore
+      ? await runtimeOptions.pendingFollowUpStore.list({
+        contactId: reflectionCanonicalContactId,
+      })
       : [];
 
     const memoryProvider = (agentLoop as HeartbeatAgent & {

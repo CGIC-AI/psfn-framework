@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import type { ActiveConcernContextProvider, ConcernStorePort } from '../concern-store-port.js';
-import type { PendingFollowUpContextProvider, PendingFollowUpStorePort } from '../pending-follow-ups.js';
+import type { PendingFollowUpContextProvider } from '../pending-follow-ups.js';
+import type { PendingFollowUpStorePort } from '../pending-follow-up-store-port.js';
 import type {
   BehavioralPatternContextProvider,
   BehavioralPatternPromotionHook,

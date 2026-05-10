@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import {
   PendingFollowUpStore,
+  createPendingFollowUpStorePort,
   evaluatePendingFollowUpWakeState,
   filterPendingFollowUpsForActiveChannel,
 } from './pending-follow-ups.js';
@@ -67,6 +68,99 @@ describe('PendingFollowUpStore', () => {
     });
     expect(store.getPendingFollowUps()).toHaveLength(0);
     expect(store.list({ includeActivated: true })).toHaveLength(1);
+  });
+
+  it('exposes pending follow-up queue operations through the port', async () => {
+    const db = new Database(':memory:');
+    const store = new PendingFollowUpStore(db, {
+      idFactory: () => 'follow-up-1',
+      now: () => new Date('2026-03-25T12:00:00.000Z'),
+    });
+    const port = createPendingFollowUpStorePort(store);
+
+    const created = await port.enqueue({
+      content: 'Check back through the port.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+    });
+
+    await expect(port.peek(created.id)).resolves.toMatchObject({
+      id: created.id,
+      content: 'Check back through the port.',
+    });
+    await expect(port.list({ contactId: 'contact-a' })).resolves.toHaveLength(1);
+    await expect(port.dequeue(created.id, {
+      activatedAt: '2026-03-25T12:05:00.000Z',
+      activationReason: 'port_dequeue',
+    })).resolves.toMatchObject({
+      activatedAt: '2026-03-25T12:05:00.000Z',
+      activationReason: 'port_dequeue',
+    });
+    await expect(port.list({ contactId: 'contact-a' })).resolves.toEqual([]);
+  });
+
+  it('quarantines invalid persisted rows instead of silently dropping them', async () => {
+    const db = new Database(':memory:');
+    let nextId = 0;
+    const store = new PendingFollowUpStore(db, {
+      idFactory: () => `follow-up-${++nextId}`,
+      now: () => new Date('2026-03-25T12:00:00.000Z'),
+    });
+    const port = createPendingFollowUpStorePort(store);
+
+    store.create({
+      content: 'This row will be quarantined.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      wakeConditions: ['next_user_turn'],
+    });
+    store.create({
+      content: 'This row should survive.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+    });
+    db.prepare(`
+      UPDATE intention_pending_follow_ups
+      SET wake_conditions = @wakeConditions
+      WHERE id = @id
+    `).run({
+      id: 'follow-up-1',
+      wakeConditions: 'not-json',
+    });
+
+    await expect(port.list({ contactId: 'contact-a' })).resolves.toEqual([
+      expect.objectContaining({
+        id: 'follow-up-2',
+        content: 'This row should survive.',
+      }),
+    ]);
+    await expect(port.peek('follow-up-1')).resolves.toBeNull();
+    await expect(port.listQuarantined()).resolves.toEqual([
+      expect.objectContaining({
+        followUpId: 'follow-up-1',
+        source: 'list',
+        reason: expect.stringContaining('wake_conditions'),
+        raw: expect.objectContaining({
+          id: 'follow-up-1',
+          wake_conditions: 'not-json',
+        }),
+      }),
+    ]);
   });
 
   it('expires stale pending follow-ups by age and overdue dueAt', () => {

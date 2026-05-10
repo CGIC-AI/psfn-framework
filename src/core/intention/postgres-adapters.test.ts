@@ -31,8 +31,19 @@ interface PendingFollowUpRow {
   due_at: string | null;
   contact_id: string | null;
   source_message_id: string | null;
+  context_summary: string | null;
+  wake_conditions: string | null;
   activated_at: string | null;
   activation_reason: string | null;
+}
+
+interface PendingFollowUpQuarantineRow {
+  id: string;
+  follow_up_id: string | null;
+  reason: string;
+  source: string | null;
+  raw_entry: string;
+  quarantined_at: string;
 }
 
 interface BehavioralPatternRow {
@@ -52,8 +63,23 @@ interface BehavioralPatternRow {
 class FakeIntentionPool {
   private activeConcerns = new Map<string, ActiveConcernRow>();
   private pendingFollowUps = new Map<string, PendingFollowUpRow>();
+  private pendingFollowUpQuarantine = new Map<string, PendingFollowUpQuarantineRow>();
   private behavioralPatternEvents = new Map<string, BehavioralPatternRow>();
   private ids = 1;
+
+  corruptPendingFollowUp(
+    id: string,
+    patch: Partial<PendingFollowUpRow>,
+  ): void {
+    const row = this.pendingFollowUps.get(id);
+    if (!row) {
+      throw new Error(`Missing fake pending follow-up "${id}"`);
+    }
+    this.pendingFollowUps.set(id, {
+      ...row,
+      ...patch,
+    });
+  }
 
   async query<Row>(text: string, values: readonly unknown[] = []): Promise<QueryResult<Row>> {
     const normalized = text.replace(/\s+/g, ' ').trim();
@@ -130,7 +156,22 @@ class FakeIntentionPool {
     }
 
     if (normalized.startsWith('INSERT INTO intention_pending_follow_ups')) {
-      const [id, content, priority, timing, createdAt, channelId, channelType, authorId, authorName, dueAt, contactId, sourceMessageId] = values as [
+      const [
+        id,
+        content,
+        priority,
+        timing,
+        createdAt,
+        channelId,
+        channelType,
+        authorId,
+        authorName,
+        dueAt,
+        contactId,
+        sourceMessageId,
+        contextSummary,
+        wakeConditions,
+      ] = values as [
         string,
         string,
         string,
@@ -140,6 +181,8 @@ class FakeIntentionPool {
         string,
         string,
         string,
+        string | null,
+        string | null,
         string | null,
         string | null,
         string | null,
@@ -157,16 +200,60 @@ class FakeIntentionPool {
         due_at: dueAt,
         contact_id: contactId,
         source_message_id: sourceMessageId,
+        context_summary: contextSummary,
+        wake_conditions: wakeConditions,
         activated_at: null,
         activation_reason: null,
       });
       return { rows: [this.pendingFollowUps.get(id)! as Row] };
     }
 
+    if (normalized.startsWith('INSERT INTO intention_pending_follow_up_quarantine')) {
+      const [id, followUpId, reason, source, rawEntry, quarantinedAt] = values as [
+        string,
+        string | null,
+        string,
+        string | null,
+        string,
+        string,
+      ];
+      this.pendingFollowUpQuarantine.set(id, {
+        id,
+        follow_up_id: followUpId,
+        reason,
+        source,
+        raw_entry: rawEntry,
+        quarantined_at: quarantinedAt,
+      });
+      return { rows: [this.pendingFollowUpQuarantine.get(id)! as Row] };
+    }
+
+    if (normalized.startsWith('DELETE FROM intention_pending_follow_ups')) {
+      const [id] = values as [string];
+      this.pendingFollowUps.delete(id);
+      return { rows: [] };
+    }
+
     if (normalized.includes('FROM intention_pending_follow_ups') && normalized.includes('WHERE id = $1')) {
       const [id] = values as [string];
       const row = this.pendingFollowUps.get(id);
       return { rows: row ? [row as Row] : [] };
+    }
+
+    if (normalized.includes('FROM intention_pending_follow_up_quarantine')) {
+      const hasFollowUpIdFilter = normalized.includes('follow_up_id = $1');
+      const hasSourceFilter = normalized.includes('source = $1') || normalized.includes('source = $2');
+      const followUpId = hasFollowUpIdFilter ? values[0] as string : undefined;
+      const sourceIndex = hasSourceFilter ? (hasFollowUpIdFilter ? 1 : 0) : -1;
+      const source = sourceIndex >= 0 ? values[sourceIndex] as string : undefined;
+      const limit = Number(values[values.length - 1]);
+      const rows = [...this.pendingFollowUpQuarantine.values()]
+        .filter(row => !followUpId || row.follow_up_id === followUpId)
+        .filter(row => !source || row.source === source)
+        .sort((left, right) => left.quarantined_at.localeCompare(right.quarantined_at) || left.id.localeCompare(right.id))
+        .slice(0, limit)
+        .map(row => row as Row);
+      return { rows };
     }
 
     if (normalized.includes('FROM intention_pending_follow_ups') && normalized.includes('ORDER BY created_at ASC, id ASC')) {
@@ -404,7 +491,7 @@ describe('postgres intention adapters', () => {
       now: () => new Date('2026-03-28T02:00:00.000Z'),
     });
 
-    const followUp = await ports.pendingFollowUpStore.create({
+    const followUp = await ports.pendingFollowUpStore.enqueue({
       content: 'Check in tomorrow about medication.',
       priority: 'medium',
       timing: 'scheduled',
@@ -414,19 +501,23 @@ describe('postgres intention adapters', () => {
       authorName: 'Whisper',
       contactId: 'contact-a',
       sourceMessageId: 'msg-3',
+      contextSummary: 'Medication check-in context',
+      wakeConditions: ['next_user_turn'],
       dueAt: '2026-03-28T03:00:00.000Z',
     });
     expect(followUp).toMatchObject({
       content: 'Check in tomorrow about medication.',
       contactId: 'contact-a',
       sourceMessageId: 'msg-3',
+      contextSummary: 'Medication check-in context',
+      wakeConditions: ['next_user_turn'],
     });
 
-    const pending = await ports.pendingFollowUpStore.getPendingFollowUps('contact-a');
+    const pending = await ports.pendingFollowUpStore.list({ contactId: 'contact-a' });
     expect(pending).toHaveLength(1);
     expect(pending[0]?.id).toBe(followUp.id);
 
-    const activated = await ports.pendingFollowUpStore.markActivated(followUp.id, {
+    const activated = await ports.pendingFollowUpStore.dequeue(followUp.id, {
       activationReason: 'post_turn_action',
       activatedAt: '2026-03-28T04:00:00.000Z',
     });
@@ -440,7 +531,7 @@ describe('postgres intention adapters', () => {
       now: () => new Date('2026-03-25T12:00:00.000Z'),
     });
 
-    await ports.pendingFollowUpStore.create({
+    await ports.pendingFollowUpStore.enqueue({
       content: 'Age this out.',
       priority: 'medium',
       timing: 'soon',
@@ -451,7 +542,7 @@ describe('postgres intention adapters', () => {
       contactId: 'contact-a',
       createdAt: '2026-03-24T11:00:00.000Z',
     });
-    await ports.pendingFollowUpStore.create({
+    await ports.pendingFollowUpStore.enqueue({
       content: 'Expire after the overdue window.',
       priority: 'medium',
       timing: 'scheduled',
@@ -463,7 +554,7 @@ describe('postgres intention adapters', () => {
       createdAt: '2026-03-24T09:00:00.000Z',
       dueAt: '2026-03-24T10:30:00.000Z',
     });
-    await ports.pendingFollowUpStore.create({
+    await ports.pendingFollowUpStore.enqueue({
       content: 'Keep this pending.',
       priority: 'medium',
       timing: 'scheduled',
@@ -476,7 +567,7 @@ describe('postgres intention adapters', () => {
       dueAt: '2026-03-25T18:00:00.000Z',
     });
 
-    await expect(ports.pendingFollowUpStore.getPendingFollowUps('contact-a')).resolves.toEqual([
+    await expect(ports.pendingFollowUpStore.list({ contactId: 'contact-a' })).resolves.toEqual([
       expect.objectContaining({ content: 'Keep this pending.' }),
     ]);
     expect(ports.pendingFollowUpProvider.getPendingFollowUps('contact-a')).toEqual([
@@ -486,6 +577,43 @@ describe('postgres intention adapters', () => {
       contactId: 'contact-a',
       includeExpired: true,
     })).resolves.toHaveLength(3);
+  });
+
+  it('quarantines invalid pending follow-up rows through the Postgres port', async () => {
+    const pool = new FakeIntentionPool();
+    const ports = createPostgresIntentionPortsFromPool(pool as never, {
+      now: () => new Date('2026-03-28T02:00:00.000Z'),
+      idFactory: () => 'follow-up-1',
+    });
+
+    await ports.pendingFollowUpStore.enqueue({
+      content: 'Corrupt wake condition row.',
+      priority: 'medium',
+      timing: 'soon',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      wakeConditions: ['next_user_turn'],
+    });
+    pool.corruptPendingFollowUp('follow-up-1', {
+      wake_conditions: 'not-json',
+    });
+
+    await expect(ports.pendingFollowUpStore.list({ contactId: 'contact-a' })).resolves.toEqual([]);
+    await expect(ports.pendingFollowUpStore.peek('follow-up-1')).resolves.toBeNull();
+    await expect(ports.pendingFollowUpStore.listQuarantined()).resolves.toEqual([
+      expect.objectContaining({
+        followUpId: 'follow-up-1',
+        source: 'list',
+        reason: expect.stringContaining('wake_conditions'),
+        raw: expect.objectContaining({
+          id: 'follow-up-1',
+          wake_conditions: 'not-json',
+        }),
+      }),
+    ]);
   });
 
   it('tracks behavioral samples and summaries', async () => {

@@ -19,9 +19,9 @@ import {
   type PendingFollowUp,
   type PendingFollowUpPriority,
   type PendingFollowUpTiming,
-  type PendingFollowUpStorePort,
   type PendingFollowUpWakeCondition,
 } from '../intention/pending-follow-ups.js';
+import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
 import type { ChannelType, PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { textResult, textResultWithError } from '../tools/results.js';
@@ -141,7 +141,7 @@ export interface ScheduleToolOptions {
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   pendingFollowUpStore?: Pick<
     PendingFollowUpStorePort,
-    'create' | 'list' | 'markActivated'
+    'enqueue' | 'list' | 'dequeue'
   > | null;
   careReminderStore?: Pick<
     CareReminderStore,
@@ -533,11 +533,11 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any>
               }).map(mapReminder)
               : [];
             const followUps = options.pendingFollowUpStore
-              ? options.pendingFollowUpStore.list({
+              ? (await options.pendingFollowUpStore.list({
                 ...(contactId ? { contactId } : {}),
                 includeActivated: params.include_activated === true,
                 limit,
-              }).map(mapFollowUp)
+              })).map(mapFollowUp)
               : [];
             const plannedTasks = options.scheduler.listTasks()
               .filter(task => task.id.startsWith('planned:'))
@@ -572,7 +572,7 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any>
               throw new Error('Pending follow-up store is unavailable');
             }
             const dueAt = normalizeOptionalIsoTimestamp(params.due_at, 'due_at');
-            const created = options.pendingFollowUpStore.create({
+            const created = await options.pendingFollowUpStore.enqueue({
               content: normalizeNonEmptyString(params.content, 'content'),
               priority: normalizePriority(params.priority),
               timing: normalizeTiming(params.timing, dueAt),
@@ -604,7 +604,7 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any>
             }
             const followUpId = normalizeNonEmptyString(params.follow_up_id, 'follow_up_id');
             const activationReason = normalizeOptionalString(params.activation_reason);
-            const activated = await options.pendingFollowUpStore.markActivated(
+            const activated = await options.pendingFollowUpStore.dequeue(
               followUpId,
               activationReason ? { activationReason } : {},
             );

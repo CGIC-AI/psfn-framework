@@ -24,6 +24,27 @@ This document is the compact contract for how the live runtime is supposed to be
 - `src/app/startup/index.ts` is disabled and exits fail-closed.
 - `npm run split` and `npm run yolo` are the intended launchers for day-to-day runtime use.
 
+## Live Alpha Migration Boundary
+
+Until beta, the live runtime may keep only the migration support listed here. New compatibility or fallback behavior in config, startup, persistence, or model-facing tool names must fail closed unless this section is updated with the supported scope, validation path, and beta-removal condition.
+
+Supported until beta:
+
+- Continuous/local shared-root layout through `DATA_DIR`. This is for local development and smoke testing only; production mode forbids shared-root operation.
+- Split-root persistence cutover through `npm run migrate:persistence-layout` and the installer `--migrate-data` path. The cutover tooling may read legacy shared roots, write manifests, and run existing intra-root cleanup, but production startup should stop until the plan is clean.
+- Startup owner-file hydration for currently supported legacy owner data. Hydration may seed missing owner files on first boot, migrate or warn on existing owner-file drift, and load model/provider registries with the existing migration paths, but it must not restore `.env` as mutable-settings authority.
+- Existing companion persistence migrations for legacy continuity files, session channel filenames, SQLite database placement, contact `discord_user_id` identity rows, and the `core_memory.json` orientation filename. These paths are read/migration support only, not permission to add new parallel artifact names.
+- Tool-surface migration aliases documented in `docs/tool-surface.md`. They preserve model-facing continuity while unified tools roll out, and should be removed after canonical actions have stable adoption.
+
+Out of boundary:
+
+- alternate config owner paths not listed in the owner-file contract
+- silent fallback from JSON owner files to `.env`
+- production fallback to `DATA_DIR` or to overlapping mutable roots
+- direct-provider bypass around the gateway/proxy security boundary
+- persistence backend fallbacks that change truth, such as app-side vector scans replacing required `pgvector`
+- new seed-loading behavior introduced as a compatibility workaround
+
 ## Configuration Ownership
 
 ### `.env` owns only

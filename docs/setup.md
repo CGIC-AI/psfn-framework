@@ -92,6 +92,7 @@ On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
 - Default mode when `PSFN_RUNTIME_LAYOUT_MODE` is unset.
 - Uses the legacy shared root (`DATA_DIR`, default `./data`) for both system and companion data.
 - Good for local development and smoke testing.
+- This shared-root support is an alpha migration boundary item that survives only until beta. Do not build new setup or runtime behavior that depends on shared-root fallback.
 
 ### Production / split roots
 
@@ -99,6 +100,8 @@ On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
 - Set both `SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR`, or neither.
 - Production layout defaults under `./runtime/production/` if explicit dirs are not provided.
 - Shared `DATA_DIR` is forbidden in production mode.
+
+Production does not fall back to local/continuous layout. Partial split-root config, overlapping roots, malformed owner files, and mutable settings in `.env` should be fixed directly rather than papered over with compatibility paths.
 
 ## Common Launch Commands
 

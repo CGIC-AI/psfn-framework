@@ -59,6 +59,16 @@ The cutover tooling:
 
 Production startup should not proceed until the cutover plan is clean.
 
+## Migration Boundary Until Beta
+
+The live alpha migration boundary is defined in [`docs/specifications.md`](./specifications.md). Operationally, keep migration support explicit and temporary:
+
+- Use `npm run migrate:persistence-layout` for legacy shared-root data. Do not keep the old shared root mounted as a runtime fallback after cutover.
+- Use continuous/local `DATA_DIR` only for local development and smoke testing. Production must use split roots and fail closed on shared-root or partial split-root wiring.
+- Treat owner-file drift warnings as cleanup signals, not as permission to keep `.env` as mutable config authority.
+- Review config, startup, persistence, and tool-surface changes against the live boundary. If a compatibility path is not named there, reject it, make it fail closed, or track it for beta removal before expanding it.
+- When migration-boundary guidance changes, run `npm run verify:settings-contract` and `npm run verify:startup-owner-files` in addition to the affected runtime validation.
+
 ## Persistence Backends
 
 SQLite remains the default backend for the repo-owned runtime, and PostgreSQL is supported behind the same ports for projection and memory surfaces without changing callers.

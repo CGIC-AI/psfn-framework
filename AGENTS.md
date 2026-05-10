@@ -147,6 +147,17 @@ Expanded meaning in this repo:
 - Gateway policy and path checks must deny by default.
 - If a capability or confirmation requirement is missing, stop the action.
 
+## Live Alpha Migration Boundary
+
+Temporary migration support is allowed during alpha only when it is named in the live boundary in `docs/specifications.md`.
+
+Guardrails:
+
+- New config, startup, persistence, or tool-surface compatibility must fail closed by default.
+- Do not add speculative fallback readers, alternate owner paths, legacy env authority, direct-provider bypasses, or parallel persistence locations unless the support is first added to the live boundary with scope, validation, and beta-removal criteria.
+- Existing compatibility that is not named in the live boundary should not be expanded. Treat it as removal debt and track it before beta.
+- Production remains stricter than continuous/local mode: shared-root `DATA_DIR`, partial split-root config, overlapping roots, malformed owner files, and missing security-sensitive dependencies must fail closed.
+
 ## Supply Chain Pinning
 
 - Do not use floating dependency or image references such as `latest`, `main-latest`, branch names, or unpinned aliases.

@@ -33,6 +33,7 @@ import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
 import { countMessageTokens } from '../../primitives/llm/tokens.js';
+import { repairStringifiedJsonArrayToolArguments } from './tool-argument-repair.js';
 
 const log = createComponentLogger('StreamAdapter');
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
@@ -347,7 +348,7 @@ function createTransportEventStream(
         applyTerminalResponse(state, response);
         enqueueThinkingEvents(queue, state, response.reasoning);
         enqueueMissingTextEvents(queue, state, response.content);
-        enqueueToolCallEvents(queue, state, response.toolCalls);
+        enqueueToolCallEvents(queue, state, response.toolCalls, resolveContextTools(params.context));
         queue.push({
           type: 'done',
           reason: response.stopReason,
@@ -389,6 +390,11 @@ function buildTransportContext(
     modelHint: buildTransportModelHint(candidate, requestOptions),
     ...(requestContext ? { correlation: requestContext as CorrelationMetadata } : {}),
   };
+}
+
+function resolveContextTools(context: unknown): readonly unknown[] | undefined {
+  const tools = (context as { tools?: unknown }).tools;
+  return Array.isArray(tools) ? tools : undefined;
 }
 
 function buildTransportModelHint(
@@ -527,14 +533,20 @@ function enqueueToolCallEvents(
   queue: AsyncEventQueue<AssistantMessageEvent>,
   state: TransportMessageState,
   toolCalls: ToolCall[],
+  toolSchemas?: readonly unknown[],
 ): void {
   for (const toolCall of toolCalls) {
+    const repairedInput = repairStringifiedJsonArrayToolArguments({
+      toolName: toolCall.name,
+      args: toolCall.input,
+      tools: toolSchemas,
+    });
     const contentIndex = state.partial.content.length;
     state.partial.content.push({
       type: 'toolCall',
       id: toolCall.id,
       name: toolCall.name,
-      arguments: toolCall.input,
+      arguments: repairedInput,
     });
     queue.push({
       type: 'toolcall_end',
@@ -544,7 +556,7 @@ function enqueueToolCallEvents(
         type: 'toolCall',
         id: toolCall.id,
         name: toolCall.name,
-        arguments: toolCall.input,
+        arguments: repairedInput,
       },
     } as AssistantMessageEvent);
   }

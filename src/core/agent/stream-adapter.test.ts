@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import { Agent } from '@mariozechner/pi-agent-core';
 import type { AgentEvent } from '@mariozechner/pi-agent-core';
+import { validateToolArguments } from '@mariozechner/pi-ai';
+import { Type } from '@sinclair/typebox';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, StreamCallbacks } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createSubstrateStreamFn, resolveModel } from './stream-adapter.js';
@@ -262,6 +264,126 @@ describe('createSubstrateStreamFn', () => {
         arguments: { query: 'hello world' },
       },
     ]);
+  });
+
+  it('repairs JSON-stringified array tool arguments before agent validation', async () => {
+    const config = makeConfig();
+    const transport = {
+      stream: vi.fn<any>().mockResolvedValue({
+        content: '',
+        toolCalls: [
+          {
+            id: 'call-toolset',
+            name: 'toolset',
+            input: {
+              action: 'activate',
+              tools: '["north_star"]',
+            },
+          },
+          {
+            id: 'call-image-analyze',
+            name: 'image_analyze',
+            input: {
+              image_urls: '["https://images.example.test/source.png"]',
+              question: 'What is visible?',
+            },
+          },
+        ],
+        model: 'gateway-model',
+        inputTokens: 11,
+        outputTokens: 7,
+        stopReason: 'toolUse',
+      }),
+    };
+    const toolsetTool = {
+      name: 'toolset',
+      description: 'Activate extended tools.',
+      parameters: Type.Object({
+        action: Type.Literal('activate'),
+        tools: Type.Array(Type.String()),
+      }),
+    };
+    const imageAnalyzeTool = {
+      name: 'image_analyze',
+      description: 'Analyze images.',
+      parameters: Type.Object({
+        image_urls: Type.Array(Type.String()),
+        question: Type.Optional(Type.String()),
+      }),
+    };
+    const streamFn = createSubstrateStreamFn(config, { transport });
+    const stream = await streamFn(resolveModel(config, 'chat'), {
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'activate image analysis' }],
+      tools: [toolsetTool, imageAnalyzeTool],
+    } as any, {});
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+    const doneEvent = events.at(-1) as { type: 'done'; message: { content: Array<{ type: string; name?: string; arguments?: Record<string, unknown> }> } };
+    const toolCalls = doneEvent.message.content.filter((entry) => entry.type === 'toolCall');
+
+    expect(toolCalls.find((entry) => entry.name === 'toolset')?.arguments).toEqual({
+      action: 'activate',
+      tools: ['north_star'],
+    });
+    expect(toolCalls.find((entry) => entry.name === 'image_analyze')?.arguments).toEqual({
+      image_urls: ['https://images.example.test/source.png'],
+      question: 'What is visible?',
+    });
+    expect(validateToolArguments(toolsetTool as any, toolCalls[0] as any)).toEqual({
+      action: 'activate',
+      tools: ['north_star'],
+    });
+    expect(validateToolArguments(imageAnalyzeTool as any, toolCalls[1] as any)).toEqual({
+      image_urls: ['https://images.example.test/source.png'],
+      question: 'What is visible?',
+    });
+  });
+
+  it('leaves non-array strings unchanged so schema validation fails closed', async () => {
+    const config = makeConfig();
+    const transport = {
+      stream: vi.fn<any>().mockResolvedValue({
+        content: '',
+        toolCalls: [
+          {
+            id: 'call-toolset-invalid',
+            name: 'toolset',
+            input: {
+              action: 'activate',
+              tools: 'north_star',
+            },
+          },
+        ],
+        model: 'gateway-model',
+        inputTokens: 11,
+        outputTokens: 7,
+        stopReason: 'toolUse',
+      }),
+    };
+    const toolsetTool = {
+      name: 'toolset',
+      description: 'Activate extended tools.',
+      parameters: Type.Object({
+        action: Type.Literal('activate'),
+        tools: Type.Array(Type.String()),
+      }),
+    };
+    const streamFn = createSubstrateStreamFn(config, { transport });
+    const stream = await streamFn(resolveModel(config, 'chat'), {
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'activate a tool' }],
+      tools: [toolsetTool],
+    } as any, {});
+    const events = await collectStreamEvents(stream as AsyncIterable<unknown>);
+    const doneEvent = events.at(-1) as { type: 'done'; message: { content: Array<{ type: string; arguments?: Record<string, unknown> }> } };
+    const toolCall = doneEvent.message.content.find((entry) => entry.type === 'toolCall');
+
+    expect(toolCall?.arguments).toEqual({
+      action: 'activate',
+      tools: 'north_star',
+    });
+    expect(() => validateToolArguments(toolsetTool as any, toolCall as any))
+      .toThrow('Validation failed for tool "toolset"');
   });
 
   it('fails closed and emits budget-block event when stream candidate exceeds budget', async () => {

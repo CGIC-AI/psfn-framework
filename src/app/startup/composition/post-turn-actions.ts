@@ -3,12 +3,18 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import type { InferredPostTurnAction } from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
+import {
+  POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
+} from '../../../core/agent/post-turn-action-runtime.js';
 import type {
   PostTurnActionAgent,
+  PostTurnActionCapability,
+  PostTurnActionHandlerResult,
   PostTurnActionExecutionMode,
   PostTurnActionFailureReason,
   PostTurnActionHandler,
   PostTurnActionHandlerOptions,
+  PostTurnActionQueueCompletionRecord,
   PostTurnActionQueueDropRecord,
   PostTurnActionQueueEntryState,
   PostTurnActionQueueFailureRecord,
@@ -19,9 +25,13 @@ import type {
   PostTurnActionQueueTerminalRecord,
   PostTurnActionQueuedEntryStatus,
   PostTurnActionRuntime,
+  PostTurnActionStatusRecord,
   PostTurnActionTerminalReason,
   QuarantinedPersistedQueueEntry,
 } from '../../../core/agent/post-turn-action-runtime.js';
+import {
+  resolvePostTurnSubagentSpawnQueuedStatus,
+} from '../../../core/agent/post-turn-subagent-spawn.js';
 import {
   POST_TURN_APPRAISAL_RUNTIME_CLASS,
   RUNTIME_LANE_CLASSES,
@@ -43,10 +53,13 @@ const log = createComponentLogger('PostTurnActions');
 
 export type {
   PostTurnActionAgent,
+  PostTurnActionCapability,
   PostTurnActionExecutionMode,
   PostTurnActionFailureReason,
   PostTurnActionHandler,
   PostTurnActionHandlerOptions,
+  PostTurnActionHandlerResult,
+  PostTurnActionQueueCompletionRecord,
   PostTurnActionQueueDropRecord,
   PostTurnActionQueueEntryState,
   PostTurnActionQueueFailureRecord,
@@ -57,12 +70,27 @@ export type {
   PostTurnActionQueueTerminalRecord,
   PostTurnActionQueuedEntryStatus,
   PostTurnActionRuntime,
+  PostTurnActionStatusRecord,
+  PostTurnSubagentSpawnPayload,
+  PostTurnSubagentSpawnPolicy,
+  PostTurnSubagentSpawnQueuedStatus,
+  PostTurnSubagentSpawnResultStatus,
   PostTurnActionTerminalReason,
   QuarantinedPersistedQueueEntry,
 } from '../../../core/agent/post-turn-action-runtime.js';
+export {
+  POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
+} from '../../../core/agent/post-turn-action-runtime.js';
+export {
+  registerPostTurnSubagentSpawnRuntime,
+} from '../../../core/agent/post-turn-subagent-spawn.js';
+export type {
+  RegisterPostTurnSubagentSpawnRuntimeOptions,
+} from '../../../core/agent/post-turn-subagent-spawn.js';
 
 interface DeferredQueueEntry {
   action: InferredPostTurnAction;
+  capability: PostTurnActionCapability;
   runtimeClass: RuntimeLaneClass;
   attempt: number;
   nextRunAt: number;
@@ -127,12 +155,14 @@ export function wirePostTurnActionRuntime(
   const recentDrops: PostTurnActionQueueDropRecord[] = [];
   const recentFailures: PostTurnActionQueueFailureRecord[] = [];
   const recentTerminals: PostTurnActionQueueTerminalRecord[] = [];
+  const recentCompletions: PostTurnActionQueueCompletionRecord[] = [];
   const droppedCountsByRuntimeClass = new Map<RuntimeLaneClass, number>();
   let processing = false;
   let droppedCount = 0;
   let failedCount = 0;
   let cancelledCount = 0;
   let acknowledgedCount = 0;
+  let completedCount = 0;
   let persistenceLoadState: PostTurnActionQueuePersistenceLoadState = persistencePath
     ? 'not_found'
     : 'not_configured';
@@ -182,9 +212,16 @@ export function wirePostTurnActionRuntime(
     return Math.max(now, runAt);
   };
 
-  const resolveRuntimeClassForKind = (kind: string): RuntimeLaneClass => (
-    resolveRuntimeLaneClassForPostTurnActionKind(kind)
+  const resolveActionCapability = (kind: string): PostTurnActionCapability => (
+    kind.trim() === POST_TURN_SUBAGENT_SPAWN_ACTION_KIND ? 'subagent_spawn' : 'generic'
   );
+
+  const resolveRuntimeClassForKind = (kind: string): RuntimeLaneClass => {
+    if (resolveActionCapability(kind) === 'subagent_spawn') {
+      return RUNTIME_LANE_CLASSES.backgroundContinuation;
+    }
+    return resolveRuntimeLaneClassForPostTurnActionKind(kind);
+  };
 
   const normalizePersistedAction = (value: unknown): InferredPostTurnAction | null => {
     if (!isRecord(value)) {
@@ -313,6 +350,7 @@ export function wirePostTurnActionRuntime(
 
     return {
       action,
+      capability: resolveActionCapability(action.kind),
       runtimeClass,
       attempt,
       nextRunAt,
@@ -329,6 +367,7 @@ export function wirePostTurnActionRuntime(
       version: PERSISTED_QUEUE_VERSION,
       entries: [...queue.values()].map((entry) => ({
         action: entry.action,
+        capability: entry.capability,
         runtimeClass: entry.runtimeClass,
         attempt: entry.attempt,
         nextRunAt: entry.nextRunAt,
@@ -486,6 +525,7 @@ export function wirePostTurnActionRuntime(
       channelId: entry.action.channelId,
       sourceMessageId: entry.action.sourceMessageId,
       dedupeKey: entry.action.dedupeKey,
+      capability: entry.capability,
       runtimeClass: entry.runtimeClass,
       chargeLane: runtimeProfile.chargeLane,
       phase,
@@ -539,6 +579,7 @@ export function wirePostTurnActionRuntime(
       actionId: entry.action.id,
       actionKind: entry.action.kind,
       dedupeKey: entry.action.dedupeKey,
+      capability: entry.capability,
       runtimeClass: entry.runtimeClass,
       reason,
       failedAt: Date.now(),
@@ -555,6 +596,7 @@ export function wirePostTurnActionRuntime(
       actionId: 'malformed',
       actionKind: 'malformed',
       dedupeKey: `malformed:${failedAt}:${failedCount}`,
+      capability: 'generic',
       runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
       reason: 'malformed_action',
       failedAt,
@@ -566,6 +608,7 @@ export function wirePostTurnActionRuntime(
       actionId: 'malformed',
       actionKind: 'malformed',
       dedupeKey: `malformed:${failedAt}:${failedCount}`,
+      capability: 'generic',
       runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
       chargeLane: resolveRuntimeLaneBudgetProfile(POST_TURN_APPRAISAL_RUNTIME_CLASS).chargeLane,
       phase: 'malformed_dropped',
@@ -596,12 +639,32 @@ export function wirePostTurnActionRuntime(
       actionId: entry.action.id,
       actionKind: entry.action.kind,
       dedupeKey: entry.action.dedupeKey,
+      capability: entry.capability,
       runtimeClass: entry.runtimeClass,
       reason,
       recordedAt: Date.now(),
       attempt: entry.attempt,
       maxAttempts: entry.maxRetries + 1,
       detail,
+    });
+  };
+
+  const recordCompletion = (
+    entry: DeferredQueueEntry,
+    result: PostTurnActionHandlerResult | undefined,
+  ): void => {
+    completedCount += 1;
+    rememberRecent(recentCompletions, {
+      actionId: entry.action.id,
+      actionKind: entry.action.kind,
+      dedupeKey: entry.action.dedupeKey,
+      capability: entry.capability,
+      runtimeClass: entry.runtimeClass,
+      completedAt: Date.now(),
+      attempt: entry.attempt,
+      maxAttempts: entry.maxRetries + 1,
+      detail: result?.detail?.trim() || 'succeeded',
+      ...(result?.subagentSpawn ? { subagentSpawn: { ...result.subagentSpawn } } : {}),
     });
   };
 
@@ -642,6 +705,7 @@ export function wirePostTurnActionRuntime(
 
     const entry: DeferredQueueEntry = {
       action,
+      capability: resolveActionCapability(action.kind),
       runtimeClass: resolveRuntimeClassForKind(action.kind),
       attempt: 0,
       nextRunAt: resolveInitialNextRunAt(action),
@@ -749,11 +813,16 @@ export function wirePostTurnActionRuntime(
       if (requiresForegroundIdle) {
         await agentLoop.waitForIdle?.();
       }
+      let handlerResult: PostTurnActionHandlerResult | undefined;
       for (const { callback } of registeredHandlers) {
-        await callback(entry.action);
+        const result = await callback(entry.action);
+        if (result) {
+          handlerResult = result;
+        }
       }
       queue.delete(entry.action.dedupeKey);
       persistQueue();
+      recordCompletion(entry, handlerResult);
       emitTelemetry('succeeded', entry);
     } catch (error) {
       const errorText = String(error);
@@ -824,19 +893,31 @@ export function wirePostTurnActionRuntime(
   const toQueuedEntryStatus = (
     entry: DeferredQueueEntry,
     now: number,
-  ): PostTurnActionQueuedEntryStatus => ({
-    actionId: entry.action.id,
-    actionKind: entry.action.kind,
-    dedupeKey: entry.action.dedupeKey,
-    runtimeClass: entry.runtimeClass,
-    state: resolveQueuedEntryState(entry, now),
-    attempt: entry.attempt,
-    maxAttempts: entry.maxRetries + 1,
-    inferredAt: entry.action.inferredAt,
-    nextRunAt: entry.nextRunAt,
-    queuedForMs: Math.max(0, now - entry.action.inferredAt),
-    runAfterMs: Math.max(0, entry.nextRunAt - now),
-  });
+  ): PostTurnActionQueuedEntryStatus => {
+    const state = resolveQueuedEntryState(entry, now);
+    const status: PostTurnActionQueuedEntryStatus = {
+      actionId: entry.action.id,
+      actionKind: entry.action.kind,
+      dedupeKey: entry.action.dedupeKey,
+      capability: entry.capability,
+      runtimeClass: entry.runtimeClass,
+      state,
+      cancellable: state !== 'running',
+      attempt: entry.attempt,
+      maxAttempts: entry.maxRetries + 1,
+      inferredAt: entry.action.inferredAt,
+      nextRunAt: entry.nextRunAt,
+      queuedForMs: Math.max(0, now - entry.action.inferredAt),
+      runAfterMs: Math.max(0, entry.nextRunAt - now),
+    };
+    if (entry.capability === 'subagent_spawn') {
+      const spawnStatus = resolvePostTurnSubagentSpawnQueuedStatus(entry.action.payload);
+      if (spawnStatus) {
+        status.subagentSpawn = spawnStatus;
+      }
+    }
+    return status;
+  };
 
   const minimumNumber = (values: number[]): number | undefined => (
     values.length > 0 ? Math.min(...values) : undefined
@@ -950,6 +1031,13 @@ export function wirePostTurnActionRuntime(
         acknowledgedCount,
         recentTerminals: recentTerminals.map((entry) => ({ ...entry })),
       },
+      completions: {
+        completedCount,
+        recentCompletions: recentCompletions.map((entry) => ({
+          ...entry,
+          ...(entry.subagentSpawn ? { subagentSpawn: { ...entry.subagentSpawn } } : {}),
+        })),
+      },
       quarantine: {
         count: quarantinedPersistedEntries.length,
         persisted: quarantinePersisted,
@@ -961,6 +1049,99 @@ export function wirePostTurnActionRuntime(
       status.nextRunAt = nextRunAt;
     }
     return status;
+  };
+
+  const matchesActionRef = (
+    record: { actionId: string; dedupeKey: string },
+    normalizedRef: string,
+  ): boolean => (
+    record.actionId === normalizedRef || record.dedupeKey === normalizedRef
+  );
+
+  const getActionStatus = (actionRef: string): PostTurnActionStatusRecord | undefined => {
+    const normalizedRef = actionRef.trim();
+    if (!normalizedRef) {
+      return undefined;
+    }
+
+    const queuedEntry = findQueuedEntry(normalizedRef);
+    if (queuedEntry) {
+      const now = Date.now();
+      const queued = toQueuedEntryStatus(queuedEntry, now);
+      const status: PostTurnActionStatusRecord = {
+        actionId: queued.actionId,
+        actionKind: queued.actionKind,
+        dedupeKey: queued.dedupeKey,
+        capability: queued.capability,
+        runtimeClass: queued.runtimeClass,
+        state: queued.state,
+        cancellable: queued.cancellable,
+        attempt: queued.attempt,
+        maxAttempts: queued.maxAttempts,
+        updatedAt: now,
+        nextRunAt: queued.nextRunAt,
+        queuedForMs: queued.queuedForMs,
+        runAfterMs: queued.runAfterMs,
+      };
+      if (queued.subagentSpawn) {
+        status.queuedSubagentSpawn = { ...queued.subagentSpawn };
+      }
+      return status;
+    }
+
+    const completion = recentCompletions.find((record) => matchesActionRef(record, normalizedRef));
+    if (completion) {
+      return {
+        actionId: completion.actionId,
+        actionKind: completion.actionKind,
+        dedupeKey: completion.dedupeKey,
+        capability: completion.capability,
+        runtimeClass: completion.runtimeClass,
+        state: 'succeeded',
+        cancellable: false,
+        attempt: completion.attempt,
+        maxAttempts: completion.maxAttempts,
+        updatedAt: completion.completedAt,
+        detail: completion.detail,
+        ...(completion.subagentSpawn ? { subagentSpawn: { ...completion.subagentSpawn } } : {}),
+      };
+    }
+
+    const terminal = recentTerminals.find((record) => matchesActionRef(record, normalizedRef));
+    if (terminal) {
+      return {
+        actionId: terminal.actionId,
+        actionKind: terminal.actionKind,
+        dedupeKey: terminal.dedupeKey,
+        capability: terminal.capability,
+        runtimeClass: terminal.runtimeClass,
+        state: terminal.reason,
+        cancellable: false,
+        attempt: terminal.attempt,
+        maxAttempts: terminal.maxAttempts,
+        updatedAt: terminal.recordedAt,
+        detail: terminal.detail,
+      };
+    }
+
+    const failure = recentFailures.find((record) => matchesActionRef(record, normalizedRef));
+    if (failure) {
+      return {
+        actionId: failure.actionId,
+        actionKind: failure.actionKind,
+        dedupeKey: failure.dedupeKey,
+        capability: failure.capability,
+        runtimeClass: failure.runtimeClass,
+        state: 'failed',
+        cancellable: false,
+        attempt: failure.attempt,
+        maxAttempts: failure.maxAttempts,
+        updatedAt: failure.failedAt,
+        detail: failure.error,
+      };
+    }
+
+    return undefined;
   };
 
   hydrateQueue();
@@ -1025,6 +1206,7 @@ export function wirePostTurnActionRuntime(
         actionId: entry.action.id,
         actionKind: entry.action.kind,
         dedupeKey: entry.action.dedupeKey,
+        capability: entry.capability,
         runtimeClass: entry.runtimeClass,
         attempt: entry.attempt,
         maxAttempts: entry.maxRetries + 1,
@@ -1037,6 +1219,7 @@ export function wirePostTurnActionRuntime(
     acknowledge(actionRef: string, detail = 'acknowledged'): boolean {
       return completeQueuedActionWithoutRunning(actionRef, 'acknowledged', detail);
     },
+    getActionStatus,
     getStatus,
   };
 }

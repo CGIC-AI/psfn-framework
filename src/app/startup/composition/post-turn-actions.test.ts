@@ -10,7 +10,11 @@ import {
 } from '../../../core/agent/worker-lanes.js';
 import { createEligibilityGate } from '../../../system/capabilities/eligibility.js';
 import { Scheduler } from '../../../core/scheduler/scheduler.js';
-import { wirePostTurnActionRuntime } from './post-turn-actions.js';
+import {
+  POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
+  registerPostTurnSubagentSpawnRuntime,
+  wirePostTurnActionRuntime,
+} from './post-turn-actions.js';
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -56,6 +60,32 @@ function makeAction(overrides: Partial<InferredPostTurnAction> = {}): InferredPo
     inferredAt: Date.now(),
     ...overrides,
   };
+}
+
+function makeSubagentSpawnAction(overrides: Partial<InferredPostTurnAction> = {}): InferredPostTurnAction {
+  return makeAction({
+    id: 'spawn-action-1',
+    kind: POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
+    dedupeKey: `${POST_TURN_SUBAGENT_SPAWN_ACTION_KIND}:research`,
+    payload: {
+      request: {
+        name: 'research',
+        task: 'inspect the logs',
+        maxTurns: 2,
+        capabilities: ['analysis'],
+        requiredCapabilities: ['analysis'],
+      },
+      policy: {
+        mode: 'post_turn_action_pipe',
+        allow: true,
+        budget: {
+          maxTurns: 2,
+        },
+      },
+    },
+    maxRetries: 0,
+    ...overrides,
+  });
 }
 
 function readPersistedQueue(path: string): { version: number; entries: unknown[] } {
@@ -1037,6 +1067,226 @@ describe('wirePostTurnActionRuntime', () => {
       nowSpy.mockRestore();
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it('routes post-turn subagent spawn actions through explicit policy and records status', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop: {
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+      },
+      intervalMs: 1,
+    });
+    const executeSubagent = vi.fn(async () => ({
+      subagentId: 'subagent-1',
+      name: 'research',
+      content: 'finished',
+      model: 'mock-model',
+      inputTokens: 11,
+      outputTokens: 13,
+      durationMs: 37,
+      turns: 2,
+      lifecycleState: 'ready' as const,
+      health: 'healthy' as const,
+      stateReason: 'completed',
+      capabilities: ['analysis'],
+      requiredCapabilities: ['analysis'],
+    }));
+    registerPostTurnSubagentSpawnRuntime({
+      postTurnActions: runtime,
+      subagentExecutionPort: { executeSubagent },
+    });
+
+    await eventBus.emit('agent.post_turn.actions.inferred', {
+      message: makeMessage(),
+      response: makeResponse(),
+      actions: [makeSubagentSpawnAction()],
+    });
+
+    expect(runtime.listQueued()).toEqual([
+      expect.objectContaining({
+        actionId: 'spawn-action-1',
+        actionKind: POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
+        capability: 'subagent_spawn',
+        runtimeClass: BACKGROUND_CONTINUATION_RUNTIME_CLASS,
+      }),
+    ]);
+    expect(runtime.getActionStatus('spawn-action-1')).toMatchObject({
+      state: 'ready',
+      cancellable: true,
+      capability: 'subagent_spawn',
+      queuedSubagentSpawn: {
+        requestName: 'research',
+        policyMode: 'post_turn_action_pipe',
+        policyAllowed: true,
+        budgetMaxTurns: 2,
+        requestedMaxTurns: 2,
+      },
+    });
+
+    await scheduler.tick();
+
+    expect(executeSubagent).toHaveBeenCalledWith({
+      name: 'research',
+      task: 'inspect the logs',
+      maxTurns: 2,
+      capabilities: ['analysis'],
+      requiredCapabilities: ['analysis'],
+    });
+    expect(runtime.listQueued()).toHaveLength(0);
+    expect(runtime.getActionStatus('spawn-action-1')).toMatchObject({
+      state: 'succeeded',
+      cancellable: false,
+      detail: 'subagent research completed with ready/healthy',
+      subagentSpawn: {
+        subagentId: 'subagent-1',
+        name: 'research',
+        lifecycleState: 'ready',
+        health: 'healthy',
+        stateReason: 'completed',
+        model: 'mock-model',
+        inputTokens: 11,
+        outputTokens: 13,
+        durationMs: 37,
+        turns: 2,
+      },
+    });
+    expect(runtime.getStatus()).toMatchObject({
+      completions: {
+        completedCount: 1,
+        recentCompletions: [
+          expect.objectContaining({
+            actionId: 'spawn-action-1',
+            capability: 'subagent_spawn',
+            subagentSpawn: expect.objectContaining({
+              subagentId: 'subagent-1',
+            }),
+          }),
+        ],
+      },
+    });
+  });
+
+  it('rejects malformed post-turn subagent spawn actions without invoking the port', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop: {
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+      },
+      intervalMs: 1,
+    });
+    const executeSubagent = vi.fn();
+    registerPostTurnSubagentSpawnRuntime({
+      postTurnActions: runtime,
+      subagentExecutionPort: { executeSubagent },
+    });
+
+    await eventBus.emit('agent.post_turn.actions.inferred', {
+      message: makeMessage(),
+      response: makeResponse(),
+      actions: [
+        makeSubagentSpawnAction({
+          id: 'spawn-missing-policy',
+          dedupeKey: `${POST_TURN_SUBAGENT_SPAWN_ACTION_KIND}:missing-policy`,
+          payload: {
+            request: {
+              name: 'research',
+              task: 'inspect the logs',
+            },
+          },
+        }),
+      ],
+    });
+
+    await scheduler.tick();
+
+    expect(executeSubagent).not.toHaveBeenCalled();
+    expect(runtime.listQueued()).toHaveLength(0);
+    expect(runtime.getActionStatus('spawn-missing-policy')).toMatchObject({
+      state: 'failed',
+      capability: 'subagent_spawn',
+      detail: 'Error: Post-turn subagent spawn requires explicit policy.',
+    });
+    expect(runtime.getStatus()).toMatchObject({
+      failures: {
+        failedCount: 1,
+        recentFailures: [
+          expect.objectContaining({
+            actionId: 'spawn-missing-policy',
+            capability: 'subagent_spawn',
+            reason: 'retries_exhausted',
+          }),
+        ],
+      },
+    });
+  });
+
+  it('cancels queued post-turn subagent spawn actions before execution and exposes terminal status', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop: {
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+      },
+      intervalMs: 1,
+    });
+    const executeSubagent = vi.fn();
+    registerPostTurnSubagentSpawnRuntime({
+      postTurnActions: runtime,
+      subagentExecutionPort: { executeSubagent },
+    });
+
+    await eventBus.emit('agent.post_turn.actions.inferred', {
+      message: makeMessage(),
+      response: makeResponse(),
+      actions: [
+        makeSubagentSpawnAction({
+          id: 'spawn-cancelled',
+          dedupeKey: `${POST_TURN_SUBAGENT_SPAWN_ACTION_KIND}:cancelled`,
+          runAt: Date.now() + 10_000,
+        }),
+      ],
+    });
+
+    expect(runtime.cancel('spawn-cancelled', 'operator cancelled background spawn')).toBe(true);
+    await scheduler.tick();
+
+    expect(executeSubagent).not.toHaveBeenCalled();
+    expect(runtime.getActionStatus('spawn-cancelled')).toMatchObject({
+      state: 'cancelled',
+      cancellable: false,
+      capability: 'subagent_spawn',
+      detail: 'operator cancelled background spawn',
+    });
+    expect(runtime.getStatus()).toMatchObject({
+      terminal: {
+        cancelledCount: 1,
+        recentTerminals: [
+          expect.objectContaining({
+            actionId: 'spawn-cancelled',
+            capability: 'subagent_spawn',
+            reason: 'cancelled',
+          }),
+        ],
+      },
+    });
   });
 
   it('blocks deferred actions when eligibility denies required capabilities', async () => {

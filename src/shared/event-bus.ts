@@ -49,6 +49,7 @@ export interface EventMap {
     channelId: string;
     sourceMessageId: string;
     dedupeKey: string;
+    capability: 'generic' | 'subagent_spawn';
     runtimeClass:
       | 'foreground_chat'
       | 'post_turn_appraisal'
@@ -62,7 +63,10 @@ export interface EventMap {
       | 'succeeded'
       | 'retry_scheduled'
       | 'failed'
-      | 'dropped_budget';
+      | 'dropped_budget'
+      | 'cancelled'
+      | 'acknowledged'
+      | 'malformed_dropped';
     attempt: number;
     maxAttempts: number;
     queueDepth: number;

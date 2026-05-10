@@ -10,62 +10,10 @@ const NETWORK_ISOLATION_PROBE_TIMEOUT_MS = 2_000;
 export function logStartupHydrationDiagnostics(
   diagnostics: StartupConfigHydrationDiagnostics,
 ): void {
-  if (diagnostics.modelsMigratedFromLegacySettings) {
-    log.warn('Migrated legacy model settings from settings.json to models.json');
-  } else if (diagnostics.modelsLegacyDriftDetected) {
-    log.warn('Detected legacy model drift between settings.json and models.json; models.json is authoritative');
-  }
-  if (diagnostics.providersMigratedFromLegacyConfig) {
-    log.warn('Migrated legacy provider endpoints into providers.json');
-  } else if (diagnostics.providersLegacyDriftDetected) {
-    log.warn('Detected provider endpoint drift between legacy config and providers.json; providers.json is authoritative');
-  }
-
-  if (diagnostics.maintenanceIntervalMigration.state === 'migrated') {
-    log.warn('Migrated legacy maintenanceIntervalMs from settings.json to scheduler.json', {
-      maintenanceIntervalMs:
-        diagnostics.maintenanceIntervalMigration.storedValue
-        ?? diagnostics.maintenanceIntervalMigration.settingsValue,
+  if (diagnostics.legacySettingsKeys.length > 0) {
+    log.error('Startup rejected cross-domain keys in settings.json', {
+      keys: diagnostics.legacySettingsKeys,
     });
-  } else if (diagnostics.maintenanceIntervalMigration.state === 'drift_detected') {
-    log.warn('Detected scheduler drift between settings.json and scheduler.json; scheduler.json is authoritative', {
-      settingsMaintenanceIntervalMs: diagnostics.maintenanceIntervalMigration.settingsValue,
-      schedulerMaintenanceIntervalMs: diagnostics.maintenanceIntervalMigration.storedValue,
-    });
-  } else if (diagnostics.maintenanceIntervalMigration.state === 'error') {
-    log.warn('Failed to migrate legacy maintenanceIntervalMs from settings.json', {
-      error: diagnostics.maintenanceIntervalMigration.error ?? 'unknown',
-    });
-  }
-
-  if (diagnostics.capabilityTierMigration.state === 'migrated') {
-    log.warn('Migrated legacy capabilityTier from settings.json to capability-tier.json', {
-      capabilityTier:
-        diagnostics.capabilityTierMigration.storedValue
-        ?? diagnostics.capabilityTierMigration.settingsValue,
-    });
-  } else if (diagnostics.capabilityTierMigration.state === 'drift_detected') {
-    log.warn('Detected capability tier drift between settings.json and capability-tier.json; capability-tier.json is authoritative', {
-      settingsCapabilityTier: diagnostics.capabilityTierMigration.settingsValue,
-      capabilityTier: diagnostics.capabilityTierMigration.storedValue,
-    });
-  } else if (diagnostics.capabilityTierMigration.state === 'error') {
-    log.warn('Failed to migrate legacy capabilityTier from settings.json', {
-      error: diagnostics.capabilityTierMigration.error ?? 'unknown',
-    });
-  }
-
-  if (diagnostics.removedLegacyKeys.length > 0) {
-    if (diagnostics.settingsRewriteError) {
-      log.warn('Failed to rewrite settings.json without legacy cross-domain keys', {
-        keys: diagnostics.removedLegacyKeys,
-        error: diagnostics.settingsRewriteError,
-      });
-    } else {
-      log.warn('Removed legacy cross-domain keys from settings.json', {
-        keys: diagnostics.removedLegacyKeys,
-      });
-    }
   }
 }
 

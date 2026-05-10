@@ -65,13 +65,14 @@ export function saveSettings(dataDir: string, settings: EditableSettings): void 
   const path = join(dataDir, SETTINGS_FILE);
   const normalized = normalizeEditableSettings(settings);
   const split = splitSettingsByDomain(normalized);
+  if (split.legacyKeys.length > 0) {
+    throw new Error(
+      'Refusing to save non-runtime keys to settings.json: '
+      + `${split.legacyKeys.join(', ')}. Save these fields through their canonical owner files.`,
+    );
+  }
   invalidateCachedJsonValue(path);
   writeJsonAtomic(path, split.runtime);
   cacheJsonValue(path, normalizeEditableSettings(split.runtime));
-  if (split.legacyKeys.length > 0) {
-    log.warn('Dropped non-runtime keys while saving settings.json', {
-      keys: split.legacyKeys,
-    });
-  }
   log.info('Saved settings');
 }

@@ -3,7 +3,6 @@ import { join } from 'node:path';
 import {
   normalizeEditableSettings,
   normalizeCanonicalModelRegistry,
-  type EditableSettings,
 } from '../settings.js';
 import { MODELS_SEED_FILE_NAME } from './seed-defaults.js';
 import type { CanonicalModelRegistry, ModelCatalogEntry, ModelRoleAssignments, ModelPurpose, ModelSlot } from '../../shared/contracts/runtime.js';
@@ -32,8 +31,6 @@ interface ModelsRuntimeLoadOptions {
 
 export interface ModelsLoadResult {
   config: ModelsRuntimeConfig;
-  migratedFromLegacySettings: boolean;
-  legacyDriftDetected: boolean;
 }
 
 interface NodeErrorLike {
@@ -123,15 +120,13 @@ export function loadModelsConfig(
   }
 }
 
-export function loadModelsConfigWithLegacyMigration(
+export function loadStartupModelsConfig(
   dataDir: string,
-  options: ModelsRuntimeLoadOptions & { legacySettings?: EditableSettings } = {},
+  options: ModelsRuntimeLoadOptions = {},
 ): ModelsLoadResult {
   const persisted = loadModelsConfig(dataDir, options);
   return {
     config: persisted,
-    migratedFromLegacySettings: false,
-    legacyDriftDetected: false,
   };
 }
 

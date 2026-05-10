@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import type { CanonicalProviderRegistry, CanonicalProviderType, ProviderRegistryEntry } from '../../shared/contracts/runtime.js';
 import type { CredentialReference } from '../../boundary/custody/credential-vault.js';
@@ -40,8 +39,6 @@ interface ProvidersConfigLoadOptions {
 
 export interface ProvidersLoadResult {
   config: ProvidersRuntimeConfig;
-  migratedFromLegacyConfig: boolean;
-  legacyDriftDetected: boolean;
 }
 
 export interface ConfiguredModelRoutingProxy {
@@ -217,36 +214,6 @@ function writeProvidersRegistry(dataDir: string, registry: CanonicalProviderRegi
   writeJsonAtomic(join(dataDir, PROVIDERS_FILE_NAME), registry);
 }
 
-function overlayLegacyProviderFields(
-  registry: CanonicalProviderRegistry,
-  legacy: {
-    litellmBaseUrl?: string;
-    openRouterModelsApiUrl?: string;
-  },
-): CanonicalProviderRegistry {
-  const next = structuredClone(registry);
-  const litellmBaseUrl = normalizeHttpUrl(legacy.litellmBaseUrl, 'legacy.litellmBaseUrl');
-  const openRouterModelsApiUrl = normalizeHttpUrl(legacy.openRouterModelsApiUrl, 'legacy.openRouterModelsApiUrl');
-
-  if (litellmBaseUrl) {
-    const litellm = next.providers.find((entry) => entry.type === 'litellm_proxy');
-    if (litellm) {
-      litellm.apiBaseUrl = litellmBaseUrl;
-      litellm.enabled = true;
-    }
-  }
-
-  if (openRouterModelsApiUrl) {
-    const openrouter = next.providers.find((entry) => entry.type === 'openrouter');
-    if (openrouter) {
-      openrouter.modelsApiUrl = openRouterModelsApiUrl;
-      openrouter.enabled = true;
-    }
-  }
-
-  return next;
-}
-
 export function loadProvidersConfig(
   dataDir: string,
   options: ProvidersConfigLoadOptions = {},
@@ -260,53 +227,13 @@ export function loadProvidersConfig(
   return projectProvidersRuntimeConfig(registry);
 }
 
-export function loadProvidersConfigWithLegacyMigration(
+export function loadStartupProvidersConfig(
   dataDir: string,
-  options: ProvidersConfigLoadOptions & {
-    legacyLiteLLMBaseUrl?: string;
-    legacyOpenRouterModelsApiUrl?: string;
-  } = {},
+  options: ProvidersConfigLoadOptions = {},
 ): ProvidersLoadResult {
-  const dataPath = join(dataDir, PROVIDERS_FILE_NAME);
-  const existed = existsSync(dataPath);
   const loaded = loadProvidersConfig(dataDir, options);
-  if (!existed) {
-    const overlay = overlayLegacyProviderFields(loaded.registry, {
-      litellmBaseUrl: options.legacyLiteLLMBaseUrl,
-      openRouterModelsApiUrl: options.legacyOpenRouterModelsApiUrl,
-    });
-    const migrated = JSON.stringify(overlay) !== JSON.stringify(loaded.registry);
-    if (migrated) {
-      writeProvidersRegistry(dataDir, overlay);
-      return {
-        config: projectProvidersRuntimeConfig(overlay),
-        migratedFromLegacyConfig: true,
-        legacyDriftDetected: false,
-      };
-    }
-    return {
-      config: loaded,
-      migratedFromLegacyConfig: false,
-      legacyDriftDetected: false,
-    };
-  }
-
-  const normalizedLegacyLiteLLMBaseUrl = normalizeHttpUrl(options.legacyLiteLLMBaseUrl, 'legacyLiteLLMBaseUrl');
-  const normalizedLegacyOpenRouterModelsApiUrl = normalizeHttpUrl(
-    options.legacyOpenRouterModelsApiUrl,
-    'legacyOpenRouterModelsApiUrl',
-  );
-  const legacyDriftDetected = (
-    (normalizedLegacyLiteLLMBaseUrl !== undefined && loaded.litellmBaseUrl !== undefined && normalizedLegacyLiteLLMBaseUrl !== loaded.litellmBaseUrl)
-    || (normalizedLegacyOpenRouterModelsApiUrl !== undefined
-      && loaded.openRouterModelsApiUrl !== undefined
-      && normalizedLegacyOpenRouterModelsApiUrl !== loaded.openRouterModelsApiUrl)
-  );
-
   return {
     config: loaded,
-    migratedFromLegacyConfig: false,
-    legacyDriftDetected,
   };
 }
 

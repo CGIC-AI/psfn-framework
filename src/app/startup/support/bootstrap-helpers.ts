@@ -1,7 +1,4 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import {
   applySettings,
   type EditableSettings,
@@ -26,9 +23,8 @@ import {
   applyProvidersRuntimeConfig,
   type ProvidersLoadResult,
 } from '../../../system/config/providers-config.js';
-import { CAPABILITY_TIER_FILE_NAME } from '../../../system/config/capability-tier-config.js';
 import { type ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
-import { SCHEDULER_FILE_NAME, type SchedulerRuntimeConfig } from '../../../system/config/scheduler-config.js';
+import { type SchedulerRuntimeConfig } from '../../../system/config/scheduler-config.js';
 import { type TrustPolicyConfig } from '../../../system/config/trust-policy-config.js';
 import { setRuntimeTrustPolicy } from '../../../system/trust/runtime-policy.js';
 import {
@@ -57,24 +53,8 @@ export {
   resolveRuntimeVoiceTtsProviderOrder,
 } from './voice-provider-runtime.js';
 
-type LegacyMigrationState = 'none' | 'migrated' | 'drift_detected' | 'error';
-
-export interface StartupHydrationLegacyMigrationDiagnostics {
-  state: LegacyMigrationState;
-  settingsValue?: number | CapabilityTier;
-  storedValue?: number | CapabilityTier;
-  error?: string;
-}
-
 export interface StartupConfigHydrationDiagnostics {
-  modelsMigratedFromLegacySettings: boolean;
-  modelsLegacyDriftDetected: boolean;
-  providersMigratedFromLegacyConfig: boolean;
-  providersLegacyDriftDetected: boolean;
-  maintenanceIntervalMigration: StartupHydrationLegacyMigrationDiagnostics;
-  capabilityTierMigration: StartupHydrationLegacyMigrationDiagnostics;
-  removedLegacyKeys: string[];
-  settingsRewriteError?: string;
+  legacySettingsKeys: string[];
 }
 
 export interface StartupConfigHydrationResult {
@@ -269,95 +249,14 @@ export function hydrateCanonicalStartupConfig(
     env,
   });
 
-  const modelsLoadResult = configStore.loadStartupModels({
-    legacySettings: settingsDomains.models,
-  });
+  const modelsLoadResult = configStore.loadStartupModels();
   applySettings(config, modelsLoadResult.config);
-  const providersLoadResult = configStore.loadStartupProviders({
-    legacyLiteLLMBaseUrl: env.LITELLM_BASE_URL,
-    legacyOpenRouterModelsApiUrl: config.openRouterModelsApiUrl,
-  });
+  const providersLoadResult = configStore.loadStartupProviders();
   applyProvidersRuntimeConfig(config, providersLoadResult.config);
 
   const diagnostics: StartupConfigHydrationDiagnostics = {
-    modelsMigratedFromLegacySettings: modelsLoadResult.migratedFromLegacySettings,
-    modelsLegacyDriftDetected: modelsLoadResult.legacyDriftDetected,
-    providersMigratedFromLegacyConfig: providersLoadResult.migratedFromLegacyConfig,
-    providersLegacyDriftDetected: providersLoadResult.legacyDriftDetected,
-    maintenanceIntervalMigration: { state: 'none' },
-    capabilityTierMigration: { state: 'none' },
-    removedLegacyKeys: [...settingsDomains.legacyKeys],
+    legacySettingsKeys: [],
   };
-
-  if (settingsDomains.maintenanceIntervalMs !== undefined) {
-    try {
-      const schedulerPath = join(systemDataDir, SCHEDULER_FILE_NAME);
-      const schedulerFileExisted = existsSync(schedulerPath);
-      const persistedScheduler = configStore.loadStartupScheduler();
-      if (!schedulerFileExisted) {
-        configStore.saveScheduler({
-          ...persistedScheduler,
-          salienceDecayIntervalMs: settingsDomains.maintenanceIntervalMs,
-        });
-        diagnostics.maintenanceIntervalMigration = {
-          state: 'migrated',
-          settingsValue: settingsDomains.maintenanceIntervalMs,
-          storedValue: settingsDomains.maintenanceIntervalMs,
-        };
-      } else if (persistedScheduler.salienceDecayIntervalMs !== settingsDomains.maintenanceIntervalMs) {
-        diagnostics.maintenanceIntervalMigration = {
-          state: 'drift_detected',
-          settingsValue: settingsDomains.maintenanceIntervalMs,
-          storedValue: persistedScheduler.salienceDecayIntervalMs,
-        };
-      }
-    } catch (error) {
-      diagnostics.maintenanceIntervalMigration = {
-        state: 'error',
-        settingsValue: settingsDomains.maintenanceIntervalMs,
-        error: String(error),
-      };
-    }
-  }
-
-  if (settingsDomains.capabilityTier !== undefined) {
-    try {
-      const capabilityPath = join(systemDataDir, CAPABILITY_TIER_FILE_NAME);
-      const capabilityFileExisted = existsSync(capabilityPath);
-      const persistedCapabilities = configStore.loadStartupCapabilityTier();
-      if (!capabilityFileExisted) {
-        configStore.saveCapabilityTier({
-          ...persistedCapabilities,
-          tier: settingsDomains.capabilityTier,
-        });
-        diagnostics.capabilityTierMigration = {
-          state: 'migrated',
-          settingsValue: settingsDomains.capabilityTier,
-          storedValue: settingsDomains.capabilityTier,
-        };
-      } else if (persistedCapabilities.tier !== settingsDomains.capabilityTier) {
-        diagnostics.capabilityTierMigration = {
-          state: 'drift_detected',
-          settingsValue: settingsDomains.capabilityTier,
-          storedValue: persistedCapabilities.tier,
-        };
-      }
-    } catch (error) {
-      diagnostics.capabilityTierMigration = {
-        state: 'error',
-        settingsValue: settingsDomains.capabilityTier,
-        error: String(error),
-      };
-    }
-  }
-
-  if (settingsDomains.legacyKeys.length > 0) {
-    try {
-      configStore.saveRuntimeSettings(settingsDomains.runtime);
-    } catch (error) {
-      diagnostics.settingsRewriteError = String(error);
-    }
-  }
 
   const trustPolicyConfig = configStore.loadStartupTrustPolicy();
   setRuntimeTrustPolicy(trustPolicyConfig);

@@ -81,11 +81,8 @@ export interface ConfigStorePort {
   loadTrustPolicy(): TrustPolicyConfig;
   saveTrustPolicy(nextConfig: unknown): TrustPolicyConfig;
   loadStartupRuntimeSettings(): Pick<StartupOwnerFileState, 'runtimeSettings' | 'settingsDomains'>;
-  loadStartupModels(options?: { legacySettings?: EditableSettings }): ModelsLoadResult;
-  loadStartupProviders(options?: {
-    legacyLiteLLMBaseUrl?: string;
-    legacyOpenRouterModelsApiUrl?: string;
-  }): ProvidersLoadResult;
+  loadStartupModels(): ModelsLoadResult;
+  loadStartupProviders(): ProvidersLoadResult;
   loadStartupTrustPolicy(): TrustPolicyConfig;
   loadStartupScheduler(): SchedulerRuntimeConfig;
   loadStartupCapabilityTier(): CapabilityTierConfig;
@@ -137,17 +134,14 @@ export function createOwnerFileConfigStore(
       dataDir: options.dataDir,
       seedDir: options.seedDir,
     }),
-    loadStartupModels: (startupOptions = {}) => loadStartupModelsOwnerFile({
+    loadStartupModels: () => loadStartupModelsOwnerFile({
       dataDir: options.dataDir,
       seedDir: options.seedDir,
       defaultContextWindow: options.defaultContextWindow,
-      legacySettings: startupOptions.legacySettings,
     }),
-    loadStartupProviders: (startupOptions = {}) => loadStartupProvidersOwnerFile({
+    loadStartupProviders: () => loadStartupProvidersOwnerFile({
       dataDir: options.dataDir,
       seedDir: options.seedDir,
-      legacyLiteLLMBaseUrl: startupOptions.legacyLiteLLMBaseUrl,
-      legacyOpenRouterModelsApiUrl: startupOptions.legacyOpenRouterModelsApiUrl,
     }),
     loadStartupTrustPolicy: () => loadStartupTrustPolicyOwnerFile(options.dataDir, options.seedDir),
     loadStartupScheduler: () => loadStartupSchedulerOwnerFile(options.dataDir, options.seedDir),

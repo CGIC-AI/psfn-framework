@@ -124,13 +124,10 @@ describe('startup owner-file loaders', () => {
       dataDir: rootDir,
       seedDir,
       defaultContextWindow: 128_000,
-      legacySettings: runtimeSettings.settingsDomains.models,
     });
     const providersLoadResult = loadStartupProvidersOwnerFile({
       dataDir: rootDir,
       seedDir,
-      legacyLiteLLMBaseUrl: 'http://127.0.0.1:4999/v1',
-      legacyOpenRouterModelsApiUrl: 'https://legacy.example.test/openrouter-models',
     });
     const trustPolicyConfig = loadStartupTrustPolicyOwnerFile(rootDir, seedDir);
 
@@ -171,6 +168,35 @@ describe('startup owner-file loaders', () => {
     expect(result.errors[0]).toContain('scheduler.json');
     expect(result.errors[0]).toContain('artifactLifecycle must be an object');
     expect(result.errors[0]).toContain('Remove or repair it so it can be reseeded');
+  });
+
+  it('fails closed when settings.json contains keys owned by other startup files', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-owner-files-settings-drift-'));
+    const seedDir = join(process.cwd(), 'config');
+    mkdirSync(rootDir, { recursive: true });
+    tempDirs.push(rootDir);
+
+    writeFileSync(
+      join(rootDir, 'settings.json'),
+      `${JSON.stringify({
+        maintenanceIntervalMs: 123_000,
+        capabilityTier: 'apprentice',
+      }, null, 2)}\n`,
+      'utf-8',
+    );
+
+    const result = verifyStartupOwnerFiles({
+      dataDir: rootDir,
+      seedDir,
+      defaultContextWindow: 128_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('settings.json');
+    expect(result.errors[0]).toContain('Unsupported cross-domain keys in settings.json');
+    expect(result.errors[0]).toContain('maintenanceIntervalMs->scheduler.json');
+    expect(result.errors[0]).toContain('capabilityTier->capability-tier.json');
   });
 
   it('fails closed when charge-policy.json drifts from the canonical schema', () => {

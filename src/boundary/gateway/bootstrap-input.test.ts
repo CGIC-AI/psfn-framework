@@ -29,13 +29,7 @@ function createStartupHydration(): StartupConfigHydrationResult {
     } as StartupConfigHydrationResult['trustPolicyConfig'],
     schedulerConfig: {} as StartupConfigHydrationResult['schedulerConfig'],
     diagnostics: {
-      modelsMigratedFromLegacySettings: false,
-      modelsLegacyDriftDetected: false,
-      providersMigratedFromLegacyConfig: false,
-      providersLegacyDriftDetected: false,
-      maintenanceIntervalMigration: { state: 'none' },
-      capabilityTierMigration: { state: 'none' },
-      removedLegacyKeys: [],
+      legacySettingsKeys: [],
     },
   };
 }

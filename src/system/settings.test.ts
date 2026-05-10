@@ -310,7 +310,7 @@ describe('settings', () => {
   });
 
   describe('saveSettings', () => {
-    it('writes settings atomically and omits domain-owned model fields', () => {
+    it('writes runtime settings atomically', () => {
       const settings = {
         extractionInterval: 10,
       };
@@ -323,6 +323,21 @@ describe('settings', () => {
       expect(parsed.modelCatalog).toBeUndefined();
       expect(parsed.modelRoleAssignments).toBeUndefined();
       expect(parsed.extractionInterval).toBe(10);
+    });
+
+    it('fails closed when asked to persist owner-file settings keys', () => {
+      expect(() => saveSettings(tempDir, {
+        modelRegistry: makeCanonicalModelRegistry(),
+      })).toThrow(
+        'Refusing to save non-runtime keys to settings.json: modelRegistry',
+      );
+
+      expect(() => saveSettings(tempDir, {
+        maintenanceIntervalMs: 120_000,
+        capabilityTier: 'autonomous',
+      })).toThrow(
+        'Refusing to save non-runtime keys to settings.json: maintenanceIntervalMs, capabilityTier',
+      );
     });
 
     it('round-trips the audited runtime owner-file fields through settings.json', () => {
@@ -1855,18 +1870,12 @@ describe('settings', () => {
       expect(config.moaTimeoutMs).toBe(30000);
     });
 
-    it('round-trip save -> load -> apply does not persist capabilityTier in settings.json', () => {
-      saveSettings(tempDir, {
+    it('saveSettings rejects capabilityTier because capability-tier.json owns it', () => {
+      expect(() => saveSettings(tempDir, {
         capabilityTier: 'autonomous',
-      });
-
-      const loaded = loadSettings(tempDir);
-      const config = makeConfig();
-      config.capabilityTier = 'nursery';
-      applySettings(config, loaded);
-
-      expect(loaded.capabilityTier).toBeUndefined();
-      expect(config.capabilityTier).toBe('nursery');
+      })).toThrow(
+        'Refusing to save non-runtime keys to settings.json: capabilityTier',
+      );
     });
 
     it('round-trip save -> load -> apply preserves sessionRestartBehavior', () => {
@@ -1895,18 +1904,12 @@ describe('settings', () => {
       expect(config.uiThemeId).toBe('generic-dark');
     });
 
-    it('round-trip save -> load -> apply keeps existing custom capabilityTier when only settings.json is used', () => {
-      saveSettings(tempDir, {
+    it('saveSettings rejects custom capabilityTier because capability-tier.json owns it', () => {
+      expect(() => saveSettings(tempDir, {
         capabilityTier: 'custom',
-      });
-
-      const loaded = loadSettings(tempDir);
-      expect(loaded.capabilityTier).toBeUndefined();
-
-      const config = makeConfig();
-      config.capabilityTier = 'custom';
-      applySettings(config, loaded);
-      expect(config.capabilityTier).toBe('custom');
+      })).toThrow(
+        'Refusing to save non-runtime keys to settings.json: capabilityTier',
+      );
     });
 
     it('parseSettingsForm parses telegram form fields', () => {

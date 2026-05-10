@@ -3,12 +3,12 @@ import type { EditableSettings, SettingsDomainSplit } from '../settings.js';
 import { SETTINGS_FILE_NAME } from '../settings/contracts.js';
 import { splitSettingsByDomain, loadSettings } from '../settings.js';
 import {
-  loadModelsConfigWithLegacyMigration,
+  loadStartupModelsConfig,
   type ModelsLoadResult,
   MODELS_FILE_NAME,
 } from './models-config.js';
 import {
-  loadProvidersConfigWithLegacyMigration,
+  loadStartupProvidersConfig,
   type ProvidersLoadResult,
   PROVIDERS_FILE_NAME,
 } from './providers-config.js';
@@ -38,8 +38,6 @@ export interface StartupOwnerFileLoadOptions {
   dataDir: string;
   seedDir?: string;
   defaultContextWindow?: number;
-  legacyLiteLLMBaseUrl?: string;
-  legacyOpenRouterModelsApiUrl?: string;
 }
 
 export interface StartupOwnerFileState {
@@ -70,12 +68,42 @@ function formatOwnerFileError(input: {
   return `Invalid ${input.label} owner file at ${input.dataPath}. Remove or repair it so it can be reseeded from ${input.seedPath}. Cause: ${cause}`;
 }
 
+const SETTINGS_OWNER_HINT_BY_KEY: Record<string, string> = {
+  modelRegistry: MODELS_FILE_NAME,
+  primaryModel: MODELS_FILE_NAME,
+  primaryProvider: MODELS_FILE_NAME,
+  primaryMaxTokens: MODELS_FILE_NAME,
+  extractionModel: MODELS_FILE_NAME,
+  extractionProvider: MODELS_FILE_NAME,
+  extractionMaxTokens: MODELS_FILE_NAME,
+  modelCatalog: MODELS_FILE_NAME,
+  modelRoleAssignments: MODELS_FILE_NAME,
+  modelRoster: MODELS_FILE_NAME,
+  maintenanceIntervalMs: SCHEDULER_FILE_NAME,
+  capabilityTier: CAPABILITY_TIER_FILE_NAME,
+};
+
+function assertRuntimeSettingsOwnerFileIsCanonical(settingsDomains: SettingsDomainSplit): void {
+  if (settingsDomains.legacyKeys.length === 0) return;
+
+  const ownerHints = settingsDomains.legacyKeys
+    .map((key) => `${key}->${SETTINGS_OWNER_HINT_BY_KEY[key] ?? 'canonical owner file'}`)
+    .join(', ');
+  throw new Error(
+    'Unsupported cross-domain keys in settings.json: '
+    + `${settingsDomains.legacyKeys.join(', ')}. `
+    + 'settings.json is runtime-owned only; move these keys to their canonical owner files before startup '
+    + `(${ownerHints}).`,
+  );
+}
+
 export function loadStartupRuntimeSettingsOwnerFile(
   options: Pick<StartupOwnerFileLoadOptions, 'dataDir' | 'seedDir'>,
 ): Pick<StartupOwnerFileState, 'runtimeSettings' | 'settingsDomains'> {
   const loadOptions = options.seedDir ? { seedDir: options.seedDir } : undefined;
   const runtimeSettings = loadSettings(options.dataDir, loadOptions);
   const settingsDomains = splitSettingsByDomain(runtimeSettings);
+  assertRuntimeSettingsOwnerFileIsCanonical(settingsDomains);
   return {
     runtimeSettings,
     settingsDomains,
@@ -83,24 +111,19 @@ export function loadStartupRuntimeSettingsOwnerFile(
 }
 
 export function loadStartupModelsOwnerFile(
-  options: Pick<StartupOwnerFileLoadOptions, 'dataDir' | 'seedDir' | 'defaultContextWindow'> & {
-    legacySettings?: EditableSettings;
-  },
+  options: Pick<StartupOwnerFileLoadOptions, 'dataDir' | 'seedDir' | 'defaultContextWindow'>,
 ): ModelsLoadResult {
-  const modelsLoadResult = loadModelsConfigWithLegacyMigration(options.dataDir, {
+  const modelsLoadResult = loadStartupModelsConfig(options.dataDir, {
     defaultContextWindow: options.defaultContextWindow,
-    legacySettings: options.legacySettings,
   });
   return modelsLoadResult;
 }
 
 export function loadStartupProvidersOwnerFile(
-  options: Pick<StartupOwnerFileLoadOptions, 'dataDir' | 'seedDir' | 'legacyLiteLLMBaseUrl' | 'legacyOpenRouterModelsApiUrl'>,
+  options: Pick<StartupOwnerFileLoadOptions, 'dataDir' | 'seedDir'>,
 ): ProvidersLoadResult {
-  const providersLoadResult = loadProvidersConfigWithLegacyMigration(options.dataDir, {
+  const providersLoadResult = loadStartupProvidersConfig(options.dataDir, {
     seedDir: options.seedDir,
-    legacyLiteLLMBaseUrl: options.legacyLiteLLMBaseUrl,
-    legacyOpenRouterModelsApiUrl: options.legacyOpenRouterModelsApiUrl,
   });
   return providersLoadResult;
 }

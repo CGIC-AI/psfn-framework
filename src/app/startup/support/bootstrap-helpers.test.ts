@@ -13,11 +13,9 @@ import {
 } from '../../../system/capabilities/eligibility.js';
 import { loadSettings, saveSettings } from '../../../system/settings.js';
 import { saveModelsConfig } from '../../../system/config/models-config.js';
-import { loadCapabilityTierConfig } from '../../../system/config/capability-tier-config.js';
 import { saveChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
 import {
-  loadSchedulerConfig,
   loadSchedulerSeedDefaults,
   saveSchedulerConfig,
 } from '../../../system/config/scheduler-config.js';
@@ -1221,11 +1219,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(result.trustPolicyConfig.channelClassification.defaultVisibility).toBeTruthy();
     expect(result.chargePolicyConfig.runChargeQuotaByLane.interactive).toBe(30);
     expect(config.chargePolicy?.surfaceCosts.shardLaunch).toBe(8);
-    expect(result.diagnostics.modelsMigratedFromLegacySettings).toBe(false);
-    expect(result.diagnostics.providersMigratedFromLegacyConfig).toBe(false);
-    expect(result.diagnostics.providersLegacyDriftDetected).toBe(false);
-    expect(result.diagnostics.modelsLegacyDriftDetected).toBe(false);
-    expect(result.diagnostics.removedLegacyKeys).toEqual([]);
+    expect(result.diagnostics.legacySettingsKeys).toEqual([]);
   });
 
   it('returns parity-consistent canonical startup snapshots across entrypoint callers', () => {
@@ -1293,7 +1287,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(chatCliConfig.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
   });
 
-  it('reports and applies legacy scheduler/capability migration diagnostics', () => {
+  it('fails closed when settings.json contains scheduler or capability owner keys', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-'));
     const systemDataDir = join(rootDir, 'system-data');
     const companionDataDir = join(rootDir, 'companion-data');
@@ -1314,29 +1308,55 @@ describe('hydrateCanonicalStartupConfig', () => {
       'utf-8',
     );
 
-    const result = hydrateCanonicalStartupConfig(config, {
+    expect(() => hydrateCanonicalStartupConfig(config, {
       env: {
         ...process.env,
         CONFIG_DIR: './config',
         PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
         DATA_DIR: legacyDataDir,
       },
-    });
-
-    expect(result.diagnostics.maintenanceIntervalMigration.state).toBe('migrated');
-    expect(result.diagnostics.capabilityTierMigration.state).toBe('migrated');
-    expect(result.diagnostics.removedLegacyKeys).toEqual(
-      expect.arrayContaining(['maintenanceIntervalMs', 'capabilityTier']),
+    })).toThrow(
+      'Unsupported cross-domain keys in settings.json: maintenanceIntervalMs, capabilityTier',
     );
-    expect(loadSchedulerConfig(systemDataDir).salienceDecayIntervalMs).toBe(222_000);
-    expect(loadCapabilityTierConfig(systemDataDir).tier).toBe('apprentice');
-    const rewrittenSettings = loadSettings(systemDataDir);
-    expect(rewrittenSettings.maintenanceIntervalMs).toBeUndefined();
-    expect(rewrittenSettings.capabilityTier).toBeUndefined();
-    expect(config.maintenanceIntervalMs).toBe(222_000);
   });
 
-  it('migrates legacy provider endpoints into providers.json on first canonical hydration', () => {
+  it('fails closed when settings.json contains model owner keys', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-models-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    writeFileSync(
+      join(systemDataDir, 'settings.json'),
+      `${JSON.stringify({
+        modelRegistry: makeCanonicalModelsConfigForChatOverride(
+          'openai/gpt-4.1-mini',
+          'openrouter',
+          2048,
+          65_536,
+        ),
+      }, null, 2)}\n`,
+      'utf-8',
+    );
+
+    expect(() => hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    })).toThrow(
+      'Unsupported cross-domain keys in settings.json: modelRegistry',
+    );
+  });
+
+  it('does not migrate legacy provider endpoints into providers.json during startup', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-providers-'));
     const systemDataDir = join(rootDir, 'system-data');
     const companionDataDir = join(rootDir, 'companion-data');
@@ -1365,10 +1385,10 @@ describe('hydrateCanonicalStartupConfig', () => {
       },
     });
 
-    expect(result.diagnostics.providersMigratedFromLegacyConfig).toBe(true);
-    expect(config.litellmBaseUrl).toBe('http://127.0.0.1:4999/v1');
-    expect(config.openRouterModelsApiUrl).toBe('https://legacy.example.test/openrouter-models');
-    expect(loadProvidersConfig(systemDataDir).litellmBaseUrl).toBe('http://127.0.0.1:4999/v1');
-    expect(loadProvidersConfig(systemDataDir).openRouterModelsApiUrl).toBe('https://legacy.example.test/openrouter-models');
+    expect(result.diagnostics.legacySettingsKeys).toEqual([]);
+    expect(config.litellmBaseUrl).toBeUndefined();
+    expect(config.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
+    expect(loadProvidersConfig(systemDataDir).litellmBaseUrl).toBeUndefined();
+    expect(loadProvidersConfig(systemDataDir).openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
   });
 });

@@ -194,7 +194,7 @@
         Runtime command board
       </h2>
       <p class="mt-1 text-sm text-shadow-600">
-        Counts from the live agent catalog and the current adaptive runtime snapshot.
+        Registered tools from the live agent catalog and the current adaptive runtime snapshot.
       </p>
     </div>
 

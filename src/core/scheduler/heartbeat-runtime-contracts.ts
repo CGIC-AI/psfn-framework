@@ -24,7 +24,7 @@ import type {
 import type { PendingFollowUp } from '../intention/pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-store-port.js';
 import type { CareReminderStore } from '../intention/care-reminders.js';
-import type { PostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
+import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import type { InternalState } from '../self-model/state.js';
 import type { MemoryExtractor } from '../agent/contracts.js';
 

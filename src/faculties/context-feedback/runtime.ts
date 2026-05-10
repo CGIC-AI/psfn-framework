@@ -1,6 +1,6 @@
 import type { PostTurnActionInferer } from '../../core/agent/substrate-agent.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
-import type { PostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
+import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { ContextManifest } from '../../core/session/context-manifest.js';

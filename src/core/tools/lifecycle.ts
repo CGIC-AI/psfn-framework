@@ -11,7 +11,7 @@ import type { LifecycleRestartSafeguard } from '../../system/capabilities/safegu
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
 import type { PostTurnInferenceContext } from '../agent/substrate-agent/post-turn-actions.js';
-import type { PostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
+import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import { executeSystemReadAction, type SettingsGetParams } from '../../system/settings-tools.js';
 import { textResult, textResultWithError } from './results.js';
 

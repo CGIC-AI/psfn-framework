@@ -1,5 +1,5 @@
-import { createComponentLogger } from '../logger.js';
-import type { MessageSender } from '../lifecycle/notifications.js';
+import { createComponentLogger } from '../../shared/logger.js';
+import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import {
   buildDeferredToolHandoffMessage,
   DEFERRED_TOOL_HANDOFF_ACTION_KIND,
@@ -9,12 +9,12 @@ import {
 import {
   inferComposedDeferredPostTurnActions,
   inferDeferredPostTurnActions as inferDeferredPostTurnActionsFromMessages,
-} from '../bootstrap/deferred-post-turn-inference.js';
-import { evaluateCompositionalPolicyForChannelId } from '../compositional/policy.js';
+} from '../agent/deferred-post-turn-inference.js';
+import { evaluateCompositionalPolicyForChannelId } from '../../system/capabilities/compositional-policy.js';
 import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
-} from '../memory/sleeptime-agent.js';
+} from '../../faculties/memory/sleeptime-agent.js';
 import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,

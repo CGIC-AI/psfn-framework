@@ -92,7 +92,7 @@ import {
 } from '../../../persistence/layout.js';
 import { ReflectionJournalStore } from '../../../persistence/journals/reflection-journal.js';
 import { ReflectionMetacognitionJournalStore } from '../../../persistence/journals/reflection-metacognition-journal.js';
-import type { PostTurnActionRuntime } from './post-turn-actions.js';
+import type { PostTurnActionRuntime } from '../../../core/agent/post-turn-action-runtime.js';
 import { isBusyTurnError } from '../../../system/lifecycle/turn-contention.js';
 import {
   buildDeferredToolHandoffMessage,

@@ -545,7 +545,7 @@ export class GatewayServer {
       });
     }
     if (this.options.auditStore) {
-      return await this.options.auditStore.log(method, decision, params);
+      return await this.options.auditStore.append({ method, decision, params });
     }
     return 0;
   }

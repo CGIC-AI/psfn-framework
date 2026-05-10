@@ -20,6 +20,12 @@ class FakeAuditPool {
   private rows: AuditRow[] = [];
   private nextId = 1;
 
+  seed(row: Omit<AuditRow, 'id'>): number {
+    const id = this.nextId++;
+    this.rows.push({ id, ...row });
+    return id;
+  }
+
   async query<Row>(text: string, values: readonly unknown[] = []): Promise<QueryResult<Row>> {
     const normalized = text.replace(/\s+/g, ' ').trim();
 
@@ -147,9 +153,20 @@ describe('postgres gateway audit adapter', () => {
       maxSizeBytes: 1_000,
     }, () => 1_000);
 
-    const first = await store.log('llm.chat', 'ALLOW', { model: 'test' });
-    const second = await store.log('fs.read', 'NEEDS_APPROVAL', { path: '/etc/passwd' });
-    const third = await store.log('discord.send', 'ALLOW');
+    const first = await store.append({
+      method: 'llm.chat',
+      decision: 'ALLOW',
+      params: { model: 'test' },
+    });
+    const second = await store.append({
+      method: 'fs.read',
+      decision: 'NEEDS_APPROVAL',
+      params: { path: '/etc/passwd' },
+    });
+    const third = await store.append({
+      method: 'discord.send',
+      decision: 'ALLOW',
+    });
     expect(first).toBeGreaterThan(0);
     expect(second).toBeGreaterThan(first);
     expect(third).toBeGreaterThan(second);
@@ -163,6 +180,37 @@ describe('postgres gateway audit adapter', () => {
       durationMs: 150,
       error: 'approval denied',
     });
+  });
+
+  it('exposes explicit rotation enforcement for maintenance paths', async () => {
+    const pool = new FakeAuditPool();
+    const store = createPostgresGatewayAuditStoreFromPool(pool as never, {
+      maxCount: 100,
+      maxAgeMs: 1_000,
+      maxSizeBytes: 1_000,
+    }, () => 1_000);
+
+    pool.seed({
+      timestamp: 1_000,
+      method: 'old',
+      decision: 'ALLOW',
+      paramsJson: null,
+      durationMs: null,
+      error: null,
+    });
+    pool.seed({
+      timestamp: 3_000,
+      method: 'fresh',
+      decision: 'ALLOW',
+      paramsJson: null,
+      durationMs: null,
+      error: null,
+    });
+
+    await store.enforceRotation(3_000);
+
+    expect(await store.count()).toBe(1);
+    expect((await store.getRecent(10)).map(entry => entry.method)).toEqual(['fresh']);
   });
 
   it('creates summary hooks and approval-event queries', async () => {

@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import { createPostgresPool, ensurePostgresSchema, executeQuery, queryOne, queryRows } from '../../persistence/postgres.js';
 import { POSTGRES_AUDIT_MIGRATIONS } from '../../persistence/postgres/migrations.js';
 import type {
+  AuditAppendEntry,
   AuditEntry,
   AuditRotationConfig,
   AuditSummaryEntry,
@@ -144,9 +145,9 @@ class PostgresGatewayAuditStore implements GatewayAuditStorePort {
     this.rotation = resolveRotationConfig(rotationConfig);
   }
 
-  async log(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number> {
+  async append(entry: AuditAppendEntry): Promise<number> {
     const timestamp = this.now();
-    const paramsJson = params ? summarizeParams(params) : null;
+    const paramsJson = entry.params ? summarizeParams(entry.params) : null;
     const row = await queryOne<Pick<AuditRow, 'id'>>(
       this.pool,
       `
@@ -154,7 +155,7 @@ class PostgresGatewayAuditStore implements GatewayAuditStorePort {
         VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING id
       `,
-      [timestamp, method, decision, paramsJson, null, null],
+      [timestamp, entry.method, entry.decision, paramsJson, null, null],
     );
     if (!row) {
       throw new Error('Failed to insert audit entry');
@@ -176,7 +177,7 @@ class PostgresGatewayAuditStore implements GatewayAuditStorePort {
   }
 
   async recordSummary(entry: AuditSummaryEntry): Promise<number> {
-    const id = await this.log(entry.method, entry.decision, entry.params);
+    const id = await this.append(entry);
     await this.complete(id, normalizeDurationMs(entry.durationMs), entry.error);
     return id;
   }
@@ -239,11 +240,11 @@ class PostgresGatewayAuditStore implements GatewayAuditStorePort {
     return row ? Number(row.cnt) : 0;
   }
 
-  private async enforceRotation(nowMs: number): Promise<void> {
+  async enforceRotation(referenceTimeMs: number = this.now()): Promise<void> {
     await executeQuery(
       this.pool,
       `DELETE FROM gateway_audit WHERE timestamp < $1`,
-      [nowMs - this.rotation.maxAgeMs],
+      [referenceTimeMs - this.rotation.maxAgeMs],
     );
     await executeQuery(
       this.pool,

@@ -12,6 +12,7 @@ import {
 import { GatewayErrors } from './protocol.js';
 import type { NdjsonConnection } from './transport.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
+import type { GatewayAuditStorePort } from './audit-port.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -132,6 +133,21 @@ function createMinimalOptions(): GatewayServerOptions {
     },
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
+  };
+}
+
+function createMockAuditStore(overrides: Partial<GatewayAuditStorePort> = {}): GatewayAuditStorePort {
+  return {
+    append: vi.fn(async () => 1),
+    complete: vi.fn(async () => undefined),
+    recordSummary: vi.fn(async () => 1),
+    createSummaryHook: vi.fn(() => async () => undefined),
+    enforceRotation: vi.fn(async () => undefined),
+    getRecent: vi.fn(async () => []),
+    getByMethod: vi.fn(async () => []),
+    getApprovalEvents: vi.fn(async () => []),
+    count: vi.fn(async () => 0),
+    ...overrides,
   };
 }
 
@@ -344,20 +360,14 @@ describe('GatewayServer', () => {
     });
 
     it('does not audit internal session.hmac RPC calls', async () => {
-      const auditLog = vi.fn().mockResolvedValue(1);
+      const auditAppend = vi.fn().mockResolvedValue(1);
       const auditComplete = vi.fn().mockResolvedValue(undefined);
       const { conn } = await setupServerConnection({
         ...createMinimalOptions(),
-        auditStore: {
-          log: auditLog,
+        auditStore: createMockAuditStore({
+          append: auditAppend,
           complete: auditComplete,
-          recordSummary: vi.fn(),
-          createSummaryHook: vi.fn(),
-          getRecent: vi.fn(),
-          getByMethod: vi.fn(),
-          getApprovalEvents: vi.fn(),
-          count: vi.fn(),
-        } as any,
+        }),
       });
 
       const verifyResponse = await invokeRpc(conn, 903, 'session.hmac.verify', {
@@ -373,7 +383,7 @@ describe('GatewayServer', () => {
       });
 
       expect(verifyResponse.error).toBeUndefined();
-      expect(auditLog).not.toHaveBeenCalled();
+      expect(auditAppend).not.toHaveBeenCalled();
       expect(auditComplete).not.toHaveBeenCalled();
     });
   });
@@ -1061,14 +1071,14 @@ describe('GatewayServer', () => {
     });
 
     it('fails closed and audits malformed JSON-RPC frames', async () => {
-      const auditLog = vi.fn().mockReturnValue(123);
+      const auditAppend = vi.fn().mockResolvedValue(123);
       const auditComplete = vi.fn();
       const { server, conn } = await setupServerConnection({
         ...createMinimalOptions(),
-        auditStore: {
-          log: auditLog,
+        auditStore: createMockAuditStore({
+          append: auditAppend,
           complete: auditComplete,
-        } as any,
+        }),
       });
 
       conn._emit({
@@ -1078,13 +1088,13 @@ describe('GatewayServer', () => {
       });
       await new Promise(resolve => setTimeout(resolve, 20));
 
-      expect(auditLog).toHaveBeenCalledWith(
-        'gateway.ipc.frame.invalid',
-        'DENY',
-        expect.objectContaining({
+      expect(auditAppend).toHaveBeenCalledWith({
+        method: 'gateway.ipc.frame.invalid',
+        decision: 'DENY',
+        params: expect.objectContaining({
           frameKind: 'jsonrpc',
         }),
-      );
+      });
       expect(auditComplete).toHaveBeenCalledWith(
         123,
         expect.any(Number),
@@ -1095,14 +1105,14 @@ describe('GatewayServer', () => {
     });
 
     it('fails closed and audits malformed NDJSON frames', async () => {
-      const auditLog = vi.fn().mockReturnValue(222);
+      const auditAppend = vi.fn().mockResolvedValue(222);
       const auditComplete = vi.fn();
       const { server, conn } = await setupServerConnection({
         ...createMinimalOptions(),
-        auditStore: {
-          log: auditLog,
+        auditStore: createMockAuditStore({
+          append: auditAppend,
           complete: auditComplete,
-        } as any,
+        }),
       });
 
       conn._emitFrameError({
@@ -1111,13 +1121,13 @@ describe('GatewayServer', () => {
       });
       await new Promise(resolve => setTimeout(resolve, 20));
 
-      expect(auditLog).toHaveBeenCalledWith(
-        'gateway.ipc.frame.invalid',
-        'DENY',
-        expect.objectContaining({
+      expect(auditAppend).toHaveBeenCalledWith({
+        method: 'gateway.ipc.frame.invalid',
+        decision: 'DENY',
+        params: expect.objectContaining({
           frameKind: 'ndjson',
         }),
-      );
+      });
       expect(auditComplete).toHaveBeenCalledWith(
         222,
         expect.any(Number),

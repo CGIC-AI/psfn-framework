@@ -1,10 +1,19 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import { AuditStore } from './audit.js';
+import type { PolicyDecision } from './protocol.js';
 
 describe('AuditStore', () => {
   let db: Database.Database;
   let store: AuditStore;
+
+  function append(
+    method: string,
+    decision: PolicyDecision,
+    params?: Record<string, unknown>,
+  ): Promise<number> {
+    return store.append({ method, decision, params });
+  }
 
   beforeEach(() => {
     db = new Database(':memory:');
@@ -16,14 +25,14 @@ describe('AuditStore', () => {
   });
 
   it('logs an audit entry and returns its id', async () => {
-    const id = await store.log('llm.chat', 'ALLOW', { model: 'test' });
+    const id = await append('llm.chat', 'ALLOW', { model: 'test' });
     expect(id).toBeGreaterThan(0);
   });
 
   it('retrieves recent entries', async () => {
-    await store.log('llm.chat', 'ALLOW');
-    await store.log('fs.read', 'NEEDS_APPROVAL', { path: '/etc/passwd' });
-    await store.log('discord.send', 'ALLOW');
+    await append('llm.chat', 'ALLOW');
+    await append('fs.read', 'NEEDS_APPROVAL', { path: '/etc/passwd' });
+    await append('discord.send', 'ALLOW');
 
     const entries = await store.getRecent(10);
     expect(entries).toHaveLength(3);
@@ -33,7 +42,7 @@ describe('AuditStore', () => {
   });
 
   it('completes an entry with duration and error', async () => {
-    const id = await store.log('web.fetch', 'ALLOW', { url: 'https://example.com' });
+    const id = await append('web.fetch', 'ALLOW', { url: 'https://example.com' });
     await store.complete(id, 150);
 
     const entries = await store.getRecent(1);
@@ -42,7 +51,7 @@ describe('AuditStore', () => {
   });
 
   it('records errors on completion', async () => {
-    const id = await store.log('fs.write', 'NEEDS_APPROVAL');
+    const id = await append('fs.write', 'NEEDS_APPROVAL');
     await store.complete(id, 50, 'Approval denied');
 
     const entries = await store.getRecent(1);
@@ -50,9 +59,9 @@ describe('AuditStore', () => {
   });
 
   it('filters by method', async () => {
-    await store.log('llm.chat', 'ALLOW');
-    await store.log('fs.read', 'NEEDS_APPROVAL');
-    await store.log('llm.chat', 'ALLOW');
+    await append('llm.chat', 'ALLOW');
+    await append('fs.read', 'NEEDS_APPROVAL');
+    await append('llm.chat', 'ALLOW');
 
     const llmEntries = await store.getByMethod('llm.chat');
     expect(llmEntries).toHaveLength(2);
@@ -60,10 +69,10 @@ describe('AuditStore', () => {
   });
 
   it('filters approval events (non-ALLOW)', async () => {
-    await store.log('llm.chat', 'ALLOW');
-    await store.log('fs.read', 'NEEDS_APPROVAL');
-    await store.log('fs.write', 'DENY');
-    await store.log('discord.send', 'ALLOW');
+    await append('llm.chat', 'ALLOW');
+    await append('fs.read', 'NEEDS_APPROVAL');
+    await append('fs.write', 'DENY');
+    await append('discord.send', 'ALLOW');
 
     const events = await store.getApprovalEvents();
     expect(events).toHaveLength(2);
@@ -72,13 +81,13 @@ describe('AuditStore', () => {
 
   it('counts entries', async () => {
     expect(await store.count()).toBe(0);
-    await store.log('llm.chat', 'ALLOW');
-    await store.log('llm.embed', 'ALLOW');
+    await append('llm.chat', 'ALLOW');
+    await append('llm.embed', 'ALLOW');
     expect(await store.count()).toBe(2);
   });
 
   it('summarizes large params', async () => {
-    await store.log('llm.chat', 'ALLOW', {
+    await append('llm.chat', 'ALLOW', {
       systemPrompt: 'x'.repeat(500),
       messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'hello' }],
       content: 'y'.repeat(300),
@@ -92,7 +101,7 @@ describe('AuditStore', () => {
   });
 
   it('summarizes shard sync envelope and decision fields in audit params', async () => {
-    await store.log('shard.sync.policy', 'DENY', {
+    await append('shard.sync.policy', 'DENY', {
       syncEnvelope: {
         version: 1,
         syncClass: 'derived_memory',
@@ -135,7 +144,7 @@ describe('AuditStore', () => {
   });
 
   it('preserves correlation fields in stored audit summaries', async () => {
-    await store.log('llm.complete', 'ALLOW', {
+    await append('llm.complete', 'ALLOW', {
       turnId: 'turn-77',
       requestId: 'req-77',
       channelId: 'internal:heartbeat',
@@ -161,9 +170,9 @@ describe('AuditStore', () => {
       maxSizeBytes: 10_000,
     });
 
-    await store.log('first', 'ALLOW');
-    await store.log('second', 'ALLOW');
-    await store.log('third', 'ALLOW');
+    await append('first', 'ALLOW');
+    await append('second', 'ALLOW');
+    await append('third', 'ALLOW');
 
     expect(await store.count()).toBe(2);
     expect((await store.getRecent(10)).map(entry => entry.method)).toEqual(['third', 'second']);
@@ -179,16 +188,35 @@ describe('AuditStore', () => {
       });
 
       nowSpy.mockReturnValueOnce(1_000);
-      await store.log('old', 'ALLOW');
+      await append('old', 'ALLOW');
 
       nowSpy.mockReturnValueOnce(3_000);
-      await store.log('fresh', 'ALLOW');
+      await append('fresh', 'ALLOW');
 
       expect(await store.count()).toBe(1);
       expect((await store.getRecent(10))[0].method).toBe('fresh');
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('exposes explicit rotation enforcement for maintenance paths', async () => {
+    store = new AuditStore(db, {
+      maxCount: 100,
+      maxAgeMs: 1_000,
+      maxSizeBytes: 10_000,
+    });
+    const insert = db.prepare(`
+      INSERT INTO gateway_audit (timestamp, method, decision, params_json, duration_ms, error)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    insert.run(1_000, 'old', 'ALLOW', null, null, null);
+    insert.run(3_000, 'fresh', 'ALLOW', null, null, null);
+
+    await store.enforceRotation(3_000);
+
+    expect(await store.count()).toBe(1);
+    expect((await store.getRecent(10))[0].method).toBe('fresh');
   });
 
   it('prunes oldest rows when approximate payload size exceeds maxSizeBytes', async () => {
@@ -198,8 +226,8 @@ describe('AuditStore', () => {
       maxSizeBytes: 220,
     });
 
-    await store.log('first', 'ALLOW', { note: 'a'.repeat(140) });
-    await store.log('second', 'ALLOW', { note: 'b'.repeat(140) });
+    await append('first', 'ALLOW', { note: 'a'.repeat(140) });
+    await append('second', 'ALLOW', { note: 'b'.repeat(140) });
 
     expect(await store.count()).toBe(1);
     expect((await store.getRecent(10))[0].method).toBe('second');

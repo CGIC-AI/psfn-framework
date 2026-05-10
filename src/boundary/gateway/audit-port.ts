@@ -24,13 +24,20 @@ export interface AuditSummaryEntry {
   error?: string;
 }
 
+export interface AuditAppendEntry {
+  method: string;
+  decision: PolicyDecision;
+  params?: Record<string, unknown>;
+}
+
 export type AuditSummaryHook = (entry: AuditSummaryEntry) => void | Promise<void>;
 
 export interface GatewayAuditStorePort {
-  log(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number>;
+  append(entry: AuditAppendEntry): Promise<number>;
   complete(id: number, durationMs: number, error?: string): Promise<void>;
   recordSummary(entry: AuditSummaryEntry): Promise<number>;
   createSummaryHook(): AuditSummaryHook;
+  enforceRotation(referenceTimeMs?: number): Promise<void>;
   getRecent(limit?: number): Promise<AuditEntry[]>;
   getByMethod(method: string, limit?: number): Promise<AuditEntry[]>;
   getApprovalEvents(limit?: number): Promise<AuditEntry[]>;

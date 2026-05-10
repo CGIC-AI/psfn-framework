@@ -2,8 +2,8 @@
 // Every gateway RPC call is logged to SQLite for review.
 
 import Database from 'better-sqlite3';
-import type { PolicyDecision } from './protocol.js';
 import type {
+  AuditAppendEntry,
   AuditEntry,
   AuditRotationConfig,
   AuditSummaryEntry,
@@ -92,11 +92,18 @@ export class AuditStore implements GatewayAuditStorePort {
     `);
   }
 
-  async log(method: string, decision: PolicyDecision, params?: Record<string, unknown>): Promise<number> {
+  async append(entry: AuditAppendEntry): Promise<number> {
     const timestamp = Date.now();
-    const paramsJson = params ? summarizeParams(params) : null;
-    const result = this.insertStmt.run(timestamp, method, decision, paramsJson, null, null);
-    this.enforceRotation(timestamp);
+    const paramsJson = entry.params ? summarizeParams(entry.params) : null;
+    const result = this.insertStmt.run(
+      timestamp,
+      entry.method,
+      entry.decision,
+      paramsJson,
+      null,
+      null,
+    );
+    await this.enforceRotation(timestamp);
     return Number(result.lastInsertRowid);
   }
 
@@ -105,7 +112,7 @@ export class AuditStore implements GatewayAuditStorePort {
   }
 
   async recordSummary(entry: AuditSummaryEntry): Promise<number> {
-    const id = await this.log(entry.method, entry.decision, entry.params);
+    const id = await this.append(entry);
     await this.complete(id, normalizeDurationMs(entry.durationMs), entry.error);
     return id;
   }
@@ -159,8 +166,8 @@ export class AuditStore implements GatewayAuditStorePort {
     return row.cnt;
   }
 
-  private enforceRotation(nowMs: number): void {
-    this.pruneByAgeStmt.run(nowMs - this.rotation.maxAgeMs);
+  async enforceRotation(referenceTimeMs: number = Date.now()): Promise<void> {
+    this.pruneByAgeStmt.run(referenceTimeMs - this.rotation.maxAgeMs);
     this.pruneByCountStmt.run(this.rotation.maxCount);
     this.pruneBySize();
   }

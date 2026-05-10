@@ -17,7 +17,6 @@ import type {
   ResponseStyle,
   ResponseStyleOverrides,
 } from '../../shared/contracts/runtime.js';
-import { loadModelSeedDefaults, loadRuntimeSettingsSeedDefaults } from './seed-defaults.js';
 import {
   type CapabilityTier,
   createDefaultCompositionalPolicyConfig,
@@ -29,7 +28,6 @@ import {
 } from './runtime-config-contracts.js';
 import {
   DEFAULT_COMPANION_CARD_FILE_NAME,
-  DEFAULT_COMPANION_ID,
 } from '../../core/identity/companion-naming.js';
 
 const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
@@ -70,7 +68,25 @@ const DEFAULT_DISCORD_TRIGGER_REACTIONS = ['👆'] as const;
 const DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS = 120_000;
 const DEFAULT_CAPABILITY_TIER: CapabilityTier = 'nursery';
 const DEFAULT_OBSIDIAN_TIMEOUT_MS = 10_000;
+const OWNER_FILE_REQUIRED_SENTINEL = '__owner_file_required__';
+const BOOTSTRAP_CONTEXT_WINDOW = 128_000;
+const BOOTSTRAP_MAX_OUTPUT_TOKENS = 1;
+const DEFAULT_CONTINUITY_MESSAGE_LIMIT = 10;
+const DEFAULT_SESSION_MIRROR_ENABLED = true;
+const DEFAULT_SESSION_MIRROR_MAX_CHARS = 220;
+const DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS = 1_800_000;
+const DEFAULT_THINK_MAX_TOKENS = 76_000;
+const DEFAULT_THINK_MAX_WALL_TIME_MS = 180_000;
+const DEFAULT_THINK_MAX_SUB_QUERIES = 12;
 type LoadConfigMode = 'gateway' | 'agent';
+
+function requireCompanionId(env: NodeJS.ProcessEnv): string {
+  const companionId = parseOptionalStringEnv(env.COMPANION_ID);
+  if (companionId) return companionId;
+  throw new Error(
+    'COMPANION_ID is required. Set an explicit deployment identity in .env before startup.',
+  );
+}
 
 function parsePersistenceBackendEnv(value: string | undefined): PersistenceBackend {
   const normalized = value?.trim().toLowerCase() ?? '';
@@ -91,18 +107,16 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     ? resolveCredentialVaultBackend(env)
     : 'env';
   const materializeEnvBackedSecrets = includeSecretBearingConfig && credentialVaultBackend === 'env';
-  const modelSeedDefaults = loadModelSeedDefaults();
-  const runtimeSeedDefaults = loadRuntimeSettingsSeedDefaults();
   const credentialVault = materializeEnvBackedSecrets
     ? createEnvCredentialVault(env)
     : undefined;
-  const primaryModel = modelSeedDefaults.primary.model;
-  const primaryProvider = modelSeedDefaults.primary.provider;
-  const primaryMaxTokens = modelSeedDefaults.primary.maxOutputTokens;
-  const defaultContextWindow = modelSeedDefaults.primary.contextWindow;
-  const extractionModel = modelSeedDefaults.extraction.model;
-  const extractionProvider = modelSeedDefaults.extraction.provider;
-  const extractionMaxTokens = modelSeedDefaults.extraction.maxOutputTokens;
+  const primaryModel = OWNER_FILE_REQUIRED_SENTINEL;
+  const primaryProvider = OWNER_FILE_REQUIRED_SENTINEL;
+  const primaryMaxTokens = BOOTSTRAP_MAX_OUTPUT_TOKENS;
+  const defaultContextWindow = BOOTSTRAP_CONTEXT_WINDOW;
+  const extractionModel = OWNER_FILE_REQUIRED_SENTINEL;
+  const extractionProvider = OWNER_FILE_REQUIRED_SENTINEL;
+  const extractionMaxTokens = BOOTSTRAP_MAX_OUTPUT_TOKENS;
   const modelCatalog = {
     primary: {
       model: primaryModel,
@@ -216,7 +230,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
   });
   const dataDir = runtimePathLayout.systemDataDir;
   const companionDataDir = runtimePathLayout.companionDataDir;
-  const companionId = parseOptionalStringEnv(env.COMPANION_ID) ?? DEFAULT_COMPANION_ID;
+  const companionId = requireCompanionId(env);
   const characterCardPath = env.CHARACTER_CARD_PATH
     ?? `${companionDataDir}/${DEFAULT_COMPANION_CARD_FILE_NAME}`;
   const databaseBasename = sanitizeDatabaseBasename(env.DATABASE_BASENAME);
@@ -251,15 +265,15 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     ...(postgresDatabaseUrl ? { postgresDatabaseUrl } : {}),
     sessionMessageLimit: 30,
     sessionRestartBehavior: 'reuse_latest_session',
-    continuityMessageLimit: runtimeSeedDefaults.continuityMessageLimit,
+    continuityMessageLimit: DEFAULT_CONTINUITY_MESSAGE_LIMIT,
     sessionHistoryBudgetPct: SESSION_HISTORY_BUDGET_PCT_DEFAULT,
     memoryRetrievalBudgetPct: MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT,
     moodCongruenceWeight: DEFAULT_MOOD_CONGRUENCE_WEIGHT,
     adaptiveContextBudgetsEnabled: false,
-    sessionMirrorEnabled: runtimeSeedDefaults.sessionMirrorEnabled,
-    sessionMirrorMaxChars: runtimeSeedDefaults.sessionMirrorMaxChars,
-    sessionMirrorActiveWindowMs: runtimeSeedDefaults.sessionMirrorActiveWindowMs,
-    sessionMirrorChannelOverrides: runtimeSeedDefaults.sessionMirrorChannelOverrides,
+    sessionMirrorEnabled: DEFAULT_SESSION_MIRROR_ENABLED,
+    sessionMirrorMaxChars: DEFAULT_SESSION_MIRROR_MAX_CHARS,
+    sessionMirrorActiveWindowMs: DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS,
+    sessionMirrorChannelOverrides: {},
     extractionInterval: DEFAULT_EXTRACTION_INTERVAL,
     maintenanceIntervalMs: DEFAULT_MAINTENANCE_INTERVAL_MS,
     defaultContextWindow,
@@ -283,9 +297,9 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     profileSynthesisMinNovelty: DEFAULT_PROFILE_SYNTHESIS_MIN_NOVELTY,
     profileSynthesisSourceMemoryLimit: DEFAULT_PROFILE_SYNTHESIS_SOURCE_MEMORY_LIMIT,
     profileSynthesisMinSourceMemories: DEFAULT_PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES,
-    thinkMaxTokens: runtimeSeedDefaults.thinkMaxTokens,
-    thinkMaxWallTimeMs: runtimeSeedDefaults.thinkMaxWallTimeMs,
-    thinkMaxSubQueries: runtimeSeedDefaults.thinkMaxSubQueries,
+    thinkMaxTokens: DEFAULT_THINK_MAX_TOKENS,
+    thinkMaxWallTimeMs: DEFAULT_THINK_MAX_WALL_TIME_MS,
+    thinkMaxSubQueries: DEFAULT_THINK_MAX_SUB_QUERIES,
     modelCatalog,
     modelRoleAssignments,
     modelRegistry,
@@ -296,30 +310,30 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
       memory: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
       context: { model: extractionModel, provider: extractionProvider, maxTokens: extractionMaxTokens },
     },
-    voiceEnabled: runtimeSeedDefaults.voiceEnabled,
+    voiceEnabled: false,
     discordBackfillOnStartup: process.env.DISCORD_BACKFILL_ON_STARTUP !== 'false',
     discordTriggerWords: undefined,
     discordTriggerReactions: [...DEFAULT_DISCORD_TRIGGER_REACTIONS],
     discordTriggerListenWindowMs: DEFAULT_DISCORD_TRIGGER_LISTEN_WINDOW_MS,
     characterName: '',
     uiThemeId: DEFAULT_UI_THEME_ID,
-    voiceTargetGuildId: runtimeSeedDefaults.voiceTargetGuildId,
-    voiceTargetUserId: runtimeSeedDefaults.voiceTargetUserId,
-    voiceReadyCueText: runtimeSeedDefaults.voiceReadyCueText,
+    voiceTargetGuildId: '',
+    voiceTargetUserId: '',
+    voiceReadyCueText: '',
     voiceDaveEncryption,
     voiceDecryptionFailureTolerance,
     ...(materializeEnvBackedSecrets
       ? { deepgramApiKey: resolveOptionalEnvCredential(credentialVault, 'DEEPGRAM_API_KEY', env) }
       : {}),
-    deepgramModel: runtimeSeedDefaults.deepgramModel,
-    deepgramSttEndpoint: runtimeSeedDefaults.deepgramSttEndpoint,
-    deepgramListenEndpoint: runtimeSeedDefaults.deepgramListenEndpoint,
+    deepgramModel: undefined,
+    deepgramSttEndpoint: undefined,
+    deepgramListenEndpoint: undefined,
     ...(materializeEnvBackedSecrets
       ? { elevenLabsApiKey: resolveOptionalEnvCredential(credentialVault, 'ELEVENLABS_API_KEY', env) }
       : {}),
     elevenLabsVoiceId: env.ELEVENLABS_VOICE_ID,
-    elevenLabsModelId: runtimeSeedDefaults.elevenLabsModelId,
-    elevenLabsEndpointBase: runtimeSeedDefaults.elevenLabsEndpointBase,
+    elevenLabsModelId: undefined,
+    elevenLabsEndpointBase: undefined,
     ...(materializeEnvBackedSecrets
       ? { falApiKey: resolveOptionalEnvCredential(credentialVault, 'FAL_API_KEY', env) }
       : {}),
@@ -327,20 +341,20 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     ...(echoTtsModel ? { echoTtsModel } : {}),
     retryMaxAttempts: DEFAULT_RETRY_MAX_ATTEMPTS,
     retryBaseDelayMs: DEFAULT_RETRY_BASE_DELAY_MS,
-    openRouterModelsApiUrl: runtimeSeedDefaults.openRouterModelsApiUrl,
+    openRouterModelsApiUrl: undefined,
     ...(responseStyleOverrides ? { responseStyleOverrides } : {}),
     importProcessingRouteMode: DEFAULT_IMPORT_PROCESSING_ROUTE_MODE,
     importProcessingStrictPolicy: false,
-    embeddingProvider: runtimeSeedDefaults.embeddingProvider,
-    embeddingModel: runtimeSeedDefaults.embeddingModel,
-    embeddingDims: runtimeSeedDefaults.embeddingDims,
-    embeddingOllamaUrl: runtimeSeedDefaults.embeddingOllamaUrl,
-    transformersModel: runtimeSeedDefaults.transformersModel,
-    textEmotionModel: runtimeSeedDefaults.textEmotionModel,
-    textEmotionCacheDir: runtimeSeedDefaults.textEmotionCacheDir,
-    textEmotionDtype: runtimeSeedDefaults.textEmotionDtype,
-    embeddingApiModel: runtimeSeedDefaults.embeddingApiModel,
-    embeddingApiDims: runtimeSeedDefaults.embeddingApiDims,
+    embeddingProvider: undefined,
+    embeddingModel: undefined,
+    embeddingDims: undefined,
+    embeddingOllamaUrl: undefined,
+    transformersModel: undefined,
+    textEmotionModel: undefined,
+    textEmotionCacheDir: undefined,
+    textEmotionDtype: undefined,
+    embeddingApiModel: undefined,
+    embeddingApiDims: undefined,
     compositionalPolicy: createDefaultCompositionalPolicyConfig(),
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,
@@ -348,13 +362,13 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     webFetchLocalCrawlerAllowHttp: false,
     ...(gatewayTlsCaPath ? { gatewayTlsCaPath } : {}),
     ...(gatewayTlsRejectUnauthorized !== undefined ? { gatewayTlsRejectUnauthorized } : {}),
-    wyomingShardRouting: runtimeSeedDefaults.wyomingShardRouting,
+    wyomingShardRouting: { enabled: false },
     wyomingEnabled,
     wyomingHost,
     ...(wyomingPort !== undefined ? { wyomingPort } : {}),
     telegramEnabled: false,
     capabilityTier: DEFAULT_CAPABILITY_TIER,
-    shardToolsets: runtimeSeedDefaults.shardToolsets,
+    shardToolsets: {},
     // Obsidian vault
     obsidianAutoPublish: false,
     obsidianTimeoutMs: DEFAULT_OBSIDIAN_TIMEOUT_MS,

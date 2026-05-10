@@ -1,16 +1,13 @@
-import { existsSync, readFileSync, renameSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
 import type { CharacterCardV2 } from './types.js';
 import { buildCharacterMacroMap } from './character-macro-map.js';
 import {
   DEFAULT_COMPANION_NAME,
-  LEGACY_CHARACTER_CARD_FILE_NAME,
   normalizeCompanionName,
 } from './companion-naming.js';
 import { renderPromptRuntimeTokens } from './prompt-runtime.js';
 import { wrapPromptSectionXml } from './prompt-sections.js';
 import { composeDefaultFoundationTemplate } from './foundation-sections.js';
-import { writeJsonAtomic } from '../../shared/utils/fs.js';
 
 export function loadCharacterCard(path: string): CharacterCardV2 {
   if (!existsSync(path)) {
@@ -73,14 +70,6 @@ function renderWithCharacterMacros(
 }
 
 export function loadOrInitializeCharacterCard(path: string): CharacterCardV2 {
-  if (!existsSync(path)) {
-    const legacyPath = join(dirname(path), LEGACY_CHARACTER_CARD_FILE_NAME);
-    if (legacyPath !== path && existsSync(legacyPath)) {
-      renameSync(legacyPath, path);
-    } else {
-      writeJsonAtomic(path, createBootstrapStarterCard());
-    }
-  }
   return loadCharacterCard(path);
 }
 

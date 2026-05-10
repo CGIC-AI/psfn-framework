@@ -5,7 +5,7 @@ PSFN boots through the split runtime. The legacy `src/app/startup/index.ts` entr
 ## Prerequisites
 
 - Node.js 22+
-- One provider secret for the model/provider seed you plan to use. A fresh install usually means `OPENROUTER_API_KEY`.
+- One provider secret for the model/provider owner file you plan to use. The shipped examples include OpenRouter, so using those examples usually means `OPENROUTER_API_KEY`.
 - Optional channel/service secrets only for the surfaces you enable:
   - `DISCORD_TOKEN` and `DISCORD_BOT_ID`
   - `TELEGRAM_BOT_TOKEN`
@@ -53,7 +53,7 @@ Mutable runtime/admin configuration lives under the system-data config domain:
 - `trust-policy.json`
 - `backup.json`
 
-On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
+Startup requires these files to exist. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state.
 
 ## First Local Bring-Up
 
@@ -67,19 +67,35 @@ On first boot, PSFN seeds these from `config/*.seed.json` where applicable.
    DATABASE_PATH=./data/companion.db
    ```
 
-2. Start the split runtime (gateway + agent + operator):
+2. Intentionally copy the example owner files into the system data directory and edit them for this deployment:
+
+   ```bash
+   cp config/settings.seed.json ./data/settings.json
+   cp config/models.seed.json ./data/models.json
+   cp config/providers.seed.json ./data/providers.json
+   cp config/scheduler.seed.json ./data/scheduler.json
+   cp config/capability-tier.seed.json ./data/capability-tier.json
+   cp config/trust-policy.seed.json ./data/trust-policy.json
+   cp config/charge-policy.seed.json ./data/charge-policy.json
+   cp config/backup.seed.json ./data/backup.json
+   cp config/skills.seed.json ./data/skills.json
+   ```
+
+3. Provide the explicit character card at `CHARACTER_CARD_PATH`. Startup fails if the configured identity file is missing.
+
+4. Start the split runtime (gateway + agent + operator):
 
    ```bash
    npm run split
    ```
 
-3. If you want the integrated Garden SPA served by the admin host, build it once:
+5. If you want the integrated Garden SPA served by the admin host, build it once:
 
    ```bash
    npm run garden:build
    ```
 
-4. If you want the standalone Garden dev server instead:
+6. If you want the standalone Garden dev server instead:
 
    ```bash
    npm run garden:dev

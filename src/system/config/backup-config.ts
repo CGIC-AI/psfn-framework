@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import {
-  loadOrSeedJson,
+  loadRequiredJson,
 } from './load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -67,9 +67,9 @@ export function loadBackupConfig(
   options: BackupConfigLoadOptions = {},
 ): BackupJsonConfig {
   const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
-  return loadOrSeedJson({
+  return loadRequiredJson({
     dataPath: join(dataDir, BACKUP_FILE_NAME),
-    seedPath: join(seedDir, BACKUP_SEED_FILE_NAME),
+    examplePath: join(seedDir, BACKUP_SEED_FILE_NAME),
     validate: validateBackupConfig,
   });
 }

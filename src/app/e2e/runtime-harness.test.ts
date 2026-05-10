@@ -28,7 +28,7 @@ afterEach(() => {
 });
 
 describe('createIsolatedE2ERuntime', () => {
-  it('boots against seeded isolated roots instead of ambient invalid DATA_DIR state', () => {
+  it('boots against explicitly copied isolated owner files instead of ambient invalid DATA_DIR state', () => {
     const ambientDataDir = mkdtempSync(join(tmpdir(), 'psfn-e2e-ambient-'));
     TEMP_DIRS.push(ambientDataDir);
     writeFileSync(join(ambientDataDir, 'scheduler.json'), JSON.stringify({

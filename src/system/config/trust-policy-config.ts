@@ -5,7 +5,7 @@ import type {
   TrustLevel,
 } from '../trust/types.js';
 import {
-  loadOrSeedJson,
+  loadRequiredJson,
 } from './load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -155,9 +155,9 @@ export function loadTrustPolicyConfig(
   options: TrustPolicyLoadOptions = {},
 ): TrustPolicyConfig {
   const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
-  return loadOrSeedJson({
+  return loadRequiredJson({
     dataPath: join(dataDir, TRUST_POLICY_FILE_NAME),
-    seedPath: join(seedDir, TRUST_POLICY_SEED_FILE_NAME),
+    examplePath: join(seedDir, TRUST_POLICY_SEED_FILE_NAME),
     validate: validateTrustPolicy,
   });
 }

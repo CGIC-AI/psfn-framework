@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -89,12 +89,30 @@ describe('resolveStartupLifecycleBundle', () => {
 
 describe('resolveStartupPreflightBundle', () => {
   const tempDirs: string[] = [];
+  const requiredOwnerFiles = [
+    'models.json',
+    'providers.json',
+    'trust-policy.json',
+    'capability-tier.json',
+    'charge-policy.json',
+  ] as const;
 
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  function copyOwnerExample(systemDataDir: string, ownerFile: typeof requiredOwnerFiles[number]): void {
+    writeFileSync(
+      join(systemDataDir, ownerFile),
+      readFileSync(
+        join(process.cwd(), 'config', ownerFile.replace(/\.json$/, '.seed.json')),
+        'utf8',
+      ),
+      'utf-8',
+    );
+  }
 
   it('warns on ignored JSON-owned env keys and returns hydrated startup state', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-preflight-'));
@@ -105,6 +123,9 @@ describe('resolveStartupPreflightBundle', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
+    for (const ownerFile of requiredOwnerFiles) {
+      copyOwnerExample(systemDataDir, ownerFile);
+    }
 
     saveSettings(systemDataDir, {
       sessionMessageLimit: 41,

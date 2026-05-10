@@ -1,14 +1,16 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveCompanionStateDir } from '../../persistence/layout.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { createBootstrapStarterCard } from '../../core/identity/loader.js';
 
 const ISOLATED_E2E_ENV_KEYS = [
   'BACKUP_ROOT_DIR',
   'CHARACTER_CARD_PATH',
+  'COMPANION_ID',
   'COMPANION_DATA_DIR',
   'DATA_DIR',
   'DATABASE_PATH',
@@ -68,6 +70,15 @@ function normalizeNonEmptyString(value: string | undefined): string | undefined 
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function copyOwnerExample(seedDir: string, systemDataDir: string, ownerFile: string): void {
+  const exampleFile = ownerFile.replace(/\.json$/, '.seed.json');
+  writeFileSync(
+    join(systemDataDir, ownerFile),
+    readFileSync(join(seedDir, exampleFile), 'utf8'),
+    'utf8',
+  );
+}
+
 export function createIsolatedE2ERuntime(
   options: IsolatedE2ERuntimeOptions = {},
 ): IsolatedE2ERuntime {
@@ -113,6 +124,26 @@ export function createIsolatedE2ERuntime(
     process.env.PSFN_RUNTIME_LAYOUT_MODE = 'continuous';
     process.env.DATABASE_PATH = databasePath;
     process.env.CHARACTER_CARD_PATH = characterCardPath;
+    process.env.COMPANION_ID = 'e2e-companion';
+
+    for (const ownerFile of [
+      'settings.json',
+      'models.json',
+      'providers.json',
+      'scheduler.json',
+      'capability-tier.json',
+      'trust-policy.json',
+      'charge-policy.json',
+      'backup.json',
+      'skills.json',
+    ]) {
+      copyOwnerExample(seedDir, systemDataDir, ownerFile);
+    }
+    writeFileSync(
+      characterCardPath,
+      `${JSON.stringify(createBootstrapStarterCard('E2E Companion'), null, 2)}\n`,
+      'utf8',
+    );
 
     return {
       backupsDir,

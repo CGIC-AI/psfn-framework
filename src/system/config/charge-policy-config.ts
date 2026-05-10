@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import {
-  loadOrSeedJson,
+  loadRequiredJson,
   loadSeedJson,
 } from './load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -227,9 +227,9 @@ export function loadChargePolicyConfig(
   options: ChargePolicyLoadOptions = {},
 ): ChargePolicyConfig {
   const seedDir = resolveSeedDir(options.seedDir);
-  return loadOrSeedJson({
+  return loadRequiredJson({
     dataPath: join(dataDir, CHARGE_POLICY_FILE_NAME),
-    seedPath: join(seedDir, CHARGE_POLICY_SEED_FILE_NAME),
+    examplePath: join(seedDir, CHARGE_POLICY_SEED_FILE_NAME),
     validate: validateChargePolicyConfig,
   });
 }

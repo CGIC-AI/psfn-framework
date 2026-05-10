@@ -3,14 +3,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { CapabilityRuntime } from './runtime.js';
-import { CAPABILITY_TIER_SEED_FILE_NAME, saveCapabilityTierConfig } from '../config/capability-tier-config.js';
+import { CAPABILITY_TIER_FILE_NAME, CAPABILITY_TIER_SEED_FILE_NAME, saveCapabilityTierConfig } from '../config/capability-tier-config.js';
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
 }
 
 describe('CapabilityRuntime', () => {
-  it('uses capability-tier seed defaults on first boot', () => {
+  it('fails closed when capability-tier.json is missing', () => {
     const root = mkdtempSync(join(tmpdir(), 'cap-runtime-fallback-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'seed');
@@ -23,14 +23,10 @@ describe('CapabilityRuntime', () => {
         customTokens: [],
       });
 
-      const runtime = new CapabilityRuntime({
+      expect(() => new CapabilityRuntime({
         dataDir,
         seedDir,
-      });
-
-      expect(runtime.getTier()).toBe('nursery');
-      expect(runtime.has('git.read')).toBe(true);
-      expect(runtime.has('git.write')).toBe(false);
+      })).toThrow('Missing required JSON owner file');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -45,6 +41,10 @@ describe('CapabilityRuntime', () => {
 
     try {
       writeJson(join(seedDir, CAPABILITY_TIER_SEED_FILE_NAME), {
+        tier: 'nursery',
+        customTokens: [],
+      });
+      writeJson(join(dataDir, CAPABILITY_TIER_FILE_NAME), {
         tier: 'nursery',
         customTokens: [],
       });

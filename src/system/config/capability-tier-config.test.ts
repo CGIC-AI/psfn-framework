@@ -15,7 +15,7 @@ function writeJson(path: string, value: unknown): void {
 }
 
 describe('capability-tier config', () => {
-  it('loads from seed and persists data file when missing', () => {
+  it('fails closed when the owner file is missing', () => {
     const root = mkdtempSync(join(tmpdir(), 'capability-tier-config-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'seed');
@@ -28,15 +28,35 @@ describe('capability-tier config', () => {
         customTokens: ['identity.read'],
       });
 
-      const loaded = loadCapabilityTierConfig(dataDir, { seedDir });
-      expect(loaded).toEqual({
+      expect(() => loadCapabilityTierConfig(dataDir, { seedDir })).toThrow(
+        'Missing required JSON owner file',
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('loads an explicit owner file without copying the seed', () => {
+    const root = mkdtempSync(join(tmpdir(), 'capability-tier-config-explicit-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'seed');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+
+    try {
+      writeJson(join(seedDir, CAPABILITY_TIER_SEED_FILE_NAME), {
         tier: 'apprentice',
         customTokens: ['identity.read'],
       });
+      writeJson(join(dataDir, CAPABILITY_TIER_FILE_NAME), {
+        tier: 'custom',
+        customTokens: ['git.read'],
+      });
 
-      const persistedRaw = readFileSync(join(dataDir, CAPABILITY_TIER_FILE_NAME), 'utf-8');
-      const persisted = JSON.parse(persistedRaw);
-      expect(persisted).toEqual(loaded);
+      expect(loadCapabilityTierConfig(dataDir, { seedDir })).toEqual({
+        tier: 'custom',
+        customTokens: ['git.read'],
+      });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -74,7 +74,7 @@ function getDefaultSeedPolicy() {
 }
 
 describe('charge policy config', () => {
-  it('loads from seed and persists the owner file when missing', () => {
+  it('fails closed when the owner file is missing', () => {
     const root = mkdtempSync(join(tmpdir(), 'charge-policy-config-'));
     const dataDir = join(root, 'data');
     const seedDir = join(root, 'seed');
@@ -122,9 +122,34 @@ describe('charge policy config', () => {
       };
       writeJson(join(seedDir, CHARGE_POLICY_SEED_FILE_NAME), seed);
 
-      const loaded = loadChargePolicyConfig(dataDir, { seedDir });
-      expect(loaded).toEqual(seed);
-      expect(JSON.parse(readFileSync(join(dataDir, CHARGE_POLICY_FILE_NAME), 'utf-8'))).toEqual(seed);
+      expect(() => loadChargePolicyConfig(dataDir, { seedDir })).toThrow(
+        'Missing required JSON owner file',
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('loads an explicit owner file without copying the seed', () => {
+    const root = mkdtempSync(join(tmpdir(), 'charge-policy-config-explicit-'));
+    const dataDir = join(root, 'data');
+    const seedDir = join(root, 'seed');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(seedDir, { recursive: true });
+
+    try {
+      const defaultSeed = getDefaultSeedPolicy();
+      const owner = {
+        ...defaultSeed,
+        runChargeQuotaByLane: {
+          ...defaultSeed.runChargeQuotaByLane,
+          interactive: 30,
+        },
+      };
+      writeJson(join(seedDir, CHARGE_POLICY_SEED_FILE_NAME), defaultSeed);
+      writeJson(join(dataDir, CHARGE_POLICY_FILE_NAME), owner);
+
+      expect(loadChargePolicyConfig(dataDir, { seedDir })).toEqual(owner);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

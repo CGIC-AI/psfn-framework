@@ -54,7 +54,7 @@ import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/think/
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
-import { loadOrInitializeCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
+import { loadCharacterCard, composeSystemPrompt } from '../../../core/identity/loader.js';
 import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
@@ -177,7 +177,7 @@ export interface IdentityComposition {
 }
 
 export function composeIdentity(config: SubstrateConfig): IdentityComposition {
-  const card = loadOrInitializeCharacterCard(config.characterCardPath);
+  const card = loadCharacterCard(config.characterCardPath);
   return {
     companionId: resolveCompanionIdFromConfig(config),
     card,

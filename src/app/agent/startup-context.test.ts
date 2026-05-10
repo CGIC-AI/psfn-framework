@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,6 +8,14 @@ import { prepareAgentStartupContext } from './startup-context.js';
 
 const ORIGINAL_ENV = { ...process.env };
 const TEMP_DIRS: string[] = [];
+const REQUIRED_OWNER_EXAMPLES = [
+  'settings.json',
+  'scheduler.json',
+  'trust-policy.json',
+  'capability-tier.json',
+  'charge-policy.json',
+  'backup.json',
+] as const;
 
 function restoreEnv(): void {
   for (const key of Object.keys(process.env)) {
@@ -27,6 +35,14 @@ afterEach(() => {
   }
 });
 
+function copyOwnerExample(systemDataDir: string, ownerFile: typeof REQUIRED_OWNER_EXAMPLES[number]): void {
+  writeFileSync(
+    join(systemDataDir, ownerFile),
+    readFileSync(join(process.cwd(), 'config', ownerFile.replace(/\.json$/, '.seed.json')), 'utf8'),
+    'utf-8',
+  );
+}
+
 describe('prepareAgentStartupContext', () => {
   it('hydrates owner-file model settings before freezing core runtime config', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'psfn-agent-startup-context-'));
@@ -37,6 +53,9 @@ describe('prepareAgentStartupContext', () => {
     mkdirSync(systemDataDir, { recursive: true });
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(workspaceDir, { recursive: true });
+    for (const ownerFile of REQUIRED_OWNER_EXAMPLES) {
+      copyOwnerExample(systemDataDir, ownerFile);
+    }
 
     saveModelsConfig(systemDataDir, {
       schemaVersion: 1,
@@ -157,6 +176,7 @@ describe('prepareAgentStartupContext', () => {
     delete process.env.COMPANION_DATA_DIR;
     process.env.WORKSPACE_PATH = workspaceDir;
     process.env.CHARACTER_CARD_PATH = join(systemDataDir, 'purrsephone.json');
+    process.env.COMPANION_ID = 'test-companion';
     process.env.LITELLM_API_KEY = 'test-litellm-key';
     process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
 

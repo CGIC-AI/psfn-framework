@@ -4,7 +4,7 @@ import { isCapabilityTier } from '../capabilities/tiers.js';
 import type { CapabilityToken } from '../capabilities/tokens.js';
 import { normalizeCapabilityTokens } from '../capabilities/tokens.js';
 import {
-  loadOrSeedJson,
+  loadRequiredJson,
   loadSeedJson,
 } from './load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -48,9 +48,9 @@ export function loadCapabilityTierConfig(
   options: CapabilityTierLoadOptions = {},
 ): CapabilityTierConfig {
   const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
-  return loadOrSeedJson({
+  return loadRequiredJson({
     dataPath: join(dataDir, CAPABILITY_TIER_FILE_NAME),
-    seedPath: join(seedDir, CAPABILITY_TIER_SEED_FILE_NAME),
+    examplePath: join(seedDir, CAPABILITY_TIER_SEED_FILE_NAME),
     validate: validateCapabilityTierConfig,
   });
 }

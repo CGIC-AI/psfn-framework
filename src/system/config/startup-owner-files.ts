@@ -33,6 +33,16 @@ import {
   CHARGE_POLICY_FILE_NAME,
   CHARGE_POLICY_SEED_FILE_NAME,
 } from './charge-policy-config.js';
+import {
+  BACKUP_FILE_NAME,
+  BACKUP_SEED_FILE_NAME,
+  loadBackupConfig,
+} from './backup-config.js';
+import {
+  loadSkillsConfig,
+  SKILLS_FILE_NAME,
+  SKILLS_SEED_FILE_NAME,
+} from './skills-config.js';
 
 export interface StartupOwnerFileLoadOptions {
   dataDir: string;
@@ -61,11 +71,10 @@ function ownerFileSeedDir(options: Pick<StartupOwnerFileLoadOptions, 'seedDir'>)
 function formatOwnerFileError(input: {
   label: string;
   dataPath: string;
-  seedPath: string;
   error: unknown;
 }): string {
   const cause = input.error instanceof Error ? input.error.message : String(input.error);
-  return `Invalid ${input.label} owner file at ${input.dataPath}. Remove or repair it so it can be reseeded from ${input.seedPath}. Cause: ${cause}`;
+  return `${input.label} owner-file validation failed at ${input.dataPath}: ${cause}`;
 }
 
 const SETTINGS_OWNER_HINT_BY_KEY: Record<string, string> = {
@@ -209,6 +218,18 @@ export function verifyStartupOwnerFiles(
       dataPath: join(options.dataDir, CHARGE_POLICY_FILE_NAME),
       seedPath: join(seedDir, CHARGE_POLICY_SEED_FILE_NAME),
       run: () => loadStartupChargePolicyOwnerFile(options.dataDir, options.seedDir),
+    },
+    {
+      label: 'backup',
+      dataPath: join(options.dataDir, BACKUP_FILE_NAME),
+      seedPath: join(seedDir, BACKUP_SEED_FILE_NAME),
+      run: () => loadBackupConfig(options.dataDir, options.seedDir ? { seedDir: options.seedDir } : undefined),
+    },
+    {
+      label: 'skills',
+      dataPath: join(options.dataDir, SKILLS_FILE_NAME),
+      seedPath: join(seedDir, SKILLS_SEED_FILE_NAME),
+      run: () => loadSkillsConfig(options.dataDir, options.seedDir ? { seedDir: options.seedDir } : undefined),
     },
   ];
 

@@ -39,6 +39,7 @@ function clearRuntimePathEnv(): void {
   delete process.env.OPENBAO_KV_PATH;
   delete process.env.OPENBAO_KV_VERSION;
   delete process.env.OPENBAO_NAMESPACE;
+  process.env.COMPANION_ID = 'test-companion';
 }
 
 afterEach(() => {
@@ -53,9 +54,18 @@ describe('loadConfig path defaults', () => {
     expect(config.systemDataDir).toBe('./data');
     expect(config.companionDataDir).toBe('./companion');
     expect(config.dataDir).toBe('./data');
-    expect(config.companionId).toBe('companion');
+    expect(config.companionId).toBe('test-companion');
     expect(config.characterCardPath).toBe('./companion/companion.json');
     expect(config.databasePath).toBe('companion/state/companion.db');
+  });
+
+  it('requires explicit companion identity wiring', () => {
+    clearRuntimePathEnv();
+    delete process.env.COMPANION_ID;
+
+    expect(() => loadConfig()).toThrow(
+      'COMPANION_ID is required',
+    );
   });
 
   it('derives card/database paths from DATA_DIR when only DATA_DIR is set', () => {
@@ -214,13 +224,13 @@ describe('loadConfig path defaults', () => {
     process.env.TTS_PROVIDER = 'echo';
 
     const config = loadConfig();
-    expect(config.primaryModel).toBe('z-ai/glm-5');
-    expect(config.primaryProvider).toBe('openrouter');
-    expect(config.primaryMaxTokens).toBe(16_384);
+    expect(config.primaryModel).toBe('__owner_file_required__');
+    expect(config.primaryProvider).toBe('__owner_file_required__');
+    expect(config.primaryMaxTokens).toBe(1);
     expect(config.defaultContextWindow).toBe(128_000);
-    expect(config.extractionModel).toBe('deepseek/deepseek-v3.2');
-    expect(config.extractionProvider).toBe('openrouter');
-    expect(config.extractionMaxTokens).toBe(8_192);
+    expect(config.extractionModel).toBe('__owner_file_required__');
+    expect(config.extractionProvider).toBe('__owner_file_required__');
+    expect(config.extractionMaxTokens).toBe(1);
     expect(config.sessionMessageLimit).toBe(30);
     expect(config.continuityMessageLimit).toBe(10);
     expect(config.maintenanceIntervalMs).toBe(300_000);
@@ -232,24 +242,24 @@ describe('loadConfig path defaults', () => {
     expect(config.thinkMaxTokens).toBe(76_000);
     expect(config.thinkMaxWallTimeMs).toBe(180_000);
     expect(config.thinkMaxSubQueries).toBe(12);
-    expect(config.deepgramModel).toBe('nova-3');
-    expect(config.deepgramSttEndpoint).toBe('wss://api.deepgram.com/v1/listen');
-    expect(config.deepgramListenEndpoint).toBe('https://api.deepgram.com/v1/listen');
-    expect(config.elevenLabsModelId).toBe('eleven_turbo_v2_5');
-    expect(config.elevenLabsEndpointBase).toBe('https://api.elevenlabs.io/v1');
-    expect(config.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
-    expect(config.embeddingProvider).toBe('transformers');
-    expect(config.embeddingModel).toBe('Xenova/all-MiniLM-L6-v2');
-    expect(config.embeddingDims).toBe(384);
-    expect(config.embeddingOllamaUrl).toBe('http://localhost:11434');
-    expect(config.transformersModel).toBe('Xenova/all-MiniLM-L6-v2');
+    expect(config.deepgramModel).toBeUndefined();
+    expect(config.deepgramSttEndpoint).toBeUndefined();
+    expect(config.deepgramListenEndpoint).toBeUndefined();
+    expect(config.elevenLabsModelId).toBeUndefined();
+    expect(config.elevenLabsEndpointBase).toBeUndefined();
+    expect(config.openRouterModelsApiUrl).toBeUndefined();
+    expect(config.embeddingProvider).toBeUndefined();
+    expect(config.embeddingModel).toBeUndefined();
+    expect(config.embeddingDims).toBeUndefined();
+    expect(config.embeddingOllamaUrl).toBeUndefined();
+    expect(config.transformersModel).toBeUndefined();
     expect(config.transformersCacheDir).toBeUndefined();
-    expect(config.textEmotionModel).toBe('SamLowe/roberta-base-go_emotions-onnx');
-    expect(config.textEmotionCacheDir).toBe('models/transformers');
-    expect(config.textEmotionDtype).toBe('fp32');
+    expect(config.textEmotionModel).toBeUndefined();
+    expect(config.textEmotionCacheDir).toBeUndefined();
+    expect(config.textEmotionDtype).toBeUndefined();
     expect(config.embeddingApiUrl).toBeUndefined();
-    expect(config.embeddingApiModel).toBe('snowflake-arctic-embed2');
-    expect(config.embeddingApiDims).toBe(1024);
+    expect(config.embeddingApiModel).toBeUndefined();
+    expect(config.embeddingApiDims).toBeUndefined();
     expect(config.voiceEnabled).toBe(false);
     expect(config.voiceTargetGuildId).toBe('');
     expect(config.voiceTargetUserId).toBe('');

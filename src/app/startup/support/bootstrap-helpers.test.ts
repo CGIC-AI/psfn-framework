@@ -117,6 +117,27 @@ function makeCanonicalModelsConfigForChatOverride(
   return cloned;
 }
 
+const HYDRATION_OWNER_FILES = [
+  'settings.json',
+  'models.json',
+  'providers.json',
+  'trust-policy.json',
+  'scheduler.json',
+  'capability-tier.json',
+  'charge-policy.json',
+] as const;
+
+function writeHydrationOwnerExamples(systemDataDir: string): void {
+  for (const ownerFile of HYDRATION_OWNER_FILES) {
+    const exampleFile = ownerFile.replace(/\.json$/, '.seed.json');
+    writeFileSync(
+      join(systemDataDir, ownerFile),
+      readFileSync(join(process.cwd(), 'config', exampleFile), 'utf8'),
+      'utf-8',
+    );
+  }
+}
+
 describe('resolveRuntimeVoiceSttProvider', () => {
   it('uses explicit provider when configured', () => {
     expect(resolveRuntimeVoiceSttProvider({ sttProvider: 'deepgram' } as any)).toBe('deepgram');
@@ -917,6 +938,7 @@ describe('installPromotedToolsPersistenceHook', () => {
   it('persists promoted tool names via runtimeHooks', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-promoted-tools-'));
     tempDirs.push(dataDir);
+    saveSettings(dataDir, {});
 
     const config = { dataDir } as any;
     installPromotedToolsPersistenceHook(config);
@@ -987,6 +1009,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
     saveSettings(systemDataDir, {
       voiceEnabled: true,
     });
@@ -1014,6 +1037,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     config.discordToken = 'discord-secret';
@@ -1038,6 +1062,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     config.voiceEnabled = true;
@@ -1068,6 +1093,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(systemDataDir, { recursive: true });
     mkdirSync(companionDataDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     config.voiceEnabled = true;
@@ -1118,6 +1144,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     saveSettings(systemDataDir, {
@@ -1231,6 +1258,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
 
     saveSettings(systemDataDir, {
       sessionMessageLimit: 41,
@@ -1296,6 +1324,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     writeFileSync(
@@ -1329,6 +1358,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     writeFileSync(
@@ -1365,6 +1395,7 @@ describe('hydrateCanonicalStartupConfig', () => {
     mkdirSync(companionDataDir, { recursive: true });
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     writeFileSync(

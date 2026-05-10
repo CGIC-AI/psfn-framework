@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadOrSeedJson } from './load-or-seed.js';
+import { loadRequiredJson } from './load-or-seed.js';
 
 interface TestConfig {
   enabled: boolean;
@@ -19,7 +19,7 @@ function validateTestConfig(value: unknown, sourcePath: string): TestConfig {
   return { enabled };
 }
 
-describe('loadOrSeedJson', () => {
+describe('loadRequiredJson', () => {
   const tempDirs: string[] = [];
 
   afterEach(() => {
@@ -39,18 +39,31 @@ describe('loadOrSeedJson', () => {
     };
   }
 
-  it('seeds data file when it does not exist', () => {
+  it('fails with operator guidance when the required owner file does not exist', () => {
     const { dataPath, seedPath } = setupPaths();
     writeFileSync(seedPath, JSON.stringify({ enabled: true }), 'utf-8');
 
-    const result = loadOrSeedJson({
+    expect(() => loadRequiredJson({
       dataPath,
-      seedPath,
+      examplePath: seedPath,
+      validate: validateTestConfig,
+    })).toThrow('Missing required JSON owner file');
+
+    expect(() => readFileSync(dataPath, 'utf-8')).toThrow();
+  });
+
+  it('loads an existing owner file without consulting the example template', () => {
+    const { dataPath, seedPath } = setupPaths();
+    writeFileSync(seedPath, JSON.stringify({ enabled: false }), 'utf-8');
+    writeFileSync(dataPath, JSON.stringify({ enabled: true }), 'utf-8');
+
+    const result = loadRequiredJson({
+      dataPath,
+      examplePath: seedPath,
       validate: validateTestConfig,
     });
 
     expect(result).toEqual({ enabled: true });
-    expect(JSON.parse(readFileSync(dataPath, 'utf-8'))).toEqual({ enabled: true });
   });
 
   it('fails closed when existing data file contains invalid JSON', () => {
@@ -58,11 +71,11 @@ describe('loadOrSeedJson', () => {
     writeFileSync(seedPath, JSON.stringify({ enabled: true }), 'utf-8');
     writeFileSync(dataPath, '{"enabled":', 'utf-8');
 
-    expect(() => loadOrSeedJson({
+    expect(() => loadRequiredJson({
       dataPath,
-      seedPath,
+      examplePath: seedPath,
       validate: validateTestConfig,
-    })).toThrow('Refusing to reseed invalid JSON config');
+    })).toThrow('Invalid JSON owner file');
 
     expect(readFileSync(dataPath, 'utf-8')).toBe('{"enabled":');
   });
@@ -72,11 +85,11 @@ describe('loadOrSeedJson', () => {
     writeFileSync(seedPath, JSON.stringify({ enabled: true }), 'utf-8');
     writeFileSync(dataPath, JSON.stringify({ enabled: 'yes' }), 'utf-8');
 
-    expect(() => loadOrSeedJson({
+    expect(() => loadRequiredJson({
       dataPath,
-      seedPath,
+      examplePath: seedPath,
       validate: validateTestConfig,
-    })).toThrow('Refusing to reseed invalid JSON config');
+    })).toThrow('Invalid JSON owner file');
 
     expect(JSON.parse(readFileSync(dataPath, 'utf-8'))).toEqual({ enabled: 'yes' });
   });

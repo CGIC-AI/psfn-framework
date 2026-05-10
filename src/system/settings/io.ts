@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import {
   cacheJsonValue,
   invalidateCachedJsonValue,
-  loadOrSeedJsonCached,
+  loadRequiredJsonCached,
 } from '../config/load-or-seed.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -33,7 +33,7 @@ function applyLegacyVoiceProviderDefaults(
   return migrated;
 }
 
-/** Load saved settings from data/settings.json, seeding from config/settings.seed.json when missing/corrupt. */
+/** Load saved settings from data/settings.json. Missing owner files fail closed with example-copy guidance. */
 export function loadSettings(
   dataDir: string,
   options?: { seedDir?: string },
@@ -42,9 +42,9 @@ export function loadSettings(
   const seedDir = options?.seedDir ?? process.env.CONFIG_DIR ?? './config';
   const seedPath = join(seedDir, SETTINGS_SEED_FILE);
 
-  const loaded = loadOrSeedJsonCached({
+  const loaded = loadRequiredJsonCached({
     dataPath: path,
-    seedPath,
+    examplePath: seedPath,
     validate: (raw, sourcePath) => {
       if (!isRecord(raw)) {
         throw new Error(`Invalid settings file format at ${sourcePath}`);

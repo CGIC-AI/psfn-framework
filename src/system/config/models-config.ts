@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   normalizeEditableSettings,
@@ -7,6 +6,7 @@ import {
 import { MODELS_SEED_FILE_NAME } from './seed-defaults.js';
 import type { CanonicalModelRegistry, ModelCatalogEntry, ModelRoleAssignments, ModelPurpose, ModelSlot } from '../../shared/contracts/runtime.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { loadRequiredJson } from './load-or-seed.js';
 
 export const MODELS_FILE_NAME = 'models.json';
 export { MODELS_SEED_FILE_NAME };
@@ -31,23 +31,6 @@ interface ModelsRuntimeLoadOptions {
 
 export interface ModelsLoadResult {
   config: ModelsRuntimeConfig;
-}
-
-interface NodeErrorLike {
-  code?: string;
-}
-
-function isNodeErrorLike(value: unknown): value is NodeErrorLike {
-  return typeof value === 'object' && value !== null;
-}
-
-function isEnoent(error: unknown): boolean {
-  return isNodeErrorLike(error) && error.code === 'ENOENT';
-}
-
-function parseJsonFile(path: string): unknown {
-  const raw = readFileSync(path, 'utf-8');
-  return JSON.parse(raw);
 }
 
 function validateModelsConfig(
@@ -104,20 +87,11 @@ export function loadModelsConfig(
   const dataPath = join(dataDir, MODELS_FILE_NAME);
   const seedPath = join(seedDir, MODELS_SEED_FILE_NAME);
 
-  try {
-    return validateModelsConfig(parseJsonFile(dataPath), dataPath, options.defaultContextWindow);
-  } catch (error) {
-    if (isEnoent(error)) {
-      const seeded = validateModelsConfig(parseJsonFile(seedPath), seedPath, options.defaultContextWindow);
-      writeJsonAtomic(dataPath, seeded.modelRegistry);
-      return seeded;
-    }
-
-    const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Refusing to reseed invalid JSON config at ${dataPath}; fix or remove the file explicitly. Cause: ${reason}`,
-    );
-  }
+  return loadRequiredJson({
+    dataPath,
+    examplePath: seedPath,
+    validate: (raw, sourcePath) => validateModelsConfig(raw, sourcePath, options.defaultContextWindow),
+  });
 }
 
 export function loadStartupModelsConfig(

@@ -6,7 +6,7 @@ import {
   envCredential,
   resolveOptionalCredentialReference,
 } from '../../boundary/custody/credential-vault.js';
-import { loadOrSeedJson } from './load-or-seed.js';
+import { loadRequiredJson } from './load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 
@@ -220,9 +220,9 @@ export function loadProvidersConfig(
   options: ProvidersConfigLoadOptions = {},
 ): ProvidersRuntimeConfig {
   const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
-  const registry = loadOrSeedJson({
+  const registry = loadRequiredJson({
     dataPath: join(dataDir, PROVIDERS_FILE_NAME),
-    seedPath: join(seedDir, PROVIDERS_SEED_FILE_NAME),
+    examplePath: join(seedDir, PROVIDERS_SEED_FILE_NAME),
     validate: normalizeCanonicalProviderRegistry,
   });
   return projectProvidersRuntimeConfig(registry);

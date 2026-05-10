@@ -152,15 +152,9 @@ describe('settings', () => {
   });
 
   describe('loadSettings', () => {
-    it('seeds defaults when file missing', () => {
-      const result = loadSettings(tempDir);
-      expect(result.sessionHistoryBudgetPct).toBe(6);
-      expect(result.memoryRetrievalBudgetPct).toBe(2);
-      expect(result.moodCongruenceWeight).toBe(0.15);
-      expect(result.extractionInterval).toBe(5);
-      expect(result.observationMaskingWindow).toBe(1);
-      expect(result.compositionalPolicy).toEqual(createDefaultCompositionalPolicyConfig());
-      expect(existsSync(join(tempDir, 'settings.json'))).toBe(true);
+    it('fails closed when settings.json is missing', () => {
+      expect(() => loadSettings(tempDir)).toThrow('Missing required JSON owner file');
+      expect(existsSync(join(tempDir, 'settings.json'))).toBe(false);
     });
 
     it('fails closed when legacy model fields are present in settings.json', () => {
@@ -181,7 +175,7 @@ describe('settings', () => {
       const path = join(tempDir, 'settings.json');
       writeFileSync(path, 'not json', 'utf-8');
 
-      expect(() => loadSettings(tempDir)).toThrow('Refusing to reseed invalid JSON config');
+      expect(() => loadSettings(tempDir)).toThrow('Invalid JSON owner file');
       expect(readFileSync(path, 'utf-8')).toBe('not json');
     });
 
@@ -189,7 +183,7 @@ describe('settings', () => {
       const path = join(tempDir, 'settings.json');
       writeFileSync(path, '[]', 'utf-8');
 
-      expect(() => loadSettings(tempDir)).toThrow('Refusing to reseed invalid JSON config');
+      expect(() => loadSettings(tempDir)).toThrow('Invalid JSON owner file');
       expect(readFileSync(path, 'utf-8')).toBe('[]');
     });
 
@@ -299,7 +293,7 @@ describe('settings', () => {
 
       writeFileSync(path, 'not json', 'utf-8');
 
-      expect(() => loadSettings(tempDir)).toThrow('Refusing to reseed invalid JSON config');
+      expect(() => loadSettings(tempDir)).toThrow('Invalid JSON owner file');
       expect(readFileSync(path, 'utf-8')).toBe('not json');
       expect(getCachedJsonValueDiagnostics(path)).toEqual({
         hits: before.hits,

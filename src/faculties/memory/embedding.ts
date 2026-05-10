@@ -14,7 +14,6 @@ import {
   resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
-import { loadRuntimeSettingsSeedDefaults } from '../../system/config/seed-defaults.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 export type EmbeddingProviderKind = 'ollama' | 'transformers' | 'api';
@@ -67,8 +66,14 @@ export interface ApiEmbeddingConfig {
   dims: number;
 }
 
-const RUNTIME_SEED_DEFAULTS = loadRuntimeSettingsSeedDefaults();
 export const STARTUP_EMBEDDING_WARMUP_TEXT = '__psfn_startup_embedding_warmup__';
+const DEFAULT_OLLAMA_EMBEDDING_URL = 'http://localhost:11434';
+const DEFAULT_OLLAMA_EMBEDDING_MODEL = 'nomic-embed-text';
+const DEFAULT_OLLAMA_EMBEDDING_DIMS = 768;
+const DEFAULT_TRANSFORMERS_EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2';
+const DEFAULT_TRANSFORMERS_EMBEDDING_DIMS = 384;
+const DEFAULT_API_EMBEDDING_MODEL = 'text-embedding-3-small';
+const DEFAULT_API_EMBEDDING_DIMS = 1536;
 
 export function resolveProjectTransformersCacheDir(projectRoot: string = process.cwd()): string {
   return path.resolve(projectRoot, 'models', 'transformers');
@@ -77,25 +82,23 @@ export function resolveProjectTransformersCacheDir(projectRoot: string = process
 export const DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR = resolveProjectTransformersCacheDir();
 
 export const DEFAULT_EMBEDDING_CONFIG: EmbeddingConfig = {
-  ollamaUrl: RUNTIME_SEED_DEFAULTS.embeddingOllamaUrl,
-  model: RUNTIME_SEED_DEFAULTS.embeddingModel,
-  dims: RUNTIME_SEED_DEFAULTS.embeddingDims,
+  ollamaUrl: DEFAULT_OLLAMA_EMBEDDING_URL,
+  model: DEFAULT_OLLAMA_EMBEDDING_MODEL,
+  dims: DEFAULT_OLLAMA_EMBEDDING_DIMS,
 };
 
 export const DEFAULT_TRANSFORMERS_EMBEDDING_CONFIG: TransformersEmbeddingConfig = {
-  model: RUNTIME_SEED_DEFAULTS.transformersModel,
-  dims: 384,
+  model: DEFAULT_TRANSFORMERS_EMBEDDING_MODEL,
+  dims: DEFAULT_TRANSFORMERS_EMBEDDING_DIMS,
   cacheDir: DEFAULT_PROJECT_TRANSFORMERS_CACHE_DIR,
 };
 
 export const DEFAULT_API_EMBEDDING_CONFIG: ApiEmbeddingConfig = {
   endpoint: '',
-  model: RUNTIME_SEED_DEFAULTS.embeddingApiModel,
+  model: DEFAULT_API_EMBEDDING_MODEL,
   apiKey: undefined,
-  dims: RUNTIME_SEED_DEFAULTS.embeddingApiDims,
+  dims: DEFAULT_API_EMBEDDING_DIMS,
 };
-
-const DEFAULT_EMBEDDING_PROVIDER: EmbeddingProviderKind = RUNTIME_SEED_DEFAULTS.embeddingProvider;
 
 interface EmbedOptions {
   signal?: AbortSignal;
@@ -446,7 +449,9 @@ function resolveEmbeddingProviderKind(
   value: string | undefined,
 ): EmbeddingProviderKind {
   if (!value || value.trim().length === 0) {
-    return DEFAULT_EMBEDDING_PROVIDER;
+    throw new Error(
+      'embeddingProvider is required in settings.json; startup no longer defaults embeddings from config/settings.seed.json',
+    );
   }
   const normalized = value.trim().toLowerCase();
   if (normalized === 'ollama' || normalized === 'transformers' || normalized === 'api') {

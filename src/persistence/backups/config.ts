@@ -61,16 +61,10 @@ export function resolveBackupRuntimeConfig(
   const defaultRootDir = options.defaultRootDir?.trim() || resolveBackupsDir(options.dataDir);
   const rootDir = env.BACKUP_ROOT_DIR?.trim() || defaultRootDir;
 
-  // Load JSON-owned config (may not exist yet — silently falls back to seed defaults)
-  let jsonConfig: ReturnType<typeof loadBackupConfig> | null = null;
-  try {
-    jsonConfig = loadBackupConfig(options.dataDir);
-  } catch {
-    // seed file may be absent in test environments; use hard-coded defaults
-  }
+  const jsonConfig = loadBackupConfig(options.dataDir);
 
   // Env vars override the JSON config for bootstrap/ops use
-  const intervalHoursFromJson = jsonConfig?.intervalHours ?? DEFAULT_BACKUP_INTERVAL_HOURS;
+  const intervalHoursFromJson = jsonConfig.intervalHours;
   const intervalMsFromEnv = parseIntegerEnv(env.BACKUP_INTERVAL_MS, 0, MIN_BACKUP_INTERVAL_MS);
   const intervalMs = intervalMsFromEnv > 0
     ? intervalMsFromEnv
@@ -79,21 +73,21 @@ export function resolveBackupRuntimeConfig(
   const retentionCountFromEnv = parseIntegerEnv(env.BACKUP_RETENTION_COUNT, 0, MIN_BACKUP_RETENTION_COUNT);
   const maxRotatingBackups = retentionCountFromEnv > 0
     ? retentionCountFromEnv
-    : (jsonConfig?.maxRotatingBackups ?? DEFAULT_BACKUP_ROTATING_COUNT);
+    : jsonConfig.maxRotatingBackups;
 
   const mirrorDir = env.BACKUP_MIRROR_DIR?.trim()
-    ?? (jsonConfig?.mirrorDir ?? DEFAULT_BACKUP_MIRROR_DIR);
+    ?? jsonConfig.mirrorDir;
 
   return {
     intervalMs,
     maxRotatingBackups,
-    maxWeeklyBackups: jsonConfig?.maxWeeklyBackups ?? DEFAULT_BACKUP_WEEKLY_COUNT,
-    maxMonthlyBackups: jsonConfig?.maxMonthlyBackups ?? DEFAULT_BACKUP_MONTHLY_COUNT,
+    maxWeeklyBackups: jsonConfig.maxWeeklyBackups,
+    maxMonthlyBackups: jsonConfig.maxMonthlyBackups,
     rootDir,
     mirrorDir,
     verifyRestore: parseBooleanEnv(
       env.BACKUP_VERIFY_RESTORE,
-      jsonConfig?.verifyRestore ?? DEFAULT_BACKUP_VERIFY_RESTORE,
+      jsonConfig.verifyRestore,
     ),
   };
 }

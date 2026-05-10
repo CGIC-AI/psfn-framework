@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import {
-  loadOrSeedJson,
+  loadRequiredJson,
   loadSeedJson,
 } from './load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -151,9 +151,9 @@ export function loadSchedulerConfig(
   options: SchedulerRuntimeLoadOptions = {},
 ): SchedulerRuntimeConfig {
   const seedDir = resolveSeedDir(options.seedDir);
-  return loadOrSeedJson({
+  return loadRequiredJson({
     dataPath: join(dataDir, SCHEDULER_FILE_NAME),
-    seedPath: join(seedDir, SCHEDULER_SEED_FILE_NAME),
+    examplePath: join(seedDir, SCHEDULER_SEED_FILE_NAME),
     validate: validateSchedulerConfig,
   });
 }

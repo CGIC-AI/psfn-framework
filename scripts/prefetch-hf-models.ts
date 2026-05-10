@@ -8,7 +8,7 @@ import {
 import {
   TextEmotionClassifier,
 } from '../src/core/emotion/text-classifier.js';
-import { loadRuntimeSettingsSeedDefaults } from '../src/system/config/seed-defaults.js';
+import { loadSettings } from '../src/system/settings/io.js';
 
 interface PrefetchCliOptions {
   dryRun: boolean;
@@ -52,12 +52,28 @@ function resolveCacheDir(configuredCacheDir: string | undefined): string {
     : path.resolve(process.cwd(), configured);
 }
 
+function resolveOwnerFileDataDir(env: NodeJS.ProcessEnv): string {
+  const dataDir = resolveOptionalString(env.SYSTEM_DATA_DIR)
+    ?? resolveOptionalString(env.DATA_DIR)
+    ?? './data';
+  return dataDir;
+}
+
+function requireRuntimeSetting(value: string | undefined, field: string, dataDir: string): string {
+  const normalized = resolveOptionalString(value);
+  if (normalized) return normalized;
+  throw new Error(`${field} is required in ${dataDir}/settings.json or via the corresponding CLI override`);
+}
+
 function resolvePrefetchRuntimeDefaults(env: NodeJS.ProcessEnv): PrefetchRuntimeDefaults {
-  const runtimeDefaults = loadRuntimeSettingsSeedDefaults(resolveOptionalString(env.CONFIG_DIR));
+  const dataDir = resolveOwnerFileDataDir(env);
+  const runtimeSettings = loadSettings(dataDir, {
+    seedDir: resolveOptionalString(env.CONFIG_DIR),
+  });
   return {
-    cacheDir: resolveCacheDir(runtimeDefaults.textEmotionCacheDir),
-    embeddingModel: runtimeDefaults.transformersModel,
-    emotionModel: runtimeDefaults.textEmotionModel,
+    cacheDir: resolveCacheDir(runtimeSettings.textEmotionCacheDir),
+    embeddingModel: requireRuntimeSetting(runtimeSettings.transformersModel, 'transformersModel', dataDir),
+    emotionModel: requireRuntimeSetting(runtimeSettings.textEmotionModel, 'textEmotionModel', dataDir),
   };
 }
 

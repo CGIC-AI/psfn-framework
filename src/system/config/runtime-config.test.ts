@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -29,9 +29,26 @@ afterEach(() => {
 });
 
 describe('hydrateJsonBackedRuntimeConfig', () => {
+  function copyOwnerExample(dataDir: string, ownerFile: string): void {
+    const exampleFile = ownerFile.replace(/\.json$/, '.seed.json');
+    writeFileSync(
+      join(dataDir, ownerFile),
+      readFileSync(join(process.cwd(), 'config', exampleFile), 'utf8'),
+      'utf8',
+    );
+  }
+
   it('prefers owner-file models and runtime settings over ignored env defaults', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-runtime-config-'));
     TEMP_DIRS.push(dataDir);
+    for (const ownerFile of [
+      'providers.json',
+      'scheduler.json',
+      'capability-tier.json',
+      'trust-policy.json',
+    ]) {
+      copyOwnerExample(dataDir, ownerFile);
+    }
 
     writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({
       thinkMaxTokens: 180000,
@@ -142,6 +159,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     }), 'utf8');
 
     process.env.DATA_DIR = dataDir;
+    process.env.COMPANION_ID = 'test-companion';
     process.env.CONFIG_DIR = 'config';
     process.env.PRIMARY_MODEL = 'env-primary-should-be-ignored';
     process.env.THINK_MAX_TOKENS = '999999';

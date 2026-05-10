@@ -167,7 +167,7 @@ src/
 │
 ├── system/                 # Platform infrastructure
 │   ├── capabilities/       #   Tier system (nursery/apprentice/autonomous/custom), 19 tokens
-│   ├── config/             #   SubstrateConfig megaobject, 9 owner files, loadOrSeedJsonCached
+│   ├── config/             #   SubstrateConfig megaobject, required owner files, explicit examples
 │   ├── lifecycle/          #   Lifecycle interface, startup/shutdown coordination
 │   ├── modules/            #   Runtime module registry and hot-loading
 │   ├── security/           #   Policy enforcement helpers
@@ -645,7 +645,7 @@ src/
 
 ### `system/config` — Configuration
 
-**Purpose**: Assembles `SubstrateConfig` (the megaobject passed to all runtime components). Loads and validates 9 owner JSON files via `loadOrSeedJsonCached()`. `ConfigStorePort` is the database-backed config interface.
+**Purpose**: Assembles `SubstrateConfig` (the megaobject passed to all runtime components). Loads and validates required owner JSON files; distributed `config/*.seed.json` files are examples only. `ConfigStorePort` is the database-backed config interface.
 
 **Key files**:
 | File | Purpose |
@@ -846,7 +846,7 @@ All tools follow the `AgentTool` pattern from `@mariozechner/pi-agent-core`:
 - Mutable runtime settings live in JSON owner files (not `.env`)
 - `.env` is for secrets, socket paths, and bootstrap overrides only
 - All settings exposed through Garden admin UI
-- `loadOrSeedJsonCached()` handles missing files with safe defaults
+- Required owner files fail closed when missing; copy/import examples intentionally before startup.
 
 ### Error Handling
 - Fail closed — never swallow errors or silently fall back

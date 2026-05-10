@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { saveSettings } from '../settings.js';
@@ -22,6 +22,17 @@ import {
 
 describe('startup owner-file loaders', () => {
   const tempDirs: string[] = [];
+  const requiredExampleOwnerFiles = [
+    'settings.json',
+    'models.json',
+    'providers.json',
+    'trust-policy.json',
+    'scheduler.json',
+    'capability-tier.json',
+    'charge-policy.json',
+    'backup.json',
+    'skills.json',
+  ] as const;
 
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
@@ -29,11 +40,37 @@ describe('startup owner-file loaders', () => {
     }
   });
 
+  function copyOwnerExample(rootDir: string, ownerFile: typeof requiredExampleOwnerFiles[number]): void {
+    const exampleFile = ownerFile.replace(/\.json$/, '.seed.json');
+    writeFileSync(
+      join(rootDir, ownerFile),
+      readFileSync(join(process.cwd(), 'config', exampleFile), 'utf8'),
+      'utf-8',
+    );
+  }
+
+  function writeRequiredOwnerExamples(
+    rootDir: string,
+    except: Array<typeof requiredExampleOwnerFiles[number]> = [],
+  ): void {
+    const skipped = new Set<string>(except);
+    for (const ownerFile of requiredExampleOwnerFiles) {
+      if (!skipped.has(ownerFile)) {
+        copyOwnerExample(rootDir, ownerFile);
+      }
+    }
+  }
+
   it('loads the explicit startup owner-file bundle without collapsing ownership boundaries', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-owner-files-'));
     const seedDir = join(process.cwd(), 'config');
     mkdirSync(rootDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeRequiredOwnerExamples(rootDir, [
+      'settings.json',
+      'scheduler.json',
+      'charge-policy.json',
+    ]);
 
     saveSettings(rootDir, {
       sessionHistoryBudgetPct: 41,
@@ -148,11 +185,31 @@ describe('startup owner-file loaders', () => {
     expect(loadStartupChargePolicyOwnerFile(rootDir, seedDir)).toEqual(chargePolicy);
   });
 
+  it('reports missing owner files before split startup begins', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-owner-files-missing-'));
+    const seedDir = join(process.cwd(), 'config');
+    mkdirSync(rootDir, { recursive: true });
+    tempDirs.push(rootDir);
+
+    const result = verifyStartupOwnerFiles({
+      dataDir: rootDir,
+      seedDir,
+      defaultContextWindow: 128_000,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors).toHaveLength(requiredExampleOwnerFiles.length);
+    expect(result.errors[0]).toContain('Missing required JSON owner file');
+    expect(result.errors[0]).toContain('Startup no longer copies distributed seed/example files');
+    expect(result.errors[0]).toContain('copy the example template');
+  });
+
   it('reports stale scheduler drift before split startup begins', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-owner-files-drift-'));
     const seedDir = join(process.cwd(), 'config');
     mkdirSync(rootDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeRequiredOwnerExamples(rootDir, ['scheduler.json']);
 
     writeFileSync(
       join(rootDir, 'scheduler.json'),
@@ -174,7 +231,7 @@ describe('startup owner-file loaders', () => {
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('scheduler.json');
     expect(result.errors[0]).toContain('artifactLifecycle must be an object');
-    expect(result.errors[0]).toContain('Remove or repair it so it can be reseeded');
+    expect(result.errors[0]).toContain('PSFN will not overwrite it from seed/example templates');
   });
 
   it('fails closed when settings.json contains keys owned by other startup files', () => {
@@ -182,6 +239,7 @@ describe('startup owner-file loaders', () => {
     const seedDir = join(process.cwd(), 'config');
     mkdirSync(rootDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeRequiredOwnerExamples(rootDir, ['settings.json']);
 
     writeFileSync(
       join(rootDir, 'settings.json'),
@@ -211,6 +269,7 @@ describe('startup owner-file loaders', () => {
     const seedDir = join(process.cwd(), 'config');
     mkdirSync(rootDir, { recursive: true });
     tempDirs.push(rootDir);
+    writeRequiredOwnerExamples(rootDir, ['charge-policy.json']);
 
     writeFileSync(
       join(rootDir, 'charge-policy.json'),

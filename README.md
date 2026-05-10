@@ -63,7 +63,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 ### Prerequisites
 
 - **Node.js 22+**
-- **One LLM provider credential** for the provider/model registry you plan to use. The shipped seed files enable OpenRouter, so a fresh install usually means `OPENROUTER_API_KEY`.
+- **One LLM provider credential** for the provider/model registry you plan to use. The shipped example owner files include OpenRouter, so using those examples usually means `OPENROUTER_API_KEY`.
 - **Discord bot** token and application ID only if you plan to use the Discord channel
 - **Ollama only if you choose the Ollama embedding provider**. PSFN also supports local in-process transformers embeddings.
 
@@ -80,7 +80,7 @@ The root `npm install` also provisions the Garden admin UI dependencies automati
 Edit `.env` only for secrets and process/bootstrap wiring:
 
 ```bash
-# Default-seed provider secret
+# Provider secret for the owner files you choose
 OPENROUTER_API_KEY=sk-or-...
 
 # Discord only if you enable the Discord channel
@@ -114,7 +114,21 @@ Mutable runtime/admin config is owned by canonical JSON files under the system-d
 - `trust-policy.json`
 - `backup.json`
 
-The runtime seeds most of those files from `config/*.seed.json` on first boot. `channels.json` is created and managed as channel settings are saved. Edit the owner files directly or through Garden / the admin API.
+Startup requires these owner files to already exist. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state. For a new local environment, intentionally copy the examples into your system data directory and edit them for the deployment:
+
+```bash
+cp config/settings.seed.json ./data/settings.json
+cp config/models.seed.json ./data/models.json
+cp config/providers.seed.json ./data/providers.json
+cp config/scheduler.seed.json ./data/scheduler.json
+cp config/capability-tier.seed.json ./data/capability-tier.json
+cp config/trust-policy.seed.json ./data/trust-policy.json
+cp config/charge-policy.seed.json ./data/charge-policy.json
+cp config/backup.seed.json ./data/backup.json
+cp config/skills.seed.json ./data/skills.json
+```
+
+`channels.json` is created and managed as channel settings are saved. Edit owner files directly or through Garden / the admin API.
 
 Do not put JSON-owned settings such as `EMBEDDING_PROVIDER`, `TRANSFORMERS_MODEL`, `OLLAMA_URL`, `CAPABILITY_TIER`, `MAINTENANCE_INTERVAL_MS`, or `OBSIDIAN_*` in `.env`. The runtime ignores those env values; the authoritative values live in the JSON owner files above.
 
@@ -122,7 +136,7 @@ In production, set both `SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR`; startup reje
 
 ### Embeddings
 
-Embedding selection lives in `settings.json` or, before first boot, `config/settings.seed.json`.
+Embedding selection lives in `settings.json`.
 
 **Local transformers example:**
 ```json
@@ -135,7 +149,7 @@ Embedding selection lives in `settings.json` or, before first boot, `config/sett
 
 That path runs in-process via `@huggingface/transformers` and caches models under `models/transformers` by default. `HF_TOKEN` is only needed for gated or private Hugging Face repos.
 
-The shipped `config/settings.seed.json` currently defaults to the local transformers profile (`Xenova/all-MiniLM-L6-v2`, `384` dims). If you want Ollama or another embeddings backend, change the seed or the generated `settings.json` before relying on first-boot defaults.
+The shipped `config/settings.seed.json` is only an example. If you copy it, it selects the local transformers profile (`Xenova/all-MiniLM-L6-v2`, `384` dims). If you want Ollama or another embeddings backend, edit `settings.json` before startup.
 
 ### Running
 

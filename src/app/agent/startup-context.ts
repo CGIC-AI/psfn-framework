@@ -114,7 +114,7 @@ export function prepareAgentStartupContext(input: {
     },
   );
   const backupConfig = resolveBackupRuntimeConfig({
-    dataDir: pathSnapshot.companionDataDir,
+    dataDir: pathSnapshot.systemDataDir,
     defaultRootDir: pathSnapshot.runtimePathLayout.backupsDir,
   });
   const eventBus = new EventBus();

@@ -72,18 +72,18 @@ describe('resolveCompanionNameFromConfig', () => {
     );
   });
 
-  it('seeds a bootstrap card when the configured companion file is missing', () => {
+  it('fails closed when the configured companion file is missing', () => {
     const root = makeTempDir();
     const path = join(root, 'companion.json');
 
-    expect(resolveCompanionNameFromConfig({
+    expect(() => resolveCompanionNameFromConfig({
       characterCardPath: path,
-    })).toBe('Companion');
+    })).toThrow('Missing character card');
   });
 });
 
 describe('resolveCompanionIdFromConfig', () => {
-  it('defaults to the canonical companion id when unset', () => {
-    expect(resolveCompanionIdFromConfig({})).toBe('companion');
+  it('requires explicit companion id when unset', () => {
+    expect(() => resolveCompanionIdFromConfig({})).toThrow('Missing COMPANION_ID');
   });
 });

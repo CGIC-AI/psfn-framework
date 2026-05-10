@@ -26,7 +26,7 @@ import {
   type ExtendedToolActivationOptions,
   type ExtendedToolActivationResult,
 } from './adaptive-tools-runtime.js';
-import type { MemoryWriter } from '../../memory/writer.js';
+import type { MemoryWriter } from '../../../faculties/memory/writer.js';
 import {
   addPromotedExtendedTool,
   applyActiveToolsToAgent,
@@ -59,7 +59,7 @@ import {
   type ValidateToolsOptions,
   type WirableTool,
 } from '../tool-wiring-validator.js';
-import type { RuntimeServiceHealthStatus } from '../../tool-health/types.js';
+import type { RuntimeServiceHealthStatus } from '../../../operator/tool-health/types.js';
 import type { RuntimeToolCatalogSnapshot } from '../tool-catalog.js';
 
 interface ToolRuntimeFacadeOptions {

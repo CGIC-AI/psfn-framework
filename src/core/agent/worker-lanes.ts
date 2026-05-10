@@ -4,7 +4,6 @@ import type {
   ObservabilityCallType,
   ModelPurpose,
 } from '../../shared/contracts/runtime.js';
-import type { WorkerExecutionPolicy, WorkerProfileClass } from '../types.js';
 
 /**
  * Worker lanes are semantic runtime roles, not implementation shortcuts.
@@ -26,6 +25,14 @@ export type SubagentWorkerLane = typeof WORKER_LANES.subagent;
 export type WhisperWorkerLane = typeof WORKER_LANES.whisper;
 export type TaskFocusedWorkerProfileClass = 'task_focused';
 export type SubconsciousWorkerProfileClass = 'subconscious';
+export type WorkerProfileClass = TaskFocusedWorkerProfileClass | SubconsciousWorkerProfileClass;
+
+export interface WorkerExecutionPolicy {
+  lane: WorkerLane;
+  profileClass: WorkerProfileClass;
+  modelPurpose: ModelPurpose;
+  failClosed: boolean;
+}
 
 export const SUBAGENT_WORKER_LANE: SubagentWorkerLane = WORKER_LANES.subagent;
 export const WHISPER_WORKER_LANE: WhisperWorkerLane = WORKER_LANES.whisper;

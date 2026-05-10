@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { SubstrateConfig } from '../../types.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { createWorkerExecutionPolicy, SUBAGENT_WORKER_LANE, WHISPER_WORKER_LANE } from '../worker-lanes.js';
 import {
   refreshModelFromConfig,

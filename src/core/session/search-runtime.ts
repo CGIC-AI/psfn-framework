@@ -1,5 +1,5 @@
 import type { LLMProviderPort } from '../agent/contracts.js';
-import type { SessionEntry } from '../../session/types.js';
+import type { SessionEntry } from './types.js';
 import { classifyChannel, getAllowedSensitivities } from '../../system/trust/policy.js';
 import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../system/trust/types.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';

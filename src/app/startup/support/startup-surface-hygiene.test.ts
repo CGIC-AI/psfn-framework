@@ -1,10 +1,12 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-const repoRootUrl = new URL('../../../../', import.meta.url);
+const repoRootPath = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../');
 
 function readRepoFile(relativePath: string): string {
-  return readFileSync(new URL(relativePath, repoRootUrl), 'utf-8');
+  return readFileSync(resolve(repoRootPath, relativePath), 'utf-8');
 }
 
 describe('startup surface hygiene', () => {
@@ -22,8 +24,8 @@ describe('startup surface hygiene', () => {
     const removedRuntimeReference = ['`src/', removedRuntimeFile, '`'].join('');
     const removedStartupHarnessReference = ['`src/runtime/', removedStartupHarnessFile, '`'].join('');
 
-    expect(existsSync(new URL(['src', removedRuntimeFile].join('/'), repoRootUrl))).toBe(false);
-    expect(existsSync(new URL(['src', 'runtime', removedStartupHarnessFile].join('/'), repoRootUrl))).toBe(false);
+    expect(existsSync(resolve(repoRootPath, 'src', removedRuntimeFile))).toBe(false);
+    expect(existsSync(resolve(repoRootPath, 'src', 'runtime', removedStartupHarnessFile))).toBe(false);
 
     for (const source of [
       readme,

@@ -21,6 +21,25 @@ export async function getModelsConfigRaw(): Promise<string> {
   return res.text();
 }
 
+export async function getProvidersConfigRaw(): Promise<string> {
+  const token = getToken();
+  const headers: Record<string, string> = {};
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
+  const res = await fetch('/api/settings/providers', {
+    headers,
+    credentials: 'include',
+  });
+  if (res.status === 401) {
+    window.location.href = '/login';
+    throw new ApiError(401, 'Unauthorized');
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, res.statusText, await res.text().catch(() => undefined));
+  }
+  return res.text();
+}
+
 export function saveModelsConfigRaw(json: string): Promise<string> {
   const params = new URLSearchParams();
   params.set('configJson', json);

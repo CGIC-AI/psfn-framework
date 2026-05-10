@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -348,5 +348,36 @@ describe('subsystem config round-trip', () => {
     expect(saved.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
     expect(readJsonFile(join(dataDir, PROVIDERS_FILE_NAME))).toEqual(expected);
     expect(loadProvidersConfig(dataDir).registry).toEqual(expected);
+  });
+
+  it('loads current providers.json owner files without legacy enabled flags as active', () => {
+    const dataDir = makeDataDir('psfn-providers-config-no-enabled-');
+    writeFileSync(join(dataDir, PROVIDERS_FILE_NAME), JSON.stringify({
+      schemaVersion: 1,
+      providers: [
+        {
+          id: 'openrouter',
+          type: 'openrouter',
+          label: 'OpenRouter',
+          apiBaseUrl: 'https://openrouter.ai/api/v1',
+          modelsApiUrl: 'https://openrouter.ai/api/v1/models',
+          apiKeyRef: {
+            kind: 'env',
+            envName: 'OPENROUTER_API_KEY',
+          },
+        },
+      ],
+    }));
+
+    const loaded = loadProvidersConfig(dataDir);
+    expect(loaded.registry.providers).toEqual([
+      expect.objectContaining({
+        id: 'openrouter',
+        type: 'openrouter',
+        enabled: true,
+      }),
+    ]);
+    expect(loaded.openRouterApiBaseUrl).toBe('https://openrouter.ai/api/v1');
+    expect(loaded.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
   });
 });

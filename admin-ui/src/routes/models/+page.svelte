@@ -3,18 +3,32 @@
   import { base } from '$app/paths';
   import {
     getModelsConfigRaw,
+    getProvidersConfigRaw,
     saveModelsConfigRaw,
     listDiscoveredModels,
     refreshDiscoveredModels,
   } from '$lib/api/endpoints/models';
-  import { getSettings, saveSubConfig } from '$lib/api/endpoints/settings';
+  import { saveSubConfig } from '$lib/api/endpoints/settings';
   import { ApiError } from '$lib/api/client';
   import type {
-    AdminSettingsData,
     CanonicalProviderRegistry,
     ProviderRegistryEntry,
     DiscoveredModel,
   } from '$lib/types';
+  import {
+    CANONICAL_PURPOSES,
+    DEFAULT_BUDGET_POLICY,
+    PURPOSE_LABELS,
+    isRecord,
+    normalizeRouting,
+    parseModelRegistryJson,
+    toNonEmptyString,
+    type CanonicalModelPurpose,
+    type CanonicalModelRegistry,
+    type ModelRegistryBudgetPolicy,
+    type ModelRegistryEntry,
+    type ModelRegistryPurposeTag,
+  } from '$lib/models/registry';
   import {
     backfillDiscoveredMetadata,
     buildUniqueModelId,
@@ -22,9 +36,10 @@
     resolveDiscoveredModelSelection,
   } from './discovery-autofill';
   import {
-    normalizeProvidersRuntimeConfig,
+    parseProviderRegistryJson,
     PROVIDER_TYPE_LABELS,
     PROVIDER_TYPES,
+    providerIsEnabled,
     providerSupportsModelsApi,
   } from '$lib/providers/registry';
   import {
@@ -41,96 +56,6 @@
     updateProviderEntry as updateProviderRegistryEntry,
     validateProviderRegistry,
   } from '$lib/providers/editor';
-  type CanonicalModelPurpose =
-    | 'chat'
-    | 'background'
-    | 'memory'
-    | 'extraction'
-    | 'summary'
-    | 'reasoning'
-    | 'import_processing'
-    | 'longContext'
-    | 'vision'
-    | 'moa';
-
-  interface ModelRegistryPurposeTag {
-    purpose: CanonicalModelPurpose;
-    primary: boolean;
-  }
-
-  interface ModelRegistrySourceMetadata extends Record<string, unknown> {
-    type: string;
-    label?: string;
-    baseUrl?: string;
-    metadata?: Record<string, unknown>;
-  }
-
-  interface ModelRegistryIdentityMetadata extends Record<string, unknown> {
-    provider: string;
-    model: string;
-    source: ModelRegistrySourceMetadata;
-    family?: string;
-  }
-
-  interface ModelRegistryEntry extends Record<string, unknown> {
-    id: string;
-    rank: number;
-    identity: ModelRegistryIdentityMetadata;
-    purposes: ModelRegistryPurposeTag[];
-    routing?: {
-      providerOrder?: string[];
-    };
-    capabilities?: Record<string, unknown>;
-    tuning?: Record<string, unknown>;
-    cost?: Record<string, unknown>;
-    metadata?: Record<string, unknown>;
-  }
-
-  interface ModelRegistryBudgetPolicy {
-    enabled: boolean;
-    dailyUsdLimit: number;
-    monthlyUsdLimit: number;
-    currency: 'USD';
-  }
-
-  interface CanonicalModelRegistry {
-    schemaVersion: 1;
-    models: ModelRegistryEntry[];
-    budgetPolicy?: ModelRegistryBudgetPolicy;
-  }
-
-  const DEFAULT_BUDGET_POLICY: ModelRegistryBudgetPolicy = {
-    enabled: false,
-    dailyUsdLimit: 5,
-    monthlyUsdLimit: 100,
-    currency: 'USD',
-  };
-
-  const CANONICAL_PURPOSES = [
-    'chat',
-    'background',
-    'memory',
-    'extraction',
-    'summary',
-    'reasoning',
-    'import_processing',
-    'longContext',
-    'vision',
-    'moa',
-  ] as const satisfies readonly CanonicalModelPurpose[];
-
-  const PURPOSE_LABELS: Record<CanonicalModelPurpose, string> = {
-    chat: 'chat',
-    background: 'background',
-    memory: 'memory',
-    extraction: 'extraction',
-    summary: 'summary',
-    reasoning: 'reasoning',
-    import_processing: 'import',
-    longContext: 'longCtx',
-    vision: 'vision',
-    moa: 'moa',
-  };
 
   const TUNING_NUMBER_FIELDS = [
     { key: 'temperature', label: 'Temperature', min: 0, max: 2, step: 0.01, integer: false },
@@ -165,7 +90,7 @@
   let dragOverIndex = $state<number | null>(null);
   let dirty = $state(false);
   let initialSnapshot = $state('');
-  let enabledProviders = $derived.by(() => providerRegistry.providers.filter((entry) => entry.enabled));
+  let enabledProviders = $derived.by(() => providerRegistry.providers.filter(providerIsEnabled));
   let providerEntriesById = $derived.by(() => (
     new Map(providerRegistry.providers.map((entry) => [entry.id, entry] as const))
   ));
@@ -237,21 +162,6 @@
     if (!initialSnapshot) return;
     dirty = JSON.stringify({ models, budgetPolicy, providerRegistry }) !== initialSnapshot;
   });
-
-  function isRecord(value: unknown): value is Record<string, unknown> {
-    return typeof value === 'object' && value !== null && !Array.isArray(value);
-  }
-
-  function toNonEmptyString(value: unknown): string | undefined {
-    if (typeof value !== 'string') return undefined;
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : undefined;
-  }
-
-  function toFiniteNumber(value: unknown): number | undefined {
-    if (typeof value === 'number' && Number.isFinite(value)) return value;
-    return undefined;
-  }
 
   function toErrorMessage(value: unknown, fallback: string): string {
     if (value instanceof Error && value.message.trim().length > 0) {
@@ -326,8 +236,8 @@
         return;
       }
       await saveSubConfig('providers', JSON.stringify(providerRegistry, null, 2));
-      const settingsData = await getSettings();
-      setProviderRegistryState(normalizeProvidersRuntimeConfig((settingsData as AdminSettingsData).editors.providers).registry);
+      const providersRaw = await getProvidersConfigRaw();
+      setProviderRegistryState(parseProviderRegistryJson(providersRaw));
       initialSnapshot = JSON.stringify({
         models,
         budgetPolicy,
@@ -353,100 +263,12 @@
     }
   }
 
-  function normalizeBudgetPolicy(value: unknown): ModelRegistryBudgetPolicy {
-    if (!isRecord(value)) {
-      return { ...DEFAULT_BUDGET_POLICY };
-    }
-
-    const enabled = value.enabled === true;
-    const dailyUsdLimit = toFiniteNumber(value.dailyUsdLimit);
-    const monthlyUsdLimit = toFiniteNumber(value.monthlyUsdLimit);
-    const normalizedDaily = dailyUsdLimit !== undefined && dailyUsdLimit > 0
-      ? dailyUsdLimit
-      : DEFAULT_BUDGET_POLICY.dailyUsdLimit;
-    const normalizedMonthly = monthlyUsdLimit !== undefined && monthlyUsdLimit > 0
-      ? monthlyUsdLimit
-      : DEFAULT_BUDGET_POLICY.monthlyUsdLimit;
-
-    return {
-      enabled,
-      dailyUsdLimit: normalizedDaily,
-      monthlyUsdLimit: normalizedMonthly,
-      currency: 'USD',
-    };
-  }
-
   function toOptionalNumber(raw: string, integer = false): number | undefined {
     const trimmed = raw.trim();
     if (trimmed.length === 0) return undefined;
     const numeric = Number(trimmed);
     if (!Number.isFinite(numeric)) return undefined;
     return integer ? Math.round(numeric) : numeric;
-  }
-
-  function normalizePurposes(value: unknown): ModelRegistryPurposeTag[] {
-    if (!Array.isArray(value)) return [];
-    const seen = new Set<CanonicalModelPurpose>();
-    const normalized: ModelRegistryPurposeTag[] = [];
-    for (const entry of value) {
-      if (!isRecord(entry)) continue;
-      const purpose = entry.purpose;
-      if (typeof purpose !== 'string') continue;
-      if (!CANONICAL_PURPOSES.includes(purpose as CanonicalModelPurpose)) continue;
-      const normalizedPurpose = purpose as CanonicalModelPurpose;
-      if (seen.has(normalizedPurpose)) continue;
-      seen.add(normalizedPurpose);
-      normalized.push({
-        purpose: normalizedPurpose,
-        primary: entry.primary === true,
-      });
-    }
-    return normalized;
-  }
-
-  function normalizeRouting(value: unknown): { providerOrder?: string[] } | undefined {
-    if (!isRecord(value) || !Array.isArray(value.providerOrder)) return undefined;
-    const providerOrder = value.providerOrder
-      .filter((entry): entry is string => typeof entry === 'string')
-      .map(entry => entry.trim().toLowerCase())
-      .filter((entry, index, array) => entry.length > 0 && array.indexOf(entry) === index);
-    return providerOrder.length > 0 ? { providerOrder } : undefined;
-  }
-
-  function normalizeModelEntry(value: unknown, index: number): ModelRegistryEntry {
-    const raw = isRecord(value) ? value : {};
-    const identityRaw = isRecord(raw.identity) ? raw.identity : {};
-    const sourceRaw = isRecord(identityRaw.source) ? identityRaw.source : {};
-    const baseId = toNonEmptyString(raw.id) ?? `model-${index + 1}`;
-    const rank = toFiniteNumber(raw.rank);
-    const provider = toNonEmptyString(identityRaw.provider) ?? '';
-    const model = toNonEmptyString(identityRaw.model) ?? '';
-    const sourceType = toNonEmptyString(sourceRaw.type) ?? '';
-    const purposes = normalizePurposes(raw.purposes);
-    return {
-      ...raw,
-      id: baseId,
-      rank: rank !== undefined ? Math.max(0, Math.round(rank)) : Math.max(0, (index + 1) * 10),
-      identity: {
-        ...identityRaw,
-        provider,
-        model,
-        source: {
-          ...sourceRaw,
-          type: sourceType,
-          ...(toNonEmptyString(sourceRaw.label) ? { label: toNonEmptyString(sourceRaw.label) } : {}),
-          ...(toNonEmptyString(sourceRaw.baseUrl) ? { baseUrl: toNonEmptyString(sourceRaw.baseUrl) } : {}),
-          ...(isRecord(sourceRaw.metadata) ? { metadata: { ...sourceRaw.metadata } } : {}),
-        },
-        ...(toNonEmptyString(identityRaw.family) ? { family: toNonEmptyString(identityRaw.family) } : {}),
-      },
-      purposes,
-      ...(normalizeRouting(raw.routing) ? { routing: normalizeRouting(raw.routing) } : {}),
-      ...(isRecord(raw.capabilities) ? { capabilities: { ...raw.capabilities } } : {}),
-      ...(isRecord(raw.tuning) ? { tuning: { ...raw.tuning } } : {}),
-      ...(isRecord(raw.cost) ? { cost: { ...raw.cost } } : {}),
-      ...(isRecord(raw.metadata) ? { metadata: { ...raw.metadata } } : {}),
-    };
   }
 
   function cloneModelEntry(entry: ModelRegistryEntry): ModelRegistryEntry {
@@ -476,31 +298,6 @@
       ...entry,
       rank: (total - index) * 10,
     }));
-  }
-
-  function parseRegistry(rawJson: string): CanonicalModelRegistry {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(rawJson);
-    } catch {
-      throw new Error('models.json is not valid JSON');
-    }
-    if (!isRecord(parsed)) {
-      throw new Error('models.json must be a JSON object');
-    }
-    if (parsed.schemaVersion !== 1) {
-      throw new Error('models.json schemaVersion must be 1');
-    }
-    if (!Array.isArray(parsed.models)) {
-      throw new Error('models.json.models must be an array');
-    }
-    const normalized = parsed.models.map((entry, index) => normalizeModelEntry(entry, index));
-    const normalizedBudgetPolicy = normalizeBudgetPolicy(parsed.budgetPolicy);
-    return {
-      schemaVersion: 1,
-      models: normalized.sort((a, b) => b.rank - a.rank),
-      budgetPolicy: normalizedBudgetPolicy,
-    };
   }
 
   function setBudgetPolicyEnabled(enabled: boolean): void {
@@ -631,7 +428,7 @@
 
   function providerAvailability(entry: ProviderRegistryEntry | undefined): string {
     if (!entry) return 'not registered';
-    return entry.enabled ? 'enabled' : 'disabled';
+    return providerIsEnabled(entry) ? 'enabled' : 'disabled';
   }
 
   function providerForModel(entry: ModelRegistryEntry): ProviderRegistryEntry | undefined {
@@ -1093,9 +890,9 @@
     error = '';
     discoveryError = '';
     validationErrors = [];
-    const [modelsRaw, settingsData] = await Promise.all([
+    const [modelsRaw, providersRaw] = await Promise.all([
       getModelsConfigRaw(),
-      getSettings(),
+      getProvidersConfigRaw(),
     ]);
     let discovered: DiscoveredModel[] = [];
     try {
@@ -1104,11 +901,11 @@
       discovered = [];
       discoveryError = toErrorMessage(discoveryLoadError, 'Model discovery unavailable');
     }
-    const registry = parseRegistry(modelsRaw);
+    const registry = parseModelRegistryJson(modelsRaw);
     models = registry.models;
     budgetPolicy = registry.budgetPolicy ?? { ...DEFAULT_BUDGET_POLICY };
     discoveredModels = discovered;
-    setProviderRegistryState(normalizeProvidersRuntimeConfig((settingsData as AdminSettingsData).editors.providers).registry);
+    setProviderRegistryState(parseProviderRegistryJson(providersRaw));
     initialSnapshot = JSON.stringify({
       models,
       budgetPolicy,
@@ -1249,7 +1046,7 @@
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-sm text-shadow-700">
-          {providerRegistry.providers.filter((entry) => entry.enabled).length} enabled / {providerRegistry.providers.length} total
+          {providerRegistry.providers.filter(providerIsEnabled).length} enabled / {providerRegistry.providers.length} total
         </span>
         <a
           href={`${base}/settings#settings-providers`}
@@ -1282,8 +1079,8 @@
           <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div class="space-y-2">
               <div class="flex flex-wrap items-center gap-2">
-                <span class="rounded-full border px-2.5 py-1 text-xs font-medium {entry.enabled ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
-                  {entry.enabled ? 'enabled' : 'disabled'}
+                <span class="rounded-full border px-2.5 py-1 text-xs font-medium {providerIsEnabled(entry) ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
+                  {providerIsEnabled(entry) ? 'enabled' : 'disabled'}
                 </span>
                 <span class="rounded-full border border-bark-300 bg-bark-100 px-2.5 py-1 text-xs font-medium text-shadow-700">
                   {PROVIDER_TYPE_LABELS[entry.type]}
@@ -1298,7 +1095,7 @@
               <label class="inline-flex items-center gap-2 text-sm text-shadow-700">
                 <input
                   type="checkbox"
-                  checked={entry.enabled}
+                  checked={providerIsEnabled(entry)}
                   onchange={(event) => updateProviderEntry(index, (nextEntry) => ({
                     ...nextEntry,
                     enabled: (event.currentTarget as HTMLInputElement).checked,

@@ -115,7 +115,8 @@ function normalizeProviderEntry(raw: unknown, field: string): ProviderRegistryEn
   if (!id || !PROVIDER_ID_PATTERN.test(id)) {
     throw new Error(`Invalid providers config: ${field}.id must be a non-empty key-safe string`);
   }
-  if (typeof raw.enabled !== 'boolean') {
+  const enabled = raw.enabled === undefined ? true : raw.enabled;
+  if (typeof enabled !== 'boolean') {
     throw new Error(`Invalid providers config: ${field}.enabled must be a boolean`);
   }
 
@@ -149,7 +150,7 @@ function normalizeProviderEntry(raw: unknown, field: string): ProviderRegistryEn
   return {
     id,
     type,
-    enabled: raw.enabled,
+    enabled,
     ...(label ? { label } : {}),
     ...(apiBaseUrl ? { apiBaseUrl } : {}),
     ...(modelsApiUrl ? { modelsApiUrl } : {}),

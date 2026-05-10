@@ -114,6 +114,16 @@ export function normalizeProvidersRuntimeConfig(value: unknown): ProvidersRuntim
   };
 }
 
+export function parseProviderRegistryJson(rawJson: string): CanonicalProviderRegistry {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    throw new Error('providers.json is not valid JSON');
+  }
+  return normalizeProvidersRuntimeConfig(parsed).registry;
+}
+
 export function createEmptyProviderEntry(index: number): ProviderRegistryEntry {
   return {
     id: `provider-${index + 1}`,
@@ -124,6 +134,10 @@ export function createEmptyProviderEntry(index: number): ProviderRegistryEntry {
 
 export function providerSupportsModelsApi(type: CanonicalProviderType): boolean {
   return type === 'openrouter';
+}
+
+export function providerIsEnabled(entry: { enabled?: boolean }): boolean {
+  return entry.enabled !== false;
 }
 
 export function providerRequiresApiBaseUrl(type: CanonicalProviderType): boolean {

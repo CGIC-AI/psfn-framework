@@ -3,8 +3,10 @@ import {
   createEmptyProviderEntry,
   normalizeProviderRegistry,
   normalizeProvidersRuntimeConfig,
+  parseProviderRegistryJson,
   providerEnvNameIsValid,
   providerIdIsValid,
+  providerIsEnabled,
   providerSupportsModelsApi,
 } from './registry';
 
@@ -44,6 +46,29 @@ describe('provider registry helpers', () => {
     });
 
     expect(normalized.providers.map((entry) => entry.id)).toEqual(['proxy', 'proxy-2']);
+  });
+
+  it('treats current provider owner files without legacy enabled flags as active', () => {
+    const normalized = parseProviderRegistryJson(JSON.stringify({
+      schemaVersion: 1,
+      providers: [
+        {
+          id: 'OpenRouter',
+          type: 'openrouter',
+          apiBaseUrl: 'https://openrouter.ai/api/v1',
+          modelsApiUrl: 'https://openrouter.ai/api/v1/models',
+        },
+      ],
+    }));
+
+    expect(normalized.providers).toHaveLength(1);
+    expect(normalized.providers[0]).toEqual(expect.objectContaining({
+      id: 'openrouter',
+      type: 'openrouter',
+      enabled: true,
+    }));
+    expect(providerIsEnabled(normalized.providers[0]!)).toBe(true);
+    expect(providerIsEnabled({ enabled: false })).toBe(false);
   });
 
   it('creates a stable empty provider template', () => {

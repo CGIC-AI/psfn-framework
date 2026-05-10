@@ -9,6 +9,7 @@ import {
   PROVIDER_TYPES,
   providerEnvNameIsValid,
   providerIdIsValid,
+  providerIsEnabled,
   providerSupportsModelsApi,
 } from './registry';
 
@@ -55,7 +56,7 @@ export function providerRuntimeRole(entry: ProviderRegistryEntry): string[] {
   if (entry.type === 'litellm_proxy') {
     roles.push('proxy routing');
   }
-  if (!entry.enabled) {
+  if (!providerIsEnabled(entry)) {
     roles.push('disabled');
   }
   return roles.length > 0 ? roles : ['direct backend'];
@@ -175,10 +176,10 @@ export function validateProviderRegistry(registry: CanonicalProviderRegistry): s
     if (entry.type === 'openrouter' && !entry.modelsApiUrl?.trim()) {
       errors.push(`${label}: modelsApiUrl is required for openrouter.`);
     }
-    if (entry.enabled && entry.type === 'openrouter') {
+    if (providerIsEnabled(entry) && entry.type === 'openrouter') {
       enabledOpenRouterCount += 1;
     }
-    if (entry.enabled && entry.type === 'litellm_proxy') {
+    if (providerIsEnabled(entry) && entry.type === 'litellm_proxy') {
       enabledLiteLLMCount += 1;
     }
   }

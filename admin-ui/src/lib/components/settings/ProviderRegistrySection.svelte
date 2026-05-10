@@ -6,6 +6,7 @@
   import {
     PROVIDER_TYPE_LABELS,
     PROVIDER_TYPES,
+    providerIsEnabled,
     providerSupportsModelsApi,
   } from '$lib/providers/registry';
   import {
@@ -55,7 +56,7 @@
   }>();
 
   function enabledProviderCount(): number {
-    return providerRegistry.providers.filter((entry: ProviderRegistryEntry) => entry.enabled).length;
+    return providerRegistry.providers.filter(providerIsEnabled).length;
   }
 
   function providerTypeLabel(type: string): string {
@@ -120,8 +121,8 @@
       <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
         <div class="space-y-2">
           <div class="flex flex-wrap items-center gap-2">
-            <span class="rounded-full border px-2.5 py-1 text-xs font-medium {entry.enabled ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
-              {entry.enabled ? 'enabled' : 'disabled'}
+            <span class="rounded-full border px-2.5 py-1 text-xs font-medium {providerIsEnabled(entry) ? 'border-moss-300 bg-moss-50 text-moss-700' : 'border-bark-300 bg-bark-100 text-shadow-600'}">
+              {providerIsEnabled(entry) ? 'enabled' : 'disabled'}
             </span>
             <span class="rounded-full border border-bark-300 bg-bark-100 px-2.5 py-1 text-xs font-medium text-shadow-700">
               {providerTypeLabel(entry.type)}
@@ -137,7 +138,7 @@
             <input
               id={providerControlId(index, 'enabled')}
               type="checkbox"
-              checked={entry.enabled}
+              checked={providerIsEnabled(entry)}
               onchange={(event) => setProviderEnabled(index, (event.currentTarget as HTMLInputElement).checked)}
               class={toggleClass}
             />

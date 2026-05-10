@@ -844,6 +844,7 @@ describe('wireHeartbeatRuntime', () => {
     const postTurnActions = {
       registerHandler: vi.fn().mockReturnValue(() => {}),
       listQueued: vi.fn().mockReturnValue([]),
+      getStatus: vi.fn(),
     };
 
     wireHeartbeatRuntime(
@@ -999,6 +1000,7 @@ describe('wireHeartbeatRuntime', () => {
       const postTurnActions = {
         registerHandler: vi.fn().mockReturnValue(() => {}),
         listQueued: vi.fn().mockReturnValue([]),
+        getStatus: vi.fn(),
       };
 
       wireHeartbeatRuntime(
@@ -1072,6 +1074,7 @@ describe('wireHeartbeatRuntime', () => {
     const postTurnActions = {
       registerHandler: vi.fn().mockReturnValue(() => {}),
       listQueued: vi.fn().mockReturnValue([]),
+      getStatus: vi.fn(),
     };
 
     const nowSpy = vi.spyOn(Date, 'now');
@@ -1161,6 +1164,7 @@ describe('wireHeartbeatRuntime', () => {
     const postTurnActions = {
       registerHandler: vi.fn().mockReturnValue(() => {}),
       listQueued: vi.fn().mockReturnValue([]),
+      getStatus: vi.fn(),
     };
 
     wireHeartbeatRuntime(

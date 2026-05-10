@@ -3,10 +3,12 @@ import type { InferredPostTurnAction } from '../../../shared/contracts/runtime.j
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import {
+  RUNTIME_LANE_CLASSES,
   compareRuntimeLanePriority,
   isRuntimeLaneClass,
   resolveRuntimeLaneBudgetProfile,
   resolveRuntimeLaneClassForPostTurnActionKind,
+  type RuntimeLaneBudgetProfile,
   type RuntimeLaneClass,
 } from '../../../core/agent/worker-lanes.js';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -31,6 +33,122 @@ export interface PostTurnActionHandlerOptions {
   runtimeClass?: RuntimeLaneClass;
 }
 
+export type PostTurnActionQueueEntryState = 'ready' | 'scheduled' | 'retry_scheduled' | 'running';
+export type PostTurnActionQueuePersistenceLoadState =
+  | 'not_configured'
+  | 'not_found'
+  | 'loaded'
+  | 'invalid_payload'
+  | 'read_failed';
+export type PostTurnActionFailureReason =
+  | 'missing_handler'
+  | 'eligibility_denied'
+  | 'retries_exhausted';
+
+export interface PostTurnActionQueuedEntryStatus {
+  actionId: string;
+  actionKind: string;
+  dedupeKey: string;
+  runtimeClass: RuntimeLaneClass;
+  state: PostTurnActionQueueEntryState;
+  attempt: number;
+  maxAttempts: number;
+  inferredAt: number;
+  nextRunAt: number;
+  queuedForMs: number;
+  runAfterMs: number;
+}
+
+export interface PostTurnActionQueueDropRecord {
+  actionId: string;
+  actionKind: string;
+  dedupeKey: string;
+  runtimeClass: RuntimeLaneClass;
+  reason: string;
+  droppedAt: number;
+  queueDepth: number;
+  maxQueuedActions: number;
+  backPressureMode: RuntimeLaneBudgetProfile['degradationMode'];
+}
+
+export interface PostTurnActionQueueFailureRecord {
+  actionId: string;
+  actionKind: string;
+  dedupeKey: string;
+  runtimeClass: RuntimeLaneClass;
+  reason: PostTurnActionFailureReason;
+  failedAt: number;
+  attempt: number;
+  maxAttempts: number;
+  error: string;
+}
+
+export interface PostTurnActionQueueLaneStatus {
+  runtimeClass: RuntimeLaneClass;
+  chargeLane: RuntimeLaneBudgetProfile['chargeLane'];
+  queueDepth: number;
+  maxQueuedActions: number;
+  availableSlots: number;
+  saturated: boolean;
+  backPressureMode: RuntimeLaneBudgetProfile['degradationMode'];
+  maxRunsPerSchedulerTick: number;
+  readyCount: number;
+  scheduledCount: number;
+  retryScheduledCount: number;
+  runningCount: number;
+  droppedCount: number;
+  nextRunAt?: number;
+  oldestInferredAt?: number;
+  oldestQueuedForMs?: number;
+  lastDrop?: PostTurnActionQueueDropRecord;
+}
+
+export interface PostTurnActionQueuePersistenceStatus {
+  enabled: boolean;
+  path?: string;
+  quarantinePath?: string;
+  loadState: PostTurnActionQueuePersistenceLoadState;
+  loadedEntries: number;
+  quarantinedEntries: number;
+  quarantinePersisted: boolean;
+  lastLoadedAt?: number;
+  lastLoadError?: string;
+  lastPersistedAt?: number;
+  lastPersistError?: string;
+}
+
+export interface PostTurnActionQueueQuarantineStatus {
+  count: number;
+  persisted: boolean;
+  entries: QuarantinedPersistedQueueEntry[];
+}
+
+export interface PostTurnActionQueueStatus {
+  timestamp: number;
+  processing: boolean;
+  queueDepth: number;
+  maxQueueDepth: number;
+  availableSlots: number;
+  saturated: boolean;
+  readyCount: number;
+  scheduledCount: number;
+  retryScheduledCount: number;
+  runningCount: number;
+  nextRunAt?: number;
+  lanes: PostTurnActionQueueLaneStatus[];
+  queued: PostTurnActionQueuedEntryStatus[];
+  backPressure: {
+    droppedCount: number;
+    recentDrops: PostTurnActionQueueDropRecord[];
+  };
+  failures: {
+    failedCount: number;
+    recentFailures: PostTurnActionQueueFailureRecord[];
+  };
+  quarantine: PostTurnActionQueueQuarantineStatus;
+  persistence: PostTurnActionQueuePersistenceStatus;
+}
+
 export interface PostTurnActionRuntime {
   registerHandler(
     kind: string,
@@ -46,6 +164,7 @@ export interface PostTurnActionRuntime {
     maxAttempts: number;
     nextRunAt: number;
   }>;
+  getStatus(): PostTurnActionQueueStatus;
 }
 
 interface DeferredQueueEntry {
@@ -78,13 +197,20 @@ export interface WirePostTurnActionRuntimeOptions {
 
 const DEFAULT_TASK_ID = 'post-turn-action-executor';
 const PERSISTED_QUEUE_VERSION = 1;
+const MAX_STATUS_HISTORY = 25;
+const RUNTIME_CLASS_ORDER: RuntimeLaneClass[] = [
+  RUNTIME_LANE_CLASSES.foregroundChat,
+  RUNTIME_LANE_CLASSES.postTurnAppraisal,
+  RUNTIME_LANE_CLASSES.backgroundContinuation,
+  RUNTIME_LANE_CLASSES.maintenanceReflection,
+];
 
 interface PersistedQueueFile {
   version: number;
   entries: unknown[];
 }
 
-interface QuarantinedPersistedQueueEntry {
+export interface QuarantinedPersistedQueueEntry {
   entryNumber: number;
   error: string;
   raw: unknown;
@@ -109,7 +235,30 @@ export function wirePostTurnActionRuntime(
 
   const handlers = new Map<string, Map<PostTurnActionHandler, RegisteredPostTurnActionHandler>>();
   const queue = new Map<string, DeferredQueueEntry>();
+  const runningDedupeKeys = new Set<string>();
+  const recentDrops: PostTurnActionQueueDropRecord[] = [];
+  const recentFailures: PostTurnActionQueueFailureRecord[] = [];
+  const droppedCountsByRuntimeClass = new Map<RuntimeLaneClass, number>();
   let processing = false;
+  let droppedCount = 0;
+  let failedCount = 0;
+  let persistenceLoadState: PostTurnActionQueuePersistenceLoadState = persistencePath
+    ? 'not_found'
+    : 'not_configured';
+  let loadedEntries = 0;
+  let lastLoadedAt: number | undefined;
+  let lastLoadError: string | undefined;
+  let lastPersistedAt: number | undefined;
+  let lastPersistError: string | undefined;
+  let quarantinedPersistedEntries: QuarantinedPersistedQueueEntry[] = [];
+  let quarantinePersisted = true;
+
+  const rememberRecent = <T>(entries: T[], entry: T): void => {
+    entries.unshift(entry);
+    if (entries.length > MAX_STATUS_HISTORY) {
+      entries.length = MAX_STATUS_HISTORY;
+    }
+  };
 
   const normalizePositiveInteger = (value: unknown): number | undefined => {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
@@ -231,10 +380,13 @@ export function wirePostTurnActionRuntime(
 
     try {
       writeJsonAtomic(persistencePath, serialized);
+      lastPersistedAt = Date.now();
+      lastPersistError = undefined;
     } catch (error) {
+      lastPersistError = String(error);
       log.error('Failed to persist deferred post-turn action queue', {
         persistencePath,
-        error: String(error),
+        error: lastPersistError,
       });
     }
   };
@@ -244,7 +396,9 @@ export function wirePostTurnActionRuntime(
   const persistQuarantinedEntries = (
     quarantinedEntries: QuarantinedPersistedQueueEntry[],
   ): boolean => {
+    quarantinedPersistedEntries = quarantinedEntries.map((entry) => ({ ...entry }));
     if (!persistencePath) {
+      quarantinePersisted = true;
       return true;
     }
 
@@ -254,13 +408,16 @@ export function wirePostTurnActionRuntime(
         if (existsSync(sidecarPath)) {
           unlinkSync(sidecarPath);
         }
+        quarantinePersisted = true;
         return true;
       }
 
       const body = quarantinedEntries.map((entry) => JSON.stringify(entry)).join('\n') + '\n';
       writeFileSync(sidecarPath, body, 'utf-8');
+      quarantinePersisted = true;
       return true;
     } catch (error) {
+      quarantinePersisted = false;
       log.error('Failed to persist deferred post-turn action quarantine sidecar', {
         persistencePath,
         sidecarPath,
@@ -273,6 +430,7 @@ export function wirePostTurnActionRuntime(
 
   const hydrateQueue = (): void => {
     if (!persistencePath || !existsSync(persistencePath)) {
+      persistenceLoadState = persistencePath ? 'not_found' : 'not_configured';
       return;
     }
 
@@ -280,14 +438,20 @@ export function wirePostTurnActionRuntime(
     try {
       parsed = JSON.parse(readFileSync(persistencePath, 'utf-8'));
     } catch (error) {
+      persistenceLoadState = 'read_failed';
+      lastLoadedAt = Date.now();
+      lastLoadError = String(error);
       log.error('Failed to load deferred post-turn action queue; starting empty', {
         persistencePath,
-        error: String(error),
+        error: lastLoadError,
       });
       return;
     }
 
     if (!isRecord(parsed) || parsed.version !== PERSISTED_QUEUE_VERSION || !Array.isArray(parsed.entries)) {
+      persistenceLoadState = 'invalid_payload';
+      lastLoadedAt = Date.now();
+      lastLoadError = 'Deferred post-turn action queue payload is invalid';
       log.error('Deferred post-turn action queue payload is invalid; starting empty', {
         persistencePath,
       });
@@ -317,6 +481,10 @@ export function wirePostTurnActionRuntime(
       queue.set(entry.action.dedupeKey, entry);
       loaded += 1;
     }
+    persistenceLoadState = 'loaded';
+    loadedEntries = loaded;
+    lastLoadedAt = Date.now();
+    lastLoadError = undefined;
 
     if (loaded > 0) {
       log.info('Loaded deferred post-turn action queue from disk', {
@@ -324,14 +492,14 @@ export function wirePostTurnActionRuntime(
         loaded,
       });
     }
-    const quarantinePersisted = persistQuarantinedEntries(quarantinedEntries);
+    const quarantineWriteSucceeded = persistQuarantinedEntries(quarantinedEntries);
     if (quarantinedEntries.length > 0) {
       log.warn('Quarantined deferred post-turn action queue entries during load', {
         persistencePath,
         quarantined: quarantinedEntries.length,
         loaded,
       });
-      if (quarantinePersisted) {
+      if (quarantineWriteSucceeded) {
         persistQueue();
       }
     }
@@ -376,6 +544,49 @@ export function wirePostTurnActionRuntime(
     });
   };
 
+  const recordDrop = (
+    entry: DeferredQueueEntry,
+    reason: string,
+  ): void => {
+    const runtimeProfile = resolveRuntimeLaneBudgetProfile(entry.runtimeClass);
+    const droppedAt = Date.now();
+    droppedCount += 1;
+    droppedCountsByRuntimeClass.set(
+      entry.runtimeClass,
+      (droppedCountsByRuntimeClass.get(entry.runtimeClass) ?? 0) + 1,
+    );
+    rememberRecent(recentDrops, {
+      actionId: entry.action.id,
+      actionKind: entry.action.kind,
+      dedupeKey: entry.action.dedupeKey,
+      runtimeClass: entry.runtimeClass,
+      reason,
+      droppedAt,
+      queueDepth: queue.size,
+      maxQueuedActions: runtimeProfile.maxQueuedActions,
+      backPressureMode: runtimeProfile.degradationMode,
+    });
+  };
+
+  const recordFailure = (
+    entry: DeferredQueueEntry,
+    reason: PostTurnActionFailureReason,
+    error: string,
+  ): void => {
+    failedCount += 1;
+    rememberRecent(recentFailures, {
+      actionId: entry.action.id,
+      actionKind: entry.action.kind,
+      dedupeKey: entry.action.dedupeKey,
+      runtimeClass: entry.runtimeClass,
+      reason,
+      failedAt: Date.now(),
+      attempt: entry.attempt,
+      maxAttempts: entry.maxRetries + 1,
+      error,
+    });
+  };
+
   const queueAction = (action: InferredPostTurnAction): void => {
     const existing = queue.get(action.dedupeKey);
     if (existing) {
@@ -399,13 +610,17 @@ export function wirePostTurnActionRuntime(
     if (overflow > 0) {
       for (const droppedEntry of sameClassEntries.slice(0, overflow)) {
         queue.delete(droppedEntry.action.dedupeKey);
+        const reason = `Runtime class queue budget exhausted for ${droppedEntry.runtimeClass}`;
+        recordDrop(droppedEntry, reason);
         emitTelemetry('dropped_budget', droppedEntry, {
-          error: `Runtime class queue budget exhausted for ${droppedEntry.runtimeClass}`,
+          error: reason,
         });
       }
     }
     persistQueue();
-    emitTelemetry('queued', entry);
+    if (queue.has(entry.action.dedupeKey)) {
+      emitTelemetry('queued', entry);
+    }
   };
 
   const runNextDueAction = async (
@@ -442,6 +657,7 @@ export function wirePostTurnActionRuntime(
         actionId: entry.action.id,
         channelId: entry.action.channelId,
       });
+      recordFailure(entry, 'missing_handler', missingHandlerError);
       emitTelemetry('failed', entry, { error: missingHandlerError });
       return true;
     }
@@ -468,12 +684,14 @@ export function wirePostTurnActionRuntime(
           requiredTokens: decision.requiredTokens,
           missingTokens: decision.missingTokens,
         });
+        recordFailure(entry, 'eligibility_denied', denialError);
         emitTelemetry('failed', entry, { error: denialError });
         return true;
       }
     }
 
     entry.attempt += 1;
+    runningDedupeKeys.add(entry.action.dedupeKey);
     persistQueue();
     emitTelemetry('started', entry);
 
@@ -503,6 +721,7 @@ export function wirePostTurnActionRuntime(
           maxRetries: entry.maxRetries,
           error: errorText,
         });
+        recordFailure(entry, 'retries_exhausted', errorText);
         emitTelemetry('failed', entry, { error: errorText });
         return true;
       }
@@ -523,6 +742,8 @@ export function wirePostTurnActionRuntime(
         delayMs,
         nextRetryAt: entry.nextRunAt,
       });
+    } finally {
+      runningDedupeKeys.delete(entry.action.dedupeKey);
     }
 
     return true;
@@ -539,6 +760,156 @@ export function wirePostTurnActionRuntime(
     } finally {
       processing = false;
     }
+  };
+
+  const resolveQueuedEntryState = (
+    entry: DeferredQueueEntry,
+    now: number,
+  ): PostTurnActionQueueEntryState => {
+    if (runningDedupeKeys.has(entry.action.dedupeKey)) {
+      return 'running';
+    }
+    if (entry.nextRunAt > now) {
+      return entry.attempt > 0 ? 'retry_scheduled' : 'scheduled';
+    }
+    return 'ready';
+  };
+
+  const toQueuedEntryStatus = (
+    entry: DeferredQueueEntry,
+    now: number,
+  ): PostTurnActionQueuedEntryStatus => ({
+    actionId: entry.action.id,
+    actionKind: entry.action.kind,
+    dedupeKey: entry.action.dedupeKey,
+    runtimeClass: entry.runtimeClass,
+    state: resolveQueuedEntryState(entry, now),
+    attempt: entry.attempt,
+    maxAttempts: entry.maxRetries + 1,
+    inferredAt: entry.action.inferredAt,
+    nextRunAt: entry.nextRunAt,
+    queuedForMs: Math.max(0, now - entry.action.inferredAt),
+    runAfterMs: Math.max(0, entry.nextRunAt - now),
+  });
+
+  const minimumNumber = (values: number[]): number | undefined => (
+    values.length > 0 ? Math.min(...values) : undefined
+  );
+
+  const buildLaneStatus = (
+    runtimeClass: RuntimeLaneClass,
+    queued: PostTurnActionQueuedEntryStatus[],
+    now: number,
+  ): PostTurnActionQueueLaneStatus => {
+    const runtimeProfile = resolveRuntimeLaneBudgetProfile(runtimeClass);
+    const queueDepth = queued.length;
+    const availableSlots = Math.max(0, runtimeProfile.maxQueuedActions - queueDepth);
+    const nextRunAt = minimumNumber(queued.map((entry) => entry.nextRunAt));
+    const oldestInferredAt = minimumNumber(queued.map((entry) => entry.inferredAt));
+    const status: PostTurnActionQueueLaneStatus = {
+      runtimeClass,
+      chargeLane: runtimeProfile.chargeLane,
+      queueDepth,
+      maxQueuedActions: runtimeProfile.maxQueuedActions,
+      availableSlots,
+      saturated: runtimeProfile.maxQueuedActions > 0 && queueDepth >= runtimeProfile.maxQueuedActions,
+      backPressureMode: runtimeProfile.degradationMode,
+      maxRunsPerSchedulerTick: runtimeProfile.maxRunsPerSchedulerTick,
+      readyCount: queued.filter((entry) => entry.state === 'ready').length,
+      scheduledCount: queued.filter((entry) => entry.state === 'scheduled').length,
+      retryScheduledCount: queued.filter((entry) => entry.state === 'retry_scheduled').length,
+      runningCount: queued.filter((entry) => entry.state === 'running').length,
+      droppedCount: droppedCountsByRuntimeClass.get(runtimeClass) ?? 0,
+    };
+    if (nextRunAt !== undefined) {
+      status.nextRunAt = nextRunAt;
+    }
+    if (oldestInferredAt !== undefined) {
+      status.oldestInferredAt = oldestInferredAt;
+      status.oldestQueuedForMs = Math.max(0, now - oldestInferredAt);
+    }
+    const lastDrop = recentDrops.find((drop) => drop.runtimeClass === runtimeClass);
+    if (lastDrop) {
+      status.lastDrop = { ...lastDrop };
+    }
+    return status;
+  };
+
+  const getStatus = (): PostTurnActionQueueStatus => {
+    const now = Date.now();
+    const queued = [...queue.values()].map((entry) => toQueuedEntryStatus(entry, now));
+    const queuedByRuntimeClass = new Map<RuntimeLaneClass, PostTurnActionQueuedEntryStatus[]>();
+    for (const runtimeClass of RUNTIME_CLASS_ORDER) {
+      queuedByRuntimeClass.set(runtimeClass, []);
+    }
+    for (const entry of queued) {
+      const existing = queuedByRuntimeClass.get(entry.runtimeClass);
+      if (existing) {
+        existing.push(entry);
+      }
+    }
+    const lanes = RUNTIME_CLASS_ORDER.map((runtimeClass) => buildLaneStatus(
+      runtimeClass,
+      queuedByRuntimeClass.get(runtimeClass) ?? [],
+      now,
+    ));
+    const nextRunAt = minimumNumber(queued.map((entry) => entry.nextRunAt));
+    const persistenceStatus: PostTurnActionQueuePersistenceStatus = {
+      enabled: Boolean(persistencePath),
+      loadState: persistenceLoadState,
+      loadedEntries,
+      quarantinedEntries: quarantinedPersistedEntries.length,
+      quarantinePersisted,
+    };
+    if (persistencePath) {
+      persistenceStatus.path = persistencePath;
+      persistenceStatus.quarantinePath = quarantineSidecarPath(persistencePath);
+    }
+    if (lastLoadedAt !== undefined) {
+      persistenceStatus.lastLoadedAt = lastLoadedAt;
+    }
+    if (lastLoadError !== undefined) {
+      persistenceStatus.lastLoadError = lastLoadError;
+    }
+    if (lastPersistedAt !== undefined) {
+      persistenceStatus.lastPersistedAt = lastPersistedAt;
+    }
+    if (lastPersistError !== undefined) {
+      persistenceStatus.lastPersistError = lastPersistError;
+    }
+
+    const status: PostTurnActionQueueStatus = {
+      timestamp: now,
+      processing,
+      queueDepth: queue.size,
+      maxQueueDepth: lanes.reduce((sum, lane) => sum + lane.maxQueuedActions, 0),
+      availableSlots: lanes.reduce((sum, lane) => sum + lane.availableSlots, 0),
+      saturated: lanes.some((lane) => lane.saturated),
+      readyCount: queued.filter((entry) => entry.state === 'ready').length,
+      scheduledCount: queued.filter((entry) => entry.state === 'scheduled').length,
+      retryScheduledCount: queued.filter((entry) => entry.state === 'retry_scheduled').length,
+      runningCount: queued.filter((entry) => entry.state === 'running').length,
+      lanes,
+      queued,
+      backPressure: {
+        droppedCount,
+        recentDrops: recentDrops.map((entry) => ({ ...entry })),
+      },
+      failures: {
+        failedCount,
+        recentFailures: recentFailures.map((entry) => ({ ...entry })),
+      },
+      quarantine: {
+        count: quarantinedPersistedEntries.length,
+        persisted: quarantinePersisted,
+        entries: quarantinedPersistedEntries.map((entry) => ({ ...entry })),
+      },
+      persistence: persistenceStatus,
+    };
+    if (nextRunAt !== undefined) {
+      status.nextRunAt = nextRunAt;
+    }
+    return status;
   };
 
   hydrateQueue();
@@ -600,5 +971,6 @@ export function wirePostTurnActionRuntime(
         nextRunAt: entry.nextRunAt,
       }));
     },
+    getStatus,
   };
 }

@@ -154,6 +154,17 @@ describe('wirePostTurnActionRuntime', () => {
 
     expect(agentLoop.waitForIdle).toHaveBeenCalledTimes(1);
     expect(handler).not.toHaveBeenCalled();
+    expect(runtime.getStatus()).toMatchObject({
+      processing: true,
+      queueDepth: 1,
+      runningCount: 1,
+      queued: [
+        expect.objectContaining({
+          actionId: 'foreground-action',
+          state: 'running',
+        }),
+      ],
+    });
 
     idleGate.resolve(undefined);
     await tickPromise;
@@ -261,6 +272,108 @@ describe('wirePostTurnActionRuntime', () => {
           chargeLane: 'maintenance',
         }),
       ]));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('keeps queue status truthful when back-pressure rejects a newly inferred action', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_355_000);
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: {
+          waitForIdle: vi.fn().mockResolvedValue(undefined),
+        },
+        intervalMs: 10,
+      });
+
+      const telemetry: Array<{ phase: string; dedupeKey: string; queueDepth: number }> = [];
+      eventBus.on('agent.post_turn.action.telemetry', (event) => {
+        telemetry.push({
+          phase: event.phase,
+          dedupeKey: event.dedupeKey,
+          queueDepth: event.queueDepth,
+        });
+      });
+
+      await eventBus.emit('agent.post_turn.actions.inferred', {
+        message: makeMessage(),
+        response: makeResponse(),
+        actions: [1, 2, 3].map((index) => makeAction({
+          id: `maintenance-${index}`,
+          dedupeKey: `maintenance:${index}`,
+          inferredAt: 1_700_000_355_000 + index,
+        })),
+      });
+
+      await eventBus.emit('agent.post_turn.actions.inferred', {
+        message: makeMessage(),
+        response: makeResponse(),
+        actions: [
+          makeAction({
+            id: 'maintenance-old',
+            dedupeKey: 'maintenance:old',
+            inferredAt: 1_700_000_354_000,
+          }),
+        ],
+      });
+
+      expect(runtime.listQueued().map((entry) => entry.dedupeKey)).toEqual([
+        'maintenance:1',
+        'maintenance:2',
+        'maintenance:3',
+      ]);
+      expect(telemetry).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          phase: 'dropped_budget',
+          dedupeKey: 'maintenance:old',
+          queueDepth: 3,
+        }),
+      ]));
+      expect(telemetry).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          phase: 'queued',
+          dedupeKey: 'maintenance:old',
+        }),
+      ]));
+
+      const maintenanceLane = runtime.getStatus().lanes.find(
+        (lane) => lane.runtimeClass === MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      );
+      expect(runtime.getStatus()).toMatchObject({
+        queueDepth: 3,
+        maxQueueDepth: 19,
+        saturated: true,
+        backPressure: {
+          droppedCount: 1,
+          recentDrops: [
+            expect.objectContaining({
+              dedupeKey: 'maintenance:old',
+              queueDepth: 3,
+              maxQueuedActions: 3,
+              backPressureMode: 'defer_until_idle',
+            }),
+          ],
+        },
+      });
+      expect(maintenanceLane).toMatchObject({
+        queueDepth: 3,
+        maxQueuedActions: 3,
+        availableSlots: 0,
+        saturated: true,
+        droppedCount: 1,
+        lastDrop: expect.objectContaining({
+          dedupeKey: 'maintenance:old',
+        }),
+      });
     } finally {
       nowSpy.mockRestore();
     }
@@ -404,6 +517,19 @@ describe('wirePostTurnActionRuntime', () => {
       await scheduler.tick();
       expect(handler).toHaveBeenCalledTimes(1);
       expect(runtime.listQueued()).toHaveLength(1);
+      expect(runtime.getStatus()).toMatchObject({
+        queueDepth: 1,
+        retryScheduledCount: 1,
+        queued: [
+          expect.objectContaining({
+            actionId: 'retry-action',
+            state: 'retry_scheduled',
+            attempt: 1,
+            maxAttempts: 2,
+            runAfterMs: 100,
+          }),
+        ],
+      });
 
       nowSpy.mockReturnValue(1_700_000_000_050);
       await scheduler.tick();
@@ -416,6 +542,21 @@ describe('wirePostTurnActionRuntime', () => {
       expect(runtime.listQueued()).toHaveLength(0);
       expect(phases).toContain('retry_scheduled');
       expect(phases).toContain('failed');
+      expect(runtime.getStatus()).toMatchObject({
+        queueDepth: 0,
+        failures: {
+          failedCount: 1,
+          recentFailures: [
+            expect.objectContaining({
+              actionId: 'retry-action',
+              reason: 'retries_exhausted',
+              attempt: 2,
+              maxAttempts: 2,
+              error: 'Error: second failure',
+            }),
+          ],
+        },
+      });
     } finally {
       nowSpy.mockRestore();
     }
@@ -587,6 +728,27 @@ describe('wirePostTurnActionRuntime', () => {
       runtime.registerHandler('heartbeat.run_template', handler);
 
       expect(runtime.listQueued()).toHaveLength(0);
+      expect(runtime.getStatus()).toMatchObject({
+        persistence: {
+          enabled: true,
+          path: persistencePath,
+          quarantinePath,
+          loadState: 'loaded',
+          loadedEntries: 0,
+          quarantinedEntries: 1,
+          quarantinePersisted: true,
+        },
+        quarantine: {
+          count: 1,
+          persisted: true,
+          entries: [
+            expect.objectContaining({
+              entryNumber: 1,
+              error: 'Invalid deferred post-turn action queue entry payload',
+            }),
+          ],
+        },
+      });
       expect(existsSync(quarantinePath)).toBe(true);
       expect(readQuarantineSidecar(quarantinePath)).toEqual([
         expect.objectContaining({

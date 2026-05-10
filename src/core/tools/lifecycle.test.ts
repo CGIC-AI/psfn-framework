@@ -633,6 +633,7 @@ describe('deferred lifecycle execution', () => {
     const postTurnActions = {
       registerHandler,
       listQueued: () => [],
+      getStatus: vi.fn(),
     };
     const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => undefined);
 
@@ -678,6 +679,7 @@ describe('deferred lifecycle execution', () => {
       postTurnActions: {
         registerHandler,
         listQueued: () => [],
+        getStatus: vi.fn(),
       } as any,
       notifier: mockNotifier,
       stopFn: mockStopFn,

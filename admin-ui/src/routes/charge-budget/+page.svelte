@@ -6,66 +6,15 @@
     type RunChargeRunSummary,
   } from '$lib/api/endpoints/charges';
   import { getSubConfig, saveSubConfig } from '$lib/api/endpoints/settings';
-
-  type ChargePolicyRuntimeLane = 'interactive' | 'background' | 'maintenance' | 'subagent' | 'shard';
-  type ChargePolicySurface =
-    | 'ownerFileInspection'
-    | 'localFilesystem'
-    | 'memoryRead'
-    | 'memoryWrite'
-    | 'localEmbedding'
-    | 'externalEmbedding'
-    | 'localImageGeneration'
-    | 'paidImageGeneration'
-    | 'thinkExtensionBand'
-    | 'subagentLaunch'
-    | 'shardLaunch'
-    | 'externalModelConsult'
-    | 'moaRoundBase';
-  type ChargePolicyReferenceModelClass = 'local' | 'subscription' | 'cheap_cloud' | 'premium_cloud';
-
-  interface ChargePolicyConfig {
-    schemaVersion: 1;
-    runChargeQuotaByLane: Record<ChargePolicyRuntimeLane, number>;
-    surfaceCosts: Record<ChargePolicySurface, number>;
-    surfaceRationales?: Partial<Record<ChargePolicySurface, string>>;
-    moa: {
-      perRoundMultiplierByReferenceModelClass: Record<ChargePolicyReferenceModelClass, number>;
-    };
-    referenceModelClassPricing: Record<ChargePolicyReferenceModelClass, number>;
-    referenceModelClassPricingRationales?: Partial<Record<ChargePolicyReferenceModelClass, string>>;
-  }
-
-  const LANE_VALUES = [
-    'interactive',
-    'background',
-    'maintenance',
-    'subagent',
-    'shard',
-  ] as const satisfies readonly ChargePolicyRuntimeLane[];
-
-  const SURFACE_VALUES = [
-    'ownerFileInspection',
-    'localFilesystem',
-    'memoryRead',
-    'memoryWrite',
-    'localEmbedding',
-    'externalEmbedding',
-    'localImageGeneration',
-    'paidImageGeneration',
-    'thinkExtensionBand',
-    'subagentLaunch',
-    'shardLaunch',
-    'externalModelConsult',
-    'moaRoundBase',
-  ] as const satisfies readonly ChargePolicySurface[];
-
-  const REFERENCE_MODEL_CLASS_VALUES = [
-    'local',
-    'subscription',
-    'cheap_cloud',
-    'premium_cloud',
-  ] as const satisfies readonly ChargePolicyReferenceModelClass[];
+  import {
+    CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES,
+    CHARGE_POLICY_RUNTIME_LANE_VALUES,
+    CHARGE_POLICY_SURFACE_VALUES,
+    type ChargePolicyConfig,
+    type ChargePolicyReferenceModelClass,
+    type ChargePolicyRuntimeLane,
+    type ChargePolicySurface,
+  } from '../../../../src/shared/contracts/charge-policy.js';
 
   interface HistoricalWindow {
     id: string;
@@ -77,6 +26,9 @@
   const now = () => Date.now();
   const DAY_MS = 86_400_000;
   const DASH = '-';
+  const LANE_VALUES = CHARGE_POLICY_RUNTIME_LANE_VALUES;
+  const SURFACE_VALUES = CHARGE_POLICY_SURFACE_VALUES;
+  const REFERENCE_MODEL_CLASS_VALUES = CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES;
 
   let charges = $state<AdminChargeLedgerData | null>(null);
   let policy = $state<ChargePolicyConfig | null>(null);
@@ -174,6 +126,10 @@
       .replace(/_/g, ' ')
       .replace(/([a-z])([A-Z])/g, '$1 $2')
       .replace(/\b\w/g, char => char.toUpperCase());
+  }
+
+  function policyKey(prefix: string, key: string): string {
+    return `${prefix}.${key}`;
   }
 
   function shortId(id: string): string {
@@ -410,7 +366,8 @@
             <div class="px-5 py-4">
               <div class="flex items-center justify-between gap-3">
                 <div>
-                  <p class="text-sm font-semibold text-shadow-800">{labelize(lane)}</p>
+                  <p class="font-mono text-sm font-semibold text-shadow-800">{policyKey('runChargeQuotaByLane', lane)}</p>
+                  <p class="text-xs text-shadow-500">{labelize(lane)}</p>
                   <p class="text-xs text-shadow-500">Spent {formatCharge(spent)} of {formatCharge(quota)}</p>
                 </div>
                 <p class="font-serif text-xl font-bold text-moss-600">{formatCharge(remaining)}</p>
@@ -450,7 +407,10 @@
         <div class="divide-y divide-bark-200">
           {#each charges?.aggregates.byLane ?? [] as item}
             <div class="flex items-center justify-between gap-4 px-5 py-3">
-              <p class="text-sm font-medium text-shadow-800">{labelize(item.key)}</p>
+              <div>
+                <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
+                <p class="text-xs text-shadow-500">{labelize(item.key)}</p>
+              </div>
               <p class="text-sm text-shadow-600">{formatCharge(item.amount)} / {formatInteger(item.eventCount)} events</p>
             </div>
           {:else}
@@ -466,7 +426,10 @@
         <div class="max-h-80 divide-y divide-bark-200 overflow-y-auto">
           {#each charges?.aggregates.bySurface ?? [] as item}
             <div class="flex items-center justify-between gap-4 px-5 py-3">
-              <p class="text-sm font-medium text-shadow-800">{labelize(item.key)}</p>
+              <div>
+                <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
+                <p class="text-xs text-shadow-500">{labelize(item.key)}</p>
+              </div>
               <p class="text-sm text-shadow-600">{formatCharge(item.amount)} / {formatInteger(item.eventCount)} events</p>
             </div>
           {:else}
@@ -568,12 +531,14 @@
               <div class="mt-3 grid gap-3 md:grid-cols-5">
                 {#each LANE_VALUES as lane}
                   <label class="block rounded-xl border border-bark-300 bg-bark-50 p-3">
-                    <span class="block text-xs font-semibold uppercase tracking-[0.14em] text-shadow-500">{labelize(lane)}</span>
+                    <span class="block font-mono text-xs font-semibold text-shadow-800">{policyKey('runChargeQuotaByLane', lane)}</span>
+                    <span class="mt-1 block text-xs uppercase tracking-[0.14em] text-shadow-500">{labelize(lane)}</span>
                     <input
                       type="number"
                       min="0"
                       step="0.01"
                       value={policy.runChargeQuotaByLane[lane]}
+                      aria-label={`${policyKey('runChargeQuotaByLane', lane)} quota`}
                       oninput={(event) => setLaneQuota(lane, (event.currentTarget as HTMLInputElement).value)}
                       class="mt-2 w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-800 focus:border-gold-400 focus:outline-none"
                     />
@@ -597,13 +562,17 @@
                   <tbody class="divide-y divide-bark-200 bg-white">
                     {#each SURFACE_VALUES as surface}
                       <tr>
-                        <td class="px-4 py-3 font-medium text-shadow-800">{labelize(surface)}</td>
+                        <td class="px-4 py-3">
+                          <p class="font-mono text-xs font-semibold text-shadow-800">{policyKey('surfaceCosts', surface)}</p>
+                          <p class="mt-1 text-xs text-shadow-500">{labelize(surface)}</p>
+                        </td>
                         <td class="px-4 py-3">
                           <input
                             type="number"
                             min="0"
                             step="0.001"
                             value={policy.surfaceCosts[surface]}
+                            aria-label={`${policyKey('surfaceCosts', surface)} cost`}
                             oninput={(event) => setSurfaceCost(surface, (event.currentTarget as HTMLInputElement).value)}
                             class="w-28 rounded-lg border border-bark-300 px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
                           />
@@ -613,6 +582,7 @@
                             type="text"
                             value={policy.surfaceRationales?.[surface] ?? ''}
                             placeholder={policy.surfaceCosts[surface] > 0 ? 'Required for nonzero cost' : 'Optional'}
+                            aria-label={`${policyKey('surfaceRationales', surface)} rationale`}
                             oninput={(event) => setSurfaceRationale(surface, (event.currentTarget as HTMLInputElement).value)}
                             class="w-full min-w-64 rounded-lg border border-bark-300 px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
                             class:border-wilt-400={policy.surfaceCosts[surface] > 0 && !policy.surfaceRationales?.[surface]?.trim()}
@@ -631,12 +601,18 @@
                 <div class="mt-3 space-y-3">
                   {#each REFERENCE_MODEL_CLASS_VALUES as referenceClass}
                     <label class="flex items-center justify-between gap-3 rounded-xl border border-bark-300 bg-bark-50 p-3">
-                      <span class="text-sm font-medium text-shadow-800">{labelize(referenceClass)}</span>
+                      <span>
+                        <span class="block font-mono text-xs font-semibold text-shadow-800">
+                          {policyKey('moa.perRoundMultiplierByReferenceModelClass', referenceClass)}
+                        </span>
+                        <span class="mt-1 block text-xs text-shadow-500">{labelize(referenceClass)}</span>
+                      </span>
                       <input
                         type="number"
                         min="0"
                         step="0.01"
                         value={policy.moa.perRoundMultiplierByReferenceModelClass[referenceClass]}
+                        aria-label={`${policyKey('moa.perRoundMultiplierByReferenceModelClass', referenceClass)} multiplier`}
                         oninput={(event) => setMoaMultiplier(referenceClass, (event.currentTarget as HTMLInputElement).value)}
                         class="w-32 rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
                       />
@@ -652,12 +628,18 @@
                   {#each REFERENCE_MODEL_CLASS_VALUES as referenceClass}
                     <div class="rounded-xl border border-bark-300 bg-bark-50 p-3">
                       <div class="flex items-center justify-between gap-3">
-                        <span class="text-sm font-medium text-shadow-800">{labelize(referenceClass)}</span>
+                        <span>
+                          <span class="block font-mono text-xs font-semibold text-shadow-800">
+                            {policyKey('referenceModelClassPricing', referenceClass)}
+                          </span>
+                          <span class="mt-1 block text-xs text-shadow-500">{labelize(referenceClass)}</span>
+                        </span>
                         <input
                           type="number"
                           min="0"
                           step="0.001"
                           value={policy.referenceModelClassPricing[referenceClass]}
+                          aria-label={`${policyKey('referenceModelClassPricing', referenceClass)} price`}
                           oninput={(event) => setReferencePricing(referenceClass, (event.currentTarget as HTMLInputElement).value)}
                           class="w-32 rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
                         />
@@ -666,6 +648,7 @@
                         type="text"
                         value={policy.referenceModelClassPricingRationales?.[referenceClass] ?? ''}
                         placeholder={policy.referenceModelClassPricing[referenceClass] > 0 ? 'Required pricing rationale' : 'Optional rationale'}
+                        aria-label={`${policyKey('referenceModelClassPricingRationales', referenceClass)} rationale`}
                         oninput={(event) => setReferenceRationale(referenceClass, (event.currentTarget as HTMLInputElement).value)}
                         class="mt-3 w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm focus:border-gold-400 focus:outline-none"
                         class:border-wilt-400={policy.referenceModelClassPricing[referenceClass] > 0 && !policy.referenceModelClassPricingRationales?.[referenceClass]?.trim()}

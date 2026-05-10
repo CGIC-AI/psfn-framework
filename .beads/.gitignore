@@ -6,6 +6,9 @@ dolt-access.lock
 bd.sock
 bd.sock.startlock
 sync-state.json
+export-state.json
+push-state.json
+.beads-credential-key
 last-touched
 
 # Local version tracking (prevents upgrade notification spam after git ops)

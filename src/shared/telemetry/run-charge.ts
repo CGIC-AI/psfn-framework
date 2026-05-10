@@ -5,7 +5,7 @@ import type {
   ChargePolicyConfig,
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
-} from '../../system/config/charge-policy-config.js';
+} from '../contracts/charge-policy.js';
 import type { EventBus } from '../event-bus.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 

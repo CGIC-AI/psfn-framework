@@ -6,7 +6,7 @@ import type { RunChargeEvent } from '../contracts/runtime.js';
 import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
-} from '../../system/config/charge-policy-config.js';
+} from '../contracts/charge-policy.js';
 
 export interface RunChargeLedgerMetadata {
   provider?: string;

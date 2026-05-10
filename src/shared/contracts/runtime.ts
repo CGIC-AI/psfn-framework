@@ -7,7 +7,7 @@ import type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
-} from '../../system/config/charge-policy-config.js';
+} from './charge-policy.js';
 
 // ── Channel-agnostic message types ──
 

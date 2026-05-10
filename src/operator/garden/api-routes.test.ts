@@ -1564,6 +1564,7 @@ describe('AdminServer JSON API routes', () => {
       accessCount: 0,
       tags: ['api'],
       sensitivity: 'confidential',
+      consentFlags: { allowRecall: false },
     }, new Float32Array([0.2, 0.3, 0.4]));
     memoryStore.insertMemory({
       id: 'api-mem-cf',
@@ -1583,9 +1584,30 @@ describe('AdminServer JSON API routes', () => {
 
     const listRes = await request(port, 'GET', '/api/admin/memory?limit=1&offset=1', undefined, authHeaders);
     expect(listRes.status).toBe(200);
-    const listPayload = JSON.parse(listRes.body) as { memories: Array<{ id: string }> };
+    const listPayload = JSON.parse(listRes.body) as {
+      memories: Array<{ id: string }>;
+      privacySummary: {
+        activeMemoryCount: number;
+        matchingMemoryCount: number;
+        pageMemoryCount: number;
+        highSensitivityCount: number;
+        consentGatedCount: number;
+        sensitivityCounts: Record<string, number>;
+      };
+    };
     expect(listPayload.memories).toHaveLength(1);
     expect(listPayload.memories.some(memory => memory.id === 'api-mem-cf')).toBe(false);
+    expect(listPayload.privacySummary).toMatchObject({
+      activeMemoryCount: 2,
+      matchingMemoryCount: 2,
+      pageMemoryCount: 1,
+      highSensitivityCount: 1,
+      consentGatedCount: 1,
+      sensitivityCounts: {
+        personal: 1,
+        confidential: 1,
+      },
+    });
 
     const filteredRes = await request(port, 'GET', '/api/admin/memory?type=semantic', undefined, authHeaders);
     expect(filteredRes.status).toBe(200);
@@ -1629,9 +1651,14 @@ describe('AdminServer JSON API routes', () => {
 
     const searchRes = await request(port, 'GET', '/api/admin/memory/search?q=memory', undefined, authHeaders);
     expect(searchRes.status).toBe(200);
-    const searchPayload = JSON.parse(searchRes.body) as { results: Array<{ id: string }> };
+    const searchPayload = JSON.parse(searchRes.body) as {
+      results: Array<{ id: string }>;
+      privacySummary: { highSensitivityCount: number; consentGatedCount: number };
+    };
     expect(searchPayload.results.length).toBeGreaterThan(0);
     expect(searchPayload.results.some(memory => memory.id === 'api-mem-cf')).toBe(false);
+    expect(searchPayload.privacySummary.highSensitivityCount).toBe(1);
+    expect(searchPayload.privacySummary.consentGatedCount).toBe(1);
 
     const deleteRes = await request(port, 'DELETE', '/api/admin/memory/api-mem-2', undefined, authHeaders);
     expect(deleteRes.status).toBe(200);

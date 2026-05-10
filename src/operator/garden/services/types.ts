@@ -232,9 +232,21 @@ export interface AdminMemoryContactSummary {
   displayName: string;
 }
 
+export interface AdminMemoryPrivacySummary {
+  activeMemoryCount: number;
+  matchingMemoryCount: number;
+  pageMemoryCount: number;
+  highSensitivityCount: number;
+  consentGatedCount: number;
+  contactLinkedCount: number;
+  scopedCount: number;
+  sensitivityCounts: Record<string, number>;
+}
+
 export interface AdminMemoryListData {
   memories: PurrMemory[];
   contactsById: Map<string, AdminMemoryContactSummary>;
+  privacySummary: AdminMemoryPrivacySummary;
   pagination: {
     limit: number;
     offset: number;
@@ -255,6 +267,7 @@ export interface AdminMemorySearchResult {
   query: string;
   results: PurrMemory[];
   contactsById: Map<string, AdminMemoryContactSummary>;
+  privacySummary: AdminMemoryPrivacySummary;
 }
 
 export interface MemoryMutationResult {

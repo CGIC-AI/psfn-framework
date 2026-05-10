@@ -169,7 +169,7 @@
       <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">The Shed</p>
       <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Tools</h1>
       <p class="mt-1 text-sm text-shadow-600">
-        Operator view for live tool availability, service health, adaptive activation, and audit signals.
+        Direct runtime tool availability for registered tools, service health, adaptive activation, and audit signals.
       </p>
     </div>
     <button

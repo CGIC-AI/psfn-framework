@@ -90,6 +90,11 @@
     data ? data.memories : []
   );
 
+  let privacySummary = $derived(
+    searchActive && searchResults ? searchResults.privacySummary :
+    data ? data.privacySummary : null
+  );
+
   // Memory type badge colors (from htmx admin)
   const TYPE_COLORS: Record<string, { bg: string; text: string }> = {
     episodic:    { bg: '#8B7355', text: 'white' },
@@ -428,6 +433,10 @@
     return `background-color: ${c.bg}; color: ${c.text}`;
   }
 
+  function sensitivityCountLabel(level: string): string {
+    return `${level}: ${privacySummary?.sensitivityCounts?.[level] ?? 0}`;
+  }
+
   function formatDate(ts: number | undefined): string {
     if (ts === undefined || ts === null) return 'unknown';
     return new Date(ts).toLocaleDateString(undefined, {
@@ -626,6 +635,51 @@
   <div>
     <h1 class="font-serif text-2xl text-shadow-900 font-semibold">The Roots</h1>
     <p class="text-shadow-600 text-sm mt-1">Memory Browser</p>
+  </div>
+
+  <div class="card-garden p-4 space-y-4">
+    <div>
+      <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">Privacy Boundaries</p>
+      <h2 class="mt-1 font-serif text-lg text-shadow-900 font-semibold">Withheld memory visibility</h2>
+      <p class="mt-1 text-sm text-shadow-600">
+        Operator-only metadata for trust-ceiling and consent-gated memory. This surface exposes counts and policy shape, not withheld memory text.
+      </p>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
+        <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Active</p>
+        <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.activeMemoryCount ?? 0}</p>
+      </div>
+      <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
+        <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Matching</p>
+        <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.matchingMemoryCount ?? 0}</p>
+      </div>
+      <div class="rounded-xl border border-wilt-200 bg-wilt-50 p-3">
+        <p class="text-xs uppercase tracking-[0.16em] text-wilt-700">High Sensitivity</p>
+        <p class="mt-2 font-serif text-2xl text-wilt-700">{privacySummary?.highSensitivityCount ?? 0}</p>
+      </div>
+      <div class="rounded-xl border border-gold-200 bg-gold-50 p-3">
+        <p class="text-xs uppercase tracking-[0.16em] text-gold-800">Consent-Gated</p>
+        <p class="mt-2 font-serif text-2xl text-gold-800">{privacySummary?.consentGatedCount ?? 0}</p>
+      </div>
+      <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
+        <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Scoped</p>
+        <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.scopedCount ?? 0}</p>
+      </div>
+    </div>
+
+    <div class="flex flex-wrap gap-2 text-xs">
+      {#each SENSITIVITY_LEVELS.filter(level => level) as level}
+        <span class="rounded-full border border-bark-200 bg-white px-2.5 py-1 font-medium text-shadow-700">
+          {sensitivityCountLabel(level)}
+        </span>
+      {/each}
+    </div>
+
+    <p class="text-xs leading-relaxed text-shadow-600">
+      Retrieval-time exclusions are shown per turn in Prompt Monitor under Memory -> withheld summary. Use those counts to explain why context was narrowed, then use this page to inspect safe operator-level metadata and adjust contact trust or consent policy deliberately.
+    </p>
   </div>
 
   <!-- Flash message -->
@@ -1161,6 +1215,14 @@
             {/if}
             {#if memTags(detailModalData.memory)}
               <span class="sm:col-span-2">Tags: <span class="text-shadow-800">{memTags(detailModalData.memory)}</span></span>
+            {/if}
+            {#if Object.keys(detailModalData.memory.consentFlags ?? {}).length > 0}
+              <span class="sm:col-span-2">
+                Consent flags:
+                <code class="text-shadow-800 bg-bark-200 px-1 rounded text-sm break-all">
+                  {JSON.stringify(detailModalData.memory.consentFlags)}
+                </code>
+              </span>
             {/if}
           </div>
 

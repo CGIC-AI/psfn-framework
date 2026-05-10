@@ -27,6 +27,7 @@ import type {
   AdminMemoryDetailData,
   AdminMemoryLinkResult,
   AdminMemoryListData,
+  AdminMemoryPrivacySummary,
   AdminMemorySearchResult,
   AdminMemoryService,
   MemoryMutationResult,
@@ -107,6 +108,45 @@ function compareMemoryRecency(
   return right.id.localeCompare(left.id);
 }
 
+function buildPrivacySummary(
+  activeMemories: readonly AdminMemoryListData['memories'][number][],
+  matchingMemories: readonly AdminMemoryListData['memories'][number][],
+  pageMemoryCount: number,
+): AdminMemoryPrivacySummary {
+  const sensitivityCounts: Record<string, number> = {};
+  let highSensitivityCount = 0;
+  let consentGatedCount = 0;
+  let contactLinkedCount = 0;
+  let scopedCount = 0;
+
+  for (const memory of activeMemories) {
+    sensitivityCounts[memory.sensitivity] = (sensitivityCounts[memory.sensitivity] ?? 0) + 1;
+    if (memory.sensitivity === 'intimate' || memory.sensitivity === 'confidential') {
+      highSensitivityCount += 1;
+    }
+    if (memory.consentFlags?.allowRecall === false) {
+      consentGatedCount += 1;
+    }
+    if (memory.contactId) {
+      contactLinkedCount += 1;
+    }
+    if (memory.scopeRef || (memory.scopeTags?.length ?? 0) > 0) {
+      scopedCount += 1;
+    }
+  }
+
+  return {
+    activeMemoryCount: activeMemories.length,
+    matchingMemoryCount: matchingMemories.length,
+    pageMemoryCount,
+    highSensitivityCount,
+    consentGatedCount,
+    contactLinkedCount,
+    scopedCount,
+    sensitivityCounts,
+  };
+}
+
 export class AdminMemoryDataService implements AdminMemoryService {
   constructor(private readonly deps: {
     memoryStore: MemoryStorePort;
@@ -172,10 +212,12 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const startDate = parseDateFilter(params?.get('startDate'), 'start');
     const endDate = parseDateFilter(params?.get('endDate'), 'end');
 
-    const filtered = (await this.deps.memoryStore
+    const activeMemories = (await this.deps.memoryStore
       .getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
+      .filter(memory => !isInternalMemoryArtifact(memory));
+
+    const filtered = activeMemories
       .filter((memory) => {
-        if (isInternalMemoryArtifact(memory)) return false;
         if (typeFilter && memory.type !== typeFilter) return false;
         if (sensitivityFilter && memory.sensitivity !== sensitivityFilter) return false;
         const createdAt = memoryTimestamp(memory);
@@ -192,6 +234,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return {
       memories,
       contactsById: await this.buildContactSummaryMap(),
+      privacySummary: buildPrivacySummary(activeMemories, filtered, memories.length),
       pagination: {
         limit,
         offset,
@@ -306,21 +349,26 @@ export class AdminMemoryDataService implements AdminMemoryService {
   }
 
   async searchMemories(query: string): Promise<AdminMemorySearchResult> {
+    const activeMemories = (await this.deps.memoryStore.getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
+      .filter(memory => !isInternalMemoryArtifact(memory));
     const embeddingService = this.deps.embeddingService;
     if (!embeddingService) {
       return {
         query,
         results: [],
         contactsById: await this.buildContactSummaryMap(),
+        privacySummary: buildPrivacySummary(activeMemories, [], 0),
       };
     }
     const embedding = await embeddingService.embed(query);
+    const results = (await this.deps.memoryStore
+      .searchByEmbedding(embedding, 0.1, 50))
+      .filter(memory => !isInternalMemoryArtifact(memory));
     return {
       query,
-      results: (await this.deps.memoryStore
-        .searchByEmbedding(embedding, 0.1, 50))
-        .filter(memory => !isInternalMemoryArtifact(memory)),
+      results,
       contactsById: await this.buildContactSummaryMap(),
+      privacySummary: buildPrivacySummary(activeMemories, results, results.length),
     };
   }
 

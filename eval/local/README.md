@@ -18,7 +18,7 @@ The primary dense targets in this bead now match the evaluation plan directly:
 - `scripts/launch-vllm.sh`: canonical vLLM launch entrypoint for dense HF checkpoints.
 - `scripts/launch-llamacpp.sh`: canonical llama.cpp launch entrypoint for GGUF checkpoints.
 - `scripts/probe-logprobs.sh`: backend-aware logprob probe for local endpoints.
-- `scripts/probe-hidden-states.sh`: vLLM hidden-state probe based on the official `extract_hidden_states` example.
+- `scripts/probe-hidden-states.sh`: hidden-state probe for dense local profiles. Profiles choose an explicit probe backend with `HIDDEN_STATE_PROBE_BACKEND`.
 - `scripts/validate-profiles.sh`: syntax and profile validation for rerunnable assets.
 
 ## Quick Start
@@ -50,8 +50,12 @@ npm run eval:local:vllm -- qwen35-9b-vllm
 For hidden-state extraction:
 
 ```bash
+python3 -m venv .venv-eval-hidden
+.venv-eval-hidden/bin/python -m pip install -r eval/local/requirements-hidden.txt
 npm run eval:local:probe:hidden -- qwen35-9b-vllm
 ```
+
+`qwen35-9b-vllm` delegates this probe to `qwen3-06b-vllm` through `HIDDEN_STATE_PROBE_FALLBACK_PROFILE`. The command prints both the requested and effective profiles so the Qwen3.5 compatibility boundary is visible in probe output.
 
 ## Target Matrix
 
@@ -67,7 +71,9 @@ The memory numbers below are operator guidance, not hard guarantees. They are in
 
 ### vLLM
 
-Use vLLM whenever you need dense HF checkpoints, OpenAI-compatible serving, or hidden-state extraction. The checked-in launch profiles target `32k` context for the Qwen paths and `16k` for Gemma to keep the initial bring-up within realistic workstation limits.
+Use vLLM whenever you need dense HF checkpoints or OpenAI-compatible serving. The checked-in launch profiles target `32k` context for the Qwen paths and `16k` for Gemma to keep the initial bring-up within realistic workstation limits.
+
+Hidden-state extraction is profile-owned instead of inferred from the serving backend. Qwen3.5 dense profiles declare an explicit fallback because the pinned stable Transformers stack does not recognize `model_type=qwen3_5`, and the vLLM `extract_hidden_states` KV-transfer example is an internal/speculative path rather than a stable compatibility contract for these models. Keep `vllm-kv-transfer` only for profiles where that exact vLLM hidden-state path has been verified.
 
 For Qwen3.5, keep `ENABLE_REASONING=0` in eval runs unless the scenario explicitly measures chain-of-thought behavior. Hidden-state comparisons and calibration sweeps are easier to interpret in non-thinking mode.
 
@@ -87,7 +93,7 @@ The checked-in assets are meant to be rerunnable and fail loud when the workstat
 
 - `llama-server` is installed and the llama.cpp launch/probe path is runnable once weights are present.
 - `python3` is installed.
-- `vllm` and `safetensors` are not installed, so `npm run eval:local:probe:hidden -- qwen35-9b-vllm` currently stops with a concrete dependency blocker instead of a hidden failure.
+- The Python hidden-state stack is repo-owned in `eval/local/requirements-hidden.txt`. If it is not installed, `npm run eval:local:probe:hidden -- qwen35-9b-vllm` stops with the pinned install command instead of a hidden failure.
 - `npm run eval:local:validate` is the minimum repo-owned gate for these profiles before live model checks.
 
 Use the probe scripts only after the relevant backend and weights are actually available locally.

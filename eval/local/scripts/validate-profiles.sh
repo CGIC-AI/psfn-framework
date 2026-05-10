@@ -21,6 +21,13 @@ while IFS= read -r profile_name; do
       require_profile_field MODEL_ID
       require_profile_field MODEL_CACHE
       require_profile_field MAX_MODEL_LEN
+      require_profile_field HIDDEN_STATE_PROBE_BACKEND
+      case "$HIDDEN_STATE_PROBE_BACKEND" in
+        transformers-forward|vllm-kv-transfer) ;;
+        *)
+          die "profile ${profile_name} uses unsupported HIDDEN_STATE_PROBE_BACKEND=${HIDDEN_STATE_PROBE_BACKEND}"
+          ;;
+      esac
       bash "${SCRIPT_DIR}/launch-vllm.sh" "$profile_name" --dry-run >/dev/null
       ;;
     llama.cpp)

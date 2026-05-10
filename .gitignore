@@ -13,6 +13,7 @@ import/
 certs/
 __pycache__/
 *.pyc
+.venv-eval-hidden/
 
 # bv (beads viewer) local config and caches
 .bv/

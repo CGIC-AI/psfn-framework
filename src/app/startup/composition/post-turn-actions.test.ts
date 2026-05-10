@@ -611,6 +611,181 @@ describe('wirePostTurnActionRuntime', () => {
     }
   });
 
+  it('cancels queued autonomous actions without running handlers', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop: {
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+      },
+      intervalMs: 1,
+    });
+    const handler = vi.fn().mockResolvedValue(undefined);
+    runtime.registerHandler('intention.follow_up', handler, {
+      executionMode: 'background',
+    });
+
+    const phases: string[] = [];
+    eventBus.on('agent.post_turn.action.telemetry', ({ phase }) => {
+      phases.push(phase);
+    });
+
+    await eventBus.emit('agent.post_turn.actions.inferred', {
+      message: makeMessage(),
+      response: makeResponse(),
+      actions: [
+        makeAction({
+          id: 'cancel-me',
+          kind: 'intention.follow_up',
+          dedupeKey: 'proactive:cancel-me',
+          runAt: Date.now() + 1_000,
+        }),
+      ],
+    });
+
+    expect(runtime.cancel('cancel-me', 'operator cancelled stale proactive action')).toBe(true);
+    expect(runtime.cancel('cancel-me')).toBe(false);
+    await scheduler.tick();
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(runtime.listQueued()).toHaveLength(0);
+    expect(phases).toEqual(expect.arrayContaining(['queued', 'cancelled']));
+    expect(runtime.getStatus()).toMatchObject({
+      queueDepth: 0,
+      terminal: {
+        cancelledCount: 1,
+        acknowledgedCount: 0,
+        recentTerminals: [
+          expect.objectContaining({
+            actionId: 'cancel-me',
+            dedupeKey: 'proactive:cancel-me',
+            reason: 'cancelled',
+            detail: 'operator cancelled stale proactive action',
+          }),
+        ],
+      },
+    });
+  });
+
+  it('acknowledges queued autonomous actions as handled without execution', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop: {
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+      },
+      intervalMs: 1,
+    });
+    const handler = vi.fn().mockResolvedValue(undefined);
+    runtime.registerHandler('intention.follow_up', handler, {
+      executionMode: 'background',
+    });
+
+    await eventBus.emit('agent.post_turn.actions.inferred', {
+      message: makeMessage(),
+      response: makeResponse(),
+      actions: [
+        makeAction({
+          id: 'ack-me',
+          kind: 'intention.follow_up',
+          dedupeKey: 'proactive:ack-me',
+        }),
+      ],
+    });
+
+    expect(runtime.acknowledge('proactive:ack-me', 'operator acknowledged proactive suggestion')).toBe(true);
+    await scheduler.tick();
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(runtime.listQueued()).toHaveLength(0);
+    expect(runtime.getStatus()).toMatchObject({
+      terminal: {
+        cancelledCount: 0,
+        acknowledgedCount: 1,
+        recentTerminals: [
+          expect.objectContaining({
+            actionId: 'ack-me',
+            dedupeKey: 'proactive:ack-me',
+            reason: 'acknowledged',
+            detail: 'operator acknowledged proactive suggestion',
+          }),
+        ],
+      },
+    });
+  });
+
+  it('fails closed on malformed inferred action events', async () => {
+    const eventBus = new EventBus();
+    const scheduler = new Scheduler(eventBus, {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const runtime = wirePostTurnActionRuntime({
+      eventBus,
+      scheduler,
+      agentLoop: {
+        waitForIdle: vi.fn().mockResolvedValue(undefined),
+      },
+      intervalMs: 1,
+    });
+    const handler = vi.fn().mockResolvedValue(undefined);
+    runtime.registerHandler('heartbeat.run_template', handler);
+
+    const phases: string[] = [];
+    eventBus.on('agent.post_turn.action.telemetry', ({ phase }) => {
+      phases.push(phase);
+    });
+
+    await eventBus.emit('agent.post_turn.actions.inferred', {
+      message: makeMessage(),
+      response: makeResponse(),
+      actions: [
+        makeAction({ id: 'valid-after-malformed', dedupeKey: 'valid:after-malformed' }),
+        {
+          id: 'bad-action',
+          kind: 'heartbeat.run_template',
+          dedupeKey: '',
+          channelId: 'test-channel',
+          sourceMessageId: 'msg-1',
+          inferredAt: 'not-a-number',
+        },
+      ],
+    });
+
+    expect(runtime.listQueued()).toEqual([
+      expect.objectContaining({
+        actionId: 'valid-after-malformed',
+        dedupeKey: 'valid:after-malformed',
+      }),
+    ]);
+    expect(phases).toContain('malformed_dropped');
+    expect(runtime.getStatus()).toMatchObject({
+      failures: {
+        failedCount: 1,
+        recentFailures: [
+          expect.objectContaining({
+            actionId: 'malformed',
+            reason: 'malformed_action',
+            error: 'Invalid inferred post-turn action payload',
+          }),
+        ],
+      },
+    });
+
+    await scheduler.tick();
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it('persists queued actions and reloads them on runtime restart', async () => {
     const nowSpy = vi.spyOn(Date, 'now');
     const tempDir = mkdtempSync(join(tmpdir(), 'psfn-post-turn-actions-'));

@@ -3,6 +3,7 @@ import type { InferredPostTurnAction } from '../../../shared/contracts/runtime.j
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import {
+  POST_TURN_APPRAISAL_RUNTIME_CLASS,
   RUNTIME_LANE_CLASSES,
   compareRuntimeLanePriority,
   isRuntimeLaneClass,
@@ -43,7 +44,9 @@ export type PostTurnActionQueuePersistenceLoadState =
 export type PostTurnActionFailureReason =
   | 'missing_handler'
   | 'eligibility_denied'
-  | 'retries_exhausted';
+  | 'retries_exhausted'
+  | 'malformed_action';
+export type PostTurnActionTerminalReason = 'cancelled' | 'acknowledged';
 
 export interface PostTurnActionQueuedEntryStatus {
   actionId: string;
@@ -81,6 +84,18 @@ export interface PostTurnActionQueueFailureRecord {
   attempt: number;
   maxAttempts: number;
   error: string;
+}
+
+export interface PostTurnActionQueueTerminalRecord {
+  actionId: string;
+  actionKind: string;
+  dedupeKey: string;
+  runtimeClass: RuntimeLaneClass;
+  reason: PostTurnActionTerminalReason;
+  recordedAt: number;
+  attempt: number;
+  maxAttempts: number;
+  detail: string;
 }
 
 export interface PostTurnActionQueueLaneStatus {
@@ -145,6 +160,11 @@ export interface PostTurnActionQueueStatus {
     failedCount: number;
     recentFailures: PostTurnActionQueueFailureRecord[];
   };
+  terminal: {
+    cancelledCount: number;
+    acknowledgedCount: number;
+    recentTerminals: PostTurnActionQueueTerminalRecord[];
+  };
   quarantine: PostTurnActionQueueQuarantineStatus;
   persistence: PostTurnActionQueuePersistenceStatus;
 }
@@ -164,6 +184,8 @@ export interface PostTurnActionRuntime {
     maxAttempts: number;
     nextRunAt: number;
   }>;
+  cancel(actionRef: string, reason?: string): boolean;
+  acknowledge(actionRef: string, detail?: string): boolean;
   getStatus(): PostTurnActionQueueStatus;
 }
 
@@ -238,10 +260,13 @@ export function wirePostTurnActionRuntime(
   const runningDedupeKeys = new Set<string>();
   const recentDrops: PostTurnActionQueueDropRecord[] = [];
   const recentFailures: PostTurnActionQueueFailureRecord[] = [];
+  const recentTerminals: PostTurnActionQueueTerminalRecord[] = [];
   const droppedCountsByRuntimeClass = new Map<RuntimeLaneClass, number>();
   let processing = false;
   let droppedCount = 0;
   let failedCount = 0;
+  let cancelledCount = 0;
+  let acknowledgedCount = 0;
   let persistenceLoadState: PostTurnActionQueuePersistenceLoadState = persistencePath
     ? 'not_found'
     : 'not_configured';
@@ -326,6 +351,10 @@ export function wirePostTurnActionRuntime(
       ...(runAt !== undefined ? { runAt } : {}),
     };
   };
+
+  const normalizeRuntimeAction = (value: unknown): InferredPostTurnAction | null => (
+    normalizePersistedAction(value)
+  );
 
   const normalizePersistedQueueEntry = (value: unknown): DeferredQueueEntry | null => {
     if (!isRecord(value)) {
@@ -513,7 +542,10 @@ export function wirePostTurnActionRuntime(
       | 'succeeded'
       | 'retry_scheduled'
       | 'failed'
-      | 'dropped_budget',
+      | 'dropped_budget'
+      | 'cancelled'
+      | 'acknowledged'
+      | 'malformed_dropped',
     entry: DeferredQueueEntry,
     optionsOverride: { nextRetryAt?: number; delayMs?: number; error?: string } = {},
   ): void => {
@@ -585,6 +617,91 @@ export function wirePostTurnActionRuntime(
       maxAttempts: entry.maxRetries + 1,
       error,
     });
+  };
+
+  const recordMalformedAction = (raw: unknown, error: string): void => {
+    const failedAt = Date.now();
+    failedCount += 1;
+    rememberRecent(recentFailures, {
+      actionId: 'malformed',
+      actionKind: 'malformed',
+      dedupeKey: `malformed:${failedAt}:${failedCount}`,
+      runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
+      reason: 'malformed_action',
+      failedAt,
+      attempt: 0,
+      maxAttempts: 0,
+      error,
+    });
+    eventBus.emit('agent.post_turn.action.telemetry', {
+      actionId: 'malformed',
+      actionKind: 'malformed',
+      dedupeKey: `malformed:${failedAt}:${failedCount}`,
+      runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
+      chargeLane: resolveRuntimeLaneBudgetProfile(POST_TURN_APPRAISAL_RUNTIME_CLASS).chargeLane,
+      phase: 'malformed_dropped',
+      attempt: 0,
+      maxAttempts: 0,
+      queueDepth: queue.size,
+      timestamp: failedAt,
+      error,
+      rawType: Array.isArray(raw) ? 'array' : typeof raw,
+    }).catch((emitError) => {
+      log.warn('Malformed deferred action telemetry emit failed', {
+        error: String(emitError),
+      });
+    });
+  };
+
+  const recordTerminal = (
+    entry: DeferredQueueEntry,
+    reason: PostTurnActionTerminalReason,
+    detail: string,
+  ): void => {
+    if (reason === 'cancelled') {
+      cancelledCount += 1;
+    } else {
+      acknowledgedCount += 1;
+    }
+    rememberRecent(recentTerminals, {
+      actionId: entry.action.id,
+      actionKind: entry.action.kind,
+      dedupeKey: entry.action.dedupeKey,
+      runtimeClass: entry.runtimeClass,
+      reason,
+      recordedAt: Date.now(),
+      attempt: entry.attempt,
+      maxAttempts: entry.maxRetries + 1,
+      detail,
+    });
+  };
+
+  const findQueuedEntry = (actionRef: string): DeferredQueueEntry | undefined => {
+    const normalizedRef = actionRef.trim();
+    if (!normalizedRef) {
+      return undefined;
+    }
+    const byDedupeKey = queue.get(normalizedRef);
+    if (byDedupeKey) {
+      return byDedupeKey;
+    }
+    return [...queue.values()].find((entry) => entry.action.id === normalizedRef);
+  };
+
+  const completeQueuedActionWithoutRunning = (
+    actionRef: string,
+    reason: PostTurnActionTerminalReason,
+    detail = reason,
+  ): boolean => {
+    const entry = findQueuedEntry(actionRef);
+    if (!entry || runningDedupeKeys.has(entry.action.dedupeKey)) {
+      return false;
+    }
+    queue.delete(entry.action.dedupeKey);
+    persistQueue();
+    recordTerminal(entry, reason, detail.trim() || reason);
+    emitTelemetry(reason, entry, { error: detail.trim() || reason });
+    return true;
   };
 
   const queueAction = (action: InferredPostTurnAction): void => {
@@ -899,6 +1016,11 @@ export function wirePostTurnActionRuntime(
         failedCount,
         recentFailures: recentFailures.map((entry) => ({ ...entry })),
       },
+      terminal: {
+        cancelledCount,
+        acknowledgedCount,
+        recentTerminals: recentTerminals.map((entry) => ({ ...entry })),
+      },
       quarantine: {
         count: quarantinedPersistedEntries.length,
         persisted: quarantinePersisted,
@@ -914,8 +1036,17 @@ export function wirePostTurnActionRuntime(
 
   hydrateQueue();
 
-  eventBus.on('agent.post_turn.actions.inferred', ({ actions }) => {
-    for (const action of actions) {
+  eventBus.on('agent.post_turn.actions.inferred', (event) => {
+    if (!isRecord(event) || !Array.isArray(event.actions)) {
+      recordMalformedAction(event, 'Post-turn action inference event must include an actions array');
+      return;
+    }
+    for (const rawAction of event.actions) {
+      const action = normalizeRuntimeAction(rawAction);
+      if (!action) {
+        recordMalformedAction(rawAction, 'Invalid inferred post-turn action payload');
+        continue;
+      }
       queueAction(action);
     }
   });
@@ -970,6 +1101,12 @@ export function wirePostTurnActionRuntime(
         maxAttempts: entry.maxRetries + 1,
         nextRunAt: entry.nextRunAt,
       }));
+    },
+    cancel(actionRef: string, reason = 'cancelled'): boolean {
+      return completeQueuedActionWithoutRunning(actionRef, 'cancelled', reason);
+    },
+    acknowledge(actionRef: string, detail = 'acknowledged'): boolean {
+      return completeQueuedActionWithoutRunning(actionRef, 'acknowledged', detail);
     },
     getStatus,
   };

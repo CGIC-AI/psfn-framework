@@ -5,7 +5,7 @@ import {
   type MessageSender,
 } from '../../system/lifecycle/notifications.js';
 import { resolveRuntimeCommandInvocation, type RuntimeModeContract } from '../../system/lifecycle/runtime-mode.js';
-import { createSystemTool } from '../../core/tools/lifecycle.js';
+import { createSystemTool, runRepoLifecycleBuildCommand } from '../../core/tools/lifecycle.js';
 import {
   createGatewayDiscordNotifySender,
   createNotifyDispatcher,
@@ -147,8 +147,8 @@ export function buildAgentControlPlane(
       getCapabilityTier: () => capabilityRuntime.getTier(),
       restartContract: lifecycleRuntimeContract.restart,
       runBuildCommand: async () => {
-        await gateway.shellExec('npm', ['run', 'build'], {
-          cwd: process.cwd(),
+        await runRepoLifecycleBuildCommand({
+          repoRoot: process.cwd(),
           timeoutMs: 120_000,
           maxOutputChars: 40_000,
         });

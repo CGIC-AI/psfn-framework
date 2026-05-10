@@ -285,7 +285,7 @@ describe('createRebuildTool', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = vi.fn((_fn: unknown) => {}) as unknown as typeof setImmediate;
 
-    const tool = createRebuildTool(mockNotifier, mockStopFn);
+    const tool = createRebuildTool(mockNotifier, mockStopFn, { runBuildCommand });
     const result = await tool.execute('call-3', { reason: 'dependency refresh' });
 
     expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('rebuild: dependency refresh');
@@ -300,7 +300,7 @@ describe('createRebuildTool', () => {
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = vi.fn((_fn: unknown) => {}) as unknown as typeof setImmediate;
 
-    const tool = createRebuildTool(mockNotifier, mockStopFn);
+    const tool = createRebuildTool(mockNotifier, mockStopFn, { runBuildCommand });
     await tool.execute('call-4', { reason: 'new module' });
 
     expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('rebuild: new module');
@@ -344,6 +344,18 @@ describe('createRebuildTool', () => {
     expect(resultText(result)).toContain('reason is required');
     expect((result.details as any).isError).toBe(true);
     expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
+  });
+
+  it('blocks rebuild before notification when no lifecycle build command is configured', async () => {
+    const tool = createRebuildTool(mockNotifier, mockStopFn);
+    const result = await tool.execute('call-no-build-command', { reason: 'verify rebuild' });
+
+    expect(resultText(result)).toContain('Rebuild blocked');
+    expect(resultText(result)).toContain('no lifecycle rebuild command is configured');
+    expect((result.details as any).isError).toBe(true);
+    expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
+    expect(runRestartCommand).not.toHaveBeenCalled();
   });
 });
 
@@ -844,6 +856,45 @@ describe('deferred lifecycle execution', () => {
 
     expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('rebuild: autonomous shakedown rebuild');
     expect(mockNotifier.notifyShutdown).toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
+    expect(runRestartCommand).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    exitSpy.mockRestore();
+  });
+
+  it('blocks deferred rebuild before pre-restart notification when no build command is configured', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const registerHandler = vi.fn((_kind, _handler) => {
+      return () => undefined;
+    });
+
+    registerDeferredLifecycleRuntime({
+      agentLoop: { registerPostTurnActionInferer: vi.fn().mockReturnValue(() => undefined) },
+      postTurnActions: {
+        registerHandler,
+        listQueued: () => [],
+        getStatus: vi.fn(),
+      } as any,
+      notifier: mockNotifier,
+      stopFn: mockStopFn,
+      runRestartCommand,
+    });
+
+    const handler = registerHandler.mock.calls[0]?.[1] as (action: any) => Promise<void>;
+    await handler({
+      id: 'action-rebuild-no-command',
+      payload: {
+        operation: 'rebuild',
+        reason: 'autonomous shakedown rebuild',
+      },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
+    expect(mockNotifier.notifyShutdown).toHaveBeenCalledWith(
+      'rebuild blocked: no lifecycle rebuild command is configured',
+    );
     expect(mockStopFn).not.toHaveBeenCalled();
     expect(runRestartCommand).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();

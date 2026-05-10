@@ -1,6 +1,9 @@
 // ── Lifecycle tools ──
 // self_restart and self_rebuild tools for the companion to trigger its own restarts.
 
+import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult, AgentMessage } from '@mariozechner/pi-agent-core';
 import type { TextContent, ToolResultMessage } from '@mariozechner/pi-ai';
@@ -18,6 +21,8 @@ import { textResult, textResultWithError } from './results.js';
 
 const log = createComponentLogger('LifecycleTools');
 export const DEFERRED_LIFECYCLE_ACTION_KIND = 'lifecycle.execute';
+const DEFAULT_REBUILD_TIMEOUT_MS = 120_000;
+const DEFAULT_REBUILD_MAX_OUTPUT_CHARS = 40_000;
 type DeferredLifecycleOperation = 'restart' | 'rebuild';
 type SystemAction = 'read' | 'restart' | 'rebuild';
 
@@ -58,6 +63,12 @@ type LifecycleRestartPlan =
     supported: false;
     reason: string;
   };
+
+export interface RepoLifecycleBuildCommandOptions {
+  repoRoot?: string;
+  timeoutMs?: number;
+  maxOutputChars?: number;
+}
 
 function resolveLifecycleRestartPlan(options: LifecycleToolOptions): LifecycleRestartPlan {
   const contract = options.restartContract;
@@ -115,6 +126,96 @@ function resolveLifecycleRestartPlan(options: LifecycleToolOptions): LifecycleRe
     exitCode: 0,
     runCommandBeforeShutdown: false,
   };
+}
+
+function resolvePositiveInt(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  const parsed = Math.floor(Number(value));
+  return parsed > 0 ? parsed : fallback;
+}
+
+function assertRepoOwnedBuildScript(repoRoot: string): void {
+  const packageJsonPath = join(repoRoot, 'package.json');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+  } catch (error) {
+    throw new Error(`Lifecycle rebuild requires a readable repo-owned package.json: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Lifecycle rebuild requires package.json to be a JSON object');
+  }
+  const scripts = (parsed as { scripts?: unknown }).scripts;
+  if (!scripts || typeof scripts !== 'object' || Array.isArray(scripts)) {
+    throw new Error('Lifecycle rebuild requires package.json scripts.build');
+  }
+  const buildScript = (scripts as { build?: unknown }).build;
+  if (typeof buildScript !== 'string' || buildScript.trim().length === 0) {
+    throw new Error('Lifecycle rebuild requires package.json scripts.build');
+  }
+}
+
+export async function runRepoLifecycleBuildCommand(
+  options: RepoLifecycleBuildCommandOptions = {},
+): Promise<void> {
+  const repoRoot = resolve(options.repoRoot ?? process.cwd());
+  assertRepoOwnedBuildScript(repoRoot);
+  const timeoutMs = resolvePositiveInt(options.timeoutMs, DEFAULT_REBUILD_TIMEOUT_MS);
+  const maxOutputChars = resolvePositiveInt(options.maxOutputChars, DEFAULT_REBUILD_MAX_OUTPUT_CHARS);
+
+  await new Promise<void>((resolveBuild, rejectBuild) => {
+    const child = spawn('npm', ['run', 'build'], {
+      cwd: repoRoot,
+      env: process.env,
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let combinedOutput = '';
+    let truncated = false;
+    let timedOut = false;
+
+    const appendOutput = (value: Buffer | string): void => {
+      const text = typeof value === 'string' ? value : value.toString('utf8');
+      if (!text) return;
+      const remaining = maxOutputChars - combinedOutput.length;
+      if (remaining <= 0) {
+        truncated = true;
+        return;
+      }
+      combinedOutput += text.slice(0, remaining);
+      if (text.length > remaining) {
+        truncated = true;
+      }
+    };
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGTERM');
+      setTimeout(() => child.kill('SIGKILL'), 250).unref();
+    }, timeoutMs);
+
+    child.stdout.on('data', appendOutput);
+    child.stderr.on('data', appendOutput);
+    child.once('error', (error) => {
+      clearTimeout(timeout);
+      rejectBuild(error);
+    });
+    child.once('close', (code) => {
+      clearTimeout(timeout);
+      if (timedOut) {
+        rejectBuild(new Error(`Lifecycle rebuild timed out after ${timeoutMs}ms${combinedOutput ? `\n${combinedOutput}` : ''}`));
+        return;
+      }
+      if (code !== 0) {
+        rejectBuild(new Error(
+          `Lifecycle rebuild failed with exit code ${code}${truncated ? ' (output truncated)' : ''}${combinedOutput ? `\n${combinedOutput}` : ''}`,
+        ));
+        return;
+      }
+      resolveBuild();
+    });
+  });
 }
 
 async function runRestartCommandIfRequired(
@@ -271,6 +372,12 @@ export function createRebuildTool(
       if (!restartPlan.supported) {
         return textResultWithError(`Rebuild blocked: ${restartPlan.reason}`, true);
       }
+      if (!options.runBuildCommand) {
+        return textResultWithError(
+          'Rebuild blocked: no lifecycle rebuild command is configured; current process was left running.',
+          true,
+        );
+      }
       const fullReason = `rebuild: ${reason}`;
 
       log.info('Self-rebuild requested', { reason, tier });
@@ -285,13 +392,9 @@ export function createRebuildTool(
       // Schedule build + shutdown after tool result returns
       setImmediate(async () => {
         try {
-          if (options.runBuildCommand) {
-            log.info('Running configured rebuild command...');
-            await options.runBuildCommand();
-            log.info('Build complete, shutting down...');
-          } else {
-            log.warn('No rebuild command configured; skipping build step before shutdown');
-          }
+          log.info('Running configured rebuild command...');
+          await options.runBuildCommand();
+          log.info('Build complete, shutting down...');
         } catch (err) {
           const errorText = err instanceof Error ? err.message : String(err);
           log.error('Build failed; aborting restart', { error: errorText });
@@ -640,18 +743,19 @@ async function executeDeferredRebuild(
     await input.notifier.notifyShutdown(`rebuild blocked: ${restartPlan.reason.slice(0, 160)}`);
     return;
   }
+  if (!input.runBuildCommand) {
+    log.warn('Deferred self-rebuild blocked because no lifecycle rebuild command is configured');
+    await input.notifier.notifyShutdown('rebuild blocked: no lifecycle rebuild command is configured');
+    return;
+  }
   setImmediate(() => {
     void (async () => {
       const fullReason = `rebuild: ${payload.reason}`;
       await input.notifier.notifyPreRestart(fullReason);
       try {
-        if (input.runBuildCommand) {
-          log.info('Running configured rebuild command...');
-          await input.runBuildCommand();
-          log.info('Build complete, shutting down...');
-        } else {
-          log.warn('No rebuild command configured; skipping build step before shutdown');
-        }
+        log.info('Running configured rebuild command...');
+        await input.runBuildCommand();
+        log.info('Build complete, shutting down...');
       } catch (err) {
         const errorText = err instanceof Error ? err.message : String(err);
         log.error('Build failed; aborting restart', { error: errorText });

@@ -27,7 +27,8 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).toContain('createGatewayDiscordNotifySender(');
     expect(controlPlaneSource).toContain('runShutdownSequence(');
     expect(controlPlaneSource).toContain('resolveRuntimeCommandInvocation');
-    expect(controlPlaneSource).toContain("gateway.shellExec('npm', ['run', 'build']");
+    expect(controlPlaneSource).toContain('runRepoLifecycleBuildCommand');
+    expect(controlPlaneSource).not.toContain("gateway.shellExec('npm', ['run', 'build']");
     expect(controlPlaneSource).toContain('unregister gateway disconnect hook');
     expect(controlPlaneSource).toContain('write graceful shutdown markers');
   });

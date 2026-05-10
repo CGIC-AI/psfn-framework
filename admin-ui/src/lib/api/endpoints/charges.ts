@@ -1,87 +1,22 @@
 import { apiGet } from '$lib/api/client';
+import type {
+  RunChargeLedgerData,
+  RunChargeLedgerEntry,
+  RunChargeLedgerMetadata,
+  RunChargeLedgerQuery,
+  RunChargeRunSummary,
+} from '../../../../../src/shared/telemetry/charge-ledger.js';
+import type { RunChargeEvent, RunChargeLineage } from '../../../../../src/shared/contracts/runtime.js';
 
-export interface ChargeLedgerQuery {
-  limit?: number;
-  sinceMs?: number;
-  untilMs?: number;
-  runId?: string;
-}
-
-export interface RunChargeLedgerMetadata {
-  provider?: string;
-  model?: string;
-  modality?: string;
-  referenceModelClass?: string;
-  shardId?: string;
-  subagentId?: string;
-}
-
-export interface RunChargeLineage {
-  runId: string;
-  rootRunId: string;
-  parentRunId?: string;
-}
-
-export interface RunChargeEvent {
-  timestampMs: number;
-  lane: string;
-  surface: string;
-  amount: number;
-  quota: number;
-  spentAfter: number;
-  remainingAfter: number;
-  lineage: RunChargeLineage;
-  details?: Record<string, unknown>;
-}
-
-export interface RunChargeLedgerEntry {
-  schemaVersion: 1;
-  recordType: 'charge_event';
-  eventId: string;
-  recordedAtMs: number;
-  event: RunChargeEvent;
-  metadata?: RunChargeLedgerMetadata;
-}
-
-export interface RunChargeBreakdown {
-  key: string;
-  amount: number;
-  eventCount: number;
-}
-
-export interface RunChargeRunSummary {
-  runId: string;
-  rootRunId: string;
-  parentRunId?: string;
-  startedAtMs: number;
-  updatedAtMs: number;
-  eventCount: number;
-  amount: number;
-  spentByLane: Record<string, number | undefined>;
-  spentBySurface: Record<string, number | undefined>;
-  lineageDepth: number;
-  shardIds: string[];
-  subagentIds: string[];
-  models: string[];
-  lastQuotaByLane: Record<string, number | undefined>;
-  lastSpentAfterByLane: Record<string, number | undefined>;
-  lastRemainingAfterByLane: Record<string, number | undefined>;
-}
-
-export interface RunChargeLedgerAggregates {
-  amount: number;
-  eventCount: number;
-  byLane: RunChargeBreakdown[];
-  bySurface: RunChargeBreakdown[];
-  byLineage: RunChargeBreakdown[];
-}
-
-export interface AdminChargeLedgerData {
-  activeRun: RunChargeRunSummary | null;
-  recentRuns: RunChargeRunSummary[];
-  aggregates: RunChargeLedgerAggregates;
-  events: RunChargeLedgerEntry[];
-}
+export type ChargeLedgerQuery = RunChargeLedgerQuery;
+export type AdminChargeLedgerData = RunChargeLedgerData;
+export type {
+  RunChargeEvent,
+  RunChargeLedgerEntry,
+  RunChargeLedgerMetadata,
+  RunChargeLineage,
+  RunChargeRunSummary,
+};
 
 export function getCharges(query: ChargeLedgerQuery = {}): Promise<AdminChargeLedgerData> {
   const params = new URLSearchParams();

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "entry": [
-    "src/index.ts",
+    "src/app/startup/index.ts",
     "src/app/agent/main.ts",
     "src/app/gateway/main.ts",
     "src/app/operator/main.ts",

@@ -33,6 +33,11 @@ interface NormalizedShellAllowlist {
   canonicalPaths: Set<string>;
 }
 
+interface ResolvedAllowedShellRoots {
+  logical: string[];
+  canonical: string[];
+}
+
 export class ShellExecPolicyError extends Error {}
 
 function normalizePositiveInt(value: unknown): number | undefined {
@@ -189,28 +194,89 @@ function resolveArgs(raw: unknown): string[] {
   return args;
 }
 
+function resolveAllowedShellRoots(
+  workspacePath: string,
+  policy: ShellExecPolicyConfig,
+): ResolvedAllowedShellRoots {
+  const allowedRootsRaw = policy.allowedCwd && policy.allowedCwd.length > 0
+    ? policy.allowedCwd
+    : [workspacePath];
+  const logical = allowedRootsRaw.map(path => resolve(normalize(path)));
+  const canonical = logical.map(path => resolveCanonicalPath(path));
+  return { logical, canonical };
+}
+
 function resolveWorkingDirectory(
   rawCwd: unknown,
   workspacePath: string,
-  policy: ShellExecPolicyConfig,
+  allowedRoots: ResolvedAllowedShellRoots,
 ): string {
   const requestedCwd = typeof rawCwd === 'string' && rawCwd.trim()
     ? rawCwd.trim()
     : workspacePath;
   const resolvedCwd = resolve(normalize(requestedCwd));
   const canonicalCwd = resolveCanonicalPath(resolvedCwd);
-  const allowedRootsRaw = policy.allowedCwd && policy.allowedCwd.length > 0
-    ? policy.allowedCwd
-    : [workspacePath];
-  const allowedRoots = allowedRootsRaw.map(path => resolve(normalize(path)));
-  const canonicalAllowedRoots = allowedRoots.map(path => resolveCanonicalPath(path));
-  if (!isInsideAllowedPaths(resolvedCwd, allowedRoots)) {
+  if (!isInsideAllowedPaths(resolvedCwd, allowedRoots.logical)) {
     throw new ShellExecPolicyError(`shell.exec cwd not allowlisted: ${resolvedCwd}`);
   }
-  if (!isInsideAllowedPaths(canonicalCwd, canonicalAllowedRoots)) {
+  if (!isInsideAllowedPaths(canonicalCwd, allowedRoots.canonical)) {
     throw new ShellExecPolicyError(`shell.exec cwd not allowlisted: ${canonicalCwd}`);
   }
   return canonicalCwd;
+}
+
+function trimMatchingQuotes(value: string): string {
+  if (value.length < 2) return value;
+  const first = value[0];
+  const last = value[value.length - 1];
+  if ((first === '"' && last === '"') || (first === '\'' && last === '\'')) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function resolveArgumentPathCandidate(value: string, cwd: string): string {
+  const normalized = normalize(value);
+  return isAbsolute(normalized)
+    ? resolve(normalized)
+    : resolve(cwd, normalized);
+}
+
+function collectArgumentPathCandidates(arg: string): string[] {
+  const candidates = new Set<string>();
+  const trimmed = arg.trim();
+  if (trimmed) {
+    candidates.add(trimmed);
+  }
+
+  const equalsIndex = trimmed.indexOf('=');
+  if (equalsIndex >= 0 && equalsIndex < trimmed.length - 1) {
+    const value = trimMatchingQuotes(trimmed.slice(equalsIndex + 1).trim());
+    if (value) {
+      candidates.add(value);
+    }
+  }
+
+  return [...candidates];
+}
+
+function assertArgumentPathsAllowed(
+  args: readonly string[],
+  cwd: string,
+  allowedRoots: ResolvedAllowedShellRoots,
+): void {
+  for (const arg of args) {
+    for (const candidate of collectArgumentPathCandidates(arg)) {
+      const resolvedPath = resolveArgumentPathCandidate(candidate, cwd);
+      const canonicalPath = resolveCanonicalPath(resolvedPath);
+      if (!isInsideAllowedPaths(resolvedPath, allowedRoots.logical)) {
+        throw new ShellExecPolicyError(`shell.exec argument path not allowlisted: ${resolvedPath}`);
+      }
+      if (!isInsideAllowedPaths(canonicalPath, allowedRoots.canonical)) {
+        throw new ShellExecPolicyError(`shell.exec argument path not allowlisted: ${canonicalPath}`);
+      }
+    }
+  }
 }
 
 function resolveBoundedExecutionPolicy(
@@ -365,7 +431,9 @@ export async function executeShellCommandWithPolicy(
   const command = resolveCommand(params.command);
   assertCommandAllowed(command, policy.allowlist ?? []);
   const args = resolveArgs(params.args);
-  const cwd = resolveWorkingDirectory(params.cwd, workspacePath, policy);
+  const allowedRoots = resolveAllowedShellRoots(workspacePath, policy);
+  const cwd = resolveWorkingDirectory(params.cwd, workspacePath, allowedRoots);
+  assertArgumentPathsAllowed(args, cwd, allowedRoots);
   const limits = resolveBoundedExecutionPolicy(params, policy);
   const requestedEnvVars = resolveRequestedEnvVars((params as { envVars?: unknown }).envVars);
   const childEnv = buildSandboxChildEnv(requestedEnvVars, policy.envAllowlist ?? []);

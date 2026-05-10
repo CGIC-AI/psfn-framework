@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   RUNTIME_MODE,
+  DEFAULT_REEXEC_RESTART_EXIT_CODE,
+  normalizeRestartExitCode,
   normalizeRestartCommand,
   normalizeRuntimeMode,
   resolveRuntimeCommandInvocation,
@@ -32,6 +34,19 @@ describe('normalizeRestartCommand', () => {
   });
 });
 
+describe('normalizeRestartExitCode', () => {
+  it('accepts integer process exit codes', () => {
+    expect(normalizeRestartExitCode('75')).toBe(75);
+    expect(normalizeRestartExitCode(' 0 ')).toBe(0);
+    expect(normalizeRestartExitCode(undefined)).toBeUndefined();
+  });
+
+  it('rejects invalid restart exit codes', () => {
+    expect(() => normalizeRestartExitCode('restart')).toThrow('Invalid PSFN_LIFECYCLE_RESTART_EXIT_CODE');
+    expect(() => normalizeRestartExitCode('300')).toThrow('Invalid PSFN_LIFECYCLE_RESTART_EXIT_CODE');
+  });
+});
+
 describe('resolveRuntimeCommandInvocation', () => {
   it('splits command strings into command and args', () => {
     expect(resolveRuntimeCommandInvocation('npm run split')).toEqual({
@@ -59,7 +74,7 @@ describe('resolveRuntimeModeContract', () => {
     })).toThrow('Unsupported runtime entrypoint');
   });
 
-  it('maps split entrypoint to canonical split mode with default split restart command', () => {
+  it('maps split entrypoint to canonical split mode with wrapper reexec restart', () => {
     const contract = resolveRuntimeModeContract({
       entrypoint: RUNTIME_MODE.SPLIT,
     });
@@ -67,9 +82,9 @@ describe('resolveRuntimeModeContract', () => {
     expect(contract).toEqual({
       mode: RUNTIME_MODE.SPLIT,
       restart: {
-        strategy: 'command',
+        strategy: 'reexec',
         source: 'mode-default',
-        command: 'npm run split',
+        exitCode: DEFAULT_REEXEC_RESTART_EXIT_CODE,
       },
     });
   });
@@ -97,9 +112,25 @@ describe('resolveRuntimeModeContract', () => {
     expect(contract).toEqual({
       mode: RUNTIME_MODE.SPLIT,
       restart: {
-        strategy: 'command',
+        strategy: 'reexec',
         source: 'mode-default',
-        command: 'npm run split',
+        exitCode: DEFAULT_REEXEC_RESTART_EXIT_CODE,
+      },
+    });
+  });
+
+  it('allows the split wrapper restart exit code to be configured explicitly', () => {
+    const contract = resolveRuntimeModeContract({
+      entrypoint: RUNTIME_MODE.SPLIT,
+      restartExitCodeEnv: '76',
+    });
+
+    expect(contract).toEqual({
+      mode: RUNTIME_MODE.SPLIT,
+      restart: {
+        strategy: 'reexec',
+        source: 'mode-default',
+        exitCode: 76,
       },
     });
   });
@@ -144,9 +175,9 @@ describe('toRuntimeStatusMetadata', () => {
 
     expect(metadata).toEqual({
       activeMode: 'split',
-      restartStrategy: 'command',
+      restartStrategy: 'reexec',
       restartCommandSource: 'mode-default',
-      restartCommand: 'npm run split',
+      restartExitCode: DEFAULT_REEXEC_RESTART_EXIT_CODE,
     });
   });
 });

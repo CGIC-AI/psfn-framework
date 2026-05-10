@@ -70,11 +70,11 @@ fi
 export PSFN_RUNTIME_MODE="$(printf '%s' "${PSFN_RUNTIME_MODE}" | tr '[:upper:]' '[:lower:]')"
 
 MODE_LABEL="split"
-RESTART_BASE="split"
 if [ "${PSFN_RUNTIME_MODE}" = "yolo" ]; then
   MODE_LABEL="yolo"
-  RESTART_BASE="yolo"
 fi
+
+export PSFN_LIFECYCLE_RESTART_EXIT_CODE="${PSFN_LIFECYCLE_RESTART_EXIT_CODE:-75}"
 
 if [ "${DEBUG_MODE}" -eq 1 ]; then
   export LOG_LEVEL="${LOG_LEVEL:-debug}"
@@ -83,14 +83,6 @@ if [ "${DEBUG_MODE}" -eq 1 ]; then
   export PSFN_DEBUG_THINKING="${PSFN_DEBUG_THINKING:-true}"
   export PSFN_DEBUG_TEXT="${PSFN_DEBUG_TEXT:-true}"
   echo "[${MODE_LABEL}] debug mode enabled (LOG_LEVEL=${LOG_LEVEL})"
-fi
-
-if [ -z "${LIFECYCLE_RESTART_COMMAND:-}" ]; then
-  if [ "${DEBUG_MODE}" -eq 1 ]; then
-    export LIFECYCLE_RESTART_COMMAND="npm run ${RESTART_BASE}:debug"
-  else
-    export LIFECYCLE_RESTART_COMMAND="npm run ${RESTART_BASE}"
-  fi
 fi
 
 if [ "${PSFN_RUNTIME_MODE}" = "yolo" ]; then
@@ -245,4 +237,16 @@ start_operator
 
 echo "[${MODE_LABEL}] admin ui: http://${ADMIN_HOST}:${ADMIN_PORT}"
 echo "[${MODE_LABEL}] running (gateway pid=${GATEWAY_PID}, agent pid=${AGENT_PID}, operator pid=${OPERATOR_PID})"
+set +e
 wait -n "${GATEWAY_PID}" "${AGENT_PID}" "${OPERATOR_PID}"
+EXIT_STATUS=$?
+set -e
+
+if [ "${EXIT_STATUS}" -eq "${PSFN_LIFECYCLE_RESTART_EXIT_CODE}" ]; then
+  echo "[${MODE_LABEL}] lifecycle restart requested; stopping children and re-execing launcher"
+  cleanup
+  trap - INT TERM EXIT
+  exec "$0" "$@"
+fi
+
+exit "${EXIT_STATUS}"

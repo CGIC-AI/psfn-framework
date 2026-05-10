@@ -4,7 +4,7 @@ import {
   type LifecycleNotifier,
   type MessageSender,
 } from '../../system/lifecycle/notifications.js';
-import { resolveRuntimeCommandInvocation } from '../../system/lifecycle/runtime-mode.js';
+import { resolveRuntimeCommandInvocation, type RuntimeModeContract } from '../../system/lifecycle/runtime-mode.js';
 import { createSystemTool } from '../../core/tools/lifecycle.js';
 import {
   createGatewayDiscordNotifySender,
@@ -24,7 +24,7 @@ import type { LifecycleRestartSafeguard, ExternalCommunicationRateLimiter } from
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { ApiServer } from '../../channels/api/server.js';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
-import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 
 const log = createComponentLogger('AgentControlPlane');
 const DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS = 10_000;
@@ -37,7 +37,7 @@ export interface AgentControlPlaneShutdownTargets {
 export interface BuildAgentControlPlaneOptions {
   heartbeatChannelId?: string;
   dataDir: string;
-  config: CoreSubstrateConfig;
+  config: SubstrateConfig;
   eventBus: EventBus;
   gateway: GatewayClient;
   unregisterGatewayDisconnect: () => void;
@@ -52,7 +52,7 @@ export interface BuildAgentControlPlaneOptions {
   lifecycleRestartSafeguard: LifecycleRestartSafeguard;
   externalRateLimiter: ExternalCommunicationRateLimiter;
   capabilityRuntime: CapabilityRuntime;
-  lifecycleRuntimeContract: { mode: string; restart: { command: string } };
+  lifecycleRuntimeContract: RuntimeModeContract;
   shutdownTargets: AgentControlPlaneShutdownTargets;
 }
 
@@ -145,6 +145,7 @@ export function buildAgentControlPlane(
       stopFn,
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
+      restartContract: lifecycleRuntimeContract.restart,
       runBuildCommand: async () => {
         await gateway.shellExec('npm', ['run', 'build'], {
           cwd: process.cwd(),
@@ -154,7 +155,9 @@ export function buildAgentControlPlane(
       },
       runRestartCommand: async () => {
         const invocation = resolveRuntimeCommandInvocation(lifecycleRuntimeContract.restart.command);
-        if (!invocation) return;
+        if (!invocation) {
+          throw new Error('Lifecycle restart command strategy is missing a restart command');
+        }
         await gateway.shellExec(invocation.command, invocation.args, {
           cwd: process.cwd(),
           timeoutMs: 30_000,

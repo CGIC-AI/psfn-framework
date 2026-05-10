@@ -12,6 +12,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
 import type { PostTurnInferenceContext } from '../agent/substrate-agent/post-turn-actions.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
+import { DEFAULT_REEXEC_RESTART_EXIT_CODE, type RuntimeRestartContract } from '../../system/lifecycle/runtime-mode.js';
 import { executeSystemReadAction, type SettingsGetParams } from '../../system/settings-tools.js';
 import { textResult, textResultWithError } from './results.js';
 
@@ -28,6 +29,7 @@ interface DeferredLifecyclePayload {
 interface LifecycleToolOptions {
   restartSafeguard?: LifecycleRestartSafeguard;
   getCapabilityTier?: () => CapabilityTier;
+  restartContract?: RuntimeRestartContract;
   runRestartCommand?: () => Promise<void>;
   runBuildCommand?: () => Promise<void>;
   executionMode?: 'immediate' | 'deferred';
@@ -43,10 +45,104 @@ interface SystemToolParams extends SettingsGetParams {
   reason?: string;
 }
 
+type SupportedRestartStrategy = Exclude<RuntimeRestartContract['strategy'], 'unsupported'>;
+
+type LifecycleRestartPlan =
+  | {
+    supported: true;
+    strategy: SupportedRestartStrategy;
+    exitCode: number;
+    runCommandBeforeShutdown: boolean;
+  }
+  | {
+    supported: false;
+    reason: string;
+  };
+
+function resolveLifecycleRestartPlan(options: LifecycleToolOptions): LifecycleRestartPlan {
+  const contract = options.restartContract;
+  if (!contract) {
+    if (options.runRestartCommand) {
+      return {
+        supported: true,
+        strategy: 'command',
+        exitCode: 0,
+        runCommandBeforeShutdown: true,
+      };
+    }
+    return {
+      supported: true,
+      strategy: 'supervisor',
+      exitCode: 0,
+      runCommandBeforeShutdown: false,
+    };
+  }
+
+  if (contract.strategy === 'unsupported') {
+    return {
+      supported: false,
+      reason: 'this runtime is not managed by a safe restart supervisor or split-wrapper reexec contract; current process was left running.',
+    };
+  }
+
+  if (contract.strategy === 'command') {
+    if (!contract.command || !options.runRestartCommand) {
+      return {
+        supported: false,
+        reason: 'restart strategy command is configured without an executable restart boundary; current process was left running.',
+      };
+    }
+    return {
+      supported: true,
+      strategy: 'command',
+      exitCode: 0,
+      runCommandBeforeShutdown: true,
+    };
+  }
+
+  if (contract.strategy === 'reexec') {
+    return {
+      supported: true,
+      strategy: 'reexec',
+      exitCode: contract.exitCode ?? DEFAULT_REEXEC_RESTART_EXIT_CODE,
+      runCommandBeforeShutdown: false,
+    };
+  }
+
+  return {
+    supported: true,
+    strategy: 'supervisor',
+    exitCode: 0,
+    runCommandBeforeShutdown: false,
+  };
+}
+
+async function runRestartCommandIfRequired(
+  plan: LifecycleRestartPlan & { supported: true },
+  options: LifecycleToolOptions,
+  notifier: LifecycleNotifier,
+  failurePrefix: string,
+): Promise<boolean> {
+  if (!plan.runCommandBeforeShutdown) {
+    return true;
+  }
+
+  try {
+    await options.runRestartCommand?.();
+    log.info('Ran restart command through configured boundary');
+    return true;
+  } catch (err) {
+    const errorText = err instanceof Error ? err.message : String(err);
+    log.error('Restart command failed; aborting shutdown', { error: errorText });
+    await notifier.notifyShutdown(`${failurePrefix} failed: ${errorText.slice(0, 160)}`);
+    return false;
+  }
+}
+
 /**
  * Create the self_restart tool.
- * Sends a pre-restart notification, then exits with code 0.
- * Supervisor (systemd, docker, pm2) handles the actual restart.
+ * Sends a pre-restart notification, then exits through the configured
+ * supervisor/reexec strategy. Unsupported self-managed runtimes fail closed.
  *
  * @param stopFn - async function to cleanly stop the runtime before exit
  */
@@ -59,7 +155,7 @@ export function createRestartTool(
     name: 'self_restart',
     description:
       'Restart yourself. Sends a "brb" message to Discord, cleanly shuts down, ' +
-      'and exits. Your process supervisor will restart you automatically. ' +
+      'and exits through the configured supervisor or split-wrapper reexec strategy. ' +
       'Use when you need a fresh start or after configuration changes.',
     label: 'self_restart',
     parameters: Type.Object({
@@ -88,6 +184,10 @@ export function createRestartTool(
           return textResultWithError(decision.reason, true);
         }
       }
+      const restartPlan = resolveLifecycleRestartPlan(options);
+      if (!restartPlan.supported) {
+        return textResultWithError(`Restart blocked: ${restartPlan.reason}`, true);
+      }
 
       log.info('Self-restart requested', { reason, tier });
 
@@ -102,15 +202,20 @@ export function createRestartTool(
       // Use setImmediate so the tool result gets back to the LLM first
       setImmediate(async () => {
         try {
-          await stopFn();
-          if (options.runRestartCommand) {
-            await options.runRestartCommand();
-            log.info('Ran restart command through configured boundary');
+          const restartCommandReady = await runRestartCommandIfRequired(
+            restartPlan,
+            options,
+            notifier,
+            'restart',
+          );
+          if (!restartCommandReady) {
+            return;
           }
+          await stopFn();
         } catch (err) {
           log.error('Error during shutdown', { error: String(err) });
         }
-        process.exit(0);
+        process.exit(restartPlan.exitCode);
       });
 
       return {
@@ -162,6 +267,10 @@ export function createRebuildTool(
           return textResultWithError(decision.reason, true);
         }
       }
+      const restartPlan = resolveLifecycleRestartPlan(options);
+      if (!restartPlan.supported) {
+        return textResultWithError(`Rebuild blocked: ${restartPlan.reason}`, true);
+      }
       const fullReason = `rebuild: ${reason}`;
 
       log.info('Self-rebuild requested', { reason, tier });
@@ -191,15 +300,20 @@ export function createRebuildTool(
         }
 
         try {
-          await stopFn();
-          if (options.runRestartCommand) {
-            await options.runRestartCommand();
-            log.info('Ran restart command through configured boundary after rebuild');
+          const restartCommandReady = await runRestartCommandIfRequired(
+            restartPlan,
+            options,
+            notifier,
+            'rebuild restart',
+          );
+          if (!restartCommandReady) {
+            return;
           }
+          await stopFn();
         } catch (err) {
           log.error('Error during shutdown', { error: String(err) });
         }
-        process.exit(0);
+        process.exit(restartPlan.exitCode);
       });
 
       return {
@@ -349,6 +463,7 @@ export function registerDeferredLifecycleRuntime(input: {
   postTurnActions: PostTurnActionRuntime;
   notifier: LifecycleNotifier;
   stopFn: () => Promise<void>;
+  restartContract?: RuntimeRestartContract;
   runRestartCommand?: () => Promise<void>;
   runBuildCommand?: () => Promise<void>;
 }): () => void {
@@ -471,23 +586,37 @@ async function executeDeferredRestart(
   input: {
     notifier: LifecycleNotifier;
     stopFn: () => Promise<void>;
+    restartContract?: RuntimeRestartContract;
     runRestartCommand?: () => Promise<void>;
   },
 ): Promise<void> {
   log.info('Executing deferred self-restart', { reason: payload.reason });
+  const restartPlan = resolveLifecycleRestartPlan(input);
+  if (!restartPlan.supported) {
+    log.warn('Deferred self-restart blocked by runtime restart strategy', {
+      reason: restartPlan.reason,
+    });
+    await input.notifier.notifyShutdown(`restart blocked: ${restartPlan.reason.slice(0, 160)}`);
+    return;
+  }
   setImmediate(() => {
     void (async () => {
       try {
         await input.notifier.notifyPreRestart(payload.reason);
-        await input.stopFn();
-        if (input.runRestartCommand) {
-          await input.runRestartCommand();
-          log.info('Ran restart command through configured boundary');
+        const restartCommandReady = await runRestartCommandIfRequired(
+          restartPlan,
+          input,
+          input.notifier,
+          'restart',
+        );
+        if (!restartCommandReady) {
+          return;
         }
+        await input.stopFn();
       } catch (err) {
         log.error('Error during deferred restart shutdown', { error: String(err) });
       }
-      process.exit(0);
+      process.exit(restartPlan.exitCode);
     })();
   });
 }
@@ -497,11 +626,20 @@ async function executeDeferredRebuild(
   input: {
     notifier: LifecycleNotifier;
     stopFn: () => Promise<void>;
+    restartContract?: RuntimeRestartContract;
     runRestartCommand?: () => Promise<void>;
     runBuildCommand?: () => Promise<void>;
   },
 ): Promise<void> {
   log.info('Executing deferred self-rebuild', { reason: payload.reason });
+  const restartPlan = resolveLifecycleRestartPlan(input);
+  if (!restartPlan.supported) {
+    log.warn('Deferred self-rebuild blocked by runtime restart strategy', {
+      reason: restartPlan.reason,
+    });
+    await input.notifier.notifyShutdown(`rebuild blocked: ${restartPlan.reason.slice(0, 160)}`);
+    return;
+  }
   setImmediate(() => {
     void (async () => {
       const fullReason = `rebuild: ${payload.reason}`;
@@ -522,15 +660,20 @@ async function executeDeferredRebuild(
       }
 
       try {
-        await input.stopFn();
-        if (input.runRestartCommand) {
-          await input.runRestartCommand();
-          log.info('Ran restart command through configured boundary after rebuild');
+        const restartCommandReady = await runRestartCommandIfRequired(
+          restartPlan,
+          input,
+          input.notifier,
+          'rebuild restart',
+        );
+        if (!restartCommandReady) {
+          return;
         }
+        await input.stopFn();
       } catch (err) {
         log.error('Error during deferred rebuild shutdown', { error: String(err) });
       }
-      process.exit(0);
+      process.exit(restartPlan.exitCode);
     })();
   });
 }

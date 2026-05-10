@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_REEXEC_RESTART_EXIT_CODE,
   RUNTIME_MODE,
   resolveRuntimeModeContract,
   toRuntimeStatusMetadata,
 } from '../../../system/lifecycle/runtime-mode.js';
 
 describe('startup entrypoint wiring', () => {
-  it('treats split startup contracts as command-restarted processes', () => {
+  it('treats split startup contracts as launcher-reexec restarted processes', () => {
     const contract = resolveRuntimeModeContract({
       entrypoint: RUNTIME_MODE.SPLIT,
     });
@@ -14,16 +15,16 @@ describe('startup entrypoint wiring', () => {
     expect(contract).toEqual({
       mode: RUNTIME_MODE.SPLIT,
       restart: {
-        strategy: 'command',
+        strategy: 'reexec',
         source: 'mode-default',
-        command: 'npm run split',
+        exitCode: DEFAULT_REEXEC_RESTART_EXIT_CODE,
       },
     });
     expect(toRuntimeStatusMetadata(contract)).toEqual({
       activeMode: 'split',
-      restartStrategy: 'command',
+      restartStrategy: 'reexec',
       restartCommandSource: 'mode-default',
-      restartCommand: 'npm run split',
+      restartExitCode: DEFAULT_REEXEC_RESTART_EXIT_CODE,
     });
   });
 

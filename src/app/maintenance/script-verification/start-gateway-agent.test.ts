@@ -15,6 +15,14 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(launcher).toContain('kill -KILL -- "-${pgid}"');
   });
 
+  it('re-execs the repo launcher for lifecycle restart exit codes', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('PSFN_LIFECYCLE_RESTART_EXIT_CODE="${PSFN_LIFECYCLE_RESTART_EXIT_CODE:-75}"');
+    expect(launcher).toContain('wait -n "${GATEWAY_PID}" "${AGENT_PID}" "${OPERATOR_PID}"');
+    expect(launcher).toContain('lifecycle restart requested; stopping children and re-execing launcher');
+    expect(launcher).toContain('exec "$0" "$@"');
+  });
+
   it('keeps the live user unit pointed at the launcher instead of npm', () => {
     const unit = readFileSync(join(repoRoot, 'scripts/system/user/purrsephone.service'), 'utf8');
     expect(unit).toContain('ExecStart=/bin/bash /mnt/samesung/ai/psfn-live/scripts/start-gateway-agent.sh --yolo');
@@ -31,6 +39,11 @@ describe('start-gateway-agent launcher supervision', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).toContain('psfn_source_dotenv_preserving_existing_env "${RESOLVED_DOTENV_FILE}"');
     expect(launcher).toContain('source "${ROOT_DIR}/scripts/system/runtime-env.sh"');
+  });
+
+  it('does not inject npm run split as an unsafe lifecycle restart command', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).not.toContain('export LIFECYCLE_RESTART_COMMAND="npm run');
   });
 });
 

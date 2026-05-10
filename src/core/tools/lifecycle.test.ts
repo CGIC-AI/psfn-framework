@@ -152,7 +152,7 @@ describe('createRestartTool', () => {
     exitSpy.mockRestore();
   });
 
-  it('launches configured restart command after shutdown', async () => {
+  it('launches configured restart command before shutdown', async () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
@@ -168,7 +168,86 @@ describe('createRestartTool', () => {
 
     expect(mockStopFn).toHaveBeenCalledOnce();
     expect(runRestartCommand).toHaveBeenCalledOnce();
+    expect(runRestartCommand.mock.invocationCallOrder[0]!).toBeLessThan(mockStopFn.mock.invocationCallOrder[0]!);
     expect(exitSpy).toHaveBeenCalledWith(0);
+
+    globalThis.setImmediate = origSetImmediate;
+    exitSpy.mockRestore();
+  });
+
+  it('uses split wrapper reexec exit codes without launching a nested split command', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const origSetImmediate = globalThis.setImmediate;
+    globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
+      void fn();
+      return 0 as any;
+    }) as typeof setImmediate;
+
+    const tool = createRestartTool(mockNotifier, mockStopFn, {
+      restartContract: {
+        strategy: 'reexec',
+        source: 'mode-default',
+        exitCode: 75,
+      },
+      runRestartCommand,
+    });
+    const result = await tool.execute('call-reexec', { reason: 'split wrapper restart' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(resultText(result)).toContain('Restart initiated');
+    expect(mockStopFn).toHaveBeenCalledOnce();
+    expect(runRestartCommand).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(75);
+
+    globalThis.setImmediate = origSetImmediate;
+    exitSpy.mockRestore();
+  });
+
+  it('fails closed for unsupported restart strategies without stopping the runtime', async () => {
+    const tool = createRestartTool(mockNotifier, mockStopFn, {
+      restartContract: {
+        strategy: 'unsupported',
+        source: 'none',
+      },
+      runRestartCommand,
+    });
+
+    const result = await tool.execute('call-unsupported', { reason: 'unsafe self restart' });
+
+    expect(resultText(result)).toContain('Restart blocked');
+    expect(resultText(result)).toContain('current process was left running');
+    expect((result.details as any).isError).toBe(true);
+    expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
+    expect(runRestartCommand).not.toHaveBeenCalled();
+  });
+
+  it('aborts shutdown when a configured restart command fails', async () => {
+    runRestartCommand.mockImplementation(async () => {
+      throw new Error('supervisor unavailable');
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const origSetImmediate = globalThis.setImmediate;
+    globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
+      void fn();
+      return 0 as any;
+    }) as typeof setImmediate;
+
+    const tool = createRestartTool(mockNotifier, mockStopFn, {
+      restartContract: {
+        strategy: 'command',
+        source: 'explicit',
+        command: 'systemctl --user restart psfn.service',
+      },
+      runRestartCommand,
+    });
+    const result = await tool.execute('call-command-fail', { reason: 'supervisor restart' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(resultText(result)).toContain('Restart initiated');
+    expect(mockNotifier.notifyShutdown).toHaveBeenCalledWith('restart failed: supervisor unavailable');
+    expect(mockStopFn).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
 
     globalThis.setImmediate = origSetImmediate;
     exitSpy.mockRestore();
@@ -325,6 +404,30 @@ describe('createSystemTool', () => {
 
     expect(resultText(result)).toContain('system action=restart is not available');
     expect((result.details as any).isError).toBe(true);
+  });
+
+  it('fails closed through system action=restart when the runtime restart strategy is unsupported', async () => {
+    const tool = createSystemTool(makeConfig(), {
+      notifier: mockNotifier,
+      stopFn: mockStopFn,
+      restartContract: {
+        strategy: 'unsupported',
+        source: 'none',
+      },
+      runRestartCommand,
+    });
+
+    const result = await tool.execute('system-unsupported-restart', {
+      action: 'restart',
+      reason: 'self-managed split restart',
+    });
+
+    expect(resultText(result)).toContain('Restart blocked');
+    expect(resultText(result)).toContain('current process was left running');
+    expect((result.details as any).isError).toBe(true);
+    expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
+    expect(runRestartCommand).not.toHaveBeenCalled();
   });
 });
 
@@ -661,6 +764,48 @@ describe('deferred lifecycle execution', () => {
     expect(mockStopFn).toHaveBeenCalledOnce();
     expect(runRestartCommand).toHaveBeenCalledOnce();
     expect(exitSpy).toHaveBeenCalledWith(0);
+
+    exitSpy.mockRestore();
+  });
+
+  it('blocks deferred restart actions before shutdown when the strategy is unsupported', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const registerHandler = vi.fn((_kind, _handler) => {
+      return () => undefined;
+    });
+
+    registerDeferredLifecycleRuntime({
+      agentLoop: { registerPostTurnActionInferer: vi.fn().mockReturnValue(() => undefined) },
+      postTurnActions: {
+        registerHandler,
+        listQueued: () => [],
+        getStatus: vi.fn(),
+      } as any,
+      notifier: mockNotifier,
+      stopFn: mockStopFn,
+      restartContract: {
+        strategy: 'unsupported',
+        source: 'none',
+      },
+      runRestartCommand,
+      runBuildCommand,
+    });
+
+    const handler = registerHandler.mock.calls[0]?.[1] as (action: any) => Promise<void>;
+    await handler({
+      id: 'action-restart-unsupported',
+      payload: {
+        operation: 'restart',
+        reason: 'autonomous shakedown restart',
+      },
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
+    expect(mockNotifier.notifyShutdown).toHaveBeenCalledWith(expect.stringContaining('restart blocked'));
+    expect(mockStopFn).not.toHaveBeenCalled();
+    expect(runRestartCommand).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
 
     exitSpy.mockRestore();
   });

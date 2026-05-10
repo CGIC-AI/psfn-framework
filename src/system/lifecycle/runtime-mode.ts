@@ -8,13 +8,14 @@ export const RUNTIME_MODE = Object.freeze({
 
 export type RuntimeMode = (typeof RUNTIME_MODE)[keyof typeof RUNTIME_MODE];
 export type RuntimeEntrypoint = RuntimeMode;
-export type RuntimeRestartStrategy = 'supervisor' | 'command';
+export type RuntimeRestartStrategy = 'supervisor' | 'command' | 'reexec' | 'unsupported';
 export type RuntimeRestartSource = 'explicit' | 'mode-default' | 'none';
 
 export interface RuntimeRestartContract {
   strategy: RuntimeRestartStrategy;
   source: RuntimeRestartSource;
   command?: string;
+  exitCode?: number;
 }
 
 export interface RuntimeModeContract {
@@ -31,6 +32,7 @@ export interface ResolveRuntimeModeContractOptions {
   entrypoint: RuntimeEntrypoint;
   runtimeModeEnv?: string;
   restartCommandEnv?: string;
+  restartExitCodeEnv?: string;
 }
 
 const RUNTIME_MODE_ALIASES: Readonly<Record<string, RuntimeMode>> = Object.freeze({
@@ -48,9 +50,18 @@ const ENTRYPOINT_ALLOWED_MODES: Readonly<Record<RuntimeEntrypoint, readonly Runt
   [RUNTIME_MODE.GATEWAY_AGENT]: Object.freeze([RUNTIME_MODE.GATEWAY_AGENT, RUNTIME_MODE.SPLIT]),
 });
 
-const DEFAULT_RESTART_COMMAND_BY_MODE: Readonly<Record<RuntimeMode, string | undefined>> = Object.freeze({
-  [RUNTIME_MODE.SPLIT]: 'npm run split',
-  [RUNTIME_MODE.GATEWAY_AGENT]: undefined,
+export const DEFAULT_REEXEC_RESTART_EXIT_CODE = 75;
+
+const DEFAULT_RESTART_BY_MODE: Readonly<Record<RuntimeMode, RuntimeRestartContract>> = Object.freeze({
+  [RUNTIME_MODE.SPLIT]: Object.freeze({
+    strategy: 'reexec',
+    source: 'mode-default',
+    exitCode: DEFAULT_REEXEC_RESTART_EXIT_CODE,
+  }),
+  [RUNTIME_MODE.GATEWAY_AGENT]: Object.freeze({
+    strategy: 'supervisor',
+    source: 'none',
+  }),
 });
 
 function normalizeToken(raw: string | undefined): string {
@@ -66,6 +77,19 @@ export function normalizeRuntimeMode(raw: string | undefined): RuntimeMode | nul
 export function normalizeRestartCommand(raw: string | undefined): string | undefined {
   const normalized = raw?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+export function normalizeRestartExitCode(raw: string | undefined): number | undefined {
+  const normalized = raw?.trim();
+  if (!normalized) return undefined;
+  if (!/^\d+$/.test(normalized)) {
+    throw new Error(`Invalid PSFN_LIFECYCLE_RESTART_EXIT_CODE "${raw}". Expected an integer from 0 to 255.`);
+  }
+  const parsed = Number(normalized);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 255) {
+    throw new Error(`Invalid PSFN_LIFECYCLE_RESTART_EXIT_CODE "${raw}". Expected an integer from 0 to 255.`);
+  }
+  return parsed;
 }
 
 export function resolveRuntimeCommandInvocation(raw: string | undefined): RuntimeCommandInvocation | undefined {
@@ -166,24 +190,23 @@ export function resolveRuntimeModeContract(
     };
   }
 
-  const modeDefaultRestartCommand = DEFAULT_RESTART_COMMAND_BY_MODE[mode];
-  if (modeDefaultRestartCommand) {
+  const defaultRestart = DEFAULT_RESTART_BY_MODE[mode];
+  if (defaultRestart.strategy === 'reexec') {
+    const restartExitCode = normalizeRestartExitCode(options.restartExitCodeEnv)
+      ?? defaultRestart.exitCode
+      ?? DEFAULT_REEXEC_RESTART_EXIT_CODE;
     return {
       mode,
       restart: {
-        strategy: 'command',
-        source: 'mode-default',
-        command: modeDefaultRestartCommand,
+        ...defaultRestart,
+        exitCode: restartExitCode,
       },
     };
   }
 
   return {
     mode,
-    restart: {
-      strategy: 'supervisor',
-      source: 'none',
-    },
+    restart: defaultRestart,
   };
 }
 
@@ -192,6 +215,7 @@ export interface RuntimeStatusMetadata extends Record<string, unknown> {
   restartStrategy: RuntimeRestartStrategy;
   restartCommandSource: RuntimeRestartSource;
   restartCommand?: string;
+  restartExitCode?: number;
 }
 
 export function toRuntimeStatusMetadata(contract: RuntimeModeContract): RuntimeStatusMetadata {
@@ -200,5 +224,6 @@ export function toRuntimeStatusMetadata(contract: RuntimeModeContract): RuntimeS
     restartStrategy: contract.restart.strategy,
     restartCommandSource: contract.restart.source,
     ...(contract.restart.command ? { restartCommand: contract.restart.command } : {}),
+    ...(typeof contract.restart.exitCode === 'number' ? { restartExitCode: contract.restart.exitCode } : {}),
   };
 }

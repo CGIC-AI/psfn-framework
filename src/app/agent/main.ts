@@ -388,7 +388,7 @@ async function main(): Promise<void> {
     lifecycleRestartSafeguard,
     externalRateLimiter,
     capabilityRuntime,
-    lifecycleRuntimeContract: lifecycleRuntimeContract as { mode: typeof lifecycleRuntimeContract.mode; restart: { command: string } },
+    lifecycleRuntimeContract,
     shutdownTargets,
   });
   const { lifecycleNotifier } = controlPlane;

@@ -45,6 +45,7 @@ export function resolveStartupLifecycleBundle(
     entrypoint: options.entrypoint,
     runtimeModeEnv: env.PSFN_RUNTIME_MODE,
     restartCommandEnv: env.LIFECYCLE_RESTART_COMMAND,
+    restartExitCodeEnv: env.PSFN_LIFECYCLE_RESTART_EXIT_CODE,
   });
 
   return {

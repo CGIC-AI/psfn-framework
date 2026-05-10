@@ -41,6 +41,7 @@ import {
   isUntrustedVisibility,
   parseChannelVisibility,
   resolveMaxHistorySpanMs,
+  repairLeadingMultimodalReviewBoundary,
   resolveRoleName,
   trimRecentEntriesToTokenBudget,
   wrapUntrustedContext,
@@ -224,8 +225,23 @@ export function assembleSessionHistoryForContext(params: {
 
   const maxSplitIndex = params.entries.length - SESSION_HISTORY_MIN_MESSAGES;
   for (let splitIndex = 1; splitIndex <= maxSplitIndex; splitIndex += 1) {
-    const summaryEntries = params.entries.slice(0, splitIndex);
-    const verbatimEntries = params.entries.slice(splitIndex);
+    const initialVerbatimEntries = params.entries.slice(splitIndex);
+    const boundaryRepairedVerbatimEntries = repairLeadingMultimodalReviewBoundary(
+      params.entries,
+      initialVerbatimEntries,
+    );
+    const boundaryPrependedCount = Math.max(
+      0,
+      boundaryRepairedVerbatimEntries.length - initialVerbatimEntries.length,
+    );
+    const safeSplitIndex = Math.max(0, splitIndex - boundaryPrependedCount);
+    if (safeSplitIndex === 0) {
+      continue;
+    }
+    const summaryEntries = params.entries.slice(0, safeSplitIndex);
+    const verbatimEntries = boundaryPrependedCount > 0
+      ? params.entries.slice(safeSplitIndex)
+      : boundaryRepairedVerbatimEntries;
     const tailMessages = entriesToMessages(
       verbatimEntries,
       params.channelVisibility,
@@ -446,7 +462,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   let recent = params.turnSnapshot
     ? params.turnSnapshot.recentEntries.map(cloneSessionEntry)
     : collectedRecent!.entries;
-  recent = applyTemporalSessionHistoryWindow(recent, params.turnBudgetCharacteristics);
+  if (!params.turnSnapshot) {
+    recent = applyTemporalSessionHistoryWindow(recent, params.turnBudgetCharacteristics);
+  }
   const sourceEntryCount = params.turnSnapshot
     ? recent.length + (params.turnSnapshot.historySummaryEntryCount ?? 0)
     : collectedRecent!.sourceCount;

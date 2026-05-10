@@ -965,6 +965,134 @@ describe('SessionManager', () => {
     expect(ctx.messages).toHaveLength(recent.length);
   });
 
+  it('keeps captured temporal snapshots stable when the live clock moves past the pruning boundary', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
+    const may9Evening = new Date('2026-05-09T23:45:00-04:00').getTime();
+    const may10Morning = new Date('2026-05-10T08:15:00-04:00').getTime();
+    const config = makeConfig({
+      adaptiveContextBudgetsEnabled: true,
+      modelRoster: {
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 20_000,
+          contextBudget: { sessionHistoryMinTokens: 1 },
+        },
+      },
+    });
+    const mgr = new SessionManager(store, config);
+    const temporalTurn = {
+      channelId: 'ch-snapshot-temporal',
+      messageText: 'what happened earlier today?',
+    };
+
+    try {
+      vi.useFakeTimers();
+      vi.setSystemTime(may9Evening);
+      store.append({
+        channelId: 'ch-snapshot-temporal',
+        role: 'user',
+        content: 'same-day image question before midnight',
+        authorId: 'u1',
+        authorName: 'User',
+        timestamp: may9Evening - 10_000,
+      });
+      store.append({
+        channelId: 'ch-snapshot-temporal',
+        role: 'assistant',
+        content: 'same-day answer before midnight',
+        authorId: 'assistant',
+        authorName: 'Companion',
+        timestamp: may9Evening - 5_000,
+      });
+
+      const snapshot = mgr.captureTurnContextSnapshot(
+        'ch-snapshot-temporal',
+        undefined,
+        undefined,
+        [],
+        temporalTurn,
+      );
+      vi.setSystemTime(may10Morning);
+
+      const snapshotContext = await mgr.buildContext(
+        'ch-snapshot-temporal',
+        'Sys',
+        '',
+        undefined,
+        undefined,
+        undefined,
+        [],
+        snapshot,
+        undefined,
+        temporalTurn,
+      );
+
+      expect(snapshotContext.messages.map(message => message.content)).toEqual([
+        'same-day image question before midnight',
+        'same-day answer before midnight',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('repairs token-budget tail pruning so current image reviews keep their user image turn boundary', async () => {
+    tokenTestUtils.setTokenizerFactory(() => ({
+      encode: (text: string) => ({ length: text.length }),
+    }));
+
+    const config = makeConfig({
+      sessionHistoryBudgetPct: 1,
+      modelRoster: {
+        chat: {
+          model: 'test-model',
+          provider: 'test',
+          maxTokens: 16384,
+          contextWindow: 100,
+          contextBudget: { sessionHistoryMinTokens: 1 },
+        },
+      },
+    });
+    const mgr = new SessionManager(store, config);
+    const timestamp = Date.now() - 60_000;
+    const append = (
+      offset: number,
+      role: 'user' | 'assistant',
+      content: string,
+    ): void => {
+      store.append({
+        channelId: 'ch-image-tail',
+        role,
+        content,
+        authorId: role === 'user' ? 'u1' : 'assistant',
+        authorName: role === 'user' ? 'User' : 'Companion',
+        timestamp: timestamp + offset,
+      });
+    };
+
+    append(1, 'user', 'what is in the image?');
+    append(2, 'assistant', 'Current image review: A catgirl sits on a server rack.');
+    append(3, 'user', 'later user one');
+    append(4, 'assistant', 'later assistant one');
+    append(5, 'user', 'later user two');
+    append(6, 'assistant', 'later assistant two');
+
+    const ctx = await mgr.buildContext('ch-image-tail', 'Sys', '');
+    const renderedHistory = ctx.messages.map(message => message.content).join('\n');
+
+    expect(renderedHistory).toContain('what is in the image?');
+    expect(renderedHistory).toContain('Current image review: A catgirl sits on a server rack.');
+    expect(renderedHistory.indexOf('what is in the image?')).toBeLessThan(
+      renderedHistory.indexOf('Current image review: A catgirl sits on a server rack.'),
+    );
+    expect(ctx.manifest?.session.finalEntryCount).toBe(6);
+  });
+
   it('keeps a 7-day session bounded to the active history window in live and snapshot context builds', async () => {
     tokenTestUtils.setTokenizerFactory(() => ({
       encode: (text: string) => ({ length: text.length }),

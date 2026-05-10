@@ -257,7 +257,7 @@ export async function withRetry<T>(
 export function trimRecentEntriesToTokenBudget(entries: SessionEntry[], tokenBudget: number): SessionEntry[] {
   if (entries.length === 0) return [];
   if (tokenBudget <= 0) {
-    return entries.slice(-SESSION_HISTORY_MIN_MESSAGES);
+    return repairLeadingMultimodalReviewBoundary(entries, entries.slice(-SESSION_HISTORY_MIN_MESSAGES));
   }
 
   let usedTokens = 0;
@@ -273,7 +273,45 @@ export function trimRecentEntriesToTokenBudget(entries: SessionEntry[], tokenBud
     usedTokens += entryTokens;
   }
 
-  return selected.reverse();
+  return repairLeadingMultimodalReviewBoundary(entries, selected.reverse());
+}
+
+function isCurrentImageReviewEntry(entry: SessionEntry): boolean {
+  return (
+    (entry.role === 'assistant' || entry.role === 'system')
+    && /(?:^|\n)Current image review:/i.test(entry.content)
+  );
+}
+
+function findEntryIndexById(entries: readonly SessionEntry[], target: SessionEntry): number {
+  const byId = entries.findIndex(entry => entry.id === target.id && entry.channelId === target.channelId);
+  if (byId >= 0) return byId;
+  return entries.indexOf(target);
+}
+
+export function repairLeadingMultimodalReviewBoundary(
+  entries: readonly SessionEntry[],
+  selectedEntries: readonly SessionEntry[],
+): SessionEntry[] {
+  const repaired = [...selectedEntries];
+  while (repaired.length > 0) {
+    const first = repaired[0];
+    if (!isCurrentImageReviewEntry(first)) {
+      return repaired;
+    }
+
+    const firstIndex = findEntryIndexById(entries, first);
+    const predecessor = firstIndex > 0 ? entries[firstIndex - 1] : undefined;
+    if (predecessor?.role === 'user') {
+      if (!repaired.some(entry => entry.id === predecessor.id && entry.channelId === predecessor.channelId)) {
+        repaired.unshift(predecessor);
+      }
+      return repaired;
+    }
+
+    repaired.shift();
+  }
+  return repaired;
 }
 
 export function collectRecentEntriesWithinTokenBudget(params: {

@@ -1,6 +1,11 @@
 import Database from 'better-sqlite3';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
+import { runForcedEpisodicSynthesis } from '../../../app/maintenance/force-episodic-synthesis.js';
+import { SessionStore } from '../../../persistence/sessions/store.js';
 import { EpisodicStore } from './store.js';
 import { EpisodicSynthesizer } from './synthesis.js';
 
@@ -201,5 +206,69 @@ describe('EpisodicSynthesizer', () => {
       episode.startedAt === '2026-04-01T09:00:00.000Z'
       && episode.endedAt === '2026-04-30T20:06:00.000Z'
     ))).toBe(false);
+  });
+
+  it('force-runs synthesis for isolated shakedown sessions without waiting for rest windows', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'episodic-force-synthesis-'));
+    try {
+      const companionDbPath = join(tempDir, 'companion.db');
+      const sessionsDir = join(tempDir, 'sessions');
+      const sessionStore = new SessionStore(sessionsDir);
+      const sessionId = 'api:local-insecure:introspect-force';
+      const startedAt = Date.parse('2026-04-06T10:00:00.000Z');
+
+      [
+        ['user', 'Please inspect the orbit garden shakedown provenance issue.'],
+        ['assistant', 'I will inspect the orbit garden shakedown provenance issue.'],
+        ['user', 'Continue the orbit garden shakedown thread and validate episodic arcs.'],
+        ['assistant', 'The orbit garden shakedown thread now needs episode arc validation.'],
+      ].forEach(([role, content], index) => {
+        const id = index + 1;
+        sessionStore.append({
+          channelId: sessionId,
+          role: role as SessionEntry['role'],
+          content,
+          authorId: role === 'user' ? 'contact:vega' : 'assistant:psfn',
+          authorName: role === 'user' ? 'Vega' : 'PSFN',
+          timestamp: startedAt + index * 60_000,
+          metadata: JSON.stringify({
+            turn: {
+              schemaVersion: 1,
+              turnId: `00000000-0000-7000-a000-${String(id).padStart(12, '0')}`,
+              requestId: `request:${id}`,
+              role,
+            },
+          }),
+        });
+      });
+
+      const result = runForcedEpisodicSynthesis({
+        companionDbPath,
+        sessionsDir,
+        sessionId,
+        transcriptMessageLimit: 12,
+        maxEntriesPerEpisode: 2,
+        allowIsolatedRuntime: true,
+      });
+
+      expect(result.beforeEpisodeCount).toBe(0);
+      expect(result.afterEpisodeCount).toBe(2);
+      expect(result.createdEpisodes).toHaveLength(2);
+      expect(result.linkedArcs).toHaveLength(1);
+      expect(result.createdEpisodes[0]).toMatchObject({
+        threadId: sessionId,
+        channelId: sessionId,
+      });
+      expect(result.createdEpisodes[0].spanRefs[0]).toMatchObject({
+        sessionId,
+        startTurnId: '00000000-0000-7000-a000-000000000001',
+      });
+      expect(result.createdEpisodes[0].provenanceRefs).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'l0_span', refId: result.createdEpisodes[0].spanRefs[0].spanId }),
+        expect.objectContaining({ kind: 'session', refId: sessionId }),
+      ]));
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });

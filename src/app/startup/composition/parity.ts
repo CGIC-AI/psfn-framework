@@ -110,6 +110,7 @@ import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
 } from '../../../faculties/memory/sleeptime-agent.js';
+import type { EpisodicSynthesizer } from '../../../faculties/memory/episodic/synthesis.js';
 import type { EmotionStateSnapshot } from '../../../core/emotion/state.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import {
@@ -224,6 +225,7 @@ interface HeartbeatRuntimeOptions {
   careReminderStore?: CareReminderStore | null;
   coreMemoryStore?: Pick<CoreMemoryStorePort, 'getSnapshot' | 'rethink'>;
   sleeptimeCadenceTurns?: number;
+  episodicSynthesizer?: Pick<EpisodicSynthesizer, 'run'> | null;
   episodicProcessingRestWindow?: EpisodicProcessingRestWindowConfig;
   intentionAppraisalEnabled?: boolean;
   postTurnActions?: PostTurnActionRuntime;
@@ -468,6 +470,7 @@ export function wireHeartbeatRuntime(
       memoryWriter: runtimeOptions.memoryWriter,
       cadenceTurns: runtimeOptions.sleeptimeCadenceTurns,
       restWindow: runtimeOptions.episodicProcessingRestWindow,
+      episodicSynthesizer: runtimeOptions.episodicSynthesizer,
     })
     : null;
   const intentionAppraisalEnabled = runtimeOptions.intentionAppraisalEnabled !== false;

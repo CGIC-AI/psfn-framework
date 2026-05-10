@@ -13,6 +13,7 @@ import type {
   PostTurnActionInferer,
 } from '../agent/substrate-agent.js';
 import type { MemoryWriter } from '../../faculties/memory/writer.js';
+import type { EpisodicSynthesizer } from '../../faculties/memory/episodic/synthesis.js';
 import type { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import type { SessionManager } from '../session/manager.js';
 import type { CoreMemoryStore } from '../../faculties/core-memory/store.js';
@@ -138,6 +139,7 @@ export interface HeartbeatRuntimeOptions {
   }) => Promise<void> | void;
   coreMemoryStore?: Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
   sleeptimeCadenceTurns?: number;
+  episodicSynthesizer?: Pick<EpisodicSynthesizer, 'run'> | null;
   episodicProcessingRestWindow?: EpisodicProcessingRestWindowConfig;
   intentionAppraisalEnabled?: boolean;
   postTurnActions?: PostTurnActionRuntime;

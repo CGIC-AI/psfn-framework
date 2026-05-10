@@ -7,6 +7,13 @@ export {
   type EpisodeTimeSearchOptions,
   type EpisodicStoreOptions,
 } from './store.js';
+export {
+  EpisodicSynthesizer,
+  type EpisodicSynthesisOptions,
+  type EpisodicSynthesisRunInput,
+  type EpisodicSynthesisRunResult,
+  type EpisodicSynthesisSessionReader,
+} from './synthesis.js';
 export type {
   Episode,
   EpisodeAffect,

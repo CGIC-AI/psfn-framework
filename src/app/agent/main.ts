@@ -12,6 +12,7 @@ import {
 } from '../../persistence/backups/startup-checks.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
+import { EpisodicStore, EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
@@ -259,6 +260,9 @@ async function main(): Promise<void> {
 
   // Memory write/import tools — intentional memory creation
   const memoryWriter = new MemoryWriter(memoryStore, gateway);
+  const episodicSynthesizer = db
+    ? new EpisodicSynthesizer(new EpisodicStore(db), sessionManager)
+    : null;
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
   );
@@ -430,6 +434,7 @@ async function main(): Promise<void> {
       onBehavioralPatternOutcome: intentionBehavioralHooks.onBehavioralPatternOutcome,
       pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
       coreMemoryStore,
+      episodicSynthesizer,
       postTurnActions,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
       intentionAppraisalEnabled: config.intentionAppraisalEnabled !== false,

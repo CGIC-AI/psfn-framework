@@ -211,12 +211,22 @@ describe('SleeptimeMemoryAgent', () => {
       const memoryWriter = {
         write: vi.fn().mockResolvedValue({ action: 'created' }),
       };
+      const episodicSynthesizer = {
+        run: vi.fn().mockReturnValue({
+          consideredEntries: 2,
+          candidateEpisodeCount: 1,
+          createdEpisodes: [],
+          skippedEpisodeIds: [],
+          linkedArcs: [],
+        }),
+      };
       const agent = new SleeptimeMemoryAgent({
         llmProvider,
         sessionManager,
         coreMemoryStore,
         memoryWriter,
         cadenceTurns: 1,
+        episodicSynthesizer,
       });
 
       await agent.execute(makeSleeptimeAction({
@@ -234,6 +244,10 @@ describe('SleeptimeMemoryAgent', () => {
         sourceRef: expect.stringContaining('source:sleeptime|session:terminal:test|message:msg-42'),
         tags: expect.arrayContaining(['preferences', 'coding', 'sleeptime']),
       }));
+      expect(episodicSynthesizer.run).toHaveBeenCalledWith({
+        sessionId: 'terminal:test',
+        sourceMessageId: 'msg-42',
+      });
       expect((llmProvider.complete as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
         expect.objectContaining({
           correlation: expect.objectContaining({
@@ -325,5 +339,70 @@ describe('SleeptimeMemoryAgent', () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it('does not synthesize episodes until rest-window inactivity is eligible', async () => {
+    const llmProvider = makeLLMProvider(JSON.stringify({
+      orient: {
+        persona: 'Calm.',
+        human: 'Focused.',
+        goals: 'Wait for rest windows.',
+      },
+      memory_writes: [],
+    }));
+    const sessionManager = {
+      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getRecentMessages: vi.fn().mockReturnValue([
+        {
+          id: 1,
+          channelId: 'terminal:test',
+          role: 'user',
+          content: 'Summarize today later.',
+          timestamp: Date.parse('2026-03-17T00:05:00.000Z'),
+        },
+        {
+          id: 2,
+          channelId: 'terminal:test',
+          role: 'assistant',
+          content: 'I will wait for the rest window.',
+          timestamp: Date.parse('2026-03-17T00:05:30.000Z'),
+        },
+      ]),
+    };
+    const coreMemoryStore = {
+      getSnapshot: vi.fn(),
+      rethink: vi.fn(),
+    };
+    const memoryWriter = {
+      write: vi.fn(),
+    };
+    const episodicSynthesizer = {
+      run: vi.fn(),
+    };
+    const agent = new SleeptimeMemoryAgent({
+      llmProvider,
+      sessionManager,
+      coreMemoryStore,
+      memoryWriter,
+      restWindow: {
+        enabled: true,
+        startLocalTime: '00:00',
+        endLocalTime: '00:00',
+        timeZone: 'UTC',
+        inactivityThresholdMinutes: 60,
+      },
+      episodicSynthesizer,
+    });
+
+    await agent.execute(makeSleeptimeAction({
+      payload: {
+        sessionId: 'terminal:test',
+        lastUserActivityAtMs: Date.now(),
+      },
+    }));
+
+    expect(episodicSynthesizer.run).not.toHaveBeenCalled();
+    expect(llmProvider.complete).not.toHaveBeenCalled();
+    expect(coreMemoryStore.rethink).not.toHaveBeenCalled();
   });
 });

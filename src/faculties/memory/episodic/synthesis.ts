@@ -1,0 +1,538 @@
+import { createHash } from 'node:crypto';
+import type { SessionEntry } from '../../../core/session/types.js';
+import { resolveSessionEntryTurnContext } from '../../../core/session/turn-provenance.js';
+import type {
+  Episode,
+  EpisodeAffect,
+  EpisodeArc,
+  EpisodeArtifactRef,
+  EpisodeProvenanceRef,
+  EpisodeSalience,
+  EpisodeSpanRef,
+} from '../../../shared/contracts/episodic-memory.js';
+import type { EpisodeArcWriteInput, EpisodeCreateInput, EpisodicStore } from './store.js';
+
+export interface EpisodicSynthesisSessionReader {
+  getRecentMessages(channelId: string, limit: number): SessionEntry[];
+}
+
+export interface EpisodicSynthesisOptions {
+  transcriptMessageLimit?: number;
+  maxEpisodesPerRun?: number;
+  maxPriorCandidates?: number;
+  gapSplitMinutes?: number;
+  maxEntriesPerEpisode?: number;
+}
+
+export interface EpisodicSynthesisRunInput {
+  sessionId: string;
+  sourceMessageId?: string;
+}
+
+export interface EpisodicSynthesisRunResult {
+  consideredEntries: number;
+  candidateEpisodeCount: number;
+  createdEpisodes: Episode[];
+  skippedEpisodeIds: string[];
+  linkedArcs: EpisodeArc[];
+}
+
+interface EpisodeGroup {
+  entries: SessionEntry[];
+}
+
+interface ThemeScore {
+  theme: string;
+  score: number;
+}
+
+const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 96;
+const DEFAULT_MAX_EPISODES_PER_RUN = 6;
+const DEFAULT_MAX_PRIOR_CANDIDATES = 24;
+const DEFAULT_GAP_SPLIT_MINUTES = 45;
+const DEFAULT_MAX_ENTRIES_PER_EPISODE = 14;
+const MIN_CONVERSATIONAL_ENTRIES = 2;
+const MIN_SINGLE_ENTRY_CHARS = 120;
+const MIN_RELATED_THEME_OVERLAP = 1;
+const MINUTE_MS = 60_000;
+const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const STOP_WORDS = new Set([
+  'about',
+  'after',
+  'again',
+  'also',
+  'because',
+  'been',
+  'before',
+  'being',
+  'could',
+  'from',
+  'have',
+  'into',
+  'just',
+  'like',
+  'more',
+  'need',
+  'only',
+  'over',
+  'please',
+  'that',
+  'their',
+  'then',
+  'there',
+  'this',
+  'through',
+  'with',
+  'would',
+  'your',
+]);
+
+function normalizePositiveInteger(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : fallback;
+}
+
+function normalizeBoundedUnit(value: number): number {
+  return Math.max(0, Math.min(1, Number(value.toFixed(3))));
+}
+
+function stableHash(parts: readonly string[]): string {
+  return createHash('sha256')
+    .update(parts.join('\u001f'))
+    .digest('hex')
+    .slice(0, 24);
+}
+
+function stableId(prefix: string, parts: readonly string[]): string {
+  return `${prefix}:${stableHash(parts)}`;
+}
+
+function toIso(timestamp: number): string {
+  return new Date(timestamp).toISOString();
+}
+
+function toUtcDay(timestamp: number): string {
+  return toIso(timestamp).slice(0, 10);
+}
+
+function isCanonicalIsoInstant(value: string): boolean {
+  return ISO_INSTANT_PATTERN.test(value) && !Number.isNaN(Date.parse(value));
+}
+
+function normalizeContent(content: string): string {
+  return content.replace(/\s+/g, ' ').trim();
+}
+
+function isConversational(entry: SessionEntry): boolean {
+  return (entry.role === 'user' || entry.role === 'assistant') && normalizeContent(entry.content).length > 0;
+}
+
+function getTurnId(entry: SessionEntry): string {
+  try {
+    return resolveSessionEntryTurnContext(entry).turnId;
+  } catch {
+    return `session-entry:${entry.channelId}:${entry.id}`;
+  }
+}
+
+function getEntryFingerprint(entry: SessionEntry): string {
+  return stableHash([
+    entry.channelId,
+    String(entry.id),
+    String(entry.timestamp),
+    entry.role,
+    normalizeContent(entry.content).slice(0, 240),
+  ]);
+}
+
+function compareEntries(left: SessionEntry, right: SessionEntry): number {
+  if (left.timestamp !== right.timestamp) return left.timestamp - right.timestamp;
+  if (left.channelId !== right.channelId) return left.channelId.localeCompare(right.channelId);
+  return left.id - right.id;
+}
+
+function groupEntries(
+  entries: readonly SessionEntry[],
+  options: {
+    gapSplitMs: number;
+    maxEntriesPerEpisode: number;
+  },
+): EpisodeGroup[] {
+  const groups: EpisodeGroup[] = [];
+  let current: SessionEntry[] = [];
+
+  for (const entry of entries) {
+    const previous = current.at(-1);
+    const startsNewGroup = previous
+      && (
+        toUtcDay(previous.timestamp) !== toUtcDay(entry.timestamp)
+        || entry.timestamp - previous.timestamp >= options.gapSplitMs
+        || current.length >= options.maxEntriesPerEpisode
+      );
+
+    if (startsNewGroup && current.length > 0) {
+      groups.push({ entries: current });
+      current = [];
+    }
+    current.push(entry);
+  }
+
+  if (current.length > 0) {
+    groups.push({ entries: current });
+  }
+
+  return groups.filter(group => isSalientGroup(group.entries));
+}
+
+function isSalientGroup(entries: readonly SessionEntry[]): boolean {
+  if (entries.length >= MIN_CONVERSATIONAL_ENTRIES) {
+    return true;
+  }
+  const totalChars = entries.reduce((sum, entry) => sum + normalizeContent(entry.content).length, 0);
+  return totalChars >= MIN_SINGLE_ENTRY_CHARS;
+}
+
+function extractWords(entries: readonly SessionEntry[]): string[] {
+  return entries
+    .flatMap(entry => normalizeContent(entry.content).toLowerCase().match(/[a-z][a-z0-9_-]{3,}/g) ?? [])
+    .filter(word => !STOP_WORDS.has(word));
+}
+
+function inferThemes(entries: readonly SessionEntry[]): string[] {
+  const scores = new Map<string, number>();
+  for (const word of extractWords(entries)) {
+    scores.set(word, (scores.get(word) ?? 0) + 1);
+  }
+
+  const ranked: ThemeScore[] = [...scores.entries()]
+    .map(([theme, score]) => ({ theme, score }))
+    .sort((left, right) => {
+      if (right.score !== left.score) return right.score - left.score;
+      return left.theme.localeCompare(right.theme);
+    });
+
+  const themes = ranked.slice(0, 5).map(entry => entry.theme);
+  return themes.length > 0 ? themes : ['conversation'];
+}
+
+function summarizeTitle(entries: readonly SessionEntry[], themes: readonly string[]): string {
+  const firstUserEntry = entries.find(entry => entry.role === 'user') ?? entries[0];
+  const text = normalizeContent(firstUserEntry.content);
+  if (text.length > 0) {
+    const clipped = text.length > 72 ? `${text.slice(0, 69)}...` : text;
+    return clipped;
+  }
+  return `Conversation about ${themes.slice(0, 2).join(' and ')}`;
+}
+
+function summarizeLandmark(entries: readonly SessionEntry[], themes: readonly string[]): string {
+  const first = entries[0];
+  const last = entries.at(-1);
+  const userTurns = entries.filter(entry => entry.role === 'user').length;
+  const assistantTurns = entries.filter(entry => entry.role === 'assistant').length;
+  return [
+    `A ${entries.length}-message exchange`,
+    `with ${userTurns} user turn${userTurns === 1 ? '' : 's'}`,
+    `and ${assistantTurns} assistant turn${assistantTurns === 1 ? '' : 's'}`,
+    `around ${themes.slice(0, 3).join(', ')}`,
+    `from ${toIso(first.timestamp)}`,
+    `to ${toIso(last.timestamp)}.`,
+  ].join(' ');
+}
+
+function inferSalience(entries: readonly SessionEntry[], themes: readonly string[]): EpisodeSalience {
+  const totalChars = entries.reduce((sum, entry) => sum + normalizeContent(entry.content).length, 0);
+  const userTurns = entries.filter(entry => entry.role === 'user').length;
+  const score = normalizeBoundedUnit(0.35 + Math.min(0.3, entries.length / 40) + Math.min(0.2, totalChars / 4000));
+  const novelty = normalizeBoundedUnit(Math.min(0.85, themes.length / 8 + userTurns / 30));
+  return {
+    score,
+    novelty,
+    emotionalIntensity: inferEmotionalIntensity(entries),
+  };
+}
+
+function inferEmotionalIntensity(entries: readonly SessionEntry[]): number {
+  const text = entries.map(entry => entry.content).join(' ').toLowerCase();
+  const markers = ['!', 'urgent', 'blocked', 'worried', 'excited', 'frustrated', 'love', 'hate'];
+  const hits = markers.reduce((count, marker) => count + (text.includes(marker) ? 1 : 0), 0);
+  return normalizeBoundedUnit(Math.min(0.8, 0.1 + hits * 0.12));
+}
+
+function inferAffect(entries: readonly SessionEntry[]): EpisodeAffect {
+  const text = entries.map(entry => entry.content).join(' ').toLowerCase();
+  const labels = new Set<string>();
+  let valence = 0;
+
+  if (/\b(thanks|great|good|love|excited|excellent)\b/.test(text)) {
+    labels.add('positive');
+    valence += 0.25;
+  }
+  if (/\b(blocked|worry|worried|bad|hate|frustrated|issue|bug)\b/.test(text)) {
+    labels.add('concerned');
+    valence -= 0.25;
+  }
+  if (/\b(plan|implement|debug|fix|ship|test|review)\b/.test(text)) {
+    labels.add('focused');
+  }
+
+  return {
+    valence: normalizeBoundedUnit((valence + 1) / 2) * 2 - 1,
+    arousal: inferEmotionalIntensity(entries),
+    dominance: 0.5,
+    labels: labels.size > 0 ? [...labels].sort() : ['neutral'],
+  };
+}
+
+function buildSpanRef(sessionId: string, entries: readonly SessionEntry[]): EpisodeSpanRef {
+  const first = entries[0];
+  const last = entries.at(-1);
+  return {
+    spanId: stableId('l0-session-span', [
+      sessionId,
+      String(first.id),
+      String(last.id),
+      String(first.timestamp),
+      String(last.timestamp),
+    ]),
+    channelId: first.channelId,
+    sessionId,
+    startTurnId: getTurnId(first),
+    endTurnId: getTurnId(last),
+    startedAt: toIso(first.timestamp),
+    endedAt: toIso(last.timestamp),
+  };
+}
+
+function buildProvenanceRefs(
+  sessionId: string,
+  spanRef: EpisodeSpanRef,
+  entries: readonly SessionEntry[],
+): EpisodeProvenanceRef[] {
+  const provenance = new Map<string, EpisodeProvenanceRef>();
+  provenance.set(`l0_span:${spanRef.spanId}`, { kind: 'l0_span', refId: spanRef.spanId });
+  provenance.set(`session:${sessionId}`, { kind: 'session', refId: sessionId });
+
+  for (const entry of entries.slice(0, 12)) {
+    const turnId = getTurnId(entry);
+    provenance.set(`turn:${turnId}`, { kind: 'turn', refId: turnId });
+  }
+
+  return [...provenance.values()];
+}
+
+function buildEpisodeInput(
+  sessionId: string,
+  group: EpisodeGroup,
+): EpisodeCreateInput {
+  const entries = group.entries;
+  const first = entries[0];
+  const last = entries.at(-1);
+
+  const themes = inferThemes(entries);
+  const spanRef = buildSpanRef(sessionId, entries);
+  const id = stableId('episode', [
+    sessionId,
+    spanRef.spanId,
+    ...entries.map(getEntryFingerprint),
+  ]);
+
+  return {
+    id,
+    title: summarizeTitle(entries, themes),
+    landmark: summarizeLandmark(entries, themes),
+    startedAt: toIso(first.timestamp),
+    endedAt: toIso(last.timestamp),
+    threadId: sessionId,
+    channelId: first.channelId,
+    participantContactIds: [...new Set(entries
+      .map(entry => entry.authorId)
+      .filter((authorId): authorId is string => typeof authorId === 'string' && authorId.trim().length > 0))].sort(),
+    salience: inferSalience(entries, themes),
+    affect: inferAffect(entries),
+    themes,
+    spanRefs: [spanRef],
+    artifactRefs: inferArtifactRefs(entries),
+    provenanceRefs: buildProvenanceRefs(sessionId, spanRef, entries),
+  };
+}
+
+function inferArtifactRefs(entries: readonly SessionEntry[]): EpisodeArtifactRef[] {
+  const refs = new Map<string, EpisodeArtifactRef>();
+  for (const entry of entries) {
+    if (!entry.metadata) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(entry.metadata) as unknown;
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    const artifacts = (parsed as { artifacts?: unknown }).artifacts;
+    if (!Array.isArray(artifacts)) continue;
+    for (const artifact of artifacts) {
+      if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) continue;
+      const record = artifact as Record<string, unknown>;
+      const artifactId = typeof record.artifactId === 'string'
+        ? record.artifactId.trim()
+        : typeof record.id === 'string'
+          ? record.id.trim()
+          : '';
+      if (!artifactId) continue;
+      refs.set(artifactId, {
+        artifactId,
+        ...(typeof record.artifactType === 'string' && record.artifactType.trim()
+          ? { artifactType: record.artifactType.trim() }
+          : {}),
+        ...(typeof record.uri === 'string' && record.uri.trim() ? { uri: record.uri.trim() } : {}),
+        ...(typeof record.path === 'string' && record.path.trim() ? { path: record.path.trim() } : {}),
+        ...(typeof record.createdAt === 'string' && isCanonicalIsoInstant(record.createdAt.trim())
+          ? { createdAt: record.createdAt.trim() }
+          : {}),
+      });
+    }
+  }
+  return [...refs.values()];
+}
+
+function themeOverlap(left: readonly string[], right: readonly string[]): number {
+  const rightSet = new Set(right);
+  return left.reduce((count, theme) => count + (rightSet.has(theme) ? 1 : 0), 0);
+}
+
+function buildArcInput(source: Episode, target: Episode, overlap: number): EpisodeArcWriteInput {
+  const sharedThemes = source.themes.filter(theme => target.themes.includes(theme));
+  const themes = sharedThemes.length > 0 ? sharedThemes : target.themes.slice(0, 3);
+  return {
+    id: stableId('episode-arc', [source.id, target.id, themes.join('|')]),
+    sourceEpisodeId: source.id,
+    targetEpisodeId: target.id,
+    arcKind: overlap > 0 ? 'same_theme' : 'continuation',
+    salience: normalizeBoundedUnit(Math.max(0.35, Math.min(source.salience.score, target.salience.score))),
+    confidence: normalizeBoundedUnit(overlap > 0 ? 0.55 + Math.min(0.3, overlap * 0.1) : 0.45),
+    themes,
+    spanRefs: target.spanRefs,
+    artifactRefs: target.artifactRefs,
+    provenanceRefs: target.provenanceRefs,
+  };
+}
+
+function findRelatedSource(
+  target: Episode,
+  candidates: readonly Episode[],
+): { episode: Episode; overlap: number } | null {
+  let best: { episode: Episode; overlap: number; distanceMs: number } | null = null;
+  const targetStart = Date.parse(target.startedAt);
+
+  for (const candidate of candidates) {
+    if (candidate.id === target.id || candidate.startedAt > target.startedAt) continue;
+    const overlap = themeOverlap(candidate.themes, target.themes);
+    const sameThread = candidate.threadId !== undefined && candidate.threadId === target.threadId;
+    if (overlap < MIN_RELATED_THEME_OVERLAP && !sameThread) continue;
+
+    const distanceMs = Math.max(0, targetStart - Date.parse(candidate.endedAt));
+    if (
+      !best
+      || overlap > best.overlap
+      || (overlap === best.overlap && distanceMs < best.distanceMs)
+    ) {
+      best = { episode: candidate, overlap, distanceMs };
+    }
+  }
+
+  return best ? { episode: best.episode, overlap: best.overlap } : null;
+}
+
+export class EpisodicSynthesizer {
+  private readonly store: Pick<EpisodicStore, 'createEpisode' | 'getEpisode' | 'searchByTime' | 'writeEpisodeArc'>;
+  private readonly sessionReader: EpisodicSynthesisSessionReader;
+  private readonly transcriptMessageLimit: number;
+  private readonly maxEpisodesPerRun: number;
+  private readonly maxPriorCandidates: number;
+  private readonly gapSplitMs: number;
+  private readonly maxEntriesPerEpisode: number;
+
+  constructor(
+    store: Pick<EpisodicStore, 'createEpisode' | 'getEpisode' | 'searchByTime' | 'writeEpisodeArc'>,
+    sessionReader: EpisodicSynthesisSessionReader,
+    options: EpisodicSynthesisOptions = {},
+  ) {
+    this.store = store;
+    this.sessionReader = sessionReader;
+    this.transcriptMessageLimit = normalizePositiveInteger(
+      options.transcriptMessageLimit,
+      DEFAULT_TRANSCRIPT_MESSAGE_LIMIT,
+    );
+    this.maxEpisodesPerRun = normalizePositiveInteger(options.maxEpisodesPerRun, DEFAULT_MAX_EPISODES_PER_RUN);
+    this.maxPriorCandidates = normalizePositiveInteger(options.maxPriorCandidates, DEFAULT_MAX_PRIOR_CANDIDATES);
+    this.gapSplitMs = normalizePositiveInteger(options.gapSplitMinutes, DEFAULT_GAP_SPLIT_MINUTES) * MINUTE_MS;
+    this.maxEntriesPerEpisode = normalizePositiveInteger(
+      options.maxEntriesPerEpisode,
+      DEFAULT_MAX_ENTRIES_PER_EPISODE,
+    );
+  }
+
+  run(input: EpisodicSynthesisRunInput): EpisodicSynthesisRunResult {
+    const entries = this.sessionReader
+      .getRecentMessages(input.sessionId, this.transcriptMessageLimit)
+      .filter(isConversational)
+      .sort(compareEntries);
+
+    const groups = groupEntries(entries, {
+      gapSplitMs: this.gapSplitMs,
+      maxEntriesPerEpisode: this.maxEntriesPerEpisode,
+    }).slice(-this.maxEpisodesPerRun);
+    const createdEpisodes: Episode[] = [];
+    const skippedEpisodeIds: string[] = [];
+    const linkedArcs: EpisodeArc[] = [];
+
+    for (const group of groups) {
+      const episodeInput = buildEpisodeInput(input.sessionId, group);
+      const existing = this.store.getEpisode(episodeInput.id);
+      const episode = existing ?? this.store.createEpisode(episodeInput);
+      if (existing) {
+        skippedEpisodeIds.push(existing.id);
+      } else {
+        createdEpisodes.push(episode);
+      }
+
+      const priorCandidates = this.resolvePriorCandidates(episode, createdEpisodes);
+      const related = findRelatedSource(episode, priorCandidates);
+      if (related) {
+        linkedArcs.push(this.store.writeEpisodeArc(
+          buildArcInput(related.episode, episode, related.overlap),
+        ));
+      }
+    }
+
+    return {
+      consideredEntries: entries.length,
+      candidateEpisodeCount: groups.length,
+      createdEpisodes,
+      skippedEpisodeIds,
+      linkedArcs,
+    };
+  }
+
+  private resolvePriorCandidates(episode: Episode, currentRunEpisodes: readonly Episode[]): Episode[] {
+    const dayWindowMs = 30 * 24 * 60 * 60 * 1000;
+    const to = episode.startedAt;
+    const from = new Date(Math.max(0, Date.parse(to) - dayWindowMs)).toISOString();
+    const persisted = this.store.searchByTime({
+      from,
+      to,
+      limit: this.maxPriorCandidates,
+    });
+    return [...persisted, ...currentRunEpisodes]
+      .filter(candidate => candidate.id !== episode.id && candidate.startedAt <= episode.startedAt)
+      .sort((left, right) => {
+        const startedDiff = Date.parse(right.startedAt) - Date.parse(left.startedAt);
+        if (startedDiff !== 0) return startedDiff;
+        return left.id.localeCompare(right.id);
+      })
+      .slice(0, this.maxPriorCandidates);
+  }
+}

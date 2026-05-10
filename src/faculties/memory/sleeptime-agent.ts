@@ -7,6 +7,7 @@ import type { SessionManager } from '../../core/session/manager.js';
 import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
 import type { CoreMemoryStorePort } from './memory-store-port.js';
 import type { MemoryWriteOptions, MemoryWriter } from './writer.js';
+import type { EpisodicSynthesisRunResult, EpisodicSynthesizer } from './episodic/synthesis.js';
 import {
   VALID_MEMORY_TYPES,
   VALID_SENSITIVITY_LEVELS,
@@ -26,6 +27,7 @@ const MAX_TRANSCRIPT_ENTRY_CHARS = 600;
 type CoreMemoryRewriter = Pick<CoreMemoryStorePort, 'getSnapshot' | 'rethink'>;
 type SessionMemoryReader = Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>;
 type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
+type SleeptimeEpisodicSynthesizer = Pick<EpisodicSynthesizer, 'run'>;
 
 interface NormalizedMemoryWrite {
   text: string;
@@ -55,6 +57,7 @@ export interface SleeptimeMemoryAgentOptions {
   transcriptMessageLimit?: number;
   maxMemoryWrites?: number;
   restWindow?: EpisodicProcessingRestWindowConfig;
+  episodicSynthesizer?: SleeptimeEpisodicSynthesizer | null;
 }
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
@@ -214,6 +217,20 @@ function summarizeSessionEntry(entry: SessionEntry): string {
   return `${rolePrefix}: ${clipped || '[empty]'}`;
 }
 
+function summarizeEpisodicSynthesis(result: EpisodicSynthesisRunResult): {
+  episodicCandidateEpisodes: number;
+  episodicCreatedEpisodes: number;
+  episodicSkippedEpisodes: number;
+  episodicLinkedArcs: number;
+} {
+  return {
+    episodicCandidateEpisodes: result.candidateEpisodeCount,
+    episodicCreatedEpisodes: result.createdEpisodes.length,
+    episodicSkippedEpisodes: result.skippedEpisodeIds.length,
+    episodicLinkedArcs: result.linkedArcs.length,
+  };
+}
+
 export class SleeptimeMemoryAgent {
   private readonly llmProvider: LLMProviderPort;
   private readonly sessionManager: SessionMemoryReader;
@@ -223,6 +240,7 @@ export class SleeptimeMemoryAgent {
   private readonly transcriptMessageLimit: number;
   private readonly maxMemoryWrites: number;
   private readonly restWindow?: EpisodicProcessingRestWindowConfig;
+  private readonly episodicSynthesizer: SleeptimeEpisodicSynthesizer | null;
   private readonly turnCountBySession = new Map<string, number>();
 
   constructor(options: SleeptimeMemoryAgentOptions) {
@@ -240,6 +258,7 @@ export class SleeptimeMemoryAgent {
       DEFAULT_MAX_MEMORY_WRITES,
     );
     this.restWindow = options.restWindow;
+    this.episodicSynthesizer = options.episodicSynthesizer ?? null;
   }
 
   inferPostTurnActions(input: {
@@ -321,6 +340,11 @@ export class SleeptimeMemoryAgent {
       });
       return;
     }
+
+    const episodicSynthesis = this.episodicSynthesizer?.run({
+      sessionId,
+      sourceMessageId: action.sourceMessageId,
+    });
 
     const currentSnapshot = this.coreMemoryStore.getSnapshot();
     const transcript = recentEntries.map(summarizeSessionEntry).join('\n');
@@ -411,6 +435,7 @@ export class SleeptimeMemoryAgent {
       transcriptEntries: recentEntries.length,
       memoryWritesRequested: plan.memoryWrites.length,
       memoryWritesSucceeded: writtenCount,
+      ...(episodicSynthesis ? summarizeEpisodicSynthesis(episodicSynthesis) : {}),
     });
   }
 

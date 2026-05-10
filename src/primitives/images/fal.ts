@@ -324,9 +324,7 @@ export class FalImageClient {
       prompt: params.prompt,
       image_urls: [...params.imageUrls],
       sync_mode: false,
-      enable_safety_checker: false,
       ...(params.numImages !== undefined ? { num_images: params.numImages } : {}),
-      ...(params.seed !== undefined ? { seed: params.seed } : {}),
       ...(params.outputFormat ? { output_format: params.outputFormat } : {}),
     };
 
@@ -335,6 +333,8 @@ export class FalImageClient {
         ...(params.aspectRatio ? { aspect_ratio: params.aspectRatio } : {}),
         resolution: params.resolution ?? '2K',
         safety_tolerance: '6',
+        limit_generations: true,
+        ...(params.seed !== undefined ? { seed: params.seed } : {}),
       });
     } else {
       Object.assign(input, {

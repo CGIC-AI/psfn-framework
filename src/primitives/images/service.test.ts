@@ -447,8 +447,9 @@ describe('ImageService', () => {
         expect(init?.method).toBe('POST');
         const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
         expect(body.resolution).toBe('2K');
-        expect(body.enable_safety_checker).toBe(false);
+        expect(body).not.toHaveProperty('enable_safety_checker');
         expect(body.safety_tolerance).toBe('6');
+        expect(body.limit_generations).toBe(true);
         expect(body.image_urls).toEqual(['https://example.test/source.png']);
         return jsonResponse({
           status: 'COMPLETED',
@@ -498,6 +499,51 @@ describe('ImageService', () => {
         },
       ],
     });
+  });
+
+  it('does not send nano-banana edit fields to GPT image edits', async () => {
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'fal-ai/gpt-image-1.5/edit',
+      'fal-gpt-edit-1',
+      (body) => {
+        expect(body).toEqual({
+          prompt: 'add a blue scarf',
+          image_urls: ['https://example.test/source.png'],
+          sync_mode: false,
+          image_size: '1024x1024',
+          background: 'auto',
+          input_fidelity: 'high',
+          output_format: 'png',
+          mask_image_url: 'https://example.test/mask.png',
+          num_images: 1,
+        });
+      },
+    );
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.edit({
+      prompt: 'add a blue scarf',
+      imageUrls: ['https://example.test/source.png'],
+      model: 'fal-ai/gpt-image-1.5/edit',
+      imageSize: '1024x1024',
+      background: 'auto',
+      inputFidelity: 'high',
+      outputFormat: 'png',
+      maskImageUrl: 'https://example.test/mask.png',
+      numImages: 1,
+      seed: 123,
+      aspectRatio: '1:1',
+      resolution: '2K',
+    });
+
+    expect(result.model).toBe('fal-ai/gpt-image-1.5/edit');
+    expect(result.requestId).toBe('fal-gpt-edit-1');
   });
 
   it('falls back to a configured ComfyUI create workflow on FAL content-policy failures', async () => {

@@ -27,7 +27,7 @@ describe('agent startup network isolation enforcement', () => {
   });
 
   it('supports only the explicit temporary override', () => {
-    expect(helperSource).toContain('ALLOW_AGENT_OUTBOUND_NETWORK=true set; startup network-isolation guard is bypassed by explicit operator override.');
+    expect(helperSource).toContain('DEGRADED: ALLOW_AGENT_OUTBOUND_NETWORK=true set; startup network-isolation guard is bypassed by explicit operator override.');
     expect(helperSource).toContain('allowOutboundNetwork');
   });
 });

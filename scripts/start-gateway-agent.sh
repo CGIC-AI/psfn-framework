@@ -62,10 +62,6 @@ if [ -z "${GATEWAY_SESSION_HMAC_KEYS:-}" ] && [ -z "${GATEWAY_SESSION_HMAC_KEY:-
   export GATEWAY_SESSION_HMAC_KEY="psfn-dev-session-hmac"
 fi
 
-if [ -z "${ALLOW_AGENT_OUTBOUND_NETWORK:-}" ]; then
-  export ALLOW_AGENT_OUTBOUND_NETWORK=true
-fi
-
 if [ "${YOLO_MODE}" -eq 1 ]; then
   export PSFN_RUNTIME_MODE="yolo"
 else

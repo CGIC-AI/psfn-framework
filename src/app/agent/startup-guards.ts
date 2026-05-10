@@ -75,7 +75,7 @@ export async function enforceNetworkIsolationOnStartup(
   const allowOutboundNetwork = isExplicitTrue(env.ALLOW_AGENT_OUTBOUND_NETWORK);
   if (allowOutboundNetwork) {
     log.warn(
-      'ALLOW_AGENT_OUTBOUND_NETWORK=true set; startup network-isolation guard is bypassed by explicit operator override.',
+      'DEGRADED: ALLOW_AGENT_OUTBOUND_NETWORK=true set; startup network-isolation guard is bypassed by explicit operator override.',
     );
     return;
   }

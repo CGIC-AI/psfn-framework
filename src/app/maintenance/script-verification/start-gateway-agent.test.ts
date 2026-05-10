@@ -20,6 +20,18 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(unit).toContain('ExecStart=/bin/bash /mnt/samesung/ai/psfn-live/scripts/start-gateway-agent.sh --yolo');
     expect(unit).not.toContain('ExecStart=%h/.nvm/versions/node/v22.21.1/bin/npm run yolo');
   });
+
+  it('does not ambiently opt the agent into outbound network access', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).not.toContain('export ALLOW_AGENT_OUTBOUND_NETWORK=true');
+    expect(launcher).not.toMatch(/ALLOW_AGENT_OUTBOUND_NETWORK[^\\n]+:-[^\\n]*true/);
+  });
+
+  it('still sources dotenv before launch so operators can explicitly opt in there', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('psfn_source_dotenv_preserving_existing_env "${RESOLVED_DOTENV_FILE}"');
+    expect(launcher).toContain('source "${ROOT_DIR}/scripts/system/runtime-env.sh"');
+  });
 });
 
 describe('psfn_source_dotenv_preserving_existing_env', () => {

@@ -12,8 +12,8 @@ import {
   type ModelSlot,
   type ModelSlotDefaults,
   type ModelSlotOverrides,
-} from '../types.js';
-import { isRecord } from '../utils/types.js';
+} from '../../shared/contracts/runtime.js';
+import { isRecord } from '../../shared/utils/types.js';
 import {
   toBoolean,
   toIntegerInRange,
@@ -22,6 +22,7 @@ import {
   toPositiveNumber,
   toStrictIntegerInRange,
   toStrictNumberInRange,
+  toStringList,
 } from './coercion.js';
 import {
   EXTRACTION_MODEL_SLOT_KEY,

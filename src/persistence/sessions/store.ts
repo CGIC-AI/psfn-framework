@@ -42,7 +42,7 @@ import {
   createDefaultSQLiteTurnRecordStorePort,
   DEFAULT_SQLITE_SESSION_SEARCH_INDEX_FILENAME,
 } from './sqlite-adapters.js';
-import type { TurnRecordStorePort } from './turn-records.js';
+import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import {
   getCrashRecoveryExtractionCandidates,

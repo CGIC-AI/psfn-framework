@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
+import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 
 function createTurnRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
@@ -45,7 +46,7 @@ describe('turn-records', () => {
   it('persists and reads psfn-amica turn records', () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-psfn-amica-turn-records-'));
     const record = createTurnRecord();
-    const turnRecordStore = createFilesystemTurnRecordStorePort(sessionsDir);
+    const turnRecordStore: TurnRecordStorePort = createFilesystemTurnRecordStorePort(sessionsDir);
 
     turnRecordStore.appendTurnRecord(record);
 

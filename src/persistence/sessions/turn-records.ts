@@ -12,6 +12,7 @@ import type {
   TurnStageTelemetryRecord,
 } from '../../core/turns/observability.js';
 import { cloneUnknownValue } from '../../core/turns/observability.js';
+import type { TurnRecordStorePort } from './turn-record-store-port.js';
 
 const TURN_RECORDS_DIR = '_turn_records';
 const TURN_RECORD_SCHEMA_VERSION = 1;
@@ -444,11 +445,6 @@ function normalizeTurnRecord(raw: unknown, expectedChannelId: string): TurnRecor
 
 function turnRecordPath(sessionsDir: string, channelId: string): string {
   return join(sessionsDir, TURN_RECORDS_DIR, `${sanitizeChannelId(channelId)}.jsonl`);
-}
-
-export interface TurnRecordStorePort {
-  appendTurnRecord(record: TurnRecord): void;
-  readRecentTurnRecords(channelId: string, limit: number): TurnRecord[];
 }
 
 function readRecentTurnRecordsFromPath(

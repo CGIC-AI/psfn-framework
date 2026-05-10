@@ -9,7 +9,7 @@ import {
 import type { SessionArchivePort } from '../journals/journal/port.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
-import type { TurnRecordStorePort } from './turn-records.js';
+import type { TurnRecordStorePort } from './turn-record-store-port.js';
 export {
   IMPORT_MANIFEST_FILENAME,
   READABLE_SESSION_FILENAME,

@@ -15,7 +15,7 @@ import type {
   SessionSearchHit,
   TranscriptProjectionDrift,
 } from './transcript-projection-port.js';
-import type { TurnRecordStorePort } from './turn-records.js';
+import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
 
 const DEFAULT_SEARCH_LIMIT = 10;

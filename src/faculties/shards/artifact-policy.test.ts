@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildShardLineageEnvelope } from './result-lineage.js';
-import { buildShardReturnedArtifacts, createArtifactReturnPort } from './artifact-policy.js';
+import { createArtifactReturnPort } from './artifact-return-port.js';
+import { buildShardReturnedArtifacts } from './artifact-policy.js';
 
 describe('buildShardReturnedArtifacts', () => {
   const TEST_COMPANION_ID = 'companion-test';

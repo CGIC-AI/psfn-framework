@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createArtifactReturnPort } from './artifact-policy.js';
+import { createArtifactReturnPort } from './artifact-return-port.js';
 import { ShardFoldReviewController } from './fold-review.js';
 import { resolveStagedShardMemoryOutputs } from './output-review.js';
 import type { ShardResultLineageEnvelope } from './result-lineage.js';

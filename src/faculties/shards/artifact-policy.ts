@@ -1,5 +1,6 @@
 import { isRecord } from '../../shared/utils/types.js';
 import type { ShardResultLineageEnvelope } from './result-lineage.js';
+import type { ArtifactReturnRequest } from './artifact-return-port.js';
 
 export type ShardArtifactMergePolicy = 'review_required';
 
@@ -19,22 +20,6 @@ export interface ShardReturnedArtifact {
   name: string;
   localPath?: string;
   provenance: ShardArtifactReturnProvenance;
-}
-
-export interface ArtifactReturnRequest {
-  lineage: ShardResultLineageEnvelope;
-  turnIndex: number;
-  turnMessageId: string;
-  attachments: readonly unknown[] | undefined;
-}
-
-export interface ArtifactReturnBatch {
-  mergePolicy: ShardArtifactMergePolicy;
-  artifacts: ShardReturnedArtifact[];
-}
-
-export interface ArtifactReturnPort {
-  collectArtifactReturn(input: ArtifactReturnRequest): ArtifactReturnBatch | null;
 }
 
 function normalizeNonEmptyString(value: string, fieldName: string): string {
@@ -121,19 +106,4 @@ export function buildShardReturnedArtifacts(input: ArtifactReturnRequest): Shard
       turnMessageId,
     });
   });
-}
-
-export function createArtifactReturnPort(): ArtifactReturnPort {
-  return {
-    collectArtifactReturn(input) {
-      const artifacts = buildShardReturnedArtifacts(input);
-      if (artifacts.length === 0) {
-        return null;
-      }
-      return {
-        mergePolicy: 'review_required',
-        artifacts,
-      };
-    },
-  };
 }

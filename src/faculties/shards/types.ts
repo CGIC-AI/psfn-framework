@@ -1,7 +1,7 @@
 import type { EmbodimentPresenceMetadata } from '../../core/agent/presence-metadata.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { ShardResultLineageEnvelope } from './result-lineage.js';
-import type { ArtifactReturnBatch } from './artifact-policy.js';
+import type { ArtifactReturnBatch } from './artifact-return-port.js';
 
 // ── Shard types ──
 // Ephemeral sub-agent instances for parallel task execution.

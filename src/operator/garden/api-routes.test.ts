@@ -17,7 +17,7 @@ import { SessionManager } from '../../core/session/manager.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { ShardManager } from '../../faculties/shards/manager.js';
 import { ShardFoldReviewController } from '../../faculties/shards/fold-review.js';
-import { createArtifactReturnPort } from '../../faculties/shards/artifact-policy.js';
+import { createArtifactReturnPort } from '../../faculties/shards/artifact-return-port.js';
 import { resolveStagedShardMemoryOutputs } from '../../faculties/shards/output-review.js';
 import { buildShardLineageEnvelope } from '../../faculties/shards/result-lineage.js';
 import { ContactStore } from '../../core/contacts/store.js';

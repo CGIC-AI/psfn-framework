@@ -1,5 +1,5 @@
 import type { EmbodimentPresenceMetadata } from '../presence-metadata.js';
-import type { ArtifactReturnBatch } from '../../../faculties/shards/artifact-policy.js';
+import type { ArtifactReturnBatch } from '../../../faculties/shards/artifact-return-port.js';
 
 export const BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME = 'spawn_subagent' as const;
 export const DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_PARALLEL = 5;

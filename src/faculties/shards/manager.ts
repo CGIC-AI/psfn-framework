@@ -45,7 +45,7 @@ import {
   createArtifactReturnPort,
   type ArtifactReturnBatch,
   type ArtifactReturnPort,
-} from './artifact-policy.js';
+} from './artifact-return-port.js';
 import {
   createEmptyShardMergeReview,
   resolveStagedShardMemoryOutputs,

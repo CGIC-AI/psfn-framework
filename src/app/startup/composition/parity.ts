@@ -69,7 +69,10 @@ import { createScheduleTool } from '../../../core/scheduler/schedule-tool.js';
 import type { ReflectionTemplate } from '../../../core/scheduler/heartbeat-policy.js';
 import type { MemoryWriter } from '../../../faculties/memory/writer.js';
 import { ValuesJournalStore } from '../../../faculties/values/store.js';
-import type { ValuesDeliberationMetadata } from '../../../faculties/values/store.js';
+import type {
+  ValuesDeliberationEpisodeMetadata,
+  ValuesDeliberationMetadata,
+} from '../../../faculties/values/store.js';
 import {
   createValuesAddTool,
   createValuesUpdateTool,
@@ -774,6 +777,32 @@ export function wireHeartbeatRuntime(
     totalTokens: result.totalTokens,
     estimatedCostUsd: result.estimatedCostUsd,
     durationMs: result.durationMs,
+    episode: toDeliberationEpisodeMetadata(result.episode),
+  });
+
+  const toDeliberationEpisodeMetadata = (
+    episode: DeliberationResult['episode'],
+  ): ValuesDeliberationEpisodeMetadata => ({
+    id: episode.id,
+    kind: episode.kind,
+    mode: episode.mode,
+    budget: {
+      maxRounds: episode.budget.maxRounds,
+      maxTotalTokens: episode.budget.maxTotalTokens,
+      maxWallTimeMs: episode.budget.maxWallTimeMs,
+      ...(episode.budget.maxTokensPerRound !== undefined
+        ? { maxTokensPerRound: episode.budget.maxTokensPerRound }
+        : {}),
+    },
+    exit: {
+      reason: episode.exit.reason,
+      exhaustedBudget: episode.exit.exhaustedBudget,
+      maxRoundsReached: episode.exit.maxRoundsReached,
+      maxTotalTokensReached: episode.exit.maxTotalTokensReached,
+      maxWallTimeReached: episode.exit.maxWallTimeReached,
+      maxTokensPerRoundReached: episode.exit.maxTokensPerRoundReached,
+      fatigueTapered: episode.exit.fatigueTapered,
+    },
   });
 
   const resolveReflectionDeliberationCallType = (

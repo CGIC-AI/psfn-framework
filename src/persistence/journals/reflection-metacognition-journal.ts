@@ -6,7 +6,10 @@ import {
   normalizeNarrativeMetacognitiveFlags,
   normalizeNarrativeSnapshotRef,
 } from '../../faculties/values/narrative-context-normalization.js';
-import type { ValuesDeliberationMetadata } from '../../faculties/values/store.js';
+import {
+  normalizeValuesDeliberationMetadata,
+  type ValuesDeliberationMetadata,
+} from '../../faculties/values/store.js';
 import type { ReflectionExecutionSource } from './reflection-substrate.js';
 
 const log = createComponentLogger('ReflectionMetacognitionJournal');
@@ -181,47 +184,6 @@ function normalizeStringArray(value: unknown, fieldName: string): string[] | und
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function normalizeDeliberationMetadata(raw: unknown): ValuesDeliberationMetadata | undefined {
-  if (raw === undefined || raw === null) {
-    return undefined;
-  }
-  if (typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new Error('deliberation must be an object when provided');
-  }
-  const candidate = raw as Partial<ValuesDeliberationMetadata>;
-  const sessionId = normalizeRequiredString(candidate.sessionId, 'deliberation.sessionId');
-  const stopReason = normalizeRequiredString(candidate.stopReason, 'deliberation.stopReason');
-  const numericFields: Array<keyof Pick<
-    ValuesDeliberationMetadata,
-    'rounds' | 'totalInputTokens' | 'totalOutputTokens' | 'totalTokens' | 'estimatedCostUsd' | 'durationMs'
-  >> = [
-    'rounds',
-    'totalInputTokens',
-    'totalOutputTokens',
-    'totalTokens',
-    'estimatedCostUsd',
-    'durationMs',
-  ];
-  const normalizedNumbers = new Map<string, number>();
-  for (const fieldName of numericFields) {
-    const value = candidate[fieldName];
-    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-      throw new Error(`deliberation.${fieldName} must be a finite number >= 0`);
-    }
-    normalizedNumbers.set(fieldName, fieldName === 'rounds' ? Math.floor(value) : value);
-  }
-  return {
-    sessionId,
-    stopReason,
-    rounds: normalizedNumbers.get('rounds') ?? 0,
-    totalInputTokens: normalizedNumbers.get('totalInputTokens') ?? 0,
-    totalOutputTokens: normalizedNumbers.get('totalOutputTokens') ?? 0,
-    totalTokens: normalizedNumbers.get('totalTokens') ?? 0,
-    estimatedCostUsd: normalizedNumbers.get('estimatedCostUsd') ?? 0,
-    durationMs: normalizedNumbers.get('durationMs') ?? 0,
-  };
-}
-
 function normalizeBaseEntry(
   input: ReflectionMetacognitionEntryBaseInput,
   now: () => number,
@@ -234,6 +196,7 @@ function normalizeBaseEntry(
     input.metacognitiveFlags,
     { contextPrefix: ERROR_PREFIX },
   );
+  const deliberation = normalizeValuesDeliberationMetadata(input.deliberation, { strict: true });
 
   return {
     occurredAt: normalizeOccurredAt(input.occurredAt, now),
@@ -259,7 +222,7 @@ function normalizeBaseEntry(
     ...(normalizeOptionalString(input.processId, 'processId') ? { processId: normalizeOptionalString(input.processId, 'processId') } : {}),
     ...(normalizeOptionalString(input.prompt, 'prompt') ? { prompt: normalizeOptionalString(input.prompt, 'prompt') } : {}),
     ...(normalizeOptionalString(input.reflection, 'reflection') ? { reflection: normalizeOptionalString(input.reflection, 'reflection') } : {}),
-    ...(normalizeDeliberationMetadata(input.deliberation) ? { deliberation: normalizeDeliberationMetadata(input.deliberation) } : {}),
+    ...(deliberation ? { deliberation } : {}),
     ...(normalizeOptionalString(input.substrateBoundary, 'substrateBoundary')
       ? { substrateBoundary: normalizeOptionalString(input.substrateBoundary, 'substrateBoundary') }
       : {}),

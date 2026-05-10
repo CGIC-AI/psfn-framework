@@ -10,7 +10,10 @@ import {
   type ReflectionTemplate,
 } from './heartbeat-policy.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
-import type { ValuesDeliberationMetadata } from '../../faculties/values/store.js';
+import type {
+  ValuesDeliberationEpisodeMetadata,
+  ValuesDeliberationMetadata,
+} from '../../faculties/values/store.js';
 import type {
   CompletionPurpose,
   ContextMessage,
@@ -944,6 +947,32 @@ export function createHeartbeatTemplateRuntime(
     totalTokens: result.totalTokens,
     estimatedCostUsd: result.estimatedCostUsd,
     durationMs: result.durationMs,
+    episode: toDeliberationEpisodeMetadata(result.episode),
+  });
+
+  const toDeliberationEpisodeMetadata = (
+    episode: DeliberationResult['episode'],
+  ): ValuesDeliberationEpisodeMetadata => ({
+    id: episode.id,
+    kind: episode.kind,
+    mode: episode.mode,
+    budget: {
+      maxRounds: episode.budget.maxRounds,
+      maxTotalTokens: episode.budget.maxTotalTokens,
+      maxWallTimeMs: episode.budget.maxWallTimeMs,
+      ...(episode.budget.maxTokensPerRound !== undefined
+        ? { maxTokensPerRound: episode.budget.maxTokensPerRound }
+        : {}),
+    },
+    exit: {
+      reason: episode.exit.reason,
+      exhaustedBudget: episode.exit.exhaustedBudget,
+      maxRoundsReached: episode.exit.maxRoundsReached,
+      maxTotalTokensReached: episode.exit.maxTotalTokensReached,
+      maxWallTimeReached: episode.exit.maxWallTimeReached,
+      maxTokensPerRoundReached: episode.exit.maxTokensPerRoundReached,
+      fatigueTapered: episode.exit.fatigueTapered,
+    },
   });
 
   const resolveReflectionDeliberationCallType = (
@@ -1246,6 +1275,12 @@ export function createHeartbeatTemplateRuntime(
       finalReflection = parsedContradiction.revisedReflection;
     }
 
+    const totalTokens = totalInputTokens + totalOutputTokens;
+    const maxRoundsReached = stopReason === 'max_rounds';
+    const maxWallTimeReached = stopReason === 'time_cap';
+    const maxTotalTokensReached = stopReason === 'token_cap' && totalTokens >= maxTotalTokens;
+    const maxTokensPerRoundReached = false;
+
     return {
       reflection: finalReflection.trim() || synthesis.trim() || evidence.trim() || prompt.trim(),
       metadata: {
@@ -1254,9 +1289,29 @@ export function createHeartbeatTemplateRuntime(
         rounds: completedRounds,
         totalInputTokens,
         totalOutputTokens,
-        totalTokens: totalInputTokens + totalOutputTokens,
+        totalTokens,
         estimatedCostUsd,
         durationMs: Math.max(0, Date.now() - startedAt),
+        episode: {
+          id: sessionId,
+          kind: 'maintenance_reflection',
+          mode: 'background_bounded',
+          budget: {
+            maxRounds: 3,
+            maxTotalTokens,
+            maxWallTimeMs,
+          },
+          exit: {
+            reason: stopReason,
+            exhaustedBudget:
+              maxRoundsReached || maxWallTimeReached || maxTotalTokensReached || maxTokensPerRoundReached,
+            maxRoundsReached,
+            maxTotalTokensReached,
+            maxWallTimeReached,
+            maxTokensPerRoundReached,
+            fatigueTapered: false,
+          },
+        },
       },
       metacognitiveFlags,
     };

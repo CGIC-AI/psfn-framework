@@ -5,7 +5,10 @@ import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js'
 import type { EmotionalTimeSeriesPoint } from '../../core/contacts/store/emotional-baseline.js';
 import { appendJsonLine } from '../jsonl.js';
 import { sanitizeChannelId } from '../sessions/store-primitives.js';
-import type { ValuesDeliberationMetadata } from '../../faculties/values/store.js';
+import {
+  normalizeValuesDeliberationMetadata,
+  type ValuesDeliberationMetadata,
+} from '../../faculties/values/store.js';
 import type { ReflectionJournalEntry } from './reflection-journal.js';
 import { NON_CANONICAL_REFLECTION_SUBSTRATE } from './reflection-journal.js';
 
@@ -214,53 +217,6 @@ function normalizeTags(value: unknown): string[] | undefined {
   }
   const normalized = [...new Set(value.map((tag, index) => normalizeRequiredString(tag, `tags[${String(index)}]`)))];
   return normalized.length > 0 ? normalized : undefined;
-}
-
-function normalizeDeliberationMetadata(raw: unknown): ValuesDeliberationMetadata | undefined {
-  if (raw === undefined || raw === null) return undefined;
-  if (typeof raw !== 'object') {
-    throw new Error('deliberation must be an object when provided');
-  }
-  const candidate = raw as Partial<ValuesDeliberationMetadata>;
-  if (typeof candidate.sessionId !== 'string' || candidate.sessionId.trim().length === 0) {
-    throw new Error('deliberation.sessionId must be a non-empty string');
-  }
-  if (typeof candidate.stopReason !== 'string' || candidate.stopReason.trim().length === 0) {
-    throw new Error('deliberation.stopReason must be a non-empty string');
-  }
-  const numericFields: Array<keyof Pick<
-    ValuesDeliberationMetadata,
-    'rounds' | 'totalInputTokens' | 'totalOutputTokens' | 'totalTokens' | 'estimatedCostUsd' | 'durationMs'
-  >> = [
-    'rounds',
-    'totalInputTokens',
-    'totalOutputTokens',
-    'totalTokens',
-    'estimatedCostUsd',
-    'durationMs',
-  ];
-  for (const fieldName of numericFields) {
-    const value = candidate[fieldName];
-    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-      throw new Error(`deliberation.${fieldName} must be a finite number >= 0`);
-    }
-  }
-  const rounds = candidate.rounds as number;
-  const totalInputTokens = candidate.totalInputTokens as number;
-  const totalOutputTokens = candidate.totalOutputTokens as number;
-  const totalTokens = candidate.totalTokens as number;
-  const estimatedCostUsd = candidate.estimatedCostUsd as number;
-  const durationMs = candidate.durationMs as number;
-  return {
-    sessionId: candidate.sessionId.trim(),
-    stopReason: candidate.stopReason.trim(),
-    rounds: Math.floor(rounds),
-    totalInputTokens,
-    totalOutputTokens,
-    totalTokens,
-    estimatedCostUsd,
-    durationMs,
-  };
 }
 
 function normalizePositiveInteger(value: unknown, fieldName: string): number | undefined {
@@ -673,6 +629,7 @@ function normalizeProcessLogEntry(raw: unknown): ReflectionProcessLogEntry | nul
   try {
     const reflection = normalizeOptionalString(entry.reflection, 'reflection');
     const error = normalizeOptionalString(entry.error, 'error');
+    const deliberation = normalizeValuesDeliberationMetadata(entry.deliberation, { strict: true });
     if (entry.stage === 'completed' && !reflection) {
       return null;
     }
@@ -695,7 +652,7 @@ function normalizeProcessLogEntry(raw: unknown): ReflectionProcessLogEntry | nul
       ...(reflection ? { reflection } : {}),
       ...(error ? { error } : {}),
       ...(normalizeTags(entry.tags) ? { tags: normalizeTags(entry.tags) } : {}),
-      ...(normalizeDeliberationMetadata(entry.deliberation) ? { deliberation: normalizeDeliberationMetadata(entry.deliberation) } : {}),
+      ...(deliberation ? { deliberation } : {}),
     };
   } catch {
     return null;
@@ -902,6 +859,7 @@ export class ReflectionProcessLogStore {
     if (input.stage === 'failed' && !error) {
       throw new Error('error is required when process stage is "failed"');
     }
+    const deliberation = normalizeValuesDeliberationMetadata(input.deliberation, { strict: true });
 
     const entry: ReflectionProcessLogEntry = {
       id: buildEntryId('reflection-process', this.now),
@@ -919,7 +877,7 @@ export class ReflectionProcessLogStore {
       ...(reflection ? { reflection } : {}),
       ...(error ? { error } : {}),
       ...(normalizeTags(input.tags) ? { tags: normalizeTags(input.tags) } : {}),
-      ...(normalizeDeliberationMetadata(input.deliberation) ? { deliberation: normalizeDeliberationMetadata(input.deliberation) } : {}),
+      ...(deliberation ? { deliberation } : {}),
     };
 
     appendJsonLine(join(this.rootDir, `${sanitizeChannelId(processId)}.jsonl`), entry);

@@ -130,6 +130,25 @@ describe('ValuesJournalStore', () => {
           totalTokens: 333,
           estimatedCostUsd: 0.00123,
           durationMs: 4567,
+          episode: {
+            id: 'delib-1',
+            kind: 'maintenance_reflection',
+            mode: 'background_bounded',
+            budget: {
+              maxRounds: 2,
+              maxTotalTokens: 4000,
+              maxWallTimeMs: 30000,
+            },
+            exit: {
+              reason: 'fatigue_taper',
+              exhaustedBudget: false,
+              maxRoundsReached: false,
+              maxTotalTokensReached: false,
+              maxWallTimeReached: false,
+              maxTokensPerRoundReached: false,
+              fatigueTapered: true,
+            },
+          },
         },
       },
       createdAt: '2026-02-26T00:00:00.000Z',
@@ -146,6 +165,66 @@ describe('ValuesJournalStore', () => {
       totalTokens: 333,
       estimatedCostUsd: 0.00123,
       durationMs: 4567,
+      episode: {
+        id: 'delib-1',
+        kind: 'maintenance_reflection',
+        mode: 'background_bounded',
+        budget: {
+          maxRounds: 2,
+          maxTotalTokens: 4000,
+          maxWallTimeMs: 30000,
+        },
+        exit: {
+          reason: 'fatigue_taper',
+          exhaustedBudget: false,
+          maxRoundsReached: false,
+          maxTotalTokensReached: false,
+          maxWallTimeReached: false,
+          maxTokensPerRoundReached: false,
+          fatigueTapered: true,
+        },
+      },
+    });
+  });
+
+  it('reads legacy deliberation metadata without episode metadata', () => {
+    writeFileSync(
+      filePath,
+      `${JSON.stringify({
+        id: 'values-1',
+        version: 1,
+        templateId: 'values-reflection',
+        templateName: 'Values Reflection',
+        prompt: 'P',
+        reflection: 'R',
+        createdAt: '2026-02-26T00:00:00.000Z',
+        telemetry: {
+          deliberation: {
+            sessionId: 'legacy-delib-1',
+            stopReason: 'max_rounds',
+            rounds: 1,
+            totalInputTokens: 10,
+            totalOutputTokens: 12,
+            totalTokens: 22,
+            estimatedCostUsd: 0.000116,
+            durationMs: 300,
+          },
+        },
+      })}\n`,
+      'utf-8',
+    );
+
+    const entries = store.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.telemetry?.deliberation).toEqual({
+      sessionId: 'legacy-delib-1',
+      stopReason: 'max_rounds',
+      rounds: 1,
+      totalInputTokens: 10,
+      totalOutputTokens: 12,
+      totalTokens: 22,
+      estimatedCostUsd: 0.000116,
+      durationMs: 300,
     });
   });
 

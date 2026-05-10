@@ -626,6 +626,18 @@ describe('wireHeartbeatRuntime', () => {
             rounds: number;
             totalTokens: number;
             estimatedCostUsd: number;
+            episode?: {
+              budget?: {
+                maxRounds?: number;
+                maxTotalTokens?: number;
+                maxWallTimeMs?: number;
+              };
+              exit?: {
+                reason?: string;
+                exhaustedBudget?: boolean;
+                maxRoundsReached?: boolean;
+              };
+            };
           };
           narrativeContext?: {
             internalStateSnapshotRef?: string;
@@ -641,6 +653,18 @@ describe('wireHeartbeatRuntime', () => {
       expect(entry.telemetry?.deliberation?.rounds).toBe(1);
       expect(entry.telemetry?.deliberation?.totalTokens).toBe(190);
       expect(entry.telemetry?.deliberation?.estimatedCostUsd).toBeGreaterThan(0);
+      expect(entry.telemetry?.deliberation?.episode).toMatchObject({
+        budget: {
+          maxRounds: 1,
+          maxTotalTokens: 4000,
+          maxWallTimeMs: 30000,
+        },
+        exit: {
+          reason: 'max_rounds',
+          exhaustedBudget: true,
+          maxRoundsReached: true,
+        },
+      });
 
       const reflectionRaw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
       const reflectionLines = reflectionRaw.split('\n').filter(line => line.trim().length > 0);
@@ -649,6 +673,12 @@ describe('wireHeartbeatRuntime', () => {
         mode: string;
         templateId: string;
         telemetry?: {
+          deliberation?: {
+            episode?: {
+              budget?: { maxRounds?: number };
+              exit?: { reason?: string; maxRoundsReached?: boolean };
+            };
+          };
           narrativeContext?: {
             internalStateSnapshotRef?: string;
           };
@@ -657,6 +687,10 @@ describe('wireHeartbeatRuntime', () => {
       expect(reflectionEntry.templateId).toBe('values-reflection');
       expect(reflectionEntry.mode).toBe('deliberation');
       expect(reflectionEntry.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(narrative.snapshotRef);
+      expect(reflectionEntry.telemetry?.deliberation?.episode).toMatchObject({
+        budget: { maxRounds: 1 },
+        exit: { reason: 'max_rounds', maxRoundsReached: true },
+      });
 
       const metacognitionRaw = readFileSync(resolveReflectionMetacognitionJournalPath(tempDir), 'utf-8').trim();
       const metacognitionLines = metacognitionRaw.split('\n').filter(line => line.trim().length > 0);

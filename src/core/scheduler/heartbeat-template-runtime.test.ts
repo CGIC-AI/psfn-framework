@@ -23,6 +23,7 @@ import {
   resolveReflectionJournalPath,
   resolveReflectionMetacognitionJournalPath,
   resolveReflectionProcessLogsDir,
+  resolveValuesJournalPath,
 } from '../../persistence/layout.js';
 import { HeartbeatPolicyStore } from './heartbeat-policy.js';
 import { Scheduler } from './scheduler.js';
@@ -150,6 +151,28 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         metacognitiveFlags?: Array<{ flag: string; confidence: number }>;
         reflectionJournalEntryId?: string;
         dailyJournalEntryId?: string;
+        deliberation?: {
+          sessionId?: string;
+          episode?: {
+            id?: string;
+            kind?: string;
+            mode?: string;
+            budget?: {
+              maxRounds?: number;
+              maxTotalTokens?: number;
+              maxWallTimeMs?: number;
+            };
+            exit?: {
+              reason?: string;
+              exhaustedBudget?: boolean;
+              maxRoundsReached?: boolean;
+              maxTotalTokensReached?: boolean;
+              maxWallTimeReached?: boolean;
+              maxTokensPerRoundReached?: boolean;
+              fatigueTapered?: boolean;
+            };
+          };
+        };
       };
 
       expect(entry.kind).toBe('reflection_run');
@@ -162,6 +185,57 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(entry.metacognitiveFlags).toEqual(metacognitiveFlags);
       expect(entry.reflectionJournalEntryId).toBeDefined();
       expect(entry.dailyJournalEntryId).toBeDefined();
+      expect(entry.deliberation?.episode?.id).toBe(entry.deliberation?.sessionId);
+      expect(entry.deliberation?.episode).toMatchObject({
+        kind: 'maintenance_reflection',
+        mode: 'background_bounded',
+        budget: {
+          maxRounds: 1,
+          maxTotalTokens: 8000,
+          maxWallTimeMs: 45000,
+        },
+        exit: {
+          reason: 'max_rounds',
+          exhaustedBudget: true,
+          maxRoundsReached: true,
+          maxTotalTokensReached: false,
+          maxWallTimeReached: false,
+          maxTokensPerRoundReached: false,
+          fatigueTapered: false,
+        },
+      });
+
+      const reflectionRaw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
+      const reflectionEntry = JSON.parse(reflectionRaw.split('\n').at(-1) ?? '{}') as {
+        telemetry?: {
+          deliberation?: {
+            episode?: {
+              budget?: { maxRounds?: number };
+              exit?: { reason?: string; maxRoundsReached?: boolean };
+            };
+          };
+        };
+      };
+      expect(reflectionEntry.telemetry?.deliberation?.episode).toMatchObject({
+        budget: { maxRounds: 1 },
+        exit: { reason: 'max_rounds', maxRoundsReached: true },
+      });
+
+      const valuesRaw = readFileSync(resolveValuesJournalPath(tempDir), 'utf-8').trim();
+      const valuesEntry = JSON.parse(valuesRaw.split('\n').at(-1) ?? '{}') as {
+        telemetry?: {
+          deliberation?: {
+            episode?: {
+              budget?: { maxRounds?: number };
+              exit?: { reason?: string; maxRoundsReached?: boolean };
+            };
+          };
+        };
+      };
+      expect(valuesEntry.telemetry?.deliberation?.episode).toMatchObject({
+        budget: { maxRounds: 1 },
+        exit: { reason: 'max_rounds', maxRoundsReached: true },
+      });
       expect(capturedOptions[0]).toMatchObject({
         correlation: {
           callType: 'background',
@@ -358,12 +432,38 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       mode?: string;
       reflection?: string;
       metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
-      deliberation?: { rounds?: number };
+      deliberation?: {
+        rounds?: number;
+        episode?: {
+          budget?: {
+            maxRounds?: number;
+            maxTotalTokens?: number;
+            maxWallTimeMs?: number;
+          };
+          exit?: {
+            reason?: string;
+            exhaustedBudget?: boolean;
+            maxRoundsReached?: boolean;
+          };
+        };
+      };
     };
 
     expect(metacognitionEntry.mode).toBe('deliberation');
     expect(metacognitionEntry.reflection).toContain('still needs an explicit follow-up');
     expect(metacognitionEntry.deliberation?.rounds).toBe(3);
+    expect(metacognitionEntry.deliberation?.episode).toMatchObject({
+      budget: {
+        maxRounds: 3,
+        maxTotalTokens: 6000,
+        maxWallTimeMs: 35000,
+      },
+      exit: {
+        reason: 'max_rounds',
+        exhaustedBudget: true,
+        maxRoundsReached: true,
+      },
+    });
     expect(metacognitionEntry.metacognitiveFlags).toEqual([
       { flag: 'continuity', confidence: 0.51 },
       {
@@ -381,10 +481,20 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         narrativeContext?: {
           metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
         };
-        deliberation?: { rounds?: number };
+        deliberation?: {
+          rounds?: number;
+          episode?: {
+            budget?: { maxRounds?: number };
+            exit?: { reason?: string; maxRoundsReached?: boolean };
+          };
+        };
       };
     };
     expect(reflectionEntry.telemetry?.deliberation?.rounds).toBe(3);
+    expect(reflectionEntry.telemetry?.deliberation?.episode).toMatchObject({
+      budget: { maxRounds: 3 },
+      exit: { reason: 'max_rounds', maxRoundsReached: true },
+    });
     expect(reflectionEntry.telemetry?.narrativeContext?.metacognitiveFlags?.some(
       (flag) => flag.flag === 'unsupported_claim',
     )).toBe(true);

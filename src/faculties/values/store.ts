@@ -69,6 +69,32 @@ export interface ValuesDeliberationMetadata {
   totalTokens: number;
   estimatedCostUsd: number;
   durationMs: number;
+  episode?: ValuesDeliberationEpisodeMetadata;
+}
+
+export interface ValuesDeliberationEpisodeBudget {
+  maxRounds: number;
+  maxTotalTokens: number;
+  maxWallTimeMs: number;
+  maxTokensPerRound?: number;
+}
+
+export interface ValuesDeliberationEpisodeExit {
+  reason: string;
+  exhaustedBudget: boolean;
+  maxRoundsReached: boolean;
+  maxTotalTokensReached: boolean;
+  maxWallTimeReached: boolean;
+  maxTokensPerRoundReached: boolean;
+  fatigueTapered: boolean;
+}
+
+export interface ValuesDeliberationEpisodeMetadata {
+  id: string;
+  kind: string;
+  mode: string;
+  budget: ValuesDeliberationEpisodeBudget;
+  exit: ValuesDeliberationEpisodeExit;
 }
 
 export type ValuesEntryProvenanceSource =
@@ -98,54 +124,170 @@ interface CompanionDerivedLayerOptions {
   maxVersionAge?: number;
 }
 
-function normalizeDeliberationMetadata(raw: unknown): ValuesDeliberationMetadata | undefined {
+interface ValuesDeliberationNormalizationOptions {
+  strict?: boolean;
+}
+
+function normalizeRequiredString(value: unknown, fieldName: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${fieldName} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function normalizeRequiredFiniteNumber(value: unknown, fieldName: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${fieldName} must be a finite number >= 0`);
+  }
+  return value;
+}
+
+function normalizeRequiredPositiveInteger(value: unknown, fieldName: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value) || value < 1) {
+    throw new Error(`${fieldName} must be a positive integer`);
+  }
+  return value;
+}
+
+function normalizeRequiredBoolean(value: unknown, fieldName: string): boolean {
+  if (typeof value !== 'boolean') {
+    throw new Error(`${fieldName} must be a boolean`);
+  }
+  return value;
+}
+
+function normalizePlainObject(value: unknown, fieldName: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${fieldName} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function normalizeDeliberationEpisodeBudget(
+  raw: unknown,
+): ValuesDeliberationEpisodeBudget {
+  const budget = normalizePlainObject(raw, 'deliberation.episode.budget');
+  const maxTokensPerRound = budget.maxTokensPerRound === undefined
+    ? undefined
+    : normalizeRequiredPositiveInteger(
+      budget.maxTokensPerRound,
+      'deliberation.episode.budget.maxTokensPerRound',
+    );
+
+  return {
+    maxRounds: normalizeRequiredPositiveInteger(
+      budget.maxRounds,
+      'deliberation.episode.budget.maxRounds',
+    ),
+    maxTotalTokens: normalizeRequiredPositiveInteger(
+      budget.maxTotalTokens,
+      'deliberation.episode.budget.maxTotalTokens',
+    ),
+    maxWallTimeMs: normalizeRequiredPositiveInteger(
+      budget.maxWallTimeMs,
+      'deliberation.episode.budget.maxWallTimeMs',
+    ),
+    ...(maxTokensPerRound !== undefined ? { maxTokensPerRound } : {}),
+  };
+}
+
+function normalizeDeliberationEpisodeExit(raw: unknown): ValuesDeliberationEpisodeExit {
+  const exit = normalizePlainObject(raw, 'deliberation.episode.exit');
+  return {
+    reason: normalizeRequiredString(exit.reason, 'deliberation.episode.exit.reason'),
+    exhaustedBudget: normalizeRequiredBoolean(
+      exit.exhaustedBudget,
+      'deliberation.episode.exit.exhaustedBudget',
+    ),
+    maxRoundsReached: normalizeRequiredBoolean(
+      exit.maxRoundsReached,
+      'deliberation.episode.exit.maxRoundsReached',
+    ),
+    maxTotalTokensReached: normalizeRequiredBoolean(
+      exit.maxTotalTokensReached,
+      'deliberation.episode.exit.maxTotalTokensReached',
+    ),
+    maxWallTimeReached: normalizeRequiredBoolean(
+      exit.maxWallTimeReached,
+      'deliberation.episode.exit.maxWallTimeReached',
+    ),
+    maxTokensPerRoundReached: normalizeRequiredBoolean(
+      exit.maxTokensPerRoundReached,
+      'deliberation.episode.exit.maxTokensPerRoundReached',
+    ),
+    fatigueTapered: normalizeRequiredBoolean(
+      exit.fatigueTapered,
+      'deliberation.episode.exit.fatigueTapered',
+    ),
+  };
+}
+
+function normalizeDeliberationEpisodeMetadata(
+  raw: unknown,
+): ValuesDeliberationEpisodeMetadata | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const episode = normalizePlainObject(raw, 'deliberation.episode');
+  return {
+    id: normalizeRequiredString(episode.id, 'deliberation.episode.id'),
+    kind: normalizeRequiredString(episode.kind, 'deliberation.episode.kind'),
+    mode: normalizeRequiredString(episode.mode, 'deliberation.episode.mode'),
+    budget: normalizeDeliberationEpisodeBudget(episode.budget),
+    exit: normalizeDeliberationEpisodeExit(episode.exit),
+  };
+}
+
+function normalizeValuesDeliberationMetadataStrict(raw: unknown): ValuesDeliberationMetadata | undefined {
   if (raw === undefined) return undefined;
-  if (!raw || typeof raw !== 'object') return undefined;
+  if (raw === null) return undefined;
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('deliberation must be an object when provided');
+  }
   const candidate = raw as Partial<ValuesDeliberationMetadata>;
 
-  if (typeof candidate.sessionId !== 'string' || candidate.sessionId.trim().length === 0) return undefined;
-  if (typeof candidate.stopReason !== 'string' || candidate.stopReason.trim().length === 0) return undefined;
-  if (typeof candidate.rounds !== 'number' || !Number.isFinite(candidate.rounds) || candidate.rounds < 0) {
-    return undefined;
+  const sessionId = normalizeRequiredString(candidate.sessionId, 'deliberation.sessionId');
+  const stopReason = normalizeRequiredString(candidate.stopReason, 'deliberation.stopReason');
+  const episode = normalizeDeliberationEpisodeMetadata(candidate.episode);
+  if (episode && episode.id !== sessionId) {
+    throw new Error('deliberation.episode.id must match deliberation.sessionId');
   }
-  if (
-    typeof candidate.totalInputTokens !== 'number'
-    || !Number.isFinite(candidate.totalInputTokens)
-    || candidate.totalInputTokens < 0
-  ) {
-    return undefined;
-  }
-  if (
-    typeof candidate.totalOutputTokens !== 'number'
-    || !Number.isFinite(candidate.totalOutputTokens)
-    || candidate.totalOutputTokens < 0
-  ) {
-    return undefined;
-  }
-  if (typeof candidate.totalTokens !== 'number' || !Number.isFinite(candidate.totalTokens) || candidate.totalTokens < 0) {
-    return undefined;
-  }
-  if (
-    typeof candidate.estimatedCostUsd !== 'number'
-    || !Number.isFinite(candidate.estimatedCostUsd)
-    || candidate.estimatedCostUsd < 0
-  ) {
-    return undefined;
-  }
-  if (typeof candidate.durationMs !== 'number' || !Number.isFinite(candidate.durationMs) || candidate.durationMs < 0) {
-    return undefined;
+  if (episode && episode.exit.reason !== stopReason) {
+    throw new Error('deliberation.episode.exit.reason must match deliberation.stopReason');
   }
 
   return {
-    sessionId: candidate.sessionId,
-    stopReason: candidate.stopReason,
-    rounds: Math.floor(candidate.rounds),
-    totalInputTokens: candidate.totalInputTokens,
-    totalOutputTokens: candidate.totalOutputTokens,
-    totalTokens: candidate.totalTokens,
-    estimatedCostUsd: candidate.estimatedCostUsd,
-    durationMs: candidate.durationMs,
+    sessionId,
+    stopReason,
+    rounds: Math.floor(normalizeRequiredFiniteNumber(candidate.rounds, 'deliberation.rounds')),
+    totalInputTokens: normalizeRequiredFiniteNumber(
+      candidate.totalInputTokens,
+      'deliberation.totalInputTokens',
+    ),
+    totalOutputTokens: normalizeRequiredFiniteNumber(
+      candidate.totalOutputTokens,
+      'deliberation.totalOutputTokens',
+    ),
+    totalTokens: normalizeRequiredFiniteNumber(candidate.totalTokens, 'deliberation.totalTokens'),
+    estimatedCostUsd: normalizeRequiredFiniteNumber(
+      candidate.estimatedCostUsd,
+      'deliberation.estimatedCostUsd',
+    ),
+    durationMs: normalizeRequiredFiniteNumber(candidate.durationMs, 'deliberation.durationMs'),
+    ...(episode ? { episode } : {}),
   };
+}
+
+export function normalizeValuesDeliberationMetadata(
+  raw: unknown,
+  options: ValuesDeliberationNormalizationOptions = {},
+): ValuesDeliberationMetadata | undefined {
+  try {
+    return normalizeValuesDeliberationMetadataStrict(raw);
+  } catch (error) {
+    if (options.strict) {
+      throw error;
+    }
+    return undefined;
+  }
 }
 
 function normalizeInternalStateSnapshot(raw: unknown): InternalState | undefined {
@@ -237,7 +379,7 @@ function normalizeValuesTelemetry(
 ): ValuesJournalTelemetry | undefined {
   const telemetryInput = input.telemetry;
   const deliberationInput = telemetryInput?.deliberation ?? input.deliberation;
-  const deliberation = normalizeDeliberationMetadata(deliberationInput);
+  const deliberation = normalizeValuesDeliberationMetadata(deliberationInput);
   if (deliberationInput !== undefined && deliberation === undefined) {
     throw new Error('values journal telemetry.deliberation is invalid');
   }

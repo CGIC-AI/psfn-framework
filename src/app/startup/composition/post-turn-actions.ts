@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import type { InferredPostTurnAction } from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
@@ -352,9 +353,72 @@ export function wirePostTurnActionRuntime(
     };
   };
 
-  const normalizeRuntimeAction = (value: unknown): InferredPostTurnAction | null => (
-    normalizePersistedAction(value)
+  const stableStringify = (value: unknown): string => {
+    if (value === null) return 'null';
+    if (Array.isArray(value)) {
+      return `[${value.map(stableStringify).join(',')}]`;
+    }
+    if (typeof value === 'object') {
+      return `{${Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`)
+        .join(',')}}`;
+    }
+    return JSON.stringify(value);
+  };
+
+  const hashRuntimePayload = (payload: Record<string, unknown>): string => (
+    createHash('sha256').update(stableStringify(payload)).digest('hex').slice(0, 16)
   );
+
+  const normalizeRuntimeAction = (
+    value: unknown,
+    event: Record<string, unknown>,
+  ): InferredPostTurnAction | null => {
+    const normalized = normalizePersistedAction(value);
+    if (normalized) {
+      return normalized;
+    }
+    if (!isRecord(value) || !isRecord(event.message)) {
+      return null;
+    }
+
+    const kind = typeof value.kind === 'string' ? value.kind.trim() : '';
+    const channelId = typeof event.message.channelId === 'string' ? event.message.channelId.trim() : '';
+    const sourceMessageId = typeof event.message.id === 'string' ? event.message.id.trim() : '';
+    if (!kind || !channelId || !sourceMessageId) {
+      return null;
+    }
+
+    const explicitDedupeKey = Object.hasOwn(value, 'dedupeKey');
+    const dedupeKey = typeof value.dedupeKey === 'string' ? value.dedupeKey.trim() : '';
+    if (explicitDedupeKey && !dedupeKey) {
+      return null;
+    }
+
+    const payload = isRecord(value.payload) ? value.payload : {};
+    const resolvedDedupeKey = dedupeKey || `${kind}:${channelId}:${hashRuntimePayload(payload)}`;
+    const id = typeof value.id === 'string' && value.id.trim()
+      ? value.id.trim()
+      : createHash('sha256')
+        .update(`${sourceMessageId}:${kind}:${resolvedDedupeKey}`)
+        .digest('hex')
+        .slice(0, 24);
+    const maxRetries = normalizePositiveInteger(value.maxRetries);
+    const runAt = normalizeActionRunAt(value.runAt);
+
+    return {
+      id,
+      kind,
+      payload,
+      dedupeKey: resolvedDedupeKey,
+      channelId,
+      sourceMessageId,
+      inferredAt: Date.now(),
+      ...(maxRetries !== undefined ? { maxRetries } : {}),
+      ...(runAt !== undefined ? { runAt } : {}),
+    };
+  };
 
   const normalizePersistedQueueEntry = (value: unknown): DeferredQueueEntry | null => {
     if (!isRecord(value)) {
@@ -1042,7 +1106,7 @@ export function wirePostTurnActionRuntime(
       return;
     }
     for (const rawAction of event.actions) {
-      const action = normalizeRuntimeAction(rawAction);
+      const action = normalizeRuntimeAction(rawAction, event);
       if (!action) {
         recordMalformedAction(rawAction, 'Invalid inferred post-turn action payload');
         continue;

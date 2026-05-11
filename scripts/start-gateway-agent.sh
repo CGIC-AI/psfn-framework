@@ -226,6 +226,49 @@ wait_for_pid_exit() {
   return 1
 }
 
+wait_for_exited_pid_status() {
+  local pid="$1"
+  if [ -z "${pid}" ]; then
+    return 255
+  fi
+
+  if ! kill -0 "${pid}" 2>/dev/null; then
+    wait "${pid}" 2>/dev/null
+    return $?
+  fi
+
+  local stat=""
+  stat="$(ps -o stat= -p "${pid}" 2>/dev/null | tr -d '[:space:]' || true)"
+  case "${stat}" in
+    Z*)
+      wait "${pid}" 2>/dev/null
+      return $?
+      ;;
+  esac
+
+  return 255
+}
+
+wait_for_lifecycle_restart_child() {
+  local attempts="${1:-100}"
+  local status=255
+  local pid=""
+  local attempt
+  for attempt in $(seq 1 "${attempts}"); do
+    for pid in "${AGENT_PID}" "${GATEWAY_PID}" "${OPERATOR_PID}"; do
+      set +e
+      wait_for_exited_pid_status "${pid}"
+      status=$?
+      set -e
+      if [ "${status}" -eq "${PSFN_LIFECYCLE_RESTART_EXIT_CODE}" ]; then
+        return 0
+      fi
+    done
+    sleep 0.1
+  done
+  return 1
+}
+
 start_gateway() {
   if [ -x "./node_modules/.bin/tsx" ]; then
     launch_background ./node_modules/.bin/tsx src/app/gateway/main.ts
@@ -324,6 +367,12 @@ set +e
 wait -n "${GATEWAY_PID}" "${AGENT_PID}" "${OPERATOR_PID}"
 EXIT_STATUS=$?
 set -e
+
+if [ "${EXIT_STATUS}" -ne "${PSFN_LIFECYCLE_RESTART_EXIT_CODE}" ]; then
+  if wait_for_lifecycle_restart_child 100; then
+    EXIT_STATUS="${PSFN_LIFECYCLE_RESTART_EXIT_CODE}"
+  fi
+fi
 
 if [ "${EXIT_STATUS}" -eq "${PSFN_LIFECYCLE_RESTART_EXIT_CODE}" ]; then
   echo "[${MODE_LABEL}] lifecycle restart requested; stopping children and re-execing launcher"

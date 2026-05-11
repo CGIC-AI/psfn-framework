@@ -23,6 +23,14 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(launcher).toContain('exec "$0" "$@"');
   });
 
+  it('waits briefly for the agent restart exit when a sibling child exits first', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('wait_for_lifecycle_restart_child');
+    expect(launcher).toContain('wait_for_exited_pid_status');
+    expect(launcher).toContain('if [ "${EXIT_STATUS}" -ne "${PSFN_LIFECYCLE_RESTART_EXIT_CODE}" ]; then');
+    expect(launcher).toContain('EXIT_STATUS="${PSFN_LIFECYCLE_RESTART_EXIT_CODE}"');
+  });
+
   it('keeps the live user unit pointed at the launcher instead of npm', () => {
     const unit = readFileSync(join(repoRoot, 'scripts/system/user/purrsephone.service'), 'utf8');
     expect(unit).toContain('ExecStart=/bin/bash /mnt/samesung/ai/psfn-live/scripts/start-gateway-agent.sh --yolo');

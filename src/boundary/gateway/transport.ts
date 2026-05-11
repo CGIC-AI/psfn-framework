@@ -63,9 +63,13 @@ export class NdjsonConnection extends EventEmitter {
         this.destroy();
       }
     });
+    this.rl.on('error', (err) => {
+      this.emitConnectionError(err);
+      this.destroy();
+    });
 
     socket.on('close', () => this.emit('close'));
-    socket.on('error', (err) => this.emit('error', err));
+    socket.on('error', (err) => this.emitConnectionError(err));
   }
 
   send(data: unknown): boolean {
@@ -84,6 +88,16 @@ export class NdjsonConnection extends EventEmitter {
 
   get destroyed(): boolean {
     return this.socket.destroyed;
+  }
+
+  private emitConnectionError(err: unknown): void {
+    if (this.listenerCount('error') > 0) {
+      this.emit('error', err);
+      return;
+    }
+    log.warn('Socket connection error without listener', {
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 

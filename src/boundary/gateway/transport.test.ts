@@ -87,6 +87,38 @@ describe('createSocketClient lifecycle', () => {
 });
 
 describe('NdjsonConnection framing', () => {
+  it('forwards readline socket errors instead of crashing the process', async () => {
+    const socketPath = join(tmpdir(), `psfn-transport-${randomUUID()}.sock`);
+    let serverConn: NdjsonConnection | null = null;
+    const connectionErrors: unknown[] = [];
+
+    const server = createSocketServer(socketPath, (conn) => {
+      serverConn = conn;
+      conn.on('error', (error) => {
+        connectionErrors.push(error);
+      });
+    });
+
+    const client = net.createConnection(socketPath);
+
+    try {
+      await waitFor(() => serverConn !== null);
+      const resetError = Object.assign(new Error('read ECONNRESET'), {
+        code: 'ECONNRESET',
+      });
+
+      (serverConn as any).rl.emit('error', resetError);
+
+      await waitFor(() => connectionErrors.length === 1);
+      await waitFor(() => serverConn?.destroyed === true);
+
+      expect(connectionErrors[0]).toBe(resetError);
+    } finally {
+      client.destroy();
+      await closeServer(server);
+    }
+  });
+
   it('fails closed on malformed NDJSON frames', async () => {
     const socketPath = join(tmpdir(), `psfn-transport-${randomUUID()}.sock`);
     let serverConn: NdjsonConnection | null = null;

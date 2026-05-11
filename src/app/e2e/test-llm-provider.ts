@@ -2,7 +2,7 @@ import type { LLMContext, LLMResponse } from '../../shared/contracts/runtime.js'
 import type { CompletionPurpose } from '../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 
-const MOCK_MODEL = 'psfn-e2e/mock';
+const MOCK_MODEL = 'companion-e2e/mock';
 
 function normalizeText(value: unknown): string {
   if (typeof value === 'string') return value;

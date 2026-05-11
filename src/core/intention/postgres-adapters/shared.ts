@@ -1,6 +1,7 @@
 import type { ActiveConcern } from '../concerns.js';
 import type { PendingFollowUp, PendingFollowUpWakeCondition } from '../pending-follow-ups.js';
 import type { BehavioralPatternSample, BehavioralStrategySummary } from '../patterns.js';
+import { CHANNEL_TYPES as RUNTIME_CHANNEL_TYPES, type ChannelType } from '../../../shared/contracts/runtime.js';
 
 export interface ActiveConcernRow {
   id: string;
@@ -68,7 +69,7 @@ export const PENDING_FOLLOW_UP_WAKE_CONDITIONS = [
   'background_recheck',
   'sustained_negative_mood',
 ] as const;
-export const CHANNEL_TYPES = ['terminal', 'api', 'discord', 'telegram', 'psfn-amica'] as const;
+export const CHANNEL_TYPES = RUNTIME_CHANNEL_TYPES;
 export const BEHAVIORAL_RESPONSE_STRATEGIES = [
   'empathy',
   'humor',
@@ -217,11 +218,11 @@ export function decodeWakeConditions(
   return normalizeWakeConditions(parsed as PendingFollowUpWakeCondition[]);
 }
 
-export function normalizeChannelType(value: string): 'terminal' | 'api' | 'discord' | 'telegram' | 'psfn-amica' {
-  if (!CHANNEL_TYPES.includes(value as (typeof CHANNEL_TYPES)[number])) {
+export function normalizeChannelType(value: string): ChannelType {
+  if (!CHANNEL_TYPES.includes(value as ChannelType)) {
     throw new Error(`Unsupported pending follow-up channel type: ${value}`);
   }
-  return value as 'terminal' | 'api' | 'discord' | 'telegram' | 'psfn-amica';
+  return value as ChannelType;
 }
 
 export function normalizeStrategy(value: string): (typeof BEHAVIORAL_RESPONSE_STRATEGIES)[number] {

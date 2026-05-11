@@ -56,7 +56,7 @@ async function main(): Promise<void> {
   console.log('=== Companion Orientation Walkthrough ===');
   console.log('A gentle tour of her new capabilities in the PSFN framework.\n');
 
-  const runtime = createIsolatedE2ERuntime({ prefix: 'psfn-walkthrough-' });
+  const runtime = createIsolatedE2ERuntime({ prefix: 'companion-walkthrough-' });
   const { config } = runtime;
   const eventBus = new EventBus();
   const db = initDatabase(config.databasePath);

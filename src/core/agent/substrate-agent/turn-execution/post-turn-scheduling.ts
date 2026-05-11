@@ -23,10 +23,10 @@ import {
   FOREGROUND_CHAT_RUNTIME_CLASS,
   resolveRuntimeLaneBudgetProfile,
 } from '../../worker-lanes.js';
-import type { TurnExecutionRuntime } from '../turn-execution-runtime.js';
 import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
+type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 
 export async function collectTurnResponseAttachments(input: {
   runtime: TurnExecutionRuntime;

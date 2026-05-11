@@ -16,10 +16,10 @@ import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import { resolveActiveEmanationState } from '../../active-emanation-state.js';
 import { resolveContinuitySubjectKey, type ResolvedAuthorContext } from '../runtime-context.js';
 import { collectVisionTurnImageUrls, hasVisionTurnInputs } from '../vision-attachments.js';
-import type { TurnExecutionRuntime } from '../turn-execution-runtime.js';
 import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
+type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 
 export interface PreparedTurnIdentityState {
   authorContext: ResolvedAuthorContext;

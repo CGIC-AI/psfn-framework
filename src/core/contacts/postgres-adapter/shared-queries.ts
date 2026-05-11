@@ -14,8 +14,7 @@ import { defaultPrivacyForChannel, normalizeIdentity, normalizePrivacyLevel } fr
 import type { ContactChannelActivityRow, ContactIdentityRow, ContactRow } from './rows.js';
 import { normalizeAuditActor, rowToContact } from './mapping.js';
 import { queryOne, queryRows } from './connection.js';
-import type { PostgresContactOperationMap } from './operation-map.js';
-import type { PostgresContactStore } from './store.js';
+import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
 
 const postgresContactSharedOperations: PostgresContactOperationMap = {
   async tableExists(tableName: string): Promise<boolean> {
@@ -258,6 +257,6 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
   },
 };
 
-export function installPostgresContactSharedOperations(store: typeof PostgresContactStore): void {
+export function installPostgresContactSharedOperations(store: PostgresContactStoreClass): void {
   Object.assign(store.prototype, postgresContactSharedOperations);
 }

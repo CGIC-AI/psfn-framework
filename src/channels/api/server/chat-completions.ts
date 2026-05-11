@@ -665,13 +665,13 @@ export class ApiChatCompletionsHandler {
       256,
     ) ?? claimedCanonicalContactId;
     const resolvedChannelPrivacy = channelPrivacy.value ?? claimedChannelPrivacy;
-    if (channelType === 'psfn-amica') {
+    if (source !== 'api') {
       if (!canonicalContactId) {
         sendApiError(
           res,
           503,
           'external_channel_not_configured',
-          'PSFN Amica claims require a canonical contact mapping',
+          'External channel claims require a canonical contact mapping',
         );
         return null;
       }
@@ -680,7 +680,7 @@ export class ApiChatCompletionsHandler {
           res,
           503,
           'external_channel_not_configured',
-          'PSFN Amica claims require a configured channel privacy level',
+          'External channel claims require a configured channel privacy level',
         );
         return null;
       }

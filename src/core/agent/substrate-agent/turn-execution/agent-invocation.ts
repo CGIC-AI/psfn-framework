@@ -36,11 +36,11 @@ import {
   resolveMoaSettings,
   runMoaTurn,
 } from '../moa-turn.js';
-import type { TurnExecutionRuntime } from '../turn-execution-runtime.js';
 import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
 const VISION_TURN_TIMEOUT_MS = 10_000;
+type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 
 export interface AgentInvocationMutableState {
   turnMessages: AgentMessage[];

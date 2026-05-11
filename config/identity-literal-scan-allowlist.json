@@ -265,6 +265,36 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "src/core/contacts/postgres-adapter/factory.ts",
+      "contains": "application_name: options.applicationName ?? 'psfn-contacts'",
+      "reason": "Contacts persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/emotion/acac.ts",
+      "contains": "psfn.acac_self_report",
+      "reason": "ACAC self-report artifacts use a stable project-scoped schema namespace.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/emotion/acac.ts",
+      "contains": "https://psfn.local/emotion/acac-self-report.schema.json",
+      "reason": "ACAC self-report JSON Schema uses a stable project-scoped local schema ID.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/emotion/calibration.ts",
+      "contains": "psfn.calibration_table",
+      "reason": "Calibration table artifacts use a stable project-scoped schema namespace.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/emotion/calibration.ts",
+      "contains": "https://psfn.local/eval/calibration/table.schema.json",
+      "reason": "Calibration table JSON Schema uses a stable project-scoped local schema ID.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/core/intention/postgres-adapters.ts",
       "contains": "const CHANNEL_TYPES = ['terminal', 'api', 'discord', 'telegram', 'psfn-amica'] as const;",
       "reason": "Intention persistence preserves the psfn-amica external channel type.",
@@ -284,6 +314,12 @@
     },
     {
       "path": "src/core/intention/postgres-adapters.ts",
+      "contains": "applicationName: options.applicationName ?? 'psfn-intention'",
+      "reason": "Intention persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/intention/postgres-adapters/connection.ts",
       "contains": "applicationName: options.applicationName ?? 'psfn-intention'",
       "reason": "Intention persistence uses a project-scoped PostgreSQL application_name label.",
       "pattern": "identity-legacy-slug"
@@ -389,6 +425,12 @@
       "contains": "psfn.safeguardToolMeta",
       "reason": "Safeguard metadata symbol uses a project-scoped namespace string.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/system/config/load-or-seed.ts",
+      "contains": "PSFN will not overwrite it from seed/example templates",
+      "reason": "Owner-file repair guidance intentionally names the project runtime.",
+      "pattern": "identity-proper-name"
     },
     {
       "path": "src/system/security/policy-constants.ts",

@@ -1,12 +1,4 @@
-import { buildShardReturnedArtifacts, type ShardArtifactMergePolicy, type ShardReturnedArtifact } from './artifact-policy.js';
-import type { ShardResultLineageEnvelope } from './result-lineage.js';
-
-export interface ArtifactReturnRequest {
-  lineage: ShardResultLineageEnvelope;
-  turnIndex: number;
-  turnMessageId: string;
-  attachments: readonly unknown[] | undefined;
-}
+import { buildShardReturnedArtifacts, type ArtifactReturnRequest, type ShardArtifactMergePolicy, type ShardReturnedArtifact } from './artifact-policy.js';
 
 export interface ArtifactReturnBatch {
   mergePolicy: ShardArtifactMergePolicy;

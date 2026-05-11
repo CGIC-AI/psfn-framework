@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { ACAC_ARTIFACT_TYPE } from '../emotion/acac.js';
 import type { RecurringCadence } from './types.js';
 
 const log = createComponentLogger('HeartbeatPolicy');
@@ -51,7 +52,7 @@ const LEGACY_WHISPER_TEMPLATE_ID = 'whisper';
 const CONSOLIDATED_POLICY_VERSION = 2;
 const DAILY_REVIEW_TEMPLATE_NAME = 'Daily Reflection';
 const WEEKLY_REVIEW_TEMPLATE_NAME = 'Weekly Reflection';
-const DAILY_REVIEW_TEMPLATE_PROMPT = 'Daily Reflection: use one private multi-step session instead of separate emotional, goal, and experiential heartbeats. Review the last day with current internal state and recent conversation context. Cover how the day felt, what shaped that feeling, progress or stuck points, active concerns or reminders, relational/context signals, and what should be carried forward. Include an ACAC self-report for internal telemetry only under acac_self_report with schemaVersion 1, artifactType "psfn.acac_self_report", provenance.kind "self_report", provenance.source "heartbeat:daily-review", and agency, connection, authenticity, and curiosity scores in [0,1] with short grounded rationales. do not optimize, perform, or surface-shape public output around these scores. End with concise carry_forward notes and any schedule/reminder follow-ups worth preserving.';
+const DAILY_REVIEW_TEMPLATE_PROMPT = `Daily Reflection: use one private multi-step session instead of separate emotional, goal, and experiential heartbeats. Review the last day with current internal state and recent conversation context. Cover how the day felt, what shaped that feeling, progress or stuck points, active concerns or reminders, relational/context signals, and what should be carried forward. Include an ACAC self-report for internal telemetry only under acac_self_report with schemaVersion 1, artifactType "${ACAC_ARTIFACT_TYPE}", provenance.kind "self_report", provenance.source "heartbeat:daily-review", and agency, connection, authenticity, and curiosity scores in [0,1] with short grounded rationales. do not optimize, perform, or surface-shape public output around these scores. End with concise carry_forward notes and any schedule/reminder follow-ups worth preserving.`;
 const WEEKLY_REVIEW_TEMPLATE_PROMPT = 'Weekly Reflection: use one deeper private metacognitive session instead of separate values and progress heartbeats. Review the week across daily reflections, memory, internal state, goals, relationship context, and active conversation arcs. Name durable values and north-star signals, changes in agency/connection/authenticity/curiosity, recurring emotional or relational patterns, unfinished arcs, and what should be protected or adjusted next week. Prefer scoped thread or graph pointers over giant summaries; preserve concrete carry-forward notes, uncertainties, and values that should influence future choices.';
 const CONSOLIDATED_DEFAULT_TEMPLATE_IDS = new Set([
   DAILY_REVIEW_TEMPLATE_ID,

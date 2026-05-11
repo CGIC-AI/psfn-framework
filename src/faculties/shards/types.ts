@@ -1,6 +1,5 @@
-import type { EmbodimentPresenceMetadata } from '../../core/agent/presence-metadata.js';
 import type { SessionEntry } from '../../core/session/types.js';
-import type { ShardResultLineageEnvelope } from './result-lineage.js';
+import type { ShardResultLineageEnvelope, ShardSourceContext } from './lineage-contracts.js';
 import type { ArtifactReturnBatch } from './artifact-return-port.js';
 
 // ── Shard types ──
@@ -9,12 +8,7 @@ import type { ArtifactReturnBatch } from './artifact-return-port.js';
 export type ShardLifecycleState = 'registering' | 'ready' | 'degraded' | 'offline';
 export type ShardHealthState = 'healthy' | 'stale' | 'failed';
 
-export interface ShardSourceContext {
-  channelId: string;
-  requestId?: string;
-  turnId?: string;
-  embodimentContext?: EmbodimentPresenceMetadata;
-}
+export type { ShardSourceContext } from './lineage-contracts.js';
 
 export interface ShardContextPackEntry {
   role: SessionEntry['role'];

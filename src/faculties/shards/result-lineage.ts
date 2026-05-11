@@ -1,44 +1,20 @@
 import { CHANNEL_TYPES, type ChannelType, type SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
-import type { ShardSourceContext } from './types.js';
-import { normalizePresenceMetadata, type CompanionPresenceMetadata } from '../../core/agent/presence-metadata.js';
+import { normalizePresenceMetadata } from '../../core/agent/presence-metadata.js';
+import type {
+  ShardResultLineageEnvelope,
+  ShardResultLineageSatelliteRouting,
+  ShardResultLineageSourceMessage,
+  ShardSourceContext,
+} from './lineage-contracts.js';
 
-export interface ShardResultLineageSourceMessage {
-  id: string;
-  channelId: string;
-  channelType: ChannelType;
-  authorId: string;
-  authorName: string;
-  timestampMs: number;
-  isDirectMessage: boolean;
-}
-
-export interface ShardResultLineageSatelliteRouting {
-  connectionId?: string;
-  sessionId?: string;
-  turnId?: string;
-  siteId?: string;
-  satelliteId?: string;
-  presence?: CompanionPresenceMetadata;
-}
-
-export interface ShardCompanionProvenance {
-  parentCompanionId: string;
-  shardCompanionId: string;
-}
-
-export interface ShardResultLineageEnvelope {
-  schemaVersion: 2;
-  kind: 'spawn' | 'wyoming';
-  coreCompanionId: string;
-  shardCompanionId: string;
-  shardId: string;
-  shardChannelId: string;
-  companionProvenance: ShardCompanionProvenance;
-  sourceMessage: ShardResultLineageSourceMessage;
-  sourceContext?: ShardSourceContext;
-  satelliteRouting?: ShardResultLineageSatelliteRouting;
-}
+export type {
+  ShardCompanionProvenance,
+  ShardResultLineageEnvelope,
+  ShardResultLineageSatelliteRouting,
+  ShardResultLineageSourceMessage,
+  ShardSourceContext,
+} from './lineage-contracts.js';
 
 function normalizeNonEmptyString(value: string, fieldName: string): string {
   const normalized = value.trim();

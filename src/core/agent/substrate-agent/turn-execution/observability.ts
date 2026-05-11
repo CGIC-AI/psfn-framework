@@ -18,9 +18,9 @@ import {
 import type { TurnSnapshot } from '../../../turns/snapshot.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
-import type { TurnExecutionRuntime } from '../turn-execution-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
+type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 
 export type TurnExecutionStageName = 'trust' | 'memory' | 'context' | 'first-token' | 'prompt' | 'end';
 

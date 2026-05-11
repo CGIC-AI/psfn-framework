@@ -17,4 +17,3 @@ export async function createPostgresContactStore(
   await ensurePostgresContactSchema(pool);
   return new PostgresContactStore(pool, primaryUserId, options.exportDir);
 }
-

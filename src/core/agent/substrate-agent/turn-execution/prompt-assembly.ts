@@ -33,10 +33,10 @@ import type { TurnRetrievalTelemetryRecord } from '../../../turns/observability.
 import { detectTurnObservabilityWarnings } from '../../../turns/observability-warnings.js';
 import type { TurnSnapshot } from '../../../turns/snapshot.js';
 import type { ResolvedAuthorContext } from '../runtime-context.js';
-import type { TurnExecutionRuntime } from '../turn-execution-runtime.js';
 import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
+type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
 
 export interface TurnPromptAssemblyResult {

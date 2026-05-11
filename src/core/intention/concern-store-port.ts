@@ -1,12 +1,9 @@
-import type {
-  ActiveConcern,
-  ActiveConcernCreateInput,
-  ActiveConcernListOptions,
-  ActiveConcernRecentResolutionOptions,
-  ActiveConcernResolveOptions,
-} from './concerns.js';
-
 type Awaitable<T> = T | Promise<T>;
+type ActiveConcern = import('./concerns.js').ActiveConcern;
+type ActiveConcernCreateInput = import('./concerns.js').ActiveConcernCreateInput;
+type ActiveConcernListOptions = import('./concerns.js').ActiveConcernListOptions;
+type ActiveConcernRecentResolutionOptions = import('./concerns.js').ActiveConcernRecentResolutionOptions;
+type ActiveConcernResolveOptions = import('./concerns.js').ActiveConcernResolveOptions;
 
 export interface ActiveConcernContextProvider {
   getActiveConcerns(contactId?: string): ActiveConcern[];

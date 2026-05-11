@@ -49,8 +49,7 @@ import {
   socialGraphEdgeRowToEdge,
 } from './mapping.js';
 import { queryOne, queryRows, withPostgresClient } from './connection.js';
-import type { PostgresContactOperationMap } from './operation-map.js';
-import type { PostgresContactStore } from './store.js';
+import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
 
 const postgresContactCrudOperations: PostgresContactOperationMap = {
   async upsert(
@@ -1244,6 +1243,6 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
   },
 };
 
-export function installPostgresContactCrudOperations(store: typeof PostgresContactStore): void {
+export function installPostgresContactCrudOperations(store: PostgresContactStoreClass): void {
   Object.assign(store.prototype, postgresContactCrudOperations);
 }

@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto';
-import type {
-  InferredPostTurnAction,
-  PostTurnActionCandidate,
-  SubstrateMessage,
+import {
+  CHANNEL_TYPES,
+  type ChannelType,
+  type InferredPostTurnAction,
+  type PostTurnActionCandidate,
+  type SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
 import type { PendingFollowUp } from '../pending-follow-ups.js';
 import { resolveConsolidatedReflectionTemplateId } from '../../scheduler/heartbeat-policy.js';
@@ -198,19 +200,13 @@ export function normalizeIntentionFollowUpActionPayload(payload: unknown): Inten
     : '';
   const channelType = payload.channelType;
   if (!channelId || !authorId || !authorName || !content) return null;
-  if (
-    channelType !== 'terminal'
-    && channelType !== 'api'
-    && channelType !== 'discord'
-    && channelType !== 'telegram'
-    && channelType !== 'psfn-amica'
-  ) {
+  if (typeof channelType !== 'string' || !CHANNEL_TYPES.includes(channelType as ChannelType)) {
     return null;
   }
 
   return {
     channelId,
-    channelType,
+    channelType: channelType as ChannelType,
     authorId,
     authorName,
     content,

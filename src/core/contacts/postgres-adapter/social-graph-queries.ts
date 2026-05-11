@@ -14,8 +14,7 @@ import {
 } from './mapping.js';
 import type { SocialGraphEntityRow, SocialRelationshipEdgeRow } from './rows.js';
 import { queryOne, queryRows } from './connection.js';
-import type { PostgresContactOperationMap } from './operation-map.js';
-import type { PostgresContactStore } from './store.js';
+import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
 
 const postgresContactSocialGraphOperations: PostgresContactOperationMap = {
   async upsertSocialGraphEntityForContact(contact: Pick<Contact, 'id' | 'displayName' | 'firstSeen' | 'lastSeen'>): Promise<SocialGraphEntity> {
@@ -376,7 +375,6 @@ const postgresContactSocialGraphOperations: PostgresContactOperationMap = {
   },
 };
 
-export function installPostgresContactSocialGraphOperations(store: typeof PostgresContactStore): void {
+export function installPostgresContactSocialGraphOperations(store: PostgresContactStoreClass): void {
   Object.assign(store.prototype, postgresContactSocialGraphOperations);
 }
-

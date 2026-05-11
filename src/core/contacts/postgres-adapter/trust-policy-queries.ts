@@ -5,8 +5,7 @@ import { isHighTierTrustLevel, isLowTierTrustLevel } from '../../../system/trust
 import { evaluateLowTierTrustDriftSuggestion, isManualHighTierTrustMutationAuthorized, resolveTrustMutationSource, type TrustDriftBehaviorSignals } from '../../../system/trust/policy.js';
 import { isPrimaryIdentity } from '../store/identity-utils.js';
 import type { collectUpsertIdentities } from '../store/upsert.js';
-import type { PostgresContactOperationMap } from './operation-map.js';
-import type { PostgresContactStore } from './store.js';
+import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
 
 const postgresContactTrustPolicyOperations: PostgresContactOperationMap = {
   async appendPrimaryTrustAudit(
@@ -157,6 +156,6 @@ const postgresContactTrustPolicyOperations: PostgresContactOperationMap = {
   },
 };
 
-export function installPostgresContactTrustPolicyOperations(store: typeof PostgresContactStore): void {
+export function installPostgresContactTrustPolicyOperations(store: PostgresContactStoreClass): void {
   Object.assign(store.prototype, postgresContactTrustPolicyOperations);
 }

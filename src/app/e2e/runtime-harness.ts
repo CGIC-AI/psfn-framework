@@ -82,7 +82,7 @@ function copyOwnerExample(seedDir: string, systemDataDir: string, ownerFile: str
 export function createIsolatedE2ERuntime(
   options: IsolatedE2ERuntimeOptions = {},
 ): IsolatedE2ERuntime {
-  const rootDir = mkdtempSync(join(tmpdir(), options.prefix ?? 'psfn-e2e-'));
+  const rootDir = mkdtempSync(join(tmpdir(), options.prefix ?? 'companion-e2e-'));
   const systemDataDir = join(rootDir, 'system-data');
   const companionDataDir = join(rootDir, 'companion-data');
   const workspacePath = join(rootDir, 'workspace');

@@ -4,7 +4,10 @@ import type {
   LLMProviderPort,
   RetrievalVADInput,
 } from '../../core/agent/contracts.js';
-import type { MemoryStorePort } from './memory-store-port.js';
+import type {
+  ContactProfileArtifact,
+  MemoryStorePort,
+} from './memory-store-port.js';
 import type {
   PurrMemory,
   MemoryScopeQuery,
@@ -136,6 +139,33 @@ function applyWithheldSummaryTelemetry(
   if (hasCountEntries(relevanceBands)) {
     telemetry.withheldRelevanceBands = { ...relevanceBands };
   }
+}
+
+function collectContactProfileProvenanceRefs(profile: ContactProfileArtifact | undefined): string[] {
+  if (!profile) return [];
+  const refs = new Set<string>();
+  const contactId = profile.contactId.trim();
+  if (contactId) {
+    refs.add(`contact_profile:${contactId}`);
+  }
+  for (const sourceMemoryId of profile.sourceMemoryIds) {
+    const normalized = sourceMemoryId.trim();
+    if (normalized) {
+      refs.add(`contact_profile_source_memory:${normalized}`);
+    }
+  }
+  return [...refs];
+}
+
+function mergeProvenanceRefs(...groups: Array<readonly string[] | undefined>): string[] {
+  const refs = new Set<string>();
+  for (const group of groups) {
+    for (const ref of group ?? []) {
+      const normalized = ref.trim();
+      if (normalized) refs.add(normalized);
+    }
+  }
+  return [...refs];
 }
 
 type RetrievalIntegrityErrorStage =
@@ -446,6 +476,7 @@ export class MemoryRetriever implements MemoryProvider {
         ? await this.memoryStore.getContactProfile(canonicalContactId)
         : undefined;
     telemetry.profileIncluded = !!profile;
+    telemetry.provenanceRefs = collectContactProfileProvenanceRefs(profile);
     const emotionalSnapshot = turnSnapshot?.emotionalSnapshot
       ? cloneEmotionalSnapshot(turnSnapshot.emotionalSnapshot)
       : canonicalContactId
@@ -565,7 +596,10 @@ export class MemoryRetriever implements MemoryProvider {
             telemetry.returnedCount = episodicEpisodeCount;
             telemetry.count = episodicEpisodeCount;
             telemetry.selectedTypes = { episodic: episodicEpisodeCount };
-            telemetry.provenanceRefs = collectEpisodicChainProvenanceRefs(episodicChains);
+            telemetry.provenanceRefs = mergeProvenanceRefs(
+              telemetry.provenanceRefs,
+              collectEpisodicChainProvenanceRefs(episodicChains),
+            );
             await this.emitRetrievalTelemetry(telemetry);
             return renderPromptBlock(profile, [], {
               emotionalSnapshot,
@@ -671,7 +705,10 @@ export class MemoryRetriever implements MemoryProvider {
           telemetry.returnedCount = episodicEpisodeCount;
           telemetry.count = episodicEpisodeCount;
           telemetry.selectedTypes = { episodic: episodicEpisodeCount };
-          telemetry.provenanceRefs = collectEpisodicChainProvenanceRefs(episodicChains);
+          telemetry.provenanceRefs = mergeProvenanceRefs(
+            telemetry.provenanceRefs,
+            collectEpisodicChainProvenanceRefs(episodicChains),
+          );
           await this.emitRetrievalTelemetry(telemetry);
           return renderPromptBlock(profile, [], {
             emotionalSnapshot,
@@ -777,7 +814,10 @@ export class MemoryRetriever implements MemoryProvider {
           telemetry.returnedCount = episodicEpisodeCount;
           telemetry.count = episodicEpisodeCount;
           telemetry.selectedTypes = { episodic: episodicEpisodeCount };
-          telemetry.provenanceRefs = collectEpisodicChainProvenanceRefs(episodicChains);
+          telemetry.provenanceRefs = mergeProvenanceRefs(
+            telemetry.provenanceRefs,
+            collectEpisodicChainProvenanceRefs(episodicChains),
+          );
           await this.emitRetrievalTelemetry(telemetry);
           return renderPromptBlock(profile, [], {
             emotionalSnapshot,
@@ -893,13 +933,14 @@ export class MemoryRetriever implements MemoryProvider {
         )
         : [];
       telemetry.emotionalContinuityCount = emotionalContinuityMemories.length;
-      telemetry.provenanceRefs = [
-        ...collectSelectedProvenanceRefs(
+      telemetry.provenanceRefs = mergeProvenanceRefs(
+        telemetry.provenanceRefs,
+        collectSelectedProvenanceRefs(
           selected,
           telemetry.retrievalSource,
         ),
-        ...collectEpisodicChainProvenanceRefs(episodicChains),
-      ];
+        collectEpisodicChainProvenanceRefs(episodicChains),
+      );
       const selectedContactContextById = await this.buildSelectedContactContext(selected, socialContext);
 
       // Update access stats; fail closed if persistence fails.

@@ -1544,7 +1544,8 @@ describe('MemoryRetriever basic behavior', () => {
       updatedAt: Date.now(),
     });
     const embedding = makeMockEmbedding();
-    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
 
     const result = await retriever.retrieve(
       'test query',
@@ -1559,6 +1560,17 @@ describe('MemoryRetriever basic behavior', () => {
     expect(profileIndex).toBeGreaterThanOrEqual(0);
     expect(memoriesIndex).toBeGreaterThan(profileIndex);
     expect(result).toContain('PrimaryUser is the primary partner');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0][0]).toBe('memory.retrieval');
+    expect(calls[0][1]).toMatchObject({
+      reason: 'ok',
+      profileIncluded: true,
+      provenanceRefs: expect.arrayContaining([
+        'contact_profile:contact-1',
+        'contact_profile_source_memory:mem-1',
+      ]),
+    });
   });
 
   it('returns profile block when memory candidates are empty', async () => {
@@ -1572,7 +1584,8 @@ describe('MemoryRetriever basic behavior', () => {
       updatedAt: Date.now(),
     });
     const embedding = makeMockEmbedding();
-    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
 
     const result = await retriever.retrieve(
       'test query',
@@ -1585,6 +1598,17 @@ describe('MemoryRetriever basic behavior', () => {
     expect(result).toContain('Core profile for this person:');
     expect(result).toContain('PrimaryUser prefers concise responses');
     expect(result).not.toContain('Relevant memories for this person:');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0][0]).toBe('memory.retrieval');
+    expect(calls[0][1]).toMatchObject({
+      reason: 'no_candidates',
+      profileIncluded: true,
+      provenanceRefs: [
+        'contact_profile:contact-1',
+        'contact_profile_source_memory:mem-1',
+      ],
+    });
   });
 
   it('uses visible social graph context to separate related people from canonical memories', async () => {

@@ -266,6 +266,45 @@ describe('DiscordAdapter startup backfill', () => {
     expect(appended[1].content).toBe('second new message');
   });
 
+  it('records allowlisted companion bot messages during startup backfill', async () => {
+    store.append({
+      channelId: '123456789012345678',
+      role: 'user',
+      content: 'old user',
+      authorId: 'user-1',
+      authorName: 'User One',
+      timestamp: 1000,
+      discordMessageId: 'm-old',
+    });
+
+    const textChannel = makeTextChannel([
+      makeMessage('m-self', 1200, { bot: true, authorId: 'bot-1', content: 'own prior reply' }),
+      makeMessage('m-other-bot', 1300, { bot: true, authorId: 'untrusted-bot', content: 'untrusted bot' }),
+      makeMessage('m-companion-bot', 1400, {
+        bot: true,
+        authorId: 'companion-bot',
+        displayName: 'Purrsephone',
+        content: 'companion prior message',
+      }),
+    ]);
+    discordMock.channelsById.set('123456789012345678', textChannel.channel);
+
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus(), {
+      sessionStore: store,
+      allowedBotUserIds: ['companion-bot'],
+    });
+    await adapter.start();
+
+    const entries = store.getRecent('123456789012345678', 10);
+    const appended = entries.filter(e => e.discordMessageId?.startsWith('m-'));
+    expect(appended.map(entry => entry.discordMessageId)).toEqual(['m-old', 'm-companion-bot']);
+    expect(appended.at(-1)).toEqual(expect.objectContaining({
+      content: 'companion prior message',
+      authorId: 'companion-bot',
+      authorName: 'Purrsephone',
+    }));
+  });
+
   it('deduplicates by discord message id before appending', async () => {
     store.append({
       channelId: '123456789012345678',
@@ -858,6 +897,97 @@ describe('DiscordAdapter DM routing', () => {
       content: 'hello with mention',
     }));
     expect(interactive.sent).toContain('guild reply');
+  });
+
+  it('ignores bot-authored guild mentions unless the bot is allowlisted', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'guild-channel-untrusted-bot';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async () => {
+      return {
+        content: 'bot reply',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'guild-bot-mention-1',
+        guildId: 'guild-1',
+        authorId: 'untrusted-bot',
+        bot: true,
+        content: '<@!bot-1> hello from a random bot',
+        mentioned: true,
+      }),
+    );
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(interactive.sent).toHaveLength(0);
+  });
+
+  it('allows configured companion bot guild messages only when they mention the runtime bot', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(
+      makeConfig({ discordTriggerWords: ['artie'] }),
+      eventBus,
+      { allowedBotUserIds: ['companion-bot'] },
+    );
+    await adapter.init();
+
+    const channelId = 'guild-channel-companion-bot';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async (message: SubstrateMessage) => {
+      return {
+        content: `reply-${message.id}`,
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+      };
+    });
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'guild-companion-trigger-word',
+        guildId: 'guild-1',
+        authorId: 'companion-bot',
+        authorDisplayName: 'Purrsephone',
+        bot: true,
+        content: 'artie without a mention',
+        mentioned: false,
+      }),
+    );
+    expect(handler).not.toHaveBeenCalled();
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'guild-companion-mention',
+        guildId: 'guild-1',
+        authorId: 'companion-bot',
+        authorDisplayName: 'Purrsephone',
+        bot: true,
+        content: '<@!bot-1> hello from Purrsephone',
+        mentioned: true,
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      id: 'guild-companion-mention',
+      channelId,
+      authorId: 'companion-bot',
+      authorName: 'Purrsephone',
+      content: 'hello from Purrsephone',
+    }));
+    expect(interactive.sent).toContain('reply-guild-companion-mention');
   });
 
   it('responds to guild messages without mention when character name trigger matches', async () => {

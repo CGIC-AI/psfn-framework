@@ -5,7 +5,7 @@ import type { EligibilityGate } from '../../../system/capabilities/eligibility.j
 import { ApiServer, type ApiServerConfig } from '../../../channels/api/server.js';
 import { DiscordAdapter } from '../../../channels/discord/adapter.js';
 import { createOpenHomeSatelliteAdapterPort } from '../../../../satellites/openhome/host/adapter.js';
-import type { TelegramChannelConfig } from '../../../channels/backplane/config.js';
+import type { DiscordChannelConfig, TelegramChannelConfig } from '../../../channels/backplane/config.js';
 import { TelegramAdapter } from '../../../channels/telegram/adapter.js';
 import type {
   ChannelAdapterFactoryPort,
@@ -17,6 +17,7 @@ import type { SessionStore } from '../../../persistence/sessions/store.js';
 
 export interface DiscordChannelAdapterFactoryOptions {
   config: SubstrateConfig;
+  discordConfig?: DiscordChannelConfig;
   eventBus: EventBus;
   sessionStore?: SessionStore | null;
   agentLoop?: SubstrateAgent | null;
@@ -40,6 +41,7 @@ export function createDiscordChannelAdapterFactoryEntry(
       const adapter = new DiscordAdapter(options.config, options.eventBus, {
         ...(options.sessionStore ? { sessionStore: options.sessionStore } : {}),
         ...(options.eligibilityGate ? { eligibilityGate: options.eligibilityGate } : {}),
+        ...(options.discordConfig ? { allowedBotUserIds: options.discordConfig.allowedBotUserIds } : {}),
       });
       if (options.agentLoop) {
         adapter.setAgent(options.agentLoop);

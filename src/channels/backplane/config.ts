@@ -48,6 +48,7 @@ export interface TelegramChannelConfig {
 
 export interface DiscordChannelConfig {
   heartbeatChannelId: string;
+  allowedBotUserIds: string[];
 }
 
 export interface ExternalChannelProfileConfig {
@@ -92,6 +93,7 @@ const DEFAULT_TELEGRAM_CHANNEL_CONFIG: TelegramChannelConfig = {
 
 const DEFAULT_DISCORD_CHANNEL_CONFIG: DiscordChannelConfig = {
   heartbeatChannelId: '',
+  allowedBotUserIds: [],
 };
 
 const DEFAULT_PSFN_AMICA_CHANNEL_CONFIG: PsfnAmicaChannelConfig = {
@@ -452,6 +454,8 @@ export function loadRuntimeChannelsConfig(
     discord: {
       heartbeatChannelId: parseConfiguredString(discordConfig.heartbeatChannelId, 'channels.json.discord.heartbeatChannelId')
         ?? DEFAULT_DISCORD_CHANNEL_CONFIG.heartbeatChannelId,
+      allowedBotUserIds: parseConfiguredStringArray(discordConfig.allowedBotUserIds, 'channels.json.discord.allowedBotUserIds')
+        ?? DEFAULT_DISCORD_CHANNEL_CONFIG.allowedBotUserIds,
     },
     psfnAmica: {
       enabled: psfnAmicaEnabled,

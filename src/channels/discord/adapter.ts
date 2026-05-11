@@ -81,6 +81,7 @@ type StatusKind = 'compaction' | 'retry' | 'long-running';
 interface DiscordAdapterOptions {
   sessionStore?: SessionStore;
   eligibilityGate?: EligibilityGate;
+  allowedBotUserIds?: string[];
 }
 
 interface LongRunningToolState {
@@ -139,11 +140,17 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private statusMessages = new Map<string, Message>();
   private statusUnsubscribers: Array<() => void> = [];
   private longRunningTools = new Map<string, LongRunningToolState>();
+  private allowedBotUserIds: Set<string>;
 
   constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
     this.runtimeConfig = config;
     this.eventBus = eventBus;
     this.sessionStore = options.sessionStore ?? null;
+    this.allowedBotUserIds = new Set(
+      (options.allowedBotUserIds ?? [])
+        .map(id => id.trim())
+        .filter(id => id.length > 0),
+    );
     this.config = {
       enabled: Boolean(config.discordToken),
       accountId: config.discordBotId || undefined,
@@ -317,10 +324,14 @@ export class DiscordAdapter implements ChannelAdapterPort {
 
   private async onDiscordMessage(msg: Message): Promise<void> {
     const runtimeBotId = this.resolveRuntimeBotId();
+    const isAllowedBotAuthor = msg.author.bot
+      ? this.isAllowedExternalBotAuthor(msg.author.id, runtimeBotId)
+      : false;
 
-    // Ignore self + bots
+    // Ignore self + unapproved bots. Approved companion bots still require
+    // explicit mention in guild channels so ambient bot chatter cannot loop.
     if (runtimeBotId && msg.author.id === runtimeBotId) return;
-    if (msg.author.bot) return;
+    if (msg.author.bot && !isAllowedBotAuthor) return;
     if (!this.handler) return;
 
     // Respond to DMs always, guild messages by mention/trigger/listening window.
@@ -330,13 +341,17 @@ export class DiscordAdapter implements ChannelAdapterPort {
       if (msg.content.trimStart().startsWith(DISCORD_TRIGGER_OPT_OUT_PREFIX)) return;
 
       const isMentioned = runtimeBotId ? msg.mentions.has(runtimeBotId) : false;
-      const isTriggered = this.matchesTriggerWord(msg.content);
+      const isTriggered = isAllowedBotAuthor ? false : this.matchesTriggerWord(msg.content);
       const listenKey = this.listeningWindowKey(channelId, msg.author.id);
-      const isListening = this.isInListeningWindow(listenKey);
+      const isListening = isAllowedBotAuthor ? false : this.isInListeningWindow(listenKey);
 
       if (!isMentioned && !isTriggered && !isListening) return;
 
-      this.openListeningWindow(listenKey);
+      if (isAllowedBotAuthor) {
+        log.debug('Discord allowed bot mention accepted', { channelId, authorId: msg.author.id });
+      } else {
+        this.openListeningWindow(listenKey);
+      }
 
       if (isTriggered && !isMentioned) {
         log.debug('Discord trigger word matched', { channelId, authorId: msg.author.id });
@@ -358,8 +373,11 @@ export class DiscordAdapter implements ChannelAdapterPort {
     user: User | PartialUser,
   ): Promise<void> {
     const runtimeBotId = this.resolveRuntimeBotId();
+    const isAllowedBotReactor = user.bot
+      ? this.isAllowedExternalBotAuthor(user.id, runtimeBotId)
+      : false;
     if (runtimeBotId && user.id === runtimeBotId) return;
-    if (user.bot) return;
+    if (user.bot && !isAllowedBotReactor) return;
 
     const emojiName = reaction.emoji.name ?? '';
     const isDeleteReaction = emojiName === '❌';
@@ -392,8 +410,11 @@ export class DiscordAdapter implements ChannelAdapterPort {
       return;
     }
 
-    if (targetMessage.author.bot) return;
     if (runtimeBotId && targetMessage.author.id === runtimeBotId) return;
+    const isAllowedBotTarget = targetMessage.author.bot
+      ? this.isAllowedExternalBotAuthor(targetMessage.author.id, runtimeBotId)
+      : false;
+    if (targetMessage.author.bot && !isAllowedBotTarget) return;
 
     const channelId = targetMessage.channelId;
     log.debug('Discord reaction trigger matched', {
@@ -403,10 +424,14 @@ export class DiscordAdapter implements ChannelAdapterPort {
       reactorId: user.id,
     });
 
-    const authorListenKey = this.listeningWindowKey(channelId, targetMessage.author.id);
-    this.openListeningWindow(authorListenKey);
-    const reactorListenKey = this.listeningWindowKey(channelId, user.id);
-    if (reactorListenKey !== authorListenKey) {
+    const authorListenKey = targetMessage.author.bot
+      ? null
+      : this.listeningWindowKey(channelId, targetMessage.author.id);
+    if (authorListenKey) {
+      this.openListeningWindow(authorListenKey);
+    }
+    const reactorListenKey = user.bot ? null : this.listeningWindowKey(channelId, user.id);
+    if (reactorListenKey && reactorListenKey !== authorListenKey) {
       this.openListeningWindow(reactorListenKey);
     }
 
@@ -696,6 +721,13 @@ export class DiscordAdapter implements ChannelAdapterPort {
     if (liveBotId) return liveBotId;
     const configuredBotId = this.runtimeConfig.discordBotId.trim();
     return configuredBotId.length > 0 ? configuredBotId : undefined;
+  }
+
+  private isAllowedExternalBotAuthor(authorId: string, runtimeBotId?: string): boolean {
+    const normalized = authorId.trim();
+    if (!normalized) return false;
+    if (runtimeBotId && normalized === runtimeBotId) return false;
+    return this.allowedBotUserIds.has(normalized);
   }
 
   private listeningWindowKey(channelId: string, userId: string): string {
@@ -1042,6 +1074,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
 
   private async backfillOnStartup(): Promise<void> {
     if (!this.sessionStore) return;
+    const runtimeBotId = this.resolveRuntimeBotId();
 
     const sessionChannelIds = this.sessionStore.listChannels()
       .filter(channel => channel.messageCount > 0)
@@ -1067,7 +1100,8 @@ export class DiscordAdapter implements ChannelAdapterPort {
         const sorted = [...messages.values()].sort((a, b) => a.createdTimestamp - b.createdTimestamp);
 
         for (const msg of sorted) {
-          if (msg.author.bot) continue;
+          if (runtimeBotId && msg.author.id === runtimeBotId) continue;
+          if (msg.author.bot && !this.isAllowedExternalBotAuthor(msg.author.id, runtimeBotId)) continue;
           if (dedupIds.has(msg.id)) continue;
 
           this.sessionStore.append({

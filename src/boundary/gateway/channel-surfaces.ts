@@ -54,6 +54,7 @@ export async function loadGatewayChannelSurfaces(
   const gatewayChannelManifest = buildChannelAdapterFactoryManifest([
     createDiscordChannelAdapterFactoryEntry({
       config: input.config,
+      discordConfig: input.bootstrap.channelsConfig.discord,
       eventBus: input.eventBus,
       eligibilityGate: input.eligibilityGate,
     }),

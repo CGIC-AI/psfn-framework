@@ -1,6 +1,6 @@
 import type { EventName } from '../../../shared/event-bus.js';
 import type { TaskState } from '../../../core/scheduler/types.js';
-import type { ThinkEvidence } from '../../../core/tools/think/types.js';
+import type { AnalysisWorkbenchEvidence } from '../../../core/tools/analysis-workbench/types.js';
 import type { SandboxBudgetRef } from './contracts.js';
 import { toErrorMessage as baseToErrorMessage } from '../../../shared/utils/errors.js';
 
@@ -83,8 +83,8 @@ export function normalizeErrorMessage(err: unknown): string {
 }
 
 export function addEvidence(
-  sink: (entry: ThinkEvidence) => void,
-  entry: Omit<ThinkEvidence, 'timestamp'> & { timestamp?: number },
+  sink: (entry: AnalysisWorkbenchEvidence) => void,
+  entry: Omit<AnalysisWorkbenchEvidence, 'timestamp'> & { timestamp?: number },
 ): void {
   sink({
     ...entry,

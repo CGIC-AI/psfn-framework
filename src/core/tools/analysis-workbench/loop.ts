@@ -6,19 +6,19 @@ import type { ContextMessage, CorrelationMetadata, LLMContext, LLMResponse } fro
 import type { LLMRequestMetadata } from '../../agent/contracts.js';
 import type {
   BudgetStatus,
-  NestedThinkOptions,
+  NestedAnalysisOptions,
   REPLDeps,
   REPLConfig,
-  ThinkDiagnostics,
-  ThinkBudget,
-  ThinkResult,
-  ThinkStep,
+  AnalysisWorkbenchDiagnostics,
+  AnalysisWorkbenchBudget,
+  AnalysisWorkbenchResult,
+  AnalysisWorkbenchStep,
 } from './types.js';
-import { createEmptyThinkDiagnostics } from './types.js';
+import { createEmptyAnalysisWorkbenchDiagnostics } from './types.js';
 import { REPLSandbox } from './sandbox.js';
 import type { SandboxBudgetRef } from './sandbox.js';
 import { buildRLMSystemPrompt } from './prompt.js';
-import type { ThinkContextMetadata } from './prompt.js';
+import type { AnalysisWorkbenchContextMetadata } from './prompt.js';
 import { parseResponse } from './parse.js';
 import {
   buildStep,
@@ -48,7 +48,7 @@ const CHARGE_QUOTA_REASON = 'charge quota';
 const RATE_LIMIT_ANSWER = '[Analysis workbench invocation rate limit exceeded; try again shortly]';
 const NURSERY_DAILY_CAP_ANSWER = '[Analysis workbench daily cost cap reached for nursery tier]';
 const CHARGE_QUOTA_ANSWER = '[Analysis workbench extension charge quota exhausted before the next iteration]';
-const MAX_NESTED_THINK_DEPTH = 2;
+const MAX_NESTED_ANALYSIS_DEPTH = 2;
 
 interface DailyCostSnapshot {
   dayKey: string;
@@ -60,9 +60,9 @@ interface ReplGovernanceState {
   dailyCostByTier: Record<CapabilityTier, DailyCostSnapshot>;
 }
 
-interface SharedThinkExecutionState {
+interface SharedAnalysisExecutionState {
   readonly startTime: number;
-  readonly rootBudget: ThinkBudget;
+  readonly rootBudget: AnalysisWorkbenchBudget;
   readonly budgetRef: SandboxBudgetRef;
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -70,13 +70,13 @@ interface SharedThinkExecutionState {
   sessionCostUsd: number;
   warnings: string[];
   autonomousCostWarningSent: boolean;
-  nextNestedThinkId: number;
-  diagnostics: ThinkDiagnostics;
+  nextNestedAnalysisId: number;
+  diagnostics: AnalysisWorkbenchDiagnostics;
 }
 
-interface ThinkRunOptions {
+interface AnalysisRunOptions {
   depth?: number;
-  sharedState?: SharedThinkExecutionState;
+  sharedState?: SharedAnalysisExecutionState;
   skipInvocationRateLimit?: boolean;
 }
 
@@ -91,7 +91,7 @@ class LLMIterationTimeoutError extends Error {
   }
 }
 
-function getRemainingWallTimeMs(startTime: number, budget: ThinkBudget): number | null {
+function getRemainingWallTimeMs(startTime: number, budget: AnalysisWorkbenchBudget): number | null {
   if (!budget.maxWallTimeMs) return null;
   return budget.maxWallTimeMs - (Date.now() - startTime);
 }
@@ -180,7 +180,7 @@ function estimateIterationCostUsd(
   return ((inputTokens * inputRate) + (outputTokens * outputRate)) / 1_000_000;
 }
 
-function resolveEffectiveBudget(config: REPLConfig, tier: CapabilityTier): ThinkBudget {
+function resolveEffectiveBudget(config: REPLConfig, tier: CapabilityTier): AnalysisWorkbenchBudget {
   const tierKey = resolveTierKey(tier);
   const tierBudget = config.tierBudgets[tierKey];
 
@@ -216,11 +216,11 @@ function resolveMemoryCeilingBytes(config: REPLConfig, tier: CapabilityTier): nu
   return Math.floor(tierLimitMb * 1024 * 1024);
 }
 
-function createSharedThinkExecutionState(
+function createSharedAnalysisExecutionState(
   startTime: number,
-  rootBudget: ThinkBudget,
+  rootBudget: AnalysisWorkbenchBudget,
   budgetRef: SandboxBudgetRef,
-): SharedThinkExecutionState {
+): SharedAnalysisExecutionState {
   return {
     startTime,
     rootBudget,
@@ -231,14 +231,14 @@ function createSharedThinkExecutionState(
     sessionCostUsd: 0,
     warnings: [],
     autonomousCostWarningSent: false,
-    nextNestedThinkId: 0,
-    diagnostics: createEmptyThinkDiagnostics(),
+    nextNestedAnalysisId: 0,
+    diagnostics: createEmptyAnalysisWorkbenchDiagnostics(),
   };
 }
 
 function syncBudgetStatusFromSharedState(
   budgetStatus: BudgetStatus,
-  sharedState: SharedThinkExecutionState,
+  sharedState: SharedAnalysisExecutionState,
   dayCostUsd: number,
 ): void {
   budgetStatus.sessionCostUsd = sharedState.sessionCostUsd;
@@ -248,18 +248,18 @@ function syncBudgetStatusFromSharedState(
 
 function normalizePositiveBudgetOverride(
   value: number | undefined,
-  field: keyof NestedThinkOptions,
+  field: keyof NestedAnalysisOptions,
 ): number | undefined {
   if (value === undefined) {
     return undefined;
   }
   if (!Number.isFinite(value) || value <= 0) {
-    throw new Error(`sub_think ${field} must be a positive number`);
+    throw new Error(`nested_analysis ${field} must be a positive number`);
   }
   return Math.floor(value);
 }
 
-function computeRemainingTokenBudget(sharedState: SharedThinkExecutionState): number | undefined {
+function computeRemainingTokenBudget(sharedState: SharedAnalysisExecutionState): number | undefined {
   if (sharedState.rootBudget.maxTokens === undefined) {
     return undefined;
   }
@@ -268,7 +268,7 @@ function computeRemainingTokenBudget(sharedState: SharedThinkExecutionState): nu
     - (sharedState.totalInputTokens + sharedState.totalOutputTokens);
 }
 
-function checkSharedBudgetExceeded(sharedState: SharedThinkExecutionState): BudgetStatus['exceeded'] {
+function checkSharedBudgetExceeded(sharedState: SharedAnalysisExecutionState): BudgetStatus['exceeded'] {
   const totalTokens = sharedState.totalInputTokens + sharedState.totalOutputTokens;
   if (sharedState.consumedIterations >= sharedState.rootBudget.maxIterations) {
     return 'max iterations';
@@ -300,10 +300,10 @@ function checkSharedBudgetExceeded(sharedState: SharedThinkExecutionState): Budg
   return null;
 }
 
-function buildNestedThinkConfig(
+function buildNestedAnalysisConfig(
   config: REPLConfig,
-  sharedState: SharedThinkExecutionState,
-  options: NestedThinkOptions | undefined,
+  sharedState: SharedAnalysisExecutionState,
+  options: NestedAnalysisOptions | undefined,
 ): REPLConfig {
   const maxIterationsOverride = normalizePositiveBudgetOverride(options?.maxIterations, 'maxIterations');
   const maxTokensOverride = normalizePositiveBudgetOverride(options?.maxTokens, 'maxTokens');
@@ -311,20 +311,20 @@ function buildNestedThinkConfig(
 
   const remainingIterations = sharedState.rootBudget.maxIterations - sharedState.consumedIterations;
   if (remainingIterations <= 0) {
-    throw new Error('sub_think budget exhausted: no iterations remaining');
+    throw new Error('nested_analysis budget exhausted: no iterations remaining');
   }
 
   const remainingTokens = computeRemainingTokenBudget(sharedState);
   if (remainingTokens !== undefined && remainingTokens <= 0) {
-    throw new Error('sub_think budget exhausted: no tokens remaining');
+    throw new Error('nested_analysis budget exhausted: no tokens remaining');
   }
 
   const remainingWallTimeMs = getRemainingWallTimeMs(sharedState.startTime, sharedState.rootBudget);
   if (remainingWallTimeMs !== null && remainingWallTimeMs <= 0) {
-    throw new Error('sub_think budget exhausted: no wall time remaining');
+    throw new Error('nested_analysis budget exhausted: no wall time remaining');
   }
 
-  const childBudget: ThinkBudget = {
+  const childBudget: AnalysisWorkbenchBudget = {
     ...config.budget,
     maxIterations: maxIterationsOverride === undefined
       ? remainingIterations
@@ -361,11 +361,11 @@ interface BuildResultOptions {
   startTime: number;
   truncated: boolean;
   budgetStatus: BudgetStatus;
-  steps: ThinkStep[];
-  diagnostics: ThinkDiagnostics;
+  steps: AnalysisWorkbenchStep[];
+  diagnostics: AnalysisWorkbenchDiagnostics;
 }
 
-function buildThinkResult(options: BuildResultOptions): ThinkResult {
+function buildAnalysisWorkbenchResult(options: BuildResultOptions): AnalysisWorkbenchResult {
   const allEvidence = flattenEvidence(options.steps);
   return makeBudgetResult(
     {
@@ -403,7 +403,7 @@ function buildBudgetFallbackAnswer(reason: BudgetStatus['exceeded']): string {
 }
 
 function pushPassiveStep(
-  steps: ThinkStep[],
+  steps: AnalysisWorkbenchStep[],
   iteration: number,
   response: LLMResponse,
   cumulativeTokens: number,
@@ -424,7 +424,7 @@ function pushPassiveStep(
   }));
 }
 
-interface ResolvedThinkRequestMetadata {
+interface ResolvedAnalysisRequestMetadata {
   requestId: string;
   turnId?: string;
   channelId?: string;
@@ -439,7 +439,7 @@ function normalizeMetadataValue(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeOriginType(value: string | undefined): ResolvedThinkRequestMetadata['originType'] | undefined {
+function normalizeOriginType(value: string | undefined): ResolvedAnalysisRequestMetadata['originType'] | undefined {
   if (
     value === 'tool'
     || value === 'background'
@@ -453,10 +453,10 @@ function normalizeOriginType(value: string | undefined): ResolvedThinkRequestMet
   return undefined;
 }
 
-function resolveThinkRequestMetadata(
+function resolveAnalysisRequestMetadata(
   deps: REPLDeps,
   toolInvocationMetadata: Partial<LLMRequestMetadata> | undefined,
-): ResolvedThinkRequestMetadata {
+): ResolvedAnalysisRequestMetadata {
   const contextMetadata = getRequestContext();
   const merged = {
     ...(contextMetadata ?? {}),
@@ -482,8 +482,8 @@ function resolveThinkRequestMetadata(
   };
 }
 
-function buildThinkCorrelation(
-  metadata: ResolvedThinkRequestMetadata,
+function buildAnalysisCorrelation(
+  metadata: ResolvedAnalysisRequestMetadata,
   originStage: string,
   requestSuffix: string,
 ): CorrelationMetadata {
@@ -500,11 +500,11 @@ function buildThinkCorrelation(
   };
 }
 
-function buildNestedThinkRequestMetadata(
-  metadata: ResolvedThinkRequestMetadata,
+function buildNestedAnalysisRequestMetadata(
+  metadata: ResolvedAnalysisRequestMetadata,
   childId: number,
 ): Partial<LLMRequestMetadata> {
-  const suffix = `subthink-${childId}`;
+  const suffix = `nested-analysis-${childId}`;
   return {
     ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
     requestId: `${metadata.requestId}:${suffix}`,
@@ -520,9 +520,9 @@ export async function runRLMLoop(
   task: string,
   deps: REPLDeps,
   toolInvocationMetadata?: Partial<LLMRequestMetadata>,
-  runOptions: ThinkRunOptions = {},
-): Promise<ThinkResult> {
-  const requestMetadata = resolveThinkRequestMetadata(deps, toolInvocationMetadata);
+  runOptions: AnalysisRunOptions = {},
+): Promise<AnalysisWorkbenchResult> {
+  const requestMetadata = resolveAnalysisRequestMetadata(deps, toolInvocationMetadata);
   const activeChargeContext = getRunChargeContext();
   if (!activeChargeContext && deps.chargePolicy) {
     return runWithChargeContext({
@@ -541,7 +541,7 @@ export async function runRLMLoop(
   const chargePolicy = deps.chargePolicy ?? activeChargeContext?.chargePolicy;
   const tier = deps.getCapabilityTier?.() ?? 'autonomous';
   const budget = resolveEffectiveBudget(config, tier);
-  const sharedState = runOptions.sharedState ?? createSharedThinkExecutionState(
+  const sharedState = runOptions.sharedState ?? createSharedAnalysisExecutionState(
     startTime,
     budget,
     {
@@ -573,7 +573,7 @@ export async function runRLMLoop(
     if (governanceState.invocationTimestampsMs.length >= maxInvocationsPerWindow) {
       updateBudgetRuntime(budgetStatus, startTime, 0, 0);
       budgetStatus.exceeded = INVOCATION_RATE_LIMIT_REASON;
-      return buildThinkResult({
+      return buildAnalysisWorkbenchResult({
         answer: RATE_LIMIT_ANSWER,
         iterations: 0,
         totalInputTokens: 0,
@@ -594,7 +594,7 @@ export async function runRLMLoop(
   if (tier === 'nursery' && nurseryDailyCapUsd > 0 && dayCost.totalUsd >= nurseryDailyCapUsd) {
     updateBudgetRuntime(budgetStatus, startTime, 0, 0);
     budgetStatus.exceeded = NURSERY_DAILY_COST_REASON;
-    return buildThinkResult({
+    return buildAnalysisWorkbenchResult({
       answer: NURSERY_DAILY_CAP_ANSWER,
       iterations: 0,
       totalInputTokens: 0,
@@ -611,7 +611,7 @@ export async function runRLMLoop(
     inputTokens: 0,
     outputTokens: 0,
   };
-  const nestedThinkPolicy = requestMetadata.channelId
+  const nestedAnalysisPolicy = requestMetadata.channelId
     ? evaluateCompositionalPolicyForChannelId({
       policy: deps.compositionalPolicy,
       capabilityTier: tier,
@@ -625,7 +625,7 @@ export async function runRLMLoop(
     const originStage = normalizeMetadataValue(incomingCorrelation?.originStage)
       ?? normalizeMetadataValue(incomingCorrelation?.purpose)
       ?? `repl.sandbox.${purpose}`;
-    const correlationBase = buildThinkCorrelation(
+    const correlationBase = buildAnalysisCorrelation(
       requestMetadata,
       originStage,
       `sandbox-${purpose}-${Date.now()}`,
@@ -655,29 +655,29 @@ export async function runRLMLoop(
     return response;
   };
 
-  const steps: ThinkStep[] = [];
+  const steps: AnalysisWorkbenchStep[] = [];
   const memoryCeilingBytes = resolveMemoryCeilingBytes(config, tier);
-  const nestedThinkRunner = async (
+  const nestedAnalysisRunner = async (
     nestedTask: string,
-    nestedOptions?: NestedThinkOptions,
+    nestedOptions?: NestedAnalysisOptions,
   ): Promise<string> => {
-    sharedState.diagnostics.nestedThinkCallCount += 1;
-    sharedState.diagnostics.maxNestedDepthReached = Math.max(
-      sharedState.diagnostics.maxNestedDepthReached,
+    sharedState.diagnostics.nestedAnalysisCallCount += 1;
+    sharedState.diagnostics.maxNestedAnalysisDepthReached = Math.max(
+      sharedState.diagnostics.maxNestedAnalysisDepthReached,
       depth + 1,
     );
-    if (!nestedThinkPolicy.allowed) {
-      sharedState.diagnostics.nestedThinkFailureCount += 1;
-      throw new Error(`sub_think is disabled by compositional policy (${nestedThinkPolicy.reason})`);
+    if (!nestedAnalysisPolicy.allowed) {
+      sharedState.diagnostics.nestedAnalysisFailureCount += 1;
+      throw new Error(`nested_analysis is disabled by compositional policy (${nestedAnalysisPolicy.reason})`);
     }
-    if (depth >= MAX_NESTED_THINK_DEPTH) {
-      sharedState.diagnostics.nestedThinkFailureCount += 1;
-      throw new Error(`sub_think depth limit reached (${MAX_NESTED_THINK_DEPTH})`);
+    if (depth >= MAX_NESTED_ANALYSIS_DEPTH) {
+      sharedState.diagnostics.nestedAnalysisFailureCount += 1;
+      throw new Error(`nested_analysis depth limit reached (${MAX_NESTED_ANALYSIS_DEPTH})`);
     }
     try {
-      const childId = ++sharedState.nextNestedThinkId;
-      const childConfig = buildNestedThinkConfig(config, sharedState, nestedOptions);
-      const nestedRequestMetadata = buildNestedThinkRequestMetadata(requestMetadata, childId);
+      const childId = ++sharedState.nextNestedAnalysisId;
+      const childConfig = buildNestedAnalysisConfig(config, sharedState, nestedOptions);
+      const nestedRequestMetadata = buildNestedAnalysisRequestMetadata(requestMetadata, childId);
       const runChild = async () => runRLMLoop(
         nestedTask,
         {
@@ -700,10 +700,10 @@ export async function runRLMLoop(
           correlation: nestedRequestMetadata,
         }, runChild)
         : await runChild();
-      sharedState.diagnostics.nestedThinkSuccessCount += 1;
+      sharedState.diagnostics.nestedAnalysisSuccessCount += 1;
       return childResult.answer;
     } catch (error) {
-      sharedState.diagnostics.nestedThinkFailureCount += 1;
+      sharedState.diagnostics.nestedAnalysisFailureCount += 1;
       throw error;
     }
   };
@@ -717,7 +717,7 @@ export async function runRLMLoop(
     scheduler: deps.scheduler,
     eventBus: deps.eventBus,
     getCapabilityTier: deps.getCapabilityTier,
-    runNestedThink: nestedThinkRunner,
+    runNestedAnalysis: nestedAnalysisRunner,
     moduleInstallConfirmationQueue: deps.moduleInstallConfirmationQueue,
     onModuleRegistryMutation: deps.onModuleRegistryMutation,
     requestMetadata,
@@ -727,7 +727,7 @@ export async function runRLMLoop(
   const stats = deps.memoryStore
     ? await deps.memoryStore.getStats()
     : null;
-  const metadata: ThinkContextMetadata = {
+  const metadata: AnalysisWorkbenchContextMetadata = {
     memoryCount: stats?.total ?? 0,
     memoryBreakdown: stats
       ? Object.entries(stats.byType)
@@ -737,7 +737,7 @@ export async function runRLMLoop(
       : 'none',
     channelCount: 0,
     currentChannelMessages: 0,
-    nestedThinkAvailable: nestedThinkPolicy.allowed && depth < MAX_NESTED_THINK_DEPTH,
+    nestedAnalysisAvailable: nestedAnalysisPolicy.allowed && depth < MAX_NESTED_ANALYSIS_DEPTH,
   };
 
   const systemPrompt = buildRLMSystemPrompt(metadata, deps.mutationPolicy);
@@ -820,13 +820,13 @@ export async function runRLMLoop(
 
   while (localIterations < budget.maxIterations) {
     if (localIterations > 0) {
-      const chargeInspection = inspectChargeSurface('thinkExtensionBand', {
+      const chargeInspection = inspectChargeSurface('analysisWorkbenchExtensionBand', {
         chargePolicy,
       });
       if (chargeInspection && !chargeInspection.allowed) {
         finalizeBudgetStatus();
         budgetStatus.exceeded = CHARGE_QUOTA_REASON;
-        return buildThinkResult({
+        return buildAnalysisWorkbenchResult({
           answer: buildBudgetFallbackAnswer(CHARGE_QUOTA_REASON),
           iterations: isNestedRun ? localIterations : sharedState.consumedIterations,
           totalInputTokens: isNestedRun ? totalInputTokens : sharedState.totalInputTokens,
@@ -873,7 +873,7 @@ export async function runRLMLoop(
         {
           systemPrompt,
           messages,
-          correlation: buildThinkCorrelation(
+          correlation: buildAnalysisCorrelation(
             requestMetadata,
             'repl.analysis_workbench.iteration',
             `iteration-${iterationNumber}`,
@@ -902,7 +902,7 @@ export async function runRLMLoop(
 
     applyCostCharge(response.inputTokens, response.outputTokens);
     if (iterationNumber > 1) {
-      chargeSurface('thinkExtensionBand', {
+      chargeSurface('analysisWorkbenchExtensionBand', {
         chargePolicy,
         details: {
           iteration: iterationNumber,
@@ -929,7 +929,7 @@ export async function runRLMLoop(
           action.answer,
         );
         finalizeBudgetStatus();
-        return buildThinkResult({
+        return buildAnalysisWorkbenchResult({
           answer: action.answer,
           iterations: isNestedRun ? localIterations : sharedState.consumedIterations,
           totalInputTokens: isNestedRun ? totalInputTokens : sharedState.totalInputTokens,
@@ -955,7 +955,7 @@ export async function runRLMLoop(
           answer,
         );
         finalizeBudgetStatus();
-        return buildThinkResult({
+        return buildAnalysisWorkbenchResult({
           answer,
           iterations: isNestedRun ? localIterations : sharedState.consumedIterations,
           totalInputTokens: isNestedRun ? totalInputTokens : sharedState.totalInputTokens,
@@ -998,7 +998,7 @@ export async function runRLMLoop(
 
         if (result.finalAnswer !== null) {
           finalizeBudgetStatus();
-          return buildThinkResult({
+          return buildAnalysisWorkbenchResult({
             answer: result.finalAnswer,
             iterations: isNestedRun ? localIterations : sharedState.consumedIterations,
             totalInputTokens: isNestedRun ? totalInputTokens : sharedState.totalInputTokens,
@@ -1049,7 +1049,7 @@ export async function runRLMLoop(
   if (!budgetStatus.exceeded) {
     budgetStatus.exceeded = 'max iterations';
   }
-  return buildThinkResult({
+  return buildAnalysisWorkbenchResult({
     answer: buildBudgetFallbackAnswer(budgetStatus.exceeded),
     iterations: isNestedRun ? localIterations : sharedState.consumedIterations,
     totalInputTokens: isNestedRun ? totalInputTokens : sharedState.totalInputTokens,

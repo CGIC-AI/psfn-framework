@@ -42,10 +42,10 @@ export interface DashboardStats {
       byWindow: DashboardCostWindowTotals;
     };
   };
-  recentThinkTraces: ThinkTraceView[];
+  recentAnalysisWorkbenchTraces: AnalysisWorkbenchTraceView[];
 }
 
-export interface ThinkTraceStepView {
+export interface AnalysisWorkbenchTraceStepView {
   iteration: number;
   inputTokens: number;
   outputTokens: number;
@@ -57,7 +57,7 @@ export interface ThinkTraceStepView {
   variablesChanged: string[];
 }
 
-export interface ThinkTraceView {
+export interface AnalysisWorkbenchTraceView {
   timestamp: number;
   task: string;
   iterations: number;
@@ -65,7 +65,7 @@ export interface ThinkTraceView {
   durationMs: number;
   truncated: boolean;
   budgetStop: string | null;
-  steps: ThinkTraceStepView[];
+  steps: AnalysisWorkbenchTraceStepView[];
 }
 
 export interface AdminEvent {

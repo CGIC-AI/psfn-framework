@@ -8,7 +8,7 @@ import type { EventBus } from '../../../shared/event-bus.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
-import type { NestedThinkRunner } from '../../../core/tools/think/types.js';
+import type { NestedAnalysisRunner } from '../../../core/tools/analysis-workbench/types.js';
 
 export interface GitStatusView {
   branch: string;
@@ -129,7 +129,7 @@ export interface SandboxDeps {
   scheduler?: Scheduler | null;
   eventBus?: EventBus | null;
   getCapabilityTier?: () => CapabilityTier;
-  runNestedThink?: NestedThinkRunner;
+  runNestedAnalysis?: NestedAnalysisRunner;
   moduleInstallConfirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   requestMetadata?: Partial<LLMRequestMetadata>;

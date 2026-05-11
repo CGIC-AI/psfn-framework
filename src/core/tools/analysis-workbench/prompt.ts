@@ -2,12 +2,12 @@
 
 import type { REPLMutationPolicy } from './types.js';
 
-export interface ThinkContextMetadata {
+export interface AnalysisWorkbenchContextMetadata {
   memoryCount: number;
   memoryBreakdown: string;  // "42 semantic, 18 episodic, ..."
   channelCount: number;
   currentChannelMessages: number;
-  nestedThinkAvailable?: boolean;
+  nestedAnalysisAvailable?: boolean;
 }
 
 function buildRepositorySection(mutationPolicy?: REPLMutationPolicy): string[] {
@@ -129,7 +129,7 @@ function buildBasePrompt(mutationPolicy?: REPLMutationPolicy): string {
 }
 
 export function buildRLMSystemPrompt(
-  metadata?: ThinkContextMetadata,
+  metadata?: AnalysisWorkbenchContextMetadata,
   mutationPolicy?: REPLMutationPolicy,
 ): string {
   const lines = [buildBasePrompt(mutationPolicy).trimEnd()];

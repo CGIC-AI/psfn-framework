@@ -51,9 +51,9 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     }
 
     writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({
-      thinkMaxTokens: 180000,
-      thinkMaxWallTimeMs: 180000,
-      thinkMaxSubQueries: 12,
+      analysisWorkbenchMaxTokens: 180000,
+      analysisWorkbenchMaxWallTimeMs: 180000,
+      analysisWorkbenchMaxSubQueries: 12,
     }), 'utf8');
     writeFileSync(join(dataDir, 'models.json'), JSON.stringify({
       schemaVersion: 1,
@@ -124,7 +124,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
         externalEmbedding: 0,
         localImageGeneration: 0,
         paidImageGeneration: 5,
-        thinkExtensionBand: 1,
+        analysisWorkbenchExtensionBand: 4,
         subagentLaunch: 1,
         shardLaunch: 7,
         externalModelConsult: 1,
@@ -132,7 +132,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
       },
       surfaceRationales: {
         paidImageGeneration: 'External image generation spends paid provider credits.',
-        thinkExtensionBand: 'Extended analysis workbench loops get a small cost to keep them bounded.',
+        analysisWorkbenchExtensionBand: 'Extended analysis workbench loops reserve scarce deep-analysis budget after the first pass.',
         subagentLaunch: 'Spawning a subagent reserves a separate runtime budget.',
         shardLaunch: 'Launching a shard consumes worker coordination overhead.',
         externalModelConsult: 'Consulting an external model uses a paid API boundary.',
@@ -171,9 +171,9 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     expect(config.primaryModel).toBe('google/gemini-3-flash-preview');
     expect(config.primaryProvider).toBe('openrouter');
     expect(config.primaryMaxTokens).toBe(12288);
-    expect(config.thinkMaxTokens).toBe(180000);
-    expect(config.thinkMaxWallTimeMs).toBe(180000);
-    expect(config.thinkMaxSubQueries).toBe(12);
+    expect(config.analysisWorkbenchMaxTokens).toBe(180000);
+    expect(config.analysisWorkbenchMaxWallTimeMs).toBe(180000);
+    expect(config.analysisWorkbenchMaxSubQueries).toBe(12);
     expect(config.chargePolicy?.surfaceCosts.shardLaunch).toBe(7);
   });
 });

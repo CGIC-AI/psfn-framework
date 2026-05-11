@@ -294,7 +294,7 @@ graph TB
   subgraph REPL["REPL / Analysis Workbench"]
     THINK["analysis_workbench<br/><i>large-context analysis</i>"]
     SANDBOX["node:vm Sandbox<br/><i>print, llm_query, memory_search,<br/>memory_count, session_messages, FINAL</i>"]
-    EVIDENCE["Evidence Tracking<br/><i>ThinkEvidence + ThinkStep</i>"]
+    EVIDENCE["Evidence Tracking<br/><i>AnalysisWorkbenchEvidence + AnalysisWorkbenchStep</i>"]
   end
 
   THINK --> SANDBOX

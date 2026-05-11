@@ -12,15 +12,15 @@ import type { ApprovalQueuePort } from '../../../system/capabilities/approval-qu
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
 
-export interface ThinkBudget {
+export interface AnalysisWorkbenchBudget {
   maxIterations: number;      // default 15
   maxTokens?: number;         // total input+output tokens, default 100_000
-  maxWallTimeMs?: number;     // total elapsed before tier clamp, default 120_000 (2 min)
+  maxWallTimeMs?: number;     // total elapsed before tier clamp, default 300_000 (5 min)
   maxSubQueries?: number;     // llm_query calls, default 20
   maxToolCalls?: number;      // sandbox tool calls (file/web helpers), default 50
 }
 
-export interface TierThinkBudget {
+export interface TierAnalysisWorkbenchBudget {
   maxIterations: number;
   maxWallTimeMs: number;
   maxSubQueries: number;
@@ -28,12 +28,12 @@ export interface TierThinkBudget {
   memoryCeilingMb: number;
 }
 
-export interface ThinkRateLimitConfig {
+export interface AnalysisWorkbenchRateLimitConfig {
   maxInvocationsPerMinute: number;
   windowMs: number;
 }
 
-export interface ThinkCostConfig {
+export interface AnalysisWorkbenchCostConfig {
   inputUsdPerMillionTokens: number;
   outputUsdPerMillionTokens: number;
   nurseryDailyCapUsd: number;
@@ -53,10 +53,10 @@ export interface BudgetStatus {
 }
 
 export interface REPLConfig {
-  budget: ThinkBudget;
-  tierBudgets: Record<'nursery' | 'apprentice' | 'autonomous', TierThinkBudget>;
-  rateLimit: ThinkRateLimitConfig;
-  cost: ThinkCostConfig;
+  budget: AnalysisWorkbenchBudget;
+  tierBudgets: Record<'nursery' | 'apprentice' | 'autonomous', TierAnalysisWorkbenchBudget>;
+  rateLimit: AnalysisWorkbenchRateLimitConfig;
+  cost: AnalysisWorkbenchCostConfig;
   outputTruncation: number;
   executionTimeoutMs: number;
 }
@@ -66,15 +66,15 @@ export interface REPLMutationPolicy {
   allowWorkspaceWrite?: boolean;
 }
 
-export interface NestedThinkOptions {
+export interface NestedAnalysisOptions {
   maxIterations?: number;
   maxTokens?: number;
   maxWallTimeMs?: number;
 }
 
-export type NestedThinkRunner = (
+export type NestedAnalysisRunner = (
   task: string,
-  options?: NestedThinkOptions,
+  options?: NestedAnalysisOptions,
 ) => Promise<string>;
 
 export const DEFAULT_REPL_TIER_BUDGETS: REPLConfig['tierBudgets'] = {
@@ -94,7 +94,7 @@ export const DEFAULT_REPL_TIER_BUDGETS: REPLConfig['tierBudgets'] = {
   },
   autonomous: {
     maxIterations: 15,
-    maxWallTimeMs: 120_000,
+    maxWallTimeMs: 300_000,
     maxSubQueries: 20,
     maxToolCalls: 50,
     memoryCeilingMb: 256,
@@ -105,7 +105,7 @@ export const DEFAULT_REPL_CONFIG: REPLConfig = {
   budget: {
     maxIterations: 15,
     maxTokens: 100_000,
-    maxWallTimeMs: 120_000,
+    maxWallTimeMs: 300_000,
     maxSubQueries: 20,
     maxToolCalls: 50,
   },
@@ -143,7 +143,7 @@ export interface REPLDeps {
   mutationPolicy?: REPLMutationPolicy;
 }
 
-export interface ThinkEvidence {
+export interface AnalysisWorkbenchEvidence {
   source:
     | 'memory_search'
     | 'memory_get_by_id'
@@ -161,13 +161,13 @@ export interface ThinkEvidence {
   timestamp: number;
 }
 
-export interface ThinkStep {
+export interface AnalysisWorkbenchStep {
   iteration: number;
   timestamp: number;       // iteration completion timestamp
   code: string;            // code the LLM wrote
   output: string;          // execution output
   error: string | null;
-  evidenceCollected: ThinkEvidence[];
+  evidenceCollected: AnalysisWorkbenchEvidence[];
   inputTokens: number;     // prompt/context tokens for this iteration
   outputTokens: number;    // model output tokens for this iteration
   tokensUsed: number;      // deprecated alias: input + output
@@ -176,23 +176,23 @@ export interface ThinkStep {
   variablesChanged: string[];
 }
 
-export interface ThinkDiagnostics {
-  nestedThinkCallCount: number;
-  nestedThinkSuccessCount: number;
-  nestedThinkFailureCount: number;
-  maxNestedDepthReached: number;
+export interface AnalysisWorkbenchDiagnostics {
+  nestedAnalysisCallCount: number;
+  nestedAnalysisSuccessCount: number;
+  nestedAnalysisFailureCount: number;
+  maxNestedAnalysisDepthReached: number;
 }
 
-export function createEmptyThinkDiagnostics(): ThinkDiagnostics {
+export function createEmptyAnalysisWorkbenchDiagnostics(): AnalysisWorkbenchDiagnostics {
   return {
-    nestedThinkCallCount: 0,
-    nestedThinkSuccessCount: 0,
-    nestedThinkFailureCount: 0,
-    maxNestedDepthReached: 0,
+    nestedAnalysisCallCount: 0,
+    nestedAnalysisSuccessCount: 0,
+    nestedAnalysisFailureCount: 0,
+    maxNestedAnalysisDepthReached: 0,
   };
 }
 
-export interface ThinkResult {
+export interface AnalysisWorkbenchResult {
   answer: string;
   iterations: number;
   totalInputTokens: number;
@@ -200,7 +200,7 @@ export interface ThinkResult {
   durationMs: number;
   truncated: boolean;
   budgetStatus: BudgetStatus;
-  steps: ThinkStep[];
-  evidence: ThinkEvidence[];
-  diagnostics: ThinkDiagnostics;
+  steps: AnalysisWorkbenchStep[];
+  evidence: AnalysisWorkbenchEvidence[];
+  diagnostics: AnalysisWorkbenchDiagnostics;
 }

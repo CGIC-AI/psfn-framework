@@ -247,10 +247,10 @@
       </div>
     </div>
 
-    <!-- Recent Think Traces -->
-    {#if stats.recentThinkTraces.length > 0}
+    <!-- Recent Analysis Workbench Traces -->
+    {#if stats.recentAnalysisWorkbenchTraces.length > 0}
       <div class="card-garden p-5">
-        <h2 class="font-serif text-lg text-shadow-900 mb-3">Recent Think Traces</h2>
+        <h2 class="font-serif text-lg text-shadow-900 mb-3">Recent Analysis Workbench Traces</h2>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
@@ -263,7 +263,7 @@
               </tr>
             </thead>
             <tbody>
-              {#each stats.recentThinkTraces.slice(0, 10) as trace}
+              {#each stats.recentAnalysisWorkbenchTraces.slice(0, 10) as trace}
                 <tr class="border-b border-bark-200 hover:bg-bark-100 transition-colors">
                   <td class="py-2 text-shadow-800 max-w-xs truncate">{trace.task}</td>
                   <td class="py-2 text-shadow-700 text-right tabular-nums">{trace.iterations}</td>

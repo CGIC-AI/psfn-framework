@@ -76,7 +76,7 @@ const DEFAULT_SESSION_MIRROR_ENABLED = true;
 const DEFAULT_SESSION_MIRROR_MAX_CHARS = 220;
 const DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS = 1_800_000;
 const DEFAULT_THINK_MAX_TOKENS = 76_000;
-const DEFAULT_THINK_MAX_WALL_TIME_MS = 180_000;
+const DEFAULT_THINK_MAX_WALL_TIME_MS = 300_000;
 const DEFAULT_THINK_MAX_SUB_QUERIES = 12;
 type LoadConfigMode = 'gateway' | 'agent';
 
@@ -297,9 +297,9 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     profileSynthesisMinNovelty: DEFAULT_PROFILE_SYNTHESIS_MIN_NOVELTY,
     profileSynthesisSourceMemoryLimit: DEFAULT_PROFILE_SYNTHESIS_SOURCE_MEMORY_LIMIT,
     profileSynthesisMinSourceMemories: DEFAULT_PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES,
-    thinkMaxTokens: DEFAULT_THINK_MAX_TOKENS,
-    thinkMaxWallTimeMs: DEFAULT_THINK_MAX_WALL_TIME_MS,
-    thinkMaxSubQueries: DEFAULT_THINK_MAX_SUB_QUERIES,
+    analysisWorkbenchMaxTokens: DEFAULT_THINK_MAX_TOKENS,
+    analysisWorkbenchMaxWallTimeMs: DEFAULT_THINK_MAX_WALL_TIME_MS,
+    analysisWorkbenchMaxSubQueries: DEFAULT_THINK_MAX_SUB_QUERIES,
     modelCatalog,
     modelRoleAssignments,
     modelRegistry,

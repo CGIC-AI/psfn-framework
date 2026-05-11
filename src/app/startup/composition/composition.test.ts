@@ -6,7 +6,7 @@ import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { EventBus } from '../../../shared/event-bus.js';
 import { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
 import { ModuleLoader } from '../../../system/modules/loader.js';
-import { DEFAULT_REPL_CONFIG } from '../../../core/tools/think/types.js';
+import { DEFAULT_REPL_CONFIG } from '../../../core/tools/analysis-workbench/types.js';
 import {
   DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE,
   extractGatewayMethods,

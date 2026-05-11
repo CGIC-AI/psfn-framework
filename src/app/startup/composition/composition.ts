@@ -46,11 +46,11 @@ import {
 import { createBoundedSubagentLaunchTool } from '../../../faculties/shards/tools.js';
 import { SubagentFaculty } from '../../../faculties/subagents/faculty.js';
 import { createSubagentTool } from '../../../faculties/subagents/tools.js';
-import { createAnalysisWorkbenchTool } from '../../../core/tools/think/tools.js';
+import { createAnalysisWorkbenchTool } from '../../../core/tools/analysis-workbench/tools.js';
 import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
 import { ValuesJournalStore } from '../../../faculties/values/store.js';
-import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/think/types.js';
+import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';

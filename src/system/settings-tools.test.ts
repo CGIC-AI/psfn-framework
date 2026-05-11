@@ -42,7 +42,7 @@ function makeConfig(): SubstrateConfig {
         maxTokens: 8192,
       },
     },
-    thinkMaxSubQueries: 9,
+    analysisWorkbenchMaxSubQueries: 9,
     retryMaxAttempts: 3,
     retryBaseDelayMs: 2000,
   };
@@ -55,12 +55,12 @@ function readText(result: { content: Array<{ text?: string }> }): string {
 describe('executeSystemReadAction', () => {
   it('returns a single key value', async () => {
     const result = executeSystemReadAction(makeConfig(), {
-      key: 'thinkMaxSubQueries',
+      key: 'analysisWorkbenchMaxSubQueries',
     });
     const payload = JSON.parse(readText(result));
 
     expect(payload.mode).toBe('single');
-    expect(payload.key).toBe('thinkMaxSubQueries');
+    expect(payload.key).toBe('analysisWorkbenchMaxSubQueries');
     expect(payload.value).toBe(9);
     expect(result.details.isError).toBeUndefined();
   });

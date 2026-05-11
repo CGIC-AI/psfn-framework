@@ -425,7 +425,7 @@ Existing pieces include:
 - background continuation delivery
 - metacognitive flags
 - values/reflection journaling
-- `think` and nested `sub_think`
+- `analysis_workbench` and nested `nested_analysis`
 - memory sleeptime/background agents
 
 This is not a blank slate. It is a shallow composition of several reflective surfaces.

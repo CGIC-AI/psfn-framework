@@ -4018,9 +4018,9 @@ describe('AdminServer JSON API routes', () => {
     });
     const beforeModelsFile = readFileSync(join(tempDir, 'models.json'), 'utf8');
     const runtimeModelControls = {
-      thinkMaxTokens: 64000,
-      thinkMaxWallTimeMs: 120000,
-      thinkMaxSubQueries: 8,
+      analysisWorkbenchMaxTokens: 64000,
+      analysisWorkbenchMaxWallTimeMs: 120000,
+      analysisWorkbenchMaxSubQueries: 8,
       openRouterProviderOrder: ['parasail', 'openai'],
       uiThemeId: 'generic-dark',
     };
@@ -4069,9 +4069,9 @@ describe('AdminServer JSON API routes', () => {
       'PATCH',
       '/api/admin/settings',
       JSON.stringify({
-        thinkMaxTokens: 999,
-        thinkMaxWallTimeMs: 1000,
-        thinkMaxSubQueries: 0,
+        analysisWorkbenchMaxTokens: 999,
+        analysisWorkbenchMaxWallTimeMs: 1000,
+        analysisWorkbenchMaxSubQueries: 0,
         modelCatalog: {
           primary: {
             routing: {
@@ -4092,18 +4092,18 @@ describe('AdminServer JSON API routes', () => {
     expect(payload.ok).toBe(false);
     expect(payload.validationErrors).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        field: 'thinkMaxTokens',
-        message: 'thinkMaxTokens must be 1000-1000000',
+        field: 'analysisWorkbenchMaxTokens',
+        message: 'analysisWorkbenchMaxTokens must be 1000-1000000',
         code: 'out_of_range',
       }),
       expect.objectContaining({
-        field: 'thinkMaxWallTimeMs',
-        message: 'thinkMaxWallTimeMs must be 5000-600000',
+        field: 'analysisWorkbenchMaxWallTimeMs',
+        message: 'analysisWorkbenchMaxWallTimeMs must be 5000-600000',
         code: 'out_of_range',
       }),
       expect.objectContaining({
-        field: 'thinkMaxSubQueries',
-        message: 'thinkMaxSubQueries must be 1-100',
+        field: 'analysisWorkbenchMaxSubQueries',
+        message: 'analysisWorkbenchMaxSubQueries must be 1-100',
         code: 'out_of_range',
       }),
       expect.objectContaining({
@@ -4123,9 +4123,9 @@ describe('AdminServer JSON API routes', () => {
       defaultContextWindow: testConfig.defaultContextWindow,
     });
     expect(modelsAfter).toEqual(modelsBefore);
-    expect(loadSettings(tempDir).thinkMaxTokens).toBe(settingsBefore.thinkMaxTokens);
-    expect(loadSettings(tempDir).thinkMaxWallTimeMs).toBe(settingsBefore.thinkMaxWallTimeMs);
-    expect(loadSettings(tempDir).thinkMaxSubQueries).toBe(settingsBefore.thinkMaxSubQueries);
+    expect(loadSettings(tempDir).analysisWorkbenchMaxTokens).toBe(settingsBefore.analysisWorkbenchMaxTokens);
+    expect(loadSettings(tempDir).analysisWorkbenchMaxWallTimeMs).toBe(settingsBefore.analysisWorkbenchMaxWallTimeMs);
+    expect(loadSettings(tempDir).analysisWorkbenchMaxSubQueries).toBe(settingsBefore.analysisWorkbenchMaxSubQueries);
     expect(refreshModelsSpy).toHaveBeenCalledTimes(0);
     expect(refreshCapabilitiesSpy).toHaveBeenCalledTimes(0);
   });

@@ -124,7 +124,7 @@ src/
   memory/             extraction, retrieval, decay, writer
   modules/            runtime module registry and loader
   persistence/        layout, cutover, path helpers
-  repl/               think and sub-think tooling
+  repl/               analysis workbench tooling
   self-model/         internal state and metacognition
   session/            journal, provenance, compaction, manifests
   settings/           schema/coercion/runtime settings helpers
@@ -154,7 +154,7 @@ src/
 
 ### Cognition and context
 
-- retrieval, extraction, appraisal, nested `sub_think`, context manifests, observation masking, and context feedback all feed runtime decision-making
+- retrieval, extraction, appraisal, analysis workbench context, context manifests, observation masking, and context feedback all feed runtime decision-making
 - key files: `src/compositional/policy.ts`, `src/memory/extraction/`, `src/memory/retrieval.ts`, `src/intention/`, `src/repl/`, `src/session/`, `src/context-feedback/`
 
 ### Affect, self-model, and background work
@@ -197,13 +197,13 @@ Current implemented tool families include:
 - heartbeat and scheduling tools
 - lifecycle tools
 - beads issue tools
-- shard and think tools
+- shard and analysis workbench tools
 - promoted-tool management tools
 
 Tool surface split:
 
 - direct agent tools are registered as `core` or `extended` and participate in `load_tools`, promotion, and adaptive-tool telemetry
-- REPL-only helpers exist only inside `think` / `sub_think` sandbox execution and are not direct tool-catalog entries
+- REPL-only helpers exist only inside `analysis_workbench` sandbox execution and are not direct tool-catalog entries
 - shared names can appear in both places, so docs and Garden should call out whether a tool is direct, REPL-only, or both
 
 Main wiring locations:

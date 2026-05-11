@@ -37,8 +37,8 @@ export type {
   DashboardCostWindowUsage,
   DashboardSessionContextPressure,
   DashboardStats,
-  ThinkTraceStepView,
-  ThinkTraceView,
+  AnalysisWorkbenchTraceStepView,
+  AnalysisWorkbenchTraceView,
 } from '../../../../src/operator/garden/types.js';
 export type {
   CanonicalProviderRegistry,

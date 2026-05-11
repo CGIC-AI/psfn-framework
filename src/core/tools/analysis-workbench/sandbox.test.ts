@@ -186,20 +186,20 @@ describe('REPLSandbox', () => {
     expect(llm.complete).toHaveBeenCalled();
   });
 
-  it('sub_think calls the nested think runner and returns only the conclusion string', async () => {
-    const runNestedThink = vi.fn(async (task: string) => `child:${task}`);
+  it('nested_analysis calls the nested analysis runner and returns only the conclusion string', async () => {
+    const runNestedAnalysis = vi.fn(async (task: string) => `child:${task}`);
     const sandbox = new REPLSandbox({
       ...nullDeps(),
-      runNestedThink,
+      runNestedAnalysis,
     });
     const result = await sandbox.execute(
-      'const answer = await sub_think("inspect memories"); print(answer);',
+      'const answer = await nested_analysis("inspect memories"); print(answer);',
       5000,
       8192,
     );
 
     expect(result.output).toBe('child:inspect memories');
-    expect(runNestedThink).toHaveBeenCalledWith('inspect memories', undefined);
+    expect(runNestedAnalysis).toHaveBeenCalledWith('inspect memories', undefined);
   });
 
   it('llm_query_strict retries until regex matches', async () => {
@@ -683,32 +683,37 @@ describe('REPLSandbox', () => {
     expect(result.output).toContain('code=-32003');
   });
 
-  it('module_* APIs persist module registry via gateway fs methods', async () => {
-    let stored = '[]';
+  it('module read APIs inspect module registry via gateway fs methods', async () => {
+    const stored = JSON.stringify([{
+      id: 'mod-1',
+      name: 'planner',
+      source: 'export default {};',
+      enabled: true,
+      installedAt: 1,
+      updatedAt: 2,
+      version: 1,
+    }]);
     const llm = {
       ...mockLLM(),
       fsRead: vi.fn(async () => stored),
-      fsWrite: vi.fn(async (_path: string, content: string) => { stored = content; }),
+      fsWrite: vi.fn(),
     } as unknown as LLMProviderPort;
     const sandbox = new REPLSandbox(nullDeps(llm));
 
     const result = await sandbox.execute(
       [
-        'const install = await module_install("planner", "export default {};", true); print(install.ok);',
         'const list = await module_list(); print(list.length);',
         'print(list[0].name, list[0].enabled);',
-        'const off = await module_disable("planner"); print(off.ok);',
         'const health = await module_health("planner"); print(health[0].health);',
       ].join('\n'),
       5000,
       8192,
     );
 
-    expect(result.output).toContain('true');
     expect(result.output).toContain('1');
     expect(result.output).toContain('planner true');
-    expect(result.output).toContain('disabled');
-    expect((llm as any).fsWrite).toHaveBeenCalled();
+    expect(result.output).toContain('ready');
+    expect((llm as any).fsWrite).not.toHaveBeenCalled();
   });
 
   it('memory_search returns empty when no memory store', async () => {
@@ -774,74 +779,6 @@ describe('REPLSandbox', () => {
     expect((memoryStore.countActiveMemories as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
   });
 
-  it('memory_write stamps repl provenance sourceRef', async () => {
-    const embedding = new Float32Array([1, 0, 0]);
-    const embeddingService = {
-      embed: vi.fn(async () => embedding),
-      embedBatch: vi.fn(),
-      dims: 3,
-    } as unknown as EmbeddingProviderPort;
-
-    const memoryStore = {
-      searchByEmbedding: vi.fn(() => []),
-      insertMemory: vi.fn(),
-      getAllActiveMemories: vi.fn(() => []),
-      updateMemory: vi.fn(),
-      runInTransaction: vi.fn((handler: () => unknown) => handler()),
-    } as unknown as MemoryStore;
-
-    const sandbox = new REPLSandbox({
-      llmProvider: mockLLM(),
-      embeddingService,
-      memoryStore,
-      sessionManager: null,
-    });
-
-    const result = await sandbox.execute(
-      'const r = await memory_write("from repl", "semantic"); print(r.action);',
-      5000,
-      8192,
-    );
-
-    expect(result.output).toBe('created');
-    expect((memoryStore.insertMemory as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
-    const insertedMemory = (memoryStore.insertMemory as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(insertedMemory.sourceRef).toMatch(/^source:repl\|operation:memory_write\|invocation:repl-/);
-  });
-
-  it('memory_write returns a structured error when the backend write fails', async () => {
-    const embedding = new Float32Array([1, 0, 0]);
-    const embeddingService = {
-      embed: vi.fn(async () => embedding),
-      embedBatch: vi.fn(),
-      dims: 3,
-    } as unknown as EmbeddingProviderPort;
-
-    const memoryStore = {
-      searchByEmbedding: vi.fn(() => []),
-      persistMemoryWrite: vi.fn(async () => {
-        throw new Error('persist failed');
-      }),
-    } as unknown as MemoryStore;
-
-    const sandbox = new REPLSandbox({
-      llmProvider: mockLLM(),
-      embeddingService,
-      memoryStore,
-      sessionManager: null,
-    });
-
-    const result = await sandbox.execute(
-      'const r = await memory_write("from repl", "semantic"); print(r.action); print(r.id);',
-      5000,
-      8192,
-    );
-
-    expect(result.error).toBeNull();
-    expect(result.output).toContain('error');
-    expect(result.output).toContain('persist failed');
-  });
-
   it('getLocals returns user-defined variables', async () => {
     const sandbox = new REPLSandbox(nullDeps());
     await sandbox.execute('var myVar = "hello";\nvar num = 42;', 5000, 8192);
@@ -887,167 +824,26 @@ describe('REPLSandbox', () => {
     expect(result.output).toBe('{"a":1}');
   });
 
-  it('memory_upsert returns error when no memory system', async () => {
+  it('does not expose mutating helpers in default analysis_workbench locals', async () => {
     const sandbox = new REPLSandbox(nullDeps());
     const result = await sandbox.execute(
-      'const r = await memory_upsert("fact", "semantic"); print(r.action);',
-      5000, 8192,
-    );
-    expect(result.output).toBe('error');
-  });
-
-  it('memory_redact returns error when no memory system', async () => {
-    const sandbox = new REPLSandbox(nullDeps());
-    const result = await sandbox.execute(
-      'const r = await memory_redact("mem-1", "auto"); print(r.operation);',
-      5000, 8192,
-    );
-    expect(result.output).toBe('error');
-  });
-
-  it('memory_upsert returns error for invalid type', async () => {
-    const embedding = new Float32Array([1, 0, 0]);
-    const embeddingService = {
-      embed: vi.fn(async () => embedding),
-      embedBatch: vi.fn(),
-      dims: 3,
-    } as unknown as EmbeddingProviderPort;
-
-    const memoryStore = {
-      searchByEmbedding: vi.fn(() => []),
-      insertMemory: vi.fn(),
-      getAllActiveMemories: vi.fn(() => []),
-    } as unknown as MemoryStore;
-
-    const sandbox = new REPLSandbox({
-      llmProvider: mockLLM(),
-      embeddingService,
-      memoryStore,
-      sessionManager: null,
-    });
-
-    const result = await sandbox.execute(
-      'const r = await memory_upsert("fact", "bogus"); print(r.action);',
-      5000, 8192,
-    );
-    expect(result.output).toBe('error');
-  });
-
-  it('memory_redact can abstract sensitive memory through the API path', async () => {
-    const embedding = new Float32Array([1, 0, 0]);
-    const embeddingService = {
-      embed: vi.fn(async () => embedding),
-      embedBatch: vi.fn(),
-      dims: 3,
-    } as unknown as EmbeddingProviderPort;
-
-    const now = Date.now();
-    const memoryStore = {
-      searchByEmbedding: vi.fn(() => []),
-      insertMemory: vi.fn(),
-      getAllActiveMemories: vi.fn(() => []),
-      runInTransaction: vi.fn((handler: () => unknown) => handler()),
-      getById: vi.fn(() => ({
-        id: 'mem-1',
-        text: 'V missed meds Tuesday at 9am after a long shift.',
-        type: 'episodic',
-        importance: 0.8,
-        confidence: 0.9,
-        emotionalValence: -0.2,
-        salience: 0.8,
-        sourceRef: 'source:test',
-        extractedAt: now,
-        lastAccessed: now,
-        accessCount: 1,
-        tags: ['health'],
-        sensitivity: 'confidential',
-        consentFlags: { deleteOnRequest: true, allowAbstraction: true },
-      })),
-      softDeleteMemory: vi.fn(() => ({
-        deleteId: 'del-1',
-        memoryId: 'mem-1',
-      })),
-      recordAbstractionLink: vi.fn(() => ({
-        id: 'link-1',
-      })),
-    } as unknown as MemoryStore;
-
-    const sandbox = new REPLSandbox({
-      llmProvider: mockLLM(),
-      embeddingService,
-      memoryStore,
-      sessionManager: null,
-    });
-
-    const result = await sandbox.execute(
-      'const r = await memory_redact("mem-1", "auto", "consent request"); print(r.operation); print(Boolean(r.abstractedId)); print(Boolean(r.provenanceRef));',
-      5000, 8192,
-    );
-
-    expect(result.output).toContain('abstracted');
-    expect(result.output).toContain('true');
-  });
-
-  it('memory_redact returns a structured error when the backend redact path fails', async () => {
-    const embedding = new Float32Array([1, 0, 0]);
-    const embeddingService = {
-      embed: vi.fn(async () => embedding),
-      embedBatch: vi.fn(),
-      dims: 3,
-    } as unknown as EmbeddingProviderPort;
-
-    const memoryStore = {
-      getById: vi.fn(() => {
-        throw new Error('lookup failed');
-      }),
-    } as unknown as MemoryStore;
-
-    const sandbox = new REPLSandbox({
-      llmProvider: mockLLM(),
-      embeddingService,
-      memoryStore,
-      sessionManager: null,
-    });
-
-    const result = await sandbox.execute(
-      'const r = await memory_redact("mem-1", "auto"); print(r.operation); print(r.sourceId);',
+      [
+        'const names = [',
+        '  "memory_write", "memory_upsert", "memory_import_batch", "memory_redact",',
+        '  "session_append_note",',
+        '  "schedule_add_every", "schedule_add_once", "schedule_update", "event_emit",',
+        '  "module_install", "module_enable", "module_disable",',
+        '];',
+        'print(names.map(name => `${name}:${typeof globalThis[name]}`).join("\\n"));',
+      ].join('\n'),
       5000,
       8192,
     );
 
     expect(result.error).toBeNull();
-    expect(result.output).toContain('error');
-    expect(result.output).toContain('lookup failed');
-  });
-
-  it('session_append_note returns false when no session manager', async () => {
-    const sandbox = new REPLSandbox(nullDeps());
-    const result = await sandbox.execute(
-      'const ok = session_append_note("ch1", "a note"); print(ok);',
-      5000, 8192,
-    );
-    expect(result.output).toBe('false');
-  });
-
-  it('session_append_note calls appendSystemNote on session manager', async () => {
-    const sessionManager = {
-      appendSystemNote: vi.fn(),
-      getRecentMessages: vi.fn(() => []),
-    } as unknown as SessionManager;
-
-    const sandbox = new REPLSandbox({
-      llmProvider: mockLLM(),
-      embeddingService: null,
-      memoryStore: null,
-      sessionManager,
-    });
-
-    const result = await sandbox.execute(
-      'const ok = session_append_note("test-channel", "important note"); print(ok);',
-      5000, 8192,
-    );
-    expect(result.output).toBe('true');
-    expect(sessionManager.appendSystemNote).toHaveBeenCalledWith('test-channel', 'important note');
+    for (const line of result.output.split('\n')) {
+      expect(line).toMatch(/:undefined$/);
+    }
   });
 
   it('getLocals excludes new builtins', async () => {
@@ -1063,7 +859,7 @@ describe('REPLSandbox', () => {
     expect(locals.event_emit).toBeUndefined();
     expect(locals.llm_query_strict).toBeUndefined();
     expect(locals.llm_query_json).toBeUndefined();
-    expect(locals.sub_think).toBeUndefined();
+    expect(locals.nested_analysis).toBeUndefined();
     expect(locals.module_list).toBeUndefined();
     expect(locals.module_install).toBeUndefined();
     expect(locals.module_enable).toBeUndefined();
@@ -1153,87 +949,6 @@ describe('REPLSandbox', () => {
     expect(result.output).toBe('1\nfalse');
   });
 
-  it('schedule_add_every registers task and validates inputs', async () => {
-    const eventBus = new EventBus();
-    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 1000, heartbeatIntervalMs: 1000 });
-    const sandbox = new REPLSandbox({
-      ...nullDeps(),
-      scheduler,
-      eventBus,
-    });
-
-    const created = await sandbox.execute(
-      [
-        'const ok = schedule_add_every("Pulse", 50, () => { globalThis.hitCount = (globalThis.hitCount || 0) + 1; });',
-        'print(ok.ok);',
-        'print(ok.id.startsWith("repl:"));',
-      ].join('\n'),
-      5000,
-      8192,
-    );
-    expect(created.output).toBe('true\ntrue');
-    expect(scheduler.listTasks()).toHaveLength(1);
-
-    await scheduler.tick();
-    expect(sandbox.getLocals().hitCount).toBe(1);
-
-    const guardrail = await sandbox.execute(
-      'const bad = schedule_add_every("Pulse", 10, "not-fn"); print(bad.ok); print(bad.error);',
-      5000,
-      8192,
-    );
-    expect(guardrail.output).toBe('false\nhandler must be a function');
-    expect(scheduler.listTasks()).toHaveLength(1);
-  });
-
-  it('schedule_add_once and schedule_update handle happy path + guardrails', async () => {
-    const eventBus = new EventBus();
-    const scheduler = new Scheduler(eventBus, { tickIntervalMs: 1000, heartbeatIntervalMs: 1000 });
-    const sandbox = new REPLSandbox({
-      ...nullDeps(),
-      scheduler,
-      eventBus,
-    });
-
-    const addResult = await sandbox.execute(
-      [
-        'const created = schedule_add_once("One Shot", Date.now() + 1_000, () => { globalThis.onceHits = (globalThis.onceHits || 0) + 1; });',
-        'globalThis.taskId = created.id;',
-        'print(created.ok);',
-      ].join('\n'),
-      5000,
-      8192,
-    );
-    expect(addResult.output).toBe('true');
-
-    const updateResult = await sandbox.execute(
-      [
-        'const updated = schedule_update(taskId, {',
-        '  name: "One Shot Renamed",',
-        '  runAt: Date.now() - 100,',
-        '  state: "idle",',
-        '});',
-        'print(updated.ok);',
-      ].join('\n'),
-      5000,
-      8192,
-    );
-    expect(updateResult.output).toBe('true');
-
-    await scheduler.tick();
-    expect(sandbox.getLocals().onceHits).toBe(1);
-    const updatedTask = scheduler.getTask(String(sandbox.getLocals().taskId));
-    expect(updatedTask?.name).toBe('One Shot Renamed');
-    expect(updatedTask?.state).toBe('complete');
-
-    const badState = await sandbox.execute(
-      'const bad = schedule_update(taskId, { state: "invalid" }); print(bad.ok); print(bad.error);',
-      5000,
-      8192,
-    );
-    expect(badState.output).toBe('false\ninvalid state: invalid');
-  });
-
   it('schedule functions fail cleanly when scheduler is unavailable', async () => {
     const sandbox = new REPLSandbox({
       ...nullDeps(),
@@ -1244,58 +959,12 @@ describe('REPLSandbox', () => {
     const result = await sandbox.execute(
       [
         'const list = schedule_list();',
-        'const add = schedule_add_every("Nope", 1000, () => {});',
-        'const upd = schedule_update("missing", { state: "paused" });',
         'print(list.length);',
-        'print(add.ok);',
-        'print(upd.ok);',
       ].join('\n'),
       5000,
       8192,
     );
-    expect(result.output).toBe('0\nfalse\nfalse');
-  });
-
-  it('event_emit enforces allowlist', async () => {
-    const eventBus = new EventBus();
-    const seen: Array<{ timestamp: number; taskCount: number }> = [];
-    eventBus.on('schedule.healthcheck', payload => { seen.push(payload); });
-
-    const sandbox = new REPLSandbox({
-      ...nullDeps(),
-      scheduler: null,
-      eventBus,
-    });
-
-    const allowed = await sandbox.execute(
-      'const ok = await event_emit("schedule.healthcheck", { timestamp: 1, taskCount: 2 }); print(ok.ok);',
-      5000,
-      8192,
-    );
-    expect(allowed.output).toBe('true');
-    expect(seen).toEqual([{ timestamp: 1, taskCount: 2 }]);
-
-    const denied = await sandbox.execute(
-      'const bad = await event_emit("system.shutdown", {}); print(bad.ok); print(bad.error);',
-      5000,
-      8192,
-    );
-    expect(denied.output).toContain('false');
-    expect(denied.output).toContain('not allowlisted');
-  });
-
-  it('event_emit returns an error when no event bus is wired', async () => {
-    const sandbox = new REPLSandbox({
-      ...nullDeps(),
-      scheduler: null,
-      eventBus: null,
-    });
-    const result = await sandbox.execute(
-      'const emitted = await event_emit("schedule.healthcheck", { timestamp: 1, taskCount: 1 }); print(emitted.ok); print(emitted.error);',
-      5000,
-      8192,
-    );
-    expect(result.output).toBe('false\nno event bus');
+    expect(result.output).toBe('0');
   });
 });
 

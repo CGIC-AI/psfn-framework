@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadBackupConfig } from '../../../system/config/backup-config.js';
@@ -17,6 +17,24 @@ let tempDir: string | null = null;
 
 function makeTempDir(): string {
   tempDir = mkdtempSync(join(tmpdir(), 'psfn-settings-service-'));
+  for (const ownerFile of [
+    'settings.json',
+    'models.json',
+    'providers.json',
+    'trust-policy.json',
+    'scheduler.json',
+    'capability-tier.json',
+    'charge-policy.json',
+    'backup.json',
+    'skills.json',
+  ]) {
+    const seedFile = ownerFile.replace(/\.json$/u, '.seed.json');
+    writeFileSync(
+      join(tempDir, ownerFile),
+      readFileSync(join(process.cwd(), 'config', seedFile), 'utf8'),
+      'utf8',
+    );
+  }
   return tempDir;
 }
 
@@ -130,9 +148,9 @@ describe('AdminSettingsDataService', () => {
       profileSynthesisSourceMemoryLimit: 20,
       profileSynthesisMinSourceMemories: 3,
       uiThemeId: 'generic-dark',
-      thinkMaxTokens: 76_000,
-      thinkMaxWallTimeMs: 180_000,
-      thinkMaxSubQueries: 12,
+      analysisWorkbenchMaxTokens: 76_000,
+      analysisWorkbenchMaxWallTimeMs: 300_000,
+      analysisWorkbenchMaxSubQueries: 12,
       retryMaxAttempts: 4,
       retryBaseDelayMs: 2_500,
       importProcessingRouteMode: 'local_endpoint',
@@ -226,9 +244,9 @@ describe('AdminSettingsDataService', () => {
 
     const modelsBefore = loadModelsConfig(root, { defaultContextWindow: config.defaultContextWindow });
     const runtimeModelControls = {
-      thinkMaxTokens: 70000,
-      thinkMaxWallTimeMs: 125000,
-      thinkMaxSubQueries: 9,
+      analysisWorkbenchMaxTokens: 70000,
+      analysisWorkbenchMaxWallTimeMs: 125000,
+      analysisWorkbenchMaxSubQueries: 9,
       openRouterProviderOrder: ['parasail', 'openai'],
       uiThemeId: 'generic-dark',
     };
@@ -266,9 +284,9 @@ describe('AdminSettingsDataService', () => {
     const modelsBefore = loadModelsConfig(root, { defaultContextWindow: config.defaultContextWindow });
     const settingsBefore = loadSettings(root);
     const result = service.updateSettings(JSON.stringify({
-      thinkMaxTokens: 999,
-      thinkMaxWallTimeMs: 1000,
-      thinkMaxSubQueries: 0,
+      analysisWorkbenchMaxTokens: 999,
+      analysisWorkbenchMaxWallTimeMs: 1000,
+      analysisWorkbenchMaxSubQueries: 0,
       uiThemeId: '',
       modelCatalog: {
         primary: {
@@ -283,18 +301,18 @@ describe('AdminSettingsDataService', () => {
     expect(result.message).toContain('modelCatalog is owned by models.json');
     expect(result.validationErrors).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        field: 'thinkMaxTokens',
-        message: 'thinkMaxTokens must be 1000-1000000',
+        field: 'analysisWorkbenchMaxTokens',
+        message: 'analysisWorkbenchMaxTokens must be 1000-1000000',
         code: 'out_of_range',
       }),
       expect.objectContaining({
-        field: 'thinkMaxWallTimeMs',
-        message: 'thinkMaxWallTimeMs must be 5000-600000',
+        field: 'analysisWorkbenchMaxWallTimeMs',
+        message: 'analysisWorkbenchMaxWallTimeMs must be 5000-600000',
         code: 'out_of_range',
       }),
       expect.objectContaining({
-        field: 'thinkMaxSubQueries',
-        message: 'thinkMaxSubQueries must be 1-100',
+        field: 'analysisWorkbenchMaxSubQueries',
+        message: 'analysisWorkbenchMaxSubQueries must be 1-100',
         code: 'out_of_range',
       }),
       expect.objectContaining({
@@ -317,9 +335,9 @@ describe('AdminSettingsDataService', () => {
     const modelsAfter = loadModelsConfig(root, { defaultContextWindow: config.defaultContextWindow });
     expect(modelsAfter).toEqual(modelsBefore);
     const settingsAfter = loadSettings(root);
-    expect(settingsAfter.thinkMaxTokens).toBe(settingsBefore.thinkMaxTokens);
-    expect(settingsAfter.thinkMaxWallTimeMs).toBe(settingsBefore.thinkMaxWallTimeMs);
-    expect(settingsAfter.thinkMaxSubQueries).toBe(settingsBefore.thinkMaxSubQueries);
+    expect(settingsAfter.analysisWorkbenchMaxTokens).toBe(settingsBefore.analysisWorkbenchMaxTokens);
+    expect(settingsAfter.analysisWorkbenchMaxWallTimeMs).toBe(settingsBefore.analysisWorkbenchMaxWallTimeMs);
+    expect(settingsAfter.analysisWorkbenchMaxSubQueries).toBe(settingsBefore.analysisWorkbenchMaxSubQueries);
   });
 
   it('applies live context controls through the canonical admin settings mutation path', () => {
@@ -716,7 +734,7 @@ describe('AdminSettingsDataService', () => {
         externalEmbedding: 0,
         localImageGeneration: 0,
         paidImageGeneration: 5,
-        thinkExtensionBand: 1,
+        analysisWorkbenchExtensionBand: 4,
         subagentLaunch: 1,
         shardLaunch: 7,
         externalModelConsult: 1,
@@ -724,7 +742,7 @@ describe('AdminSettingsDataService', () => {
       },
       surfaceRationales: {
         paidImageGeneration: 'External image generation spends paid provider credits.',
-        thinkExtensionBand: 'Extended analysis workbench loops get a small cost to keep them bounded.',
+        analysisWorkbenchExtensionBand: 'Extended analysis workbench loops reserve scarce deep-analysis budget after the first pass.',
         subagentLaunch: 'Spawning a subagent reserves a separate runtime budget.',
         shardLaunch: 'Launching a shard consumes worker coordination overhead.',
         externalModelConsult: 'Consulting an external model uses a paid API boundary.',

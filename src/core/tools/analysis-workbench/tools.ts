@@ -57,7 +57,7 @@ export function createAnalysisWorkbenchTool(deps: REPLDeps): AgentTool<any> {
 
         if (effectiveDeps.costTelemetry) {
           const requestContext = getRequestContext();
-          await effectiveDeps.costTelemetry.recordThinkTrace({
+          await effectiveDeps.costTelemetry.recordAnalysisWorkbenchTrace({
             timestamp: Date.now(),
             task: params.task,
             ...(requestContext?.channelId ? { channelId: requestContext.channelId } : {}),
@@ -78,7 +78,7 @@ export function createAnalysisWorkbenchTool(deps: REPLDeps): AgentTool<any> {
               toolCalls: result.budgetStatus.toolCalls,
               sessionCostUsd: result.budgetStatus.sessionCostUsd,
               warnings: [...result.budgetStatus.warnings],
-              nestedThink: result.diagnostics,
+              nestedAnalysis: result.diagnostics,
               steps: result.steps.map(step => ({
                 iteration: step.iteration,
                 timestamp: step.timestamp,
@@ -103,12 +103,12 @@ export function createAnalysisWorkbenchTool(deps: REPLDeps): AgentTool<any> {
         const totalTokens = result.totalInputTokens + result.totalOutputTokens;
         const tokenBudget = effectiveDeps.config.budget.maxTokens ?? 100_000;
         const evidenceCount = result.evidence.length;
-        const nestedThinkCount = result.diagnostics.nestedThinkSuccessCount;
+        const nestedAnalysisCount = result.diagnostics.nestedAnalysisSuccessCount;
         const header =
           `[Analysis workbench: ${result.iterations} iter${result.iterations !== 1 ? 's' : ''}, ` +
           `${totalTokens}/${tokenBudget} tokens, ` +
           `${result.durationMs}ms` +
-          `${nestedThinkCount > 0 ? `, ${nestedThinkCount} nested analysis` : ''}` +
+          `${nestedAnalysisCount > 0 ? `, ${nestedAnalysisCount} nested analysis` : ''}` +
           `${evidenceCount > 0 ? `, ${evidenceCount} evidence` : ''}` +
           `${result.truncated ? ', truncated' : ''}` +
           `${result.budgetStatus.exceeded ? `, stopped: ${result.budgetStatus.exceeded}` : ''}]`;

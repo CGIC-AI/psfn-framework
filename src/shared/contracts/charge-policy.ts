@@ -18,7 +18,7 @@ export const CHARGE_POLICY_SURFACE_VALUES = [
   'externalEmbedding',
   'localImageGeneration',
   'paidImageGeneration',
-  'thinkExtensionBand',
+  'analysisWorkbenchExtensionBand',
   'subagentLaunch',
   'shardLaunch',
   'externalModelConsult',

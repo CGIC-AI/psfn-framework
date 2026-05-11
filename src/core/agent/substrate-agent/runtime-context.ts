@@ -102,12 +102,14 @@ const CHARGE_SURFACE_PROMPT_LABELS: Record<ChargePolicySurface, string> = {
   externalEmbedding: 'external embedding',
   localImageGeneration: 'local image generation',
   paidImageGeneration: 'paid image/video generation',
-  thinkExtensionBand: 'analysis_workbench extension pass after the first iteration',
+  analysisWorkbenchExtensionBand: 'analysis_workbench extension pass after the first iteration',
   subagentLaunch: 'subagent launch',
   shardLaunch: 'shard launch',
   externalModelConsult: 'external model consult',
   moaRoundBase: 'multi-model deliberation round',
 };
+
+const ANALYSIS_WORKBENCH_EXTENSION_SURFACE: ChargePolicySurface = 'analysisWorkbenchExtensionBand';
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -150,6 +152,7 @@ function buildChargeBudgetContextBlock(input: {
   const quota = chargePolicy.runChargeQuotaByLane[lane];
   const spent = snapshot?.quotaSpentByLane[lane] ?? 0;
   const remaining = Math.max(0, quota - spent);
+  const analysisWorkbenchExtensionCost = chargePolicy.surfaceCosts[ANALYSIS_WORKBENCH_EXTENSION_SURFACE];
   const costedSurfaces = CHARGE_POLICY_SURFACE_VALUES
     .map(surface => ({
       surface,
@@ -160,9 +163,11 @@ function buildChargeBudgetContextBlock(input: {
 
   const lines = [
     '[Charge budget]',
-    `Active lane: ${lane}; remaining ${formatChargeAmount(remaining)} of ${formatChargeAmount(quota)} run-charge units before this turn's optional escalations.`,
+    `Active lane: ${lane}; current-turn spend ${formatChargeAmount(spent)}; remaining ${formatChargeAmount(remaining)} of ${formatChargeAmount(quota)} run-charge units before this turn's optional escalations.`,
+    'This prompt quota is a fresh current-turn allowance, not the long-running monthly/session budget. Historical spend is recorded in the charge ledger and visible in Garden Charge / Budget for planning and allocation.',
     'Costed escalations:',
     ...costedSurfaces.map(entry => `- ${CHARGE_SURFACE_PROMPT_LABELS[entry.surface]}: ${formatChargeAmount(entry.amount)}`),
+    `analysis_workbench first pass: 0 charge units but still high-latency; each extension pass after the first iteration costs ${formatChargeAmount(analysisWorkbenchExtensionCost)} current-turn units and still has a safety wall-time cap.`,
     'Zero-cost default path: use direct semantic tools for routine reads, memory/session lookup, schedule work, repo inspection, and state changes.',
     'Use analysis_workbench only for bounded multi-stage analysis of large files, codebases, logs, transcripts, datasets, or evidence sets. Do not use it for tool discovery, schema confusion, simple lookup, or ordinary replies.',
   ];

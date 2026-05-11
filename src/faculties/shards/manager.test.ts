@@ -128,7 +128,7 @@ function makeChargePolicy(): ChargePolicyConfig {
       externalEmbedding: 0,
       localImageGeneration: 0,
       paidImageGeneration: 6,
-      thinkExtensionBand: 1,
+      analysisWorkbenchExtensionBand: 1,
       subagentLaunch: 1,
       shardLaunch: 8,
       externalModelConsult: 1,

@@ -1,11 +1,11 @@
 import {
-  createEmptyThinkDiagnostics,
+  createEmptyAnalysisWorkbenchDiagnostics,
   type BudgetStatus,
-  type ThinkBudget,
-  type ThinkDiagnostics,
-  type ThinkEvidence,
-  type ThinkResult,
-  type ThinkStep,
+  type AnalysisWorkbenchBudget,
+  type AnalysisWorkbenchDiagnostics,
+  type AnalysisWorkbenchEvidence,
+  type AnalysisWorkbenchResult,
+  type AnalysisWorkbenchStep,
 } from './types.js';
 
 export interface StepBuilderInput {
@@ -13,7 +13,7 @@ export interface StepBuilderInput {
   code: string;
   output: string;
   error: string | null;
-  evidenceCollected: ThinkEvidence[];
+  evidenceCollected: AnalysisWorkbenchEvidence[];
   inputTokens: number;
   outputTokens: number;
   cumulativeTokens: number;
@@ -29,9 +29,9 @@ export interface BudgetResultInput {
   durationMs: number;
   truncated: boolean;
   budgetStatus: BudgetStatus;
-  steps?: ThinkStep[];
-  evidence?: ThinkEvidence[];
-  diagnostics?: ThinkDiagnostics;
+  steps?: AnalysisWorkbenchStep[];
+  evidence?: AnalysisWorkbenchEvidence[];
+  diagnostics?: AnalysisWorkbenchDiagnostics;
 }
 
 export function createBudgetStatus(): BudgetStatus {
@@ -73,7 +73,7 @@ export function updateBudgetProgress(
   updateBudgetRuntime(status, startTime, subQueries, toolCalls);
 }
 
-export function checkBudget(status: BudgetStatus, budget: ThinkBudget): void {
+export function checkBudget(status: BudgetStatus, budget: AnalysisWorkbenchBudget): void {
   if (status.iterations >= budget.maxIterations) {
     status.exceeded = 'max iterations';
   } else if (budget.maxTokens && status.totalTokens >= budget.maxTokens) {
@@ -87,7 +87,7 @@ export function checkBudget(status: BudgetStatus, budget: ThinkBudget): void {
   }
 }
 
-export function buildStep(input: StepBuilderInput): ThinkStep {
+export function buildStep(input: StepBuilderInput): AnalysisWorkbenchStep {
   const stepTokens = input.inputTokens + input.outputTokens;
   return {
     iteration: input.iteration,
@@ -105,11 +105,11 @@ export function buildStep(input: StepBuilderInput): ThinkStep {
   };
 }
 
-export function flattenEvidence(steps: ThinkStep[]): ThinkEvidence[] {
+export function flattenEvidence(steps: AnalysisWorkbenchStep[]): AnalysisWorkbenchEvidence[] {
   return steps.flatMap(step => step.evidenceCollected);
 }
 
-export function makeBudgetResult(input: BudgetResultInput): ThinkResult {
+export function makeBudgetResult(input: BudgetResultInput): AnalysisWorkbenchResult {
   return {
     answer: input.answer,
     iterations: input.iterations,
@@ -120,7 +120,7 @@ export function makeBudgetResult(input: BudgetResultInput): ThinkResult {
     budgetStatus: input.budgetStatus,
     steps: input.steps ?? [],
     evidence: input.evidence ?? [],
-    diagnostics: input.diagnostics ?? createEmptyThinkDiagnostics(),
+    diagnostics: input.diagnostics ?? createEmptyAnalysisWorkbenchDiagnostics(),
   };
 }
 

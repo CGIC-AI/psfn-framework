@@ -22,7 +22,7 @@ describe('buildRLMSystemPrompt', () => {
     expect(prompt).not.toContain('session_append_note');
     expect(prompt).not.toContain('schedule_add');
     expect(prompt).not.toContain('module_install');
-    expect(prompt).not.toContain('sub_think');
+    expect(prompt).not.toContain('nested_analysis');
     expect(prompt).toContain('`await web("fetch", url, { prompt? })`');
     expect(prompt).toContain('`await web("browse", url, { prompt? })`');
     expect(prompt).toContain('`await web("search", query, { maxUrls? })`');

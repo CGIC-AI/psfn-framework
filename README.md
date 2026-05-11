@@ -167,14 +167,19 @@ npm run yolo
 
 Same split runtime, but gateway policy allows `fs.read` across the full local codebase root while keeping write restrictions to workspace scope.
 
-**Manual split (two terminals):**
+**Manual split (three terminals):**
 ```bash
 # Terminal 1 — Gateway (loads .env via dotenv)
 npm run gateway
 
-# Terminal 2 — Agent (does NOT load dotenv)
-set -a && source .env && set +a && npm run agent
+# Terminal 2 — Agent (do not source .env; pass only non-secret runtime wiring)
+env -i PATH="$PATH" HOME="$HOME" GATEWAY_SOCKET="${GATEWAY_SOCKET:-/run/psfn/gateway.sock}" npm run agent
+
+# Terminal 3 — Operator/Garden (loads admin auth from .env)
+npm run operator
 ```
+
+Use `npm run split` for the normal path. It starts the agent under the same curated non-secret environment allowlist while the gateway keeps provider/API secrets.
 
 **Containerized agent (maximum isolation):**
 ```bash
@@ -298,18 +303,18 @@ Skills are reusable workflow guidance, not world-execution tools. The runtime ma
 | Category | Current direct tool names |
 |----------|-------|
 | **Adaptive control** | `tool_search`, `toolset` |
-| **Already unified direct tools** | `shell`, `skill`, `orient`, `memory`, `scratchpad`, `session`, `identity`, `north_star`, `system`, `subagent` |
+| **Already unified direct tools** | `shell`, `skill`, `orient`, `memory`, `scratchpad`, `session`, `identity`, `north_star`, `schedule`, `system`, `subagent` |
 | **Filesystem** | `fs_list`, `fs_read` |
 | **Contacts** | `contact_list`, `contact_lookup`, `contact_note`, `contact_set_trust`, `contact_link_identity`, `contact_set_channel_privacy` |
 | **Repository** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
 | **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
 | **North Star** | `north_star` |
 | **Values** | `orient`, `values_add`, `values_update` |
-| **Scheduler** | `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task` |
+| **Scheduler** | `schedule` with `action=list_templates|update_template|run_template|create_reminder|create_follow_up` |
 | **Beads and lifecycle** | `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`, `settings_get`, `promoted_tools_*`, `self_restart`, `self_rebuild`, `notify_operator` |
 | **Media** | current stabilized branch: `image_create`, `image_edit`, `image_analyze`; target surface: `media` (`action=generate|edit|analyze`) |
 | **Shards** | `spawn_shard` |
-| **Large-context analysis** | `analysis_workbench` (bounded RLM+REPL sandbox) |
+| **Large-context analysis** | `analysis_workbench` (bounded analysis workbench for large evidence sets) |
 
 Tool surface split:
 - **Direct agent tools**: `tool_search` and `toolset` stay core; the rest are registered as `core` or `extended`, with overlay activation controlled by `toolset`, promotion, and bounded autoload rules

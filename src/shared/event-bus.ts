@@ -193,7 +193,7 @@ export interface EventMap {
     error: string;
   };
   'agent.retry.end': { channelId: string; success: boolean; attempt: number };
-  'agent.think.trace': {
+  'agent.analysis_workbench.trace': {
     timestamp: number;
     task: string;
     result: {
@@ -207,11 +207,11 @@ export interface EventMap {
       toolCalls: number;
       sessionCostUsd: number;
       warnings: string[];
-      nestedThink: {
-        nestedThinkCallCount: number;
-        nestedThinkSuccessCount: number;
-        nestedThinkFailureCount: number;
-        maxNestedDepthReached: number;
+      nestedAnalysis: {
+        nestedAnalysisCallCount: number;
+        nestedAnalysisSuccessCount: number;
+        nestedAnalysisFailureCount: number;
+        maxNestedAnalysisDepthReached: number;
       };
       steps: Array<{
         iteration: number;

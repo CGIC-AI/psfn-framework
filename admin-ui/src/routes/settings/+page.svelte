@@ -190,7 +190,7 @@
       profileSynthesisMinNovelty, profileSynthesisSourceMemoryLimit,
       profileSynthesisMinSourceMemories,
       // Analysis Workbench
-      thinkMaxTokens, thinkMaxWallTimeMs, thinkMaxSubQueries,
+      analysisWorkbenchMaxTokens, analysisWorkbenchMaxWallTimeMs, analysisWorkbenchMaxSubQueries,
       // Voice / TTS
       ttsProvider, voiceId, echoTtsUrl, echoTtsVoice, echoTtsPreset,
       sttProvider, deepgramModel,
@@ -302,9 +302,9 @@
   let profileSynthesisMinSourceMemories = $state(2);
 
   // ── Analysis Workbench ──
-  let thinkMaxTokens = $state(76000);
-  let thinkMaxWallTimeMs = $state(180000);
-  let thinkMaxSubQueries = $state(12);
+  let analysisWorkbenchMaxTokens = $state(76000);
+  let analysisWorkbenchMaxWallTimeMs = $state(300000);
+  let analysisWorkbenchMaxSubQueries = $state(12);
 
   // ── Raw editor states ──
   let modelsJson = $state('');
@@ -422,7 +422,7 @@
     {
       id: 'analysis-workbench', title: 'Analysis Workbench', icon: 'R',
       keys: SETTINGS_GARDEN_SECTION_FIELDS['analysis-workbench'],
-      summary: () => `Max tokens: ${thinkMaxTokens.toLocaleString()}, Wall time: ${Math.round(thinkMaxWallTimeMs / 1000)}s`,
+      summary: () => `Max tokens: ${analysisWorkbenchMaxTokens.toLocaleString()}, Wall time: ${Math.round(analysisWorkbenchMaxWallTimeMs / 1000)}s`,
     },
     {
       id: 'compositional', title: 'Compositional Cognition', icon: 'K',
@@ -851,9 +851,9 @@
     profileSynthesisMinSourceMemories = Number(config.profileSynthesisMinSourceMemories ?? 2);
 
     // Analysis Workbench
-    thinkMaxTokens = Number(config.thinkMaxTokens ?? 76000);
-    thinkMaxWallTimeMs = Number(config.thinkMaxWallTimeMs ?? 180000);
-    thinkMaxSubQueries = Number(config.thinkMaxSubQueries ?? 12);
+    analysisWorkbenchMaxTokens = Number(config.analysisWorkbenchMaxTokens ?? 76000);
+    analysisWorkbenchMaxWallTimeMs = Number(config.analysisWorkbenchMaxWallTimeMs ?? 300000);
+    analysisWorkbenchMaxSubQueries = Number(config.analysisWorkbenchMaxSubQueries ?? 12);
 
     // Voice / TTS
     const providerSelection = resolveVoiceProviderSelection(config);
@@ -1034,14 +1034,14 @@
       case 'profileSynthesisMinSourceMemories':
         profileSynthesisMinSourceMemories = numberFromConfigValue(value, profileSynthesisMinSourceMemories);
         break;
-      case 'thinkMaxTokens':
-        thinkMaxTokens = numberFromConfigValue(value, thinkMaxTokens);
+      case 'analysisWorkbenchMaxTokens':
+        analysisWorkbenchMaxTokens = numberFromConfigValue(value, analysisWorkbenchMaxTokens);
         break;
-      case 'thinkMaxWallTimeMs':
-        thinkMaxWallTimeMs = numberFromConfigValue(value, thinkMaxWallTimeMs);
+      case 'analysisWorkbenchMaxWallTimeMs':
+        analysisWorkbenchMaxWallTimeMs = numberFromConfigValue(value, analysisWorkbenchMaxWallTimeMs);
         break;
-      case 'thinkMaxSubQueries':
-        thinkMaxSubQueries = numberFromConfigValue(value, thinkMaxSubQueries);
+      case 'analysisWorkbenchMaxSubQueries':
+        analysisWorkbenchMaxSubQueries = numberFromConfigValue(value, analysisWorkbenchMaxSubQueries);
         break;
       case 'ttsProvider':
         ttsProvider = stringFromConfigValue(value);
@@ -1323,9 +1323,9 @@
       profileSynthesisSourceMemoryLimit,
       profileSynthesisMinSourceMemories,
       // Analysis Workbench
-      thinkMaxTokens,
-      thinkMaxWallTimeMs,
-      thinkMaxSubQueries,
+      analysisWorkbenchMaxTokens,
+      analysisWorkbenchMaxWallTimeMs,
+      analysisWorkbenchMaxSubQueries,
       // Voice / TTS
       ttsProvider,
       voiceId,
@@ -2326,7 +2326,7 @@
           </div>
           <div class="flex items-center gap-3">
             {#if !openSections.has('analysis-workbench')}
-              <span class="text-sm text-shadow-500">Max: {fmtTokens(thinkMaxTokens)} tokens, {fmtMs(thinkMaxWallTimeMs)}, {thinkMaxSubQueries} queries</span>
+              <span class="text-sm text-shadow-500">Max: {fmtTokens(analysisWorkbenchMaxTokens)} tokens, {fmtMs(analysisWorkbenchMaxWallTimeMs)}, {analysisWorkbenchMaxSubQueries} queries</span>
             {/if}
             <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('analysis-workbench') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
@@ -2335,18 +2335,18 @@
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
               <div>
-                <SettingFieldLabel label="Max Tokens" keys="thinkMaxTokens" forId={settingControlId('thinkMaxTokens')} class={LABEL_CLS} />
-                <input id={settingControlId('thinkMaxTokens')} type="number" min="1000" max="1000000" step="1000" bind:value={thinkMaxTokens} class={INPUT_CLS} />
+                <SettingFieldLabel label="Max Tokens" keys="analysisWorkbenchMaxTokens" forId={settingControlId('analysisWorkbenchMaxTokens')} class={LABEL_CLS} />
+                <input id={settingControlId('analysisWorkbenchMaxTokens')} type="number" min="1000" max="1000000" step="1000" bind:value={analysisWorkbenchMaxTokens} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Max tokens for RLM sandbox (1K-1M)</p>
               </div>
               <div>
-                <SettingFieldLabel label="Max Wall Time (ms)" keys="thinkMaxWallTimeMs" forId={settingControlId('thinkMaxWallTimeMs')} class={LABEL_CLS} />
-                <input id={settingControlId('thinkMaxWallTimeMs')} type="number" min="5000" max="600000" step="1000" bind:value={thinkMaxWallTimeMs} class={INPUT_CLS} />
-                <p class="text-sm text-shadow-500 mt-1">Max wall-clock time ({fmtMs(thinkMaxWallTimeMs)})</p>
+                <SettingFieldLabel label="Max Wall Time (ms)" keys="analysisWorkbenchMaxWallTimeMs" forId={settingControlId('analysisWorkbenchMaxWallTimeMs')} class={LABEL_CLS} />
+                <input id={settingControlId('analysisWorkbenchMaxWallTimeMs')} type="number" min="5000" max="600000" step="1000" bind:value={analysisWorkbenchMaxWallTimeMs} class={INPUT_CLS} />
+                <p class="text-sm text-shadow-500 mt-1">Max wall-clock time ({fmtMs(analysisWorkbenchMaxWallTimeMs)})</p>
               </div>
               <div>
-                <SettingFieldLabel label="Max Sub-Queries" keys="thinkMaxSubQueries" forId={settingControlId('thinkMaxSubQueries')} class={LABEL_CLS} />
-                <input id={settingControlId('thinkMaxSubQueries')} type="number" min="1" max="100" step="1" bind:value={thinkMaxSubQueries} class={INPUT_CLS} />
+                <SettingFieldLabel label="Max Sub-Queries" keys="analysisWorkbenchMaxSubQueries" forId={settingControlId('analysisWorkbenchMaxSubQueries')} class={LABEL_CLS} />
+                <input id={settingControlId('analysisWorkbenchMaxSubQueries')} type="number" min="1" max="100" step="1" bind:value={analysisWorkbenchMaxSubQueries} class={INPUT_CLS} />
                 <p class="text-sm text-shadow-500 mt-1">Max LLM sub-queries per analysis workbench run (1-100)</p>
               </div>
             </div>

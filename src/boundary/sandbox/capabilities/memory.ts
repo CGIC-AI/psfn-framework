@@ -9,7 +9,7 @@ import {
   VALID_MEMORY_REDACTION_OPERATIONS,
 } from '../../../faculties/memory/types.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
-import type { ThinkEvidence } from '../../../core/tools/think/types.js';
+import type { AnalysisWorkbenchEvidence } from '../../../core/tools/analysis-workbench/types.js';
 import { addEvidence, splitCsvTags, toTrimmedString } from './common.js';
 import {
   runSessionSearch,
@@ -69,7 +69,7 @@ interface CreateMemoryCapabilitiesOptions {
   embeddingService: EmbeddingProviderPort | null;
   memoryStore: MemoryStorePort | null;
   sessionManager: SessionManager | null;
-  pushEvidence: (entry: ThinkEvidence) => void;
+  pushEvidence: (entry: AnalysisWorkbenchEvidence) => void;
 }
 
 function resolveTranscriptSearchPort(

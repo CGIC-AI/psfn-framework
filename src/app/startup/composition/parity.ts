@@ -21,7 +21,7 @@ import type {
   ExtendedToolActivationResult,
   PostTurnActionInferer,
 } from '../../../core/agent/substrate-agent.js';
-import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/think/types.js';
+import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
 import type { MessageSender } from '../../../system/lifecycle/notifications.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import {
@@ -351,9 +351,9 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
     ...DEFAULT_REPL_CONFIG,
     budget: { ...DEFAULT_REPL_CONFIG.budget },
   };
-  if (config.thinkMaxTokens !== undefined) replConfig.budget.maxTokens = config.thinkMaxTokens;
-  if (config.thinkMaxWallTimeMs !== undefined) replConfig.budget.maxWallTimeMs = config.thinkMaxWallTimeMs;
-  if (config.thinkMaxSubQueries !== undefined) replConfig.budget.maxSubQueries = config.thinkMaxSubQueries;
+  if (config.analysisWorkbenchMaxTokens !== undefined) replConfig.budget.maxTokens = config.analysisWorkbenchMaxTokens;
+  if (config.analysisWorkbenchMaxWallTimeMs !== undefined) replConfig.budget.maxWallTimeMs = config.analysisWorkbenchMaxWallTimeMs;
+  if (config.analysisWorkbenchMaxSubQueries !== undefined) replConfig.budget.maxSubQueries = config.analysisWorkbenchMaxSubQueries;
   return replConfig;
 }
 

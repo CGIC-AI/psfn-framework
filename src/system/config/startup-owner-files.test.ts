@@ -126,7 +126,7 @@ describe('startup owner-file loaders', () => {
         externalEmbedding: 0,
         localImageGeneration: 0,
         paidImageGeneration: 5,
-        thinkExtensionBand: 1,
+        analysisWorkbenchExtensionBand: 4,
         subagentLaunch: 1,
         shardLaunch: 7,
         externalModelConsult: 1,
@@ -134,7 +134,7 @@ describe('startup owner-file loaders', () => {
       },
       surfaceRationales: {
         paidImageGeneration: 'External image generation spends paid provider credits.',
-        thinkExtensionBand: 'Extended analysis workbench loops get a small cost to keep them bounded.',
+        analysisWorkbenchExtensionBand: 'Extended analysis workbench loops reserve scarce deep-analysis budget after the first pass.',
         subagentLaunch: 'Spawning a subagent reserves a separate runtime budget.',
         shardLaunch: 'Launching a shard consumes worker coordination overhead.',
         externalModelConsult: 'Consulting an external model uses a paid API boundary.',

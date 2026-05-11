@@ -239,9 +239,9 @@ describe('loadConfig path defaults', () => {
     expect(config.sessionMirrorMaxChars).toBe(220);
     expect(config.sessionMirrorActiveWindowMs).toBe(1_800_000);
     expect(config.sessionMirrorChannelOverrides).toEqual({});
-    expect(config.thinkMaxTokens).toBe(76_000);
-    expect(config.thinkMaxWallTimeMs).toBe(180_000);
-    expect(config.thinkMaxSubQueries).toBe(12);
+    expect(config.analysisWorkbenchMaxTokens).toBe(76_000);
+    expect(config.analysisWorkbenchMaxWallTimeMs).toBe(300_000);
+    expect(config.analysisWorkbenchMaxSubQueries).toBe(12);
     expect(config.deepgramModel).toBeUndefined();
     expect(config.deepgramSttEndpoint).toBeUndefined();
     expect(config.deepgramListenEndpoint).toBeUndefined();

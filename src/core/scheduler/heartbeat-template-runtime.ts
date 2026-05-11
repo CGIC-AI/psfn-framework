@@ -362,6 +362,20 @@ function mergeReflectionPromptBundles(
   };
 }
 
+function mergeReflectionGroundingProvenanceRefs(
+  refs: readonly string[],
+  input: {
+    internalStateSnapshotRef?: string;
+    canonicalContactId?: string;
+  },
+): string[] {
+  return [...new Set([
+    ...refs,
+    ...(input.internalStateSnapshotRef ? [`internal_state_snapshot:${input.internalStateSnapshotRef}`] : []),
+    ...(input.canonicalContactId ? [`reflection_contact:${input.canonicalContactId}`] : []),
+  ].map(ref => ref.trim()).filter(Boolean))];
+}
+
 function hasAssertionHeavyIntrospectiveOutput(reflection: string): boolean {
   const normalized = reflection.replace(/\s+/g, ' ').trim().toLowerCase();
   if (!normalized) return false;
@@ -1834,9 +1848,18 @@ export function createHeartbeatTemplateRuntime(
       summary: guardrailSummary,
     });
 
+    const journalGroundingProvenanceRefs = mergeReflectionGroundingProvenanceRefs(
+      reflectionGroundingProvenanceRefs,
+      {
+        ...(persistenceContext?.internalStateSnapshotRef
+          ? { internalStateSnapshotRef: persistenceContext.internalStateSnapshotRef }
+          : {}),
+        ...(reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {}),
+      },
+    );
     const supportGapFlags = buildUnsupportedReflectionSupportFlags(
       reflectionText,
-      reflectionGroundingProvenanceRefs,
+      journalGroundingProvenanceRefs,
     );
     const persistedMetacognitiveFlags = mergeMetacognitiveFlags(
       persistenceContext?.metacognitiveFlags,
@@ -1867,9 +1890,9 @@ export function createHeartbeatTemplateRuntime(
             internalState: persistenceContextForJournal.internalState,
             metacognitiveFlags: persistenceContextForJournal.metacognitiveFlags,
           } : {}),
-          ...(reflectionGroundingProvenanceRefs.length > 0 ? {
+          ...(journalGroundingProvenanceRefs.length > 0 ? {
             ...(reflectionSubstrateContext ? { substrateBoundary: reflectionSubstrateContext.canonicalTruthBoundary } : {}),
-            substrateProvenanceRefs: reflectionGroundingProvenanceRefs,
+            substrateProvenanceRefs: journalGroundingProvenanceRefs,
           } : {}),
         });
         reflectionJournalEntryId = reflectionEntry.id;
@@ -1929,9 +1952,9 @@ export function createHeartbeatTemplateRuntime(
         ...(dailyJournalEntryId ? { dailyJournalEntryId } : {}),
         ...(reflectionProcessId ? { processId: reflectionProcessId } : {}),
         ...(deliberationMetadata ? { deliberation: deliberationMetadata } : {}),
-        ...(reflectionGroundingProvenanceRefs.length > 0 ? {
+        ...(journalGroundingProvenanceRefs.length > 0 ? {
           ...(reflectionSubstrateContext ? { substrateBoundary: reflectionSubstrateContext.canonicalTruthBoundary } : {}),
-          substrateProvenanceRefs: reflectionGroundingProvenanceRefs,
+          substrateProvenanceRefs: journalGroundingProvenanceRefs,
         } : {}),
       });
 

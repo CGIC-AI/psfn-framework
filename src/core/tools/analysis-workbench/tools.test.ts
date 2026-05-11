@@ -52,10 +52,10 @@ describe('createAnalysisWorkbenchTool', () => {
       steps: [],
       evidence: [],
       diagnostics: {
-        nestedThinkCallCount: 0,
-        nestedThinkSuccessCount: 0,
-        nestedThinkFailureCount: 0,
-        maxNestedDepthReached: 0,
+        nestedAnalysisCallCount: 0,
+        nestedAnalysisSuccessCount: 0,
+        nestedAnalysisFailureCount: 0,
+        maxNestedAnalysisDepthReached: 0,
       },
     });
 
@@ -102,10 +102,10 @@ describe('createAnalysisWorkbenchTool', () => {
         timestamp: 1_700_000_000_000,
       }],
       diagnostics: {
-        nestedThinkCallCount: 0,
-        nestedThinkSuccessCount: 0,
-        nestedThinkFailureCount: 0,
-        maxNestedDepthReached: 0,
+        nestedAnalysisCallCount: 0,
+        nestedAnalysisSuccessCount: 0,
+        nestedAnalysisFailureCount: 0,
+        maxNestedAnalysisDepthReached: 0,
       },
     });
 

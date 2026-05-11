@@ -89,6 +89,8 @@ Startup requires these files to exist. Distributed `config/*.seed.json` files ar
    npm run split
    ```
 
+   The launcher loads `.env` for gateway/operator processes, then starts the agent with a curated non-secret environment allowlist. Provider credentials, API keys, and admin tokens stay gateway/operator-owned.
+
 5. If you want the integrated Garden SPA served by the admin host, build it once:
 
    ```bash

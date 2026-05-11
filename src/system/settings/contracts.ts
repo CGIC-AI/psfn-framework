@@ -103,9 +103,9 @@ export interface EditableSettings {
   profileSynthesisMinNovelty?: number;
   profileSynthesisSourceMemoryLimit?: number;
   profileSynthesisMinSourceMemories?: number;
-  thinkMaxTokens?: number;
-  thinkMaxWallTimeMs?: number;
-  thinkMaxSubQueries?: number;
+  analysisWorkbenchMaxTokens?: number;
+  analysisWorkbenchMaxWallTimeMs?: number;
+  analysisWorkbenchMaxSubQueries?: number;
   retryMaxAttempts?: number;
   retryBaseDelayMs?: number;
   openRouterProviderOrder?: string[];
@@ -224,9 +224,9 @@ export const RUNTIME_SETTINGS_KEYS = [
   'profileSynthesisMinNovelty',
   'profileSynthesisSourceMemoryLimit',
   'profileSynthesisMinSourceMemories',
-  'thinkMaxTokens',
-  'thinkMaxWallTimeMs',
-  'thinkMaxSubQueries',
+  'analysisWorkbenchMaxTokens',
+  'analysisWorkbenchMaxWallTimeMs',
+  'analysisWorkbenchMaxSubQueries',
   'retryMaxAttempts',
   'retryBaseDelayMs',
   'openRouterProviderOrder',

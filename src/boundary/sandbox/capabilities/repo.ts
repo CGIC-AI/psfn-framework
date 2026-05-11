@@ -1,5 +1,5 @@
 import { isAllowedRepoRelativePath } from '../../../system/security/policy-constants.js';
-import type { ThinkEvidence } from '../../../core/tools/think/types.js';
+import type { AnalysisWorkbenchEvidence } from '../../../core/tools/analysis-workbench/types.js';
 import type { GatewayREPLCapabilities, GitCommitView, GitDiffView, GitStatusView } from './contracts.js';
 import { addEvidence, normalizeRepoPath, toErrorMessage } from './common.js';
 
@@ -12,7 +12,7 @@ export interface RepoCapabilities {
 
 interface CreateRepoCapabilitiesOptions {
   gatewayCaps: GatewayREPLCapabilities;
-  pushEvidence: (entry: ThinkEvidence) => void;
+  pushEvidence: (entry: AnalysisWorkbenchEvidence) => void;
 }
 
 export function createRepoCapabilities(options: CreateRepoCapabilitiesOptions): RepoCapabilities {

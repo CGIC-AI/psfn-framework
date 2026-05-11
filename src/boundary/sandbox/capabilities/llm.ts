@@ -1,5 +1,5 @@
 import type { LLMProviderPort, LLMRequestMetadata } from '../../../core/agent/contracts.js';
-import type { ThinkEvidence } from '../../../core/tools/think/types.js';
+import type { AnalysisWorkbenchEvidence } from '../../../core/tools/analysis-workbench/types.js';
 import type { SandboxBudgetRef } from './contracts.js';
 import { addEvidence, BUDGET_EXCEEDED_MESSAGE } from './common.js';
 import { chargeSurface } from '../../../shared/telemetry/run-charge.js';
@@ -13,7 +13,7 @@ export interface LLMCapabilities {
 interface CreateLLMCapabilitiesOptions {
   llmProvider: LLMProviderPort;
   budgetRef?: SandboxBudgetRef;
-  pushEvidence: (entry: ThinkEvidence) => void;
+  pushEvidence: (entry: AnalysisWorkbenchEvidence) => void;
   requestMetadata?: Partial<LLMRequestMetadata>;
 }
 

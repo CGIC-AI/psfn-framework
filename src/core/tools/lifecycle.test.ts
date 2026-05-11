@@ -50,7 +50,7 @@ function makeConfig(): SubstrateConfig {
         maxTokens: 8192,
       },
     },
-    thinkMaxSubQueries: 9,
+    analysisWorkbenchMaxSubQueries: 9,
     retryMaxAttempts: 3,
     retryBaseDelayMs: 2000,
   };
@@ -379,7 +379,7 @@ describe('createSystemTool', () => {
   it('reads runtime settings through action=read and defaults to read behavior', async () => {
     const tool = createSystemTool(makeConfig());
 
-    const single = await tool.execute('system-read-single', { action: 'read', key: 'thinkMaxSubQueries' });
+    const single = await tool.execute('system-read-single', { action: 'read', key: 'analysisWorkbenchMaxSubQueries' });
     expect(JSON.parse(resultText(single)).value).toBe(9);
 
     const listed = await tool.execute('system-read-default', { list: true });

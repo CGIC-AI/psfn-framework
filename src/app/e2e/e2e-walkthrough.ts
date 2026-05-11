@@ -11,7 +11,7 @@ import { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
-import { DEFAULT_REPL_CONFIG } from '../../core/tools/think/types.js';
+import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
 import { createIsolatedE2ERuntime } from './runtime-harness.js';
 import {
   composeIdentity,

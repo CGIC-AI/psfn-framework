@@ -258,9 +258,9 @@ src/
 **Key files**:
 | File | Purpose |
 |------|---------|
-| `sandbox/think-executor.ts` | Runs code in node:vm with injected helpers, globalThis var transform |
-| `sandbox/think-tool.ts` | AgentTool wrapper for `analysis_workbench` |
-| `sandbox/evidence.ts` | ThinkEvidence collection from sandbox calls |
+| `analysis-workbench/sandbox.ts` | Runs code in node:vm with injected helpers, globalThis var transform |
+| `analysis-workbench/tools.ts` | AgentTool wrapper for `analysis_workbench` |
+| `sandbox/evidence.ts` | AnalysisWorkbenchEvidence collection from sandbox calls |
 
 **Key patterns**:
 - `var/let/const x =` → `globalThis.x =` regex transform: preserves variable state across iterations
@@ -408,9 +408,9 @@ src/
 |------|---------|
 | `scheduler/scheduler.ts` | Core scheduler: task registry, tick, wall-clock cadence |
 | `scheduler/heartbeat-policy.ts` | HeartbeatPolicyStore: 4 default reflection templates, atomic JSON persist |
-| `scheduler/heartbeat-tools.ts` | 3 agent tools: heartbeat_get_policy, heartbeat_update_policy, schedule_task |
+| `scheduler/schedule-tool.ts` | Unified `schedule` tool for task and reflection-template operations |
 
-**Default reflection templates**: whisper (1h, sends to Discord), daily-review (24h), emotional-check (8h), goal-update (12h)
+**Default reflection templates**: daily-review and weekly-review, scheduled during the configured rest window when enabled.
 
 ---
 
@@ -943,8 +943,8 @@ All tools follow the `AgentTool` pattern from `@mariozechner/pi-agent-core`:
 2. Set `LayerType` appropriately (base/operator/runtime/channel/task)
 3. Agent cannot modify `base` or `operator` layers — only runtime/channel/task
 
-**To add a heartbeat reflection template**:
-1. Use `heartbeat_update_policy` agent tool
+**To add a scheduled reflection template**:
+1. Use `schedule action="upsert_template"` or the Garden scheduler UI
 2. Or edit `HeartbeatPolicyStore` directly
 3. Templates sync to scheduler tasks as `reflection:<id>` on startup
 

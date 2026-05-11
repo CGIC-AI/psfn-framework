@@ -1076,9 +1076,9 @@ describe('settings', () => {
         profileSynthesisMinNovelty: 0.3,
         profileSynthesisSourceMemoryLimit: 18,
         profileSynthesisMinSourceMemories: 4,
-        thinkMaxTokens: 8_192,
-        thinkMaxWallTimeMs: 45_000,
-        thinkMaxSubQueries: 5,
+        analysisWorkbenchMaxTokens: 8_192,
+        analysisWorkbenchMaxWallTimeMs: 45_000,
+        analysisWorkbenchMaxSubQueries: 5,
         retryMaxAttempts: 4,
         retryBaseDelayMs: 2_500,
         openRouterProviderOrder: ['parasail', 'openai'],
@@ -1559,7 +1559,7 @@ describe('settings', () => {
   describe('runtime settings snapshot', () => {
     it('returns only safe runtime settings keys', () => {
       const config = makeConfig();
-      config.thinkMaxSubQueries = 7;
+      config.analysisWorkbenchMaxSubQueries = 7;
       const snapshot = getRuntimeSettingsSnapshot(config);
       expect(Object.keys(snapshot).sort()).toEqual([...RUNTIME_SETTINGS_KEYS].sort());
       expect((snapshot as any).discordToken).toBeUndefined();
@@ -1571,9 +1571,9 @@ describe('settings', () => {
       const snapshot = getRuntimeSettingsSnapshot(config);
       expect(snapshot.adaptiveContextBudgetsEnabled).toBe(false);
       expect(snapshot.moodCongruenceWeight).toBe(0.15);
-      expect(snapshot.thinkMaxTokens).toBeNull();
-      expect(snapshot.thinkMaxWallTimeMs).toBeNull();
-      expect(snapshot.thinkMaxSubQueries).toBeNull();
+      expect(snapshot.analysisWorkbenchMaxTokens).toBeNull();
+      expect(snapshot.analysisWorkbenchMaxWallTimeMs).toBeNull();
+      expect(snapshot.analysisWorkbenchMaxSubQueries).toBeNull();
       expect(snapshot.sessionRestartBehavior).toBe('reuse_latest_session');
       expect(snapshot.observationMaskingWindow).toBe(1);
       expect(snapshot.compactionEmotionalSalienceThresholdPct).toBe(75);
@@ -1618,7 +1618,7 @@ describe('settings', () => {
     });
 
     it('validates setting key membership', () => {
-      expect(isRuntimeSettingKey('thinkMaxSubQueries')).toBe(true);
+      expect(isRuntimeSettingKey('analysisWorkbenchMaxSubQueries')).toBe(true);
       expect(isRuntimeSettingKey('sessionRestartBehavior')).toBe(true);
       expect(isRuntimeSettingKey('compositionalPolicy')).toBe(true);
       expect(isRuntimeSettingKey('promotedExtendedTools')).toBe(true);

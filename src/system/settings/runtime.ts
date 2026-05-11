@@ -90,9 +90,9 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'profileSynthesisMinNovelty',
   'profileSynthesisSourceMemoryLimit',
   'profileSynthesisMinSourceMemories',
-  'thinkMaxTokens',
-  'thinkMaxWallTimeMs',
-  'thinkMaxSubQueries',
+  'analysisWorkbenchMaxTokens',
+  'analysisWorkbenchMaxWallTimeMs',
+  'analysisWorkbenchMaxSubQueries',
   'retryMaxAttempts',
   'retryBaseDelayMs',
   'moaMaxRounds',
@@ -187,9 +187,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
       config.profileSynthesisSourceMemoryLimit ?? null,
     profileSynthesisMinSourceMemories:
       config.profileSynthesisMinSourceMemories ?? null,
-    thinkMaxTokens: config.thinkMaxTokens ?? null,
-    thinkMaxWallTimeMs: config.thinkMaxWallTimeMs ?? null,
-    thinkMaxSubQueries: config.thinkMaxSubQueries ?? null,
+    analysisWorkbenchMaxTokens: config.analysisWorkbenchMaxTokens ?? null,
+    analysisWorkbenchMaxWallTimeMs: config.analysisWorkbenchMaxWallTimeMs ?? null,
+    analysisWorkbenchMaxSubQueries: config.analysisWorkbenchMaxSubQueries ?? null,
     retryMaxAttempts: config.retryMaxAttempts ?? null,
     retryBaseDelayMs: config.retryBaseDelayMs ?? null,
   } satisfies SnapshotSection<
@@ -209,9 +209,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'profileSynthesisMinNovelty'
     | 'profileSynthesisSourceMemoryLimit'
     | 'profileSynthesisMinSourceMemories'
-    | 'thinkMaxTokens'
-    | 'thinkMaxWallTimeMs'
-    | 'thinkMaxSubQueries'
+    | 'analysisWorkbenchMaxTokens'
+    | 'analysisWorkbenchMaxWallTimeMs'
+    | 'analysisWorkbenchMaxSubQueries'
     | 'retryMaxAttempts'
     | 'retryBaseDelayMs'
   >;

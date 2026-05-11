@@ -12,7 +12,7 @@ import { resolveCompanionNameFromCard } from '../../core/identity/companion-runt
 import { LLMClient } from '../../primitives/llm/client.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
-import { DEFAULT_REPL_CONFIG } from '../../core/tools/think/types.js';
+import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
 import {
   hydrateCanonicalStartupConfig,

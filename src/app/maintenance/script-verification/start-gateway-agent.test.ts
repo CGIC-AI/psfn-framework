@@ -41,6 +41,20 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(launcher).toContain('source "${ROOT_DIR}/scripts/system/runtime-env.sh"');
   });
 
+  it('launches the agent with a non-secret environment allowlist', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('launch_background env -i "${AGENT_ENV[@]}" ./node_modules/.bin/tsx src/app/agent/main.ts');
+    expect(launcher).toContain('build_agent_env');
+    expect(launcher).toContain('GATEWAY_SOCKET');
+    expect(launcher).toContain('SYSTEM_DATA_DIR');
+    expect(launcher).toContain('COMPANION_DATA_DIR');
+    expect(launcher).not.toMatch(/\n\s*API_KEY\s*\\/);
+    expect(launcher).not.toMatch(/\n\s*ADMIN_TOKEN\s*\\/);
+    expect(launcher).not.toMatch(/\n\s*OPENROUTER_API_KEY\s*\\/);
+    expect(launcher).not.toMatch(/\n\s*LITELLM_API_KEY\s*\\/);
+    expect(launcher).not.toMatch(/\n\s*FAL_API_KEY\s*\\/);
+  });
+
   it('does not inject npm run split as an unsafe lifecycle restart command', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).not.toContain('export LIFECYCLE_RESTART_COMMAND="npm run');

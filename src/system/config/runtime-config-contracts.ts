@@ -145,9 +145,9 @@ export interface SubstrateConfig {
   echoTtsVoice?: string;
   echoTtsPreset?: string;
   echoTtsModel?: string;
-  thinkMaxTokens?: number;
-  thinkMaxWallTimeMs?: number;
-  thinkMaxSubQueries?: number;
+  analysisWorkbenchMaxTokens?: number;
+  analysisWorkbenchMaxWallTimeMs?: number;
+  analysisWorkbenchMaxSubQueries?: number;
   retryMaxAttempts?: number;
   retryBaseDelayMs?: number;
   openRouterProviderOrder?: string[];

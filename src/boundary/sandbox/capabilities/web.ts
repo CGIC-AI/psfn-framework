@@ -1,4 +1,4 @@
-import type { ThinkEvidence } from '../../../core/tools/think/types.js';
+import type { AnalysisWorkbenchEvidence } from '../../../core/tools/analysis-workbench/types.js';
 import type { GatewayREPLCapabilities, SandboxBudgetRef } from './contracts.js';
 import {
   addEvidence,
@@ -26,7 +26,7 @@ export interface WebCapabilities {
 
 interface CreateWebCapabilitiesOptions {
   gatewayCaps: GatewayREPLCapabilities;
-  pushEvidence: (entry: ThinkEvidence) => void;
+  pushEvidence: (entry: AnalysisWorkbenchEvidence) => void;
   budgetRef?: SandboxBudgetRef;
   llm_query_json: (prompt: string, maxRetries?: number) => Promise<unknown>;
 }

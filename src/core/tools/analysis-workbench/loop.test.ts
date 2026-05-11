@@ -82,7 +82,7 @@ function makeChargePolicy(): ChargePolicyConfig {
       externalEmbedding: 0,
       localImageGeneration: 0,
       paidImageGeneration: 6,
-      thinkExtensionBand: 1,
+      analysisWorkbenchExtensionBand: 1,
       subagentLaunch: 1,
       shardLaunch: 8,
       externalModelConsult: 1,
@@ -148,7 +148,7 @@ describe('runRLMLoop', () => {
     expect(result.iterations).toBe(2);
     expect(emitted).toHaveLength(1);
     expect(emitted[0][0]).toBe('agent.charge');
-    expect((emitted[0][1] as any).surface).toBe('thinkExtensionBand');
+    expect((emitted[0][1] as any).surface).toBe('analysisWorkbenchExtensionBand');
     expect((emitted[0][1] as any).lineage.runId).toBeDefined();
   });
 
@@ -318,7 +318,7 @@ describe('runRLMLoop', () => {
       'Let me reason through this...',
       'FINAL("thought about it")',
     ]);
-    const result = await runRLMLoop('Think hard', makeDeps(llm));
+    const result = await runRLMLoop('Analyze this carefully', makeDeps(llm));
 
     expect(result.answer).toBe('thought about it');
     expect(result.iterations).toBe(2);
@@ -497,9 +497,9 @@ describe('runRLMLoop', () => {
     });
   });
 
-  it('runs sub_think with isolated child context and conclusion-only return when policy allows it', async () => {
+  it('runs nested_analysis with isolated child context and conclusion-only return when policy allows it', async () => {
     const llm = sequentialLLM([
-      '```repl\nconst child = await sub_think("child task"); print(child);\n```',
+      '```repl\nconst child = await nested_analysis("child task"); print(child);\n```',
       'FINAL("child conclusion")',
       'FINAL("parent conclusion")',
     ]);
@@ -527,10 +527,10 @@ describe('runRLMLoop', () => {
 
     expect(result.answer).toBe('parent conclusion');
     expect(result.diagnostics).toMatchObject({
-      nestedThinkCallCount: 1,
-      nestedThinkSuccessCount: 1,
-      nestedThinkFailureCount: 0,
-      maxNestedDepthReached: 1,
+      nestedAnalysisCallCount: 1,
+      nestedAnalysisSuccessCount: 1,
+      nestedAnalysisFailureCount: 0,
+      maxNestedAnalysisDepthReached: 1,
     });
 
     const calls = (llm.complete as ReturnType<typeof vi.fn>).mock.calls;
@@ -538,8 +538,8 @@ describe('runRLMLoop', () => {
     expect(calls[1][0].messages[0]).toEqual({ role: 'user', content: 'child task' });
     expect(calls[1][0].messages).toHaveLength(2);
     expect(calls[1][0].correlation).toMatchObject({
-      requestId: 'req-nested:subthink-1:iteration-1',
-      toolCallId: 'tool-nested:subthink-1',
+      requestId: 'req-nested:nested-analysis-1:iteration-1',
+      toolCallId: 'tool-nested:nested-analysis-1',
       originStage: 'repl.analysis_workbench.iteration',
       purpose: 'repl.analysis_workbench.iteration',
     });
@@ -551,7 +551,7 @@ describe('runRLMLoop', () => {
 
   it('routes analysis workbench and nested code execution through the sandbox execution port', async () => {
     const llm = sequentialLLM([
-      '```repl\nconst child = await sub_think("child task"); print(child);\n```',
+      '```repl\nconst child = await nested_analysis("child task"); print(child);\n```',
       '```repl\nFINAL("child conclusion")\n```',
       'FINAL("parent conclusion")',
     ]);
@@ -591,13 +591,13 @@ describe('runRLMLoop', () => {
 
     expect(result.answer).toBe('parent conclusion');
     expect(executeCode).toHaveBeenCalledTimes(2);
-    expect(executeCode.mock.calls[0]?.[0]?.code).toContain('sub_think("child task")');
+    expect(executeCode.mock.calls[0]?.[0]?.code).toContain('nested_analysis("child task")');
     expect(executeCode.mock.calls[1]?.[0]?.code).toContain('FINAL("child conclusion")');
   });
 
-  it('fails closed when sub_think is denied by compositional policy', async () => {
+  it('fails closed when nested_analysis is denied by compositional policy', async () => {
     const llm = sequentialLLM([
-      '```repl\nawait sub_think("blocked task");\n```',
+      '```repl\nawait nested_analysis("blocked task");\n```',
       'FINAL("done")',
     ]);
 
@@ -617,14 +617,14 @@ describe('runRLMLoop', () => {
     const calls = (llm.complete as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls).toHaveLength(2);
     expect(calls[1][0].messages[2].content).toContain(
-      'sub_think is disabled by compositional policy (disabled)',
+      'nested_analysis is disabled by compositional policy (disabled)',
     );
-    expect(result.diagnostics.nestedThinkFailureCount).toBeGreaterThanOrEqual(1);
+    expect(result.diagnostics.nestedAnalysisFailureCount).toBeGreaterThanOrEqual(1);
   });
 
   it('counts nested analysis LLM spend against the parent token budget', async () => {
     const llm = sequentialLLM([
-      '```repl\nconst child = await sub_think("budget child"); print(child);\n```',
+      '```repl\nconst child = await nested_analysis("budget child"); print(child);\n```',
       'FINAL("child conclusion")',
       'FINAL("parent conclusion")',
     ]);
@@ -700,7 +700,7 @@ describe('runRLMLoop', () => {
     expect(result.answer).toBe('done');
   });
 
-  it('includes steps in ThinkResult', async () => {
+  it('includes steps in AnalysisWorkbenchResult', async () => {
     const llm = sequentialLLM([
       '```repl\nprint("step output");\n```',
       'FINAL("done")',
@@ -752,7 +752,7 @@ describe('runRLMLoop', () => {
     expect(result.evidence.length).toBeGreaterThanOrEqual(1);
   });
 
-  it('ThinkResult has empty steps/evidence for direct FINAL', async () => {
+  it('AnalysisWorkbenchResult has empty steps/evidence for direct FINAL', async () => {
     const llm = sequentialLLM(['FINAL("immediate")']);
     const result = await runRLMLoop('Direct answer', makeDeps(llm));
 

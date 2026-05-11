@@ -4,7 +4,7 @@ import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { ShardExecutionPort } from '../../../faculties/shards/port.js';
-import type { DashboardCostWindow, DashboardSessionContextPressure, ThinkTraceView } from '../types.js';
+import type { DashboardCostWindow, DashboardSessionContextPressure, AnalysisWorkbenchTraceView } from '../types.js';
 import type { AdminDashboardData, AdminDashboardService } from './types.js';
 import {
   aggregateDashboardCostWindows,
@@ -40,7 +40,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
 
   private latestUsageSessionId: string | null = null;
 
-  private thinkTraces: ThinkTraceView[] = [];
+  private analysisWorkbenchTraces: AnalysisWorkbenchTraceView[] = [];
 
   constructor(private readonly deps: {
     memoryStore: MemoryStorePort;
@@ -87,8 +87,8 @@ export class AdminDashboardDataService implements AdminDashboardService {
       });
     });
 
-    this.deps.eventBus.on('agent.think.trace', ({ timestamp, task, result }) => {
-      const trace: ThinkTraceView = {
+    this.deps.eventBus.on('agent.analysis_workbench.trace', ({ timestamp, task, result }) => {
+      const trace: AnalysisWorkbenchTraceView = {
         timestamp,
         task,
         iterations: result.iterations,
@@ -108,8 +108,8 @@ export class AdminDashboardDataService implements AdminDashboardService {
           variablesChanged: step.variablesChanged,
         })),
       };
-      this.thinkTraces.unshift(trace);
-      if (this.thinkTraces.length > 5) this.thinkTraces.length = 5;
+      this.analysisWorkbenchTraces.unshift(trace);
+      if (this.analysisWorkbenchTraces.length > 5) this.analysisWorkbenchTraces.length = 5;
     });
   }
 
@@ -224,7 +224,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
             byWindow: costByWindow,
           },
         },
-        recentThinkTraces: this.thinkTraces,
+        recentAnalysisWorkbenchTraces: this.analysisWorkbenchTraces,
       },
     };
   }

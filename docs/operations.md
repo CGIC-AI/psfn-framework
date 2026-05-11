@@ -15,6 +15,7 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 ```
 
 - `split` is the standard gateway + agent + operator launcher.
+- `split` loads `.env` for gateway/operator processes and launches the agent with a curated non-secret environment allowlist; provider credentials, API keys, and admin tokens must not be agent-owned.
 - `yolo` keeps the split runtime but broadens gateway `fs.read` scope across the codebase.
 - `operator` runs only the Garden operator surface when you want it separate from the launcher.
 - `agent:docker` is the production profile (`network_mode: "none"`).
@@ -97,16 +98,15 @@ npm run verify:backup-restore
 
 ## Heartbeat Audit Posture
 
-Use `heartbeat_get_policy` when you need the live heartbeat classification, not just the raw prompt text.
+Use `schedule action=list_templates` when you need the live reflection/scheduler classification, not raw prompt text.
 
-The default heartbeat set is intentionally split by purpose:
+The default reflection set is intentionally consolidated:
 
-- `whisper` / `Musing`: optional outward Discord note; silence is acceptable when nothing genuinely worth sharing surfaces.
-- `daily-review`, `emotional-check`, `goal-update`: background/private scans; they should only emit notes when they produce real carry-forward value.
-- `experiential-review`: private internal-state narrative; extraction should be grounded in actual internal-state deltas or uncertainty.
-- `values-reflection`: background deliberation; extraction should capture durable value signal, not a forced recital.
+- `daily-review`: private multi-turn reflection that can cover mood, goals, memory, and metacognitive continuity when the rest window allows it.
+- `weekly-review`: broader consolidation and planning pass for durable themes, values, and longer arcs.
+- Heartbeat remains a runtime cadence/checkpoint. It should not burn tokens unless useful work is configured.
 
-Operational rule: silent/background intervals are valid outcomes for the audited defaults. Do not treat every cadence tick as requiring a visible note or a durable extraction artifact.
+Operational rule: silent/background intervals are valid outcomes. Do not treat every cadence tick as requiring a visible note or a durable extraction artifact.
 
 ## Re-Embedding
 

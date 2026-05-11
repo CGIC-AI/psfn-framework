@@ -121,6 +121,88 @@ GATEWAY_PID=""
 AGENT_PID=""
 OPERATOR_PID=""
 LAUNCHED_PID=""
+AGENT_ENV=()
+
+append_agent_env() {
+  local name="$1"
+  if [ "${!name+x}" = "x" ]; then
+    AGENT_ENV+=("${name}=${!name}")
+  fi
+}
+
+build_agent_env() {
+  AGENT_ENV=()
+  local name
+  for name in \
+    ALLOW_AGENT_OUTBOUND_NETWORK \
+    ALLOW_INSECURE_LOCAL_API \
+    API_HEALTH_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS \
+    API_HOST \
+    API_PORT \
+    ADMIN_HOST \
+    ADMIN_PORT \
+    ADMIN_TRANSPORT_SOCKET \
+    BACKUP_ROOT_DIR \
+    CHARACTER_CARD_PATH \
+    COMPANION_DATA_DIR \
+    COMPANION_ID \
+    CONFIG_DIR \
+    CONTINUITY_WATCHDOG_ENDPOINT \
+    CONTINUITY_WATCHDOG_MAX_FAILURES \
+    CONTINUITY_WATCHDOG_RESTART_PID \
+    CONTINUITY_WATCHDOG_STATE_FILE \
+    CONTINUITY_WATCHDOG_TIMEOUT_MS \
+    DATA_DIR \
+    DATABASE_BASENAME \
+    DATABASE_PATH \
+    EMBEDDING_DIMS \
+    EXTRACTION_DRAIN_TIMEOUT_MS \
+    GATEWAY_SOCKET \
+    HOME \
+    LANG \
+    LC_ALL \
+    LC_CTYPE \
+    LOG_LEVEL \
+    LOGNAME \
+    MODULE_REGISTRY_PATH \
+    NODE_ENV \
+    NODE_OPTIONS \
+    PATH \
+    PERSISTENCE_BACKEND \
+    PRIMARY_TELEGRAM_USER_ID \
+    PRIMARY_USER_ID \
+    PSFN_DEBUG_EVENTS \
+    PSFN_DEBUG_MODE \
+    PSFN_DEBUG_TEXT \
+    PSFN_DEBUG_THINKING \
+    PSFN_LIFECYCLE_RESTART_EXIT_CODE \
+    PSFN_LOGS_DIR \
+    PSFN_RUNTIME_LAYOUT_MODE \
+    PSFN_RUNTIME_MODE \
+    PSFN_RUNTIME_ROOT \
+    PSFN_TEMP_DIR \
+    PWD \
+    SHELL \
+    SHELL_EXEC_ALLOWED_CWD \
+    SHELL_EXEC_ALLOWLIST \
+    SHELL_EXEC_DEFAULT_MAX_OUTPUT_CHARS \
+    SHELL_EXEC_DEFAULT_TIMEOUT_MS \
+    SHELL_EXEC_ENABLED \
+    SHELL_EXEC_ENV_ALLOWLIST \
+    SHELL_EXEC_MAX_OUTPUT_CHARS \
+    SHELL_EXEC_MAX_TIMEOUT_MS \
+    SHUTDOWN_FORCE_EXIT_TIMEOUT_MS \
+    SYSTEM_DATA_DIR \
+    TELEGRAM_PRIMARY_USER_ID \
+    TERM \
+    TMP \
+    TMPDIR \
+    TZ \
+    USER \
+    WORKSPACE_PATH; do
+    append_agent_env "${name}"
+  done
+}
 
 launch_background() {
   if command -v setsid >/dev/null 2>&1; then
@@ -154,10 +236,11 @@ start_gateway() {
 }
 
 start_agent() {
+  build_agent_env
   if [ -x "./node_modules/.bin/tsx" ]; then
-    launch_background ./node_modules/.bin/tsx src/app/agent/main.ts
+    launch_background env -i "${AGENT_ENV[@]}" ./node_modules/.bin/tsx src/app/agent/main.ts
   else
-    launch_background npm run agent
+    launch_background env -i "${AGENT_ENV[@]}" npm run agent
   fi
   AGENT_PID="${LAUNCHED_PID}"
 }

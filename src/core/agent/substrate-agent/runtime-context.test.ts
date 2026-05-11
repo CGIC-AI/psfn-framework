@@ -94,7 +94,7 @@ const TEST_CHARGE_POLICY = {
     externalEmbedding: 0,
     localImageGeneration: 0,
     paidImageGeneration: 6,
-    thinkExtensionBand: 1,
+    analysisWorkbenchExtensionBand: 4,
     subagentLaunch: 1,
     shardLaunch: 8,
     externalModelConsult: 1,
@@ -102,7 +102,7 @@ const TEST_CHARGE_POLICY = {
   },
   surfaceRationales: {
     paidImageGeneration: 'External image generation spends paid provider credits.',
-    thinkExtensionBand: 'Extended analysis workbench loops get a small cost to keep them bounded.',
+    analysisWorkbenchExtensionBand: 'Extended analysis workbench loops reserve scarce deep-analysis budget after the first pass.',
     subagentLaunch: 'Spawning a subagent reserves a separate runtime budget.',
     shardLaunch: 'Launching a shard consumes worker coordination overhead.',
     externalModelConsult: 'Consulting an external model uses a paid API boundary.',
@@ -403,9 +403,13 @@ describe('runtime subject identity', () => {
     });
 
     expect(runtimeContext).toContain('<runtime_charge_budget>');
-    expect(runtimeContext).toContain('remaining 24 of 24 run-charge units');
+    expect(runtimeContext).toContain('current-turn spend 0; remaining 24 of 24 run-charge units');
+    expect(runtimeContext).toContain('This prompt quota is a fresh current-turn allowance');
+    expect(runtimeContext).toContain('visible in Garden Charge / Budget');
     expect(runtimeContext).toContain('paid image/video generation: 6');
-    expect(runtimeContext).toContain('analysis_workbench extension pass after the first iteration: 1');
+    expect(runtimeContext).toContain('analysis_workbench extension pass after the first iteration: 4');
+    expect(runtimeContext).toContain('analysis_workbench first pass: 0 charge units');
+    expect(runtimeContext).toContain('each extension pass after the first iteration costs 4 current-turn units');
     expect(runtimeContext).toContain('Do not use it for tool discovery, schema confusion, simple lookup, or ordinary replies.');
     expect(runtimeContext).not.toContain('think');
   });

@@ -3,7 +3,7 @@ import type { ApprovalQueuePort } from '../../../system/capabilities/approval-qu
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { isModuleRecord } from '../../../system/modules/registry.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
-import type { ThinkEvidence } from '../../../core/tools/think/types.js';
+import type { AnalysisWorkbenchEvidence } from '../../../core/tools/analysis-workbench/types.js';
 import type { GatewayREPLCapabilities, ModuleRecord } from './contracts.js';
 import { addEvidence, toErrorMessage, toTrimmedString } from './common.js';
 
@@ -28,7 +28,7 @@ export interface ModuleCapabilities {
 
 interface CreateModuleCapabilitiesOptions {
   gatewayCaps: GatewayREPLCapabilities;
-  pushEvidence: (entry: ThinkEvidence) => void;
+  pushEvidence: (entry: AnalysisWorkbenchEvidence) => void;
   getCapabilityTier?: () => CapabilityTier;
   confirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;

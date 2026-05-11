@@ -14,8 +14,8 @@ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
-import { DEFAULT_REPL_CONFIG } from '../../core/tools/think/types.js';
-import { runRLMLoop } from '../../core/tools/think/loop.js';
+import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
+import { runRLMLoop } from '../../core/tools/analysis-workbench/loop.js';
 import { initDatabase } from '../../persistence/sqlite-utils.js';
 import { createIsolatedE2ERuntime } from './runtime-harness.js';
 import {
@@ -411,7 +411,7 @@ async function main(): Promise<void> {
     assert(replResult.durationMs > 0,
       `Duration: ${replResult.durationMs}ms`);
   } catch (err) {
-    assert(false, 'REPL/Think tool works', String(err));
+    assert(false, 'analysis_workbench works', String(err));
   }
 
   // ────────────────────────────────────────

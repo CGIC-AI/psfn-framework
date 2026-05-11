@@ -37,7 +37,7 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 
 ## Current Stabilized Branch
 
-The stabilized `refactor-pt3` branch still ships a mixed direct tool surface. The target stack above is architectural direction; the live runtime is only partially collapsed today.
+The current Sprint 8 runtime ships a mixed direct tool surface. The target stack above is architectural direction; several high-entropy legacy aliases have already been collapsed.
 
 Always-on adaptive control:
 
@@ -54,6 +54,7 @@ Already unified top-level direct tools in the current runtime:
 - `session`
 - `identity`
 - `north_star`
+- `schedule`
 - `system`
 - `subagent`
 
@@ -64,8 +65,8 @@ Still-split first-party direct tools in the current runtime:
 - contacts: `contact_list`, `contact_lookup`, `contact_note`, `contact_set_trust`, `contact_link_identity`, `contact_set_channel_privacy`
 - repository: `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr`
 - session continuity helpers: `session_new`, `session_resume`, `start_focus`, `complete_focus`
-- identity and direction legacy aliases: `prompt_layer_*`, `identity_diff`, `identity_changelog`, `character_card_update`, `north_star_*`
-- heartbeat and values: `heartbeat_get_policy`, `heartbeat_update_policy`, `heartbeat_run_template`, `schedule_task`, `values_add`, `values_update`
+- direction legacy aliases: `character_card_update`, `north_star_*`
+- values: `values_add`, `values_update`
 - vault: `vault_write`, `vault_read`, `vault_search`, `vault_daily`
 - beads: `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`
 - lifecycle and operator control legacy aliases: `settings_get`, `promoted_tools_*`, `self_restart`, `self_rebuild`, `notify_operator`
@@ -77,8 +78,7 @@ Important current-state notes:
 - `load_tools` is no longer a live runtime control tool. Tool discovery and activation now run through `tool_search` and `toolset`.
 - Transcript lookup now stays on the direct `session` tool; the split `session_search`, `session_grep`, and `session_list` registrations are no longer live.
 - Unified `memory`, `scratchpad`, `session`, and `orient` are live direct tools on this branch, while only the remaining write/mutation helpers stay split during migration.
-- Unified `identity`, `north_star`, and `system` are live direct tools on this branch, while their legacy split aliases remain registered during migration.
-- A unified `schedule` tool exists in code, but the stabilized agent entrypoint still wires the split heartbeat/scheduling tools through `src/app/startup/composition/parity.ts`.
+- Unified `identity`, `north_star`, `schedule`, and `system` are live direct tools on this branch. Legacy prompt-layer and heartbeat/scheduling aliases are not the model-facing control path.
 
 ## Target Identity Surface
 
@@ -96,10 +96,6 @@ The target model-facing `schedule` surface collapses time-based continuity and s
 
 - Continuity actions: `list`, `create_follow_up`, `activate_follow_up`, `create_reminder`, `trigger_reminder`
 - Scheduler/template actions: `list_templates`, `update_template`, `run_template`, `schedule_prompt`
-- Legacy migration aliases remain available inside the same tool:
-  `get_policy` -> `list_templates`
-  `update_policy` -> `update_template`
-  `schedule_task` -> `schedule_prompt`
 
 This keeps durable reminders, proactive follow-ups, birthdays, anniversaries, self-reminders, and timed work under one semantic faculty instead of scattering them across ad hoc timer micro-tools.
 
@@ -316,13 +312,6 @@ The table below maps current first-party tool names to the target surface. It is
 | `create_concern` | `orient` | background-only | Active concerns are orientation data, not a task board. |
 | `list_concerns` | `orient` | background-only | Concern visibility belongs to the same active-state lane. |
 | `resolve_concern` | `orient` | background-only | Concern resolution closes the loop on active-state tracking. |
-| `prompt_layer_list` | `identity` | always-on | Collapsed into `identity action=list_layers`. |
-| `prompt_layer_get` | `identity` | always-on | Collapsed into `identity action=get_layer`. |
-| `prompt_layer_update` | `identity` | always-on | Collapsed into `identity action=update_layer`; capability gating still distinguishes write scope. |
-| `prompt_layer_rollback` | `identity` | always-on | Collapsed into `identity action=rollback_layer`. |
-| `prompt_layer_toggle` | `identity` | always-on | Collapsed into `identity action=toggle_layer`. |
-| `identity_diff` | `identity` | always-on | Collapsed into `identity action=diff_layer`. |
-| `identity_changelog` | `identity` | always-on | Collapsed into `identity action=history`. |
 | `persona_update` | `identity` | always-on | Collapsed into `identity action=update_persona` with the existing review guards preserved. |
 | `character_card_update` | `identity` | extended | Character-card mutation belongs to identity. |
 | `north_star` | `north_star` | extended | Unified long-horizon guiding-intent surface with `action=list|create|update|delete|reorder`; keep it semantic and non-core. |
@@ -358,10 +347,6 @@ The table below maps current first-party tool names to the target surface. It is
 | `wake_return_summary` | `session` | always-on | Wake/return continuity summaries now map to `action="wake_return"`. |
 | `start_focus` | `session` | extended | Focus sessions are workflow state. |
 | `complete_focus` | `session` | extended | Same family. |
-| `heartbeat_get_policy` | `schedule` | background-only | Policy reads belong to scheduling, but not as a frequent turn action. |
-| `heartbeat_update_policy` | `schedule` | extended | Same family. |
-| `heartbeat_run_template` | `schedule` | background-only | Template execution is a background worker concern. |
-| `schedule_task` | `schedule` | extended | Durable tasking belongs here. |
 | `self_restart` | `system` | always-on | Collapsed into `system action="restart"`; lifecycle safeguards and capability checks still gate execution. |
 | `self_rebuild` | `system` | always-on | Collapsed into `system action="rebuild"` with the same safeguards. |
 | `notify` | `notify` | extended | Unified notify surface with `action=brief|send|approval_request`. |

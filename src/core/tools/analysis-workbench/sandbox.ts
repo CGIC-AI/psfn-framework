@@ -3,7 +3,7 @@
 // This host-side runner is a constrained REPL, not a security boundary.
 
 import vm from 'node:vm';
-import type { ThinkEvidence } from './types.js';
+import type { AnalysisWorkbenchEvidence } from './types.js';
 import * as helpers from './helpers.js';
 import type {
   ExecuteResult,
@@ -22,7 +22,7 @@ import {
   createRepoCapabilities,
   createSchedulerCapabilities,
   createShellCapabilities,
-  createThinkCapabilities,
+  createAnalysisCapabilities,
   createToolchainCapabilities,
   createWebCapabilities,
 } from '../../../boundary/sandbox/capabilities/index.js';
@@ -46,7 +46,7 @@ export class REPLSandbox {
   private deps: SandboxDeps;
   private budgetRef: SandboxBudgetRef | undefined;
   private builtinKeysSet: Set<string>;
-  private currentEvidence: ThinkEvidence[] = [];
+  private currentEvidence: AnalysisWorkbenchEvidence[] = [];
   private memoryCeilingBytes: number | undefined;
   private executionPort: SandboxExecutionPort;
 
@@ -72,7 +72,7 @@ export class REPLSandbox {
     };
 
     const gatewayCaps = this.deps.llmProvider as unknown as GatewayREPLCapabilities;
-    const pushEvidence = (entry: ThinkEvidence): void => {
+    const pushEvidence = (entry: AnalysisWorkbenchEvidence): void => {
       this.currentEvidence.push(entry);
     };
 
@@ -82,9 +82,9 @@ export class REPLSandbox {
       pushEvidence,
       requestMetadata: this.deps.requestMetadata,
     });
-    const nestedThink = this.deps.runNestedThink
-      ? createThinkCapabilities({
-        runNestedThink: this.deps.runNestedThink,
+    const nestedAnalysis = this.deps.runNestedAnalysis
+      ? createAnalysisCapabilities({
+        runNestedAnalysis: this.deps.runNestedAnalysis,
       })
       : null;
 
@@ -151,26 +151,14 @@ export class REPLSandbox {
       llm_query: llm.llm_query,
       llm_query_strict: llm.llm_query_strict,
       llm_query_json: llm.llm_query_json,
-      ...(nestedThink ? { sub_think: nestedThink.sub_think } : {}),
+      ...(nestedAnalysis ? { nested_analysis: nestedAnalysis.nested_analysis } : {}),
       memory_search: memory.memory_search,
       memory_count: memory.memory_count,
-      memory_write: memory.memory_write,
-      memory_upsert: memory.memory_upsert,
-      memory_import_batch: memory.memory_import_batch,
-      memory_redact: memory.memory_redact,
       memory_get_by_id: memory.memory_get_by_id,
       session_messages: memory.session_messages,
       session_search: memory.session_search,
-      session_append_note: memory.session_append_note,
       schedule_list: scheduler.schedule_list,
-      schedule_add_every: scheduler.schedule_add_every,
-      schedule_add_once: scheduler.schedule_add_once,
-      schedule_update: scheduler.schedule_update,
-      event_emit: scheduler.event_emit,
       module_list: modules.module_list,
-      module_install: modules.module_install,
-      module_enable: modules.module_enable,
-      module_disable: modules.module_disable,
       module_health: modules.module_health,
       repo_status: repo.repo_status,
       repo_diff: repo.repo_diff,
@@ -245,7 +233,7 @@ export class REPLSandbox {
   }
 
   /** Drain collected evidence since last call */
-  collectEvidence(): ThinkEvidence[] {
+  collectEvidence(): AnalysisWorkbenchEvidence[] {
     const evidence = this.currentEvidence;
     this.currentEvidence = [];
     return evidence;

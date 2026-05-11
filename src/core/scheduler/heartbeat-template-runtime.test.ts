@@ -267,6 +267,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
             };
           };
         };
+        substrateProvenanceRefs?: string[];
       };
 
       expect(entry.kind).toBe('reflection_run');
@@ -276,6 +277,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(entry.reason).toBe('Manual reflection run via schedule action=run_template');
       expect(entry.processId).toMatch(/^reflection-process-/);
       expect(entry.internalStateSnapshotRef).toBe(snapshotRef);
+      expect(entry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
+        `internal_state_snapshot:${snapshotRef}`,
+        'reflection_contact:contact-1',
+      ]));
       expect(entry.metacognitiveFlags).toEqual(metacognitiveFlags);
       expect(entry.reflectionJournalEntryId).toBeDefined();
       expect(entry.dailyJournalEntryId).toBeDefined();
@@ -537,6 +542,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       mode?: string;
       reflection?: string;
       metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
+      substrateProvenanceRefs?: string[];
       deliberation?: {
         rounds?: number;
         episode?: {
@@ -556,6 +562,11 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
 
     expect(metacognitionEntry.mode).toBe('deliberation');
     expect(metacognitionEntry.reflection).toContain('still needs an explicit follow-up');
+    expect(metacognitionEntry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
+      `internal_state_snapshot:${snapshotRef}`,
+      'reflection_contact:contact-1',
+      'reflection_contact_memory:contact-1',
+    ]));
     expect(metacognitionEntry.deliberation?.rounds).toBe(3);
     expect(metacognitionEntry.deliberation?.episode).toMatchObject({
       budget: {

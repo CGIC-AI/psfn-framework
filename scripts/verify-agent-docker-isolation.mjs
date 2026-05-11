@@ -81,6 +81,11 @@ if (!productionServiceBlock) {
     /^\s{4}network_mode:\s*["']?none["']?\s*$/m,
     'docker/docker-compose.production.yml service "psfn-agent-production" must set network_mode: "none"',
   );
+  if (/^\s{6}(API_KEY|CONTINUITY_WATCHDOG_API_KEY):/m.test(productionServiceBlock)) {
+    addFailure(
+      'docker/docker-compose.production.yml service "psfn-agent-production" must not pass API_KEY or CONTINUITY_WATCHDOG_API_KEY into the agent',
+    );
+  }
 }
 
 const continuousServiceBlock = getServiceBlock(continuousCompose, "psfn-agent");

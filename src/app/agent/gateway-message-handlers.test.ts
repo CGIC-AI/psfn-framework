@@ -58,6 +58,7 @@ function createHarness(overrides?: {
     durationMs: number;
   }>;
   handleMessage?: (message: SubstrateMessage) => Promise<AgentResponse>;
+  observeMessage?: (message: SubstrateMessage) => Promise<void>;
 }) {
   let onHandleMessage:
     | ((message: SubstrateMessage) => Promise<AgentResponse>)
@@ -78,6 +79,7 @@ function createHarness(overrides?: {
   };
   const agentLoop = {
     handleMessage: vi.fn(overrides?.handleMessage ?? (async () => makeResponse('primary response'))),
+    observeMessage: vi.fn(overrides?.observeMessage ?? (async () => {})),
   };
   const shardManager = {
     delegateSatelliteSession: vi.fn(
@@ -261,10 +263,39 @@ describe('registerGatewayMessageHandlers', () => {
         attachmentCount: 1,
         attachmentTypes: ['image/png'],
         attachmentNames: ['image.png'],
+        responseMode: 'respond',
       },
     );
     expect(harness.agentLoop.handleMessage).toHaveBeenCalledWith(message);
     expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'discord response');
+  });
+
+  it('records passive discord observations without generating or sending a response', async () => {
+    const harness = createHarness();
+    const message = makeMessage({
+      id: 'discord-observe-1',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      timestamp: '2026-03-02T02:00:00.000Z',
+      routing: {
+        source: 'discord',
+        responseMode: 'observe',
+      },
+    });
+
+    await harness.onDiscordMessage(message);
+
+    expect(message.timestamp).toBeInstanceOf(Date);
+    expect(harness.trackSessionActivity).toHaveBeenCalledWith(message);
+    expect(harness.agentLoop.observeMessage).toHaveBeenCalledWith(message);
+    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
+    expect(harness.gateway.discordSend).not.toHaveBeenCalled();
+    expect(harness.gateway.discordSendMedia).not.toHaveBeenCalled();
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('discord.message.observed', {
+      channelId: 'discord:general',
+      messageId: 'discord-observe-1',
+      authorId: 'user-1',
+    });
   });
 
   it('sends generated media attachments back through the gateway discord egress', async () => {

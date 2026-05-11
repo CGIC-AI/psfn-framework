@@ -109,6 +109,7 @@ import {
   buildRuntimeContext as buildRuntimeContextForTurn,
   buildScratchpadContextBlock as buildScratchpadContextBlockForTurn,
   getPersonaAdaptation as getPersonaAdaptationForTurn,
+  resolveContinuitySubjectKey,
   resolveAuthorContext as resolveAuthorContextForTurn,
   type ResolvedAuthorContext,
 } from './substrate-agent/runtime-context.js';
@@ -691,6 +692,69 @@ export class SubstrateAgent {
     log.debug('Queued follow-up', {
       channelId: message.channelId,
       systemOriginated: isSystemOriginated,
+    });
+  }
+
+  /**
+   * Record a message as observed context without invoking the model or adding an
+   * assistant response. Used for ambient channel traffic that should be visible
+   * in later turns but must not itself trigger a reply.
+   */
+  async observeMessage(message: SubstrateMessage): Promise<void> {
+    await this.sessionManager.awaitPendingAutoCompaction(message.channelId);
+
+    const turnId = createTurnId();
+    const requestId = message.id;
+    const observationMetadata = JSON.stringify({
+      type: 'observed_message',
+      source: message.routing?.source ?? message.channelType,
+      responseMode: message.routing?.responseMode ?? 'observe',
+    });
+    const recordOptions = {
+      turnId,
+      requestId,
+      sourceMessageId: message.id,
+      metadata: observationMetadata,
+      channelMeta: {
+        isDirectMessage: message.isDirectMessage ?? false,
+      },
+    };
+
+    if (message.authorId.startsWith('system:')) {
+      this.sessionManager.recordSystemMessage(
+        message.channelId,
+        formatAttributedSystemContent(message.content, message.authorName),
+        message.authorId,
+        message.authorName,
+        message.isDirectMessage,
+        undefined,
+        recordOptions,
+      );
+      return;
+    }
+
+    const authorContext = await this.resolveAuthorContext(message);
+    const continuitySubjectKey = resolveContinuitySubjectKey({
+      canonicalContactKey: authorContext.canonicalContactKey,
+      subjectIdentityKey: authorContext.subjectIdentityKey,
+      authorId: message.authorId,
+    });
+    this.sessionManager.recordUserMessage(
+      message.channelId,
+      message.content,
+      message.authorId,
+      message.authorName,
+      message.isDirectMessage,
+      continuitySubjectKey,
+      {
+        ...recordOptions,
+        trustLevel: authorContext.trustLevel,
+      },
+    );
+    log.debug('Observed message without model turn', {
+      channelId: message.channelId,
+      messageId: message.id,
+      authorId: message.authorId,
     });
   }
 

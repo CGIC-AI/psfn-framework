@@ -27,6 +27,7 @@ export interface GatewayMessageGateway {
 
 export interface GatewayMessageAgentLoop {
   handleMessage(message: SubstrateMessage): Promise<AgentResponse>;
+  observeMessage(message: SubstrateMessage): Promise<void>;
 }
 
 export type GatewayMessageShardManager = Pick<ShardExecutionPort, 'delegateSatelliteSession'>;
@@ -266,12 +267,24 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     try {
       trackSessionActivity(message);
       const attachments = message.attachments ?? [];
+      const isObservationOnly = message.routing?.responseMode === 'observe';
       log.info(`Message from ${message.authorName}: ${message.content.slice(0, 50)}...`, {
         channelId: message.channelId,
         attachmentCount: attachments.length,
         attachmentTypes: attachments.map((attachment) => attachment.contentType),
         attachmentNames: attachments.map((attachment) => attachment.name),
+        responseMode: message.routing?.responseMode ?? 'respond',
       });
+
+      if (isObservationOnly) {
+        await agentLoop.observeMessage(message);
+        safeguardAuditTrail.append('discord.message.observed', {
+          channelId: message.channelId,
+          messageId: message.id,
+          authorId: message.authorId,
+        });
+        return;
+      }
 
       const response = await agentLoop.handleMessage(message);
       if (response.content.trim()) {

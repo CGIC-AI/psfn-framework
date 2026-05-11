@@ -20,6 +20,7 @@ export interface ReflectionPublishInput {
 const FOLDER_MAP: Array<[RegExp, string]> = [
   [/^musing$/i, 'Reflections/musings/'],
   [/^daily/i, 'Reflections/daily/'],
+  [/^weekly/i, 'Reflections/weekly/'],
   [/^emotional/i, 'Reflections/emotional/'],
   [/^goal/i, 'Reflections/goals/'],
   [/^values/i, 'Reflections/values/'],

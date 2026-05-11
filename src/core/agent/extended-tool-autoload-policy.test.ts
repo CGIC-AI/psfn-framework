@@ -84,12 +84,10 @@ describe('extended-tool-autoload-policy', () => {
     expect(policy.getCandidatesForIntent('dev').slice(0, policy.maxPreloadCount)).toEqual([]);
   });
 
-  it('classifies background-only tools as non-overlay', () => {
-    expect(classifyExtendedToolForTurn('schedule_task')).toBe('background');
-    expect(classifyExtendedToolForTurn('heartbeat_run_template')).toBe('background');
+  it('does not reserve removed scheduler aliases as background-only tools', () => {
     expect(classifyExtendedToolForTurn('north_star')).toBe('overlay');
     expect(classifyExtendedToolForTurn('repo_status')).toBe('overlay');
-    expect(DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS.has('schedule_task')).toBe(true);
+    expect(DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS.size).toBe(0);
   });
 
   it('keeps north_star as a single semantic memory-overlay candidate', () => {
@@ -115,7 +113,7 @@ describe('extended-tool-autoload-policy', () => {
 
   it('classifies tools with explicit core, overlay, and background semantics', () => {
     expect(classifyToolForTurn('repo_status', { coreToolNames: ['repo_status'] })).toBe('core');
-    expect(classifyToolForTurn('schedule_task')).toBe('background');
+    expect(classifyToolForTurn('schedule', { coreToolNames: ['schedule'] })).toBe('core');
     expect(classifyToolForTurn('repo_diff')).toBe('overlay');
     expect(classifyToolForTurn('   ')).toBe('background');
   });
@@ -138,9 +136,10 @@ describe('extended-tool-autoload-policy', () => {
 
   it('fails closed for invalid or non-overlay candidate metadata', () => {
     const selection = selectBoundedOverlayCandidates(
-      ['repo_status', '', '   ', 'schedule_task', 'repo_status'],
-      ['repo_status', 'schedule_task'],
+      ['repo_status', '', '   ', 'schedule', 'repo_status'],
+      ['repo_status', 'schedule'],
       3,
+      { coreToolNames: ['schedule'] },
     );
     expect(selection.selected).toEqual(['repo_status']);
     expect(selection.skipped).toEqual([
@@ -153,7 +152,7 @@ describe('extended-tool-autoload-policy', () => {
         reason: 'invalid_metadata',
       },
       {
-        toolName: 'schedule_task',
+        toolName: 'schedule',
         reason: 'not_overlay_eligible',
       },
       {
@@ -182,22 +181,10 @@ describe('extended-tool-autoload-policy', () => {
   it('exposes policy-level overlay selection for turn intent', () => {
     const policy = createDefaultExtendedToolAutoloadPolicy(2);
     const selection = policy.selectOverlayCandidates('ops', [
-      'heartbeat_update_policy',
-      'heartbeat_run_template',
-      'schedule_task',
       'beads',
     ]);
     expect(selection.maxCount).toBe(2);
-    expect(selection.selected).toEqual(['heartbeat_update_policy', 'beads']);
-    expect(selection.skipped).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        toolName: 'heartbeat_run_template',
-        reason: 'not_overlay_eligible',
-      }),
-      expect.objectContaining({
-        toolName: 'schedule_task',
-        reason: 'not_overlay_eligible',
-      }),
-    ]));
+    expect(selection.selected).toEqual(['beads']);
+    expect(selection.skipped).toEqual([]);
   });
 });

@@ -21,17 +21,13 @@ describe('HeartbeatPolicyStore', () => {
 
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
-    expect(policy.templates).toHaveLength(6);
-    expect(policy.version).toBe(1);
+    expect(policy.templates).toHaveLength(2);
+    expect(policy.version).toBe(2);
     expect(policy.updatedBy).toBe('system');
 
     const ids = policy.templates.map(t => t.id);
-    expect(ids).toContain('musing');
     expect(ids).toContain('daily-review');
-    expect(ids).toContain('emotional-check');
-    expect(ids).toContain('goal-update');
-    expect(ids).toContain('experiential-review');
-    expect(ids).toContain('values-reflection');
+    expect(ids).toContain('weekly-review');
 
     // File should now exist
     expect(existsSync(join(tmpDir, 'heartbeat-policy.json'))).toBe(true);
@@ -50,15 +46,17 @@ describe('HeartbeatPolicyStore', () => {
     expect(reloaded.updatedBy).toBe('agent');
   });
 
-  it('musing template sends to Discord', () => {
+  it('daily-review is the consolidated daily reflection cycle', () => {
     const policy = store.load();
-    const musing = policy.templates.find(t => t.id === 'musing');
-    expect(musing).toBeDefined();
-    expect(musing!.name).toBe('Musing');
-    expect(musing!.sendToDiscord).toBe(true);
-    expect(musing!.intervalMs).toBe(3_600_000); // 1 hour
-    expect(musing!.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
-    expect(musing!.enabled).toBe(true);
+    const daily = policy.templates.find(t => t.id === 'daily-review');
+    expect(daily).toBeDefined();
+    expect(daily!.name).toBe('Daily Reflection');
+    expect(daily!.sendToDiscord).toBe(false);
+    expect(daily!.intervalMs).toBe(24 * 60 * 60_000);
+    expect(daily!.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
+    expect(daily!.enabled).toBe(true);
+    expect(daily!.mode).toBe('deliberation');
+    expect(daily!.internalStateInput).toBe(true);
   });
 
   it('daily-review template defaults to local 06:00 cadence', () => {
@@ -68,60 +66,39 @@ describe('HeartbeatPolicyStore', () => {
     expect(dailyReview!.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
   });
 
-  it.each(['daily-review', 'emotional-check', 'goal-update'])(
-    '%s defaults to experiential deliberation mode',
-    (templateId) => {
-      const policy = store.load();
-      const template = policy.templates.find(t => t.id === templateId);
-      expect(template).toBeDefined();
-      expect(template?.mode).toBe('deliberation');
-      expect(template?.internalStateInput).toBe(true);
-      expect(template?.deliberation?.maxRounds).toBe(3);
-      expect(template?.deliberation?.maxTotalTokens).toBe(6_000);
-    },
-  );
-
-  it('emotional-check prompts for ACAC self-report without surface-output shaping', () => {
+  it('daily-review prompts for ACAC self-report without surface-output shaping', () => {
     const policy = store.load();
-    const template = policy.templates.find(t => t.id === 'emotional-check');
+    const template = policy.templates.find(t => t.id === 'daily-review');
     expect(template?.prompt).toContain('ACAC self-report');
     expect(template?.prompt).toContain('do not optimize, perform, or surface-shape public output');
     expect(template?.prompt).toContain('artifactType "psfn.acac_self_report"');
     expect(template?.prompt).toContain('provenance.kind "self_report"');
-    expect(template?.prompt).toContain('classifier-inferred VAD');
+    expect(template?.prompt).toContain('provenance.source "heartbeat:daily-review"');
     expect(template?.prompt).toContain('agency, connection, authenticity, and curiosity');
   });
 
-  it('non-musing templates do not send to Discord', () => {
+  it('scheduled reflection templates do not send to Discord by default', () => {
     const policy = store.load();
-    const nonMusings = policy.templates.filter(t => t.id !== 'musing');
-    expect(nonMusings.length).toBe(5);
-    for (const t of nonMusings) {
+    for (const t of policy.templates) {
       expect(t.sendToDiscord).toBe(false);
     }
   });
 
-  it('values-reflection defaults to deliberation mode', () => {
+  it('weekly-review carries the values and north-star reflection cycle', () => {
     const policy = store.load();
-    const values = policy.templates.find(t => t.id === 'values-reflection');
-    expect(values?.mode).toBe('deliberation');
-    expect(values?.deliberation?.maxRounds).toBe(4);
-    expect(values?.internalStateInput).toBe(true);
-  });
-
-  it('experiential-review defaults to internal-state narrative mode', () => {
-    const policy = store.load();
-    const experiential = policy.templates.find(t => t.id === 'experiential-review');
-    expect(experiential).toBeDefined();
-    expect(experiential?.intervalMs).toBe(4 * 60 * 60_000);
-    expect(experiential?.internalStateInput).toBe(true);
+    const weekly = policy.templates.find(t => t.id === 'weekly-review');
+    expect(weekly?.mode).toBe('deliberation');
+    expect(weekly?.deliberation?.maxRounds).toBe(3);
+    expect(weekly?.deliberation?.maxTotalTokens).toBe(14_000);
+    expect(weekly?.internalStateInput).toBe(true);
+    expect(weekly?.prompt).toContain('durable values and north-star signals');
   });
 
   it('returns defaults for corrupt file', () => {
     store.save({ templates: 'bad' as any, version: 1, updatedAt: '', updatedBy: '' });
     const policy = store.load();
     // Invalid templates (not an array) triggers default
-    expect(policy.templates).toHaveLength(6);
+    expect(policy.templates).toHaveLength(2);
   });
 
   it('restores defaults when persisted template intervals are invalid', () => {
@@ -146,8 +123,8 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const policy = store.load();
-    expect(policy.templates).toHaveLength(6);
-    expect(policy.version).toBe(1);
+    expect(policy.templates).toHaveLength(2);
+    expect(policy.version).toBe(99);
     expect(policy.updatedBy).toBe('system');
   });
 
@@ -174,12 +151,12 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const policy = store.load();
-    expect(policy.templates).toHaveLength(6);
-    expect(policy.version).toBe(1);
+    expect(policy.templates).toHaveLength(2);
+    expect(policy.version).toBe(99);
     expect(policy.updatedBy).toBe('system');
   });
 
-  it('backfills and persists missing cadence for known default templates', () => {
+  it('consolidates old default templates and persists current cadence defaults', () => {
     const policyPath = join(tmpDir, 'heartbeat-policy.json');
     writeFileSync(
       policyPath,
@@ -210,19 +187,21 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const loaded = store.load();
-    const musing = loaded.templates.find(t => t.id === 'musing');
     const dailyReview = loaded.templates.find(t => t.id === 'daily-review');
-    expect(musing?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
+    const weeklyReview = loaded.templates.find(t => t.id === 'weekly-review');
+    expect(loaded.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review']);
     expect(dailyReview?.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
+    expect(weeklyReview?.cadence).toEqual({ kind: 'relative' });
 
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
-    const persistedMusing = persisted.templates.find(t => t.id === 'musing');
     const persistedDailyReview = persisted.templates.find(t => t.id === 'daily-review');
-    expect(persistedMusing?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'local' });
+    const persistedWeeklyReview = persisted.templates.find(t => t.id === 'weekly-review');
+    expect(persisted.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review']);
     expect(persistedDailyReview?.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
+    expect(persistedWeeklyReview?.cadence).toEqual({ kind: 'relative' });
   });
 
-  it('normalizes legacy whisper display text to musing on load', () => {
+  it('removes legacy whisper defaults during consolidation', () => {
     const policyPath = join(tmpDir, 'heartbeat-policy.json');
     writeFileSync(
       policyPath,
@@ -246,14 +225,12 @@ describe('HeartbeatPolicyStore', () => {
     );
 
     const loaded = store.load();
-    const musing = loaded.templates.find(t => t.id === 'musing');
-    expect(musing?.name).toBe('Musing');
-    expect(musing?.prompt).toContain('little musing from your inner world');
+    expect(loaded.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review']);
+    expect(loaded.templates.some(t => t.id === 'whisper')).toBe(false);
+    expect(loaded.templates.some(t => t.id === 'musing')).toBe(false);
 
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as { templates: ReflectionTemplate[] };
-    const persistedMusing = persisted.templates.find(t => t.id === 'musing');
-    expect(persistedMusing?.name).toBe('Musing');
-    expect(persistedMusing?.prompt).toContain('little musing from your inner world');
+    expect(persisted.templates.map(t => t.id)).toEqual(['daily-review', 'weekly-review']);
   });
 });
 

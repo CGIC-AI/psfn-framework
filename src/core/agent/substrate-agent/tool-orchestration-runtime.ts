@@ -76,7 +76,6 @@ const PARALLEL_READ_ONLY_TOOL_NAMES = new Set([
   'issue_ready',
   'issue_show',
   'settings_get',
-  'heartbeat_get_policy',
   'contact_lookup',
   'contact_list',
   'session_list',

@@ -25,20 +25,21 @@ import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-st
 import type { ChannelType, PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { textResult, textResultWithError } from '../tools/results.js';
-import type { LegacyAliasTelemetryCallback } from '../tools/legacy-alias-telemetry.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
 import type { Scheduler } from './scheduler.js';
-import type { HeartbeatPolicyStore, ReflectionDeliberationConfig } from './heartbeat-policy.js';
 import {
-  createHeartbeatGetPolicyTool,
-  createHeartbeatRunTemplateTool,
-  createHeartbeatUpdatePolicyTool,
-  createScheduleTaskTool,
-} from './heartbeat-tools.js';
+  resolveConsolidatedReflectionTemplateId,
+  type HeartbeatPolicy,
+  type HeartbeatPolicyStore,
+  type ReflectionDeliberationConfig,
+  type ReflectionTemplate,
+} from './heartbeat-policy.js';
 import type { MemoryWriter } from '../../faculties/memory/writer.js';
 
 const DEFAULT_LIST_LIMIT = 32;
 const MAX_LIST_LIMIT = 200;
+const MAX_SCHEDULED_TASKS = 50;
 
 const SCHEDULE_TOOL_ACTIONS = [
   'list',
@@ -50,9 +51,6 @@ const SCHEDULE_TOOL_ACTIONS = [
   'update_template',
   'run_template',
   'schedule_prompt',
-  'get_policy',
-  'update_policy',
-  'schedule_task',
 ] as const;
 
 type ScheduleToolActionName = (typeof SCHEDULE_TOOL_ACTIONS)[number];
@@ -147,11 +145,62 @@ export interface ScheduleToolOptions {
     CareReminderStore,
     'create' | 'list' | 'markTriggered'
   > | null;
-  emitLegacyAliasTelemetry?: LegacyAliasTelemetryCallback;
 }
 
 function errorMessage(error: unknown): string {
   return toErrorMessage(error);
+}
+
+function formatMs(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${(ms / 3_600_000).toFixed(1)}h`;
+  return `${(ms / 86_400_000).toFixed(1)}d`;
+}
+
+function formatDeliberation(config?: ReflectionDeliberationConfig): string {
+  if (!config) return 'default';
+  const parts: string[] = [];
+  if (config.maxRounds !== undefined) parts.push(`rounds=${config.maxRounds}`);
+  if (config.maxTotalTokens !== undefined) parts.push(`tokens=${config.maxTotalTokens}`);
+  if (config.maxWallTimeMs !== undefined) parts.push(`wall=${config.maxWallTimeMs}ms`);
+  if (config.voices !== undefined && config.voices.length > 0) {
+    parts.push(`voices=${config.voices.join('+')}`);
+  }
+  return parts.length > 0 ? parts.join(', ') : 'default';
+}
+
+function cloneDeliberation(config: ReflectionDeliberationConfig | undefined): ReflectionDeliberationConfig | undefined {
+  if (!config) return undefined;
+  return {
+    ...(config.maxRounds !== undefined ? { maxRounds: config.maxRounds } : {}),
+    ...(config.maxTotalTokens !== undefined ? { maxTotalTokens: config.maxTotalTokens } : {}),
+    ...(config.maxWallTimeMs !== undefined ? { maxWallTimeMs: config.maxWallTimeMs } : {}),
+    ...(config.voices !== undefined ? { voices: [...config.voices] } : {}),
+    ...(config.inputUsdPerMillionTokens !== undefined
+      ? { inputUsdPerMillionTokens: config.inputUsdPerMillionTokens }
+      : {}),
+    ...(config.outputUsdPerMillionTokens !== undefined
+      ? { outputUsdPerMillionTokens: config.outputUsdPerMillionTokens }
+      : {}),
+  };
+}
+
+function cloneTemplate(template: ReflectionTemplate): ReflectionTemplate {
+  return {
+    ...template,
+    ...(template.cadence !== undefined ? { cadence: { ...template.cadence } } : {}),
+    ...(template.deliberation !== undefined
+      ? { deliberation: cloneDeliberation(template.deliberation) }
+      : {}),
+  };
+}
+
+function clonePolicy(policy: HeartbeatPolicy): HeartbeatPolicy {
+  return {
+    ...policy,
+    templates: policy.templates.map(template => cloneTemplate(template)),
+  };
 }
 
 function normalizeAction(value: unknown): ScheduleToolAction {
@@ -171,12 +220,6 @@ function normalizeAction(value: unknown): ScheduleToolAction {
     case 'run_template':
     case 'schedule_prompt':
       return normalized;
-    case 'get_policy':
-      return 'list_templates';
-    case 'update_policy':
-      return 'update_template';
-    case 'schedule_task':
-      return 'schedule_prompt';
   }
   throw new Error(`action must be one of: ${SCHEDULE_TOOL_ACTIONS.join(', ')}`);
 }
@@ -370,7 +413,6 @@ function resolveScheduleRequirement(params: Record<string, unknown>): Capability
     case '':
     case 'list':
     case 'list_templates':
-    case 'get_policy':
       return 'identity.read';
     case 'create_follow_up':
     case 'activate_follow_up':
@@ -379,8 +421,6 @@ function resolveScheduleRequirement(params: Record<string, unknown>): Capability
     case 'update_template':
     case 'run_template':
     case 'schedule_prompt':
-    case 'update_policy':
-    case 'schedule_task':
       return 'identity.write.runtime';
     default:
       return ['identity.read', 'identity.write.runtime'];
@@ -388,33 +428,13 @@ function resolveScheduleRequirement(params: Record<string, unknown>): Capability
 }
 
 export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any> {
-  const heartbeatGetPolicyTool = createHeartbeatGetPolicyTool(options.heartbeatPolicyStore);
-  const heartbeatUpdatePolicyTool = createHeartbeatUpdatePolicyTool(
-    options.heartbeatPolicyStore,
-    options.syncReflectionTasks,
-    {
-      memoryWriter: options.memoryWriter,
-    },
-  );
-  const heartbeatRunTemplateTool = createHeartbeatRunTemplateTool(
-    options.heartbeatPolicyStore,
-    options.runTemplate,
-  );
-  const scheduleTaskTool = createScheduleTaskTool(
-    options.scheduler,
-    options.agentLoop,
-    options.sender,
-    options.heartbeatChannelId,
-  );
-
   const tool: AgentTool<any> = {
     name: 'schedule',
     label: 'schedule',
     description:
       'Manage time-based continuity through one schedule surface. ' +
       'Use action=list|create_follow_up|activate_follow_up|create_reminder|trigger_reminder|' +
-      'list_templates|update_template|run_template|schedule_prompt. ' +
-      'Legacy scheduler semantics remain available as action=get_policy|update_policy|schedule_task.',
+      'list_templates|update_template|run_template|schedule_prompt.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union(
         SCHEDULE_TOOL_ACTIONS.map(action => Type.Literal(action)),
@@ -476,7 +496,7 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any>
       template_id: Type.Optional(Type.String({ minLength: 1, description: 'Heartbeat template id for template actions.' })),
       send_to_discord: Type.Optional(Type.Boolean({ description: 'Optional send override for action=run_template or action=update_template.' })),
       defer_if_busy: Type.Optional(Type.Boolean({ description: 'Whether manual template runs should defer while busy. Defaults to true.' })),
-      name: Type.Optional(Type.String({ minLength: 1, description: 'Scheduled prompt name for action=schedule_prompt or action=schedule_task.' })),
+      name: Type.Optional(Type.String({ minLength: 1, description: 'Scheduled prompt name for action=schedule_prompt.' })),
       prompt: Type.Optional(Type.String({ minLength: 1, description: 'Scheduled prompt body.' })),
       delay_minutes: Type.Optional(Type.Number({ minimum: 1, maximum: 10080, description: 'Delay before a scheduled prompt fires.' })),
       id: Type.Optional(Type.String({ minLength: 1, description: 'Template id when action=update_template adds a new template.' })),
@@ -499,22 +519,13 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any>
       })),
     }),
     execute: async (
-      toolCallId: string,
+      _toolCallId: string,
       params: ScheduleToolParams = {},
-      signal?: AbortSignal,
+      _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
-      const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
       let action: ScheduleToolAction;
       try {
         action = normalizeAction(params.action);
-        if (rawAction && rawAction !== action) {
-          options.emitLegacyAliasTelemetry?.({
-            toolName: 'schedule',
-            alias: rawAction,
-            canonicalAction: action,
-            migrationSurface: 'schedule',
-          });
-        }
       } catch (error) {
         return textResultWithError(`schedule failed: ${errorMessage(error)}`, true);
       }
@@ -664,40 +675,231 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any>
             }, null, 2));
           }
 
-          case 'list_templates':
-            return heartbeatGetPolicyTool.execute(toolCallId, {}, signal);
+          case 'list_templates': {
+            const policy = options.heartbeatPolicyStore.load();
+            const lines = [
+              `Reflection Schedule Policy (v${policy.version}, updated ${policy.updatedAt} by ${policy.updatedBy})`,
+              `Templates: ${policy.templates.length}`,
+              '',
+            ];
 
-          case 'update_template':
-            return heartbeatUpdatePolicyTool.execute(toolCallId, {
-              action: params.id ? 'add' as const : undefined,
-              ...(params.template_id ? { templateId: params.template_id } : {}),
-              ...(params.id ? { id: params.id } : {}),
-              ...(params.name ? { name: params.name } : {}),
-              ...(params.prompt ? { prompt: params.prompt } : {}),
-              ...(params.interval_ms !== undefined ? { intervalMs: params.interval_ms } : {}),
-              ...(params.enabled !== undefined ? { enabled: params.enabled } : {}),
-              ...(params.send_to_discord !== undefined ? { sendToDiscord: params.send_to_discord } : {}),
-              ...(params.reason ? { reason: params.reason } : {}),
-              ...(params.internal_state_input !== undefined
-                ? { internalStateInput: params.internal_state_input }
+            for (const template of policy.templates) {
+              lines.push(`[${template.enabled ? 'ON' : 'OFF'}] ${template.id} - "${template.name}"`);
+              lines.push(`  Interval: ${formatMs(template.intervalMs)}`);
+              lines.push(`  Discord: ${template.sendToDiscord ? 'yes' : 'no'}`);
+              lines.push(`  Mode: ${template.mode ?? 'standard'}`);
+              if (template.mode === 'deliberation') {
+                lines.push(`  Deliberation: ${formatDeliberation(template.deliberation)}`);
+              }
+              lines.push(
+                `  Prompt: ${template.prompt.slice(0, 120)}${template.prompt.length > 120 ? '...' : ''}`,
+              );
+              lines.push('');
+            }
+
+            return textResult(lines.join('\n'));
+          }
+
+          case 'update_template': {
+            const policy = options.heartbeatPolicyStore.load();
+            const policyBefore = clonePolicy(policy);
+
+            if (params.id) {
+              const id = normalizeNonEmptyString(params.id, 'id');
+              const name = normalizeNonEmptyString(params.name, 'name');
+              const prompt = normalizeNonEmptyString(params.prompt, 'prompt');
+              if (params.interval_ms === undefined) {
+                return textResultWithError('interval_ms is required when adding a reflection template', true);
+              }
+              if (policy.templates.length >= options.heartbeatPolicyStore.maxTemplates) {
+                return textResultWithError(`Max ${options.heartbeatPolicyStore.maxTemplates} templates allowed`, true);
+              }
+              if (policy.templates.some(template => template.id === id)) {
+                return textResultWithError(`Template "${id}" already exists`, true);
+              }
+
+              const newTemplate: ReflectionTemplate = {
+                id,
+                name,
+                prompt,
+                intervalMs: params.interval_ms,
+                enabled: params.enabled ?? true,
+                sendToDiscord: params.send_to_discord ?? false,
+                ...(params.internal_state_input !== undefined
+                  ? { internalStateInput: params.internal_state_input }
+                  : {}),
+                mode: params.mode ?? 'standard',
+                ...(params.deliberation ? { deliberation: cloneDeliberation(params.deliberation) } : {}),
+              };
+              const errors = options.heartbeatPolicyStore.validateNew(newTemplate);
+              if (errors.length > 0) {
+                return textResultWithError(
+                  'Validation errors:\n' + errors.map(error => `  ${error.field}: ${error.message}`).join('\n'),
+                  true,
+                );
+              }
+
+              policy.templates.push(newTemplate);
+              policy.version++;
+              policy.updatedAt = new Date().toISOString();
+              policy.updatedBy = 'agent';
+              options.heartbeatPolicyStore.save(policy);
+              try {
+                options.syncReflectionTasks();
+              } catch (error) {
+                options.heartbeatPolicyStore.save(policyBefore);
+                throw error;
+              }
+
+              return textResult(`Added reflection template "${id}" (${formatMs(params.interval_ms)} interval)`);
+            }
+
+            const requestedTemplateId = normalizeNonEmptyString(params.template_id, 'template_id');
+            const templateId = resolveConsolidatedReflectionTemplateId(requestedTemplateId);
+            const template = policy.templates.find(candidate => candidate.id === templateId);
+            if (!template) {
+              return textResultWithError(`Template "${requestedTemplateId}" not found`, true);
+            }
+
+            const updates: Record<string, unknown> = {};
+            if (params.name !== undefined) updates.name = params.name;
+            if (params.prompt !== undefined) updates.prompt = params.prompt;
+            if (params.interval_ms !== undefined) updates.intervalMs = params.interval_ms;
+            if (params.internal_state_input !== undefined) updates.internalStateInput = params.internal_state_input;
+            if (params.mode !== undefined) updates.mode = params.mode;
+            if (params.deliberation !== undefined) updates.deliberation = params.deliberation;
+            if (Object.keys(updates).length > 0) {
+              const errors = options.heartbeatPolicyStore.validateUpdate(updates);
+              if (errors.length > 0) {
+                return textResultWithError(
+                  'Validation errors:\n' + errors.map(error => `  ${error.field}: ${error.message}`).join('\n'),
+                  true,
+                );
+              }
+            }
+
+            if (params.name !== undefined) template.name = params.name;
+            if (params.prompt !== undefined) template.prompt = params.prompt;
+            if (params.interval_ms !== undefined) template.intervalMs = params.interval_ms;
+            if (params.enabled !== undefined) template.enabled = params.enabled;
+            if (params.send_to_discord !== undefined) template.sendToDiscord = params.send_to_discord;
+            if (params.internal_state_input !== undefined) template.internalStateInput = params.internal_state_input;
+            if (params.mode !== undefined) template.mode = params.mode;
+            if (params.deliberation !== undefined) template.deliberation = cloneDeliberation(params.deliberation);
+
+            policy.version++;
+            policy.updatedAt = new Date().toISOString();
+            policy.updatedBy = 'agent';
+            options.heartbeatPolicyStore.save(policy);
+            try {
+              options.syncReflectionTasks();
+            } catch (error) {
+              options.heartbeatPolicyStore.save(policyBefore);
+              throw error;
+            }
+
+            return textResult(
+              `Updated reflection template "${template.id}" - `
+              + `${template.enabled ? 'enabled' : 'disabled'}, `
+              + `${formatMs(template.intervalMs)} interval, mode=${template.mode ?? 'standard'}`,
+            );
+          }
+
+          case 'run_template': {
+            const requestedTemplateId = normalizeNonEmptyString(params.template_id, 'template_id');
+            const templateId = resolveConsolidatedReflectionTemplateId(requestedTemplateId);
+            const policy = options.heartbeatPolicyStore.load();
+            if (!policy.templates.some(template => template.id === templateId)) {
+              return textResultWithError(`Template "${requestedTemplateId}" not found`, true);
+            }
+
+            const result = await options.runTemplate(requestedTemplateId, {
+              ...(params.send_to_discord !== undefined
+                ? { sendToDiscordOverride: params.send_to_discord }
                 : {}),
-              ...(params.mode ? { mode: params.mode } : {}),
-              ...(params.deliberation ? { deliberation: params.deliberation } : {}),
-            }, signal);
+              deferIfBusy: params.defer_if_busy ?? true,
+            });
+            if (result.queued) {
+              const queueDetail = result.deferredAction ? 'for post-turn execution.' : 'on the deferred reflection queue.';
+              return {
+                content: [{
+                  type: 'text',
+                  text: `Queued manual reflection run "${result.templateName}" (${result.templateId}) ${queueDetail}`,
+                }],
+                details: {
+                  ...(result.deferredAction ? { deferredAction: result.deferredAction } : {}),
+                },
+              };
+            }
 
-          case 'run_template':
-            return heartbeatRunTemplateTool.execute(toolCallId, {
-              templateId: normalizeNonEmptyString(params.template_id, 'template_id'),
-              ...(params.send_to_discord !== undefined ? { sendToDiscord: params.send_to_discord } : {}),
-              ...(params.defer_if_busy !== undefined ? { deferIfBusy: params.defer_if_busy } : {}),
-            }, signal);
+            const reflection = result.reflection.trim();
+            return textResult(
+              `Triggered reflection template "${result.templateName}" (${result.templateId}).\n\n`
+              + (reflection || '[empty reflection output]'),
+            );
+          }
 
-          case 'schedule_prompt':
-            return scheduleTaskTool.execute(toolCallId, {
-              name: normalizeNonEmptyString(params.name, 'name'),
-              prompt: normalizeNonEmptyString(params.prompt, 'prompt'),
-              delay_minutes: typeof params.delay_minutes === 'number' ? params.delay_minutes : Number.NaN,
-            }, signal);
+          case 'schedule_prompt': {
+            const name = normalizeNonEmptyString(params.name, 'name');
+            const prompt = normalizeNonEmptyString(params.prompt, 'prompt');
+            const delayMinutes = typeof params.delay_minutes === 'number' ? params.delay_minutes : Number.NaN;
+            if (!Number.isFinite(delayMinutes) || delayMinutes < 1 || delayMinutes > 10080) {
+              return textResultWithError('delay_minutes must be between 1 and 10080 (7 days)', true);
+            }
+            if (prompt.length < 10) {
+              return textResultWithError('prompt must be at least 10 characters', true);
+            }
+
+            const allTasks = options.scheduler.listTasks();
+            if (allTasks.length >= MAX_SCHEDULED_TASKS) {
+              return textResultWithError(`Max ${MAX_SCHEDULED_TASKS} total tasks allowed`, true);
+            }
+
+            const taskId = `planned:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const runAt = Date.now() + delayMinutes * 60_000;
+
+            options.scheduler.register({
+              id: taskId,
+              name,
+              type: 'one-shot',
+              intervalMs: 0,
+              runAt,
+              handler: async () => {
+                const runPlannedPrompt = async (): Promise<void> => {
+                  const response = await options.agentLoop.handleMessage({
+                    id: `planned-${Date.now()}`,
+                    channelId: `internal:planned:${taskId}`,
+                    channelType: 'terminal',
+                    authorId: 'scheduler',
+                    authorName: name,
+                    content: prompt,
+                    timestamp: new Date(),
+                  });
+
+                  if (options.heartbeatChannelId) {
+                    await options.sender.send(options.heartbeatChannelId, response.content);
+                  }
+                };
+
+                try {
+                  await runPlannedPrompt();
+                } catch (error) {
+                  if (!isBusyTurnError(error)) {
+                    throw error;
+                  }
+                  if (typeof options.agentLoop.waitForIdle !== 'function') {
+                    throw error;
+                  }
+                  await options.agentLoop.waitForIdle();
+                  await runPlannedPrompt();
+                }
+              },
+              state: 'idle',
+            });
+
+            const fireAt = new Date(runAt).toISOString();
+            return textResult(`Scheduled "${name}" to fire at ${fireAt} (in ${delayMinutes}m)`);
+          }
         }
       } catch (error) {
         return textResultWithError(`schedule failed for action=${action}: ${errorMessage(error)}`, true);

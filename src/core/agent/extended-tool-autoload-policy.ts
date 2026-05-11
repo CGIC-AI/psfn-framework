@@ -48,10 +48,7 @@ const OPS_PATTERN = /\b(schedule|heartbeat|policy|runtime|settings|restart|rebui
 const OPS_TASK_KINDS = new Set(['heartbeat', 'planning', 'maintenance']);
 
 export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX = 3;
-export const DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS: ReadonlySet<string> = new Set([
-  'schedule_task',
-  'heartbeat_run_template',
-]);
+export const DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS: ReadonlySet<string> = new Set();
 
 export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnIntent, readonly string[]>> = {
   dev: [
@@ -62,9 +59,6 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
     'north_star',
   ],
   ops: [
-    'heartbeat_update_policy',
-    'heartbeat_run_template',
-    'schedule_task',
     'beads',
   ],
   reflection: [],

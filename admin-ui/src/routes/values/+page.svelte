@@ -93,7 +93,7 @@
           </p>
           <p class="text-sm text-shadow-600 mt-2">
             The values journal is available when the agent is running with an active gateway.
-            Values reflections are captured from periodic "values-reflection" heartbeats.
+            Values reflections are captured from the consolidated weekly reflection heartbeat.
             Each entry records a versioned prompt and the agent's reflection on her current values and goals.
           </p>
         </div>

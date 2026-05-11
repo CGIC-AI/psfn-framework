@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort } from '../agent/contracts.js';
+import type { LLMContext } from '../../shared/contracts/runtime.js';
 import { EventBus, type EventMap } from '../../shared/event-bus.js';
 import {
   NON_CANONICAL_REFLECTION_SUBSTRATE,
@@ -60,10 +61,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     const capturedPrompts: string[] = [];
     const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
     const policy = policyStore.load();
-    const template = policy.templates.find((candidate) => candidate.id === 'musing');
+    const template = policy.templates.find((candidate) => candidate.id === 'daily-review');
     expect(template).toBeDefined();
     if (!template) {
-      throw new Error('musing template missing from defaults');
+      throw new Error('daily-review template missing from defaults');
     }
     template.internalStateInput = true;
     template.sendToDiscord = false;
@@ -81,7 +82,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         artifactType: ACAC_ARTIFACT_TYPE,
         provenance: {
           kind: 'self_report',
-          source: 'heartbeat:emotional-check',
+          source: 'heartbeat:daily-review',
           observedAt: '2026-03-02T01:00:00.000Z',
         },
         axes: {
@@ -119,7 +120,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       dataDir: tempDir,
     });
 
-    await runtime.runTemplateNow('musing', {
+    await runtime.runTemplateNow('daily-review', {
       sendToDiscordOverride: false,
       deferIfBusy: false,
     });
@@ -127,7 +128,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     const internalStateSection = getPromptSection(capturedPrompts[0] ?? '', '[Internal State Input]');
     expect(internalStateSection).toContain('[ACAC Self-Report]');
     expect(internalStateSection).toContain('provenance_kind: self_report');
-    expect(internalStateSection).toContain('provenance_source: heartbeat:emotional-check');
+    expect(internalStateSection).toContain('provenance_source: heartbeat:daily-review');
     expect(internalStateSection).toContain('agency_score: 0.8100 rationale: The next action feels available.');
     expect(internalStateSection).toContain('connection_score: 0.6200 rationale: The contact thread is present.');
     expect(internalStateSection).toContain('authenticity_score: 0.7300 rationale: The report matches the current context.');
@@ -161,17 +162,11 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     try {
       const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
       const policy = policyStore.load();
-      const valuesTemplate = policy.templates.find((template) => template.id === 'values-reflection');
+      const valuesTemplate = policy.templates.find((template) => template.id === 'weekly-review');
       expect(valuesTemplate).toBeDefined();
       if (!valuesTemplate) {
-        throw new Error('values-reflection template missing from defaults');
+        throw new Error('weekly-review template missing from defaults');
       }
-      valuesTemplate.deliberation = {
-        ...valuesTemplate.deliberation,
-        maxRounds: 1,
-      };
-      policyStore.save(policy);
-
       const internalState = new InternalStateComputer().computeState({
         emotionState: {
           vad: { valence: 0.1, arousal: 0.2, dominance: 0.05 },
@@ -192,7 +187,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       });
       const snapshotRef = buildInternalStateSnapshotRef(internalState);
       const metacognitiveFlags = [{ flag: 'continuity', confidence: 0.72 }];
-      const capturedOptions: Array<Record<string, unknown> | undefined> = [];
+      const capturedContexts: LLMContext[] = [];
       const llmProvider: LLMProviderPort = {
         stream: vi.fn(async () => ({
           content: '',
@@ -202,8 +197,8 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           outputTokens: 0,
           stopReason: 'stop',
         })),
-        complete: vi.fn(async (_context, purpose, requestOptions?: Record<string, unknown>) => {
-          capturedOptions.push(requestOptions);
+        complete: vi.fn(async (context, purpose) => {
+          capturedContexts.push(context);
           const content = purpose === 'reasoning'
             ? 'Continuity stays central.'
             : 'Care keeps the tone steady.';
@@ -233,7 +228,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         },
       });
 
-      await runtime.runTemplateNow('values-reflection', {
+      await runtime.runTemplateNow('weekly-review', {
         sendToDiscordOverride: false,
         deferIfBusy: false,
       });
@@ -276,9 +271,9 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
 
       expect(entry.kind).toBe('reflection_run');
       expect(entry.executionSource).toBe('manual');
-      expect(entry.initiatorSurface).toBe('tool:heartbeat_run_template');
+      expect(entry.initiatorSurface).toBe('tool:schedule');
       expect(entry.initiatedBy).toBe('companion');
-      expect(entry.reason).toBe('Manual reflection run via heartbeat_run_template');
+      expect(entry.reason).toBe('Manual reflection run via schedule action=run_template');
       expect(entry.processId).toMatch(/^reflection-process-/);
       expect(entry.internalStateSnapshotRef).toBe(snapshotRef);
       expect(entry.metacognitiveFlags).toEqual(metacognitiveFlags);
@@ -289,9 +284,9 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         kind: 'maintenance_reflection',
         mode: 'background_bounded',
         budget: {
-          maxRounds: 1,
-          maxTotalTokens: 8000,
-          maxWallTimeMs: 45000,
+          maxRounds: 3,
+          maxTotalTokens: 14000,
+          maxWallTimeMs: 90000,
         },
         exit: {
           reason: 'max_rounds',
@@ -316,7 +311,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         };
       };
       expect(reflectionEntry.telemetry?.deliberation?.episode).toMatchObject({
-        budget: { maxRounds: 1 },
+        budget: { maxRounds: 3 },
         exit: { reason: 'max_rounds', maxRoundsReached: true },
       });
 
@@ -332,20 +327,31 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         };
       };
       expect(valuesEntry.telemetry?.deliberation?.episode).toMatchObject({
-        budget: { maxRounds: 1 },
+        budget: { maxRounds: 3 },
         exit: { reason: 'max_rounds', maxRoundsReached: true },
       });
-      expect(capturedOptions[0]).toMatchObject({
+      const evidenceContext = capturedContexts.find((context) => {
+        const correlation = context.correlation;
+        return (
+          correlation?.channelId === 'internal:reflection:weekly-review' &&
+          correlation.originStage === 'heartbeat.deliberation.evidence'
+        );
+      });
+      expect(evidenceContext).toMatchObject({
         correlation: {
           callType: 'background',
           originType: 'background',
-          channelId: 'internal:reflection:values-reflection',
-          originStage: 'heartbeat.deliberation.voice.reasoning',
+          channelId: 'internal:reflection:weekly-review',
+          originStage: 'heartbeat.deliberation.evidence',
         },
       });
-      expect(capturedOptions[2]).toMatchObject({
+      const contradictionContext = capturedContexts.find((context) => {
+        const correlation = context.correlation;
+        return correlation?.originStage === 'heartbeat.deliberation.contradiction';
+      });
+      expect(contradictionContext).toMatchObject({
         correlation: {
-          originStage: 'heartbeat.deliberation.aggregator',
+          originStage: 'heartbeat.deliberation.contradiction',
         },
       });
     } finally {
@@ -554,8 +560,8 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(metacognitionEntry.deliberation?.episode).toMatchObject({
       budget: {
         maxRounds: 3,
-        maxTotalTokens: 6000,
-        maxWallTimeMs: 35000,
+        maxTotalTokens: 10000,
+        maxWallTimeMs: 60000,
       },
       exit: {
         reason: 'max_rounds',
@@ -610,10 +616,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
     try {
       const policy = policyStore.load();
-      const valuesTemplate = policy.templates.find((template) => template.id === 'values-reflection');
+      const valuesTemplate = policy.templates.find((template) => template.id === 'weekly-review');
       expect(valuesTemplate).toBeDefined();
       if (!valuesTemplate) {
-        throw new Error('values-reflection template missing from defaults');
+        throw new Error('weekly-review template missing from defaults');
       }
       valuesTemplate.deliberation = {
         ...valuesTemplate.deliberation,
@@ -686,7 +692,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         },
       });
 
-      await runtime.runTemplateNow('values-reflection', {
+      await runtime.runTemplateNow('weekly-review', {
         sendToDiscordOverride: false,
         deferIfBusy: false,
       });
@@ -701,7 +707,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     }
   });
 
-  it.each(['daily-review', 'musing'])(
+  it.each(['daily-review', 'weekly-review'])(
     'binds canonical contact context for %s reflection turns',
     async (templateId) => {
       tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
@@ -945,8 +951,26 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     },
   );
 
-  it('flags assertion-heavy musing output when no grounding support is available', async () => {
+  it('records internal-state grounding for contactless daily reflection output', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const internalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.05, arousal: 0.2, dominance: 0.1 },
+        mood: { valence: 0.08, arousal: 0.18, dominance: 0.12 },
+        discrete: { tenderness: 0.4 },
+        confidence: 0.72,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      sessionMetrics: {
+        userMessageText: '',
+        responseText: '',
+        toolCallCount: 0,
+        recentTurnCount: 0,
+        lastSeenDeltaSeconds: 3_600,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(internalState);
 
     const runtime = createHeartbeatTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
@@ -954,12 +978,15 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         handleMessage: vi.fn(async () => ({
           content: 'I feel a quiet tenderness in my inner world, and I know it means I need more connection today.',
         })),
+        getCurrentInternalState: () => internalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
       } as any,
       sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
     });
 
-    await runtime.runTemplateNow('musing', {
+    await runtime.runTemplateNow('daily-review', {
       sendToDiscordOverride: false,
       deferIfBusy: false,
     });
@@ -969,17 +996,34 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       metacognitiveFlags?: Array<{ flag: string; confidence: number; evidence?: string }>;
       substrateProvenanceRefs?: string[];
     };
-    expect(metacognitionEntry.substrateProvenanceRefs).toBeUndefined();
-    expect(metacognitionEntry.metacognitiveFlags).toEqual([
-      expect.objectContaining({
-        flag: 'support_gap_confabulation_risk',
-        evidence: expect.stringContaining('no persisted grounding provenance refs'),
-      }),
-    ]);
+    expect(metacognitionEntry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^internal_state_snapshot:/),
+    ]));
+    expect(metacognitionEntry.metacognitiveFlags ?? []).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ flag: 'support_gap_confabulation_risk' }),
+    ]));
   });
 
-  it('persists response retrieval provenance for contactless musing turns', async () => {
+  it('persists response retrieval provenance for contactless daily reflection turns', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const internalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.05, arousal: 0.2, dominance: 0.1 },
+        mood: { valence: 0.08, arousal: 0.18, dominance: 0.12 },
+        discrete: { anticipation: 0.45 },
+        confidence: 0.72,
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      sessionMetrics: {
+        userMessageText: '',
+        responseText: '',
+        toolCallCount: 0,
+        recentTurnCount: 0,
+        lastSeenDeltaSeconds: 3_600,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(internalState);
 
     const runtime = createHeartbeatTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
@@ -993,12 +1037,15 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
             ],
           },
         })),
+        getCurrentInternalState: () => internalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
       } as any,
       sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
     });
 
-    await runtime.runTemplateNow('musing', {
+    await runtime.runTemplateNow('daily-review', {
       sendToDiscordOverride: false,
       deferIfBusy: false,
     });
@@ -1031,10 +1078,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     const telemetryEvents: EventMap['reflection.guardrail'][] = [];
     const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
     const policy = policyStore.load();
-    const template = policy.templates.find((candidate) => candidate.id === 'musing');
+    const template = policy.templates.find((candidate) => candidate.id === 'daily-review');
     expect(template).toBeDefined();
     if (!template) {
-      throw new Error('musing template missing from defaults');
+      throw new Error('daily-review template missing from defaults');
     }
     template.internalStateInput = true;
     policyStore.save(policy);
@@ -1074,14 +1121,14 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       runtimeOptions: { eventBus },
     });
 
-    await runtime.runTemplateNow('musing', {
+    await runtime.runTemplateNow('daily-review', {
       sendToDiscordOverride: false,
       deferIfBusy: false,
     });
 
     expect(telemetryEvents).toHaveLength(1);
     expect(telemetryEvents[0]).toMatchObject({
-      channelId: 'internal:reflection:musing',
+      channelId: 'internal:reflection:daily-review',
       snapshotSource: 'derived_runtime',
       counters: {
         nullCanonicalContactCount: 1,
@@ -1100,10 +1147,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     const now = Date.now();
     const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
     const policy = policyStore.load();
-    const template = policy.templates.find((candidate) => candidate.id === 'musing');
+    const template = policy.templates.find((candidate) => candidate.id === 'daily-review');
     expect(template).toBeDefined();
     if (!template) {
-      throw new Error('musing template missing from defaults');
+      throw new Error('daily-review template missing from defaults');
     }
     template.internalStateInput = true;
     template.intervalMs = 15 * 60 * 1000;
@@ -1194,7 +1241,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       },
     });
 
-    await runtime.runTemplateNow('musing', {
+    await runtime.runTemplateNow('daily-review', {
       sendToDiscordOverride: false,
       deferIfBusy: false,
     });
@@ -1220,10 +1267,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     const now = Date.now();
     const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
     const policy = policyStore.load();
-    const template = policy.templates.find((candidate) => candidate.id === 'musing');
+    const template = policy.templates.find((candidate) => candidate.id === 'daily-review');
     expect(template).toBeDefined();
     if (!template) {
-      throw new Error('musing template missing from defaults');
+      throw new Error('daily-review template missing from defaults');
     }
     template.internalStateInput = true;
     policyStore.save(policy);
@@ -1316,7 +1363,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       },
     });
 
-    await runtime.runTemplateNow('musing', {
+    await runtime.runTemplateNow('daily-review', {
       sendToDiscordOverride: false,
       deferIfBusy: false,
     });
@@ -1343,10 +1390,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
 
     const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
     const policy = policyStore.load();
-    const experientialTemplate = policy.templates.find((template) => template.id === 'experiential-review');
+    const experientialTemplate = policy.templates.find((template) => template.id === 'daily-review');
     expect(experientialTemplate).toBeDefined();
     if (!experientialTemplate) {
-      throw new Error('experiential-review template missing from defaults');
+      throw new Error('daily-review template missing from defaults');
     }
     experientialTemplate.prompt = [
       'Self:',
@@ -1509,7 +1556,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       },
     });
 
-    await runtime.runTemplateNow('experiential-review', {
+    await runtime.runTemplateNow('daily-review', {
       sendToDiscordOverride: false,
       deferIfBusy: false,
     });
@@ -1592,10 +1639,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     try {
       const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
       const policy = policyStore.load();
-      const valuesTemplate = policy.templates.find((template) => template.id === 'values-reflection');
+      const valuesTemplate = policy.templates.find((template) => template.id === 'weekly-review');
       expect(valuesTemplate).toBeDefined();
       if (!valuesTemplate) {
-        throw new Error('values-reflection template missing from defaults');
+        throw new Error('weekly-review template missing from defaults');
       }
       valuesTemplate.deliberation = {
         ...valuesTemplate.deliberation,
@@ -1741,7 +1788,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         },
       });
 
-      const reflectionRun = runtime.runTemplateNow('values-reflection', {
+      const reflectionRun = runtime.runTemplateNow('weekly-review', {
         sendToDiscordOverride: false,
         deferIfBusy: false,
       });
@@ -1756,7 +1803,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(flushTelemetry).toEqual([
         expect.objectContaining({
           channelId: 'discord:primary-session',
-          templateId: 'values-reflection',
+          templateId: 'weekly-review',
           phase: 'completed',
         }),
       ]);

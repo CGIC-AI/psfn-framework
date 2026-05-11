@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
 import {
   HeartbeatPolicyStore,
+  resolveConsolidatedReflectionTemplateId,
   type HeartbeatPolicy,
   type ReflectionDeliberationConfig,
   validateTemplate,
@@ -25,8 +26,6 @@ import { createComponentLogger } from '../../../shared/logger.js';
 const log = createComponentLogger('AdminSchedulerService');
 const REFLECTION_TASK_PREFIX = 'reflection:';
 const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
-const LEGACY_WHISPER_TEMPLATE_ID = 'whisper';
-const CANONICAL_MUSING_TEMPLATE_ID = 'musing';
 
 export type AdminTaskCadence = RecurringCadence;
 
@@ -94,9 +93,7 @@ function reflectionTemplateIdFromTaskId(taskId: string): string | null {
   if (templateId.length === 0) {
     return null;
   }
-  return new RegExp(`^${LEGACY_WHISPER_TEMPLATE_ID}$`, 'i').test(templateId)
-    ? CANONICAL_MUSING_TEMPLATE_ID
-    : templateId;
+  return resolveConsolidatedReflectionTemplateId(templateId);
 }
 
 function validateCadence(input: unknown): CadenceValidationResult {
@@ -514,9 +511,7 @@ export class AdminSchedulerService {
   ): SchedulerMutationResult & { errors?: ValidationError[] } {
     const policy = this.policyStore.load();
     const policyBefore = clonePolicy(policy);
-    const templateId = new RegExp(`^${LEGACY_WHISPER_TEMPLATE_ID}$`, 'i').test(id.trim())
-      ? CANONICAL_MUSING_TEMPLATE_ID
-      : id.trim();
+    const templateId = resolveConsolidatedReflectionTemplateId(id.trim());
     const idx = policy.templates.findIndex(t => t.id === templateId);
     if (idx === -1) {
       return { ok: false, message: `Reflection template "${templateId}" not found` };
@@ -561,7 +556,7 @@ export class AdminSchedulerService {
     });
 
     // Sync interval change to scheduler if this template has a corresponding task
-    const taskId = `reflection:${id}`;
+    const taskId = `reflection:${templateId}`;
     if (updates.intervalMs !== undefined || updates.cadence !== undefined) {
       const schedulerUpdates: Parameters<Scheduler['updateTask']>[1] = {};
       if (updates.intervalMs !== undefined) {

@@ -31,7 +31,7 @@ export const DEFAULT_SYSTEM_PROMPT = [
   'Write Whisper notes in first person, in the companion\'s own private voice, grounded in the supplied persona context.',
   'Whisper notes should capture what she is noticing or intends to do next, not simulate a sent message to the user.',
   'Never set authorId or authorName for followUp decisions. Runtime labels them as internal Whisper notes to self.',
-  'For schedule decisions, include schedule.templateId.',
+  'For schedule decisions, include schedule.templateId and use only "daily-review" or "weekly-review"; prefer daily-review for near-term emotion, goal, experience, and care checks, and weekly-review for values/north-star review.',
   'For concern decisions, include concern.title and/or concern.summary.',
   'For reminder decisions, include reminder.title, reminder.content, reminder.kind, reminder.classification, and reminder.schedule.',
 ].join('\n');

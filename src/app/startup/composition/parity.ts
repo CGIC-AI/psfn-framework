@@ -59,15 +59,13 @@ import { NorthStarStore } from '../../../faculties/north-star/store.js';
 import {
   createNorthStarTool,
 } from '../../../faculties/north-star/tools.js';
-import { HeartbeatPolicyStore } from '../../../core/scheduler/heartbeat-policy.js';
 import {
-  createHeartbeatGetPolicyTool,
-  createHeartbeatRunTemplateTool,
-  createHeartbeatUpdatePolicyTool,
-  createScheduleTaskTool,
-} from '../../../core/scheduler/heartbeat-tools.js';
+  HeartbeatPolicyStore,
+  isValuesReflectionTemplateId,
+  resolveConsolidatedReflectionTemplateId,
+} from '../../../core/scheduler/heartbeat-policy.js';
 import { createScheduleTool } from '../../../core/scheduler/schedule-tool.js';
-import type { ReflectionTemplate } from '../../../core/scheduler/heartbeat-policy.js';
+import type { HeartbeatPolicy, ReflectionTemplate } from '../../../core/scheduler/heartbeat-policy.js';
 import type { MemoryWriter } from '../../../faculties/memory/writer.js';
 import { ValuesJournalStore } from '../../../faculties/values/store.js';
 import type {
@@ -134,7 +132,6 @@ import {
   type InternalState,
 } from '../../../core/self-model/state.js';
 import { createSystemTool } from '../../../core/tools/lifecycle.js';
-import { createLegacyAliasTelemetryEmitter } from '../../../core/tools/legacy-alias-telemetry.js';
 import {
   BACKGROUND_CONTINUATION_RUNTIME_CLASS,
   MAINTENANCE_REFLECTION_RUNTIME_CLASS,
@@ -154,6 +151,14 @@ interface ReflectionInternalStateContext {
   internalState: InternalState;
   internalStateSnapshotRef: string;
   metacognitiveFlags: ReflectionMetacognitiveFlag[];
+}
+
+function findReflectionTemplateById(
+  policy: HeartbeatPolicy,
+  templateId: string,
+): ReflectionTemplate | undefined {
+  const consolidatedTemplateId = resolveConsolidatedReflectionTemplateId(templateId);
+  return policy.templates.find(candidate => candidate.id === consolidatedTemplateId);
 }
 
 interface HeartbeatAgentResponse {
@@ -865,9 +870,9 @@ export function wireHeartbeatRuntime(
     switch (source) {
       case 'manual':
         return {
-          initiatorSurface: 'tool:heartbeat_run_template',
+          initiatorSurface: 'tool:schedule',
           initiatedBy: 'companion',
-          reason: 'Manual reflection run via heartbeat_run_template',
+          reason: 'Manual reflection run via schedule action=run_template',
         };
       case 'deferred_scheduler':
         return {
@@ -1032,7 +1037,7 @@ export function wireHeartbeatRuntime(
       } : {}),
     });
 
-    if (template.id === 'values-reflection') {
+    if (isValuesReflectionTemplateId(template.id)) {
       valuesJournal.append({
         templateId: template.id,
         templateName: template.name,
@@ -1144,7 +1149,7 @@ export function wireHeartbeatRuntime(
     options: { sendToDiscordOverride?: boolean } = {},
   ): { templateName: string; queuedNow: boolean } => {
     const current = store.load();
-    const template = current.templates.find(candidate => candidate.id === templateId);
+    const template = findReflectionTemplateById(current, templateId);
     if (!template) {
       throw new Error(`Template "${templateId}" not found`);
     }
@@ -1208,7 +1213,7 @@ export function wireHeartbeatRuntime(
       deferredAction?: PostTurnActionCandidate;
     }> => {
     const current = store.load();
-    const template = current.templates.find(candidate => candidate.id === templateId);
+    const template = findReflectionTemplateById(current, templateId);
     if (!template) {
       throw new Error(`Template "${templateId}" not found`);
     }
@@ -1576,7 +1581,7 @@ export function wireHeartbeatRuntime(
         }
         const templateId = templateIdRaw.trim();
         const current = store.load();
-        const template = current.templates.find(candidate => candidate.id === templateId);
+        const template = findReflectionTemplateById(current, templateId);
         if (!template) {
           throw new Error(`Template "${templateId}" not found`);
         }
@@ -1751,14 +1756,7 @@ export function wireHeartbeatRuntime(
     memoryWriter: runtimeOptions.memoryWriter,
     pendingFollowUpStore: runtimeOptions.pendingFollowUpStore ?? null,
     careReminderStore: runtimeOptions.careReminderStore ?? null,
-    emitLegacyAliasTelemetry: runtimeOptions.eventBus
-      ? createLegacyAliasTelemetryEmitter(runtimeOptions.eventBus)
-      : undefined,
   }), 'core');
-  target.registerTool(createHeartbeatGetPolicyTool(store), 'extended');
-  target.registerTool(createHeartbeatUpdatePolicyTool(store, syncReflectionTasks), 'extended');
-  target.registerTool(createHeartbeatRunTemplateTool(store, runTemplateNow), 'extended');
-  target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId), 'extended');
   target.registerTool(createValuesAddTool(valuesJournal), 'extended');
   target.registerTool(createValuesUpdateTool(valuesJournal), 'extended');
 

@@ -286,11 +286,11 @@ describe('wireHeartbeatRuntime', () => {
   it('registers reflection tasks using template cadence', () => {
     const store = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
     const policy = store.load();
-    const musing = policy.templates.find(template => template.id === 'musing');
-    if (!musing) {
-      throw new Error('musing template missing');
+    const dailyReview = policy.templates.find(template => template.id === 'daily-review');
+    if (!dailyReview) {
+      throw new Error('daily-review template missing');
     }
-    musing.cadence = { kind: 'hourly', minute: 0, timezone: 'utc' };
+    dailyReview.cadence = { kind: 'daily', hour: 7, minute: 30, timezone: 'utc' };
     store.save(policy);
 
     const eventBus = new EventBus();
@@ -316,12 +316,12 @@ describe('wireHeartbeatRuntime', () => {
       tempDir,
     );
 
-    const task = scheduler.getTask('reflection:musing');
+    const task = scheduler.getTask('reflection:daily-review');
     expect(task).toBeDefined();
-    expect(task?.cadence).toEqual({ kind: 'hourly', minute: 0, timezone: 'utc' });
+    expect(task?.cadence).toEqual({ kind: 'daily', hour: 7, minute: 30, timezone: 'utc' });
   });
 
-  it('registers schedule as the canonical core surface and keeps legacy heartbeat policy access compatible', async () => {
+  it('registers schedule as the canonical core surface without split heartbeat policy tools', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -349,15 +349,18 @@ describe('wireHeartbeatRuntime', () => {
 
     const calls = target.registerTool.mock.calls as Array<[any, string]>;
     expect(calls.find(([tool]) => tool.name === 'schedule')?.[1]).toBe('core');
-    expect(calls.find(([tool]) => tool.name === 'heartbeat_get_policy')?.[1]).toBe('extended');
+    expect(calls.some(([tool]) => tool.name === 'heartbeat_get_policy')).toBe(false);
+    expect(calls.some(([tool]) => tool.name === 'heartbeat_update_policy')).toBe(false);
+    expect(calls.some(([tool]) => tool.name === 'heartbeat_run_template')).toBe(false);
+    expect(calls.some(([tool]) => tool.name === 'schedule_task')).toBe(false);
 
     const scheduleTool = calls.find(([tool]) => tool.name === 'schedule')?.[0] as {
       execute: (toolCallId: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text?: string }> }>;
     };
-    const result = await scheduleTool.execute('call-schedule-list-templates', { action: 'get_policy' });
+    const result = await scheduleTool.execute('call-schedule-list-templates', { action: 'list_templates' });
     const text = result.content[0]?.text ?? '';
 
-    expect(text).toContain('Heartbeat Policy');
+    expect(text).toContain('Reflection Schedule Policy');
     expect(text).toContain('Templates:');
   });
 
@@ -396,7 +399,7 @@ describe('wireHeartbeatRuntime', () => {
     ).toBe(true);
   });
 
-  it('writes versioned values entries when values-reflection task runs', async () => {
+  it('writes versioned values entries when weekly reflection task runs', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -434,9 +437,9 @@ describe('wireHeartbeatRuntime', () => {
         tempDir,
       );
 
-      const task = scheduler.getTask('reflection:values-reflection');
+      const task = scheduler.getTask('reflection:weekly-review');
       expect(task).toBeDefined();
-      expect(task?.intervalMs).toBe(24 * 60 * 60_000);
+      expect(task?.intervalMs).toBe(7 * 24 * 60 * 60_000);
 
       nowSpy.mockReturnValue(1_700_000_000_000 + task!.intervalMs + 1);
       await scheduler.tick();
@@ -458,15 +461,15 @@ describe('wireHeartbeatRuntime', () => {
         };
       };
       expect(entry.version).toBe(1);
-      expect(entry.templateId).toBe('values-reflection');
-      expect(entry.templateName).toBe('Values Reflection');
+      expect(entry.templateId).toBe('weekly-review');
+      expect(entry.templateName).toBe('Weekly Reflection');
       expect(entry.reflection).toContain('Values reflection body');
       expect(entry.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(narrative.snapshotRef);
       expect(entry.telemetry?.narrativeContext?.internalState).toEqual(narrative.internalState);
       expect(entry.telemetry?.narrativeContext?.metacognitiveFlags).toEqual(narrative.metacognitiveFlags);
 
       const valuesCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
-        (call) => call[0]?.channelId === 'internal:reflection:values-reflection',
+        (call) => call[0]?.channelId === 'internal:reflection:weekly-review',
       );
       expect(valuesCall?.[0]?.content).toContain('<internal_state_input>');
       expect(valuesCall?.[0]?.content).toContain('serialized_internal_state:');
@@ -478,9 +481,9 @@ describe('wireHeartbeatRuntime', () => {
   it('runs deliberation mode and persists journal telemetry metadata', async () => {
     const store = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
     const policy = store.load();
-    const values = policy.templates.find(template => template.id === 'values-reflection');
+    const values = policy.templates.find(template => template.id === 'weekly-review');
     if (!values) {
-      throw new Error('values-reflection template missing');
+      throw new Error('weekly-review template missing');
     }
     values.mode = 'deliberation';
     values.deliberation = {
@@ -584,7 +587,7 @@ describe('wireHeartbeatRuntime', () => {
         },
       );
 
-      const task = scheduler.getTask('reflection:values-reflection');
+      const task = scheduler.getTask('reflection:weekly-review');
       expect(task).toBeDefined();
 
       nowSpy.mockReturnValue(1_700_000_000_000 + task!.intervalMs + 1);
@@ -592,13 +595,13 @@ describe('wireHeartbeatRuntime', () => {
 
       const handledChannels = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls
         .map(call => call[0]?.channelId);
-      expect(handledChannels).not.toContain('internal:reflection:values-reflection');
+      expect(handledChannels).not.toContain('internal:reflection:weekly-review');
       const valuesDeliberationCalls = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls
         .filter((call) => (
           typeof call[0]?.messages?.[0]?.content === 'string'
-          && call[0].messages[0].content.includes('Name the values guiding you today')
+          && call[0].messages[0].content.includes('durable values and north-star signals')
         ));
-      expect(valuesDeliberationCalls.map((call) => call[1])).toEqual(['reasoning', 'background', 'reasoning']);
+      expect(valuesDeliberationCalls.map((call) => call[1]).slice(0, 3)).toEqual(['reasoning', 'background', 'reasoning']);
       const firstDeliberationCall = valuesDeliberationCalls[0]?.[0] as
         | { messages?: Array<{ content?: string }> }
         | undefined;
@@ -614,7 +617,7 @@ describe('wireHeartbeatRuntime', () => {
         callType: 'scheduled',
         originType: 'scheduled',
         originStage: 'heartbeat.deliberation.voice.reasoning',
-        channelId: 'internal:reflection:values-reflection',
+        channelId: 'internal:reflection:weekly-review',
       });
       expect(memoryWriter.write).not.toHaveBeenCalled();
 
@@ -684,7 +687,7 @@ describe('wireHeartbeatRuntime', () => {
           };
         };
       };
-      expect(reflectionEntry.templateId).toBe('values-reflection');
+      expect(reflectionEntry.templateId).toBe('weekly-review');
       expect(reflectionEntry.mode).toBe('deliberation');
       expect(reflectionEntry.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(narrative.snapshotRef);
       expect(reflectionEntry.telemetry?.deliberation?.episode).toMatchObject({
@@ -713,7 +716,7 @@ describe('wireHeartbeatRuntime', () => {
     }
   });
 
-  it('injects InternalState narrative payload for experiential-review template runs', async () => {
+  it('injects InternalState narrative payload for daily reflection template runs', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
@@ -742,19 +745,19 @@ describe('wireHeartbeatRuntime', () => {
     );
 
     const registeredTools = target.registerTool.mock.calls.map(call => call[0]);
-    const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool.name === 'heartbeat_run_template');
+    const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool.name === 'schedule');
     expect(runTemplateTool).toBeDefined();
 
     const runResult = await runTemplateTool.execute(
-      'manual-experiential',
-      { templateId: 'experiential-review', deferIfBusy: false },
+      'manual-daily-review',
+      { action: 'run_template', template_id: 'daily-review', defer_if_busy: false },
       new AbortController().signal,
     );
     const runText = runResult.content.map((part: { text: string }) => part.text).join('');
-    expect(runText).toContain('Triggered reflection template "Experiential Review" (experiential-review).');
+    expect(runText).toContain('Triggered reflection template "Daily Reflection" (daily-review).');
 
     const experientialCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
-      (call) => call[0]?.channelId === 'internal:reflection:experiential-review',
+      (call) => call[0]?.channelId === 'internal:reflection:daily-review',
     );
     expect(experientialCall).toBeDefined();
     expect(experientialCall?.[0]?.content).toContain('<internal_state_input>');
@@ -772,12 +775,16 @@ describe('wireHeartbeatRuntime', () => {
     const target = {
       registerTool: vi.fn(),
     };
+    const narrative = createInternalStateNarrativeFixture();
     const agentLoop = {
       handleMessage: vi
         .fn()
         .mockRejectedValueOnce(new Error('Agent is already processing another prompt'))
         .mockResolvedValue({ content: 'Deferred reflection output' }),
       waitForIdle: vi.fn().mockResolvedValue(undefined),
+      getCurrentInternalState: vi.fn(() => narrative.internalState),
+      getCurrentInternalStateSnapshotRef: vi.fn(() => narrative.snapshotRef),
+      getCurrentMetacognitiveFlags: vi.fn(() => narrative.metacognitiveFlags),
     };
     const sender = {
       send: vi.fn().mockResolvedValue(undefined),
@@ -795,16 +802,16 @@ describe('wireHeartbeatRuntime', () => {
       );
 
       const registeredTools = target.registerTool.mock.calls.map(call => call[0]);
-      const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool.name === 'heartbeat_run_template');
+      const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool.name === 'schedule');
       expect(runTemplateTool).toBeDefined();
 
       const runResult = await runTemplateTool.execute(
         'manual-1',
-        { templateId: 'musing' },
+        { action: 'run_template', template_id: 'daily-review' },
         new AbortController().signal,
       );
       const runText = runResult.content.map((part: { text: string }) => part.text).join('');
-      expect(runText).toContain('Queued manual reflection run "Musing" (musing) for post-turn execution.');
+      expect(runText).toContain('Queued manual reflection run "Daily Reflection" (daily-review) for post-turn execution.');
 
       const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:'));
       expect(deferredTask).toBeDefined();
@@ -814,7 +821,7 @@ describe('wireHeartbeatRuntime', () => {
 
       expect(agentLoop.waitForIdle).toHaveBeenCalledOnce();
       expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
-      expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:musing');
+      expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:daily-review');
     } finally {
       nowSpy.mockRestore();
     }
@@ -830,6 +837,7 @@ describe('wireHeartbeatRuntime', () => {
       registerTool: vi.fn(),
     };
     const registerPostTurnActionInferer = vi.fn().mockReturnValue(() => {});
+    const narrative = createInternalStateNarrativeFixture();
     const agentLoop = {
       handleMessage: vi
         .fn()
@@ -837,6 +845,9 @@ describe('wireHeartbeatRuntime', () => {
         .mockResolvedValue({ content: 'Deferred reflection output' }),
       waitForIdle: vi.fn().mockResolvedValue(undefined),
       registerPostTurnActionInferer,
+      getCurrentInternalState: vi.fn(() => narrative.internalState),
+      getCurrentInternalStateSnapshotRef: vi.fn(() => narrative.snapshotRef),
+      getCurrentMetacognitiveFlags: vi.fn(() => narrative.metacognitiveFlags),
     };
     const sender = {
       send: vi.fn().mockResolvedValue(undefined),
@@ -878,13 +889,13 @@ describe('wireHeartbeatRuntime', () => {
       response: { content: 'ok' },
       turnMessages: [{
         role: 'toolResult',
-        toolName: 'heartbeat_run_template',
+        toolName: 'schedule',
         result: {
           details: {
             deferredAction: {
               kind: 'heartbeat.run_template',
-              payload: { templateId: 'musing' },
-              dedupeKey: 'heartbeat.run_template:musing',
+              payload: { templateId: 'daily-review' },
+              dedupeKey: 'heartbeat.run_template:daily-review',
               maxRetries: 2,
             },
           },
@@ -893,22 +904,22 @@ describe('wireHeartbeatRuntime', () => {
     });
     expect(inferredActions).toEqual([{
       kind: 'heartbeat.run_template',
-      payload: { templateId: 'musing' },
-      dedupeKey: 'heartbeat.run_template:musing',
+      payload: { templateId: 'daily-review' },
+      dedupeKey: 'heartbeat.run_template:daily-review',
       maxRetries: 2,
     }]);
 
     const registeredTools = target.registerTool.mock.calls.map(call => call[0]);
-    const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool.name === 'heartbeat_run_template');
+    const runTemplateTool = registeredTools.find((tool: { name?: string }) => tool.name === 'schedule');
     expect(runTemplateTool).toBeDefined();
 
     const runResult = await runTemplateTool.execute(
       'manual-2',
-      { templateId: 'musing' },
+      { action: 'run_template', template_id: 'daily-review' },
       new AbortController().signal,
     );
     const runText = runResult.content.map((part: { text: string }) => part.text).join('');
-    expect(runText).toContain('Queued manual reflection run "Musing" (musing) for post-turn execution.');
+    expect(runText).toContain('Queued manual reflection run "Daily Reflection" (daily-review) for post-turn execution.');
     expect((runResult.details as { deferredAction?: { kind?: string } }).deferredAction?.kind)
       .toBe('heartbeat.run_template');
 
@@ -929,15 +940,15 @@ describe('wireHeartbeatRuntime', () => {
     await deferredHandler({
       id: 'deferred-1',
       kind: 'heartbeat.run_template',
-      payload: { templateId: 'musing' },
-      dedupeKey: 'heartbeat.run_template:musing',
+      payload: { templateId: 'daily-review' },
+      dedupeKey: 'heartbeat.run_template:daily-review',
       channelId: 'test-channel',
       sourceMessageId: 'msg-1',
       inferredAt: Date.now(),
     });
 
     expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
-    expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:musing');
+    expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:daily-review');
   });
 
   it('gates composed post-turn appraisal by compositional policy', async () => {
@@ -1116,8 +1127,8 @@ describe('wireHeartbeatRuntime', () => {
         await deferredHandler({
           id: `deferred-loop-${index}`,
           kind: 'heartbeat.run_template',
-          payload: { templateId: 'emotional-check' },
-          dedupeKey: `heartbeat.run_template:emotional-check:${index}`,
+          payload: { templateId: 'daily-review' },
+          dedupeKey: `heartbeat.run_template:daily-review:${index}`,
           channelId: 'test-channel',
           sourceMessageId: `msg-loop-${index}`,
           inferredAt: now,
@@ -1127,10 +1138,10 @@ describe('wireHeartbeatRuntime', () => {
       expect(agentLoop.handleMessage).toHaveBeenCalledTimes(4);
       const handledChannels = agentLoop.handleMessage.mock.calls.map(call => call[0]?.channelId);
       expect(handledChannels).toEqual([
-        'internal:reflection:emotional-check',
-        'internal:reflection:emotional-check',
-        'internal:reflection:emotional-check',
-        'internal:reflection:emotional-check',
+        'internal:reflection:daily-review',
+        'internal:reflection:daily-review',
+        'internal:reflection:daily-review',
+        'internal:reflection:daily-review',
       ]);
     } finally {
       nowSpy.mockRestore();
@@ -1524,12 +1535,16 @@ describe('wireHeartbeatRuntime', () => {
     const target = {
       registerTool: vi.fn(),
     };
+    const narrative = createInternalStateNarrativeFixture();
     const agentLoop = {
       handleMessage: vi
         .fn()
         .mockRejectedValueOnce(new Error('Agent is already processing another prompt'))
         .mockResolvedValue({ content: 'Deferred scheduled output' }),
       waitForIdle: vi.fn().mockResolvedValue(undefined),
+      getCurrentInternalState: vi.fn(() => narrative.internalState),
+      getCurrentInternalStateSnapshotRef: vi.fn(() => narrative.snapshotRef),
+      getCurrentMetacognitiveFlags: vi.fn(() => narrative.metacognitiveFlags),
     };
     const sender = {
       send: vi.fn().mockResolvedValue(undefined),
@@ -1546,13 +1561,13 @@ describe('wireHeartbeatRuntime', () => {
         tempDir,
       );
 
-      const musingTask = scheduler.getTask('reflection:musing');
-      expect(musingTask).toBeDefined();
+      const dailyTask = scheduler.getTask('reflection:daily-review');
+      expect(dailyTask).toBeDefined();
 
-      nowSpy.mockReturnValue(1_700_000_000_000 + (musingTask?.intervalMs ?? 0) + 1);
+      nowSpy.mockReturnValue(1_700_000_000_000 + (dailyTask?.intervalMs ?? 0) + 1);
       await scheduler.tick();
 
-      const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:musing'));
+      const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:daily-review'));
       expect(deferredTask).toBeDefined();
 
       nowSpy.mockReturnValue((deferredTask?.runAt ?? 0) + 1);
@@ -1560,7 +1575,7 @@ describe('wireHeartbeatRuntime', () => {
 
       expect(agentLoop.waitForIdle).toHaveBeenCalledOnce();
       expect(agentLoop.handleMessage).toHaveBeenCalledTimes(2);
-      expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:musing');
+      expect(agentLoop.handleMessage.mock.calls[1]?.[0]?.channelId).toBe('internal:reflection:daily-review');
     } finally {
       nowSpy.mockRestore();
     }

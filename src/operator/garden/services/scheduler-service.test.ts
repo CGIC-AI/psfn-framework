@@ -52,7 +52,7 @@ describe('AdminSchedulerService', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('normalizes legacy whisper reflection tasks to the canonical musing template on task updates', () => {
+  it('normalizes legacy whisper reflection tasks to the consolidated daily reflection template on task updates', () => {
     const { scheduler } = createSchedulerStub([
       makeTask({
         id: 'reflection:whisper',
@@ -73,12 +73,12 @@ describe('AdminSchedulerService', () => {
 
     const policyPath = join(tempDir, 'heartbeat-policy.json');
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as HeartbeatPolicy;
-    const musing = persisted.templates.find(template => template.id === 'musing');
-    expect(musing).toBeDefined();
-    expect(musing?.enabled).toBe(false);
+    const daily = persisted.templates.find(template => template.id === 'daily-review');
+    expect(daily).toBeDefined();
+    expect(daily?.enabled).toBe(false);
 
     const data = service.getFullData();
-    expect(data.reflections.find(template => template.id === 'musing')?.enabled).toBe(false);
+    expect(data.reflections.find(template => template.id === 'daily-review')?.enabled).toBe(false);
 
     const metacognitionRaw = readFileSync(resolveReflectionMetacognitionJournalPath(tempDir), 'utf-8').trim();
     const metacognitionEntry = JSON.parse(metacognitionRaw.split('\n').at(-1) ?? '{}') as {
@@ -93,29 +93,29 @@ describe('AdminSchedulerService', () => {
     expect(metacognitionEntry.kind).toBe('reflection_mutation');
     expect(metacognitionEntry.initiatorSurface).toBe('garden:scheduler_service');
     expect(metacognitionEntry.initiatedBy).toBe('garden_operator');
-    expect(metacognitionEntry.reason).toBe('Garden scheduler task update for reflection template "musing"');
-    expect(metacognitionEntry.templateId).toBe('musing');
+    expect(metacognitionEntry.reason).toBe('Garden scheduler task update for reflection template "daily-review"');
+    expect(metacognitionEntry.templateId).toBe('daily-review');
     expect(metacognitionEntry.mutationBefore?.enabled).toBe(true);
     expect(metacognitionEntry.mutationAfter?.enabled).toBe(false);
   });
 
-  it('normalizes legacy whisper reflection ids when mutating reflection templates directly', () => {
+  it('normalizes legacy whisper reflection ids to the consolidated daily reflection when mutating directly', () => {
     const { scheduler } = createSchedulerStub();
     const service = new AdminSchedulerService(scheduler, tempDir);
 
     const result = service.updateReflection('whisper', {
-      name: 'Updated Musing',
+      name: 'Updated Daily Reflection',
     });
 
     expect(result).toEqual({
       ok: true,
-      message: 'Reflection "musing" updated',
+      message: 'Reflection "daily-review" updated',
     });
 
     const policyPath = join(tempDir, 'heartbeat-policy.json');
     const persisted = JSON.parse(readFileSync(policyPath, 'utf-8')) as HeartbeatPolicy;
-    const musing = persisted.templates.find(template => template.id === 'musing');
-    expect(musing?.name).toBe('Updated Musing');
+    const daily = persisted.templates.find(template => template.id === 'daily-review');
+    expect(daily?.name).toBe('Updated Daily Reflection');
 
     const metacognitionRaw = readFileSync(resolveReflectionMetacognitionJournalPath(tempDir), 'utf-8').trim();
     const metacognitionEntry = JSON.parse(metacognitionRaw.split('\n').at(-1) ?? '{}') as {
@@ -130,9 +130,9 @@ describe('AdminSchedulerService', () => {
     expect(metacognitionEntry.kind).toBe('reflection_mutation');
     expect(metacognitionEntry.initiatorSurface).toBe('garden:scheduler_service');
     expect(metacognitionEntry.initiatedBy).toBe('garden_operator');
-    expect(metacognitionEntry.reason).toBe('Garden scheduler reflection template update for "musing"');
-    expect(metacognitionEntry.templateId).toBe('musing');
-    expect(metacognitionEntry.mutationBefore?.name).toBe('Musing');
-    expect(metacognitionEntry.mutationAfter?.name).toBe('Updated Musing');
+    expect(metacognitionEntry.reason).toBe('Garden scheduler reflection template update for "daily-review"');
+    expect(metacognitionEntry.templateId).toBe('daily-review');
+    expect(metacognitionEntry.mutationBefore?.name).toBe('Daily Reflection');
+    expect(metacognitionEntry.mutationAfter?.name).toBe('Updated Daily Reflection');
   });
 });

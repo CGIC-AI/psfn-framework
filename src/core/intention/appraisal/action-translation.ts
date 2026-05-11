@@ -5,6 +5,7 @@ import type {
   SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
 import type { PendingFollowUp } from '../pending-follow-ups.js';
+import { resolveConsolidatedReflectionTemplateId } from '../../scheduler/heartbeat-policy.js';
 import {
   DEFAULT_FOLLOW_UP_PENDING_DELAY_MS,
   INTENTION_FOLLOW_UP_ACTION_KIND,
@@ -122,7 +123,7 @@ export function decisionsToPostTurnActionCandidates(
     }
 
     if (decision.type === 'schedule') {
-      const templateId = decision.schedule?.templateId.trim() ?? '';
+      const templateId = resolveConsolidatedReflectionTemplateId(decision.schedule?.templateId ?? '');
       if (!templateId) continue;
       candidates.push({
         kind: 'heartbeat.run_template',

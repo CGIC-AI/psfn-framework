@@ -6,7 +6,7 @@ import {
 } from './deferred-post-turn-inference.js';
 
 describe('inferDeferredPostTurnActions', () => {
-  it('extracts deferred heartbeat actions from heartbeat_run_template tool results', () => {
+  it('extracts deferred heartbeat actions from schedule tool results', () => {
     const actions = inferDeferredPostTurnActions({
       message: {
         id: 'msg-1',
@@ -19,20 +19,20 @@ describe('inferDeferredPostTurnActions', () => {
       },
       turnMessages: [{
         role: 'toolResult',
-        toolName: 'heartbeat_run_template',
+        toolName: 'schedule',
         result: {
           details: {
             deferredAction: {
               kind: 'heartbeat.run_template',
-              payload: { templateId: 'musing' },
-              dedupeKey: 'heartbeat.run_template:musing',
+              payload: { templateId: 'daily-review' },
+              dedupeKey: 'heartbeat.run_template:daily-review',
               maxRetries: 2,
             },
           },
         },
       }, {
         role: 'toolResult',
-        toolName: 'heartbeat_run_template',
+        toolName: 'schedule',
         result: {
           details: {
             deferredAction: {
@@ -47,8 +47,8 @@ describe('inferDeferredPostTurnActions', () => {
 
     expect(actions).toEqual([{
       kind: 'heartbeat.run_template',
-      payload: { templateId: 'musing' },
-      dedupeKey: 'heartbeat.run_template:musing',
+      payload: { templateId: 'daily-review' },
+      dedupeKey: 'heartbeat.run_template:daily-review',
       maxRetries: 2,
     }]);
   });

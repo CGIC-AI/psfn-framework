@@ -49,8 +49,8 @@
   const REFLECTION_TASK_PREFIX = 'reflection:';
   const DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
   const KNOWN_HEARTBEAT_CADENCE: Record<string, RecurringCadence> = {
-    whisper: { kind: 'hourly', minute: 0, timezone: 'local' },
     'daily-review': { kind: 'daily', hour: 6, minute: 0, timezone: 'local' },
+    'weekly-review': { kind: 'relative' },
   };
 
   let editingIntervals = $state<Record<string, string>>({});

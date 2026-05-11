@@ -6,6 +6,8 @@ import type { ActiveConcernSnapshot } from '../intention/appraisal.js';
 import {
   HEARTBEAT_SILENT_REFLECTION_TOKEN,
   HeartbeatPolicyStore,
+  isValuesReflectionTemplateId,
+  resolveConsolidatedReflectionTemplateId,
   type HeartbeatPolicy,
   type ReflectionTemplate,
 } from './heartbeat-policy.js';
@@ -86,7 +88,7 @@ const TEMPLATE_EXECUTION_BURST_LIMIT = 4;
 const TEMPLATE_EXECUTION_COOLDOWN_MS = 10 * 60_000;
 const REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS = 2_500;
 const REFLECTION_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT = 8;
-const EXPERIENTIAL_DELIBERATION_TEMPLATE_IDS = new Set(['daily-review', 'emotional-check', 'goal-update']);
+const RICH_DELIBERATION_TEMPLATE_IDS = new Set(['daily-review', 'weekly-review']);
 const DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS = 2;
 const DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS = 8;
 const MAX_UNSUPPORTED_CLAIM_FLAGS = 4;
@@ -327,7 +329,15 @@ function mergeMetacognitiveFlags(
 }
 
 function isExperientialDeliberationTemplate(template: ReflectionTemplate): boolean {
-  return EXPERIENTIAL_DELIBERATION_TEMPLATE_IDS.has(template.id);
+  return RICH_DELIBERATION_TEMPLATE_IDS.has(template.id);
+}
+
+function findReflectionTemplateById(
+  policy: HeartbeatPolicy,
+  templateId: string,
+): ReflectionTemplate | undefined {
+  const consolidatedTemplateId = resolveConsolidatedReflectionTemplateId(templateId);
+  return policy.templates.find(candidate => candidate.id === consolidatedTemplateId);
 }
 
 function mergeReflectionPromptBundles(
@@ -1268,6 +1278,7 @@ export function createHeartbeatTemplateRuntime(
 
     const startedAt = Date.now();
     const sessionId = randomUUID();
+    const maxRounds = Math.max(1, Math.min(3, Math.floor(template.deliberation?.maxRounds ?? 3)));
     const maxTotalTokens = Math.max(256, Math.floor(template.deliberation?.maxTotalTokens ?? 6_000));
     const maxWallTimeMs = Math.max(250, Math.floor(template.deliberation?.maxWallTimeMs ?? 35_000));
     const inputUsdPerMillionTokens = template.deliberation?.inputUsdPerMillionTokens
@@ -1291,6 +1302,10 @@ export function createHeartbeatTemplateRuntime(
     ): Promise<string | null> => {
       if (Date.now() - startedAt >= maxWallTimeMs) {
         stopReason = 'time_cap';
+        return null;
+      }
+      if (completedRounds >= maxRounds) {
+        stopReason = 'max_rounds';
         return null;
       }
       if (totalInputTokens + totalOutputTokens >= maxTotalTokens) {
@@ -1399,7 +1414,7 @@ export function createHeartbeatTemplateRuntime(
           kind: 'maintenance_reflection',
           mode: 'background_bounded',
           budget: {
-            maxRounds: 3,
+            maxRounds,
             maxTotalTokens,
             maxWallTimeMs,
           },
@@ -1427,22 +1442,22 @@ export function createHeartbeatTemplateRuntime(
       switch (source) {
         case 'deferred_scheduler':
           return {
-            initiatorSurface: 'tool:heartbeat_run_template',
+            initiatorSurface: 'tool:schedule',
             initiatedBy: 'companion',
             reason: 'Manual reflection run deferred to the scheduler while the runtime was busy',
           };
         case 'deferred_post_turn':
           return {
-            initiatorSurface: 'tool:heartbeat_run_template',
+            initiatorSurface: 'tool:schedule',
             initiatedBy: 'companion',
             reason: 'Manual reflection run deferred to post-turn execution while the runtime was busy',
           };
         case 'manual':
         default:
           return {
-            initiatorSurface: 'tool:heartbeat_run_template',
+            initiatorSurface: 'tool:schedule',
             initiatedBy: 'companion',
-            reason: 'Manual reflection run via heartbeat_run_template',
+            reason: 'Manual reflection run via schedule action=run_template',
           };
       }
     }
@@ -1920,7 +1935,7 @@ export function createHeartbeatTemplateRuntime(
         } : {}),
       });
 
-      if (template.id === 'values-reflection') {
+      if (isValuesReflectionTemplateId(template.id)) {
         valuesJournal.append({
           templateId: template.id,
           templateName: template.name,
@@ -2029,7 +2044,7 @@ export function createHeartbeatTemplateRuntime(
   ): { templateName: string; queuedNow: boolean; requestedSource: ReflectionRequestSource } => {
     const requestedSource = options.requestedSource ?? 'scheduled';
     const current = store.load();
-    const template = current.templates.find(candidate => candidate.id === templateId);
+    const template = findReflectionTemplateById(current, templateId);
     if (!template) {
       throw new Error(`Template "${templateId}" not found`);
     }
@@ -2087,7 +2102,7 @@ export function createHeartbeatTemplateRuntime(
     options: { sendToDiscordOverride?: boolean; deferIfBusy?: boolean } = {},
   ): Promise<HeartbeatRunTemplateResult> => {
     const current = store.load();
-    const template = current.templates.find(candidate => candidate.id === templateId);
+    const template = findReflectionTemplateById(current, templateId);
     if (!template) {
       throw new Error(`Template "${templateId}" not found`);
     }
@@ -2137,7 +2152,7 @@ export function createHeartbeatTemplateRuntime(
     options: { sendToDiscordOverride?: boolean; actionId?: string; requestedSource?: ReflectionRequestSource } = {},
   ): Promise<void> => {
     const current = store.load();
-    const template = current.templates.find(candidate => candidate.id === templateId);
+    const template = findReflectionTemplateById(current, templateId);
     if (!template) {
       throw new Error(`Template "${templateId}" not found`);
     }

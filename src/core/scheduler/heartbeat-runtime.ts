@@ -2,18 +2,11 @@ import { createComponentLogger } from '../../shared/logger.js';
 import type { ToolRegistrarTarget } from '../agent/tool-registrar.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import type { Scheduler } from './scheduler.js';
-import {
-  createHeartbeatGetPolicyTool,
-  createHeartbeatRunTemplateTool,
-  createHeartbeatUpdatePolicyTool,
-  createScheduleTaskTool,
-} from './heartbeat-tools.js';
 import { createScheduleTool } from './schedule-tool.js';
 import {
   createValuesAddTool,
   createValuesUpdateTool,
 } from '../../faculties/values/tools.js';
-import { createLegacyAliasTelemetryEmitter } from '../tools/legacy-alias-telemetry.js';
 import {
   createHeartbeatTemplateRuntime,
   type HeartbeatTemplateRuntime,
@@ -70,15 +63,7 @@ export function wireHeartbeatRuntime(
     memoryWriter: runtimeOptions.memoryWriter,
     pendingFollowUpStore: runtimeOptions.pendingFollowUpStore ?? null,
     careReminderStore: runtimeOptions.careReminderStore ?? null,
-    emitLegacyAliasTelemetry: createLegacyAliasTelemetryEmitter(runtimeOptions.eventBus),
   }), 'core');
-  target.registerTool(createHeartbeatGetPolicyTool(templateRuntime.policyStore), 'extended');
-  target.registerTool(createHeartbeatUpdatePolicyTool(templateRuntime.policyStore, templateRuntime.syncReflectionTasks, {
-    memoryWriter: runtimeOptions.memoryWriter,
-    reflectionStore: runtimeOptions.reflectionStore,
-  }), 'extended');
-  target.registerTool(createHeartbeatRunTemplateTool(templateRuntime.policyStore, templateRuntime.runTemplateNow), 'extended');
-  target.registerTool(createScheduleTaskTool(scheduler, agentLoop, sender, heartbeatChannelId), 'extended');
   target.registerTool(createValuesAddTool(templateRuntime.valuesJournal), 'extended');
   target.registerTool(createValuesUpdateTool(templateRuntime.valuesJournal), 'extended');
 

@@ -74,14 +74,14 @@ describe('wireHeartbeatRuntime reflection metacognition journal', () => {
 
     const runTool = target.registerTool.mock.calls
       .map(call => call[0])
-      .find(tool => tool?.name === 'heartbeat_run_template') as {
-        execute: (toolCallId: string, params: { templateId: string; sendToDiscord?: boolean }, signal: AbortSignal) => Promise<unknown>;
+      .find(tool => tool?.name === 'schedule') as {
+        execute: (toolCallId: string, params: { action: string; template_id: string; send_to_discord?: boolean }, signal: AbortSignal) => Promise<unknown>;
       };
     expect(runTool).toBeDefined();
 
     await runTool.execute(
       'call-reflection-meta',
-      { templateId: 'musing', sendToDiscord: false },
+      { action: 'run_template', template_id: 'daily-review', send_to_discord: false },
       new AbortController().signal,
     );
 
@@ -102,10 +102,10 @@ describe('wireHeartbeatRuntime reflection metacognition journal', () => {
 
     expect(entry.kind).toBe('reflection_run');
     expect(entry.executionSource).toBe('manual');
-    expect(entry.initiatorSurface).toBe('tool:heartbeat_run_template');
+    expect(entry.initiatorSurface).toBe('tool:schedule');
     expect(entry.initiatedBy).toBe('companion');
-    expect(entry.reason).toBe('Manual reflection run via heartbeat_run_template');
-    expect(entry.channelId).toBe('internal:reflection:musing');
+    expect(entry.reason).toBe('Manual reflection run via schedule action=run_template');
+    expect(entry.channelId).toBe('internal:reflection:daily-review');
     expect(entry.mode).toBe('agent');
     expect(entry.internalStateSnapshotRef).toBe(snapshotRef);
     expect(entry.metacognitiveFlags).toEqual(metacognitiveFlags);

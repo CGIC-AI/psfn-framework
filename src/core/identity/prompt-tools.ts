@@ -17,6 +17,7 @@ import { withCapabilityRequirement } from '../../system/capabilities/requirement
 import {
   IdentityCoolingOffManager,
 } from '../../system/capabilities/safeguards.js';
+import type { ApprovalQueuePort, ConfirmationQueueEntry } from '../../system/capabilities/approval-queue-port.js';
 import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
 import { textResult, textResultWithError } from '../tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -59,6 +60,18 @@ interface PromptLineDiffSummary {
   hiddenLineCount: number;
 }
 
+type ProtectedPromptLayerProposalAction = 'update' | 'rollback' | 'toggle';
+
+interface ProtectedPromptLayerProposalInput {
+  action: ProtectedPromptLayerProposalAction;
+  layer: PromptLayer;
+  tier: CapabilityTier;
+  reason: string;
+  nextContent?: string;
+  requestedVersion?: number;
+  nextEnabled?: boolean;
+}
+
 function errorMessage(error: unknown): string {
   return toErrorMessage(error);
 }
@@ -76,6 +89,136 @@ function resolvePromptLayerWriteCapability(store: PromptLayerStatePort, layerId:
   if (layer.type === 'base') return 'identity.write.base';
   if (layer.type === 'operator') return 'identity.write.operator';
   return 'identity.write.runtime';
+}
+
+function isProtectedPromptLayer(layer: PromptLayer): boolean {
+  return layer.type === 'base' || layer.type === 'operator';
+}
+
+function protectedPromptLayerLabel(layer: PromptLayer): string {
+  return `${layer.type}/${layer.name} (${layer.id.slice(0, 8)} v${layer.version})`;
+}
+
+function protectedPromptLayerActionLabel(action: ProtectedPromptLayerProposalAction): string {
+  if (action === 'rollback') return 'rollback';
+  if (action === 'toggle') return 'toggle';
+  return 'update';
+}
+
+function enqueueProtectedPromptLayerProposal(
+  store: PromptLayerStatePort,
+  confirmationQueue: ApprovalQueuePort,
+  input: ProtectedPromptLayerProposalInput,
+): ConfirmationQueueEntry {
+  const actionLabel = protectedPromptLayerActionLabel(input.action);
+  const lineDelta = typeof input.nextContent === 'string'
+    ? countLineChanges(input.layer.content, input.nextContent)
+    : null;
+  const params: Record<string, unknown> = {
+    layer_id: input.layer.id,
+    layer_type: input.layer.type,
+    layer_name: input.layer.name,
+    previous_version: input.layer.version,
+    previous_checksum: input.layer.checksum,
+    previous_enabled: input.layer.enabled,
+    reason: input.reason,
+  };
+
+  if (typeof input.nextContent === 'string') {
+    params.content = input.nextContent;
+  }
+  if (typeof input.requestedVersion === 'number') {
+    params.requested_version = input.requestedVersion;
+  }
+  if (typeof input.nextEnabled === 'boolean') {
+    params.enabled = input.nextEnabled;
+  }
+
+  const companionReasonParts = [
+    `${input.layer.type} prompt-layer ${actionLabel} proposed by ${input.tier} tier.`,
+    input.reason,
+    `Current layer: ${protectedPromptLayerLabel(input.layer)}; checksum ${input.layer.checksum}.`,
+  ];
+  if (lineDelta) {
+    companionReasonParts.push(`Content delta: +${lineDelta.added}/-${lineDelta.removed} lines.`);
+  }
+  if (typeof input.nextEnabled === 'boolean') {
+    companionReasonParts.push(`Requested enabled state: ${input.nextEnabled}.`);
+  }
+
+  return confirmationQueue.enqueue(
+    {
+      method: `identity.prompt_layer.${actionLabel}`,
+      action: actionLabel,
+      scope: protectedPromptLayerLabel(input.layer),
+      params,
+      companionReason: companionReasonParts.join(' '),
+    },
+    async (approvedParams: Record<string, unknown>, queueEntry: ConfirmationQueueEntry) => {
+      const approvedLayerId = typeof approvedParams.layer_id === 'string'
+        ? approvedParams.layer_id.trim()
+        : input.layer.id;
+      if (!approvedLayerId) {
+        throw new Error('Approved prompt-layer proposal must include layer_id.');
+      }
+
+      const targetLayer = resolvePromptLayerById(store, approvedLayerId);
+      if (!targetLayer) {
+        throw new Error(`Layer not found: ${approvedLayerId}`);
+      }
+      if (isCanonicalCharacterFoundationLayer(targetLayer)) {
+        throw new Error(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE);
+      }
+      if (!isProtectedPromptLayer(targetLayer)) {
+        throw new Error('Approved prompt-layer proposal must target a base or operator layer.');
+      }
+      if (targetLayer.version !== input.layer.version || targetLayer.checksum !== input.layer.checksum) {
+        throw new Error(
+          `Layer ${targetLayer.name} changed after proposal creation; inspect current v${targetLayer.version} and submit a new proposal.`,
+        );
+      }
+      if (targetLayer.enabled !== input.layer.enabled) {
+        throw new Error(
+          `Layer ${targetLayer.name} enabled state changed after proposal creation; inspect current state and submit a new proposal.`,
+        );
+      }
+
+      const approvedReason = normalizeReason(
+        typeof approvedParams.reason === 'string' ? approvedParams.reason : undefined,
+      ) ?? queueEntry.companionReason;
+
+      if (input.action === 'toggle') {
+        const enabled = approvedParams.enabled;
+        if (typeof enabled !== 'boolean') {
+          throw new Error('Approved prompt-layer toggle proposal must include boolean enabled.');
+        }
+        if (targetLayer.enabled === enabled) return;
+        store.toggle(targetLayer.id);
+        return;
+      }
+
+      const approvedContent = typeof approvedParams.content === 'string'
+        ? approvedParams.content
+        : input.nextContent;
+      if (typeof approvedContent !== 'string') {
+        throw new Error('Approved prompt-layer proposal must include content.');
+      }
+
+      store.update(targetLayer.id, approvedContent, 'admin:confirmation', {}, approvedReason);
+    },
+  );
+}
+
+function protectedPromptLayerProposalQueuedText(
+  entry: ConfirmationQueueEntry,
+  layer: PromptLayer,
+  action: ProtectedPromptLayerProposalAction,
+): string {
+  return (
+    `Prompt-layer ${protectedPromptLayerActionLabel(action)} queued for confirmation (id: ${entry.id}). ` +
+    `${layer.type} identity layers cannot be changed directly by agent tools; ` +
+    'use the admin Confirmations page to approve, deny, or modify.'
+  );
 }
 
 function resolvePromptLayerWriteCapabilityForAction(
@@ -153,16 +296,26 @@ function handlePromptLayerStagedAction(
     );
   }
 
+  const stagedLayer = readiness.stage ? store.getById(readiness.stage.layerId) : undefined;
+  if (!stagedLayer) {
+    return textResultWithError(`Layer not found: ${readiness.stage?.layerId ?? stageId}`, true);
+  }
+  if (isCanonicalCharacterFoundationLayer(stagedLayer)) {
+    return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+  }
+  if (isProtectedPromptLayer(stagedLayer)) {
+    return textResultWithError(
+      `${stagedLayer.type} identity layers now require operator confirmation; submit a new update or rollback proposal.`,
+      true,
+    );
+  }
+
   const committed = identityCoolingOff.markCommitted(stageId);
   if (committed.status !== 'ready' || !committed.stage) {
     return textResultWithError(`Unable to commit stage ${stageId}.`, true);
   }
 
-  const layer = store.getById(committed.stage.layerId);
-  if (!layer) return textResultWithError(`Layer not found: ${committed.stage.layerId}`, true);
-  if (isCanonicalCharacterFoundationLayer(layer)) {
-    return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
-  }
+  const layer = stagedLayer;
 
   const reason = normalizeReason(params.reason) ?? options.commitReason;
   const updated = store.update(
@@ -374,7 +527,7 @@ export function createIdentityTool(
   const historyTool = createIdentityChangelogTool(store);
   const updateTool = createPromptLayerUpdateTool(store, options);
   const rollbackTool = createPromptLayerRollbackTool(store, options);
-  const toggleTool = createPromptLayerToggleTool(store);
+  const toggleTool = createPromptLayerToggleTool(store, options);
   const identityCoolingOff = options.identityCoolingOff;
 
   const tool: AgentTool<any> = {
@@ -761,6 +914,7 @@ export function createIdentityChangelogTool(store: PromptLayerStatePort): AgentT
 export interface PromptLayerUpdateToolOptions {
   identityCoolingOff?: IdentityCoolingOffManager;
   getCapabilityTier?: () => CapabilityTier;
+  confirmationQueue?: ApprovalQueuePort;
 }
 
 export function createPromptLayerUpdateTool(
@@ -769,12 +923,13 @@ export function createPromptLayerUpdateTool(
 ): AgentTool<any> {
   const identityCoolingOff = options.identityCoolingOff;
   const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
+  const confirmationQueue = options.confirmationQueue;
 
   const tool: AgentTool<any> = {
     name: 'prompt_layer_update',
     description:
       'Update the content of a prompt layer. Access is controlled by capability tier; history is preserved for rollback. ' +
-      'Base-layer edits at Nursery/Apprentice are staged with cooling-off and require commit/cancel.',
+      'Base and operator identity-layer edits are queued for operator confirmation.',
     label: 'prompt_layer_update',
     parameters: Type.Object({
       layer_id: Type.Optional(Type.String({ description: 'ID of the prompt layer to update (prefix match OK).' })),
@@ -829,24 +984,23 @@ export function createPromptLayerUpdateTool(
         }
 
         const tier = getCapabilityTier();
-        const needsCoolingOff = (
-          layer.type === 'base'
-          && (tier === 'nursery' || tier === 'apprentice')
-          && !!identityCoolingOff
-        );
-        if (needsCoolingOff) {
-          const staged = identityCoolingOff.stageBaseLayerEdit({
-            layerId: layer.id,
-            layerName: layer.name,
-            previousContent: layer.content,
-            nextContent: content,
-            requestedBy: 'agent',
+        if (isProtectedPromptLayer(layer)) {
+          const reason = normalizeReason(params.reason) ?? 'Prompt layer updated via prompt_layer_update';
+          if (!confirmationQueue) {
+            return textResultWithError(
+              `${layer.type} identity layer updates require confirmation queue support.`,
+              true,
+            );
+          }
+          const entry = enqueueProtectedPromptLayerProposal(store, confirmationQueue, {
+            action: 'update',
+            layer,
             tier,
+            reason,
+            nextContent: content,
           });
           return textResult(
-            `Staged base-layer update (stage_id: ${staged.id}). ` +
-            `Cooling-off until ${new Date(staged.readyAt).toISOString()}. ` +
-            'Use prompt_layer_update with action=commit and stage_id to apply, or action=cancel to abort.',
+            protectedPromptLayerProposalQueuedText(entry, layer, 'update'),
           );
         }
 
@@ -870,12 +1024,13 @@ export function createPromptLayerRollbackTool(
 ): AgentTool<any> {
   const identityCoolingOff = options.identityCoolingOff;
   const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
+  const confirmationQueue = options.confirmationQueue;
 
   const tool: AgentTool<any> = {
     name: 'prompt_layer_rollback',
     description:
       'Rollback a prompt layer to historical content. Access is controlled by capability tier. ' +
-      'Base-layer rollbacks at Nursery/Apprentice are staged with cooling-off and require commit/cancel.',
+      'Base and operator identity-layer rollbacks are queued for operator confirmation.',
     label: 'prompt_layer_rollback',
     parameters: Type.Object({
       layer_id: Type.Optional(Type.String({ description: 'ID of the prompt layer to roll back (prefix match OK).' })),
@@ -952,24 +1107,25 @@ export function createPromptLayerRollbackTool(
         }
 
         const tier = getCapabilityTier();
-        const needsCoolingOff = (
-          layer.type === 'base'
-          && (tier === 'nursery' || tier === 'apprentice')
-          && !!identityCoolingOff
-        );
-        if (needsCoolingOff) {
-          const staged = identityCoolingOff.stageBaseLayerEdit({
-            layerId: layer.id,
-            layerName: layer.name,
-            previousContent: layer.content,
-            nextContent: baseline.content,
-            requestedBy: 'agent',
+        if (isProtectedPromptLayer(layer)) {
+          const reason = normalizeReason(params.reason)
+            ?? `Prompt layer rolled back via prompt_layer_rollback to version ${requestedVersion}`;
+          if (!confirmationQueue) {
+            return textResultWithError(
+              `${layer.type} identity layer rollbacks require confirmation queue support.`,
+              true,
+            );
+          }
+          const entry = enqueueProtectedPromptLayerProposal(store, confirmationQueue, {
+            action: 'rollback',
+            layer,
             tier,
+            reason,
+            nextContent: baseline.content,
+            requestedVersion,
           });
           return textResult(
-            `Staged base-layer rollback to v${requestedVersion} (stage_id: ${staged.id}). ` +
-            `Cooling-off until ${new Date(staged.readyAt).toISOString()}. ` +
-            'Use prompt_layer_rollback with action=commit and stage_id to apply, or action=cancel to abort.',
+            protectedPromptLayerProposalQueuedText(entry, layer, 'rollback'),
           );
         }
 
@@ -991,7 +1147,12 @@ export function createPromptLayerRollbackTool(
   });
 }
 
-export function createPromptLayerToggleTool(store: PromptLayerStatePort): AgentTool<any> {
+export function createPromptLayerToggleTool(
+  store: PromptLayerStatePort,
+  options: PromptLayerUpdateToolOptions = {},
+): AgentTool<any> {
+  const getCapabilityTier = options.getCapabilityTier ?? (() => 'autonomous' as CapabilityTier);
+  const confirmationQueue = options.confirmationQueue;
   const tool: AgentTool<any> = {
     name: 'prompt_layer_toggle',
     description: 'Toggle a prompt layer on/off. Access is controlled by capability tier.',
@@ -1010,6 +1171,24 @@ export function createPromptLayerToggleTool(store: PromptLayerStatePort): AgentT
         if (!layer) return textResultWithError(`Layer not found: ${params.layer_id}`, true);
         if (isCanonicalCharacterFoundationLayer(layer)) {
           return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
+        }
+        if (isProtectedPromptLayer(layer)) {
+          if (!confirmationQueue) {
+            return textResultWithError(
+              `${layer.type} identity layer toggles require confirmation queue support.`,
+              true,
+            );
+          }
+          const entry = enqueueProtectedPromptLayerProposal(store, confirmationQueue, {
+            action: 'toggle',
+            layer,
+            tier: getCapabilityTier(),
+            reason: 'Prompt layer toggle requested via prompt_layer_toggle',
+            nextEnabled: !layer.enabled,
+          });
+          return textResult(
+            protectedPromptLayerProposalQueuedText(entry, layer, 'toggle'),
+          );
         }
 
         const toggled = store.toggle(layer.id);

@@ -9,6 +9,7 @@ import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 import { gateToolWithCapabilities, type CapabilityAccess } from '../../system/capabilities/gate.js';
 import { resolveTierCapabilityTokens } from '../../system/capabilities/tiers.js';
 import { IdentityCoolingOffManager } from '../../system/capabilities/safeguards.js';
+import { ConfirmationQueue } from '../../system/capabilities/confirmation-queue.js';
 import { PromptLayerStore } from './prompt-store.js';
 import { CARD_BACKED_FOUNDATION_PROMPT_MESSAGE } from './canonical-foundation.js';
 import {
@@ -108,6 +109,34 @@ describe('Prompt Layer Tools', () => {
       expect(resultText(result)).toContain('does not accept persona mutation fields');
       expect(result.details?.isError).toBe(true);
       expect(store.getById(layer.id)?.content).toBe('original');
+    });
+
+    it('queues protected prompt-layer updates from the unified identity tool', async () => {
+      const queue = new ConfirmationQueue({ idFactory: () => 'identity-layer-1' });
+      const layer = createNonFoundationBaseLayer('Self Addendum', 'self-addendum');
+      const tool = gateToolWithCapabilities(
+        createIdentityTool(store, {
+          confirmationQueue: queue,
+          getCapabilityTier: () => 'autonomous',
+        }),
+        () => accessForTier('autonomous'),
+      );
+
+      const result = await tool.execute('identity-protected-update', {
+        action: 'update_layer',
+        layer_id: layer.id,
+        content: 'proposed self addendum',
+        reason: 'Improve self-description',
+      });
+
+      expect(resultText(result)).toContain('Prompt-layer update queued for confirmation');
+      expect(queue.listPending()).toHaveLength(1);
+      expect(store.getById(layer.id)?.content).toBe('original');
+
+      const resolved = await queue.resolve({ id: 'identity-layer-1', decision: 'approve' });
+      expect(resolved.status).toBe('approved');
+      expect(store.getById(layer.id)?.content).toBe('proposed self addendum');
+      expect(store.getById(layer.id)?.updatedBy).toBe('admin:confirmation');
     });
   });
 
@@ -338,11 +367,15 @@ describe('Prompt Layer Tools', () => {
       }
     });
 
-    it('allows non-foundation base layer updates in apprentice and autonomous tiers', async () => {
+    it('queues non-foundation base layer updates in apprentice and autonomous tiers', async () => {
       for (const tier of ['apprentice', 'autonomous'] as const) {
+        const queue = new ConfirmationQueue({ idFactory: () => `base-${tier}-1` });
         const layer = createNonFoundationBaseLayer('Character Foundation', `alternate-${tier}`);
         const tool = gateToolWithCapabilities(
-          createPromptLayerUpdateTool(store),
+          createPromptLayerUpdateTool(store, {
+            confirmationQueue: queue,
+            getCapabilityTier: () => tier,
+          }),
           () => accessForTier(tier),
         );
 
@@ -352,13 +385,80 @@ describe('Prompt Layer Tools', () => {
         });
         const text = resultText(result);
 
-        expect(text).toContain('Updated layer');
+        expect(text).toContain('Prompt-layer update queued for confirmation');
+        expect(queue.listPending()).toHaveLength(1);
+        expect(store.getById(layer.id)?.content).toBe('original');
+
+        const resolved = await queue.resolve({ id: `base-${tier}-1`, decision: 'approve' });
+        expect(resolved.status).toBe('approved');
         expect(store.getById(layer.id)?.content).toBe(`modified-${tier}`);
-        expect(store.getById(layer.id)?.updatedBy).toBe('agent');
+        expect(store.getById(layer.id)?.updatedBy).toBe('admin:confirmation');
       }
     });
 
-    it('stages base updates with cooling-off in apprentice tier when safeguard is configured', async () => {
+    it('fails closed for protected base updates when confirmation queue is missing', async () => {
+      const layer = createNonFoundationBaseLayer('Character Foundation', 'alternate-no-queue');
+      const tool = gateToolWithCapabilities(
+        createPromptLayerUpdateTool(store, {
+          getCapabilityTier: () => 'autonomous',
+        }),
+        () => accessForTier('autonomous'),
+      );
+
+      const result = await tool.execute('base-no-queue', {
+        layer_id: layer.id,
+        content: 'blocked-change',
+      });
+
+      expect(resultText(result)).toContain('base identity layer updates require confirmation queue support');
+      expect(result.details?.isError).toBe(true);
+      expect(store.getById(layer.id)?.content).toBe('original');
+    });
+
+    it('keeps protected prompt-layer proposals inert when denied and supports modified approval', async () => {
+      let sequence = 0;
+      const queue = new ConfirmationQueue({ idFactory: () => `protected-update-${++sequence}` });
+      const deniedLayer = createNonFoundationBaseLayer('Denied Base', 'denied-base');
+      const modifiedLayer = createNonFoundationBaseLayer('Modified Base', 'modified-base');
+      const tool = gateToolWithCapabilities(
+        createPromptLayerUpdateTool(store, {
+          confirmationQueue: queue,
+          getCapabilityTier: () => 'autonomous',
+        }),
+        () => accessForTier('autonomous'),
+      );
+
+      await tool.execute('denied-proposal', {
+        layer_id: deniedLayer.id,
+        content: 'denied change',
+        reason: 'Denied proposal',
+      });
+      const denied = await queue.resolve({ id: 'protected-update-1', decision: 'deny' });
+      expect(denied.status).toBe('denied');
+      expect(store.getById(deniedLayer.id)?.content).toBe('original');
+
+      await tool.execute('modified-proposal', {
+        layer_id: modifiedLayer.id,
+        content: 'agent proposed change',
+        reason: 'Needs operator rewrite',
+      });
+      const modified = await queue.resolve({
+        id: 'protected-update-2',
+        decision: 'modify',
+        modifiedParams: {
+          ...queue.listPending()[0].params,
+          content: 'operator modified change',
+          reason: 'Operator approved adjusted wording',
+        },
+      });
+
+      expect(modified.status).toBe('modified');
+      expect(store.getById(modifiedLayer.id)?.content).toBe('operator modified change');
+      expect(store.getById(modifiedLayer.id)?.updatedBy).toBe('admin:confirmation');
+      expect(store.getLayerHistory(modifiedLayer.id).at(-1)?.reason).toBe('Operator approved adjusted wording');
+    });
+
+    it('rejects committing protected staged base updates', async () => {
       let now = 1_000;
       const manager = new IdentityCoolingOffManager({
         now: () => now,
@@ -366,6 +466,14 @@ describe('Prompt Layer Tools', () => {
         idFactory: () => 'stage-1',
       });
       const layer = createNonFoundationBaseLayer('Character Foundation', 'alternate-stage');
+      manager.stageBaseLayerEdit({
+        layerId: layer.id,
+        layerName: layer.name,
+        previousContent: layer.content,
+        nextContent: 'staged-change',
+        requestedBy: 'agent',
+        tier: 'apprentice',
+      });
       const tool = gateToolWithCapabilities(
         createPromptLayerUpdateTool(store, {
           identityCoolingOff: manager,
@@ -374,27 +482,14 @@ describe('Prompt Layer Tools', () => {
         () => accessForTier('apprentice'),
       );
 
-      const staged = await tool.execute('stage', {
-        layer_id: layer.id,
-        content: 'staged-change',
-      });
-      expect(resultText(staged)).toContain('Staged base-layer update');
-      expect(store.getById(layer.id)?.content).toBe('original');
-
-      const tooSoon = await tool.execute('commit-early', {
-        action: 'commit',
-        stage_id: 'stage-1',
-      });
-      expect(resultText(tooSoon)).toContain('cooling off');
-      expect(store.getById(layer.id)?.content).toBe('original');
-
       now = 6_100;
       const committed = await tool.execute('commit-ready', {
         action: 'commit',
         stage_id: 'stage-1',
       });
-      expect(resultText(committed)).toContain('Committed staged update');
-      expect(store.getById(layer.id)?.content).toBe('staged-change');
+      expect(resultText(committed)).toContain('require operator confirmation');
+      expect(committed.details?.isError).toBe(true);
+      expect(store.getById(layer.id)?.content).toBe('original');
     });
 
     it('allows cancelling staged base updates before commit', async () => {
@@ -404,6 +499,14 @@ describe('Prompt Layer Tools', () => {
         idFactory: () => `stage-${++sequence}`,
       });
       const layer = createNonFoundationBaseLayer('Character Foundation', 'alternate-cancel');
+      manager.stageBaseLayerEdit({
+        layerId: layer.id,
+        layerName: layer.name,
+        previousContent: layer.content,
+        nextContent: 'staged-change',
+        requestedBy: 'agent',
+        tier: 'apprentice',
+      });
       const tool = gateToolWithCapabilities(
         createPromptLayerUpdateTool(store, {
           identityCoolingOff: manager,
@@ -412,10 +515,6 @@ describe('Prompt Layer Tools', () => {
         () => accessForTier('apprentice'),
       );
 
-      await tool.execute('stage', {
-        layer_id: layer.id,
-        content: 'staged-change',
-      });
       const cancelled = await tool.execute('cancel', {
         action: 'cancel',
         stage_id: 'stage-1',
@@ -439,11 +538,15 @@ describe('Prompt Layer Tools', () => {
       expect(store.getById(layer.id)?.content).toBe('original');
     });
 
-    it('allows operator layer updates in apprentice and autonomous tiers', async () => {
+    it('queues operator layer updates in apprentice and autonomous tiers', async () => {
       for (const tier of ['apprentice', 'autonomous'] as const) {
+        const queue = new ConfirmationQueue({ idFactory: () => `operator-${tier}-1` });
         const layer = store.create({ type: 'operator', name: `Operator-${tier}`, content: 'original' });
         const tool = gateToolWithCapabilities(
-          createPromptLayerUpdateTool(store),
+          createPromptLayerUpdateTool(store, {
+            confirmationQueue: queue,
+            getCapabilityTier: () => tier,
+          }),
           () => accessForTier(tier),
         );
 
@@ -453,7 +556,11 @@ describe('Prompt Layer Tools', () => {
         });
         const text = resultText(result);
 
-        expect(text).toContain('Updated layer');
+        expect(text).toContain('Prompt-layer update queued for confirmation');
+        expect(store.getById(layer.id)?.content).toBe('original');
+
+        const resolved = await queue.resolve({ id: `operator-${tier}-1`, decision: 'approve' });
+        expect(resolved.status).toBe('approved');
         expect(store.getById(layer.id)?.content).toBe(`operator-${tier}`);
       }
     });
@@ -564,44 +671,30 @@ describe('Prompt Layer Tools', () => {
       expect(history.at(-1)?.reason).toBe('Revert runtime prompt to known good');
     });
 
-    it('stages base rollbacks with cooling-off in apprentice tier and commits after wait', async () => {
-      let now = 5_000;
-      const manager = new IdentityCoolingOffManager({
-        now: () => now,
-        defaultCooldownMs: 5_000,
-        idFactory: () => 'rollback-stage-1',
-      });
+    it('queues base rollbacks for confirmation in apprentice tier', async () => {
+      const queue = new ConfirmationQueue({ idFactory: () => 'rollback-proposal-1' });
       const layer = createNonFoundationBaseLayer('Character Foundation', 'rollback-apprentice');
       store.update(layer.id, 'base-v2', 'agent', {}, 'base update');
       const tool = gateToolWithCapabilities(
         createPromptLayerRollbackTool(store, {
-          identityCoolingOff: manager,
+          confirmationQueue: queue,
           getCapabilityTier: () => 'apprentice',
         }),
         () => accessForTier('apprentice'),
       );
 
-      const staged = await tool.execute('rollback-stage', {
+      const queued = await tool.execute('rollback-queue', {
         layer_id: layer.id,
         version: 1,
       });
-      expect(resultText(staged)).toContain('Staged base-layer rollback');
+      expect(resultText(queued)).toContain('Prompt-layer rollback queued for confirmation');
+      expect(queue.listPending()).toHaveLength(1);
       expect(store.getById(layer.id)?.content).toBe('base-v2');
 
-      const tooSoon = await tool.execute('rollback-commit-early', {
-        action: 'commit',
-        stage_id: 'rollback-stage-1',
-      });
-      expect(resultText(tooSoon)).toContain('cooling off');
-      expect(store.getById(layer.id)?.content).toBe('base-v2');
-
-      now = 10_100;
-      const committed = await tool.execute('rollback-commit-ready', {
-        action: 'commit',
-        stage_id: 'rollback-stage-1',
-      });
-      expect(resultText(committed)).toContain('Committed staged rollback');
+      const resolved = await queue.resolve({ id: 'rollback-proposal-1', decision: 'approve' });
+      expect(resolved.status).toBe('approved');
       expect(store.getById(layer.id)?.content).toBe('original');
+      expect(store.getById(layer.id)?.updatedBy).toBe('admin:confirmation');
     });
   });
 
@@ -638,19 +731,27 @@ describe('Prompt Layer Tools', () => {
       }
     });
 
-    it('allows non-foundation base toggles in apprentice and autonomous tiers', async () => {
+    it('queues non-foundation base toggles in apprentice and autonomous tiers', async () => {
       for (const tier of ['apprentice', 'autonomous'] as const) {
+        const queue = new ConfirmationQueue({ idFactory: () => `toggle-base-${tier}-1` });
         const baseA = createNonFoundationBaseLayer('Character Foundation', `main-clone-${tier}`);
         createNonFoundationBaseLayer(`Base-B-${tier}`, `support-${tier}`);
         const tool = gateToolWithCapabilities(
-          createPromptLayerToggleTool(store),
+          createPromptLayerToggleTool(store, {
+            confirmationQueue: queue,
+            getCapabilityTier: () => tier,
+          }),
           () => accessForTier(tier),
         );
 
         const result = await tool.execute(`toggle-${tier}`, { layer_id: baseA.id });
         const text = resultText(result);
 
-        expect(text).toContain('disabled');
+        expect(text).toContain('Prompt-layer toggle queued for confirmation');
+        expect(store.getById(baseA.id)?.enabled).toBe(true);
+
+        const resolved = await queue.resolve({ id: `toggle-base-${tier}-1`, decision: 'approve' });
+        expect(resolved.status).toBe('approved');
         expect(store.getById(baseA.id)?.enabled).toBe(false);
       }
     });
@@ -670,18 +771,26 @@ describe('Prompt Layer Tools', () => {
       expect(store.getById(layer.id)?.enabled).toBe(true);
     });
 
-    it('allows operator toggles in apprentice and autonomous tiers', async () => {
+    it('queues operator toggles in apprentice and autonomous tiers', async () => {
       for (const tier of ['apprentice', 'autonomous'] as const) {
+        const queue = new ConfirmationQueue({ idFactory: () => `toggle-operator-${tier}-1` });
         const layer = store.create({ type: 'operator', name: `Operator-${tier}`, content: 'policy' });
         const tool = gateToolWithCapabilities(
-          createPromptLayerToggleTool(store),
+          createPromptLayerToggleTool(store, {
+            confirmationQueue: queue,
+            getCapabilityTier: () => tier,
+          }),
           () => accessForTier(tier),
         );
 
         const result = await tool.execute(`toggle-${tier}`, { layer_id: layer.id });
         const text = resultText(result);
 
-        expect(text).toContain('disabled');
+        expect(text).toContain('Prompt-layer toggle queued for confirmation');
+        expect(store.getById(layer.id)?.enabled).toBe(true);
+
+        const resolved = await queue.resolve({ id: `toggle-operator-${tier}-1`, decision: 'approve' });
+        expect(resolved.status).toBe('approved');
         expect(store.getById(layer.id)?.enabled).toBe(false);
       }
     });

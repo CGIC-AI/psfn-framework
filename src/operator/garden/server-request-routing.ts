@@ -6,6 +6,8 @@ export const GARDEN_PREFIX = '/';
 
 const GARDEN_CLIENT_ROUTES = new Set([
   '/',
+  '/action-pipe',
+  '/charge-budget',
   '/chat',
   '/confirmations',
   '/contacts',

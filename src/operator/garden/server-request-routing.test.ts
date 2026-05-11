@@ -42,6 +42,31 @@ describe('handleAdminRequest', () => {
     expect(sendNotFound).not.toHaveBeenCalled();
   });
 
+  it('serves the Garden SPA for nav-advertised client routes on direct load', () => {
+    for (const path of ['/action-pipe', '/charge-budget']) {
+      const req = makeRequest('GET', path);
+      const res = makeResponse();
+      const serveGardenPage = vi.fn();
+      const serveGardenBuildAsset = vi.fn();
+      const sendNotFound = vi.fn();
+
+      handleAdminRequest(req, res, {
+        checkAuth: vi.fn(() => true),
+        tryServeStaticAsset: vi.fn(() => false),
+        isGardenUiEnabled: vi.fn(() => true),
+        serveGardenBuildAsset,
+        serveGardenPage,
+        route: vi.fn(() => false),
+        sendNotFound,
+        onRequestError: vi.fn(),
+      });
+
+      expect(serveGardenPage).toHaveBeenCalledWith(path, res);
+      expect(serveGardenBuildAsset).not.toHaveBeenCalled();
+      expect(sendNotFound).not.toHaveBeenCalled();
+    }
+  });
+
   it('serves the Garden SPA shell at root instead of redirecting', () => {
     const req = makeRequest('GET', '/');
     const res = makeResponse();

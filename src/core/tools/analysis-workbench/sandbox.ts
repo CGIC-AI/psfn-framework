@@ -1,10 +1,7 @@
 // ── RLM Sandbox ──
-// node:vm-based code execution with injected context functions.
-// This host-side runner is a constrained REPL, not a security boundary.
+// Out-of-process REPL orchestration with explicit host-helper IPC.
 
-import vm from 'node:vm';
 import type { AnalysisWorkbenchEvidence } from './types.js';
-import * as helpers from './helpers.js';
 import type {
   ExecuteResult,
   GatewayREPLCapabilities,
@@ -12,9 +9,10 @@ import type {
   SandboxBudgetRef,
   SandboxDeps,
   SandboxExecutionPort,
+  SandboxHostHelper,
 } from '../../../boundary/sandbox/capabilities/contracts.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
-import { withNodeVmSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
+import { withChildProcessSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
 import {
   createLLMCapabilities,
   createMemoryCapabilities,
@@ -41,35 +39,19 @@ export class FinalAnswerSignal {
 }
 
 export class REPLSandbox {
-  private context: vm.Context;
-  private outputBuffer: string[] = [];
   private deps: SandboxDeps;
   private budgetRef: SandboxBudgetRef | undefined;
-  private builtinKeysSet: Set<string>;
   private currentEvidence: AnalysisWorkbenchEvidence[] = [];
   private memoryCeilingBytes: number | undefined;
   private executionPort: SandboxExecutionPort;
+  private hostHelpers: Record<string, SandboxHostHelper>;
+  private locals: Record<string, unknown> = {};
 
   constructor(deps: SandboxDeps, budgetRef?: SandboxBudgetRef, limits?: SandboxLimits) {
     this.deps = deps;
     this.budgetRef = budgetRef;
     this.memoryCeilingBytes = limits?.memoryCeilingBytes;
-    this.executionPort = withNodeVmSandboxExecutionPort(this.deps.executionPort ?? null);
-
-    const print = (...args: unknown[]) => {
-      this.outputBuffer.push(args.map(value => {
-        if (typeof value === 'string') return value;
-        try {
-          return JSON.stringify(value, null, 2);
-        } catch {
-          return String(value);
-        }
-      }).join(' '));
-    };
-
-    const FINAL = (answer: string) => {
-      throw new FinalAnswerSignal(String(answer));
-    };
+    this.executionPort = withChildProcessSandboxExecutionPort(this.deps.executionPort ?? null);
 
     const gatewayCaps = this.deps.llmProvider as unknown as GatewayREPLCapabilities;
     const pushEvidence = (entry: AnalysisWorkbenchEvidence): void => {
@@ -99,7 +81,7 @@ export class REPLSandbox {
     const scheduler = createSchedulerCapabilities({
       scheduler: this.deps.scheduler ?? null,
       eventBus: this.deps.eventBus ?? null,
-      getSandboxContext: () => this.context,
+      getSandboxContext: () => this.locals,
     });
 
     const modules = createModuleCapabilities({
@@ -143,11 +125,7 @@ export class REPLSandbox {
       && typeof this.executionPort.shellExec === 'function',
     );
 
-    const contextValues: Record<string, unknown> = {
-      // Injected functions
-      print,
-      console: { log: print, warn: print, error: print },
-      FINAL,
+    this.hostHelpers = {
       llm_query: llm.llm_query,
       llm_query_strict: llm.llm_query_strict,
       llm_query_json: llm.llm_query_json,
@@ -180,56 +158,7 @@ export class REPLSandbox {
         }
         : {}),
       ...((allowShellExec && hasShellExecPort) ? { shell_exec: shell.shell_exec } : {}),
-
-      // Text analysis helpers
-      search: helpers.search,
-      grep: helpers.grep,
-      grep_v: helpers.grep_v,
-      between: helpers.between,
-      head: helpers.head,
-      tail: helpers.tail,
-      word_frequency: helpers.word_frequency,
-      diff: helpers.diff,
-      text_similarity: helpers.text_similarity,
-      dedupe: helpers.dedupe,
-      group_by: helpers.group_by,
-      partition: helpers.partition,
-
-      // Safe builtins
-      JSON,
-      Math,
-      Date,
-      Array,
-      Object,
-      String,
-      Number,
-      Boolean,
-      Map,
-      Set,
-      RegExp,
-      Promise,
-      parseInt,
-      parseFloat,
-      isNaN,
-      isFinite,
-      undefined,
-      null: null,
-      true: true,
-      false: false,
-      Infinity,
-      NaN,
-
-      // For async IIFE support
-      setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
     };
-
-    this.context = vm.createContext(contextValues);
-
-    // Make globalThis point to the context itself so var assignments persist.
-    this.context.globalThis = this.context;
-
-    // Initialize builtin keys set for variable tracking and getLocals.
-    this.builtinKeysSet = new Set([...Object.keys(contextValues), 'globalThis']);
   }
 
   /** Drain collected evidence since last call */
@@ -243,35 +172,27 @@ export class REPLSandbox {
     return this.executionPort.codeExecutionBoundary;
   }
 
-  private snapshotUserVars(): Map<string, unknown> {
-    const snap = new Map<string, unknown>();
-    for (const key of Object.getOwnPropertyNames(this.context)) {
-      if (!this.builtinKeysSet.has(key)) {
-        snap.set(key, this.context[key]);
-      }
+  private snapshotUserVars(): Map<string, string> {
+    const snap = new Map<string, string>();
+    for (const [key, value] of Object.entries(this.locals)) {
+      snap.set(key, this.stableValueKey(value));
     }
     return snap;
   }
 
-  private assertMemoryCeiling(): void {
-    if (!this.memoryCeilingBytes || this.memoryCeilingBytes <= 0) {
-      return;
-    }
-
-    const heapUsedBytes = process.memoryUsage().heapUsed;
-    if (heapUsedBytes > this.memoryCeilingBytes) {
-      const usedMb = (heapUsedBytes / (1024 * 1024)).toFixed(1);
-      const limitMb = (this.memoryCeilingBytes / (1024 * 1024)).toFixed(1);
-      throw new Error(`Sandbox memory ceiling exceeded (${usedMb}MB > ${limitMb}MB)`);
+  private stableValueKey(value: unknown): string {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
     }
   }
 
   async execute(code: string, timeoutMs: number, truncationLimit: number): Promise<ExecuteResult> {
-    this.outputBuffer = [];
     const before = this.snapshotUserVars();
 
     // Transform top-level var/let/const to globalThis assignments so they persist
-    // across execute() calls (async IIFE creates a new scope otherwise)
+    // across execute() calls (async IIFE creates a new scope otherwise).
     const transformed = code.replace(
       /^(var|let|const)\s+(\w+)\s*=/gm,
       'globalThis.$2 =',
@@ -279,33 +200,37 @@ export class REPLSandbox {
     const wrapped = `(async () => {\n${transformed}\n})()`;
 
     try {
-      await this.executionPort.executeCode({
+      const response = await this.executionPort.executeCode({
         code: wrapped,
-        context: this.context,
         timeoutMs,
         memoryCeilingBytes: this.memoryCeilingBytes,
-        assertMemoryCeiling: () => this.assertMemoryCeiling(),
+        initialLocals: this.locals,
+        helperNames: Object.keys(this.hostHelpers),
+        hostHelpers: this.hostHelpers,
       });
-      this.assertMemoryCeiling();
+      this.locals = response.locals;
 
-      const output = this.truncate(this.outputBuffer.join('\n'), truncationLimit);
+      const output = this.truncate(response.output.join('\n'), truncationLimit);
       const variablesChanged = this.diffVars(before);
-      return { output, error: null, finalAnswer: null, variablesChanged };
+      return {
+        output,
+        error: response.error,
+        finalAnswer: response.finalAnswer,
+        variablesChanged,
+      };
     } catch (err) {
       if (err instanceof FinalAnswerSignal) {
-        const output = this.truncate(this.outputBuffer.join('\n'), truncationLimit);
         const variablesChanged = this.diffVars(before);
-        return { output, error: null, finalAnswer: err.answer, variablesChanged };
+        return { output: '', error: null, finalAnswer: err.answer, variablesChanged };
       }
 
       const errorMsg = toErrorMessage(err);
-      const output = this.truncate(this.outputBuffer.join('\n'), truncationLimit);
       const variablesChanged = this.diffVars(before);
-      return { output, error: errorMsg, finalAnswer: null, variablesChanged };
+      return { output: '', error: errorMsg, finalAnswer: null, variablesChanged };
     }
   }
 
-  private diffVars(before: Map<string, unknown>): string[] {
+  private diffVars(before: Map<string, string>): string[] {
     const changed: string[] = [];
     const after = this.snapshotUserVars();
 
@@ -319,13 +244,7 @@ export class REPLSandbox {
   }
 
   getLocals(): Record<string, unknown> {
-    const locals: Record<string, unknown> = {};
-    for (const key of Object.getOwnPropertyNames(this.context)) {
-      if (!this.builtinKeysSet.has(key)) {
-        locals[key] = this.context[key];
-      }
-    }
-    return locals;
+    return { ...this.locals };
   }
 
   private truncate(text: string, limit: number): string {

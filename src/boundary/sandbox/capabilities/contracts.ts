@@ -1,4 +1,3 @@
-import type vm from 'node:vm';
 import type { LLMProviderPort, EmbeddingProviderPort, LLMRequestMetadata } from '../../../core/agent/contracts.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
@@ -58,21 +57,42 @@ export type SandboxExecutionBoundary =
   | SandboxBrokerExecutionBoundary
   | GatewayProcessExecutionBoundary;
 
-export interface NodeVmCodeExecutionBoundary {
-  kind: 'node_vm';
-  isolatedFromGatewaySecrets: false;
-  securityPosture: 'non_isolated';
+export type SandboxDeniedCapability =
+  | 'filesystem'
+  | 'network'
+  | 'process'
+  | 'module_import'
+  | 'global_escape'
+  | 'child_process'
+  | 'environment';
+
+export interface ChildProcessCodeExecutionBoundary {
+  kind: 'child_process';
+  isolatedFromGatewaySecrets: true;
+  securityPosture: 'out_of_process_default_deny';
+  protocol: 'analysis-workbench-child-v1';
+  deniedCapabilities: readonly SandboxDeniedCapability[];
   reason: string;
 }
 
-export type SandboxCodeExecutionBoundary = NodeVmCodeExecutionBoundary;
+export type SandboxCodeExecutionBoundary = ChildProcessCodeExecutionBoundary;
+
+export type SandboxHostHelper = (...args: unknown[]) => unknown | Promise<unknown>;
 
 export interface SandboxCodeExecutionRequest {
   code: string;
-  context: vm.Context;
   timeoutMs: number;
   memoryCeilingBytes?: number;
-  assertMemoryCeiling?: () => void;
+  initialLocals: Record<string, unknown>;
+  helperNames: readonly string[];
+  hostHelpers: Readonly<Record<string, SandboxHostHelper>>;
+}
+
+export interface SandboxCodeExecutionResponse {
+  output: string[];
+  error: string | null;
+  finalAnswer: string | null;
+  locals: Record<string, unknown>;
 }
 
 export interface SandboxExecutionPort {
@@ -85,7 +105,7 @@ export interface SandboxExecutionPort {
   ) => Promise<ShellExecView>;
   executeCode: (
     request: SandboxCodeExecutionRequest,
-  ) => Promise<void>;
+  ) => Promise<SandboxCodeExecutionResponse>;
 }
 
 export type { ModuleRecord } from '../../../system/modules/types.js';
@@ -149,4 +169,4 @@ export interface ExecuteResult {
   variablesChanged: string[];
 }
 
-export type ContextGetter = () => vm.Context;
+export type ContextGetter = () => unknown;

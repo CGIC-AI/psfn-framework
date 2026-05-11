@@ -1,7 +1,7 @@
 import type { ShellExecPolicyConfig } from './execution/shell-policy-config.js';
 import { executeShellCommandWithPolicy } from './execution/shell-runner.js';
 import type { SandboxExecutionPort } from './capabilities/contracts.js';
-import { withNodeVmSandboxExecutionPort } from './sandbox-execution-port.js';
+import { withChildProcessSandboxExecutionPort } from './sandbox-execution-port.js';
 
 export function createSandboxBrokerExecutionPort(options: {
   workspacePath: string;
@@ -12,7 +12,7 @@ export function createSandboxBrokerExecutionPort(options: {
     return null;
   }
 
-  return withNodeVmSandboxExecutionPort({
+  return withChildProcessSandboxExecutionPort({
     boundary: {
       kind: 'sandbox_broker',
       isolatedFromGatewaySecrets: true,

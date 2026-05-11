@@ -18,7 +18,7 @@ import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
-import { withNodeVmSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
+import { withChildProcessSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
 import { wireShardAndThinkRuntime } from './composition.js';
 
 type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous';
@@ -218,7 +218,7 @@ function wireSplitThinkTool(options: {
 function makeExecutionPort(
   overrides: Partial<SandboxExecutionPort> = {},
 ): SandboxExecutionPort {
-  const base = withNodeVmSandboxExecutionPort(null);
+  const base = withChildProcessSandboxExecutionPort(null);
   return {
     boundary: overrides.boundary ?? base.boundary,
     codeExecutionBoundary: overrides.codeExecutionBoundary ?? base.codeExecutionBoundary,
@@ -405,12 +405,6 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
           truncated: false,
           durationMs: 7,
         })),
-        codeExecutionBoundary: {
-          kind: 'node_vm',
-          isolatedFromGatewaySecrets: false,
-          securityPosture: 'non_isolated',
-          reason: 'test analysis workbench adapter',
-        },
       });
       const target = wireSplitThinkTool({
         tier: 'autonomous',
@@ -438,19 +432,13 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
 
     try {
       const llm = makeGatewayLLM(['```repl\nprint("through-port"); FINAL("done");\n```'], registryPath);
-      const fallbackPort = withNodeVmSandboxExecutionPort(null);
+      const fallbackPort = withChildProcessSandboxExecutionPort(null);
       const executeCode = vi.fn(fallbackPort.executeCode);
       const executionPort = makeExecutionPort({
         boundary: {
           kind: 'sandbox_broker',
           isolatedFromGatewaySecrets: true,
           brokerId: 'test-broker',
-        },
-        codeExecutionBoundary: {
-          kind: 'node_vm',
-          isolatedFromGatewaySecrets: false,
-          securityPosture: 'non_isolated',
-          reason: 'test analysis workbench adapter',
         },
         executeCode,
       });

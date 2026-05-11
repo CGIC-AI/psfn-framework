@@ -32,11 +32,19 @@ describe('createSandboxBrokerExecutionPort', () => {
       brokerId: 'test-broker',
     });
     expect(port?.codeExecutionBoundary).toMatchObject({
-      kind: 'node_vm',
-      isolatedFromGatewaySecrets: false,
-      securityPosture: 'non_isolated',
+      kind: 'child_process',
+      isolatedFromGatewaySecrets: true,
+      securityPosture: 'out_of_process_default_deny',
+      protocol: 'analysis-workbench-child-v1',
+      deniedCapabilities: expect.arrayContaining([
+        'filesystem',
+        'network',
+        'process',
+        'module_import',
+        'global_escape',
+      ]),
     });
-    expect(port?.codeExecutionBoundary.reason).toContain('not a security boundary');
+    expect(port?.codeExecutionBoundary.reason).toContain('child process');
 
     const result = await port?.shellExec('node', ['-e', 'process.stdout.write("ok")'], {});
 

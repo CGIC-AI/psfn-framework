@@ -6,7 +6,7 @@ describe('buildRLMSystemPrompt', () => {
     const prompt = buildRLMSystemPrompt();
 
     expect(prompt).toContain('constrained JavaScript REPL');
-    expect(prompt).toContain('node:vm runner is non-isolated and is not a security boundary');
+    expect(prompt).toContain('out-of-process with a default-deny helper protocol');
     expect(prompt).toContain('### Repository');
     expect(prompt).toContain('`await repo_status()`');
     expect(prompt).toContain('`await repo_diff(staged?)`');

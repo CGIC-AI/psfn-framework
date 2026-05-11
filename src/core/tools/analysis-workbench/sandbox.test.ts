@@ -8,7 +8,7 @@ import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import { EventBus } from '../../../shared/event-bus.js';
 import { Scheduler } from '../../scheduler/scheduler.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
-import { withNodeVmSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
+import { withChildProcessSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
 import type { REPLMutationPolicy } from './types.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
@@ -92,7 +92,7 @@ function nullDeps(
 function makeExecutionPort(
   overrides: Partial<SandboxExecutionPort> = {},
 ): SandboxExecutionPort {
-  const base = withNodeVmSandboxExecutionPort(null);
+  const base = withChildProcessSandboxExecutionPort(null);
   return {
     boundary: overrides.boundary ?? base.boundary,
     codeExecutionBoundary: overrides.codeExecutionBoundary ?? base.codeExecutionBoundary,
@@ -420,16 +420,10 @@ describe('REPLSandbox', () => {
   });
 
   it('routes code execution through the sandbox execution port', async () => {
-    const fallbackPort = withNodeVmSandboxExecutionPort(null);
+    const fallbackPort = withChildProcessSandboxExecutionPort(null);
     const executeCode = vi.fn(fallbackPort.executeCode);
     const sandbox = new REPLSandbox(nullDeps(mockLLM(), makeExecutionPort({
       executeCode,
-      codeExecutionBoundary: {
-        kind: 'node_vm',
-        isolatedFromGatewaySecrets: false,
-        securityPosture: 'non_isolated',
-        reason: 'test execution spy',
-      },
     })));
 
     const result = await sandbox.execute(
@@ -447,8 +441,8 @@ describe('REPLSandbox', () => {
     }));
   });
 
-  it('reports host-side node:vm code execution as non-isolated even when shell uses a broker', () => {
-    const executionPort = withNodeVmSandboxExecutionPort({
+  it('reports child-process code execution as default-deny even when shell uses a broker', () => {
+    const executionPort = withChildProcessSandboxExecutionPort({
       boundary: {
         kind: 'sandbox_broker',
         isolatedFromGatewaySecrets: true,
@@ -473,15 +467,23 @@ describe('REPLSandbox', () => {
       isolatedFromGatewaySecrets: true,
     });
     expect(sandbox.getExecutionBoundary()).toEqual({
-      kind: 'node_vm',
-      isolatedFromGatewaySecrets: false,
-      securityPosture: 'non_isolated',
-      reason: expect.stringContaining('not a security boundary'),
+      kind: 'child_process',
+      isolatedFromGatewaySecrets: true,
+      securityPosture: 'out_of_process_default_deny',
+      protocol: 'analysis-workbench-child-v1',
+      deniedCapabilities: expect.arrayContaining([
+        'filesystem',
+        'network',
+        'process',
+        'module_import',
+        'global_escape',
+      ]),
+      reason: expect.stringContaining('child process'),
     });
   });
 
-  it('fails closed when a node:vm code boundary claims gateway-secret isolation', () => {
-    expect(() => withNodeVmSandboxExecutionPort({
+  it('fails closed when code execution is configured with a non-child-process boundary', () => {
+    expect(() => withChildProcessSandboxExecutionPort({
       boundary: {
         kind: 'sandbox_broker',
         isolatedFromGatewaySecrets: true,
@@ -489,10 +491,10 @@ describe('REPLSandbox', () => {
       shellExec: vi.fn(),
       codeExecutionBoundary: {
         kind: 'node_vm',
-        isolatedFromGatewaySecrets: true,
+        isolatedFromGatewaySecrets: false,
         reason: 'legacy false claim',
       } as any,
-    })).toThrow('node:vm code execution cannot be marked isolatedFromGatewaySecrets=true');
+    })).toThrow('requires an out-of-process child_process sandbox boundary');
   });
 
   it('shell_exec helper calls the sandbox execution port when allowed', async () => {
@@ -512,12 +514,6 @@ describe('REPLSandbox', () => {
         truncated: false,
         durationMs: 12,
       })),
-      codeExecutionBoundary: {
-        kind: 'node_vm',
-        isolatedFromGatewaySecrets: false,
-        securityPosture: 'non_isolated',
-        reason: 'test node:vm adapter',
-      },
     });
     const sandbox = new REPLSandbox(nullDeps(mockLLM(), executionPort));
 
@@ -538,12 +534,6 @@ describe('REPLSandbox', () => {
         isolatedFromGatewaySecrets: true,
       },
       shellExec: vi.fn(async () => ({ exitCode: 0 })),
-      codeExecutionBoundary: {
-        kind: 'node_vm',
-        isolatedFromGatewaySecrets: false,
-        securityPosture: 'non_isolated',
-        reason: 'test node:vm adapter',
-      },
     });
     const sandbox = new REPLSandbox(nullDeps(mockLLM(), executionPort));
 
@@ -575,12 +565,6 @@ describe('REPLSandbox', () => {
         truncated: false,
         durationMs: 12,
       })),
-      codeExecutionBoundary: {
-        kind: 'node_vm',
-        isolatedFromGatewaySecrets: false,
-        securityPosture: 'non_isolated',
-        reason: 'legacy node:vm path',
-      },
     })));
     const result = await sandbox.execute(
       'print(typeof shell_exec);',
@@ -757,7 +741,7 @@ describe('REPLSandbox', () => {
 
   it('memory_count returns 0 when no store', async () => {
     const sandbox = new REPLSandbox(nullDeps());
-    const result = await sandbox.execute('print(memory_count());', 5000, 8192);
+    const result = await sandbox.execute('print(await memory_count());', 5000, 8192);
     expect(result.output).toBe('0');
   });
 
@@ -807,6 +791,69 @@ describe('REPLSandbox', () => {
 
     const r3 = await sandbox.execute('Buffer.from("x");', 5000, 8192);
     expect(r3.error).toBeTruthy();
+  });
+
+  it('denies import, filesystem, network, process, and global escape attempts by default', async () => {
+    const sandbox = new REPLSandbox(nullDeps());
+
+    const result = await sandbox.execute(
+      [
+        'const checks = [];',
+        'checks.push(`process:${typeof process}`);',
+        'checks.push(`require:${typeof require}`);',
+        'checks.push(`Buffer:${typeof Buffer}`);',
+        'checks.push(`fetch:${typeof fetch}`);',
+        'checks.push(`WebSocket:${typeof WebSocket}`);',
+        'try { await import("node:fs"); checks.push("fs-import:allowed"); }',
+        'catch (error) { checks.push("fs-import:denied"); }',
+        'try { await import("node:net"); checks.push("net-import:allowed"); }',
+        'catch (error) { checks.push("net-import:denied"); }',
+        'try { await import("node:child_process"); checks.push("child-process-import:allowed"); }',
+        'catch (error) { checks.push("child-process-import:denied"); }',
+        'try { globalThis.constructor.constructor("return process")(); checks.push("global-escape:allowed"); }',
+        'catch (error) { checks.push("global-escape:denied"); }',
+        'try { Function("return process")(); checks.push("function-escape:allowed"); }',
+        'catch (error) { checks.push("function-escape:denied"); }',
+        'try { Object.constructor("return process")(); checks.push("object-constructor-escape:allowed"); }',
+        'catch (error) { checks.push("object-constructor-escape:denied"); }',
+        'print(checks.join("\\n"));',
+      ].join('\n'),
+      5000,
+      8192,
+    );
+
+    expect(result.error).toBeNull();
+    expect(result.output).toContain('process:undefined');
+    expect(result.output).toContain('require:undefined');
+    expect(result.output).toContain('Buffer:undefined');
+    expect(result.output).toContain('fetch:undefined');
+    expect(result.output).toContain('WebSocket:undefined');
+    expect(result.output).toContain('fs-import:denied');
+    expect(result.output).toContain('net-import:denied');
+    expect(result.output).toContain('child-process-import:denied');
+    expect(result.output).toContain('global-escape:denied');
+    expect(result.output).toContain('function-escape:denied');
+    expect(result.output).toContain('object-constructor-escape:denied');
+    expect(result.output).not.toContain('allowed');
+  });
+
+  it('declares default-deny child-process code execution capabilities', () => {
+    const sandbox = new REPLSandbox(nullDeps());
+    expect(sandbox.getExecutionBoundary()).toMatchObject({
+      kind: 'child_process',
+      isolatedFromGatewaySecrets: true,
+      securityPosture: 'out_of_process_default_deny',
+      protocol: 'analysis-workbench-child-v1',
+      deniedCapabilities: expect.arrayContaining([
+        'filesystem',
+        'network',
+        'process',
+        'module_import',
+        'global_escape',
+        'child_process',
+        'environment',
+      ]),
+    });
   });
 
   it('console.log maps to print', async () => {
@@ -943,7 +990,7 @@ describe('REPLSandbox', () => {
     });
 
     const result = await sandbox.execute(
-      'const tasks = schedule_list(); print(tasks.length); print(Boolean(tasks[0].handler));',
+      'const tasks = await schedule_list(); print(tasks.length); print(Boolean(tasks[0].handler));',
       5000, 8192,
     );
     expect(result.output).toBe('1\nfalse');
@@ -958,7 +1005,7 @@ describe('REPLSandbox', () => {
 
     const result = await sandbox.execute(
       [
-        'const list = schedule_list();',
+        'const list = await schedule_list();',
         'print(list.length);',
       ].join('\n'),
       5000,

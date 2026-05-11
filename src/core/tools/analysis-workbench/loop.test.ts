@@ -5,7 +5,7 @@ import type { REPLDeps, REPLConfig } from './types.js';
 import { DEFAULT_REPL_CONFIG } from './types.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
-import { withNodeVmSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
+import { withChildProcessSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
 
@@ -555,7 +555,7 @@ describe('runRLMLoop', () => {
       '```repl\nFINAL("child conclusion")\n```',
       'FINAL("parent conclusion")',
     ]);
-    const fallbackPort = withNodeVmSandboxExecutionPort(null);
+    const fallbackPort = withChildProcessSandboxExecutionPort(null);
     const executeCode = vi.fn(fallbackPort.executeCode);
 
     const result = await runRLMLoop(
@@ -563,12 +563,6 @@ describe('runRLMLoop', () => {
       makeDeps(llm, {
         executionPort: {
           ...fallbackPort,
-          codeExecutionBoundary: {
-            kind: 'node_vm',
-            isolatedFromGatewaySecrets: false,
-            securityPosture: 'non_isolated',
-            reason: 'test execution spy',
-          },
           executeCode,
         },
         getCapabilityTier: () => 'autonomous',

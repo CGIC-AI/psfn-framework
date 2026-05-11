@@ -59,7 +59,7 @@ function buildBasePrompt(mutationPolicy?: REPLMutationPolicy): string {
     'Use this workbench only for multi-stage analysis of large files, codebases, logs, datasets, transcripts, or evidence sets that would be harmful to stuff directly into the main conversation context.',
     'Do not use it for ordinary reasoning, tool discovery, missing schemas, simple file lookup, routine inspection, or state changes.',
     'Respond with at most one ```repl block per turn. Your code runs in a constrained JavaScript REPL.',
-    'The host-side node:vm runner is non-isolated and is not a security boundary; use only the exposed helpers.',
+    'Execution runs out-of-process with a default-deny helper protocol; use only the exposed helpers.',
     'Variables persist across iterations. When you have the answer, call FINAL().',
     'The analysis_workbench tool only accepts a plain task string. Do not expect prior hidden scratchpad state outside this sandbox.',
     '',

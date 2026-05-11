@@ -4,6 +4,7 @@ import type {
   MessageModelOverride,
   MessagePromptOverride,
   MessageRoutingMetadata,
+  AgentResponse,
   ResponseStyle,
   SubstrateMessage,
 } from '../../shared/contracts/runtime.js';
@@ -92,6 +93,12 @@ interface IdentityClaimHeaders {
 
 interface ActiveRequestState {
   channelId: string;
+}
+
+interface ObservedTurnCompletion {
+  promise: Promise<AgentResponse>;
+  attachFallback(turnPromise: Promise<AgentResponse>): void;
+  dispose(): void;
 }
 
 export interface AgentApiBackendConfig {
@@ -243,7 +250,9 @@ export class AgentApiBackend {
       }
     }
 
+    const turnCompletion = this.observeTurnCompletion(pendingTurn.value.substrateMsg.id);
     const turnPromise = this.agentLoop.handleMessage(pendingTurn.value.substrateMsg);
+    turnCompletion.attachFallback(turnPromise);
     this.attachTurnCleanup(pendingTurn.value.releaseChannel, turnPromise);
     const timeoutMs = this.normalizeChatCompletionTimeoutMs(params.timeoutMs);
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
@@ -260,8 +269,8 @@ export class AgentApiBackend {
     try {
       const response = await (
         turnTimeoutPromise
-          ? Promise.race([turnPromise, turnTimeoutPromise])
-          : turnPromise
+          ? Promise.race([turnCompletion.promise, turnTimeoutPromise])
+          : turnCompletion.promise
       );
       return {
         ok: true,
@@ -289,6 +298,7 @@ export class AgentApiBackend {
       if (timeoutHandle) {
         clearTimeout(timeoutHandle);
       }
+      turnCompletion.dispose();
       unsubscribe();
       this.activeRequests.delete(params.requestId);
     }
@@ -334,6 +344,53 @@ export class AgentApiBackend {
       .finally(() => {
         releaseChannel();
       });
+  }
+
+  private observeTurnCompletion(messageId: string): ObservedTurnCompletion {
+    let settled = false;
+    let cleanup: () => void = () => {};
+    let resolveCompletion: (response: AgentResponse) => void = () => {};
+    let rejectCompletion: (error: unknown) => void = () => {};
+
+    const settle = (action: () => void) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      action();
+    };
+
+    const promise = new Promise<AgentResponse>((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
+    });
+
+    const unsubscribeEnd = this.eventBus.on('agent.turn.end', ({ message, response }) => {
+      if (message.id !== messageId) return;
+      settle(() => resolveCompletion(response));
+    });
+    const unsubscribeError = this.eventBus.on('agent.error', ({ message, error }) => {
+      if (message.id !== messageId) return;
+      settle(() => rejectCompletion(error));
+    });
+    cleanup = () => {
+      unsubscribeEnd();
+      unsubscribeError();
+    };
+
+    return {
+      promise,
+      attachFallback: (turnPromise) => {
+        void turnPromise.then(
+          response => settle(() => resolveCompletion(response)),
+          error => settle(() => rejectCompletion(error)),
+        );
+      },
+      dispose: () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+      },
+    };
   }
 
   private emitQueueTelemetry(

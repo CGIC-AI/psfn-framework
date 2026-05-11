@@ -114,6 +114,54 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     );
   });
 
+  it('removes analysis_workbench from internal maintenance turns', () => {
+    const { facade, agent, emitTelemetry, correlation } = createFacade('maintenance');
+    facade.registerTool(makeTool('identity'), 'core');
+    facade.registerTool(makeTool('system'), 'core');
+    facade.registerTool(makeTool('session'), 'core');
+    facade.registerTool(makeTool('analysis_workbench'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-maintenance-1',
+      channelId: 'internal:maintenance',
+      channelType: 'api',
+      authorId: 'runtime',
+      authorName: 'Maintenance',
+      content: 'routine maintenance',
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    }, 'maintenance', 'background', correlation, { intent: null, skipped: [] });
+
+    const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    expect(tools.map(tool => tool.name)).toEqual(['identity', 'session', 'system']);
+    expect(emitTelemetry).toHaveBeenCalledWith(
+      'agent.tools.core_guardrail.skipped',
+      expect.objectContaining({
+        toolName: 'analysis_workbench',
+        taskKind: 'maintenance',
+        reason: 'maintenance_turn_allowlist',
+      }),
+    );
+  });
+
+  it('keeps analysis_workbench available for non-maintenance large-evidence turns', () => {
+    const { facade, agent, correlation } = createFacade(null);
+    facade.registerTool(makeTool('session'), 'core');
+    facade.registerTool(makeTool('analysis_workbench'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-large-evidence-1',
+      channelId: 'api:analysis',
+      channelType: 'api',
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'Analyze this large transcript and evidence set.',
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    }, undefined, 'chat', correlation, { intent: null, skipped: [] });
+
+    const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    expect(tools.map(tool => tool.name)).toEqual(['analysis_workbench', 'session']);
+  });
+
   it('denies disallowed maintenance-turn core tool actions and emits audit telemetry', async () => {
     const execute = vi.fn(async () => ({
       content: [{ type: 'text', text: 'identity ok' }],

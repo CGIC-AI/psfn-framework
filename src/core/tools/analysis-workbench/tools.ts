@@ -14,10 +14,11 @@ export function createAnalysisWorkbenchTool(deps: REPLDeps): AgentTool<any> {
   return {
     name: 'analysis_workbench',
     description:
-      'Bounded analysis workbench for large files, codebases, logs, datasets, or evidence sets that would ' +
+      'Bounded analysis workbench for large files, codebases, logs, transcripts, datasets, or evidence sets that would ' +
       'bloat the main conversation context. Use direct semantic tools first, and use tool_search/toolset ' +
       'when the active stack is missing a capability. Do not use this for routine reasoning, tool discovery, ' +
-      'schema confusion, simple file lookup, basic inspection, or routine state changes. Pass only the task ' +
+      'schema confusion, routine orient actions, concern maintenance, scheduler/schedule work, simple lookup, ' +
+      'basic file/session inspection, or routine state changes. Pass only the task ' +
       'or question to analyze; the tool manages its own temporary scratchpad and iterative code sandbox.',
     label: 'analysis_workbench',
     parameters: Type.Object({

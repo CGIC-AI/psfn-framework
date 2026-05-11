@@ -5,6 +5,7 @@ import { EMOTIONAL_AFFECT_BODY_TEMPLATE } from '../emotion/persona-adaptation.js
 import { OPEN_THREADS_BODY_TEMPLATE } from '../intention/concerns.js';
 import { METACOGNITIVE_PERSONA_GUIDANCE_BODY_TEMPLATE } from '../self-model/metacognition.js';
 import {
+  ANALYSIS_WORKBENCH_GUIDANCE_BODY_TEMPLATE,
   EXTENDED_TOOLS_BODY_TEMPLATE,
   INTERNAL_STATE_BODY_TEMPLATE,
   RESPONSE_STYLE_GUIDANCE_BODY_TEMPLATE,
@@ -172,6 +173,7 @@ const RUNTIME_ATTENTION_LAYER_CONTENT = wrapRuntimeUmbrella('runtime_attention',
 
 const RUNTIME_TOOLING_LAYER_CONTENT = wrapRuntimeUmbrella('runtime_tooling', [
   "<tooling>\n<active_count>{{runtime_tooling_active_count}}</active_count>\n<core_count>{{runtime_tooling_core_count}}</core_count>\n<promoted_count>{{runtime_tooling_promoted_count}}</promoted_count>\n<loaded_count>{{runtime_tooling_loaded_count}}</loaded_count>\n<autoload_count>{{runtime_tooling_autoload_count}}</autoload_count>\n<deferred_count>{{runtime_tooling_deferred_count}}</deferred_count>\n<available_extended_count>{{runtime_tooling_available_extended_count}}</available_extended_count>\n</tooling>",
+  `<analysis_workbench_guidance>\n${ANALYSIS_WORKBENCH_GUIDANCE_BODY_TEMPLATE}\n</analysis_workbench_guidance>`,
   "<appearance_context>\n{{runtime_appearance_context_body}}\n</appearance_context>",
   `<self_image_tool_guidance>\n${SELF_IMAGE_TOOL_GUIDANCE_BODY_TEMPLATE}\n</self_image_tool_guidance>`,
   `<extended_tools>\n${EXTENDED_TOOLS_BODY_TEMPLATE}\n</extended_tools>`,
@@ -225,7 +227,7 @@ const LEGACY_RUNTIME_PROMPT_LAYER_DEFINITIONS = [
     name: 'Tooling',
     priority: 160,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: "<tooling>\n<active_count>{{runtime_tooling_active_count}}</active_count>\n<core_count>{{runtime_tooling_core_count}}</core_count>\n<promoted_count>{{runtime_tooling_promoted_count}}</promoted_count>\n<loaded_count>{{runtime_tooling_loaded_count}}</loaded_count>\n<autoload_count>{{runtime_tooling_autoload_count}}</autoload_count>\n<deferred_count>{{runtime_tooling_deferred_count}}</deferred_count>\n<available_extended_count>{{runtime_tooling_available_extended_count}}</available_extended_count>\n</tooling>",
+    content: `<tooling>\n<active_count>{{runtime_tooling_active_count}}</active_count>\n<core_count>{{runtime_tooling_core_count}}</core_count>\n<promoted_count>{{runtime_tooling_promoted_count}}</promoted_count>\n<loaded_count>{{runtime_tooling_loaded_count}}</loaded_count>\n<autoload_count>{{runtime_tooling_autoload_count}}</autoload_count>\n<deferred_count>{{runtime_tooling_deferred_count}}</deferred_count>\n<available_extended_count>{{runtime_tooling_available_extended_count}}</available_extended_count>\n</tooling>\n<analysis_workbench_guidance>\n${ANALYSIS_WORKBENCH_GUIDANCE_BODY_TEMPLATE}\n</analysis_workbench_guidance>`,
   },
   {
     identifier: 'runtime.trust',

@@ -23,10 +23,12 @@ describe('createAnalysisWorkbenchTool', () => {
     });
 
     expect(tool.name).toBe('analysis_workbench');
-    expect(tool.description).toContain('large files, codebases, logs, datasets, or evidence sets');
+    expect(tool.description).toContain('large files, codebases, logs, transcripts, datasets, or evidence sets');
     expect(tool.description).toContain('Use direct semantic tools first');
     expect(tool.description).toContain('use tool_search/toolset');
     expect(tool.description).toContain('Do not use this for routine reasoning, tool discovery');
+    expect(tool.description).toContain('routine orient actions, concern maintenance, scheduler/schedule work');
+    expect(tool.description).toContain('simple lookup');
     expect(tool.description).toContain('Pass only the task');
   });
 

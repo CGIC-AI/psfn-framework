@@ -8,6 +8,7 @@ import { EMOTIONAL_AFFECT_BODY_TEMPLATE } from '../emotion/persona-adaptation.js
 import { OPEN_THREADS_BODY_TEMPLATE } from '../intention/concerns.js';
 import { METACOGNITIVE_PERSONA_GUIDANCE_BODY_TEMPLATE } from '../self-model/metacognition.js';
 import {
+  ANALYSIS_WORKBENCH_GUIDANCE_BODY_TEMPLATE,
   EXTENDED_TOOLS_BODY_TEMPLATE,
   INTERNAL_STATE_BODY_TEMPLATE,
   RESPONSE_STYLE_GUIDANCE_BODY_TEMPLATE,
@@ -71,7 +72,7 @@ const LEGACY_RUNTIME_LAYER_SEEDS = [
     identifier: 'runtime.tooling',
     name: 'Tooling',
     priority: 160,
-    content: "<tooling>\n<active_count>{{runtime_tooling_active_count}}</active_count>\n<core_count>{{runtime_tooling_core_count}}</core_count>\n<promoted_count>{{runtime_tooling_promoted_count}}</promoted_count>\n<loaded_count>{{runtime_tooling_loaded_count}}</loaded_count>\n<autoload_count>{{runtime_tooling_autoload_count}}</autoload_count>\n<deferred_count>{{runtime_tooling_deferred_count}}</deferred_count>\n<available_extended_count>{{runtime_tooling_available_extended_count}}</available_extended_count>\n</tooling>",
+    content: `<tooling>\n<active_count>{{runtime_tooling_active_count}}</active_count>\n<core_count>{{runtime_tooling_core_count}}</core_count>\n<promoted_count>{{runtime_tooling_promoted_count}}</promoted_count>\n<loaded_count>{{runtime_tooling_loaded_count}}</loaded_count>\n<autoload_count>{{runtime_tooling_autoload_count}}</autoload_count>\n<deferred_count>{{runtime_tooling_deferred_count}}</deferred_count>\n<available_extended_count>{{runtime_tooling_available_extended_count}}</available_extended_count>\n</tooling>\n<analysis_workbench_guidance>\n${ANALYSIS_WORKBENCH_GUIDANCE_BODY_TEMPLATE}\n</analysis_workbench_guidance>`,
   },
   {
     identifier: 'runtime.trust',
@@ -292,6 +293,9 @@ describe('runtime prompt layer schema', () => {
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_speaking_with_trust_level}}');
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_channel_visibility}}');
     expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).toContain('{{runtime_tooling_active_count}}');
+    expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).toContain('<analysis_workbench_guidance>');
+    expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).toContain('large files, codebases, logs, transcripts, datasets, or evidence sets');
+    expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).toContain('Do not use analysis_workbench for routine orient actions, concern maintenance, scheduler or schedule work, simple lookup');
     expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).toContain('{{runtime_appearance_context_body}}');
     expect(getRuntimePromptLayerDefinition('runtime.self')?.content).toContain('{{runtime_response_style}}');
     expect(getRuntimePromptLayerDefinition('runtime.self')?.content).toContain('{{#if runtime_response_style_is_concise}}');

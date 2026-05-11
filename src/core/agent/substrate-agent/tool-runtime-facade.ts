@@ -114,7 +114,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isMaintenanceToolRestrictedTaskKind(taskKind: string | null | undefined): boolean {
-  return taskKind === 'heartbeat' || taskKind === 'reflection';
+  return taskKind === 'heartbeat' || taskKind === 'reflection' || taskKind === 'maintenance';
 }
 
 function resolveMaintenanceIdentityAction(params: Record<string, unknown>): string | null {

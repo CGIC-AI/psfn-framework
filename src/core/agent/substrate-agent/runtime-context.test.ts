@@ -415,7 +415,7 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).toContain('analysis_workbench extension pass after the first iteration: 4');
     expect(runtimeContext).toContain('analysis_workbench first pass: 0 charge units');
     expect(runtimeContext).toContain('each extension pass after the first iteration costs 4 current-turn units');
-    expect(runtimeContext).toContain('Do not use it for tool discovery, schema confusion, simple lookup, or ordinary replies.');
+    expect(runtimeContext).toContain('Do not use it for routine orient actions, concern maintenance, scheduler work, tool discovery, schema confusion, simple lookup, or ordinary replies.');
     expect(runtimeContext).not.toContain('think');
   });
 
@@ -1519,6 +1519,11 @@ describe('runtime subject identity', () => {
     expect(rendered).toContain('<tier>autonomous</tier>');
     expect(rendered).toContain('<active_count>5</active_count>');
     expect(rendered).toContain('<available_extended_count>3</available_extended_count>');
+    expect(rendered).toContain('<analysis_workbench_guidance>');
+    expect(rendered).toContain('analysis_workbench is a large-evidence escalation surface only.');
+    expect(rendered).toContain('large files, codebases, logs, transcripts, datasets, or evidence sets');
+    expect(rendered).toContain('Do not use analysis_workbench for routine orient actions, concern maintenance, scheduler or schedule work, simple lookup');
+    expect(rendered).toContain('orient for persona/human/goals/values/concerns');
     expect(rendered).toContain('<appearance_context>');
     expect(rendered).toContain('<self_image_tool_guidance>');
     expect(rendered).toContain('<extended_tools>');

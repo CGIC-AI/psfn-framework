@@ -169,7 +169,7 @@ function buildChargeBudgetContextBlock(input: {
     ...costedSurfaces.map(entry => `- ${CHARGE_SURFACE_PROMPT_LABELS[entry.surface]}: ${formatChargeAmount(entry.amount)}`),
     `analysis_workbench first pass: 0 charge units but still high-latency; each extension pass after the first iteration costs ${formatChargeAmount(analysisWorkbenchExtensionCost)} current-turn units and still has a safety wall-time cap.`,
     'Zero-cost default path: use direct semantic tools for routine reads, memory/session lookup, schedule work, repo inspection, and state changes.',
-    'Use analysis_workbench only for bounded multi-stage analysis of large files, codebases, logs, transcripts, datasets, or evidence sets. Do not use it for tool discovery, schema confusion, simple lookup, or ordinary replies.',
+    'Use analysis_workbench only for bounded multi-stage analysis of large files, codebases, logs, transcripts, datasets, or evidence sets. Do not use it for routine orient actions, concern maintenance, scheduler work, tool discovery, schema confusion, simple lookup, or ordinary replies.',
   ];
 
   return wrapPromptSectionXml({

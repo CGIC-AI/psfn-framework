@@ -29,6 +29,21 @@ describe('extended-tool-autoload-policy', () => {
     expect(intent).toBe('memory');
   });
 
+  it('classifies routine orient and concern maintenance as memory intent instead of social fallback', () => {
+    for (const content of [
+      'Please list active concerns and resolve the hydration thread.',
+      'Append this note to the goals block in orientation.',
+      'Use values_list to review recent values reflections.',
+    ]) {
+      const intent = classifyTurnIntent({
+        channelId: 'api:session-1',
+        channelType: 'api',
+        content,
+      });
+      expect(intent).toBe('memory');
+    }
+  });
+
   it('classifies internal and ops task turns as ops intent', () => {
     const internalIntent = classifyTurnIntent({
       channelId: 'internal:heartbeat',
@@ -109,6 +124,52 @@ describe('extended-tool-autoload-policy', () => {
     ]);
     expect(selection.selected).toEqual([]);
     expect(selection.skipped).toEqual([]);
+  });
+
+  it('does not autoload analysis_workbench for routine orient, concern, scheduler, or simple lookup turns', () => {
+    const policy = createDefaultExtendedToolAutoloadPolicy(3);
+    const cases = [
+      {
+        content: 'List active concerns and resolve the hydration thread.',
+        taskKind: undefined,
+      },
+      {
+        content: 'Append this to the persona orientation block.',
+        taskKind: undefined,
+      },
+      {
+        content: 'List schedule templates and show the next heartbeat.',
+        taskKind: undefined,
+      },
+      {
+        content: 'Simple lookup: show the latest session note.',
+        taskKind: undefined,
+      },
+      {
+        content: 'Run routine maintenance.',
+        taskKind: 'maintenance',
+      },
+    ] as const;
+
+    for (const entry of cases) {
+      const intent = policy.classifyIntent({
+        channelId: 'api:routine',
+        channelType: 'api',
+        content: entry.content,
+      }, entry.taskKind);
+      const selection = policy.selectOverlayCandidates(intent, [
+        'analysis_workbench',
+        'beads',
+        'vault',
+        'north_star',
+        'image_create',
+        'image_edit',
+        'image_analyze',
+      ]);
+
+      expect(selection.candidates).not.toContain('analysis_workbench');
+      expect(selection.selected).not.toContain('analysis_workbench');
+    }
   });
 
   it('classifies tools with explicit core, overlay, and background semantics', () => {

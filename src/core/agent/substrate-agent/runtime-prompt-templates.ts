@@ -29,4 +29,11 @@ export const INTERNAL_STATE_BODY_TEMPLATE = '{{#if runtime_internal_state_presen
 
 export const SELF_IMAGE_TOOL_GUIDANCE_BODY_TEMPLATE = '{{#if runtime_self_image_tool_active}}Use selfie_create for a brand new selfie or self-portrait featuring you.\nUse image_create for scenes, objects, or other non-self images.\nUse image_edit when modifying an existing image while keeping its subject consistent.\nUse image_analyze to inspect generated images or explicit remote image URLs so you can see what is actually there.\nIf the current user message already includes an attached image, inspect that attachment directly instead of calling image_analyze for it.\nWhen selfie_create is active, write the prompt as the full desired shot and combine your Appearance context with pose, framing, lighting, background, mood, and style details.\nGenerated image tools already return a vision review, so do not ask the user to go check whether it looks like you unless you need their subjective preference.{{/if}}';
 
+export const ANALYSIS_WORKBENCH_GUIDANCE_BODY_TEMPLATE = [
+  'analysis_workbench is a large-evidence escalation surface only.',
+  'Use it only for bounded multi-stage analysis of large files, codebases, logs, transcripts, datasets, or evidence sets that would overload the main conversation context.',
+  'Do not use analysis_workbench for routine orient actions, concern maintenance, scheduler or schedule work, simple lookup, simple file/session inspection, tool discovery, missing schemas, ordinary replies, or routine state changes.',
+  'For routine workflows, use direct active tools instead: orient for persona/human/goals/values/concerns, schedule for scheduler operations, session or memory tools for conversation/memory lookup, and repo/filesystem tools for basic inspection.',
+].join('\n');
+
 export const EXTENDED_TOOLS_BODY_TEMPLATE = '{{#if runtime_extended_tools_total}}Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.\nIf a non-default tool is not already active, activate it before you describe its outcome.\nCore tools are already active through the structured tool registry and are not duplicated here.\n{{runtime_extended_tool_directory_lines}}{{/if}}';

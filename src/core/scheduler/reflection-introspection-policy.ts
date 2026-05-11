@@ -48,8 +48,8 @@ export function formatReflectionIntrospectionPolicyBlock(
   if (policy.toolUseMode === 'bounded_read_only_introspection') {
     lines.push(
       '- This is a maintenance reflection turn, not a foreground user turn.',
-      '- If deeper synthesis is necessary, you may use the core think tool.',
-      `- Inside think, restrict evidence gathering to read-only introspection helpers: ${policy.thinkHelpers.join(', ')}.`,
+      '- If deeper synthesis is necessary, you may use the core analysis_workbench tool.',
+      `- Inside analysis_workbench, restrict evidence gathering to read-only introspection helpers: ${policy.thinkHelpers.join(', ')}.`,
       '- Do not call tool_search or toolset, and do not activate overlay or extended tools.',
       '- Do not call mutating, runtime-management, scheduling, repo-write, or external-communication tools.',
       '- If evidence is incomplete, say so explicitly and stay within the provided context.',

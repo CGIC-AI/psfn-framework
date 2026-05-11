@@ -127,7 +127,7 @@ export function createWebFetchTool(ops: WebFetchOperations): AgentTool<any> {
     name: 'web_fetch',
     label: 'web_fetch',
     description:
-      'Fetch and sanitize webpage content directly through the guarded gateway web.fetch path. Use this for routine docs/pages/articles instead of think.',
+      'Fetch and sanitize webpage content directly through the guarded gateway web.fetch path. Use this for routine docs/pages/articles instead of analysis_workbench.',
     parameters: Type.Object({
       url: Type.String({
         description: 'Absolute URL to fetch.',

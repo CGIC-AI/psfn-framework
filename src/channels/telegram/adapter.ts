@@ -881,13 +881,13 @@ export class TelegramAdapter implements ChannelAdapterPort {
   }
 
   private isLongRunningTool(toolName: string): boolean {
-    return toolName === 'think';
+    return toolName === 'analysis_workbench';
   }
 
   private buildLongRunningStatusText(toolName: string, elapsedMs: number): string {
     const elapsedSeconds = Math.max(1, Math.floor(elapsedMs / 1000));
-    if (toolName === 'think') {
-      return `Still thinking deeply (${elapsedSeconds}s elapsed)...`;
+    if (toolName === 'analysis_workbench') {
+      return `Still analyzing large-context material (${elapsedSeconds}s elapsed)...`;
     }
     return `Still running ${toolName} (${elapsedSeconds}s elapsed)...`;
   }

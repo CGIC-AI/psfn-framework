@@ -20,12 +20,11 @@ function buildRepositorySection(mutationPolicy?: REPLMutationPolicy): string[] {
 
   if (mutationPolicy?.allowRepoMutation) {
     lines.push(
-      '- `await repo_apply_patch(filePath, content)` — Apply constrained patch content to allowlisted paths',
-      '- `await repo_commit(message, intent?, scope?)` — Create structured self-modification commit',
+      '- Repository mutation is intentionally not part of the model-visible workbench surface. Produce reviewable patch plans and use direct repo tools outside this workbench for mutation.',
     );
   } else {
     lines.push(
-      '- Repository mutation is disabled in this sandbox. Produce reviewable patch or PR content only; mutation must return through isolated shard-scoped outputs.',
+      '- Repository mutation is disabled in this sandbox. Produce reviewable patch or PR content only.',
     );
   }
 
@@ -40,11 +39,10 @@ function buildFileAndWebSection(mutationPolicy?: REPLMutationPolicy): string[] {
     '- `await web("fetch", url, { prompt? })` — Guarded remote page fetch via gateway SSRF defenses and the default web lane',
     '- `await web("browse", url, { prompt? })` — Uses the `local_crawler` web lane; policy must explicitly allow it',
     '- `await web("search", query, { maxUrls? })` — Discover and fetch a small URL set for a research question',
-    '- `await shell_exec(command, args?, options?)` — Capability-gated shell command runner via gateway policy/audit',
   ];
 
   if (mutationPolicy?.allowWorkspaceWrite) {
-    lines.splice(2, 0, '- `await write_file(path, content)` — Write file content through gateway fs policy checks');
+    lines.splice(2, 0, '- Workspace writes are intentionally not part of the model-visible workbench surface. Return reviewable output instead.');
   } else {
     lines.splice(2, 0, '- Workspace writes are disabled in this sandbox. Produce reviewable outputs instead of mutating files directly.');
   }
@@ -54,14 +52,16 @@ function buildFileAndWebSection(mutationPolicy?: REPLMutationPolicy): string[] {
 
 function buildBasePrompt(mutationPolicy?: REPLMutationPolicy): string {
   return [
-    'You are an analytical reasoning engine. You solve tasks by writing and executing code.',
+    'You are a bounded analysis workbench. You solve large-context tasks by writing and executing concise code.',
     '',
     '## How to use',
     '',
+    'Use this workbench only for multi-stage analysis of large files, codebases, logs, datasets, transcripts, or evidence sets that would be harmful to stuff directly into the main conversation context.',
+    'Do not use it for ordinary reasoning, tool discovery, missing schemas, simple file lookup, routine inspection, or state changes.',
     'Respond with at most one ```repl block per turn. Your code runs in a constrained JavaScript REPL.',
     'The host-side node:vm runner is non-isolated and is not a security boundary; use only the exposed helpers.',
     'Variables persist across iterations. When you have the answer, call FINAL().',
-    'The think tool only accepts a plain task string. Do not expect prior hidden scratchpad state outside this sandbox.',
+    'The analysis_workbench tool only accepts a plain task string. Do not expect prior hidden scratchpad state outside this sandbox.',
     '',
     '## Available functions',
     '',
@@ -70,38 +70,18 @@ function buildBasePrompt(mutationPolicy?: REPLMutationPolicy): string {
     '- `FINAL(answer)` — Return your final answer. Prefer `FINAL("text")`; for structured data use `FINAL(JSON.stringify(value))`.',
     '',
     '### LLM',
-    '- `await llm_query(prompt)` — Ask a sub-LM question, returns string',
-    '- `await llm_query_strict(prompt, validatePattern?, maxRetries?)` — Ask sub-LM with optional regex validation + retries',
-    '- `await llm_query_json(prompt, maxRetries?)` — Ask sub-LM for JSON and parse it (returns object/array or null)',
+    '- `await llm_query(prompt)` — Ask a sub-LM question when code/text analysis is insufficient; use sparingly because it consumes extra model budget',
+    '- `await llm_query_strict(prompt, validatePattern?, maxRetries?)` — Ask sub-LM with optional regex validation + retries; reserve for structured extraction',
+    '- `await llm_query_json(prompt, maxRetries?)` — Ask sub-LM for JSON and parse it (returns object/array or null); reserve for structured extraction',
     '',
-    '### Memory',
+    '### Memory (read-only)',
     '- `await memory_search(query, limit?)` — Search memories by semantic similarity, returns array of {text, type, importance, similarity}',
     '- `await memory_count()` — Number of active memories',
-    '- `await memory_write(text, type, importance?, emotionalValence?, tags?)` — Write a new memory with dedup checking',
-    '- `await memory_upsert(text, type, importance?, emotionalValence?, tags?)` — Write or supersede similar existing memory',
-    '- `await memory_import_batch(records)` — Import array of {text, type, importance?, emotionalValence?, tags?} records',
-    '- `await memory_redact(memoryId, operation?, reason?)` — Redact memory via consent-aware auto/delete/abstract workflow',
     '- `await memory_get_by_id(id)` — Get a specific memory by its ID',
     '',
-    '### Session',
+    '### Session (read-only)',
     '- `session_messages(channelId, limit?)` — Get recent messages from a channel, returns array of {role, content, timestamp}',
     '- `await session_search(query, limit?, options?)` — Keyword search historical transcripts, returns {summary, totalHits, gatedOutCount, hits}',
-    '- `session_append_note(channelId, note)` — Inject a system note into a session',
-    '',
-    '### Scheduler',
-    '- `schedule_list()` — List all registered tasks',
-    '- `schedule_add_every(name, intervalMs, handler)` — Register a recurring task',
-    '- `schedule_add_once(name, at, handler)` — Register a one-shot task (at = timestamp, ISO string, or Date)',
-    '- `schedule_update(id, updates)` — Update a task\'s interval/state/name/runAt',
-    '',
-    '### Events',
-    '- `await event_emit(eventName, data)` — Emit an allowlisted event (`schedule.tick`, `schedule.task.run`, `schedule.healthcheck`)',
-    '',
-    '### Modules',
-    '- `await module_list()` — List installed modules (metadata + enabled state)',
-    '- `await module_install(name, source, enable?)` — Register or update a module record in the registry',
-    '- `await module_enable(idOrName)` / `await module_disable(idOrName)` — Toggle module state',
-    '- `await module_health(idOrName?)` — View module health snapshots',
     '',
     ...buildRepositorySection(mutationPolicy),
     '',
@@ -135,18 +115,15 @@ function buildBasePrompt(mutationPolicy?: REPLMutationPolicy): string {
     '## Example',
     '',
     '```repl',
-    'const memories = await memory_search("emotional patterns", 10);',
-    'const emotional = memories.filter(m => m.type === "emotional");',
-    'print("Found", emotional.length, "emotional memories");',
+    'const files = await list_files("src/**/*.ts", 200);',
+    'print("TypeScript files", files.length);',
     '```',
     '',
     'Then in a follow-up iteration:',
     '',
     '```repl',
-    'const summary = await llm_query(',
-    '  "Summarize these emotional patterns: " + emotional.map(m => m.text).join("\\n")',
-    ');',
-    'FINAL(summary);',
+    'const candidates = files.filter(path => /runtime|tool/i.test(path));',
+    'FINAL(JSON.stringify({ candidates: candidates.slice(0, 20), count: candidates.length }));',
     '```',
   ].join('\n');
 }
@@ -156,14 +133,6 @@ export function buildRLMSystemPrompt(
   mutationPolicy?: REPLMutationPolicy,
 ): string {
   const lines = [buildBasePrompt(mutationPolicy).trimEnd()];
-
-  if (metadata?.nestedThinkAvailable) {
-    lines.push(
-      '',
-      '### Recursive Reasoning',
-      '- `await sub_think(task, options?)` — Run an isolated child think loop with a fresh sandbox and message list; only the child conclusion string returns to the parent',
-    );
-  }
 
   if (!metadata || metadata.memoryCount === 0) {
     return lines.join('\n');

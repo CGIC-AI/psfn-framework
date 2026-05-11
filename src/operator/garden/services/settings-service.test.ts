@@ -164,7 +164,7 @@ describe('AdminSettingsDataService', () => {
       discordTriggerListenWindowMs: 180_000,
       telegramEnabled: true,
       telegramAuthorizedUsers: '123456,654321',
-      promotedExtendedTools: ['obsidian_append_note', 'think'],
+      promotedExtendedTools: ['obsidian_append_note', 'analysis_workbench'],
       chatApiBaseUrl: 'http://127.0.0.1:3000/api',
       moaEnabled: true,
       moaReferenceModels: ['openai/gpt-4.1-mini', 'anthropic/claude-3.7-sonnet'],
@@ -176,7 +176,7 @@ describe('AdminSettingsDataService', () => {
         enabled: true,
         allowedTiers: ['apprentice'],
         allowedChannelTypes: ['discord'],
-        allowedPurposes: ['think'],
+        allowedPurposes: ['analysis_workbench'],
       },
     } satisfies Record<string, unknown>;
 
@@ -724,7 +724,7 @@ describe('AdminSettingsDataService', () => {
       },
       surfaceRationales: {
         paidImageGeneration: 'External image generation spends paid provider credits.',
-        thinkExtensionBand: 'Extended think loops get a small cost to keep them bounded.',
+        thinkExtensionBand: 'Extended analysis workbench loops get a small cost to keep them bounded.',
         subagentLaunch: 'Spawning a subagent reserves a separate runtime budget.',
         shardLaunch: 'Launching a shard consumes worker coordination overhead.',
         externalModelConsult: 'Consulting an external model uses a paid API boundary.',

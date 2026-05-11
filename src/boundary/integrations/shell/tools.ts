@@ -40,7 +40,7 @@ export function createShellTool(ops: ShellOperations): AgentTool<any> {
     label: 'shell',
     description:
       'Unified shell primitive for direct command execution via the gateway allowlist. '
-      + 'Use action=exec with an explicit command and args. This is distinct from fs/repo tools and does not rely on think fallback semantics.',
+      + 'Use action=exec with an explicit command and args. This is distinct from fs/repo tools and does not rely on analysis_workbench fallback semantics.',
     parameters: Type.Object({
       action: Type.Optional(Type.Literal('exec', {
         description: 'Shell action. Defaults to exec.',

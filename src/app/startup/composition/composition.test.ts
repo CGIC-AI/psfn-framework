@@ -135,12 +135,12 @@ class FakeSubstrateAgent {
   }
 }
 
-function findThinkTool(target: FakeSubstrateAgent): AgentTool<any> {
-  const think = target.tools.find((tool) => tool.name === 'think');
-  if (!think) {
-    throw new Error('think tool was not registered');
+function findAnalysisWorkbenchTool(target: FakeSubstrateAgent): AgentTool<any> {
+  const tool = target.tools.find((candidate) => candidate.name === 'analysis_workbench');
+  if (!tool) {
+    throw new Error('analysis_workbench tool was not registered');
   }
-  return think;
+  return tool;
 }
 
 function extractText(result: unknown): string {
@@ -260,8 +260,8 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
         onModuleRegistryMutation: onMutation,
       });
 
-      const think = findThinkTool(target);
-      const result = await think.execute('call-1', { task: 'install module' });
+      const analysisWorkbench = findAnalysisWorkbenchTool(target);
+      const result = await analysisWorkbench.execute('call-1', { task: 'install module' });
       const text = extractText(result);
 
       expect(text).toContain('module_install is disabled for nursery tier');
@@ -309,8 +309,8 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
       expect(shardPort.getActiveCount()).toBe(0);
       expect(shardPort.getActiveShards()).toEqual([]);
 
-      const think = findThinkTool(target);
-      const result = await think.execute('call-2', { task: 'install module' });
+      const analysisWorkbench = findAnalysisWorkbenchTool(target);
+      const result = await analysisWorkbench.execute('call-2', { task: 'install module' });
       const text = extractText(result);
 
       expect(text).toContain('"queued":true');
@@ -367,8 +367,8 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
         onModuleRegistryMutation: onMutation,
       });
 
-      const think = findThinkTool(target);
-      const result = await think.execute('call-3', { task: 'install module' });
+      const analysisWorkbench = findAnalysisWorkbenchTool(target);
+      const result = await analysisWorkbench.execute('call-3', { task: 'install module' });
       const text = extractText(result);
 
       expect(text).toContain('"ok":false');
@@ -409,7 +409,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
           kind: 'node_vm',
           isolatedFromGatewaySecrets: false,
           securityPosture: 'non_isolated',
-          reason: 'test think adapter',
+          reason: 'test analysis workbench adapter',
         },
       });
       const target = wireSplitThinkTool({
@@ -419,8 +419,8 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
         executionPort,
       });
 
-      const think = findThinkTool(target);
-      const result = await think.execute('call-shell', { task: 'check brokered shell path' });
+      const analysisWorkbench = findAnalysisWorkbenchTool(target);
+      const result = await analysisWorkbench.execute('call-shell', { task: 'check brokered shell path' });
       const text = extractText(result);
 
       expect(text).toContain('"ok":true');
@@ -431,7 +431,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
     }
   });
 
-  it('routes think code execution through the sandbox execution port', async () => {
+  it('routes analysis workbench code execution through the sandbox execution port', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-split-code-broker-'));
     const registryPath = join(root, 'registry.json');
     writeFileSync(registryPath, '[]', 'utf-8');
@@ -450,7 +450,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
           kind: 'node_vm',
           isolatedFromGatewaySecrets: false,
           securityPosture: 'non_isolated',
-          reason: 'test think adapter',
+          reason: 'test analysis workbench adapter',
         },
         executeCode,
       });
@@ -461,8 +461,8 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
         executionPort,
       });
 
-      const think = findThinkTool(target);
-      const result = await think.execute('call-code', { task: 'exercise think execution port' });
+      const analysisWorkbench = findAnalysisWorkbenchTool(target);
+      const result = await analysisWorkbench.execute('call-code', { task: 'exercise analysis workbench execution port' });
       const text = extractText(result);
 
       expect(text).toContain('done');

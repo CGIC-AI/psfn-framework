@@ -111,7 +111,7 @@ describe('AdminAuditTimelineStore', () => {
     store.append({
       actionType: 'tool_invocation',
       decision: 'allowed',
-      narrative: `${DEFAULT_COMPANION_NAME} completed tool "think".`,
+      narrative: `${DEFAULT_COMPANION_NAME} completed tool "analysis_workbench".`,
       actor: 'companion',
     });
 
@@ -224,7 +224,7 @@ describe('audit event collector actor attribution', () => {
     // Simulate a tool end event
     (eventBus as unknown as { emit: (e: string, p: unknown) => void }).emit('agent.tool.end', {
       toolCallId: 'call-1',
-      toolName: 'think',
+      toolName: 'analysis_workbench',
       channelId: 'discord:general',
       isError: false,
     });

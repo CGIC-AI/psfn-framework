@@ -87,7 +87,7 @@ describe('worker lanes', () => {
     expect(resolveRuntimeLaneClassForModelCall({
       purpose: 'reasoning',
       callType: 'tool',
-      originStage: 'repl.think.tool',
+      originStage: 'repl.analysis_workbench.tool',
     })).toBe(FOREGROUND_CHAT_RUNTIME_CLASS);
     expect(resolveRuntimeLaneClassForModelCall({
       purpose: 'summary',

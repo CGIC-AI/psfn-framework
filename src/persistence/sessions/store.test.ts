@@ -90,7 +90,7 @@ describe('SessionStore', () => {
         content: 'hi',
         timestamp: 1_700_000_000_250,
       },
-      toolCalls: [{ toolName: 'think', toolCallId: 'tool-1' }],
+      toolCalls: [{ toolName: 'analysis_workbench', toolCallId: 'tool-1' }],
       contextManifestRef: 'session:api:turn-record|messages:3|memory_chars:120',
       internalStateSnapshotRef: 'trust:regular|contact:none',
       extractedMemoryIds: [],

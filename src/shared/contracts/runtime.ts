@@ -607,7 +607,7 @@ export const COMPOSITIONAL_PURPOSES = [
   'extraction',
   'retrieval',
   'appraisal',
-  'think',
+  'analysis_workbench',
   'shard_context',
 ] as const;
 export type CompositionalPurpose = typeof COMPOSITIONAL_PURPOSES[number];

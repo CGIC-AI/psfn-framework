@@ -108,7 +108,7 @@ describe('validateToolWiring', () => {
   it('passes tools without wiringMeta', () => {
     const tools = [
       makeTool('memory_write'),
-      makeTool('think'),
+      makeTool('analysis_workbench'),
     ];
     const report = validateToolWiring({
       mode: 'gateway',

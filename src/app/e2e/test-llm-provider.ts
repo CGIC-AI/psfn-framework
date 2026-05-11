@@ -55,7 +55,7 @@ function renderChatResponse(promptText: string): string {
   }
 
   if (promptText.includes('orientation') || promptText.includes('capabilities')) {
-    return 'I can hold onto facts, answer questions, and use the think tool when needed.';
+    return 'I can hold onto facts, answer questions, and use the analysis workbench when a large-context problem needs it.';
   }
 
   if (promptText.includes('what do you think') || promptText.includes('how are you feeling')) {

@@ -30,8 +30,8 @@ describe('ReflectionNudgeTracker', () => {
     expect(result).toContain('complex multi-step work');
   });
 
-  it('qualifies turns with think tool regardless of tool count', () => {
-    // think tool used but only 1 tool call
+  it('qualifies turns with analysis workbench use regardless of tool count', () => {
+    // Analysis workbench used but only 1 tool call.
     expect(tracker.evaluate({ toolCalls: 1, usedThinkTool: true })).toBeNull(); // 1st
     expect(tracker.evaluate({ toolCalls: 1, usedThinkTool: true })).toBeNull(); // 2nd
     const result = tracker.evaluate({ toolCalls: 1, usedThinkTool: true }); // 3rd
@@ -81,13 +81,13 @@ describe('ReflectionNudgeTracker', () => {
     expect(result).toContain('skill action="create"');
   });
 
-  it('does not qualify think tool when nudgeOnThinkTool is false', () => {
+  it('does not qualify analysis workbench use when nudgeOnThinkTool is false', () => {
     const custom = new ReflectionNudgeTracker({
       nudgeOnThinkTool: false,
       nudgeEveryNthTurn: 1,
     });
 
-    // Think tool used but below minToolCalls — should not qualify
+    // Analysis workbench used but below minToolCalls, so it should not qualify.
     const result = custom.evaluate({ toolCalls: 1, usedThinkTool: true });
     expect(result).toBeNull();
   });

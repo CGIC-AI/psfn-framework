@@ -1090,7 +1090,7 @@ describe('settings', () => {
           enabled: true,
           allowedTiers: ['autonomous'],
           allowedChannelTypes: ['api', 'discord'],
-          allowedPurposes: ['retrieval', 'think'],
+          allowedPurposes: ['retrieval', 'analysis_workbench'],
         },
         webFetchAllowHttp: true,
         webFetchDomainAllowlist: ['example.com', 'internal.local'],

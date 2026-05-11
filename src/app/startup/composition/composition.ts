@@ -46,7 +46,7 @@ import {
 import { createBoundedSubagentLaunchTool } from '../../../faculties/shards/tools.js';
 import { SubagentFaculty } from '../../../faculties/subagents/faculty.js';
 import { createSubagentTool } from '../../../faculties/subagents/tools.js';
-import { createThinkTool } from '../../../core/tools/think/tools.js';
+import { createAnalysisWorkbenchTool } from '../../../core/tools/think/tools.js';
 import { CoreMemoryStore } from '../../../faculties/core-memory/store.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
 import { ValuesJournalStore } from '../../../faculties/values/store.js';
@@ -385,7 +385,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
   options.agentLoop.registerTool(createSubagentTool(subagentFaculty), 'core');
   options.agentLoop.registerTool(createBoundedSubagentLaunchTool(shardManager), 'extended');
 
-  options.agentLoop.registerTool(createThinkTool({
+  options.agentLoop.registerTool(createAnalysisWorkbenchTool({
     llmProvider: options.llmProvider,
     embeddingService: options.embeddingService,
     memoryStore: options.memoryStore,

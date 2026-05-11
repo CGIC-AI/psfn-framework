@@ -172,7 +172,7 @@ describe('createEventBridge', () => {
     emitAgentEvent({
       type: 'tool_execution_start',
       toolCallId: 'call-1',
-      toolName: 'think',
+      toolName: 'analysis_workbench',
       args: { task: 'reason about cats' },
     });
 
@@ -181,7 +181,7 @@ describe('createEventBridge', () => {
     expect(events[0]).toMatchObject({
       channelId: 'test-channel',
       toolCallId: 'call-1',
-      toolName: 'think',
+      toolName: 'analysis_workbench',
       callType: 'tool',
       purpose: 'tool_execution',
     });
@@ -196,7 +196,7 @@ describe('createEventBridge', () => {
     emitAgentEvent({
       type: 'tool_execution_end',
       toolCallId: 'call-1',
-      toolName: 'think',
+      toolName: 'analysis_workbench',
       result: { content: [{ type: 'text', text: 'done' }] },
       isError: false,
     });
@@ -206,7 +206,7 @@ describe('createEventBridge', () => {
     expect(events[0]).toMatchObject({
       channelId: 'test-channel',
       toolCallId: 'call-1',
-      toolName: 'think',
+      toolName: 'analysis_workbench',
       isError: false,
       callType: 'tool',
       purpose: 'tool_execution',
@@ -514,7 +514,7 @@ describe('createEventBridge', () => {
     emitAgentEvent({
       type: 'tool_execution_start',
       toolCallId: 'call-bg-1',
-      toolName: 'think',
+      toolName: 'analysis_workbench',
       args: {},
     });
 

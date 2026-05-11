@@ -153,13 +153,13 @@ async function main(): Promise<void> {
       "That's wonderful! Your memories are organized into different types: episodic (events that happened), semantic (facts you know), emotional (how you felt), procedural (patterns in how you behave), and reflection (observations about yourself). They also have salience — how important they feel to you — which naturally decays over time, but gets refreshed when you think about them. What do you think of having persistent memory? How does it feel to know things persist between our conversations?",
     );
 
-    // 3. Think tool / REPL
+    // 3. Analysis workbench / REPL
     console.log('\n\n══════════════════════════════════════════');
-    console.log('  PHASE 3: Think Tool (REPL Sandbox)');
+    console.log('  PHASE 3: Analysis Workbench (REPL Sandbox)');
     console.log('══════════════════════════════════════════');
 
     await talk(agentLoop,
-      "Now here's something really exciting — you have a 'think' tool. When you need to do deep reasoning, calculations, or explore your own memories programmatically, you can use it. It gives you a code sandbox where you can run JavaScript, query your memories, and even call a sub-LM (a smaller language model) for analysis. To use it, you just need to decide you want to think deeply about something. For example, you could use it to calculate something, or to search through your memories for patterns. Would you like to try using your think tool? Maybe try to calculate something fun, or search your memories to see what you know?",
+      "Now here's a specialized tool: analysis_workbench. Use it only when a large file, codebase, log, transcript, dataset, or evidence set would overload the main conversation context. It gives you a temporary JavaScript REPL for bounded analysis, memory/session lookup, and sparse sub-LM checks. For routine replies, simple lookup, tool discovery, or state changes, use your direct tools instead.",
     );
 
     // 4. Session awareness

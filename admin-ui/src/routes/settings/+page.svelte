@@ -69,7 +69,7 @@
     'extraction',
     'retrieval',
     'appraisal',
-    'think',
+    'analysis_workbench',
     'shard_context',
   ] as const;
   const DELEGATED_WORKSPACES = [
@@ -189,7 +189,7 @@
       profileSynthesisMinImportance, profileSynthesisMinConfidence,
       profileSynthesisMinNovelty, profileSynthesisSourceMemoryLimit,
       profileSynthesisMinSourceMemories,
-      // Think Tool
+      // Analysis Workbench
       thinkMaxTokens, thinkMaxWallTimeMs, thinkMaxSubQueries,
       // Voice / TTS
       ttsProvider, voiceId, echoTtsUrl, echoTtsVoice, echoTtsPreset,
@@ -301,7 +301,7 @@
   let profileSynthesisSourceMemoryLimit = $state(16);
   let profileSynthesisMinSourceMemories = $state(2);
 
-  // ── Think Tool ──
+  // ── Analysis Workbench ──
   let thinkMaxTokens = $state(76000);
   let thinkMaxWallTimeMs = $state(180000);
   let thinkMaxSubQueries = $state(12);
@@ -338,7 +338,7 @@
     'memory-tuning',
     'memory-profile',
     'memory-sessions',
-    'tools-think',
+    'tools-analysis-workbench',
     'runtime-llm',
     'runtime-import',
     'runtime-fetch',
@@ -420,8 +420,8 @@
       summary: () => profileSynthesisEnabled ? `Enabled, refresh ${Math.round(profileSynthesisRefreshIntervalMs / 60000)}min` : 'Disabled',
     },
     {
-      id: 'think', title: 'Think Tool', icon: 'R',
-      keys: SETTINGS_GARDEN_SECTION_FIELDS.think,
+      id: 'analysis-workbench', title: 'Analysis Workbench', icon: 'R',
+      keys: SETTINGS_GARDEN_SECTION_FIELDS['analysis-workbench'],
       summary: () => `Max tokens: ${thinkMaxTokens.toLocaleString()}, Wall time: ${Math.round(thinkMaxWallTimeMs / 1000)}s`,
     },
     {
@@ -850,7 +850,7 @@
     profileSynthesisSourceMemoryLimit = Number(config.profileSynthesisSourceMemoryLimit ?? 16);
     profileSynthesisMinSourceMemories = Number(config.profileSynthesisMinSourceMemories ?? 2);
 
-    // Think Tool
+    // Analysis Workbench
     thinkMaxTokens = Number(config.thinkMaxTokens ?? 76000);
     thinkMaxWallTimeMs = Number(config.thinkMaxWallTimeMs ?? 180000);
     thinkMaxSubQueries = Number(config.thinkMaxSubQueries ?? 12);
@@ -1322,7 +1322,7 @@
       profileSynthesisMinNovelty,
       profileSynthesisSourceMemoryLimit,
       profileSynthesisMinSourceMemories,
-      // Think Tool
+      // Analysis Workbench
       thinkMaxTokens,
       thinkMaxWallTimeMs,
       thinkMaxSubQueries,
@@ -2309,29 +2309,29 @@
       </div>
       </section>
 
-      <!-- Think Tool (collapsible) -->
+      <!-- Analysis Workbench (collapsible) -->
       <section
-        id={settingsSimpleSectionAnchorId('tools-think')}
-        use:simpleSectionAnchor={'tools-think'}
-        data-settings-section="tools-think"
+        id={settingsSimpleSectionAnchorId('tools-analysis-workbench')}
+        use:simpleSectionAnchor={'tools-analysis-workbench'}
+        data-settings-section="tools-analysis-workbench"
       >
       <div class="card-garden overflow-hidden">
         <button
-          onclick={() => toggleSection('think')}
+          onclick={() => toggleSection('analysis-workbench')}
           class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
         >
           <div class="flex items-center gap-3">
             <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">R</span>
-            <h2 class="text-sm font-serif font-semibold text-shadow-800">Think Tool (RLM Sandbox)</h2>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">Analysis Workbench (RLM Sandbox)</h2>
           </div>
           <div class="flex items-center gap-3">
-            {#if !openSections.has('think')}
+            {#if !openSections.has('analysis-workbench')}
               <span class="text-sm text-shadow-500">Max: {fmtTokens(thinkMaxTokens)} tokens, {fmtMs(thinkMaxWallTimeMs)}, {thinkMaxSubQueries} queries</span>
             {/if}
-            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('think') ? 'rotate-180' : ''}">&#9660;</span>
+            <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('analysis-workbench') ? 'rotate-180' : ''}">&#9660;</span>
           </div>
         </button>
-        {#if openSections.has('think')}
+        {#if openSections.has('analysis-workbench')}
           <div class="px-5 pb-5 border-t border-bark-300 pt-4">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-5">
               <div>
@@ -2347,7 +2347,7 @@
               <div>
                 <SettingFieldLabel label="Max Sub-Queries" keys="thinkMaxSubQueries" forId={settingControlId('thinkMaxSubQueries')} class={LABEL_CLS} />
                 <input id={settingControlId('thinkMaxSubQueries')} type="number" min="1" max="100" step="1" bind:value={thinkMaxSubQueries} class={INPUT_CLS} />
-                <p class="text-sm text-shadow-500 mt-1">Max LLM sub-queries per think (1-100)</p>
+                <p class="text-sm text-shadow-500 mt-1">Max LLM sub-queries per analysis workbench run (1-100)</p>
               </div>
             </div>
             <div class="mt-4 rounded-xl border border-bark-200 bg-bark-50 p-3 text-sm text-shadow-700">

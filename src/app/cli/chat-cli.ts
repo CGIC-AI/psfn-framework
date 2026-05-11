@@ -83,7 +83,7 @@ async function main(): Promise<void> {
   const salienceDecay = new SalienceDecay(memoryStore);
   salienceDecay.start();
 
-  // Shards and think tool (RLM+REPL)
+  // Shards and analysis workbench (RLM+REPL)
   wireShardAndThinkRuntime({
     agentLoop,
     eventBus,

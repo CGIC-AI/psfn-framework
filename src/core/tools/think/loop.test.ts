@@ -120,7 +120,7 @@ describe('runRLMLoop', () => {
     expect(result.budgetStatus.iterations).toBe(1);
   });
 
-  it('routes think completions through reasoning purpose', async () => {
+  it('routes analysis workbench completions through reasoning purpose', async () => {
     const llm = sequentialLLM(['FINAL("done")']);
     await runRLMLoop('Reasoning route test', makeDeps(llm));
 
@@ -128,7 +128,7 @@ describe('runRLMLoop', () => {
     expect(calls[0][1]).toBe('reasoning');
   });
 
-  it('charges the think extension band on iterative follow-up passes', async () => {
+  it('charges the analysis workbench extension band on iterative follow-up passes', async () => {
     const llm = sequentialLLM([
       '```repl\nvar step = 1;\n```',
       'FINAL("done")',
@@ -152,7 +152,7 @@ describe('runRLMLoop', () => {
     expect((emitted[0][1] as any).lineage.runId).toBeDefined();
   });
 
-  it('refuses the next iteration when think charge quota is exhausted before the extension band', async () => {
+  it('refuses the next iteration when analysis workbench charge quota is exhausted before the extension band', async () => {
     const llm = sequentialLLM([
       '```repl\nvar step = 1;\n```',
       'FINAL("done")',
@@ -240,7 +240,7 @@ describe('runRLMLoop', () => {
     expect(llm.shellExec).not.toHaveBeenCalled();
   });
 
-  it('propagates structured origin metadata into think iteration calls', async () => {
+  it('propagates structured origin metadata into analysis workbench iteration calls', async () => {
     const llm = sequentialLLM(['FINAL("done")']);
     await runRLMLoop(
       'Metadata route test',
@@ -249,10 +249,10 @@ describe('runRLMLoop', () => {
         turnId: 'turn-1',
         requestId: 'req-1',
         channelId: 'discord:123',
-        toolName: 'think',
+        toolName: 'analysis_workbench',
         toolCallId: 'tool-1',
         originType: 'tool',
-        originStage: 'repl.think.tool',
+        originStage: 'repl.analysis_workbench.tool',
       },
     );
 
@@ -261,12 +261,12 @@ describe('runRLMLoop', () => {
       turnId: 'turn-1',
       requestId: 'req-1:iteration-1',
       channelId: 'discord:123',
-      toolName: 'think',
+      toolName: 'analysis_workbench',
       toolCallId: 'tool-1',
       callType: 'tool',
       originType: 'tool',
-      originStage: 'repl.think.iteration',
-      purpose: 'repl.think.iteration',
+      originStage: 'repl.analysis_workbench.iteration',
+      purpose: 'repl.analysis_workbench.iteration',
     });
   });
 
@@ -315,7 +315,7 @@ describe('runRLMLoop', () => {
 
   it('nudges on no-action response', async () => {
     const llm = sequentialLLM([
-      'Let me think about this...',
+      'Let me reason through this...',
       'FINAL("thought about it")',
     ]);
     const result = await runRLMLoop('Think hard', makeDeps(llm));
@@ -345,7 +345,7 @@ describe('runRLMLoop', () => {
     expect(result.truncated).toBe(true);
     expect(result.iterations).toBe(3);
     expect(result.budgetStatus.exceeded).toBe('max iterations');
-    expect(result.answer).toBe('[Think loop stopped: max iterations]');
+    expect(result.answer).toBe('[Analysis workbench loop stopped: max iterations]');
   });
 
   it('accumulates tokens across iterations', async () => {
@@ -447,7 +447,7 @@ describe('runRLMLoop', () => {
     expect(result.budgetStatus.totalTokens).toBeGreaterThanOrEqual(50);
     // Should have stopped after 2 iterations (2 * 30 = 60 >= 50)
     expect(result.iterations).toBe(2);
-    expect(result.answer).toBe('[Think loop stopped: token budget]');
+    expect(result.answer).toBe('[Analysis workbench loop stopped: token budget]');
   });
 
   it('budgetStatus tracks sub-queries from sandbox', async () => {
@@ -476,10 +476,10 @@ describe('runRLMLoop', () => {
         turnId: 'turn-2',
         requestId: 'req-2',
         channelId: 'discord:456',
-        toolName: 'think',
+        toolName: 'analysis_workbench',
         toolCallId: 'tool-2',
         originType: 'tool',
-        originStage: 'repl.think.tool',
+        originStage: 'repl.analysis_workbench.tool',
       },
     );
 
@@ -512,16 +512,16 @@ describe('runRLMLoop', () => {
           enabled: true,
           allowedTiers: ['autonomous'],
           allowedChannelTypes: ['api'],
-          allowedPurposes: ['think'],
+          allowedPurposes: ['analysis_workbench'],
         },
       }),
       {
         channelId: 'api:session-1',
         requestId: 'req-nested',
         toolCallId: 'tool-nested',
-        toolName: 'think',
+        toolName: 'analysis_workbench',
         originType: 'tool',
-        originStage: 'repl.think.tool',
+        originStage: 'repl.analysis_workbench.tool',
       },
     );
 
@@ -540,16 +540,16 @@ describe('runRLMLoop', () => {
     expect(calls[1][0].correlation).toMatchObject({
       requestId: 'req-nested:subthink-1:iteration-1',
       toolCallId: 'tool-nested:subthink-1',
-      originStage: 'repl.think.iteration',
-      purpose: 'repl.think.iteration',
+      originStage: 'repl.analysis_workbench.iteration',
+      purpose: 'repl.analysis_workbench.iteration',
     });
 
     const feedback = calls[2][0].messages[2].content;
     expect(feedback).toContain('child conclusion');
-    expect(feedback).not.toContain('[Think:');
+    expect(feedback).not.toContain('[Analysis workbench:');
   });
 
-  it('routes think and sub_think code execution through the sandbox execution port', async () => {
+  it('routes analysis workbench and nested code execution through the sandbox execution port', async () => {
     const llm = sequentialLLM([
       '```repl\nconst child = await sub_think("child task"); print(child);\n```',
       '```repl\nFINAL("child conclusion")\n```',
@@ -576,16 +576,16 @@ describe('runRLMLoop', () => {
           enabled: true,
           allowedTiers: ['autonomous'],
           allowedChannelTypes: ['api'],
-          allowedPurposes: ['think'],
+          allowedPurposes: ['analysis_workbench'],
         },
       }),
       {
         channelId: 'api:session-port',
         requestId: 'req-port',
         toolCallId: 'tool-port',
-        toolName: 'think',
+        toolName: 'analysis_workbench',
         originType: 'tool',
-        originStage: 'repl.think.tool',
+        originStage: 'repl.analysis_workbench.tool',
       },
     );
 
@@ -602,15 +602,15 @@ describe('runRLMLoop', () => {
     ]);
 
     const result = await runRLMLoop(
-      'Denied nested think',
+      'Denied nested analysis',
       makeDeps(llm),
       {
         channelId: 'api:session-2',
         requestId: 'req-denied',
         toolCallId: 'tool-denied',
-        toolName: 'think',
+        toolName: 'analysis_workbench',
         originType: 'tool',
-        originStage: 'repl.think.tool',
+        originStage: 'repl.analysis_workbench.tool',
       },
     );
 
@@ -622,7 +622,7 @@ describe('runRLMLoop', () => {
     expect(result.diagnostics.nestedThinkFailureCount).toBeGreaterThanOrEqual(1);
   });
 
-  it('counts nested think LLM spend against the parent token budget', async () => {
+  it('counts nested analysis LLM spend against the parent token budget', async () => {
     const llm = sequentialLLM([
       '```repl\nconst child = await sub_think("budget child"); print(child);\n```',
       'FINAL("child conclusion")',
@@ -634,7 +634,7 @@ describe('runRLMLoop', () => {
         enabled: true,
         allowedTiers: ['autonomous'],
         allowedChannelTypes: ['api'],
-        allowedPurposes: ['think'],
+        allowedPurposes: ['analysis_workbench'],
       },
       config: makeConfig({ maxTokens: 50 }),
     });
@@ -646,9 +646,9 @@ describe('runRLMLoop', () => {
         channelId: 'api:session-3',
         requestId: 'req-budget',
         toolCallId: 'tool-budget',
-        toolName: 'think',
+        toolName: 'analysis_workbench',
         originType: 'tool',
-        originStage: 'repl.think.tool',
+        originStage: 'repl.analysis_workbench.tool',
       },
     );
 
@@ -763,7 +763,7 @@ describe('runRLMLoop', () => {
 
   it('steps include none-type iterations', async () => {
     const llm = sequentialLLM([
-      'Let me think about this...',
+      'Let me reason through this...',
       'FINAL("thought about it")',
     ]);
     const result = await runRLMLoop('None step test', makeDeps(llm));
@@ -847,10 +847,10 @@ describe('runRLMLoop', () => {
     expect(result.truncated).toBe(true);
     expect(result.iterations).toBe(0);
     expect(result.budgetStatus.exceeded).toBe('wall time');
-    expect(result.answer).toBe('[Think loop stopped: wall time]');
+    expect(result.answer).toBe('[Analysis workbench loop stopped: wall time]');
   });
 
-  it('enforces invocation rate limits across think calls', async () => {
+  it('enforces invocation rate limits across analysis workbench calls', async () => {
     const llm = sequentialLLM(['FINAL("first")', 'FINAL("second")']);
     const cfg = makeConfig();
     cfg.rateLimit = {

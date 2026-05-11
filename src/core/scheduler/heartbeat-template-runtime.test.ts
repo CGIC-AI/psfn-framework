@@ -902,7 +902,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(introspectionPolicySection).toContain('tool_use_mode: bounded_read_only_introspection');
       expect(introspectionPolicySection).toContain('memory_retrieval_modes: temporal, reflection');
       expect(introspectionPolicySection).toContain('overlay_tool_activation: forbidden');
-      expect(introspectionPolicySection).toContain('core think tool');
+      expect(introspectionPolicySection).toContain('core analysis_workbench tool');
       expect(introspectionPolicySection).toContain('memory_search, session_messages, session_search');
       expect(contactSection).toContain('contact_id: contact-1');
       expect(contactSection).toContain('trust_level: trusted');

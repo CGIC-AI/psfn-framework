@@ -77,7 +77,7 @@ describe('compositional policy', () => {
       policy,
       capabilityTier: 'autonomous',
       channelType: 'api',
-      purpose: 'think',
+      purpose: 'analysis_workbench',
     })).toMatchObject({ allowed: false, reason: 'purpose_not_allowed' });
   });
 

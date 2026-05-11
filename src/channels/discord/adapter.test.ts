@@ -1458,29 +1458,29 @@ describe('DiscordAdapter status visibility', () => {
     expect(interactive.edits).toContain('Having trouble reaching my thoughts. Please try again.');
   });
 
-  it('shows rate-limited long-running think status updates and clears them on completion', async () => {
+  it('shows rate-limited long-running analysis status updates and clears them on completion', async () => {
     vi.useFakeTimers();
     try {
       const eventBus = new EventBus();
       const adapter = new DiscordAdapter(makeConfig(), eventBus);
       await adapter.init();
 
-      const channelId = 'ch-think';
+      const channelId = 'ch-analysis';
       const interactive = makeInteractiveTextChannel();
       discordMock.channelsById.set(channelId, interactive.channel);
 
       adapter.onMessage(async () => {
         await eventBus.emit('agent.tool.start', {
           channelId,
-          toolCallId: 'think-call-1',
-          toolName: 'think',
+          toolCallId: 'analysis-call-1',
+          toolName: 'analysis_workbench',
         });
         await vi.advanceTimersByTimeAsync(16_000);
         await vi.advanceTimersByTimeAsync(25_000);
         await eventBus.emit('agent.tool.end', {
           channelId,
-          toolCallId: 'think-call-1',
-          toolName: 'think',
+          toolCallId: 'analysis-call-1',
+          toolName: 'analysis_workbench',
           isError: false,
         });
         return {
@@ -1492,10 +1492,10 @@ describe('DiscordAdapter status visibility', () => {
 
       await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
 
-      const longRunningSends = interactive.sent.filter(msg => msg.includes('Still thinking deeply'));
+      const longRunningSends = interactive.sent.filter(msg => msg.includes('Still analyzing large-context material'));
       expect(longRunningSends).toHaveLength(1);
-      expect(interactive.edits.some(msg => msg.includes('Still thinking deeply'))).toBe(true);
-      expect(interactive.deleted.some(msg => msg.includes('Still thinking deeply'))).toBe(true);
+      expect(interactive.edits.some(msg => msg.includes('Still analyzing large-context material'))).toBe(true);
+      expect(interactive.deleted.some(msg => msg.includes('Still analyzing large-context material'))).toBe(true);
     } finally {
       vi.useRealTimers();
     }

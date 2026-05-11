@@ -1,5 +1,12 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { SubstrateMessage, ResponseStyle } from '../../../shared/contracts/runtime.js';
+import {
+  CHARGE_POLICY_RUNTIME_LANE_VALUES,
+  CHARGE_POLICY_SURFACE_VALUES,
+  type ChargePolicyConfig,
+  type ChargePolicyRuntimeLane,
+  type ChargePolicySurface,
+} from '../../../shared/contracts/charge-policy.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { resolveTierCapabilityTokens } from '../../../system/capabilities/tiers.js';
 import { resolveToolRequiredCapabilities } from '../../../system/capabilities/requirements.js';
@@ -55,6 +62,7 @@ import {
   SELF_IMAGE_TOOL_GUIDANCE_BODY_TEMPLATE,
   TRUST_GUIDANCE_BODY_TEMPLATE,
 } from './runtime-prompt-templates.js';
+import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
 
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
@@ -84,6 +92,86 @@ interface ExtendedToolGuideEntry {
 const OMITTED_CONCERN_LINE_PATTERN = /^- (\d+) additional lower-salience thread(?:s)? omitted\.$/;
 const CONCERN_PRIORITY_PATTERN = /\[(high|medium|low);/i;
 const SKILL_TAG_PATTERN = /<skill\b/gi;
+
+const CHARGE_SURFACE_PROMPT_LABELS: Record<ChargePolicySurface, string> = {
+  ownerFileInspection: 'owner-file inspection',
+  localFilesystem: 'local filesystem read',
+  memoryRead: 'memory read',
+  memoryWrite: 'memory write through direct memory tools',
+  localEmbedding: 'local embedding',
+  externalEmbedding: 'external embedding',
+  localImageGeneration: 'local image generation',
+  paidImageGeneration: 'paid image/video generation',
+  thinkExtensionBand: 'analysis_workbench extension pass after the first iteration',
+  subagentLaunch: 'subagent launch',
+  shardLaunch: 'shard launch',
+  externalModelConsult: 'external model consult',
+  moaRoundBase: 'multi-model deliberation round',
+};
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isChargePolicyRuntimeLane(value: string): value is ChargePolicyRuntimeLane {
+  return (CHARGE_POLICY_RUNTIME_LANE_VALUES as readonly string[]).includes(value);
+}
+
+function isChargePolicyConfig(value: unknown): value is ChargePolicyConfig {
+  if (!isRecordValue(value)) return false;
+  if (value.schemaVersion !== 1) return false;
+  return (
+    isRecordValue(value.runChargeQuotaByLane)
+    && isRecordValue(value.surfaceCosts)
+    && isRecordValue(value.moa)
+    && isRecordValue(value.referenceModelClassPricing)
+  );
+}
+
+function resolveChargePolicyConfig(config: Record<string, unknown> | undefined): ChargePolicyConfig | null {
+  const raw = config?.chargePolicy;
+  return isChargePolicyConfig(raw) ? raw : null;
+}
+
+function formatChargeAmount(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/u, '').replace(/\.$/u, '');
+}
+
+function buildChargeBudgetContextBlock(input: {
+  config?: Record<string, unknown>;
+}): string {
+  const chargePolicy = resolveChargePolicyConfig(input.config);
+  if (!chargePolicy) return '';
+
+  const snapshot = getRunChargeSnapshot();
+  const lane = snapshot?.lane && isChargePolicyRuntimeLane(snapshot.lane)
+    ? snapshot.lane
+    : 'interactive';
+  const quota = chargePolicy.runChargeQuotaByLane[lane];
+  const spent = snapshot?.quotaSpentByLane[lane] ?? 0;
+  const remaining = Math.max(0, quota - spent);
+  const costedSurfaces = CHARGE_POLICY_SURFACE_VALUES
+    .map(surface => ({
+      surface,
+      amount: chargePolicy.surfaceCosts[surface],
+    }))
+    .filter(entry => entry.amount > 0)
+    .sort((left, right) => right.amount - left.amount || left.surface.localeCompare(right.surface));
+
+  const lines = [
+    '[Charge budget]',
+    `Active lane: ${lane}; remaining ${formatChargeAmount(remaining)} of ${formatChargeAmount(quota)} run-charge units before this turn's optional escalations.`,
+    'Costed escalations:',
+    ...costedSurfaces.map(entry => `- ${CHARGE_SURFACE_PROMPT_LABELS[entry.surface]}: ${formatChargeAmount(entry.amount)}`),
+    'Zero-cost default path: use direct semantic tools for routine reads, memory/session lookup, schedule work, repo inspection, and state changes.',
+    'Use analysis_workbench only for bounded multi-stage analysis of large files, codebases, logs, transcripts, datasets, or evidence sets. Do not use it for tool discovery, schema confusion, simple lookup, or ordinary replies.',
+  ];
+
+  return wrapPromptSectionXml({
+    id: 'runtime_charge_budget',
+    content: lines.join('\n'),
+  });
+}
 
 export interface ResolvedAuthorContext {
   trustLevel: TrustLevel;
@@ -755,18 +843,24 @@ export function buildRuntimeContext(input: {
   activeConcernsBlock?: string;
   behavioralNotesBlock?: string;
   formatTopEmotions: (discrete: Record<string, number>) => string;
+  config?: Record<string, unknown>;
 }): string {
   const runtimeContextExtra = (() => {
     const raw = input.templateVariables?.runtime_context_extra;
     return typeof raw === 'string' ? raw.trim() : '';
   })();
+  const sections: string[] = [];
   if (runtimeContextExtra) {
-    return wrapPromptSectionXml({
+    sections.push(wrapPromptSectionXml({
       id: 'companion_runtime_context',
       content: runtimeContextExtra,
-    });
+    }));
   }
-  return '';
+  const chargeBudgetContext = buildChargeBudgetContextBlock({ config: input.config });
+  if (chargeBudgetContext) {
+    sections.push(chargeBudgetContext);
+  }
+  return sections.join('\n\n');
 }
 
 export function buildActiveConcernsContextBlock(input: {

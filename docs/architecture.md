@@ -24,7 +24,7 @@ Those helpers keep the split runtime and shared wiring aligned on core wiring:
 - session runtime
 - memory runtime
 - prompt/runtime settings surfaces
-- shard and think tooling
+- shard and analysis workbench tooling
 - heartbeat/scheduler wiring
 - channel adapter manifests
 
@@ -46,7 +46,7 @@ Those helpers keep the split runtime and shared wiring aligned on core wiring:
 - initializes SQLite-backed companion data
 - loads the character card and prompt registry
 - composes `SessionManager`, `SubstrateAgent`, `MemoryStore`, `MemoryRetriever`, `MemoryExtractor`, `Scheduler`, the gateway-routed API backend, and the private admin transport
-- wires contacts, values, skills, safeguards, core memory, shards, think tools, image tools, and post-turn actions
+- wires contacts, values, skills, safeguards, core memory, shards, analysis workbench tools, image tools, and post-turn actions
 
 The agent talks to the gateway through `GatewayClient`, which acts as the LLM and embeddings provider inside the isolated process.
 

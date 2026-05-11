@@ -12,7 +12,7 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - `repo`
 - `shell`
 - `web`
-- `think`
+- `analysis_workbench`
 - `tool_search`
 - `toolset`
 
@@ -110,7 +110,7 @@ The target model-facing `fs` surface collapses common workspace inspection and s
 - Inspection actions: `list`, `read`, `search`
 - Mutation actions: `write`, `edit`
 
-The surface is designed to keep routine codebase inspection out of `think`:
+The surface is designed to keep routine codebase inspection out of `analysis_workbench`:
 
 - use `fs action="list"` for bounded discovery
 - use `fs action="search"` for targeted content lookup before broad reasoning
@@ -135,7 +135,7 @@ This keeps repository work on one primitive while preserving the existing protec
 
 ## Target Shell Surface
 
-The current runtime already exposes a unified model-facing `shell` tool for direct command execution outside `think`, and that remains the target shape.
+The current runtime already exposes a unified model-facing `shell` tool for direct command execution outside `analysis_workbench`, and that remains the target shape.
 
 - Action: `exec`
 
@@ -145,7 +145,7 @@ The surface stays intentionally narrow:
 - gateway policy remains authoritative for enablement, executable allowlists, cwd bounds, timeouts, and output caps
 - confirmation, auditing, and fail-closed denial stay on the underlying `shell.exec` gateway path
 - `shell` remains distinct from `fs` and `repo`; use those primitives for structured workspace and git operations instead of shelling out by default
-- `shell_exec` inside `think` remains a bounded helper, not the primary model-facing surface
+- `shell_exec` inside `analysis_workbench` remains a bounded helper, not the primary model-facing surface
 
 ## Target Session Surface
 
@@ -292,7 +292,7 @@ The companion-facing runtime prompt should describe the active stack for the tur
 - Scratchpad entries now age under an explicit lifecycle policy from `scheduler.json`; stale temporary notes are eligible for cleanup unless they are promoted first.
 - Promote scratchpad content only when it hardens into stable facts (`memory`), durable notes/artifacts (`vault` or repo docs), or orientation state (`orient`).
 - Temporary file cleanup only touches generated media plus the managed workspace temp subtree at `workspace/.psfn/temp-artifacts`; ordinary workspace files are never swept implicitly.
-- Use `think` as an explicit fallback for deep reasoning, not as the default escape hatch.
+- Use `analysis_workbench` only for bounded multi-stage analysis of large files, codebases, logs, transcripts, datasets, or evidence sets that would overload normal context.
 - Keep `web` distinct from `session`: transcript lookup and continuity resume belong to `session`, while remote-page discovery/retrieval belongs to `web`.
 - Keep creative prompt craft, appearance heuristics, and provider/model quirks in creator skills rather than top-level tool descriptions.
 - Keep bounded worker control on `subagent` with `action=spawn|message|wait|cancel|status`.
@@ -335,7 +335,7 @@ The table below maps current first-party tool names to the target surface. It is
 | `load_tools` | `toolset` | hidden | `load_tools` no longer ships as a live runtime control tool on this branch; use `toolset action="activate"` for discovery-driven activation. |
 | `fs_read` | `fs` | always-on | Collapsed into `fs action="read"`. |
 | `fs_list` | `fs` | always-on | Collapsed into `fs action="list"`. |
-| `shell_exec` | `shell` | always-on | Direct command execution now belongs on `shell action="exec"`; the `think` helper remains bounded and secondary. |
+| `shell_exec` | `shell` | always-on | Direct command execution now belongs on `shell action="exec"`; the `analysis_workbench` helper remains bounded and secondary. |
 | `repo_status` | `repo` | always-on | Repository inspection belongs under one primitive. |
 | `repo_diff` | `repo` | always-on | Same family. |
 | `repo_apply_patch` | `repo` | extended | Mutation stays gated. |
@@ -371,7 +371,7 @@ The table below maps current first-party tool names to the target surface. It is
 | `web_research` | `web` | always-on | Collapsed into `web action="search"` for small-scope URL discovery + fetch; do not confuse with `session search` or transcript recall. |
 | `subagent` | `subagent` | extended | Unified bounded-worker control plane; keep distinct from long-horizon shard work. |
 | `spawn_shard` | `shard` | extended | Legacy action/name now collapses into `shard action="spawn"`; long-horizon clone work is shard work, not subagent work, and forked shards intentionally inherit typed parent context snapshots and a stable prompt prefix. |
-| `think` | `think` | always-on | Keep as an explicit fallback for deep reasoning. |
+| `analysis_workbench` | `analysis_workbench` | always-on | Bounded RLM+REPL analysis for large files, codebases, logs, transcripts, datasets, or evidence sets. Not for routine reasoning, tool discovery, schema confusion, simple lookup, or state changes. |
 | `skill` | `skill` | always-on | Unified surface with `action=list|view|create|update`; skills stay discoverable and managed-skill mutation remains explicit on the same semantic tool. |
 | `vault_write` | `vault` | extended | Collapsed into `vault action="write"`; vault stays for durable notes/artifacts, not scratchpad or memory. |
 | `vault_read` | `vault` | always-on | Collapsed into `vault action="read"`. |
@@ -394,8 +394,8 @@ The table below maps current first-party tool names to the target surface. It is
 - Treat `tool_search` as the first discovery step for non-default tools and `toolset` as the semantic control plane for activating, pinning, and unpinning them.
 - Keep `shardToolsets` shard-specific. It should not become a general companion tool-selection mechanism.
 - Preserve `north_star` as a dedicated semantic surface rather than folding it into `identity` or `orient`.
-- Leave `think` available as a fallback, but do not use it to hide missing tool taxonomy.
+- Leave `analysis_workbench` available for large-context analysis, but do not use it to hide missing tool taxonomy or routine direct-tool gaps.
 
 ## Practical Rule Of Thumb
 
-If the task is world execution, use a primitive. If it is companion state, use a semantic companion tool. If it is workflow strategy, encode it in a skill. If it is long-tail or special-case tool selection, use `tool_search`/`toolset`. If none of that fits, `think` is the fallback.
+If the task is world execution, use a primitive. If it is companion state, use a semantic companion tool. If it is workflow strategy, encode it in a skill. If it is long-tail or special-case tool selection, use `tool_search`/`toolset`. Use `analysis_workbench` only when the material is too large or multi-stage for normal context without crowding out the conversation.

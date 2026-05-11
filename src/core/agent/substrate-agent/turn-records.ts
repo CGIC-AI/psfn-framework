@@ -310,7 +310,7 @@ export function buildTurnToolSummary(turnMessages: AgentMessage[]): TurnToolSumm
   for (const msg of turnMessages) {
     if (isToolResultAgentMessage(msg)) {
       toolCalls += 1;
-      if (msg.toolName === 'think') {
+      if (msg.toolName === 'analysis_workbench') {
         usedThinkTool = true;
       }
     }

@@ -344,7 +344,7 @@ export function wireStaticPromptRegistry(dataDir: string): PromptRegistryStore {
 
 /**
  * Build REPL config with runtime settings overrides.
- * Shared across the split runtime entrypoints to keep think tool budgets aligned.
+ * Shared across the split runtime entrypoints to keep analysis workbench budgets aligned.
  */
 export function buildReplConfig(config: SubstrateConfig): REPLConfig {
   const replConfig: REPLConfig = {

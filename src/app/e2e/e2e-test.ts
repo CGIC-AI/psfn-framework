@@ -377,9 +377,9 @@ async function main(): Promise<void> {
   }
 
   // ────────────────────────────────────────
-  // TEST 9: REPL/Think tool (RLM loop)
+  // TEST 9: REPL/analysis workbench (RLM loop)
   // ────────────────────────────────────────
-  section('Test 9: REPL/Think Tool');
+  section('Test 9: REPL/Analysis Workbench');
 
   try {
     process.stdout.write('  Running RLM loop (simple math)...');

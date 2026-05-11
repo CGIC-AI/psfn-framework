@@ -38,7 +38,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 ### Self-Modification
 - **Layered Prompt Stack** — 5-layer editable prompt system (base→operator→runtime→channel→task) with versioning, rollback, and admin UI
 - **Git Tools** — 6 agent-accessible repo inspection and guarded mutation tools for the read-only parent runtime, with path allowlists, protected branch blocking, and audit trail
-- **RLM+REPL Sandbox** — Code execution via `think` tool with sub-LM calls, memory queries, variable persistence
+- **Analysis Workbench** — Bounded RLM+REPL analysis for large files, codebases, logs, transcripts, datasets, or evidence sets that should not be stuffed into the main conversation context
 - **Self-Spawning Shards** — Parallel sub-agents for concurrent tasks
 - **Obsidian Vault** — 4 agent tools (`vault_write`, `vault_read`, `vault_search`, `vault_daily`) for reading and writing Obsidian notes, with auto-publish for heartbeat reflections
 
@@ -309,12 +309,12 @@ Skills are reusable workflow guidance, not world-execution tools. The runtime ma
 | **Beads and lifecycle** | `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`, `settings_get`, `promoted_tools_*`, `self_restart`, `self_rebuild`, `notify_operator` |
 | **Media** | current stabilized branch: `image_create`, `image_edit`, `image_analyze`; target surface: `media` (`action=generate|edit|analyze`) |
 | **Shards** | `spawn_shard` |
-| **Reasoning** | `think` (RLM+REPL sandbox) |
+| **Large-context analysis** | `analysis_workbench` (bounded RLM+REPL sandbox) |
 
 Tool surface split:
 - **Direct agent tools**: `tool_search` and `toolset` stay core; the rest are registered as `core` or `extended`, with overlay activation controlled by `toolset`, promotion, and bounded autoload rules
-- **REPL-only helpers**: `think` also exposes bounded helper functions for filesystem, git, shell, memory, and model operations. Those helper names are separate from the direct-tool catalog and are never promotable direct tools.
-- Some capabilities exist on both surfaces, but the direct tool catalog is the source of truth for what the agent can call outside `think`
+- **REPL-only helpers**: `analysis_workbench` exposes bounded read-oriented helper functions for large-context inspection, memory/session lookup, and sparse sub-LM checks. Those helper names are separate from the direct-tool catalog and are never promotable direct tools.
+- Some capabilities exist on both surfaces, but the direct tool catalog is the source of truth for what the agent can call outside `analysis_workbench`
 
 ## Project Structure
 
@@ -334,7 +334,7 @@ src/
   contacts/                 # Contact store, management tools
   session/                  # JSONL sessions, compaction, user continuity
   shards/                   # Self-spawning parallel sub-agents
-  repl/                     # RLM+REPL sandbox (think tool)
+  repl/                     # RLM+REPL sandbox (analysis_workbench tool)
   scheduler/                # Heartbeat, one-shot, maintenance
   voice/                    # Voice pipeline (STT, TTS connectors, WebSocket transport)
   vault/                    # Obsidian vault integration (ops, tools, auto-publish)

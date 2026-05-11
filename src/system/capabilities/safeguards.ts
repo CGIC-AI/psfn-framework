@@ -79,7 +79,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   notify: 'irreversible',
   notify_operator: 'irreversible',
   spawn_subagent: 'irreversible',
-  think: 'reversible',
+  analysis_workbench: 'reversible',
   skill_list: 'reversible',
 };
 

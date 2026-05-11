@@ -55,7 +55,7 @@ export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
     label: 'fs',
     description:
       'Unified filesystem primitive for workspace inspection and safe mutation. '
-      + 'Use action=list|read|search|write|edit. Prefer list/search/read for common file inspection before think. '
+      + 'Use action=list|read|search|write|edit. Prefer list/search/read for common file inspection before analysis_workbench. '
       + 'Writes stay explicit, bounded, and fail closed on unsafe overwrite/edit requests.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union([

@@ -5,7 +5,7 @@
 export interface ReflectionNudgeConfig {
   /** Minimum tool calls in a turn to qualify as "complex". Default: 3. */
   minToolCalls: number;
-  /** Also qualify if the `think` (RLM) tool was used. Default: true. */
+  /** Also qualify if the analysis workbench tool was used. Default: true. */
   nudgeOnThinkTool: boolean;
   /** Only nudge every Nth qualifying turn to avoid nagging. Default: 3. */
   nudgeEveryNthTurn: number;

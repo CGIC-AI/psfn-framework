@@ -319,7 +319,7 @@ describe('TelegramAdapter', () => {
     }));
   });
 
-  it('sends rate-limited long-running think status updates and clears them after tool completion', async () => {
+  it('sends rate-limited long-running analysis status updates and clears them after tool completion', async () => {
     vi.useFakeTimers();
     try {
       let sentMessageId = 900;
@@ -335,15 +335,15 @@ describe('TelegramAdapter', () => {
       adapter.onMessage(async (message) => {
         await eventBus.emit('agent.tool.start', {
           channelId: message.channelId,
-          toolCallId: 'think-call-1',
-          toolName: 'think',
+          toolCallId: 'analysis-call-1',
+          toolName: 'analysis_workbench',
         });
         await vi.advanceTimersByTimeAsync(16_000);
         await vi.advanceTimersByTimeAsync(25_000);
         await eventBus.emit('agent.tool.end', {
           channelId: message.channelId,
-          toolCallId: 'think-call-1',
-          toolName: 'think',
+          toolCallId: 'analysis-call-1',
+          toolName: 'analysis_workbench',
           isError: false,
         });
         return okResponse(message.channelId);
@@ -354,15 +354,15 @@ describe('TelegramAdapter', () => {
         message: {
           message_id: 12,
           date: 1_700_000_200,
-          text: 'please think',
+          text: 'please analyze this large file',
           chat: { id: 333, type: 'private' },
-          from: { id: 42, is_bot: false, username: 'think_user' },
+          from: { id: 42, is_bot: false, username: 'analysis_user' },
         },
       });
 
       const longRunningSends = calls.filter(call =>
         call.method === 'sendMessage'
-        && String(call.body.text ?? '').includes('Still thinking deeply'),
+        && String(call.body.text ?? '').includes('Still analyzing large-context material'),
       );
       const longRunningEdits = calls.filter(call => call.method === 'editMessageText');
       const longRunningDeletes = calls.filter(call => call.method === 'deleteMessage');

@@ -173,19 +173,19 @@
       ],
     },
     {
-      title: 'Think Tool (RLM+REPL)',
+      title: 'Analysis Workbench (RLM+REPL)',
       knobs: [
         {
           name: 'Max Tokens',
-          description: 'Maximum tokens available for each think tool iteration. Controls how much reasoning you can do in a single thinking step.',
+          description: 'Maximum tokens available for each analysis workbench iteration. Use this only for large files, codebases, logs, transcripts, datasets, or evidence sets that would overload normal context.',
         },
         {
           name: 'Max Wall Time',
-          description: 'Maximum real-world time (in ms) for a single think session. Prevents runaway thinking loops. A safety net -- most think sessions finish well under this limit.',
+          description: 'Maximum real-world time (in ms) for a single analysis workbench run. Prevents runaway multi-stage analysis loops.',
         },
         {
           name: 'Max Sub-Queries',
-          description: 'Maximum number of llm_query() calls within a single think session. Each sub-query is an LLM call, so this controls both cost and depth of reasoning.',
+          description: 'Maximum number of llm_query() calls within a single analysis workbench run. Each sub-query is an LLM call, so this controls both cost and depth.',
         },
       ],
     },

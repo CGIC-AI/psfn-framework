@@ -1899,7 +1899,7 @@ describe('SubstrateAgent.handleMessage', () => {
     promptSpy.mockImplementationOnce(async function (this: Agent) {
       this.appendMessage({
         role: 'assistant',
-        content: [{ type: 'toolCall', id: 'tool-1', name: 'think', arguments: { task: 'loop' } }],
+        content: [{ type: 'toolCall', id: 'tool-1', name: 'analysis_workbench', arguments: { task: 'loop' } }],
         api: '' as any,
         provider: '' as any,
         model: '',
@@ -1917,7 +1917,7 @@ describe('SubstrateAgent.handleMessage', () => {
       this.appendMessage({
         role: 'toolResult',
         toolCallId: 'tool-1',
-        toolName: 'think',
+        toolName: 'analysis_workbench',
         content: [{ type: 'text', text: 'ok' }],
         isError: false,
         timestamp: Date.now(),
@@ -2024,7 +2024,7 @@ describe('SubstrateAgent.handleMessage', () => {
     promptSpy.mockImplementationOnce(async function (this: Agent) {
       this.appendMessage({
         role: 'assistant',
-        content: [{ type: 'toolCall', id: 'tool-1', name: 'think', arguments: { task: 'loop' } }],
+        content: [{ type: 'toolCall', id: 'tool-1', name: 'analysis_workbench', arguments: { task: 'loop' } }],
         api: '' as any,
         provider: '' as any,
         model: '',
@@ -2042,7 +2042,7 @@ describe('SubstrateAgent.handleMessage', () => {
       this.appendMessage({
         role: 'toolResult',
         toolCallId: 'tool-1',
-        toolName: 'think',
+        toolName: 'analysis_workbench',
         content: [{ type: 'text', text: 'sandbox conclusion' }],
         isError: false,
         timestamp: Date.now(),
@@ -2075,7 +2075,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(sessionManager.recordToolObservation).toHaveBeenCalledWith(
       'test-channel',
       {
-        toolName: 'think',
+        toolName: 'analysis_workbench',
         toolCallId: 'tool-1',
         content: 'sandbox conclusion',
         isError: false,

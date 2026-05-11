@@ -641,7 +641,7 @@
       <h3 class="text-base font-serif font-semibold text-shadow-900">Scope Note</h3>
       <p class="mt-4 text-sm leading-relaxed text-shadow-700">
         This page is derived from the direct runtime tool catalog and admin telemetry. Helpers that only exist inside
-        <code class="rounded bg-bark-100 px-1.5 py-0.5 text-xs text-gold-700">think</code>
+        <code class="rounded bg-bark-100 px-1.5 py-0.5 text-xs text-gold-700">analysis_workbench</code>
         are intentionally excluded because they are not registered as direct agent tools.
       </p>
     </div>

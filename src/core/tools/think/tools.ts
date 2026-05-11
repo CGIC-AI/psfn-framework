@@ -1,5 +1,5 @@
-// ── think tool ──
-// Registered on the parent SubstrateAgent. Runs an ephemeral RLM loop for deep reasoning.
+// ── analysis workbench tool ──
+// Registered on the parent SubstrateAgent. Runs an ephemeral RLM loop for bounded analysis.
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
@@ -10,17 +10,16 @@ import { textResultWithError } from '../results.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 
-export function createThinkTool(deps: REPLDeps): AgentTool<any> {
+export function createAnalysisWorkbenchTool(deps: REPLDeps): AgentTool<any> {
   return {
-    name: 'think',
+    name: 'analysis_workbench',
     description:
-      'Explicit fallback analytical thinking via code execution. Reach for direct tools first, and use ' +
-      'tool_search/toolset before think when the active stack is missing the needed capability. Use think ' +
-      'only when those direct tools are still insufficient for multi-step reasoning, synthesis, or pattern ' +
-      'analysis; not for routine file lookup, simple reads, basic inspection, or routine state changes. ' +
-      'Pass only the task or question to analyze; the tool manages its own scratchpad. Runs an iterative ' +
-      'code sandbox that can query memories and sub-LMs.',
-    label: 'think',
+      'Bounded analysis workbench for large files, codebases, logs, datasets, or evidence sets that would ' +
+      'bloat the main conversation context. Use direct semantic tools first, and use tool_search/toolset ' +
+      'when the active stack is missing a capability. Do not use this for routine reasoning, tool discovery, ' +
+      'schema confusion, simple file lookup, basic inspection, or routine state changes. Pass only the task ' +
+      'or question to analyze; the tool manages its own temporary scratchpad and iterative code sandbox.',
+    label: 'analysis_workbench',
     parameters: Type.Object({
       task: Type.String({ description: 'The analytical task or question to reason through' }),
       maxIterations: Type.Optional(Type.Number({ description: 'Override max iterations (default 15)' })),
@@ -49,10 +48,10 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
           params.task,
           effectiveDeps,
           {
-            toolName: 'think',
+            toolName: 'analysis_workbench',
             toolCallId,
             originType: 'tool',
-            originStage: 'repl.think.tool',
+            originStage: 'repl.analysis_workbench.tool',
           },
         );
 
@@ -64,10 +63,10 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
             ...(requestContext?.channelId ? { channelId: requestContext.channelId } : {}),
             ...(requestContext?.requestId ? { requestId: requestContext.requestId } : {}),
             ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
-            toolName: 'think',
+            toolName: 'analysis_workbench',
             toolCallId,
             originType: 'tool',
-            originStage: 'repl.think.tool',
+            originStage: 'repl.analysis_workbench.tool',
             result: {
               iterations: result.iterations,
               totalInputTokens: result.totalInputTokens,
@@ -106,10 +105,10 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
         const evidenceCount = result.evidence.length;
         const nestedThinkCount = result.diagnostics.nestedThinkSuccessCount;
         const header =
-          `[Think: ${result.iterations} iter${result.iterations !== 1 ? 's' : ''}, ` +
+          `[Analysis workbench: ${result.iterations} iter${result.iterations !== 1 ? 's' : ''}, ` +
           `${totalTokens}/${tokenBudget} tokens, ` +
           `${result.durationMs}ms` +
-          `${nestedThinkCount > 0 ? `, ${nestedThinkCount} sub-think` : ''}` +
+          `${nestedThinkCount > 0 ? `, ${nestedThinkCount} nested analysis` : ''}` +
           `${evidenceCount > 0 ? `, ${evidenceCount} evidence` : ''}` +
           `${result.truncated ? ', truncated' : ''}` +
           `${result.budgetStatus.exceeded ? `, stopped: ${result.budgetStatus.exceeded}` : ''}]`;
@@ -120,7 +119,7 @@ export function createThinkTool(deps: REPLDeps): AgentTool<any> {
           details: { isError: isError || undefined },
         };
       } catch (error) {
-        return textResultWithError(`[Think error: ${toErrorMessage(error)}]`, true);
+        return textResultWithError(`[Analysis workbench error: ${toErrorMessage(error)}]`, true);
       }
     },
   };

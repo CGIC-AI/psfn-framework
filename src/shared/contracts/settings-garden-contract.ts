@@ -16,7 +16,7 @@ export type GardenSettingsSectionId =
   | 'compositional'
   | 'extraction-tuning'
   | 'profile'
-  | 'think'
+  | 'analysis-workbench'
   | 'trust'
   | 'llm'
   | 'import'
@@ -94,9 +94,9 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   profileSynthesisSourceMemoryLimit: { sectionId: 'profile', surface: 'advanced' },
   profileSynthesisMinSourceMemories: { sectionId: 'profile', surface: 'advanced' },
   uiThemeId: { sectionId: 'profile', surface: 'advanced' },
-  thinkMaxTokens: { sectionId: 'think', surface: 'advanced' },
-  thinkMaxWallTimeMs: { sectionId: 'think', surface: 'advanced' },
-  thinkMaxSubQueries: { sectionId: 'think', surface: 'advanced' },
+  thinkMaxTokens: { sectionId: 'analysis-workbench', surface: 'advanced' },
+  thinkMaxWallTimeMs: { sectionId: 'analysis-workbench', surface: 'advanced' },
+  thinkMaxSubQueries: { sectionId: 'analysis-workbench', surface: 'advanced' },
   capabilityTier: { sectionId: 'trust', surface: 'custom', editorId: 'capabilities' },
   customTokens: { sectionId: 'trust', surface: 'custom', editorId: 'capabilities' },
   retryMaxAttempts: { sectionId: 'llm', surface: 'advanced' },
@@ -169,7 +169,7 @@ export const SETTINGS_GARDEN_SECTION_FIELDS: Record<GardenSettingsSectionId, str
   compositional: collectSectionFields('compositional'),
   'extraction-tuning': collectSectionFields('extraction-tuning'),
   profile: collectSectionFields('profile'),
-  think: collectSectionFields('think'),
+  'analysis-workbench': collectSectionFields('analysis-workbench'),
   trust: collectSectionFields('trust'),
   llm: collectSectionFields('llm'),
   import: collectSectionFields('import'),

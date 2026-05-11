@@ -76,6 +76,58 @@ const METACOGNITIVE_FLAG_NAMES = [
 
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
 
+const TEST_CHARGE_POLICY = {
+  schemaVersion: 1,
+  runChargeQuotaByLane: {
+    interactive: 24,
+    background: 8,
+    maintenance: 0,
+    subagent: 6,
+    shard: 12,
+  },
+  surfaceCosts: {
+    ownerFileInspection: 0,
+    localFilesystem: 0,
+    memoryRead: 0,
+    memoryWrite: 0,
+    localEmbedding: 0,
+    externalEmbedding: 0,
+    localImageGeneration: 0,
+    paidImageGeneration: 6,
+    thinkExtensionBand: 1,
+    subagentLaunch: 1,
+    shardLaunch: 8,
+    externalModelConsult: 1,
+    moaRoundBase: 1,
+  },
+  surfaceRationales: {
+    paidImageGeneration: 'External image generation spends paid provider credits.',
+    thinkExtensionBand: 'Extended analysis workbench loops get a small cost to keep them bounded.',
+    subagentLaunch: 'Spawning a subagent reserves a separate runtime budget.',
+    shardLaunch: 'Launching a shard consumes worker coordination overhead.',
+    externalModelConsult: 'Consulting an external model uses a paid API boundary.',
+    moaRoundBase: 'Each MOA round carries coordination overhead even before model spend.',
+  },
+  moa: {
+    perRoundMultiplierByReferenceModelClass: {
+      local: 1,
+      subscription: 1,
+      cheap_cloud: 1,
+      premium_cloud: 2,
+    },
+  },
+  referenceModelClassPricing: {
+    local: 0,
+    subscription: 0,
+    cheap_cloud: 1,
+    premium_cloud: 4,
+  },
+  referenceModelClassPricingRationales: {
+    cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
+    premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
+  },
+};
+
 function buildRuntimePromptOutputs(
   input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
 ): { variables: Record<string, string>; rendered: string } {
@@ -314,6 +366,48 @@ describe('runtime subject identity', () => {
     });
 
     expect(authorContext.speakerRole).toBe('user');
+  });
+
+  it('renders charge budget guidance outside the static prompt prefix', () => {
+    const message = makeMessage({
+      channelId: 'api:general',
+      channelType: 'api',
+      authorId: 'user-1',
+      authorName: 'User',
+    });
+
+    const runtimeContext = buildRuntimeContext({
+      message,
+      resolvedUserName: 'User',
+      trustLevel: 'primary',
+      channelType: 'api',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 6,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 6,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      formatTopEmotions: () => '',
+      config: { chargePolicy: TEST_CHARGE_POLICY },
+    });
+
+    expect(runtimeContext).toContain('<runtime_charge_budget>');
+    expect(runtimeContext).toContain('remaining 24 of 24 run-charge units');
+    expect(runtimeContext).toContain('paid image/video generation: 6');
+    expect(runtimeContext).toContain('analysis_workbench extension pass after the first iteration: 1');
+    expect(runtimeContext).toContain('Do not use it for tool discovery, schema confusion, simple lookup, or ordinary replies.');
+    expect(runtimeContext).not.toContain('think');
   });
 
   it('uses the canonical contact key as the continuity subject when contact resolution succeeds', async () => {

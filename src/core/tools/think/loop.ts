@@ -1,5 +1,5 @@
 // ── RLM Iteration Loop ──
-// Runs an ephemeral think cycle: LLM → code → output → repeat until FINAL.
+// Runs an ephemeral analysis workbench cycle: LLM → code → output → repeat until FINAL.
 
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import type { ContextMessage, CorrelationMetadata, LLMContext, LLMResponse } from '../../../shared/contracts/runtime.js';
@@ -41,13 +41,13 @@ import {
 
 const LLM_TIMEOUT_BUFFER_MS = 25;
 const LLM_TIMEOUT_REASON = 'llm timeout';
-const LLM_TIMEOUT_ANSWER = '[Think loop timed out waiting for LLM response]';
+const LLM_TIMEOUT_ANSWER = '[Analysis workbench loop timed out waiting for LLM response]';
 const INVOCATION_RATE_LIMIT_REASON = 'invocation rate limit';
 const NURSERY_DAILY_COST_REASON = 'daily cost cap';
 const CHARGE_QUOTA_REASON = 'charge quota';
-const RATE_LIMIT_ANSWER = '[Think invocation rate limit exceeded; try again shortly]';
-const NURSERY_DAILY_CAP_ANSWER = '[Think daily cost cap reached for nursery tier]';
-const CHARGE_QUOTA_ANSWER = '[Think extension charge quota exhausted before the next iteration]';
+const RATE_LIMIT_ANSWER = '[Analysis workbench invocation rate limit exceeded; try again shortly]';
+const NURSERY_DAILY_CAP_ANSWER = '[Analysis workbench daily cost cap reached for nursery tier]';
+const CHARGE_QUOTA_ANSWER = '[Analysis workbench extension charge quota exhausted before the next iteration]';
 const MAX_NESTED_THINK_DEPTH = 2;
 
 interface DailyCostSnapshot {
@@ -397,9 +397,9 @@ function buildBudgetFallbackAnswer(reason: BudgetStatus['exceeded']): string {
     return CHARGE_QUOTA_ANSWER;
   }
   if (reason) {
-    return `[Think loop stopped: ${reason}]`;
+    return `[Analysis workbench loop stopped: ${reason}]`;
   }
-  return '[Think loop stopped before producing a final answer]';
+  return '[Analysis workbench loop stopped before producing a final answer]';
 }
 
 function pushPassiveStep(
@@ -467,7 +467,7 @@ function resolveThinkRequestMetadata(
   const turnId = normalizeMetadataValue(merged.turnId);
   const requestId = normalizeMetadataValue(merged.requestId)
     ?? turnId
-    ?? `repl-think-${Date.now()}`;
+    ?? `repl-analysis-${Date.now()}`;
   const originType = normalizeOriginType(normalizeMetadataValue(merged.originType))
     ?? normalizeOriginType(normalizeMetadataValue(merged.callType))
     ?? 'tool';
@@ -476,7 +476,7 @@ function resolveThinkRequestMetadata(
     requestId,
     ...(turnId ? { turnId } : {}),
     ...(normalizeMetadataValue(merged.channelId) ? { channelId: normalizeMetadataValue(merged.channelId) } : {}),
-    toolName: normalizeMetadataValue(merged.toolName) ?? 'think',
+    toolName: normalizeMetadataValue(merged.toolName) ?? 'analysis_workbench',
     ...(normalizeMetadataValue(merged.toolCallId) ? { toolCallId: normalizeMetadataValue(merged.toolCallId) } : {}),
     originType,
   };
@@ -509,10 +509,10 @@ function buildNestedThinkRequestMetadata(
     ...(metadata.turnId ? { turnId: metadata.turnId } : {}),
     requestId: `${metadata.requestId}:${suffix}`,
     ...(metadata.channelId ? { channelId: metadata.channelId } : {}),
-    toolName: metadata.toolName ?? 'think',
+    toolName: metadata.toolName ?? 'analysis_workbench',
     ...(metadata.toolCallId ? { toolCallId: `${metadata.toolCallId}:${suffix}` } : {}),
     originType: metadata.originType,
-    originStage: 'repl.think.subcall',
+    originStage: 'repl.analysis_workbench.subcall',
   };
 }
 
@@ -616,7 +616,7 @@ export async function runRLMLoop(
       policy: deps.compositionalPolicy,
       capabilityTier: tier,
       channelId: requestMetadata.channelId,
-      purpose: 'think',
+      purpose: 'analysis_workbench',
     })
     : { allowed: false, reason: 'channel_type_not_allowed' as const };
   const sandboxLLMProvider = Object.create(llmProvider) as typeof llmProvider;
@@ -769,7 +769,7 @@ export async function runRLMLoop(
       && dayCost.totalUsd >= autonomousWarningUsd
     ) {
       sharedState.warnings.push(
-        `Autonomous daily think spend warning: $${dayCost.totalUsd.toFixed(4)} >= $${autonomousWarningUsd.toFixed(4)}`,
+        `Autonomous daily analysis workbench spend warning: $${dayCost.totalUsd.toFixed(4)} >= $${autonomousWarningUsd.toFixed(4)}`,
       );
       sharedState.autonomousCostWarningSent = true;
     }
@@ -875,7 +875,7 @@ export async function runRLMLoop(
           messages,
           correlation: buildThinkCorrelation(
             requestMetadata,
-            'repl.think.iteration',
+            'repl.analysis_workbench.iteration',
             `iteration-${iterationNumber}`,
           ),
         },

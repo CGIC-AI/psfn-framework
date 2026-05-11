@@ -1099,6 +1099,7 @@ export class SubstrateAgent {
       activeConcernsBlock: this.buildActiveConcernsContextBlock(canonicalContactKey),
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       formatTopEmotions: (discrete) => this.emotionSelfModelRuntime.formatTopEmotions(discrete),
+      config: this.config as unknown as Record<string, unknown>,
     });
   }
 

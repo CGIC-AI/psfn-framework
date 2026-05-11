@@ -64,7 +64,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     facade.registerTool(makeTool('session'), 'core');
     facade.registerTool(makeTool('contact'), 'core');
     facade.registerTool(makeTool('subagent'), 'core');
-    facade.registerTool(makeTool('think'), 'core');
+    facade.registerTool(makeTool('analysis_workbench'), 'core');
 
     facade.applyActiveToolsToAgentForTurn({
       id: 'msg-1',
@@ -83,7 +83,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       .filter(([eventName]) => eventName === 'agent.tools.core_guardrail.skipped');
     expect(skippedEvents).toEqual(expect.arrayContaining([
       ['agent.tools.core_guardrail.skipped', expect.objectContaining({ toolName: 'subagent', taskKind: 'reflection' })],
-      ['agent.tools.core_guardrail.skipped', expect.objectContaining({ toolName: 'think', taskKind: 'reflection' })],
+      ['agent.tools.core_guardrail.skipped', expect.objectContaining({ toolName: 'analysis_workbench', taskKind: 'reflection' })],
     ]));
   });
 
@@ -94,7 +94,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     facade.registerTool(makeTool('session'), 'core');
     facade.registerTool(makeTool('contact'), 'core');
     facade.registerTool(makeTool('subagent'), 'core');
-    facade.registerTool(makeTool('think'), 'core');
+    facade.registerTool(makeTool('analysis_workbench'), 'core');
 
     facade.applyActiveToolsToAgentForTurn({
       id: 'msg-2',
@@ -107,7 +107,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, undefined, 'chat', correlation, { intent: null, skipped: [] });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    expect(tools.map(tool => tool.name)).toEqual(['contact', 'identity', 'session', 'subagent', 'system', 'think']);
+    expect(tools.map(tool => tool.name)).toEqual(['analysis_workbench', 'contact', 'identity', 'session', 'subagent', 'system']);
     expect(emitTelemetry).not.toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
       expect.anything(),

@@ -34,7 +34,7 @@ graph TB
         EM["core/emotion\nEmotionState"]
         CAP["system/capabilities\nCapabilityTier"]
         TOOLS["core/tools\nTool Registry"]
-        SAND["boundary/sandbox\nRLM/think"]
+        SAND["boundary/sandbox\nanalysis workbench"]
         SHARDS["faculties/shards\nShardManager"]
     end
 
@@ -105,7 +105,7 @@ src/
 │   ├── custody/            #   Content sanitization helpers
 │   ├── gateway/            #   JSON-RPC 2.0 server, 36 gateway methods, SSRF defenses
 │   ├── integrations/       #   gateway-ops / local-ops pairs (beads, fs, git, shell, vault, web)
-│   └── sandbox/            #   node:vm RLM sandbox for `think` tool
+│   └── sandbox/            #   node:vm RLM sandbox for `analysis_workbench`
 │
 ├── channels/               # Inbound protocol adapters
 │   ├── api/                #   OpenAI-compatible REST + Voice WebSocket
@@ -251,15 +251,15 @@ src/
 
 ---
 
-### `boundary/sandbox` — RLM think Sandbox
+### `boundary/sandbox` — Analysis Workbench Sandbox
 
-**Purpose**: Implements the `think` tool — a sandboxed node:vm environment where the agent can write and execute arbitrary code to reason about problems. Injects memory search, LLM query, session message access, and evidence collection.
+**Purpose**: Implements the `analysis_workbench` tool: a sandboxed node:vm environment for bounded multi-stage analysis of large files, codebases, logs, transcripts, datasets, or evidence sets. Injects read-oriented file/repo/web helpers, memory search, LLM query, session message access, and evidence collection.
 
 **Key files**:
 | File | Purpose |
 |------|---------|
 | `sandbox/think-executor.ts` | Runs code in node:vm with injected helpers, globalThis var transform |
-| `sandbox/think-tool.ts` | AgentTool wrapper for `think` |
+| `sandbox/think-tool.ts` | AgentTool wrapper for `analysis_workbench` |
 | `sandbox/evidence.ts` | ThinkEvidence collection from sandbox calls |
 
 **Key patterns**:
@@ -424,7 +424,7 @@ src/
 | `tools/registry.ts` | Tool registry: register, list, get by name |
 | `tools/load-tools.ts` | `load_tools` meta-tool implementation |
 
-**Core tools**: think, spawn_shard, memory_write/import, contact_lookup/list, self_restart/rebuild, load_tools
+**Core tools**: analysis_workbench, spawn_shard, memory_write/import, contact_lookup/list, self_restart/rebuild, load_tools
 
 **Extended tools** (loaded on demand): 6 git, 4 prompt, 3 heartbeat/schedule, contact_set_trust, contact_note + more
 

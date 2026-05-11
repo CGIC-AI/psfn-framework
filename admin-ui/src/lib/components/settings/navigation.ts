@@ -63,9 +63,9 @@ export const SETTINGS_SIMPLE_SECTIONS = [
     groupId: 'memory',
   },
   {
-    id: 'tools-think',
-    title: 'Think Tool',
-    description: 'Sandbox limits for tool-assisted reasoning',
+    id: 'tools-analysis-workbench',
+    title: 'Analysis Workbench',
+    description: 'Sandbox limits for large-context analysis',
     groupId: 'tools',
   },
   {

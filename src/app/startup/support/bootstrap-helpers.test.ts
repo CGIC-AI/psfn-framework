@@ -985,9 +985,9 @@ describe('installPromotedToolsPersistenceHook', () => {
       configStore,
     });
 
-    config.runtimeHooks.persistPromotedExtendedTools(['memory_recall', 'think']);
+    config.runtimeHooks.persistPromotedExtendedTools(['memory_recall', 'analysis_workbench']);
 
-    expect(savedSettings.promotedExtendedTools).toEqual(['memory_recall', 'think']);
+    expect(savedSettings.promotedExtendedTools).toEqual(['memory_recall', 'analysis_workbench']);
   });
 });
 
@@ -1191,7 +1191,7 @@ describe('hydrateCanonicalStartupConfig', () => {
       },
       surfaceRationales: {
         paidImageGeneration: 'External image generation spends paid provider credits.',
-        thinkExtensionBand: 'Extended think loops get a small cost to keep them bounded.',
+        thinkExtensionBand: 'Extended analysis workbench loops get a small cost to keep them bounded.',
         subagentLaunch: 'Spawning a subagent reserves a separate runtime budget.',
         shardLaunch: 'Launching a shard consumes worker coordination overhead.',
         externalModelConsult: 'Consulting an external model uses a paid API boundary.',

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { createThinkTool } from './tools.js';
+import { createAnalysisWorkbenchTool } from './tools.js';
 import { DEFAULT_REPL_CONFIG } from './types.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 import { runRLMLoop } from './loop.js';
@@ -8,13 +8,13 @@ vi.mock('./loop.js', () => ({
   runRLMLoop: vi.fn(),
 }));
 
-describe('createThinkTool', () => {
+describe('createAnalysisWorkbenchTool', () => {
   beforeEach(() => {
     vi.mocked(runRLMLoop).mockReset();
   });
 
-  it('describes think as an explicit fallback after direct tools', () => {
-    const tool = createThinkTool({
+  it('describes the analysis workbench as a bounded large-context tool', () => {
+    const tool = createAnalysisWorkbenchTool({
       llmProvider: {} as any,
       embeddingService: null,
       memoryStore: null,
@@ -22,16 +22,17 @@ describe('createThinkTool', () => {
       config: DEFAULT_REPL_CONFIG,
     });
 
-    expect(tool.description).toContain('Explicit fallback analytical thinking via code execution.');
-    expect(tool.description).toContain('Reach for direct tools first');
-    expect(tool.description).toContain('use tool_search/toolset before think when the active stack is missing the needed capability');
-    expect(tool.description).toContain('not for routine file lookup, simple reads, basic inspection, or routine state changes');
-    expect(tool.description).toContain('Pass only the task or question to analyze');
+    expect(tool.name).toBe('analysis_workbench');
+    expect(tool.description).toContain('large files, codebases, logs, datasets, or evidence sets');
+    expect(tool.description).toContain('Use direct semantic tools first');
+    expect(tool.description).toContain('use tool_search/toolset');
+    expect(tool.description).toContain('Do not use this for routine reasoning, tool discovery');
+    expect(tool.description).toContain('Pass only the task');
   });
 
-  it('marks truncated think results as tool errors', async () => {
+  it('marks truncated analysis workbench results as tool errors', async () => {
     vi.mocked(runRLMLoop).mockResolvedValue({
-      answer: '[Think loop stopped: token budget]',
+      answer: '[Analysis workbench loop stopped: token budget]',
       iterations: 2,
       totalInputTokens: 12,
       totalOutputTokens: 8,
@@ -58,7 +59,7 @@ describe('createThinkTool', () => {
       },
     });
 
-    const tool = createThinkTool({
+    const tool = createAnalysisWorkbenchTool({
       llmProvider: {} as any,
       embeddingService: null,
       memoryStore: null,
@@ -66,14 +67,14 @@ describe('createThinkTool', () => {
       config: DEFAULT_REPL_CONFIG,
     });
 
-    const result = await tool.execute('think-call-2', { task: 'inspect token budget' });
+    const result = await tool.execute('analysis-call-2', { task: 'inspect token budget' });
 
     expect(result.details.isError).toBe(true);
     expect(result.content[0]?.type).toBe('text');
     expect((result.content[0] as { text: string }).text).toContain('stopped: token budget');
   });
 
-  it('records think evidence into the active focus session context when channel metadata is available', async () => {
+  it('records analysis workbench evidence into the active focus session context when channel metadata is available', async () => {
     vi.mocked(runRLMLoop).mockResolvedValue({
       answer: 'done',
       iterations: 1,
@@ -111,7 +112,7 @@ describe('createThinkTool', () => {
     const sessionManager = {
       recordFocusEvidence: vi.fn(),
     };
-    const tool = createThinkTool({
+    const tool = createAnalysisWorkbenchTool({
       llmProvider: {} as any,
       embeddingService: null,
       memoryStore: null,
@@ -125,7 +126,7 @@ describe('createThinkTool', () => {
         purpose: 'agent.turn',
         channelId: 'api:focus-evidence',
       },
-      () => tool.execute('think-call-1', { task: 'inspect focus' }),
+      () => tool.execute('analysis-call-1', { task: 'inspect focus' }),
     );
 
     expect(sessionManager.recordFocusEvidence).toHaveBeenCalledWith(

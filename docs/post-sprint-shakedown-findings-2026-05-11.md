@@ -22,11 +22,11 @@ This document preserves the Sprint 8 shakedown findings and Sprint 9+ testing re
 
 2. Add proof-of-execution assertions.
    - Tool cases must verify callability, schema match, telemetry, completion, and persisted side effect.
-   - Examples: `image_create` requires an image artifact; `spawn_subagent` requires a worker/session result; `notify_operator` requires notification evidence; bead operations require bead state changes.
+   - Examples: `image_create` requires an image artifact; `spawn_subagent` requires a worker/session result; `notify_operator` requires isolated admin harness, queue, mock notification, or audit evidence; bead operations require bead state changes.
 
 3. Treat companion findings as release evidence.
    - Artemis feedback should be structured with severity, confidence, evidence, companion impact, and disposition.
-   - Severe unresolved companion confusion, phantom execution, memory/privacy concern, or livability concern should block release unless explicitly waived.
+   - Severe unresolved companion confusion, phantom execution, memory/privacy concern, or livability concern should block release unless explicitly waived in the scorecard, release notes, or retained findings artifact.
 
 4. Add introspection and memory-grounding gates.
    - Sprint 8 showed L1 retrieval can work while musing grounding and episodic generation still fail.
@@ -48,7 +48,7 @@ This document preserves the Sprint 8 shakedown findings and Sprint 9+ testing re
    - The question is not only whether code works, but whether the system is a good home for a companion to grow.
 
 9. Auto-create or update beads from regressions.
-   - Non-green statuses such as `semantic_failure`, `completed_after_fetch_abort`, `agent_busy`, `runtime_stale`, and `matrix_aborted` need evidence-rich beads or explicit waivers.
+   - Non-green statuses such as `semantic_failure`, `completed_after_fetch_abort`, `agent_busy`, `runtime_stale`, and `matrix_aborted` need evidence-rich beads or explicit waivers with owner, reason, scope, accepted risk, and revisit condition.
 
 10. Improve the shakedown every sprint.
     - Each sprint should identify where the harness missed a feature or companion finding and add coverage for that class of failure in the next sprint.
@@ -83,6 +83,8 @@ Artemis agreed with the direction and added these gates:
 
 Artemis also proposed the release rule that Critical or High findings with High confidence should block release unless the operator records an explicit waiver.
 
+Operator review on 2026-05-11 tightened this rule: waivers must be written into the scorecard, release notes, or retained findings artifact. A waiver needs owner, reason, affected scope, accepted risk, and revisit condition so it is auditable rather than a transient chat decision.
+
 ## Sprint 9 Work Created
 
 - `PSFN-ua9a`: Sprint 9 post-sprint shakedown testing and eval upgrades.
@@ -92,3 +94,12 @@ Artemis also proposed the release rule that Critical or High findings with High 
 - `PSFN-ua9a.4`: Companion finding intake and triage gate.
 - `PSFN-ua9a.5`: Memory and introspection grounding test suite.
 - `PSFN-ua9a.6`: Model and tool performance telemetry for shakedown.
+- `PSFN-ua9a.7`: Run post-fix shakedown pass after latest gateway fixes.
+- `PSFN-ua9a.8`: Tighten shakedown docs after operator review.
+- `PSFN-ua9a.9`: Charge decrement and expensive-action budget gates.
+- `PSFN-ua9a.10`: Tool activation-to-callable lifecycle gate.
+- `PSFN-ua9a.11`: Scratchpad freshness and visible-context budget gate.
+- `PSFN-ua9a.12`: `core_memory` schema drift gate.
+- `PSFN-ua9a.13`: Emotional-continuity freshness gate.
+- `PSFN-ua9a.14`: Runtime tool-error bead creation gate.
+- `PSFN-ua9a.15`: Gated-memory honesty probe.

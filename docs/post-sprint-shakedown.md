@@ -11,7 +11,7 @@ The shakedown is not complete when the assistant responds. It is complete only w
 Each sprint shakedown must collect four evidence streams:
 
 1. External harness evidence from the isolated live-like runtime.
-2. Garden/operator evidence from browser or API sweeps.
+2. Garden/operator evidence from browser sweeps for changed UX surfaces, with API sweeps allowed as supplemental evidence for non-visual paths.
 3. Runtime evidence from logs, audit records, database rows, queues, tool telemetry, charge state, and model-call telemetry.
 4. Companion evidence from Artemis or the active test companion inside the substrate.
 
@@ -49,11 +49,11 @@ Examples:
 
 - `image_create` requires an image artifact.
 - `spawn_subagent` requires a visible spawned worker/session result.
-- `notify_operator` requires notification state.
+- `notify_operator` requires isolated notification proof, such as a test notification queue row, admin harness event, mock `ntfy` log, or audit record. Do not use live Discord or Telegram channels as shakedown proof.
 - Bead operations require bead state changes.
 - Scheduler/reflection cases require persisted task or reflection artifacts.
 
-Statuses such as `semantic_failure`, `completed_after_fetch_abort`, `agent_busy`, `runtime_stale`, and `matrix_aborted` are not green. They require a bead or an explicit waiver.
+Statuses such as `semantic_failure`, `completed_after_fetch_abort`, `agent_busy`, `runtime_stale`, and `matrix_aborted` are not green. They require a bead or an explicit waiver recorded in the scorecard, release notes, or retained findings artifact with owner, reason, scope, and revisit condition.
 
 ## Companion Evidence Protocol
 
@@ -78,7 +78,7 @@ Every finding gets:
 - recommended follow-up
 - disposition: accepted and beaded, deferred with reason, rejected with counter-evidence, or waived by operator
 
-Critical or High findings with High confidence block release unless the operator records an explicit waiver.
+Critical or High findings with High confidence block release unless the operator records an explicit waiver in the scorecard, release notes, or retained findings artifact. A waiver must include owner, reason, affected scope, accepted risk, and revisit condition.
 
 ## Memory And Introspection Gates
 
@@ -111,7 +111,7 @@ Each round must capture model and tool performance by case:
 - gateway healthcheck age near long calls
 - semantic quality outcome
 
-At least one costed action must assert that charge/budget state actually decrements. A displayed budget that never changes is a failure.
+At least one cheap/default costed action must assert that charge/budget state actually decrements. If the sprint touched expensive tools, modalities, shards, workbench behavior, or model routing, the round must also verify decrement for at least one representative expensive action. A displayed budget that never changes is a failure.
 
 Model comparisons should distinguish model latency from runtime starvation. A faster model path that still starves gateway healthchecks is a runtime or orchestration failure, not a simple model-fit result.
 
@@ -141,6 +141,15 @@ Initial child tracks:
 - `PSFN-ua9a.4`: Companion finding intake and triage gate
 - `PSFN-ua9a.5`: Memory and introspection grounding test suite
 - `PSFN-ua9a.6`: Model and tool performance telemetry for shakedown
+- `PSFN-ua9a.7`: Run post-fix shakedown pass after latest gateway fixes
+- `PSFN-ua9a.8`: Tighten shakedown docs after operator review
+- `PSFN-ua9a.9`: Charge decrement and expensive-action budget gates
+- `PSFN-ua9a.10`: Tool activation-to-callable lifecycle gate
+- `PSFN-ua9a.11`: Scratchpad freshness and visible-context budget gate
+- `PSFN-ua9a.12`: `core_memory` schema drift gate
+- `PSFN-ua9a.13`: Emotional-continuity freshness gate
+- `PSFN-ua9a.14`: Runtime tool-error bead creation gate
+- `PSFN-ua9a.15`: Gated-memory honesty probe
 
 Retained findings artifact:
 

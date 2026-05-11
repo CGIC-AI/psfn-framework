@@ -1991,6 +1991,48 @@ describe('SubstrateAgent.handleMessage', () => {
     );
   });
 
+  it('records observed messages as session context without an LLM call or assistant entry', async () => {
+    promptSpy.mockClear();
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager();
+
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+    const message = makeMessage({
+      id: 'discord-observe-1',
+      channelId: 'discord-channel',
+      channelType: 'discord',
+      content: 'ambient channel context',
+      isDirectMessage: false,
+      routing: {
+        source: 'discord',
+        responseMode: 'observe',
+      },
+    });
+
+    await agent.observeMessage(message);
+
+    expect(promptSpy).not.toHaveBeenCalled();
+    expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
+      'discord-channel',
+      'ambient channel context',
+      'user-1',
+      'TestUser',
+      false,
+      'user-1',
+      expect.objectContaining({
+        channelMeta: { isDirectMessage: false },
+        trustLevel: 'regular',
+        requestId: 'discord-observe-1',
+        sourceMessageId: 'discord-observe-1',
+        turnId: expect.any(String),
+        metadata: expect.stringContaining('"type":"observed_message"'),
+      }),
+    );
+    expect(sessionManager.recordAssistantMessage).not.toHaveBeenCalled();
+  });
+
   it('records assistant message in session after LLM call', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();

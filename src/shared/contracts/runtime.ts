@@ -172,6 +172,11 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
 
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'unknown';
+  /**
+   * Transport-level response disposition. `observe` messages are recorded as
+   * context but must not trigger model response generation or channel egress.
+   */
+  responseMode?: 'respond' | 'observe';
   gateway?: GatewayRoutingMetadata;
   wyoming?: WyomingRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;

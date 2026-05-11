@@ -11,7 +11,7 @@ import {
   type TextChannel,
   type User,
 } from 'discord.js';
-import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
   ChannelAdapterPort,
@@ -78,6 +78,19 @@ const LONG_RUNNING_STATUS_POLL_MS = 5_000;
 const LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS = 20_000;
 type StatusKind = 'compaction' | 'retry' | 'long-running';
 
+function createSuppressedDiscordResponse(channelId: string): AgentResponse {
+  return {
+    content: '',
+    channelId,
+    metadata: {
+      model: 'discord-observation',
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: 0,
+    },
+  };
+}
+
 interface DiscordAdapterOptions {
   sessionStore?: SessionStore;
   eligibilityGate?: EligibilityGate;
@@ -98,6 +111,7 @@ interface PendingDiscordTurn {
   msg: Message;
   substrateMsg: SubstrateMessage;
   replyToOriginal: boolean;
+  respondToMessage: boolean;
 }
 
 export class DiscordAdapter implements ChannelAdapterPort {
@@ -223,7 +237,13 @@ export class DiscordAdapter implements ChannelAdapterPort {
   /** Set direct agent reference for steering support */
   setAgent(agent: SubstrateAgent): void {
     this.agent = agent;
-    this.handler = (msg) => agent.handleMessage(msg);
+    this.handler = async (msg) => {
+      if (msg.routing?.responseMode === 'observe') {
+        await agent.observeMessage(msg);
+        return createSuppressedDiscordResponse(msg.channelId);
+      }
+      return agent.handleMessage(msg);
+    };
   }
 
   async init(): Promise<void> {
@@ -328,43 +348,45 @@ export class DiscordAdapter implements ChannelAdapterPort {
       ? this.isAllowedExternalBotAuthor(msg.author.id, runtimeBotId)
       : false;
 
-    // Ignore self + unapproved bots. Approved companion bots still require
-    // explicit mention in guild channels so ambient bot chatter cannot loop.
+    // Ignore self + unapproved bots. Approved companion bots are observed in
+    // guild channels, but only a direct mention is allowed to produce egress.
     if (runtimeBotId && msg.author.id === runtimeBotId) return;
     if (msg.author.bot && !isAllowedBotAuthor) return;
     if (!this.handler) return;
 
-    // Respond to DMs always, guild messages by mention/trigger/listening window.
+    // Respond to DMs always. Guild messages are all observed for context, but
+    // response egress is gated strictly to direct mentions.
     const isDM = !msg.guild;
     const channelId = msg.channelId;
+    let respondToMessage = isDM;
     if (!isDM) {
-      if (msg.content.trimStart().startsWith(DISCORD_TRIGGER_OPT_OUT_PREFIX)) return;
-
+      const isOptOut = msg.content.trimStart().startsWith(DISCORD_TRIGGER_OPT_OUT_PREFIX);
       const isMentioned = runtimeBotId ? msg.mentions.has(runtimeBotId) : false;
-      const isTriggered = isAllowedBotAuthor ? false : this.matchesTriggerWord(msg.content);
-      const listenKey = this.listeningWindowKey(channelId, msg.author.id);
-      const isListening = isAllowedBotAuthor ? false : this.isInListeningWindow(listenKey);
+      respondToMessage = isMentioned && !isOptOut;
 
-      if (!isMentioned && !isTriggered && !isListening) return;
-
-      if (isAllowedBotAuthor) {
-        log.debug('Discord allowed bot mention accepted', { channelId, authorId: msg.author.id });
-      } else {
-        this.openListeningWindow(listenKey);
-      }
-
-      if (isTriggered && !isMentioned) {
-        log.debug('Discord trigger word matched', { channelId, authorId: msg.author.id });
-      } else if (isListening && !isMentioned) {
-        log.debug('Discord listening window accepted follow-up', { channelId, authorId: msg.author.id });
+      if (respondToMessage) {
+        const listenKey = this.listeningWindowKey(channelId, msg.author.id);
+        if (!isAllowedBotAuthor) {
+          this.openListeningWindow(listenKey);
+        }
+        if (isAllowedBotAuthor) {
+          log.debug('Discord allowed bot mention accepted', { channelId, authorId: msg.author.id });
+        }
+      } else if (isAllowedBotAuthor) {
+        log.debug('Discord allowed bot message observed without response', { channelId, authorId: msg.author.id });
+      } else if (this.matchesTriggerWord(msg.content)) {
+        log.debug('Discord trigger word observed without response', { channelId, authorId: msg.author.id });
+      } else if (this.isInListeningWindow(this.listeningWindowKey(channelId, msg.author.id))) {
+        log.debug('Discord listening-window message observed without response', { channelId, authorId: msg.author.id });
       }
     }
 
-    const substrateMsg = this.buildSubstrateMessage(msg, isDM, runtimeBotId);
+    const substrateMsg = this.buildSubstrateMessage(msg, isDM, runtimeBotId, respondToMessage);
     await this.processMessage({
       msg,
       substrateMsg,
       replyToOriginal: false,
+      respondToMessage,
     });
   }
 
@@ -446,14 +468,19 @@ export class DiscordAdapter implements ChannelAdapterPort {
       msg: targetMessage as Message,
       substrateMsg,
       replyToOriginal: true,
+      respondToMessage: true,
     });
   }
 
   private async processMessage(turn: PendingDiscordTurn): Promise<void> {
-    const { msg, substrateMsg, replyToOriginal } = turn;
+    const { msg, substrateMsg, replyToOriginal, respondToMessage } = turn;
     const channelId = substrateMsg.channelId;
 
     if (!this.handler) return;
+    if (!respondToMessage) {
+      await this.processObservedMessage(turn);
+      return;
+    }
 
     // If already processing this channel, steer (interrupt) instead of dropping.
     if (this.processing.has(channelId)) {
@@ -494,7 +521,6 @@ export class DiscordAdapter implements ChannelAdapterPort {
       waitMs: 0,
     });
 
-    // Start typing indicator
     const typingInterval = this.startTyping(msg);
     this.clearStatus(channelId, 'compaction').catch(() => undefined);
     this.clearStatus(channelId, 'retry').catch(() => undefined);
@@ -568,10 +594,40 @@ export class DiscordAdapter implements ChannelAdapterPort {
     }
   }
 
+  private async processObservedMessage(turn: PendingDiscordTurn): Promise<void> {
+    const { substrateMsg } = turn;
+    const channelId = substrateMsg.channelId;
+    if (!this.handler) return;
+
+    try {
+      await this.eventBus.emit('message.received', { message: substrateMsg });
+      await this.handler(substrateMsg);
+      log.debug('Discord message observed without response egress', {
+        channelId,
+        messageId: substrateMsg.id,
+      });
+    } catch (error) {
+      const errorText = toErrorMessage(error);
+      log.error('Error processing observed Discord message', {
+        channelId,
+        messageId: substrateMsg.id,
+        error: errorText,
+      });
+      await this.eventBus.emit('channel.message.error', {
+        channelId,
+        channelType: 'discord',
+        messageId: substrateMsg.id,
+        phase: 'handler',
+        error: errorText,
+      }).catch(() => undefined);
+    }
+  }
+
   private buildSubstrateMessage(
     msg: Message,
     isDirectMessage: boolean,
     runtimeBotId?: string,
+    respondToMessage = true,
   ): SubstrateMessage {
     const attachments: NonNullable<SubstrateMessage['attachments']> = this.extractAttachments(msg);
     if (attachments.length < DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) {
@@ -596,6 +652,10 @@ export class DiscordAdapter implements ChannelAdapterPort {
       content: resolvedContent,
       ...(attachments.length > 0 ? { attachments } : {}),
       timestamp: msg.createdAt,
+      routing: {
+        source: 'discord',
+        responseMode: respondToMessage ? 'respond' : 'observe',
+      },
     };
   }
 

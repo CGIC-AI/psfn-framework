@@ -853,7 +853,7 @@ describe('DiscordAdapter DM routing', () => {
     }));
   });
 
-  it('requires mentions in guild channels and strips bot mention text', async () => {
+  it('observes guild channel messages but only replies to direct mentions', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);
     await adapter.init();
@@ -879,7 +879,17 @@ describe('DiscordAdapter DM routing', () => {
         mentioned: false,
       }),
     );
-    expect(handler).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      channelId,
+      isDirectMessage: false,
+      content: 'hello without mention',
+      routing: expect.objectContaining({
+        source: 'discord',
+        responseMode: 'observe',
+      }),
+    }));
+    expect(interactive.sent).toHaveLength(0);
 
     await (adapter as any).onDiscordMessage(
       makeDiscordIncomingMessage(channelId, interactive.channel, {
@@ -890,11 +900,15 @@ describe('DiscordAdapter DM routing', () => {
       }),
     );
 
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1][0]).toEqual(expect.objectContaining({
       channelId,
       isDirectMessage: false,
       content: 'hello with mention',
+      routing: expect.objectContaining({
+        source: 'discord',
+        responseMode: 'respond',
+      }),
     }));
     expect(interactive.sent).toContain('guild reply');
   });
@@ -932,7 +946,7 @@ describe('DiscordAdapter DM routing', () => {
     expect(interactive.sent).toHaveLength(0);
   });
 
-  it('allows configured companion bot guild messages only when they mention the runtime bot', async () => {
+  it('observes configured companion bot guild messages and replies only to mentions', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(
       makeConfig({ discordTriggerWords: ['artie'] }),
@@ -965,7 +979,18 @@ describe('DiscordAdapter DM routing', () => {
         mentioned: false,
       }),
     );
-    expect(handler).not.toHaveBeenCalled();
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      id: 'guild-companion-trigger-word',
+      authorId: 'companion-bot',
+      authorName: 'Purrsephone',
+      content: 'artie without a mention',
+      routing: expect.objectContaining({
+        source: 'discord',
+        responseMode: 'observe',
+      }),
+    }));
+    expect(interactive.sent).toHaveLength(0);
 
     await (adapter as any).onDiscordMessage(
       makeDiscordIncomingMessage(channelId, interactive.channel, {
@@ -979,18 +1004,22 @@ describe('DiscordAdapter DM routing', () => {
       }),
     );
 
-    expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+    expect(handler).toHaveBeenCalledTimes(2);
+    expect(handler.mock.calls[1][0]).toEqual(expect.objectContaining({
       id: 'guild-companion-mention',
       channelId,
       authorId: 'companion-bot',
       authorName: 'Purrsephone',
       content: 'hello from Purrsephone',
+      routing: expect.objectContaining({
+        source: 'discord',
+        responseMode: 'respond',
+      }),
     }));
     expect(interactive.sent).toContain('reply-guild-companion-mention');
   });
 
-  it('responds to guild messages without mention when character name trigger matches', async () => {
+  it('observes character name trigger matches without replying when unmentioned', async () => {
     const eventBus = new EventBus();
     const characterName = 'Companion';
     const adapter = new DiscordAdapter(makeConfig({ characterName }), eventBus);
@@ -1019,10 +1048,16 @@ describe('DiscordAdapter DM routing', () => {
     );
 
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(interactive.sent).toContain('triggered reply');
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      routing: expect.objectContaining({
+        source: 'discord',
+        responseMode: 'observe',
+      }),
+    }));
+    expect(interactive.sent).toHaveLength(0);
   });
 
-  it('responds to guild messages when configured trigger words match case-insensitively', async () => {
+  it('observes configured trigger word matches without replying when unmentioned', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig({
       discordTriggerWords: ['pixie', 'wake up'],
@@ -1052,7 +1087,13 @@ describe('DiscordAdapter DM routing', () => {
     );
 
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(interactive.sent).toContain('keyword reply');
+    expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+      routing: expect.objectContaining({
+        source: 'discord',
+        responseMode: 'observe',
+      }),
+    }));
+    expect(interactive.sent).toHaveLength(0);
   });
 
   it('falls back to live client user id for mention stripping when config bot id is missing', async () => {
@@ -1091,7 +1132,7 @@ describe('DiscordAdapter DM routing', () => {
     }));
   });
 
-  it('extends listening windows after trigger and honors !i opt-out', async () => {
+  it('observes trigger/listening/opt-out guild text without mention-only egress', async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
@@ -1154,8 +1195,22 @@ describe('DiscordAdapter DM routing', () => {
         }),
       );
 
-      expect(handler).toHaveBeenCalledTimes(2);
-      expect(handler.mock.calls.map((call) => call[0].id)).toEqual(['guild-listen-1', 'guild-listen-2']);
+      expect(handler).toHaveBeenCalledTimes(4);
+      expect(handler.mock.calls.map((call) => call[0].id)).toEqual([
+        'guild-listen-1',
+        'guild-listen-2',
+        'guild-listen-3',
+        'guild-listen-4',
+      ]);
+      for (const call of handler.mock.calls) {
+        expect(call[0]).toEqual(expect.objectContaining({
+          routing: expect.objectContaining({
+            source: 'discord',
+            responseMode: 'observe',
+          }),
+        }));
+      }
+      expect(interactive.sent).toHaveLength(0);
     } finally {
       vi.useRealTimers();
     }
@@ -1247,7 +1302,7 @@ describe('DiscordAdapter DM routing', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it('uses live config updates for trigger words, reaction triggers, and listening window duration', async () => {
+  it('uses live reaction trigger config while guild text remains passive unless mentioned', async () => {
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date('2026-01-02T00:00:00.000Z'));
@@ -1282,7 +1337,15 @@ describe('DiscordAdapter DM routing', () => {
           mentioned: false,
         }),
       );
-      expect(handler).not.toHaveBeenCalled();
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler.mock.calls[0][0]).toEqual(expect.objectContaining({
+        id: 'live-word-1',
+        routing: expect.objectContaining({
+          source: 'discord',
+          responseMode: 'observe',
+        }),
+      }));
+      expect(interactive.sent).toHaveLength(0);
 
       config.discordTriggerWords = ['beta'];
       await (adapter as any).onDiscordMessage(
@@ -1294,7 +1357,7 @@ describe('DiscordAdapter DM routing', () => {
           mentioned: false,
         }),
       );
-      expect(handler).toHaveBeenCalledTimes(1);
+      expect(handler).toHaveBeenCalledTimes(2);
 
       config.discordTriggerListenWindowMs = 10_000;
       await (adapter as any).onDiscordMessage(
@@ -1306,7 +1369,7 @@ describe('DiscordAdapter DM routing', () => {
           mentioned: false,
         }),
       );
-      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler).toHaveBeenCalledTimes(3);
 
       vi.advanceTimersByTime(10_001);
       await (adapter as any).onDiscordMessage(
@@ -1318,7 +1381,7 @@ describe('DiscordAdapter DM routing', () => {
           mentioned: false,
         }),
       );
-      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler).toHaveBeenCalledTimes(4);
 
       config.discordTriggerReactions = ['🔥'];
       const targetMessage = makeReactionTargetMessage(channelId, interactive.channel, {
@@ -1329,11 +1392,11 @@ describe('DiscordAdapter DM routing', () => {
       });
       const oldReaction = makeReactionPayload(targetMessage, { emojiName: '👆' });
       await (adapter as any).onReactionAdd(oldReaction, { id: 'reactor-live', bot: false });
-      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler).toHaveBeenCalledTimes(4);
 
       const newReaction = makeReactionPayload(targetMessage, { emojiName: '🔥' });
       await (adapter as any).onReactionAdd(newReaction, { id: 'reactor-live', bot: false });
-      expect(handler).toHaveBeenCalledTimes(3);
+      expect(handler).toHaveBeenCalledTimes(5);
       expect(targetMessage.reply).toHaveBeenCalledWith('live-live-reaction-target');
     } finally {
       vi.useRealTimers();

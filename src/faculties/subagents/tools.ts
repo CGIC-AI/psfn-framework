@@ -89,6 +89,12 @@ export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
               action,
               surface: 'subagent',
               semantics: 'bounded_worker',
+              subagent_id: task.subagentId,
+              subagentId: task.subagentId,
+              next_action: {
+                action: 'wait',
+                subagent_id: task.subagentId,
+              },
               task,
             }));
           }
@@ -108,7 +114,7 @@ export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
           }
 
           case 'wait': {
-            const result = await port.wait(normalizeRequiredText(params.subagent_id, 'subagent_id'));
+            const result = await port.wait(resolveWaitSubagentId(port, params.subagent_id));
             return textResult(formatPayload({
               action,
               surface: 'subagent',
@@ -185,4 +191,32 @@ function normalizeRequiredText(value: string | undefined, field: string): string
     throw new Error(`${field} is required.`);
   }
   return normalized;
+}
+
+function resolveWaitSubagentId(port: SubagentControlPort, value: string | undefined): string {
+  const normalized = value?.trim();
+  if (normalized) {
+    return normalized;
+  }
+
+  const snapshot = port.getRuntimeSnapshot({ taskLimit: 2 });
+  const candidates = new Set<string>();
+  for (const view of [...snapshot.activeTasks, ...snapshot.recentTasks]) {
+    const subagentId = view.task.subagentId.trim();
+    if (subagentId) {
+      candidates.add(subagentId);
+    }
+  }
+
+  if (candidates.size === 1) {
+    for (const subagentId of candidates) {
+      return subagentId;
+    }
+  }
+
+  throw new Error(
+    candidates.size > 1
+      ? 'subagent_id is required because multiple subagent tasks are visible.'
+      : 'subagent_id is required. Use the subagent_id from the spawn result or run action=status first.',
+  );
 }

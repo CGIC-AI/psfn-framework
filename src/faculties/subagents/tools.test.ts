@@ -155,6 +155,12 @@ describe('createSubagentTool', () => {
       action: 'spawn',
       surface: 'subagent',
       semantics: 'bounded_worker',
+      subagent_id: 'subagent-1',
+      subagentId: 'subagent-1',
+      next_action: {
+        action: 'wait',
+        subagent_id: 'subagent-1',
+      },
       task: {
         subagentId: 'subagent-1',
         lifecycleState: 'queued',
@@ -218,6 +224,29 @@ describe('createSubagentTool', () => {
       action: 'cancel',
       result: {
         lifecycleState: 'cancelled',
+      },
+    });
+  });
+
+  it('infers a wait target when exactly one bounded worker task is visible', async () => {
+    const port = createPort();
+    const detail = port.getRuntimeTaskDetail('subagent-1');
+    expect(detail).not.toBeNull();
+    vi.mocked(port.getRuntimeSnapshot).mockReturnValueOnce({
+      generatedAt: 200,
+      activeCount: 0,
+      activeTasks: [],
+      recentTasks: [detail!.view],
+    });
+    const tool = createSubagentTool(port);
+
+    const waited = await tool.execute('call-wait', { action: 'wait' });
+
+    expect(port.wait).toHaveBeenCalledWith('subagent-1');
+    expect(parseText(waited)).toMatchObject({
+      action: 'wait',
+      result: {
+        lifecycleState: 'completed',
       },
     });
   });

@@ -1070,6 +1070,91 @@ describe('GatewayServer', () => {
       expect(status.stateReason).toBe('healthcheck_stale');
     });
 
+    it('keeps long-running agent-originated RPC frames healthy while they are in flight', async () => {
+      const options = createMinimalOptions();
+      let resolveComplete!: (value: {
+        content: string;
+        model: string;
+        inputTokens: number;
+        outputTokens: number;
+        stopReason: string;
+      }) => void;
+      const completePromise = new Promise<{
+        content: string;
+        model: string;
+        inputTokens: number;
+        outputTokens: number;
+        stopReason: string;
+      }>((resolve) => {
+        resolveComplete = resolve;
+      });
+      options.llmProvider.complete = vi.fn(() => completePromise) as any;
+
+      const server = new GatewayServer(options);
+
+      let onConnectionCb: ((conn: NdjsonConnection) => void) | null = null;
+      mockedCreateSocketServer.mockImplementation((_path, cb) => {
+        onConnectionCb = cb;
+        return { close: vi.fn(), listen: vi.fn() } as any;
+      });
+
+      server.start();
+
+      const mockConn = createMockConnection();
+      onConnectionCb!(mockConn.conn);
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const statuses = (server as any).connectionStatuses as Map<NdjsonConnection, any>;
+      const status = statuses.get(mockConn.conn);
+      expect(status).toBeDefined();
+
+      const fakeNow = Date.now();
+      vi.useFakeTimers({ now: fakeNow });
+      try {
+        mockConn._emit({
+          jsonrpc: '2.0',
+          id: 123,
+          method: 'llm.complete',
+          params: {
+            model: 'mock-model',
+            provider: 'mock-provider',
+            messages: [{ role: 'user', content: 'long call' }],
+            systemPrompt: '',
+            purpose: 'reasoning',
+          },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(options.llmProvider.complete).toHaveBeenCalledTimes(1);
+
+        await vi.advanceTimersByTimeAsync(status.healthcheckStaleAfterMs + 30_000);
+        (server as any).refreshConnectionHealth();
+
+        expect(status.state).toBe('ready');
+        expect(status.health).toBe('healthy');
+        expect(status.stateReason).toBe('rpc_message_received');
+
+        resolveComplete({
+          content: 'done',
+          model: 'mock-model',
+          inputTokens: 1,
+          outputTokens: 1,
+          stopReason: 'end',
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(mockConn.sent).toContainEqual(expect.objectContaining({
+          id: 123,
+          result: expect.objectContaining({
+            content: 'done',
+            model: 'mock-model',
+          }),
+        }));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('fails closed and audits malformed JSON-RPC frames', async () => {
       const auditAppend = vi.fn().mockResolvedValue(123);
       const auditComplete = vi.fn();

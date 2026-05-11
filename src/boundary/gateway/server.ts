@@ -46,6 +46,10 @@ import type { ApiStreamDeltaNotification } from '../../channels/api/types.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
+const CONNECTION_IN_FLIGHT_HEALTH_TOUCH_INTERVAL_MS = Math.min(
+  30_000,
+  Math.max(1_000, Math.floor(DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS / 3)),
+);
 const INVALID_FRAME_AUDIT_METHOD = 'gateway.ipc.frame.invalid';
 const FRAME_PREVIEW_LIMIT = 200;
 export { evaluatePolicy };
@@ -265,6 +269,7 @@ export class GatewayServer {
           );
           return;
         }
+        const releaseInFlightHealthcheck = this.beginInFlightHealthcheck(conn);
         // json-rpc-2.0 receiveAndSend() payload param is typed as `any`; message is parsed JSON
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         try {
@@ -277,6 +282,8 @@ export class GatewayServer {
             `JSON-RPC receive/send failed: ${messageText}`,
             summarizeFramePreview(message),
           );
+        } finally {
+          releaseInFlightHealthcheck();
         }
       });
 
@@ -427,6 +434,18 @@ export class GatewayServer {
     if (status.state === 'degraded' && status.stateReason === 'healthcheck_stale') {
       this.transitionConnectionState(conn, 'ready', 'healthcheck_recovered');
     }
+  }
+
+  private beginInFlightHealthcheck(conn: NdjsonConnection): () => void {
+    const timer = setInterval(() => {
+      this.touchConnectionHealthcheck(conn);
+    }, CONNECTION_IN_FLIGHT_HEALTH_TOUCH_INTERVAL_MS);
+    timer.unref();
+
+    return () => {
+      clearInterval(timer);
+      this.touchConnectionHealthcheck(conn);
+    };
   }
 
   private transitionConnectionState(

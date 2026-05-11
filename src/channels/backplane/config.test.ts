@@ -15,6 +15,7 @@ describe('loadRuntimeChannelsConfig', () => {
     try {
       const config = loadRuntimeChannelsConfig(dataDir, {});
       expect(config.discord.heartbeatChannelId).toBe('');
+      expect(config.discord.allowedBotUserIds).toEqual([]);
       expect(config.telegram.enabled).toBe(false);
       expect(config.telegram.token).toBe('');
       expect(config.telegram.allowedUsers).toEqual([]);
@@ -203,6 +204,44 @@ describe('loadRuntimeChannelsConfig', () => {
       const config = loadRuntimeChannelsConfig(dataDir, {});
 
       expect(config.discord.heartbeatChannelId).toBe('1312460007211536394');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads discord allowlisted bot user ids from file', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          heartbeatChannelId: '1312460007211536394',
+          allowedBotUserIds: ['1050938702622375987', ' 1467253459387678963 '],
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+
+      expect(config.discord).toEqual({
+        heartbeatChannelId: '1312460007211536394',
+        allowedBotUserIds: ['1050938702622375987', '1467253459387678963'],
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects malformed discord allowlisted bot user ids', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          allowedBotUserIds: ['1050938702622375987', 42],
+        },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.discord.allowedBotUserIds must contain only strings',
+      );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

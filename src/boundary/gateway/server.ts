@@ -57,9 +57,11 @@ export type { GatewayNtfyConfig, PolicyConfig, VoiceStreamRequestOptions };
 
 type GatewayConnectionState = 'registering' | 'ready' | 'degraded' | 'offline';
 type GatewayConnectionHealth = 'healthy' | 'stale' | 'failed';
+type GatewayConnectionRole = 'agent' | 'internal_session_integrity';
 type MalformedFrameKind = 'ndjson' | 'jsonrpc';
 
 interface GatewayConnectionStatus {
+  role: GatewayConnectionRole;
   state: GatewayConnectionState;
   stateReason: string;
   health: GatewayConnectionHealth;
@@ -188,7 +190,7 @@ export class GatewayServer {
     }
   }
 
-  private registerMethods(target: JSONRPCServerAndClient): void {
+  private registerMethods(target: JSONRPCServerAndClient, conn: NdjsonConnection): void {
     const runtime: GatewayMethodRuntime = {
       target,
       llmProvider: this.options.llmProvider,
@@ -217,6 +219,7 @@ export class GatewayServer {
     };
 
     registerGatewayMethods(runtime);
+    target.addMethod('gateway.client.identify', (params: unknown) => this.identifyConnection(conn, params));
     target.addMethod('api.stream.delta', (params: unknown) => {
       this.dispatchApiStreamDelta(params as ApiStreamDeltaNotification);
       return null;
@@ -230,6 +233,7 @@ export class GatewayServer {
       log.info('Agent connected');
       this.connections.add(conn);
       this.connectionStatuses.set(conn, {
+        role: 'agent',
         state: 'registering',
         stateReason: 'connection_opened',
         health: 'healthy',
@@ -244,7 +248,7 @@ export class GatewayServer {
         new JSONRPCServer(),
         new JSONRPCClient((request) => { conn.send(request); }),
       );
-      this.registerMethods(serverAndClient);
+      this.registerMethods(serverAndClient, conn);
       this.rpcClients.set(conn, serverAndClient);
       this.transitionConnectionState(conn, 'ready', 'rpc_registered');
 
@@ -401,7 +405,7 @@ export class GatewayServer {
       if (!status) {
         continue;
       }
-      if (status.state === 'ready' && status.health === 'healthy') {
+      if (status.role === 'agent' && status.state === 'ready' && status.health === 'healthy') {
         return client;
       }
     }
@@ -411,6 +415,9 @@ export class GatewayServer {
 
   private refreshConnectionHealth(now = Date.now()): void {
     for (const [conn, status] of this.connectionStatuses.entries()) {
+      if (status.role !== 'agent') {
+        continue;
+      }
       if (status.state !== 'ready' && status.state !== 'registering') {
         continue;
       }
@@ -523,6 +530,9 @@ export class GatewayServer {
     };
 
     for (const status of this.connectionStatuses.values()) {
+      if (status.role !== 'agent') {
+        continue;
+      }
       summary.total += 1;
       if (status.state === 'registering') summary.registering += 1;
       else if (status.state === 'ready') summary.ready += 1;
@@ -535,6 +545,21 @@ export class GatewayServer {
 
   private getRuntimeHealth(): RuntimeHealthResult {
     return this.runtimeHealthTracker.getSnapshot(this.getConnectionSummary());
+  }
+
+  private identifyConnection(conn: NdjsonConnection, params: unknown): { success: true; role: GatewayConnectionRole } {
+    if (!isRecord(params) || !isGatewayConnectionRole(params.role)) {
+      throw new Error('gateway.client.identify requires a valid role');
+    }
+
+    const status = this.connectionStatuses.get(conn);
+    if (!status || status.state === 'offline') {
+      throw new Error('Cannot identify an inactive gateway connection');
+    }
+
+    status.role = params.role;
+    this.transitionConnectionState(conn, 'ready', `client_identified:${params.role}`);
+    return { success: true, role: params.role };
   }
 
   async stop(): Promise<void> {
@@ -667,6 +692,10 @@ function isValidJsonRpcError(value: unknown): boolean {
     && Number.isFinite(value.code)
     && typeof value.message === 'string'
     && value.message.trim().length > 0;
+}
+
+function isGatewayConnectionRole(value: unknown): value is GatewayConnectionRole {
+  return value === 'agent' || value === 'internal_session_integrity';
 }
 
 function summarizeFramePreview(message: unknown): string {

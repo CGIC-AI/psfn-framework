@@ -137,6 +137,7 @@ function writeResponse(stateBuffer, payloadBuffer, payload) {
 
 let activeSocket = null;
 let activeSocketPath = null;
+let activeSocketIdentified = false;
 let connectPromise = null;
 let buffer = '';
 const pendingById = new Map();
@@ -156,6 +157,7 @@ function resetSocket(error) {
   }
   activeSocket = null;
   activeSocketPath = null;
+  activeSocketIdentified = false;
   connectPromise = null;
   buffer = '';
   rejectPending(error);
@@ -248,8 +250,8 @@ async function ensureSocket(socketPath) {
   return await connectPromise;
 }
 
-function requestRpc(socketPath, method, params, id, timeoutMs) {
-  return ensureSocket(socketPath).then((socket) => new Promise((resolve, reject) => {
+function sendSocketRpc(socket, method, params, id, timeoutMs) {
+  return new Promise((resolve, reject) => {
     const request = JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\\n';
 
     const timer = setTimeout(() => {
@@ -266,7 +268,27 @@ function requestRpc(socketPath, method, params, id, timeoutMs) {
       pendingById.delete(id);
       reject(error instanceof Error ? error : new Error(errorMessage(error)));
     }
-  }));
+  });
+}
+
+async function identifySessionIntegritySocket(socket, requestId, timeoutMs) {
+  if (activeSocketIdentified) {
+    return;
+  }
+  await sendSocketRpc(
+    socket,
+    'gateway.client.identify',
+    { role: 'internal_session_integrity' },
+    'session-integrity-identify-' + requestId,
+    timeoutMs,
+  );
+  activeSocketIdentified = true;
+}
+
+async function requestRpc(socketPath, method, params, id, timeoutMs) {
+  const socket = await ensureSocket(socketPath);
+  await identifySessionIntegritySocket(socket, id, timeoutMs);
+  return await sendSocketRpc(socket, method, params, id, timeoutMs);
 }
 
 parentPort.on('message', async (job) => {

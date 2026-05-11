@@ -1070,6 +1070,64 @@ describe('GatewayServer', () => {
       expect(status.stateReason).toBe('healthcheck_stale');
     });
 
+    it('excludes identified session-integrity clients from agent routing and stale health', async () => {
+      const server = new GatewayServer(createMinimalOptions());
+
+      let onConnectionCb: ((conn: NdjsonConnection) => void) | null = null;
+      mockedCreateSocketServer.mockImplementation((_path, cb) => {
+        onConnectionCb = cb;
+        return { close: vi.fn(), listen: vi.fn() } as any;
+      });
+
+      server.start();
+
+      const internalConn = createMockConnection();
+      onConnectionCb!(internalConn.conn);
+      const identifyResponse = await invokeRpc(internalConn, 300, 'gateway.client.identify', {
+        role: 'internal_session_integrity',
+      });
+      expect(identifyResponse.result).toEqual({
+        success: true,
+        role: 'internal_session_integrity',
+      });
+
+      const agentConn = createMockConnection();
+      onConnectionCb!(agentConn.conn);
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      const statuses = (server as any).connectionStatuses as Map<NdjsonConnection, any>;
+      const internalStatus = statuses.get(internalConn.conn);
+      expect(internalStatus.role).toBe('internal_session_integrity');
+      internalStatus.lastHealthcheckAt = Date.now() - internalStatus.healthcheckStaleAfterMs - 5;
+
+      (server as any).refreshConnectionHealth();
+      expect(internalStatus.state).toBe('ready');
+      expect(internalStatus.health).toBe('healthy');
+
+      const requestPromise = server.requestAgent('voice.handleMessage', {
+        message: makeVoiceMessage('hello'),
+      });
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      expect(internalConn.sent).not.toContainEqual(expect.objectContaining({
+        method: 'voice.handleMessage',
+      }));
+      const agentRequest = agentConn.sent.find((message: any) => message.method === 'voice.handleMessage') as any;
+      expect(agentRequest).toBeDefined();
+      agentConn._emit({
+        jsonrpc: '2.0',
+        id: agentRequest.id,
+        result: { content: 'ok', channelId: 'ch1', model: 'test', durationMs: 10 },
+      });
+
+      await expect(requestPromise).resolves.toEqual({
+        content: 'ok',
+        channelId: 'ch1',
+        model: 'test',
+        durationMs: 10,
+      });
+    });
+
     it('keeps long-running agent-originated RPC frames healthy while they are in flight', async () => {
       const options = createMinimalOptions();
       let resolveComplete!: (value: {

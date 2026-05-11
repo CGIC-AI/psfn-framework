@@ -471,7 +471,7 @@ describe('wireHeartbeatRuntime', () => {
       const valuesCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
         (call) => call[0]?.channelId === 'internal:reflection:weekly-review',
       );
-      expect(valuesCall?.[0]?.content).toContain('<internal_state_input>');
+      expect(valuesCall?.[0]?.content).toContain('[Internal State Input]');
       expect(valuesCall?.[0]?.content).toContain('serialized_internal_state:');
     } finally {
       nowSpy.mockRestore();
@@ -601,25 +601,28 @@ describe('wireHeartbeatRuntime', () => {
           typeof call[0]?.messages?.[0]?.content === 'string'
           && call[0].messages[0].content.includes('durable values and north-star signals')
         ));
-      expect(valuesDeliberationCalls.map((call) => call[1]).slice(0, 3)).toEqual(['reasoning', 'background', 'reasoning']);
+      expect(valuesDeliberationCalls.map((call) => call[1])).toEqual(['reasoning']);
       const firstDeliberationCall = valuesDeliberationCalls[0]?.[0] as
-        | { messages?: Array<{ content?: string }> }
-        | undefined;
-      const firstDeliberationOptions = valuesDeliberationCalls[0]?.[2] as
-        | { correlation?: { callType?: string; originType?: string; originStage?: string; channelId?: string } }
+        | {
+          messages?: Array<{ content?: string }>;
+          correlation?: { callType?: string; originType?: string; originStage?: string; channelId?: string };
+        }
         | undefined;
       expect(firstDeliberationCall?.messages?.[0]?.content).not.toContain(
         '<appearance_context>',
       );
-      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('<internal_state_input>');
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Internal State Input]');
       expect(firstDeliberationCall?.messages?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
-      expect(firstDeliberationOptions?.correlation).toMatchObject({
+      expect(firstDeliberationCall?.correlation).toMatchObject({
         callType: 'scheduled',
         originType: 'scheduled',
-        originStage: 'heartbeat.deliberation.voice.reasoning',
+        originStage: 'heartbeat.deliberation.evidence',
         channelId: 'internal:reflection:weekly-review',
       });
-      expect(memoryWriter.write).not.toHaveBeenCalled();
+      expect(memoryWriter.write).toHaveBeenCalledWith(expect.objectContaining({
+        sourceRef: expect.stringContaining('source:heartbeat|template:weekly-review|mode:deliberation'),
+        tags: expect.arrayContaining(['heartbeat', 'reflection', 'deliberation', 'weekly-review']),
+      }));
 
       const raw = readFileSync(resolveValuesJournalPath(tempDir), 'utf-8').trim();
       const entry = JSON.parse(raw) as {
@@ -649,12 +652,12 @@ describe('wireHeartbeatRuntime', () => {
           };
         };
       };
-      expect(entry.reflection).toContain('synthesized values reflection');
+      expect(entry.reflection).toContain('Reasoning voice: continuity and trust matter.');
       expect(entry.telemetry?.narrativeContext?.internalStateSnapshotRef).toBe(narrative.snapshotRef);
       expect(entry.telemetry?.narrativeContext?.internalState).toEqual(narrative.internalState);
       expect(entry.telemetry?.narrativeContext?.metacognitiveFlags).toEqual(narrative.metacognitiveFlags);
       expect(entry.telemetry?.deliberation?.rounds).toBe(1);
-      expect(entry.telemetry?.deliberation?.totalTokens).toBe(190);
+      expect(entry.telemetry?.deliberation?.totalTokens).toBe(70);
       expect(entry.telemetry?.deliberation?.estimatedCostUsd).toBeGreaterThan(0);
       expect(entry.telemetry?.deliberation?.episode).toMatchObject({
         budget: {
@@ -710,7 +713,7 @@ describe('wireHeartbeatRuntime', () => {
       expect(metacognitionEntry.initiatorSurface).toBe('scheduler:reflection_template');
       expect(metacognitionEntry.reason).toBe('Scheduled reflection run');
       expect(metacognitionEntry.reflectionJournalEntryId).toBeDefined();
-      expect(metacognitionEntry.prompt).toContain('<internal_state_input>');
+      expect(metacognitionEntry.prompt).toContain('[Internal State Input]');
     } finally {
       nowSpy.mockRestore();
     }
@@ -760,10 +763,10 @@ describe('wireHeartbeatRuntime', () => {
       (call) => call[0]?.channelId === 'internal:reflection:daily-review',
     );
     expect(experientialCall).toBeDefined();
-    expect(experientialCall?.[0]?.content).toContain('<internal_state_input>');
+    expect(experientialCall?.[0]?.content).toContain('[Internal State Input]');
     expect(experientialCall?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
-    expect(experientialCall?.[0]?.content).toContain('<recent_metacognitive_flags>');
-    expect(experientialCall?.[0]?.content).toContain('<open_threads>');
+    expect(experientialCall?.[0]?.content).toContain('[Recent Metacognitive Flags]');
+    expect(experientialCall?.[0]?.content).toContain('[Active Concerns]');
   });
 
   it('defers manual template runs when the agent is busy and executes them after idle', async () => {
@@ -813,7 +816,7 @@ describe('wireHeartbeatRuntime', () => {
       const runText = runResult.content.map((part: { text: string }) => part.text).join('');
       expect(runText).toContain('Queued manual reflection run "Daily Reflection" (daily-review) for post-turn execution.');
 
-      const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:'));
+      const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection-run:deferred:'));
       expect(deferredTask).toBeDefined();
 
       nowSpy.mockReturnValue((deferredTask?.runAt ?? 0) + 1);
@@ -923,7 +926,7 @@ describe('wireHeartbeatRuntime', () => {
     expect((runResult.details as { deferredAction?: { kind?: string } }).deferredAction?.kind)
       .toBe('heartbeat.run_template');
 
-    const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:'));
+    const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection-run:deferred:'));
     expect(deferredTask).toBeUndefined();
 
     const deferredHandler = heartbeatRegisterCall?.[1] as (
@@ -1567,7 +1570,7 @@ describe('wireHeartbeatRuntime', () => {
       nowSpy.mockReturnValue(1_700_000_000_000 + (dailyTask?.intervalMs ?? 0) + 1);
       await scheduler.tick();
 
-      const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection:deferred:daily-review'));
+      const deferredTask = scheduler.listTasks().find(task => task.id.startsWith('reflection-run:deferred:scheduled:daily-review'));
       expect(deferredTask).toBeDefined();
 
       nowSpy.mockReturnValue((deferredTask?.runAt ?? 0) + 1);

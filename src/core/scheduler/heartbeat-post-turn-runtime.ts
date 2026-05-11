@@ -259,11 +259,15 @@ export function wireHeartbeatPostTurnRuntime(
           context.canonicalContactKey
           && runtimeOptions.contactStore?.getEmotionalSnapshot
         )
-          ? runtimeOptions.contactStore.getEmotionalSnapshot(context.canonicalContactKey) ?? null
+          ? (await runtimeOptions.contactStore.getEmotionalSnapshot(context.canonicalContactKey)) ?? null
           : null;
-        const isPrimaryContact = context.canonicalContactKey
-          ? runtimeOptions.contactStore?.getById?.(context.canonicalContactKey)?.trustLevel === 'primary'
-          : false;
+        const contactForMotivation = (
+          context.canonicalContactKey
+          && runtimeOptions.contactStore?.getById
+        )
+          ? await runtimeOptions.contactStore.getById(context.canonicalContactKey)
+          : undefined;
+        const isPrimaryContact = contactForMotivation?.trustLevel === 'primary';
         const motivationAssessment = motivationBridge?.assess({
           sessionId: resolvedSessionId,
           currentEmotion,

@@ -18,7 +18,7 @@ import type { ReflectionMetacognitionJournalStore } from '../../persistence/jour
 import type { SessionManager } from '../session/manager.js';
 import type { CoreMemoryStore } from '../../faculties/core-memory/store.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
-import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
+import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type {
   ActiveConcernSnapshot,
   IntentionActionDecision,
@@ -39,6 +39,7 @@ export interface HeartbeatAgent {
       internalState?: InternalState;
       internalStateSnapshotRef?: string;
       metacognitiveFlags?: unknown;
+      retrievalProvenanceRefs?: string[];
     };
   }>;
   followUp?(message: SubstrateMessage): void;
@@ -64,10 +65,7 @@ export interface HeartbeatRuntimeOptions {
   reflectionStore?: ReflectionMetacognitionJournalStore;
   sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>;
   emotionState?: { getState(): EmotionStateSnapshot };
-  contactStore?: {
-    getEmotionalSnapshot?(id: string): EmotionalSnapshot | undefined;
-    getById?(id: string): { trustLevel?: string } | undefined;
-  };
+  contactStore?: Pick<ContactStorePort, 'getById' | 'getEmotionalSnapshot' | 'getEmotionalTimeSeries'>;
   getActiveConcerns?: (input: {
     channelId: string;
     canonicalContactKey?: string;
@@ -101,7 +99,7 @@ export interface HeartbeatRuntimeOptions {
   onIntentionFollowUpActivated?: (input: {
     pendingFollowUpId: string;
     activationReason?: string;
-  }) => Promise<boolean | undefined> | boolean | undefined;
+  }) => Promise<boolean | void | undefined> | boolean | void | undefined;
   onIntentionReminderDecision?: (input: {
     decision: IntentionActionDecision;
     channelId: string;

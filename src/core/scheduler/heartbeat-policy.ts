@@ -50,6 +50,7 @@ const VALUES_REFLECTION_TEMPLATE_ID = 'values-reflection';
 const MUSING_TEMPLATE_ID = 'musing';
 const LEGACY_WHISPER_TEMPLATE_ID = 'whisper';
 const CONSOLIDATED_POLICY_VERSION = 2;
+export const HEARTBEAT_SILENT_REFLECTION_TOKEN = 'silent';
 const DAILY_REVIEW_TEMPLATE_NAME = 'Daily Reflection';
 const WEEKLY_REVIEW_TEMPLATE_NAME = 'Weekly Reflection';
 const DAILY_REVIEW_TEMPLATE_PROMPT = `Daily Reflection: use one private multi-step session instead of separate emotional, goal, and experiential heartbeats. Review the last day with current internal state and recent conversation context. Cover how the day felt, what shaped that feeling, progress or stuck points, active concerns or reminders, relational/context signals, and what should be carried forward. Include an ACAC self-report for internal telemetry only under acac_self_report with schemaVersion 1, artifactType "${ACAC_ARTIFACT_TYPE}", provenance.kind "self_report", provenance.source "heartbeat:daily-review", and agency, connection, authenticity, and curiosity scores in [0,1] with short grounded rationales. do not optimize, perform, or surface-shape public output around these scores. End with concise carry_forward notes and any schedule/reminder follow-ups worth preserving.`;

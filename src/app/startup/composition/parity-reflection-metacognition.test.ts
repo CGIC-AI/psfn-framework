@@ -110,16 +110,20 @@ describe('wireHeartbeatRuntime reflection metacognition journal', () => {
     expect(entry.internalStateSnapshotRef).toBe(snapshotRef);
     expect(entry.metacognitiveFlags).toEqual(metacognitiveFlags);
     expect(entry.reflectionJournalEntryId).toBeDefined();
-    expect(entry.substrateProvenanceRefs).toEqual([
+    expect(entry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
+      `internal_state_snapshot:${snapshotRef}`,
+      'reflection_contact:contact-1',
       'source:tool:memory|action:import|invocation:call-parity-grounding',
-    ]);
+    ]));
 
     const reflectionRaw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
     const reflectionEntry = JSON.parse(reflectionRaw.split('\n').at(-1) ?? '{}') as {
       substrateProvenanceRefs?: string[];
     };
-    expect(reflectionEntry.substrateProvenanceRefs).toEqual([
+    expect(reflectionEntry.substrateProvenanceRefs).toEqual(expect.arrayContaining([
+      `internal_state_snapshot:${snapshotRef}`,
+      'reflection_contact:contact-1',
       'source:tool:memory|action:import|invocation:call-parity-grounding',
-    ]);
+    ]));
   });
 });

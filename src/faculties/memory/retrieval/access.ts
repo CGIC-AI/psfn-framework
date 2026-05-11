@@ -11,7 +11,9 @@ import {
 import type { PurrMemory } from '../types.js';
 import {
   createEmptyMemoryWithheldSummary,
+  incrementMemoryWithheldRelevanceBand,
   incrementMemoryWithheldReason,
+  resolveMemoryWithheldRelevanceBand,
   type MemoryWithheldReasonTag,
   type MemoryWithheldSummary,
 } from '../withheld-summary.js';
@@ -89,7 +91,7 @@ export function evaluateRetrievalAccessDecision(
   };
 }
 
-export function summarizeWithheldMemories<T extends Pick<PurrMemory, 'id' | 'sensitivity' | 'contactId' | 'consentFlags' | 'tags'>>(
+export function summarizeWithheldMemories<T extends Pick<PurrMemory, 'id' | 'sensitivity' | 'contactId' | 'consentFlags' | 'tags'> & { similarity?: number }>(
   memories: readonly T[],
   options: {
     trustLevel: TrustLevel;
@@ -110,6 +112,10 @@ export function summarizeWithheldMemories<T extends Pick<PurrMemory, 'id' | 'sen
     const decision = evaluateRetrievalAccessDecision(memory, options);
     if (!decision.allowed && decision.withheldReason) {
       incrementMemoryWithheldReason(summary, decision.withheldReason);
+      incrementMemoryWithheldRelevanceBand(
+        summary,
+        resolveMemoryWithheldRelevanceBand(memory.similarity),
+      );
       withheldIds.add(memory.id);
     }
   }

@@ -4,7 +4,9 @@ import { isBoundaryMemory } from '../boundary-log.js';
 import type { ContactProfileArtifact } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import {
+  formatMemoryWithheldRelevanceBandLabel,
   formatMemoryWithheldReasonLabel,
+  listMemoryWithheldRelevanceBandEntries,
   listMemoryWithheldReasonEntries,
   type MemoryWithheldSummary,
 } from '../withheld-summary.js';
@@ -126,14 +128,18 @@ function renderWithheldSummary(summary: MemoryWithheldSummary): string {
   const detailLine = listMemoryWithheldReasonEntries(summary.reasonCounts)
     .map(({ reason, count }) => `${count} ${formatMemoryWithheldReasonLabel(reason)}`)
     .join(', ');
+  const relevanceLine = listMemoryWithheldRelevanceBandEntries(summary.relevanceBands ?? {})
+    .map(({ band, count }) => `${count} ${formatMemoryWithheldRelevanceBandLabel(band)}`)
+    .join(', ');
   const plural = summary.totalCount === 1 ? 'memory was' : 'memories were';
   return wrapPromptSectionXml({
     id: 'memory_context_note',
     content: [
       'Memory context note:',
       `- ${summary.totalCount} candidate ${plural} kept out of this turn's memory context.`,
-      ...(detailLine ? [`- Reasons: ${detailLine}.`] : []),
-      '- Do not infer or disclose missing details. Ask for consent or clarification if needed.',
+      ...(detailLine ? [`- Broad trust/privacy reasons: ${detailLine}.`] : []),
+      ...(relevanceLine ? [`- Coarse relevance bands: ${relevanceLine}.`] : []),
+      '- Safe next actions: do not infer or disclose missing details; ask for consent, clarification, or a more private/higher-trust channel if needed.',
     ].join('\n'),
   });
 }

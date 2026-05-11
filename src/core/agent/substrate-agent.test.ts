@@ -5198,6 +5198,10 @@ describe('SubstrateAgent.handleMessage', () => {
             'contact_scope.high_intimacy': 1,
             'trust.ceiling_exceeded': 1,
           },
+          withheldRelevanceBands: {
+            high: 1,
+            medium: 1,
+          },
           scoreRejectedCount: 1,
           budgetCappedCount: 1,
           selectedTypes: { semantic: 1 },
@@ -5231,6 +5235,10 @@ describe('SubstrateAgent.handleMessage', () => {
       withheldReasonCounts: {
         'contact_scope.high_intimacy': 1,
         'trust.ceiling_exceeded': 1,
+      },
+      withheldRelevanceBands: {
+        high: 1,
+        medium: 1,
       },
       scoreRejectedCount: 1,
       budgetCappedCount: 1,

@@ -466,6 +466,10 @@ describe('SessionManager', () => {
           'trust.ceiling_exceeded': 1,
           'boundary.withhold': 1,
         },
+        withheldRelevanceBands: {
+          high: 2,
+          medium: 1,
+        },
         scoreRejectedCount: 1,
         budgetCappedCount: 1,
         selectedTypes: { semantic: 1, episodic: 1 },
@@ -492,6 +496,10 @@ describe('SessionManager', () => {
           'contact_scope.high_intimacy': 1,
           'trust.ceiling_exceeded': 1,
           'boundary.withhold': 1,
+        },
+        withheldRelevanceBands: {
+          high: 2,
+          medium: 1,
         },
         scoreRejectedCount: 1,
         budgetCappedCount: 1,

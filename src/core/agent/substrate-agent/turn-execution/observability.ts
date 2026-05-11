@@ -140,6 +140,9 @@ export function createTurnExecutionObservability(input: {
       ...(telemetry.withheldReasonCounts
         ? { withheldReasonCounts: { ...telemetry.withheldReasonCounts } }
         : {}),
+      ...(telemetry.withheldRelevanceBands
+        ? { withheldRelevanceBands: { ...telemetry.withheldRelevanceBands } }
+        : {}),
       ...(telemetry.scoreRejectedCount !== undefined ? { scoreRejectedCount: telemetry.scoreRejectedCount } : {}),
       ...(telemetry.budgetCappedCount !== undefined ? { budgetCappedCount: telemetry.budgetCappedCount } : {}),
       ...(telemetry.selectedTypes ? { selectedTypes: { ...telemetry.selectedTypes } } : {}),

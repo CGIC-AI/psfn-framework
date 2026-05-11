@@ -735,6 +735,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
         ...(params.memoryManifestSeed?.withheldReasonCounts
           ? { withheldReasonCounts: { ...params.memoryManifestSeed.withheldReasonCounts } }
           : {}),
+        ...(params.memoryManifestSeed?.withheldRelevanceBands
+          ? { withheldRelevanceBands: { ...params.memoryManifestSeed.withheldRelevanceBands } }
+          : {}),
         scoreRejectedCount: params.memoryManifestSeed?.scoreRejectedCount ?? 0,
         budgetCappedCount: params.memoryManifestSeed?.budgetCappedCount ?? 0,
       },

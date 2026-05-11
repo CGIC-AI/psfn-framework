@@ -58,6 +58,7 @@ import { isInternalMemoryArtifact } from './internal-artifacts.js';
 import {
   cloneMemoryWithheldSummary,
   serializeMemoryWithheldSummary,
+  type MemoryWithheldSummary,
 } from './withheld-summary.js';
 import {
   memoryMatchesScopeQuery,
@@ -117,6 +118,25 @@ import type {
   ScoredMemory,
 } from './retrieval/types.js';
 const log = createComponentLogger('Retrieval');
+
+function hasCountEntries(record: Record<string, number | undefined> | undefined): boolean {
+  return !!record && Object.values(record).some(count => count > 0);
+}
+
+function applyWithheldSummaryTelemetry(
+  telemetry: RetrievalTelemetry,
+  withheldSummary: MemoryWithheldSummary | undefined,
+): void {
+  telemetry.withheldCount = withheldSummary?.totalCount ?? 0;
+  const reasonCounts = withheldSummary?.reasonCounts;
+  if (hasCountEntries(reasonCounts)) {
+    telemetry.withheldReasonCounts = { ...reasonCounts };
+  }
+  const relevanceBands = withheldSummary?.relevanceBands;
+  if (hasCountEntries(relevanceBands)) {
+    telemetry.withheldRelevanceBands = { ...relevanceBands };
+  }
+}
 
 type RetrievalIntegrityErrorStage =
   | 'retrieve'
@@ -478,10 +498,7 @@ export class MemoryRetriever implements MemoryProvider {
         ).summary;
       }
       telemetry.reason = 'empty_input';
-      telemetry.withheldCount = withheldSummary?.totalCount ?? 0;
-      if (withheldSummary?.reasonCounts && Object.keys(withheldSummary.reasonCounts).length > 0) {
-        telemetry.withheldReasonCounts = { ...withheldSummary.reasonCounts };
-      }
+      applyWithheldSummaryTelemetry(telemetry, withheldSummary);
       await this.emitRetrievalTelemetry(telemetry);
       return renderPromptBlock(profile, [], {
         emotionalSnapshot,
@@ -542,10 +559,7 @@ export class MemoryRetriever implements MemoryProvider {
             ).summary;
           }
           telemetry.reason = 'no_candidates';
-          telemetry.withheldCount = withheldSummary?.totalCount ?? 0;
-          if (withheldSummary?.reasonCounts && Object.keys(withheldSummary.reasonCounts).length > 0) {
-            telemetry.withheldReasonCounts = { ...withheldSummary.reasonCounts };
-          }
+          applyWithheldSummaryTelemetry(telemetry, withheldSummary);
           if (episodicChains.length > 0) {
             telemetry.reason = 'ok';
             telemetry.returnedCount = episodicEpisodeCount;
@@ -592,10 +606,7 @@ export class MemoryRetriever implements MemoryProvider {
           },
         ).summary;
       }
-      telemetry.withheldCount = withheldSummary?.totalCount ?? 0;
-      if (withheldSummary?.reasonCounts && Object.keys(withheldSummary.reasonCounts).length > 0) {
-        telemetry.withheldReasonCounts = { ...withheldSummary.reasonCounts };
-      }
+      applyWithheldSummaryTelemetry(telemetry, withheldSummary);
 
       if (memories.length > 0) {
         telemetry.topSimilarity = memories[0].similarity;
@@ -850,6 +861,7 @@ export class MemoryRetriever implements MemoryProvider {
         rejectedByPolicyReasonTags: diagnostics.rejectedByPolicyReasonTag,
         withheldCount: telemetry.withheldCount,
         withheldReasonCounts: telemetry.withheldReasonCounts,
+        withheldRelevanceBands: telemetry.withheldRelevanceBands,
         rejectedByScore: diagnostics.rejectedByScore,
         scoreGuaranteedCount,
         evidenceSupportAverage: telemetry.evidenceSupportAverage,

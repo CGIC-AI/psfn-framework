@@ -2,7 +2,10 @@ import type {
   AdaptiveContextBudgetProfile,
   ContextBudgetTurnCategory,
 } from '../../shared/context-budget.js';
-import type { MemoryWithheldReasonCounts } from '../../faculties/memory/withheld-summary.js';
+import type {
+  MemoryWithheldRelevanceBandCounts,
+  MemoryWithheldReasonCounts,
+} from '../../faculties/memory/withheld-summary.js';
 
 export type ContextManifestCompositionalMode =
   | 'disabled_policy'
@@ -28,6 +31,7 @@ export interface ContextManifestMemorySeed {
   policyRejectedReasonTags?: Record<string, number>;
   withheldCount?: number;
   withheldReasonCounts?: MemoryWithheldReasonCounts;
+  withheldRelevanceBands?: MemoryWithheldRelevanceBandCounts;
   scoreRejectedCount?: number;
   budgetCappedCount?: number;
   selectedTypes?: Record<string, number>;
@@ -80,6 +84,7 @@ export interface ContextManifestMemorySummary {
     policyRejectedReasonTags?: Record<string, number>;
     withheldCount?: number;
     withheldReasonCounts?: MemoryWithheldReasonCounts;
+    withheldRelevanceBands?: MemoryWithheldRelevanceBandCounts;
     scoreRejectedCount: number;
     budgetCappedCount: number;
   };

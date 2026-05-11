@@ -5,10 +5,13 @@ export type MemoryWithheldReasonTag =
   | Exclude<PolicyReasonTag, 'operator.approval_override' | 'default.within_bounds'>;
 
 export type MemoryWithheldReasonCounts = Partial<Record<MemoryWithheldReasonTag, number>>;
+export type MemoryWithheldRelevanceBand = 'high' | 'medium' | 'low';
+export type MemoryWithheldRelevanceBandCounts = Partial<Record<MemoryWithheldRelevanceBand, number>>;
 
 export interface MemoryWithheldSummary {
   totalCount: number;
   reasonCounts: MemoryWithheldReasonCounts;
+  relevanceBands?: MemoryWithheldRelevanceBandCounts;
 }
 
 const MEMORY_WITHHELD_REASON_ORDER: readonly MemoryWithheldReasonTag[] = [
@@ -29,10 +32,23 @@ const MEMORY_WITHHELD_REASON_LABELS: Record<MemoryWithheldReasonTag, string> = {
   'visibility.channel_restricted': 'channel visibility restriction',
 };
 
+const MEMORY_WITHHELD_RELEVANCE_BAND_ORDER: readonly MemoryWithheldRelevanceBand[] = [
+  'high',
+  'medium',
+  'low',
+];
+
+const MEMORY_WITHHELD_RELEVANCE_BAND_LABELS: Record<MemoryWithheldRelevanceBand, string> = {
+  high: 'high-match',
+  medium: 'medium-match',
+  low: 'low-match',
+};
+
 export function createEmptyMemoryWithheldSummary(): MemoryWithheldSummary {
   return {
     totalCount: 0,
     reasonCounts: {},
+    relevanceBands: {},
   };
 }
 
@@ -44,6 +60,24 @@ export function incrementMemoryWithheldReason(
   summary.reasonCounts[reason] = (summary.reasonCounts[reason] ?? 0) + 1;
 }
 
+export function incrementMemoryWithheldRelevanceBand(
+  summary: MemoryWithheldSummary,
+  relevanceBand: MemoryWithheldRelevanceBand | undefined,
+): void {
+  if (!relevanceBand) return;
+  summary.relevanceBands ??= {};
+  summary.relevanceBands[relevanceBand] = (summary.relevanceBands[relevanceBand] ?? 0) + 1;
+}
+
+export function resolveMemoryWithheldRelevanceBand(
+  similarity: number | undefined,
+): MemoryWithheldRelevanceBand | undefined {
+  if (!Number.isFinite(similarity)) return undefined;
+  if (similarity >= 0.8) return 'high';
+  if (similarity >= 0.5) return 'medium';
+  return 'low';
+}
+
 export function cloneMemoryWithheldSummary(
   summary?: MemoryWithheldSummary,
 ): MemoryWithheldSummary | undefined {
@@ -51,6 +85,7 @@ export function cloneMemoryWithheldSummary(
   return {
     totalCount: summary.totalCount,
     reasonCounts: { ...summary.reasonCounts },
+    ...(summary.relevanceBands ? { relevanceBands: { ...summary.relevanceBands } } : {}),
   };
 }
 
@@ -62,11 +97,17 @@ export function serializeMemoryWithheldSummary(summary?: MemoryWithheldSummary):
       return count && count > 0 ? `${reason}:${count}` : null;
     })
     .filter((value): value is string => value !== null);
-  return `${summary.totalCount}|${orderedPairs.join(',')}`;
+  const relevancePairs = listMemoryWithheldRelevanceBandEntries(summary.relevanceBands ?? {})
+    .map(({ band, count }) => `${band}:${count}`);
+  return `${summary.totalCount}|${orderedPairs.join(',')}|${relevancePairs.join(',')}`;
 }
 
 export function formatMemoryWithheldReasonLabel(reason: MemoryWithheldReasonTag): string {
   return MEMORY_WITHHELD_REASON_LABELS[reason];
+}
+
+export function formatMemoryWithheldRelevanceBandLabel(band: MemoryWithheldRelevanceBand): string {
+  return MEMORY_WITHHELD_RELEVANCE_BAND_LABELS[band];
 }
 
 export function listMemoryWithheldReasonEntries(
@@ -74,5 +115,13 @@ export function listMemoryWithheldReasonEntries(
 ): Array<{ reason: MemoryWithheldReasonTag; count: number }> {
   return MEMORY_WITHHELD_REASON_ORDER
     .map((reason) => ({ reason, count: reasonCounts[reason] ?? 0 }))
+    .filter(({ count }) => count > 0);
+}
+
+export function listMemoryWithheldRelevanceBandEntries(
+  relevanceBands: MemoryWithheldRelevanceBandCounts,
+): Array<{ band: MemoryWithheldRelevanceBand; count: number }> {
+  return MEMORY_WITHHELD_RELEVANCE_BAND_ORDER
+    .map((band) => ({ band, count: relevanceBands[band] ?? 0 }))
     .filter(({ count }) => count > 0);
 }

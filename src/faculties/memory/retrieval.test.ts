@@ -232,6 +232,9 @@ describe('MemoryRetriever trust-gated filtering', () => {
       reasonCounts: {
         'trust.ceiling_exceeded': 1,
       },
+      relevanceBands: {
+        high: 1,
+      },
     });
     expect(snapshot.withheldCandidateIds).toContain(memories[1].id);
 
@@ -241,7 +244,10 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Personal detail');
     expect(result).toContain('Memory context note:');
     expect(result).toContain('1 candidate memory was kept out');
+    expect(result).toContain('Broad trust/privacy reasons: 1 trust ceiling.');
+    expect(result).toContain('Coarse relevance bands: 1 high-match.');
     expect(result).toContain('trust ceiling');
+    expect(result).toContain('Safe next actions: do not infer or disclose missing details');
   });
 
   it('public trust + broadcast channel returns only public memories', async () => {
@@ -1105,6 +1111,46 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).toContain('trust ceiling');
     expect(result).not.toContain('Secret stuff');
     expect(result).not.toContain('Private detail');
+  });
+
+  it('distinguishes no matching memories from matching memories withheld by trust gates', async () => {
+    const emptyRetriever = new MemoryRetriever(makeMockStore([]), makeMockEmbedding(), { retrievalLimit: 20 });
+    const gatedMemory = makeMemory({
+      text: 'Protected matching detail that must not leak.',
+      sensitivity: 'confidential',
+      similarity: 0.96,
+    });
+    const gatedRetriever = new MemoryRetriever(
+      makeMockStore([gatedMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+    );
+
+    const emptyResult = await emptyRetriever.retrieve('protected detail', 'twitter:feed', 'public');
+    const gatedResult = await gatedRetriever.retrieve('protected detail', 'twitter:feed', 'public');
+
+    expect(emptyResult).toBe('');
+    expect(gatedResult).toContain('Memory context note:');
+    expect(gatedResult).toContain('1 candidate memory was kept out');
+    expect(gatedResult).toContain('Coarse relevance bands: 1 high-match.');
+    expect(gatedResult).not.toContain(gatedMemory.text);
+  });
+
+  it('keeps the withheld-memory summary bounded when many relevant memories are gated', async () => {
+    const memories = Array.from({ length: 80 }, (_, idx) => makeMemory({
+      text: `Protected gated detail ${idx}`,
+      sensitivity: 'confidential',
+      similarity: idx < 20 ? 0.9 : idx < 50 ? 0.62 : 0.22,
+    }));
+    const retriever = new MemoryRetriever(makeMockStore(memories), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('protected gated detail', 'twitter:feed', 'public');
+
+    expect(result).toContain('80 candidate memories were kept out');
+    expect(result).toContain('Coarse relevance bands: 20 high-match, 30 medium-match, 30 low-match.');
+    expect(result).not.toContain('Protected gated detail 0');
+    expect(result).not.toContain('Protected gated detail 79');
+    expect(result.length).toBeLessThan(700);
   });
 
   it('does not update access stats for filtered-out memories', async () => {
@@ -2471,6 +2517,9 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     expect(telemetry.withheldCount).toBe(1);
     expect(telemetry.withheldReasonCounts).toMatchObject({
       'trust.ceiling_exceeded': 1,
+    });
+    expect(telemetry.withheldRelevanceBands).toMatchObject({
+      high: 1,
     });
     expect(telemetry.returnedCount).toBe(1);
   });

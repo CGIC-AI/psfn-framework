@@ -8,6 +8,7 @@ import type {
   PurrMemory,
 } from '../types.js';
 import type {
+  MemoryWithheldRelevanceBandCounts,
   MemoryWithheldReasonCounts,
   MemoryWithheldReasonTag,
 } from '../withheld-summary.js';
@@ -79,6 +80,7 @@ export interface RetrievalTelemetry {
   policyRejectedReasonTags?: Record<string, number>;
   withheldCount?: number;
   withheldReasonCounts?: MemoryWithheldReasonCounts;
+  withheldRelevanceBands?: MemoryWithheldRelevanceBandCounts;
   scoreRejectedCount?: number;
   scoreGuaranteedCount?: number;
   evidenceSupportAverage?: number;

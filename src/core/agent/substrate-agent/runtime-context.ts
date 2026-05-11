@@ -222,6 +222,21 @@ function compactPromptText(value: string, maxChars = 220): string {
   return `${normalized.slice(0, maxChars - 3)}...`;
 }
 
+function formatScratchpadOmissionMetadata(entries: Array<{ updatedAt: number }>): string {
+  const updatedTimes = entries
+    .map(entry => entry.updatedAt)
+    .filter((value): value is number => Number.isFinite(value));
+  if (updatedTimes.length === 0) return '';
+
+  const newest = Math.max(...updatedTimes);
+  const oldest = Math.min(...updatedTimes);
+  return [
+    ' Older/stale metadata:',
+    `newest omitted updated ${new Date(newest).toISOString()};`,
+    `oldest omitted updated ${new Date(oldest).toISOString()}.`,
+  ].join(' ');
+}
+
 function formatPromptRuntimeDateTime(now: Date): string {
   const timeZone = resolveActiveTimezone();
   return new Intl.DateTimeFormat('en-US', {
@@ -930,7 +945,7 @@ export function buildScratchpadContextBlock(input: {
     ];
 
     let included = 0;
-    let usedChars = 0;
+    let usedChars = lines.join('\n').length;
     for (const entry of entries) {
       if (included >= SCRATCHPAD_PROMPT_MAX_ENTRIES) break;
 
@@ -942,7 +957,7 @@ export function buildScratchpadContextBlock(input: {
         : normalized;
 
       const line = `- ${entry.id}: ${clipped}`;
-      const projectedChars = usedChars + line.length;
+      const projectedChars = usedChars + 1 + line.length;
       if (projectedChars > SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS) break;
 
       lines.push(line);
@@ -953,7 +968,10 @@ export function buildScratchpadContextBlock(input: {
     if (included === 0) return '';
     const omitted = Math.max(0, entries.length - included);
     if (omitted > 0) {
-      lines.push(`- (${omitted} additional notes omitted for context budget)`);
+      lines.push(
+        `- (${omitted} additional notes omitted for context budget)`
+        + formatScratchpadOmissionMetadata(entries.slice(included)),
+      );
     }
 
     return lines.join('\n');

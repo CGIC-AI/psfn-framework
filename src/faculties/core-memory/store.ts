@@ -32,6 +32,17 @@ export interface CoreMemoryStoreOptions {
 }
 
 const CORE_MEMORY_VERSION = 1 as const;
+const GOALS_TIMESTAMP_SOURCE = String.raw`(?:\d{4}-\d{2}-\d{2}[T\s]\d{2}[:-]\d{2}[:-]\d{2}(?:[.:\s-]\d{3})?(?:Z|[+-]\d{2}:?\d{2})?|\d{8}T\d{6}(?:\.\d+)?Z?)`;
+const GOALS_TIMESTAMP_PATTERN = new RegExp(String.raw`\b${GOALS_TIMESTAMP_SOURCE}\b`, 'i');
+const GOALS_ORIENT_LOG_LINE_PATTERN = new RegExp(
+  String.raw`^\s*(?:[-*]\s*)?(?:matrix(?:[\s/_-]+orient)?|orient(?:ation)?(?:\s+(?:log|shakedown))?)\s*[:#-]?\s*(?:at\s*)?${GOALS_TIMESTAMP_SOURCE}\b`,
+  'i',
+);
+const GOALS_BARE_TIMESTAMP_PATTERN = new RegExp(
+  String.raw`^\s*(?:[-*]\s*)?(?:timestamp\s*)?${GOALS_TIMESTAMP_SOURCE}\s*$`,
+  'i',
+);
+const GOALS_SEMANTIC_WORD_PATTERN = /[a-z][a-z-]{2,}/i;
 
 const DEFAULT_BLOCKS: Record<CoreMemoryLabel, Omit<CoreMemoryBlock, 'content'>> = {
   persona: {
@@ -101,11 +112,75 @@ function normalizeTruncateTail(input: string, maxChars: number): string {
   return input.slice(input.length - maxChars).trimStart();
 }
 
-function normalizeReplaceContent(content: string, maxChars: number): string {
-  return normalizeTruncateHead(content.trim(), maxChars);
+function stripOrientLogTimestampPrefix(line: string): string {
+  const timestamp = line.match(GOALS_TIMESTAMP_PATTERN);
+  if (!timestamp || timestamp.index === undefined) return line.trim();
+  return line
+    .slice(timestamp.index + timestamp[0].length)
+    .replace(/^\s*[-:;,.#]*\s*/, '')
+    .trim();
+}
+
+function normalizeDurableGoalLine(line: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+
+  if (GOALS_BARE_TIMESTAMP_PATTERN.test(trimmed)) {
+    return null;
+  }
+
+  if (!GOALS_ORIENT_LOG_LINE_PATTERN.test(trimmed)) {
+    return trimmed;
+  }
+
+  const semanticTail = stripOrientLogTimestampPrefix(trimmed);
+  if (!GOALS_SEMANTIC_WORD_PATTERN.test(semanticTail)) {
+    return null;
+  }
+  return semanticTail;
+}
+
+function normalizeDurableGoalsContent(content: string): string {
+  const trimmed = content.trim();
+  if (
+    !GOALS_TIMESTAMP_PATTERN.test(trimmed)
+    || !trimmed.split(/\r?\n/u).some(line => GOALS_ORIENT_LOG_LINE_PATTERN.test(line))
+  ) {
+    return trimmed;
+  }
+
+  const acceptedLines: string[] = [];
+  const seen = new Set<string>();
+  for (const line of trimmed.split(/\r?\n/u)) {
+    const normalized = normalizeDurableGoalLine(line);
+    if (!normalized) continue;
+    const dedupeKey = normalized.toLowerCase();
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    acceptedLines.push(normalized);
+  }
+
+  return acceptedLines.join('\n');
+}
+
+function normalizeBlockContent(
+  label: CoreMemoryLabel,
+  content: string,
+  maxChars: number,
+  truncate: (input: string, maxChars: number) => string,
+): string {
+  const normalized = label === 'goals'
+    ? normalizeDurableGoalsContent(content)
+    : content.trim();
+  return truncate(normalized, maxChars);
+}
+
+function normalizePersistedBlockContent(label: CoreMemoryLabel, content: string): string {
+  return label === 'goals' ? normalizeDurableGoalsContent(content) : content;
 }
 
 function normalizeAppendContent(
+  label: CoreMemoryLabel,
   existing: string,
   appendText: string,
   maxChars: number,
@@ -120,7 +195,7 @@ function normalizeAppendContent(
   const merged = normalizedExisting.length > 0
     ? `${normalizedExisting}${normalizedSeparator}${normalizedAppend}`
     : normalizedAppend;
-  return normalizeTruncateTail(merged, maxChars);
+  return normalizeBlockContent(label, merged, maxChars, normalizeTruncateTail);
 }
 
 function parseBlock(raw: unknown, expectedLabel: CoreMemoryLabel): CoreMemoryBlock {
@@ -138,7 +213,9 @@ function parseBlock(raw: unknown, expectedLabel: CoreMemoryLabel): CoreMemoryBlo
   if (typeof maxChars !== 'number' || !Number.isInteger(maxChars) || maxChars < 1) {
     throw new Error(`core memory block "${expectedLabel}" maxChars must be a positive integer`);
   }
-  if (content.length > maxChars) {
+  const normalizedContent = normalizePersistedBlockContent(expectedLabel, content);
+
+  if (normalizedContent.length > maxChars) {
     throw new Error(`core memory block "${expectedLabel}" content exceeds maxChars`);
   }
   if (trustLevel !== undefined && typeof trustLevel !== 'string') {
@@ -151,7 +228,7 @@ function parseBlock(raw: unknown, expectedLabel: CoreMemoryLabel): CoreMemoryBlo
 
   return {
     label: expectedLabel,
-    content,
+    content: normalizedContent,
     maxChars,
     ...(normalizedTrustLevel ? { trustLevel: normalizedTrustLevel } : {}),
   };
@@ -220,6 +297,7 @@ export class CoreMemoryStore {
   ): CoreMemoryBlock {
     const current = this.snapshot.blocks[label];
     const nextContent = normalizeAppendContent(
+      label,
       current.content,
       appendText,
       current.maxChars,
@@ -230,7 +308,12 @@ export class CoreMemoryStore {
 
   replace(label: CoreMemoryLabel, content: string): CoreMemoryBlock {
     const current = this.snapshot.blocks[label];
-    const nextContent = normalizeReplaceContent(content, current.maxChars);
+    const nextContent = normalizeBlockContent(
+      label,
+      content,
+      current.maxChars,
+      normalizeTruncateHead,
+    );
     return this.writeBlock(label, nextContent);
   }
 
@@ -238,7 +321,12 @@ export class CoreMemoryStore {
     const nextBlocks = {} as Record<CoreMemoryLabel, CoreMemoryBlock>;
     for (const label of CORE_MEMORY_LABELS) {
       const current = this.snapshot.blocks[label];
-      const replacement = normalizeReplaceContent(input[label], current.maxChars);
+      const replacement = normalizeBlockContent(
+        label,
+        input[label],
+        current.maxChars,
+        normalizeTruncateHead,
+      );
       nextBlocks[label] = {
         ...current,
         content: replacement,

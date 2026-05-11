@@ -9,6 +9,7 @@ import {
   buildDynamicPromptTemplateVariables,
   buildPromptTemplateVariables,
   buildRuntimeContext,
+  buildScratchpadContextBlock,
   getPersonaAdaptation,
   resolveAuthorContext,
 } from './runtime-context.js';
@@ -75,6 +76,10 @@ const METACOGNITIVE_FLAG_NAMES = [
 ] as const;
 
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
+const TEST_RUNTIME_CONTEXT_LOGGER = {
+  warn: () => undefined,
+  debug: () => undefined,
+};
 
 const TEST_CHARGE_POLICY = {
   schemaVersion: 1,
@@ -898,6 +903,84 @@ describe('runtime subject identity', () => {
 
     expect(runtimeContext).toContain('<companion_runtime_context>');
     expect(runtimeContext).toContain('Companion runtime context override.');
+  });
+
+  it('caps scratchpad prompt context and keeps stale omitted notes as metadata only', () => {
+    const recentUsefulNote = 'Recent useful note: preserve PSFN-h00b acceptance context.';
+    const staleFullText = 'STALE_FULL_TEXT_SHOULD_NOT_APPEAR '.repeat(80);
+    const entries = [
+      ...Array.from({ length: 8 }, (_, index) => ({
+        id: `recent-${index}`,
+        content: index === 0
+          ? recentUsefulNote
+          : `Recent useful note ${index}: keep prompt-visible scratchpad context concise.`,
+        createdAt: Date.parse('2026-05-11T04:00:00.000Z') + index,
+        updatedAt: Date.parse('2026-05-11T04:10:00.000Z') + index,
+      })),
+      ...Array.from({ length: 20 }, (_, index) => ({
+        id: `stale-${index}`,
+        content: `${staleFullText}${index}`,
+        createdAt: Date.parse('2026-05-10T04:00:00.000Z') + index,
+        updatedAt: Date.parse('2026-05-10T04:10:00.000Z') + index,
+      })),
+    ];
+
+    const block = buildScratchpadContextBlock({
+      scratchpadProvider: {
+        listScratchpadEntries: (limit?: number) => {
+          expect(limit).toBe(64);
+          return entries;
+        },
+      },
+      logger: TEST_RUNTIME_CONTEXT_LOGGER,
+    });
+
+    expect(block).toContain(recentUsefulNote);
+    expect(block).toContain('additional notes omitted for context budget');
+    expect(block).toContain('Older/stale metadata');
+    expect(block).toContain('newest omitted updated');
+    expect(block).not.toContain('STALE_FULL_TEXT_SHOULD_NOT_APPEAR');
+    expect(block.length).toBeLessThan(2_000);
+  });
+
+  it('keeps recent useful scratchpad notes visible while total chars stop stale bloat', () => {
+    const stalePayload = 'outdated bulk scratchpad source text '.repeat(120);
+    const entries = [
+      {
+        id: 'recent-actionable',
+        content: 'Recent useful note: run targeted runtime-context and core-memory tests.',
+        createdAt: Date.parse('2026-05-11T04:00:00.000Z'),
+        updatedAt: Date.parse('2026-05-11T04:15:00.000Z'),
+      },
+      ...Array.from({ length: 7 }, (_, index) => ({
+        id: `recent-budget-${index}`,
+        content: `Recent budget filler ${index}: ${'keep only fresh scratchpad context '.repeat(12)}`,
+        createdAt: Date.parse('2026-05-11T04:01:00.000Z') + index,
+        updatedAt: Date.parse('2026-05-11T04:14:00.000Z') + index,
+      })),
+      ...Array.from({ length: 12 }, (_, index) => ({
+        id: `old-bulk-${index}`,
+        content: stalePayload,
+        createdAt: Date.parse('2026-05-09T04:00:00.000Z') + index,
+        updatedAt: Date.parse('2026-05-09T04:10:00.000Z') + index,
+      })),
+    ];
+
+    const block = buildScratchpadContextBlock({
+      scratchpadProvider: {
+        listScratchpadEntries: () => entries,
+      },
+      logger: TEST_RUNTIME_CONTEXT_LOGGER,
+    });
+    const visibleEntries = block
+      .split('\n')
+      .filter(line => line.startsWith('- ') && !line.includes('omitted for context budget'));
+
+    expect(block).toContain('Recent useful note: run targeted runtime-context and core-memory tests.');
+    expect(visibleEntries.length).toBeLessThanOrEqual(8);
+    expect(block).toContain('additional notes omitted for context budget');
+    expect(block).not.toContain(stalePayload);
+    expect(block.length).toBeLessThan(2_000);
   });
 
   it('exposes granular runtime prompt variables for editable prompt-owned phrasing', () => {

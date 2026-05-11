@@ -66,6 +66,40 @@ describe('CoreMemoryStore', () => {
     expect(goals.content.endsWith('BBBBBBBB')).toBe(true);
   });
 
+  it('rejects repeated raw matrix-orient timestamp logs from durable goals', () => {
+    const path = makeStorePath('psfn-core-memory-goals-log-reject-');
+    const store = new CoreMemoryStore(path);
+    store.replace('goals', 'Maintain concise semantic sprint closeout goals.');
+    store.append('goals', [
+      'matrix orient 2026-05-11T03-54-10-841Z',
+      'matrix orient 2026-05-11T03-58-02-112Z',
+      'orient 2026-05-11T04:01:02.003Z',
+      'Maintain concise semantic sprint closeout goals.',
+    ].join('\n'));
+
+    const goals = store.getBlock('goals').content;
+    expect(goals).toBe('Maintain concise semantic sprint closeout goals.');
+    expect(goals).not.toMatch(/matrix orient/i);
+    expect(goals).not.toMatch(/2026-05-11T03-54-10-841Z/i);
+    expect(goals.length).toBeLessThan(120);
+  });
+
+  it('summarizes timestamp-prefixed orient goal lines to semantic tails', () => {
+    const path = makeStorePath('psfn-core-memory-goals-log-summarize-');
+    const store = new CoreMemoryStore(path);
+    store.replace('goals', [
+      'matrix orient 2026-05-11T03-54-10-841Z: Finish memory closeout regressions.',
+      'orient 2026-05-11T04:01:02.003Z - Keep scratchpad prompt context bounded.',
+      'Keep runtime context honest.',
+    ].join('\n'));
+
+    expect(store.getBlock('goals').content).toBe([
+      'Finish memory closeout regressions.',
+      'Keep scratchpad prompt context bounded.',
+      'Keep runtime context honest.',
+    ].join('\n'));
+  });
+
   it('replace truncates oversized content to block maxChars', () => {
     const path = makeStorePath('psfn-core-memory-replace-cap-');
     const store = new CoreMemoryStore(path);
@@ -97,6 +131,32 @@ describe('CoreMemoryStore', () => {
     expect(persisted.blocks.persona.content).toContain('Analytical');
     expect(persisted.blocks.human.content).toContain('Primary user');
     expect(persisted.blocks.goals.content).toContain('Phase V');
+  });
+
+  it('normalizes persisted raw orient-log goals before prompt context', () => {
+    const path = makeStorePath('psfn-core-memory-load-goals-log-normalize-');
+    writeFileSync(path, JSON.stringify({
+      version: 1,
+      updatedAt: '2026-05-11T04:00:00.000Z',
+      blocks: {
+        persona: { label: 'persona', content: 'Practical.', maxChars: 2400 },
+        human: { label: 'human', content: 'Prefers concise work.', maxChars: 2400, trustLevel: 'trusted' },
+        goals: {
+          label: 'goals',
+          content: [
+            'matrix orient 2026-05-11T03-54-10-841Z',
+            'orient 2026-05-11T04:01:02.003Z: Preserve semantic goals.',
+          ].join('\n'),
+          maxChars: 1600,
+        },
+      },
+    }), 'utf-8');
+
+    const store = new CoreMemoryStore(path);
+    const context = store.formatForContext();
+    expect(context).toContain('Preserve semantic goals.');
+    expect(context).not.toContain('matrix orient 2026-05-11T03-54-10-841Z');
+    expect(context).not.toContain('2026-05-11T04:01:02.003Z');
   });
 
   it('throws on malformed persisted snapshot', () => {

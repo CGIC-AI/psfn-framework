@@ -5,6 +5,10 @@ import type {
   ConfirmationResolveResult,
 } from '$lib/types';
 
+export type AdminConfirmationResolveResult = Omit<ConfirmationResolveResult, 'id'> & {
+  ok: boolean;
+};
+
 /**
  * Fetch pending confirmations from the admin API.
  * Endpoint: GET /api/admin/confirmations
@@ -23,8 +27,8 @@ export function resolveConfirmation(
   id: string,
   decision: ConfirmationDecision,
   modifiedParams?: Record<string, unknown>,
-): Promise<ConfirmationResolveResult> {
-  return apiPost<ConfirmationResolveResult>('/api/admin/confirmations/resolve', {
+): Promise<AdminConfirmationResolveResult> {
+  return apiPost<AdminConfirmationResolveResult>('/api/admin/confirmations/resolve', {
     id,
     decision,
     modifiedParams,

@@ -114,7 +114,9 @@ const LEGACY_RUNTIME_LAYER_IDENTIFIERS = [
   'runtime.extended_tools',
 ] as const;
 
-const LEGACY_RUNTIME_LAYER_IDENTIFIER_SET = new Set<string>(LEGACY_RUNTIME_LAYER_IDENTIFIERS);
+type LegacyRuntimeLayerIdentifier = typeof LEGACY_RUNTIME_LAYER_IDENTIFIERS[number];
+
+const LEGACY_RUNTIME_LAYER_IDENTIFIER_SET = new Set<LegacyRuntimeLayerIdentifier>(LEGACY_RUNTIME_LAYER_IDENTIFIERS);
 
 const RUNTIME_TOOLING_LEGACY_IDENTIFIERS = [
   'runtime.tooling',
@@ -512,8 +514,9 @@ function findExistingRuntimeLayer(
   ));
 }
 
-function isLegacyRuntimeLayerIdentifier(identifier: string | undefined): identifier is string {
-  return typeof identifier === 'string' && LEGACY_RUNTIME_LAYER_IDENTIFIER_SET.has(identifier);
+function isLegacyRuntimeLayerIdentifier(identifier: string | undefined): identifier is LegacyRuntimeLayerIdentifier {
+  return typeof identifier === 'string'
+    && LEGACY_RUNTIME_LAYER_IDENTIFIER_SET.has(identifier as LegacyRuntimeLayerIdentifier);
 }
 
 function isCurrentToolingUmbrellaLayer(layer: Pick<PromptLayer, 'identifier' | 'content'>): boolean {
@@ -714,7 +717,7 @@ function resolveRuntimeSignalCoverageIssue(
   signal: RequiredRuntimePromptSignalDefinitionInternal,
 ): RuntimePromptLayerCoverageIssue['reason'] | null {
   const candidates = runtimeLayers.filter(layer => (
-    signal.ownerLayerIdentifiers.includes(layer.identifier)
+    (layer.identifier !== undefined && signal.ownerLayerIdentifiers.includes(layer.identifier))
     || layerReferencesRequiredRuntimeSignal(layer.content, signal)
   ));
   if (candidates.length === 0) {

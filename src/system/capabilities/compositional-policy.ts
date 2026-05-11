@@ -8,7 +8,7 @@ export { createDefaultCompositionalPolicyConfig } from '../config/runtime-config
 
 const CHANNEL_TYPE_SET = new Set<ChannelType>(CHANNEL_TYPES);
 const COMPOSITIONAL_PURPOSE_SET = new Set<CompositionalPurpose>(COMPOSITIONAL_PURPOSES);
-const NON_COMPOSITIONAL_CHANNEL_TYPES = new Set<ChannelType>(['internal', 'subagent', 'shard']);
+const NON_COMPOSITIONAL_CHANNEL_TYPES = new Set<string>(['internal', 'subagent', 'shard']);
 
 function uniqueValues<T>(values: Iterable<T>): T[] {
   return [...new Set(values)];

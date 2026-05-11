@@ -274,6 +274,12 @@ export function resolveConfiguredLiteLLMApiKeyReference(
   return config.litellmApiKeyRef ?? envCredential('LITELLM_API_KEY');
 }
 
+export function resolveConfiguredLiteLLMApiKeyEnv(
+  config: Pick<SubstrateConfig, 'litellmApiKeyRef'>,
+): string {
+  return resolveConfiguredLiteLLMApiKeyReference(config).envName;
+}
+
 export function resolveConfiguredLiteLLMApiKey(
   config: Pick<SubstrateConfig, 'credentialVault' | 'litellmApiKeyRef'>,
   env: NodeJS.ProcessEnv = process.env,

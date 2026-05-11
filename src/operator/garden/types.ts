@@ -74,10 +74,20 @@ export interface AdminEvent {
   payload: Record<string, unknown>;
 }
 
-export type AdminAuditActionType = 'tool_invocation' | 'identity_edit' | 'external_action' | 'memory_mutation' | 'settings_change';
-export type AdminAuditDecision = 'allowed' | 'denied';
+export type AdminAuditActionType =
+  | 'tool_invocation'
+  | 'tool_activation'
+  | 'identity_edit'
+  | 'external_action'
+  | 'memory_mutation'
+  | 'settings_change'
+  | 'confirmation'
+  | 'charge_decision'
+  | 'gateway_policy';
+export type AdminAuditDecision = 'allowed' | 'denied' | 'needs_approval';
 export type AdminAuditTimeRange = '15m' | '1h' | '24h' | '7d' | '30d' | 'all';
 export type AdminAuditActor = 'operator' | 'companion';
+export type AdminAuditHistorySource = 'garden' | 'gateway' | 'charge';
 
 export interface AdminAuditTimelineEntry {
   id: string;
@@ -93,6 +103,38 @@ export interface AdminAuditTimelineFilters {
   actionType: AdminAuditActionType | 'all';
   decision: AdminAuditDecision | 'all';
   timeRange: AdminAuditTimeRange;
+}
+
+export interface AdminAuditHistoryEntry extends AdminAuditTimelineEntry {
+  source: AdminAuditHistorySource;
+  sourceRecordId?: string;
+  raw?: Record<string, unknown>;
+}
+
+export interface AdminAuditHistoryFilters extends AdminAuditTimelineFilters {
+  source: AdminAuditHistorySource | 'all';
+  query?: string;
+  limit: number;
+  offset: number;
+}
+
+export interface AdminAuditHistoryPagination {
+  limit: number;
+  offset: number;
+  total: number;
+  hasPrevious: boolean;
+  hasNext: boolean;
+}
+
+export interface AdminAuditHistoryData {
+  entries: AdminAuditHistoryEntry[];
+  filters: AdminAuditHistoryFilters;
+  pagination: AdminAuditHistoryPagination;
+  sources: {
+    garden: { available: boolean; count: number };
+    gateway: { available: boolean; count: number; message?: string };
+    charge: { available: boolean; count: number; message?: string };
+  };
 }
 
 export type AdminChatDebugCategory = 'thinking' | 'text' | 'tools' | 'memory' | 'errors';

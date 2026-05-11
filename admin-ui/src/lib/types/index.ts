@@ -45,6 +45,7 @@ export type {
   CanonicalProviderType,
   ProviderRegistryEntry,
 } from '../../../../src/shared/contracts/runtime.js';
+export type { ProvidersRuntimeConfig } from '../../../../src/system/config/providers-config.js';
 export type {
   ConfirmationDecision,
   ConfirmationQueueEntry,
@@ -256,14 +257,17 @@ export interface AdminMemoryScopeMutationResult {
 export type ChannelInfo = CanonicalAdminSessionListData['channels'][number];
 
 export interface SessionEntry {
+  id: number;
+  channelId?: string;
   role: string;
   content: string;
   authorName?: string;
   authorId?: string;
-  timestamp?: string;
+  timestamp?: string | number;
   toolCalls?: unknown[];
   originChannelId?: string;
   channelVisibility?: string;
+  metadata?: string;
 }
 
 export type CompactionAuditView = CanonicalAdminSessionMessagesData['compactionAuditViews'][number];
@@ -280,7 +284,7 @@ export interface AdminObservedMemory {
   importance: number;
   confidence: number;
   emotionalValence: number;
-  formationVAD?: Record<string, number>;
+  formationVAD?: unknown;
   salience: number;
   sourceRef: string;
   extractedAt: number;
@@ -291,7 +295,7 @@ export interface AdminObservedMemory {
   provenanceRefs?: string[];
   retentionClass?: string;
   sensitivity: string;
-  consentFlags?: Record<string, boolean>;
+  consentFlags?: unknown;
   contactId?: string;
   deletedAt?: number;
   deletedBy?: string;
@@ -466,8 +470,8 @@ export interface AdminTurnSessionContextSnapshotData {
 
 export interface AdminTurnMemorySnapshotData {
   channelId: string;
-  profile?: Record<string, unknown>;
-  emotionalSnapshot?: Record<string, number>;
+  profile?: unknown;
+  emotionalSnapshot?: unknown;
   contactEmotionalMemories: AdminObservedMemory[];
   semanticCandidates: AdminObservedScoredMemory[];
   lexicalCandidates: AdminObservedScoredMemory[];
@@ -510,7 +514,7 @@ export interface AdminSessionMessageOntologyView {
   transportRole: SessionEntry['role'];
   promptRole: 'user' | 'assistant' | 'toolResult' | 'custom';
   semanticType: 'outwardSpeech' | 'toolResult' | 'systemNote' | 'mirror';
-  messageClass: 'outwardSpeech' | 'systemNote' | 'internalWhisper' | 'compaction' | 'continuity' | 'mirror' | null;
+  messageClass: 'outwardSpeech' | 'systemNote' | 'internalWhisper' | 'musing' | 'compaction' | 'continuity' | 'mirror' | null;
   promptVisibility: 'prompt_visible' | 'operator_only';
   displayLabel: string;
 }
@@ -909,22 +913,62 @@ export interface TelemetryEvent {
   data: unknown;
 }
 
-// Audit Trail (derived from telemetry events on the client)
-export type AuditActionType = 'tool_invocation' | 'identity_edit' | 'external_action' | 'memory_mutation';
-export type AuditDecision = 'allowed' | 'denied';
+// Audit Trail (persisted Garden/runtime history)
+export type AuditActionType =
+  | 'tool_invocation'
+  | 'tool_activation'
+  | 'identity_edit'
+  | 'external_action'
+  | 'memory_mutation'
+  | 'settings_change'
+  | 'confirmation'
+  | 'charge_decision'
+  | 'gateway_policy';
+export type AuditDecision = 'allowed' | 'denied' | 'needs_approval';
 export type AuditTimeRange = '15m' | '1h' | '24h' | '7d' | '30d' | 'all';
+export type AuditHistorySource = 'garden' | 'gateway' | 'charge';
 
 export interface AuditEntry {
   id: string;
   timestamp: number;
+  source: AuditHistorySource;
+  sourceRecordId?: string;
   actionType: AuditActionType;
   decision: AuditDecision;
   narrative: string;
   details?: string;
+  actor?: 'operator' | 'companion';
+  raw?: Record<string, unknown>;
 }
 
 export interface AuditFilters {
   actionType: AuditActionType | 'all';
   decision: AuditDecision | 'all';
   timeRange: AuditTimeRange;
+  source?: AuditHistorySource | 'all';
+  query?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface AuditHistoryData {
+  entries: AuditEntry[];
+  filters: Required<Pick<AuditFilters, 'actionType' | 'decision' | 'timeRange'>> & {
+    source: AuditHistorySource | 'all';
+    query?: string;
+    limit: number;
+    offset: number;
+  };
+  pagination: {
+    limit: number;
+    offset: number;
+    total: number;
+    hasPrevious: boolean;
+    hasNext: boolean;
+  };
+  sources: Record<AuditHistorySource, {
+    available: boolean;
+    count: number;
+    message?: string;
+  }>;
 }

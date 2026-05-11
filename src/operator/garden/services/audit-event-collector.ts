@@ -116,6 +116,81 @@ export function registerAuditTimelineSources(options: {
     }
   });
 
+  eventBus.on('agent.tools.adaptive.decision', (event) => {
+    const denied = event.decision === 'failed' || event.decision === 'skipped';
+    appendAuditTimelineEntry(
+      'tool_activation',
+      denied ? 'denied' : 'allowed',
+      denied
+        ? `Adaptive tool "${event.toolName}" was not activated.`
+        : `Adaptive tool "${event.toolName}" was ${event.decision}.`,
+      [
+        `source=${event.source}`,
+        event.reason ? `reason=${event.reason}` : null,
+        event.missingTokens?.length ? `missingTokens=${event.missingTokens.join(',')}` : null,
+        event.channelId ? `channelId=${event.channelId}` : null,
+      ],
+      'companion',
+    );
+  });
+
+  eventBus.on('agent.tools.autoload.skipped', (event) => {
+    appendAuditTimelineEntry(
+      'tool_activation',
+      'denied',
+      `Autoload skipped tool "${event.toolName}".`,
+      [
+        `reason=${event.reason}`,
+        event.missingTokens?.length ? `missingTokens=${event.missingTokens.join(',')}` : null,
+        event.tier ? `tier=${event.tier}` : null,
+        `channelId=${event.channelId}`,
+      ],
+      'companion',
+    );
+  });
+
+  eventBus.on('capability.eligibility', (event) => {
+    if (
+      event.operationKind !== 'tool.execute'
+      && event.operationKind !== 'plugin.activate'
+      && event.operationKind !== 'plugin.action'
+    ) {
+      return;
+    }
+    appendAuditTimelineEntry(
+      'tool_activation',
+      event.allowed ? 'allowed' : 'denied',
+      event.allowed
+        ? `Capability gate allowed ${event.operationKind}.`
+        : `Capability gate denied ${event.operationKind}.`,
+      [
+        `operation=${event.operationRef}`,
+        `reason=${event.reasonCode}`,
+        `tier=${event.tier}`,
+        event.missingTokens.length > 0 ? `missingTokens=${event.missingTokens.join(',')}` : null,
+      ],
+      'companion',
+    );
+  });
+
+  eventBus.on('model.budget.blocked', (event) => {
+    appendAuditTimelineEntry(
+      'charge_decision',
+      'denied',
+      `Model budget blocked ${event.provider}:${event.model}.`,
+      [
+        `reason=${event.reason}`,
+        `purpose=${event.purpose}`,
+        `estimatedRequestCostUsd=${event.estimatedRequestCostUsd}`,
+        `dailySpentUsd=${event.budget.dailySpentUsd}`,
+        `dailyLimitUsd=${event.budget.dailyLimitUsd}`,
+        `monthlySpentUsd=${event.budget.monthlySpentUsd}`,
+        `monthlyLimitUsd=${event.budget.monthlyLimitUsd}`,
+      ],
+      'companion',
+    );
+  });
+
   eventBus.on('memory.extraction.end', (event) => {
     const writeCount = event.writeCount ?? 0;
     const deduplicatedCount = event.deduplicatedCount ?? 0;

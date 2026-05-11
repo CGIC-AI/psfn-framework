@@ -18,6 +18,24 @@ const DEFAULT_ROTATION_CONFIG: AuditRotationConfig = {
 };
 
 const SIZE_PRUNE_BATCH = 100;
+const MAX_HISTORY_LIMIT = 2_000;
+
+export interface GatewayAuditHistoryQuery {
+  limit?: number;
+  offset?: number;
+  method?: string;
+  decision?: AuditEntry['decision'];
+  sinceMs?: number;
+  untilMs?: number;
+  query?: string;
+}
+
+export interface GatewayAuditHistoryPage {
+  entries: AuditEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+}
 
 export class AuditStore implements GatewayAuditStorePort {
   private readonly db: Database.Database;
@@ -123,7 +141,7 @@ export class AuditStore implements GatewayAuditStorePort {
     };
   }
 
-  private static readonly SELECT_COLS = `
+  static readonly SELECT_COLS = `
     id, timestamp, method, decision,
     params_json AS paramsJson,
     duration_ms AS durationMs,
@@ -206,6 +224,74 @@ export function createSQLiteGatewayAuditStore(
   return new AuditStore(db, rotationConfig);
 }
 
+export function readSQLiteGatewayAuditHistory(
+  dbPath: string,
+  query: GatewayAuditHistoryQuery = {},
+): GatewayAuditHistoryPage {
+  const limit = normalizeHistoryLimit(query.limit);
+  const offset = normalizeHistoryOffset(query.offset);
+  const clauses: string[] = [];
+  const values: Array<string | number> = [];
+
+  const method = query.method?.trim();
+  if (method) {
+    clauses.push('method = ?');
+    values.push(method);
+  }
+
+  if (query.decision) {
+    clauses.push('decision = ?');
+    values.push(query.decision);
+  }
+
+  if (query.sinceMs !== undefined) {
+    clauses.push('timestamp >= ?');
+    values.push(normalizeHistoryTimestamp('sinceMs', query.sinceMs));
+  }
+
+  if (query.untilMs !== undefined) {
+    clauses.push('timestamp <= ?');
+    values.push(normalizeHistoryTimestamp('untilMs', query.untilMs));
+  }
+
+  const textQuery = query.query?.trim();
+  if (textQuery) {
+    clauses.push(`(
+      method LIKE ? ESCAPE '\\'
+      OR decision LIKE ? ESCAPE '\\'
+      OR COALESCE(params_json, '') LIKE ? ESCAPE '\\'
+      OR COALESCE(error, '') LIKE ? ESCAPE '\\'
+    )`);
+    const likeQuery = `%${escapeSqlLike(textQuery)}%`;
+    values.push(likeQuery, likeQuery, likeQuery, likeQuery);
+  }
+
+  const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    const totalRow = db.prepare(`
+      SELECT COUNT(*) AS cnt
+      FROM gateway_audit
+      ${where}
+    `).get(...values) as { cnt: number };
+    const entries = db.prepare(`
+      SELECT ${AuditStore.SELECT_COLS}
+      FROM gateway_audit
+      ${where}
+      ORDER BY timestamp DESC, id DESC
+      LIMIT ? OFFSET ?
+    `).all(...values, limit, offset) as AuditEntry[];
+    return {
+      entries,
+      total: totalRow.cnt,
+      limit,
+      offset,
+    };
+  } finally {
+    db.close();
+  }
+}
+
 // Summarize params for logging — redact content fields that could be large
 function summarizeParams(params: Record<string, unknown>): string {
   const summary: Record<string, unknown> = {};
@@ -285,6 +371,27 @@ function normalizeDurationMs(value: number | undefined): number {
   if (value === undefined) return 0;
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.trunc(value));
+}
+
+function normalizeHistoryLimit(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 200;
+  return Math.min(MAX_HISTORY_LIMIT, Math.max(1, Math.trunc(value)));
+}
+
+function normalizeHistoryOffset(value: number | undefined): number {
+  if (value === undefined || !Number.isFinite(value)) return 0;
+  return Math.max(0, Math.trunc(value));
+}
+
+function normalizeHistoryTimestamp(name: string, value: number): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} must be a finite timestamp >= 0`);
+  }
+  return Math.trunc(value);
+}
+
+function escapeSqlLike(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_');
 }
 
 function positiveInteger(name: string, value: number): number {

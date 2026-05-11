@@ -20,6 +20,7 @@ import type {
 import type {
   AdminActionPipeService,
   AdminAdaptiveToolsService,
+  AdminAuditHistoryService,
   AdminChargeLedgerService,
   AdminContactsService,
   AdminDashboardService,
@@ -119,6 +120,7 @@ export interface AdminChatBootstrapApi {
 
 export interface GardenAdminDomainServices {
   dashboard: AdminDashboardService;
+  auditHistory: AdminAuditHistoryService;
   charges?: AdminChargeLedgerService | null;
   actionPipe?: AdminActionPipeService | null;
   shards: AdminShardFoldReviewService;

@@ -127,6 +127,8 @@ export interface EditableSettings {
   embeddingApiModel?: string;
   embeddingApiDims?: number;
   compositionalPolicy?: CompositionalPolicyConfig;
+  wyomingShardRouting?: SubstrateConfig['wyomingShardRouting'];
+  shardToolsets?: SubstrateConfig['shardToolsets'];
   webFetchAllowHttp?: boolean;
   webFetchDomainAllowlist?: string[];
   webFetchAllowInternalNetwork?: boolean;

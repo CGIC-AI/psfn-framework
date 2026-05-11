@@ -10,6 +10,11 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import { GARDEN_PREFIX } from './server-request-routing.js';
 import { sendJson, sendRedirect } from '../../channels/backplane/http/primitives.js';
 import { sendGardenLoginPage } from './auth-pages.js';
+import type {
+  AdminAuditActionType,
+  AdminAuditActor,
+  AdminAuditDecision,
+} from './types.js';
 
 export interface AdminRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -42,6 +47,25 @@ export function dispatchAdminRoute(
 }
 
 export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
+  const appendAuditTimelineEntry = (
+    actionType: AdminAuditActionType,
+    decision: AdminAuditDecision,
+    narrative: string,
+    details?: Array<string | null | undefined>,
+    actor?: AdminAuditActor,
+  ): void => {
+    const joinedDetails = details
+      ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
+      .join(' ');
+    deps.services.auditHistory.appendGardenEntry({
+      actionType,
+      decision,
+      narrative,
+      ...(joinedDetails ? { details: joinedDetails } : {}),
+      ...(actor ? { actor } : {}),
+    });
+  };
+
   return [
     {
       method: 'GET',
@@ -100,6 +124,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
     },
     ...buildAdminApiRoutes({
       dashboardService: deps.services.dashboard,
+      auditHistoryService: deps.services.auditHistory,
       chargeLedgerService: deps.services.charges,
       actionPipeService: deps.services.actionPipe,
       shardFoldReviewService: deps.services.shards,
@@ -119,6 +144,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       modelDiscovery: deps.services.modelDiscovery,
       chatBootstrapService: deps.services.chatBootstrap,
       withBody: deps.withBody,
+      appendAuditTimelineEntry,
     }),
   ];
 }

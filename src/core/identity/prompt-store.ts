@@ -804,9 +804,6 @@ export class PromptLayerStore {
           content: composeFoundationSectionTemplate({
             id: definition.id,
             content: definition.defaultContent,
-            enabled: definition.defaultEnabled,
-            title: definition.title,
-            defaultEnabled: definition.defaultEnabled,
           }),
           priority: definition.priority,
           updatedBy: 'system:foundation-seed',

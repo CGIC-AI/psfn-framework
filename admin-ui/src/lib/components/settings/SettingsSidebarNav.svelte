@@ -18,10 +18,10 @@
     onNavigate: (sectionId: SettingsSimpleSectionId) => void;
   }>();
 
-  let navGroups = $derived<GardenSectionNavGroup[]>(groups.map(group => ({
+  let navGroups = $derived<GardenSectionNavGroup[]>(groups.map((group: SettingsSimpleSectionGroup) => ({
     id: group.id,
     label: group.label,
-    items: group.sections.map(section => ({
+    items: group.sections.map((section) => ({
       id: section.id,
       title: section.title,
       description: section.description,

@@ -16,6 +16,7 @@ import {
 import type {
   AdminActionPipeService,
   AdminAdaptiveToolsService,
+  AdminAuditHistoryService,
   AdminChargeLedgerService,
   AdminContactsService,
   AdminDashboardService,
@@ -44,9 +45,16 @@ import type {
   AdminAuditActionType,
   AdminAuditActor,
   AdminAuditDecision,
+  AdminAuditHistorySource,
+  AdminAuditTimeRange,
 } from './types.js';
 import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
 import { isShardFoldReviewUnavailableError } from './services/shard-fold-review-service.js';
+import {
+  ADMIN_AUDIT_ACTION_TYPES,
+  ADMIN_AUDIT_DECISIONS,
+  ADMIN_AUDIT_TIME_RANGES,
+} from './audit-timeline.js';
 
 export interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -127,6 +135,8 @@ const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
 const ADMIN_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
 const CHARGE_LEDGER_UNAVAILABLE_ERROR = 'Charge ledger backend unavailable';
 const ACTION_PIPE_UNAVAILABLE_ERROR = 'Action pipe backend unavailable';
+const AUDIT_HISTORY_UNAVAILABLE_ERROR = 'Audit history backend unavailable';
+const ADMIN_AUDIT_HISTORY_SOURCES = ['garden', 'gateway', 'charge'] as const;
 
 function toFiniteQueryNumber(
   value: string | null,
@@ -156,9 +166,66 @@ function toPositiveIntegerQueryNumber(
   return { ok: true, value: parsed };
 }
 
+function parseAuditActionTypeQuery(
+  value: string | null,
+): { ok: true; value?: AdminAuditActionType | 'all' } | { ok: false; error: string } {
+  if (value === null || value.trim() === '') return { ok: true };
+  const normalized = value.trim();
+  if (normalized === 'all' || ADMIN_AUDIT_ACTION_TYPES.includes(normalized as AdminAuditActionType)) {
+    return { ok: true, value: normalized as AdminAuditActionType | 'all' };
+  }
+  return {
+    ok: false,
+    error: `Invalid actionType query parameter. Expected all or one of: ${ADMIN_AUDIT_ACTION_TYPES.join(', ')}.`,
+  };
+}
+
+function parseAuditDecisionQuery(
+  value: string | null,
+): { ok: true; value?: AdminAuditDecision | 'all' } | { ok: false; error: string } {
+  if (value === null || value.trim() === '') return { ok: true };
+  const normalized = value.trim();
+  if (normalized === 'all' || ADMIN_AUDIT_DECISIONS.includes(normalized as AdminAuditDecision)) {
+    return { ok: true, value: normalized as AdminAuditDecision | 'all' };
+  }
+  return {
+    ok: false,
+    error: `Invalid decision query parameter. Expected all or one of: ${ADMIN_AUDIT_DECISIONS.join(', ')}.`,
+  };
+}
+
+function parseAuditTimeRangeQuery(
+  value: string | null,
+): { ok: true; value?: AdminAuditTimeRange } | { ok: false; error: string } {
+  if (value === null || value.trim() === '') return { ok: true };
+  const normalized = value.trim();
+  if (ADMIN_AUDIT_TIME_RANGES.includes(normalized as AdminAuditTimeRange)) {
+    return { ok: true, value: normalized as AdminAuditTimeRange };
+  }
+  return {
+    ok: false,
+    error: `Invalid timeRange query parameter. Expected one of: ${ADMIN_AUDIT_TIME_RANGES.join(', ')}.`,
+  };
+}
+
+function parseAuditSourceQuery(
+  value: string | null,
+): { ok: true; value?: AdminAuditHistorySource | 'all' } | { ok: false; error: string } {
+  if (value === null || value.trim() === '') return { ok: true };
+  const normalized = value.trim();
+  if (normalized === 'all' || ADMIN_AUDIT_HISTORY_SOURCES.includes(normalized as AdminAuditHistorySource)) {
+    return { ok: true, value: normalized as AdminAuditHistorySource | 'all' };
+  }
+  return {
+    ok: false,
+    error: `Invalid source query parameter. Expected all or one of: ${ADMIN_AUDIT_HISTORY_SOURCES.join(', ')}.`,
+  };
+}
+
 export function buildAdminApiRoutes(options: {
   config: SubstrateConfig;
   dashboardService: AdminDashboardService;
+  auditHistoryService?: AdminAuditHistoryService | null;
   chargeLedgerService?: AdminChargeLedgerService | null;
   actionPipeService?: AdminActionPipeService | null;
   shardFoldReviewService: AdminShardFoldReviewService;
@@ -188,6 +255,7 @@ export function buildAdminApiRoutes(options: {
   const {
     config,
     dashboardService,
+    auditHistoryService,
     chargeLedgerService,
     actionPipeService,
     shardFoldReviewService,
@@ -323,6 +391,63 @@ export function buildAdminApiRoutes(options: {
               error: `Failed to load dashboard data: ${toSanitizedMessage(error, 'unknown error')}`,
             });
           },
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/audit/history'),
+      handle: (req, res) => {
+        if (!auditHistoryService) {
+          sendJson(res, 503, { error: AUDIT_HISTORY_UNAVAILABLE_ERROR });
+          return;
+        }
+
+        const url = parseRequestUrl(req, '/api/admin/audit/history');
+        const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+        if (!limit.ok) {
+          sendJson(res, 400, { error: limit.error });
+          return;
+        }
+        const offset = toFiniteQueryNumber(url.searchParams.get('offset'), 'offset');
+        if (!offset.ok) {
+          sendJson(res, 400, { error: offset.error });
+          return;
+        }
+        const actionType = parseAuditActionTypeQuery(url.searchParams.get('actionType'));
+        if (!actionType.ok) {
+          sendJson(res, 400, { error: actionType.error });
+          return;
+        }
+        const decision = parseAuditDecisionQuery(url.searchParams.get('decision'));
+        if (!decision.ok) {
+          sendJson(res, 400, { error: decision.error });
+          return;
+        }
+        const timeRange = parseAuditTimeRangeQuery(url.searchParams.get('timeRange'));
+        if (!timeRange.ok) {
+          sendJson(res, 400, { error: timeRange.error });
+          return;
+        }
+        const source = parseAuditSourceQuery(url.searchParams.get('source'));
+        if (!source.ok) {
+          sendJson(res, 400, { error: source.error });
+          return;
+        }
+
+        auditHistoryService.getAuditHistory({
+          ...(limit.value !== undefined ? { limit: limit.value } : {}),
+          ...(offset.value !== undefined ? { offset: offset.value } : {}),
+          ...(actionType.value !== undefined ? { actionType: actionType.value } : {}),
+          ...(decision.value !== undefined ? { decision: decision.value } : {}),
+          ...(timeRange.value !== undefined ? { timeRange: timeRange.value } : {}),
+          ...(source.value !== undefined ? { source: source.value } : {}),
+          ...(url.searchParams.get('query')?.trim() ? { query: url.searchParams.get('query')!.trim() } : {}),
+        }).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to load audit history'),
+          }),
         );
       },
     },
@@ -1223,6 +1348,11 @@ export function buildAdminApiRoutes(options: {
 
           const result = settingsService.saveSubConfigJson('models', configJson);
           if (!result.ok) {
+            appendSettingsMutationAudit(
+              'denied',
+              'Operator models.json update failed.',
+              [`message=${toSanitizedMessage(result.message, 'models.json save failed')}`],
+            );
             sendJson(res, 400, {
               error: result.message,
               ...result,
@@ -1230,6 +1360,10 @@ export function buildAdminApiRoutes(options: {
             return;
           }
 
+          appendSettingsMutationAudit(
+            'allowed',
+            'Operator updated models.json via /api/admin/settings/models.',
+          );
           sendJson(res, 200, { ok: true, message: 'models.json saved' });
         });
       },
@@ -1302,9 +1436,18 @@ export function buildAdminApiRoutes(options: {
           }
           const result = settingsService.saveSubConfigJson(params.key, configJson);
           if (!result.ok) {
+            appendSettingsMutationAudit(
+              'denied',
+              `Operator ${params.key} owner-file update failed.`,
+              [`message=${toSanitizedMessage(result.message, 'owner-file save failed')}`],
+            );
             sendJson(res, 400, { error: result.message });
             return;
           }
+          appendSettingsMutationAudit(
+            'allowed',
+            `Operator updated ${params.key} owner file via /api/settings/${params.key}.`,
+          );
           res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
           res.end(result.message);
         });
@@ -2100,12 +2243,26 @@ export function buildAdminApiRoutes(options: {
       match: exactPath('/api/admin/confirmations/resolve'),
       handle: (req, res) => {
         if (!confirmationQueueApi) {
+          appendAuditTimelineEntry?.(
+            'confirmation',
+            'denied',
+            'Operator confirmation resolve failed: confirmation queue unavailable.',
+            [],
+            'operator',
+          );
           sendJson(res, 400, { ok: false, message: 'Confirmation queue is unavailable' });
           return;
         }
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
+            appendAuditTimelineEntry?.(
+              'confirmation',
+              'denied',
+              'Operator confirmation resolve failed: invalid JSON payload.',
+              [],
+              'operator',
+            );
             sendJson(res, 400, { ok: false, message: parsed.error });
             return;
           }
@@ -2114,10 +2271,24 @@ export function buildAdminApiRoutes(options: {
           const decision = (typeof payload.decision === 'string' ? payload.decision : '').trim();
 
           if (!id) {
+            appendAuditTimelineEntry?.(
+              'confirmation',
+              'denied',
+              'Operator confirmation resolve failed: missing confirmation ID.',
+              [],
+              'operator',
+            );
             sendJson(res, 400, { ok: false, message: 'Confirmation ID is required' });
             return;
           }
           if (decision !== 'approve' && decision !== 'deny' && decision !== 'modify') {
+            appendAuditTimelineEntry?.(
+              'confirmation',
+              'denied',
+              'Operator confirmation resolve failed: invalid decision.',
+              [`id=${id}`, `decision=${decision || 'missing'}`],
+              'operator',
+            );
             sendJson(res, 400, { ok: false, message: 'Invalid decision (must be approve, deny, or modify)' });
             return;
           }
@@ -2129,6 +2300,19 @@ export function buildAdminApiRoutes(options: {
 
           confirmationQueueApi!.resolveConfirmationQueue(resolveParams).then(
             (result) => {
+              appendAuditTimelineEntry?.(
+                'confirmation',
+                result.status === 'approved' || result.status === 'modified'
+                  ? 'allowed'
+                  : 'denied',
+                `Operator resolved confirmation ${id}: ${result.status}.`,
+                [
+                  `decision=${decision}`,
+                  `executed=${result.executed}`,
+                  result.message ? `message=${result.message}` : null,
+                ],
+                'operator',
+              );
               sendJson(res, 200, {
                 ok: result.status === 'approved' || result.status === 'modified',
                 message: result.message,
@@ -2137,6 +2321,13 @@ export function buildAdminApiRoutes(options: {
               });
             },
             (error) => {
+              appendAuditTimelineEntry?.(
+                'confirmation',
+                'denied',
+                `Operator confirmation resolve failed for ${id}.`,
+                [`decision=${decision}`, `error=${toSanitizedMessage(error, 'unknown error')}`],
+                'operator',
+              );
               sendJson(res, 500, { ok: false, message: `Confirmation resolve failed: ${String(error)}` });
             },
           );

@@ -4,6 +4,7 @@
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import AuditSurfaceMap from '$lib/components/telemetry/AuditSurfaceMap.svelte';
+  import { getAuditHistory } from '$lib/api/endpoints/audit-history';
   import {
     getEvents,
     isConnected,
@@ -15,7 +16,7 @@
     clearEvents,
     filterEvents,
   } from '$lib/stores/telemetry.svelte';
-  import type { TelemetryEvent, AuditEntry, AuditActionType, AuditDecision, AuditTimeRange } from '$lib/types';
+  import type { AuditEntry, AuditActionType, AuditDecision, AuditHistoryData, AuditHistorySource, AuditTimeRange } from '$lib/types';
 
   // ── Tab State ──
   type TabId = 'live' | 'audit';
@@ -113,19 +114,45 @@
   let auditActionType = $state<AuditActionType | 'all'>('all');
   let auditDecision = $state<AuditDecision | 'all'>('all');
   let auditTimeRange = $state<AuditTimeRange>('24h');
+  let auditSource = $state<AuditHistorySource | 'all'>('all');
+  let auditQuery = $state('');
+  let auditHistory = $state<AuditHistoryData | null>(null);
+  let auditLoading = $state(false);
+  let auditError = $state<string | null>(null);
+  let auditOffset = $state(0);
+  let auditRequestSeq = 0;
+  let lastAuditFilterKey = '';
+  const AUDIT_PAGE_SIZE = 100;
 
   const ACTION_TYPE_OPTIONS: { value: AuditActionType | 'all'; label: string }[] = [
     { value: 'all', label: 'All action types' },
     { value: 'tool_invocation', label: 'Tool invocation' },
+    { value: 'tool_activation', label: 'Tool activation' },
     { value: 'identity_edit', label: 'Identity edit' },
     { value: 'external_action', label: 'External action' },
     { value: 'memory_mutation', label: 'Memory mutation' },
+    { value: 'settings_change', label: 'Settings change' },
+    { value: 'confirmation', label: 'Confirmation' },
+    { value: 'charge_decision', label: 'Charge decision' },
+    { value: 'gateway_policy', label: 'Gateway policy' },
   ];
 
   const DECISION_OPTIONS: { value: AuditDecision | 'all'; label: string }[] = [
     { value: 'all', label: 'All decisions' },
     { value: 'allowed', label: 'Allowed' },
     { value: 'denied', label: 'Denied' },
+    { value: 'needs_approval', label: 'Needs approval' },
+  ];
+
+  const AUDIT_SOURCE_STATUSES: { value: AuditHistorySource; label: string }[] = [
+    { value: 'garden', label: 'Garden runtime' },
+    { value: 'gateway', label: 'Gateway audit' },
+    { value: 'charge', label: 'Charge ledger' },
+  ];
+
+  const SOURCE_OPTIONS: { value: AuditHistorySource | 'all'; label: string }[] = [
+    { value: 'all', label: 'All sources' },
+    ...AUDIT_SOURCE_STATUSES,
   ];
 
   const TIME_RANGE_OPTIONS: { value: AuditTimeRange; label: string }[] = [
@@ -137,142 +164,7 @@
     { value: 'all', label: 'All time' },
   ];
 
-  const TIME_RANGE_MS: Record<Exclude<AuditTimeRange, 'all'>, number> = {
-    '15m': 15 * 60 * 1_000,
-    '1h': 60 * 60 * 1_000,
-    '24h': 24 * 60 * 60 * 1_000,
-    '7d': 7 * 24 * 60 * 60 * 1_000,
-    '30d': 30 * 24 * 60 * 60 * 1_000,
-  };
-
-  // Classify telemetry events into audit entries
-  function eventToAuditEntry(event: TelemetryEvent, index: number): AuditEntry | null {
-    const data = event.data as Record<string, unknown> | null;
-    if (!data || typeof data !== 'object') return null;
-
-    // Tool invocations
-    if (event.type === 'agent.tool.start' || event.type === 'agent.tool.end') {
-      const toolName = (data.name as string) || (data.toolName as string) || 'unknown';
-      const status = event.type === 'agent.tool.start' ? 'started' : 'completed';
-      const resultText = data.error ? `error: ${data.error}` : '';
-      return {
-        id: `audit-${index}`,
-        timestamp: event.timestamp,
-        actionType: 'tool_invocation',
-        decision: 'allowed',
-        narrative: `Tool "${toolName}" ${status}`,
-        details: resultText || undefined,
-      };
-    }
-
-    // Memory mutations
-    if (event.type === 'memory.extraction.end' || event.type.startsWith('memory.write') || event.type.startsWith('memory.import')) {
-      const count = (data.count as number) || (data.extracted as number) || 0;
-      return {
-        id: `audit-${index}`,
-        timestamp: event.timestamp,
-        actionType: 'memory_mutation',
-        decision: 'allowed',
-        narrative: `Memory ${event.type.split('.').pop()}: ${count > 0 ? `${count} entries` : 'completed'}`,
-        details: data.types ? `types: ${data.types}` : undefined,
-      };
-    }
-
-    // External actions (message sent, broadcast)
-    if (event.type === 'message.sent' || event.type.startsWith('broadcast.')) {
-      const channel = (data.channelId as string) || (data.channel as string) || '';
-      return {
-        id: `audit-${index}`,
-        timestamp: event.timestamp,
-        actionType: 'external_action',
-        decision: 'allowed',
-        narrative: `${event.type}${channel ? ` on ${channel}` : ''}`,
-        details: data.contentPreview ? String(data.contentPreview) : undefined,
-      };
-    }
-
-    // Wyoming policy violations (denied)
-    if (event.type === 'wyoming.policy.violation') {
-      return {
-        id: `audit-${index}`,
-        timestamp: event.timestamp,
-        actionType: 'external_action',
-        decision: 'denied',
-        narrative: `Wyoming policy violation: ${data.code || 'unknown'}`,
-        details: [
-          data.scope ? `scope=${data.scope}` : null,
-          data.action ? `action=${data.action}` : null,
-          data.limit ? `limit=${data.limit}` : null,
-        ].filter(Boolean).join(' ') || undefined,
-      };
-    }
-
-    // Wyoming audit summary
-    if (event.type === 'wyoming.audit.summary') {
-      const decision = data.decision === 'denied' ? 'denied' as const : 'allowed' as const;
-      return {
-        id: `audit-${index}`,
-        timestamp: event.timestamp,
-        actionType: 'external_action',
-        decision,
-        narrative: `Wyoming ${data.method || 'action'}: ${data.decision || 'unknown'}`,
-        details: data.error ? String(data.error) : undefined,
-      };
-    }
-
-    // Wyoming session events
-    if (event.type === 'wyoming.session.start' || event.type === 'wyoming.session.end') {
-      return {
-        id: `audit-${index}`,
-        timestamp: event.timestamp,
-        actionType: 'external_action',
-        decision: 'allowed',
-        narrative: event.type === 'wyoming.session.start'
-          ? `Wyoming session started (${data.activeSessions || 0} active)`
-          : `Wyoming session ended: ${data.reason || 'normal'}`,
-        details: data.durationMs ? `duration=${data.durationMs}ms` : undefined,
-      };
-    }
-
-    // Agent turn usage (audit as tool invocation since it's a completed turn)
-    if (event.type === 'agent.turn.usage') {
-      return {
-        id: `audit-${index}`,
-        timestamp: event.timestamp,
-        actionType: 'tool_invocation',
-        decision: 'allowed',
-        narrative: `Agent turn completed`,
-        details: [
-          data.inputTokens ? `input=${data.inputTokens}` : null,
-          data.outputTokens ? `output=${data.outputTokens}` : null,
-          data.toolCalls ? `tools=${data.toolCalls}` : null,
-        ].filter(Boolean).join(' ') || undefined,
-      };
-    }
-
-    return null;
-  }
-
-  let auditEntries = $derived.by(() => {
-    const allEvents = getEvents();
-    const entries: AuditEntry[] = [];
-
-    for (let i = 0; i < allEvents.length; i++) {
-      const entry = eventToAuditEntry(allEvents[i], i);
-      if (entry) entries.push(entry);
-    }
-
-    // Apply filters
-    const now = Date.now();
-    const minTimestamp = auditTimeRange === 'all' ? 0 : now - TIME_RANGE_MS[auditTimeRange];
-
-    return entries.filter(entry => {
-      if (entry.timestamp < minTimestamp) return false;
-      if (auditActionType !== 'all' && entry.actionType !== auditActionType) return false;
-      if (auditDecision !== 'all' && entry.decision !== auditDecision) return false;
-      return true;
-    }).reverse(); // newest first
-  });
+  let auditEntries = $derived<AuditEntry[]>(auditHistory?.entries ?? []);
 
   const TELEMETRY_TABS = [
     { id: 'live', label: 'Live Events' },
@@ -287,20 +179,43 @@
   const DECISION_BADGE: Record<AuditDecision, string> = {
     allowed: 'bg-moss-100 text-moss-700',
     denied: 'bg-wilt-100 text-wilt-600',
+    needs_approval: 'bg-gold-100 text-gold-700',
   };
 
   const ACTION_TYPE_BADGE: Record<AuditActionType, string> = {
     tool_invocation: 'bg-gold-100 text-gold-700',
+    tool_activation: 'bg-gold-100 text-gold-700',
     identity_edit: 'bg-petal-100 text-petal-500',
     external_action: 'bg-bark-200 text-shadow-800',
     memory_mutation: 'bg-moss-100 text-moss-700',
+    settings_change: 'bg-petal-100 text-petal-600',
+    confirmation: 'bg-bark-200 text-shadow-800',
+    charge_decision: 'bg-moss-100 text-moss-700',
+    gateway_policy: 'bg-wilt-100 text-wilt-600',
   };
 
   const ACTION_TYPE_LABEL: Record<AuditActionType, string> = {
     tool_invocation: 'Tool',
+    tool_activation: 'Activation',
     identity_edit: 'Identity',
     external_action: 'External',
     memory_mutation: 'Memory',
+    settings_change: 'Settings',
+    confirmation: 'Confirm',
+    charge_decision: 'Charge',
+    gateway_policy: 'Gateway',
+  };
+
+  const SOURCE_BADGE: Record<AuditHistorySource, string> = {
+    garden: 'bg-petal-100 text-petal-600',
+    gateway: 'bg-wilt-100 text-wilt-600',
+    charge: 'bg-moss-100 text-moss-700',
+  };
+
+  const SOURCE_LABEL: Record<AuditHistorySource, string> = {
+    garden: 'Garden',
+    gateway: 'Gateway',
+    charge: 'Charge',
   };
 
   // ══════════════════════════════════════════════
@@ -423,6 +338,69 @@
   function toggleExpandedEvent(id: string): void {
     expandedEventId = expandedEventId === id ? null : id;
   }
+
+  async function loadPersistentAuditHistory(): Promise<void> {
+    const requestId = ++auditRequestSeq;
+    auditLoading = true;
+    auditError = null;
+    try {
+      const result = await getAuditHistory({
+        actionType: auditActionType,
+        decision: auditDecision,
+        timeRange: auditTimeRange,
+        source: auditSource,
+        query: auditQuery,
+        limit: AUDIT_PAGE_SIZE,
+        offset: auditOffset,
+      });
+      if (requestId !== auditRequestSeq) return;
+      auditHistory = result;
+    } catch (error) {
+      if (requestId !== auditRequestSeq) return;
+      auditError = error instanceof Error ? error.message : String(error);
+      auditHistory = null;
+    } finally {
+      if (requestId === auditRequestSeq) {
+        auditLoading = false;
+      }
+    }
+  }
+
+  function refreshAuditHistory(): void {
+    void loadPersistentAuditHistory();
+  }
+
+  function previousAuditPage(): void {
+    auditOffset = Math.max(0, auditOffset - AUDIT_PAGE_SIZE);
+  }
+
+  function nextAuditPage(): void {
+    auditOffset += AUDIT_PAGE_SIZE;
+  }
+
+  $effect(() => {
+    const filterKey = [
+      auditActionType,
+      auditDecision,
+      auditTimeRange,
+      auditSource,
+      auditQuery.trim(),
+    ].join('|');
+    if (lastAuditFilterKey && filterKey !== lastAuditFilterKey) {
+      auditOffset = 0;
+    }
+    lastAuditFilterKey = filterKey;
+  });
+
+  $effect(() => {
+    void auditActionType;
+    void auditDecision;
+    void auditTimeRange;
+    void auditSource;
+    void auditQuery;
+    void auditOffset;
+    void loadPersistentAuditHistory();
+  });
 
   // ── Lifecycle ──
   onMount(() => {
@@ -636,8 +614,9 @@
   {#if activeTab === 'audit'}
     <div class="card-garden p-4">
       <p class="text-sm text-shadow-600 mb-4">
-        Unified timeline for tool invocations, identity edits, external actions, and memory mutations.
-        Audit entries are derived from the live telemetry stream.
+        Unified persisted timeline for tool invocations and activation failures, settings changes,
+        confirmations, gateway policy decisions, memory mutations, charge decisions, and external actions.
+        The live stream remains an overlay on the Live Events tab.
       </p>
 
       <!-- Filters -->
@@ -681,33 +660,73 @@
           </select>
         </label>
 
+        <label class="flex flex-col gap-1">
+          <span class="text-sm font-medium text-shadow-800">Source</span>
+          <select
+            bind:value={auditSource}
+            class="text-sm px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
+                   focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
+          >
+            {#each SOURCE_OPTIONS as opt}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </label>
+
+        <label class="flex flex-col gap-1">
+          <span class="text-sm font-medium text-shadow-800">Search</span>
+          <input
+            type="text"
+            bind:value={auditQuery}
+            placeholder="Narrative, details, source..."
+            class="text-sm px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
+                   placeholder:text-shadow-600
+                   focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400 w-60"
+          />
+        </label>
+
         <div class="flex-1"></div>
 
+        <button
+          type="button"
+          onclick={refreshAuditHistory}
+          class="text-sm px-4 py-2 rounded-lg border border-bark-300 text-shadow-600 hover:bg-bark-100 font-medium transition-colors"
+        >
+          Refresh
+        </button>
+
         <span class="text-sm text-shadow-600">
-          {auditEntries.length} {auditEntries.length === 1 ? 'entry' : 'entries'}
+          {auditHistory?.pagination.total ?? 0} total
         </span>
       </div>
+
+      {#if auditHistory}
+        <div class="mt-4 flex flex-wrap gap-2 text-sm text-shadow-600">
+          {#each AUDIT_SOURCE_STATUSES as sourceOption}
+            {@const source = sourceOption.value}
+            {@const state = auditHistory.sources[source]}
+            <span class="inline-flex items-center gap-1 rounded-full px-2 py-1 {SOURCE_BADGE[source]}">
+              {SOURCE_LABEL[source]}: {state.available ? `${state.count} indexed` : `unavailable${state.message ? ` (${state.message})` : ''}`}
+            </span>
+          {/each}
+        </div>
+      {/if}
     </div>
 
-    <!-- Connection required notice -->
-    {#if !isConnected() && getEvents().length === 0}
+    {#if auditLoading}
       <div class="card-garden p-8 text-center">
-        <p class="font-serif text-lg text-shadow-800 mb-2">No telemetry data</p>
-        <p class="text-sm text-shadow-600 mb-4">
-          Audit entries are derived from the live telemetry stream. Connect to start capturing events.
-        </p>
-        <button
-          onclick={handleConnect}
-          class="text-sm px-5 py-2.5 rounded-lg border border-moss-300 bg-moss-50 text-moss-700
-                 hover:bg-moss-100 font-medium transition-colors"
-        >
-          Connect telemetry
-        </button>
+        <p class="font-serif text-lg text-shadow-800 mb-2">Loading audit history</p>
+        <p class="text-sm text-shadow-600">Reading persisted Garden, gateway, and charge history.</p>
+      </div>
+    {:else if auditError}
+      <div class="card-garden p-8 text-center">
+        <p class="font-serif text-lg text-wilt-600 mb-2">Audit history unavailable</p>
+        <p class="text-sm text-shadow-600">{auditError}</p>
       </div>
     {:else if auditEntries.length === 0}
       <div class="card-garden p-8 text-center">
         <p class="text-sm text-shadow-600 italic">
-          No audit events match the selected filters.
+          No persisted audit events match the selected filters.
         </p>
       </div>
     {:else}
@@ -722,9 +741,15 @@
               <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium {ACTION_TYPE_BADGE[entry.actionType]}">
                 {ACTION_TYPE_LABEL[entry.actionType]}
               </span>
-              <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium {DECISION_BADGE[entry.decision]}">
-                {entry.decision === 'allowed' ? 'Allowed' : 'Denied'}
+              <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium {SOURCE_BADGE[entry.source]}">
+                {SOURCE_LABEL[entry.source]}
               </span>
+              <span class="inline-block px-2 py-0.5 rounded-full text-sm font-medium {DECISION_BADGE[entry.decision]}">
+                {entry.decision === 'allowed' ? 'Allowed' : entry.decision === 'needs_approval' ? 'Needs approval' : 'Denied'}
+              </span>
+              {#if entry.actor}
+                <span class="text-sm text-shadow-600">actor={entry.actor}</span>
+              {/if}
             </div>
             <p class="text-sm text-shadow-800 leading-relaxed">{entry.narrative}</p>
             {#if entry.details}
@@ -733,6 +758,31 @@
           </article>
         {/each}
       </div>
+
+      {#if auditHistory}
+        <div class="card-garden p-3 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onclick={previousAuditPage}
+            disabled={!auditHistory.pagination.hasPrevious}
+            class="text-sm px-4 py-2 rounded-lg border border-bark-300 text-shadow-600 hover:bg-bark-100 font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            onclick={nextAuditPage}
+            disabled={!auditHistory.pagination.hasNext}
+            class="text-sm px-4 py-2 rounded-lg border border-bark-300 text-shadow-600 hover:bg-bark-100 font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Next
+          </button>
+          <span class="text-sm text-shadow-600">
+            Showing {auditHistory.pagination.offset + 1}-{Math.min(auditHistory.pagination.offset + auditHistory.entries.length, auditHistory.pagination.total)}
+            of {auditHistory.pagination.total}
+          </span>
+        </div>
+      {/if}
     {/if}
   {/if}
 </div>

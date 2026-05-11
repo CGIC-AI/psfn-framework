@@ -1,6 +1,6 @@
 import type {
-  type LowTierTrustDriftSuggestion,
-  type TrustDriftBehaviorSignals,
+  LowTierTrustDriftSuggestion,
+  TrustDriftBehaviorSignals,
 } from '../../system/trust/policy.js';
 import type { TrustLevel, TrustMutationSource } from '../../system/trust/types.js';
 import type { EmotionalSnapshot, EmotionalTimeSeriesPoint } from './store/emotional-baseline.js';

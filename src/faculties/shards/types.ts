@@ -1,4 +1,5 @@
 import type { SessionEntry } from '../../core/session/types.js';
+import type { ShardCreationMode as RoutingShardCreationMode } from '../../shared/routing/envelope.js';
 import type { ShardResultLineageEnvelope, ShardSourceContext } from './lineage-contracts.js';
 import type { ArtifactReturnBatch } from './artifact-return-port.js';
 
@@ -7,6 +8,7 @@ import type { ArtifactReturnBatch } from './artifact-return-port.js';
 
 export type ShardLifecycleState = 'registering' | 'ready' | 'degraded' | 'offline';
 export type ShardHealthState = 'healthy' | 'stale' | 'failed';
+export type ShardCreationMode = RoutingShardCreationMode;
 
 export type { ShardSourceContext } from './lineage-contracts.js';
 
@@ -23,6 +25,24 @@ export interface ShardContextPack {
   source: ShardSourceContext;
   sessionEntries: ShardContextPackEntry[];
   memoryBlock?: string;
+}
+
+export interface ShardParentContextSnapshot {
+  inheritedFrom: string;
+  source: ShardSourceContext;
+  task: string;
+  transcript: {
+    entries: ShardContextPackEntry[];
+  };
+  memory?: {
+    content: string;
+  };
+}
+
+export interface ShardPromptDiscipline {
+  stablePrefix: string;
+  remit: string;
+  guardrails: readonly string[];
 }
 
 export type ShardTaggedOutputSource = 'memory_write' | 'memory_import_batch';

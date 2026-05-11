@@ -2,7 +2,10 @@ import { join } from 'node:path';
 import type { SessionArchivePort } from '../journals/journal/port.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { createSqliteTranscriptProjection } from './transcript-projection.js';
-import type { TranscriptProjectionPort } from './transcript-projection-port.js';
+import type {
+  KeywordSearchableTranscriptProjection,
+  TranscriptProjectionPort,
+} from './transcript-projection-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
@@ -27,7 +30,7 @@ export function createDefaultSQLiteSessionArchivePort(): SessionArchivePort {
 
 export function createDefaultSQLiteTranscriptProjection(
   searchIndexPath: string,
-): TranscriptProjectionPort {
+): KeywordSearchableTranscriptProjection {
   return createSqliteTranscriptProjection(searchIndexPath);
 }
 

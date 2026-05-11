@@ -360,7 +360,7 @@ export function collectRecentEntriesWithinTokenBudget(params: {
 }
 
 export function resolveMaxHistorySpanMs(
-  config: Pick<SubstrateConfig, 'maxHistorySpanMs'>,
+  config: Record<string, unknown>,
 ): number {
   const candidate = config.maxHistorySpanMs;
   if (typeof candidate !== 'number' || !Number.isFinite(candidate) || candidate <= 0) {

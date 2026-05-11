@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import type { TurnID } from '../../../../src/shared/contracts/runtime.js';
 import type { AdminSessionTurnData } from '../types';
 import {
   buildPromptMonitorTurns,
@@ -8,6 +9,10 @@ import {
   resolvePromptMonitorMetrics,
   resolvePromptMonitorSummary,
 } from './prompt-monitor';
+
+function asTurnId(value: string): TurnID {
+  return value as TurnID;
+}
 
 function buildTurn(seed: {
   turnId: string;
@@ -19,7 +24,8 @@ function buildTurn(seed: {
 }): AdminSessionTurnData {
   return {
     record: {
-      turnId: seed.turnId,
+      schemaVersion: 1,
+      turnId: asTurnId(seed.turnId),
       requestId: seed.turnId,
       channelId: seed.channelId,
       channelType: 'api',
@@ -29,24 +35,26 @@ function buildTurn(seed: {
       userMessage: {
         role: 'user',
         content: 'hello',
-        timestamp: String(seed.completedAt - 50),
+        timestamp: seed.completedAt - 50,
       },
       assistantMessage: {
         role: 'assistant',
         content: 'world',
-        timestamp: String(seed.completedAt),
+        timestamp: seed.completedAt,
       },
       toolCalls: [],
       extractedMemoryIds: [],
       concernDeltaRefs: [],
       contactDeltaRefs: [],
       versionPointers: {
+        model: 'test-model',
         promptStack: seed.promptVersionPointer,
         promptMode: 'default',
       },
       provenanceRefs: [],
     },
     roleEnvelopeRefs: [],
+    continuityProvenance: [],
     stages: [
       {
         observedAt: seed.completedAt - 40,
@@ -114,16 +122,20 @@ function buildTurn(seed: {
           { role: 'user', content: 'hello' },
           { role: 'assistant', content: 'world' },
         ],
-        providerObservability: {
-          routeKind: 'registered_model',
-          requestedProvider: 'test',
-          requestedModel: 'test-model',
-          backendProvider: 'test',
-          backendModel: 'test-model',
-          backendApi: 'openai-completions',
-          systemRole: {
-            transport: 'openai_system',
-            supportsSystemRole: true,
+          providerObservability: {
+            routeKind: 'registered_model',
+            requestedProvider: 'test',
+            requestedModel: 'test-model',
+            backendProvider: 'test',
+            backendModel: 'test-model',
+            backendApi: 'openai-completions',
+            promptCaching: {
+              configured: false,
+              engaged: false,
+            },
+            systemRole: {
+              transport: 'openai_system',
+              supportsSystemRole: true,
             supportsDeveloperRole: false,
             usesOutOfBandSystemPrompt: false,
           },
@@ -270,6 +282,10 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
             backendProvider: 'litellm',
             backendModel: 'openrouter/live',
             backendApi: 'openai-responses',
+            promptCaching: {
+              configured: false,
+              engaged: false,
+            },
             systemRole: {
               transport: 'openai_developer',
               supportsSystemRole: true,

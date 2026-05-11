@@ -132,7 +132,7 @@
   }
 
   function stringRecordProperty(record: HistoryRecord, key: string): string | undefined {
-    const value = (record as Record<string, unknown>)[key];
+    const value = (record as unknown as Record<string, unknown>)[key];
     return typeof value === 'string' && value.trim() ? value : undefined;
   }
 

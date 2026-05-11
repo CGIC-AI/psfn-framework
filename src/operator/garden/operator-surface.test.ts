@@ -210,6 +210,32 @@ async function createHarness(): Promise<Harness> {
         },
       })),
     },
+    auditHistory: {
+      appendGardenEntry: vi.fn(),
+      getAuditHistory: vi.fn(async () => ({
+        entries: [],
+        filters: {
+          actionType: 'all',
+          decision: 'all',
+          timeRange: '24h',
+          source: 'all',
+          limit: 100,
+          offset: 0,
+        },
+        pagination: {
+          limit: 100,
+          offset: 0,
+          total: 0,
+          hasPrevious: false,
+          hasNext: false,
+        },
+        sources: {
+          garden: { available: true, count: 0 },
+          gateway: { available: false, count: 0 },
+          charge: { available: false, count: 0 },
+        },
+      })),
+    },
     shards: {
       listShardFoldReviews: vi.fn(async () => ({ reviews: [] })),
       getShardFoldReview: vi.fn(async () => null),

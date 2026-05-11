@@ -115,9 +115,9 @@ function assertNonZeroEntriesHaveRationales<T extends string>(
   fieldPath: string,
   rationaleFieldPath: string,
 ): void {
-  const missing = Object.entries(values)
+  const missing = (Object.entries(values) as Array<[T, number]>)
     .filter(([, amount]) => amount > 0)
-    .map(([key]) => key as T)
+    .map(([key]) => key)
     .filter((key) => {
       if (!rationales) {
         return true;

@@ -10,15 +10,20 @@ const MAX_AUDIT_TIMELINE_ENTRIES = 500;
 
 export const ADMIN_AUDIT_ACTION_TYPES: AdminAuditActionType[] = [
   'tool_invocation',
+  'tool_activation',
   'identity_edit',
   'external_action',
   'memory_mutation',
   'settings_change',
+  'confirmation',
+  'charge_decision',
+  'gateway_policy',
 ];
 
 export const ADMIN_AUDIT_DECISIONS: AdminAuditDecision[] = [
   'allowed',
   'denied',
+  'needs_approval',
 ];
 
 export const ADMIN_AUDIT_TIME_RANGES: AdminAuditTimeRange[] = [

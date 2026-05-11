@@ -13,6 +13,11 @@ import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { HEALTH_PROBE_PATH } from './transport-client.js';
+import type {
+  AdminAuditActionType,
+  AdminAuditActor,
+  AdminAuditDecision,
+} from './types.js';
 
 const log = createComponentLogger('GardenAdminTransport');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -49,9 +54,28 @@ export class GardenAdminTransportServer implements Lifecycle {
   constructor(
     private readonly config: GardenAdminTransportServerConfig,
   ) {
+    const appendAuditTimelineEntry = (
+      actionType: AdminAuditActionType,
+      decision: AdminAuditDecision,
+      narrative: string,
+      details?: Array<string | null | undefined>,
+      actor?: AdminAuditActor,
+    ): void => {
+      const joinedDetails = details
+        ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
+        .join(' ');
+      this.config.services.auditHistory.appendGardenEntry({
+        actionType,
+        decision,
+        narrative,
+        ...(joinedDetails ? { details: joinedDetails } : {}),
+        ...(actor ? { actor } : {}),
+      });
+    };
     this.routes = buildAdminApiRoutes({
       config: config.config,
       dashboardService: config.services.dashboard,
+      auditHistoryService: config.services.auditHistory,
       chargeLedgerService: config.services.charges,
       actionPipeService: config.services.actionPipe,
       shardFoldReviewService: config.services.shards,
@@ -70,6 +94,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       confirmationQueueApi: config.services.confirmations,
       valuesJournal: config.services.values,
       withBody: (req, res, cb) => this.withBody(req, res, cb),
+      appendAuditTimelineEntry,
     });
     this.telemetryTransport = new AdminServerTelemetryTransport(
       config.eventBus,

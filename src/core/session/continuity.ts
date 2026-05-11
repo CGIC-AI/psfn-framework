@@ -191,7 +191,7 @@ export class UserContinuityStore {
       metadata: buildContinuityEntryMetadata({
         continuityUserId: userId,
         sourceChannelId: entry.originChannelId ?? entry.channelId,
-        sourceVisibility: entry.channelVisibility ?? classifyChannel(entry.originChannelId ?? entry.channelId),
+        sourceVisibility: (entry.channelVisibility ?? classifyChannel(entry.originChannelId ?? entry.channelId)) as ChannelVisibility,
         sourceRole: entry.role,
         recordedAt: entry.timestamp,
         existingMetadata: entry.metadata,

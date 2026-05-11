@@ -32,6 +32,10 @@ function clampProbability(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
 
+function normalizeConfidence(value: number | undefined): number {
+  return clampProbability(value ?? DEFAULT_EMOTIONAL_CONFIDENCE);
+}
+
 function normalizeCount(value: number | undefined): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.floor(value as number));
@@ -61,7 +65,7 @@ function normalizeTimeSeriesPoint(
   if (!Number.isFinite(point.valence)) return undefined;
   return {
     valence: round(clampUnit(point.valence as number)),
-    confidence: round(clampProbability(point.confidence)),
+    confidence: round(normalizeConfidence(point.confidence)),
     observedAtMs: normalizeObservedAtMs(point.observedAtMs),
   };
 }
@@ -109,7 +113,7 @@ export function appendEmotionalObservationToTimeSeries(
 ): EmotionalTimeSeriesPoint[] {
   const nextPoint: EmotionalTimeSeriesPoint = {
     valence: round(clampUnit(observation.valence)),
-    confidence: round(clampProbability(observation.confidence)),
+    confidence: round(normalizeConfidence(observation.confidence)),
     observedAtMs: normalizeObservedAtMs(observation.observedAtMs),
   };
   return finalizeTimeSeries(

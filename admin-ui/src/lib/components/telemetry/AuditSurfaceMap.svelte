@@ -37,10 +37,10 @@
     {
       title: 'Telemetry Stream / Audit Trail',
       contextLabel: 'The Sap',
-      description: 'Raw runtime event flow plus derived audit entries for tool use, memory mutation, external action, and policy decisions.',
-      source: 'admin telemetry event buffer',
+      description: 'Raw runtime event flow plus persisted audit history for tool use, activation failures, settings changes, charges, confirmations, external actions, and gateway policy decisions.',
+      source: 'Garden audit JSONL, gateway audit store, charge ledger, and live admin telemetry',
       operatorQuestion: 'What just happened, and was it allowed or denied?',
-      retention: 'In-browser live buffer',
+      retention: 'Persistent audit history plus live overlay',
       actions: [
         { kind: 'tab', tab: 'live', label: 'Live Events' },
         { kind: 'tab', tab: 'audit', label: 'Audit Trail' },

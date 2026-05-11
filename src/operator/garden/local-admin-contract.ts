@@ -1,4 +1,6 @@
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import { join } from 'node:path';
+import { readSQLiteGatewayAuditHistory } from '../../boundary/gateway/audit.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
@@ -42,6 +44,12 @@ import type {
 import { AdminChatBootstrapService } from './chat/bootstrap.js';
 import { AdminActionPipeDataService } from './services/action-pipe-service.js';
 import { AdminAdaptiveToolsDataService } from './services/adaptive-tools-service.js';
+import {
+  AdminAuditHistoryDataService,
+  GardenAuditHistoryJsonlStore,
+  type GatewayAuditHistoryReader,
+} from './services/audit-history-service.js';
+import { registerAuditTimelineSources } from './services/audit-event-collector.js';
 import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
@@ -99,6 +107,28 @@ export function createInProcessGardenAdminContract(
   });
   const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
   const chargeLedger = new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
+  const auditHistory = new AdminAuditHistoryDataService({
+    gardenStore: new GardenAuditHistoryJsonlStore(join(options.config.dataDir, 'garden-audit-history.jsonl')),
+    gatewayReader: resolveGatewayAuditReader(options.config),
+    chargeLedger,
+  });
+  registerAuditTimelineSources({
+    eventBus: options.eventBus,
+    activeToolInvocations: new Map(),
+    appendAuditTimelineEntry: (actionType, decision, narrative, details, actor) => {
+      const joinedDetails = details
+        ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
+        .join(' ');
+      auditHistory.appendGardenEntry({
+        actionType,
+        decision,
+        narrative,
+        ...(joinedDetails ? { details: joinedDetails } : {}),
+        ...(actor ? { actor } : {}),
+      });
+    },
+    resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
+  });
   const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
     resolvePromptRuntimeLayoutPath(companionDataDir),
   );
@@ -113,6 +143,7 @@ export function createInProcessGardenAdminContract(
       eventBus: options.eventBus,
       resolveLastActiveSessionId,
     }),
+    auditHistory,
     charges: new AdminChargeLedgerDataService(chargeLedger),
     actionPipe: options.postTurnActions
       ? new AdminActionPipeDataService(options.postTurnActions)
@@ -131,6 +162,18 @@ export function createInProcessGardenAdminContract(
       contactStore: options.contactStore,
       embeddingService: options.embeddingService,
       resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
+      appendAuditTimelineEntry: (actionType, decision, narrative, details) => {
+        const joinedDetails = details
+          ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
+          .join(' ');
+        auditHistory.appendGardenEntry({
+          actionType,
+          decision,
+          narrative,
+          ...(joinedDetails ? { details: joinedDetails } : {}),
+          actor: 'operator',
+        });
+      },
     }),
     sessions: new AdminSessionDataService({
       sessionStore: options.sessionStore,
@@ -161,6 +204,18 @@ export function createInProcessGardenAdminContract(
       sessionStore: options.sessionStore,
       sessionManager: options.sessionManager,
       resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
+      appendAuditTimelineEntry: (actionType, decision, narrative, details) => {
+        const joinedDetails = details
+          ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
+          .join(' ');
+        auditHistory.appendGardenEntry({
+          actionType,
+          decision,
+          narrative,
+          ...(joinedDetails ? { details: joinedDetails } : {}),
+          actor: 'operator',
+        });
+      },
       companionValuesLayerProvider: () => valuesJournal.buildCompanionDerivedLayer(),
     }),
     scheduler: new AdminSchedulerService(options.scheduler, options.config.dataDir),
@@ -176,4 +231,12 @@ export function createInProcessGardenAdminContract(
       resolveGlobalDefaultSessionId: resolveLastActiveSessionId,
     }),
   };
+}
+
+function resolveGatewayAuditReader(config: SubstrateConfig): GatewayAuditHistoryReader | null {
+  if ((config.persistenceBackend ?? 'sqlite') !== 'sqlite') {
+    return null;
+  }
+  const auditDbPath = process.env.AUDIT_DB_PATH?.trim() || join(config.dataDir, 'gateway-audit.db');
+  return query => readSQLiteGatewayAuditHistory(auditDbPath, query);
 }

@@ -10,6 +10,7 @@ import type {
   ReadJournalTailResult,
   ScanJournalMetadataOptions,
 } from './types.js';
+export type { JournalFileMetadata } from './types.js';
 import {
   appendJournalEntry,
   quarantineSidecarPath,

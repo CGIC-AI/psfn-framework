@@ -330,7 +330,7 @@ function parseFoldReviewRecord(value: unknown): ShardFoldReviewRecord | null {
   if (!shardId || !channelId || !task || !isRecord(lineage)) {
     return null;
   }
-  return value as ShardFoldReviewRecord;
+  return value as unknown as ShardFoldReviewRecord;
 }
 
 class ShardFoldReviewStore {

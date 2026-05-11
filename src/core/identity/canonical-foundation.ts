@@ -6,10 +6,10 @@ export const CANONICAL_CHARACTER_FOUNDATION_IDENTIFIER = 'main';
 export const CARD_BACKED_FOUNDATION_PROMPT_MESSAGE =
   'Character Foundation is human-owned prompt soil. Agent-side edits are blocked.';
 
-const CANONICAL_FOUNDATION_IDENTIFIERS = new Set(
+const CANONICAL_FOUNDATION_IDENTIFIERS = new Set<string>(
   FOUNDATION_SECTION_DEFINITIONS.map(section => section.identifier),
 );
-const CANONICAL_FOUNDATION_LAYER_NAMES = new Set(
+const CANONICAL_FOUNDATION_LAYER_NAMES = new Set<string>(
   FOUNDATION_SECTION_DEFINITIONS.map(section => section.layerName),
 );
 

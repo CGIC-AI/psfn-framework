@@ -103,6 +103,10 @@ import type {
   ShardFoldReviewRecord,
   ShardFoldReviewState,
 } from '../../../faculties/shards/fold-review.js';
+export type {
+  AdminAuditHistoryQuery,
+  AdminAuditHistoryService,
+} from './audit-history-service.js';
 
 export interface AdminDashboardData {
   stats: DashboardStats;

@@ -445,10 +445,11 @@ export function sanitizeTurnRetrievalTelemetry(
     retrievalSource,
     ...data
   } = payload as EventMap['memory.retrieval'] & Record<string, unknown>;
+  const normalizedTurnId = payload.turnId.trim();
 
   return {
     observedAt: Date.now(),
-    turnId: turnId.trim(),
+    turnId: normalizedTurnId,
     ...(typeof requestId === 'string' && requestId.trim().length > 0 ? { requestId: requestId.trim() } : {}),
     channelId,
     ...(typeof callType === 'string' ? { callType: callType as TurnObservabilityCallType } : {}),

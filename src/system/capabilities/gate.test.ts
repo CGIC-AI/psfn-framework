@@ -454,12 +454,19 @@ describe('capability tool gating', () => {
     expect(beads.executeSpy).not.toHaveBeenCalled();
     expect((readyDenied.content[0] as any).text).toContain('issue.read');
 
+    const implicitReadyGated = gateToolWithCapabilities(
+      beads.tool,
+      () => accessForTier('custom', ['issue.read']),
+    );
+    await implicitReadyGated.execute('beads-implicit-ready', {});
+    expect(beads.executeSpy).toHaveBeenCalledTimes(1);
+
     const createGated = gateToolWithCapabilities(
       beads.tool,
       () => accessForTier('custom', ['issue.read']),
     );
     const createDenied = await createGated.execute('beads-create', { action: 'create', title: 'Tracked work' });
-    expect(beads.executeSpy).not.toHaveBeenCalled();
+    expect(beads.executeSpy).toHaveBeenCalledTimes(1);
     expect((createDenied.content[0] as any).text).toContain('issue.write');
 
     const updateGated = gateToolWithCapabilities(
@@ -467,14 +474,14 @@ describe('capability tool gating', () => {
       () => accessForTier('apprentice'),
     );
     await updateGated.execute('beads-update', { action: 'issue_update', id: 'PSFN-1', status: 'in_progress' });
-    expect(beads.executeSpy).toHaveBeenCalledTimes(1);
+    expect(beads.executeSpy).toHaveBeenCalledTimes(2);
 
     const closeGated = gateToolWithCapabilities(
       beads.tool,
       () => accessForTier('autonomous'),
     );
     await closeGated.execute('beads-close', { action: 'close', id: 'PSFN-1', reason: 'done' });
-    expect(beads.executeSpy).toHaveBeenCalledTimes(2);
+    expect(beads.executeSpy).toHaveBeenCalledTimes(3);
   });
 
   it('evaluates toolset capability requirements by action', async () => {

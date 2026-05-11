@@ -117,7 +117,7 @@ function resolveUnifiedToolRequirement(
       if (action === 'inspect' || action === 'status' || action === 'diff' || action === null) return 'git.read';
       return ['git.read', 'git.write'];
     case 'beads':
-      if (action === 'ready' || action === 'issue_ready' || action === 'show' || action === 'issue_show') return 'issue.read';
+      if (action === null || action === 'ready' || action === 'issue_ready' || action === 'show' || action === 'issue_show') return 'issue.read';
       if (action === 'create' || action === 'issue_create' || action === 'update' || action === 'issue_update') return 'issue.write';
       if (action === 'close' || action === 'issue_close' || action === 'sync' || action === 'issue_sync') return 'issue.close';
       return ['issue.read', 'issue.write', 'issue.close'];

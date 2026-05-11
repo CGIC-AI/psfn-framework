@@ -8,6 +8,8 @@ type AgentLoopErrorEvent = {
   messages: AgentMessage[];
 };
 
+const DEFAULT_MAX_ASSISTANT_STEPS_PER_RUN = 8;
+
 export function agentLoopWithScheduler(
   prompts: AgentMessage[],
   context: AgentContext,
@@ -83,6 +85,7 @@ async function runLoop(
   schedulerOptions: ToolCallSchedulerOptions,
 ) {
   let firstTurn = true;
+  let assistantStepCount = 0;
   let pendingMessages = (await config.getSteeringMessages?.()) || [];
 
   for (;;) {
@@ -104,6 +107,19 @@ async function runLoop(
           newMessages.push(message);
         }
         pendingMessages = [];
+      }
+
+      assistantStepCount += 1;
+      if (assistantStepCount > DEFAULT_MAX_ASSISTANT_STEPS_PER_RUN) {
+        const message = buildLoopLimitMessage(config, assistantStepCount);
+        currentContext.messages.push(message);
+        newMessages.push(message);
+        stream.push({ type: 'message_start', message });
+        stream.push({ type: 'message_end', message });
+        stream.push({ type: 'turn_end', message, toolResults: [] });
+        stream.push({ type: 'agent_end', messages: newMessages });
+        stream.end(newMessages);
+        return;
       }
 
       const message = await streamAssistantResponse(currentContext, config, signal, stream, streamFn);
@@ -153,6 +169,39 @@ async function runLoop(
 
   stream.push({ type: 'agent_end', messages: newMessages });
   stream.end(newMessages);
+}
+
+function buildLoopLimitMessage(
+  config: AgentLoopConfig,
+  stepCount: number,
+): AssistantMessage {
+  return {
+    role: 'assistant',
+    content: [{
+      type: 'text',
+      text: `Turn stopped after ${stepCount - 1} assistant steps without bounded completion. Retry with a narrower request or fewer dependent tool calls.`,
+    }],
+    api: config.model.api,
+    provider: config.model.provider,
+    model: config.model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    stopReason: 'error',
+    errorMessage: 'agent_loop_step_limit_exceeded',
+    timestamp: Date.now(),
+  } as AssistantMessage;
 }
 
 async function streamAssistantResponse(

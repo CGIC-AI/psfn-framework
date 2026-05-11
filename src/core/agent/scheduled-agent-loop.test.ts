@@ -196,4 +196,41 @@ describe('scheduled-agent-loop stream result contract', () => {
       .toBe('Scheduled agent loop requires an explicit streamFn; direct provider fallback is disabled.');
     expect(events.some((event) => event.type === 'message_end' && event.message?.role === 'assistant')).toBe(false);
   });
+
+  it('stops repeated follow-up continuations with a bounded diagnostic', async () => {
+    const streamFn = makeStreamFn('value');
+    const events: any[] = [];
+    const config = {
+      ...makeLoopConfig(),
+      getFollowUpMessages: async () => [{
+        role: 'user',
+        content: [{ type: 'text', text: 'continue' }],
+        timestamp: Date.now(),
+      }],
+    };
+
+    const stream = agentLoopWithScheduler(
+      [{ role: 'user', content: [{ type: 'text', text: 'hello' }] } as any],
+      {
+        systemPrompt: 'system prompt',
+        messages: [],
+        tools: [],
+      } as any,
+      config as any,
+      new AbortController().signal,
+      streamFn as any,
+      { maxParallelToolCalls: 1 },
+    );
+
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(streamFn).toHaveBeenCalledTimes(8);
+    const finalAssistant = [...events].reverse().find(
+      (event) => event.type === 'message_end' && event.message?.role === 'assistant',
+    )?.message;
+    expect(finalAssistant?.errorMessage).toBe('agent_loop_step_limit_exceeded');
+    expect(finalAssistant?.content?.[0]?.text).toContain('Turn stopped after 8 assistant steps');
+  });
 });

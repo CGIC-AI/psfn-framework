@@ -285,6 +285,54 @@ describe('tool-call-scheduler', () => {
     expect((result.toolResults[2] as ToolResultMessage).isError).toBe(false);
   });
 
+  it('skips remaining sequential calls after a tool error so dependent chains can retry after seeing results', async () => {
+    const tool = makeTool(
+      'memory_patch',
+      async (toolCallId) => {
+        if (toolCallId === 'call-2') {
+          throw new Error('memory_id is required');
+        }
+        return {
+          content: [{ type: 'text', text: `done:${toolCallId}` }],
+          details: {},
+        };
+      },
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:memory_patch',
+        }),
+      },
+    );
+    const telemetry = vi.fn();
+
+    const result = await executeToolCallsWithScheduler(
+      [tool],
+      makeAssistantMessage(['memory_patch', 'memory_patch', 'memory_patch']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, onTelemetry: telemetry },
+    );
+
+    expect(result.toolResults).toHaveLength(3);
+    expect((result.toolResults[0] as ToolResultMessage).isError).toBe(false);
+    expect((result.toolResults[1] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[2] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[2] as ToolResultMessage).content).toEqual([
+      {
+        type: 'text',
+        text: 'Skipped because an earlier sequential tool call failed. Read the tool result and retry only the needed follow-up call.',
+      },
+    ]);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.skipped',
+      expect.objectContaining({
+        skippedCount: 1,
+        reason: 'prior_tool_error',
+      }),
+    );
+  });
+
   it('skips remaining queued calls when steering messages arrive mid-batch', async () => {
     let steeringPollCount = 0;
     const telemetry = vi.fn();

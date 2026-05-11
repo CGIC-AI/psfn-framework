@@ -415,7 +415,8 @@ export function createMemoryPatchTool(writer: MemoryWriter): AgentTool<any> {
     name: 'memory_patch',
     description:
       'Patch specific fields on an existing memory without deleting or superseding it. '
-      + 'Use for surgical belief correction, emotional-weight adjustment, or tag/provenance correction.',
+      + 'Use for surgical belief correction, emotional-weight adjustment, or tag/provenance correction. '
+      + 'memory_id must be the plain memory id string. If you need an id from memory action=write, call memory first, read its tool result, then call memory_patch in a later assistant step.',
     label: 'memory_patch',
     parameters: Type.Object({
       memory_id: Type.String({ description: 'Memory ID to patch.' }),

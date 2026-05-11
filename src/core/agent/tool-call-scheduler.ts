@@ -24,6 +24,8 @@ interface ToolExecutionContext {
 export interface ToolExecutionResult {
   toolResults: ToolResultMessage[];
   steeringMessages?: AgentMessage[];
+  haltRemaining?: boolean;
+  haltReasonText?: string;
 }
 
 type QueuedMessageSkipReason =
@@ -100,6 +102,23 @@ export async function executeToolCallsWithScheduler(
     steeringMessages = batchResults.steeringMessages;
     index += batch.length;
 
+    if (batchResults.haltRemaining) {
+      const remainingDescriptors = descriptors.slice(index);
+      if (remainingDescriptors.length > 0) {
+        const resultText = batchResults.haltReasonText
+          ?? 'Skipped because an earlier sequential tool call failed. Read the tool result and retry only the needed follow-up call.';
+        options.onTelemetry?.('agent.tools.scheduler.skipped', {
+          reason: 'prior_tool_error',
+          skippedCount: remainingDescriptors.length,
+          skippedTools: remainingDescriptors.map((entry: ToolCallDescriptor) => entry.toolCall.name),
+        });
+        for (const descriptor of remainingDescriptors) {
+          results.push(skipToolCall(descriptor.toolCall, context.stream, resultText));
+        }
+      }
+      break;
+    }
+
     if (steeringMessages && steeringMessages.length > 0) {
       const remainingDescriptors = descriptors.slice(index);
       const attribution = resolveQueuedMessageAttribution(steeringMessages);
@@ -131,6 +150,13 @@ async function executeSequentialBatch(
   for (const descriptor of descriptors) {
     const result = await executeSingleToolCall(descriptor, context, options);
     results.push(result);
+    if (result.isError) {
+      return {
+        toolResults: results,
+        haltRemaining: true,
+        haltReasonText: 'Skipped because an earlier sequential tool call failed. Read the tool result and retry only the needed follow-up call.',
+      };
+    }
 
     if (getSteeringMessages) {
       const steeringMessages = await getSteeringMessages();

@@ -41,6 +41,18 @@ describe('beads tool', () => {
     expect(ops.show).toHaveBeenCalledWith({ id: 'PSFN-9', actor: 'agent-main' });
   });
 
+  it('explains required plain id shape before dispatching show', async () => {
+    const ops = createMockOps();
+    const tool = createBeadsTool(ops);
+
+    const result = await tool.execute('call-show-missing-id', { action: 'show', actor: 'agent-main' });
+
+    expect(ops.show).not.toHaveBeenCalled();
+    expect(resultText(result)).toContain('action=show requires id as a plain non-empty string');
+    expect(resultText(result)).toContain('"id":"PSFN-123"');
+    expect(result.details?.isError).toBe(true);
+  });
+
   it('creates, updates, and closes issues through the unified tool surface', async () => {
     const ops = createMockOps();
     const tool = createBeadsTool(ops);

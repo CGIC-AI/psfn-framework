@@ -102,6 +102,22 @@ function normalizeBeadsAction(params: BeadsToolParams): BeadsAction {
   throw new Error(`action is required. Supported actions: ${BEADS_ACTION_HELP}`);
 }
 
+function requirePlainStringParam(
+  params: BeadsToolParams,
+  key: 'id' | 'title' | 'reason',
+  action: BeadsAction,
+  example: string,
+): string {
+  const value = params[key];
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(
+      `action=${action} requires ${key} as a plain non-empty string. `
+      + `Example: ${example}. Do not pass a whole issue object, payload array, or nested JSON object.`,
+    );
+  }
+  return value.trim();
+}
+
 export function createBeadsTool(ops: BeadsOperations): AgentTool<any> {
   return {
     name: 'beads',
@@ -109,6 +125,8 @@ export function createBeadsTool(ops: BeadsOperations): AgentTool<any> {
     description:
       'Unified tracked-work surface for beads issue discovery and mutation. '
       + 'Use action=ready|show|create|update|close|sync. '
+      + 'Use id as a plain string such as "PSFN-123" for action=show|update|close; do not pass the whole ready payload or issue object. '
+      + 'If you need an id from action=ready, call ready first, read its tool result, then call show/update/close in a later assistant step. '
       + 'Legacy issue_* aliases remain accepted as action values only.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
@@ -178,10 +196,13 @@ export function createBeadsTool(ops: BeadsOperations): AgentTool<any> {
             case 'ready':
               return await ops.ready({ actor: params.actor });
             case 'show':
-              return await ops.show({ id: params.id!, actor: params.actor });
+              return await ops.show({
+                id: requirePlainStringParam(params, 'id', 'show', '{"action":"show","id":"PSFN-123"}'),
+                actor: params.actor,
+              });
             case 'create':
               return await ops.create({
-                title: params.title!,
+                title: requirePlainStringParam(params, 'title', 'create', '{"action":"create","title":"Tracked work"}'),
                 issueType: params.issue_type,
                 priority: params.priority,
                 deps: params.deps,
@@ -190,15 +211,15 @@ export function createBeadsTool(ops: BeadsOperations): AgentTool<any> {
               });
             case 'update':
               return await ops.update({
-                id: params.id!,
+                id: requirePlainStringParam(params, 'id', 'update', '{"action":"update","id":"PSFN-123","status":"in_progress"}'),
                 status: params.status,
                 priority: params.priority,
                 actor: params.actor,
               });
             case 'close':
               return await ops.close({
-                id: params.id!,
-                reason: params.reason!,
+                id: requirePlainStringParam(params, 'id', 'close', '{"action":"close","id":"PSFN-123","reason":"Completed"}'),
+                reason: requirePlainStringParam(params, 'reason', 'close', '{"action":"close","id":"PSFN-123","reason":"Completed"}'),
                 actor: params.actor,
               });
             case 'sync':

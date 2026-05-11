@@ -131,7 +131,7 @@ src/
 │   ├── core-memory/        #   Pinned/permanent core memory slots
 │   ├── memory/             #   L2 memory: SQLite vec0, MemoryRetriever (trust-gated), extraction
 │   ├── north-star/         #   Long-term goal tracking
-│   ├── shards/             #   Ephemeral sub-agents (spawn_shard), max 5 concurrent
+│   ├── shards/             #   Shard manager plus bounded spawn_subagent bridge
 │   ├── skills/             #   Skill storage, loading, and tools
 │   ├── subagents/          #   Named persistent sub-agent management
 │   └── values/             #   Values journal and tools
@@ -308,7 +308,7 @@ src/
 | `agent/background-completion-delivery-queue.ts` | Queue for async background completions |
 
 **Key patterns**:
-- `coreTools` / `extendedTools` split: `load_tools` meta-tool hot-swaps to extended set; reset each turn
+- `coreTools` / `extendedTools` split: `tool_search` discovers non-default tools and `toolset` activates or pins them; unpinned activation is turn-local
 - `steer()` — mid-stream interrupt for concurrent channel messages (Discord steer vs defer-latest)
 - `followUp()` — queues a follow-up after the agent goes idle
 - `buildRuntimeContext()` — injects date/time/channel/trust/model/tool directory into system prompt
@@ -394,7 +394,7 @@ src/
 |------|---------|
 | `contacts/store.ts` | ContactStore: CRUD, trust level management |
 | `contacts/types.ts` | Contact interface, RelationshipType, TrustLevel |
-| `contacts/tools.ts` | 4 agent tools: contact_set_trust, contact_note, contact_lookup, contact_list |
+| `contacts/tools.ts` | Unified `contact` tool plus selected mutation compatibility helpers |
 | `contacts/identity-verification.ts` | Identity verification helpers |
 
 ---
@@ -407,7 +407,7 @@ src/
 | File | Purpose |
 |------|---------|
 | `scheduler/scheduler.ts` | Core scheduler: task registry, tick, wall-clock cadence |
-| `scheduler/heartbeat-policy.ts` | HeartbeatPolicyStore: 4 default reflection templates, atomic JSON persist |
+| `scheduler/heartbeat-policy.ts` | HeartbeatPolicyStore: consolidated daily-review and weekly-review templates, atomic JSON persist |
 | `scheduler/schedule-tool.ts` | Unified `schedule` tool for task and reflection-template operations |
 
 **Default reflection templates**: daily-review and weekly-review, scheduled during the configured rest window when enabled.
@@ -416,17 +416,17 @@ src/
 
 ### `core/tools` — Tool Registry
 
-**Purpose**: Manages the tool catalog. Registers tools as `core` or `extended`. `load_tools` meta-tool (always in core) hot-swaps to the extended set. Each turn resets back to core tools.
+**Purpose**: Manages the tool catalog. Registers tools as `core` or `extended`. `tool_search` and `toolset` are always-on control tools for discovery, same-turn activation, and pinning. Unpinned overlay activation is turn-local.
 
 **Key files**:
 | File | Purpose |
 |------|---------|
+| `agent/substrate-agent/adaptive-tools-runtime.ts` | `tool_search` and `toolset` discovery/control implementation |
 | `tools/registry.ts` | Tool registry: register, list, get by name |
-| `tools/load-tools.ts` | `load_tools` meta-tool implementation |
 
-**Core tools**: analysis_workbench, spawn_shard, memory_write/import, contact_lookup/list, self_restart/rebuild, load_tools
+**Core tools**: `tool_search`, `toolset`, `analysis_workbench`, `fs`, `repo`, `web`, `shell`, `memory`, `scratchpad`, `contact`, `session`, `identity`, `orient`, `schedule`, `system`, `skill`, `subagent`
 
-**Extended tools** (loaded on demand): 6 git, 4 prompt, 3 heartbeat/schedule, contact_set_trust, contact_note + more
+**Extended tools** (activated or pinned on demand): selected memory/contact mutation helpers, `vault`, `beads`, `notify`, `media`, `spawn_subagent`, values helpers, and other gated overlays
 
 ---
 
@@ -455,9 +455,9 @@ src/
 | `memory/extraction/prompt.ts` | Extraction prompt (updated for relational memories) |
 | `memory/store.ts` | SQLite vec0 store: CRUD, nearest-neighbor search |
 | `memory/decay.ts` | Salience decay scheduler task |
-| `memory/tools.ts` | memory_write, memory_import_batch agent tools |
+| `memory/tools.ts` | Unified `memory` and `scratchpad` tools plus selected mutation compatibility helpers |
 
-**Memory types**: episodic, semantic, procedural, emotional, relational (with optional contactId FK)
+**Memory types**: episodic, semantic, emotional, procedural, boundary, reflection, relational
 
 **Sensitivity levels**: public → personal → intimate → confidential
 
@@ -469,15 +469,15 @@ src/
 
 ---
 
-### `faculties/shards` — Ephemeral Sub-Agents
+### `faculties/shards` — Shards and Bounded Worker Launch
 
-**Purpose**: Manages ephemeral sub-agents launched via `spawn_shard`. Each shard gets a unique `shard:<uuid>` channelId, shares the parent's LLM/memory, has no extraction/archival, depth=1 max (no sub-shards), max 5 concurrent.
+**Purpose**: Manages shard execution internals and exposes the current bounded `spawn_subagent` launch helper for short-horizon parallel work. Bounded workers return text/artifacts to the parent and must not become separate minds or mutate the parent runtime in place.
 
 **Key files**:
 | File | Purpose |
 |------|---------|
 | `shards/manager.ts` | ShardManager: lifecycle, concurrency cap, cleanup |
-| `shards/tools.ts` | spawn_shard agent tool |
+| `shards/tools.ts` | `spawn_subagent` bounded worker launch helper |
 
 ---
 
@@ -571,7 +571,7 @@ src/
 - Conversation Roots — session viewer
 - Garden Visitors — contacts + trust management
 - Prompt Soil — layered prompt stack editor
-- Garden Rhythms — scheduler + heartbeat templates
+- Garden Rhythms — scheduler + daily/weekly reflection templates
 - Active Branches — shard viewer
 - Identity — character card display
 - Settings — all ~120 editable settings with validation ranges
@@ -939,12 +939,12 @@ All tools follow the `AgentTool` pattern from `@mariozechner/pi-agent-core`:
 4. Add Garden UI form field in `operator/garden/`
 
 **To add a new prompt layer**:
-1. Use `prompt_update` agent tool (or `PromptLayerStore.upsert()` directly)
+1. Use `identity action="update_layer"` (or `PromptLayerStore.upsert()` directly)
 2. Set `LayerType` appropriately (base/operator/runtime/channel/task)
 3. Agent cannot modify `base` or `operator` layers — only runtime/channel/task
 
 **To add a scheduled reflection template**:
-1. Use `schedule action="upsert_template"` or the Garden scheduler UI
+1. Use `schedule action="update_template"` or the Garden scheduler UI
 2. Or edit `HeartbeatPolicyStore` directly
 3. Templates sync to scheduler tasks as `reflection:<id>` on startup
 

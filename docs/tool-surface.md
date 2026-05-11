@@ -44,41 +44,45 @@ Always-on adaptive control:
 - `tool_search`
 - `toolset`
 
-Already unified top-level direct tools in the current runtime:
+Unified top-level direct tools in the current runtime:
 
+- `fs`
+- `repo`
 - `shell`
+- `web`
 - `skill`
 - `orient`
 - `memory`
 - `scratchpad`
+- `contact`
 - `session`
 - `identity`
 - `north_star`
 - `schedule`
 - `system`
 - `subagent`
+- `vault`
+- `beads`
+- `notify`
+- `media`
 
-Still-split first-party direct tools in the current runtime:
+Still-split or compatibility direct tools in the current runtime:
 
-- memory mutation legacy aliases: `memory_import_batch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_write`
-- filesystem: `fs_list`, `fs_read`
-- contacts: `contact_list`, `contact_lookup`, `contact_note`, `contact_set_trust`, `contact_link_identity`, `contact_set_channel_privacy`
-- repository: `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr`
+- memory mutation helpers: `memory_import_batch`, `memory_patch`, `memory_redact`, `memory_delete`, `undo_memory_delete`, `scratchpad_write`
+- contact mutation helpers: `contact_note`, `contact_set_trust`, `contact_link_identity`, `contact_set_channel_privacy`
 - session continuity helpers: `session_new`, `session_resume`, `start_focus`, `complete_focus`
-- direction legacy aliases: `character_card_update`, `north_star_*`
 - values: `values_add`, `values_update`
-- vault: `vault_write`, `vault_read`, `vault_search`, `vault_daily`
-- beads: `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`
-- lifecycle and operator control legacy aliases: `settings_get`, `promoted_tools_*`, `self_restart`, `self_rebuild`, `notify_operator`
-- images: `image_create`, `image_edit`, `image_analyze`
-- shards: `spawn_shard`
+- promoted-tool compatibility helpers: `promoted_tools_*`
+- media compatibility helpers: `image_create`, `image_edit`, `image_analyze`, plus dedicated `selfie_create`
+- bounded worker launch helper: `spawn_subagent`
 
 Important current-state notes:
 
 - `load_tools` is no longer a live runtime control tool. Tool discovery and activation now run through `tool_search` and `toolset`.
+- `fs_list`, `fs_read`, `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr`, `vault_*`, `issue_*`, `settings_get`, `self_restart`, `self_rebuild`, and `notify_operator` are historical or action-alias names, not the preferred model-facing control path.
 - Transcript lookup now stays on the direct `session` tool; the split `session_search`, `session_grep`, and `session_list` registrations are no longer live.
-- Unified `memory`, `scratchpad`, `session`, and `orient` are live direct tools on this branch, while only the remaining write/mutation helpers stay split during migration.
-- Unified `identity`, `north_star`, `schedule`, and `system` are live direct tools on this branch. Legacy prompt-layer and heartbeat/scheduling aliases are not the model-facing control path.
+- Unified `memory`, `scratchpad`, `contact`, `session`, and `orient` are live direct tools on this branch, while only selected write/mutation helpers stay split during migration.
+- Unified `identity`, `north_star`, `schedule`, `system`, `vault`, `beads`, `notify`, and `media` are live direct tools on this branch. Legacy prompt-layer, lifecycle, operator-notification, vault, beads, and heartbeat/scheduling aliases are not the model-facing control path.
 
 ## Target Identity Surface
 
@@ -253,8 +257,7 @@ The target model-facing `system` surface collapses safe runtime-setting reads an
 The target model-facing `shard` surface collapses long-horizon shard work and fold-back lifecycle control into one tool.
 
 - Actions: `spawn`, `list`, `status`, `deliver`
-- Legacy action alias remains available inside the same tool:
-  `spawn_shard` -> `spawn`
+- Current Sprint 8 bounded parallel work uses `spawn_subagent`; the old `spawn_shard` name is historical and should not be used in active prompts or checklists.
 - `list` and `status` are anchored on the live shard runtime snapshot/detail views instead of ad hoc summaries
 - `deliver` wires to the real shard delivery path, which transitions available artifacts into delivered state and refreshes fold-back review metadata
 
@@ -313,24 +316,24 @@ The table below maps current first-party tool names to the target surface. It is
 | `list_concerns` | `orient` | background-only | Concern visibility belongs to the same active-state lane. |
 | `resolve_concern` | `orient` | background-only | Concern resolution closes the loop on active-state tracking. |
 | `persona_update` | `identity` | always-on | Collapsed into `identity action=update_persona` with the existing review guards preserved. |
-| `character_card_update` | `identity` | extended | Character-card mutation belongs to identity. |
+| `character_card_update` | `identity` | hidden | Historical prompt/persona mutation name; use `identity action="update_persona"`. |
 | `north_star` | `north_star` | extended | Unified long-horizon guiding-intent surface with `action=list|create|update|delete|reorder`; keep it semantic and non-core. |
-| `settings_get` | `system` | always-on | Runtime-setting reads are system guidance, not identity. |
+| `settings_get` | `system` | hidden | Historical top-level name; runtime-setting reads use `system action="read"`. |
 | `tool_search` | `tool_search` | always-on | Primary discovery surface for non-default tools; pair it with `toolset` for activation or pinning. |
 | `promoted_tools_list` | `toolset` | hidden | Legacy promoted-tool helper now collapses into `toolset action="list"`. |
 | `promoted_tools_add` | `toolset` | hidden | Legacy promoted-tool helper now collapses into `toolset action="pin"`. |
 | `promoted_tools_remove` | `toolset` | hidden | Legacy promoted-tool helper now collapses into `toolset action="unpin"`. |
 | `promoted_tools_swap` | `toolset` | hidden | Legacy slot-reorder helper is no longer model-facing. |
 | `load_tools` | `toolset` | hidden | `load_tools` no longer ships as a live runtime control tool on this branch; use `toolset action="activate"` for discovery-driven activation. |
-| `fs_read` | `fs` | always-on | Collapsed into `fs action="read"`. |
-| `fs_list` | `fs` | always-on | Collapsed into `fs action="list"`. |
+| `fs_read` | `fs` | hidden | Historical top-level name; use `fs action="read"`. |
+| `fs_list` | `fs` | hidden | Historical top-level name; use `fs action="list"`. |
 | `shell_exec` | `shell` | always-on | Direct command execution now belongs on `shell action="exec"`; the `analysis_workbench` helper remains bounded and secondary. |
-| `repo_status` | `repo` | always-on | Repository inspection belongs under one primitive. |
-| `repo_diff` | `repo` | always-on | Same family. |
-| `repo_apply_patch` | `repo` | extended | Mutation stays gated. |
-| `repo_commit` | `repo` | extended | Mutation stays gated. |
-| `repo_create_branch` | `repo` | extended | Mutation stays gated. |
-| `repo_open_pr` | `repo` | extended | Mutation stays gated. |
+| `repo_status` | `repo` | hidden | Historical top-level name; use `repo action="inspect" target="status"`. |
+| `repo_diff` | `repo` | hidden | Historical top-level name; use `repo action="inspect" target="diff"`. |
+| `repo_apply_patch` | `repo` | hidden | Historical top-level name; use gated `repo action="patch"` when mutation is explicitly enabled. |
+| `repo_commit` | `repo` | hidden | Historical top-level name; use gated `repo action="commit"` when mutation is explicitly enabled. |
+| `repo_create_branch` | `repo` | hidden | Historical top-level name; use gated `repo action="branch"` when mutation is explicitly enabled. |
+| `repo_open_pr` | `repo` | hidden | Historical top-level name; use `repo action="publish"`. |
 | `issue_ready` | `beads` | hidden | Legacy alias now maps to `beads action="ready"`. |
 | `issue_show` | `beads` | hidden | Legacy alias now maps to `beads action="show"`. |
 | `issue_create` | `beads` | hidden | Legacy alias now maps to `beads action="create"`. |
@@ -339,29 +342,30 @@ The table below maps current first-party tool names to the target surface. It is
 | `issue_sync` | `beads` | hidden | Legacy alias now maps to `beads action="sync"`. |
 | `beads` | `beads` | extended | Unified tracked-work surface with `action=ready|show|create|update|close|sync`; read-style actions share one registration, but mutation remains explicit via `action`. |
 | `session_new` | `session` | always-on | Continuity and conversation workflow belong together. |
-| `session_list` | `session` | always-on | Same family. |
+| `session_list` | `session` | hidden | Historical top-level name; use `session action="list"`. |
 | `session_resume` | `session` | extended | Resume is a workflow action, not a read-only query. |
-| `session_search` | `session` | always-on | Same family. |
-| `session_grep` | `session` | always-on | Same family. |
-| `continuity_list` | `session` | always-on | Session-scoped low-stress continuity lookup now maps to `action="list_continuity"`. |
-| `wake_return_summary` | `session` | always-on | Wake/return continuity summaries now map to `action="wake_return"`. |
+| `session_search` | `session` | hidden | Historical top-level name; use `session action="search"`. |
+| `session_grep` | `session` | hidden | Historical top-level name; use `session action="grep"`. |
+| `continuity_list` | `session` | hidden | Historical top-level name; use `session action="list_continuity"`. |
+| `wake_return_summary` | `session` | hidden | Historical top-level name; use `session action="wake_return"`. |
 | `start_focus` | `session` | extended | Focus sessions are workflow state. |
 | `complete_focus` | `session` | extended | Same family. |
-| `self_restart` | `system` | always-on | Collapsed into `system action="restart"`; lifecycle safeguards and capability checks still gate execution. |
-| `self_rebuild` | `system` | always-on | Collapsed into `system action="rebuild"` with the same safeguards. |
+| `self_restart` | `system` | hidden | Historical top-level name; use `system action="restart"` with the same safeguards. |
+| `self_rebuild` | `system` | hidden | Historical top-level name; use `system action="rebuild"` with the same safeguards. |
 | `notify` | `notify` | extended | Unified notify surface with `action=brief|send|approval_request`. |
 | `notify_operator` | `notify` | hidden | Legacy operator alert behavior now maps to `notify action="brief"`. |
 | `web_fetch` | `web` | always-on | Collapsed into `web action="fetch"` for ordinary remote page retrieval through the default gateway lane. |
 | `crawler_fetch` | `web` | always-on | Collapsed into `web action="browse"` so crawler-lane use stays explicit without creating a second top-level web tool. |
 | `web_research` | `web` | always-on | Collapsed into `web action="search"` for small-scope URL discovery + fetch; do not confuse with `session search` or transcript recall. |
 | `subagent` | `subagent` | extended | Unified bounded-worker control plane; keep distinct from long-horizon shard work. |
-| `spawn_shard` | `shard` | extended | Legacy action/name now collapses into `shard action="spawn"`; long-horizon clone work is shard work, not subagent work, and forked shards intentionally inherit typed parent context snapshots and a stable prompt prefix. |
+| `spawn_subagent` | `subagent` | extended | Current bounded parallel launch helper for short-horizon work. It is not the long-horizon shard surface. |
+| `spawn_shard` | `shard` | hidden | Historical name from the pre-consolidation surface. Do not use it in active prompts or checklists; future long-horizon shard work should converge on `shard action="spawn"`. |
 | `analysis_workbench` | `analysis_workbench` | always-on | Bounded RLM+REPL analysis for large files, codebases, logs, transcripts, datasets, or evidence sets. Not for routine reasoning, tool discovery, schema confusion, simple lookup, or state changes. |
 | `skill` | `skill` | always-on | Unified surface with `action=list|view|create|update`; skills stay discoverable and managed-skill mutation remains explicit on the same semantic tool. |
-| `vault_write` | `vault` | extended | Collapsed into `vault action="write"`; vault stays for durable notes/artifacts, not scratchpad or memory. |
-| `vault_read` | `vault` | always-on | Collapsed into `vault action="read"`. |
-| `vault_search` | `vault` | always-on | Collapsed into `vault action="search"`. |
-| `vault_daily` | `vault` | extended | Collapsed into `vault action="daily"`; daily journaling stays on the same durable note surface. |
+| `vault_write` | `vault` | hidden | Historical top-level name; use `vault action="write"`. |
+| `vault_read` | `vault` | hidden | Historical top-level name; use `vault action="read"`. |
+| `vault_search` | `vault` | hidden | Historical top-level name; use `vault action="search"`. |
+| `vault_daily` | `vault` | hidden | Historical top-level name; use `vault action="daily"`. |
 | `image_create` | `media` | extended | Collapsed into `media action="generate"`; detailed prompt craft belongs in creator skills, not runtime context. |
 | `image_edit` | `media` | extended | Collapsed into `media action="edit"` on the same surface. |
 | `image_analyze` | `media` | extended | Collapsed into `media action="analyze"` on the same surface. |

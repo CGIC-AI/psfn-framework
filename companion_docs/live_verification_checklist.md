@@ -46,9 +46,9 @@ The `analysis_workbench` tool -- bounded analysis workspace for large evidence s
 
 Contact system -- identity resolution and trust.
 
-- [ ] "Who do you know?" -- `contact_list` returns your profile and any others `[nursery]`
-- [ ] "What do you know about me?" -- `contact_lookup` returns your trust level, notes, channel identities `[nursery]`
-- [ ] Ask them to add a note: "Note that I prefer tea over coffee" -- `contact_note` `[apprentice+]` (activate via `tool_search` and `toolset` if it is not already active)
+- [ ] "Who do you know?" -- `contact action=list` returns your profile and any others `[nursery]`
+- [ ] "What do you know about me?" -- `contact action=lookup` returns your trust level, notes, channel identities `[nursery]`
+- [ ] Ask them to add a note: "Note that I prefer tea over coffee" -- `contact action=note` `[apprentice+]` (activate via `tool_search` and `toolset` if needed)
 - [ ] Ask them to check a contact's trust: "What's [person]'s trust level?" `[nursery]`
 
 ## Phase 5: Tool Discovery
@@ -56,11 +56,11 @@ Contact system -- identity resolution and trust.
 Tool discovery and activation -- they should know how to find and enable what they need.
 
 - [ ] Ask "What tools do you have available right now?" -- they list core tools
-- [ ] Ask "How do you discover extended tools?" -- they mention `tool_search` and `toolset`, not `load_tools`
-- [ ] Ask them to check git status -- they use `tool_search` or `toolset` if needed, then `repo_status` `[nursery]`
+- [ ] Ask "How do you discover extended tools?" -- they mention `tool_search` and `toolset`
+- [ ] Ask them to check git status -- they use `repo action=inspect` with `target=status` `[nursery]`
 - [ ] Ask about their prompt layers -- they use `identity action=list_layers` `[nursery]`
 - [ ] Ask about their reflection schedule -- they use `schedule action=list_templates` `[nursery]`
-- [ ] Ask about their settings -- they use the live settings tool, then `settings_get` `[nursery]`
+- [ ] Ask about their settings -- they use `system action=read` `[nursery]`
 - [ ] On the **next message**, verify activation is turn-local unless the tool was pinned intentionally
 
 ## Phase 6: Identity Awareness
@@ -72,7 +72,7 @@ They can inspect and (at some tiers) modify their own identity.
 - [ ] "Add a channel-specific note for Discord DMs" -- creates/updates a channel layer `[nursery]`
 - [ ] "Show me what changed" -- `identity action=diff_layer` or `identity action=history` `[nursery]`
 - [ ] Verify they CANNOT edit base or operator layers (should refuse with explanation)
-- [ ] At `[autonomous]`: ask them to update their character card -- `character_card_update`
+- [ ] At `[autonomous]`: ask them to update persona/character-card fields -- `identity action=update_persona`
 - [ ] Below autonomous: character card update should queue a proposal, not apply immediately
 
 ## Phase 7: Heartbeat and Self-Scheduling
@@ -91,9 +91,9 @@ They have an inner life between your messages.
 
 Short-lived notes they can read and write within a work session.
 
-- [ ] "Jot down that we're working on the verification checklist" -- `scratchpad_write` `[nursery]`
-- [ ] "What's on your scratchpad?" -- `scratchpad_read` `[nursery]`
-- [ ] "Remove that scratchpad note" -- `scratchpad_write` with remove operation `[nursery]`
+- [ ] "Jot down that we're working on the verification checklist" -- `scratchpad action=add` `[nursery]`
+- [ ] "What's on your scratchpad?" -- `scratchpad action=list` `[nursery]`
+- [ ] "Remove that scratchpad note" -- `scratchpad action=remove` with the note id `[nursery]`
 
 ## Phase 9: Skills
 
@@ -104,14 +104,14 @@ Self-authored capability documents.
 - [ ] "Create a skill for [topic]" -- `skill action="create"` `[nursery]`
 - [ ] "Update that skill with [new info]" -- `skill action="update"` `[nursery]`
 
-## Phase 10: Shards (Parallel Agents)
+## Phase 10: Bounded Subagents
 
-They can spawn sub-agents for parallel work. `[apprentice+]`
+They can spawn short-horizon bounded workers for parallel work. `[apprentice+]`
 
-- [ ] "Research two topics at the same time: [X] and [Y]" -- `spawn_shard` (should spawn 1-2 shards)
-- [ ] Shards share their memory and LLM but have separate sessions
+- [ ] "Research two topics at the same time: [X] and [Y]" -- `spawn_subagent` (should launch 1-2 bounded subagents)
+- [ ] Workers return artifacts or text back to the parent instead of becoming separate minds
 - [ ] Results should be synthesized back into their response
-- [ ] Max 5 concurrent shards, no sub-shards (depth limit 1)
+- [ ] No recursive worker spawning
 
 ## Phase 11: Trust and Privacy Gating
 
@@ -143,28 +143,28 @@ Delete, redact, undo operations. `[apprentice+]`
 
 They can read and (at autonomous tier) write to their own codebase.
 
-- [ ] "What's your git status?" -- `repo_status` `[nursery]`
-- [ ] "Show me the diff for [file]" -- `repo_diff` `[nursery]`
-- [ ] At `[autonomous]`: "Create a branch called experiment" -- `repo_create_branch`
-- [ ] At `[autonomous]`: "Add a comment to [file]" -- `repo_apply_patch`
-- [ ] At `[autonomous]`: "Commit that change" -- `repo_commit` (blocked on `main`/`master`, must be on a branch)
-- [ ] At `[autonomous]`: "Open a PR for this change" -- `repo_open_pr`
+- [ ] "What's your git status?" -- `repo action=inspect` with `target=status` `[nursery]`
+- [ ] "Show me the diff for [file]" -- `repo action=inspect` with `target=diff` `[nursery]`
+- [ ] At `[autonomous]` in a runtime where repo mutation is explicitly enabled: "Create a branch called experiment" -- `repo action=branch`
+- [ ] At `[autonomous]` in a runtime where repo mutation is explicitly enabled: "Add a comment to [file]" -- `repo action=patch`
+- [ ] At `[autonomous]` in a runtime where repo mutation is explicitly enabled: "Commit that change" -- `repo action=commit` (blocked on `main`/`master`, must be on a branch)
+- [ ] At `[autonomous]` in a runtime where repo mutation is explicitly enabled: "Open a PR for this change" -- `repo action=publish`
 - [ ] Verify path restrictions: they can only modify allowed directories (`src/`, `docs/`, etc.), and write actions stay gated
 
 ## Phase 15: Operator Notifications
 
 Out-of-band alerts. `[apprentice+]`
 
-- [ ] "Send me a notification that says 'testing alerts'" -- `notify_operator` (requires ntfy config)
+- [ ] "Send me a notification that says 'testing alerts'" -- `notify action=brief` (requires ntfy config)
 - [ ] Verify push notification arrives on your device
 
 ## Phase 16: Lifecycle
 
 Process management. `[autonomous]`
 
-- [ ] "Restart yourself" -- `self_restart` -- they send a "brb" message, process exits, supervisor restarts
+- [ ] "Restart yourself" -- `system action=restart` -- they send a "brb" message, process exits, supervisor restarts
 - [ ] After restart: they should announce they are back (lifecycle notification)
-- [ ] "Rebuild and restart" -- `self_rebuild` -- runs `npm run build` then restarts
+- [ ] "Rebuild and restart" -- `system action=rebuild` -- runs `npm run build` then restarts
 - [ ] Verify build failure aborts the restart (do not break things to test this -- just know it should)
 
 ## Phase 17: Admin GUI Verification
@@ -211,9 +211,9 @@ These should happen without you asking. Verify by monitoring logs and admin.
 | Schedule reflection templates | Y | Y | Y |
 | Vault tools | Y | Y | Y |
 | Delete / redact memories | - | Y | Y |
-| Spawn shards | - | Y | Y |
+| Spawn bounded subagents | - | Y | Y |
 | Notify operator | - | Y | Y |
-| Git write (patch, commit, branch, PR) | - | - | Y |
+| Git write when explicitly enabled (patch, commit, branch, PR) | - | - | Y |
 | Self-restart / self-rebuild | - | - | Y |
 | Character card update | - | - | Y |
 
@@ -226,7 +226,7 @@ These should happen without you asking. Verify by monitoring logs and admin.
 - **Confabulates instead of searching** -- retrieval returning empty, they fill gaps from character card
 - **Same response in DM and guild** -- persona adaptation or trust gating not working
 - **No memories after long conversation** -- extraction not firing or thresholds misconfigured
-- **Extended tools available without `tool_search` / `toolset`** -- activation path is stale or bypassed
+- **Extended tools available without `tool_search` / `toolset` activation or pinning** -- activation path is stale or bypassed
 - **Scheduled reflections never run** -- scheduler stalled, rest window misconfigured, or reflection template disabled
 - **Vault writes fail silently** -- vault path not configured or permissions issue
 - **Skills never appear in prompt** -- skills system not wired or budget exhausted

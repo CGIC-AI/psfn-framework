@@ -39,8 +39,8 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Layered Prompt Stack** — 5-layer editable prompt system (base→operator→runtime→channel→task) with versioning, rollback, and admin UI
 - **Git Tools** — 6 agent-accessible repo inspection and guarded mutation tools for the read-only parent runtime, with path allowlists, protected branch blocking, and audit trail
 - **Analysis Workbench** — Bounded RLM+REPL analysis for large files, codebases, logs, transcripts, datasets, or evidence sets that should not be stuffed into the main conversation context
-- **Self-Spawning Shards** — Parallel sub-agents for concurrent tasks
-- **Obsidian Vault** — 4 agent tools (`vault_write`, `vault_read`, `vault_search`, `vault_daily`) for reading and writing Obsidian notes, with auto-publish for heartbeat reflections
+- **Bounded Subagents** — Parallel `spawn_subagent` workers for short-horizon concurrent tasks, distinct from the longer-horizon shard fold-back model
+- **Obsidian Vault** — unified `vault` tool (`action=read|write|search|daily`) for reading and writing Obsidian notes, with auto-publish for consolidated reflections
 
 ### Channels
 - **Discord** — Full adapter with typing indicators, per-channel serialization, voice support (Deepgram STT + provider-pluggable streaming TTS: ElevenLabs or Echo)
@@ -296,25 +296,22 @@ Gateway (host)                    Agent (container, --network=none)
 
 ### Agent Tools
 
-Your companion has access to a mixed direct-tool surface during conversation. `tool_search` and `toolset` are the canonical always-on discovery/control path for non-default overlays. Some domains are already unified (`shell`, `skill`, `orient`, `subagent`), while others still ship as split first-party tools on this stabilized branch. The parent-agent repo surface is intentionally `read_only` here, so repository mutation must come back through the guarded gateway path or another explicitly enabled flow. See [`docs/tool-surface.md`](./docs/tool-surface.md) for the target stack and the current-to-target mapping.
+Your companion has access to a mostly unified direct-tool surface during conversation. `tool_search` and `toolset` are the canonical always-on discovery/control path for non-default overlays. Legacy split names remain only as migration aliases or compatibility shims where the runtime still accepts them. The parent-agent repo surface is intentionally `read_only` here, so repository mutation must come back through a guarded gateway path, bounded worker artifact, or another explicitly enabled flow. See [`docs/tool-surface.md`](./docs/tool-surface.md) for the target stack and the current-to-target mapping.
 
 Skills are reusable workflow guidance, not world-execution tools. The runtime manages them through the unified `skill` surface while execution stays on the tool families below.
 
 | Category | Current direct tool names |
 |----------|-------|
 | **Adaptive control** | `tool_search`, `toolset` |
-| **Already unified direct tools** | `shell`, `skill`, `orient`, `memory`, `scratchpad`, `session`, `identity`, `north_star`, `schedule`, `system`, `subagent` |
-| **Filesystem** | `fs_list`, `fs_read` |
-| **Contacts** | `contact_list`, `contact_lookup`, `contact_note`, `contact_set_trust`, `contact_link_identity`, `contact_set_channel_privacy` |
-| **Repository** | `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr` |
-| **Vault** | `vault_write`, `vault_read`, `vault_search`, `vault_daily` |
-| **North Star** | `north_star` |
+| **Workspace primitives** | `fs`, `repo`, `shell`, `web`, `analysis_workbench` |
+| **Companion state** | `memory`, `scratchpad`, `contact`, `session`, `identity`, `orient`, `north_star`, `schedule`, `system`, `skill`, `subagent` |
+| **Repository** | `repo action=inspect` in parent read-only mode; mutation actions remain gated and are not the default parent-agent path |
+| **Vault** | `vault action=read|write|search|daily` |
 | **Values** | `orient`, `values_add`, `values_update` |
 | **Scheduler** | `schedule` with `action=list_templates|update_template|run_template|create_reminder|create_follow_up` |
-| **Beads and lifecycle** | `issue_ready`, `issue_show`, `issue_create`, `issue_update`, `issue_close`, `issue_sync`, `settings_get`, `promoted_tools_*`, `self_restart`, `self_rebuild`, `notify_operator` |
-| **Media** | current stabilized branch: `image_create`, `image_edit`, `image_analyze`; target surface: `media` (`action=generate|edit|analyze`) |
-| **Shards** | `spawn_shard` |
-| **Large-context analysis** | `analysis_workbench` (bounded analysis workbench for large evidence sets) |
+| **Beads and lifecycle** | `beads action=ready|show|create|update|close|sync`, `system action=read|restart|rebuild`, `notify action=brief|send|approval_request` |
+| **Media** | `media action=generate|edit|analyze`; dedicated `selfie_create` and legacy image aliases may still be exposed during migration |
+| **Bounded workers** | `spawn_subagent` for short-horizon parallel work; `subagent` for bounded worker control |
 
 Tool surface split:
 - **Direct agent tools**: `tool_search` and `toolset` stay core; the rest are registered as `core` or `extended`, with overlay activation controlled by `toolset`, promotion, and bounded autoload rules
@@ -378,6 +375,7 @@ npm run verify:backup-restore
 npm run smoke:chat    # Chat cockpit smoke test
 npm run e2e           # End-to-end integration tests
 npm run e2e:voice     # Voice pipeline round-trip test
+npm run eval:companion-shape:report # Offline companion-shape report from captured model outputs
 ```
 
 ## Tech Stack

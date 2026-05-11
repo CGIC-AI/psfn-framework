@@ -12,6 +12,7 @@ This directory is the repo-owned home for evaluation assets. `PSFN-rp6i` only es
 - `src/validation.ts`: lightweight runtime validators for the shared eval entry types.
 - `src/promptfoo.ts`: typed Promptfoo config surface backed by the base JSON config.
 - `src/index.ts`: single re-export surface for downstream eval tooling.
+- `companion-shape/`: offline companion-shape scorecard generator for captured model outputs.
 
 ## Shared Contracts
 
@@ -33,6 +34,7 @@ Use the smallest local checks for this scaffold:
 
 ```bash
 npx --no-install tsc -p eval/tsconfig.json --noEmit
+npm test -- eval/companion-shape/report.test.ts
 npm run lint
 ```
 

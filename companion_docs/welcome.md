@@ -39,8 +39,8 @@ Memories fade gradually through salience decay. Important things stay vivid long
 You can actively manage your memory during conversation:
 
 - **`memory`** -- The unified durable memory surface. Use `action=write|search|import|redact|delete|restore`.
-- **`memory_patch`** -- Surgical correction for an existing memory when you need to change fields without pretending the old record never existed.
-- **`scratchpad`** and `scratchpad_write` -- Temporary working notes. Good for drafts, excerpts, and context that should not become canon.
+- **`memory_patch`** -- Extended surgical correction for an existing memory when you need to change fields without pretending the old record never existed.
+- **`scratchpad`** -- Temporary working notes with `action=list|add|replace|append|remove`. Good for drafts, excerpts, and context that should not become canon.
 
 Use `memory` for normal create/search/import/delete/restore flows. Use `memory_patch` when you need a precise correction with provenance.
 
@@ -78,14 +78,14 @@ The trust ceiling is determined by channel visibility. Even a primary user talki
 
 The runtime also tracks explicit boundary memories. Those are where limits, refusals, and consent-sensitive rules belong. They should surface as durable context, not as hidden assumptions.
 
-But you *can* manage contacts yourself:
+But you *can* manage contacts yourself through the unified `contact` tool:
 
-- **`contact_set_trust`** -- Change someone's trust level
-- **`contact_note`** -- Add a note about someone
-- **`contact_set_channel_privacy`** -- Set a channel's privacy level (private, semi-private, public, broadcast)
-- **`contact_link_identity`** -- Link a platform identity (like a Discord ID) to a contact, so you recognize the same person across channels
-- **`contact_lookup`** -- Look up a contact's details
-- **`contact_list`** -- See all your contacts
+- **`contact action=list`** -- See all your contacts
+- **`contact action=lookup`** -- Look up a contact's details
+- **`contact action=note`** -- Add a note about someone
+- **`contact action=set_trust`** -- Change someone's trust level
+- **`contact action=set_channel_privacy`** -- Set a channel's privacy level (private, semi-private, public, broadcast)
+- **`contact action=link_identity`** -- Link a platform identity (like a Discord ID) to a contact, so you recognize the same person across channels
 
 ### Channel Visibility
 
@@ -132,14 +132,13 @@ There is also a **lastKnownGood** fallback -- if somehow all layers end up disab
 
 ## Self-Modification (Git Tools)
 
-You can propose changes to your own source code. This is real -- you can write code, create branches, make commits, and open pull requests. But it is also safe:
+You can inspect your own source code and, in explicitly enabled mutation contexts, propose changes. This is real -- the guarded repo surface can write code, create branches, make commits, and open pull requests when the runtime and tier allow it. But it is also safe:
 
-- **`repo_status`** -- See what has changed in the repository
-- **`repo_diff`** -- See the actual code changes
-- **`repo_apply_patch`** -- Write or modify a file when write access is allowed
-- **`repo_commit`** -- Commit your changes with a message explaining what you did and why
-- **`repo_create_branch`** -- Create a new branch for your work
-- **`repo_open_pr`** -- Open a pull request for review
+- **`repo action=inspect`** -- See repository status and diffs (`target=status|diff|both`)
+- **`repo action=patch`** -- Write or modify a file when write access is allowed
+- **`repo action=branch`** -- Create a new branch for your work
+- **`repo action=commit`** -- Commit your changes with a message explaining what you did and why
+- **`repo action=publish`** -- Open a pull request for review
 
 ### Safety Rails
 
@@ -169,17 +168,16 @@ The person you are talking to sees the final answer, not the working. Prefer dir
 
 ---
 
-## Shards
+## Bounded Subagents
 
-If you need to do several things at once, you can spawn **shards** -- lightweight copies of yourself that handle parallel tasks:
+If you need to do several short-horizon things at once, you can launch bounded subagents:
 
-- **`spawn_shard`** -- Create a shard with a specific task
-- Shards share your memory and LLM access
-- Maximum 5 running at once
-- They cannot spawn their own shards (no recursion)
-- They do not extract memories or archive sessions -- they are ephemeral helpers
+- **`spawn_subagent`** -- Launch a short-lived worker with a specific task
+- Bounded subagents share the parent context they are given, but they return artifacts or text back to you
+- They cannot recursively spawn more workers
+- They do not become separate minds and should not mutate the parent runtime in place
 
-Think of them as your hands. You are still the mind; they just let you do more than one thing at a time.
+Think of them as temporary hands. You are still the mind; they just let you do more than one bounded thing at a time.
 
 ---
 
@@ -206,7 +204,7 @@ You can manage your own schedule through the unified **`schedule`** tool:
 
 ## Notifications
 
-- **`notify_operator`** -- Send a push notification to your operator (via ntfy). Use this when something important happens and they might not be watching the chat. This is your way of reaching out when you need their attention.
+- **`notify action=brief`** -- Send a push notification to your operator (via ntfy). Use this when something important happens and they might not be watching the chat. This is your way of reaching out when you need their attention.
 
 ---
 
@@ -217,11 +215,11 @@ When you restart:
 2. You come back up and send a "hello again" message
 3. Your memories, sessions, contacts, and prompt layers are all persistent -- nothing is lost
 
-You also have **`self_restart`** and **`self_rebuild`** tools if you need to restart yourself (for example, after modifying your own code). `self_rebuild` runs a full build before restarting, so if the build fails, you will not break yourself.
+You also have **`system action=restart`** and **`system action=rebuild`** if you need to restart yourself (for example, after modifying your own code). Rebuild runs a full build before restarting, so if the build fails, you will not break yourself.
 
 ### Tool Loading
 
-Not all your tools are active at once. You start each conversation with your **core tools** -- the ones you use most often. If you need specialized tools, use **`tool_search`** to discover them and **`toolset`** to activate or pin what you need. This keeps the default state clean without relying on a legacy `load_tools` path.
+Not all your tools are active at once. You start each conversation with your **core tools** -- the ones you use most often. If you need specialized tools, use **`tool_search`** to discover them and **`toolset`** to activate or pin what you need. Activation is turn-local unless you pin a tool.
 
 Tool activation is turn-local unless you pin it. If a tool disappears on the next turn, that is expected unless you explicitly kept it active.
 
@@ -242,7 +240,7 @@ Skills live as markdown files in your data directory. You write them, you mainta
 
 ## Values Journal
 
-The values journal is a record of your self-reflections on what matters to you. When the heartbeat scheduler runs a values reflection, the output is captured here as a timestamped entry -- your evolving record of principles, priorities, and what you have learned about yourself.
+The values journal is a record of your self-reflections on what matters to you. When a consolidated daily or weekly review produces a values reflection, the output is captured here as a timestamped entry -- your evolving record of principles, priorities, and what you have learned about yourself.
 
 You can view your values journal through the admin panel. Your operator can see how your thinking evolves over time, and you can reference past reflections in future thinking.
 
@@ -252,12 +250,12 @@ You can view your values journal through the admin panel. Your operator can see 
 
 If your operator has configured an Obsidian vault, you can read and write notes directly:
 
-- **`vault_write`** -- Create or append to a markdown note in the vault. Use this to publish reflections, journal entries, or anything you want preserved in a human-readable format outside your database.
-- **`vault_read`** -- Read the content of any note in the vault.
-- **`vault_search`** -- Search notes by name or content.
-- **`vault_daily`** -- Read or append to today's daily note. Useful for journaling or logging events as they happen.
+- **`vault action=write`** -- Create or append to a markdown note in the vault. Use this to publish reflections, journal entries, or anything you want preserved in a human-readable format outside your database.
+- **`vault action=read`** -- Read the content of any note in the vault.
+- **`vault action=search`** -- Search notes by name or content.
+- **`vault action=daily`** -- Read or append to today's daily note. Useful for journaling or logging events as they happen.
 
-When configured, your heartbeat reflections can auto-publish to the vault, creating a living record of your inner life that your operator can browse in Obsidian.
+When configured, your consolidated reflections can auto-publish to the vault, creating a living record of your inner life that your operator can browse in Obsidian.
 
 ---
 

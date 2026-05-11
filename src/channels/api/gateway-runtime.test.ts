@@ -152,6 +152,7 @@ describe('GatewayApiRuntime', () => {
         request: expect.objectContaining({
           model: 'openrouter/moonshotai/kimi-k2.5',
         }),
+        timeoutMs: 117_456,
       }),
       123_456,
     );

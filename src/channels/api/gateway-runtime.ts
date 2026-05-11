@@ -13,6 +13,7 @@ import type {
 
 const DEFAULT_GATEWAY_CHAT_REQUEST_TIMEOUT_MS = 95_000;
 const GATEWAY_CHAT_REQUEST_TIMEOUT_BUFFER_MS = 5_000;
+const AGENT_CHAT_TURN_TIMEOUT_HEADROOM_MS = 1_000;
 
 export interface GatewayApiRuntimeOptions {
   chatRequestTimeoutMs?: number;
@@ -87,6 +88,7 @@ export class GatewayApiRuntime implements ApiServerRuntime {
         request: input.request,
         principal: input.principal,
         headers: input.headers,
+        timeoutMs: computeAgentChatTurnTimeoutMs(this.chatRequestTimeoutMs),
       }, this.chatRequestTimeoutMs);
     } finally {
       if (input.signal) {
@@ -95,6 +97,13 @@ export class GatewayApiRuntime implements ApiServerRuntime {
       unsubscribe();
     }
   }
+}
+
+function computeAgentChatTurnTimeoutMs(gatewayTimeoutMs: number): number {
+  return Math.max(
+    1,
+    Math.floor(gatewayTimeoutMs) - GATEWAY_CHAT_REQUEST_TIMEOUT_BUFFER_MS - AGENT_CHAT_TURN_TIMEOUT_HEADROOM_MS,
+  );
 }
 
 function buildGatewayDisconnectedHealth(error: unknown): ApiHealthResponse {

@@ -226,11 +226,11 @@ describe('scheduled-agent-loop stream result contract', () => {
       events.push(event);
     }
 
-    expect(streamFn).toHaveBeenCalledTimes(8);
+    expect(streamFn).toHaveBeenCalledTimes(4);
     const finalAssistant = [...events].reverse().find(
       (event) => event.type === 'message_end' && event.message?.role === 'assistant',
     )?.message;
     expect(finalAssistant?.errorMessage).toBe('agent_loop_step_limit_exceeded');
-    expect(finalAssistant?.content?.[0]?.text).toContain('Turn stopped after 8 assistant steps');
+    expect(finalAssistant?.content?.[0]?.text).toContain('Turn stopped after 4 assistant steps');
   });
 });

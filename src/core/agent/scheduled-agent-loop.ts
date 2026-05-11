@@ -8,7 +8,7 @@ type AgentLoopErrorEvent = {
   messages: AgentMessage[];
 };
 
-const DEFAULT_MAX_ASSISTANT_STEPS_PER_RUN = 8;
+const DEFAULT_MAX_ASSISTANT_STEPS_PER_RUN = 4;
 
 export function agentLoopWithScheduler(
   prompts: AgentMessage[],

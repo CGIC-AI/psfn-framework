@@ -142,6 +142,7 @@ export interface ApiChatCompletionRpcParams {
   request: ChatCompletionRequest;
   principal: ApiAuthPrincipal;
   headers: ApiRpcHeaders;
+  timeoutMs?: number;
 }
 
 export interface ApiChatCompletionRpcSuccess {

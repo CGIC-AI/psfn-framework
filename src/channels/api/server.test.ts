@@ -1414,7 +1414,7 @@ describe('ApiServer', () => {
       } as unknown as SubstrateAgent;
 
       await server.stop();
-      server = new ApiServer({
+      server = createApiServer({
         port,
         agentLoop: mockAgent,
         eventBus,

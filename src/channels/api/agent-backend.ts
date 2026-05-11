@@ -48,6 +48,7 @@ import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 const DEFAULT_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS = 65 * 60_000;
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
 const DIRECT_PROVIDER_OVERRIDE_ALLOWLIST = new Set(['anthropic', 'openai', 'google']);
+const MIN_CHAT_COMPLETION_TIMEOUT_MS = 1_000;
 
 const IDENTITY_CLAIM_HEADERS = {
   canonicalContactId: 'x-canonical-contact-id',
@@ -187,6 +188,7 @@ export class AgentApiBackend {
       request: params.request,
       principal: params.principal,
       headers: params.headers,
+      timeoutMs: params.timeoutMs,
       onDelta: params.request.stream && this.onStreamDelta
         ? (text) => this.onStreamDelta?.(params.requestId, text)
         : undefined,
@@ -211,6 +213,7 @@ export class AgentApiBackend {
     headers: ApiRpcHeaders;
     onDelta?: (text: string) => void | Promise<void>;
     signal?: AbortSignal;
+    timeoutMs?: number;
   }): Promise<ApiChatCompletionRpcResult> {
     const pendingTurn = await this.prepareTurn(
       params.request,
@@ -242,9 +245,24 @@ export class AgentApiBackend {
 
     const turnPromise = this.agentLoop.handleMessage(pendingTurn.value.substrateMsg);
     this.attachTurnCleanup(pendingTurn.value.releaseChannel, turnPromise);
+    const timeoutMs = this.normalizeChatCompletionTimeoutMs(params.timeoutMs);
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const turnTimeoutPromise = timeoutMs === null
+      ? null
+      : new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          this.abortActiveTurn(pendingTurn.value.channelId, 'timeout');
+          reject(new Error('api_chat_completion_timeout'));
+        }, timeoutMs);
+        timeoutHandle.unref();
+      });
 
     try {
-      const response = await turnPromise;
+      const response = await (
+        turnTimeoutPromise
+          ? Promise.race([turnPromise, turnTimeoutPromise])
+          : turnPromise
+      );
       return {
         ok: true,
         response: {
@@ -255,6 +273,9 @@ export class AgentApiBackend {
         },
       };
     } catch (error) {
+      if (error instanceof Error && error.message === 'api_chat_completion_timeout') {
+        return this.fail(504, 'request_timeout', 'Request timed out before turn completed');
+      }
       if (isBusyTurnError(error)) {
         return this.fail(503, 'agent_busy', 'Agent is already processing another prompt');
       }
@@ -264,6 +285,9 @@ export class AgentApiBackend {
     } finally {
       if (params.signal) {
         params.signal.removeEventListener('abort', onAbort);
+      }
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
       }
       unsubscribe();
       this.activeRequests.delete(params.requestId);
@@ -292,6 +316,16 @@ export class AgentApiBackend {
       return Math.floor(value);
     }
     return DEFAULT_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS;
+  }
+
+  private normalizeChatCompletionTimeoutMs(value: number | undefined): number | null {
+    if (value === undefined) {
+      return null;
+    }
+    if (!Number.isFinite(value) || value <= 0) {
+      return null;
+    }
+    return Math.max(MIN_CHAT_COMPLETION_TIMEOUT_MS, Math.floor(value));
   }
 
   private attachTurnCleanup(releaseChannel: () => void, turnPromise: Promise<unknown>): void {

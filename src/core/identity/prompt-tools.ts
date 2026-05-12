@@ -534,7 +534,8 @@ export function createIdentityTool(
     name: 'identity',
     description:
       'Unified identity surface for prompt-layer inspection, prompt-layer mutation, staged prompt commits/cancels, and persona updates. '
-      + 'Mutating actions remain capability-gated, audited, and confirmation/cooling-off guarded.',
+      + 'Mutating actions remain capability-gated, audited, and confirmation/cooling-off guarded. '
+      + 'For action=toggle_layer, the tool result is JSON containing layerId, previousEnabled, enabled, and state.',
     label: 'identity',
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
@@ -552,7 +553,7 @@ export function createIdentityTool(
         description:
           'Identity action. Required for all actions except empty-argument calls, which default to list_layers.',
       })),
-      layer_id: Type.Optional(Type.String({ description: 'Prompt layer ID (prefix match OK).' })),
+      layer_id: Type.Optional(Type.String({ description: 'Prompt layer ID. Prefer the full layer id from list_layers; prefix match is accepted.' })),
       content: Type.Optional(Type.String({ description: 'Replacement prompt-layer content for update_layer.' })),
       version: Type.Optional(Type.Number({ description: 'Historical prompt-layer version for diff_layer or rollback_layer.', minimum: 1 })),
       stage_id: Type.Optional(Type.String({ description: 'Staged prompt-layer edit ID for commit_stage or cancel_stage.' })),
@@ -689,7 +690,7 @@ export function createPromptLayerListTool(store: PromptLayerStatePort): AgentToo
             l.channelType ? `channel=${l.channelType}` : null,
             l.taskKind ? `task=${l.taskKind}` : null,
           ].filter(Boolean).join(', ');
-          return `[${status}] ${l.type}/${l.name} (v${l.version}, priority=${l.priority}${meta ? ', ' + meta : ''}) -- ${l.id.slice(0, 8)}`;
+          return `[${status}] ${l.type}/${l.name} (id=${l.id}, v${l.version}, priority=${l.priority}${meta ? ', ' + meta : ''})`;
         });
         return textResult(lines.join('\n'));
       } catch (error) {
@@ -1155,7 +1156,9 @@ export function createPromptLayerToggleTool(
   const confirmationQueue = options.confirmationQueue;
   const tool: AgentTool<any> = {
     name: 'prompt_layer_toggle',
-    description: 'Toggle a prompt layer on/off. Access is controlled by capability tier.',
+    description:
+      'Toggle a prompt layer on/off. Access is controlled by capability tier. '
+      + 'Successful runtime/channel/task toggles return JSON with layerId, previousEnabled, enabled, and state.',
     label: 'prompt_layer_toggle',
     parameters: Type.Object({
       layer_id: Type.String({ description: 'ID of the prompt layer to toggle (prefix match OK).' }),
@@ -1191,8 +1194,17 @@ export function createPromptLayerToggleTool(
           );
         }
 
+        const previousEnabled = layer.enabled;
         const toggled = store.toggle(layer.id);
-        return textResult(`Layer "${toggled.name}" is now ${toggled.enabled ? 'enabled' : 'disabled'}`);
+        return textResult(JSON.stringify({
+          action: 'toggle_layer',
+          layerId: toggled.id,
+          layerName: toggled.name,
+          layerType: toggled.type,
+          previousEnabled,
+          enabled: toggled.enabled,
+          state: toggled.enabled ? 'enabled' : 'disabled',
+        }, null, 2));
       } catch (error) {
         return textResultWithError(`prompt_layer_toggle failed: ${errorMessage(error)}`, true);
       }

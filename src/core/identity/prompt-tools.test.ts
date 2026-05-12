@@ -111,6 +111,51 @@ describe('Prompt Layer Tools', () => {
       expect(store.getById(layer.id)?.content).toBe('original');
     });
 
+    it('returns structured toggle proof from the unified identity tool', async () => {
+      const layer = store.create({ type: 'runtime', name: 'Runtime', content: 'runtime' });
+      const tool = gateToolWithCapabilities(
+        createIdentityTool(store),
+        () => accessForTier('nursery'),
+      );
+
+      const first = await tool.execute('identity-toggle-first', {
+        action: 'toggle_layer',
+        layer_id: layer.id,
+      });
+      const second = await tool.execute('identity-toggle-second', {
+        action: 'toggle_layer',
+        layer_id: layer.id,
+      });
+      const firstPayload = JSON.parse(resultText(first)) as {
+        action: string;
+        layerId: string;
+        previousEnabled: boolean;
+        enabled: boolean;
+        state: string;
+      };
+      const secondPayload = JSON.parse(resultText(second)) as {
+        layerId: string;
+        previousEnabled: boolean;
+        enabled: boolean;
+        state: string;
+      };
+
+      expect(firstPayload).toMatchObject({
+        action: 'toggle_layer',
+        layerId: layer.id,
+        previousEnabled: true,
+        enabled: false,
+        state: 'disabled',
+      });
+      expect(secondPayload).toMatchObject({
+        layerId: layer.id,
+        previousEnabled: false,
+        enabled: true,
+        state: 'enabled',
+      });
+      expect(store.getById(layer.id)?.enabled).toBe(true);
+    });
+
     it('queues protected prompt-layer updates from the unified identity tool', async () => {
       const queue = new ConfirmationQueue({ idFactory: () => 'identity-layer-1' });
       const layer = createNonFoundationBaseLayer('Self Addendum', 'self-addendum');
@@ -160,6 +205,7 @@ describe('Prompt Layer Tools', () => {
 
       expect(text).toContain('[ON] base/Base');
       expect(text).toContain('[ON] runtime/Runtime');
+      expect(text).toContain('id=');
       expect(text).toContain('priority=5');
       expect(text).toContain('channel=discord_text');
     });
@@ -804,8 +850,11 @@ describe('Prompt Layer Tools', () => {
 
       const result = await tool.execute('test', { layer_id: layer.id });
       const text = resultText(result);
+      const payload = JSON.parse(text) as { layerId: string; enabled: boolean; state: string };
 
-      expect(text).toContain('disabled');
+      expect(payload.layerId).toBe(layer.id);
+      expect(payload.enabled).toBe(false);
+      expect(payload.state).toBe('disabled');
       expect(store.getById(layer.id)?.enabled).toBe(false);
     });
 
@@ -820,8 +869,11 @@ describe('Prompt Layer Tools', () => {
       );
       const result = await tool.execute('test', { layer_id: layer.id });
       const text = resultText(result);
+      const payload = JSON.parse(text) as { layerId: string; enabled: boolean; state: string };
 
-      expect(text).toContain('enabled');
+      expect(payload.layerId).toBe(layer.id);
+      expect(payload.enabled).toBe(true);
+      expect(payload.state).toBe('enabled');
       expect(store.getById(layer.id)?.enabled).toBe(true);
     });
 

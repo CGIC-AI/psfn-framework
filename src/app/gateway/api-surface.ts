@@ -19,7 +19,7 @@ import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-parsing.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
-const GATEWAY_API_REQUEST_TIMEOUT_MS = 120_000;
+const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
 
 export interface GatewayApiSurfaceBindings {
   apiHost?: string;

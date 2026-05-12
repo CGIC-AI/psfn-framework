@@ -2357,6 +2357,95 @@ describe('SubstrateAgent.handleMessage', () => {
     );
   });
 
+  it('enriches memory retrieval with recent same-session context', async () => {
+    const config = makeConfig();
+    const sessionManager = makeMockSessionManager() as any;
+    sessionManager.captureTurnContextSnapshot = vi.fn().mockReturnValue({
+      channelId: 'test-channel',
+      recentEntries: [
+        {
+          id: 1,
+          channelId: 'test-channel',
+          role: 'user',
+          content: 'Earlier same-session marker alpha for a grounding probe.',
+          timestamp: 1_700_000_000_000,
+          metadata: JSON.stringify({
+            turn: {
+              turnId: '019e0000-0000-7000-8000-000000000001',
+              requestId: 'msg-prior-1',
+              sourceMessageId: 'msg-prior-1',
+              role: 'user',
+            },
+          }),
+        },
+        {
+          id: 2,
+          channelId: 'test-channel',
+          role: 'assistant',
+          content: '```json\n{"ack":true}\n```',
+          timestamp: 1_700_000_000_100,
+          metadata: JSON.stringify({
+            turn: {
+              turnId: '019e0000-0000-7000-8000-000000000001',
+              requestId: 'msg-prior-1',
+              sourceMessageId: 'msg-prior-1',
+              role: 'assistant',
+            },
+          }),
+        },
+        {
+          id: 3,
+          channelId: 'test-channel',
+          role: 'user',
+          content: TEST_USER_GREETING,
+          timestamp: 1_700_000_000_200,
+          metadata: JSON.stringify({
+            turn: {
+              turnId: '019e0000-0000-7000-8000-000000000002',
+              requestId: 'msg-context-enriched',
+              sourceMessageId: 'msg-context-enriched',
+              role: 'user',
+            },
+          }),
+        },
+      ],
+      compactionSummaryTexts: [],
+      focusKnowledgeTexts: [],
+      continuityEntries: [],
+      compactionPromptText: 'Compaction prompt snapshot',
+      versionPointer: 'session-context-enriched',
+    });
+    const memorySnapshot = {
+      channelId: 'test-channel',
+      contactEmotionalMemories: [],
+      semanticCandidates: [],
+      lexicalCandidates: [],
+      proactiveCandidates: [],
+      versionPointer: 'memory-context-enriched',
+    };
+    const mockMemory = {
+      captureTurnMemorySnapshot: vi.fn().mockResolvedValue(memorySnapshot),
+      retrieve: vi.fn().mockResolvedValue('Relevant memories here'),
+      retrieveProactiveRecall: vi.fn().mockResolvedValue(''),
+    };
+    const agent = new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
+    );
+    agent.memoryProvider = mockMemory as unknown as MemoryProvider;
+
+    await agent.handleMessage(makeMessage({ id: 'msg-context-enriched' }));
+
+    const retrievalQuery = mockMemory.captureTurnMemorySnapshot.mock.calls[0]?.[0];
+    expect(retrievalQuery).toContain(TEST_USER_GREETING);
+    expect(retrievalQuery).toContain('Earlier same-session marker alpha');
+    expect(retrievalQuery).toContain('```json {"ack":true} ```');
+    expect(retrievalQuery).not.toContain(`${TEST_USER_GREETING}\n\n${TEST_USER_GREETING}`);
+    expect(retrievalQuery.indexOf('Earlier same-session marker alpha')).toBeLessThan(
+      retrievalQuery.indexOf(TEST_USER_GREETING),
+    );
+    expect(mockMemory.retrieve.mock.calls[0]?.[0]).toBe(retrievalQuery);
+  });
+
   it('appends spontaneous recall when memory provider supports proactive retrieval', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();

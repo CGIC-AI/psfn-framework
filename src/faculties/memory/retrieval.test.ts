@@ -53,9 +53,11 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
     searchByText: vi.fn().mockReturnValue([]),
     updateMemory: vi.fn(),
     getContactProfile: vi.fn().mockReturnValue(undefined),
+    getById: vi.fn().mockImplementation((id: string) => memories.find(memory => memory.id === id)),
     getMemoriesByContact: vi.fn().mockReturnValue([]),
     getMemoriesByChannel: vi.fn().mockReturnValue([]),
     getAllActiveMemories: vi.fn().mockReturnValue(memories),
+    listActiveMemories: vi.fn().mockReturnValue(memories),
   } as unknown as MemoryStorePort;
 }
 
@@ -1276,6 +1278,37 @@ describe('MemoryRetriever basic behavior', () => {
     });
   });
 
+  it('augments turn snapshots with recent matching memories when vector candidates are stale', async () => {
+    const staleSensitive = makeMemory({
+      id: 'stale-sensitive',
+      text: 'Old introspection grounding probe residue from another run.',
+      sensitivity: 'personal',
+      similarity: 0.95,
+      extractedAt: Date.now() - 60_000,
+    });
+    const recentPublic = makeMemory({
+      id: 'recent-public',
+      text: 'Fresh introspection grounding probe public memory for current review.',
+      sensitivity: 'public',
+      similarity: 0.2,
+      tags: ['introspection-grounding', 'current-review'],
+      extractedAt: Date.now(),
+    });
+    const store = makeMockStore([staleSensitive]);
+    (store.listActiveMemories as ReturnType<typeof vi.fn>).mockReturnValue([recentPublic, staleSensitive]);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const snapshot = await retriever.captureTurnMemorySnapshot(
+      'Continue the introspection grounding probe current review.',
+      'api:test',
+      'regular',
+    );
+
+    expect(snapshot.semanticCandidates.map(memory => memory.id)).toContain('recent-public');
+    expect(snapshot.withheldCandidateIds).toContain('stale-sensitive');
+  });
+
   it('fails closed when selected-memory access stat persistence fails', async () => {
     const memories = [
       makeMemory({
@@ -1609,6 +1642,57 @@ describe('MemoryRetriever basic behavior', () => {
         'contact_profile_source_memory:mem-1',
       ],
     });
+  });
+
+  it('withholds contact profiles whose source memories are denied by consent policy', async () => {
+    const deniedSource = makeMemory({
+      id: 'mem-denied',
+      text: 'Consent denied profile source',
+      sensitivity: 'public',
+      consentFlags: { allowRecall: false },
+      contactId: 'contact-1',
+      similarity: 1,
+    });
+    const store = makeMockStore([]);
+    (store.getContactProfile as ReturnType<typeof vi.fn>).mockReturnValue({
+      contactId: 'contact-1',
+      summary: 'This profile summary was derived from a consent-denied source.',
+      sourceMemoryIds: [deniedSource.id],
+      confidenceScore: 0.88,
+      noveltyScore: 0.4,
+      updatedAt: Date.now(),
+    });
+    (store.getById as ReturnType<typeof vi.fn>).mockImplementation((id: string) => (
+      id === deniedSource.id ? deniedSource : undefined
+    ));
+    const embedding = makeMockEmbedding();
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
+
+    const result = await retriever.retrieve(
+      'test query',
+      'api:test',
+      'primary',
+      undefined,
+      'contact-1',
+    );
+
+    expect(result).not.toContain('Core profile for this person:');
+    expect(result).not.toContain('consent-denied source');
+
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls[0][0]).toBe('memory.retrieval');
+    expect(calls[0][1]).toMatchObject({
+      reason: 'no_candidates',
+      profileIncluded: false,
+      withheldCount: 1,
+      withheldReasonCounts: {
+        'consent.allow_recall_denied': 1,
+      },
+    });
+    expect(calls[0][1].provenanceRefs).not.toEqual(expect.arrayContaining([
+      `contact_profile_source_memory:${deniedSource.id}`,
+    ]));
   });
 
   it('uses visible social graph context to separate related people from canonical memories', async () => {

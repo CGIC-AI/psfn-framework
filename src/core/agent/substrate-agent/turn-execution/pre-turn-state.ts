@@ -20,6 +20,9 @@ import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
+const MEMORY_RETRIEVAL_RECENT_ENTRY_LIMIT = 6;
+const MEMORY_RETRIEVAL_RECENT_ENTRY_MAX_CHARS = 700;
+const MEMORY_RETRIEVAL_QUERY_MAX_CHARS = 6_000;
 
 export interface PreparedTurnIdentityState {
   authorContext: ResolvedAuthorContext;
@@ -49,6 +52,69 @@ export interface PreTurnComputationResult {
   memoryContextBlock: string;
   memoryContextChars: number;
   scratchpadBlock: string;
+}
+
+function truncateRetrievalContextEntry(value: string): string {
+  const compacted = value.replace(/\s+/g, ' ').trim();
+  if (compacted.length <= MEMORY_RETRIEVAL_RECENT_ENTRY_MAX_CHARS) {
+    return compacted;
+  }
+  return `${compacted.slice(0, MEMORY_RETRIEVAL_RECENT_ENTRY_MAX_CHARS - 3)}...`;
+}
+
+function parseSessionEntryRequestIds(metadata: string | undefined): Set<string> {
+  if (!metadata) return new Set();
+  try {
+    const parsed = JSON.parse(metadata) as { turn?: Record<string, unknown> };
+    const turn = parsed.turn;
+    if (!turn || typeof turn !== 'object') return new Set();
+    return new Set(
+      [turn.requestId, turn.sourceMessageId]
+        .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        .map(value => value.trim()),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function isCurrentTurnSessionEntry(
+  entry: TurnSessionContextSnapshot['recentEntries'][number],
+  message: SubstrateMessage,
+): boolean {
+  if (parseSessionEntryRequestIds(entry.metadata).has(message.id)) {
+    return true;
+  }
+  return entry.role === 'user' && entry.content === message.content;
+}
+
+function buildMemoryRetrievalContextText(
+  message: SubstrateMessage,
+  sessionContextSnapshot: TurnSessionContextSnapshot | undefined,
+): string {
+  const currentTurnText = message.content.trim();
+  const recentLines = (sessionContextSnapshot?.recentEntries ?? [])
+    .filter(entry => entry.role === 'user' || entry.role === 'assistant')
+    .filter(entry => !isCurrentTurnSessionEntry(entry, message))
+    .slice(-MEMORY_RETRIEVAL_RECENT_ENTRY_LIMIT)
+    .map(entry => truncateRetrievalContextEntry(entry.content))
+    .filter(line => line.trim().length > 0);
+
+  if (recentLines.length === 0) {
+    return message.content;
+  }
+
+  // Put continuity anchors first so lexical fallback can find long-lived thread terms
+  // instead of spending its limited token budget on generic current-turn phrasing.
+  const queryText = [
+    recentLines.join('\n'),
+    currentTurnText,
+  ].join('\n\n');
+
+  if (queryText.length <= MEMORY_RETRIEVAL_QUERY_MAX_CHARS) {
+    return queryText;
+  }
+  return queryText.slice(0, MEMORY_RETRIEVAL_QUERY_MAX_CHARS);
 }
 
 export async function prepareTurnIdentityState(input: {
@@ -239,6 +305,7 @@ export async function computePreTurnState(input: {
       turnBudgetCharacteristics,
     )
     : undefined;
+  const memoryRetrievalContextText = buildMemoryRetrievalContextText(message, sessionContextSnapshot);
   const [emotionSnapshot, memorySnapshot] = await Promise.all([
     runtime.emotionSelfModelRuntime.observeEmotionState(
       message.content,
@@ -246,7 +313,7 @@ export async function computePreTurnState(input: {
     ),
     memoryProvider && typeof memoryProvider.captureTurnMemorySnapshot === 'function'
       ? memoryProvider.captureTurnMemorySnapshot(
-        message.content,
+        memoryRetrievalContextText,
         message.channelId,
         trustLevel,
         channelMeta,
@@ -291,7 +358,7 @@ export async function computePreTurnState(input: {
       const memoriesBlockPromise = memoryProvider
         && !bypassMemoryForVisionTurn
         ? memoryProvider.retrieve(
-          message.content,
+          memoryRetrievalContextText,
           message.channelId,
           trustLevel,
           channelMeta,

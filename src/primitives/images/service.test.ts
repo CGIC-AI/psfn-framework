@@ -131,6 +131,50 @@ describe('ImageService', () => {
     });
   });
 
+  it('retries transient FAL fetch failures once before surfacing an image failure', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2') {
+        if (fetchMock.mock.calls.filter(([calledUrl]) => String(calledUrl) === url).length === 1) {
+          throw new TypeError('fetch failed');
+        }
+        return jsonResponse({
+          status: 'COMPLETED',
+          request_id: 'fal-retry-1',
+          response_url: 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-retry-1',
+        });
+      }
+
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-retry-1') {
+        return jsonResponse({
+          images: [
+            {
+              url: 'https://cdn.example.test/retry.png',
+              content_type: 'image/png',
+              file_name: 'retry.png',
+            },
+          ],
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'a lighthouse at dusk',
+    });
+
+    expect(result.requestId).toBe('fal-retry-1');
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === 'https://queue.fal.run/fal-ai/nano-banana-2')).toHaveLength(2);
+  });
+
   it('persists generated outputs into the companion images directory when companion storage is configured', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-image-service-'));
     tempDirs.push(companionDataDir);

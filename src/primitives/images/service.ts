@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { ComfyUiImageClient } from './comfyui.js';
-import { FalImageClient, isFalContentPolicyError } from './fal.js';
+import { FalApiError, FalImageClient, isFalContentPolicyError } from './fal.js';
 import { resolveInlineOrEnvCredential } from '../../boundary/custody/credential-vault.js';
 import { resolveConfiguredCompanionDataDir, resolveGeneratedImagesDir } from '../../persistence/layout.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -17,12 +17,21 @@ import type {
 } from './types.js';
 
 const log = createComponentLogger('ImageService');
+const FAL_TRANSIENT_ATTEMPTS = 2;
 
 function hasWorkflowForMode(
   config: ImageRuntimeConfig,
   mode: ImageMode,
 ): boolean {
   return Boolean(config.imageWorkflows?.comfyUi?.[mode]?.workflow);
+}
+
+function isTransientFalError(error: unknown): boolean {
+  if (error instanceof FalApiError) {
+    return error.status === 408 || error.status === 409 || error.status === 425 || error.status === 429 || error.status >= 500;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(fetch failed|network|timeout|timed out|econnreset|econnrefused|etimedout|socket hang up)\b/i.test(message);
 }
 
 function inferExtension(url: string, contentType: string | undefined): string {
@@ -123,9 +132,28 @@ export class ImageService implements ImageOperations {
     }
 
     try {
-      const result = mode === 'create'
-        ? await new FalImageClient(falApiKey, this.fetchImpl).create(params)
-        : await new FalImageClient(falApiKey, this.fetchImpl).edit(params);
+      const falClient = new FalImageClient(falApiKey, this.fetchImpl);
+      let result: ImageGenerationResult | null = null;
+      for (let attempt = 1; attempt <= FAL_TRANSIENT_ATTEMPTS; attempt += 1) {
+        try {
+          result = mode === 'create'
+            ? await falClient.create(params)
+            : await falClient.edit(params);
+          break;
+        } catch (error) {
+          if (attempt >= FAL_TRANSIENT_ATTEMPTS || !isTransientFalError(error)) {
+            throw error;
+          }
+          log.warn('Retrying transient FAL image request failure', {
+            mode,
+            attempt,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (!result) {
+        throw new Error('FAL image request did not return a result');
+      }
       return await this.persistGeneratedImages(result);
     } catch (error) {
       if (

@@ -114,6 +114,34 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     );
   });
 
+  it('removes analysis_workbench from routine memory-intent concern turns', () => {
+    const { facade, agent, emitTelemetry, correlation } = createFacade(null);
+    facade.registerTool(makeTool('orient'), 'core');
+    facade.registerTool(makeTool('memory'), 'core');
+    facade.registerTool(makeTool('analysis_workbench'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-concern-1',
+      channelId: 'api:routine-concern',
+      channelType: 'api',
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'Use orient to create_concern, list_concerns, resolve_concern, and list_concerns again.',
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    }, undefined, 'chat', correlation, { intent: 'memory', skipped: [] });
+
+    const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    expect(tools.map(tool => tool.name)).toEqual(['memory', 'orient']);
+    expect(emitTelemetry).toHaveBeenCalledWith(
+      'agent.tools.core_guardrail.skipped',
+      expect.objectContaining({
+        toolName: 'analysis_workbench',
+        intent: 'memory',
+        reason: 'routine_intent_direct_tool_path',
+      }),
+    );
+  });
+
   it('removes analysis_workbench from internal maintenance turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade('maintenance');
     facade.registerTool(makeTool('identity'), 'core');
@@ -143,7 +171,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     );
   });
 
-  it('keeps analysis_workbench available for non-maintenance large-evidence turns', () => {
+  it('keeps analysis_workbench available for explicit large-evidence turns', () => {
     const { facade, agent, correlation } = createFacade(null);
     facade.registerTool(makeTool('session'), 'core');
     facade.registerTool(makeTool('analysis_workbench'), 'core');
@@ -156,7 +184,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       authorName: 'User',
       content: 'Analyze this large transcript and evidence set.',
       timestamp: new Date('2026-04-23T12:00:00Z'),
-    }, undefined, 'chat', correlation, { intent: null, skipped: [] });
+    }, undefined, 'chat', correlation, { intent: 'memory', skipped: [] });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual(['analysis_workbench', 'session']);

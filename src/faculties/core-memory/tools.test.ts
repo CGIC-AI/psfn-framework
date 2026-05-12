@@ -263,4 +263,31 @@ describe('orient tool', () => {
     expect(resolvedPayload.resolved).toBe(true);
     expect(resolvedPayload.concern.resolutionOutcome).toBe('Handled in orient.');
   });
+
+  it('returns an actionable error when resolving a concern without concernId through orient', async () => {
+    const db = new Database(':memory:');
+    const concernStore = createConcernStorePort(new ActiveConcernStore(db));
+    const tool = createOrientTool({
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    }, {
+      concernStore,
+    });
+
+    const result = await tool.execute('call-concern-resolve-missing-id', {
+      action: 'resolve_concern',
+    });
+    const payload = JSON.parse(resultText(result)) as {
+      error: string;
+      required: string;
+      hint: string;
+    };
+
+    expect(result.details.isError).toBe(true);
+    expect(payload.error).toBe('missing_required_parameter');
+    expect(payload.required).toBe('concernId');
+    expect(payload.hint).toContain('concern.id');
+    expect(payload.hint).toContain('Do not use tool_search');
+  });
 });

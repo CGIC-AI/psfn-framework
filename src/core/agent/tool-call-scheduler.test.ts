@@ -71,6 +71,35 @@ function makeConcurrencyMeta(
 }
 
 describe('tool-call-scheduler', () => {
+  it('promotes tool result details.isError to the top-level tool result error flag', async () => {
+    const orient = makeTool(
+      'orient',
+      async () => ({
+        content: [{ type: 'text', text: 'resolve_concern failed: concernId is required' }],
+        details: { isError: true },
+      }),
+      { concurrency: makeConcurrencyMeta('exclusive') },
+    );
+    const streamEvents: any[] = [];
+
+    const result = await executeToolCallsWithScheduler(
+      [orient],
+      makeAssistantMessage(['orient']),
+      undefined,
+      { stream: { push: (event) => { streamEvents.push(event); } } },
+      { maxParallelToolCalls: 1 },
+    );
+
+    expect(result.toolResults).toHaveLength(1);
+    expect((result.toolResults[0] as ToolResultMessage).isError).toBe(true);
+    expect(streamEvents.find(event => event.type === 'tool_execution_end')).toEqual(
+      expect.objectContaining({
+        toolName: 'orient',
+        isError: true,
+      }),
+    );
+  });
+
   it('runs sibling spawn_subagent calls concurrently when bounded parallelism allows it', async () => {
     const starts = new Map<string, number>();
     const ends = new Map<string, number>();

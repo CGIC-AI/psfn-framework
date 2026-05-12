@@ -80,11 +80,13 @@ export function createResolveConcernTool(store: ConcernStorePort): AgentTool<any
   return {
     name: 'resolve_concern',
     label: 'resolve_concern',
-    description: 'Resolve an active concern once it has been handled or no longer needs tracking.',
+    description:
+      'Resolve an active concern once it has been handled or no longer needs tracking. '
+      + 'Pass concernId copied exactly from the concern.id returned by create_concern or list_concerns.',
     parameters: Type.Object({
       concernId: Type.String({
         minLength: 1,
-        description: 'Concern id to resolve.',
+        description: 'Concern id to resolve. Copy the exact concern.id from create_concern or list_concerns.',
       }),
       outcome: Type.Optional(Type.String({
         minLength: 1,

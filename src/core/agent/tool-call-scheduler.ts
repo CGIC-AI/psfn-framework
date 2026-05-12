@@ -39,6 +39,13 @@ interface QueuedMessageAttribution {
   resultText: string;
 }
 
+function toolResultDetailsFlagError(result: { details?: unknown } | undefined): boolean {
+  const details = result?.details;
+  return !!details
+    && typeof details === 'object'
+    && (details as { isError?: unknown }).isError === true;
+}
+
 export async function executeToolCallsWithScheduler(
   tools: AgentTool<any>[] | undefined,
   assistantMessage: any,
@@ -219,6 +226,7 @@ async function executeSingleToolCall(
         partialResult,
       });
     });
+    isError = toolResultDetailsFlagError(result);
   } catch (error) {
     cancelled = context.signal?.aborted === true
       || (error instanceof Error && /abort(ed)?/i.test(error.message));

@@ -124,7 +124,9 @@ export function createOrientTool(
       + 'Use action=append for incremental updates, action=replace to rewrite one block, '
       + 'action=reorient for a holistic refresh of all three blocks, '
       + 'action=values_list to inspect recent values reflections, and '
-      + 'action=create_concern|list_concerns|resolve_concern to manage active open threads.',
+      + 'action=create_concern|list_concerns|resolve_concern to manage active open threads. '
+      + 'For action=resolve_concern, pass concernId copied exactly from the concern.id returned by '
+      + 'create_concern or list_concerns; do not use tool_search, fs, or analysis_workbench to rediscover it.',
     parameters: Type.Object({
       action: Type.Unsafe<OrientAction>({
         type: 'string',
@@ -182,7 +184,7 @@ export function createOrientTool(
       })),
       concernId: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Concern id for action=resolve_concern.',
+        description: 'Required for action=resolve_concern. Copy the exact concern.id from create_concern or list_concerns.',
       })),
       outcome: Type.Optional(Type.String({
         minLength: 1,
@@ -235,10 +237,19 @@ export function createOrientTool(
         }
 
         if (action === 'resolve_concern') {
+          const concernId = ensureString(params.concernId);
+          if (!concernId) {
+            return textResultWithError(JSON.stringify({
+              error: 'missing_required_parameter',
+              action: 'resolve_concern',
+              required: 'concernId',
+              hint: 'Retry orient with action="resolve_concern" and concernId set to the concern.id returned by create_concern or list_concerns. Do not use tool_search, fs, or analysis_workbench for this.',
+            }, null, 2), true);
+          }
           return createResolveConcernTool(requireConcernStore(options.concernStore)).execute(
             toolCallId,
             {
-              concernId: params.concernId ?? '',
+              concernId,
               outcome: params.outcome,
             },
           );

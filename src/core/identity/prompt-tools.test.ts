@@ -888,5 +888,19 @@ describe('Prompt Layer Tools', () => {
       expect(text).toContain('Layer not found');
       expect(result.details?.isError).toBe(true);
     });
+
+    it('rejects blank layer ids without matching the first prompt layer', async () => {
+      const first = store.create({ type: 'runtime', name: 'First Runtime', content: 'first' });
+      const tool = gateToolWithCapabilities(
+        createPromptLayerToggleTool(store),
+        () => accessForTier('nursery'),
+      );
+      const result = await tool.execute('blank-toggle', { layer_id: '   ' });
+      const text = resultText(result);
+
+      expect(text).toContain('layer_id is required');
+      expect(result.details?.isError).toBe(true);
+      expect(store.getById(first.id)?.enabled).toBe(true);
+    });
   });
 });

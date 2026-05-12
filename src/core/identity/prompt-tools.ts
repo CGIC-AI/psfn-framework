@@ -1169,9 +1169,10 @@ export function createPromptLayerToggleTool(
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       try {
-        const layers = store.getAll();
-        const layer = layers.find(l => l.id === params.layer_id || l.id.startsWith(params.layer_id));
-        if (!layer) return textResultWithError(`Layer not found: ${params.layer_id}`, true);
+        const layerId = typeof params.layer_id === 'string' ? params.layer_id.trim() : '';
+        if (!layerId) return textResultWithError('layer_id is required.', true);
+        const layer = resolvePromptLayerById(store, layerId);
+        if (!layer) return textResultWithError(`Layer not found: ${layerId}`, true);
         if (isCanonicalCharacterFoundationLayer(layer)) {
           return textResultWithError(CARD_BACKED_FOUNDATION_PROMPT_MESSAGE, true);
         }

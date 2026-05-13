@@ -17,6 +17,8 @@ import {
 import type { GatewayServer } from '../../boundary/gateway/server.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { buildExternalChannelProfiles, type RuntimeChannelsConfig } from '../../channels/backplane/config.js';
+import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
@@ -39,6 +41,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   env?: NodeJS.ProcessEnv;
   eligibilityGate: EligibilityGate;
   gateway: Pick<GatewayServer, 'requestAgent' | 'subscribeApiStream' | 'requestAgentVoiceStream'>;
+  channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistry?: SatelliteRegistryConfig;
 }
 
@@ -270,6 +273,10 @@ export async function startOptionalGatewayApiServer(
       chatRequestTimeoutMs: computeGatewayChatRequestTimeoutMs(GATEWAY_API_REQUEST_TIMEOUT_MS),
     }),
     modelName: options.config.companionId,
+    companionName: resolveCompanionNameFromConfig(options.config),
+    externalChannelProfiles: options.channelsConfig
+      ? buildExternalChannelProfiles(options.channelsConfig)
+      : {},
   });
   await apiServer.start();
   return apiServer;

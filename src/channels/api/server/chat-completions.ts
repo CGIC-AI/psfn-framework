@@ -128,6 +128,10 @@ export class ApiChatCompletionsHandler {
     this.logger = config.logger;
   }
 
+  externalChannelProfile(channelType: ChannelType): ExternalChannelProfileConfig | undefined {
+    return this.externalChannelProfiles[channelType];
+  }
+
   async handle(
     req: IncomingMessage,
     res: ServerResponse,

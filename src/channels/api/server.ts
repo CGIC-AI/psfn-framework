@@ -101,6 +101,7 @@ export interface ApiServerConfig {
   eventBus: EventBus;
   sessionManager: SessionManager;
   companionId?: string;
+  companionName?: string;
   contactStore?: ContactStorePort;
   apiKey?: string;
   adminToken?: string;
@@ -151,6 +152,7 @@ export class ApiServer implements ChannelAdapterPort {
   private allowInsecureWithoutAuth: boolean;
   private corsAllowedOrigins: ReturnType<typeof normalizeCorsAllowedOrigins>;
   private modelName: string;
+  private companionName: string;
   private requestTimeoutMs: number;
   private seenTelemetryNonces = new Map<string, number>();
   private voiceWebSocket: ApiVoiceWebSocketAdapter;
@@ -172,6 +174,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.allowInsecureWithoutAuth = config.allowInsecureWithoutAuth === true;
     this.corsAllowedOrigins = normalizeCorsAllowedOrigins(config.corsAllowedOrigins);
     this.modelName = config.modelName ?? resolveCompanionIdFromConfig(config);
+    this.companionName = config.companionName?.trim() || this.modelName;
     this.requestTimeoutMs = parseChatRequestTimeoutMs(config.requestTimeoutMs);
     this.healthChecks = config.healthChecks ?? {};
     this.schedulerHealthcheckStaleAfterMs = parseSchedulerHealthcheckStaleAfterMs(
@@ -284,6 +287,8 @@ export class ApiServer implements ChannelAdapterPort {
 
     if (req.method === 'GET' && path === '/v1/models') {
       handleModelsEndpoint(res, this.modelName);
+    } else if (req.method === 'GET' && path === '/v1/identity') {
+      this.handleIdentity(res);
     } else if (req.method === 'GET' && path === '/health') {
       void this.handleHealth(res);
     } else if (req.method === 'POST' && path === '/v1/chat/completions') {
@@ -293,6 +298,35 @@ export class ApiServer implements ChannelAdapterPort {
     } else {
       sendApiError(res, 404, 'not_found', `No route for ${req.method} ${path}`);
     }
+  }
+
+  private handleIdentity(res: ServerResponse): void {
+    const psfnAmica = this.chatCompletions.externalChannelProfile('psfn-amica');
+    sendJson(res, 200, {
+      object: 'psfn.identity',
+      companion: {
+        id: this.modelName,
+        name: this.companionName,
+      },
+      channels: {
+        ...(psfnAmica
+          ? {
+            'psfn-amica': {
+              ...(psfnAmica.authorId || psfnAmica.authorName
+                ? {
+                  user: {
+                    ...(psfnAmica.authorId ? { id: psfnAmica.authorId } : {}),
+                    ...(psfnAmica.authorName ? { name: psfnAmica.authorName } : {}),
+                  },
+                }
+                : {}),
+              ...(psfnAmica.canonicalContactId ? { canonicalContactId: psfnAmica.canonicalContactId } : {}),
+              ...(psfnAmica.channelPrivacy ? { channelPrivacy: psfnAmica.channelPrivacy } : {}),
+            },
+          }
+          : {}),
+      },
+    });
   }
 
   private async handleHealth(res: ServerResponse): Promise<void> {

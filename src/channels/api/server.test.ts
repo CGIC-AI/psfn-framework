@@ -467,6 +467,53 @@ describe('ApiServer', () => {
     });
   });
 
+  describe('GET /v1/identity', () => {
+    it('returns companion identity and configured Amica contact identity', async () => {
+      await server.stop();
+      server = createApiServer({
+        port,
+        agentLoop: createMockAgentLoop(eventBus),
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+        modelName: 'purrsephone',
+        companionName: 'Purrsephone',
+        externalChannelProfiles: {
+          'psfn-amica': {
+            authorId: 'admin-user',
+            authorName: 'Vega',
+            canonicalContactId: 'contact-vega',
+            channelPrivacy: 'semi_private',
+          },
+        },
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'GET', '/v1/identity');
+      expect(res.status).toBe(200);
+
+      const body = JSON.parse(res.body);
+      expect(body).toEqual({
+        object: 'psfn.identity',
+        companion: {
+          id: 'purrsephone',
+          name: 'Purrsephone',
+        },
+        channels: {
+          'psfn-amica': {
+            user: {
+              id: 'admin-user',
+              name: 'Vega',
+            },
+            canonicalContactId: 'contact-vega',
+            channelPrivacy: 'semi_private',
+          },
+        },
+      });
+    });
+  });
+
   describe('GET /health', () => {
     it('returns structured healthy subsystem status', async () => {
       await server.stop();

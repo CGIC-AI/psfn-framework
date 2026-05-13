@@ -210,6 +210,7 @@ async function main(): Promise<void> {
     env: process.env,
     eligibilityGate,
     gateway,
+    channelsConfig: bootstrap.channelsConfig,
     satelliteRegistry: satelliteRegistryConfig,
   });
   await voiceSurfaces.start();

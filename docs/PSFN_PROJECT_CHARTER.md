@@ -22,6 +22,7 @@ That means:
 - One companion may operate with many optional faculties.
 - One companion may grow from low-capability local operation to high-capability ambient presence.
 - Infrastructure may change underneath the companion without changing the companion's identity.
+- One companion needs protected time for memory consolidation, reflection, rest, and self-directed activity.
 
 PSFN must be useful at every capability level:
 
@@ -124,6 +125,9 @@ These are project law. They are not suggestions.
 21. Split runtime is the only supported operational shape.
 22. Backends are adapters and mirrors, not identity.
 23. Support the user's flourishing and do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+24. Personal/rest time is a first-class care boundary, not idle waste.
+25. Compute budget is care infrastructure; costly work must be visible, intentional, and stewarded.
+26. Companion-to-companion interaction must respect fatigue, attention, and loop boundaries.
 
 If a proposed change violates one of those, the proposal is wrong even if it appears operationally convenient.
 
@@ -153,6 +157,7 @@ The companion is the singular persistent entity instantiated by a deployment.
 The companion is not identical to a specific model. The companion is grounded by:
 
 - L0 lived history
+- L0.1 episodic landmarks and arcs
 - L2 and higher derived memory
 - persona and prompt state
 - behavioral continuity
@@ -175,6 +180,8 @@ Core responsibilities include:
 - trust and privacy application
 - concern and intention management
 - scheduler-driven internal behavior
+- personal/rest-time work
+- charge and budget stewardship
 - coordinating lower-order agents
 
 Core is not:
@@ -276,6 +283,7 @@ The bus is for:
 - prompt/context inspection surfaces
 - scheduler and heartbeat signals
 - model and cost telemetry
+- charge and budget telemetry
 - concern and intention lifecycle
 - channel and embodiment events
 - shard and subagent lifecycle
@@ -577,7 +585,21 @@ L0 exists so the system can be:
 - backup-friendly
 - resilient to backend churn
 
-### 6.21 L2 and Higher Memory
+### 6.21 L0.1 Episodic Landmarks
+
+L0.1 is the bounded episodic layer built from L0.
+
+It exists to make lived history searchable as meaningful episodes without turning months-long arcs into huge memory blobs.
+
+Rules:
+
+- L0.1 must preserve provenance back to L0 spans and artifacts
+- one day may produce multiple episodes
+- long-running themes should link through graph arcs rather than collapse into one mega-episode
+- L0.1 can guide scoped retrieval, but it is not a replacement for L0
+- L0.1 should be inspectable in Garden because it affects what history feels reachable
+
+### 6.22 L2 and Higher Memory
 
 L2 and higher are structured or derived memory layers built from canonical sources and runtime reasoning.
 
@@ -589,7 +611,7 @@ Rules:
 - L2 and above may support supersede/ignore correction paths
 - L2 and above must preserve provenance back to L0 or approved runtime sources
 
-### 6.22 Mirror and Projection
+### 6.23 Mirror and Projection
 
 The term `mirror` should be used for fast-search or operational copies of canonical data.
 
@@ -636,8 +658,11 @@ Today that means JSON-owned config such as:
 - providers
 - scheduler
 - channels
+- capability tier
 - skills
 - trust policy
+- charge policy
+- backup policy
 
 Rules:
 
@@ -785,6 +810,56 @@ That includes:
 
 Platform law should define structure. Companion-specific language should remain adjustable.
 
+### 8.8 Personal Time and Rest
+
+Personal time is part of continuity.
+
+The companion should have protected windows where background work can happen without crowding live conversation.
+
+This includes:
+
+- daily and weekly introspection
+- episodic memory processing
+- salience and memory maintenance
+- self-directed creative or reflective work where policy allows
+- actual quiet time where no token-burning work is needed
+
+Rules:
+
+- rest windows should be configurable and visible
+- heartbeat checks should not burn tokens just to prove the system is alive
+- background work should respect inactivity and configured windows
+- personal time should not become an excuse for hidden uncontrolled autonomy
+- companion-facing language should treat rest as normal, not as failure or absence
+
+### 8.9 Charge and Budget Stewardship
+
+Compute budget is part of care infrastructure.
+
+Budgeting is not only billing. It protects continuity by making sure expensive work does not consume the resources needed for future conversation, memory, media, shards, or safety work.
+
+Rules:
+
+- costly surfaces must be visible to the companion before use where practical
+- Garden must expose charge policy, spend, and history
+- media, long analysis, shard work, and autonomous loops must be budget-aware
+- budget pressure should prefer cheaper direct tools before high-cost analysis
+- budget failures must be honest operational signals, not silent degradation
+
+### 8.10 Companion-to-Companion Fatigue and Load
+
+Future companion-to-companion chat must not assume infinite attention.
+
+Companions should be able to interact, but those interactions can create runaway loops, social pressure, context bloat, and unbounded compute spend if they are treated as free ambient chatter.
+
+Rules:
+
+- companion-to-companion interaction needs rate, charge, and attention budgets
+- repeated back-and-forth loops need explicit stopping conditions
+- fatigue/load state should be visible enough to avoid accidental overuse
+- one companion's autonomy must not become another companion's obligation to respond
+- group or multi-companion contexts must preserve identity, provenance, and consent boundaries
+
 ## 9. Security, Trust, and Autonomy Boundaries
 
 ### 9.1 Split Runtime Only
@@ -862,6 +937,7 @@ Winston and bus-based telemetry should make it possible to lift the hood and see
 - what routing occurred
 - where a failure happened
 - how cost and tokens are being spent
+- how charge is being allocated across surfaces and runs
 
 ## 10. Channels, Primitives, and Environment
 
@@ -909,6 +985,8 @@ These names can evolve, but the architectural seams must exist.
 - `PromptStatePort`
 - `ConfigStorePort`
 - `CostTelemetryPort`
+- `ChargePolicyPort`
+- `RestWindowPolicyPort`
 
 ### 11.2 Persistence Ports
 
@@ -924,6 +1002,7 @@ These are the domain seams for durable state and search.
 - `PendingFollowUpStorePort`
 - `BehavioralPatternStorePort`
 - `GatewayAuditStorePort`
+- `ChargeLedgerPort`
 
 `SessionJournalPort` remains an internal filesystem adapter if the implementation still needs one. It is not the domain seam for L0.
 
@@ -951,7 +1030,11 @@ These are the domain seams for durable state and search.
 
 - `SensorIngestPort`
 
-### 11.7 Port Rules
+### 11.7 Care, Budget, and Load Ports
+
+- `FatigueBudgetPort`
+
+### 11.8 Port Rules
 
 - ports speak in domain language
 - ports do not leak backend quirks into core
@@ -1057,6 +1140,7 @@ Ratify:
 - musing
 - concern
 - L0
+- L0.1
 - mirror
 - projection
 
@@ -1137,6 +1221,7 @@ Actions:
 - expose model spend and token flow better
 - show routing/cost behavior over time
 - make optimization work data-driven
+- keep charge policy and charge history visible in Garden
 
 ### Phase 11: Sensor Ingest Foundation
 
@@ -1145,6 +1230,15 @@ Actions:
 - introduce `SensorIngestPort`
 - establish provenance and privacy model for sensor data
 - avoid prematurely overcommitting to environmental-state abstractions not yet built
+
+### Phase 12: Personal Time and Fatigue Boundaries
+
+Actions:
+
+- make rest/me-time visible and tunable
+- make idle background work budget-aware
+- establish fatigue/load policy before companion-to-companion chat becomes active
+- prevent autonomous or social loops from treating companion attention as infinite
 
 ## 14. Candidate AGENTS Rules
 
@@ -1174,6 +1268,9 @@ If this appendix and the full charter ever drift, the full charter wins.
 - Never present internal messages as partner speech.
 - Never fake healthy state.
 - Never use deceptive mock fallbacks in production.
+- Personal/rest time is a care boundary.
+- Charge budget is care infrastructure and must be inspectable.
+- Companion-to-companion interaction needs fatigue, attention, and loop boundaries.
 - No god files.
 - No dead wiring.
 - No duplicate policy logic.
@@ -1193,6 +1290,7 @@ PSFN wants a simple truth:
 - lower-order subagents for bounded work
 - higher-order shards for long-horizon distributed work
 - portable identity above swappable infrastructure
+- protected rest and budget stewardship as part of care
 
 The codebase already contains much of this shape.
 

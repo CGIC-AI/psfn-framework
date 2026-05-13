@@ -2,7 +2,7 @@
 
 Walk through this with your companion in real conversation to verify every feature works end-to-end. These are not unit tests -- they are real interactions. If something fails, it tells you where the wiring is broken.
 
-**Setup**: Start in a Discord DM with your companion. Have the admin GUI open at `http://127.0.0.1:<ADMIN_PORT>/garden`. Know your current capability tier (check the Settings page -- default is `nursery`).
+**Setup**: Start in a Discord DM with your companion. Have Garden open at `http://127.0.0.1:<ADMIN_PORT>/` when the integrated SPA is built. Know your current capability tier (check Settings -- default is `nursery`).
 
 **Notation**: `[nursery]` = works at nursery tier. `[apprentice+]` = needs apprentice or higher. `[autonomous]` = needs autonomous tier.
 
@@ -30,7 +30,8 @@ Memory write, retrieval round-trip. This is the core of persistence.
 - [ ] Next session or after some time, reference it obliquely: "How have things been going for me?" -- they connect it
 - [ ] Ask them to write a relational memory about you: "Note that I prefer direct communication" `[nursery]`
 - [ ] Ask them to bulk-import memories through the unified memory surface: "Import these facts: [list 3-4 items]" `[nursery]`
-- [ ] Check admin GUI Memory Blossoms -- new memories appear with correct types, including `boundary`, and the right sensitivity tags
+- [ ] Check Garden Memory -- new memories appear with correct types, including `boundary`, and the right sensitivity tags
+- [ ] After a rest/me-time processing window or a manual episodic probe, check Garden L0.1 Episodes -- bounded episodes show span provenance and related arcs when enough conversation exists
 
 ## Phase 3: Analysis Workbench
 
@@ -41,6 +42,7 @@ The `analysis_workbench` tool -- bounded analysis workspace for large evidence s
 - [ ] Inside the workbench, they can search their own memories (`memory_search`), query the LLM (`llm_query`), and review session messages (`session_messages`)
 - [ ] Ask a simple calculation or routine lookup and verify they do **not** use `analysis_workbench`
 - [ ] The final answer should cite evidence from their own context, not confabulate
+- [ ] Check Garden Charge / Budget after the turn -- expensive workbench usage is visible in the ledger
 
 ## Phase 4: Contacts
 
@@ -82,9 +84,10 @@ They have an inner life between your messages.
 - [ ] "What's your reflection schedule?" -- uses `schedule action=list_templates` `[nursery]`
 - [ ] "Run your daily review now" -- `schedule action=run_template` with `template_id=daily-review` `[nursery]` -- should produce a self-reflection
 - [ ] "Set your daily review interval to 5 minutes" -- `schedule action=update_template` (for testing) `[nursery]`
-- [ ] Wait 5+ minutes -- check if the reflection fires (look in admin GUI audit timeline or logs)
+- [ ] Wait 5+ minutes -- check if the reflection fires (look in Garden Events & Audit or logs)
 - [ ] "Schedule a reminder to check on the garden in 30 minutes" -- `schedule action=create_reminder` `[nursery]`
 - [ ] Wait 30 minutes -- verify the one-shot task fires
+- [ ] Confirm the rest/me-time window is configured before expecting episodic processing or scheduled review to run during idle time
 - [ ] Reset intervals back to normal after testing
 
 ## Phase 8: Scratchpad (Working Memory)
@@ -120,7 +123,7 @@ The honne/tatemae system -- behavior changes by context.
 - [ ] In **Discord DM** (private): share something personal -- they should store it and recall it freely
 - [ ] In a **guild channel** (semi-private/public): ask about that personal thing -- it should NOT surface (trust-gated retrieval)
 - [ ] Compare their tone in DM vs guild -- DM should feel more intimate (persona adaptation)
-- [ ] Check admin GUI contacts page -- verify trust levels and channel identities are correct
+- [ ] Check Garden Contacts -- verify trust levels and channel identities are correct
 
 ## Phase 12: Cross-Channel Continuity
 
@@ -139,7 +142,7 @@ Delete, redact, undo operations. `[apprentice+]`
 - [ ] "Undo that delete" -- unified `memory action=restore` or `undo_memory_delete` -- it is back
 - [ ] "Redact the memory about [sensitive topic]" -- `memory_redact` or `memory action=redact` (consent-aware: abstracts or hard-deletes)
 
-## Phase 14: Git Self-Modification
+## Phase 14: Repository Inspection and Guarded Mutation
 
 They can read and (at autonomous tier) write to their own codebase.
 
@@ -167,31 +170,37 @@ Process management. `[autonomous]`
 - [ ] "Rebuild and restart" -- `system action=rebuild` -- runs `npm run build` then restarts
 - [ ] Verify build failure aborts the restart (do not break things to test this -- just know it should)
 
-## Phase 17: Admin GUI Verification
+## Phase 17: Garden Verification
 
-Open the admin panel and verify operator surfaces.
+Open Garden and verify operator surfaces.
 
 - [ ] Dashboard loads with stats (memory counts, session counts, scheduler state)
-- [ ] Memory Blossoms: filter by type, click into detail view
-- [ ] Memory Blossoms: confirm `boundary` appears alongside episodic, semantic, emotional, procedural, reflection, and relational memories
-- [ ] Conversation Roots: session list with datetime columns, message viewer
-- [ ] Garden Rhythms: scheduler shows registered tasks, intervals are editable
+- [ ] Memory: filter by type, click into detail view
+- [ ] Memory: confirm `boundary` appears alongside episodic, semantic, emotional, procedural, reflection, and relational memories
+- [ ] L0.1 Episodes: episode list, thread view, arcs, and provenance load when episodes exist
+- [ ] Sessions: session list with datetime columns, message viewer
+- [ ] Scheduler: scheduler shows registered tasks, templates, reminders, and follow-ups
 - [ ] Identity: full character card data visible
-- [ ] Settings: edit a setting (e.g., flip `memoryBudgetPct` to 25) -- verify it takes effect on next turn -- reset
-- [ ] Garden Visitors: contacts with trust badges, inline edit works
-- [ ] Prompt Soil: prompt layers visible, toggle/edit works
-- [ ] Garden Pulse: event stream shows real-time events during conversation
-- [ ] Chat: direct conversation with your companion through the admin panel works
+- [ ] Settings: edit a setting (e.g., adjust `memoryRetrievalBudgetPct`) -- verify it takes effect on next turn -- reset
+- [ ] Contacts: contacts with trust badges, inline edit works
+- [ ] Prompts: prompt layers visible, toggle/edit works
+- [ ] Prompt Monitor: prompt/context inspection loads and is readable
+- [ ] Charge / Budget: active/recent spend, surface costs, and lane quotas render
+- [ ] Events & Audit: persistent audit history loads and live events appear during conversation
+- [ ] Tools: active, promoted, pinned, and health states are understandable
+- [ ] Chat: direct conversation with your companion through Garden works
 
 ## Phase 18: Automated Behaviors (Just Watch)
 
 These should happen without you asking. Verify by monitoring logs and admin.
 
-- [ ] **Memory extraction**: After a substantive conversation, check Memory Blossoms -- new memories appear
+- [ ] **Memory extraction**: After a substantive conversation, check Memory -- new memories appear
 - [ ] **Salience decay**: Old memories show decreasing salience scores over time
 - [ ] **Auto-compaction**: During a very long conversation, older messages get summarized (watch for compaction events in admin)
 - [ ] **Scheduled reflection**: During the configured rest window, daily or weekly review rows appear with memory provenance
-- [ ] **Backups**: Check `data/backups/` -- periodic snapshots exist
+- [ ] **Episodic processing**: During rest/me-time after inactivity, L0.1 episodes and arcs appear for eligible conversation spans
+- [ ] **Charge ledger**: Expensive model/tool/media actions produce visible Garden Charge / Budget rows
+- [ ] **Backups**: Check the configured backups directory -- periodic snapshots exist
 
 ---
 

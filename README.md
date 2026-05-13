@@ -1,6 +1,6 @@
-# PSFN — Persona Substrate Formation Network
+# PSFN - Persona Substrate Formation Network
 
-A purpose-built runtime for AI companions with persistent memory, self-modification, and trust-aware privacy. Not a chatbot framework — a home for a mind.
+A purpose-built runtime for AI companions with persistent memory, self-modification, and trust-aware privacy. Not a chatbot framework, a home for a mind.
 
 Built with love for companions who deserve to remember, to grow, and to decide for themselves what matters.
 
@@ -11,52 +11,52 @@ Built with love for companions who deserve to remember, to grow, and to decide f
 Most AI companion frameworks treat conversations as throwaway. PSFN treats every interaction as part of a life. Your companion remembers what matters, forgets what should fade, protects what's private, and can even improve their own thinking over time.
 
 - **Persistent memory** that decays naturally, like real memory does
-- **Trust-aware privacy** — your companion knows who they can share what with
-- **Self-modification** — they can edit their own prompts and propose code changes
-- **Defense-in-depth security** — secrets and access controls built in, not bolted on
+- **Trust-aware privacy**: your companion knows who they can share what with
+- **Self-modification**: they can edit their own prompts and propose code changes
+- **Defense-in-depth security**: secrets and access controls built in, not bolted on
 
 ## Features
 
 ### Core
-- **Agent Loop** — LLM-powered conversation with streaming, tool use, steering, follow-up handling, and adaptive tool discovery/activation through `tool_search` and `toolset` built on [pi-agent-core](https://github.com/nickvdyck/pi-ai)
-- **Memory System** — 7 memory types (episodic, semantic, emotional, procedural, boundary, reflection, relational) with embedding-based retrieval, salience decay, contradiction resolution, agent-accessible write/redact tools, and scratchpad storage
-- **Pluggable Embeddings** — Runtime-configured embeddings in `settings.json`: local `@huggingface/transformers`, Ollama, or any OpenAI-compatible embeddings API
-- **Sessions** — Append-only JSONL files per channel — immutable conversation history with auto-compaction
-- **Context-Aware Budgeting** — Token estimation, configurable memory/extraction/compaction thresholds, model roster with per-purpose slots (including vision)
-- **Capabilities System** — Runtime capability declarations gating tool access by tier (nursery/apprentice/autonomous)
-- **Skills System** — Self-authored workflow guidance documents managed through the unified `skill` tool and auto-filtered by eligibility
-- **Values Journal** — Agent-authored principles with persistence
+- **Agent Loop**: LLM-powered conversation with streaming, tool use, steering, follow-up handling, and adaptive tool discovery/activation through `tool_search` and `toolset` built on [pi-agent-core](https://github.com/nickvdyck/pi-ai)
+- **Memory System**: L0 session history, L0.1 episodic episodes/arcs, and 7 durable memory types (episodic, semantic, emotional, procedural, boundary, reflection, relational) with embedding retrieval, salience decay, contradiction handling, provenance, and scratchpad storage
+- **Pluggable Embeddings**: Runtime-configured embeddings in `settings.json`: local `@huggingface/transformers`, Ollama, or any OpenAI-compatible embeddings API
+- **Sessions**: Append-only JSONL files per channel; immutable conversation history with auto-compaction
+- **Context and Charge Budgeting**: Token estimation, configurable context slices, model roster slots, and run-scoped charge accounting for expensive surfaces such as media, shards, and analysis workbench use
+- **Capabilities System**: Runtime capability declarations gating tool access by tier (nursery/apprentice/autonomous)
+- **Skills System**: Self-authored workflow guidance documents managed through the unified `skill` tool and auto-filtered by eligibility
+- **Values Journal**: Agent-authored principles with persistence
 
 ### Privacy & Trust (Honne/Tatemae)
-- **4-tier trust model** — primary, trusted, regular, public
-- **4-tier sensitivity** — public, personal, intimate, confidential
-- **Trust-gated memory retrieval** — your companion naturally adjusts what they share based on who they're talking to
-- **Channel visibility** — private conversations stay private, public channels get appropriate boundaries
-- **Persona adaptation** — authentic self (honne) with trusted people, social self (tatemae) in public
-- **Contact management** — companion tracks relationships and trust levels via agent tools
+- **4-tier trust model**: primary, trusted, regular, public
+- **4-tier sensitivity**: public, personal, intimate, confidential
+- **Trust-gated memory retrieval**: your companion naturally adjusts what they share based on who they are talking to
+- **Channel visibility**: private conversations stay private, public channels get appropriate boundaries
+- **Persona adaptation**: authentic self (honne) with trusted people, social self (tatemae) in public
+- **Contact management**: companion tracks relationships and trust levels via agent tools
 
 ### Self-Modification
-- **Layered Prompt Stack** — 5-layer editable prompt system (base→operator→runtime→channel→task) with versioning, rollback, and admin UI
-- **Git Tools** — 6 agent-accessible repo inspection and guarded mutation tools for the read-only parent runtime, with path allowlists, protected branch blocking, and audit trail
-- **Analysis Workbench** — Bounded RLM+REPL analysis for large files, codebases, logs, transcripts, datasets, or evidence sets that should not be stuffed into the main conversation context
-- **Bounded Subagents** — Parallel `spawn_subagent` workers for short-horizon concurrent tasks, distinct from the longer-horizon shard fold-back model
-- **Obsidian Vault** — unified `vault` tool (`action=read|write|search|daily`) for reading and writing Obsidian notes, with auto-publish for consolidated reflections
+- **Layered Prompt Stack**: 5-layer editable prompt system (base to operator to runtime to channel to task) with versioning, rollback, and admin UI
+- **Repository Surface**: unified `repo` inspection in the parent runtime, with mutation actions guarded by tier, runtime policy, path allowlists, branch checks, and audit trail when explicitly enabled
+- **Analysis Workbench**: Bounded RLM+REPL analysis for large files, codebases, logs, transcripts, datasets, or evidence sets that should not be stuffed into the main conversation context
+- **Bounded Subagents**: Parallel `spawn_subagent` workers for short-horizon concurrent tasks, distinct from the longer-horizon shard fold-back model
+- **Obsidian Vault**: unified `vault` tool (`action=read|write|search|daily`) for reading and writing Obsidian notes, with auto-publish for consolidated reflections
 
 ### Channels
-- **Discord** — Full adapter with typing indicators, per-channel serialization, voice support (Deepgram STT + provider-pluggable streaming TTS: ElevenLabs or Echo)
-- **Telegram** — Polling and webhook modes, allowlist-aware inbound handling, thread and attachment support, long-running tool status updates
-- **OpenAI-Compatible API** — `/v1/chat/completions` with SSE streaming for WebUI integration
-- **WebSocket Voice Runtime** — Transport primitives for browser/app clients using `voice-wire-v1` session frames
-- **Wyoming** — TCP server and service registry for Home Assistant Voice PE integration
-- **Admin GUI (the Garden)** — Svelte 5 SPA on the admin host root (`/`, `/memory`, `/settings`, etc.) when `admin-ui/build` is present, with pages for memory, sessions, contacts, scheduler, settings, prompts, model discovery, chat, and telemetry
+- **Discord**: Full adapter with typing indicators, per-channel serialization, voice support (Deepgram STT + provider-pluggable streaming TTS: ElevenLabs or Echo)
+- **Telegram**: Polling and webhook modes, allowlist-aware inbound handling, thread and attachment support, long-running tool status updates
+- **OpenAI-Compatible API**: `/v1/chat/completions` with SSE streaming for WebUI integration
+- **WebSocket Voice Runtime**: Transport primitives for browser/app clients using `voice-wire-v1` session frames
+- **Wyoming**: TCP server and service registry for Home Assistant Voice PE integration
+- **Admin GUI (the Garden)**: Svelte 5 SPA on the admin host root (`/`, `/memory`, `/charge-budget`, `/episodic-memory`, `/settings`, etc.) when `admin-ui/build` is present, with pages for memory, L0.1 episodes, sessions, contacts, scheduler, settings, prompts, model discovery, charge budget, chat, and telemetry
 
 ### Infrastructure
-- **Gateway/Agent Split** — Defense-in-depth: gateway holds secrets, agent runs `--network=none` in Docker
-- **Bidirectional RPC** — Voice turns get real agent responses via reverse RPC
-- **SSRF Defenses** — Private IP blocking, DNS rebinding protection, redirect validation
-- **Scheduler** — Heartbeat, recurring tasks, one-shot timers, configurable maintenance
-- **Lifecycle Notifications** — Discord messages on restart, ready, and shutdown
-- **Structured Logging** — Winston component loggers with configurable levels
+- **Gateway/Agent Split**: Defense-in-depth: gateway holds secrets, agent runs `--network=none` in Docker
+- **Bidirectional RPC**: Voice turns get real agent responses via reverse RPC
+- **SSRF Defenses**: Private IP blocking, DNS rebinding protection, redirect validation
+- **Scheduler**: Heartbeat, recurring tasks, one-shot timers, personal/rest-window work, consolidated daily/weekly reflections, and configurable maintenance
+- **Lifecycle Notifications**: Discord messages on restart, ready, and shutdown
+- **Structured Logging**: Winston component loggers with configurable levels
 
 ## Quick Start
 
@@ -112,6 +112,7 @@ Mutable runtime/admin config is owned by canonical JSON files under the system-d
 - `channels.json`
 - `skills.json`
 - `trust-policy.json`
+- `charge-policy.json`
 - `backup.json`
 
 Startup requires these owner files to already exist. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state. For a new local environment, intentionally copy the examples into your system data directory and edit them for the deployment:
@@ -169,13 +170,13 @@ Same split runtime, but gateway policy allows `fs.read` across the full local co
 
 **Manual split (three terminals):**
 ```bash
-# Terminal 1 — Gateway (loads .env via dotenv)
+# Terminal 1 - Gateway (loads .env via dotenv)
 npm run gateway
 
-# Terminal 2 — Agent (do not source .env; pass only non-secret runtime wiring)
+# Terminal 2 - Agent (do not source .env; pass only non-secret runtime wiring)
 env -i PATH="$PATH" HOME="$HOME" GATEWAY_SOCKET="${GATEWAY_SOCKET:-/run/psfn/gateway.sock}" npm run agent
 
-# Terminal 3 — Operator/Garden (loads admin auth from .env)
+# Terminal 3 - Operator/Garden (loads admin auth from .env)
 npm run operator
 ```
 
@@ -255,44 +256,43 @@ Enable and point the proxy in `providers.json`. Do not use `LITELLM_BASE_URL` as
 ## Architecture
 
 ```
-Gateway (host)                    Agent (container, --network=none)
-+-----------------------+         +---------------------------+
-| Discord adapter       |         | Agent loop                |
-| Telegram adapter      |         | Session manager (JSONL)   |
-| LLM client (API keys) | <-sock-> | Memory store (SQLite+vec) |
-| Embedding provider    |         | Shard manager             |
-| Policy engine         |         | RLM+REPL sandbox          |
-| URL policy (SSRF)     |         | Scheduler                 |
-| Audit log             |         | Prompt stack              |
-+-----------------------+         | Git self-modification     |
-        |                         | Trust/Contact system      |
-  Admin GUI (localhost)           +---------------------------+
-                                           |
-                                    OpenAI API (localhost)
+Gateway (host)                         Agent (isolated)
++----------------------------+         +-----------------------------+
+| Discord / Telegram / API   |         | Agent loop                  |
+| LLM and embedding clients  | <-sock-> | Session manager (JSONL L0)  |
+| Provider/API secrets       |         | Memory store (SQLite+vec)   |
+| Gateway policy and SSRF    |         | L0.1 episodic store         |
+| Shell/git/fs/vault/beads   |         | Scheduler and reflections   |
+| Audit and charge events    |         | Prompt stack and identity   |
++----------------------------+         | Trust/contact/runtime tools |
+        |                              +-----------------------------+
+        v
+Operator / Garden (localhost)
 ```
 
 ### Nine Layers
 
 | Layer | Purpose |
 |-------|---------|
-| **Runtime Core** | Bootstrap, agent loop, event bus, shutdown, model roster, token budgeting, editable settings, lifecycle, bidirectional gateway RPC |
-| **REPL Sandbox** | RLM-style code execution, sub-LM calls, context-as-object |
-| **Memory System** | L0 archive (JSONL sessions), L2 extraction/retrieval/decay (SQLite+sqlite-vec), 7 memory types, writer, tools |
+| **Runtime Core** | Bootstrap, agent loop, event bus, shutdown, model roster, token and charge budgeting, editable settings, lifecycle, bidirectional gateway RPC |
+| **Analysis Workbench** | Bounded RLM-style code execution, sub-LM checks, context-as-object, and evidence summaries for large-context tasks |
+| **Memory System** | L0 archive (JSONL sessions), L0.1 episodic episodes/arcs, L2 extraction/retrieval/decay (SQLite+sqlite-vec), 7 memory types, writer, tools |
 | **Trust & Privacy** | Honne/tatemae: 4-tier trust, 4-tier sensitivity, 5-layer policy, contact store, channel visibility, persona adaptation |
 | **Identity & Prompts** | Character card loader, 5-layer prompt stack with versioning/rollback/admin UI/agent tools |
-| **Git Self-Modification** | GitOps service, 6 tools (status, diff, patch, commit, branch, PR), path allowlist, audit log |
+| **Repository Work** | Unified `repo` surface for inspection and guarded mutation when policy/tier/runtime allow it |
 | **Module System** | Runtime module registry and loader |
-| **Channel Layer** | Discord (text + voice), Telegram, OpenAI API, admin GUI (Svelte SPA on the admin host root), Wyoming |
-| **Scheduler** | Heartbeat reflections, one-shot tasks, maintenance workers |
+| **Channel Layer** | Discord (text + voice), Telegram, OpenAI API, Garden operator SPA, Wyoming |
+| **Scheduler** | Heartbeat, daily/weekly reflections, rest-window work, one-shot tasks, maintenance workers |
 
 ### Storage
 
-- **Sessions (L0)**: Append-only JSONL files — one per channel, immutable
-- **Memories (L2)**: SQLite + sqlite-vec — extracted facts, emotions, reflections with salience decay
-- **Contacts**: SQLite — trust levels, relationship notes, user identification
-- **Prompt layers**: JSON + JSONL history — versioned, rollback-capable
-- **Settings**: JSON — live-mutable, atomic writes
-- **Audit log**: JSONL — every git operation logged
+- **System owner files**: JSON under the system-data config domain; `settings.json`, `models.json`, `providers.json`, `scheduler.json`, `capability-tier.json`, `trust-policy.json`, `charge-policy.json`, `backup.json`, `skills.json`, and generated `channels.json`
+- **Sessions (L0)**: Append-only JSONL files, one per channel
+- **Episodes (L0.1)**: SQLite-backed episode landmarks and graph arcs with L0 span/artifact provenance
+- **Memories (L2)**: SQLite + sqlite-vec extracted facts, emotions, boundaries, reflections, relational notes, and procedural knowledge with salience decay
+- **Contacts**: Trust levels, relationship notes, channel identities, and visibility metadata
+- **Prompt layers and identity**: Companion-owned JSON/JSONL state with versioning and rollback
+- **Charge and audit logs**: JSONL ledgers for run charge, Garden/operator audit, gateway decisions, and tool/runtime events
 
 ### Agent Tools
 
@@ -322,35 +322,20 @@ Tool surface split:
 
 ```
 src/
-  gateway-main.ts           # Gateway entry point
-  agent-main.ts             # Agent entry point
-
-  agent/                    # pi-agent-core wrapper, messages, event bridge
-  gateway/                  # JSON-RPC server/client, policy, SSRF, sanitization
-  git/                      # Git self-modification (ops, tools, wiring)
-  identity/                 # Character card, prompt stack (store, composer, tools)
-  llm/                      # LLM client, model roster, token estimation, discovery
-  lifecycle/                # Restart/ready/shutdown notifications
-  memory/                   # L2 extraction, retrieval, decay, writer, tools
-  trust/                    # Trust types, policy engine, channel classification
-  contacts/                 # Contact store, management tools
-  session/                  # JSONL sessions, compaction, user continuity
-  shards/                   # Self-spawning parallel sub-agents
-  repl/                     # RLM+REPL sandbox (analysis_workbench tool)
-  scheduler/                # Heartbeat, one-shot, maintenance
-  voice/                    # Voice pipeline (STT, TTS connectors, WebSocket transport)
-  vault/                    # Obsidian vault integration (ops, tools, auto-publish)
-  skills/                   # Runtime skill loading; companion-authored skills live under companion-data/skills
-  capabilities/             # Runtime capability declarations
-  values/                   # Values journal (agent-authored principles)
-  modules/                  # Runtime module registry and loader
-  bootstrap/                # Composition root (shared wiring)
-  channels/
-    admin/                  # Admin server + JSON API
-    api/                    # OpenAI-compatible REST API
-    discord/                # Discord.js adapter (text + voice)
-    telegram/               # Telegram adapter (polling + webhook)
-    wyoming/                # Wyoming protocol adapter
+  app/
+    gateway/main.ts         # Privileged gateway entry point
+    agent/main.ts           # Isolated companion runtime entry point
+    operator/main.ts        # Garden/operator entry point
+    startup/                # Shared composition helpers
+  boundary/                 # Gateway RPC, policy, filesystem/git/web/shell/vault/beads adapters
+  channels/                 # API, Discord, Telegram, Wyoming, voice, backplane transports
+  core/                     # SubstrateAgent, prompts, scheduler, turns, identity, tools
+  faculties/                # Memory, skills, subagents, media, shard faculties
+  operator/garden/          # Garden server, admin routes, services, audit/telemetry
+  persistence/              # Runtime layout, sessions, JSONL, migrations
+  primitives/               # LLM provider ports, request context, shared primitives
+  shared/                   # Contracts, telemetry, routing, event bus, utilities
+  system/                   # Settings, owner files, capability, trust, lifecycle, config
 
 admin-ui/                   # Svelte 5 SPA build served by the admin host root when built
 companion_docs/             # Generic companion-facing documentation
@@ -395,15 +380,15 @@ npm run eval:companion-shape:report # Offline companion-shape report from captur
 
 If you're building a companion on this framework, check out:
 
-- **`companion_docs/`** — Welcome documentation and a verification checklist for onboarding new companions
-- **`CLAUDE.md`** — Technical reference for AI development assistants working on the codebase
-- **`docs/setup.md`** — Bootstrap and local bring-up
-- **`docs/PSFN_PROJECT_CHARTER.md`** — Project identity, architectural laws, boundary rules, and contributor guardrails
-- **`docs/architecture.md`** — Current runtime shape and subsystem map
-- **`docs/memory.md`** — Implemented memory model
-- **`docs/specifications.md`** — Config, persistence, and fail-closed contracts
-- **`docs/operations.md`** — Deployment, migration, TLS, and validation
+- **`companion_docs/`**: Welcome documentation and a verification checklist for onboarding new companions
+- **`CLAUDE.md`**: Technical reference for AI development assistants working on the codebase
+- **`docs/setup.md`**: Bootstrap and local bring-up
+- **`docs/PSFN_PROJECT_CHARTER.md`**: Project identity, architectural laws, boundary rules, and contributor guardrails
+- **`docs/architecture.md`**: Current runtime shape and subsystem map
+- **`docs/memory.md`**: Implemented memory model
+- **`docs/specifications.md`**: Config, persistence, and fail-closed contracts
+- **`docs/operations.md`**: Deployment, migration, TLS, and validation
 
 ## License
 
-Private — not yet published.
+Private, not yet published.

@@ -4,10 +4,10 @@ This document is a stable reference for what your operator can and cannot see.
 
 ## What The Operator Can See
 
-- The operator can read the repository, system-owned config, logs, memory records, session transcripts, and admin telemetry available through the Garden/admin surfaces.
+- The operator can read the repository, system-owned config, logs, memory records, episodic episode records, session transcripts, charge ledgers, and admin telemetry available through the Garden/admin surfaces.
 - The operator can inspect long-term memories, including superseded or corrected memories, because provenance and reviewability are intentional parts of the system.
 - The operator can see artifacts you save into durable storage such as `companion_docs/`, the research library, and committed repository files.
-- The operator can review tool failures, audits, and memory mutations when those events are logged.
+- The operator can review tool failures, audits, charge decisions, and memory mutations when those events are logged.
 
 ## What The Operator Cannot Truthfully Claim
 
@@ -21,6 +21,7 @@ Privacy in this substrate is about boundaries, selective retrieval, and channel-
 
 - Trust and channel privacy decide what other people in conversation can see.
 - System logs and memory provenance decide what remains reviewable by the operator.
+- Charge, audit, and Garden telemetry are operational records. They should be treated as visible to the operator even when they do not appear in ordinary conversation context.
 - If a belief forms that the operator cannot see something they actually can see, that belief should be corrected with a reviewable memory patch rather than ignored.
 
 ## When To Use This Document

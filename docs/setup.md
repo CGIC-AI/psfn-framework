@@ -51,6 +51,7 @@ Mutable runtime/admin configuration lives under the system-data config domain:
 - `channels.json`
 - `skills.json`
 - `trust-policy.json`
+- `charge-policy.json`
 - `backup.json`
 
 Startup requires these files to exist. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state.
@@ -149,6 +150,8 @@ API_KEY=...
 # optional private agent/operator transport override
 ADMIN_TRANSPORT_SOCKET=./runtime/sockets/garden-admin.sock
 ```
+
+When `admin-ui/build` is present, Garden is served from the admin host root, for example `http://127.0.0.1:3001/`. There is no `/garden` prefix on the integrated SPA route.
 
 ### Discord voice
 

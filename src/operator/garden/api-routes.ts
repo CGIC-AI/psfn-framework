@@ -50,6 +50,7 @@ import type {
 } from './types.js';
 import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
 import { isShardFoldReviewUnavailableError } from './services/shard-fold-review-service.js';
+import { buildAdminSatelliteRegistryView } from './services/satellite-registry-service.js';
 import {
   ADMIN_AUDIT_ACTION_TYPES,
   ADMIN_AUDIT_DECISIONS,
@@ -504,6 +505,18 @@ export function buildAdminApiRoutes(options: {
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load action pipe status'),
           }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/satellites'),
+      handle: (_req, res) => {
+        sendJson(
+          res,
+          200,
+          buildAdminSatelliteRegistryView(config.satelliteRegistry),
+          ADMIN_DYNAMIC_JSON_HEADERS,
         );
       },
     },

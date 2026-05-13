@@ -4,6 +4,7 @@ import type { StreamingSttProvider } from '../../primitives/voice/connectors/stt
 import type { StreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
 import type { CapabilityTier } from '../capabilities/tier-types.js';
 import type { ChargePolicyConfig } from './charge-policy-config.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type {
   CanonicalModelRegistry,
   CanonicalProviderRegistry,
@@ -201,6 +202,9 @@ export interface SubstrateConfig {
 
   // ── Charge policy ──
   chargePolicy?: ChargePolicyConfig;
+
+  // ── Satellite claim registry ──
+  satelliteRegistry?: SatelliteRegistryConfig;
 
   // ── MoA (Mixture of Agents) ──
   moaEnabled?: boolean;

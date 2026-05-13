@@ -11,6 +11,7 @@ import type { AgentCoreRuntime } from './core-runtime.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
 import type { EpisodicStore } from '../../faculties/memory/episodic/store.js';
 import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';
@@ -22,6 +23,7 @@ export interface StartOptionalAdminTransportServerOptions {
   apiPort?: number;
   env?: NodeJS.ProcessEnv;
   config: SubstrateConfig;
+  satelliteRegistryConfig: SatelliteRegistryConfig;
   gateway: GatewayClient;
   eventBus: EventBus;
   scheduler: Scheduler;
@@ -52,6 +54,10 @@ export async function startOptionalAdminTransportServer(
 
   const env = options.env ?? process.env;
   const modelDiscovery = new GatewayModelDiscovery(options.gateway);
+  const adminConfig: SubstrateConfig = {
+    ...options.config,
+    satelliteRegistry: options.satelliteRegistryConfig,
+  };
   const services = createInProcessGardenAdminContract({
     apiBaseUrl: env.API_BASE_URL,
     apiHost: options.apiHost,
@@ -66,7 +72,7 @@ export async function startOptionalAdminTransportServer(
     eventBus: options.eventBus,
     contactStore: options.coreRuntime.contactStore,
     characterCard: options.card,
-    config: options.config,
+    config: adminConfig,
     embeddingService: options.gateway,
     modelDiscovery,
     promptState: options.coreRuntime.promptState,
@@ -82,7 +88,7 @@ export async function startOptionalAdminTransportServer(
   const adminTransport = new GardenAdminTransportServer({
     socketPath: resolveAdminTransportSocketPath(env),
     eventBus: options.eventBus,
-    config: options.config,
+    config: adminConfig,
     services,
   });
   await adminTransport.init();

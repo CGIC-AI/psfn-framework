@@ -338,6 +338,7 @@ async function main(): Promise<void> {
     apiPort,
     env: process.env,
     config,
+    satelliteRegistryConfig,
     gateway,
     eventBus,
     scheduler,

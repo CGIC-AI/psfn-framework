@@ -93,6 +93,48 @@ export interface SatelliteRegistryConfig {
   satellites: SatelliteConfig[];
 }
 
+export interface AdminSatelliteEndpointAuthView {
+  mode: SatelliteAuthMode;
+  allowedPrincipalCount: number;
+  certBound: boolean;
+  certBindingTypes: string[];
+}
+
+export interface AdminSatelliteEndpointLiveView {
+  status: 'not_observed';
+  detail: string;
+}
+
+export interface AdminSatelliteEndpointView {
+  endpointId: string;
+  displayName: string;
+  claimTypes: string[];
+  promptChannelType: string;
+  auth: AdminSatelliteEndpointAuthView;
+  defaultIdentity: SatelliteDefaultIdentityConfig;
+  maxCapabilities: SatelliteCapability[];
+  telemetryScopes: SatelliteTelemetryScope[];
+  live: AdminSatelliteEndpointLiveView;
+}
+
+export interface AdminSatelliteView {
+  satelliteId: string;
+  displayName: string;
+  mobility: SatelliteMobility;
+  staticLocationLabel?: string;
+  endpoints: AdminSatelliteEndpointView[];
+}
+
+export interface AdminSatelliteRegistryView {
+  schemaVersion: 1;
+  enabled: boolean;
+  satelliteCount: number;
+  endpointCount: number;
+  liveObservationStatus: 'not_implemented';
+  liveObservationDetail: string;
+  satellites: AdminSatelliteView[];
+}
+
 export interface SatelliteClaimCapabilityResolution {
   advertised: SatelliteCapability[];
   registryMax: SatelliteCapability[];

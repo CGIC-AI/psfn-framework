@@ -3,23 +3,27 @@ title: "PSFN Substrate Framework — Architecture"
 ---
 graph TB
   %% ═══════════════════════════════════════════════
-  %% ENTRY POINTS
+  %% ENTRY POINTS  (src/app/*)
   %% ═══════════════════════════════════════════════
-  subgraph Entry["Entry Points"]
+  subgraph Entry["Entry Points (src/app/*)"]
     direction LR
-    IDX["index.ts<br/><i>Disabled — split runtime only</i>"]
-    GWM["gateway-main.ts<br/><i>Host process — holds secrets + external egress</i>"]
-    AGM["agent-main.ts<br/><i>Container process — network-isolated</i>"]
+    IDX["app/startup/index.ts<br/><i>disabled — split runtime only,<br/>hydrateCanonicalStartupConfig()</i>"]
+    GWM["app/gateway/main.ts<br/><i>host process — secrets + external egress</i>"]
+    AGM["app/agent/main.ts<br/><i>container process — --network=none</i>"]
+    OPM["app/operator/main.ts<br/><i>operator process — Garden + tool-health</i>"]
+    CLI["app/cli/chat-cli.ts<br/><i>terminal chat client</i>"]
   end
 
   %% ═══════════════════════════════════════════════
-  %% BOOTSTRAP LAYER
+  %% BOOTSTRAP & COMPOSITION  (src/app/startup/*)
   %% ═══════════════════════════════════════════════
-  subgraph Bootstrap["Bootstrap & Composition"]
-    COMP["composition.ts<br/><i>composeIdentity, composeSubstrateAgent,<br/>composeSessionRuntime, wireMemoryRuntime,<br/>wireShardAndThinkRuntime, wireSelfModelRuntime</i>"]
-    PARITY["parity.ts<br/><i>wirePromptRuntime, wireHeartbeatRuntime,<br/>wireSettingsRuntime, wireSessionToolsRuntime,<br/>wireFilesystemToolsRuntime, wireContactRuntime</i>"]
-    POSTACT["post-turn-actions.ts<br/><i>deferred action queue + dispatch</i>"]
-    CHANRT["channel-runtime.ts<br/><i>Discord / Telegram / OpenHome / API factory entries</i>"]
+  subgraph Bootstrap["Bootstrap &amp; Composition"]
+    COMP["startup/composition/composition.ts<br/><i>composeIdentity, composeSubstrateAgent,<br/>composeSessionRuntime[Async],<br/>wireMemoryRuntime, wireCoreMemoryRuntime,<br/>wireShardAndThinkRuntime, wireSelfModelRuntime</i>"]
+    PARITY["startup/composition/parity.ts<br/><i>wirePromptRuntime, wireCharacterCardRuntime,<br/>wireSettingsRuntime, wireSessionToolsRuntime,<br/>wireFilesystemToolsRuntime, wireHeartbeatRuntime,<br/>wireStaticPromptRegistry,<br/>wireExtendedToolAutoloadPolicy</i>"]
+    CHANRT["startup/composition/channel-runtime.ts<br/><i>Discord / Telegram / API / Garden / Wyoming<br/>channel adapter factories</i>"]
+    POSTACT["startup/composition/post-turn-actions.ts<br/><i>deferred post-turn action queue + dispatch</i>"]
+    DPI["startup/composition/deferred-post-turn-inference.ts<br/><i>deferred inference scheduling</i>"]
+    SUPPORT["startup/support/*<br/><i>bootstrap-helpers, channel-lifecycle,<br/>startup-preflight, ml-warmup, signal-shutdown,<br/>plugin-eligibility, voice-provider-runtime</i>"]
   end
 
   IDX --> LIFECYCLE
@@ -30,39 +34,64 @@ graph TB
   AGM --> GWC
   AGM --> COMP
   AGM --> PARITY
+  AGM --> CHANRT
+  OPM --> GARDENSRV
+  OPM --> TOOLHLTH
+  CLI --> API
+
   COMP --> SMAN
   COMP --> SA
   COMP --> MRET
   COMP --> MEXT
+  COMP --> EPISTORE
   COMP --> SMGR
+  COMP --> SUBAGFAC
+  COMP --> IROLE
   PARITY --> PLSTORE
+  PARITY --> PCOMPOSE
+  PARITY --> NORTHSTAR
+  PARITY --> VALUES
   PARITY --> HBEAT
   PARITY --> SKILLS
-  PARITY --> VALUES
+  PARITY --> FSOPS
   POSTACT --> SA
+  DPI --> SA
+  SUPPORT --> LIFECYCLE
 
   %% ═══════════════════════════════════════════════
-  %% RUNTIME CORE
+  %% RUNTIME CORE  (src/shared, src/system/lifecycle)
   %% ═══════════════════════════════════════════════
-  subgraph Core["Runtime Core"]
-    EB["EventBus<br/><i>Typed events: turns, tools, streams,<br/>heartbeat, model budget, capabilities</i>"]
-    LIFECYCLE["Lifecycle<br/><i>RuntimeMode contract, LifecycleNotifier,<br/>turn contention, pre-restart / ready / shutdown</i>"]
+  subgraph Core["Runtime Core (src/shared, src/system/lifecycle)"]
+    EB["shared/event-bus.ts<br/><i>typed EventBus: ~50+ event families —<br/>turns, tools, streams, thinking, heartbeat,<br/>model budget, capabilities, lifecycle</i>"]
+    LIFECYCLE["system/lifecycle/*<br/><i>Lifecycle contract, LifecycleNotifier,<br/>RuntimeMode, turn contention, restart/ready/shutdown</i>"]
+    SHARED["shared/{contracts,routing,telemetry,time,utils}<br/><i>SubstrateMessage, AgentResponse, TurnRecord,<br/>gateway routing envelope, charge ledger,<br/>cost telemetry port, sensor ingest port</i>"]
+    SECPOL["system/security/*<br/><i>policy constants, refusal patterns</i>"]
   end
 
   LIFECYCLE --> DISCORD
+  LIFECYCLE --> TELEGRAM
+  LIFECYCLE --> API
+  LIFECYCLE --> GARDENSRV
+  SHARED --> SA
+  SHARED --> EB
+  SECPOL --> SA
 
   %% ═══════════════════════════════════════════════
-  %% GATEWAY  (host-side process)
+  %% BOUNDARY / GATEWAY (host-side)  src/boundary/*
   %% ═══════════════════════════════════════════════
-  subgraph Gateway["Gateway (Host-Side Process)"]
-    GWS["GatewayServer<br/><i>JSON-RPC 2.0 bidirectional</i>"]
-    POLICY["Policy Engine<br/><i>ALLOW / NEEDS_APPROVAL / DENY</i>"]
-    SSRF["URL Policy + SSRF Defense<br/><i>lane-based allowlists: discovery / crawler</i>"]
-    SANITIZE["Content Sanitizer<br/><i>structural → pattern → tagging</i>"]
-    GWAUDIT["AuditStore<br/><i>SQLite gateway audit log</i>"]
-    TRANSPORT["NdjsonConnection<br/><i>Unix socket NDJSON transport</i>"]
-    NTFY["ntfy Notifier<br/><i>notify_operator push notifications</i>"]
-    CONFQUEUE["ConfirmationQueue<br/><i>operator-confirmable queued actions</i>"]
+  subgraph Gateway["Boundary — Gateway (Host Process)"]
+    GWS["boundary/gateway/server.ts<br/><i>JSON-RPC 2.0 bidirectional, ~36 methods<br/>(llm, discord, fs, git, beads, vault, web, shell,<br/>image, notify, session-hmac, runtime-health)</i>"]
+    POLICY["boundary/gateway/policy.ts<br/><i>ALLOW / NEEDS_APPROVAL / DENY,<br/>policy-config, approval-boundary</i>"]
+    SSRF["boundary/gateway/url-policy.ts<br/><i>URL allowlist + SSRF defense,<br/>IPv4/IPv6/mapped private detection,<br/>DNS-rebinding + redirect-target check</i>"]
+    SANITIZE["boundary/gateway/sanitize.ts<br/><i>structural strip → pattern → tagging</i>"]
+    GWAUDIT["boundary/gateway/audit.ts<br/><i>SQLite + optional Postgres mirror audit log</i>"]
+    TRANSPORT["boundary/gateway/transport.ts<br/><i>NDJSON Unix socket transport</i>"]
+    TLS["boundary/gateway/tls.ts<br/><i>optional TLS configuration</i>"]
+    NTFY["boundary/gateway/ntfy-notifier.ts<br/><i>notify_operator push notifications</i>"]
+    CONFQUEUE["system/capabilities/confirmation-queue.ts<br/><i>operator-confirmable queued actions</i>"]
+    HMAC["boundary/gateway/session-hmac.ts<br/><i>HMAC session integrity</i>"]
+    VAULTLOC["boundary/custody/credential-vault.ts<br/><i>credential vault (host side)</i>"]
+    SANDBOX["boundary/sandbox/*<br/><i>sandbox-execution-broker, shell-runner,<br/>analysis-workbench child source,<br/>capability contracts</i>"]
   end
 
   GWS --> POLICY
@@ -70,35 +99,74 @@ graph TB
   GWS --> SANITIZE
   GWS --> GWAUDIT
   GWS --> TRANSPORT
+  GWS --> TLS
   GWS --> NTFY
+  GWS --> HMAC
   GWS --> CONFQUEUE
   GWS --> LLMC
+  GWS --> VAULTLOC
   NTFY --> NTFYSVC
 
   %% ═══════════════════════════════════════════════
-  %% AGENT  (container-side)
+  %% BOUNDARY INTEGRATIONS  src/boundary/integrations/*
   %% ═══════════════════════════════════════════════
-  subgraph AgentSide["Agent (Container-Side)"]
-    GWC["GatewayClient<br/><i>implements LLMProvider + EmbeddingService<br/>HMAC session integrity, keep-alive</i>"]
+  subgraph Integrations["Boundary Integrations (gateway-ops / local-ops)"]
+    INTGIT["integrations/git<br/><i>repo status, diff, patch, commit,<br/>branch, PR + JSONL audit, path allowlist,<br/>protected-branch guard</i>"]
+    INTVAULT["integrations/vault<br/><i>Obsidian read/write, auto-publish reflections</i>"]
+    INTBEADS["integrations/beads<br/><i>bd issue tracker: ready, show, create,<br/>update, close, sync + GitHub project sync</i>"]
+    INTFS["integrations/filesystem<br/><i>workspace-aware fs read/write/list</i>"]
+    INTSHELL["integrations/shell<br/><i>bounded shell execution via sandbox broker</i>"]
+    INTWEB["integrations/web<br/><i>web fetch + search (SSRF-validated)</i>"]
   end
 
-  GWC <-->|"NDJSON Unix Socket<br/>/run/psfn/gateway.sock"| TRANSPORT
-
   %% ═══════════════════════════════════════════════
-  %% AGENT SYSTEM
+  %% AGENT-SIDE GATEWAY CLIENT
   %% ═══════════════════════════════════════════════
-  subgraph AgentSystem["Agent System"]
-    SA["SubstrateAgent<br/><i>wraps pi-agent-core Agent<br/>tool registry (core / extended),<br/>capability gate, adaptive telemetry</i>"]
-    BRIDGE["EventBridge<br/><i>pi-agent-core events → EventBus</i>"]
-    MSGS["AgentMessages<br/><i>convertToLlm(): compaction,<br/>observation masking, continuity</i>"]
-    STREAM["StreamAdapter<br/><i>model slot resolution,<br/>runtime stream options</i>"]
-    BGQUEUE["Background Completion Queue<br/><i>deferred turn completions,<br/>background continuation policy</i>"]
+  subgraph AgentSide["Boundary — Agent-Side Client"]
+    GWC["boundary/gateway/client.ts<br/><i>implements LLMProvider + EmbeddingService,<br/>HMAC session integrity, keep-alive,<br/>bidirectional JSONRPCServerAndClient</i>"]
+    GWOPS["boundary/gateway/gateway-ops-port.ts<br/><i>typed ports over GatewayClient</i>"]
   end
 
+  GWC <-->|"NDJSON Unix socket<br/>/run/psfn/gateway.sock"| TRANSPORT
+  GWOPS --> GWC
+
+  %% ═══════════════════════════════════════════════
+  %% AGENT SYSTEM  src/core/agent/*
+  %% ═══════════════════════════════════════════════
+  subgraph AgentSystem["Agent System (src/core/agent)"]
+    SA["SubstrateAgent<br/><i>wraps pi-agent-core Agent;<br/>core / extended tool registry,<br/>capability gate, adaptive-tools telemetry,<br/>tool_search + toolset overlay</i>"]
+    TURNEXEC["substrate-agent/turn-execution-runtime.ts<br/><i>TurnExecutionRuntime: 60+ context methods</i>"]
+    TOOLFACADE["substrate-agent/tool-runtime-facade.ts<br/><i>facade injected into each tool</i>"]
+    ESMRT["substrate-agent/emotion-self-model-runtime.ts<br/><i>emotion + self-model tool access</i>"]
+    MOA["substrate-agent/moa-turn.ts<br/><i>Mixture-of-Agents deliberation turn</i>"]
+    BRIDGE["agent/event-bridge.ts<br/><i>pi-agent-core events → EventBus</i>"]
+    MSGS["agent/messages.ts<br/><i>convertToLlm(): compaction,<br/>observation masking, continuity envelopes</i>"]
+    STREAM["agent/stream-adapter.ts<br/><i>model slot resolution + runtime stream opts</i>"]
+    BGQUEUE["agent/background-completion-{policy,delivery-queue}.ts<br/><i>deferred background continuations</i>"]
+    SAL["agent/scheduled-agent-loop.ts<br/><i>scheduled per-channel turn execution</i>"]
+    LANES["agent/worker-lanes.ts<br/><i>worker lanes + subagent lane routing</i>"]
+    EMSTATE2["agent/active-emanation-state.ts<br/><i>per-turn emanation envelope state</i>"]
+    PRESENCE["agent/presence-metadata.ts<br/><i>presence + idle metadata</i>"]
+    CATALOG["agent/tool-catalog.ts + tool-registrar.ts<br/><i>core/extended tool wiring + validator</i>"]
+    ADAPT["agent/adaptive-tools-telemetry.ts<br/><i>tool autoload policy + telemetry</i>"]
+    HANDOFF["agent/deferred-tool-handoff.ts<br/><i>tool result handoff queue</i>"]
+  end
+
+  SA --> TURNEXEC
+  SA --> TOOLFACADE
+  SA --> ESMRT
   SA --> BRIDGE
   SA --> MSGS
   SA --> STREAM
   SA --> BGQUEUE
+  SA --> SAL
+  SA --> LANES
+  SA --> EMSTATE2
+  SA --> PRESENCE
+  SA --> CATALOG
+  SA --> ADAPT
+  SA --> HANDOFF
+  SA --> MOA
   BRIDGE --> EB
   SA --> EB
   SA -->|"memoryProvider"| MRET
@@ -112,44 +180,56 @@ graph TB
   SA --> EMAPPR
   SA --> INTSTATE
   SA --> INTAPPR
-  SA --> THINK
-  SA -->|"spawn_shard"| SMGR
+  SA --> AWB
+  SA -->|"spawn_subagent (bounded)"| SMGR
+  SA -->|"subagent (named)"| SUBAGFAC
   STREAM --> GWC
   STREAM --> LLMC
 
   %% ═══════════════════════════════════════════════
-  %% LLM LAYER
+  %% LLM LAYER  src/primitives/llm/*
   %% ═══════════════════════════════════════════════
-  subgraph LLM["LLM Layer"]
-    LLMC["LLMClient<br/><i>stream() + complete()<br/>retry + fallback + budget</i>"]
-    MODELS["Model Roster<br/><i>ModelSlot, ModelPurpose,<br/>resolveModelSlot()</i>"]
-    DISC["ModelDiscovery<br/><i>LiteLLM + OpenRouter /v1/models</i>"]
-    BUDGET["ModelBudget<br/><i>per-model budget enforcement</i>"]
-    DELIB["Deliberation<br/><i>values + heartbeat LLM calls</i>"]
+  subgraph LLM["LLM Layer (src/primitives/llm)"]
+    LLMC["LLMClient<br/><i>stream() + complete(),<br/>retry + fallback + budget,<br/>thinking_delta bridging,<br/>content-block normalization</i>"]
+    MODELS["models.ts + routing.ts<br/><i>ModelSlot, ModelPurpose,<br/>resolveModelSlot() with fallback chains</i>"]
+    DISC["discovery.ts<br/><i>LiteLLM + OpenRouter /v1/models, 5-min cache</i>"]
+    BUDGET["model-budget.ts + model-call-gate.ts<br/><i>per-model + per-purpose budget enforcement</i>"]
+    DELIB["deliberation.ts<br/><i>multi-candidate sampling for values,<br/>heartbeat reflections, MOA</i>"]
+    FALLBACK["fallback.ts + retry.ts<br/><i>retry policy + provider fallback runner</i>"]
+    CORR["correlation.ts + request-context.ts<br/><i>request correlation + telemetry context</i>"]
   end
 
   LLMC --> MODELS
   LLMC --> BUDGET
+  LLMC --> FALLBACK
+  LLMC --> CORR
   LLMC --> LITELLM
   DISC --> LITELLM
   DELIB --> LLMC
+  MOA --> DELIB
 
   %% ═══════════════════════════════════════════════
-  %% MEMORY SYSTEM
+  %% MEMORY  src/faculties/memory/* + src/faculties/core-memory
   %% ═══════════════════════════════════════════════
-  subgraph Memory["Memory System"]
-    MSTORE["MemoryStore<br/><i>SQLite + sqlite-vec, 6 memory types,<br/>vector similarity + lexical search, scratchpad</i>"]
-    MRET["MemoryRetriever<br/><i>composite: vector + recency + salience +<br/>VAD mood congruence + trust-gated</i>"]
-    MEXT["MemoryExtractor<br/><i>LLM extraction → XML parse,<br/>quality gates, crash recovery</i>"]
-    MWRITE["MemoryWriter<br/><i>dedup + contradiction logic</i>"]
-    DECAY["SalienceDecay<br/><i>exponential per-type half-lives</i>"]
-    EMBED["EmbeddingProvider<br/><i>Ollama — snowflake-arctic-embed2 (1024d)</i>"]
-    SLEEPTIME["SleeptimeMemoryAgent<br/><i>idle consolidation — LLM synthesis</i>"]
-    MEMJRNL["MemoryJournal<br/><i>append-only JSONL mutation audit</i>"]
+  subgraph Memory["Memory System (src/faculties/memory + core-memory)"]
+    MSTORE["memory/store.ts (SQLite + sqlite-vec)<br/><i>6 base types + relational, vector + lexical,<br/>scratchpad, trust filters, salience</i>"]
+    PGSTORE["memory/postgres-store.ts<br/><i>optional Postgres adapter (pgvector)</i>"]
+    MRET["memory/retrieval{,/*}.ts<br/><i>composite: vector + recency + salience +<br/>VAD mood + trust-gated access,<br/>proactive + social + episodic modes</i>"]
+    MEXT["memory/extraction/*<br/><i>orchestrator, chunk-compose, importance,<br/>naming, profile-synthesis, emotional,<br/>quality gates + sensitivity tagging</i>"]
+    MWRITE["memory/writer.ts<br/><i>dedup + contradiction logic +<br/>sensitivity + consent flags</i>"]
+    DECAY["memory/decay.ts + maintenance-review.ts<br/><i>exponential half-lives, maintenance pass</i>"]
+    EMBED["memory/embedding.ts<br/><i>Ollama snowflake-arctic-embed2 (1024d)</i>"]
+    SLEEPTIME["memory/sleeptime-agent.ts<br/><i>idle consolidation via LLM synthesis</i>"]
+    MEMJRNL["memory/journal.ts<br/><i>append-only JSONL mutation audit</i>"]
+    EPISTORE["memory/episodic/*<br/><i>Episode + EpisodeArc store +<br/>EpisodicSynthesizer (LLM arc rollups)</i>"]
+    RLIB["memory/research-library/*<br/><i>structured research artifact library</i>"]
+    ABSTR["memory/abstraction.ts<br/><i>pattern abstraction passes</i>"]
+    COREMEM["core-memory/store.ts + tools.ts<br/><i>fixed-size JSON core slots,<br/>orient tool, always-loaded</i>"]
   end
 
   MRET --> MSTORE
   MRET --> EMBED
+  MRET --> EPISTORE
   MRET -->|"trust-gated retrieval"| TPOLICY
   MEXT --> MWRITE
   MEXT --> PREG
@@ -160,20 +240,28 @@ graph TB
   EMBED --> OLLAMA
   SLEEPTIME --> MWRITE
   SLEEPTIME --> LLMC
+  EPISTORE --> LLMC
+  EPISTORE --> MSTORE
+  RLIB --> MSTORE
+  ABSTR --> MWRITE
   MSTORE --> SQLITE
+  PGSTORE --> POSTGRES
   MEMJRNL --> JSONLFS
   PATTERNS --> MWRITE
+  COREMEM --> JSONFILES
 
   %% ═══════════════════════════════════════════════
-  %% SESSION SYSTEM
+  %% SESSIONS  src/core/session + src/persistence/sessions
   %% ═══════════════════════════════════════════════
   subgraph Sessions["Session System"]
-    SSTORE["SessionStore<br/><i>per-channel JSONL, append-only L0,<br/>crash recovery, channel index</i>"]
-    SMAN["SessionManager<br/><i>buildContext(), auto-compaction,<br/>token budget, observation masking,<br/>focus knowledge, core memory injection</i>"]
-    UCONT["UserContinuityStore<br/><i>per-user cross-channel JSONL</i>"]
-    COMPGD["CompressionGuideline<br/><i>self-improving compaction instructions</i>"]
-    FOCUS["FocusKnowledge<br/><i>active study/focus integration</i>"]
-    IROLE["InternalRoleEnvelopes<br/><i>per-channel JSONL ledger:<br/>Whisper notes, system annotations</i>"]
+    SSTORE["persistence/sessions/store.ts<br/><i>per-channel JSONL (L0), append-only,<br/>HMAC-SHA256 chain, crash recovery,<br/>channel index, SQLite/Postgres turn record adapters</i>"]
+    SMAN["core/session/manager.ts<br/><i>buildContext(): compaction, token budget,<br/>observation masking, focus knowledge,<br/>core memory injection</i>"]
+    UCONT["core/session/continuity.ts<br/><i>per-user cross-channel JSONL,<br/>channelsShareContinuity()</i>"]
+    COMPGD["core/session/compression-guideline.ts<br/><i>self-improving compaction instructions</i>"]
+    FOCUS["core/session/focus-knowledge.ts<br/><i>active study/focus integration</i>"]
+    IROLE["core/internal-role-envelopes/*<br/><i>internal_thought, self_reflection,<br/>values_reflection, concern_candidate,<br/>outreach_candidate / handoff / result</i>"]
+    PROVEN["core/session/turn-provenance.ts +<br/>core/session/tool-observation.ts<br/><i>provenance + observation context</i>"]
+    SREPAIR["persistence/repair + persistence/journals<br/><i>journal repair, transcript projection,<br/>reflection journals, HMAC boundary</i>"]
   end
 
   SMAN --> SSTORE
@@ -184,41 +272,54 @@ graph TB
   SMAN --> PREG
   MSGS --> SMAN
   SSTORE --> JSONLFS
+  SSTORE --> SREPAIR
+  SREPAIR --> JSONLFS
   UCONT --> JSONLFS
   IROLE --> JSONLFS
+  IROLE --> SMAN
+  PROVEN --> SSTORE
 
   %% ═══════════════════════════════════════════════
-  %% IDENTITY & PROMPTS
+  %% IDENTITY & PROMPTS  src/core/identity + faculties/north-star
   %% ═══════════════════════════════════════════════
-  subgraph Identity["Identity & Prompts"]
-    CARD["Character Card Loader<br/><i>V2 spec JSON</i>"]
-    CARDVER["CharacterCardVersionStore<br/><i>JSONL version history + persona_update tool</i>"]
-    PLSTORE["PromptLayerStore<br/><i>JSON + JSONL history, 5 layer types,<br/>create / update / rollback / toggle</i>"]
-    PCOMPOSE["PromptComposer<br/><i>context-aware filtering, SHA-256 hash,<br/>constitution + values + north-star layers</i>"]
-    PREG["PromptRegistryStore<br/><i>keyed runtime prompts: extraction,<br/>compaction, deliberation call-sites</i>"]
-    NORTHSTAR["NorthStarStore<br/><i>companion goals, injected into prompt</i>"]
-    COREMEM["CoreMemoryStore<br/><i>fixed-size JSON, injected into context</i>"]
+  subgraph Identity["Identity &amp; Prompts"]
+    CARD["identity/loader.ts + importer.ts<br/><i>character card V2/V3 loader</i>"]
+    CARDVER["identity/card-versioning.ts<br/><i>JSONL version history + persona_update</i>"]
+    PLSTORE["identity/prompt-store.ts<br/><i>JSON + JSONL history,<br/>5 layer types: base/operator/runtime/channel/task</i>"]
+    PCOMPOSE["identity/prompt-composer.ts<br/><i>context-aware filtering,<br/>SHA-256 hash, lastKnownGood fallback,<br/>constitution + values + north-star layers</i>"]
+    PREG["identity/prompt-registry.ts<br/><i>keyed runtime prompts: extraction,<br/>compaction, deliberation call-sites</i>"]
+    PRUNTIME["identity/prompt-runtime.ts +<br/>identity/prompt-state-port.ts<br/><i>runtime prompt state + cache</i>"]
+    PMACRO["identity/character-macro-map.ts<br/><i>{{char}} / {{user}} macro expansion</i>"]
+    NORTHSTAR["faculties/north-star/store.ts + tools.ts<br/><i>companion goals, injected into prompt</i>"]
+    COREMEM2["faculties/core-memory/store.ts<br/><i>fixed-size JSON, injected into context</i>"]
+    VALUES["faculties/values/*<br/><i>values journal + tools +<br/>LLM deliberation, narrative context</i>"]
   end
 
   CARD --> PLSTORE
   CARDVER --> CARD
   PCOMPOSE --> PLSTORE
   PCOMPOSE --> NORTHSTAR
+  PCOMPOSE --> VALUES
+  PRUNTIME --> PLSTORE
+  PMACRO --> PCOMPOSE
   PLSTORE --> JSONLFS
   PREG --> JSONLFS
-  COREMEM --> JSONFILES
+  COREMEM2 --> JSONFILES
   NORTHSTAR --> JSONFILES
+  VALUES --> JSONLFS
+  VALUES --> DELIB
 
   %% ═══════════════════════════════════════════════
-  %% EMOTION & AFFECT
+  %% EMOTION & AFFECT  src/core/emotion
   %% ═══════════════════════════════════════════════
-  subgraph Emotion["Emotion & Affect"]
-    EMSTATE["EmotionState<br/><i>VAD: valence-arousal-dominance,<br/>mood EMA, discrete emotions,<br/>joy / anger / sadness / surprise / love</i>"]
-    EMOBS["EmotionObserver<br/><i>text + audio emotion observations</i>"]
-    TXTCLS["Text Emotion Classifier<br/><i>transformers ML</i>"]
-    AUDCLS["Audio Emotion Classifier<br/><i>audio ML</i>"]
-    PERSONA["PersonaAdaptation<br/><i>honne / tatemae per trust tier</i>"]
-    EMAPPR["EmotionAppraisal<br/><i>per-turn appraisal entries</i>"]
+  subgraph Emotion["Emotion &amp; Affect"]
+    EMSTATE["emotion/state.ts<br/><i>VAD: valence-arousal-dominance,<br/>mood EMA, discrete emotions,<br/>joy / anger / sadness / surprise / love</i>"]
+    EMOBS["emotion/observer.ts<br/><i>text + audio emotion observations</i>"]
+    TXTCLS["emotion/text-classifier.ts<br/><i>transformer-based ML</i>"]
+    AUDCLS["emotion/audio-classifier.ts<br/><i>audio ML classifier</i>"]
+    PERSONA["emotion/persona-adaptation.ts<br/><i>honne / tatemae per trust tier</i>"]
+    EMAPPR["emotion/appraisal.ts + acac.ts<br/><i>per-turn appraisal entries +<br/>ACAC affective continuity</i>"]
+    VADLEX["emotion/vad-lexicon.ts +<br/>emotion/calibration.ts<br/><i>VAD lexicon + classifier calibration</i>"]
   end
 
   EMOBS --> EMSTATE
@@ -226,13 +327,14 @@ graph TB
   EMOBS --> AUDCLS
   EMSTATE --> PERSONA
   EMAPPR --> EMSTATE
+  VADLEX --> TXTCLS
 
   %% ═══════════════════════════════════════════════
-  %% SELF-MODEL & METACOGNITION
+  %% SELF-MODEL & METACOGNITION  src/core/self-model
   %% ═══════════════════════════════════════════════
-  subgraph SelfModel["Self-Model & Metacognition"]
-    INTSTATE["InternalState<br/><i>4 dimensions: emotional + cognitive +<br/>attention + relational</i>"]
-    META["MetacognitionFlags<br/><i>confidence levels + evidence</i>"]
+  subgraph SelfModel["Self-Model &amp; Metacognition"]
+    INTSTATE["self-model/state.ts<br/><i>4 dimensions: emotional + cognitive +<br/>attention + relational</i>"]
+    META["self-model/metacognition.ts<br/><i>confidence levels + evidence,<br/>introspection policy</i>"]
   end
 
   INTSTATE --> EMSTATE
@@ -241,14 +343,15 @@ graph TB
   INTSTATE --> FOLLOWUPS
 
   %% ═══════════════════════════════════════════════
-  %% INTENTION & ACTIVE CONCERNS
+  %% INTENTION & ACTIVE CONCERNS  src/core/intention
   %% ═══════════════════════════════════════════════
-  subgraph Intention["Intention & Active Concerns"]
-    INTAPPR["IntentionAppraisal<br/><i>post-turn: followUp / concern / schedule / noop<br/>LLM + emotion + context + contacts</i>"]
-    CONCERNS["ActiveConcerns<br/><i>SQLite: open / pending / resolved,<br/>priorities + due dates</i>"]
-    FOLLOWUPS["PendingFollowUps<br/><i>immediate / soon / scheduled</i>"]
-    MOTIV["MotivationBridge<br/><i>appraisal decisions → heartbeat / scheduler</i>"]
-    PATTERNS["BehavioralPatterns<br/><i>tracks + promotes patterns to long-term memory</i>"]
+  subgraph Intention["Intention &amp; Active Concerns"]
+    INTAPPR["intention/post-turn-appraisal.ts +<br/>intention/appraisal/*<br/><i>follow-up / concern / schedule / noop,<br/>LLM + emotion + context + contacts</i>"]
+    CONCERNS["intention/concerns.ts<br/><i>SQLite (or Postgres): open / pending /<br/>resolved, priorities + due dates</i>"]
+    FOLLOWUPS["intention/pending-follow-ups.ts<br/><i>immediate / soon / scheduled</i>"]
+    MOTIV["intention/motivation.ts<br/><i>appraisal decisions → heartbeat / scheduler</i>"]
+    PATTERNS["intention/patterns.ts<br/><i>behavioral pattern tracker +<br/>memory promotion hook</i>"]
+    CARE["intention/care-reminders.ts<br/><i>relational care reminders</i>"]
   end
 
   INTAPPR --> LLMC
@@ -258,181 +361,261 @@ graph TB
   INTAPPR --> CONCERNS
   INTAPPR --> FOLLOWUPS
   INTAPPR --> MOTIV
+  INTAPPR --> CARE
   MOTIV --> SCHEDULER
+  CARE --> CONTACT
   CONCERNS --> SQLITE
+  CONCERNS --> POSTGRES
   FOLLOWUPS --> SQLITE
+  FOLLOWUPS --> POSTGRES
 
   %% ═══════════════════════════════════════════════
-  %% TRUST & CONTACTS
+  %% TRUST & CONTACTS  src/system/trust + src/core/contacts
   %% ═══════════════════════════════════════════════
-  subgraph Trust["Trust & Contacts"]
-    TPOLICY["Trust Policy<br/><i>5-layer: operator → consent →<br/>trust → visibility → default</i>"]
-    CONTACT["ContactStore<br/><i>SQLite — identity linking, social graph,<br/>challenge / verify, mutation audit</i>"]
-    CHANVIS["ChannelVisibility<br/><i>private / semi_private / public / broadcast</i>"]
+  subgraph Trust["Trust &amp; Contacts"]
+    TPOLICY["system/trust/policy.ts +<br/>system/trust/runtime-policy.ts<br/><i>5-layer: operator → consent →<br/>trust → visibility → default,<br/>broadcast-safety guard</i>"]
+    CONTACT["core/contacts/store.ts<br/><i>SQLite + optional Postgres,<br/>identity linking, social graph,<br/>challenge / verify, emotional baseline,<br/>mutation audit</i>"]
+    CHANVIS["system/trust/types.ts<br/><i>ChannelVisibility:<br/>private / semi_private / public / broadcast</i>"]
+    PREFNAME["core/contacts/preferred-name.ts<br/><i>preferred-name resolution</i>"]
   end
 
   TPOLICY --> CONTACT
   TPOLICY --> CHANVIS
   CONTACT --> SQLITE
+  CONTACT --> POSTGRES
+  PREFNAME --> CONTACT
 
   %% ═══════════════════════════════════════════════
-  %% CAPABILITIES & SAFEGUARDS
+  %% CAPABILITIES & SAFEGUARDS  src/system/capabilities
   %% ═══════════════════════════════════════════════
-  subgraph Capabilities["Capabilities & Safeguards"]
-    CAPRT["CapabilityRuntime<br/><i>tier loaded from capability-tier.json</i>"]
-    ELIGATE["EligibilityGate<br/><i>ALLOW / DENY with reason codes,<br/>capability tokens + tier checks</i>"]
-    SAFEGUARDS["Safeguards<br/><i>identity cooling-off, restart guard,<br/>comms rate limiter — JSONL audit</i>"]
+  subgraph Capabilities["Capabilities &amp; Safeguards"]
+    CAPRT["capabilities/runtime.ts +<br/>capabilities/tiers.ts<br/><i>tier loaded from capability-tier.json:<br/>nursery / apprentice / autonomous / custom</i>"]
+    TOKENS["capabilities/tokens.ts<br/><i>~19 capability tokens</i>"]
+    ELIGATE["capabilities/eligibility.ts +<br/>capabilities/gate.ts<br/><i>ALLOW / DENY with reason codes,<br/>capability tokens + tier checks</i>"]
+    SAFEGUARDS["capabilities/safeguards.ts<br/><i>identity cooling-off, restart guard,<br/>comms rate limiter — JSONL audit</i>"]
+    COMPPOL["capabilities/compositional-policy.ts<br/><i>per-channel feature flags:<br/>memory extraction, intention appraisal</i>"]
+    APPRQ["capabilities/confirmation-queue.ts +<br/>capabilities/approval-queue-port.ts<br/><i>human-in-the-loop confirmations</i>"]
   end
 
   CAPRT --> ELIGATE
+  CAPRT --> TOKENS
+  CAPRT --> APPRQ
   SA --> ELIGATE
+  COMPPOL -.->|"channel flags"| SA
   SAFEGUARDS --> JSONLFS
 
   %% ═══════════════════════════════════════════════
-  %% REPL SANDBOX
+  %% ANALYSIS WORKBENCH (REPL)  src/core/tools/analysis-workbench
   %% ═══════════════════════════════════════════════
-  subgraph REPL["REPL / Analysis Workbench"]
-    THINK["analysis_workbench<br/><i>large-context analysis</i>"]
-    SANDBOX["node:vm Sandbox<br/><i>print, llm_query, memory_search,<br/>memory_count, session_messages, FINAL</i>"]
-    EVIDENCE["Evidence Tracking<br/><i>AnalysisWorkbenchEvidence + AnalysisWorkbenchStep</i>"]
+  subgraph REPL["Analysis Workbench (RLM Sandbox)"]
+    AWB["analysis-workbench/tools.ts +<br/>analysis-workbench/loop.ts<br/><i>large-context analysis loop</i>"]
+    SANDBOX2["analysis-workbench/sandbox.ts<br/><i>node:vm sandbox: print, llm_query,<br/>memory_search, memory_count,<br/>session_messages, FINAL</i>"]
+    EVIDENCE["analysis-workbench evidence tracking<br/><i>per-step evidence collection +<br/>iteration / token / evidence header</i>"]
   end
 
-  THINK --> SANDBOX
-  SANDBOX --> EVIDENCE
-  SANDBOX --> MRET
-  SANDBOX --> SMAN
-  SANDBOX --> LLMC
+  AWB --> SANDBOX2
+  SANDBOX2 --> EVIDENCE
+  SANDBOX2 --> MRET
+  SANDBOX2 --> SMAN
+  SANDBOX2 --> LLMC
+  SANDBOX2 --> SBROKER
+  SBROKER["boundary/sandbox/sandbox-execution-broker.ts<br/><i>shell + repo + web capability broker</i>"]
 
   %% ═══════════════════════════════════════════════
-  %% SHARDS
+  %% SHARDS & SUBAGENTS  src/faculties/shards + subagents
   %% ═══════════════════════════════════════════════
-  subgraph Shards["Self-Spawning Shards"]
-    SMGR["ShardManager<br/><i>max 5 concurrent, depth=1</i>"]
-    SHARD["Shard Instance<br/><i>ephemeral SubstrateAgent<br/>channelId: shard:uuid, shared LLM/memory</i>"]
+  subgraph Shards["Shards &amp; Sub-Agents"]
+    SMGR["faculties/shards/manager.ts<br/><i>bounded launch, fold-review,<br/>artifact return policy,<br/>concurrency cap, depth=1</i>"]
+    SHARD["shard execution<br/><i>ephemeral SubstrateAgent,<br/>channelId: shard:&lt;uuid&gt;,<br/>shared LLM/memory</i>"]
+    SUBAGFAC["faculties/subagents/faculty.ts<br/><i>SubagentFaculty: named persistent sub-agents,<br/>task registry, worker-lane routing</i>"]
+    FOLDREV["faculties/shards/fold-review.ts +<br/>faculties/shards/output-review.ts<br/><i>shard output review + result lineage</i>"]
   end
 
   SMGR --> SHARD
+  SMGR --> FOLDREV
+  SUBAGFAC --> LANES
 
   %% ═══════════════════════════════════════════════
-  %% CHANNEL ADAPTERS
+  %% CHANNEL ADAPTERS  src/channels/*
   %% ═══════════════════════════════════════════════
   subgraph Channels["Channel Adapters"]
-    DISCORD["DiscordAdapter<br/><i>discord.js — text + voice,<br/>typing indicators, backfill, steering</i>"]
-    TELEGRAM["TelegramAdapter<br/><i>long-poll or webhook,<br/>media sends, user allowlist</i>"]
-    API["ApiServer<br/><i>OpenAI-compatible /v1/chat/completions<br/>SSE streaming + voice WebSocket</i>"]
-    ADMINSRV["AdminServer<br/><i>Garden SPA host at /garden<br/>/api/admin/* REST surface<br/>auth, multipart uploads, telemetry</i>"]
-    GARDEN["Garden SPA<br/><i>Svelte 5 + SvelteKit<br/>primary admin UI</i>"]
+    DISCORD["channels/discord/adapter.ts<br/><i>discord.js — text + voice,<br/>typing indicators, backfill, steering</i>"]
+    DISCVOICE["channels/discord/voice*.ts<br/><i>DiscordVoiceRuntime: STT→agent→TTS,<br/>VAD preflight, error recovery</i>"]
+    TELEGRAM["channels/telegram/adapter.ts<br/><i>long-poll or webhook, media sends,<br/>user allowlist</i>"]
+    API["channels/api/server.ts<br/><i>OpenAI-compat /v1/chat/completions<br/>SSE streaming + voice WebSocket,<br/>X-Session-ID → api:&lt;sessionId&gt;</i>"]
+    APIVWS["channels/api/voice-websocket-runtime.ts<br/><i>voice WS runtime</i>"]
+    BACKPLANE["channels/backplane/*<br/><i>channel adapter registry, capabilities,<br/>routing envelope, HTTP backplane</i>"]
   end
 
   DISCORD --> EB
   DISCORD --> DISCORDAPI
+  DISCVOICE --> DISCORD
+  DISCVOICE --> VOICERT
   TELEGRAM --> EB
   TELEGRAM --> TELEGRAMAPI
   API --> EB
   API --> SA
-  ADMINSRV --> EB
-  GARDEN -->|"/api/admin/*"| ADMINSRV
+  APIVWS --> API
+  APIVWS --> VOICERT
+  BACKPLANE --> DISCORD
+  BACKPLANE --> TELEGRAM
+  BACKPLANE --> API
 
   %% ═══════════════════════════════════════════════
-  %% VOICE SYSTEM
+  %% OPERATOR / GARDEN UI  src/operator/*
   %% ═══════════════════════════════════════════════
-  subgraph Voice["Voice System"]
-    WYTCP["WyomingTcpServer<br/><i>Home Assistant Wyoming TCP protocol</i>"]
-    WYRT["WyomingRuntime<br/><i>service registry: handle + ASR + TTS</i>"]
-    STTREG["STT Registry<br/><i>Deepgram streaming</i>"]
-    TTSREG["TTS Registry<br/><i>ElevenLabs + Echo streaming</i>"]
-    VOICEPIPE["Voice Pipeline<br/><i>VAD, codec, transport, policy, observers</i>"]
+  subgraph Operator["Operator Surface (Garden Admin)"]
+    GARDENSRV["operator/garden/server.ts<br/><i>SvelteKit SPA host at /garden,<br/>/api/admin/* REST surface,<br/>WebSocket /api/admin/events,<br/>auth, multipart, telemetry</i>"]
+    GARDEN["operator/garden chat + handlers + services<br/><i>API routes: memory, episodic, contacts,<br/>charge ledger, audit timeline, action pipe</i>"]
+    GARDENUI["admin-ui (Svelte 5 + SvelteKit)<br/><i>primary admin SPA</i>"]
+    TOOLHLTH["operator/tool-health/types.ts<br/><i>tool call telemetry, health monitoring</i>"]
+    OPALERT["startup/support/operator-alerts.ts<br/><i>operator alert surfaces</i>"]
   end
 
-  WYTCP --> WYRT
-  WYRT --> STTREG
-  WYRT --> TTSREG
-  WYRT --> VOICEPIPE
+  GARDENUI -->|"/api/admin/*"| GARDENSRV
+  GARDENSRV --> EB
+  GARDEN --> SA
+  GARDEN --> TOOLHLTH
+  OPALERT --> NTFY
+
+  %% ═══════════════════════════════════════════════
+  %% VOICE SYSTEM  src/primitives/voice + satellites
+  %% ═══════════════════════════════════════════════
+  subgraph Voice["Voice System"]
+    VOICERT["primitives/voice/runtime/orchestrator.ts<br/><i>VoiceOrchestrator state machine,<br/>pipeline/runner/queue/task</i>"]
+    STTREG["primitives/voice/connectors/stt<br/><i>Deepgram streaming STT</i>"]
+    TTSREG["primitives/voice/connectors/tts<br/><i>ElevenLabs + Echo streaming TTS</i>"]
+    VOICEPIPE["primitives/voice/pipeline/*<br/><i>frames, processor, queue, runner</i>"]
+    VPOLICY["primitives/voice/policy/*<br/><i>reliability + security policy</i>"]
+    VTURNS["primitives/voice/turns/*<br/><i>voice turn controller + strategies</i>"]
+    VTRANS["primitives/voice/transports/*<br/><i>Discord input/output + WebSocket</i>"]
+    VOBS["primitives/voice/observers/*<br/><i>turns + errors + latency observers</i>"]
+    WYTCP["satellites/wyoming/host/server.ts<br/><i>Wyoming TCP server (Home Assistant)</i>"]
+    WYRT["satellites/wyoming/host/runtime.ts<br/><i>Wyoming service registry: handle + ASR + TTS</i>"]
+    OPENHOME["satellites/openhome<br/><i>OpenHome satellite adapter</i>"]
+  end
+
+  VOICERT --> STTREG
+  VOICERT --> TTSREG
+  VOICERT --> VOICEPIPE
+  VOICERT --> VTURNS
+  VOICERT --> VTRANS
+  VOICERT --> VOBS
+  VOICERT --> VPOLICY
   STTREG --> DEEPGRAM
   TTSREG --> ELEVENLABS
   TTSREG --> ECHOTTS
-  VOICEPIPE --> DISCORD
+  WYTCP --> WYRT
+  WYRT --> VOICERT
+  OPENHOME --> VOICERT
 
   %% ═══════════════════════════════════════════════
-  %% SCHEDULER & HEARTBEAT
+  %% SCHEDULER & HEARTBEAT  src/core/scheduler + faculties/skills
   %% ═══════════════════════════════════════════════
-  subgraph Sched["Scheduler & Heartbeat"]
-    SCHEDULER["Scheduler<br/><i>tick-based: every / one-shot tasks</i>"]
-    HBEAT["HeartbeatPolicyStore<br/><i>4 templates: whisper, daily,<br/>emotional, goals</i>"]
-    REFLJRNL["ReflectionJournal<br/><i>JSONL heartbeat reflection outputs</i>"]
-    SKILLS["SkillsRuntime<br/><i>SKILL.md discovery + tools</i>"]
-    VALUES["ValuesJournal<br/><i>JSONL + LLM deliberation</i>"]
+  subgraph Sched["Scheduler &amp; Heartbeat"]
+    SCHEDULER["core/scheduler/scheduler.ts<br/><i>tick-based: every / one-shot tasks,<br/>updateTask(), skipFirstRun</i>"]
+    HBEAT["core/scheduler/heartbeat-policy.ts +<br/>core/scheduler/heartbeat-runtime.ts<br/><i>reflection templates: daily-review,<br/>weekly-review (rest-window scheduled)</i>"]
+    HBRUN["core/scheduler/heartbeat-post-turn-runtime.ts<br/><i>post-turn reflection trigger +<br/>introspection policy + telemetry</i>"]
+    REFLJRNL["persistence/journals/reflection-journal.ts +<br/>reflection-metacognition-journal.ts<br/><i>JSONL heartbeat reflection outputs +<br/>SQLite/Postgres mirror</i>"]
+    SKILLS["faculties/skills/*<br/><i>SkillsRuntime, store, loader, filter,<br/>format, reflection nudge, tools</i>"]
+    RESTWIN["core/scheduler/rest-window.ts<br/><i>rest window scheduling</i>"]
+    SCHEDTOOL["core/scheduler/schedule-tool.ts<br/><i>unified schedule tool</i>"]
   end
 
   SCHEDULER --> EB
   SCHEDULER --> DECAY
   SCHEDULER --> HBEAT
   SCHEDULER --> BACKUP
+  SCHEDULER --> RESTWIN
   HBEAT --> REFLJRNL
   HBEAT --> SA
+  HBRUN --> SA
   REFLJRNL --> JSONLFS
-  VALUES --> JSONLFS
-  VALUES --> DELIB
+  REFLJRNL --> SQLITE
+  REFLJRNL --> POSTGRES
+  SCHEDTOOL --> SCHEDULER
 
   %% ═══════════════════════════════════════════════
-  %% SELF-MODIFICATION TOOLS
+  %% TOOLS  src/core/tools + integration ops + image ops
   %% ═══════════════════════════════════════════════
-  subgraph SelfMod["Self-Modification Tools"]
-    GITOPS["GitOps / GatewayGitOps<br/><i>6 tools: status, diff, patch,<br/>commit, branch, PR + JSONL audit</i>"]
-    VAULTOPS["VaultOps / GatewayVaultOps<br/><i>Obsidian read/write, auto-publish reflections</i>"]
-    BEADSOPS["BeadsOps / GatewayBeadsOps<br/><i>issue tracker: ready, show, create,<br/>update, close, sync</i>"]
-    FSOPS["FilesystemOps / GatewayFilesystemOps<br/><i>file read / write / list tools</i>"]
-    IMGOPS["ImageOps / GatewayImageOps<br/><i>ComfyUI / Fal.ai generation,<br/>vision reviewer</i>"]
+  subgraph Tools["Tool Surface"]
+    CORETOOLS["core tools: tool_search, toolset,<br/>analysis_workbench, fs, repo, web, shell,<br/>memory, scratchpad, contact, session,<br/>identity, orient, schedule, system,<br/>skill, subagent"]
+    EXTTOOLS["extended tools: vault, beads, notify, media,<br/>spawn_subagent (bounded), values helpers,<br/>memory/contact mutation helpers,<br/>promoted-tool overlays"]
+    IMGOPS["primitives/images/* + tools.ts<br/><i>ComfyUI / Fal.ai generation,<br/>vision reviewer, remote fetch</i>"]
   end
 
-  SA --> GITOPS
-  SA --> VAULTOPS
-  SA --> BEADSOPS
-  SA --> FSOPS
-  SA --> IMGOPS
-  GITOPS -.->|"gateway-backed in split mode"| GWC
-  VAULTOPS -.->|"gateway-backed in split mode"| GWC
-  BEADSOPS -.->|"gateway-backed in split mode"| GWC
-  FSOPS -.->|"gateway-backed in split mode"| GWC
-  IMGOPS -.->|"gateway-backed in split mode"| GWC
-  GITOPS --> JSONLFS
-  VAULTOPS --> OBSIDIAN
+  SA --> CORETOOLS
+  SA --> EXTTOOLS
+  CORETOOLS --> INTGIT
+  CORETOOLS --> INTFS
+  CORETOOLS --> INTWEB
+  CORETOOLS --> INTSHELL
+  EXTTOOLS --> INTVAULT
+  EXTTOOLS --> INTBEADS
+  EXTTOOLS --> IMGOPS
+  EXTTOOLS --> NTFY
   IMGOPS --> COMFYUI
+  INTGIT -.->|"gateway-backed in split mode"| GWC
+  INTVAULT -.->|"gateway-backed in split mode"| GWC
+  INTBEADS -.->|"gateway-backed in split mode"| GWC
+  INTFS -.->|"gateway-backed in split mode"| GWC
+  INTSHELL -.->|"gateway-backed in split mode"| GWC
+  INTWEB -.->|"gateway-backed in split mode"| GWC
+  IMGOPS -.->|"gateway-backed in split mode"| GWC
+  INTGIT --> JSONLFS
+  INTVAULT --> OBSIDIAN
 
   %% ═══════════════════════════════════════════════
-  %% PERSISTENCE & CONFIGURATION
+  %% PERSISTENCE & CONFIG  src/persistence + src/system
   %% ═══════════════════════════════════════════════
-  subgraph Persist["Persistence & Configuration"]
-    LAYOUT["PersistenceLayout<br/><i>two-root topology: system-data + companion-data,<br/>fail-closed path resolution</i>"]
-    SETTCON["SettingsContract<br/><i>owner-file map: settings.json, models.json,<br/>capability-tier.json, channels.json, etc.</i>"]
-    BACKUP["BackupSystem<br/><i>scheduled + retention rotation (rotating/weekly/monthly),<br/>startup integrity checks</i>"]
-    MODULES["ModuleLoader<br/><i>runtime module registry,<br/>additional tool registration</i>"]
+  subgraph Persist["Persistence &amp; Configuration"]
+    LAYOUT["persistence/layout.ts (~786 lines)<br/><i>two-root topology: system-data +<br/>companion-data, fail-closed path resolution</i>"]
+    CUTOVER["persistence/cutover.ts (~940 lines)<br/><i>split-root migration engine</i>"]
+    RTFACT["persistence/runtime-factory.ts<br/><i>per-process persistence runtime</i>"]
+    SETTCON["system/config/settings-contract.ts +<br/>settings-contract-guard.ts<br/><i>owner-file map: settings.json, models.json,<br/>scheduler.json, capability-tier.json,<br/>channels.json, skills.json, trust-policy.json, …</i>"]
+    BACKUP["persistence/backups/*<br/><i>scheduled + rotation (rotating / weekly / monthly),<br/>startup integrity checks</i>"]
+    MODULES["system/modules/loader.ts + registry.ts<br/><i>runtime module registry,<br/>additional tool registration</i>"]
+    SETTINGS["system/settings/*<br/><i>EditableSettings (~120 fields),<br/>schema, coercion, form, io</i>"]
+    CONFIGSTORE["system/config/config-store.ts +<br/>system-config-repository<br/><i>database-backed config interface</i>"]
+    IMPORTERS["persistence/importers/*<br/><i>bulk data importers</i>"]
+    ARTIFACTS["persistence/artifact-lifecycle/*<br/><i>companion artifact lifecycle hooks</i>"]
   end
 
   LAYOUT --> SETTCON
+  LAYOUT --> CUTOVER
+  RTFACT --> LAYOUT
   SETTCON --> JSONFILES
+  SETTINGS --> JSONFILES
+  CONFIGSTORE --> SQLITE
+  CONFIGSTORE --> POSTGRES
   BACKUP --> JSONLFS
   MODULES --> SA
+  ARTIFACTS --> JSONLFS
 
   %% ═══════════════════════════════════════════════
-  %% POST-TURN PIPELINE
+  %% POST-TURN PIPELINE  src/faculties/context-feedback
   %% ═══════════════════════════════════════════════
   subgraph PostTurn["Post-Turn Pipeline"]
-    CTXFEED["ContextFeedback Evaluator<br/><i>scores: confabulation / missed context /<br/>wasted tokens / good</i>"]
-    COMPOSS["CompositionalPolicy<br/><i>per-channel feature flags:<br/>memory extraction, intention appraisal</i>"]
+    CTXFEED["faculties/context-feedback/evaluator.ts<br/><i>scores: confabulation / missed context /<br/>wasted tokens / good</i>"]
+    CTXRT["faculties/context-feedback/runtime.ts<br/><i>post-turn feedback runtime</i>"]
+    CHARGE["shared/telemetry/charge-ledger.ts +<br/>shared/telemetry/run-charge.ts<br/><i>per-run charge accounting,<br/>cost telemetry port</i>"]
   end
 
   CTXFEED --> EB
-  COMPOSS -.->|"channel flags"| SA
+  CTXRT --> SA
+  CHARGE --> SA
+  CHARGE --> LLMC
 
   %% ═══════════════════════════════════════════════
   %% OBSERVABILITY
   %% ═══════════════════════════════════════════════
   subgraph Obs["Observability"]
-    TERMDBG["TerminalDebugObserver<br/><i>EventBus subscriber → terminal render</i>"]
+    TERMDBG["startup/support/terminal-observer.ts<br/><i>EventBus subscriber → terminal render</i>"]
+    TURNOBS["core/turns/observability.ts<br/><i>turn-level observability + warnings</i>"]
   end
 
   TERMDBG --> EB
+  TURNOBS --> EB
 
   %% ═══════════════════════════════════════════════
   %% EXTERNAL SERVICES
@@ -448,9 +631,10 @@ graph TB
     OBSIDIAN[("Obsidian CLI — vault")]
     NTFYSVC[("ntfy — push notifications")]
     COMFYUI[("ComfyUI / Fal.ai — images")]
-    SQLITE[("SQLite + sqlite-vec<br/><i>memories, contacts, concerns, audit</i>")]
-    JSONLFS[("JSONL Files<br/><i>sessions, prompts, audit, journals</i>")]
-    JSONFILES[("JSON Config Files<br/><i>settings, models, capability-tier,<br/>channels, skills, trust-policy</i>")]
+    SQLITE[("SQLite + sqlite-vec<br/><i>memories, contacts, concerns,<br/>audit, episodic, turn records</i>")]
+    POSTGRES[("PostgreSQL + pgvector<br/><i>optional alternate substrate</i>")]
+    JSONLFS[("JSONL Files<br/><i>sessions, prompts, audit, journals,<br/>reflections, role envelopes</i>")]
+    JSONFILES[("JSON Config Files<br/><i>settings, models, scheduler,<br/>capability-tier, channels, skills,<br/>trust-policy, core memory, north-star</i>")]
   end
 
   %% ═══════════════════════════════════════════════
@@ -474,33 +658,38 @@ graph TB
   classDef channel   fill:#6c8ebf,stroke:#4a6a8f,color:#fff
   classDef voice     fill:#4aaeaa,stroke:#2d7a78,color:#fff
   classDef sched     fill:#aa7acc,stroke:#7a4a9c,color:#fff
-  classDef selfmod   fill:#9a7a5a,stroke:#6a5a3a,color:#fff
+  classDef tools     fill:#9a7a5a,stroke:#6a5a3a,color:#fff
   classDef persist   fill:#7a7a7a,stroke:#5a5a5a,color:#fff
   classDef postturn  fill:#6a9a7a,stroke:#4a7a5a,color:#fff
+  classDef operator  fill:#7ab87a,stroke:#558a55,color:#fff
+  classDef obs       fill:#5b8c5a,stroke:#3d6b3c,color:#fff
   classDef external  fill:#555,stroke:#333,color:#fff
+  classDef integ     fill:#c17817,stroke:#8a5510,color:#fff
 
-  class IDX,GWM,AGM entry
-  class RT,EB,LIFECYCLE core
-  class GWS,POLICY,SSRF,SANITIZE,GWAUDIT,TRANSPORT,NTFY,CONFQUEUE gateway
-  class GWC agent
-  class SA,BRIDGE,MSGS,STREAM,BGQUEUE agent
-  class LLMC,MODELS,DISC,BUDGET,DELIB llm
-  class MSTORE,MRET,MEXT,MWRITE,DECAY,EMBED,SLEEPTIME,MEMJRNL memory
-  class SSTORE,SMAN,UCONT,COMPGD,FOCUS,IROLE session
-  class CARD,CARDVER,PLSTORE,PCOMPOSE,PREG,NORTHSTAR,COREMEM identity
-  class EMSTATE,EMOBS,TXTCLS,AUDCLS,PERSONA,EMAPPR emotion
+  class IDX,GWM,AGM,OPM,CLI entry
+  class EB,LIFECYCLE,SHARED,SECPOL core
+  class GWS,POLICY,SSRF,SANITIZE,GWAUDIT,TRANSPORT,TLS,NTFY,CONFQUEUE,HMAC,VAULTLOC,SANDBOX gateway
+  class GWC,GWOPS agent
+  class SA,TURNEXEC,TOOLFACADE,ESMRT,MOA,BRIDGE,MSGS,STREAM,BGQUEUE,SAL,LANES,EMSTATE2,PRESENCE,CATALOG,ADAPT,HANDOFF agent
+  class LLMC,MODELS,DISC,BUDGET,DELIB,FALLBACK,CORR llm
+  class MSTORE,PGSTORE,MRET,MEXT,MWRITE,DECAY,EMBED,SLEEPTIME,MEMJRNL,EPISTORE,RLIB,ABSTR,COREMEM memory
+  class SSTORE,SMAN,UCONT,COMPGD,FOCUS,IROLE,PROVEN,SREPAIR session
+  class CARD,CARDVER,PLSTORE,PCOMPOSE,PREG,PRUNTIME,PMACRO,NORTHSTAR,COREMEM2,VALUES identity
+  class EMSTATE,EMOBS,TXTCLS,AUDCLS,PERSONA,EMAPPR,VADLEX emotion
   class INTSTATE,META selfmodel
-  class INTAPPR,CONCERNS,FOLLOWUPS,MOTIV,PATTERNS intention
-  class TPOLICY,CONTACT,CHANVIS trust
-  class CAPRT,ELIGATE,SAFEGUARDS caps
-  class THINK,SANDBOX,EVIDENCE repl
-  class SMGR,SHARD shards
-  class DISCORD,TELEGRAM,API,ADMINSRV,GARDEN channel
-  class WYTCP,WYRT,STTREG,TTSREG,VOICEPIPE voice
-  class SCHEDULER,HBEAT,REFLJRNL,SKILLS,VALUES sched
-  class GITOPS,VAULTOPS,BEADSOPS,FSOPS,IMGOPS selfmod
-  class LAYOUT,SETTCON,BACKUP,MODULES persist
-  class CTXFEED,COMPOSS postturn
-  class COMP,PARITY,POSTACT,CHANRT persist
-  class TERMDBG core
-  class LITELLM,OLLAMA,DISCORDAPI,TELEGRAMAPI,DEEPGRAM,ELEVENLABS,ECHOTTS,OBSIDIAN,NTFYSVC,COMFYUI,SQLITE,JSONLFS,JSONFILES external
+  class INTAPPR,CONCERNS,FOLLOWUPS,MOTIV,PATTERNS,CARE intention
+  class TPOLICY,CONTACT,CHANVIS,PREFNAME trust
+  class CAPRT,TOKENS,ELIGATE,SAFEGUARDS,COMPPOL,APPRQ caps
+  class AWB,SANDBOX2,EVIDENCE,SBROKER repl
+  class SMGR,SHARD,SUBAGFAC,FOLDREV shards
+  class DISCORD,DISCVOICE,TELEGRAM,API,APIVWS,BACKPLANE channel
+  class GARDENSRV,GARDEN,GARDENUI,TOOLHLTH,OPALERT operator
+  class VOICERT,STTREG,TTSREG,VOICEPIPE,VPOLICY,VTURNS,VTRANS,VOBS,WYTCP,WYRT,OPENHOME voice
+  class SCHEDULER,HBEAT,HBRUN,REFLJRNL,SKILLS,RESTWIN,SCHEDTOOL sched
+  class CORETOOLS,EXTTOOLS,IMGOPS tools
+  class LAYOUT,CUTOVER,RTFACT,SETTCON,BACKUP,MODULES,SETTINGS,CONFIGSTORE,IMPORTERS,ARTIFACTS persist
+  class CTXFEED,CTXRT,CHARGE postturn
+  class TERMDBG,TURNOBS obs
+  class COMP,PARITY,POSTACT,DPI,CHANRT,SUPPORT persist
+  class INTGIT,INTVAULT,INTBEADS,INTFS,INTSHELL,INTWEB integ
+  class LITELLM,OLLAMA,DISCORDAPI,TELEGRAMAPI,DEEPGRAM,ELEVENLABS,ECHOTTS,OBSIDIAN,NTFYSVC,COMFYUI,SQLITE,POSTGRES,JSONLFS,JSONFILES external

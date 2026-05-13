@@ -12,6 +12,7 @@ import {
   buildScratchpadContextBlock,
   getPersonaAdaptation,
   resolveAuthorContext,
+  resolveIdentityChannel,
 } from './runtime-context.js';
 
 function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessage {
@@ -417,6 +418,75 @@ describe('runtime subject identity', () => {
     expect(runtimeContext).toContain('each extension pass after the first iteration costs 4 current-turn units');
     expect(runtimeContext).toContain('Do not use it for routine orient actions, concern maintenance, scheduler work, tool discovery, schema confusion, simple lookup, or ordinary replies.');
     expect(runtimeContext).not.toContain('think');
+  });
+
+  it('renders satellite endpoint capability context for registered mobile speech turns', () => {
+    const message = makeMessage({
+      channelId: 'satellite:android-mobile:weekend-walk',
+      channelType: 'api',
+      authorId: 'primary-user',
+      authorName: 'Primary User',
+      routing: {
+        source: 'satellite',
+        channelPrivacy: 'private',
+        canonicalContactId: 'contact-primary-user',
+        satellite: {
+          schemaVersion: 1,
+          satelliteId: 'android-phone',
+          satelliteDisplayName: 'Android Mobile Satellite',
+          endpointId: 'companion-app',
+          endpointDisplayName: 'Companion App',
+          claimType: 'android-mobile',
+          sessionId: 'weekend-walk',
+          mobility: 'mobile',
+          promptChannelType: 'mobile_satellite',
+          capabilities: {
+            advertised: ['text', 'audio_input', 'speech_to_text', 'audio_output', 'text_to_speech', 'vision'],
+            registryMax: ['text', 'audio_input', 'speech_to_text', 'audio_output', 'text_to_speech', 'vision', 'robotics'],
+            effective: ['text', 'audio_input', 'speech_to_text', 'audio_output', 'text_to_speech', 'vision'],
+            policyDenied: ['robotics'],
+          },
+          telemetryScopes: ['location', 'timezone'],
+          auth: {
+            mode: 'api_key',
+            principalId: 'api-key-test',
+            certBound: false,
+          },
+        },
+      },
+    });
+
+    const runtimeContext = buildRuntimeContext({
+      message,
+      resolvedUserName: 'Primary User',
+      trustLevel: 'primary',
+      channelType: 'api',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 6,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 6,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      formatTopEmotions: () => '',
+      config: {},
+    });
+
+    expect(runtimeContext).toContain('<runtime_satellite_endpoint>');
+    expect(runtimeContext).toContain('Effective capabilities: text, audio_input, speech_to_text, audio_output, text_to_speech, vision');
+    expect(runtimeContext).toContain('Policy-denied or not-yet-modeled capabilities: robotics');
+    expect(runtimeContext).toContain('ordinary replies may be spoken by the satellite');
+    expect(resolveIdentityChannel(message)).toBe('satellite:android-mobile');
   });
 
   it('uses the canonical contact key as the continuity subject when contact resolution succeeds', async () => {

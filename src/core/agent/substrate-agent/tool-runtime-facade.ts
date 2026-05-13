@@ -110,6 +110,14 @@ const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy
   }],
 ]);
 
+const SATELLITE_VISUAL_TOOL_NAMES = new Set([
+  'media',
+  'image_create',
+  'selfie_create',
+  'image_edit',
+  'image_analyze',
+]);
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -494,8 +502,13 @@ export class ToolRuntimeFacade {
       autoloadOutcome.intent,
       correlation,
     );
-    applyActiveToolsToAgent({
+    const satelliteResolution = this.applySatelliteCapabilityToolPolicy(
       resolution,
+      message,
+      correlation,
+    );
+    applyActiveToolsToAgent({
+      resolution: satelliteResolution,
       withCapabilityGates: tools => this.withCapabilityGates(tools),
       setAgentTools: tools => this.agent.setTools(tools),
     });
@@ -506,7 +519,7 @@ export class ToolRuntimeFacade {
       callType,
       correlation,
       autoloadOutcome,
-      resolution,
+      resolution: satelliteResolution,
       withAdaptiveCorrelation: (contextCorrelation, purpose) => this.withAdaptiveCorrelation(contextCorrelation, purpose),
     });
     this.lastAdaptiveToolSnapshot = snapshot;
@@ -736,6 +749,79 @@ export class ToolRuntimeFacade {
           taskKind: taskKind ?? null,
           intent,
           reason: 'routine_intent_direct_tool_path',
+        });
+        continue;
+      }
+
+      filteredTools.push(tool);
+      if (source) {
+        filteredSnapshotTools.push({ toolName: tool.name, source });
+      }
+    }
+
+    if (!removed) {
+      return resolution;
+    }
+
+    const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
+      core: 0,
+      promoted: 0,
+      extendedLoaded: 0,
+      autoload: 0,
+      deferred: 0,
+      total: filteredSnapshotTools.length,
+    };
+    for (const entry of filteredSnapshotTools) {
+      if (entry.source === 'core') counts.core += 1;
+      else if (entry.source === 'promoted') counts.promoted += 1;
+      else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
+      else if (entry.source === 'autoload') counts.autoload += 1;
+      else counts.deferred += 1;
+    }
+
+    return {
+      tools: filteredTools,
+      snapshotTools: filteredSnapshotTools,
+      promotedSkipped: resolution.promotedSkipped.map(entry => ({
+        ...entry,
+        ...(entry.missingTokens ? { missingTokens: [...entry.missingTokens] } : {}),
+      })),
+      counts,
+    };
+  }
+
+  private applySatelliteCapabilityToolPolicy(
+    resolution: ActiveToolResolution,
+    message: SubstrateMessage,
+    correlation: CorrelationMetadata | null,
+  ): ActiveToolResolution {
+    const satellite = message.routing?.satellite;
+    if (!satellite) return resolution;
+
+    const effective = new Set(satellite.capabilities.effective);
+    const visualAllowed = effective.has('vision') || effective.has('image_upload') || effective.has('avatar');
+    const avatarAllowed = effective.has('avatar') || effective.has('avatar_expression') || effective.has('avatar_action');
+    const sourceByToolName = new Map(
+      resolution.snapshotTools.map((entry) => [entry.toolName, entry.source] as const),
+    );
+    const filteredTools: AgentTool<any>[] = [];
+    const filteredSnapshotTools: AdaptiveToolSnapshotTool[] = [];
+    let removed = false;
+
+    for (const tool of resolution.tools) {
+      const source = sourceByToolName.get(tool.name);
+      const shouldBlockVisualTool = SATELLITE_VISUAL_TOOL_NAMES.has(tool.name) && !visualAllowed;
+      const shouldBlockAvatarTool = tool.name.includes('avatar') && !avatarAllowed;
+      if (shouldBlockVisualTool || shouldBlockAvatarTool) {
+        removed = true;
+        this.emitTelemetry('agent.tools.core_guardrail.skipped', {
+          ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.skipped'),
+          toolName: tool.name,
+          satelliteId: satellite.satelliteId,
+          endpointId: satellite.endpointId,
+          claimType: satellite.claimType,
+          effectiveCapabilities: satellite.capabilities.effective,
+          reason: 'satellite_capability_denied',
         });
         continue;
       }

@@ -19,6 +19,9 @@ import {
   loadRuntimeChannelsConfig,
 } from '../../channels/backplane/config.js';
 import {
+  loadSatelliteRegistryConfig,
+} from '../../channels/backplane/satellite-registry.js';
+import {
   buildRuntimeChannelsConfigOverrides,
 } from '../startup/support/bootstrap-helpers.js';
 import { resolveStartupPreflightBundle } from '../startup/support/startup-preflight.js';
@@ -30,6 +33,7 @@ import {
 } from '../../system/config/runtime-config-contracts.js';
 import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
 import type { RuntimePathSnapshot } from '../../persistence/layout.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 
 interface AgentStartupLogger {
   info(message: string, meta?: Record<string, unknown>): void;
@@ -51,6 +55,7 @@ export interface AgentStartupContext {
   schedulerConfig: ReturnType<typeof resolveStartupPreflightBundle>['startupHydration']['schedulerConfig'];
   trustPolicyConfig: ReturnType<typeof resolveStartupPreflightBundle>['startupHydration']['trustPolicyConfig'];
   channelsConfig: RuntimeChannelsConfig;
+  satelliteRegistryConfig: SatelliteRegistryConfig;
   backupConfig: ReturnType<typeof resolveBackupRuntimeConfig>;
   capabilityRuntime: CapabilityRuntime;
   eligibilityGate: EligibilityGate;
@@ -113,6 +118,7 @@ export function prepareAgentStartupContext(input: {
       },
     },
   );
+  const satelliteRegistryConfig = loadSatelliteRegistryConfig(pathSnapshot.systemDataDir);
   const backupConfig = resolveBackupRuntimeConfig({
     dataDir: pathSnapshot.systemDataDir,
     defaultRootDir: pathSnapshot.runtimePathLayout.backupsDir,
@@ -152,6 +158,7 @@ export function prepareAgentStartupContext(input: {
     schedulerConfig,
     trustPolicyConfig,
     channelsConfig,
+    satelliteRegistryConfig,
     backupConfig,
     capabilityRuntime,
     eligibilityGate,

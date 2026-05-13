@@ -190,6 +190,68 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     expect(tools.map(tool => tool.name)).toEqual(['analysis_workbench', 'session']);
   });
 
+  it('removes visual tools from audio-only satellite turns', () => {
+    const { facade, agent, emitTelemetry, correlation } = createFacade(null);
+    facade.registerTool(makeTool('session'), 'core');
+    facade.registerTool(makeTool('image_analyze'), 'core');
+    facade.registerTool(makeTool('selfie_create'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-audio-satellite-1',
+      channelId: 'satellite:voice-pi:kitchen',
+      channelType: 'api',
+      authorId: 'primary-user',
+      authorName: 'Primary User',
+      content: 'talk with me',
+      routing: {
+        source: 'satellite',
+        satellite: {
+          schemaVersion: 1,
+          satelliteId: 'pi-voice',
+          satelliteDisplayName: 'Kitchen Voice Pi',
+          endpointId: 'wyoming-voice',
+          endpointDisplayName: 'Wyoming Voice Endpoint',
+          claimType: 'voice-pi',
+          sessionId: 'kitchen',
+          mobility: 'static',
+          promptChannelType: 'voice_satellite',
+          capabilities: {
+            advertised: ['text', 'audio_input', 'speech_to_text', 'audio_output', 'text_to_speech'],
+            registryMax: ['text', 'audio_input', 'speech_to_text', 'audio_output', 'text_to_speech'],
+            effective: ['text', 'audio_input', 'speech_to_text', 'audio_output', 'text_to_speech'],
+            policyDenied: [],
+          },
+          telemetryScopes: ['presence'],
+          auth: {
+            mode: 'api_key',
+            principalId: 'api-key-test',
+            certBound: false,
+          },
+        },
+      },
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    }, undefined, 'chat', correlation, { intent: null, skipped: [] });
+
+    const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    expect(tools.map(tool => tool.name)).toEqual(['session']);
+    expect(emitTelemetry).toHaveBeenCalledWith(
+      'agent.tools.core_guardrail.skipped',
+      expect.objectContaining({
+        toolName: 'image_analyze',
+        satelliteId: 'pi-voice',
+        reason: 'satellite_capability_denied',
+      }),
+    );
+    expect(emitTelemetry).toHaveBeenCalledWith(
+      'agent.tools.core_guardrail.skipped',
+      expect.objectContaining({
+        toolName: 'selfie_create',
+        satelliteId: 'pi-voice',
+        reason: 'satellite_capability_denied',
+      }),
+    );
+  });
+
   it('denies disallowed maintenance-turn core tool actions and emits audit telemetry', async () => {
     const execute = vi.fn(async () => ({
       content: [{ type: 'text', text: 'identity ok' }],

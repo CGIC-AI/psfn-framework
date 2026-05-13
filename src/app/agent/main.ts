@@ -77,6 +77,7 @@ async function main(): Promise<void> {
     pathSnapshot,
     schedulerConfig,
     channelsConfig,
+    satelliteRegistryConfig,
     backupConfig,
     capabilityRuntime,
     eligibilityGate,
@@ -321,6 +322,7 @@ async function main(): Promise<void> {
     contactStore,
     healthChecks: apiHealthChecks,
     externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),
+    satelliteRegistry: satelliteRegistryConfig,
     onStreamDelta: (requestId, text) => gateway.notifyApiStreamDelta(requestId, text),
   });
   gateway.onApiChatCompletion((params) => apiBackend.handleChatCompletion(params));

@@ -5,6 +5,7 @@ import type {
   MessageRoutingMetadata,
   SubstrateMessage,
 } from '../../../shared/contracts/runtime.js';
+import type { SatelliteRoutingMetadata } from '../../../shared/contracts/satellite-registry.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { ChannelVisibility } from '../../../system/trust/types.js';
 import type { ApiAuthPrincipal } from '../../backplane/http/auth.js';
@@ -114,6 +115,7 @@ export function buildSubstrateMessage(params: {
   overrides: TurnRoutingOverrides;
   channelPrivacy?: ChannelVisibility;
   canonicalContactId?: string;
+  satellite?: SatelliteRoutingMetadata;
 }): SubstrateMessage {
   const {
     channelId,
@@ -126,6 +128,7 @@ export function buildSubstrateMessage(params: {
     overrides,
     channelPrivacy,
     canonicalContactId,
+    satellite,
   } = params;
   const approvalToken = clampApiHeader(
     singleApiHeader(req.headers['x-broadcast-approval-token']),
@@ -148,6 +151,7 @@ export function buildSubstrateMessage(params: {
         },
       }
       : {}),
+    ...(satellite ? { satellite } : {}),
     ...(channelPrivacy ? { channelPrivacy } : {}),
     ...(overrides.modelOverride ? { modelOverride: overrides.modelOverride } : {}),
     ...(overrides.promptOverride ? { promptOverride: overrides.promptOverride } : {}),
@@ -156,6 +160,7 @@ export function buildSubstrateMessage(params: {
   };
   const hasRouting = source !== 'api'
     || routing.broadcast
+    || routing.satellite
     || routing.channelPrivacy
     || routing.modelOverride
     || routing.promptOverride

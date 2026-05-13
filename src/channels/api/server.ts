@@ -8,6 +8,7 @@ import type { Duplex } from 'node:stream';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
@@ -114,6 +115,7 @@ export interface ApiServerConfig {
   healthChecks?: ApiServerHealthChecks;
   schedulerHealthcheckStaleAfterMs?: number;
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
+  satelliteRegistry?: SatelliteRegistryConfig;
   sensorIngest?: SensorIngestPort;
 }
 
@@ -197,6 +199,7 @@ export class ApiServer implements ChannelAdapterPort {
       modelName: this.modelName,
       requestTimeoutMs: this.requestTimeoutMs,
       externalChannelProfiles: config.externalChannelProfiles ?? {},
+      satelliteRegistry: config.satelliteRegistry,
       logger: log,
     });
     this.config = {

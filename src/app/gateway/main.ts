@@ -31,6 +31,7 @@ import { resolveStartupPreflightBundle } from '../startup/support/startup-prefli
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
+import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -75,6 +76,7 @@ async function main(): Promise<void> {
     env,
     logger: log,
   });
+  const satelliteRegistryConfig = loadSatelliteRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   logStartupHydrationDiagnostics(startupHydration.diagnostics);
   const bootstrap = resolveGatewayBootstrapInput({
     config,
@@ -208,6 +210,7 @@ async function main(): Promise<void> {
     env: process.env,
     eligibilityGate,
     gateway,
+    satelliteRegistry: satelliteRegistryConfig,
   });
   await voiceSurfaces.start();
   await startGatewayChannelSurfaces(channelSurfaces, bootstrap, log);

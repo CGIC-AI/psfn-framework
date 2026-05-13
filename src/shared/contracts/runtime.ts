@@ -8,6 +8,7 @@ import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
 } from './charge-policy.js';
+import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 
 // ── Channel-agnostic message types ──
 
@@ -171,7 +172,7 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
 }
 
 export interface MessageRoutingMetadata {
-  source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'unknown';
+  source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'satellite' | 'unknown';
   /**
    * Transport-level response disposition. `observe` messages are recorded as
    * context but must not trigger model response generation or channel egress.
@@ -179,6 +180,7 @@ export interface MessageRoutingMetadata {
   responseMode?: 'respond' | 'observe';
   gateway?: GatewayRoutingMetadata;
   wyoming?: WyomingRoutingMetadata;
+  satellite?: SatelliteRoutingMetadata;
   broadcast?: BroadcastRoutingMetadata;
   channelPrivacy?: ChannelVisibility;
   modelOverride?: MessageModelOverride;

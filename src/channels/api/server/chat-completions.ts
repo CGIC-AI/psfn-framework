@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { ChannelType, SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type { SatelliteRegistryConfig } from '../../../shared/contracts/satellite-registry.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
 import type { EventBus } from '../../../shared/event-bus.js';
@@ -96,6 +97,7 @@ export interface ApiChatCompletionsHandlerConfig {
   modelName: string;
   requestTimeoutMs: number;
   externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
+  satelliteRegistry: SatelliteRegistryConfig | undefined;
   logger: ApiServerLogger;
 }
 
@@ -108,6 +110,7 @@ export class ApiChatCompletionsHandler {
   private readonly modelName: string;
   private readonly requestTimeoutMs: number;
   private readonly externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
+  private readonly satelliteRegistry: SatelliteRegistryConfig | undefined;
   private readonly logger: ApiServerLogger;
   private readonly channelTurnLock = new FifoChannelLock();
   private readonly processingChannels = new Set<string>();
@@ -121,6 +124,7 @@ export class ApiChatCompletionsHandler {
     this.modelName = config.modelName;
     this.requestTimeoutMs = config.requestTimeoutMs;
     this.externalChannelProfiles = config.externalChannelProfiles;
+    this.satelliteRegistry = config.satelliteRegistry;
     this.logger = config.logger;
   }
 
@@ -642,6 +646,7 @@ export class ApiChatCompletionsHandler {
       defaultAuthorId: defaultAuthor.authorId,
       defaultAuthorName: defaultAuthor.authorName,
       externalChannelProfiles: this.externalChannelProfiles,
+      satelliteRegistry: this.satelliteRegistry,
     });
     if (!turnIdentity.ok) {
       sendApiError(res, turnIdentity.status, turnIdentity.type, turnIdentity.message);
@@ -655,6 +660,7 @@ export class ApiChatCompletionsHandler {
       source,
       channelPrivacy: claimedChannelPrivacy,
       canonicalContactId: claimedCanonicalContactId,
+      satellite,
     } = turnIdentity.value;
     if (!(await this.enforceIdentityClaim(req, res, authorId))) {
       return null;
@@ -697,6 +703,7 @@ export class ApiChatCompletionsHandler {
       overrides: routingOverrides.value,
       channelPrivacy: resolvedChannelPrivacy,
       canonicalContactId,
+      satellite,
     });
 
     const acquiredChannel = await this.acquireChannel(channelId, req, res);

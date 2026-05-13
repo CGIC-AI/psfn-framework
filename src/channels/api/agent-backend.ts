@@ -8,6 +8,10 @@ import type {
   ResponseStyle,
   SubstrateMessage,
 } from '../../shared/contracts/runtime.js';
+import type {
+  SatelliteRegistryConfig,
+  SatelliteRoutingMetadata,
+} from '../../shared/contracts/satellite-registry.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -109,6 +113,7 @@ export interface AgentApiBackendConfig {
   healthChecks?: ApiServerHealthChecks;
   schedulerHealthcheckStaleAfterMs?: number;
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
+  satelliteRegistry?: SatelliteRegistryConfig;
   sensorIngest?: SensorIngestPort;
   onStreamDelta?: (requestId: string, text: string) => void | Promise<void>;
 }
@@ -121,6 +126,7 @@ export class AgentApiBackend {
   private readonly healthChecks: ApiServerHealthChecks;
   private readonly schedulerHealthcheckStaleAfterMs: number;
   private readonly externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
+  private readonly satelliteRegistry: SatelliteRegistryConfig | undefined;
   private readonly sensorIngest: SensorIngestPort;
   private readonly onStreamDelta?: (requestId: string, text: string) => void | Promise<void>;
   private readonly channelTurnLock = new FifoChannelLock();
@@ -139,6 +145,7 @@ export class AgentApiBackend {
       config.schedulerHealthcheckStaleAfterMs,
     );
     this.externalChannelProfiles = config.externalChannelProfiles ?? {};
+    this.satelliteRegistry = config.satelliteRegistry;
     this.sensorIngest = config.sensorIngest ?? createEventBusSensorIngestPort(config.eventBus);
     this.onStreamDelta = config.onStreamDelta;
     this.unregisterSchedulerHealthcheck = this.eventBus.on('schedule.healthcheck', ({ timestamp }) => {
@@ -795,6 +802,7 @@ export class AgentApiBackend {
     overrides: TurnRoutingOverrides;
     channelPrivacy?: ChannelVisibility;
     canonicalContactId?: string;
+    satellite?: SatelliteRoutingMetadata;
   }): SubstrateMessage {
     const approvalToken = this.readHeader(params.headers, 'x-broadcast-approval-token', 256);
     const requestedScope = this.readHeader(params.headers, 'x-broadcast-visibility-scope', 64);
@@ -811,6 +819,7 @@ export class AgentApiBackend {
           },
         }
         : {}),
+      ...(params.satellite ? { satellite: params.satellite } : {}),
       ...(params.channelPrivacy ? { channelPrivacy: params.channelPrivacy } : {}),
       ...(params.overrides.modelOverride ? { modelOverride: params.overrides.modelOverride } : {}),
       ...(params.overrides.promptOverride ? { promptOverride: params.overrides.promptOverride } : {}),
@@ -819,6 +828,7 @@ export class AgentApiBackend {
     };
     const hasRouting = params.source !== 'api'
       || routing.broadcast
+      || routing.satellite
       || routing.channelPrivacy
       || routing.modelOverride
       || routing.promptOverride
@@ -861,6 +871,7 @@ export class AgentApiBackend {
       defaultAuthorId: defaultAuthor.authorId,
       defaultAuthorName: defaultAuthor.authorName,
       externalChannelProfiles: this.externalChannelProfiles,
+      satelliteRegistry: this.satelliteRegistry,
     });
     if (!turnIdentity.ok) {
       return {
@@ -877,6 +888,7 @@ export class AgentApiBackend {
       source,
       channelPrivacy: claimedChannelPrivacy,
       canonicalContactId: claimedCanonicalContactId,
+      satellite,
     } = turnIdentity.value;
 
     const identityClaim = await this.enforceIdentityClaim(headers, authorId);
@@ -886,17 +898,17 @@ export class AgentApiBackend {
 
     const canonicalContactId = this.readHeader(headers, 'x-canonical-contact-id', 256) ?? claimedCanonicalContactId;
     const resolvedChannelPrivacy = channelPrivacy.value ?? claimedChannelPrivacy;
-    if (channelType === 'psfn-amica') {
+    if (source !== 'api') {
       if (!canonicalContactId) {
         return {
           ok: false,
-          error: this.fail(503, 'external_channel_not_configured', 'PSFN Amica claims require a canonical contact mapping'),
+          error: this.fail(503, 'external_channel_not_configured', 'External channel claims require a canonical contact mapping'),
         };
       }
       if (!resolvedChannelPrivacy) {
         return {
           ok: false,
-          error: this.fail(503, 'external_channel_not_configured', 'PSFN Amica claims require a configured channel privacy level'),
+          error: this.fail(503, 'external_channel_not_configured', 'External channel claims require a configured channel privacy level'),
         };
       }
     }
@@ -912,6 +924,7 @@ export class AgentApiBackend {
       overrides: routingOverrides.value,
       channelPrivacy: resolvedChannelPrivacy,
       canonicalContactId,
+      satellite,
     });
     this.seedSession(channelId, request.messages, authorId, authorName, resolvedChannelPrivacy);
 

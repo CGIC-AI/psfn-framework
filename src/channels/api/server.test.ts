@@ -16,6 +16,7 @@ import {
   deriveApiKeyPrincipalId,
   INSECURE_LOCAL_API_PRINCIPAL_ID,
 } from '../backplane/http/auth.js';
+import { parseSatelliteRegistryConfig } from '../backplane/satellite-registry.js';
 import { resolveApiCorsAllowedOrigins } from './http-policy.js';
 import type {
   VoiceWebSocketCloseReason,
@@ -25,6 +26,44 @@ import type {
 // ── Helpers ──
 
 const WAIT_TIMEOUT_MS = 2_000;
+
+const SATELLITE_TEST_REGISTRY = parseSatelliteRegistryConfig({
+  schemaVersion: 1,
+  enabled: true,
+  satellites: [
+    {
+      satelliteId: 'android-phone',
+      displayName: 'Android Mobile Satellite',
+      mobility: 'mobile',
+      endpoints: [
+        {
+          endpointId: 'companion-app',
+          displayName: 'Companion App',
+          claimTypes: ['android-mobile'],
+          promptChannelType: 'mobile_satellite',
+          auth: { mode: 'api_key' },
+          defaultIdentity: {
+            authorId: 'primary-user',
+            authorName: 'Primary User',
+            canonicalContactId: 'contact-primary-user',
+            channelPrivacy: 'private',
+          },
+          maxCapabilities: [
+            'text',
+            'audio_input',
+            'speech_to_text',
+            'audio_output',
+            'text_to_speech',
+            'vision',
+            'image_upload',
+            'location',
+          ],
+          telemetryScopes: ['location', 'timezone', 'presence'],
+        },
+      ],
+    },
+  ],
+});
 
 function insecureSessionChannel(sessionId: string): string {
   return `api:${INSECURE_LOCAL_API_PRINCIPAL_ID}:${sessionId}`;
@@ -2028,6 +2067,62 @@ describe('ApiServer with auth', () => {
     expect(call.routing?.source).toBe('psfn-amica');
     expect(call.routing?.canonicalContactId).toBe('contact-primary-user');
     expect(call.routing?.channelPrivacy).toBe('semi_private');
+  });
+
+  it('routes registry-backed satellite claims with effective speech and vision capabilities', async () => {
+    await server.stop();
+    const mockAgent = createMockAgentLoop(eventBus);
+    server = createApiServer({
+      port,
+      agentLoop: mockAgent,
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+      satelliteRegistry: SATELLITE_TEST_REGISTRY,
+    });
+    await server.init();
+    await server.start();
+
+    const res = await request(port, 'POST', '/v1/chat/completions', {
+      model: DEFAULT_COMPANION_ID,
+      messages: [{ role: 'user', content: 'walk with me' }],
+    }, {
+      Authorization: 'Bearer test-secret-key',
+      'X-PSFN-Satellite-Claim-Type': 'android-mobile',
+      'X-PSFN-Satellite-ID': 'android-phone',
+      'X-PSFN-Satellite-Endpoint-ID': 'companion-app',
+      'X-PSFN-Satellite-Session-ID': 'weekend-walk',
+      'X-PSFN-Satellite-Capabilities': 'text,audio_input,speech_to_text,audio_output,text_to_speech,vision,image_upload,location',
+      'X-PSFN-Satellite-Telemetry-Scopes': 'location,timezone,presence',
+    });
+    expect(res.status).toBe(200);
+
+    const call = (mockAgent.handleMessage as any).mock.calls[0][0];
+    expect(call.channelId).toBe('satellite:android-mobile:weekend-walk');
+    expect(call.channelType).toBe('api');
+    expect(call.authorId).toBe('primary-user');
+    expect(call.authorName).toBe('Primary User');
+    expect(call.routing?.source).toBe('satellite');
+    expect(call.routing?.canonicalContactId).toBe('contact-primary-user');
+    expect(call.routing?.channelPrivacy).toBe('private');
+    expect(call.routing?.satellite).toMatchObject({
+      satelliteId: 'android-phone',
+      endpointId: 'companion-app',
+      claimType: 'android-mobile',
+      promptChannelType: 'mobile_satellite',
+      mobility: 'mobile',
+      telemetryScopes: ['location', 'timezone', 'presence'],
+    });
+    expect(call.routing?.satellite.capabilities.effective).toEqual([
+      'text',
+      'audio_input',
+      'speech_to_text',
+      'audio_output',
+      'text_to_speech',
+      'vision',
+      'image_upload',
+      'location',
+    ]);
   });
 
   it('applies configured psfn-amica defaults when the caller only claims channel type and id', async () => {

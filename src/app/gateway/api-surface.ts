@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import { ApiServer } from '../../channels/api/server.js';
 import { resolveApiCorsAllowedOrigins } from '../../channels/api/http-policy.js';
+import {
+  hasSatelliteClaimHeaders,
+  resolveSatelliteClaim,
+  SATELLITE_CLAIM_HEADERS,
+} from '../../channels/backplane/satellite-registry.js';
 import { createApiVoiceWebSocketRuntime } from '../../channels/api/voice-websocket-runtime.js';
 import {
   computeGatewayChatRequestTimeoutMs,
@@ -33,6 +39,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   env?: NodeJS.ProcessEnv;
   eligibilityGate: EligibilityGate;
   gateway: Pick<GatewayServer, 'requestAgent' | 'subscribeApiStream' | 'requestAgentVoiceStream'>;
+  satelliteRegistry?: SatelliteRegistryConfig;
 }
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
@@ -79,13 +86,79 @@ function readHeaderOrQuery(
   return clampHeader(readQueryParam(request, queryNames), maxLength);
 }
 
+function buildSatelliteClaimHeaders(
+  request: IncomingMessage,
+  sessionId: string,
+): IncomingMessage['headers'] {
+  const headers: IncomingMessage['headers'] = { ...request.headers };
+  const copy = (headerName: string, queryNames: string[], maxLength: number) => {
+    if (clampHeader(singleHeader(headers[headerName]), maxLength)) return;
+    const value = readQueryParam(request, queryNames);
+    if (value) {
+      headers[headerName] = clampHeader(value, maxLength);
+    }
+  };
+
+  copy(SATELLITE_CLAIM_HEADERS.claimType, ['satellite_claim_type', 'claim_type'], 64);
+  copy(SATELLITE_CLAIM_HEADERS.satelliteId, ['satellite_id'], 128);
+  copy(SATELLITE_CLAIM_HEADERS.endpointId, ['satellite_endpoint_id', 'endpoint_id'], 128);
+  copy(SATELLITE_CLAIM_HEADERS.sessionId, ['satellite_session_id', 'satellite_thread_id'], 128);
+  copy(SATELLITE_CLAIM_HEADERS.capabilities, ['satellite_capabilities'], 1024);
+  copy(SATELLITE_CLAIM_HEADERS.telemetryScopes, ['satellite_telemetry_scopes'], 1024);
+  copy(SATELLITE_CLAIM_HEADERS.clientCertFingerprintSha256, ['client_cert_fingerprint_sha256'], 160);
+  copy(SATELLITE_CLAIM_HEADERS.clientCertSpkiSha256, ['client_cert_spki_sha256'], 160);
+  copy(SATELLITE_CLAIM_HEADERS.clientCertSubject, ['client_cert_subject'], 512);
+  copy(SATELLITE_CLAIM_HEADERS.clientCertSan, ['client_cert_san'], 512);
+
+  const hasSatelliteEnvelope = Boolean(
+    clampHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.claimType]), 64)
+    || clampHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.satelliteId]), 128)
+    || clampHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.endpointId]), 128),
+  );
+  if (hasSatelliteEnvelope && !clampHeader(singleHeader(headers[SATELLITE_CLAIM_HEADERS.sessionId]), 128)) {
+    headers[SATELLITE_CLAIM_HEADERS.sessionId] = sessionId;
+  }
+  return headers;
+}
+
 function buildVoiceMessage(params: {
   request: IncomingMessage;
   principal: { id: string; mode: 'api_key' | 'insecure_local' };
   connectionId: string;
+  sessionId: string;
   transcript: string;
   channelPrefix: string;
+  satelliteRegistry?: SatelliteRegistryConfig;
 }): SubstrateMessage {
+  const satelliteHeaders = buildSatelliteClaimHeaders(params.request, params.sessionId);
+  if (hasSatelliteClaimHeaders(satelliteHeaders)) {
+    const satelliteClaim = resolveSatelliteClaim({
+      headers: satelliteHeaders,
+      principal: params.principal,
+      registry: params.satelliteRegistry,
+    });
+    if (!satelliteClaim.ok) {
+      throw new Error(`${satelliteClaim.type}: ${satelliteClaim.message}`);
+    }
+    return {
+      id: `api-voice-msg-${randomUUID()}`,
+      channelId: satelliteClaim.value.channelId,
+      channelType: 'api',
+      authorId: satelliteClaim.value.authorId,
+      authorName: satelliteClaim.value.authorName,
+      content: params.transcript,
+      isDirectMessage: true,
+      routing: {
+        source: 'satellite',
+        responseStyle: 'concise',
+        channelPrivacy: satelliteClaim.value.channelPrivacy,
+        canonicalContactId: satelliteClaim.value.canonicalContactId,
+        satellite: satelliteClaim.value.satellite,
+      },
+      timestamp: new Date(),
+    };
+  }
+
   const sessionId = readHeaderOrQuery(
     params.request,
     'x-session-id',
@@ -143,13 +216,15 @@ export async function startOptionalGatewayApiServer(
   const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
     config: options.config,
     eligibilityGate: options.eligibilityGate,
-    handleAssistantTurn: async ({ request, principal, transportSession, transcript, signal, channelPrefix }) => {
+    handleAssistantTurn: async ({ request, principal, transportSession, sessionId, transcript, signal, channelPrefix }) => {
       const message = buildVoiceMessage({
         request,
         principal,
         connectionId: transportSession.connectionId,
+        sessionId,
         transcript,
         channelPrefix,
+        satelliteRegistry: options.satelliteRegistry,
       });
       const result = await options.gateway.requestAgentVoiceStream(message, { signal });
       return result.content;

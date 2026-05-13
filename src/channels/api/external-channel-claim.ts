@@ -1,8 +1,16 @@
 import type { IncomingHttpHeaders } from 'node:http';
 import { CHANNEL_TYPES, type ChannelType, type MessageRoutingMetadata } from '../../shared/contracts/runtime.js';
+import type {
+  SatelliteRegistryConfig,
+  SatelliteRoutingMetadata,
+} from '../../shared/contracts/satellite-registry.js';
 import type { ChannelVisibility } from '../../system/trust/types.js';
 import type { ExternalChannelProfileConfig } from '../backplane/config.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
+import {
+  hasSatelliteClaimHeaders,
+  resolveSatelliteClaim,
+} from '../backplane/satellite-registry.js';
 import {
   clampHttpHeader as clampHeaderValue,
   singleHeader as firstHeaderValue,
@@ -20,6 +28,7 @@ export interface ApiTurnIdentity {
   source: MessageRoutingSource;
   channelPrivacy?: ChannelVisibility;
   canonicalContactId?: string;
+  satellite?: SatelliteRoutingMetadata;
 }
 
 export type ApiTurnIdentityResolution = { ok: true; value: ApiTurnIdentity } | {
@@ -56,6 +65,7 @@ export function resolveApiTurnIdentity(options: {
   defaultAuthorId: string;
   defaultAuthorName: string;
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
+  satelliteRegistry?: SatelliteRegistryConfig;
 }): ApiTurnIdentityResolution {
   const {
     headers,
@@ -64,7 +74,32 @@ export function resolveApiTurnIdentity(options: {
     defaultAuthorId,
     defaultAuthorName,
     externalChannelProfiles,
+    satelliteRegistry,
   } = options;
+
+  if (hasSatelliteClaimHeaders(headers)) {
+    const satelliteClaim = resolveSatelliteClaim({
+      headers,
+      principal,
+      registry: satelliteRegistry,
+    });
+    if (!satelliteClaim.ok) {
+      return satelliteClaim;
+    }
+    return {
+      ok: true,
+      value: {
+        channelId: satelliteClaim.value.channelId,
+        channelType: 'api',
+        authorId: satelliteClaim.value.authorId,
+        authorName: satelliteClaim.value.authorName,
+        source: 'satellite',
+        channelPrivacy: satelliteClaim.value.channelPrivacy,
+        canonicalContactId: satelliteClaim.value.canonicalContactId,
+        satellite: satelliteClaim.value.satellite,
+      },
+    };
+  }
 
   const claimedChannelId = readHeader(headers, EXTERNAL_CHANNEL_HEADERS.channelId, 256);
   const claimedChannelTypeRaw = readHeader(headers, EXTERNAL_CHANNEL_HEADERS.channelType, 64);

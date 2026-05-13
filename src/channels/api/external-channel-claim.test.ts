@@ -3,7 +3,45 @@ import {
   INSECURE_LOCAL_API_PRINCIPAL,
   principalFromApiKeyToken,
 } from '../backplane/http/auth.js';
+import { parseSatelliteRegistryConfig } from '../backplane/satellite-registry.js';
 import { resolveApiTurnIdentity } from './external-channel-claim.js';
+
+const satelliteRegistry = parseSatelliteRegistryConfig({
+  schemaVersion: 1,
+  enabled: true,
+  satellites: [
+    {
+      satelliteId: 'android-phone',
+      displayName: 'Android Mobile Satellite',
+      mobility: 'mobile',
+      endpoints: [
+        {
+          endpointId: 'companion-app',
+          displayName: 'Companion App',
+          claimTypes: ['android-mobile'],
+          promptChannelType: 'mobile_satellite',
+          auth: { mode: 'api_key' },
+          defaultIdentity: {
+            authorId: 'primary-user',
+            authorName: 'Primary User',
+            canonicalContactId: 'contact-primary-user',
+            channelPrivacy: 'private',
+          },
+          maxCapabilities: [
+            'text',
+            'audio_input',
+            'speech_to_text',
+            'audio_output',
+            'text_to_speech',
+            'vision',
+            'image_upload',
+          ],
+          telemetryScopes: ['presence'],
+        },
+      ],
+    },
+  ],
+});
 
 describe('resolveApiTurnIdentity', () => {
   it('returns the default API identity when no external claim headers are present', () => {
@@ -24,6 +62,67 @@ describe('resolveApiTurnIdentity', () => {
         authorName: 'API Principal',
         source: 'api',
       },
+    });
+  });
+
+  it('accepts authenticated registry-backed satellite claims without adding a channel type constant', () => {
+    const result = resolveApiTurnIdentity({
+      headers: {
+        'x-psfn-satellite-claim-type': 'android-mobile',
+        'x-psfn-satellite-id': 'android-phone',
+        'x-psfn-satellite-endpoint-id': 'companion-app',
+        'x-psfn-satellite-session-id': 'weekend-walk',
+        'x-psfn-satellite-capabilities': 'text,audio_input,speech_to_text,audio_output,text_to_speech,vision',
+      },
+      principal: principalFromApiKeyToken('test-secret-key'),
+      defaultChannelId: 'api:principal:session-1',
+      defaultAuthorId: 'principal',
+      defaultAuthorName: 'API Principal',
+      satelliteRegistry,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        channelId: 'satellite:android-mobile:weekend-walk',
+        channelType: 'api',
+        authorId: 'primary-user',
+        authorName: 'Primary User',
+        source: 'satellite',
+        canonicalContactId: 'contact-primary-user',
+        channelPrivacy: 'private',
+      },
+    });
+    expect(result.ok && result.value.satellite?.capabilities.effective).toEqual([
+      'text',
+      'audio_input',
+      'speech_to_text',
+      'audio_output',
+      'text_to_speech',
+      'vision',
+    ]);
+  });
+
+  it('fails closed for unregistered satellite claims', () => {
+    const result = resolveApiTurnIdentity({
+      headers: {
+        'x-psfn-satellite-claim-type': 'android-mobile',
+        'x-psfn-satellite-id': 'android-phone',
+        'x-psfn-satellite-endpoint-id': 'missing',
+        'x-psfn-satellite-session-id': 'weekend-walk',
+      },
+      principal: principalFromApiKeyToken('test-secret-key'),
+      defaultChannelId: 'api:principal:session-1',
+      defaultAuthorId: 'principal',
+      defaultAuthorName: 'API Principal',
+      satelliteRegistry,
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      status: 403,
+      type: 'satellite_claim_not_registered',
+      message: 'Satellite claim is not registered for this satellite endpoint',
     });
   });
 

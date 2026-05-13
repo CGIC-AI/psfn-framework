@@ -1,6 +1,6 @@
 # Architecture
 
-This is the current runtime shape. For the component graph, start with [`docs/architecture-diagram.mmd`](./architecture-diagram.mmd); for behavior, trust the code in `src/`.
+This is the current runtime shape. For the component graph, start with [`docs/architecture-diagram.mmd`](./architecture-diagram.mmd); for behavior, trust the code in `src/`. For the post-Sprint 8 source-backed deep dive, see [`docs/sprint-8-architecture-report.md`](./sprint-8-architecture-report.md).
 
 ## Canonical Runtime Model
 

@@ -12,6 +12,21 @@ bd close <id>         # Complete work
 bd sync               # Sync with git
 ```
 
+## Worktree Placement
+
+Keep linked worktrees for this repository under the repo-local `worktrees/`
+directory. Do not create sibling worktree checkouts in `../ai` or other shared
+project directories.
+
+Use this shape for new worktrees:
+
+```bash
+mkdir -p worktrees
+git worktree add worktrees/<short-name> -b <branch-name>
+```
+
+`worktrees/` is local runtime state and must stay ignored by git.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.

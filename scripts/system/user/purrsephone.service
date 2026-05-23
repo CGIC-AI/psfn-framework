@@ -8,7 +8,7 @@ StartLimitBurst=5
 [Service]
 Type=simple
 WorkingDirectory=/mnt/samesung/ai/psfn-live
-Environment=PATH=%h/.nvm/versions/node/v22.21.1/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PATH=%h/.local/bin:%h/.nvm/versions/node/v22.21.1/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=PSFN_DOTENV_FILE=/mnt/samesung/ai/psfn-live/.env
 Environment=DATA_DIR=/mnt/samesung/ai/psfn-live/data
 Environment=DATABASE_PATH=/mnt/samesung/ai/psfn-live/data/purrsephone.db

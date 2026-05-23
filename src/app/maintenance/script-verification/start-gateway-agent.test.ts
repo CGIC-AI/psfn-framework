@@ -37,6 +37,11 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(unit).not.toContain('ExecStart=%h/.nvm/versions/node/v22.21.1/bin/npm run yolo');
   });
 
+  it('keeps user-local tools visible to the live user unit', () => {
+    const unit = readFileSync(join(repoRoot, 'scripts/system/user/purrsephone.service'), 'utf8');
+    expect(unit).toMatch(/^Environment=PATH=%h\/\.local\/bin:%h\/\.nvm\/versions\/node\/v22\.21\.1\/bin:/m);
+  });
+
   it('does not ambiently opt the agent into outbound network access', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).not.toContain('export ALLOW_AGENT_OUTBOUND_NETWORK=true');

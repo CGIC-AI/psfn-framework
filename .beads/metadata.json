@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "server",
-  "dolt_database": "PSFN",
-  "project_id": "e7ea423d-524b-4a2c-bd45-1f53241c4eda"
-}

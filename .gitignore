@@ -18,17 +18,14 @@ __pycache__/
 # bv (beads viewer) local config and caches
 .bv/
 
+# Local beads state lives in the shared Dolt server and must not dirty code commits.
+.beads/
+
 # Internal planning/audit artifacts (non-product docs)
 history/
 working_doc/
 working_docs/
 workspace/
-
-# Beads transient lock/socket files (keep .beads/issues.jsonl tracked)
-.beads/*.lock
-.beads/*.sock*
-.beads/beads.left.jsonl
-.beads/daemon.log
 
 # SvelteKit admin UI
 admin-ui/node_modules/

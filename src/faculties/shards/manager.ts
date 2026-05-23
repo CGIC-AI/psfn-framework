@@ -41,6 +41,7 @@ import type {
 } from './types.js';
 import { buildShardLineageEnvelope, deriveShardCompanionId } from './result-lineage.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import {
   createArtifactReturnPort,
   type ArtifactReturnBatch,
@@ -98,6 +99,11 @@ const DEFAULT_SHARD_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonly s
   autonomous: [SHARD_TOOLSET_ALL],
   custom: [SHARD_TOOLSET_ALL],
 };
+
+function normalizeShardMaxTurns(value: unknown): number {
+  if (!Number.isFinite(value)) return DEFAULT_MAX_TURNS;
+  return Math.max(1, Math.min(AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN, Math.trunc(value as number)));
+}
 
 const SHARD_STATE_TRANSITIONS: Readonly<Record<ShardLifecycleState, readonly ShardLifecycleState[]>> = {
   registering: ['ready', 'degraded', 'offline'],
@@ -421,7 +427,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     }
 
     const startTime = Date.now();
-    const maxTurns = shardConfig.maxTurns ?? DEFAULT_MAX_TURNS;
+    const maxTurns = normalizeShardMaxTurns(shardConfig.maxTurns);
     const capabilities = this.resolveAdvertisedCapabilities(shardConfig.capabilities);
     const requiredCapabilities = this.resolveRequiredCapabilities(shardConfig.requiredCapabilities);
     const missingCapabilities = requiredCapabilities.filter(capability => !capabilities.includes(capability));

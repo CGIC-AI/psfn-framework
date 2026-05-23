@@ -103,7 +103,7 @@ export interface ShardConfig {
   name: string;                    // Human-readable label
   task: string;                    // The prompt to send to the shard
   systemPrompt?: string;           // Override parent's system prompt (default: inherit)
-  maxTurns?: number;               // Max conversation turns (default: 1)
+  maxTurns?: number;               // Max conversation turns (default: 1, capped by agent loop ceiling)
   sourceContext?: ShardSourceContext;
   contextPack?: ShardContextPack;
   capabilities?: string[];         // Declared capability tokens for routing diagnostics

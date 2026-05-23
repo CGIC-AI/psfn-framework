@@ -1,14 +1,16 @@
 import { EventStream, type AssistantMessage } from '@mariozechner/pi-ai';
 import type { AgentContext, AgentLoopConfig, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
 import { executeToolCallsWithScheduler, type ToolCallSchedulerOptions } from './tool-call-scheduler.js';
+import {
+  AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT,
+  AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN,
+} from './turn-limits.js';
 
 type AgentLoopErrorEvent = {
   type: 'agent_error';
   error: Error;
   messages: AgentMessage[];
 };
-
-const DEFAULT_MAX_ASSISTANT_STEPS_PER_RUN = 12;
 
 export function agentLoopWithScheduler(
   prompts: AgentMessage[],
@@ -86,6 +88,7 @@ async function runLoop(
 ) {
   let firstTurn = true;
   let assistantStepCount = 0;
+  let checkInMessageSent = false;
   let pendingMessages = (await config.getSteeringMessages?.()) || [];
 
   for (;;) {
@@ -110,7 +113,7 @@ async function runLoop(
       }
 
       assistantStepCount += 1;
-      if (assistantStepCount > DEFAULT_MAX_ASSISTANT_STEPS_PER_RUN) {
+      if (assistantStepCount > AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN) {
         const message = buildLoopLimitMessage(config, assistantStepCount);
         currentContext.messages.push(message);
         newMessages.push(message);
@@ -120,6 +123,14 @@ async function runLoop(
         stream.push({ type: 'agent_end', messages: newMessages });
         stream.end(newMessages);
         return;
+      }
+      if (!checkInMessageSent && assistantStepCount === AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT) {
+        const message = buildLoopCheckInMessage(assistantStepCount);
+        currentContext.messages.push(message);
+        newMessages.push(message);
+        stream.push({ type: 'message_start', message });
+        stream.push({ type: 'message_end', message });
+        checkInMessageSent = true;
       }
 
       const message = await streamAssistantResponse(currentContext, config, signal, stream, streamFn);
@@ -171,6 +182,20 @@ async function runLoop(
   stream.end(newMessages);
 }
 
+function buildLoopCheckInMessage(stepCount: number): AgentMessage {
+  return {
+    role: 'system',
+    content: [{
+      type: 'text',
+      text: `[SYSTEM: Long-Horizon Check-In] You have used ${stepCount} assistant steps in this turn. `
+        + 'Pause before the next tool call: state the current goal, what has been proven, what remains uncertain, '
+        + 'and whether to continue inline, delegate to a subagent/shard, create or claim a bead, or stop with partial findings. '
+        + 'Do not repeat failed tool calls; continue only when the next step directly advances the goal and fits the charge budget.',
+    }],
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
 function buildLoopLimitMessage(
   config: AgentLoopConfig,
   stepCount: number,
@@ -179,7 +204,7 @@ function buildLoopLimitMessage(
     role: 'assistant',
     content: [{
       type: 'text',
-      text: `Turn stopped after ${stepCount - 1} assistant steps without bounded completion. Retry with a narrower request or fewer dependent tool calls.`,
+      text: `Turn stopped after ${stepCount - 1} assistant steps without bounded completion. Retry with a narrower request, delegate to a bounded worker, or split the work into tracked beads.`,
     }],
     api: config.model.api,
     provider: config.model.provider,

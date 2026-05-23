@@ -4,6 +4,7 @@ import {
   createBoundedSubagentLaunchPort,
   createSubagentExecutionPort,
   isBoundedSubagentLaunchToolName,
+  MAX_BOUNDED_SUBAGENT_LAUNCH_TURNS,
   normalizeBoundedSubagentLaunchRequest,
 } from './bounded-subagent-contract.js';
 
@@ -97,7 +98,12 @@ describe('bounded subagent contract', () => {
       name: 'name',
       task: 'task',
       maxTurns: 0,
-    })).toThrow('maxTurns must be an integer between 1 and 8');
+    })).toThrow(`maxTurns must be an integer between 1 and ${MAX_BOUNDED_SUBAGENT_LAUNCH_TURNS}`);
+    expect(normalizeBoundedSubagentLaunchRequest({
+      name: 'name',
+      task: 'task',
+      maxTurns: MAX_BOUNDED_SUBAGENT_LAUNCH_TURNS,
+    }).maxTurns).toBe(MAX_BOUNDED_SUBAGENT_LAUNCH_TURNS);
     expect(() => normalizeBoundedSubagentLaunchRequest({
       name: 'name',
       task: 'task',

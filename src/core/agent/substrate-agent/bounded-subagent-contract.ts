@@ -1,10 +1,11 @@
 import type { EmbodimentPresenceMetadata } from '../presence-metadata.js';
 import type { ArtifactReturnBatch } from '../../../faculties/shards/artifact-return-port.js';
+import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../turn-limits.js';
 
 export const BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME = 'spawn_subagent' as const;
 export const DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_PARALLEL = 5;
 export const DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_TURNS = 1;
-export const MAX_BOUNDED_SUBAGENT_LAUNCH_TURNS = 8;
+export const MAX_BOUNDED_SUBAGENT_LAUNCH_TURNS = AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN;
 
 export type BoundedSubagentLaunchToolName = typeof BOUNDED_SUBAGENT_LAUNCH_TOOL_NAME;
 export type BoundedSubagentLaunchLifecycleState = 'registering' | 'ready' | 'degraded' | 'offline';

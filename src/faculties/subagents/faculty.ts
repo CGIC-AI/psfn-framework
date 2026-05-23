@@ -29,6 +29,7 @@ import type { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
 import { inferSessionChannelType } from '../../core/session/session-id.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
 import type {
@@ -70,6 +71,11 @@ const SUBAGENT_CONTROL_AUTHOR_NAME = 'SubagentControl';
 function resolveMessageChannelType(channelId: string): ChannelType {
   const inferred = inferSessionChannelType(channelId);
   return inferred && inferred !== 'subagent' ? inferred : 'api';
+}
+
+function normalizeSubagentMaxTurns(value: unknown): number {
+  if (!Number.isFinite(value)) return DEFAULT_MAX_TURNS;
+  return Math.max(1, Math.min(AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN, Math.trunc(value as number)));
 }
 
 export interface SubagentToolCatalog {
@@ -159,9 +165,7 @@ export class SubagentFaculty implements SubagentControlPort {
 
     const subagentId = `subagent-${randomUUID()}`;
     const startTime = Date.now();
-    const maxTurns = Number.isFinite(request.maxTurns)
-      ? Math.max(1, Math.trunc(request.maxTurns as number))
-      : DEFAULT_MAX_TURNS;
+    const maxTurns = normalizeSubagentMaxTurns(request.maxTurns);
     const capabilities = this.resolveAdvertisedCapabilities(request.capabilities);
     const requiredCapabilities = this.resolveRequiredCapabilities(request.requiredCapabilities);
     const missingCapabilities = requiredCapabilities.filter(capability => !capabilities.includes(capability));

@@ -15,6 +15,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { SubagentFaculty } from './faculty.js';
+import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 
 let mockSubagentContent = 'subagent response';
 let mockSubagentError: Error | null = null;
@@ -128,6 +129,8 @@ const TEST_CONFIG: SubstrateConfig = {
   defaultContextWindow: 128_000,
   extractionThresholdPct: 30,
   compactionThresholdPct: 70,
+  companionId: 'companion',
+  characterName: 'Companion',
   modelRoster: {
     chat: CHAT_SLOT,
     background: BACKGROUND_SLOT,
@@ -189,6 +192,27 @@ describe('SubagentFaculty', () => {
     expect(entries).toHaveLength(2);
     expect(entries[0]?.content).toBe('inspect runtime state');
     expect(entries[1]?.content).toBe('task completed');
+  });
+
+  it('caps explicit multi-turn subagent requests at the shared agent loop ceiling', async () => {
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const result = await faculty.execute({
+      name: 'deep-inspect',
+      task: 'inspect until complete',
+      maxTurns: 999,
+    });
+
+    expect(result.turns).toBe(AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN);
+    expect(promptSpy).toHaveBeenCalledTimes(AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN);
   });
 
   it('exposes operator-visible runtime snapshots with transcripts, artifacts, and resume state', async () => {

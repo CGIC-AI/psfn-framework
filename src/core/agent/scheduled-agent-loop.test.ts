@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import { agentLoopWithScheduler, resolveStreamResult } from './scheduled-agent-loop.js';
+import {
+  AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT,
+  AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN,
+} from './turn-limits.js';
 
 const ZERO_USAGE = {
   input: 0,
@@ -226,11 +230,20 @@ describe('scheduled-agent-loop stream result contract', () => {
       events.push(event);
     }
 
-    expect(streamFn).toHaveBeenCalledTimes(12);
+    expect(streamFn).toHaveBeenCalledTimes(AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN);
+    const checkInMessages = events.filter((event) => {
+      if (event.type !== 'message_end' || event.message?.role !== 'system') return false;
+      const text = event.message.content?.[0]?.text;
+      return typeof text === 'string' && text.includes('[SYSTEM: Long-Horizon Check-In]');
+    });
+    expect(checkInMessages).toHaveLength(1);
+    expect(checkInMessages[0]?.message?.content?.[0]?.text)
+      .toContain(`used ${AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT} assistant steps`);
     const finalAssistant = [...events].reverse().find(
       (event) => event.type === 'message_end' && event.message?.role === 'assistant',
     )?.message;
     expect(finalAssistant?.errorMessage).toBe('agent_loop_step_limit_exceeded');
-    expect(finalAssistant?.content?.[0]?.text).toContain('Turn stopped after 12 assistant steps');
+    expect(finalAssistant?.content?.[0]?.text)
+      .toContain(`Turn stopped after ${AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN} assistant steps`);
   });
 });

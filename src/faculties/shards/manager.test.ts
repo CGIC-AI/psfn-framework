@@ -11,6 +11,7 @@ import { getRunChargeSnapshot, runWithChargeContext } from '../../shared/telemet
 import { buildSessionMetadataWithTurn } from '../../core/session/turn-provenance.js';
 import { buildFocusMemoryScopeQuery } from '../../core/session/focus-knowledge.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import { DEFAULT_SHARD_TOOLSET, ShardManager } from './manager.js';
 import { ShardFoldReviewController } from './fold-review.js';
 import { createBoundedSubagentLaunchTool } from './tools.js';
@@ -240,6 +241,27 @@ describe('ShardManager', () => {
         isDirectMessage: false,
       }),
       }));
+  });
+
+  it('caps explicit multi-turn shard requests at the shared agent loop ceiling', async () => {
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'You are a helpful assistant.',
+    });
+
+    const result = await manager.spawn({
+      name: 'deep-shard',
+      task: 'inspect until complete',
+      maxTurns: 999,
+    });
+
+    expect(result.turns).toBe(AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN);
+    expect(promptSpy).toHaveBeenCalledTimes(AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN);
   });
 
   it('charges bounded subagent launches and nested shard execution with lineage', async () => {

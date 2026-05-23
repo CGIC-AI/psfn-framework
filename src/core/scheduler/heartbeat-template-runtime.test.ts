@@ -126,6 +126,10 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     });
 
     const internalStateSection = getPromptSection(capturedPrompts[0] ?? '', '[Internal State Input]');
+    expect(internalStateSection).toContain('[Internal State Interpretation Boundary]');
+    expect(internalStateSection).toContain('boundary: runtime telemetry, not canonical self-truth');
+    expect(internalStateSection).toContain('fallible signals to compare against conversation, memory, and self-report');
+    expect(internalStateSection).toContain('do_not: force reconciliation around these values');
     expect(internalStateSection).toContain('[ACAC Self-Report]');
     expect(internalStateSection).toContain('provenance_kind: self_report');
     expect(internalStateSection).toContain('provenance_source: heartbeat:daily-review');
@@ -1587,6 +1591,9 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(prompt).not.toContain('{{reflection_self}}');
     expect(prompt).not.toContain('{{reflection_relational}}');
     expect(prompt).not.toContain('{{reflection_affect}}');
+    expect(internalStateSection).toContain('[Internal State Interpretation Boundary]');
+    expect(internalStateSection).toContain('boundary: runtime telemetry, not canonical self-truth');
+    expect(internalStateSection).toContain('fallible signals to compare against conversation, memory, and self-report');
     expect(internalStateSection).toContain(`snapshot_ref: ${currentSnapshotRef}`);
     expect(internalStateSection).toContain('serialized_internal_state:');
     expect(memoryHeaderSection).not.toBe('');

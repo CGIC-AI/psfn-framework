@@ -208,6 +208,16 @@ function formatAcacSelfReportBlock(internalState: InternalState): string | null 
   ].join('\n');
 }
 
+function formatInternalStateInterpretationBoundary(): string {
+  return [
+    '[Internal State Interpretation Boundary]',
+    'boundary: runtime telemetry, not canonical self-truth',
+    'use: treat VAD, mood, discrete emotions, ACAC, concerns, and metacognitive flags as fallible signals to compare against conversation, memory, and self-report.',
+    'do_not: force reconciliation around these values or treat them as authoritative emotional ground truth.',
+    'when_conflicted: name uncertainty or conflict explicitly and prefer grounded evidence over classifier output.',
+  ].join('\n');
+}
+
 function promptUsesReflectionMacros(prompt: string): boolean {
   return Object.values(REFLECTION_PROMPT_TOKENS).some(token => prompt.includes(token));
 }
@@ -599,6 +609,7 @@ export function createHeartbeatTemplateRuntime(
 
     return [
       '[Internal State Input]',
+      formatInternalStateInterpretationBoundary(),
       `snapshot_ref: ${context.internalStateSnapshotRef}`,
       `serialized_internal_state: ${serializeInternalState(context.internalState)}`,
       ...(acacSection ? [acacSection] : []),

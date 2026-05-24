@@ -8,7 +8,9 @@ function requireImageService(runtime: GatewayMethodRuntime): ImageService {
   if (!runtime.imageConfig) {
     throw new Error('Image provider config is not wired on the gateway');
   }
-  return new ImageService(runtime.imageConfig);
+  return new ImageService(runtime.imageConfig, fetch, {
+    personalFilesDir: runtime.workspacePath,
+  });
 }
 
 const IMAGE_METHODS: ReadonlyArray<AuditedMethodDescriptor<any, ImageGenerationRpcResult>> = [

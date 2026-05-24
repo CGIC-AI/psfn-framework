@@ -77,6 +77,16 @@ const DEFAULT_PRODUCTION_WORKSPACE_PATH = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/wo
 const DEFAULT_PRODUCTION_LOGS_DIR = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/logs`;
 const DEFAULT_PRODUCTION_TEMP_DIR = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/tmp`;
 const DEFAULT_PRODUCTION_BACKUPS_DIR = `${DEFAULT_PRODUCTION_RUNTIME_ROOT}/backups`;
+const PERSONAL_DOCS_DIRNAME = 'docs';
+const PERSONAL_DOWNLOADS_DIRNAME = 'downloads';
+const PERSONAL_IMAGES_DIRNAME = 'images';
+const PERSONAL_JOURNAL_DIRNAME = 'journal';
+const PERSONAL_KNOWLEDGE_DIRNAME = 'knowledge';
+const PERSONAL_SCRATCHPAD_DIRNAME = 'scratchpad';
+const PERSONAL_SKILLS_DIRNAME = 'skills';
+const PERSONAL_MODULES_DIRNAME = 'modules';
+const PERSONAL_EXPERIMENTS_DIRNAME = 'experiments';
+const PERSONAL_TMP_DIRNAME = 'tmp';
 const COMPANION_STATE_DIRNAME = 'state';
 const COMPANION_DOCS_DIRNAME = 'docs';
 const COMPANION_WORKSPACE_DIRNAME = 'workspace';
@@ -168,6 +178,21 @@ function assertNoOverlappingRoots(
   }
 }
 
+function assertWorkspaceDoesNotOverlapRuntimeState(
+  mode: RuntimeLayoutMode,
+  workspacePath: string,
+  roots: Readonly<Record<string, string>>,
+): void {
+  for (const [label, root] of Object.entries(roots)) {
+    if (workspacePath === root || isStrictSubpath(workspacePath, root) || isStrictSubpath(root, workspacePath)) {
+      throw new Error(
+        `Personal workspace path (${workspacePath}) must not overlap runtime state root "${label}" (${root}) ` +
+        `in ${mode} mode.`,
+      );
+    }
+  }
+}
+
 function resolveProductionDefaultPath(
   explicitRuntimeRoot: string | undefined,
   runtimeRootDir: string,
@@ -255,11 +280,9 @@ export function resolveRuntimePathLayout(
   const workspacePath = normalizeDir(options.workspacePath)
     ?? (mode === RUNTIME_LAYOUT_MODE.PRODUCTION
       ? resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'workspace')
-      : (usesLegacySharedDataDir
-        ? (explicitRuntimeRoot && runtimeRootDir !== DEFAULT_CONTINUOUS_RUNTIME_ROOT
-          ? join(runtimeRootDir, 'workspace')
-          : DEFAULT_LEGACY_CONTINUOUS_WORKSPACE_PATH)
-        : companionDataDir));
+      : (explicitRuntimeRoot && runtimeRootDir !== DEFAULT_CONTINUOUS_RUNTIME_ROOT
+        ? join(runtimeRootDir, 'workspace')
+        : DEFAULT_LEGACY_CONTINUOUS_WORKSPACE_PATH));
   const logsDir = normalizeDir(options.logsDir)
     ?? (mode === RUNTIME_LAYOUT_MODE.PRODUCTION
       ? resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'logs')
@@ -276,6 +299,11 @@ export function resolveRuntimePathLayout(
     ?? (mode === RUNTIME_LAYOUT_MODE.PRODUCTION
       ? resolveProductionDefaultPath(explicitRuntimeRoot, runtimeRootDir, 'backups')
       : resolveBackupsDir(companionDataDir));
+
+  assertWorkspaceDoesNotOverlapRuntimeState(mode, workspacePath, {
+    systemDataDir,
+    companionDataDir,
+  });
 
   if (mode === RUNTIME_LAYOUT_MODE.PRODUCTION) {
     assertNoDuplicateRoots(mode, {
@@ -681,6 +709,60 @@ export function resolveIdentityAssetsDir(companionDataDir: string): string {
 
 export function resolveGeneratedImagesDir(companionDataDir: string): string {
   return resolveCompanionImagesDir(companionDataDir);
+}
+
+export function resolvePersonalDocsDir(personalFilesDir: string): string {
+  return join(personalFilesDir, PERSONAL_DOCS_DIRNAME);
+}
+
+export function resolvePersonalDownloadsDir(personalFilesDir: string): string {
+  return join(personalFilesDir, PERSONAL_DOWNLOADS_DIRNAME);
+}
+
+export function resolvePersonalImagesDir(personalFilesDir: string): string {
+  return join(personalFilesDir, PERSONAL_IMAGES_DIRNAME);
+}
+
+export function resolvePersonalJournalDir(personalFilesDir: string): string {
+  return join(personalFilesDir, PERSONAL_JOURNAL_DIRNAME);
+}
+
+export function resolvePersonalKnowledgeDir(personalFilesDir: string): string {
+  return join(personalFilesDir, PERSONAL_KNOWLEDGE_DIRNAME);
+}
+
+export function resolvePersonalScratchpadDir(personalFilesDir: string): string {
+  return join(personalFilesDir, PERSONAL_SCRATCHPAD_DIRNAME);
+}
+
+export function resolvePersonalSkillsDir(personalFilesDir: string): string {
+  return join(personalFilesDir, PERSONAL_SKILLS_DIRNAME);
+}
+
+export function resolvePersonalModulesDir(personalFilesDir: string): string {
+  return join(personalFilesDir, PERSONAL_MODULES_DIRNAME);
+}
+
+export function resolvePersonalExperimentsDir(personalFilesDir: string): string {
+  return join(personalFilesDir, PERSONAL_EXPERIMENTS_DIRNAME);
+}
+
+export function resolvePersonalTempDir(personalFilesDir: string): string {
+  return join(personalFilesDir, PERSONAL_TMP_DIRNAME);
+}
+
+export function ensurePersonalFilesLayout(personalFilesDir: string): void {
+  mkdirSync(personalFilesDir, { recursive: true });
+  mkdirSync(resolvePersonalDocsDir(personalFilesDir), { recursive: true });
+  mkdirSync(resolvePersonalDownloadsDir(personalFilesDir), { recursive: true });
+  mkdirSync(resolvePersonalImagesDir(personalFilesDir), { recursive: true });
+  mkdirSync(resolvePersonalJournalDir(personalFilesDir), { recursive: true });
+  mkdirSync(resolvePersonalKnowledgeDir(personalFilesDir), { recursive: true });
+  mkdirSync(resolvePersonalScratchpadDir(personalFilesDir), { recursive: true });
+  mkdirSync(resolvePersonalSkillsDir(personalFilesDir), { recursive: true });
+  mkdirSync(resolvePersonalModulesDir(personalFilesDir), { recursive: true });
+  mkdirSync(resolvePersonalExperimentsDir(personalFilesDir), { recursive: true });
+  mkdirSync(resolvePersonalTempDir(personalFilesDir), { recursive: true });
 }
 
 export function resolveWorkspaceLifecycleDir(workspacePath: string): string {

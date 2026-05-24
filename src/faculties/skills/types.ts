@@ -1,8 +1,8 @@
 export type SkillSource = 'companion' | 'bundled' | 'extra' | 'custom';
-export type SkillOwnership = 'companion' | 'deployment';
+export type SkillOwnership = 'personal' | 'deployment';
 
 export interface ManagedSkillOwnership {
-  owner: 'companion';
+  owner: 'personal';
   managedRoot: string;
   configPath: string;
 }

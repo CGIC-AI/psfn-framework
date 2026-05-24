@@ -32,6 +32,7 @@ import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
+import { ensurePersonalFilesLayout } from '../../persistence/layout.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -123,7 +124,7 @@ async function main(): Promise<void> {
 
   // Ensure gateway socket directory exists
   mkdirSync(dirname(bootstrap.socketPath), { recursive: true });
-  mkdirSync(bootstrap.workspaceRoot, { recursive: true });
+  ensurePersonalFilesLayout(bootstrap.workspaceRoot);
   if (bootstrap.workspaceRoot !== bootstrap.gitRepoRoot) {
     log.info('Gateway workspace and git roots diverge', {
       workspaceRoot: bootstrap.workspaceRoot,

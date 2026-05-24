@@ -4,7 +4,11 @@ import { basename, extname, join } from 'node:path';
 import { ComfyUiImageClient } from './comfyui.js';
 import { FalApiError, FalImageClient, isFalContentPolicyError } from './fal.js';
 import { resolveInlineOrEnvCredential } from '../../boundary/custody/credential-vault.js';
-import { resolveConfiguredCompanionDataDir, resolveGeneratedImagesDir } from '../../persistence/layout.js';
+import {
+  resolveConfiguredCompanionDataDir,
+  resolveGeneratedImagesDir,
+  resolvePersonalImagesDir,
+} from '../../persistence/layout.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { ImageOperations } from './ops.js';
 import type {
@@ -91,6 +95,8 @@ export class ImageService implements ImageOperations {
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly options: {
       companionDataDir?: string;
+      generatedImagesDir?: string;
+      personalFilesDir?: string;
     } = {},
   ) {}
 
@@ -202,13 +208,20 @@ export class ImageService implements ImageOperations {
   }
 
   private async persistGeneratedImages(result: ImageGenerationResult): Promise<ImageGenerationResult> {
-    const companionDataDir = this.options.companionDataDir?.trim()
-      || resolveConfiguredCompanionDataDirOrNull(this.config);
+    const storageRoot = this.options.generatedImagesDir?.trim()
+      || (this.options.personalFilesDir?.trim()
+        ? resolvePersonalImagesDir(this.options.personalFilesDir.trim())
+        : null)
+      || (() => {
+        const companionDataDir = this.options.companionDataDir?.trim()
+          || resolveConfiguredCompanionDataDirOrNull(this.config);
+        return companionDataDir ? resolveGeneratedImagesDir(companionDataDir) : null;
+      })();
     if (result.images.length === 0) {
       return result;
     }
-    if (!companionDataDir) {
-      log.warn('Generated image persistence skipped: companionDataDir unavailable', {
+    if (!storageRoot) {
+      log.warn('Generated image persistence skipped: storage root unavailable', {
         requestId: result.requestId,
         imageCount: result.images.length,
       });
@@ -221,7 +234,7 @@ export class ImageService implements ImageOperations {
       (now.getUTCMonth() + 1).toString().padStart(2, '0'),
       now.getUTCDate().toString().padStart(2, '0'),
     ].join('-');
-    const storageDir = join(resolveGeneratedImagesDir(companionDataDir), dateDir);
+    const storageDir = join(storageRoot, dateDir);
     await mkdir(storageDir, { recursive: true });
 
     const images = await Promise.all(result.images.map(async (asset, index) => {

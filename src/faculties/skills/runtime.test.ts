@@ -16,6 +16,20 @@ function writeSkill(path: string, description: string, body: string): void {
   ].join('\n'), 'utf-8');
 }
 
+function writeSkillsConfig(dataDir: string, seedDir: string): void {
+  const payload = {
+    enabled: true,
+    directories: ['companion/skills', 'skills'],
+    extraDirectories: [],
+    maxLoadedSkills: 32,
+    maxSkillChars: 100_000,
+    disabledSkills: [],
+  };
+
+  writeFileSync(join(seedDir, 'skills.seed.json'), JSON.stringify(payload, null, 2));
+  writeFileSync(join(dataDir, 'skills.json'), JSON.stringify(payload, null, 2));
+}
+
 describe('skills runtime', () => {
   it('uses explicit repoRoot even when process cwd drifts', () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-runtime-root-'));
@@ -28,14 +42,7 @@ describe('skills runtime', () => {
     mkdirSync(seedDir, { recursive: true });
     mkdirSync(skillDir, { recursive: true });
 
-    writeFileSync(join(seedDir, 'skills.seed.json'), JSON.stringify({
-      enabled: true,
-      directories: ['companion/skills', 'skills'],
-      extraDirectories: [],
-      maxLoadedSkills: 32,
-      maxSkillChars: 100_000,
-      disabledSkills: [],
-    }, null, 2));
+    writeSkillsConfig(dataDir, seedDir);
     writeSkill(join(skillDir, 'SKILL.md'), 'cwd proof', '# Memory cwd-proof');
 
     const previousCwd = process.cwd();
@@ -68,14 +75,7 @@ describe('skills runtime', () => {
     mkdirSync(seedDir, { recursive: true });
     mkdirSync(skillDir, { recursive: true });
 
-    writeFileSync(join(seedDir, 'skills.seed.json'), JSON.stringify({
-      enabled: true,
-      directories: ['companion/skills', 'skills'],
-      extraDirectories: [],
-      maxLoadedSkills: 32,
-      maxSkillChars: 100_000,
-      disabledSkills: [],
-    }, null, 2));
+    writeSkillsConfig(dataDir, seedDir);
 
     const skillPath = join(skillDir, 'SKILL.md');
     writeSkill(skillPath, 'first description', '# Memory v1');
@@ -107,34 +107,30 @@ describe('skills runtime', () => {
     }
   });
 
-  it('reports managed skill ownership under the companion data root', () => {
+  it('reports managed skill ownership under the personal files root when configured', () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-runtime-managed-root-'));
     const companionDataDir = join(root, 'companion-data');
+    const personalFilesDir = join(root, 'purrsephone');
     const seedDir = join(root, 'config');
 
     mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(personalFilesDir, { recursive: true });
     mkdirSync(seedDir, { recursive: true });
 
-    writeFileSync(join(seedDir, 'skills.seed.json'), JSON.stringify({
-      enabled: true,
-      directories: ['companion/skills', 'skills'],
-      extraDirectories: [],
-      maxLoadedSkills: 32,
-      maxSkillChars: 100_000,
-      disabledSkills: [],
-    }, null, 2));
+    writeSkillsConfig(companionDataDir, seedDir);
 
     try {
       const runtime = new SkillsRuntime({
         dataDir: companionDataDir,
         seedDir,
         repoRoot: root,
+        managedRootDir: join(personalFilesDir, 'skills'),
         isBinaryAvailable: () => true,
       });
 
       expect(runtime.getManagedOwnership()).toEqual({
-        owner: 'companion',
-        managedRoot: 'companion-data/skills',
+        owner: 'personal',
+        managedRoot: 'purrsephone/skills',
         configPath: 'companion-data/skills.json',
       });
     } finally {

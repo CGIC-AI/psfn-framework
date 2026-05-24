@@ -227,6 +227,58 @@ describe('ImageService', () => {
     expect(readFileSync(result.images[0]!.localPath!)).toEqual(Buffer.from(imageBytes));
   });
 
+  it('persists generated images under the personal files root when configured', async () => {
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-image-companion-'));
+    const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-image-personal-'));
+    tempDirs.push(companionDataDir, personalFilesDir);
+    const imageBytes = Uint8Array.from([137, 80, 78, 71, 2]);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2') {
+        return jsonResponse({ request_id: 'fal-req-personal-1' });
+      }
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-req-personal-1/status') {
+        return jsonResponse({
+          status: 'COMPLETED',
+          response_url: 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-req-personal-1',
+        });
+      }
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/requests/fal-req-personal-1') {
+        return jsonResponse({
+          images: [
+            {
+              url: 'https://cdn.example.test/output-personal.png',
+              content_type: 'image/png',
+              file_name: 'output-personal.png',
+            },
+          ],
+        });
+      }
+      if (url === 'https://cdn.example.test/output-personal.png') {
+        return binaryResponse(imageBytes);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+        companionDataDir,
+        systemDataDir: join(companionDataDir, '..', 'system-data'),
+      } as any,
+      fetchMock as typeof fetch,
+      { personalFilesDir },
+    );
+
+    const result = await service.create({
+      prompt: 'a lighthouse at dusk',
+    });
+
+    expect(result.images[0]?.localPath).toContain(join(personalFilesDir, 'images'));
+    expect(existsSync(result.images[0]!.localPath!)).toBe(true);
+    expect(readFileSync(result.images[0]!.localPath!)).toEqual(Buffer.from(imageBytes));
+  });
+
   it('maps Flux 2 generation options to the FAL payload', async () => {
     const fetchMock = createCompletedFalGenerationFetchMock(
       'fal-ai/flux-2',

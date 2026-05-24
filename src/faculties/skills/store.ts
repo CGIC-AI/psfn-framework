@@ -153,6 +153,7 @@ export interface SkillUpdateInput {
 
 interface SkillStoreOptions {
   repoRoot: string;
+  managedRootDir?: string;
   now?: () => Date;
 }
 
@@ -178,7 +179,7 @@ export class SkillStore {
   private readonly now: () => Date;
 
   constructor(dataDir: string, options: SkillStoreOptions) {
-    this.managedRootDir = resolve(dataDir, MANAGED_SKILLS_DIR);
+    this.managedRootDir = resolve(options.managedRootDir?.trim() || resolve(dataDir, MANAGED_SKILLS_DIR));
     this.repoRoot = requireSkillRepoRoot(options.repoRoot);
     this.now = options.now ?? (() => new Date());
   }

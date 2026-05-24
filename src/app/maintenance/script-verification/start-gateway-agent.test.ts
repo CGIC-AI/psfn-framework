@@ -42,6 +42,15 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(unit).toMatch(/^Environment=PATH=%h\/\.local\/bin:%h\/\.nvm\/versions\/node\/v22\.21\.1\/bin:/m);
   });
 
+  it('points the live user unit at separate personal and runtime roots', () => {
+    const unit = readFileSync(join(repoRoot, 'scripts/system/user/purrsephone.service'), 'utf8');
+    expect(unit).toContain('Environment=DATA_DIR=/mnt/samesung/ai/psfn-live/data');
+    expect(unit).toContain('Environment=WORKSPACE_PATH=/mnt/samesung/ai/psfn-live/purrsephone');
+    expect(unit).toContain('Environment=CHARACTER_CARD_PATH=/mnt/samesung/ai/psfn-live/data/companion.json');
+    expect(unit).not.toContain('Environment=WORKSPACE_PATH=/mnt/samesung/ai/psfn-live/workspace');
+    expect(unit).not.toContain('Environment=CHARACTER_CARD_PATH=/mnt/samesung/ai/psfn-live/purrsephone/purrsephone.json');
+  });
+
   it('does not ambiently opt the agent into outbound network access', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).not.toContain('export ALLOW_AGENT_OUTBOUND_NETWORK=true');
@@ -126,6 +135,29 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
       '/explicit/workspace',
       '/explicit/card.json',
       'loaded',
+    ]);
+  });
+
+  it('defaults the runtime workspace to a separate personal workspace root', () => {
+    const output = execFileSync(
+      'bash',
+      [
+        '-lc',
+        [
+          `source ${JSON.stringify(runtimeEnvPath)}`,
+          'unset WORKSPACE_PATH DATA_DIR SYSTEM_DATA_DIR COMPANION_DATA_DIR PSFN_RUNTIME_ROOT PSFN_RUNTIME_LAYOUT_MODE',
+          'psfn_resolve_runtime_workspace_path',
+          'export SYSTEM_DATA_DIR=./system-data',
+          'export COMPANION_DATA_DIR=./companion-data',
+          'psfn_resolve_runtime_workspace_path',
+        ].join('; '),
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    ).trim().split('\n');
+
+    expect(output).toEqual([
+      './workspace',
+      './workspace',
     ]);
   });
 });

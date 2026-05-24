@@ -87,10 +87,13 @@ Mutable runtime settings belong in canonical JSON owner files in the system-owne
 
 Companion state belongs under `companion-data`.
 
+`WORKSPACE_PATH` is the personal writable files root, not a runtime-state root. For the live Purrsephone deployment, this is repo-root `purrsephone/`. Personal documents, generated/saved images, downloads, personal knowledge-base notes, scratchpad/journal files, authored personal skills, modules, and experiments belong there. Runtime owner files, databases, L0/session state, telemetry, backups, active identity artifacts, and system/default skill config belong in `DATA_DIR` or split system/companion runtime roots.
+
 Guardrails:
 
 - If only one of `SYSTEM_DATA_DIR` or `COMPANION_DATA_DIR` is set, startup must fail.
 - Production layout roots must not overlap.
+- `WORKSPACE_PATH` must not overlap `DATA_DIR`, `SYSTEM_DATA_DIR`, or `COMPANION_DATA_DIR`.
 - New settings must be wired through the owner-file contract, Garden exposure, and tests.
 - Run `npm run verify:settings-contract` when touching settings or settings UI.
 

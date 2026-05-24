@@ -60,6 +60,7 @@ import {
   resolveContactsDir,
   resolveMemoryJournalPath,
   resolveNotesDir,
+  resolvePersonalSkillsDir,
   resolveScratchpadMirrorPath,
 } from '../../persistence/layout.js';
 
@@ -171,6 +172,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     dataDir: pathSnapshot.systemDataDir,
     seedDir: process.env.CONFIG_DIR,
     repoRoot: process.cwd(),
+    managedRootDir: resolvePersonalSkillsDir(pathSnapshot.workspaceRoot),
   });
   registerWebTools(agentLoop, new GatewayWebFetchOps(gatewayOps), {
     gatewayMode: true,

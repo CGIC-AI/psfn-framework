@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, afterEach } from 'vitest';
 import { collectGeneratedImageAttachments } from './generated-media.js';
+import { resolveGeneratedImagesDir } from '../../persistence/layout.js';
 
 describe('collectGeneratedImageAttachments', () => {
   const tempDirs: string[] = [];
@@ -149,6 +150,51 @@ describe('collectGeneratedImageAttachments', () => {
     expect(attachments[0]?.url).toBe('https://images.example.test/purr-3.png');
     expect(attachments[0]?.name).toBe('purr-3.png');
     expect(readFileSync(attachments[0]!.localPath!)).toEqual(Buffer.from('png-three'));
+  });
+
+  it('reuses existing local paths from image tool results instead of downloading again', async () => {
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-generated-media-'));
+    const personalDir = mkdtempSync(join(tmpdir(), 'psfn-personal-images-'));
+    tempDirs.push(companionDataDir, personalDir);
+    const localPath = join(personalDir, 'purr-existing.png');
+
+    const attachments = await collectGeneratedImageAttachments({
+      companionDataDir,
+      turnMessages: [
+        {
+          role: 'toolResult',
+          toolName: 'image_create',
+          content: [{
+            type: 'text',
+            text: JSON.stringify({
+              provider: 'fal',
+              mode: 'create',
+              images: [
+                {
+                  url: 'https://images.example.test/purr-existing.png',
+                  contentType: 'image/png',
+                  fileName: 'purr-existing.png',
+                  localPath,
+                },
+              ],
+            }),
+          }],
+        } as any,
+      ],
+      fetchImpl: async () => {
+        throw new Error('fetch should not be called for existing local image paths');
+      },
+    });
+
+    expect(attachments).toEqual([
+      {
+        url: 'https://images.example.test/purr-existing.png',
+        contentType: 'image/png',
+        name: 'purr-existing.png',
+        localPath,
+      },
+    ]);
+    expect(existsSync(resolveGeneratedImagesDir(companionDataDir))).toBe(false);
   });
 
   it('ignores non-image tool results and malformed payloads', async () => {

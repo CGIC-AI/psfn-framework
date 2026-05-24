@@ -40,7 +40,11 @@ psfn_resolve_runtime_workspace_path() {
     return 0
   fi
 
-  psfn_resolve_companion_data_dir
+  if [ -n "${runtime_root}" ] && [ "${runtime_root}" != "." ]; then
+    printf '%s\n' "${runtime_root%/}/workspace"
+  else
+    printf '%s\n' "./workspace"
+  fi
 }
 
 psfn_resolve_companion_data_dir() {

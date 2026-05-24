@@ -27,6 +27,9 @@ working_doc/
 working_docs/
 workspace/
 
+# Companion personal files live inside the repo tree but are runtime/personal data.
+purrsephone/
+
 # SvelteKit admin UI
 admin-ui/node_modules/
 admin-ui/build/

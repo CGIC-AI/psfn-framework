@@ -28,6 +28,7 @@ export interface SkillsRuntimeOptions {
   dataDir: string;
   seedDir?: string;
   repoRoot: string;
+  managedRootDir?: string;
   environment?: NodeJS.ProcessEnv;
   isBinaryAvailable?: (binaryName: string) => boolean;
 }
@@ -64,6 +65,7 @@ export class SkillsRuntime {
     this.options = options;
     this.store = new SkillStore(options.dataDir, {
       repoRoot: options.repoRoot,
+      ...(options.managedRootDir ? { managedRootDir: options.managedRootDir } : {}),
     });
   }
 
@@ -128,7 +130,7 @@ export class SkillsRuntime {
 
   getManagedOwnership(): ManagedSkillOwnership {
     return {
-      owner: 'companion',
+      owner: 'personal',
       managedRoot: this.toRepoRelativePath(this.store.getManagedRootDir()),
       configPath: this.toRepoRelativePath(resolve(this.options.dataDir, SKILLS_FILE_NAME)),
     };

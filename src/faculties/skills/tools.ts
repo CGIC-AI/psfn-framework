@@ -29,7 +29,7 @@ function resolveSkillOwnership(source: SkillSource): SkillOwnership {
   switch (source) {
     case 'companion':
     case 'custom':
-      return 'companion';
+      return 'personal';
     case 'bundled':
     case 'extra':
       return 'deployment';
@@ -183,6 +183,7 @@ export function createSkillTool(runtime: SkillsRuntime): AgentTool<any> {
     description:
       'Unified skill management surface for list/view/create/update. '
       + 'Skills capture reusable workflow guidance; tools execute actions. '
+      + 'Created and updated skills are personal skills stored under the configured personal files root, separate from deployment/system skill directories. '
       + 'Creator workflows such as image or music creation should be modeled as skills loaded with action="view", not as new top-level tools. '
       + `Use action=${SKILL_TOOL_ACTION_HELP}. Legacy action aliases remain available during migration.`,
     parameters: Type.Object({
@@ -258,7 +259,7 @@ export function createSkillTool(runtime: SkillsRuntime): AgentTool<any> {
               version: created.version,
               createdAt: created.createdAt,
               updatedAt: created.updatedAt,
-              ownership: 'companion',
+              ownership: 'personal',
               path: created.relativePath,
             }, null, 2));
           }
@@ -286,7 +287,7 @@ export function createSkillTool(runtime: SkillsRuntime): AgentTool<any> {
               version: updated.version,
               createdAt: updated.createdAt,
               updatedAt: updated.updatedAt,
-              ownership: 'companion',
+              ownership: 'personal',
               path: updated.relativePath,
             }, null, 2));
           }

@@ -34,6 +34,7 @@ Keep `.env` limited to:
 - Secrets
 - Host, port, and socket wiring
 - Runtime mode and persistence layout wiring
+- Personal files workspace wiring (`WORKSPACE_PATH`)
 - Explicit bootstrap overrides such as `CHARACTER_CARD_PATH`
 - Explicit deployment identity such as `COMPANION_ID`
 
@@ -63,8 +64,9 @@ Startup requires these files to exist. Distributed `config/*.seed.json` files ar
    ```dotenv
    OPENROUTER_API_KEY=...
    COMPANION_ID=companion
-   CHARACTER_CARD_PATH=./data/character.json
    DATA_DIR=./data
+   WORKSPACE_PATH=./purrsephone
+   CHARACTER_CARD_PATH=./data/companion.json
    DATABASE_PATH=./data/companion.db
    ```
 
@@ -82,7 +84,7 @@ Startup requires these files to exist. Distributed `config/*.seed.json` files ar
    cp config/skills.seed.json ./data/skills.json
    ```
 
-3. Provide the explicit character card at `CHARACTER_CARD_PATH`. Startup fails if the configured identity file is missing.
+3. Provide the explicit character card at `CHARACTER_CARD_PATH`. Startup fails if the configured identity file is missing. Keep this active identity file under runtime data, not under the personal writable workspace.
 
 4. Start the split runtime (gateway + agent + operator):
 
@@ -110,6 +112,7 @@ Startup requires these files to exist. Distributed `config/*.seed.json` files ar
 
 - Default mode when `PSFN_RUNTIME_LAYOUT_MODE` is unset.
 - Uses the legacy shared root (`DATA_DIR`, default `./data`) for both system and companion data.
+- Uses `WORKSPACE_PATH` as the personal files root for documents, downloads, generated images, journal/scratchpad files, knowledge-base notes, authored skills, modules, and experiments. In the live Purrsephone deployment this is repo-root `./purrsephone`.
 - Good for local development and smoke testing.
 - This shared-root support is an alpha migration boundary item that survives only until beta. Do not build new setup or runtime behavior that depends on shared-root fallback.
 

@@ -65,6 +65,9 @@ function normalizeImageGenerationResult(parsed: unknown): ImageGenerationResult 
       ...(typeof entry.fileName === 'string' && entry.fileName.trim()
         ? { fileName: entry.fileName.trim() }
         : {}),
+      ...(typeof entry.localPath === 'string' && entry.localPath.trim()
+        ? { localPath: entry.localPath.trim() }
+        : {}),
     }))
     .filter((entry) => entry.url.length > 0);
 
@@ -163,6 +166,15 @@ async function persistImageAsset(params: {
   const { asset, requestId, index, storageDir, fetchImpl } = params;
   const extension = inferExtension(asset.url, asset.contentType);
   const fileStem = deriveFileStem(asset, requestId, index);
+  const existingLocalPath = asset.localPath?.trim();
+  if (existingLocalPath) {
+    return {
+      url: asset.url,
+      contentType: asset.contentType || 'image/png',
+      name: resolveAttachmentName(existingLocalPath, asset),
+      localPath: existingLocalPath,
+    };
+  }
   const fileName = `${fileStem}-${randomUUID().slice(0, 8)}${extension}`;
   const storedPath = join(storageDir, fileName);
 
@@ -219,14 +231,20 @@ export async function collectGeneratedImageAttachments(params: {
     return [];
   }
 
-  const now = new Date();
-  const dateDir = [
-    now.getUTCFullYear().toString().padStart(4, '0'),
-    (now.getUTCMonth() + 1).toString().padStart(2, '0'),
-    now.getUTCDate().toString().padStart(2, '0'),
-  ].join('-');
-  const storageDir = join(resolveGeneratedImagesDir(params.companionDataDir), dateDir);
-  await mkdir(storageDir, { recursive: true });
+  const needsStorage = imageResults.some(result => (
+    result.images.some(asset => !asset.localPath?.trim())
+  ));
+  let storageDir = '';
+  if (needsStorage) {
+    const now = new Date();
+    const dateDir = [
+      now.getUTCFullYear().toString().padStart(4, '0'),
+      (now.getUTCMonth() + 1).toString().padStart(2, '0'),
+      now.getUTCDate().toString().padStart(2, '0'),
+    ].join('-');
+    storageDir = join(resolveGeneratedImagesDir(params.companionDataDir), dateDir);
+    await mkdir(storageDir, { recursive: true });
+  }
 
   const fetchImpl = params.fetchImpl ?? fetch;
   const attachments: Attachment[] = [];

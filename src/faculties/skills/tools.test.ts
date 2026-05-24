@@ -5,16 +5,18 @@ import { tmpdir } from 'node:os';
 import { SkillsRuntime } from './runtime.js';
 import { createSkillTool } from './tools.js';
 
-function writeSeedConfig(seedDir: string): void {
+function writeSkillsConfig(dataDir: string, seedDir: string): void {
   mkdirSync(seedDir, { recursive: true });
-  writeFileSync(join(seedDir, 'skills.seed.json'), JSON.stringify({
+  const payload = {
     enabled: true,
     directories: ['skills'],
     extraDirectories: [],
     maxLoadedSkills: 32,
     maxSkillChars: 24_000,
     disabledSkills: [],
-  }, null, 2));
+  };
+  writeFileSync(join(seedDir, 'skills.seed.json'), JSON.stringify(payload, null, 2));
+  writeFileSync(join(dataDir, 'skills.json'), JSON.stringify(payload, null, 2));
 }
 
 function readText(result: { content: Array<{ text?: string }> }): string {
@@ -25,15 +27,18 @@ describe('skills tools', () => {
   it('supports create, view, update, and list through the unified skill tool', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-tools-'));
     const companionDataDir = join(root, 'companion-data');
+    const personalFilesDir = join(root, 'purrsephone');
     const seedDir = join(root, 'config');
     mkdirSync(companionDataDir, { recursive: true });
-    writeSeedConfig(seedDir);
+    mkdirSync(personalFilesDir, { recursive: true });
+    writeSkillsConfig(companionDataDir, seedDir);
 
     try {
       const runtime = new SkillsRuntime({
         dataDir: companionDataDir,
         seedDir,
         repoRoot: root,
+        managedRootDir: join(personalFilesDir, 'skills'),
         isBinaryAvailable: () => true,
       });
       const skillTool = createSkillTool(runtime);
@@ -56,8 +61,8 @@ describe('skills tools', () => {
       };
       expect(createdPayload.action).toBe('created');
       expect(createdPayload.version).toBe(1);
-      expect(createdPayload.ownership).toBe('companion');
-      expect(createdPayload.path).toContain('companion-data/skills/ops/incident-runbook/SKILL.md');
+      expect(createdPayload.ownership).toBe('personal');
+      expect(createdPayload.path).toContain('purrsephone/skills/ops/incident-runbook/SKILL.md');
 
       const viewCreated = await skillTool.execute('call-2', {
         action: 'skill_view',
@@ -71,7 +76,7 @@ describe('skills tools', () => {
       };
       expect(createdViewPayload.name).toBe('incident-runbook');
       expect(createdViewPayload.category).toBe('ops');
-      expect(createdViewPayload.ownership).toBe('companion');
+      expect(createdViewPayload.ownership).toBe('personal');
       expect(createdViewPayload.content).toContain('Gather logs');
 
       const updateResult = await skillTool.execute('call-3', {
@@ -96,8 +101,8 @@ describe('skills tools', () => {
         skills: Array<{ name: string; inPromptIndex: boolean; ownership: string }>;
       };
       expect(listPayload.managedOwnership).toEqual({
-        owner: 'companion',
-        managedRoot: 'companion-data/skills',
+        owner: 'personal',
+        managedRoot: 'purrsephone/skills',
         configPath: 'companion-data/skills.json',
       });
       expect(listPayload.categories).toContainEqual({
@@ -107,11 +112,11 @@ describe('skills tools', () => {
       });
       expect(listPayload.includedInPrompt.some(skill => (
         skill.name === 'incident-runbook'
-        && skill.ownership === 'companion'
+        && skill.ownership === 'personal'
       ))).toBe(true);
       const managedSkill = listPayload.skills.find(skill => skill.name === 'incident-runbook');
       expect(managedSkill?.inPromptIndex).toBe(true);
-      expect(managedSkill?.ownership).toBe('companion');
+      expect(managedSkill?.ownership).toBe('personal');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -120,15 +125,18 @@ describe('skills tools', () => {
   it('returns explicit errors for invalid actions, invalid names, and missing skills', async () => {
     const root = mkdtempSync(join(tmpdir(), 'skills-tools-errors-'));
     const companionDataDir = join(root, 'companion-data');
+    const personalFilesDir = join(root, 'purrsephone');
     const seedDir = join(root, 'config');
     mkdirSync(companionDataDir, { recursive: true });
-    writeSeedConfig(seedDir);
+    mkdirSync(personalFilesDir, { recursive: true });
+    writeSkillsConfig(companionDataDir, seedDir);
 
     try {
       const runtime = new SkillsRuntime({
         dataDir: companionDataDir,
         seedDir,
         repoRoot: root,
+        managedRootDir: join(personalFilesDir, 'skills'),
       });
       const skillTool = createSkillTool(runtime);
 

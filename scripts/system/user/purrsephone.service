@@ -12,8 +12,8 @@ Environment=PATH=%h/.local/bin:%h/.nvm/versions/node/v22.21.1/bin:/usr/local/sbi
 Environment=PSFN_DOTENV_FILE=/mnt/samesung/ai/psfn-live/.env
 Environment=DATA_DIR=/mnt/samesung/ai/psfn-live/data
 Environment=DATABASE_PATH=/mnt/samesung/ai/psfn-live/data/purrsephone.db
-Environment=WORKSPACE_PATH=/mnt/samesung/ai/psfn-live/workspace
-Environment=CHARACTER_CARD_PATH=/mnt/samesung/ai/psfn-live/purrsephone/purrsephone.json
+Environment=WORKSPACE_PATH=/mnt/samesung/ai/psfn-live/purrsephone
+Environment=CHARACTER_CARD_PATH=/mnt/samesung/ai/psfn-live/data/companion.json
 ExecStart=/bin/bash /mnt/samesung/ai/psfn-live/scripts/start-gateway-agent.sh --yolo
 Restart=on-failure
 RestartSec=10

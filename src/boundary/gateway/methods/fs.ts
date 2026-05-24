@@ -1,6 +1,6 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
-import { writeFile, glob as fsGlob } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { writeFile, glob as fsGlob, stat } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, relative } from 'node:path';
 import type {
   FsEditParams,
   FsListParams,
@@ -39,6 +39,60 @@ function resolveReadPath(path: string, runtime: GatewayMethodRuntime): string {
   return resolveWorkspaceFsPathFromRoot(path, resolveReadRoot(runtime));
 }
 
+function toErrorCode(error: unknown): string | undefined {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    return typeof code === 'string' ? code : undefined;
+  }
+  return undefined;
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function stripKnownRootPrefix(path: string, workspaceRoot: string): string | null {
+  const normalized = path.replace(/\\/g, '/').replace(/^\.\//, '');
+  const workspaceName = basename(workspaceRoot);
+  for (const prefix of [workspaceName, 'workspace']) {
+    if (normalized === prefix || normalized.startsWith(`${prefix}/`)) {
+      return normalized.slice(prefix.length).replace(/^\/+/, '');
+    }
+  }
+  return null;
+}
+
+async function buildWriteFailureMessage(
+  requestedPath: string,
+  workspaceRoot: string,
+  resolvedPath: string,
+  error: unknown,
+): Promise<string> {
+  const code = toErrorCode(error);
+  const parentDir = dirname(resolvedPath);
+  const parentExists = await pathExists(parentDir);
+  const relativeResolved = relative(workspaceRoot, resolvedPath).replace(/\\/g, '/');
+  const correctedRelativePath = stripKnownRootPrefix(requestedPath, workspaceRoot);
+  const guidance = [
+    `fs.write failed for "${requestedPath}" (${code ?? 'unknown error'}).`,
+    `Writes are personal-root-relative; personal root is ${workspaceRoot}.`,
+    `Resolved target: ${resolvedPath}.`,
+    `Workspace-relative target: ${relativeResolved || '.'}.`,
+    parentExists
+      ? `Parent directory exists: ${parentDir}.`
+      : `Missing parent directory: ${parentDir}.`,
+  ];
+  if (correctedRelativePath) {
+    guidance.push(`The path appears to include a root prefix; retry with "${correctedRelativePath}".`);
+  }
+  return guidance.join(' ');
+}
+
 const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'fs.read',
@@ -55,7 +109,14 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     handler: async (params: FsWriteParams, runtime) => {
       const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
       const resolvedPath = resolveWorkspaceFsPathFromRoot(params.path, workspaceRoot);
-      await writeFile(resolvedPath, params.content, 'utf-8');
+      try {
+        await writeFile(resolvedPath, params.content, 'utf-8');
+      } catch (error) {
+        throw new JSONRPCErrorException(
+          await buildWriteFailureMessage(params.path, workspaceRoot, resolvedPath, error),
+          GatewayErrors.PROVIDER_ERROR,
+        );
+      }
       return { success: true };
     },
     summary: (p: FsWriteParams) => ({ path: p.path }),

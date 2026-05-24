@@ -54,8 +54,10 @@ export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
     name: 'fs',
     label: 'fs',
     description:
-      'Unified filesystem primitive for workspace inspection and safe mutation. '
+      'Unified filesystem primitive for personal-file inspection and safe mutation. '
       + 'Use action=list|read|search|write|edit. Prefer list/search/read for common file inspection before analysis_workbench. '
+      + 'Write/edit paths are relative to the configured personal files root, not DATA or runtime state. '
+      + 'In gateway yolo mode, reads may expose broader codebase paths while writes stay personal-root-relative. '
       + 'Writes stay explicit, bounded, and fail closed on unsafe overwrite/edit requests.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
@@ -68,10 +70,10 @@ export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
         description: 'Filesystem action. Defaults to list for empty-argument calls.',
       })),
       path: Type.Optional(Type.String({
-        description: 'Workspace-relative path for action=read, action=write, or action=edit.',
+        description: 'Personal-root-relative path for action=write/edit; read paths may be broader in gateway yolo mode.',
       })),
       glob: Type.Optional(Type.String({
-        description: 'Workspace-relative glob for action=list or action=search. Defaults to **/*.',
+        description: 'Personal-root-relative glob for local mode; gateway yolo read/search may use the broader read root. Defaults to **/*.',
       })),
       max_entries: Type.Optional(Type.Integer({
         minimum: 1,

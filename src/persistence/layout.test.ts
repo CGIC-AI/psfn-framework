@@ -29,6 +29,16 @@ import {
   resolveGeneratedImagesDir,
   resolveHeartbeatPolicyPath,
   resolveIdentityAssetsDir,
+  resolvePersonalDocsDir,
+  resolvePersonalDownloadsDir,
+  resolvePersonalExperimentsDir,
+  resolvePersonalImagesDir,
+  resolvePersonalJournalDir,
+  resolvePersonalKnowledgeDir,
+  resolvePersonalModulesDir,
+  resolvePersonalScratchpadDir,
+  resolvePersonalSkillsDir,
+  resolvePersonalTempDir,
   resolveInternalRoleEnvelopeLedgerPath,
   resolveInternalRoleEnvelopesDir,
   resolveLegacyValuesJournalPath,
@@ -53,6 +63,7 @@ import {
   resolveScratchpadMirrorPath,
   resolveSessionsDir,
   resolveValuesJournalPath,
+  ensurePersonalFilesLayout,
 } from './layout.js';
 
 function writeJournalEntry(filePath: string, channelId: string): void {
@@ -172,7 +183,7 @@ describe('persistence layout', () => {
       runtimeRootDir: DEFAULT_CONTINUOUS_RUNTIME_ROOT,
       systemDataDir: DEFAULT_CONTINUOUS_SYSTEM_DATA_DIR,
       companionDataDir: DEFAULT_CONTINUOUS_COMPANION_DATA_DIR,
-      workspacePath: DEFAULT_CONTINUOUS_COMPANION_DATA_DIR,
+      workspacePath: './workspace',
       logsDir: './logs',
       tempDir: './tmp',
       backupsDir: resolveBackupsDir('./companion'),
@@ -230,7 +241,7 @@ describe('persistence layout', () => {
       systemDataDir: '/srv/psfn/system-data',
       companionDataDir: '/srv/psfn/companion-data',
       workspacePath: '/srv/psfn/companion-data',
-    })).toThrow('shares a mutable root');
+    })).toThrow('Personal workspace path');
 
     expect(() => resolveRuntimePathLayout({
       mode: RUNTIME_LAYOUT_MODE.PRODUCTION,
@@ -247,9 +258,24 @@ describe('persistence layout', () => {
     });
     expect(layout.systemDataDir).toBe('/srv/psfn/continuous/data');
     expect(layout.companionDataDir).toBe('/srv/psfn/continuous/companion');
-    expect(layout.workspacePath).toBe('/srv/psfn/continuous/companion');
+    expect(layout.workspacePath).toBe('/srv/psfn/continuous/workspace');
     expect(layout.logsDir).toBe('/srv/psfn/continuous/logs');
     expect(layout.tempDir).toBe('/srv/psfn/continuous/tmp');
+  });
+
+  it('rejects personal workspace roots that overlap runtime state in continuous mode', () => {
+    expect(() => resolveRuntimePathLayout({
+      mode: RUNTIME_LAYOUT_MODE.CONTINUOUS,
+      systemDataDir: '/srv/psfn/system-data',
+      companionDataDir: '/srv/psfn/companion-data',
+      workspacePath: '/srv/psfn/companion-data',
+    })).toThrow('Personal workspace path');
+
+    expect(() => resolveRuntimePathLayout({
+      mode: RUNTIME_LAYOUT_MODE.CONTINUOUS,
+      legacyDataDir: '/srv/psfn/data',
+      workspacePath: '/srv/psfn/data/personal',
+    })).toThrow('must not overlap runtime state root');
   });
 
   it('resolves configured system and companion dirs from config-style objects', () => {
@@ -288,6 +314,31 @@ describe('persistence layout', () => {
       resolveGeneratedImagesDir(dataDir),
       resolveBackupsDir(dataDir),
     ];
+    for (const dir of dirs) {
+      expect(existsSync(dir)).toBe(true);
+      expect(statSync(dir).isDirectory()).toBe(true);
+    }
+  });
+
+  it('creates the personal files skeleton separately from runtime state', () => {
+    const personalFilesDir = join(tempDir, 'purrsephone');
+
+    ensurePersonalFilesLayout(personalFilesDir);
+
+    const dirs = [
+      personalFilesDir,
+      resolvePersonalDocsDir(personalFilesDir),
+      resolvePersonalDownloadsDir(personalFilesDir),
+      resolvePersonalImagesDir(personalFilesDir),
+      resolvePersonalJournalDir(personalFilesDir),
+      resolvePersonalKnowledgeDir(personalFilesDir),
+      resolvePersonalScratchpadDir(personalFilesDir),
+      resolvePersonalSkillsDir(personalFilesDir),
+      resolvePersonalModulesDir(personalFilesDir),
+      resolvePersonalExperimentsDir(personalFilesDir),
+      resolvePersonalTempDir(personalFilesDir),
+    ];
+
     for (const dir of dirs) {
       expect(existsSync(dir)).toBe(true);
       expect(statSync(dir).isDirectory()).toBe(true);

@@ -87,11 +87,10 @@ OPENROUTER_API_KEY=sk-or-...
 # DISCORD_TOKEN=...
 # DISCORD_BOT_ID=...
 
-# Bootstrap paths
-CHARACTER_CARD_PATH=./data/character.json
-
-# Continuous/dev shared-root defaults
+# Runtime state and personal files are distinct roots
 DATA_DIR=./data
+WORKSPACE_PATH=./purrsephone
+CHARACTER_CARD_PATH=./data/companion.json
 DATABASE_PATH=./data/companion.db
 
 # Production split-root layout (set both or neither)

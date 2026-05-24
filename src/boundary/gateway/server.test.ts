@@ -418,7 +418,7 @@ describe('GatewayServer', () => {
     }
   });
 
-  it('roots fs.read and fs.write relative paths to the workspace', async () => {
+  it('roots fs.read and fs.write relative paths to the personal workspace', async () => {
     const workspace = mkdtempSync(join(tmpdir(), 'gw-fs-rw-'));
     const relativeReadPath = 'notes.txt';
     const relativeWritePath = 'new-note.txt';
@@ -441,6 +441,32 @@ describe('GatewayServer', () => {
       });
       expect(writeResponse.result).toEqual({ success: true });
       expect(readFileSync(join(workspace, relativeWritePath), 'utf-8')).toBe('written in workspace');
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('returns actionable fs.write diagnostics for missing personal-workspace parents', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'gw-fs-write-diagnostics-'));
+
+    try {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        policyConfig: {
+          workspacePath: workspace,
+        },
+      });
+
+      const response = await invokeRpc(conn, 962, 'fs.write', {
+        path: 'workspace/docs/note.txt',
+        content: 'missing parent',
+      });
+
+      expect(response.result).toBeUndefined();
+      expect(response.error?.message).toContain('Writes are personal-root-relative');
+      expect(response.error?.message).toContain(`personal root is ${workspace}`);
+      expect(response.error?.message).toContain('Missing parent directory');
+      expect(response.error?.message).toContain('retry with "docs/note.txt"');
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
@@ -483,7 +509,7 @@ describe('GatewayServer', () => {
     }
   });
 
-  it('roots relative fs.read and fs.list to full codebase root in yolo mode while keeping writes in workspace', async () => {
+  it('roots relative fs.read and fs.list to full codebase root in yolo mode while keeping writes in the personal workspace', async () => {
     const codebaseRoot = mkdtempSync(join(tmpdir(), 'gw-yolo-root-'));
     const workspace = join(codebaseRoot, 'workspace');
     mkdirSync(workspace, { recursive: true });

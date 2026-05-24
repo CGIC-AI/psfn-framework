@@ -86,7 +86,7 @@ if [ "${DEBUG_MODE}" -eq 1 ]; then
 fi
 
 if [ "${PSFN_RUNTIME_MODE}" = "yolo" ]; then
-  echo "[${MODE_LABEL}] YOLO mode active: gateway fs.read can access full codebase paths; fs.write remains workspace-scoped."
+  echo "[${MODE_LABEL}] YOLO mode active: gateway fs.read can access full codebase paths; fs.write remains personal-workspace-scoped."
 fi
 
 echo "[${MODE_LABEL}] verifying startup owner files..."

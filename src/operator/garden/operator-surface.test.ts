@@ -246,7 +246,27 @@ async function createHarness(): Promise<Harness> {
     memory: {} as GardenAdminDomainServices['memory'],
     sessions: {} as GardenAdminDomainServices['sessions'],
     contacts: {} as GardenAdminDomainServices['contacts'],
-    settings: {} as GardenAdminDomainServices['settings'],
+    settings: {
+      getSettingsData: vi.fn(),
+      getSettingsContractData: vi.fn(),
+      updateSettings: vi.fn(),
+      getSubConfigJson: vi.fn((key: string) => {
+        if (key !== 'providers') return null;
+        return JSON.stringify({
+          schemaVersion: 1,
+          providers: [
+            {
+              id: 'litellm',
+              type: 'litellm_proxy',
+              enabled: true,
+              apiBaseUrl: 'http://localhost:4000/v1',
+              apiKeyRef: { kind: 'env', envName: 'LITELLM_API_KEY' },
+            },
+          ],
+        });
+      }),
+      saveSubConfigJson: vi.fn(() => ({ ok: true, message: 'providers.json saved' })),
+    } as GardenAdminDomainServices['settings'],
     identity: {} as GardenAdminDomainServices['identity'],
     prompts: {} as GardenAdminDomainServices['prompts'],
     scheduler: {
@@ -332,6 +352,26 @@ describe('Garden operator surface', () => {
     expect(res.status).toBe(200);
     const payload = JSON.parse(res.body) as { stats: { sessionCount: number } };
     expect(payload.stats.sessionCount).toBeTypeOf('number');
+  });
+
+  it('proxies canonical admin settings owner-file routes through the operator surface', async () => {
+    const canonicalRes = await requestPort(harness.port, 'GET', '/api/admin/settings/providers');
+    expect(canonicalRes.status).toBe(200);
+    expect(JSON.parse(canonicalRes.body)).toEqual({
+      schemaVersion: 1,
+      providers: [
+        {
+          id: 'litellm',
+          type: 'litellm_proxy',
+          enabled: true,
+          apiBaseUrl: 'http://localhost:4000/v1',
+          apiKeyRef: { kind: 'env', envName: 'LITELLM_API_KEY' },
+        },
+      ],
+    });
+
+    const staleRes = await requestPort(harness.port, 'GET', '/api/settings/providers');
+    expect(staleRes.status).toBe(404);
   });
 
   it('reports degraded health when the admin transport is unreachable', async () => {

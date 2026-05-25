@@ -89,7 +89,7 @@ export async function getSubConfig(key: string): Promise<string> {
   const token = getToken();
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`/api/settings/${encodeURIComponent(key)}`, {
+  const res = await fetch(`/api/admin/settings/${encodeURIComponent(key)}`, {
     headers,
     credentials: 'include',
   });
@@ -100,7 +100,7 @@ export async function getSubConfig(key: string): Promise<string> {
 export function saveSubConfig(key: string, json: string): Promise<string> {
   const params = new URLSearchParams();
   params.set('configJson', json);
-  return apiPostForm(`/api/settings/${encodeURIComponent(key)}`, params);
+  return apiPostForm(`/api/admin/settings/${encodeURIComponent(key)}`, params);
 }
 
 export function listModels(): Promise<DiscoveredModel[]> {

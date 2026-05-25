@@ -22,6 +22,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
+import { saveModelsConfig } from '../../system/config/models-config.js';
 
 function request(
   port: number,
@@ -252,6 +253,48 @@ async function createHarness(options: {
       chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
     },
   };
+  saveModelsConfig(tempDir, {
+    schemaVersion: 1,
+    models: [
+      {
+        id: 'primary',
+        rank: 100,
+        identity: {
+          provider: 'test',
+          model: 'test-model',
+          source: { type: 'local' },
+        },
+        purposes: [
+          { purpose: 'chat', primary: true },
+          { purpose: 'summary', primary: true },
+          { purpose: 'reasoning', primary: true },
+          { purpose: 'longContext', primary: true },
+          { purpose: 'vision', primary: true },
+          { purpose: 'moa', primary: true },
+        ],
+        capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+        tuning: { maxOutputTokens: 4096 },
+      },
+      {
+        id: 'extraction',
+        rank: 80,
+        identity: {
+          provider: 'test',
+          model: 'test-extract',
+          source: { type: 'local' },
+        },
+        purposes: [
+          { purpose: 'background', primary: true },
+          { purpose: 'extraction', primary: true },
+          { purpose: 'import_processing', primary: true },
+        ],
+        capabilities: { maxOutputTokens: 2048, contextWindow: 128_000 },
+        tuning: { maxOutputTokens: 2048 },
+      },
+    ],
+  }, {
+    defaultContextWindow: config.defaultContextWindow,
+  });
 
   const db = new Database(':memory:');
   sqliteVec.load(db);

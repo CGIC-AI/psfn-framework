@@ -1654,6 +1654,50 @@ export function buildAdminApiRoutes(options: {
         });
       },
     },
+    // ── Canonical settings subsystem raw-config editors ──
+    {
+      method: 'GET',
+      match: prefixedParamPath(`${ADMIN_SETTINGS_API_PATH}/`, 'key'),
+      handle: (_req, res, params) => {
+        const raw = settingsService.getSubConfigJson(params.key);
+        if (raw === null) {
+          sendJson(res, 404, { error: `Unknown settings subsystem: ${params.key}` });
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(raw);
+      },
+    },
+    {
+      method: 'POST',
+      match: prefixedParamPath(`${ADMIN_SETTINGS_API_PATH}/`, 'key'),
+      handle: (req, res, params) => {
+        withBody(req, res, (body) => {
+          const formParams = new URLSearchParams(body);
+          const configJson = formParams.get('configJson');
+          if (typeof configJson !== 'string' || configJson.trim().length === 0) {
+            sendJson(res, 400, { error: 'Missing configJson form field' });
+            return;
+          }
+          const result = settingsService.saveSubConfigJson(params.key, configJson);
+          if (!result.ok) {
+            appendSettingsMutationAudit(
+              'denied',
+              `Operator ${params.key} owner-file update failed.`,
+              [`message=${toSanitizedMessage(result.message, 'owner-file save failed')}`],
+            );
+            sendJson(res, 400, { error: result.message });
+            return;
+          }
+          appendSettingsMutationAudit(
+            'allowed',
+            `Operator updated ${params.key} owner file via /api/admin/settings/${params.key}.`,
+          );
+          res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end(result.message);
+        });
+      },
+    },
     // ── Settings subsystem raw-config editors ──
     {
       method: 'GET',

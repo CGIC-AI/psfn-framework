@@ -26,7 +26,7 @@ export async function getProvidersConfigRaw(): Promise<string> {
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch('/api/settings/providers', {
+  const res = await fetch('/api/admin/settings/providers', {
     headers,
     credentials: 'include',
   });

@@ -369,7 +369,105 @@ test("Voxta facade accepts proxy microphone stream and emits STT events", async 
   }
 });
 
-function testHubConfig(overrides: { audioFolder?: string | null; sttStreamEnabled?: boolean } = {}): HubConfig {
+test("Voxta facade accepts AcidBubbles vision capture uploads and exposes metadata", async () => {
+  const artifactsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "voxta-vision-artifacts-"));
+  const agent = new FakeAgent();
+  const server = new RealtimeHubServer(testHubConfig({
+    artifactsRoot,
+    visionCaptureTimeoutMs: 1_000,
+  }), { agent });
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-vision", acidBubblesAuthenticate())));
+    const configuration = await waitForVoxta(frames, "configuration");
+    const configurationId = activeConfigurationId(configuration);
+    await waitForCompletion(frames, "auth-vision");
+    socket.send(encodeFrame(invocation("start-vision", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-vision");
+
+    const toggleVision = await fetch(`${baseUrl}/api/configurations/${configurationId}/services/ComputerVision`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    assert.equal(toggleVision.status, 200);
+    await waitForVoxta(
+      frames,
+      "configuration",
+      (payload) => serviceEnabled(payload, "ComputerVision") === true,
+    );
+
+    socket.send(encodeFrame(invocation("send-vision", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "what do you see",
+    })));
+    const screenRequest = await waitForVoxta(
+      frames,
+      "visionCaptureRequest",
+      (payload) => payload.source === "Screen",
+    );
+    const eyesRequest = await waitForVoxta(
+      frames,
+      "visionCaptureRequest",
+      (payload) => payload.source === "Eyes",
+    );
+    const upload = multipartBody("file", "virtamate.jpg", "image/jpeg", Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+    const screenUpload = await fetch(
+      `${baseUrl}/api/vision/requests/${screenRequest.visionCaptureRequestId}/send`
+        + `?sessionId=${chatStarted.sessionId}&source=Screen&label=virtamate`,
+      {
+        method: "POST",
+        headers: { "Content-Type": upload.contentType },
+        body: new Uint8Array(upload.body),
+      },
+    );
+    assert.equal(screenUpload.status, 200);
+    const eyesCancel = await fetch(
+      `${baseUrl}/api/vision/requests/${eyesRequest.visionCaptureRequestId}?sessionId=${chatStarted.sessionId}`,
+      { method: "DELETE" },
+    );
+    assert.equal(eyesCancel.status, 200);
+    await waitForVoxta(frames, "replyEnd");
+    await waitForCompletion(frames, "send-vision");
+
+    assert.equal(agent.calls.length, 1);
+    const capture = agent.calls[0]?.channel?.visionCaptures?.[0];
+    assert.ok(capture);
+    assert.equal(capture.requestId, screenRequest.visionCaptureRequestId);
+    assert.equal(capture.sessionId, chatStarted.sessionId);
+    assert.equal(capture.source, "Screen");
+    assert.equal(capture.label, "virtamate");
+    assert.equal(capture.mimeType, "image/jpeg");
+    assert.equal(capture.bytes, 4);
+    assert.equal(fs.existsSync(capture.filePath), true);
+    assert.equal(fs.readFileSync(capture.filePath).toString("hex"), "ffd8ffd9");
+  } finally {
+    socket?.close();
+    await server.close();
+    fs.rmSync(artifactsRoot, { recursive: true, force: true });
+  }
+});
+
+function testHubConfig(overrides: {
+  artifactsRoot?: string;
+  audioFolder?: string | null;
+  sttStreamEnabled?: boolean;
+  visionCaptureTimeoutMs?: number;
+} = {}): HubConfig {
   const satelliteClaim = normalizeSatelliteClaimConfig({
     capabilityProfile: "voxta-avatar",
     satelliteId: "voxta-vam",
@@ -384,7 +482,7 @@ function testHubConfig(overrides: { audioFolder?: string | null; sttStreamEnable
     elevenlabsApiKey: "test-elevenlabs",
     elevenlabsVoiceId: "test-voice",
     elevenlabsModelId: "eleven_flash_v2_5",
-    artifactsRoot: ".artifacts/test-voxta",
+    artifactsRoot: overrides.artifactsRoot ?? ".artifacts/test-voxta",
     psfn: {
       baseUrl: "http://127.0.0.1:1/v1",
       apiKey: "test",
@@ -405,6 +503,7 @@ function testHubConfig(overrides: { audioFolder?: string | null; sttStreamEnable
       clientVersion: "1.2.1",
       audioFolder: overrides.audioFolder ?? null,
       sttStreamEnabled: overrides.sttStreamEnabled ?? false,
+      visionCaptureTimeoutMs: overrides.visionCaptureTimeoutMs ?? 1_500,
       actionAllowlist: ["wave"],
     },
     sessionTtlSeconds: 300,
@@ -442,6 +541,26 @@ function acidBubblesAuthenticate(): Record<string, unknown> {
       visionCapture: "PostImage",
       visionSources: ["Screen", "Eyes"],
     },
+  };
+}
+
+function multipartBody(
+  fieldName: string,
+  filename: string,
+  mimeType: string,
+  data: Buffer,
+): { contentType: string; body: Buffer } {
+  const boundary = `----psfn-${crypto.randomUUID()}`;
+  const head = Buffer.from(
+    `--${boundary}\r\n`
+      + `Content-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\n`
+      + `Content-Type: ${mimeType}\r\n\r\n`,
+    "utf8",
+  );
+  const tail = Buffer.from(`\r\n--${boundary}--\r\n`, "utf8");
+  return {
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    body: Buffer.concat([head, data, tail]),
   };
 }
 

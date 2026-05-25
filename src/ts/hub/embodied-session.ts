@@ -53,6 +53,18 @@ export interface PsfnChannelContext {
     transport: AttachedSatellite["transport"];
     capabilities: Required<SatelliteCapabilities>;
   }>;
+  visionCaptures?: VisionCaptureMetadata[];
+}
+
+export interface VisionCaptureMetadata {
+  requestId: string;
+  sessionId: string;
+  source: string;
+  label: string;
+  mimeType: string;
+  filePath: string;
+  bytes: number;
+  capturedAt: string;
 }
 
 export interface AttachSatelliteInput {

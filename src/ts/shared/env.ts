@@ -66,6 +66,7 @@ export interface VoxtaFacadeConfig {
   clientVersion: string;
   audioFolder: string | null;
   sttStreamEnabled: boolean;
+  visionCaptureTimeoutMs: number;
   actionAllowlist: string[];
 }
 
@@ -228,6 +229,7 @@ function loadVoxtaFacadeConfig(projectRoot: string): VoxtaFacadeConfig {
       ? resolvePath(projectRoot, process.env.VOXTA_AUDIO_FOLDER.trim())
       : null,
     sttStreamEnabled: process.env.VOXTA_STT_STREAM_ENABLED?.trim() === "true",
+    visionCaptureTimeoutMs: Number.parseInt(process.env.VOXTA_VISION_CAPTURE_TIMEOUT_MS || "1500", 10),
     actionAllowlist: splitCsv(process.env.VOXTA_APP_TRIGGER_ALLOWLIST || ""),
   };
 }

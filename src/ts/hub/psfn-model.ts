@@ -52,8 +52,9 @@ export class PsfnModelAdapter implements AgentRuntimeAdapter {
       channel,
       apiKey: this.runtime.apiKey,
     });
+    const channelMetadata = buildChannelMetadata(channel, satelliteClaim);
     const response = await this.postChatCompletion(
-      this.buildHeaders(channel, satelliteClaim),
+      this.buildHeaders(channel, satelliteClaim, channelMetadata),
       JSON.stringify({
         model: this.runtime.model,
         stream: false,
@@ -63,6 +64,7 @@ export class PsfnModelAdapter implements AgentRuntimeAdapter {
         response_style: "concise",
         user: conversationId,
         satellite_claim: satelliteClaim,
+        channel_metadata: channelMetadata,
         messages: this.buildMessages(input.history ?? [], input.userText),
       }),
     );
@@ -176,7 +178,11 @@ export class PsfnModelAdapter implements AgentRuntimeAdapter {
     });
   }
 
-  private buildHeaders(channel: PsfnChannelContext, satelliteClaim: SatelliteClaimEnvelope): Record<string, string> {
+  private buildHeaders(
+    channel: PsfnChannelContext,
+    satelliteClaim: SatelliteClaimEnvelope,
+    channelMetadata: Record<string, unknown>,
+  ): Record<string, string> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
@@ -192,13 +198,7 @@ export class PsfnModelAdapter implements AgentRuntimeAdapter {
       satelliteClaim,
     }));
     headers["X-PSFN-Satellite-Claim"] = JSON.stringify(satelliteClaim);
-    headers["X-PSFN-Channel-Metadata"] = JSON.stringify({
-      sessionId: channel.sessionId,
-      sourceSatelliteId: channel.sourceSatelliteId,
-      sourceSatelliteName: channel.sourceSatelliteName,
-      activeSatellites: channel.activeSatellites,
-      satelliteClaim,
-    });
+    headers["X-PSFN-Channel-Metadata"] = JSON.stringify(channelMetadata);
     return headers;
   }
 
@@ -233,6 +233,20 @@ function buildDefaultChannelContext(config: PsfnRuntimeConfig["satelliteClaim"],
         capabilities,
       },
     ],
+  };
+}
+
+function buildChannelMetadata(
+  channel: PsfnChannelContext,
+  satelliteClaim: SatelliteClaimEnvelope,
+): Record<string, unknown> {
+  return {
+    sessionId: channel.sessionId,
+    sourceSatelliteId: channel.sourceSatelliteId,
+    sourceSatelliteName: channel.sourceSatelliteName,
+    activeSatellites: channel.activeSatellites,
+    ...(channel.visionCaptures?.length ? { visionCaptures: channel.visionCaptures } : {}),
+    satelliteClaim,
   };
 }
 

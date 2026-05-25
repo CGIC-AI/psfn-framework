@@ -96,13 +96,15 @@ test("psfn model adapter sends embodied hub channel headers", async () => {
       locationMode: "static",
     });
     assert.deepEqual(JSON.parse(capturedHeaders["X-PSFN-Satellite-Claim"] || "{}"), bodyClaim);
-    assert.deepEqual(JSON.parse(capturedHeaders["X-PSFN-Channel-Metadata"] || "{}"), {
+    const expectedChannelMetadata = {
       sessionId: "thin-shell:demo",
       sourceSatelliteId: "thin-shell",
       sourceSatelliteName: "Thin Shell",
       activeSatellites: channel.activeSatellites,
       satelliteClaim: bodyClaim,
-    });
+    };
+    assert.deepEqual(capturedBody.channel_metadata, expectedChannelMetadata);
+    assert.deepEqual(JSON.parse(capturedHeaders["X-PSFN-Channel-Metadata"] || "{}"), expectedChannelMetadata);
   } finally {
     globalThis.fetch = originalFetch;
   }

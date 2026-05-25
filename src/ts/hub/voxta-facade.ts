@@ -13,6 +13,7 @@ import {
   EmbodiedSessionRegistry,
   VOXTA_VAM_CAPABILITIES,
 } from "./embodied-session.js";
+import type { PsfnChannelContext, VisionCaptureMetadata } from "./embodied-session.js";
 import type { ConversationMessage } from "./session-store.js";
 import { SessionStore } from "./session-store.js";
 
@@ -26,6 +27,7 @@ interface VoxtaFacadeDependencies {
   sessions: SessionStore;
   embodiedSessions: EmbodiedSessionRegistry;
   agent: AgentRuntimeAdapter;
+  artifactsRoot: string;
   tts?: VoxtaTtsAdapter;
   stt?: VoxtaSttAdapter;
 }
@@ -67,11 +69,21 @@ type VoxtaServiceType = "SpeechToText" | "TextToSpeech" | "ComputerVision" | "Ac
 type ToggleableVoxtaServiceType = Exclude<VoxtaServiceType, "ActionInference">;
 
 type VoxtaServiceState = Record<VoxtaServiceType, boolean>;
+type VoxtaVisionSource = "Screen" | "Eyes";
 
 interface VoxtaFacadeRuntime {
   serviceStates: Map<string, VoxtaServiceState>;
   connectionsByConfigurationId: Map<string, VoxtaConnection>;
   connectionsBySessionId: Map<string, VoxtaConnection>;
+  pendingVisionRequests: Map<string, PendingVisionRequest>;
+}
+
+interface PendingVisionRequest {
+  requestId: string;
+  sessionId: string;
+  source: VoxtaVisionSource;
+  resolve: (capture: VisionCaptureMetadata | null) => void;
+  timeout: NodeJS.Timeout;
 }
 
 type VoxtaClientPayload = Record<string, unknown> & {
@@ -101,6 +113,7 @@ export class VoxtaFacade {
     serviceStates: new Map(),
     connectionsByConfigurationId: new Map(),
     connectionsBySessionId: new Map(),
+    pendingVisionRequests: new Map(),
   };
   private readonly audioWsServer = new WebSocketServer({ noServer: true });
 
@@ -136,6 +149,16 @@ export class VoxtaFacade {
       writeCorsHeaders(response);
       response.statusCode = 204;
       response.end();
+      return true;
+    }
+    const visionRequest = parseVisionRequestPath(url.pathname);
+    if (visionRequest) {
+      writeCorsHeaders(response);
+      void this.handleVisionRequest(request, response, url, visionRequest).catch((error) => {
+        writeJson(response, 500, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
       return true;
     }
     const serviceToggle = parseServiceTogglePath(url.pathname);
@@ -262,6 +285,71 @@ export class VoxtaFacade {
       }
     }
   }
+
+  private async handleVisionRequest(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+    url: URL,
+    visionRequest: { requestId: string; action: "send" | "cancel" },
+  ): Promise<void> {
+    if (!this.deps.config.enabled) {
+      writeJson(response, 404, { error: "Voxta facade is disabled" });
+      return;
+    }
+    const sessionId = normalizedString(url.searchParams.get("sessionId"));
+    if (!sessionId) {
+      writeJson(response, 400, { error: "Voxta vision request requires sessionId" });
+      return;
+    }
+    const connection = this.runtime.connectionsBySessionId.get(sessionId);
+    if (!connection) {
+      writeJson(response, 404, { error: `Unknown Voxta session: ${sessionId}` });
+      return;
+    }
+    if (visionRequest.action === "cancel") {
+      if (request.method !== "DELETE") {
+        response.setHeader("Allow", "DELETE, OPTIONS");
+        writeJson(response, 405, { error: "Voxta vision request cancellation requires DELETE" });
+        return;
+      }
+      this.resolveVisionRequest(visionRequest.requestId, null);
+      writeJson(response, 200, { success: true, cancelled: true });
+      return;
+    }
+    if (request.method !== "POST") {
+      response.setHeader("Allow", "POST, OPTIONS");
+      writeJson(response, 405, { error: "Voxta vision upload requires POST" });
+      return;
+    }
+    const source = parseVisionSource(url.searchParams.get("source"));
+    if (!source) {
+      writeJson(response, 400, { error: "Voxta vision upload source must be Screen or Eyes" });
+      return;
+    }
+    const label = normalizedString(url.searchParams.get("label")) ?? "virtamate";
+    const upload = await readMultipartUpload(request);
+    const capture = persistVisionCapture({
+      root: this.deps.artifactsRoot,
+      requestId: visionRequest.requestId,
+      sessionId,
+      source,
+      label,
+      upload,
+    });
+    connection.recordVisionCapture(capture);
+    this.resolveVisionRequest(visionRequest.requestId, capture);
+    writeJson(response, 200, { success: true, requestId: visionRequest.requestId });
+  }
+
+  private resolveVisionRequest(requestId: string, capture: VisionCaptureMetadata | null): void {
+    const pending = this.runtime.pendingVisionRequests.get(requestId);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timeout);
+    this.runtime.pendingVisionRequests.delete(requestId);
+    pending.resolve(capture);
+  }
 }
 
 class VoxtaConnection {
@@ -273,6 +361,7 @@ class VoxtaConnection {
   private sessionId: string;
   private chatId: string;
   private registeredSessionId: string | null = null;
+  private visionCaptures: VisionCaptureMetadata[] = [];
   private replyAbort = false;
   private replySequence = 0;
 
@@ -473,6 +562,13 @@ class VoxtaConnection {
     });
   }
 
+  recordVisionCapture(capture: VisionCaptureMetadata): void {
+    this.visionCaptures = [
+      ...this.visionCaptures.filter((item) => item.requestId !== capture.requestId),
+      capture,
+    ].slice(-6);
+  }
+
   private async handleRegisterApp(invocationId: string | undefined, payload: VoxtaClientPayload): Promise<void> {
     const label = typeof payload.label === "string" ? payload.label : this.deps.config.appLabel;
     await this.sendReceive({
@@ -591,6 +687,7 @@ class VoxtaConnection {
     this.replyAbort = false;
     const messageId = crypto.randomUUID();
     let responseText = "";
+    await this.requestVisionCapturesIfNeeded();
 
     await this.sendReceive({
       $type: "chatFlow",
@@ -620,7 +717,7 @@ class VoxtaConnection {
       userText,
       conversationId: this.sessionId,
       history: this.deps.sessions.getHistory(this.sessionId) as ConversationMessage[],
-      channel: this.deps.embodiedSessions.getContext(this.sessionId, this.deps.config.satelliteId),
+      channel: this.agentChannelContext(),
     });
     for await (const delta of stream) {
       if (this.replyAbort || replyId !== this.replySequence) {
@@ -745,6 +842,43 @@ class VoxtaConnection {
     }
   }
 
+  private async requestVisionCapturesIfNeeded(): Promise<void> {
+    if (!this.currentServiceState().ComputerVision) {
+      return;
+    }
+    const sources: VoxtaVisionSource[] = ["Screen", "Eyes"];
+    const captures = await Promise.all(sources.map((source) => this.requestVisionCapture(source)));
+    for (const capture of captures) {
+      if (capture) {
+        this.recordVisionCapture(capture);
+      }
+    }
+  }
+
+  private async requestVisionCapture(source: VoxtaVisionSource): Promise<VisionCaptureMetadata | null> {
+    const requestId = crypto.randomUUID();
+    const promise = new Promise<VisionCaptureMetadata | null>((resolve) => {
+      const timeout = setTimeout(() => {
+        this.runtime.pendingVisionRequests.delete(requestId);
+        resolve(null);
+      }, Math.max(100, this.deps.config.visionCaptureTimeoutMs));
+      this.runtime.pendingVisionRequests.set(requestId, {
+        requestId,
+        sessionId: this.sessionId,
+        source,
+        resolve,
+        timeout,
+      });
+    });
+    await this.sendReceive({
+      $type: "visionCaptureRequest",
+      sessionId: this.sessionId,
+      visionCaptureRequestId: requestId,
+      source,
+    });
+    return promise;
+  }
+
   private async sendReceive(payload: VoxtaServerPayload): Promise<void> {
     await this.sendFrame({
       type: 1,
@@ -786,6 +920,14 @@ class VoxtaConnection {
       satelliteName: this.deps.config.satelliteName,
       capabilities: VOXTA_VAM_CAPABILITIES,
     });
+  }
+
+  private agentChannelContext(): PsfnChannelContext {
+    const context = this.deps.embodiedSessions.getContext(this.sessionId, this.deps.config.satelliteId);
+    return {
+      ...context,
+      visionCaptures: this.visionCaptures.slice(-4),
+    };
   }
 
   private cancelReply(): void {
@@ -1008,7 +1150,8 @@ function isCorsPreflight(request: http.IncomingMessage, pathname: string): boole
   return request.method === "OPTIONS" && (
     isNegotiatePath(pathname) ||
     isHubPath(pathname) ||
-    parseServiceTogglePath(pathname) !== null
+    parseServiceTogglePath(pathname) !== null ||
+    parseVisionRequestPath(pathname) !== null
   );
 }
 
@@ -1022,6 +1165,24 @@ function writeJson(response: http.ServerResponse, statusCode: number, payload: u
   response.statusCode = statusCode;
   response.setHeader("Content-Type", "application/json");
   response.end(JSON.stringify(payload));
+}
+
+function parseVisionRequestPath(pathname: string): { requestId: string; action: "send" | "cancel" } | null {
+  const sendMatch = /^\/api\/vision\/requests\/([^/]+)\/send$/.exec(pathname);
+  if (sendMatch) {
+    return {
+      requestId: decodeURIComponent(sendMatch[1] || ""),
+      action: "send",
+    };
+  }
+  const cancelMatch = /^\/api\/vision\/requests\/([^/]+)$/.exec(pathname);
+  if (cancelMatch) {
+    return {
+      requestId: decodeURIComponent(cancelMatch[1] || ""),
+      action: "cancel",
+    };
+  }
+  return null;
 }
 
 function parseServiceTogglePath(
@@ -1041,12 +1202,117 @@ function parseServiceTogglePath(
   };
 }
 
-async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
+interface MultipartUpload {
+  data: Buffer;
+  mimeType: string;
+  filename: string;
+}
+
+async function readMultipartUpload(request: http.IncomingMessage): Promise<MultipartUpload> {
+  const contentType = String(request.headers["content-type"] || "");
+  const boundary = /boundary=([^;]+)/i.exec(contentType)?.[1]?.trim();
+  if (!boundary) {
+    throw new Error("Voxta vision upload must be multipart/form-data with a boundary");
+  }
+  const body = await readRequestBuffer(request);
+  const part = extractMultipartFile(body, boundary.replace(/^"|"$/g, ""), "file");
+  if (!part) {
+    throw new Error("Voxta vision upload must include a file field");
+  }
+  return part;
+}
+
+async function readRequestBuffer(request: http.IncomingMessage): Promise<Buffer> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
-  const raw = Buffer.concat(chunks).toString("utf8").trim();
+  return Buffer.concat(chunks);
+}
+
+function extractMultipartFile(body: Buffer, boundary: string, fieldName: string): MultipartUpload | null {
+  const delimiter = Buffer.from(`--${boundary}`);
+  let offset = 0;
+  while (offset < body.length) {
+    const partStart = body.indexOf(delimiter, offset);
+    if (partStart === -1) {
+      return null;
+    }
+    const headersStart = partStart + delimiter.length;
+    if (body.subarray(headersStart, headersStart + 2).toString("ascii") === "--") {
+      return null;
+    }
+    const partBodyStart = body.indexOf(Buffer.from("\r\n\r\n"), headersStart);
+    if (partBodyStart === -1) {
+      return null;
+    }
+    const headerText = body.subarray(headersStart, partBodyStart).toString("utf8");
+    const nextPart = body.indexOf(delimiter, partBodyStart + 4);
+    if (nextPart === -1) {
+      return null;
+    }
+    const partBodyEnd = body.subarray(nextPart - 2, nextPart).toString("ascii") === "\r\n"
+      ? nextPart - 2
+      : nextPart;
+    const disposition = /content-disposition:\s*form-data;([^\r\n]+)/i.exec(headerText)?.[1] || "";
+    const name = /name="([^"]+)"/i.exec(disposition)?.[1] || "";
+    if (name === fieldName) {
+      const filename = /filename="([^"]*)"/i.exec(disposition)?.[1] || "upload.jpg";
+      const mimeType = /content-type:\s*([^\r\n]+)/i.exec(headerText)?.[1]?.trim() || "application/octet-stream";
+      return {
+        data: body.subarray(partBodyStart + 4, partBodyEnd),
+        filename,
+        mimeType,
+      };
+    }
+    offset = nextPart;
+  }
+  return null;
+}
+
+function persistVisionCapture(input: {
+  root: string;
+  requestId: string;
+  sessionId: string;
+  source: VoxtaVisionSource;
+  label: string;
+  upload: MultipartUpload;
+}): VisionCaptureMetadata {
+  const capturedAt = new Date();
+  const dateKey = capturedAt.toISOString().slice(0, 10).replaceAll("-", "");
+  const directory = path.join(input.root, "voxta-vision", dateKey);
+  fs.mkdirSync(directory, { recursive: true });
+  const extension = extensionForMimeType(input.upload.mimeType) ?? (path.extname(input.upload.filename) || ".bin");
+  const filePath = path.join(
+    directory,
+    `voxta_${safePathPart(input.sessionId)}_${safePathPart(input.requestId)}_${input.source}${extension}`,
+  );
+  fs.writeFileSync(filePath, input.upload.data);
+  return {
+    requestId: input.requestId,
+    sessionId: input.sessionId,
+    source: input.source,
+    label: input.label,
+    mimeType: input.upload.mimeType,
+    filePath,
+    bytes: input.upload.data.length,
+    capturedAt: capturedAt.toISOString(),
+  };
+}
+
+function extensionForMimeType(mimeType: string): string | undefined {
+  const normalized = mimeType.toLowerCase();
+  if (normalized === "image/jpeg" || normalized === "image/jpg") {
+    return ".jpg";
+  }
+  if (normalized === "image/png") {
+    return ".png";
+  }
+  return undefined;
+}
+
+async function readJsonBody(request: http.IncomingMessage): Promise<unknown> {
+  const raw = (await readRequestBuffer(request)).toString("utf8").trim();
   if (!raw) {
     return null;
   }
@@ -1124,6 +1390,14 @@ function parseAudioInputSpec(raw: string | null): VoxtaAudioInputSpec {
     throw new Error("Voxta audio input stream spec contentType is required");
   }
   return spec;
+}
+
+function parseVisionSource(value: unknown): VoxtaVisionSource | undefined {
+  const normalized = normalizedString(value);
+  if (normalized === "Screen" || normalized === "Eyes") {
+    return normalized;
+  }
+  return undefined;
 }
 
 function numberField(value: unknown, name: string): number {

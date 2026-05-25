@@ -70,6 +70,7 @@ export class RealtimeHubServer {
       sessions: this.sessions,
       embodiedSessions: this.embodiedSessions,
       agent: this.agent,
+      artifactsRoot: config.artifactsRoot,
       tts: options.voxtaTts ?? new ElevenLabsVoxtaTts(this.tts),
       stt: options.voxtaStt ?? new DeepgramVoxtaStt(config.deepgramApiKey),
     });

@@ -273,6 +273,7 @@ Important settings for the Python ESPHome fallback path:
 - `VOXTA_ASSISTANT_NAME`, `VOXTA_USER_NAME`, and related ID vars shape the Voxta welcome/chat payloads
 - `VOXTA_AUDIO_FOLDER` enables direct VaM TTS playback by writing local `.wav` files, typically VaM `Custom\Sounds\Voxta`
 - `VOXTA_STT_STREAM_ENABLED=true` emits Voxta `recordingRequest` messages for official-proxy or sidecar microphone streaming
+- `VOXTA_VISION_CAPTURE_TIMEOUT_MS` controls how long a user turn waits for VaM Screen/Eyes capture uploads when ComputerVision is enabled
 - `VOXTA_APP_TRIGGER_ALLOWLIST` is a comma-separated allowlist for Voxta `appTrigger` forwarding
 - optional `PSFN_AUTHOR_ID` and `PSFN_AUTHOR_NAME` if you need the hub to assert a specific PSFN-side author
 - `VOICE_REPLY_TIMEOUT_SECONDS`
@@ -324,6 +325,8 @@ Supported HTTP and websocket routes:
 | `PUT /api/configurations/{id}/services/TextToSpeech` | VaM TTS toggle |
 | `PUT /api/configurations/{id}/services/ComputerVision` | VaM vision toggle |
 | `WS /ws/audio/input/stream?sessionId=<guid>` | Voxta proxy microphone PCM stream for STT |
+| `POST /api/vision/requests/{id}/send?sessionId=<guid>&source=<Screen\|Eyes>&label=virtamate` | AcidBubbles multipart JPEG vision upload |
+| `DELETE /api/vision/requests/{id}?sessionId=<guid>` | AcidBubbles vision capture cancellation |
 | `POST /voxta/hub/negotiate?negotiateVersion=1` | Alternate namespaced negotiation route |
 | `WS /voxta/hub?id=<connectionToken>` | Alternate namespaced websocket route |
 
@@ -355,10 +358,18 @@ first, then binary PCM frames. The first implementation transcribes the buffered
 PCM when the stream closes and emits `speechRecognitionStart`,
 `speechRecognitionPartial`, and `speechRecognitionEnd`.
 
+For VaM vision capture, enable the plugin's ComputerVision service and at least
+one AcidBubbles source toggle (`Screen` or `Eyes`). On the next user turn, the
+hub sends `visionCaptureRequest` for both sources, accepts the plugin's JPEG
+upload or cancellation, persists the image under the artifact root, and includes
+capture metadata in PSFN channel metadata. The VaM satellite already advertises
+`vision_upload`, which maps to the framework `vision` and `image_upload`
+capabilities at the satellite registry seam.
+
 Current Voxta limitations:
 
 - low-latency live STT partials for long-running mic streams are not implemented yet
-- vision upload/capture is advertised as a capability but not implemented yet
+- VaM vision uploads are captured and surfaced as channel metadata; using the image bytes in model prompts depends on the PSFN image-processing/multimodal pipeline contract
 - compatibility has been tested against the SignalR/Voxta protocol shape, not yet against the live AcidBubbles plugin
 
 ## Transport Paths

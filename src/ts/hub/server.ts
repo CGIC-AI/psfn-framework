@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -30,7 +31,7 @@ import type { AgentRuntimeAdapter } from "./agent-runtime.js";
 import { ElevenLabsStream } from "./elevenlabs-stream.js";
 import { HermesApiModelAdapter } from "./hermes-api-model.js";
 import { PsfnModelAdapter } from "./psfn-model.js";
-import { VoxtaFacade } from "./voxta-facade.js";
+import { VoxtaFacade, type VoxtaSttAdapter, type VoxtaTtsAdapter } from "./voxta-facade.js";
 import {
   canReceiveStreamingAudio,
   DEFAULT_REALTIME_CAPABILITIES,
@@ -54,7 +55,7 @@ export class RealtimeHubServer {
 
   constructor(
     private readonly config: HubConfig,
-    options: { agent?: AgentRuntimeAdapter } = {},
+    options: { agent?: AgentRuntimeAdapter; voxtaTts?: VoxtaTtsAdapter; voxtaStt?: VoxtaSttAdapter } = {},
   ) {
     this.sessions = new SessionStore(config.sessionTtlSeconds);
     this.embodiedSessions = new EmbodiedSessionRegistry(resolveChannelType(config));
@@ -69,6 +70,8 @@ export class RealtimeHubServer {
       sessions: this.sessions,
       embodiedSessions: this.embodiedSessions,
       agent: this.agent,
+      tts: options.voxtaTts ?? new ElevenLabsVoxtaTts(this.tts),
+      stt: options.voxtaStt ?? new DeepgramVoxtaStt(config.deepgramApiKey),
     });
     this.httpServer = http.createServer((request, response) => {
       if (this.voxta.handleHttp(request, response)) {
@@ -122,6 +125,34 @@ export class RealtimeHubServer {
     await new Promise<void>((resolve, reject) => {
       this.httpServer.close((error) => (error ? reject(error) : resolve()));
     });
+  }
+}
+
+class DeepgramVoxtaStt implements VoxtaSttAdapter {
+  constructor(private readonly apiKey: string) {}
+
+  async transcribePcm(input: { pcm: Buffer }): Promise<{ text: string; provider: string }> {
+    const transcript = await transcribePcmClip(this.apiKey, input.pcm);
+    return {
+      text: transcript.text,
+      provider: transcript.provider,
+    };
+  }
+}
+
+class ElevenLabsVoxtaTts implements VoxtaTtsAdapter {
+  constructor(private readonly tts: ElevenLabsStream) {}
+
+  async synthesizeWav(text: string): Promise<Buffer> {
+    const mp3Chunks: Buffer[] = [];
+    for await (const chunk of this.tts.streamText(singleValueStream(text))) {
+      mp3Chunks.push(chunk);
+    }
+    const mp3 = Buffer.concat(mp3Chunks);
+    if (mp3.length === 0) {
+      return Buffer.alloc(0);
+    }
+    return convertMp3ToWav(mp3);
   }
 }
 
@@ -706,6 +737,44 @@ class RealtimeConnection {
 
 async function* singleValueStream(text: string): AsyncGenerator<string, void, void> {
   yield text;
+}
+
+async function convertMp3ToWav(mp3: Buffer): Promise<Buffer> {
+  const ffmpeg = spawn("ffmpeg", [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-f",
+    "mp3",
+    "-i",
+    "pipe:0",
+    "-ac",
+    "1",
+    "-ar",
+    "16000",
+    "-f",
+    "wav",
+    "pipe:1",
+  ], {
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  const stdout: Buffer[] = [];
+  const stderr: Buffer[] = [];
+  ffmpeg.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+  ffmpeg.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+  const exit = new Promise<void>((resolve, reject) => {
+    ffmpeg.once("error", reject);
+    ffmpeg.once("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`ffmpeg failed converting Voxta TTS audio: ${Buffer.concat(stderr).toString("utf8").trim()}`));
+    });
+  });
+  ffmpeg.stdin.end(mp3);
+  await exit;
+  return Buffer.concat(stdout);
 }
 
 async function transcribePcmClip(

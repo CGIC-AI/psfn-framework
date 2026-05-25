@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import fs from "node:fs";
 import type { AddressInfo } from "node:net";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import WebSocket, { type RawData } from "ws";
 
+import { wrapPcmAsWav } from "../shared/audio.js";
 import type { HubConfig } from "../shared/env.js";
 import type { AgentRuntimeAdapter } from "./agent-runtime.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
@@ -66,16 +71,23 @@ test("Voxta facade negotiates SignalR and routes SendMessage into the embodied s
     socket.send(encodeFrame({ protocol: "json", version: 1 }));
     await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
 
-    socket.send(encodeFrame(invocation("auth-1", { $type: "authenticate" })));
-    await waitForVoxta(frames, "welcome");
+    socket.send(encodeFrame(invocation("auth-1", acidBubblesAuthenticate())));
+    const welcome = await waitForVoxta(frames, "welcome");
+    assert.equal(welcome.apiVersion, "2025-11");
+    assert.equal(welcome.voxtaServerVersion, "1.1.3");
+    assert.equal(welcome.registeredClientVersion, "1.1.1");
+    const configuration = await waitForVoxta(frames, "configuration");
+    assertAcidBubblesConfiguration(configuration);
     await waitForCompletion(frames, "auth-1");
 
     socket.send(encodeFrame(invocation("start-1", {
       $type: "startChat",
-      characterId: "psfn-assistant",
     })));
     const chatStarted = await waitForVoxta(frames, "chatStarted");
     const sessionId = String(chatStarted.sessionId);
+    assertGuid(sessionId);
+    assertGuid(chatStarted.chatId);
+    assertAcidBubblesChatStarted(chatStarted);
     await waitForCompletion(frames, "start-1");
 
     socket.send(encodeFrame(invocation("trigger-1", {
@@ -86,7 +98,8 @@ test("Voxta facade negotiates SignalR and routes SendMessage into the embodied s
     })));
     const appTrigger = await waitForVoxta(frames, "appTrigger");
     await waitForCompletion(frames, "trigger-1");
-    assert.equal(appTrigger.value, "wave");
+    assert.equal(appTrigger.name, "wave");
+    assert.deepEqual(appTrigger.arguments, ["1"]);
 
     socket.send(encodeFrame(invocation("trigger-2", {
       $type: "triggerAction",
@@ -101,12 +114,35 @@ test("Voxta facade negotiates SignalR and routes SendMessage into the embodied s
       sessionId,
       text: "hello there",
     })));
+    const replyGenerating = await waitForVoxta(frames, "replyGenerating");
+    assert.equal(replyGenerating.sessionId, sessionId);
+    assertGuid(replyGenerating.messageId);
+    assertGuid(replyGenerating.senderId);
+    assert.equal(replyGenerating.role, "Assistant");
+    assert.equal(replyGenerating.isNarration, false);
+    const replyStart = await waitForVoxta(frames, "replyStart");
+    assert.equal(replyStart.sessionId, sessionId);
+    assert.equal(replyStart.messageId, replyGenerating.messageId);
+    assertGuid(replyStart.senderId);
+    const firstChunk = await waitForVoxta(frames, "replyChunk");
+    assert.equal(firstChunk.sessionId, sessionId);
+    assert.equal(firstChunk.messageId, replyGenerating.messageId);
+    assertGuid(firstChunk.senderId);
+    assert.equal(firstChunk.text, "Hello from PSFN");
+    assert.equal(firstChunk.audioUrl, "silence:0");
+    assert.equal(firstChunk.startIndex, 0);
+    assert.equal(firstChunk.endIndex, 15);
+    assert.equal(firstChunk.isNarration, false);
+    assert.equal(firstChunk.audioGapMs, 0);
     const finalAssistantMessage = await waitForVoxta(
       frames,
       "message",
       (payload) => payload.role === "Assistant",
     );
-    await waitForVoxta(frames, "replyEnd");
+    const replyEnd = await waitForVoxta(frames, "replyEnd");
+    assert.equal(replyEnd.sessionId, sessionId);
+    assert.equal(replyEnd.messageId, replyGenerating.messageId);
+    assertGuid(replyEnd.senderId);
     await waitForCompletion(frames, "send-1");
 
     assert.equal(finalAssistantMessage.text, "Hello from PSFN");
@@ -126,7 +162,214 @@ test("Voxta facade negotiates SignalR and routes SendMessage into the embodied s
   }
 });
 
-function testHubConfig(): HubConfig {
+test("Voxta facade writes VaM-playable WAV artifacts when VOXTA audio folder is configured", async () => {
+  const audioFolder = fs.mkdtempSync(path.join(os.tmpdir(), "voxta-vam-audio-"));
+  const agent = new FakeAgent();
+  const ttsCalls: string[] = [];
+  const server = new RealtimeHubServer(testHubConfig({ audioFolder }), {
+    agent,
+    voxtaTts: {
+      async synthesizeWav(text: string): Promise<Buffer> {
+        ttsCalls.push(text);
+        return wrapPcmAsWav(Buffer.alloc(320), {
+          sampleRate: 16000,
+          channels: 1,
+          bitsPerSample: 16,
+        });
+      },
+    },
+  });
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-audio", acidBubblesAuthenticate())));
+    await waitForVoxta(frames, "configuration");
+    await waitForCompletion(frames, "auth-audio");
+    socket.send(encodeFrame(invocation("start-audio", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-audio");
+
+    socket.send(encodeFrame(invocation("send-audio", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "say this",
+    })));
+    const chunk = await waitForVoxta(frames, "replyChunk");
+    await waitForCompletion(frames, "send-audio");
+
+    assert.deepEqual(ttsCalls, ["Hello from PSFN"]);
+    assert.equal(typeof chunk.audioUrl, "string");
+    assert.match(String(chunk.audioUrl), /\.wav$/);
+    assert.equal(path.dirname(String(chunk.audioUrl)), audioFolder);
+    assert.equal(fs.existsSync(String(chunk.audioUrl)), true);
+    const wav = fs.readFileSync(String(chunk.audioUrl));
+    assert.equal(wav.toString("ascii", 0, 4), "RIFF");
+    assert.equal(wav.toString("ascii", 8, 12), "WAVE");
+  } finally {
+    socket?.close();
+    await server.close();
+    fs.rmSync(audioFolder, { recursive: true, force: true });
+  }
+});
+
+test("Voxta facade accepts AcidBubbles-style raw /hub WebSocket without negotiate", async () => {
+  const agent = new FakeAgent();
+  const server = new RealtimeHubServer(testHubConfig(), { agent });
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+
+    socket.send(encodeFrame(invocation("auth-raw", acidBubblesAuthenticate())));
+    const welcome = await waitForVoxta(frames, "welcome");
+    assert.equal(welcome.apiVersion, "2025-11");
+    assert.equal(welcome.registeredClientVersion, "1.1.1");
+    const configuration = await waitForVoxta(frames, "configuration");
+    assertAcidBubblesConfiguration(configuration);
+    const configurationId = activeConfigurationId(configuration);
+    await waitForCompletion(frames, "auth-raw");
+
+    const toggleStt = await fetch(`${baseUrl}/api/configurations/${configurationId}/services/SpeechToText`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    assert.equal(toggleStt.status, 200);
+    const sttDisabled = await waitForVoxta(
+      frames,
+      "configuration",
+      (payload) => serviceEnabled(payload, "SpeechToText") === false,
+    );
+    assert.equal(serviceEnabled(sttDisabled, "TextToSpeech"), true);
+
+    const toggleTts = await fetch(`${baseUrl}/api/configurations/${configurationId}/services/TextToSpeech`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+    });
+    assert.equal(toggleTts.status, 200);
+    await waitForVoxta(
+      frames,
+      "configuration",
+      (payload) => serviceEnabled(payload, "TextToSpeech") === false,
+    );
+
+    socket.send(encodeFrame(invocation("start-raw", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    assertAcidBubblesChatStarted(chatStarted);
+    await waitForCompletion(frames, "start-raw");
+
+    socket.send(encodeFrame(invocation("playback-start", {
+      $type: "speechPlaybackStart",
+      sessionId: chatStarted.sessionId,
+      messageId: crypto.randomUUID(),
+      startIndex: 0,
+      endIndex: 5,
+      duration: 0.25,
+      isNarration: false,
+    })));
+    await waitForCompletion(frames, "playback-start");
+
+    socket.send(encodeFrame(invocation("playback-complete", {
+      $type: "speechPlaybackComplete",
+      sessionId: chatStarted.sessionId,
+      messageId: crypto.randomUUID(),
+    })));
+    await waitForCompletion(frames, "playback-complete");
+  } finally {
+    socket?.close();
+    await server.close();
+  }
+});
+
+test("Voxta facade accepts proxy microphone stream and emits STT events", async () => {
+  const agent = new FakeAgent();
+  const sttCalls: Array<{ specSampleRate: number; bytes: number }> = [];
+  const server = new RealtimeHubServer(testHubConfig({ sttStreamEnabled: true }), {
+    agent,
+    voxtaStt: {
+      async transcribePcm(input): Promise<{ text: string; provider: string }> {
+        sttCalls.push({
+          specSampleRate: input.spec.sampleRate,
+          bytes: input.pcm.length,
+        });
+        return { text: "hello from mic", provider: "fake-stt" };
+      },
+    },
+  });
+  let socket: WebSocket | null = null;
+  let audioSocket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-stt", acidBubblesAuthenticate())));
+    await waitForVoxta(frames, "configuration");
+    await waitForCompletion(frames, "auth-stt");
+    socket.send(encodeFrame(invocation("start-stt", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    const recordingRequest = await waitForVoxta(frames, "recordingRequest");
+    assert.equal(recordingRequest.sessionId, chatStarted.sessionId);
+    assert.equal(recordingRequest.enabled, true);
+    await waitForCompletion(frames, "start-stt");
+
+    audioSocket = await openSocket(
+      `ws://127.0.0.1:${address.port}/ws/audio/input/stream?sessionId=${encodeURIComponent(String(chatStarted.sessionId))}`,
+    );
+    audioSocket.send(JSON.stringify({
+      sampleRate: 16000,
+      channels: 1,
+      bufferMilliseconds: 30,
+      bitsPerSample: 16,
+      contentType: "audio/wav",
+    }));
+    audioSocket.send(Buffer.alloc(320));
+    audioSocket.close();
+
+    const speechStart = await waitForVoxta(frames, "speechRecognitionStart");
+    assert.equal(speechStart.sessionId, chatStarted.sessionId);
+    const partial = await waitForVoxta(frames, "speechRecognitionPartial");
+    assert.equal(partial.text, "hello from mic");
+    const end = await waitForVoxta(frames, "speechRecognitionEnd");
+    assert.equal(end.sessionId, chatStarted.sessionId);
+    assert.equal(end.text, "hello from mic");
+    assert.deepEqual(sttCalls, [{ specSampleRate: 16000, bytes: 320 }]);
+  } finally {
+    audioSocket?.close();
+    socket?.close();
+    await server.close();
+  }
+});
+
+function testHubConfig(overrides: { audioFolder?: string | null; sttStreamEnabled?: boolean } = {}): HubConfig {
   const satelliteClaim = normalizeSatelliteClaimConfig({
     capabilityProfile: "voxta-avatar",
     satelliteId: "voxta-vam",
@@ -160,6 +403,8 @@ function testHubConfig(): HubConfig {
       userName: "User",
       appLabel: "PSFN Satellite Hub",
       clientVersion: "1.2.1",
+      audioFolder: overrides.audioFolder ?? null,
+      sttStreamEnabled: overrides.sttStreamEnabled ?? false,
       actionAllowlist: ["wave"],
     },
     sessionTtlSeconds: 300,
@@ -182,6 +427,107 @@ function invocation(invocationId: string, payload: Record<string, unknown>): Rec
     target: "SendMessage",
     arguments: [payload],
   };
+}
+
+function acidBubblesAuthenticate(): Record<string, unknown> {
+  return {
+    $type: "authenticate",
+    client: "Voxta.VirtAMate",
+    clientVersion: "1.1.1",
+    scope: ["role:app"],
+    capabilities: {
+      audioOutput: "LocalFile",
+      audioFolder: "C:\\VaM\\Custom\\Sounds\\Voxta",
+      acceptedAudioContentTypes: ["audio/x-wav"],
+      visionCapture: "PostImage",
+      visionSources: ["Screen", "Eyes"],
+    },
+  };
+}
+
+function assertAcidBubblesConfiguration(payload: Record<string, unknown>): void {
+  const configurations = payload.configurations;
+  assert.ok(Array.isArray(configurations));
+  assert.ok(configurations.length >= 1);
+  const active = activeConfiguration(payload);
+  assert.ok(isRecord(active));
+  assertGuid(active.id);
+  assert.ok(isRecord(active.services));
+  assertServiceEnabled(active.services, "SpeechToText", true);
+  assertServiceEnabled(active.services, "TextToSpeech", true);
+  assertServiceEnabled(active.services, "ComputerVision", false);
+}
+
+function activeConfiguration(payload: Record<string, unknown>): Record<string, unknown> {
+  const configurations = payload.configurations;
+  assert.ok(Array.isArray(configurations));
+  const active = configurations.find((candidate) => isRecord(candidate) && candidate.isDefault === true);
+  if (isRecord(active)) {
+    return active;
+  }
+  const fallback = configurations[0];
+  assert.ok(isRecord(fallback));
+  return fallback;
+}
+
+function activeConfigurationId(payload: Record<string, unknown>): string {
+  const id = activeConfiguration(payload).id;
+  assertGuid(id);
+  return id;
+}
+
+function serviceEnabled(payload: Record<string, unknown>, name: string): boolean | undefined {
+  const active = activeConfiguration(payload);
+  if (!isRecord(active.services)) {
+    return undefined;
+  }
+  const service = active.services[name];
+  if (!isRecord(service) || typeof service.enabled !== "boolean") {
+    return undefined;
+  }
+  return service.enabled;
+}
+
+function assertServiceEnabled(services: Record<string, unknown>, name: string, enabled: boolean): void {
+  const service = services[name];
+  assert.ok(isRecord(service), `Missing service ${name}`);
+  assert.equal(service.enabled, enabled);
+}
+
+function assertAcidBubblesChatStarted(payload: Record<string, unknown>): void {
+  assertGuid(payload.sessionId);
+  assertGuid(payload.chatId);
+  assert.equal(payload.title, "PSFN");
+  assert.equal(payload.chatStyle, "Roleplay");
+  assert.ok(Array.isArray(payload.messages));
+  assert.ok(Array.isArray(payload.augmentations));
+  assert.ok(isRecord(payload.user));
+  assertGuid(payload.user.id);
+  assert.ok(Array.isArray(payload.characters));
+  assert.ok(isRecord(payload.characters[0]));
+  assertGuid(payload.characters[0].id);
+  assertGuid(payload.servicesConfigurationsSetId);
+  assert.ok(isRecord(payload.context));
+  assert.ok(Array.isArray(payload.context.flags));
+  assert.ok(Array.isArray(payload.context.characters));
+  assert.ok(Array.isArray(payload.context.actions));
+  assert.ok(isRecord(payload.context.roles));
+  assert.ok(isRecord(payload.services));
+  assertServiceName(payload.services, "textToSpeech");
+  assertServiceName(payload.services, "speechToText");
+  assertServiceName(payload.services, "actionInference");
+}
+
+function assertServiceName(services: Record<string, unknown>, name: string): void {
+  const service = services[name];
+  assert.ok(isRecord(service), `Missing chat service ${name}`);
+  assert.equal(typeof service.serviceName, "string");
+  assert.notEqual(service.serviceName, "");
+}
+
+function assertGuid(value: unknown): asserts value is string {
+  assert.equal(typeof value, "string");
+  assert.match(String(value), /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
 }
 
 function encodeFrame(payload: Record<string, unknown>): string {

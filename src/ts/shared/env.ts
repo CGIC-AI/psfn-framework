@@ -64,6 +64,8 @@ export interface VoxtaFacadeConfig {
   userName: string;
   appLabel: string;
   clientVersion: string;
+  audioFolder: string | null;
+  sttStreamEnabled: boolean;
   actionAllowlist: string[];
 }
 
@@ -198,7 +200,7 @@ export function loadHubConfig(projectRoot: string): HubConfig {
     artifactsRoot: resolvePath(projectRoot, process.env.ARTIFACT_ROOT || ".artifacts/runtime-ts"),
     psfn,
     hermes,
-    voxta: loadVoxtaFacadeConfig(),
+    voxta: loadVoxtaFacadeConfig(projectRoot),
     sessionTtlSeconds: Number.parseInt(process.env.SESSION_TTL_SECONDS || "300", 10),
   };
 }
@@ -211,7 +213,7 @@ function loadAgentRuntime(): HubConfig["agentRuntime"] {
   throw new Error("AGENT_RUNTIME must be either 'psfn' or 'hermes'");
 }
 
-function loadVoxtaFacadeConfig(): VoxtaFacadeConfig {
+function loadVoxtaFacadeConfig(projectRoot: string): VoxtaFacadeConfig {
   return {
     enabled: process.env.VOXTA_FACADE_ENABLED?.trim() !== "false",
     satelliteId: process.env.VOXTA_SATELLITE_ID?.trim() || "voxta-vam",
@@ -222,6 +224,10 @@ function loadVoxtaFacadeConfig(): VoxtaFacadeConfig {
     userName: process.env.VOXTA_USER_NAME?.trim() || "User",
     appLabel: process.env.VOXTA_APP_LABEL?.trim() || "PSFN Satellite Hub",
     clientVersion: process.env.VOXTA_CLIENT_VERSION?.trim() || "1.2.1",
+    audioFolder: process.env.VOXTA_AUDIO_FOLDER?.trim()
+      ? resolvePath(projectRoot, process.env.VOXTA_AUDIO_FOLDER.trim())
+      : null,
+    sttStreamEnabled: process.env.VOXTA_STT_STREAM_ENABLED?.trim() === "true",
     actionAllowlist: splitCsv(process.env.VOXTA_APP_TRIGGER_ALLOWLIST || ""),
   };
 }

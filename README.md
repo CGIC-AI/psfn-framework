@@ -271,6 +271,8 @@ Important settings for the Python ESPHome fallback path:
 - `VOXTA_FACADE_ENABLED` enables the Voxta-compatible SignalR facade on `/hub`, defaulting to `true`
 - `VOXTA_SATELLITE_ID` and `VOXTA_SATELLITE_NAME` identify the VaM/Voxta satellite in PSFN channel metadata
 - `VOXTA_ASSISTANT_NAME`, `VOXTA_USER_NAME`, and related ID vars shape the Voxta welcome/chat payloads
+- `VOXTA_AUDIO_FOLDER` enables direct VaM TTS playback by writing local `.wav` files, typically VaM `Custom\Sounds\Voxta`
+- `VOXTA_STT_STREAM_ENABLED=true` emits Voxta `recordingRequest` messages for official-proxy or sidecar microphone streaming
 - `VOXTA_APP_TRIGGER_ALLOWLIST` is a comma-separated allowlist for Voxta `appTrigger` forwarding
 - optional `PSFN_AUTHOR_ID` and `PSFN_AUTHOR_NAME` if you need the hub to assert a specific PSFN-side author
 - `VOICE_REPLY_TIMEOUT_SECONDS`
@@ -318,6 +320,10 @@ Supported HTTP and websocket routes:
 | --- | --- |
 | `POST /hub/negotiate?negotiateVersion=1` | SignalR negotiation |
 | `WS /hub?id=<connectionToken>` | SignalR JSON websocket |
+| `PUT /api/configurations/{id}/services/SpeechToText` | VaM STT toggle |
+| `PUT /api/configurations/{id}/services/TextToSpeech` | VaM TTS toggle |
+| `PUT /api/configurations/{id}/services/ComputerVision` | VaM vision toggle |
+| `WS /ws/audio/input/stream?sessionId=<guid>` | Voxta proxy microphone PCM stream for STT |
 | `POST /voxta/hub/negotiate?negotiateVersion=1` | Alternate namespaced negotiation route |
 | `WS /voxta/hub?id=<connectionToken>` | Alternate namespaced websocket route |
 
@@ -335,13 +341,23 @@ Supported Voxta client messages:
 | `speechPlaybackStart`, `speechPlaybackComplete`, `typingStart`, `typingEnd`, `pauseChat`, `inspect`, `inspectAudioInput` | Acknowledged for compatibility |
 
 Assistant replies emit `chatFlow`, `replyGenerating`, `replyStart`,
-`replyChunk`, final `message`, and `replyEnd` events. The facade also attaches
-the VaM/Voxta satellite to PSFN channel metadata with text, local audio,
-animation, expression, action, and vision capabilities.
+`replyChunk`, final `message`, and `replyEnd` events. When `VOXTA_AUDIO_FOLDER`
+is configured and TextToSpeech is enabled, `replyChunk.audioUrl` points at a
+local `.wav` artifact written for VaM playback; otherwise it uses a `silence:0`
+placeholder so the text path still works. The facade also attaches the VaM/Voxta
+satellite to PSFN channel metadata with text, local audio, animation,
+expression, action, and vision capabilities.
+
+For VaM microphone parity through the official Voxta proxy or a PSFN sidecar, set
+`VOXTA_STT_STREAM_ENABLED=true`. The hub then emits `recordingRequest`; the
+proxy opens `/ws/audio/input/stream?sessionId=<guid>`, sends the stream-spec JSON
+first, then binary PCM frames. The first implementation transcribes the buffered
+PCM when the stream closes and emits `speechRecognitionStart`,
+`speechRecognitionPartial`, and `speechRecognitionEnd`.
 
 Current Voxta limitations:
 
-- local WAV/URL playback artifacts are not emitted yet
+- low-latency live STT partials for long-running mic streams are not implemented yet
 - vision upload/capture is advertised as a capability but not implemented yet
 - compatibility has been tested against the SignalR/Voxta protocol shape, not yet against the live AcidBubbles plugin
 
@@ -362,9 +378,9 @@ Voxta/VaM embodiment path:
 
 - Voxta-compatible SignalR websocket facade on the TypeScript hub
 - user text turns enter the same embodied session registry as the Pi path
-- assistant deltas stream back as Voxta reply events
+- assistant replies stream back as Voxta reply events with VaM-compatible metadata
 - app triggers are denied by default unless explicitly allowlisted
-- VaM does not need to own microphone input; another satellite can provide mic and barge-in
+- VaM text chat and direct local WAV TTS can run through this path; VaM microphone parity uses the official proxy or a compatible sidecar to capture and stream local mic audio
 
 Fallback path:
 

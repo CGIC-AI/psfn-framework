@@ -546,6 +546,44 @@ describe('GatewayServer', () => {
     }
   });
 
+  it('retargets broad yolo fs.search to the personal working folders', async () => {
+    const codebaseRoot = mkdtempSync(join(tmpdir(), 'gw-yolo-search-'));
+    const workspace = join(codebaseRoot, 'purrsephone');
+    mkdirSync(join(workspace, 'downloads'), { recursive: true });
+    mkdirSync(join(codebaseRoot, 'src'), { recursive: true });
+    writeFileSync(
+      join(workspace, 'downloads', 'COMPANION_EXPERIENCE.md'),
+      'COMPANION_EXPERIENCE working-folder hit',
+      'utf-8',
+    );
+    writeFileSync(join(codebaseRoot, 'src', 'noise.ts'), 'COMPANION_EXPERIENCE repo noise', 'utf-8');
+
+    try {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        policyConfig: {
+          workspacePath: workspace,
+          fullCodebaseReadRoot: codebaseRoot,
+        },
+      });
+
+      const searchResponse = await invokeRpc(conn, 973, 'fs.search', {
+        query: 'COMPANION_EXPERIENCE',
+        glob: '**/*',
+        maxMatches: 10,
+      });
+
+      expect(searchResponse.error).toBeUndefined();
+      expect(searchResponse.result.glob).toContain('purrsephone/');
+      expect(searchResponse.result.glob).not.toBe('**/*');
+      expect(searchResponse.result.matches).toEqual([
+        expect.objectContaining({ path: 'purrsephone/downloads/COMPANION_EXPERIENCE.md' }),
+      ]);
+    } finally {
+      rmSync(codebaseRoot, { recursive: true, force: true });
+    }
+  });
+
   describe('confirmation queue', () => {
     let tempDir: string;
 

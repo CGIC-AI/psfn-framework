@@ -84,6 +84,38 @@ describe('fs tool', () => {
     ]);
   });
 
+  it('retargets broad searches to working folders and skips directories', async () => {
+    mkdirSync(join(workspace, 'downloads'), { recursive: true });
+    mkdirSync(join(workspace, 'docs', 'nested'), { recursive: true });
+    mkdirSync(join(workspace, 'src'), { recursive: true });
+    writeFileSync(join(workspace, 'downloads', 'COMPANION_EXPERIENCE.md'), 'needle in downloads\n', 'utf-8');
+    writeFileSync(join(workspace, 'src', 'noise.ts'), 'needle outside working folders\n', 'utf-8');
+    const tool = createFsTool(ops);
+
+    const broadSearch = JSON.parse(resultText(await tool.execute('search-broad', {
+      action: 'search',
+      glob: '**/*',
+      query: 'needle',
+      max_matches: 10,
+    })));
+    const directorySearch = JSON.parse(resultText(await tool.execute('search-directory-glob', {
+      action: 'search',
+      glob: 'docs/*',
+      query: 'alpha',
+      max_matches: 10,
+    })));
+
+    expect(broadSearch.glob).not.toBe('**/*');
+    expect(broadSearch.matches).toEqual([
+      expect.objectContaining({ path: 'downloads/COMPANION_EXPERIENCE.md' }),
+    ]);
+    expect(directorySearch.isError).toBeUndefined();
+    expect(directorySearch.matches).toEqual([
+      expect.objectContaining({ path: 'docs/notes.txt' }),
+      expect.objectContaining({ path: 'docs/notes.txt' }),
+    ]);
+  });
+
   it('writes new files and edits existing files through the unified fs surface', async () => {
     const tool = createFsTool(ops);
 

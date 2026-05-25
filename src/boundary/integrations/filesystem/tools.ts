@@ -49,6 +49,17 @@ function requireStringField(value: unknown, field: string): string {
   return value;
 }
 
+function normalizeSearchGlobParam(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  if (normalized.length === 0 || normalized === '**' || normalized === '**/*') {
+    return undefined;
+  }
+  return value;
+}
+
 export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
   return {
     name: 'fs',
@@ -56,6 +67,7 @@ export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
     description:
       'Unified filesystem primitive for personal-file inspection and safe mutation. '
       + 'Use action=list|read|search|write|edit. Prefer list/search/read for common file inspection before analysis_workbench. '
+      + 'For action=search, omit glob for the default working-folder search or provide a narrow folder/file glob; do not use bare **/*. '
       + 'Write/edit paths are relative to the configured personal files root, not DATA or runtime state. '
       + 'In gateway yolo mode, reads may expose broader codebase paths while writes stay personal-root-relative. '
       + 'Writes stay explicit, bounded, and fail closed on unsafe overwrite/edit requests.',
@@ -73,7 +85,7 @@ export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
         description: 'Personal-root-relative path for action=write/edit; read paths may be broader in gateway yolo mode.',
       })),
       glob: Type.Optional(Type.String({
-        description: 'Personal-root-relative glob for local mode; gateway yolo read/search may use the broader read root. Defaults to **/*.',
+        description: 'Used with action=list/search. For search, omit this or use a narrow folder/file glob; bare **/* is retargeted to working folders.',
       })),
       max_entries: Type.Optional(Type.Integer({
         minimum: 1,
@@ -164,9 +176,10 @@ export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
           }
 
           case 'search': {
+            const glob = normalizeSearchGlobParam(params.glob);
             const result = await ops.search({
               query: requireString(params.query, 'query'),
-              ...(typeof params.glob === 'string' ? { glob: params.glob } : {}),
+              ...(glob ? { glob } : {}),
               ...(params.mode === 'regex' ? { mode: 'regex' as const } : {}),
               ...(typeof params.max_matches === 'number' ? { maxMatches: params.max_matches } : {}),
               ...(typeof params.max_files === 'number' ? { maxFiles: params.max_files } : {}),

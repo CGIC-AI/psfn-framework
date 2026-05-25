@@ -18,7 +18,9 @@ import {
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import {
+  buildWorkingFolderSearchGlob,
   editWorkspaceFile,
+  isBroadSearchGlob,
   readTextFile,
   searchWorkspaceFiles,
 } from '../../integrations/filesystem/workspace-ops.js';
@@ -37,6 +39,21 @@ function resolveReadPath(path: string, runtime: GatewayMethodRuntime): string {
     return resolveWorkspaceFsPathFromRoot(path, resolveWorkspaceRoot(runtime.workspacePath));
   }
   return resolveWorkspaceFsPathFromRoot(path, resolveReadRoot(runtime));
+}
+
+function resolveDefaultSearchGlob(runtime: GatewayMethodRuntime): string {
+  const readRoot = resolveReadRoot(runtime);
+  const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
+  const workspaceRelativeToReadRoot = relative(readRoot, workspaceRoot).replace(/\\/g, '/');
+  if (
+    workspaceRelativeToReadRoot.length > 0
+    && !workspaceRelativeToReadRoot.startsWith('../')
+    && workspaceRelativeToReadRoot !== '..'
+    && !isAbsolute(workspaceRelativeToReadRoot)
+  ) {
+    return buildWorkingFolderSearchGlob(workspaceRelativeToReadRoot);
+  }
+  return buildWorkingFolderSearchGlob();
 }
 
 function toErrorCode(error: unknown): string | undefined {
@@ -166,7 +183,9 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     handler: async (params: FsSearchParams, runtime) => {
       return await searchWorkspaceFiles(resolveReadRoot(runtime), {
         query: params.query,
-        ...(typeof params.glob === 'string' ? { glob: params.glob } : {}),
+        ...(typeof params.glob === 'string' && !isBroadSearchGlob(params.glob)
+          ? { glob: params.glob }
+          : { glob: resolveDefaultSearchGlob(runtime) }),
         ...(params.mode ? { mode: params.mode } : {}),
         ...(typeof params.maxMatches === 'number' ? { maxMatches: params.maxMatches } : {}),
         ...(typeof params.maxFiles === 'number' ? { maxFiles: params.maxFiles } : {}),

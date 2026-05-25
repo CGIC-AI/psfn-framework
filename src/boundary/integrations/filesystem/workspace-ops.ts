@@ -1,4 +1,4 @@
-import { glob as fsGlob, open, readFile, writeFile } from 'node:fs/promises';
+import { glob as fsGlob, open, readFile, stat, writeFile } from 'node:fs/promises';
 import {
   normalizeWorkspaceRelativeGlob,
   resolveWorkspaceFsPathFromRoot,
@@ -29,6 +29,31 @@ const MAX_SEARCH_MAX_BYTES_PER_FILE = 200_000;
 const DEFAULT_SEARCH_CONTEXT_LINES = 0;
 const MAX_SEARCH_CONTEXT_LINES = 2;
 const MAX_PREVIEW_CHARS = 500;
+const SEARCHABLE_TEXT_EXTENSIONS = [
+  'md',
+  'mdx',
+  'txt',
+  'json',
+  'jsonl',
+  'yaml',
+  'yml',
+  'ts',
+  'tsx',
+  'js',
+  'jsx',
+  'css',
+  'html',
+] as const;
+const DEFAULT_SEARCH_FOLDERS = [
+  'downloads',
+  'docs',
+  'knowledge',
+  'journal',
+  'scratchpad',
+  'skills',
+  'modules',
+  'experiments',
+] as const;
 
 function clampFiniteInteger(value: unknown, fallback: number, min: number, max: number): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
@@ -43,6 +68,21 @@ function escapeRegExp(value: string): string {
 
 function normalizeSearchMode(value: unknown): FilesystemSearchMode {
   return value === 'regex' ? 'regex' : DEFAULT_SEARCH_MODE;
+}
+
+export function isBroadSearchGlob(value: string | undefined): boolean {
+  const normalized = typeof value === 'string'
+    ? value.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '')
+    : '';
+  return normalized.length === 0 || normalized === '**' || normalized === '**/*';
+}
+
+export function buildWorkingFolderSearchGlob(prefix = ''): string {
+  const normalizedPrefix = prefix.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+  const textExtensionGlob = `{${SEARCHABLE_TEXT_EXTENSIONS.join(',')}}`;
+  const folderGlob = `{${DEFAULT_SEARCH_FOLDERS.join(',')}}`;
+  const workingPattern = `{*.${textExtensionGlob},${folderGlob}/*.${textExtensionGlob},${folderGlob}/*/*.${textExtensionGlob},${folderGlob}/*/*/*.${textExtensionGlob}}`;
+  return normalizedPrefix.length > 0 ? `${normalizedPrefix}/${workingPattern}` : workingPattern;
 }
 
 function normalizeWorkspacePath(path: string, root: string, action: 'read' | 'write' | 'edit'): string {
@@ -148,6 +188,16 @@ export async function listWorkspaceFiles(root: string, glob = DEFAULT_LIST_GLOB,
   return paths;
 }
 
+function normalizeSearchGlob(options: FilesystemSearchOptions): string {
+  const normalizedGlob = normalizeWorkspaceRelativeGlob(
+    isBroadSearchGlob(options.glob) ? buildWorkingFolderSearchGlob() : options.glob,
+  );
+  if (normalizedGlob === null) {
+    throw new Error('fs search glob must be a non-empty workspace-relative pattern');
+  }
+  return normalizedGlob;
+}
+
 export async function searchWorkspaceFiles(root: string, options: FilesystemSearchOptions): Promise<FilesystemSearchResult> {
   const query = typeof options.query === 'string' ? options.query.trim() : '';
   if (!query) {
@@ -165,10 +215,7 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
     }
   }
 
-  const normalizedGlob = normalizeWorkspaceRelativeGlob(options.glob);
-  if (!normalizedGlob) {
-    throw new Error('fs search glob must be a non-empty workspace-relative pattern');
-  }
+  const normalizedGlob = normalizeSearchGlob(options);
 
   const maxMatches = clampFiniteInteger(options.maxMatches, DEFAULT_SEARCH_MAX_MATCHES, 1, MAX_SEARCH_MAX_MATCHES);
   const maxFiles = clampFiniteInteger(options.maxFiles, DEFAULT_SEARCH_MAX_FILES, 1, MAX_SEARCH_MAX_FILES);
@@ -191,6 +238,10 @@ export async function searchWorkspaceFiles(root: string, options: FilesystemSear
 
   for (const path of paths) {
     const absolutePath = resolveWorkspaceFsPathFromRoot(path, root);
+    const fileStat = await stat(absolutePath);
+    if (!fileStat.isFile()) {
+      continue;
+    }
     const readResult = await readTextFile(absolutePath, maxBytesPerFile);
     scannedFiles += 1;
     if (readResult.truncated) {

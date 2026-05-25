@@ -48,7 +48,7 @@ const ROUTINE_ORIENTATION_PATTERN = /\b(orient|orientation|reorient|values_list|
 const OPS_PATTERN = /\b(schedule|heartbeat|policy|runtime|settings|restart|rebuild|maintenance|incident|ops|operation)\b/i;
 const OPS_TASK_KINDS = new Set(['heartbeat', 'planning', 'maintenance']);
 
-export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX = 3;
+export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX = 4;
 export const DEFAULT_BACKGROUND_ONLY_EXTENDED_TOOLS: ReadonlySet<string> = new Set();
 
 export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnIntent, readonly string[]>> = {
@@ -64,6 +64,7 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
   ],
   reflection: [],
   social: [
+    'selfie_create',
     'image_create',
     'image_edit',
     'image_analyze',

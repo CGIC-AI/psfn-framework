@@ -20,6 +20,7 @@ import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import type { TurnSnapshot, TurnPromptResponseSnapshot } from '../../../turns/snapshot.js';
 import { MESSAGE_CLASSES } from '../../message-classes.js';
 import type { SystemNoteMessage } from '../../messages.js';
+import type { AutoloadTurnOutcome } from '../adaptive-tools-runtime.js';
 import { resolveModel } from '../../stream-adapter.js';
 import {
   cloneObservedAdaptiveToolSnapshot,
@@ -213,6 +214,7 @@ export async function invokeAgentForTurn(input: {
     userMessageText: string;
     imageAttachmentUrls: string[];
   };
+  autoloadOutcome: AutoloadTurnOutcome;
   turnSnapshot: TurnSnapshot;
   templateVariables: Record<string, string>;
   speakerRole: 'user' | 'system';
@@ -237,6 +239,7 @@ export async function invokeAgentForTurn(input: {
     turnCorrelationBase,
     viewerRequestContext,
     baseVisionToolRequestContext,
+    autoloadOutcome,
     turnSnapshot,
     templateVariables,
     speakerRole,
@@ -250,7 +253,7 @@ export async function invokeAgentForTurn(input: {
   let responseModel = runtime.agent.state.model.id;
   let fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
   let runtimeContradictionDiagnostics: NonNullable<AgentResponse['metadata']['diagnostics']> | undefined;
-  let turnIntent: string | null = null;
+  const turnIntent: string | null = autoloadOutcome.intent;
   const isVisionTurn = hasVisionTurnInputs(message);
   const visionTurnDeadlineAt = isVisionTurn ? promptStageStart + VISION_TURN_TIMEOUT_MS : null;
 
@@ -310,15 +313,6 @@ export async function invokeAgentForTurn(input: {
   }
 
   runtime.agent.setSystemPrompt(enforceUntrustedCompactionGuard(providerSystemPrompt));
-  const autoloadOutcome = runtime.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
-  turnIntent = autoloadOutcome.intent;
-  runtime.applyActiveToolsToAgentForTurn(
-    message,
-    taskKind,
-    turnCallType,
-    turnCorrelationBase,
-    autoloadOutcome,
-  );
   const adaptiveToolSnapshot = cloneObservedAdaptiveToolSnapshot(
     runtime.getAdaptiveToolRuntimeState().lastSnapshot,
   );

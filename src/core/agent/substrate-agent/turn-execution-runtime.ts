@@ -404,6 +404,14 @@ export async function handleMessageForTurn(
     turnSnapshot = preTurnState.turnSnapshot;
     memoryContextBlock = preTurnState.memoryContextBlock;
     memoryContextChars = preTurnState.memoryContextChars;
+    const autoloadOutcome = runtime.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
+    runtime.applyActiveToolsToAgentForTurn(
+      message,
+      taskKind,
+      turnCallType,
+      turnCorrelationBase,
+      autoloadOutcome,
+    );
     const responseStyle = runtime.resolveResponseStyle(message, channelType, channelMeta);
     const promptAssembly = await assembleTurnPrompt({
       runtime,
@@ -451,6 +459,7 @@ export async function handleMessageForTurn(
       turnCorrelationBase,
       viewerRequestContext,
       baseVisionToolRequestContext,
+      autoloadOutcome,
       turnSnapshot,
       templateVariables: promptAssembly.templateVariables,
       speakerRole,

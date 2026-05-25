@@ -1732,6 +1732,61 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     });
   });
 
+  it('applies same-turn selfie autoload before rendering dynamic prompt variables', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    const callOrder: string[] = [];
+    runtime.preloadExtendedToolsForTurn = vi.fn(() => ({
+      intent: 'social',
+      skipped: [],
+    }));
+    runtime.applyActiveToolsToAgentForTurn = vi.fn(() => {
+      callOrder.push('apply-tools');
+      runtime.agent.state.tools = [{
+        name: 'selfie_create',
+        description: 'Generate a dedicated selfie or self-portrait of the companion.',
+        inputSchema: { type: 'object' },
+      }] as any[];
+    });
+    runtime.buildDynamicPromptTemplateVariables = vi.fn(() => {
+      callOrder.push('dynamic-prompt');
+      expect((runtime.agent.state.tools as Array<{ name?: string }>).some(tool => tool.name === 'selfie_create'))
+        .toBe(true);
+      return {
+        runtime_self_image_tool_active: 'true',
+      };
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-selfie-autoload-prompt', {
+      channelType: 'discord',
+      content: 'take a selfie',
+    }));
+
+    expect(runtime.preloadExtendedToolsForTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'take a selfie',
+      }),
+      undefined,
+      expect.objectContaining({
+        requestId: 'msg-selfie-autoload-prompt',
+      }),
+    );
+    expect(callOrder).toEqual(['apply-tools', 'dynamic-prompt']);
+  });
+
   it('exposes appearance context to tools when selfie_create is active for the turn', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({

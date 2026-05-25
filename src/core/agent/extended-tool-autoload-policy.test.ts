@@ -114,6 +114,38 @@ describe('extended-tool-autoload-policy', () => {
     expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.memory.filter(name => name === 'north_star')).toHaveLength(1);
   });
 
+  it('preloads the dedicated selfie tool before generic social image tools', () => {
+    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX).toBe(4);
+    expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.social.slice(0, 4)).toEqual([
+      'selfie_create',
+      'image_create',
+      'image_edit',
+      'image_analyze',
+    ]);
+
+    const policy = createDefaultExtendedToolAutoloadPolicy(DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX);
+    const selection = policy.selectOverlayCandidates('social', [
+      'selfie_create',
+      'image_create',
+      'image_edit',
+      'image_analyze',
+      'vault',
+    ]);
+
+    expect(selection.selected).toEqual([
+      'selfie_create',
+      'image_create',
+      'image_edit',
+      'image_analyze',
+    ]);
+    expect(selection.skipped).toEqual([
+      {
+        toolName: 'vault',
+        reason: 'budget_exhausted',
+      },
+    ]);
+  });
+
   it('keeps reflection intent free of overlay preload candidates', () => {
     expect(DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES.reflection).toEqual([]);
     const policy = createDefaultExtendedToolAutoloadPolicy(2);

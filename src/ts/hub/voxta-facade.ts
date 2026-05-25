@@ -13,7 +13,7 @@ import {
   EmbodiedSessionRegistry,
   VOXTA_VAM_CAPABILITIES,
 } from "./embodied-session.js";
-import type { PsfnChannelContext, VisionCaptureMetadata } from "./embodied-session.js";
+import type { PsfnChannelContext, VisionCaptureImage, VisionCaptureMetadata } from "./embodied-session.js";
 import type { ConversationMessage } from "./session-store.js";
 import { SessionStore } from "./session-store.js";
 
@@ -82,7 +82,7 @@ interface PendingVisionRequest {
   requestId: string;
   sessionId: string;
   source: VoxtaVisionSource;
-  resolve: (capture: VisionCaptureMetadata | null) => void;
+  resolve: (capture: VisionCaptureImage | null) => void;
   timeout: NodeJS.Timeout;
 }
 
@@ -341,7 +341,7 @@ export class VoxtaFacade {
     writeJson(response, 200, { success: true, requestId: visionRequest.requestId });
   }
 
-  private resolveVisionRequest(requestId: string, capture: VisionCaptureMetadata | null): void {
+  private resolveVisionRequest(requestId: string, capture: VisionCaptureImage | null): void {
     const pending = this.runtime.pendingVisionRequests.get(requestId);
     if (!pending) {
       return;
@@ -361,7 +361,7 @@ class VoxtaConnection {
   private sessionId: string;
   private chatId: string;
   private registeredSessionId: string | null = null;
-  private visionCaptures: VisionCaptureMetadata[] = [];
+  private visionCaptures: VisionCaptureImage[] = [];
   private replyAbort = false;
   private replySequence = 0;
 
@@ -562,7 +562,7 @@ class VoxtaConnection {
     });
   }
 
-  recordVisionCapture(capture: VisionCaptureMetadata): void {
+  recordVisionCapture(capture: VisionCaptureImage): void {
     this.visionCaptures = [
       ...this.visionCaptures.filter((item) => item.requestId !== capture.requestId),
       capture,
@@ -855,9 +855,9 @@ class VoxtaConnection {
     }
   }
 
-  private async requestVisionCapture(source: VoxtaVisionSource): Promise<VisionCaptureMetadata | null> {
+  private async requestVisionCapture(source: VoxtaVisionSource): Promise<VisionCaptureImage | null> {
     const requestId = crypto.randomUUID();
-    const promise = new Promise<VisionCaptureMetadata | null>((resolve) => {
+    const promise = new Promise<VisionCaptureImage | null>((resolve) => {
       const timeout = setTimeout(() => {
         this.runtime.pendingVisionRequests.delete(requestId);
         resolve(null);
@@ -926,7 +926,8 @@ class VoxtaConnection {
     const context = this.deps.embodiedSessions.getContext(this.sessionId, this.deps.config.satelliteId);
     return {
       ...context,
-      visionCaptures: this.visionCaptures.slice(-4),
+      visionCaptures: this.visionCaptures.slice(-4).map(stripVisionCaptureImageData),
+      visionCaptureImages: this.visionCaptures.slice(-4),
     };
   }
 
@@ -1277,7 +1278,7 @@ function persistVisionCapture(input: {
   source: VoxtaVisionSource;
   label: string;
   upload: MultipartUpload;
-}): VisionCaptureMetadata {
+}): VisionCaptureImage {
   const capturedAt = new Date();
   const dateKey = capturedAt.toISOString().slice(0, 10).replaceAll("-", "");
   const directory = path.join(input.root, "voxta-vision", dateKey);
@@ -1297,7 +1298,13 @@ function persistVisionCapture(input: {
     filePath,
     bytes: input.upload.data.length,
     capturedAt: capturedAt.toISOString(),
+    dataBase64: input.upload.data.toString("base64"),
   };
+}
+
+function stripVisionCaptureImageData(capture: VisionCaptureImage): VisionCaptureMetadata {
+  const { dataBase64: _dataBase64, ...metadata } = capture;
+  return metadata;
 }
 
 function extensionForMimeType(mimeType: string): string | undefined {

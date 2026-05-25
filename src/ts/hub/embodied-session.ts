@@ -54,6 +54,7 @@ export interface PsfnChannelContext {
     capabilities: Required<SatelliteCapabilities>;
   }>;
   visionCaptures?: VisionCaptureMetadata[];
+  visionCaptureImages?: VisionCaptureImage[];
 }
 
 export interface VisionCaptureMetadata {
@@ -65,6 +66,10 @@ export interface VisionCaptureMetadata {
   filePath: string;
   bytes: number;
   capturedAt: string;
+}
+
+export interface VisionCaptureImage extends VisionCaptureMetadata {
+  dataBase64: string;
 }
 
 export interface AttachSatelliteInput {

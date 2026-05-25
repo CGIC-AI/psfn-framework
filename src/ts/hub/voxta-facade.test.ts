@@ -455,6 +455,10 @@ test("Voxta facade accepts AcidBubbles vision capture uploads and exposes metada
     assert.equal(capture.bytes, 4);
     assert.equal(fs.existsSync(capture.filePath), true);
     assert.equal(fs.readFileSync(capture.filePath).toString("hex"), "ffd8ffd9");
+    const image = agent.calls[0]?.channel?.visionCaptureImages?.[0];
+    assert.ok(image);
+    assert.equal(image.dataBase64, "/9j/2Q==");
+    assert.equal(JSON.stringify(agent.calls[0]?.channel?.visionCaptures).includes("/9j/2Q=="), false);
   } finally {
     socket?.close();
     await server.close();

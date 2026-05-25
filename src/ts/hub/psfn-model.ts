@@ -21,6 +21,18 @@ interface CompletionResponse {
   chunks(): AsyncIterable<Uint8Array>;
 }
 
+type PsfnChatMessageContent =
+  | string
+  | Array<
+    | { type: "text"; text: string }
+    | { type: "image"; data: string; mimeType: string; name?: string }
+  >;
+
+type PsfnChatMessage = {
+  role: "user" | "assistant";
+  content: PsfnChatMessageContent;
+};
+
 const DEFAULT_SYSTEM_PROMPT =
   "Reply as plain spoken dialogue only, in one short sentence unless the user explicitly asks for more. "
   + "Do not use roleplay actions, stage directions, emotes, asterisks, markdown, narration, or scene-setting. "
@@ -65,7 +77,7 @@ export class PsfnModelAdapter implements AgentRuntimeAdapter {
         user: conversationId,
         satellite_claim: satelliteClaim,
         channel_metadata: channelMetadata,
-        messages: this.buildMessages(input.history ?? [], input.userText),
+        messages: this.buildMessages(input.history ?? [], input.userText, channel),
       }),
     );
 
@@ -202,14 +214,28 @@ export class PsfnModelAdapter implements AgentRuntimeAdapter {
     return headers;
   }
 
-  private buildMessages(history: ConversationMessage[], userText: string): Array<{ role: "user" | "assistant"; content: string }> {
-    const messages = history
+  private buildMessages(
+    history: ConversationMessage[],
+    userText: string,
+    channel: PsfnChannelContext,
+  ): PsfnChatMessage[] {
+    const messages: PsfnChatMessage[] = history
       .filter((message) => message.content.trim().length > 0)
       .map((message) => ({
         role: message.role,
         content: message.content,
       }));
-    if (!messages.length || messages[messages.length - 1]?.content !== userText) {
+    const currentVisionImages = normalizeVisionCaptureImages(channel);
+    if (currentVisionImages.length > 0) {
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage?.role === "user" && lastMessage.content === userText) {
+        messages.pop();
+      }
+      messages.push({
+        role: "user",
+        content: buildInlineVisionContent(userText, currentVisionImages),
+      });
+    } else if (!messages.length || messages[messages.length - 1]?.content !== userText) {
       messages.push({ role: "user", content: userText });
     }
     return messages;
@@ -248,6 +274,34 @@ function buildChannelMetadata(
     ...(channel.visionCaptures?.length ? { visionCaptures: channel.visionCaptures } : {}),
     satelliteClaim,
   };
+}
+
+function normalizeVisionCaptureImages(
+  channel: PsfnChannelContext,
+): NonNullable<PsfnChannelContext["visionCaptureImages"]> {
+  return (channel.visionCaptureImages ?? [])
+    .filter((capture) => capture.dataBase64.trim().length > 0 && capture.mimeType.startsWith("image/"))
+    .slice(-4);
+}
+
+function buildInlineVisionContent(
+  userText: string,
+  captures: NonNullable<PsfnChannelContext["visionCaptureImages"]>,
+): PsfnChatMessageContent {
+  const content: Exclude<PsfnChatMessageContent, string> = [];
+  const text = userText.trim();
+  if (text) {
+    content.push({ type: "text", text });
+  }
+  for (const capture of captures) {
+    content.push({
+      type: "image",
+      data: capture.dataBase64,
+      mimeType: capture.mimeType,
+      name: `${capture.label}-${capture.source.toLowerCase()}.jpg`,
+    });
+  }
+  return content;
 }
 
 function deriveChannelId(channelType: string, conversationId: string): string {

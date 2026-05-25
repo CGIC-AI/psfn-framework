@@ -109,3 +109,105 @@ test("psfn model adapter sends embodied hub channel headers", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("psfn model adapter sends VaM vision captures as inline image blocks", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedBody: Record<string, unknown> = {};
+
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+    return new Response(
+      '{"choices":[{"message":{"role":"assistant","content":"I see it."}}]}',
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  };
+
+  const satelliteClaim = normalizeSatelliteClaimConfig({
+    capabilityProfile: "voxta-avatar",
+    satelliteId: "voxta-vam",
+    endpointId: "voxta-vam",
+    displayName: "Voxta VaM",
+  });
+  const adapter = new PsfnModelAdapter({
+    baseUrl: "http://psfn.test",
+    model: "psfn",
+    apiKey: "secret",
+    channelType: satelliteClaim.channelType,
+    satelliteClaim,
+  });
+  const channel: PsfnChannelContext = {
+    sessionId: "voxta-session",
+    channelType: "satellite.endpoint",
+    channelId: "satellite.endpoint:voxta-session",
+    sourceSatelliteId: "voxta-vam",
+    sourceSatelliteName: "Voxta VaM",
+    activeSatellites: [
+      {
+        id: "voxta-vam",
+        name: "Voxta VaM",
+        transport: "websocket",
+        capabilities: {
+          input: ["text", "vision_upload"],
+          output: ["text", "subtitle", "local_file_audio", "animation", "action", "expression"],
+          control: ["interrupt", "presence", "session_attach"],
+          safety: ["action_allowlist", "local_only"],
+        },
+      },
+    ],
+    visionCaptures: [{
+      requestId: "vision-1",
+      sessionId: "voxta-session",
+      source: "Screen",
+      label: "virtamate",
+      mimeType: "image/jpeg",
+      filePath: "/tmp/voxta.jpg",
+      bytes: 4,
+      capturedAt: "2026-05-25T00:00:00.000Z",
+    }],
+    visionCaptureImages: [{
+      requestId: "vision-1",
+      sessionId: "voxta-session",
+      source: "Screen",
+      label: "virtamate",
+      mimeType: "image/jpeg",
+      filePath: "/tmp/voxta.jpg",
+      bytes: 4,
+      capturedAt: "2026-05-25T00:00:00.000Z",
+      dataBase64: "YWJjZA==",
+    }],
+  };
+
+  try {
+    for await (const _chunk of adapter.streamReply({
+      userText: "what do you see?",
+      conversationId: "voxta-session",
+      history: [{ role: "user", content: "what do you see?" }],
+      channel,
+    })) {
+      // drain generator
+    }
+
+    const messages = capturedBody.messages as Array<{ role: string; content: unknown }>;
+    assert.deepEqual(messages, [{
+      role: "user",
+      content: [
+        { type: "text", text: "what do you see?" },
+        {
+          type: "image",
+          data: "YWJjZA==",
+          mimeType: "image/jpeg",
+          name: "virtamate-screen.jpg",
+        },
+      ],
+    }]);
+    assert.deepEqual(
+      JSON.stringify(capturedBody.channel_metadata).includes("YWJjZA=="),
+      false,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

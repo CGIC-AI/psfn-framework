@@ -15,6 +15,7 @@ import {
 import {
   canWriteResponse,
   MAX_BODY_SIZE,
+  SATELLITE_HUB_BODY_SIZE,
   sendApiError,
   type ApiServerLogger,
 } from './http.js';
@@ -45,6 +46,19 @@ export function clampApiHeader(value: string | undefined, maxLength: number): st
   return clampHeaderValue(value, maxLength);
 }
 
+export function resolveChatCompletionBodyLimit(req: IncomingMessage): number {
+  const channelType = singleApiHeader(req.headers['x-psfn-channel-type'])?.trim().toLowerCase();
+  if (
+    channelType === 'satellite.endpoint'
+    || singleApiHeader(req.headers['x-psfn-satellite-id'])
+    || singleApiHeader(req.headers['x-psfn-satellite-claim'])
+    || singleApiHeader(req.headers['x-psfn-satellite-capabilities'])
+  ) {
+    return SATELLITE_HUB_BODY_SIZE;
+  }
+  return MAX_BODY_SIZE;
+}
+
 export function extractRpcHeaders(req: IncomingMessage): ApiRuntimeChatRequest['headers'] {
   const headers: ApiRuntimeChatRequest['headers'] = {};
   for (const [name, value] of Object.entries(req.headers)) {
@@ -59,7 +73,7 @@ export async function readChatCompletionRequest(
   logger: ApiServerLogger,
 ): Promise<ChatCompletionRequest | null> {
   const parsedBody = await readJsonBodyWithLimit<ChatCompletionRequest>(req, res, {
-    maxBytes: MAX_BODY_SIZE,
+    maxBytes: resolveChatCompletionBodyLimit(req),
     logger,
   });
   if (!parsedBody.ok) {

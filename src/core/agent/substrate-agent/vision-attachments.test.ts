@@ -164,4 +164,35 @@ describe('buildTurnUserContent', () => {
       mimeType: 'image/jpeg',
     });
   });
+
+  it('routes inline base64 images directly to the multimodal prompt path', async () => {
+    const { reviewer, analyze } = makeReviewer();
+    const result = await buildTurnUserContent({
+      message: makeMessage({
+        attachments: [{
+          url: 'inline:image:0',
+          contentType: 'image/jpeg',
+          name: 'vam-screen.jpg',
+          dataBase64: 'YWJjZA==',
+        }],
+      }),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger: {
+        warn: vi.fn(),
+        debug: vi.fn(),
+      },
+      visionReviewer: reviewer,
+    });
+
+    expect(analyze).not.toHaveBeenCalled();
+    expect(Array.isArray(result.content)).toBe(true);
+    const blocks = result.content as Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+    expect(blocks[0]?.type).toBe('text');
+    expect(blocks[1]).toEqual({
+      type: 'image',
+      data: 'YWJjZA==',
+      mimeType: 'image/jpeg',
+    });
+  });
 });

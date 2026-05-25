@@ -214,6 +214,7 @@ export interface Attachment {
   contentType: string;
   name: string;
   localPath?: string;
+  dataBase64?: string;
 }
 
 export interface AgentResponse {

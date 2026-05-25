@@ -9,6 +9,7 @@ import {
 import { buildApiErrorEnvelope } from '../response-format.js';
 
 export const MAX_BODY_SIZE = 1_048_576; // 1MB
+export const SATELLITE_HUB_BODY_SIZE = MAX_BODY_SIZE * 2;
 export const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 90_000;
 export const DEFAULT_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS = 65 * 60_000;
 

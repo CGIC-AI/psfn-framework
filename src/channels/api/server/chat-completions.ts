@@ -45,6 +45,7 @@ import {
   deriveAuthor,
   deriveChannelId,
   getLastUserMessage,
+  getLastUserMessageAttachments,
   seedSession,
 } from './session.js';
 import { SseStreamingTransport } from './streaming.js';
@@ -696,6 +697,7 @@ export class ApiChatCompletionsHandler {
       }
     }
     const lastUserMsg = getLastUserMessage(request.messages);
+    const lastUserAttachments = getLastUserMessageAttachments(request.messages);
     const substrateMsg = buildSubstrateMessage({
       channelId,
       channelType,
@@ -708,6 +710,7 @@ export class ApiChatCompletionsHandler {
       channelPrivacy: resolvedChannelPrivacy,
       canonicalContactId,
       satellite,
+      attachments: lastUserAttachments,
     });
 
     const acquiredChannel = await this.acquireChannel(channelId, req, res);

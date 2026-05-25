@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type {
+  Attachment,
   ChannelType,
   MessageModelOverride,
   MessagePromptOverride,
@@ -34,6 +35,11 @@ import type {
   ChatCompletionRequest,
   TelemetryIngestResponse,
 } from './types.js';
+import {
+  getLastUserMessage as getChatLastUserMessage,
+  getLastUserMessageAttachments,
+  getMessageTextContent,
+} from './server/session.js';
 import { buildApiHealthResponse } from './server-health.js';
 import {
   type FifoChannelLease,
@@ -479,11 +485,12 @@ export class AgentApiBackend {
 
     const prior = messages.slice(0, -1);
     for (const msg of prior) {
+      const content = getMessageTextContent(msg);
       if (msg.role === 'user') {
         if (channelPrivacy) {
           this.sessionManager.recordUserMessage(
             channelId,
-            msg.content,
+            content,
             authorId,
             msg.name ?? authorName,
             undefined,
@@ -493,13 +500,13 @@ export class AgentApiBackend {
             },
           );
         } else {
-          this.sessionManager.recordUserMessage(channelId, msg.content, authorId, msg.name ?? authorName);
+          this.sessionManager.recordUserMessage(channelId, content, authorId, msg.name ?? authorName);
         }
       } else if (msg.role === 'assistant') {
         if (channelPrivacy) {
           this.sessionManager.recordAssistantMessage(
             channelId,
-            msg.content,
+            content,
             undefined,
             undefined,
             undefined,
@@ -508,7 +515,7 @@ export class AgentApiBackend {
             },
           );
         } else {
-          this.sessionManager.recordAssistantMessage(channelId, msg.content);
+          this.sessionManager.recordAssistantMessage(channelId, content);
         }
       }
     }
@@ -536,10 +543,7 @@ export class AgentApiBackend {
   }
 
   private getLastUserMessage(messages: ChatCompletionRequest['messages']): string {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === 'user') return messages[i].content;
-    }
-    return messages[messages.length - 1].content;
+    return getChatLastUserMessage(messages);
   }
 
   private parseTurnRoutingOverrides(
@@ -803,6 +807,7 @@ export class AgentApiBackend {
     channelPrivacy?: ChannelVisibility;
     canonicalContactId?: string;
     satellite?: SatelliteRoutingMetadata;
+    attachments?: Attachment[];
   }): SubstrateMessage {
     const approvalToken = this.readHeader(params.headers, 'x-broadcast-approval-token', 256);
     const requestedScope = this.readHeader(params.headers, 'x-broadcast-visibility-scope', 64);
@@ -842,6 +847,7 @@ export class AgentApiBackend {
       authorId: params.authorId,
       authorName: params.authorName,
       content: params.content,
+      ...(params.attachments && params.attachments.length > 0 ? { attachments: params.attachments } : {}),
       ...(hasRouting ? { routing } : {}),
       timestamp: new Date(),
     };
@@ -925,6 +931,7 @@ export class AgentApiBackend {
       channelPrivacy: resolvedChannelPrivacy,
       canonicalContactId,
       satellite,
+      attachments: getLastUserMessageAttachments(request.messages),
     });
     this.seedSession(channelId, request.messages, authorId, authorName, resolvedChannelPrivacy);
 

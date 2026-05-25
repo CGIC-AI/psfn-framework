@@ -33,7 +33,8 @@ interface VisionAttachmentResolutionFailure {
     | 'fetch_unavailable'
     | 'fetch_failed'
     | 'unsupported_mime'
-    | 'invalid_size';
+    | 'invalid_size'
+    | 'invalid_data';
   url: string;
   detail: string;
 }
@@ -107,6 +108,7 @@ export function collectVisionAttachmentUrls(message?: SubstrateMessage): string[
   if (!message?.attachments || message.attachments.length === 0) return [];
   return message.attachments
     .filter((attachment) => resolveAttachmentImageContentType(attachment) !== null)
+    .filter((attachment) => isFetchableAttachmentUrl(attachment.url))
     .slice(0, VISION_ATTACHMENT_MAX_COUNT)
     .map((attachment) => attachment.url.trim())
     .filter((url) => url.length > 0);
@@ -129,11 +131,12 @@ export async function buildTurnUserContent(input: {
   visionReviewer?: ImageVisionReviewer | null;
 }): Promise<TurnUserContentBuildResult> {
   const visionUrls = collectVisionTurnImageUrls(input.message);
+  const hasInlineImages = hasInlineVisionAttachments(input.message);
   const semanticText = extractSemanticVisionTurnText(
     input.message.content,
     visionUrls,
   );
-  if (visionUrls.length > 0 && input.visionReviewer) {
+  if (visionUrls.length > 0 && !hasInlineImages && input.visionReviewer) {
     try {
       const review = await input.visionReviewer.analyze({
         imageUrls: visionUrls,
@@ -223,6 +226,23 @@ function resolveAttachmentImageContentType(attachment: Attachment): string | nul
   return null;
 }
 
+function hasInlineVisionAttachments(message: SubstrateMessage): boolean {
+  return Boolean(message.attachments?.some((attachment) => {
+    return typeof attachment.dataBase64 === 'string'
+      && attachment.dataBase64.trim().length > 0
+      && resolveAttachmentImageContentType(attachment) !== null;
+  }));
+}
+
+function isFetchableAttachmentUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 async function resolveVisionImageContentBlocks(input: {
   message: SubstrateMessage;
   llmClient: LLMProviderPort;
@@ -297,6 +317,25 @@ async function resolveVisionAttachmentContent(input: {
   runtimeMode: RuntimeMode;
   logger: VisionLogger;
 }): Promise<VisionAttachmentResolutionResult> {
+  const inlineDataBase64 = input.attachment.dataBase64?.trim();
+  if (inlineDataBase64) {
+    const contentType = resolveAttachmentImageContentType(input.attachment);
+    if (!contentType) {
+      return {
+        failure: {
+          code: 'unsupported_mime',
+          url: input.attachment.url,
+          detail: 'Inline image attachment did not include a supported image content type.',
+        },
+      };
+    }
+    return resolveInlineVisionAttachmentContent({
+      url: input.attachment.url,
+      dataBase64: inlineDataBase64,
+      contentType,
+    });
+  }
+
   let attachmentUrl: URL;
   try {
     attachmentUrl = new URL(input.attachment.url);
@@ -387,6 +426,47 @@ async function resolveVisionAttachmentContent(input: {
       detail: capabilityUnavailableMessage,
     },
   };
+}
+
+function resolveInlineVisionAttachmentContent(input: {
+  url: string;
+  dataBase64: string;
+  contentType: string;
+}): VisionAttachmentResolutionResult {
+  const dataBase64 = input.dataBase64.replace(/\s+/g, '');
+  if (!isStrictBase64(dataBase64)) {
+    return {
+      failure: {
+        code: 'invalid_data',
+        url: input.url,
+        detail: 'Inline image attachment data is not valid base64.',
+      },
+    };
+  }
+
+  const bytes = Buffer.from(dataBase64, 'base64');
+  if (bytes.byteLength <= 0 || bytes.byteLength > VISION_ATTACHMENT_MAX_BYTES) {
+    return {
+      failure: {
+        code: 'invalid_size',
+        url: input.url,
+        detail: `Inline image attachment size ${bytes.byteLength} is outside the supported range.`,
+      },
+    };
+  }
+
+  return {
+    block: {
+      type: 'image',
+      data: dataBase64,
+      mimeType: input.contentType,
+    },
+  };
+}
+
+function isStrictBase64(value: string): boolean {
+  if (!value || value.length % 4 !== 0) return false;
+  return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
 }
 
 function extractSemanticVisionTurnText(

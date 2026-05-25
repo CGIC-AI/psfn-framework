@@ -3,9 +3,33 @@
 import type { ExternalTelemetryEvent } from '../../shared/event-bus.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 
+export interface OpenAITextContentPart {
+  type: 'text';
+  text: string;
+}
+
+export interface OpenAIInlineImageContentPart {
+  type: 'image';
+  data: string;
+  mimeType: string;
+  name?: string;
+}
+
+export interface OpenAIImageUrlContentPart {
+  type: 'image_url';
+  image_url: string | {
+    url?: string;
+    detail?: string;
+  };
+}
+
+export type OpenAIMessageContent =
+  | string
+  | Array<OpenAITextContentPart | OpenAIInlineImageContentPart | OpenAIImageUrlContentPart>;
+
 export interface OpenAIMessage {
   role: 'system' | 'user' | 'assistant';
-  content: string;
+  content: OpenAIMessageContent;
   name?: string;
 }
 

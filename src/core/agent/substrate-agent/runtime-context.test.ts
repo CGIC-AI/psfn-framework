@@ -86,7 +86,7 @@ const TEST_CHARGE_POLICY = {
   schemaVersion: 1,
   runChargeQuotaByLane: {
     interactive: 24,
-    background: 8,
+    background: 16,
     maintenance: 0,
     subagent: 6,
     shard: 12,

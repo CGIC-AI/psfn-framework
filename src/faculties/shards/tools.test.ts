@@ -4,6 +4,12 @@ import { createBoundedSubagentLaunchTool } from './tools.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 
 describe('createBoundedSubagentLaunchTool', () => {
+  it('advertises sixteen turns for background-model worker tasks', () => {
+    const tool = createBoundedSubagentLaunchTool({ executeSubagent: vi.fn() } as unknown as SubagentExecutionPort);
+
+    expect((tool.parameters as any).properties.maxTurns.maximum).toBe(16);
+  });
+
   it('returns a bounded subagent launch envelope in details', async () => {
     const executeSubagent = vi.fn(async () => ({
       subagentId: 'subagent-123',

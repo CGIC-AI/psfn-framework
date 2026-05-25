@@ -135,6 +135,12 @@ function createPort(): SubagentControlPort {
 }
 
 describe('createSubagentTool', () => {
+  it('advertises sixteen turns for background-model worker tasks', () => {
+    const tool = createSubagentTool(createPort());
+
+    expect((tool.parameters as any).properties.max_turns.maximum).toBe(16);
+  });
+
   it('routes spawn requests through the bounded subagent control surface', async () => {
     const port = createPort();
     const tool = createSubagentTool(port);

@@ -46,7 +46,7 @@ export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
       system_prompt: Type.Optional(Type.String({ description: 'Optional subagent system prompt override.' })),
       max_turns: Type.Optional(Type.Number({
         minimum: 1,
-        maximum: 8,
+        maximum: 16,
         description: 'Optional max turns for the bounded worker loop.',
       })),
       capabilities: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {

@@ -30,7 +30,7 @@ export function createBoundedSubagentLaunchTool(manager: SubagentExecutionPort):
         Type.String({ description: 'Optional system prompt override (default: inherit parent prompt)' }),
       ),
       maxTurns: Type.Optional(
-        Type.Number({ minimum: 1, maximum: 8, description: 'Optional max turns for the bounded subagent loop (default: 1)' }),
+        Type.Number({ minimum: 1, maximum: 16, description: 'Optional max turns for the bounded subagent loop (default: 1)' }),
       ),
       capabilities: Type.Optional(
         Type.Array(Type.String({ minLength: 1 }), {

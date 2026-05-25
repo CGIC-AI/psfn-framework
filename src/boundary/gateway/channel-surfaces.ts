@@ -57,6 +57,7 @@ export async function loadGatewayChannelSurfaces(
       discordConfig: input.bootstrap.channelsConfig.discord,
       eventBus: input.eventBus,
       eligibilityGate: input.eligibilityGate,
+      personalFilesDir: input.bootstrap.workspaceRoot,
     }),
     createOpenHomeChannelAdapterFactoryEntry(),
     createTelegramChannelAdapterFactoryEntry({

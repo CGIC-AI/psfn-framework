@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { EventBus } from '../../shared/event-bus.js';
@@ -664,6 +664,71 @@ describe('DiscordAdapter DM routing', () => {
         },
       ],
     }));
+  });
+
+  it('saves and parses Discord text attachments when a personal files root is configured', async () => {
+    const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-discord-docs-'));
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response('# Field notes\n\nThe artifact is in the garden.', {
+      headers: { 'content-type': 'text/markdown' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const eventBus = new EventBus();
+      const adapter = new DiscordAdapter(makeConfig(), eventBus, { personalFilesDir });
+      await adapter.init();
+
+      const channelId = 'dm-channel-docs';
+      const interactive = makeInteractiveTextChannel();
+      discordMock.channelsById.set(channelId, interactive.channel);
+
+      const handler = vi.fn(async () => {
+        return {
+          content: 'document received',
+          channelId,
+          metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+        };
+      });
+      adapter.onMessage(handler);
+
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'dm-doc-1',
+          content: 'please read this',
+          attachments: [
+            {
+              id: 'att-doc-md',
+              name: 'field-notes.md',
+              url: 'https://cdn.discordapp.com/attachments/a/b/field-notes.md',
+              contentType: 'text/markdown',
+              size: 64,
+            },
+          ],
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledWith('https://cdn.discordapp.com/attachments/a/b/field-notes.md');
+      expect(handler).toHaveBeenCalledTimes(1);
+      const message = handler.mock.calls[0][0] as SubstrateMessage;
+      expect(message.content).toContain('please read this');
+      expect(message.content).toContain('The artifact is in the garden.');
+      expect(message.attachments).toHaveLength(1);
+      const attachment = message.attachments?.[0];
+      expect(attachment).toEqual(expect.objectContaining({
+        url: 'https://cdn.discordapp.com/attachments/a/b/field-notes.md',
+        contentType: 'text/markdown',
+        name: 'field-notes.md',
+      }));
+      expect(attachment?.localPath).toContain(join(personalFilesDir, 'downloads', 'discord'));
+      expect(attachment?.localPath && existsSync(attachment.localPath)).toBe(true);
+      expect(attachment?.parsedTextPath && existsSync(attachment.parsedTextPath)).toBe(true);
+      expect(readFileSync(attachment!.localPath!, 'utf8')).toBe('# Field notes\n\nThe artifact is in the garden.');
+      expect(readFileSync(attachment!.parsedTextPath!, 'utf8')).toContain('The artifact is in the garden.');
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+      rmSync(personalFilesDir, { recursive: true, force: true });
+    }
   });
 
   it('prefers canonical Discord attachment URLs over proxy URLs for image attachments', async () => {

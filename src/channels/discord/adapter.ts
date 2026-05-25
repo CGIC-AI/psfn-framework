@@ -40,6 +40,12 @@ import {
   type TurnContentionPolicy,
 } from '../../system/lifecycle/turn-contention.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  appendDiscordDocumentIngestToContent,
+  ingestDiscordDocumentAttachments,
+  toDiscordDocumentAttachmentCandidate,
+  type DiscordDocumentAttachmentCandidate,
+} from './file-ingest.js';
 
 const log = createComponentLogger('Discord');
 
@@ -54,6 +60,7 @@ const DISCORD_LISTEN_WINDOW_MIN_MS = 10_000;
 const DISCORD_LISTEN_WINDOW_MAX_MS = 600_000;
 const DISCORD_TRIGGER_OPT_OUT_PREFIX = '!i';
 const DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE = 4;
+const DISCORD_MAX_DOCUMENT_ATTACHMENTS_PER_MESSAGE = 4;
 const DISCORD_MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const DISCORD_INLINE_IMAGE_URL_PATTERN = /https?:\/\/[^\s<>()]+/gi;
 const DISCORD_IMAGE_LINK_HOST_SUFFIXES = [
@@ -95,6 +102,7 @@ interface DiscordAdapterOptions {
   sessionStore?: SessionStore;
   eligibilityGate?: EligibilityGate;
   allowedBotUserIds?: string[];
+  personalFilesDir?: string;
 }
 
 interface LongRunningToolState {
@@ -155,11 +163,13 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private statusUnsubscribers: Array<() => void> = [];
   private longRunningTools = new Map<string, LongRunningToolState>();
   private allowedBotUserIds: Set<string>;
+  private personalFilesDir: string | null;
 
   constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
     this.runtimeConfig = config;
     this.eventBus = eventBus;
     this.sessionStore = options.sessionStore ?? null;
+    this.personalFilesDir = options.personalFilesDir?.trim() || null;
     this.allowedBotUserIds = new Set(
       (options.allowedBotUserIds ?? [])
         .map(id => id.trim())
@@ -381,7 +391,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
       }
     }
 
-    const substrateMsg = this.buildSubstrateMessage(msg, isDM, runtimeBotId, respondToMessage);
+    const substrateMsg = await this.buildSubstrateMessage(msg, isDM, runtimeBotId, respondToMessage);
     await this.processMessage({
       msg,
       substrateMsg,
@@ -459,7 +469,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
 
     fullReaction.remove().catch(() => undefined);
 
-    const substrateMsg = this.buildSubstrateMessage(
+    const substrateMsg = await this.buildSubstrateMessage(
       targetMessage as Message,
       !targetMessage.guild,
       runtimeBotId,
@@ -623,12 +633,12 @@ export class DiscordAdapter implements ChannelAdapterPort {
     }
   }
 
-  private buildSubstrateMessage(
+  private async buildSubstrateMessage(
     msg: Message,
     isDirectMessage: boolean,
     runtimeBotId?: string,
     respondToMessage = true,
-  ): SubstrateMessage {
+  ): Promise<SubstrateMessage> {
     const attachments: NonNullable<SubstrateMessage['attachments']> = this.extractAttachments(msg);
     if (attachments.length < DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) {
       const seenUrls = new Set(attachments.map((attachment) => attachment.url));
@@ -638,7 +648,32 @@ export class DiscordAdapter implements ChannelAdapterPort {
         attachments.push(...inlineAttachments);
       }
     }
-    const content = this.sanitizeMessageContent(msg.content, runtimeBotId);
+    let content = this.sanitizeMessageContent(msg.content, runtimeBotId);
+    const documentCandidates = this.extractDocumentAttachmentCandidates(msg);
+    if (documentCandidates.length > 0 && this.personalFilesDir) {
+      const documentSummary = await ingestDiscordDocumentAttachments(documentCandidates, {
+        personalFilesDir: this.personalFilesDir,
+        channelId: msg.channelId,
+        messageId: msg.id,
+        authorId: msg.author.id,
+        createdAt: msg.createdAt,
+      });
+      attachments.push(...documentSummary.results.map(result => result.attachment));
+      content = appendDiscordDocumentIngestToContent(content, documentSummary);
+      if (documentSummary.failures.length > 0) {
+        log.warn('Some Discord document attachments failed to ingest', {
+          channelId: msg.channelId,
+          messageId: msg.id,
+          failures: documentSummary.failures,
+        });
+      }
+    } else if (documentCandidates.length > 0 && !this.personalFilesDir) {
+      log.warn('Discord document attachments skipped because personal files root is not configured', {
+        channelId: msg.channelId,
+        messageId: msg.id,
+        attachmentNames: documentCandidates.map(candidate => candidate.name),
+      });
+    }
     const resolvedContent = content === '(empty message)' && attachments.length > 0
       ? '(image attachment)'
       : content;
@@ -697,6 +732,17 @@ export class DiscordAdapter implements ChannelAdapterPort {
     }
 
     return attachments;
+  }
+
+  private extractDocumentAttachmentCandidates(msg: Message): DiscordDocumentAttachmentCandidate[] {
+    const candidates: DiscordDocumentAttachmentCandidate[] = [];
+    for (const raw of msg.attachments.values()) {
+      if (candidates.length >= DISCORD_MAX_DOCUMENT_ATTACHMENTS_PER_MESSAGE) break;
+      const candidate = toDiscordDocumentAttachmentCandidate(raw);
+      if (!candidate) continue;
+      candidates.push(candidate);
+    }
+    return candidates;
   }
 
   private extractInlineImageLinks(

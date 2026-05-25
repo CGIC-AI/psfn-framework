@@ -24,6 +24,7 @@ export interface DiscordChannelAdapterFactoryOptions {
   onMessage?: MessageHandler | null;
   onVoiceMessage?: MessageHandler | null;
   eligibilityGate?: EligibilityGate;
+  personalFilesDir?: string;
 }
 
 export function createDiscordChannelAdapterFactoryEntry(
@@ -42,6 +43,7 @@ export function createDiscordChannelAdapterFactoryEntry(
         ...(options.sessionStore ? { sessionStore: options.sessionStore } : {}),
         ...(options.eligibilityGate ? { eligibilityGate: options.eligibilityGate } : {}),
         ...(options.discordConfig ? { allowedBotUserIds: options.discordConfig.allowedBotUserIds } : {}),
+        ...(options.personalFilesDir ? { personalFilesDir: options.personalFilesDir } : {}),
       });
       if (options.agentLoop) {
         adapter.setAgent(options.agentLoop);

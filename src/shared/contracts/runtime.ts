@@ -215,6 +215,7 @@ export interface Attachment {
   name: string;
   localPath?: string;
   dataBase64?: string;
+  parsedTextPath?: string;
 }
 
 export interface AgentResponse {

@@ -20,6 +20,7 @@ const GARDEN_CLIENT_ROUTES = new Set([
   '/primer',
   '/prompt-monitor',
   '/prompts',
+  '/satellites',
   '/scheduler',
   '/sessions',
   '/settings',

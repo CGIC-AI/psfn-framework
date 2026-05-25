@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { navItems } from '../../../admin-ui/src/lib/nav.js';
 import { handleAdminRequest } from './server-request-routing.js';
 
 function makeRequest(method: string, url: string): IncomingMessage {
@@ -43,7 +44,7 @@ describe('handleAdminRequest', () => {
   });
 
   it('serves the Garden SPA for nav-advertised client routes on direct load', () => {
-    for (const path of ['/action-pipe', '/charge-budget']) {
+    for (const { path } of navItems) {
       const req = makeRequest('GET', path);
       const res = makeResponse();
       const serveGardenPage = vi.fn();

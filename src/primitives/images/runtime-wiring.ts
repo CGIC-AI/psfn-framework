@@ -2,9 +2,18 @@ import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { ToolRegistrar } from '../../core/agent/tool-registrar.js';
 import type { ToolWiringMeta, WirableTool } from '../../core/agent/tool-wiring-validator.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
+import { ImageReferenceStore } from './reference-store.js';
 import type { ImageOperations } from './ops.js';
 import { ImageService } from './service.js';
-import { createImageAnalyzeTool, createImageCreateTool, createImageEditTool, createMediaTool, createSelfieTool } from './tools.js';
+import {
+  createImageAnalyzeTool,
+  createImageCreateTool,
+  createImageEditTool,
+  createMediaTool,
+  createSelfieTool,
+  type ImageReferenceResolver,
+} from './tools.js';
 import {
   DefaultImageVisionReviewer,
   type ImageVisionReviewerOptions,
@@ -29,10 +38,13 @@ function resolveRequiredGatewayMethods(
     case 'media':
       return ['image.create', 'image.edit', 'web.fetch_binary'];
     case 'image_create':
-    case 'selfie_create':
       return includeVisionReview
         ? ['image.create', 'web.fetch_binary']
         : ['image.create'];
+    case 'selfie_create':
+      return includeVisionReview
+        ? ['image.create', 'image.edit', 'web.fetch_binary']
+        : ['image.create', 'image.edit'];
     case 'image_edit':
       return includeVisionReview
         ? ['image.edit', 'web.fetch_binary']
@@ -47,6 +59,7 @@ function resolveRequiredGatewayMethods(
 export interface RegisterImagesToolsOptions {
   gatewayMode?: boolean;
   reviewer?: ImageVisionReviewer;
+  referenceResolver?: ImageReferenceResolver;
 }
 
 export function registerImageTools(
@@ -55,10 +68,10 @@ export function registerImageTools(
   options?: RegisterImagesToolsOptions,
 ): void {
   const tools: AgentTool<any>[] = [
-    createMediaTool(ops, options?.reviewer),
+    createMediaTool(ops, options?.reviewer, { referenceResolver: options?.referenceResolver }),
     createImageCreateTool(ops, options?.reviewer),
-    createSelfieTool(ops, options?.reviewer),
-    createImageEditTool(ops, options?.reviewer),
+    createSelfieTool(ops, options?.reviewer, { referenceResolver: options?.referenceResolver }),
+    createImageEditTool(ops, options?.reviewer, { referenceResolver: options?.referenceResolver }),
     ...(options?.reviewer ? [createImageAnalyzeTool(options.reviewer)] : []),
   ];
 
@@ -87,6 +100,7 @@ export function wireImageRuntime(
 ): ImageService {
   const service = new ImageService(config);
   const reviewer = options?.reviewer ?? new DefaultImageVisionReviewer(config, options?.reviewerOptions);
-  registerImageTools(target, service, { reviewer });
+  const referenceStore = new ImageReferenceStore(resolveConfiguredCompanionDataDir(config));
+  registerImageTools(target, service, { reviewer, referenceResolver: referenceStore });
   return service;
 }

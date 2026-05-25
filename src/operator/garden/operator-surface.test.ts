@@ -242,6 +242,7 @@ async function createHarness(): Promise<Harness> {
       resolveShardFoldReview: vi.fn(async () => ({ ok: false, message: 'Shard fold review not found' })),
     },
     adaptiveTools: null,
+    images: {} as GardenAdminDomainServices['images'],
     memory: {} as GardenAdminDomainServices['memory'],
     sessions: {} as GardenAdminDomainServices['sessions'],
     contacts: {} as GardenAdminDomainServices['contacts'],

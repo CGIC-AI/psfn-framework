@@ -7,6 +7,7 @@ import type {
   AdminAuditHistoryService,
   AdminContactsService,
   AdminDashboardService,
+  AdminImagesService,
   AdminIdentityService,
   AdminMemoryService,
   AdminPromptsService,
@@ -46,6 +47,7 @@ function makeRoutes(auditHistoryService?: AdminAuditHistoryService | null): Admi
   return buildAdminApiRoutes({
     config: {} as SubstrateConfig,
     dashboardService: {} as AdminDashboardService,
+    imagesService: {} as AdminImagesService,
     auditHistoryService,
     shardFoldReviewService: {} as AdminShardFoldReviewService,
     memoryService: {} as AdminMemoryService,

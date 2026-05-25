@@ -9,6 +9,14 @@
     uploadIdentity,
   } from '$lib/api/endpoints/identity';
   import type { DiffPreviewResponse } from '$lib/api/endpoints/identity';
+  import {
+    deleteImageReference,
+    listImageReferences,
+    setDefaultImageReference,
+    updateImageReference,
+    uploadImageReference,
+  } from '$lib/api/endpoints/images';
+  import type { ImageReferenceListResponse, ImageReferencePhoto } from '$lib/api/endpoints/images';
   import ConfirmationModal from '$lib/components/ConfirmationModal.svelte';
   import {
     cancelIdentityConfirmation,
@@ -36,6 +44,22 @@
   let uploadMessage = $state('');
   let uploadSuccess = $state(false);
   let uploadInput = $state<HTMLInputElement | null>(null);
+
+  // Reference photos
+  let referenceData = $state<ImageReferenceListResponse | null>(null);
+  let referenceLoading = $state(true);
+  let referenceError = $state('');
+  let referenceUploadFiles = $state<File[]>([]);
+  let referenceUploadDescription = $state('');
+  let referenceUploadTags = $state('');
+  let referenceUploadDefault = $state(false);
+  let referenceUploading = $state(false);
+  let referenceUploadInput = $state<HTMLInputElement | null>(null);
+  let referenceEditingId = $state<string | null>(null);
+  let referenceEditDescription = $state('');
+  let referenceEditTags = $state('');
+  let referenceSavingId = $state<string | null>(null);
+  let referenceDeletingId = $state<string | null>(null);
 
   // Rollback
   let rollingBack = $state<number | null>(null);
@@ -79,11 +103,17 @@
 
   onMount(async () => {
     try {
-      data = await getIdentity();
+      const [identity, references] = await Promise.all([
+        getIdentity(),
+        listImageReferences(),
+      ]);
+      data = identity;
+      referenceData = references;
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load identity';
     } finally {
       loading = false;
+      referenceLoading = false;
     }
   });
 
@@ -135,6 +165,123 @@
       pushToast(uploadMessage, 'error');
     } finally {
       uploading = false;
+    }
+  }
+
+  function parseReferenceTags(value: string): string[] {
+    return value
+      .split(',')
+      .map((tag) => tag.trim())
+      .filter(Boolean);
+  }
+
+  function referenceBlobUrl(reference: ImageReferencePhoto): string {
+    return `/api/admin/image-references/${encodeURIComponent(reference.id)}/blob`;
+  }
+
+  function onReferenceUploadChange(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    referenceUploadFiles = Array.from(input.files ?? []);
+    referenceError = '';
+  }
+
+  function clearReferenceUploadSelection() {
+    referenceUploadFiles = [];
+    if (referenceUploadInput) referenceUploadInput.value = '';
+  }
+
+  async function refreshReferencePhotos() {
+    referenceError = '';
+    referenceData = await listImageReferences();
+  }
+
+  async function runReferenceUpload() {
+    if (referenceUploadFiles.length === 0) return;
+    referenceUploading = true;
+    referenceError = '';
+    try {
+      const tags = parseReferenceTags(referenceUploadTags);
+      for (let index = 0; index < referenceUploadFiles.length; index += 1) {
+        const file = referenceUploadFiles[index];
+        if (!file) continue;
+        await uploadImageReference(file, {
+          description: referenceUploadDescription,
+          tags,
+          setDefault: referenceUploadDefault && index === 0,
+        });
+      }
+      await refreshReferencePhotos();
+      clearReferenceUploadSelection();
+      referenceUploadDescription = '';
+      referenceUploadTags = '';
+      referenceUploadDefault = false;
+      pushToast('Reference photo uploaded', 'success');
+    } catch (e) {
+      referenceError = e instanceof Error ? e.message : 'Reference photo upload failed';
+      pushToast(referenceError, 'error');
+    } finally {
+      referenceUploading = false;
+    }
+  }
+
+  function startReferenceEdit(reference: ImageReferencePhoto) {
+    referenceEditingId = reference.id;
+    referenceEditDescription = reference.description;
+    referenceEditTags = reference.tags.join(', ');
+  }
+
+  function cancelReferenceEdit() {
+    referenceEditingId = null;
+    referenceEditDescription = '';
+    referenceEditTags = '';
+  }
+
+  async function saveReferenceEdit(reference: ImageReferencePhoto) {
+    referenceSavingId = reference.id;
+    referenceError = '';
+    try {
+      await updateImageReference(reference.id, {
+        description: referenceEditDescription,
+        tags: parseReferenceTags(referenceEditTags),
+      });
+      await refreshReferencePhotos();
+      cancelReferenceEdit();
+      pushToast('Reference photo saved', 'success');
+    } catch (e) {
+      referenceError = e instanceof Error ? e.message : 'Reference photo update failed';
+      pushToast(referenceError, 'error');
+    } finally {
+      referenceSavingId = null;
+    }
+  }
+
+  async function setReferenceDefault(reference: ImageReferencePhoto) {
+    referenceSavingId = reference.id;
+    referenceError = '';
+    try {
+      await setDefaultImageReference(reference.id);
+      await refreshReferencePhotos();
+      pushToast('Default reference updated', 'success');
+    } catch (e) {
+      referenceError = e instanceof Error ? e.message : 'Default reference update failed';
+      pushToast(referenceError, 'error');
+    } finally {
+      referenceSavingId = null;
+    }
+  }
+
+  async function removeReference(reference: ImageReferencePhoto) {
+    referenceDeletingId = reference.id;
+    referenceError = '';
+    try {
+      await deleteImageReference(reference.id);
+      await refreshReferencePhotos();
+      pushToast('Reference photo deleted', 'success');
+    } catch (e) {
+      referenceError = e instanceof Error ? e.message : 'Reference photo deletion failed';
+      pushToast(referenceError, 'error');
+    } finally {
+      referenceDeletingId = null;
     }
   }
 
@@ -383,6 +530,7 @@
 
   let card = $derived(data?.card ?? null);
   let cardData = $derived(card?.data ?? null);
+  let referencePhotos = $derived(referenceData?.references ?? []);
   let appearanceValue = $derived(
     cardData?.extensions?.visual_description
       ? String(cardData.extensions.visual_description)
@@ -717,6 +865,193 @@
           {:else}
             <p class="text-sm text-shadow-500 italic">No visual description set in extensions</p>
           {/if}
+        </div>
+
+        <!-- Reference photos -->
+        <div class="card-garden p-5">
+          <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 class="text-sm font-medium text-shadow-700 uppercase tracking-wider">Reference Photos</h3>
+              <p class="mt-1 text-sm text-shadow-600">{referencePhotos.length} photo{referencePhotos.length === 1 ? '' : 's'}</p>
+            </div>
+            <button
+              type="button"
+              onclick={() => void refreshReferencePhotos()}
+              disabled={referenceLoading || referenceUploading}
+              class="rounded-lg border border-bark-300 px-3 py-1.5 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:opacity-50"
+            >
+              Refresh
+            </button>
+          </div>
+
+          {#if referenceError}
+            <div class="mb-4 rounded-lg border border-wilt-200 bg-wilt-50 px-3 py-2 text-sm text-wilt-700">{referenceError}</div>
+          {/if}
+
+          <form
+            class="space-y-3 rounded-lg border border-bark-300 bg-bark-50 p-3"
+            onsubmit={(e) => {
+              e.preventDefault();
+              void runReferenceUpload();
+            }}
+          >
+            <div class="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_1fr]">
+              <input
+                bind:this={referenceUploadInput}
+                type="file"
+                multiple
+                accept="image/png,image/jpeg,image/webp,image/gif"
+                onchange={onReferenceUploadChange}
+                class="block w-full text-sm text-shadow-700 file:mr-3 file:rounded-lg file:border file:border-bark-300 file:bg-bark-100 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-shadow-800 hover:file:bg-bark-200"
+              />
+              <input
+                type="text"
+                bind:value={referenceUploadDescription}
+                maxlength="240"
+                placeholder="Short description"
+                class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 placeholder:text-shadow-400 focus:border-gold-400 focus:outline-none focus:ring-2 focus:ring-gold-300"
+              />
+            </div>
+            <div class="grid grid-cols-1 gap-3 lg:grid-cols-[1fr_auto_auto] lg:items-center">
+              <input
+                type="text"
+                bind:value={referenceUploadTags}
+                placeholder="tags, comma separated"
+                class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 placeholder:text-shadow-400 focus:border-gold-400 focus:outline-none focus:ring-2 focus:ring-gold-300"
+              />
+              <label class="inline-flex items-center gap-2 text-sm font-medium text-shadow-700">
+                <input
+                  type="checkbox"
+                  bind:checked={referenceUploadDefault}
+                  class="rounded border-bark-300 text-gold-600 focus:ring-gold-300"
+                />
+                Default
+              </label>
+              <div class="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={referenceUploading || referenceUploadFiles.length === 0}
+                  class="rounded-lg bg-gold-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-gold-700 disabled:opacity-50"
+                >
+                  {referenceUploading ? 'Uploading...' : 'Upload'}
+                </button>
+                <button
+                  type="button"
+                  onclick={clearReferenceUploadSelection}
+                  disabled={referenceUploading || referenceUploadFiles.length === 0}
+                  class="rounded-lg border border-bark-300 px-3 py-2 text-sm font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:opacity-50"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          </form>
+
+          <div class="mt-4">
+            {#if referenceLoading}
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {#each Array(3) as _}
+                  <div class="rounded-lg border border-bark-300 p-3 animate-pulse">
+                    <div class="aspect-[4/3] rounded bg-bark-200"></div>
+                    <div class="mt-3 h-4 w-2/3 rounded bg-bark-200"></div>
+                  </div>
+                {/each}
+              </div>
+            {:else if referencePhotos.length === 0}
+              <p class="text-sm text-shadow-500 italic">No reference photos saved</p>
+            {:else}
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {#each referencePhotos as reference (reference.id)}
+                  <div class="rounded-lg border border-bark-300 bg-white p-3">
+                    <div class="relative overflow-hidden rounded bg-bark-100">
+                      <img
+                        src={referenceBlobUrl(reference)}
+                        alt={reference.description || reference.fileName}
+                        class="aspect-[4/3] w-full object-contain"
+                        loading="lazy"
+                      />
+                      {#if reference.isDefault}
+                        <span class="absolute right-2 top-2 rounded-full border border-gold-300 bg-gold-50 px-2 py-0.5 text-xs font-medium text-gold-700">
+                          Default
+                        </span>
+                      {/if}
+                    </div>
+
+                    {#if referenceEditingId === reference.id}
+                      <div class="mt-3 space-y-2">
+                        <input
+                          type="text"
+                          bind:value={referenceEditDescription}
+                          maxlength="240"
+                          class="w-full rounded-lg border border-gold-300 px-3 py-2 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-300"
+                        />
+                        <input
+                          type="text"
+                          bind:value={referenceEditTags}
+                          class="w-full rounded-lg border border-gold-300 px-3 py-2 text-sm text-shadow-900 focus:outline-none focus:ring-2 focus:ring-gold-300"
+                        />
+                        <div class="flex gap-2">
+                          <button
+                            type="button"
+                            onclick={() => void saveReferenceEdit(reference)}
+                            disabled={referenceSavingId === reference.id}
+                            class="rounded bg-gold-600 px-2.5 py-1 text-sm font-medium text-white hover:bg-gold-700 disabled:opacity-50"
+                          >
+                            {referenceSavingId === reference.id ? 'Saving...' : 'Save'}
+                          </button>
+                          <button
+                            type="button"
+                            onclick={cancelReferenceEdit}
+                            disabled={referenceSavingId === reference.id}
+                            class="rounded border border-bark-300 px-2.5 py-1 text-sm font-medium text-shadow-700 hover:bg-bark-100 disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    {:else}
+                      <div class="mt-3 space-y-2">
+                        <p class="text-sm font-medium text-shadow-800">{reference.description || reference.fileName}</p>
+                        <div class="flex flex-wrap gap-1.5">
+                          {#each reference.tags as tag}
+                            <span class="rounded-full border border-bark-300 bg-bark-100 px-2 py-0.5 text-xs font-medium text-shadow-700">{tag}</span>
+                          {/each}
+                        </div>
+                        <p class="text-xs font-mono text-shadow-500">{reference.id}</p>
+                        <div class="flex flex-wrap gap-2 border-t border-bark-300 pt-2">
+                          <button
+                            type="button"
+                            onclick={() => startReferenceEdit(reference)}
+                            class="text-sm font-medium text-gold-700 hover:text-gold-600"
+                          >
+                            Edit
+                          </button>
+                          {#if !reference.isDefault}
+                            <button
+                              type="button"
+                              onclick={() => void setReferenceDefault(reference)}
+                              disabled={referenceSavingId === reference.id}
+                              class="text-sm font-medium text-shadow-700 hover:text-shadow-900 disabled:opacity-50"
+                            >
+                              Set Default
+                            </button>
+                          {/if}
+                          <button
+                            type="button"
+                            onclick={() => void removeReference(reference)}
+                            disabled={referenceDeletingId === reference.id}
+                            class="text-sm font-medium text-wilt-600 hover:text-wilt-700 disabled:opacity-50"
+                          >
+                            {referenceDeletingId === reference.id ? 'Deleting...' : 'Delete'}
+                          </button>
+                        </div>
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </div>
         </div>
 
         <!-- Card fields -- each is click-to-edit -->

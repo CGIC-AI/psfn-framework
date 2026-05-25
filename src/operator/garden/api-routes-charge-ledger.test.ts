@@ -7,6 +7,7 @@ import type {
   AdminChargeLedgerService,
   AdminContactsService,
   AdminDashboardService,
+  AdminImagesService,
   AdminIdentityService,
   AdminMemoryService,
   AdminPromptsService,
@@ -46,6 +47,7 @@ function makeRoutes(chargeLedgerService?: AdminChargeLedgerService | null): Admi
   return buildAdminApiRoutes({
     config: {} as SubstrateConfig,
     dashboardService: {} as AdminDashboardService,
+    imagesService: {} as AdminImagesService,
     chargeLedgerService,
     shardFoldReviewService: {} as AdminShardFoldReviewService,
     memoryService: {} as AdminMemoryService,

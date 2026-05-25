@@ -36,6 +36,7 @@ import { registerFilesystemTools } from '../../boundary/integrations/filesystem/
 import { GatewayFilesystemOps } from '../../boundary/integrations/filesystem/gateway-ops.js';
 import { registerImageTools } from '../../primitives/images/runtime-wiring.js';
 import { GatewayImageOps } from '../../primitives/images/gateway-ops.js';
+import { ImageReferenceStore } from '../../primitives/images/reference-store.js';
 import { DefaultImageVisionReviewer } from '../../primitives/images/vision-reviewer.js';
 import { registerWebTools } from '../../boundary/integrations/web/runtime-wiring.js';
 import { GatewayWebFetchOps } from '../../boundary/integrations/web/gateway-ops.js';
@@ -186,6 +187,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   registerImageTools(agentLoop, new GatewayImageOps(gateway), {
     gatewayMode: true,
     reviewer: imageVisionReviewer,
+    referenceResolver: new ImageReferenceStore(pathSnapshot.companionDataDir),
   });
   agentLoop.imageVisionReviewer = imageVisionReviewer;
   const promptStore = wirePromptRuntime(

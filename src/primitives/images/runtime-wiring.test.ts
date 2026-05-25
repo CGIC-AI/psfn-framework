@@ -34,6 +34,7 @@ describe('media runtime wiring', () => {
     expect(calls.get('image_create')?.exposure).toBe('extended');
     expect(calls.get('selfie_create')?.tool.wiringMeta?.requiredGatewayMethods).toEqual([
       'image.create',
+      'image.edit',
       'web.fetch_binary',
     ]);
     expect(calls.get('image_edit')?.tool.wiringMeta?.requiredGatewayMethods).toEqual([

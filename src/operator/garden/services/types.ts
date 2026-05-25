@@ -103,6 +103,13 @@ import type {
   ShardFoldReviewRecord,
   ShardFoldReviewState,
 } from '../../../faculties/shards/fold-review.js';
+import type {
+  ImageReferenceBlob,
+  ImageReferenceListData,
+  ImageReferencePhoto,
+  ImageReferenceUpdateInput,
+  ImageReferenceUploadInput,
+} from '../../../primitives/images/reference-store.js';
 export type {
   AdminAuditHistoryQuery,
   AdminAuditHistoryService,
@@ -114,6 +121,52 @@ export interface AdminDashboardData {
 
 export interface AdminDashboardService {
   getDashboardData(options?: { costWindow?: DashboardCostWindow }): Promise<AdminDashboardData>;
+}
+
+export interface AdminGeneratedImageRootView {
+  kind: 'personal' | 'companion';
+  path: string;
+}
+
+export interface AdminGeneratedImageView {
+  id: string;
+  url: string;
+  rootKind: 'personal' | 'companion';
+  relativePath: string;
+  fileName: string;
+  contentType: string;
+  sizeBytes: number;
+  createdAt: string;
+  updatedAt: string;
+  prompt?: string;
+  provider?: string;
+  mode?: string;
+  model?: string;
+  sourceToolName?: string;
+  requestId?: string;
+  referenceImageIds?: string[];
+}
+
+export interface AdminGeneratedImageListData {
+  roots: AdminGeneratedImageRootView[];
+  images: AdminGeneratedImageView[];
+}
+
+export interface AdminImageBlob {
+  fileName: string;
+  contentType: string;
+  data: Buffer;
+}
+
+export interface AdminImagesService {
+  listGeneratedImages(): Promise<AdminGeneratedImageListData>;
+  getGeneratedImageBlob(id: string): Promise<AdminImageBlob | null>;
+  listReferencePhotos(): Promise<ImageReferenceListData>;
+  addReferencePhoto(input: ImageReferenceUploadInput): Promise<ImageReferencePhoto>;
+  updateReferencePhoto(id: string, input: ImageReferenceUpdateInput): Promise<ImageReferencePhoto>;
+  deleteReferencePhoto(id: string): Promise<void>;
+  setDefaultReferencePhoto(id: string): Promise<ImageReferencePhoto>;
+  getReferencePhotoBlob(id: string): Promise<ImageReferenceBlob | null>;
 }
 
 export interface AdminChargeLedgerService {

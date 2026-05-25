@@ -2,6 +2,10 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { ImageOperations } from './ops.js';
+import type {
+  ImageReferenceSelector,
+  ResolvedImageReference,
+} from './reference-store.js';
 import { getVisionToolRequestContext } from './request-context.js';
 import { textResultWithError } from '../../core/tools/results.js';
 import { chargeSurface } from '../../shared/telemetry/run-charge.js';
@@ -55,6 +59,13 @@ interface MediaToolParams {
   enable_safety_checker?: boolean;
   negative_prompt?: string;
   use_turbo?: boolean;
+  reference_image_id?: string;
+  reference_image_tags?: string[];
+  use_default_reference?: boolean;
+}
+
+export interface ImageReferenceResolver {
+  resolveForTool(selector: ImageReferenceSelector): Promise<ResolvedImageReference | null>;
 }
 
 function formatResult(result: ImageGenerationResult): string {
@@ -175,7 +186,7 @@ function resolveCurrentTurnVisionReviewFallback(
 
 function buildImageCreateDescription(selfImage: boolean): string {
   if (selfImage) {
-    return 'Generate a dedicated selfie or self-portrait of the companion. Use this explicit path when the request is specifically about her own representation; the runtime Appearance context is loaded for this tool only. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
+    return 'Generate a dedicated selfie or self-portrait of the companion. Use this explicit path when the request is specifically about her own representation; the runtime Appearance context is loaded for this tool only. When a default reference photo is configured, this tool uses it through the image-edit pipeline unless use_reference_image=false; choose reference_image_id or reference_image_tags for a different saved reference. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
   }
   return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits, use the dedicated selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
 }
@@ -185,6 +196,66 @@ function buildImageCreatePromptDescription(selfImage: boolean): string {
     return 'Full generation prompt for a selfie or self-portrait. The runtime Appearance context is available on this tool; combine it with the desired pose, camera angle, lighting, background, and style.';
   }
   return 'Full generation prompt. For selfies or self-portraits, use the dedicated selfie_create tool instead of this generic path.';
+}
+
+function referenceSelectionSchema() {
+  return {
+    reference_image_id: Type.Optional(Type.String({
+      description: 'Saved reference photo id to include as an image-edit input.',
+    })),
+    reference_image_tags: Type.Optional(Type.Array(Type.String(), {
+      minItems: 1,
+      maxItems: 6,
+      description: 'Saved reference tags to match when selecting a reference photo.',
+    })),
+  };
+}
+
+function normalizeReferenceTags(tags: readonly string[] | undefined): string[] {
+  return (tags ?? [])
+    .map((tag) => tag.trim())
+    .filter((tag) => tag.length > 0);
+}
+
+async function resolveReferenceImage(
+  resolver: ImageReferenceResolver | undefined,
+  input: {
+    reference_image_id?: string;
+    reference_image_tags?: string[];
+    use_reference_image?: boolean;
+    use_default_reference?: boolean;
+  },
+  options: {
+    defaultToSavedReference: boolean;
+  },
+): Promise<ResolvedImageReference | null> {
+  if (!resolver) return null;
+  if (input.use_reference_image === false) return null;
+  const referenceImageId = input.reference_image_id?.trim();
+  if (referenceImageId === 'none') return null;
+  const referenceImageTags = normalizeReferenceTags(input.reference_image_tags);
+  const useDefaultReference = input.use_default_reference === true
+    || (options.defaultToSavedReference && !referenceImageId && referenceImageTags.length === 0);
+  if (!referenceImageId && referenceImageTags.length === 0 && !useDefaultReference) {
+    return null;
+  }
+
+  return await resolver.resolveForTool({
+    ...(referenceImageId ? { referenceImageId } : {}),
+    ...(referenceImageTags.length > 0 ? { referenceImageTags } : {}),
+    useDefaultReference,
+  });
+}
+
+function appendReferenceImageUrl(
+  inputUrls: string[],
+  reference: ResolvedImageReference | null,
+): string[] {
+  if (!reference) return inputUrls;
+  if (inputUrls.length >= 4) {
+    throw new Error('Reference photo plus input images exceeds the four-image edit limit');
+  }
+  return [...inputUrls, reference.dataUrl];
 }
 
 async function reviewGeneratedImages(
@@ -302,6 +373,7 @@ async function executeMediaGenerate(
       enableSafetyChecker: params.enable_safety_checker,
       negativePrompt: params.negative_prompt,
       useTurbo: params.use_turbo,
+      sourceToolName: 'media',
     });
     chargePaidImageGeneration(result, 'generate');
     const review = await reviewGeneratedImages(reviewer, {
@@ -323,6 +395,7 @@ async function executeMediaEdit(
   ops: ImageOperations,
   reviewer: ImageVisionReviewer | undefined,
   params: MediaToolParams,
+  referenceResolver?: ImageReferenceResolver,
 ): Promise<AgentToolResult<MediaToolResultDetails>> {
   const prompt = normalizePrompt(params.prompt);
   if (!prompt) {
@@ -335,9 +408,13 @@ async function executeMediaEdit(
   }
 
   try {
+    const reference = await resolveReferenceImage(referenceResolver, params, {
+      defaultToSavedReference: false,
+    });
+    const imageUrls = appendReferenceImageUrl(inputUrls, reference);
     const result = await ops.edit({
       prompt,
-      imageUrls: inputUrls,
+      imageUrls,
       provider: params.provider,
       model: params.model as typeof FAL_EDIT_MODELS[number] | undefined,
       numImages: params.num_images,
@@ -351,6 +428,8 @@ async function executeMediaEdit(
       maskImageUrl: params.mask_image_url,
       inputFidelity: params.input_fidelity,
       seed: params.seed,
+      sourceToolName: 'media',
+      ...(reference ? { referenceImageIds: [reference.id] } : {}),
     });
     chargePaidImageGeneration(result, 'edit');
     const review = await reviewGeneratedImages(reviewer, {
@@ -424,6 +503,9 @@ async function executeMediaAnalyze(
 export function createMediaTool(
   ops: ImageOperations,
   reviewer?: ImageVisionReviewer,
+  options?: {
+    referenceResolver?: ImageReferenceResolver;
+  },
 ): AgentTool<any> {
   const tool: AgentTool<any> = {
     name: 'media',
@@ -470,6 +552,10 @@ export function createMediaTool(
       enable_safety_checker: Type.Optional(Type.Boolean()),
       negative_prompt: Type.Optional(Type.String()),
       use_turbo: Type.Optional(Type.Boolean()),
+      ...referenceSelectionSchema(),
+      use_default_reference: Type.Optional(Type.Boolean({
+        description: 'Include the configured default reference photo as an additional edit input.',
+      })),
     }),
     execute: async (
       _toolCallId: string,
@@ -479,7 +565,7 @@ export function createMediaTool(
         case 'generate':
           return await executeMediaGenerate(ops, reviewer, params);
         case 'edit':
-          return await executeMediaEdit(ops, reviewer, params);
+          return await executeMediaEdit(ops, reviewer, params, options?.referenceResolver);
         case 'analyze':
           return await executeMediaAnalyze(reviewer, params);
         default:
@@ -497,37 +583,48 @@ export function createImageCreateTool(
   options?: {
     selfImage?: boolean;
     toolName?: string;
+    referenceResolver?: ImageReferenceResolver;
   },
 ): AgentTool<any> {
   const selfImage = options?.selfImage ?? false;
   const toolName = options?.toolName ?? 'image_create';
+  const parameterShape = {
+    prompt: Type.String({
+      description: buildImageCreatePromptDescription(selfImage),
+    }),
+    provider: providerPreferenceSchema(),
+    model: Type.Optional(Type.Union(FAL_CREATE_MODELS.map((value) => Type.Literal(value)))),
+    num_images: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
+    width: Type.Optional(Type.Integer({ minimum: 64, maximum: 4096 })),
+    height: Type.Optional(Type.Integer({ minimum: 64, maximum: 4096 })),
+    aspect_ratio: aspectRatioSchema(),
+    resolution: Type.Optional(Type.String()),
+    image_size: Type.Optional(Type.String()),
+    background: Type.Optional(Type.String()),
+    output_format: Type.Optional(Type.String()),
+    seed: Type.Optional(Type.Integer({ minimum: 0 })),
+    guidance_scale: Type.Optional(Type.Number()),
+    num_inference_steps: Type.Optional(Type.Integer({ minimum: 1 })),
+    acceleration: Type.Optional(Type.String()),
+    enable_prompt_expansion: Type.Optional(Type.Boolean()),
+    enable_safety_checker: Type.Optional(Type.Boolean()),
+    negative_prompt: Type.Optional(Type.String()),
+    use_turbo: Type.Optional(Type.Boolean()),
+    ...(selfImage
+      ? {
+          ...referenceSelectionSchema(),
+          use_reference_image: Type.Optional(Type.Boolean({
+            description: 'Set false to generate without a saved reference photo.',
+          })),
+          edit_model: Type.Optional(Type.Union(FAL_EDIT_MODELS.map((value) => Type.Literal(value)))),
+        }
+      : {}),
+  };
   return {
     name: toolName,
     label: toolName,
     description: buildImageCreateDescription(selfImage),
-    parameters: Type.Object({
-      prompt: Type.String({
-        description: buildImageCreatePromptDescription(selfImage),
-      }),
-      provider: providerPreferenceSchema(),
-      model: Type.Optional(Type.Union(FAL_CREATE_MODELS.map((value) => Type.Literal(value)))),
-      num_images: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
-      width: Type.Optional(Type.Integer({ minimum: 64, maximum: 4096 })),
-      height: Type.Optional(Type.Integer({ minimum: 64, maximum: 4096 })),
-      aspect_ratio: aspectRatioSchema(),
-      resolution: Type.Optional(Type.String()),
-      image_size: Type.Optional(Type.String()),
-      background: Type.Optional(Type.String()),
-      output_format: Type.Optional(Type.String()),
-      seed: Type.Optional(Type.Integer({ minimum: 0 })),
-      guidance_scale: Type.Optional(Type.Number()),
-      num_inference_steps: Type.Optional(Type.Integer({ minimum: 1 })),
-      acceleration: Type.Optional(Type.String()),
-      enable_prompt_expansion: Type.Optional(Type.Boolean()),
-      enable_safety_checker: Type.Optional(Type.Boolean()),
-      negative_prompt: Type.Optional(Type.String()),
-      use_turbo: Type.Optional(Type.Boolean()),
-    }),
+    parameters: Type.Object(parameterShape),
     execute: async (
       _toolCallId: string,
       params: {
@@ -550,36 +647,64 @@ export function createImageCreateTool(
         enable_safety_checker?: boolean;
         negative_prompt?: string;
         use_turbo?: boolean;
+        reference_image_id?: string;
+        reference_image_tags?: string[];
+        use_reference_image?: boolean;
+        edit_model?: typeof FAL_EDIT_MODELS[number];
       },
     ): Promise<AgentToolResult<ImageToolResultDetails>> => {
       try {
-        const result = await ops.create({
-          prompt: params.prompt,
-          provider: params.provider,
-          model: params.model,
-          numImages: params.num_images,
-          width: params.width,
-          height: params.height,
-          aspectRatio: params.aspect_ratio,
-          resolution: params.resolution,
-          imageSize: params.image_size,
-          background: params.background,
-          outputFormat: params.output_format,
-          seed: params.seed,
-          guidanceScale: params.guidance_scale,
-          numInferenceSteps: params.num_inference_steps,
-          acceleration: params.acceleration,
-          enablePromptExpansion: params.enable_prompt_expansion,
-          enableSafetyChecker: params.enable_safety_checker,
-          negativePrompt: params.negative_prompt,
-          useTurbo: params.use_turbo,
-        });
-        chargePaidImageGeneration(result, 'generate');
+        const reference = selfImage
+          ? await resolveReferenceImage(options?.referenceResolver, params, {
+              defaultToSavedReference: true,
+            })
+          : null;
+        const result = reference
+          ? await ops.edit({
+              prompt: params.prompt,
+              imageUrls: [reference.dataUrl],
+              provider: params.provider,
+              model: params.edit_model,
+              numImages: params.num_images,
+              width: params.width,
+              height: params.height,
+              aspectRatio: params.aspect_ratio,
+              resolution: params.resolution,
+              imageSize: params.image_size,
+              background: params.background,
+              outputFormat: params.output_format,
+              seed: params.seed,
+              sourceToolName: toolName,
+              referenceImageIds: [reference.id],
+            })
+          : await ops.create({
+              prompt: params.prompt,
+              provider: params.provider,
+              model: params.model,
+              numImages: params.num_images,
+              width: params.width,
+              height: params.height,
+              aspectRatio: params.aspect_ratio,
+              resolution: params.resolution,
+              imageSize: params.image_size,
+              background: params.background,
+              outputFormat: params.output_format,
+              seed: params.seed,
+              guidanceScale: params.guidance_scale,
+              numInferenceSteps: params.num_inference_steps,
+              acceleration: params.acceleration,
+              enablePromptExpansion: params.enable_prompt_expansion,
+              enableSafetyChecker: params.enable_safety_checker,
+              negativePrompt: params.negative_prompt,
+              useTurbo: params.use_turbo,
+              sourceToolName: toolName,
+            });
+        chargePaidImageGeneration(result, reference ? 'edit' : 'generate');
         const review = await reviewGeneratedImages(reviewer, {
           imageUrls: result.images.map((image) => image.url),
           imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
           prompt: params.prompt,
-          mode: 'create',
+          mode: reference ? 'edit' : 'create',
         });
         return {
           content: buildToolContent(result, review.visionReview, review.visionReviewError),
@@ -599,16 +724,23 @@ export function createImageCreateTool(
 export function createSelfieTool(
   ops: ImageOperations,
   reviewer?: ImageVisionReviewer,
+  options?: {
+    referenceResolver?: ImageReferenceResolver;
+  },
 ): AgentTool<any> {
   return createImageCreateTool(ops, reviewer, {
     selfImage: true,
     toolName: 'selfie_create',
+    referenceResolver: options?.referenceResolver,
   });
 }
 
 export function createImageEditTool(
   ops: ImageOperations,
   reviewer?: ImageVisionReviewer,
+  options?: {
+    referenceResolver?: ImageReferenceResolver;
+  },
 ): AgentTool<any> {
   return {
     name: 'image_edit',
@@ -621,6 +753,10 @@ export function createImageEditTool(
           'Full edit instruction. State the target result clearly and mention any identity details that must remain unchanged; for self-image work, use the dedicated selfie_create tool instead of relying on hidden appearance context.',
       }),
       image_urls: Type.Array(Type.String(), { minItems: 1, maxItems: 4 }),
+      ...referenceSelectionSchema(),
+      use_default_reference: Type.Optional(Type.Boolean({
+        description: 'Include the configured default reference photo as an additional edit input.',
+      })),
       provider: providerPreferenceSchema(),
       model: Type.Optional(Type.Union(FAL_EDIT_MODELS.map((value) => Type.Literal(value)))),
       num_images: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
@@ -653,12 +789,19 @@ export function createImageEditTool(
         mask_image_url?: string;
         input_fidelity?: string;
         seed?: number;
+        reference_image_id?: string;
+        reference_image_tags?: string[];
+        use_default_reference?: boolean;
       },
     ): Promise<AgentToolResult<ImageToolResultDetails>> => {
       try {
+        const reference = await resolveReferenceImage(options?.referenceResolver, params, {
+          defaultToSavedReference: false,
+        });
+        const imageUrls = appendReferenceImageUrl([...params.image_urls], reference);
         const result = await ops.edit({
           prompt: params.prompt,
-          imageUrls: [...params.image_urls],
+          imageUrls,
           provider: params.provider,
           model: params.model,
           numImages: params.num_images,
@@ -672,6 +815,8 @@ export function createImageEditTool(
           maskImageUrl: params.mask_image_url,
           inputFidelity: params.input_fidelity,
           seed: params.seed,
+          sourceToolName: 'image_edit',
+          ...(reference ? { referenceImageIds: [reference.id] } : {}),
         });
         chargePaidImageGeneration(result, 'edit');
         const review = await reviewGeneratedImages(reviewer, {

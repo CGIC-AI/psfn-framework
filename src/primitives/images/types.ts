@@ -20,6 +20,7 @@ export const FAL_CREATE_MODELS = [
 ] as const;
 
 export const FAL_EDIT_MODELS = [
+  'openai/gpt-image-2/edit',
   'fal-ai/nano-banana-2/edit',
   'fal-ai/gpt-image-1.5/edit',
 ] as const;
@@ -127,6 +128,8 @@ export interface ImageCreateParams {
   enableSafetyChecker?: boolean;
   negativePrompt?: string;
   useTurbo?: boolean;
+  sourceToolName?: string;
+  referenceImageIds?: string[];
 }
 
 export interface ImageEditParams {
@@ -145,6 +148,8 @@ export interface ImageEditParams {
   background?: string;
   outputFormat?: string;
   seed?: number;
+  sourceToolName?: string;
+  referenceImageIds?: string[];
 }
 
 export interface ImageVisionReview {

@@ -8,6 +8,7 @@ import type {
   AdminActionPipeService,
   AdminContactsService,
   AdminDashboardService,
+  AdminImagesService,
   AdminIdentityService,
   AdminMemoryService,
   AdminPromptsService,
@@ -98,6 +99,7 @@ function makeRoutes(actionPipeService?: AdminActionPipeService | null): AdminApi
   return buildAdminApiRoutes({
     config: {} as SubstrateConfig,
     dashboardService: {} as AdminDashboardService,
+    imagesService: {} as AdminImagesService,
     actionPipeService,
     shardFoldReviewService: {} as AdminShardFoldReviewService,
     memoryService: {} as AdminMemoryService,

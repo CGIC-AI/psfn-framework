@@ -327,6 +327,113 @@ describe('image tools', () => {
     expect(resultText(result)).toContain('Vision review:');
   });
 
+  it('uses the default reference photo for selfie_create through the edit pipeline', async () => {
+    const ops = {
+      create: vi.fn(),
+      edit: vi.fn(async () => ({
+        provider: 'fal',
+        mode: 'edit' as const,
+        model: 'openai/gpt-image-2/edit',
+        fallbackUsed: false,
+        requestId: 'req-selfie-ref-1',
+        images: [{
+          url: 'https://images.example.test/selfie-ref.png',
+          contentType: 'image/png',
+          fileName: 'selfie-ref.png',
+          localPath: '/tmp/selfie-ref.png',
+        }],
+      })),
+    };
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => ({
+        question: 'Describe the generated image.',
+        summary: 'The referenced portrait remains recognizable.',
+        model: 'vision-model',
+        imageCount: 1,
+      })),
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+
+    const tool = createSelfieTool(ops, reviewer, { referenceResolver });
+    const result = await tool.execute('tool-call-selfie-ref', {
+      prompt: 'a candid mirror selfie with short hair and warm daylight',
+      aspect_ratio: '3:4',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    expect(referenceResolver.resolveForTool).toHaveBeenCalledWith({
+      useDefaultReference: true,
+    });
+    expect(ops.create).not.toHaveBeenCalled();
+    expect(ops.edit).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: 'a candid mirror selfie with short hair and warm daylight',
+      imageUrls: ['data:image/png;base64,cmVm'],
+      aspectRatio: '3:4',
+      sourceToolName: 'selfie_create',
+      referenceImageIds: ['ref-default'],
+    }));
+    expect(reviewer.analyze).toHaveBeenCalledWith({
+      imageUrls: ['https://images.example.test/selfie-ref.png'],
+      imageLocalPaths: ['/tmp/selfie-ref.png'],
+      prompt: 'a candid mirror selfie with short hair and warm daylight',
+      mode: 'edit',
+    });
+    expect(result.details.imageResult?.requestId).toBe('req-selfie-ref-1');
+  });
+
+  it('lets image_edit append a selected reference photo to the edit inputs', async () => {
+    const ops = {
+      create: vi.fn(),
+      edit: vi.fn(async () => ({
+        provider: 'fal',
+        mode: 'edit' as const,
+        model: 'openai/gpt-image-2/edit',
+        fallbackUsed: false,
+        requestId: 'req-edit-ref-1',
+        images: [{
+          url: 'https://images.example.test/edit-ref.png',
+          contentType: 'image/png',
+          fileName: 'edit-ref.png',
+        }],
+      })),
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-short-hair',
+        dataUrl: 'data:image/png;base64,c2hvcnQ=',
+        description: 'short hair reference',
+        tags: ['short-hair'],
+      })),
+    };
+
+    const tool = createImageEditTool(ops, undefined, { referenceResolver });
+    const result = await tool.execute('tool-call-edit-ref', {
+      prompt: 'keep the pose, update the hairstyle to match the reference',
+      image_urls: ['https://images.example.test/source.png'],
+      reference_image_tags: ['short-hair'],
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    expect(referenceResolver.resolveForTool).toHaveBeenCalledWith({
+      referenceImageTags: ['short-hair'],
+      useDefaultReference: false,
+    });
+    expect(ops.edit).toHaveBeenCalledWith(expect.objectContaining({
+      imageUrls: [
+        'https://images.example.test/source.png',
+        'data:image/png;base64,c2hvcnQ=',
+      ],
+      sourceToolName: 'image_edit',
+      referenceImageIds: ['ref-short-hair'],
+    }));
+    expect(result.details.imageResult?.requestId).toBe('req-edit-ref-1');
+  });
+
   it('exposes image_analyze as a callable vision tool', async () => {
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({

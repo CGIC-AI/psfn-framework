@@ -55,6 +55,7 @@ import { AdminContactsDataService } from './services/contacts-service.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
 import { AdminEpisodicMemoryDataService } from './services/episodic-memory-service.js';
 import { AdminIdentityDataService } from './services/identity-service.js';
+import { AdminImagesDataService } from './services/images-service.js';
 import { AdminMemoryDataService } from './services/memory-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
 import { AdminSchedulerService } from './services/scheduler-service.js';
@@ -142,6 +143,10 @@ export function createInProcessGardenAdminContract(
       shardManager: options.shardManager,
       eventBus: options.eventBus,
       resolveLastActiveSessionId,
+    }),
+    images: new AdminImagesDataService({
+      config: options.config,
+      companionDataDir,
     }),
     auditHistory,
     charges: new AdminChargeLedgerDataService(chargeLedger),

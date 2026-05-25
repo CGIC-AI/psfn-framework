@@ -25,6 +25,7 @@ import type {
   AdminContactsService,
   AdminDashboardService,
   AdminEpisodicMemoryService,
+  AdminImagesService,
   AdminIdentityService,
   AdminMemoryService,
   AdminPromptsService,
@@ -120,6 +121,7 @@ export interface AdminChatBootstrapApi {
 
 export interface GardenAdminDomainServices {
   dashboard: AdminDashboardService;
+  images: AdminImagesService;
   auditHistory: AdminAuditHistoryService;
   charges?: AdminChargeLedgerService | null;
   actionPipe?: AdminActionPipeService | null;

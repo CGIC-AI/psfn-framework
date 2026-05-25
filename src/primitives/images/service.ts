@@ -10,6 +10,7 @@ import {
   resolvePersonalImagesDir,
 } from '../../persistence/layout.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import type { ImageOperations } from './ops.js';
 import type {
   ImageCreateParams,
@@ -22,6 +23,7 @@ import type {
 
 const log = createComponentLogger('ImageService');
 const FAL_TRANSIENT_ATTEMPTS = 2;
+const GENERATED_IMAGE_META_SUFFIX = '.image-meta.json';
 
 function hasWorkflowForMode(
   config: ImageRuntimeConfig,
@@ -89,6 +91,34 @@ function resolveConfiguredCompanionDataDirOrNull(config: ImageRuntimeConfig): st
   }
 }
 
+function buildGeneratedImageMetadata(
+  result: ImageGenerationResult,
+  params: ImageCreateParams | ImageEditParams | undefined,
+  asset: ImageResultAsset,
+  index: number,
+  contentType: string,
+): Record<string, unknown> {
+  const sourceImageCount = params && 'imageUrls' in params ? params.imageUrls.length : 0;
+  return {
+    schemaVersion: 1,
+    createdAt: new Date().toISOString(),
+    provider: result.provider,
+    mode: result.mode,
+    ...(result.model ? { model: result.model } : {}),
+    fallbackUsed: result.fallbackUsed,
+    ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {}),
+    ...(result.requestId ? { requestId: result.requestId } : {}),
+    imageIndex: index,
+    originalUrl: asset.url,
+    contentType,
+    ...(asset.fileName ? { providerFileName: asset.fileName } : {}),
+    ...(params?.prompt ? { prompt: params.prompt } : {}),
+    ...(params?.sourceToolName ? { sourceToolName: params.sourceToolName } : {}),
+    ...(params?.referenceImageIds?.length ? { referenceImageIds: params.referenceImageIds } : {}),
+    sourceImageCount,
+  };
+}
+
 export class ImageService implements ImageOperations {
   constructor(
     private readonly config: ImageRuntimeConfig,
@@ -127,14 +157,14 @@ export class ImageService implements ImageOperations {
     );
     const provider = params.provider ?? 'auto';
     if (provider === 'comfyui') {
-      return await this.persistGeneratedImages(await this.runComfy(mode, params));
+      return await this.persistGeneratedImages(await this.runComfy(mode, params), params);
     }
 
     if (!falApiKey) {
       if (provider === 'fal') {
         throw new Error('FAL_API_KEY is not configured');
       }
-      return await this.persistGeneratedImages(await this.runComfy(mode, params));
+      return await this.persistGeneratedImages(await this.runComfy(mode, params), params);
     }
 
     try {
@@ -160,7 +190,7 @@ export class ImageService implements ImageOperations {
       if (!result) {
         throw new Error('FAL image request did not return a result');
       }
-      return await this.persistGeneratedImages(result);
+      return await this.persistGeneratedImages(result, params);
     } catch (error) {
       if (
         provider === 'auto'
@@ -168,7 +198,7 @@ export class ImageService implements ImageOperations {
         && this.config.comfyUiBaseUrl
         && hasWorkflowForMode(this.config, mode)
       ) {
-        const fallbackResult = await this.persistGeneratedImages(await this.runComfy(mode, params));
+        const fallbackResult = await this.persistGeneratedImages(await this.runComfy(mode, params), params);
         return {
           ...fallbackResult,
           fallbackUsed: true,
@@ -207,7 +237,10 @@ export class ImageService implements ImageOperations {
       : await client.edit(params);
   }
 
-  private async persistGeneratedImages(result: ImageGenerationResult): Promise<ImageGenerationResult> {
+  private async persistGeneratedImages(
+    result: ImageGenerationResult,
+    params?: ImageCreateParams | ImageEditParams,
+  ): Promise<ImageGenerationResult> {
     const storageRoot = this.options.generatedImagesDir?.trim()
       || (this.options.personalFilesDir?.trim()
         ? resolvePersonalImagesDir(this.options.personalFilesDir.trim())
@@ -266,6 +299,18 @@ export class ImageService implements ImageOperations {
         }
 
         await writeFile(localPath, bytes);
+        try {
+          writeJsonAtomic(
+            `${localPath}${GENERATED_IMAGE_META_SUFFIX}`,
+            buildGeneratedImageMetadata(result, params, asset, index, contentType),
+          );
+        } catch (error) {
+          log.warn('Failed to write generated image metadata sidecar', {
+            localPath,
+            requestId: result.requestId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
         return {
           ...asset,
           contentType,

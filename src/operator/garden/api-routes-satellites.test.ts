@@ -7,6 +7,7 @@ import { buildAdminApiRoutes } from './api-routes.js';
 import type {
   AdminContactsService,
   AdminDashboardService,
+  AdminImagesService,
   AdminIdentityService,
   AdminMemoryService,
   AdminPromptsService,
@@ -46,6 +47,7 @@ function makeRoutes(config: SubstrateConfig): AdminApiRoute[] {
   return buildAdminApiRoutes({
     config,
     dashboardService: {} as AdminDashboardService,
+    imagesService: {} as AdminImagesService,
     shardFoldReviewService: {} as AdminShardFoldReviewService,
     memoryService: {} as AdminMemoryService,
     sessionService: {} as AdminSessionService,

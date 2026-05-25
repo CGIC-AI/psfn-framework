@@ -272,11 +272,23 @@ describe('ImageService', () => {
 
     const result = await service.create({
       prompt: 'a lighthouse at dusk',
+      sourceToolName: 'image_create',
     });
 
     expect(result.images[0]?.localPath).toContain(join(personalFilesDir, 'images'));
     expect(existsSync(result.images[0]!.localPath!)).toBe(true);
     expect(readFileSync(result.images[0]!.localPath!)).toEqual(Buffer.from(imageBytes));
+    const metadata = JSON.parse(readFileSync(`${result.images[0]!.localPath!}.image-meta.json`, 'utf-8')) as Record<string, unknown>;
+    expect(metadata).toMatchObject({
+      schemaVersion: 1,
+      provider: 'fal',
+      mode: 'create',
+      model: 'fal-ai/nano-banana-2',
+      requestId: 'fal-req-personal-1',
+      prompt: 'a lighthouse at dusk',
+      sourceToolName: 'image_create',
+      sourceImageCount: 0,
+    });
   });
 
   it('maps Flux 2 generation options to the FAL payload', async () => {
@@ -536,25 +548,29 @@ describe('ImageService', () => {
     expect(result.requestId).toBe('fal-grok-imagine');
   });
 
-  it('defaults FAL nano-banana edits to 2K resolution', async () => {
+  it('defaults FAL edits to GPT Image 2', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/edit') {
+      if (url === 'https://queue.fal.run/openai/gpt-image-2/edit') {
         expect(init?.method).toBe('POST');
         const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
-        expect(body.resolution).toBe('2K');
+        expect(body).toMatchObject({
+          prompt: 'turn this into a sunset selfie',
+          image_urls: ['https://example.test/source.png'],
+          sync_mode: false,
+        });
+        expect(body).not.toHaveProperty('resolution');
         expect(body).not.toHaveProperty('enable_safety_checker');
-        expect(body.safety_tolerance).toBe('6');
-        expect(body.limit_generations).toBe(true);
-        expect(body.image_urls).toEqual(['https://example.test/source.png']);
+        expect(body).not.toHaveProperty('safety_tolerance');
+        expect(body).not.toHaveProperty('limit_generations');
         return jsonResponse({
           status: 'COMPLETED',
           request_id: 'fal-edit-req-1',
-          response_url: 'https://queue.fal.run/fal-ai/nano-banana-2/edit/requests/fal-edit-req-1',
+          response_url: 'https://queue.fal.run/openai/gpt-image-2/edit/requests/fal-edit-req-1',
         });
       }
 
-      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2/edit/requests/fal-edit-req-1') {
+      if (url === 'https://queue.fal.run/openai/gpt-image-2/edit/requests/fal-edit-req-1') {
         return jsonResponse({
           images: [
             {
@@ -584,7 +600,7 @@ describe('ImageService', () => {
     expect(result).toEqual({
       provider: 'fal',
       mode: 'edit',
-      model: 'fal-ai/nano-banana-2/edit',
+      model: 'openai/gpt-image-2/edit',
       fallbackUsed: false,
       requestId: 'fal-edit-req-1',
       images: [

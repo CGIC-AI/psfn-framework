@@ -92,6 +92,7 @@ type VoxtaClientPayload = Record<string, unknown> & {
   sessionId?: string;
   chatId?: string;
   characterId?: string;
+  characterIds?: unknown;
   text?: string;
   name?: string;
   value?: string;
@@ -428,12 +429,12 @@ class VoxtaConnection {
     this.sessionId = normalizeGuid(connectionId) ?? crypto.randomUUID();
     this.chatId = crypto.randomUUID();
     this.assistant = {
-      id: normalizeGuid(deps.config.assistantId) ?? crypto.randomUUID(),
+      id: stableVoxtaGuid("assistant", deps.config.assistantId),
       name: deps.config.assistantName,
       role: "Assistant",
     };
     this.user = {
-      id: normalizeGuid(deps.config.userId) ?? crypto.randomUUID(),
+      id: stableVoxtaGuid("user", deps.config.userId),
       name: deps.config.userName,
       role: "User",
     };
@@ -657,6 +658,7 @@ class VoxtaConnection {
   }
 
   private async handleStartChat(invocationId: string | undefined, payload: VoxtaClientPayload): Promise<void> {
+    this.applyRequestedCharacterId(payload);
     this.sessionId = crypto.randomUUID();
     this.chatId = crypto.randomUUID();
     this.attachSatellite();
@@ -666,6 +668,7 @@ class VoxtaConnection {
   }
 
   private async handleResumeChat(invocationId: string | undefined, payload: VoxtaClientPayload): Promise<void> {
+    this.applyRequestedCharacterId(payload);
     const chatId = normalizedString(payload.chatId);
     if (chatId) {
       this.chatId = normalizeGuid(chatId) ?? crypto.randomUUID();
@@ -675,6 +678,13 @@ class VoxtaConnection {
     }
     await this.emitChatStarted(payload.characterId);
     await this.sendCompletion(invocationId);
+  }
+
+  private applyRequestedCharacterId(payload: VoxtaClientPayload): void {
+    const requestedCharacterId = firstGuid(payload.characterId, payload.characterIds);
+    if (requestedCharacterId) {
+      this.assistant.id = requestedCharacterId;
+    }
   }
 
   private async handleSend(invocationId: string | undefined, payload: VoxtaClientPayload): Promise<void> {
@@ -1508,6 +1518,37 @@ function normalizeGuid(value: unknown): string | undefined {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)
     ? text
     : undefined;
+}
+
+function firstGuid(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    const guid = normalizeGuid(value);
+    if (guid) {
+      return guid;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const itemGuid = normalizeGuid(item);
+        if (itemGuid) {
+          return itemGuid;
+        }
+      }
+    }
+  }
+  return undefined;
+}
+
+function stableVoxtaGuid(kind: string, value: string): string {
+  const guid = normalizeGuid(value);
+  if (guid) {
+    return guid;
+  }
+  const normalized = normalizedString(value) ?? kind;
+  const bytes = crypto.createHash("sha256").update(`voxta:${kind}:${normalized}`).digest();
+  bytes[6] = ((bytes[6] ?? 0) & 0x0f) | 0x50;
+  bytes[8] = ((bytes[8] ?? 0) & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 function normalizeVoxtaSendText(input: string): { promptText: string } {

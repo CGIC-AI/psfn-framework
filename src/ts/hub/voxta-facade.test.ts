@@ -207,6 +207,54 @@ test("Voxta facade normalizes VaM slash-command context before PSFN routing", as
   }
 });
 
+test("Voxta facade uses selected VaM character id as assistant sender", async () => {
+  const agent = new FakeAgent();
+  const selectedCharacterId = "4a5a7397-5164-4af1-9f44-a8177d75d62f";
+  const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-character", acidBubblesAuthenticate())));
+    await waitForVoxta(frames, "configuration");
+    await waitForCompletion(frames, "auth-character");
+
+    socket.send(encodeFrame(invocation("start-character", {
+      $type: "startChat",
+      characterIds: [selectedCharacterId],
+    })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-character");
+    assert.equal(chatStarted.characterId, selectedCharacterId);
+    assert.ok(isRecord(chatStarted.context));
+    assert.ok(Array.isArray(chatStarted.context.characters));
+    assert.equal(chatStarted.context.characters[0]?.id, selectedCharacterId);
+
+    socket.send(encodeFrame(invocation("send-character", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "hello there",
+    })));
+    const replyGenerating = await waitForVoxta(frames, "replyGenerating");
+    const replyChunk = await waitForVoxta(frames, "replyChunk");
+    await waitForCompletion(frames, "send-character");
+    assert.equal(replyGenerating.senderId, selectedCharacterId);
+    assert.equal(replyChunk.senderId, selectedCharacterId);
+  } finally {
+    socket?.close();
+    await server.close();
+  }
+});
+
 test("Voxta facade writes VaM-playable WAV artifacts when VOXTA audio folder is configured", async () => {
   const audioFolder = fs.mkdtempSync(path.join(os.tmpdir(), "voxta-vam-audio-"));
   const agent = new FakeAgent();

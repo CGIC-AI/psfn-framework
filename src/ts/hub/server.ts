@@ -55,7 +55,11 @@ export class RealtimeHubServer {
 
   constructor(
     private readonly config: HubConfig,
-    options: { agent?: AgentRuntimeAdapter; voxtaTts?: VoxtaTtsAdapter; voxtaStt?: VoxtaSttAdapter } = {},
+    options: {
+      agent?: AgentRuntimeAdapter;
+      voxtaTts?: VoxtaTtsAdapter | null;
+      voxtaStt?: VoxtaSttAdapter | null;
+    } = {},
   ) {
     this.sessions = new SessionStore(config.sessionTtlSeconds);
     this.embodiedSessions = new EmbodiedSessionRegistry(resolveChannelType(config));
@@ -71,8 +75,8 @@ export class RealtimeHubServer {
       embodiedSessions: this.embodiedSessions,
       agent: this.agent,
       artifactsRoot: config.artifactsRoot,
-      tts: options.voxtaTts ?? new ElevenLabsVoxtaTts(this.tts),
-      stt: options.voxtaStt ?? new DeepgramVoxtaStt(config.deepgramApiKey),
+      tts: options.voxtaTts === null ? undefined : options.voxtaTts ?? new ElevenLabsVoxtaTts(this.tts),
+      stt: options.voxtaStt === null ? undefined : options.voxtaStt ?? new DeepgramVoxtaStt(config.deepgramApiKey),
     });
     this.httpServer = http.createServer((request, response) => {
       if (this.voxta.handleHttp(request, response)) {

@@ -76,6 +76,7 @@ interface VoxtaFacadeRuntime {
   connectionsByConfigurationId: Map<string, VoxtaConnection>;
   connectionsBySessionId: Map<string, VoxtaConnection>;
   pendingVisionRequests: Map<string, PendingVisionRequest>;
+  connections: Set<VoxtaConnection>;
 }
 
 interface PendingVisionRequest {
@@ -114,6 +115,7 @@ export class VoxtaFacade {
     connectionsByConfigurationId: new Map(),
     connectionsBySessionId: new Map(),
     pendingVisionRequests: new Map(),
+    connections: new Set(),
   };
   private readonly audioWsServer = new WebSocketServer({ noServer: true });
 
@@ -128,6 +130,7 @@ export class VoxtaFacade {
         this.deps,
         this.runtime,
         pending?.connectionId ?? crypto.randomUUID(),
+        publicBaseUrlForRequest(this.deps.config.publicBaseUrl, request),
       );
       connection.run();
     });
@@ -149,6 +152,12 @@ export class VoxtaFacade {
       writeCorsHeaders(response);
       response.statusCode = 204;
       response.end();
+      return true;
+    }
+    const audioArtifact = parseAudioArtifactPath(url.pathname);
+    if (audioArtifact) {
+      writeCorsHeaders(response);
+      this.handleAudioArtifact(request, response, audioArtifact);
       return true;
     }
     const visionRequest = parseVisionRequestPath(url.pathname);
@@ -247,6 +256,43 @@ export class VoxtaFacade {
     }
   }
 
+  private handleAudioArtifact(
+    request: http.IncomingMessage,
+    response: http.ServerResponse,
+    artifact: { filename: string },
+  ): void {
+    if (!this.deps.config.enabled) {
+      writeJson(response, 404, { error: "Voxta facade is disabled" });
+      return;
+    }
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      response.setHeader("Allow", "GET, HEAD, OPTIONS");
+      writeJson(response, 405, { error: "Voxta audio artifacts require GET or HEAD" });
+      return;
+    }
+    const filePath = path.join(voxtaAudioArtifactsRoot(this.deps.artifactsRoot), artifact.filename);
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(filePath);
+    } catch {
+      writeJson(response, 404, { error: "Voxta audio artifact not found" });
+      return;
+    }
+    if (!stats.isFile()) {
+      writeJson(response, 404, { error: "Voxta audio artifact not found" });
+      return;
+    }
+    response.statusCode = 200;
+    response.setHeader("Content-Type", "audio/x-wav");
+    response.setHeader("Content-Length", String(stats.size));
+    response.setHeader("Cache-Control", "no-store");
+    if (request.method === "HEAD") {
+      response.end();
+      return;
+    }
+    fs.createReadStream(filePath).pipe(response);
+  }
+
   private async handleServiceToggle(
     request: http.IncomingMessage,
     response: http.ServerResponse,
@@ -266,10 +312,18 @@ export class VoxtaFacade {
       writeJson(response, 400, { error: "Voxta service update body must be { enabled: boolean }" });
       return;
     }
-    const state = this.runtime.serviceStates.get(toggle.configurationId);
+    let connection = this.runtime.connectionsByConfigurationId.get(toggle.configurationId);
+    if (!connection && this.runtime.connections.size === 1) {
+      const soleConnection = [...this.runtime.connections][0];
+      if (soleConnection) {
+        connection = soleConnection;
+        connection.adoptConfigurationId(toggle.configurationId);
+      }
+    }
+    let state = this.runtime.serviceStates.get(toggle.configurationId);
     if (!state) {
-      writeJson(response, 404, { error: `Unknown Voxta configuration: ${toggle.configurationId}` });
-      return;
+      state = connection?.currentServiceState() ?? defaultServiceState();
+      this.runtime.serviceStates.set(toggle.configurationId, state);
     }
     state[toggle.serviceType] = body.enabled;
     writeJson(response, 200, {
@@ -277,7 +331,6 @@ export class VoxtaFacade {
       serviceType: toggle.serviceType,
       enabled: body.enabled,
     });
-    const connection = this.runtime.connectionsByConfigurationId.get(toggle.configurationId);
     if (connection) {
       await connection.emitConfiguration();
       if (toggle.serviceType === "SpeechToText" && this.deps.config.sttStreamEnabled) {
@@ -356,7 +409,7 @@ class VoxtaConnection {
   private readonly assistant: VoxtaParticipant;
   private readonly user: VoxtaParticipant;
   private readonly actionAllowlist: Set<string>;
-  private readonly servicesConfigurationsSetId = crypto.randomUUID();
+  private servicesConfigurationsSetId: string = crypto.randomUUID();
   private messageChain: Promise<void> = Promise.resolve();
   private sessionId: string;
   private chatId: string;
@@ -370,6 +423,7 @@ class VoxtaConnection {
     private readonly deps: VoxtaFacadeDependencies,
     private readonly runtime: VoxtaFacadeRuntime,
     connectionId: string,
+    private readonly publicBaseUrl: string,
   ) {
     this.sessionId = normalizeGuid(connectionId) ?? crypto.randomUUID();
     this.chatId = crypto.randomUUID();
@@ -384,13 +438,9 @@ class VoxtaConnection {
       role: "User",
     };
     this.actionAllowlist = new Set(deps.config.actionAllowlist);
-    this.runtime.serviceStates.set(this.servicesConfigurationsSetId, {
-      SpeechToText: true,
-      TextToSpeech: true,
-      ComputerVision: false,
-      ActionInference: true,
-    });
+    this.runtime.serviceStates.set(this.servicesConfigurationsSetId, defaultServiceState());
     this.runtime.connectionsByConfigurationId.set(this.servicesConfigurationsSetId, this);
+    this.runtime.connections.add(this);
     this.attachSatellite();
     this.registerSession();
   }
@@ -411,7 +461,12 @@ class VoxtaConnection {
     });
     this.socket.on("close", () => {
       this.cancelReply();
-      this.runtime.connectionsByConfigurationId.delete(this.servicesConfigurationsSetId);
+      for (const [configurationId, connection] of this.runtime.connectionsByConfigurationId) {
+        if (connection === this) {
+          this.runtime.connectionsByConfigurationId.delete(configurationId);
+        }
+      }
+      this.runtime.connections.delete(this);
       if (this.registeredSessionId) {
         this.runtime.connectionsBySessionId.delete(this.registeredSessionId);
         this.registeredSessionId = null;
@@ -531,6 +586,22 @@ class VoxtaConnection {
     await this.sendReceive(this.configurationPayload());
   }
 
+  adoptConfigurationId(configurationId: string): void {
+    const nextId = normalizedString(configurationId);
+    if (!nextId || nextId === this.servicesConfigurationsSetId) {
+      return;
+    }
+    const state = this.currentServiceState();
+    for (const [id, connection] of this.runtime.connectionsByConfigurationId) {
+      if (connection === this) {
+        this.runtime.connectionsByConfigurationId.delete(id);
+      }
+    }
+    this.servicesConfigurationsSetId = nextId;
+    this.runtime.serviceStates.set(this.servicesConfigurationsSetId, state);
+    this.runtime.connectionsByConfigurationId.set(this.servicesConfigurationsSetId, this);
+  }
+
   async emitRecordingRequest(enabled: boolean): Promise<void> {
     await this.sendReceive({
       $type: "recordingRequest",
@@ -616,18 +687,6 @@ class VoxtaConnection {
     this.sessionId = sessionId;
     this.attachSatellite();
     this.registerSession();
-
-    await this.sendReceive({
-      $type: "message",
-      messageId: crypto.randomUUID(),
-      senderId: this.user.id,
-      senderName: this.user.name,
-      senderType: "User",
-      role: this.user.role,
-      text,
-      timestamp: new Date().toISOString(),
-      sessionId: this.sessionId,
-    });
 
     this.deps.sessions.append(this.sessionId, { role: "user", content: text });
     const replyTask = this.streamAssistantReply(text);
@@ -749,17 +808,6 @@ class VoxtaConnection {
       timestamp: new Date().toISOString(),
     });
     await this.sendReceive({
-      $type: "message",
-      messageId,
-      senderId: this.assistant.id,
-      senderName: this.assistant.name,
-      senderType: "Assistant",
-      role: this.assistant.role,
-      text: responseText,
-      timestamp: new Date().toISOString(),
-      sessionId: this.sessionId,
-    });
-    await this.sendReceive({
       $type: "replyEnd",
       sessionId: this.sessionId,
       messageId,
@@ -776,9 +824,8 @@ class VoxtaConnection {
   }
 
   private async createSpeechArtifact(messageId: string, text: string): Promise<string> {
-    const audioFolder = this.deps.config.audioFolder;
     const serviceState = this.runtime.serviceStates.get(this.servicesConfigurationsSetId);
-    if (!audioFolder || !this.deps.tts || serviceState?.TextToSpeech === false) {
+    if (!this.deps.tts || serviceState?.TextToSpeech === false) {
       return "silence:0";
     }
     const spokenText = sanitizeSpokenText(text);
@@ -786,12 +833,20 @@ class VoxtaConnection {
       return "silence:0";
     }
     try {
-      fs.mkdirSync(audioFolder, { recursive: true });
       const wav = await this.deps.tts.synthesizeWav(spokenText);
       if (wav.length === 0) {
         return "silence:0";
       }
       const filename = `voxta_${safePathPart(this.sessionId)}_${safePathPart(messageId)}_0.wav`;
+      const audioFolder = this.deps.config.audioFolder;
+      if (!audioFolder) {
+        const directory = voxtaAudioArtifactsRoot(this.deps.artifactsRoot);
+        fs.mkdirSync(directory, { recursive: true });
+        const filePath = path.join(directory, filename);
+        fs.writeFileSync(filePath, wav);
+        return `${this.publicBaseUrl}/api/voxta/audio/${encodeURIComponent(filename)}`;
+      }
+      fs.mkdirSync(audioFolder, { recursive: true });
       const filePath = path.join(audioFolder, filename);
       fs.writeFileSync(filePath, wav);
       return filePath;
@@ -1031,13 +1086,14 @@ class VoxtaConnection {
     };
   }
 
-  private currentServiceState(): VoxtaServiceState {
-    return this.runtime.serviceStates.get(this.servicesConfigurationsSetId) ?? {
-      SpeechToText: true,
-      TextToSpeech: true,
-      ComputerVision: false,
-      ActionInference: true,
-    };
+  currentServiceState(): VoxtaServiceState {
+    const state = this.runtime.serviceStates.get(this.servicesConfigurationsSetId);
+    if (state) {
+      return state;
+    }
+    const fallback = defaultServiceState();
+    this.runtime.serviceStates.set(this.servicesConfigurationsSetId, fallback);
+    return fallback;
   }
 
   private registerSession(): void {
@@ -1151,6 +1207,7 @@ function isCorsPreflight(request: http.IncomingMessage, pathname: string): boole
   return request.method === "OPTIONS" && (
     isNegotiatePath(pathname) ||
     isHubPath(pathname) ||
+    parseAudioArtifactPath(pathname) !== null ||
     parseServiceTogglePath(pathname) !== null ||
     parseVisionRequestPath(pathname) !== null
   );
@@ -1158,7 +1215,7 @@ function isCorsPreflight(request: http.IncomingMessage, pathname: string): boole
 
 function writeCorsHeaders(response: http.ServerResponse): void {
   response.setHeader("Access-Control-Allow-Origin", "*");
-  response.setHeader("Access-Control-Allow-Methods", "POST, PUT, OPTIONS");
+  response.setHeader("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, DELETE, OPTIONS");
   response.setHeader("Access-Control-Allow-Headers", "content-type, authorization");
 }
 
@@ -1184,6 +1241,18 @@ function parseVisionRequestPath(pathname: string): { requestId: string; action: 
     };
   }
   return null;
+}
+
+function parseAudioArtifactPath(pathname: string): { filename: string } | null {
+  const match = /^\/api\/voxta\/audio\/([^/]+)$/.exec(pathname);
+  if (!match) {
+    return null;
+  }
+  const filename = decodeURIComponent(match[1] || "");
+  if (!/^[a-z0-9_.-]+\.wav$/i.test(filename)) {
+    return null;
+  }
+  return { filename };
 }
 
 function parseServiceTogglePath(
@@ -1438,6 +1507,27 @@ function normalizeGuid(value: unknown): string | undefined {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)
     ? text
     : undefined;
+}
+
+function defaultServiceState(): VoxtaServiceState {
+  return {
+    SpeechToText: true,
+    TextToSpeech: true,
+    ComputerVision: false,
+    ActionInference: true,
+  };
+}
+
+function voxtaAudioArtifactsRoot(artifactsRoot: string): string {
+  return path.join(artifactsRoot, "voxta-audio");
+}
+
+function publicBaseUrlForRequest(configuredBaseUrl: string | null, request: http.IncomingMessage): string {
+  if (configuredBaseUrl) {
+    return configuredBaseUrl;
+  }
+  const host = normalizedString(request.headers.host) ?? "127.0.0.1";
+  return `http://${host}`;
 }
 
 function normalizeArguments(value: unknown): unknown[] {

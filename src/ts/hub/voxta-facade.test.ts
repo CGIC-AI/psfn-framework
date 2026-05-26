@@ -43,7 +43,7 @@ class FakeAgent implements AgentRuntimeAdapter {
 
 test("Voxta facade negotiates SignalR and routes SendMessage into the embodied session", async () => {
   const agent = new FakeAgent();
-  const server = new RealtimeHubServer(testHubConfig(), { agent });
+  const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });
   let socket: WebSocket | null = null;
 
   try {
@@ -134,18 +134,13 @@ test("Voxta facade negotiates SignalR and routes SendMessage into the embodied s
     assert.equal(firstChunk.endIndex, 15);
     assert.equal(firstChunk.isNarration, false);
     assert.equal(firstChunk.audioGapMs, 0);
-    const finalAssistantMessage = await waitForVoxta(
-      frames,
-      "message",
-      (payload) => payload.role === "Assistant",
-    );
     const replyEnd = await waitForVoxta(frames, "replyEnd");
     assert.equal(replyEnd.sessionId, sessionId);
     assert.equal(replyEnd.messageId, replyGenerating.messageId);
     assertGuid(replyEnd.senderId);
     await waitForCompletion(frames, "send-1");
 
-    assert.equal(finalAssistantMessage.text, "Hello from PSFN");
+    assert.deepEqual(voxtaPayloads(frames).filter((payload) => payload.$type === "message"), []);
     assert.equal(agent.calls.length, 1);
     assert.equal(agent.calls[0]?.userText, "hello there");
     assert.equal(agent.calls[0]?.conversationId, sessionId);
@@ -222,9 +217,70 @@ test("Voxta facade writes VaM-playable WAV artifacts when VOXTA audio folder is 
   }
 });
 
+test("Voxta facade serves proxy-fetchable WAV artifacts when no local VaM audio folder is configured", async () => {
+  const artifactsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "voxta-http-audio-"));
+  const agent = new FakeAgent();
+  const ttsCalls: string[] = [];
+  const server = new RealtimeHubServer(testHubConfig({ artifactsRoot }), {
+    agent,
+    voxtaTts: {
+      async synthesizeWav(text: string): Promise<Buffer> {
+        ttsCalls.push(text);
+        return wrapPcmAsWav(Buffer.alloc(320), {
+          sampleRate: 16000,
+          channels: 1,
+          bitsPerSample: 16,
+        });
+      },
+    },
+  });
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-http-audio", acidBubblesAuthenticate())));
+    await waitForVoxta(frames, "configuration");
+    await waitForCompletion(frames, "auth-http-audio");
+    socket.send(encodeFrame(invocation("start-http-audio", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-http-audio");
+
+    socket.send(encodeFrame(invocation("send-http-audio", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "say this",
+    })));
+    const chunk = await waitForVoxta(frames, "replyChunk");
+    await waitForCompletion(frames, "send-http-audio");
+
+    assert.deepEqual(ttsCalls, ["Hello from PSFN"]);
+    assert.equal(typeof chunk.audioUrl, "string");
+    assert.match(String(chunk.audioUrl), new RegExp(`^http://127\\.0\\.0\\.1:${address.port}/api/voxta/audio/.+\\.wav$`));
+    const audio = await fetch(String(chunk.audioUrl));
+    assert.equal(audio.status, 200);
+    assert.equal(audio.headers.get("content-type"), "audio/x-wav");
+    const wav = Buffer.from(await audio.arrayBuffer());
+    assert.equal(wav.toString("ascii", 0, 4), "RIFF");
+    assert.equal(wav.toString("ascii", 8, 12), "WAVE");
+  } finally {
+    socket?.close();
+    await server.close();
+    fs.rmSync(artifactsRoot, { recursive: true, force: true });
+  }
+});
+
 test("Voxta facade accepts AcidBubbles-style raw /hub WebSocket without negotiate", async () => {
   const agent = new FakeAgent();
-  const server = new RealtimeHubServer(testHubConfig(), { agent });
+  const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });
   let socket: WebSocket | null = null;
 
   try {
@@ -274,6 +330,20 @@ test("Voxta facade accepts AcidBubbles-style raw /hub WebSocket without negotiat
       (payload) => serviceEnabled(payload, "TextToSpeech") === false,
     );
 
+    const proxyConfigurationId = crypto.randomUUID();
+    const toggleUnknownVision = await fetch(`${baseUrl}/api/configurations/${proxyConfigurationId}/services/ComputerVision`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    assert.equal(toggleUnknownVision.status, 200);
+    await waitForVoxta(
+      frames,
+      "configuration",
+      (payload) => activeConfigurationId(payload) === proxyConfigurationId &&
+        serviceEnabled(payload, "ComputerVision") === true,
+    );
+
     socket.send(encodeFrame(invocation("start-raw", { $type: "startChat" })));
     const chatStarted = await waitForVoxta(frames, "chatStarted");
     assertAcidBubblesChatStarted(chatStarted);
@@ -307,6 +377,7 @@ test("Voxta facade accepts proxy microphone stream and emits STT events", async 
   const sttCalls: Array<{ specSampleRate: number; bytes: number }> = [];
   const server = new RealtimeHubServer(testHubConfig({ sttStreamEnabled: true }), {
     agent,
+    voxtaTts: null,
     voxtaStt: {
       async transcribePcm(input): Promise<{ text: string; provider: string }> {
         sttCalls.push({
@@ -375,7 +446,7 @@ test("Voxta facade accepts AcidBubbles vision capture uploads and exposes metada
   const server = new RealtimeHubServer(testHubConfig({
     artifactsRoot,
     visionCaptureTimeoutMs: 1_000,
-  }), { agent });
+  }), { agent, voxtaTts: null });
   let socket: WebSocket | null = null;
 
   try {
@@ -505,6 +576,7 @@ function testHubConfig(overrides: {
       userName: "User",
       appLabel: "PSFN Satellite Hub",
       clientVersion: "1.2.1",
+      publicBaseUrl: null,
       audioFolder: overrides.audioFolder ?? null,
       sttStreamEnabled: overrides.sttStreamEnabled ?? false,
       visionCaptureTimeoutMs: overrides.visionCaptureTimeoutMs ?? 1_500,
@@ -681,6 +753,16 @@ async function waitForVoxta(
     const payload = (frame as { arguments: unknown[] }).arguments[0];
     assert.ok(isRecord(payload));
     return payload;
+  });
+}
+
+function voxtaPayloads(frames: unknown[]): Array<Record<string, unknown>> {
+  return frames.flatMap((frame) => {
+    if (!isRecord(frame) || frame.type !== 1 || frame.target !== "ReceiveMessage") {
+      return [];
+    }
+    const payload = Array.isArray(frame.arguments) ? frame.arguments[0] : undefined;
+    return isRecord(payload) ? [payload] : [];
   });
 }
 

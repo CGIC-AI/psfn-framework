@@ -271,7 +271,8 @@ Important settings for the Python ESPHome fallback path:
 - `VOXTA_FACADE_ENABLED` enables the Voxta-compatible SignalR facade on `/hub`, defaulting to `true`
 - `VOXTA_SATELLITE_ID` and `VOXTA_SATELLITE_NAME` identify the VaM/Voxta satellite in PSFN channel metadata
 - `VOXTA_ASSISTANT_NAME`, `VOXTA_USER_NAME`, and related ID vars shape the Voxta welcome/chat payloads
-- `VOXTA_AUDIO_FOLDER` enables direct VaM TTS playback by writing local `.wav` files, typically VaM `Custom\Sounds\Voxta`
+- `VOXTA_PUBLIC_BASE_URL` optionally overrides the public base URL used for proxy-fetchable Voxta audio artifacts
+- `VOXTA_AUDIO_FOLDER` enables direct VaM TTS playback by writing local `.wav` files, typically VaM `Custom\Sounds\Voxta`; when unset, TTS uses HTTP WAV URLs under `/api/voxta/audio/`
 - `VOXTA_STT_STREAM_ENABLED=true` emits Voxta `recordingRequest` messages for official-proxy or sidecar microphone streaming
 - `VOXTA_VISION_CAPTURE_TIMEOUT_MS` controls how long a user turn waits for VaM Screen/Eyes capture uploads when ComputerVision is enabled
 - `VOXTA_APP_TRIGGER_ALLOWLIST` is a comma-separated allowlist for Voxta `appTrigger` forwarding
@@ -324,6 +325,7 @@ Supported HTTP and websocket routes:
 | `PUT /api/configurations/{id}/services/SpeechToText` | VaM STT toggle |
 | `PUT /api/configurations/{id}/services/TextToSpeech` | VaM TTS toggle |
 | `PUT /api/configurations/{id}/services/ComputerVision` | VaM vision toggle |
+| `GET /api/voxta/audio/{artifact}.wav` | Proxy-fetchable WAV artifact for TTS playback |
 | `WS /ws/audio/input/stream?sessionId=<guid>` | Voxta proxy microphone PCM stream for STT |
 | `POST /api/vision/requests/{id}/send?sessionId=<guid>&source=<Screen\|Eyes>&label=virtamate` | AcidBubbles multipart JPEG vision upload |
 | `DELETE /api/vision/requests/{id}?sessionId=<guid>` | AcidBubbles vision capture cancellation |
@@ -344,11 +346,11 @@ Supported Voxta client messages:
 | `speechPlaybackStart`, `speechPlaybackComplete`, `typingStart`, `typingEnd`, `pauseChat`, `inspect`, `inspectAudioInput` | Acknowledged for compatibility |
 
 Assistant replies emit `chatFlow`, `replyGenerating`, `replyStart`,
-`replyChunk`, final `message`, and `replyEnd` events. When `VOXTA_AUDIO_FOLDER`
-is configured and TextToSpeech is enabled, `replyChunk.audioUrl` points at a
-local `.wav` artifact written for VaM playback; otherwise it uses a `silence:0`
-placeholder so the text path still works. The facade also attaches the VaM/Voxta
-satellite to PSFN channel metadata with text, local audio, animation,
+`replyChunk`, and `replyEnd` events. When TextToSpeech is enabled,
+`replyChunk.audioUrl` points at either a local `.wav` artifact written under
+`VOXTA_AUDIO_FOLDER` or a proxy-fetchable HTTP WAV URL under `/api/voxta/audio/`.
+If TTS is unavailable, the facade uses a `silence:0` placeholder so the text path
+still works. The facade also attaches the VaM/Voxta satellite to PSFN channel metadata with text, local audio, animation,
 expression, action, and vision capabilities.
 
 For VaM microphone parity through the official Voxta proxy or a PSFN sidecar, set
@@ -370,7 +372,7 @@ Current Voxta limitations:
 
 - low-latency live STT partials for long-running mic streams are not implemented yet
 - VaM vision uploads are captured and surfaced as channel metadata; using the image bytes in model prompts depends on the PSFN image-processing/multimodal pipeline contract
-- compatibility has been tested against the SignalR/Voxta protocol shape, not yet against the live AcidBubbles plugin
+- live AcidBubbles plugin testing is in progress; the facade now avoids unsupported `message` server packets and accepts proxy service syncs for active configuration IDs
 
 ## Transport Paths
 

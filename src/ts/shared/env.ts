@@ -64,6 +64,7 @@ export interface VoxtaFacadeConfig {
   userName: string;
   appLabel: string;
   clientVersion: string;
+  publicBaseUrl: string | null;
   audioFolder: string | null;
   sttStreamEnabled: boolean;
   visionCaptureTimeoutMs: number;
@@ -225,6 +226,7 @@ function loadVoxtaFacadeConfig(projectRoot: string): VoxtaFacadeConfig {
     userName: process.env.VOXTA_USER_NAME?.trim() || "User",
     appLabel: process.env.VOXTA_APP_LABEL?.trim() || "PSFN Satellite Hub",
     clientVersion: process.env.VOXTA_CLIENT_VERSION?.trim() || "1.2.1",
+    publicBaseUrl: loadVoxtaPublicBaseUrl(),
     audioFolder: process.env.VOXTA_AUDIO_FOLDER?.trim()
       ? resolvePath(projectRoot, process.env.VOXTA_AUDIO_FOLDER.trim())
       : null,
@@ -232,6 +234,26 @@ function loadVoxtaFacadeConfig(projectRoot: string): VoxtaFacadeConfig {
     visionCaptureTimeoutMs: Number.parseInt(process.env.VOXTA_VISION_CAPTURE_TIMEOUT_MS || "1500", 10),
     actionAllowlist: splitCsv(process.env.VOXTA_APP_TRIGGER_ALLOWLIST || ""),
   };
+}
+
+function loadVoxtaPublicBaseUrl(): string | null {
+  const explicit = process.env.VOXTA_PUBLIC_BASE_URL?.trim();
+  if (explicit) {
+    return explicit.replace(/\/+$/, "");
+  }
+  const host = (
+    process.env.AUDIO_PUBLIC_HOST?.trim() ||
+    process.env.REALTIME_VOICE_PUBLIC_HOST?.trim()
+  );
+  if (!host) {
+    return null;
+  }
+  if (/^https?:\/\//i.test(host)) {
+    return host.replace(/\/+$/, "");
+  }
+  const port = process.env.REALTIME_VOICE_PORT?.trim() || "8787";
+  const hasPort = /:\d+$/.test(host);
+  return `http://${host}${hasPort ? "" : `:${port}`}`;
 }
 
 export function loadPiClientConfig(projectRoot: string): PiClientConfig {

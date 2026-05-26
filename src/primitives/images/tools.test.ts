@@ -529,6 +529,34 @@ describe('image tools', () => {
     expect(resultText(result)).toContain('may be stale or refer to a different image');
   });
 
+  it('blocks internal current-turn attachment handles without public fetch', async () => {
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => ({
+        question: 'Should not be reached.',
+        summary: 'Should not be reached.',
+        model: 'vision-model',
+        imageCount: 1,
+      })),
+    };
+
+    const tool = createImageAnalyzeTool(reviewer);
+    const result = await runWithVisionToolRequestContext(
+      {
+        userMessageText: 'can you see this now?',
+        imageAttachmentUrls: ['inline:image:0'],
+      },
+      async () => tool.execute('tool-call-inline', {
+        image_urls: ['attachment:current-turn-image-1'],
+        question: 'What is visible?',
+      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+    );
+
+    expect(reviewer.analyze).not.toHaveBeenCalled();
+    expect(result.details.visionReview).toBeUndefined();
+    expect(result.details.visionReviewError).toContain('live image attachment bytes');
+    expect(resultText(result)).not.toContain('unsupported image URL protocol');
+  });
+
   it('allows an explicit current-message url even when the turn also has a live attachment', async () => {
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({

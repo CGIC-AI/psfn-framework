@@ -3,6 +3,7 @@ import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import {
   buildTurnUserContent,
+  collectVisionTurnImageUrls,
   hasVisionTurnInputs,
 } from './vision-attachments.js';
 
@@ -167,15 +168,20 @@ describe('buildTurnUserContent', () => {
 
   it('routes inline base64 images directly to the multimodal prompt path', async () => {
     const { reviewer, analyze } = makeReviewer();
+    const message = makeMessage({
+      attachments: [{
+        url: 'inline:image:0',
+        contentType: 'image/jpeg',
+        name: 'vam-screen.jpg',
+        dataBase64: 'YWJjZA==',
+      }],
+    });
+
+    expect(hasVisionTurnInputs(message)).toBe(true);
+    expect(collectVisionTurnImageUrls(message)).toEqual(['inline:image:0']);
+
     const result = await buildTurnUserContent({
-      message: makeMessage({
-        attachments: [{
-          url: 'inline:image:0',
-          contentType: 'image/jpeg',
-          name: 'vam-screen.jpg',
-          dataBase64: 'YWJjZA==',
-        }],
-      }),
+      message,
       llmClient: {} as any,
       runtimeMode: 'gateway',
       logger: {

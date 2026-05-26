@@ -116,11 +116,16 @@ export function collectVisionAttachmentUrls(message?: SubstrateMessage): string[
 
 export function collectVisionTurnImageUrls(message?: SubstrateMessage): string[] {
   if (!message) return [];
-  return collectVisionAttachmentUrls(message);
+  if (!message.attachments || message.attachments.length === 0) return [];
+  return message.attachments
+    .filter((attachment) => resolveAttachmentImageContentType(attachment) !== null)
+    .slice(0, VISION_ATTACHMENT_MAX_COUNT)
+    .map((attachment) => attachment.url.trim())
+    .filter((url) => url.length > 0);
 }
 
 export function hasVisionTurnInputs(message?: SubstrateMessage): boolean {
-  return collectVisionTurnImageUrls(message).length > 0;
+  return hasVisionAttachments(message);
 }
 
 export async function buildTurnUserContent(input: {
@@ -130,11 +135,12 @@ export async function buildTurnUserContent(input: {
   logger: VisionLogger;
   visionReviewer?: ImageVisionReviewer | null;
 }): Promise<TurnUserContentBuildResult> {
-  const visionUrls = collectVisionTurnImageUrls(input.message);
+  const visionUrls = collectVisionAttachmentUrls(input.message);
+  const visionReferences = collectVisionTurnImageUrls(input.message);
   const hasInlineImages = hasInlineVisionAttachments(input.message);
   const semanticText = extractSemanticVisionTurnText(
     input.message.content,
-    visionUrls,
+    visionReferences,
   );
   if (visionUrls.length > 0 && !hasInlineImages && input.visionReviewer) {
     try {

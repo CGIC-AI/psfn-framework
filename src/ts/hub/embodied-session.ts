@@ -55,6 +55,10 @@ export interface PsfnChannelContext {
   }>;
   visionCaptures?: VisionCaptureMetadata[];
   visionCaptureImages?: VisionCaptureImage[];
+  contextNotes?: Array<{
+    key: string;
+    text: string;
+  }>;
 }
 
 export interface VisionCaptureMetadata {

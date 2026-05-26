@@ -212,6 +212,71 @@ test("psfn model adapter sends VaM vision captures as inline image blocks", asyn
   }
 });
 
+test("psfn model adapter injects retained VaM context into the active user turn", async () => {
+  const originalFetch = globalThis.fetch;
+  let capturedBody: Record<string, unknown> = {};
+
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    capturedBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+    return new Response(
+      '{"choices":[{"message":{"role":"assistant","content":"I see it."}}]}',
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  };
+
+  const satelliteClaim = normalizeSatelliteClaimConfig({
+    capabilityProfile: "voxta-avatar",
+    satelliteId: "voxta-vam",
+    endpointId: "voxta-vam",
+    displayName: "Voxta VaM",
+  });
+  const adapter = new PsfnModelAdapter({
+    baseUrl: "http://psfn.test",
+    model: "psfn",
+    apiKey: "secret",
+    channelType: satelliteClaim.channelType,
+    satelliteClaim,
+  });
+  const channel: PsfnChannelContext = {
+    sessionId: "voxta-session",
+    channelType: "satellite.endpoint",
+    channelId: "satellite.endpoint:voxta-session",
+    sourceSatelliteId: "voxta-vam",
+    sourceSatelliteName: "Voxta VaM",
+    activeSatellites: [],
+    contextNotes: [{
+      key: "VaM/Slot2",
+      text: "Purrsephone is standing.",
+    }],
+  };
+
+  try {
+    for await (const _chunk of adapter.streamReply({
+      userText: "can you see?",
+      conversationId: "voxta-session",
+      history: [{ role: "user", content: "can you see?" }],
+      channel,
+    })) {
+      // drain generator
+    }
+
+    assert.deepEqual(capturedBody.messages, [{
+      role: "user",
+      content: "Current VaM context:\n- [VaM/Slot2] Purrsephone is standing.\n\nUser turn:\ncan you see?",
+    }]);
+    const channelMetadata = capturedBody.channel_metadata as Record<string, unknown>;
+    assert.deepEqual(channelMetadata.contextNotes, [{
+      key: "VaM/Slot2",
+      text: "Purrsephone is standing.",
+    }]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("psfn model adapter retries transient agent_busy responses", async () => {
   const originalFetch = globalThis.fetch;
   const originalRetryBase = process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS;

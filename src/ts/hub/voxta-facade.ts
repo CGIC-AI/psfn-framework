@@ -18,6 +18,7 @@ import type { ConversationMessage } from "./session-store.js";
 import { SessionStore } from "./session-store.js";
 
 const SIGNALR_RECORD_SEPARATOR = "\x1e";
+const SIGNALR_KEEPALIVE_INTERVAL_MS = 15_000;
 const VOXTA_API_VERSION = "2025-11";
 const VOXTA_SERVER_VERSION = "1.1.3";
 const VAM_PLUGIN_VERSION = "1.1.1";
@@ -96,6 +97,9 @@ type VoxtaClientPayload = Record<string, unknown> & {
   text?: string;
   name?: string;
   value?: string;
+  contexts?: unknown;
+  contextKey?: string;
+  doReply?: unknown;
 };
 
 type VoxtaServerPayload = Record<string, unknown> & {
@@ -416,18 +420,21 @@ class VoxtaConnection {
   private chatId: string;
   private registeredSessionId: string | null = null;
   private visionCaptures: VisionCaptureImage[] = [];
+  private readonly voxtaContexts = new Map<string, string[]>();
   private replyAbort = false;
   private replySequence = 0;
+  private keepAlive: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly socket: WebSocket,
     private readonly deps: VoxtaFacadeDependencies,
     private readonly runtime: VoxtaFacadeRuntime,
-    connectionId: string,
+    _connectionId: string,
     private readonly publicBaseUrl: string,
   ) {
-    this.sessionId = normalizeGuid(connectionId) ?? crypto.randomUUID();
-    this.chatId = crypto.randomUUID();
+    const persistentKey = `${deps.config.satelliteId}:${deps.config.assistantId}:${deps.config.userId}`;
+    this.sessionId = stableVoxtaGuid("session", deps.config.sessionId ?? persistentKey);
+    this.chatId = stableVoxtaGuid("chat", deps.config.chatId ?? persistentKey);
     this.assistant = {
       id: stableVoxtaGuid("assistant", deps.config.assistantId),
       name: deps.config.assistantName,
@@ -447,6 +454,9 @@ class VoxtaConnection {
   }
 
   run(): void {
+    this.keepAlive = setInterval(() => {
+      void this.sendFrame({ type: 6 });
+    }, SIGNALR_KEEPALIVE_INTERVAL_MS);
     this.socket.on("message", (raw) => {
       for (const frame of decodeSignalRFrames(raw)) {
         this.messageChain = this.messageChain
@@ -461,6 +471,10 @@ class VoxtaConnection {
       }
     });
     this.socket.on("close", () => {
+      if (this.keepAlive) {
+        clearInterval(this.keepAlive);
+        this.keepAlive = null;
+      }
       this.cancelReply();
       for (const [configurationId, connection] of this.runtime.connectionsByConfigurationId) {
         if (connection === this) {
@@ -468,7 +482,7 @@ class VoxtaConnection {
         }
       }
       this.runtime.connections.delete(this);
-      if (this.registeredSessionId) {
+      if (this.registeredSessionId && this.runtime.connectionsBySessionId.get(this.registeredSessionId) === this) {
         this.runtime.connectionsBySessionId.delete(this.registeredSessionId);
         this.registeredSessionId = null;
       }
@@ -659,8 +673,6 @@ class VoxtaConnection {
 
   private async handleStartChat(invocationId: string | undefined, payload: VoxtaClientPayload): Promise<void> {
     this.applyRequestedCharacterId(payload);
-    this.sessionId = crypto.randomUUID();
-    this.chatId = crypto.randomUUID();
     this.attachSatellite();
     this.registerSession();
     await this.emitChatStarted(payload.characterId);
@@ -669,13 +681,8 @@ class VoxtaConnection {
 
   private async handleResumeChat(invocationId: string | undefined, payload: VoxtaClientPayload): Promise<void> {
     this.applyRequestedCharacterId(payload);
-    const chatId = normalizedString(payload.chatId);
-    if (chatId) {
-      this.chatId = normalizeGuid(chatId) ?? crypto.randomUUID();
-      this.sessionId = crypto.randomUUID();
-      this.attachSatellite();
-      this.registerSession();
-    }
+    this.attachSatellite();
+    this.registerSession();
     await this.emitChatStarted(payload.characterId);
     await this.sendCompletion(invocationId);
   }
@@ -694,37 +701,51 @@ class VoxtaConnection {
       return;
     }
     const input = normalizeVoxtaSendText(rawText);
-    const sessionId = normalizedString(payload.sessionId) ?? this.sessionId;
-    this.sessionId = sessionId;
     this.attachSatellite();
     this.registerSession();
 
     this.deps.sessions.append(this.sessionId, { role: "user", content: input.promptText });
+    if (!shouldReplyToVoxtaSend(input, payload.doReply)) {
+      await this.sendReceive({
+        $type: "chatFlow",
+        state: "WaitingForUser",
+        sessionId: this.sessionId,
+      });
+      await this.sendCompletion(invocationId);
+      return;
+    }
     const replyTask = this.streamAssistantReply(input.promptText);
     await replyTask;
     await this.sendCompletion(invocationId);
   }
 
-  private async handleInterrupt(invocationId: string | undefined, payload: VoxtaClientPayload): Promise<void> {
-    const sessionId = normalizedString(payload.sessionId) ?? this.sessionId;
+  private async handleInterrupt(invocationId: string | undefined, _payload: VoxtaClientPayload): Promise<void> {
     this.cancelReply();
     await this.sendReceive({
       $type: "interruptSpeech",
-      sessionId,
+      sessionId: this.sessionId,
     });
     await this.sendReceive({
       $type: "replyCancelled",
-      sessionId,
+      sessionId: this.sessionId,
       messageId: crypto.randomUUID(),
     });
     await this.sendCompletion(invocationId);
   }
 
   private async handleUpdateContext(invocationId: string | undefined, payload: VoxtaClientPayload): Promise<void> {
+    const contextKey = normalizedString(payload.contextKey) ?? "voxta-context";
+    const contextTexts = extractVoxtaContextTexts(payload.contexts ?? payload.text ?? payload.value);
+    if (contextTexts.length > 0) {
+      this.voxtaContexts.set(contextKey, contextTexts);
+      this.pruneVoxtaContexts();
+    } else {
+      this.voxtaContexts.delete(contextKey);
+    }
     await this.sendReceive({
       $type: "contextUpdated",
-      sessionId: normalizedString(payload.sessionId) ?? this.sessionId,
-      contextKey: normalizedString(payload.contextKey) ?? "voxta-context",
+      sessionId: this.sessionId,
+      contextKey,
       flags: this.contextFlags(),
       actions: this.contextActions(),
     });
@@ -747,7 +768,7 @@ class VoxtaConnection {
       arguments: normalizeArguments(payload.arguments),
       role: this.assistant.role,
       senderId: this.assistant.id,
-      sessionId: normalizedString(payload.sessionId) ?? this.sessionId,
+      sessionId: this.sessionId,
     });
     await this.sendCompletion(invocationId);
   }
@@ -994,7 +1015,26 @@ class VoxtaConnection {
       ...context,
       visionCaptures: this.visionCaptures.slice(-4).map(stripVisionCaptureImageData),
       visionCaptureImages: this.visionCaptures.slice(-4),
+      contextNotes: this.contextNotes(),
     };
+  }
+
+  private contextNotes(): NonNullable<PsfnChannelContext["contextNotes"]> {
+    return [...this.voxtaContexts.entries()]
+      .flatMap(([key, values]) => values.map((text) => ({ key, text })))
+      .filter((note) => note.key.trim().length > 0 && note.text.trim().length > 0)
+      .slice(-12);
+  }
+
+  private pruneVoxtaContexts(): void {
+    const entries = [...this.voxtaContexts.entries()].slice(-16);
+    if (entries.length === this.voxtaContexts.size) {
+      return;
+    }
+    this.voxtaContexts.clear();
+    for (const [key, value] of entries) {
+      this.voxtaContexts.set(key, value);
+    }
   }
 
   private cancelReply(): void {
@@ -1551,19 +1591,79 @@ function stableVoxtaGuid(kind: string, value: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
-function normalizeVoxtaSendText(input: string): { promptText: string } {
+type NormalizedVoxtaSend = {
+  promptText: string;
+  slashCommand?: string;
+  slashShouldReply?: boolean;
+};
+
+function normalizeVoxtaSendText(input: string): NormalizedVoxtaSend {
   const text = normalizeVoxtaTemplateTokens(input);
   const slashCommand = /^\/([A-Za-z][A-Za-z0-9_-]*)(?:\s+([\s\S]*))?$/.exec(text);
   if (!slashCommand) {
     return { promptText: text };
   }
 
+  const command = slashCommand[1]?.toLowerCase();
   const body = slashCommand[2]?.trim() ?? "";
   if (!body) {
     return { promptText: text };
   }
 
-  return { promptText: body };
+  return {
+    promptText: body,
+    slashCommand: command,
+    slashShouldReply: command === "event" ? true : command === "secret" || command === "note" ? false : undefined,
+  };
+}
+
+function shouldReplyToVoxtaSend(input: NormalizedVoxtaSend, payloadDoReply: unknown): boolean {
+  if (typeof input.slashShouldReply === "boolean") {
+    return input.slashShouldReply;
+  }
+  return normalizeVoxtaBoolean(payloadDoReply) ?? true;
+}
+
+function normalizeVoxtaBoolean(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  const text = normalizedString(value);
+  if (!text) {
+    return undefined;
+  }
+  if (/^(true|1|yes|y)$/i.test(text)) {
+    return true;
+  }
+  if (/^(false|0|no|n)$/i.test(text)) {
+    return false;
+  }
+  return undefined;
+}
+
+function extractVoxtaContextTexts(value: unknown): string[] {
+  const texts = collectVoxtaContextTexts(value)
+    .map((text) => normalizeVoxtaTemplateTokens(text).trim())
+    .filter(Boolean);
+  return [...new Set(texts)].slice(-8);
+}
+
+function collectVoxtaContextTexts(value: unknown): string[] {
+  if (typeof value === "string") {
+    return [value];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectVoxtaContextTexts(item));
+  }
+  if (!isRecord(value)) {
+    return [];
+  }
+  return [
+    value.text,
+    value.content,
+    value.value,
+    value.description,
+  ].flatMap((item) => collectVoxtaContextTexts(item));
 }
 
 function normalizeVoxtaTemplateTokens(input: string): string {

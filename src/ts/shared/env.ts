@@ -58,6 +58,8 @@ export interface VoxtaFacadeConfig {
   enabled: boolean;
   satelliteId: string;
   satelliteName: string;
+  sessionId: string | null;
+  chatId: string | null;
   assistantId: string;
   assistantName: string;
   userId: string;
@@ -220,6 +222,8 @@ function loadVoxtaFacadeConfig(projectRoot: string): VoxtaFacadeConfig {
     enabled: process.env.VOXTA_FACADE_ENABLED?.trim() !== "false",
     satelliteId: process.env.VOXTA_SATELLITE_ID?.trim() || "voxta-vam",
     satelliteName: process.env.VOXTA_SATELLITE_NAME?.trim() || "Voxta VaM",
+    sessionId: process.env.VOXTA_SESSION_ID?.trim() || null,
+    chatId: process.env.VOXTA_CHAT_ID?.trim() || null,
     assistantId: process.env.VOXTA_ASSISTANT_ID?.trim() || "psfn-assistant",
     assistantName: process.env.VOXTA_ASSISTANT_NAME?.trim() || "PSFN",
     userId: process.env.VOXTA_USER_ID?.trim() || "voxta-user",

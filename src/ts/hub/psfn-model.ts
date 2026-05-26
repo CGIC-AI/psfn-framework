@@ -240,6 +240,7 @@ export class PsfnModelAdapter implements AgentRuntimeAdapter {
     userText: string,
     channel: PsfnChannelContext,
   ): PsfnChatMessage[] {
+    const contextualUserText = buildContextualUserText(userText, channel);
     const messages: PsfnChatMessage[] = history
       .filter((message) => message.content.trim().length > 0)
       .map((message) => ({
@@ -254,10 +255,16 @@ export class PsfnModelAdapter implements AgentRuntimeAdapter {
       }
       messages.push({
         role: "user",
-        content: buildInlineVisionContent(userText, currentVisionImages),
+        content: buildInlineVisionContent(contextualUserText, currentVisionImages),
       });
-    } else if (!messages.length || messages[messages.length - 1]?.content !== userText) {
-      messages.push({ role: "user", content: userText });
+    } else {
+      const lastMessage = messages[messages.length - 1];
+      if (lastMessage?.role === "user" && lastMessage.content === userText) {
+        messages.pop();
+      }
+      if (!messages.length || messages[messages.length - 1]?.content !== contextualUserText) {
+        messages.push({ role: "user", content: contextualUserText });
+      }
     }
     return messages;
   }
@@ -293,8 +300,34 @@ function buildChannelMetadata(
     sourceSatelliteName: channel.sourceSatelliteName,
     activeSatellites: channel.activeSatellites,
     ...(channel.visionCaptures?.length ? { visionCaptures: channel.visionCaptures } : {}),
+    ...(channel.contextNotes?.length ? { contextNotes: normalizeContextNotes(channel.contextNotes) } : {}),
     satelliteClaim,
   };
+}
+
+function buildContextualUserText(userText: string, channel: PsfnChannelContext): string {
+  const contextNotes = normalizeContextNotes(channel.contextNotes ?? []);
+  if (contextNotes.length === 0) {
+    return userText;
+  }
+  const lines = [
+    "Current VaM context:",
+    ...contextNotes.map((note) => `- [${note.key}] ${note.text}`),
+    "",
+    "User turn:",
+    userText.trim(),
+  ];
+  return lines.join("\n");
+}
+
+function normalizeContextNotes(notes: NonNullable<PsfnChannelContext["contextNotes"]>): Array<{ key: string; text: string }> {
+  return notes
+    .map((note) => ({
+      key: note.key.trim(),
+      text: note.text.trim(),
+    }))
+    .filter((note) => note.key.length > 0 && note.text.length > 0)
+    .slice(-12);
 }
 
 function normalizeVisionCaptureImages(

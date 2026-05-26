@@ -149,6 +149,8 @@ public sealed class BridgeSession : IAsyncDisposable
             })
             .WithAutomaticReconnect()
             .Build();
+        _remote.ServerTimeout = TimeSpan.FromMinutes(5);
+        _remote.KeepAliveInterval = TimeSpan.FromSeconds(15);
         _remote.On<JsonElement>("ReceiveMessage", message => ReceiveRemoteMessageAsync(message));
     }
 
@@ -173,7 +175,7 @@ public sealed class BridgeSession : IAsyncDisposable
         await _sendLock.WaitAsync(cancellationToken);
         try
         {
-            await _remote.InvokeAsync("SendMessage", node, cancellationToken);
+            await _remote.SendAsync("SendMessage", node, cancellationToken);
         }
         finally
         {

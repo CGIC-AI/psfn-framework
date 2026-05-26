@@ -186,6 +186,7 @@ test("Voxta facade normalizes VaM slash-command context before PSFN routing", as
       text: "/event {{ user }} slaps Purrsephone's face.",
     })));
     await waitForCompletion(frames, "send-event");
+    assert.equal(agent.calls.length, 1);
 
     socket.send(encodeFrame(invocation("send-secret", {
       $type: "send",
@@ -193,16 +194,73 @@ test("Voxta facade normalizes VaM slash-command context before PSFN routing", as
       text: "/secret {{ user }} cups Purrsephone's face.",
     })));
     await waitForCompletion(frames, "send-secret");
+    assert.equal(agent.calls.length, 1);
+
+    socket.send(encodeFrame(invocation("send-after-secret", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "did you get that?",
+    })));
+    await waitForCompletion(frames, "send-after-secret");
 
     assert.equal(agent.calls[0]?.userText, "{{user}} slaps Purrsephone's face.");
-    assert.equal(agent.calls[1]?.userText, "{{user}} cups Purrsephone's face.");
+    assert.equal(agent.calls[1]?.userText, "did you get that?");
     assert.deepEqual(agent.calls[1]?.history?.map((message) => message.content), [
       "{{user}} slaps Purrsephone's face.",
       "Hello from PSFN",
       "{{user}} cups Purrsephone's face.",
+      "did you get that?",
     ]);
   } finally {
     socket?.close();
+    await server.close();
+  }
+});
+
+test("Voxta facade reuses stable chat and session ids across VaM reconnects", async () => {
+  const agent = new FakeAgent();
+  const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });
+  let firstSocket: WebSocket | null = null;
+  let secondSocket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+
+    firstSocket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const firstFrames: unknown[] = [];
+    firstSocket.on("message", (raw) => {
+      firstFrames.push(...decodeSignalRFrames(raw));
+    });
+    firstSocket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(firstFrames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    firstSocket.send(encodeFrame(invocation("auth-stable-1", acidBubblesAuthenticate())));
+    await waitForVoxta(firstFrames, "configuration");
+    await waitForCompletion(firstFrames, "auth-stable-1");
+    firstSocket.send(encodeFrame(invocation("start-stable-1", { $type: "startChat" })));
+    const firstChatStarted = await waitForVoxta(firstFrames, "chatStarted");
+    await waitForCompletion(firstFrames, "start-stable-1");
+    firstSocket.close();
+
+    secondSocket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const secondFrames: unknown[] = [];
+    secondSocket.on("message", (raw) => {
+      secondFrames.push(...decodeSignalRFrames(raw));
+    });
+    secondSocket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(secondFrames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    secondSocket.send(encodeFrame(invocation("auth-stable-2", acidBubblesAuthenticate())));
+    await waitForVoxta(secondFrames, "configuration");
+    await waitForCompletion(secondFrames, "auth-stable-2");
+    secondSocket.send(encodeFrame(invocation("start-stable-2", { $type: "startChat" })));
+    const secondChatStarted = await waitForVoxta(secondFrames, "chatStarted");
+    await waitForCompletion(secondFrames, "start-stable-2");
+
+    assert.equal(secondChatStarted.sessionId, firstChatStarted.sessionId);
+    assert.equal(secondChatStarted.chatId, firstChatStarted.chatId);
+  } finally {
+    firstSocket?.close();
+    secondSocket?.close();
     await server.close();
   }
 });
@@ -249,6 +307,58 @@ test("Voxta facade uses selected VaM character id as assistant sender", async ()
     await waitForCompletion(frames, "send-character");
     assert.equal(replyGenerating.senderId, selectedCharacterId);
     assert.equal(replyChunk.senderId, selectedCharacterId);
+  } finally {
+    socket?.close();
+    await server.close();
+  }
+});
+
+test("Voxta facade retains TouchElite context slots for the next PSFN turn", async () => {
+  const agent = new FakeAgent();
+  const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-touch-context", acidBubblesAuthenticate())));
+    await waitForVoxta(frames, "configuration");
+    await waitForCompletion(frames, "auth-touch-context");
+    socket.send(encodeFrame(invocation("start-touch-context", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-touch-context");
+
+    socket.send(encodeFrame(invocation("update-touch-context", {
+      $type: "updateContext",
+      sessionId: chatStarted.sessionId,
+      contextKey: "VaM/Slot2",
+      contexts: [{
+        text: "Purrsephone is standing. The scene view shows {{ user }} nearby.",
+      }],
+    })));
+    const contextUpdated = await waitForVoxta(frames, "contextUpdated");
+    await waitForCompletion(frames, "update-touch-context");
+    assert.equal(contextUpdated.contextKey, "VaM/Slot2");
+
+    socket.send(encodeFrame(invocation("send-touch-context", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "can you see?",
+    })));
+    await waitForCompletion(frames, "send-touch-context");
+
+    assert.deepEqual(agent.calls[0]?.channel?.contextNotes, [{
+      key: "VaM/Slot2",
+      text: "Purrsephone is standing. The scene view shows {{user}} nearby.",
+    }]);
   } finally {
     socket?.close();
     await server.close();
@@ -668,6 +778,8 @@ function testHubConfig(overrides: {
       enabled: true,
       satelliteId: "voxta-vam",
       satelliteName: "Voxta VaM",
+      sessionId: null,
+      chatId: null,
       assistantId: "psfn-assistant",
       assistantName: "PSFN",
       userId: "voxta-user",

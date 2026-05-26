@@ -270,6 +270,7 @@ Important settings for the Python ESPHome fallback path:
 - `HERMES_CHANNEL_TYPE` for the hub channel id prefix, defaulting to `hermes-agent`
 - `VOXTA_FACADE_ENABLED` enables the Voxta-compatible SignalR facade on `/hub`, defaulting to `true`
 - `VOXTA_SATELLITE_ID` and `VOXTA_SATELLITE_NAME` identify the VaM/Voxta satellite in PSFN channel metadata
+- `VOXTA_SESSION_ID` and `VOXTA_CHAT_ID` optionally pin the VaM/Voxta conversation IDs; when unset the hub derives stable IDs from the Voxta satellite, assistant, and user IDs
 - `VOXTA_ASSISTANT_NAME`, `VOXTA_USER_NAME`, and related ID vars shape the Voxta welcome/chat payloads
 - `VOXTA_PUBLIC_BASE_URL` optionally overrides the public base URL used for proxy-fetchable Voxta audio artifacts
 - `VOXTA_AUDIO_FOLDER` enables direct VaM TTS playback by writing local `.wav` files, typically VaM `Custom\Sounds\Voxta`; when unset, TTS uses HTTP WAV URLs under `/api/voxta/audio/`
@@ -340,7 +341,7 @@ Supported Voxta client messages:
 | `registerApp` | Registers the VaM/Voxta satellite capabilities |
 | `loadCharactersList`, `loadScenariosList`, `loadChatsList` | Returns minimal lists backed by the configured PSFN assistant identity |
 | `startChat`, `resumeChat`, `subscribeToChat` | Opens or attaches a stable embodied session |
-| `send` | Routes user text into the selected PSFN/Hermes runtime |
+| `send` | Routes user text into the selected PSFN/Hermes runtime; `/secret` and `/note` are retained as context without generating a reply |
 | `interrupt` | Cancels the active reply and emits Voxta interrupt/cancel events |
 | `triggerAction` | Emits `appTrigger` only when the action is in `VOXTA_APP_TRIGGER_ALLOWLIST` |
 | `speechPlaybackStart`, `speechPlaybackComplete`, `typingStart`, `typingEnd`, `pauseChat`, `inspect`, `inspectAudioInput` | Acknowledged for compatibility |

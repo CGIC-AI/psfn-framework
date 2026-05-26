@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import https from "node:https";
 import type { IncomingMessage } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 
 import type { ConversationMessage } from "./session-store.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
@@ -37,6 +38,7 @@ const DEFAULT_SYSTEM_PROMPT =
   "Reply as plain spoken dialogue only, in one short sentence unless the user explicitly asks for more. "
   + "Do not use roleplay actions, stage directions, emotes, asterisks, markdown, narration, or scene-setting. "
   + "Do not call tools. Do not add preambles, summaries, or extra reassurance.";
+const DEFAULT_PSFN_AGENT_BUSY_MAX_RETRIES = 12;
 
 export class PsfnModelAdapter implements AgentRuntimeAdapter {
   private readonly apiBaseUrl: string;
@@ -65,7 +67,7 @@ export class PsfnModelAdapter implements AgentRuntimeAdapter {
       apiKey: this.runtime.apiKey,
     });
     const channelMetadata = buildChannelMetadata(channel, satelliteClaim);
-    const response = await this.postChatCompletion(
+    const response = await this.postChatCompletionWithBusyRetry(
       this.buildHeaders(channel, satelliteClaim, channelMetadata),
       JSON.stringify({
         model: this.runtime.model,
@@ -155,6 +157,25 @@ export class PsfnModelAdapter implements AgentRuntimeAdapter {
         }
       },
     };
+  }
+
+  private async postChatCompletionWithBusyRetry(
+    headers: Record<string, string>,
+    body: string,
+  ): Promise<CompletionResponse> {
+    const maxRetries = agentBusyMaxRetries();
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+      const response = await this.postChatCompletion(headers, body);
+      if (response.ok) {
+        return response;
+      }
+      const responseText = await response.text();
+      if (!isAgentBusyResponse(response.status, responseText) || attempt >= maxRetries) {
+        return responseFromText(response.status, responseText);
+      }
+      await delay(agentBusyRetryDelayMs(attempt));
+    }
+    return responseFromText(503, '{"error":{"message":"Agent is already processing another prompt"}}');
   }
 
   private async postChatCompletionWithClientCertificate(
@@ -387,6 +408,39 @@ async function formatError(response: CompletionResponse): Promise<string> {
     return `PSFN chat completion failed (${response.status}): ${body}`;
   }
   return `PSFN chat completion failed (${response.status})`;
+}
+
+function isAgentBusyResponse(status: number, body: string): boolean {
+  return status === 503 && (
+    body.includes('"type":"agent_busy"') ||
+    body.includes('"type": "agent_busy"') ||
+    body.toLowerCase().includes("agent is already processing another prompt")
+  );
+}
+
+function agentBusyRetryDelayMs(attempt: number): number {
+  const base = Number.parseInt(process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS || "750", 10);
+  const normalizedBase = Number.isFinite(base) && base >= 0 ? base : 750;
+  return Math.min(5_000, normalizedBase * (attempt + 1));
+}
+
+function agentBusyMaxRetries(): number {
+  const configured = Number.parseInt(process.env.PSFN_AGENT_BUSY_MAX_RETRIES || "", 10);
+  if (Number.isFinite(configured) && configured >= 0) {
+    return configured;
+  }
+  return DEFAULT_PSFN_AGENT_BUSY_MAX_RETRIES;
+}
+
+function responseFromText(status: number, body: string): CompletionResponse {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => body,
+    chunks: async function* chunks() {
+      yield Buffer.from(body, "utf8");
+    },
+  };
 }
 
 function responseFromIncomingMessage(message: IncomingMessage): CompletionResponse {

@@ -211,3 +211,64 @@ test("psfn model adapter sends VaM vision captures as inline image blocks", asyn
     globalThis.fetch = originalFetch;
   }
 });
+
+test("psfn model adapter retries transient agent_busy responses", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalRetryBase = process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS;
+  let calls = 0;
+
+  process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS = "1";
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return new Response(
+        '{"error":{"message":"Agent is already processing another prompt","type":"agent_busy"}}',
+        {
+          status: 503,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+    return new Response(
+      '{"choices":[{"message":{"role":"assistant","content":"Ready now"}}]}',
+      {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      },
+    );
+  };
+
+  const satelliteClaim = normalizeSatelliteClaimConfig({
+    capabilityProfile: "voxta-avatar",
+    satelliteId: "voxta-vam",
+    endpointId: "voxta-vam",
+    displayName: "Voxta VaM",
+  });
+  const adapter = new PsfnModelAdapter({
+    baseUrl: "http://psfn.test",
+    model: "psfn",
+    apiKey: "secret",
+    channelType: satelliteClaim.channelType,
+    satelliteClaim,
+  });
+
+  try {
+    const chunks: string[] = [];
+    for await (const chunk of adapter.streamReply({
+      userText: "hello",
+      conversationId: "voxta-session",
+      history: [],
+    })) {
+      chunks.push(chunk);
+    }
+    assert.deepEqual(chunks, ["Ready now"]);
+    assert.equal(calls, 2);
+  } finally {
+    if (originalRetryBase === undefined) {
+      delete process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS;
+    } else {
+      process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS = originalRetryBase;
+    }
+    globalThis.fetch = originalFetch;
+  }
+});

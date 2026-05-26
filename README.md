@@ -360,6 +360,23 @@ first, then binary PCM frames. The first implementation transcribes the buffered
 PCM when the stream closes and emits `speechRecognitionStart`,
 `speechRecognitionPartial`, and `speechRecognitionEnd`.
 
+When VaM is using the official proxy for remote PSFN, the plugin's REST calls may
+still target the proxy's local port. If that proxy does not forward REST routes,
+run the local bridge on the VaM machine and point the VaM plugin at the bridge
+port:
+
+```bash
+npm run voxta:local-bridge -- \
+  --listen 127.0.0.1:8791 \
+  --signalr http://127.0.0.1:8789 \
+  --api http://purrsephone.local.vega.nyc:8789
+```
+
+Keep the official Voxta proxy on `127.0.0.1:8789`; set the VaM plugin host/port
+to `127.0.0.1:8791`. The bridge sends `/hub` traffic to the official proxy, while
+`/api/...` REST service toggles, vision uploads, and `/ws/audio/...` mic streams
+go to the remote hub. Audio downloads use the hub's configured public base URL.
+
 For VaM vision capture, enable the plugin's ComputerVision service and at least
 one AcidBubbles source toggle (`Screen` or `Eyes`). On the next user turn, the
 hub sends `visionCaptureRequest` for both sources, accepts the plugin's JPEG

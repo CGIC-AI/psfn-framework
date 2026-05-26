@@ -8,6 +8,7 @@
     "hub:ts": "tsx src/ts/hub/main.ts",
     "pi:ts": "tsx src/ts/pi-client/main.ts",
     "smoke:ts": "node scripts/smoke-ts-hub.mjs",
+    "voxta:local-bridge": "node scripts/voxta-local-rest-bridge.mjs",
     "shell:psfn": "node scripts/psfn-thin-shell.mjs",
     "studio:build": "npm run build:ts && node scripts/build-device-studio.mjs",
     "studio:dev": "npm run studio:build && node scripts/serve-device-studio.mjs",

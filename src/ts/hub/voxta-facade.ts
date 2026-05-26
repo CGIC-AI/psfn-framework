@@ -678,18 +678,19 @@ class VoxtaConnection {
   }
 
   private async handleSend(invocationId: string | undefined, payload: VoxtaClientPayload): Promise<void> {
-    const text = normalizedString(payload.text);
-    if (!text) {
+    const rawText = normalizedString(payload.text);
+    if (!rawText) {
       await this.sendCompletion(invocationId, "Voxta send text is empty");
       return;
     }
+    const input = normalizeVoxtaSendText(rawText);
     const sessionId = normalizedString(payload.sessionId) ?? this.sessionId;
     this.sessionId = sessionId;
     this.attachSatellite();
     this.registerSession();
 
-    this.deps.sessions.append(this.sessionId, { role: "user", content: text });
-    const replyTask = this.streamAssistantReply(text);
+    this.deps.sessions.append(this.sessionId, { role: "user", content: input.promptText });
+    const replyTask = this.streamAssistantReply(input.promptText);
     await replyTask;
     await this.sendCompletion(invocationId);
   }
@@ -1507,6 +1508,25 @@ function normalizeGuid(value: unknown): string | undefined {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(text)
     ? text
     : undefined;
+}
+
+function normalizeVoxtaSendText(input: string): { promptText: string } {
+  const text = normalizeVoxtaTemplateTokens(input);
+  const slashCommand = /^\/([A-Za-z][A-Za-z0-9_-]*)(?:\s+([\s\S]*))?$/.exec(text);
+  if (!slashCommand) {
+    return { promptText: text };
+  }
+
+  const body = slashCommand[2]?.trim() ?? "";
+  if (!body) {
+    return { promptText: text };
+  }
+
+  return { promptText: body };
+}
+
+function normalizeVoxtaTemplateTokens(input: string): string {
+  return input.replaceAll(/\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g, "{{$1}}");
 }
 
 function defaultServiceState(): VoxtaServiceState {

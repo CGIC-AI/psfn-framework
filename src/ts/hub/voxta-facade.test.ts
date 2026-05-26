@@ -157,6 +157,56 @@ test("Voxta facade negotiates SignalR and routes SendMessage into the embodied s
   }
 });
 
+test("Voxta facade normalizes VaM slash-command context before PSFN routing", async () => {
+  const agent = new FakeAgent();
+  const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-context", acidBubblesAuthenticate())));
+    await waitForVoxta(frames, "configuration");
+    await waitForCompletion(frames, "auth-context");
+    socket.send(encodeFrame(invocation("start-context", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-context");
+
+    socket.send(encodeFrame(invocation("send-event", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "/event {{ user }} slaps Purrsephone's face.",
+    })));
+    await waitForCompletion(frames, "send-event");
+
+    socket.send(encodeFrame(invocation("send-secret", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "/secret {{ user }} cups Purrsephone's face.",
+    })));
+    await waitForCompletion(frames, "send-secret");
+
+    assert.equal(agent.calls[0]?.userText, "{{user}} slaps Purrsephone's face.");
+    assert.equal(agent.calls[1]?.userText, "{{user}} cups Purrsephone's face.");
+    assert.deepEqual(agent.calls[1]?.history?.map((message) => message.content), [
+      "{{user}} slaps Purrsephone's face.",
+      "Hello from PSFN",
+      "{{user}} cups Purrsephone's face.",
+    ]);
+  } finally {
+    socket?.close();
+    await server.close();
+  }
+});
+
 test("Voxta facade writes VaM-playable WAV artifacts when VOXTA audio folder is configured", async () => {
   const audioFolder = fs.mkdtempSync(path.join(os.tmpdir(), "voxta-vam-audio-"));
   const agent = new FakeAgent();

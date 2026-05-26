@@ -353,29 +353,23 @@ If TTS is unavailable, the facade uses a `silence:0` placeholder so the text pat
 still works. The facade also attaches the VaM/Voxta satellite to PSFN channel metadata with text, local audio, animation,
 expression, action, and vision capabilities.
 
-For VaM microphone parity through the official Voxta proxy or a PSFN sidecar, set
-`VOXTA_STT_STREAM_ENABLED=true`. The hub then emits `recordingRequest`; the
-proxy opens `/ws/audio/input/stream?sessionId=<guid>`, sends the stream-spec JSON
-first, then binary PCM frames. The first implementation transcribes the buffered
-PCM when the stream closes and emits `speechRecognitionStart`,
-`speechRecognitionPartial`, and `speechRecognitionEnd`.
+For remote VaM use, run the repo-local relay on the VaM Windows machine and
+point the AcidBubbles plugin at that single local endpoint:
 
-When VaM is using the official proxy for remote PSFN, the plugin's REST calls may
-still target the proxy's local port. If that proxy does not forward REST routes,
-run the local bridge on the VaM machine and point the VaM plugin at the bridge
-port:
-
-```bash
-npm run voxta:local-bridge -- \
-  --listen 127.0.0.1:8791 \
-  --signalr http://127.0.0.1:8789 \
-  --api http://purrsephone.local.vega.nyc:8789
+```powershell
+$env:PSFN_VOXTA_RELAY_LISTEN_URL = "http://127.0.0.1:8789"
+$env:PSFN_VOXTA_RELAY_REMOTE_HUB_URL = "http://purrsephone.local.vega.nyc:8789/hub"
+$env:PSFN_VOXTA_RELAY_REMOTE_API_BASE_URL = "http://purrsephone.local.vega.nyc:8789"
+$env:PSFN_VOXTA_RELAY_AUDIO_FOLDER = "E:\VAM\Custom\Sounds\Voxta"
+dotnet run --project relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj
 ```
 
-Keep the official Voxta proxy on `127.0.0.1:8789`; set the VaM plugin host/port
-to `127.0.0.1:8791`. The bridge sends `/hub` traffic to the official proxy, while
-`/api/...` REST service toggles, vision uploads, and `/ws/audio/...` mic streams
-go to the remote hub. Audio downloads use the hub's configured public base URL.
+The relay exposes local SignalR `/hub` for VaM, forwards REST `/api/...` routes
+to the remote hub, downloads remote `replyChunk.audioUrl` WAV artifacts into the
+VaM audio folder, rewrites audio URLs to local file paths, and owns Windows
+microphone capture when the hub emits `recordingRequest`. Set
+`VOXTA_STT_STREAM_ENABLED=true` on the hub so the relay opens the remote
+`/ws/audio/input/stream?sessionId=<guid>` websocket and streams 16 kHz mono PCM.
 
 For VaM vision capture, enable the plugin's ComputerVision service and at least
 one AcidBubbles source toggle (`Screen` or `Eyes`). On the next user turn, the
@@ -410,7 +404,8 @@ Voxta/VaM embodiment path:
 - user text turns enter the same embodied session registry as the Pi path
 - assistant replies stream back as Voxta reply events with VaM-compatible metadata
 - app triggers are denied by default unless explicitly allowlisted
-- VaM text chat and direct local WAV TTS can run through this path; VaM microphone parity uses the official proxy or a compatible sidecar to capture and stream local mic audio
+- remote VaM uses the repo-local relay to provide the plugin's single local
+  endpoint, local WAV playback files, REST forwarding, and microphone capture
 
 Fallback path:
 

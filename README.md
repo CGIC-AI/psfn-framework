@@ -357,11 +357,9 @@ For remote VaM use, run the repo-local relay on the VaM Windows machine and
 point the AcidBubbles plugin at that single local endpoint:
 
 ```powershell
-$env:PSFN_VOXTA_RELAY_LISTEN_URL = "http://127.0.0.1:8789"
-$env:PSFN_VOXTA_RELAY_REMOTE_HUB_URL = "http://purrsephone.local.vega.nyc:8789/hub"
-$env:PSFN_VOXTA_RELAY_REMOTE_API_BASE_URL = "http://purrsephone.local.vega.nyc:8789"
-$env:PSFN_VOXTA_RELAY_AUDIO_FOLDER = "E:\VAM\Custom\Sounds\Voxta"
-dotnet run --project relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj
+.\PsfnVoxtaRelay.exe `
+  --remote http://purrsephone.local.vega.nyc:8789 `
+  --audio-folder "E:\VAM\Custom\Sounds\Voxta"
 ```
 
 The relay exposes local SignalR `/hub` for VaM, forwards REST `/api/...` routes

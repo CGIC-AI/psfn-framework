@@ -24,30 +24,50 @@ The relay intentionally stays JSON-pass-through. It does not depend on
 
 ## Run
 
-PowerShell:
+Published executable on the VaM Windows machine:
 
 ```powershell
-$env:PSFN_VOXTA_RELAY_LISTEN_URL = "http://127.0.0.1:8789"
-$env:PSFN_VOXTA_RELAY_REMOTE_HUB_URL = "http://purrsephone.local.vega.nyc:8789/hub"
-$env:PSFN_VOXTA_RELAY_REMOTE_API_BASE_URL = "http://purrsephone.local.vega.nyc:8789"
-$env:PSFN_VOXTA_RELAY_AUDIO_FOLDER = "E:\VAM\Custom\Sounds\Voxta"
-dotnet run --project relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj
+.\PsfnVoxtaRelay.exe `
+  --remote http://purrsephone.local.vega.nyc:8789 `
+  --audio-folder "E:\VAM\Custom\Sounds\Voxta"
 ```
 
 Configure the AcidBubbles plugin to `127.0.0.1:8789`.
 
+From source:
+
+```powershell
+dotnet run --project relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj -- `
+  --remote http://purrsephone.local.vega.nyc:8789 `
+  --audio-folder "E:\VAM\Custom\Sounds\Voxta"
+```
+
 ## Config
 
-| Environment variable | Default |
-| --- | --- |
-| `PSFN_VOXTA_RELAY_LISTEN_URL` | `http://127.0.0.1:8789` |
-| `PSFN_VOXTA_RELAY_REMOTE_HUB_URL` | `http://purrsephone.local.vega.nyc:8789/hub` |
-| `PSFN_VOXTA_RELAY_REMOTE_API_BASE_URL` | inferred from remote hub URL |
-| `PSFN_VOXTA_RELAY_AUDIO_FOLDER` | temp folder fallback |
-| `PSFN_VOXTA_RELAY_REMOTE_BEARER_TOKEN` | unset |
+| CLI option | Environment variable | Default |
+| --- | --- | --- |
+| `--listen` | `PSFN_VOXTA_RELAY_LISTEN_URL` | `http://127.0.0.1:8789` |
+| `--remote-hub` | `PSFN_VOXTA_RELAY_REMOTE_HUB_URL` | `http://purrsephone.local.vega.nyc:8789/hub` |
+| `--api` | `PSFN_VOXTA_RELAY_REMOTE_API_BASE_URL` | inferred from remote hub URL |
+| `--audio-folder` | `PSFN_VOXTA_RELAY_AUDIO_FOLDER` | temp folder fallback |
+| `--token` | `PSFN_VOXTA_RELAY_REMOTE_BEARER_TOKEN` | unset |
+
+`--remote <url>` is a shortcut for `--remote-hub <url>/hub` and `--api <url>`.
 
 ## Build
 
 ```bash
 dotnet build relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj
+```
+
+## Publish Windows EXE
+
+```bash
+dotnet publish relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj \
+  -c Release \
+  -r win-x64 \
+  --self-contained true \
+  -p:PublishSingleFile=true \
+  -p:PublishTrimmed=false \
+  -o .artifacts/psfn-voxta-relay-win-x64
 ```

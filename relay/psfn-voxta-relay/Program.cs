@@ -6,13 +6,24 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using NAudio.Wave;
 
 var builder = WebApplication.CreateBuilder(args);
-var options = RelayOptions.FromEnvironment();
+if (RelayOptions.ShouldShowHelp(args))
+{
+    Console.WriteLine(RelayOptions.Usage);
+    return;
+}
+
+var options = RelayOptions.FromArgs(args);
 
 builder.WebHost.UseUrls(options.ListenUrl);
 builder.Services.AddSignalR(options =>
@@ -591,34 +602,157 @@ public sealed record RelayOptions(
     string FallbackAudioFolder,
     string? RemoteBearerToken)
 {
-    public static RelayOptions FromEnvironment()
+    public const string Usage = """
+        PSFN Voxta Relay
+
+        Usage:
+          PsfnVoxtaRelay.exe --remote http://purrsephone.local.vega.nyc:8789 --audio-folder "E:\VAM\Custom\Sounds\Voxta"
+
+        Options:
+          --remote <url>         Satellite hub base URL. Sets --remote-hub to <url>/hub and --api to <url>.
+          --remote-hub <url>     Full upstream SignalR hub URL. Default: http://purrsephone.local.vega.nyc:8789/hub
+          --api <url>            Upstream REST/API base URL. Default: inferred from --remote-hub
+          --listen <url>         Local VaM listen URL. Default: http://127.0.0.1:8789
+          --audio-folder <path>  Fallback VaM audio folder. The plugin authenticate packet can override this.
+          --token <token>        Optional bearer token for the upstream hub.
+          --help                 Print this help.
+
+        Environment variable equivalents:
+          PSFN_VOXTA_RELAY_LISTEN_URL
+          PSFN_VOXTA_RELAY_REMOTE_HUB_URL
+          PSFN_VOXTA_RELAY_REMOTE_API_BASE_URL
+          PSFN_VOXTA_RELAY_AUDIO_FOLDER
+          PSFN_VOXTA_RELAY_REMOTE_BEARER_TOKEN
+        """;
+
+    public static bool ShouldShowHelp(string[] args)
     {
-        var listenUrl = Read("PSFN_VOXTA_RELAY_LISTEN_URL", "http://127.0.0.1:8789");
-        var remoteHubUrl = new Uri(Read("PSFN_VOXTA_RELAY_REMOTE_HUB_URL", "http://purrsephone.local.vega.nyc:8789/hub"));
+        return args.Any(arg => arg is "--help" or "-h" or "/?");
+    }
+
+    public static RelayOptions FromArgs(string[] args)
+    {
+        var cli = ParseArgs(args);
+        var remoteBaseRaw = ReadCli(cli, "remote", "server");
+        Uri? remoteBaseUrl = null;
+        if (!string.IsNullOrWhiteSpace(remoteBaseRaw))
+        {
+            remoteBaseUrl = new Uri(remoteBaseRaw);
+        }
+
+        var listenUrl = ReadCli(cli, "listen", "listen-url")
+            ?? ReadEnvironment("PSFN_VOXTA_RELAY_LISTEN_URL", "http://127.0.0.1:8789");
+        var remoteHubUrl = new Uri(
+            ReadCli(cli, "remote-hub", "hub")
+            ?? Environment.GetEnvironmentVariable("PSFN_VOXTA_RELAY_REMOTE_HUB_URL")?.Trim()
+            ?? (remoteBaseUrl is not null
+                ? InferHubUrl(remoteBaseUrl).ToString()
+                : "http://purrsephone.local.vega.nyc:8789/hub"));
         var remoteApiBaseUrl = new Uri(
-            Environment.GetEnvironmentVariable("PSFN_VOXTA_RELAY_REMOTE_API_BASE_URL")
+            ReadCli(cli, "api", "remote-api")
+            ?? Environment.GetEnvironmentVariable("PSFN_VOXTA_RELAY_REMOTE_API_BASE_URL")?.Trim()
+            ?? (remoteBaseUrl is not null
+                ? InferApiBaseUrl(remoteBaseUrl).ToString()
+                : null)
             ?? InferApiBaseUrl(remoteHubUrl).ToString());
         var fallbackAudioFolder = Read(
+            ReadCli(cli, "audio-folder", "audio"),
             "PSFN_VOXTA_RELAY_AUDIO_FOLDER",
             Path.Combine(Path.GetTempPath(), "psfn-voxta-relay-audio"));
-        var token = Environment.GetEnvironmentVariable("PSFN_VOXTA_RELAY_REMOTE_BEARER_TOKEN");
+        var token = ReadCli(cli, "token", "bearer-token")
+            ?? Environment.GetEnvironmentVariable("PSFN_VOXTA_RELAY_REMOTE_BEARER_TOKEN");
         return new RelayOptions(listenUrl, remoteHubUrl, remoteApiBaseUrl, fallbackAudioFolder, token);
     }
 
-    private static string Read(string name, string fallback)
+    private static string Read(string? cliValue, string environmentName, string fallback)
+    {
+        if (!string.IsNullOrWhiteSpace(cliValue))
+        {
+            return cliValue.Trim();
+        }
+        return ReadEnvironment(environmentName, fallback);
+    }
+
+    private static string ReadEnvironment(string name, string fallback)
     {
         var value = Environment.GetEnvironmentVariable(name);
         return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+    }
+
+    private static string? ReadCli(Dictionary<string, string> cli, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (cli.TryGetValue(name, out var value) && !string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static Dictionary<string, string> ParseArgs(string[] args)
+    {
+        var parsed = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (var index = 0; index < args.Length; index += 1)
+        {
+            var arg = args[index];
+            if (!arg.StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"Unexpected argument '{arg}'. Use --help for usage.");
+            }
+
+            var keyValue = arg[2..];
+            var equals = keyValue.IndexOf('=');
+            if (equals >= 0)
+            {
+                parsed[keyValue[..equals]] = keyValue[(equals + 1)..];
+                continue;
+            }
+
+            if (index + 1 >= args.Length || args[index + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                parsed[keyValue] = "true";
+                continue;
+            }
+
+            parsed[keyValue] = args[index + 1];
+            index += 1;
+        }
+        return parsed;
+    }
+
+    private static Uri InferHubUrl(Uri remoteBaseUrl)
+    {
+        if (remoteBaseUrl.AbsolutePath.TrimEnd('/').EndsWith("/hub", StringComparison.OrdinalIgnoreCase))
+        {
+            return remoteBaseUrl;
+        }
+        var builder = new UriBuilder(remoteBaseUrl)
+        {
+            Path = JoinPath(remoteBaseUrl.AbsolutePath, "/hub"),
+            Query = "",
+            Fragment = "",
+        };
+        return builder.Uri;
     }
 
     private static Uri InferApiBaseUrl(Uri remoteHubUrl)
     {
         var builder = new UriBuilder(remoteHubUrl)
         {
-            Path = "",
+            Path = remoteHubUrl.AbsolutePath.TrimEnd('/').EndsWith("/hub", StringComparison.OrdinalIgnoreCase)
+                ? remoteHubUrl.AbsolutePath.TrimEnd('/')[..^4]
+                : remoteHubUrl.AbsolutePath,
             Query = "",
             Fragment = "",
         };
         return builder.Uri;
+    }
+
+    private static string JoinPath(string basePath, string path)
+    {
+        var normalizedBase = basePath == "/" ? "" : basePath.TrimEnd('/');
+        return $"{normalizedBase}/{path.TrimStart('/')}";
     }
 }

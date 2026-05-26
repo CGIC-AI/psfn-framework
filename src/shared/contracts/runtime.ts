@@ -284,12 +284,13 @@ export interface ResponseMetadata {
   retrievalProvenanceRefs?: string[];
   diagnostics?: {
     fallback?: {
-      code: 'vision_empty_response';
-      strategy: 'replay_transport_content';
+      code: 'vision_empty_response' | 'vision_content_unavailable' | 'vision_prompt_unavailable';
+      strategy: 'replay_transport_content' | 'text_only_unavailable_notice' | 'runtime_nonfabricating_notice';
       attempts: number;
       finalContentEmpty: boolean;
       previousStopReason?: string;
       previousErrorMessage?: string;
+      runtimeFallbackApplied?: boolean;
     };
     runtimeContradiction?: {
       code: 'runtime_datetime_anchor_contradiction';
@@ -620,7 +621,7 @@ export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
 }
 
 export type ModelPurpose = 'chat' | 'background' | 'memory' | 'context' | 'reasoning' | 'longContext' | 'vision';
-export type CompletionPurpose = 'background' | 'memory' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing';
+export type CompletionPurpose = 'background' | 'memory' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing' | 'vision';
 export type ImportProcessingRouteMode = 'background' | 'openrouter_zdr' | 'local_endpoint';
 export const COMPOSITIONAL_PURPOSES = [
   'extraction',

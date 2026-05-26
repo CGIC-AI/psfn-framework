@@ -1146,6 +1146,9 @@ export class LLMClient {
     if (purpose === 'summary') {
       return 'summary';
     }
+    if (purpose === 'vision') {
+      return 'vision';
+    }
     return 'background';
   }
 

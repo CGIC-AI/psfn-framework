@@ -47,6 +47,7 @@ export function inferCallType(
     case 'context':
     case 'background':
     case 'import_processing':
+    case 'vision':
     default:
       return 'background';
   }

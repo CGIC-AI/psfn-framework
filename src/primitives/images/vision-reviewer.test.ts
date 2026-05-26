@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DefaultImageVisionReviewer } from './vision-reviewer.js';
+import { resolveRoutingCandidates } from '../llm/routing.js';
 
 vi.mock('../../core/agent/stream-adapter.js', () => ({
   resolveModel: vi.fn(() => ({
@@ -13,7 +14,25 @@ vi.mock('../../core/agent/stream-adapter.js', () => ({
   })),
 }));
 
+vi.mock('../llm/routing.js', () => ({
+  resolveRoutingCandidates: vi.fn(() => [{
+    model: 'vision-model',
+    provider: 'openrouter',
+    maxTokens: 1024,
+  }]),
+}));
+
+const mockedResolveRoutingCandidates = vi.mocked(resolveRoutingCandidates);
+
 describe('DefaultImageVisionReviewer', () => {
+  beforeEach(() => {
+    mockedResolveRoutingCandidates.mockReturnValue([{
+      model: 'vision-model',
+      provider: 'openrouter',
+      maxTokens: 1024,
+    }]);
+  });
+
   it('uses gateway binary fetch when available', async () => {
     const binaryFetcher = vi.fn(async () => ({
       dataBase64: 'AQID',
@@ -133,13 +152,90 @@ describe('DefaultImageVisionReviewer', () => {
           model: 'vision-model',
           provider: 'openrouter',
           maxTokens: 1024,
+          pin: true,
         }),
       }),
-      'background',
+      'vision',
     );
     expect(completeImpl).not.toHaveBeenCalled();
     expect(result.summary).toBe('Gateway review summary');
     expect(result.model).toBe('gateway-vision-model');
+  });
+
+  it('tries the next configured vision model when a vision completion returns empty content', async () => {
+    mockedResolveRoutingCandidates.mockReturnValueOnce([
+      {
+        model: 'primary-vision-model',
+        provider: 'openrouter',
+        maxTokens: 1024,
+      },
+      {
+        model: 'fallback-vision-model',
+        provider: 'openrouter',
+        maxTokens: 2048,
+      },
+    ]);
+    const llmProvider = {
+      complete: vi.fn()
+        .mockResolvedValueOnce({
+          content: '',
+          toolCalls: [],
+          model: 'primary-vision-model',
+          inputTokens: 11,
+          outputTokens: 0,
+          stopReason: 'stop',
+        })
+        .mockResolvedValueOnce({
+          content: 'Fallback model can see the image.',
+          toolCalls: [],
+          model: 'fallback-vision-model',
+          inputTokens: 12,
+          outputTokens: 8,
+          stopReason: 'stop',
+        }),
+    };
+    const reviewer = new DefaultImageVisionReviewer(
+      {
+        primaryProvider: 'openrouter',
+      } as any,
+      {
+        llmProvider: llmProvider as any,
+        binaryFetcher: vi.fn(async () => ({
+          dataBase64: 'AQID',
+          mimeType: 'image/png',
+          sizeBytes: 3,
+        })),
+      },
+    );
+
+    const result = await reviewer.analyze({
+      imageUrls: ['https://images.example.test/review.png'],
+      question: 'Describe it.',
+    });
+
+    expect(llmProvider.complete).toHaveBeenCalledTimes(2);
+    expect(llmProvider.complete).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        modelHint: expect.objectContaining({
+          model: 'primary-vision-model',
+          pin: true,
+        }),
+      }),
+      'vision',
+    );
+    expect(llmProvider.complete).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        modelHint: expect.objectContaining({
+          model: 'fallback-vision-model',
+          pin: true,
+        }),
+      }),
+      'vision',
+    );
+    expect(result.summary).toBe('Fallback model can see the image.');
+    expect(result.model).toBe('fallback-vision-model');
   });
 
   it('prefers a saved local image path over gateway fetch for generated outputs', async () => {

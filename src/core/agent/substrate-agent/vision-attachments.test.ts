@@ -139,6 +139,39 @@ describe('buildTurnUserContent', () => {
     expect(result.currentTurnVisionReview).toBeUndefined();
   });
 
+  it('retries transient dedicated reviewer failures before degrading', async () => {
+    const analyze = vi.fn()
+      .mockRejectedValueOnce(new Error('vision provider returned empty text'))
+      .mockRejectedValueOnce(new Error('vision provider timed out'))
+      .mockResolvedValueOnce({
+        question: 'Describe exactly what is visible in the current image input.',
+        summary: 'A photo of a white-haired companion holding a tablet.',
+        model: 'fallback-vision-model',
+        imageCount: 1,
+      });
+    const logger = {
+      warn: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    const result = await buildTurnUserContent({
+      message: makeMessage(),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger,
+      visionReviewer: { analyze },
+    });
+
+    expect(analyze).toHaveBeenCalledTimes(3);
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(result.content).toContain('Current image review: A photo of a white-haired companion holding a tablet.');
+    expect(result.currentTurnVisionReview).toEqual({
+      imageUrls: ['https://media.discordapp.net/attachments/a/b/current-photo.jpg?width=1024&height=768'],
+      question: 'Describe exactly what is visible in the current image input.',
+      summary: 'A photo of a white-haired companion holding a tablet.',
+    });
+  });
+
   it('keeps the multimodal fallback path when no reviewer is wired', async () => {
     const result = await buildTurnUserContent({
       message: makeMessage(),

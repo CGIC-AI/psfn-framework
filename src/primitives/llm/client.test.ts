@@ -1661,6 +1661,65 @@ describe('LLMClient correlation metadata', () => {
     expect(model.id).toBe('openrouter/google/gemini-3-flash-preview');
     expect(model.input).toContain('image');
   });
+
+  it('routes vision completions through the configured vision-purpose candidate', async () => {
+    const config = makeConfig({
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'background',
+            rank: 10,
+            identity: {
+              provider: 'openrouter',
+              model: 'background/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'background', primary: true }],
+            capabilities: { maxOutputTokens: 1024, contextWindow: 64_000 },
+            tuning: { maxOutputTokens: 1024 },
+          },
+          {
+            id: 'vision',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'vision/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'vision', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 1_048_576,
+              supportsVision: true,
+            },
+            tuning: { maxOutputTokens: 4096 },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'visible image summary' }],
+      model: 'openrouter/vision/model',
+      usage: { input: 12, output: 3 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Describe this image.' }],
+      },
+      'vision',
+      { disableRetry: true },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const model = mocks.completeSimple.mock.calls[0][0] as { id: string; input: string[] };
+    expect(model.id).toBe('openrouter/vision/model');
+    expect(model.input).toContain('image');
+  });
 });
 
 describe('LLMClient model budget gates and usage metering', () => {

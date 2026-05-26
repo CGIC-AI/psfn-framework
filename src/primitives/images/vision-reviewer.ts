@@ -9,6 +9,7 @@ import {
 } from '@mariozechner/pi-ai';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resolveModel } from '../../core/agent/stream-adapter.js';
+import { resolveRoutingCandidates, type RoutingCandidate } from '../llm/routing.js';
 import {
   resolveConfiguredLiteLLMApiKey,
   resolveConfiguredLiteLLMBaseUrl,
@@ -136,6 +137,29 @@ function resolveConfiguredComfyOrigin(config: SubstrateConfig): string | null {
   }
 }
 
+function extractVisionResponseSummary(response: { content?: unknown[] | string }): string {
+  return typeof response.content === 'string'
+    ? response.content.trim()
+    : extractTextContent(response.content).trim();
+}
+
+function buildCandidateModelHint(candidate: RoutingCandidate) {
+  return {
+    provider: candidate.provider,
+    model: candidate.model,
+    maxTokens: candidate.maxTokens,
+    pin: true,
+    ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
+    ...(candidate.thinkingEnabled !== undefined ? { thinkingEnabled: candidate.thinkingEnabled } : {}),
+    ...(candidate.thinkingEffort !== undefined ? { thinkingEffort: candidate.thinkingEffort } : {}),
+    ...(candidate.temperature !== undefined ? { temperature: candidate.temperature } : {}),
+    ...(candidate.topP !== undefined ? { topP: candidate.topP } : {}),
+    ...(candidate.topK !== undefined ? { topK: candidate.topK } : {}),
+    ...(candidate.frequencyPenalty !== undefined ? { frequencyPenalty: candidate.frequencyPenalty } : {}),
+    ...(candidate.repetitionPenalty !== undefined ? { repetitionPenalty: candidate.repetitionPenalty } : {}),
+  };
+}
+
 export class DefaultImageVisionReviewer implements ImageVisionReviewer {
   private readonly completeImpl: ImageVisionReviewerOptions['completeImpl'];
 
@@ -155,7 +179,6 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
       throw new Error('image_analyze requires at least one image URL');
     }
 
-    const model = resolveModel(this.config, 'vision');
     const question = normalizeQuestion(input);
     const imageLocalPaths = (input.imageLocalPaths ?? [])
       .map((value) => value.trim())
@@ -182,37 +205,55 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
         timestamp: Date.now(),
       }],
     } satisfies PiContext;
-    const response = this.options.llmProvider
-      ? await this.options.llmProvider.complete(
-        {
-          systemPrompt: context.systemPrompt,
-          messages: context.messages,
-          modelHint: {
-            model: String(model.id),
-            ...(typeof (model as { provider?: unknown }).provider === 'string'
-              ? { provider: (model as { provider?: string }).provider }
-              : {}),
-            ...(typeof model.maxTokens === 'number' ? { maxTokens: model.maxTokens } : {}),
-          },
-        },
-        'background',
-      )
-      : await this.completeImpl(
-        model,
-        context,
-        {
-          apiKey: resolveApiKey(model, this.config),
-          maxTokens: model.maxTokens,
-        },
-      );
 
-    const summary = typeof response.content === 'string'
-      ? response.content.trim()
-      : extractTextContent(response.content).trim();
+    if (this.options.llmProvider) {
+      const candidates = resolveRoutingCandidates(this.config, 'vision');
+      if (candidates.length === 0) {
+        throw new Error('No eligible model configured for purpose \'vision\'. Add a primary model for this purpose in config.modelRegistry.');
+      }
+
+      let lastError: Error | null = null;
+      for (const candidate of candidates) {
+        try {
+          const response = await this.options.llmProvider.complete(
+            {
+              systemPrompt: context.systemPrompt,
+              messages: context.messages,
+              modelHint: buildCandidateModelHint(candidate),
+            },
+            'vision',
+          );
+          const summary = extractVisionResponseSummary(response);
+          if (!summary) {
+            throw new Error(`vision review returned empty text from ${candidate.provider}/${candidate.model}`);
+          }
+          return {
+            question,
+            summary,
+            model: response.model,
+            imageCount: imageBlocks.length,
+          };
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+        }
+      }
+
+      throw new Error(`vision review failed for all configured vision models: ${lastError?.message ?? 'unknown error'}`);
+    }
+
+    const model = resolveModel(this.config, 'vision');
+    const response = await this.completeImpl(
+      model,
+      context,
+      {
+        apiKey: resolveApiKey(model, this.config),
+        maxTokens: model.maxTokens,
+      },
+    );
+    const summary = extractVisionResponseSummary(response);
     if (!summary) {
       throw new Error('vision review returned empty text');
     }
-
     return {
       question,
       summary,

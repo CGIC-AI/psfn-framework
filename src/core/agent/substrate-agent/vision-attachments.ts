@@ -55,6 +55,7 @@ export interface TurnUserContentBuildResult {
 
 const VISION_ATTACHMENT_MAX_COUNT = 4;
 const VISION_ATTACHMENT_MAX_BYTES = 8 * 1024 * 1024;
+const DEDICATED_VISION_REVIEW_MAX_ATTEMPTS = 3;
 const LIVE_ATTACHMENT_DIRECT_INSPECTION_INSTRUCTION = [
   '[Runtime note]',
   'The current user turn includes live image attachment bytes below.',
@@ -144,9 +145,13 @@ export async function buildTurnUserContent(input: {
   );
   if (visionUrls.length > 0 && !hasInlineImages && input.visionReviewer) {
     try {
-      const review = await input.visionReviewer.analyze({
+      const review = await analyzeWithDedicatedVisionRetry({
+        reviewer: input.visionReviewer,
         imageUrls: visionUrls,
         question: DEDICATED_VISION_REVIEW_QUESTION,
+        logger: input.logger,
+        channelId: input.message.channelId,
+        channelType: input.message.channelType,
       });
       return {
         content: buildReviewedVisionTurnText({
@@ -212,6 +217,39 @@ export async function buildTurnUserContent(input: {
       ...resolved.blocks,
     ],
   };
+}
+
+async function analyzeWithDedicatedVisionRetry(input: {
+  reviewer: ImageVisionReviewer;
+  imageUrls: string[];
+  question: string;
+  logger: VisionLogger;
+  channelId: string;
+  channelType?: string;
+}): Promise<Awaited<ReturnType<ImageVisionReviewer['analyze']>>> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= DEDICATED_VISION_REVIEW_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await input.reviewer.analyze({
+        imageUrls: input.imageUrls,
+        question: input.question,
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt >= DEDICATED_VISION_REVIEW_MAX_ATTEMPTS) {
+        break;
+      }
+      input.logger.warn('Dedicated current-turn image review attempt failed; retrying', {
+        channelId: input.channelId,
+        channelType: input.channelType,
+        imageUrls: input.imageUrls,
+        attempt,
+        maxAttempts: DEDICATED_VISION_REVIEW_MAX_ATTEMPTS,
+        error: toErrorMessage(error),
+      });
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(toErrorMessage(lastError));
 }
 
 function resolveAttachmentImageContentType(attachment: Attachment): string | null {

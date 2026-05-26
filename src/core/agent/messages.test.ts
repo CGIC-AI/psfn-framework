@@ -188,7 +188,10 @@ describe('convertToLlm', () => {
     expect(result).toHaveLength(1);
     expect(result[0].role).toBe('assistant');
     expect((result[0] as AssistantMessage).content).toEqual([
-      { type: 'text', text: '[Internal note to self] Stay gentle and concrete.' },
+      {
+        type: 'text',
+        text: '[Private runtime note to self; not user-visible and not sent by the user] Stay gentle and concrete.',
+      },
     ]);
     expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.internalWhisper);
   });

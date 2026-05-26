@@ -78,6 +78,7 @@ interface MirrorSessionMetadata {
 
 const MAX_MIRROR_RENDER_CHARS = 180;
 const LEGACY_OR_CANONICAL_MUSING_CHANNEL_PATTERN = /^internal:reflection:(musing|whisper)$/i;
+const PRIVATE_INTERNAL_WHISPER_PREFIX = '[Private runtime note to self; not user-visible and not sent by the user]';
 
 function createInternalAssistantMessage(
   content: string,
@@ -170,7 +171,7 @@ function isMusingReflectionChannel(channelId: string): boolean {
  * Custom messages are converted:
  * - compaction → user message with summary prefix
  * - systemNote → assistant-side internal note with [System note] prefix
- * - internalWhisper → assistant-side internal note
+ * - internalWhisper → assistant-side private runtime note
  * - mirror → compact user-side mirror note
  * - continuity → filtered out (injected into system prompt instead)
  */
@@ -193,7 +194,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       ));
     } else if (isInternalWhisperMessage(msg)) {
       result.push(createInternalAssistantMessage(
-        `[Internal note to self] ${msg.content}`,
+        `${PRIVATE_INTERNAL_WHISPER_PREFIX} ${msg.content}`,
         msg.timestamp,
         MESSAGE_CLASSES.internalWhisper,
       ));

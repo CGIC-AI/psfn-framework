@@ -40,7 +40,9 @@ import {
 import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
-const VISION_TURN_TIMEOUT_MS = 10_000;
+const VISION_TURN_TIMEOUT_MS = 30_000;
+const VISION_RECOVERY_REPLAY_MAX_ATTEMPTS = 3;
+const RUNTIME_FALLBACK_MODEL = 'runtime-fallback';
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 
 export interface AgentInvocationMutableState {
@@ -194,6 +196,74 @@ function buildPromptResponseSnapshot(input: {
     ...(reasoning ? { reasoning } : {}),
     ...(toolCallCount !== undefined ? { toolCallCount } : {}),
   };
+}
+
+function countImageAttachments(message: SubstrateMessage): number {
+  return message.attachments?.filter((attachment) => {
+    const type = attachment.contentType.split(';')[0]?.trim().toLowerCase() ?? '';
+    return type.startsWith('image/')
+      || /\.(?:png|jpe?g|gif|webp|bmp|avif)(?:[?#].*)?$/i.test(attachment.name)
+      || /\.(?:png|jpe?g|gif|webp|bmp|avif)(?:[?#].*)?$/i.test(attachment.url);
+  }).length ?? 0;
+}
+
+function buildVisionUnavailablePromptContent(input: {
+  message: SubstrateMessage;
+  errorMessage: string;
+}): UserMessage['content'] {
+  const imageCount = countImageAttachments(input.message);
+  const semanticText = input.message.content.trim();
+  const note = [
+    '[Runtime note]',
+    `The current user turn included ${imageCount || 'one or more'} image attachment(s), but runtime image inspection failed for this turn.`,
+    'You cannot reliably see the current image contents.',
+    'Do not pretend you saw them.',
+    'Reply to the user from the text that is available, acknowledge that image inspection failed, and ask them to resend the image if visual details matter.',
+    `Runtime failure: ${input.errorMessage}`,
+  ].join(' ');
+
+  return semanticText.length > 0
+    ? `${note}\n\nUser text: ${semanticText}`
+    : note;
+}
+
+function buildVisionUnavailableAssistantReply(message: SubstrateMessage): string {
+  const hasText = message.content.trim().length > 0;
+  if (hasText) {
+    return 'I got your message, but my image reader failed before I could inspect the attachment. I can respond to the text, but I should not pretend I saw the image. Please resend it if the visual details matter.';
+  }
+  return 'I got the image attachment, but my image reader failed before I could inspect it. Please resend it or describe what you want me to check.';
+}
+
+function appendRuntimeFallbackAssistantMessage(
+  runtime: TurnExecutionRuntime,
+  content: string,
+): AssistantMessage {
+  const message: AssistantMessage = {
+    role: 'assistant',
+    content: [{ type: 'text', text: content }],
+    api: 'runtime',
+    provider: 'runtime',
+    model: RUNTIME_FALLBACK_MODEL,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    stopReason: 'stop',
+    timestamp: Date.now(),
+  };
+  runtime.agent.appendMessage(message);
+  return message;
 }
 
 export async function invokeAgentForTurn(input: {
@@ -355,18 +425,58 @@ export async function invokeAgentForTurn(input: {
     purpose: 'agent.turn.prompt',
   });
   runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, autoloadOutcome.intent);
-  const turnUserContentBuildResult = await runWithVisionTurnTimeout({
-    channelId: message.channelId,
-    deadlineAt: visionTurnDeadlineAt,
-    stage: 'build_turn_user_content',
-    run: () => buildTurnUserContent({
-      message,
-      llmClient: runtime.llmClient,
-      runtimeMode: runtime.runtimeMode,
-      logger: log,
-      visionReviewer: runtime.imageVisionReviewer,
-    }),
-  });
+  let initialBridgeActive = true;
+  const clearInitialPromptContext = (): void => {
+    if (!initialBridgeActive) return;
+    initialBridgeActive = false;
+    unsubscribeFirstToken();
+    runtime.bridge.clearChannel(bridgeToken);
+    runtime.clearActiveTurnContext();
+  };
+  let promptVisionDeadlineAt = visionTurnDeadlineAt;
+  let runtimeFallbackModel: string | null = null;
+  let turnUserContentBuildResult: Awaited<ReturnType<typeof buildTurnUserContent>>;
+  try {
+    turnUserContentBuildResult = await runWithVisionTurnTimeout({
+      channelId: message.channelId,
+      deadlineAt: visionTurnDeadlineAt,
+      stage: 'build_turn_user_content',
+      run: () => buildTurnUserContent({
+        message,
+        llmClient: runtime.llmClient,
+        runtimeMode: runtime.runtimeMode,
+        logger: log,
+        visionReviewer: runtime.imageVisionReviewer,
+      }),
+    });
+  } catch (error) {
+    if (!isVisionTurn) {
+      clearInitialPromptContext();
+      throw error;
+    }
+    const errorMessage = toErrorMessage(error);
+    log.warn('Vision content build failed; falling back to a text-only unavailable-image prompt', {
+      channelId: message.channelId,
+      channelType: message.channelType,
+      error: errorMessage,
+    });
+    promptVisionDeadlineAt = null;
+    fallbackDiagnostics = {
+      fallback: {
+        code: 'vision_content_unavailable',
+        strategy: 'text_only_unavailable_notice',
+        attempts: 0,
+        finalContentEmpty: false,
+        previousErrorMessage: errorMessage,
+      },
+    };
+    turnUserContentBuildResult = {
+      content: buildVisionUnavailablePromptContent({
+        message,
+        errorMessage,
+      }),
+    };
+  }
   const selfieAppearanceContext = activeTools.some((tool) => tool.name === 'selfie_create')
     ? resolveAppearanceContextFromTemplateVariables(templateVariables)
     : undefined;
@@ -387,7 +497,7 @@ export async function invokeAgentForTurn(input: {
   try {
     await runWithVisionTurnTimeout({
       channelId: message.channelId,
-      deadlineAt: visionTurnDeadlineAt,
+      deadlineAt: promptVisionDeadlineAt,
       stage: 'agent_prompt',
       onTimeout: () => runtime.agent.abort(),
       run: () => runWithRequestContext(
@@ -403,10 +513,30 @@ export async function invokeAgentForTurn(input: {
         ),
       ),
     });
+  } catch (error) {
+    if (!isVisionTurn) {
+      throw error;
+    }
+    const errorMessage = toErrorMessage(error);
+    log.warn('Vision prompt failed; emitting non-fabricating runtime fallback reply', {
+      channelId: message.channelId,
+      channelType: message.channelType,
+      error: errorMessage,
+    });
+    appendRuntimeFallbackAssistantMessage(runtime, buildVisionUnavailableAssistantReply(message));
+    runtimeFallbackModel = RUNTIME_FALLBACK_MODEL;
+    fallbackDiagnostics = {
+      fallback: {
+        code: 'vision_prompt_unavailable',
+        strategy: 'runtime_nonfabricating_notice',
+        attempts: 0,
+        finalContentEmpty: false,
+        previousErrorMessage: errorMessage,
+        runtimeFallbackApplied: true,
+      },
+    };
   } finally {
-    unsubscribeFirstToken();
-    runtime.bridge.clearChannel(bridgeToken);
-    runtime.clearActiveTurnContext();
+    clearInitialPromptContext();
   }
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- closure mutation invisible to narrowing
   if (streamFirstTokenAt == null) {
@@ -419,7 +549,7 @@ export async function invokeAgentForTurn(input: {
 
   mutableState.turnMessages = runtime.agent.state.messages.slice(mutableState.turnStartMessageIndex);
   turnUsage = runtime.accumulateTurnUsage(mutableState.turnMessages);
-  responseModel = runtime.agent.state.model.id;
+  responseModel = runtimeFallbackModel ?? runtime.agent.state.model.id;
   firstTokenAt = streamFirstTokenAt;
 
   responseText = runtime.extractResponseText();
@@ -544,9 +674,12 @@ export async function invokeAgentForTurn(input: {
         error: toErrorMessage(error),
       });
     }
+    runtime.agent.replaceMessages(historyMessages);
+    mutableState.turnStartMessageIndex = runtime.agent.state.messages.length;
 
     const replayTransportContent = message.content.trim();
     let recoveryAttempts = 0;
+    let recoveryErrorMessage: string | undefined;
     const runVisionRecoveryPrompt = async (
       content: UserMessage['content'],
       requestSuffix: string,
@@ -564,7 +697,7 @@ export async function invokeAgentForTurn(input: {
       try {
         await runWithVisionTurnTimeout({
           channelId: message.channelId,
-          deadlineAt: visionTurnDeadlineAt,
+          deadlineAt: Date.now() + VISION_TURN_TIMEOUT_MS,
           stage: originStage,
           onTimeout: () => runtime.agent.abort(),
           run: () => runWithRequestContext(
@@ -584,51 +717,72 @@ export async function invokeAgentForTurn(input: {
       }
     };
 
-    if (replayTransportContent.length > 0) {
-      await runVisionRecoveryPrompt(
-        replayTransportContent,
-        'vision-recovery',
-        'agent.turn.vision_recovery',
-      );
-      recoveryAttempts += 1;
+    try {
+      if (replayTransportContent.length > 0) {
+        for (let attempt = 1; attempt <= VISION_RECOVERY_REPLAY_MAX_ATTEMPTS; attempt += 1) {
+          const isRetry = attempt > 1;
+          await runVisionRecoveryPrompt(
+            replayTransportContent,
+            isRetry ? `vision-recovery-retry-${attempt}` : 'vision-recovery',
+            isRetry ? 'agent.turn.vision_recovery_retry' : 'agent.turn.vision_recovery',
+          );
+          recoveryAttempts += 1;
 
-      mutableState.turnMessages = runtime.agent.state.messages.slice(mutableState.turnStartMessageIndex);
-      turnUsage = runtime.accumulateTurnUsage(mutableState.turnMessages);
-      responseModel = runtime.agent.state.model.id;
-      responseText = runtime.extractResponseText();
-
-      if (responseText.trim().length === 0) {
-        log.warn('Vision recovery replay remained empty; retrying once with same transport content', {
+          mutableState.turnMessages = runtime.agent.state.messages.slice(mutableState.turnStartMessageIndex);
+          turnUsage = runtime.accumulateTurnUsage(mutableState.turnMessages);
+          responseModel = runtime.agent.state.model.id;
+          responseText = runtime.extractResponseText();
+          if (responseText.trim().length > 0) {
+            break;
+          }
+          if (attempt < VISION_RECOVERY_REPLAY_MAX_ATTEMPTS) {
+            log.warn('Vision recovery replay remained empty; retrying with same transport content', {
+              channelId: message.channelId,
+              model: runtime.agent.state.model.id,
+              attempt,
+              maxAttempts: VISION_RECOVERY_REPLAY_MAX_ATTEMPTS,
+            });
+          }
+        }
+      } else {
+        log.warn('Vision recovery replay skipped because transport-normalized content was empty', {
           channelId: message.channelId,
-          model: runtime.agent.state.model.id,
         });
-        await runVisionRecoveryPrompt(
-          replayTransportContent,
-          'vision-recovery-retry',
-          'agent.turn.vision_recovery_retry',
-        );
-        recoveryAttempts += 1;
-
-        mutableState.turnMessages = runtime.agent.state.messages.slice(mutableState.turnStartMessageIndex);
-        turnUsage = runtime.accumulateTurnUsage(mutableState.turnMessages);
-        responseModel = runtime.agent.state.model.id;
-        responseText = runtime.extractResponseText();
       }
-    } else {
-      log.warn('Vision recovery replay skipped because transport-normalized content was empty', {
+    } catch (error) {
+      recoveryErrorMessage = toErrorMessage(error);
+      log.warn('Vision recovery replay failed; applying runtime fallback reply', {
         channelId: message.channelId,
+        error: recoveryErrorMessage,
       });
     }
 
+    let runtimeFallbackApplied = false;
+    if (responseText.trim().length === 0) {
+      log.warn('Vision turn remained empty after non-fabricating recovery replay; applying runtime fallback reply', {
+        channelId: message.channelId,
+        model: runtime.agent.state.model.id,
+      });
+      appendRuntimeFallbackAssistantMessage(runtime, buildVisionUnavailableAssistantReply(message));
+      runtimeFallbackApplied = true;
+      runtimeFallbackModel = RUNTIME_FALLBACK_MODEL;
+      mutableState.turnMessages = runtime.agent.state.messages.slice(mutableState.turnStartMessageIndex);
+      turnUsage = runtime.accumulateTurnUsage(mutableState.turnMessages);
+      responseModel = RUNTIME_FALLBACK_MODEL;
+      responseText = runtime.extractResponseText();
+    }
+
     const finalContentEmpty = responseText.trim().length === 0;
+    const previousErrorMessage = assistantMessage?.errorMessage ?? recoveryErrorMessage;
     fallbackDiagnostics = {
       fallback: {
         code: 'vision_empty_response',
-        strategy: 'replay_transport_content',
+        strategy: runtimeFallbackApplied ? 'runtime_nonfabricating_notice' : 'replay_transport_content',
         attempts: recoveryAttempts,
         finalContentEmpty,
         ...(assistantMessage?.stopReason ? { previousStopReason: assistantMessage.stopReason } : {}),
-        ...(assistantMessage?.errorMessage ? { previousErrorMessage: assistantMessage.errorMessage } : {}),
+        ...(previousErrorMessage ? { previousErrorMessage } : {}),
+        ...(runtimeFallbackApplied ? { runtimeFallbackApplied: true } : {}),
       },
     };
     runtime.emitTelemetry('agent.turn.fallback', {
@@ -638,12 +792,6 @@ export async function invokeAgentForTurn(input: {
       ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.fallback'),
     });
 
-    if (finalContentEmpty) {
-      log.warn('Vision turn remained empty after non-fabricating recovery replay', {
-        channelId: message.channelId,
-        model: runtime.agent.state.model.id,
-      });
-    }
   }
   observability.emitObservedTurnStage('prompt', {
     durationMs: Date.now() - promptStageStart,

@@ -343,6 +343,9 @@ function createRuntime(params: {
       replaceMessages: vi.fn((messages: any[]) => {
         agentState.messages = [...messages];
       }),
+      appendMessage: vi.fn((message: any) => {
+        agentState.messages = [...agentState.messages, message];
+      }),
       setTools: vi.fn((tools: any[]) => {
         agentState.tools = [...tools];
       }),
@@ -1881,7 +1884,67 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     });
   });
 
-  it('aborts a hung vision turn after 10 seconds', async () => {
+  it('retries empty vision prompt recovery three times before returning a visible fallback reply', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.extractResponseText = vi.fn(() => {
+      const latestAssistant = [...(runtime.agent.state.messages as any[])]
+        .reverse()
+        .find(message => message.role === 'assistant');
+      if (Array.isArray(latestAssistant?.content)) {
+        return latestAssistant.content
+          .filter((block: any) => block.type === 'text')
+          .map((block: any) => block.text)
+          .join('');
+      }
+      return typeof latestAssistant?.content === 'string' ? latestAssistant.content : '';
+    });
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: '' });
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-vision-empty', {
+      channelType: 'discord',
+      content: 'what is in the image?',
+      attachments: [{
+        url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+        contentType: 'image/png',
+        name: 'current-image.png',
+      }],
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(4);
+    expect(response).toMatchObject({
+      content: expect.stringContaining('image reader failed'),
+      metadata: {
+        diagnostics: {
+          fallback: expect.objectContaining({
+            code: 'vision_empty_response',
+            strategy: 'runtime_nonfabricating_notice',
+            attempts: 3,
+            finalContentEmpty: false,
+            runtimeFallbackApplied: true,
+          }),
+        },
+      },
+    });
+  });
+
+  it('aborts a hung vision turn after 30 seconds and returns a visible fallback reply', async () => {
     vi.useFakeTimers();
     try {
       const eventBus = new EventBus();
@@ -1902,6 +1965,18 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       const promptDeferred = createDeferred<void>();
       const abort = vi.fn();
       runtime.agent.abort = abort as typeof runtime.agent.abort;
+      runtime.extractResponseText = vi.fn(() => {
+        const latestAssistant = [...(runtime.agent.state.messages as any[])]
+          .reverse()
+          .find(message => message.role === 'assistant');
+        if (Array.isArray(latestAssistant?.content)) {
+          return latestAssistant.content
+            .filter((block: any) => block.type === 'text')
+            .map((block: any) => block.text)
+            .join('');
+        }
+        return typeof latestAssistant?.content === 'string' ? latestAssistant.content : '';
+      });
       runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
         (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
         return promptDeferred.promise;
@@ -1915,17 +1990,22 @@ describe('handleMessageForTurn pre-response concurrency', () => {
           contentType: 'image/png',
           name: 'current-image.png',
         }],
-      })).then(
-        () => null,
-        error => error,
-      );
+      }));
 
       await flushAsyncWork();
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(30_000);
 
-      const error = await turnResultPromise;
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).message).toBe('Vision turn timed out after 10000ms');
+      await expect(turnResultPromise).resolves.toMatchObject({
+        content: expect.stringContaining('image reader failed'),
+        metadata: {
+          diagnostics: {
+            fallback: expect.objectContaining({
+              code: 'vision_prompt_unavailable',
+              runtimeFallbackApplied: true,
+            }),
+          },
+        },
+      });
       expect(abort).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();

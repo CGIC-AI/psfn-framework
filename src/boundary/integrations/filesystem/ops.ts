@@ -9,6 +9,10 @@ export interface FilesystemReadResult {
   truncated: boolean;
 }
 
+export interface FilesystemListOptions {
+  path?: string;
+}
+
 export interface FilesystemSearchOptions {
   query: string;
   glob?: string;
@@ -62,7 +66,7 @@ export interface FilesystemEditResult {
 
 export interface FilesystemOperations {
   read(path: string, options?: FilesystemReadOptions): Promise<FilesystemReadResult>;
-  list(glob?: string, maxEntries?: number): Promise<string[]>;
+  list(glob?: string, maxEntries?: number, options?: FilesystemListOptions): Promise<string[]>;
   search(options: FilesystemSearchOptions): Promise<FilesystemSearchResult>;
   write(options: FilesystemWriteOptions): Promise<FilesystemWriteResult>;
   edit(options: FilesystemEditOptions): Promise<FilesystemEditResult>;

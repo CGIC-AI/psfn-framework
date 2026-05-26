@@ -1,6 +1,7 @@
 import type {
   FilesystemEditOptions,
   FilesystemEditResult,
+  FilesystemListOptions,
   FilesystemOperations,
   FilesystemReadOptions,
   FilesystemReadResult,
@@ -37,8 +38,12 @@ export class WorkspaceFilesystemOps implements FilesystemOperations {
     return readTextFile(resolvedPath, options?.maxBytes);
   }
 
-  async list(glob = DEFAULT_LIST_GLOB, maxEntries = DEFAULT_LIST_MAX_ENTRIES): Promise<string[]> {
-    return listWorkspaceFiles(this.workspaceRoot, glob, maxEntries);
+  async list(
+    glob = DEFAULT_LIST_GLOB,
+    maxEntries = DEFAULT_LIST_MAX_ENTRIES,
+    options?: FilesystemListOptions,
+  ): Promise<string[]> {
+    return listWorkspaceFiles(this.workspaceRoot, glob, maxEntries, options);
   }
 
   async search(options: FilesystemSearchOptions): Promise<FilesystemSearchResult> {

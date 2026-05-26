@@ -182,6 +182,17 @@ function hasText(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
+function isWorkspaceRelativeDirectoryPath(value: unknown): boolean {
+  if (value === undefined) {
+    return true;
+  }
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return false;
+  }
+  const normalizedPath = normalizeWorkspaceRelativeGlob(value.trim());
+  return normalizedPath !== null && !/[*?[\]{}]/.test(normalizedPath);
+}
+
 export function evaluateShardSessionMemorySyncPolicy(
   envelope: ShardSessionMemorySyncEnvelope,
 ): ShardSessionMemorySyncDecision {
@@ -392,7 +403,12 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
     }
 
     case 'fs.list': {
-      const glob = (params as Record<string, unknown>).glob;
+      const paramsRecord = params as Record<string, unknown>;
+      const path = paramsRecord.path;
+      const glob = paramsRecord.glob;
+      if (!isWorkspaceRelativeDirectoryPath(path)) {
+        return 'DENY';
+      }
       if (glob !== undefined && typeof glob !== 'string') {
         return 'DENY';
       }

@@ -1,5 +1,5 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
-import { writeFile, glob as fsGlob, stat } from 'node:fs/promises';
+import { writeFile, glob as fsGlob, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative } from 'node:path';
 import type {
   FsEditParams,
@@ -34,11 +34,23 @@ function resolveReadRoot(runtime: GatewayMethodRuntime): string {
   return resolveWorkspaceRoot(fullCodebaseReadRoot);
 }
 
-function resolveReadPath(path: string, runtime: GatewayMethodRuntime): string {
+async function resolveReadPath(path: string, runtime: GatewayMethodRuntime): Promise<string> {
   if (isAbsolute(path)) {
     return resolveWorkspaceFsPathFromRoot(path, resolveWorkspaceRoot(runtime.workspacePath));
   }
+  const workspaceCandidate = resolveWorkspaceFsPathFromRoot(path, resolveWorkspaceRoot(runtime.workspacePath));
+  if (await pathExists(workspaceCandidate)) {
+    return workspaceCandidate;
+  }
   return resolveWorkspaceFsPathFromRoot(path, resolveReadRoot(runtime));
+}
+
+function relativePathForDisplay(path: string, root: string): string {
+  return relative(root, path).replace(/\\/g, '/').replace(/^\.\//, '') || '.';
+}
+
+function summarizeSearchGlob(glob: string | undefined): string {
+  return typeof glob === 'string' && !isBroadSearchGlob(glob) ? glob : 'working-folders';
 }
 
 function resolveDefaultSearchGlob(runtime: GatewayMethodRuntime): string {
@@ -71,6 +83,53 @@ async function pathExists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function resolveListBase(
+  params: FsListParams,
+  runtime: GatewayMethodRuntime,
+): Promise<{ cwd: string; displayRoot: string; glob: string }> {
+  const workspaceRoot = resolveWorkspaceRoot(runtime.workspacePath);
+  const readRoot = resolveReadRoot(runtime);
+  const requestedPath = typeof params.path === 'string' && params.path.trim().length > 0
+    ? params.path.trim()
+    : '';
+  const requestedGlob = typeof params.glob === 'string' ? params.glob : undefined;
+  const normalizedGlob = normalizeWorkspaceRelativeGlob(
+    isBroadSearchGlob(requestedGlob) ? '*' : requestedGlob,
+  );
+  if (!normalizedGlob) {
+    throw new JSONRPCErrorException(
+      'fs.list glob must be a non-empty workspace-relative pattern',
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+
+  if (requestedPath.length === 0 && isBroadSearchGlob(requestedGlob)) {
+    return { cwd: workspaceRoot, displayRoot: workspaceRoot, glob: '*' };
+  }
+
+  if (requestedPath.length === 0) {
+    return { cwd: readRoot, displayRoot: readRoot, glob: normalizedGlob };
+  }
+
+  const cwd = await resolveReadPath(requestedPath, runtime);
+  const cwdStat = await stat(cwd);
+  if (!cwdStat.isDirectory()) {
+    throw new JSONRPCErrorException(
+      `fs.list path must resolve to a directory: ${requestedPath}`,
+      GatewayErrors.PROVIDER_ERROR,
+    );
+  }
+  const canonicalCwd = await realpath(cwd);
+  if (!isInsideAllowedPaths(canonicalCwd, [workspaceRoot, readRoot])) {
+    throw new JSONRPCErrorException(
+      `fs.list path must stay inside an allowed read root: ${requestedPath}`,
+      GatewayErrors.POLICY_DENIED,
+    );
+  }
+  const displayRoot = isInsideAllowedPaths(canonicalCwd, [workspaceRoot]) ? workspaceRoot : readRoot;
+  return { cwd: canonicalCwd, displayRoot, glob: normalizedGlob };
 }
 
 function stripKnownRootPrefix(path: string, workspaceRoot: string): string | null {
@@ -114,7 +173,7 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'fs.read',
     handler: async (params: FsReadParams, runtime) => {
-      const resolvedPath = resolveReadPath(params.path, runtime);
+      const resolvedPath = await resolveReadPath(params.path, runtime);
       return await readTextFile(resolvedPath, params.maxBytes);
     },
     summary: (p: FsReadParams) => ({ path: p.path, maxBytes: p.maxBytes }),
@@ -143,29 +202,21 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'fs.list',
     handler: async (params: FsListParams, runtime) => {
-      const normalizedGlob = normalizeWorkspaceRelativeGlob(params.glob);
-      if (!normalizedGlob) {
-        throw new JSONRPCErrorException(
-          'fs.list glob must be a non-empty workspace-relative pattern',
-          GatewayErrors.POLICY_DENIED,
-        );
-      }
-
       const maxEntries = Number.isFinite(params.maxEntries)
         ? Math.max(1, Math.min(500, Math.floor(Number(params.maxEntries))))
         : 200;
 
-      const readRoot = resolveReadRoot(runtime);
+      const listBase = await resolveListBase(params, runtime);
       const paths: string[] = [];
-      for await (const match of fsGlob(normalizedGlob, {
-        cwd: readRoot,
+      for await (const match of fsGlob(listBase.glob, {
+        cwd: listBase.cwd,
       })) {
-        const relative = String(match).replace(/\\/g, '/').replace(/^\.\//, '');
-        const absolute = resolveWorkspaceFsPathFromRoot(relative, readRoot);
-        if (!isInsideAllowedPaths(absolute, [readRoot])) {
+        const relativeMatch = String(match).replace(/\\/g, '/').replace(/^\.\//, '');
+        const absolute = resolveWorkspaceFsPathFromRoot(relativeMatch, listBase.cwd);
+        if (!isInsideAllowedPaths(absolute, [listBase.cwd])) {
           continue;
         }
-        paths.push(relative);
+        paths.push(relativePathForDisplay(absolute, listBase.displayRoot));
         if (paths.length >= maxEntries) {
           break;
         }
@@ -174,9 +225,9 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       paths.sort((a, b) => a.localeCompare(b));
       return { paths };
     },
-    summary: (p: FsListParams) => ({ glob: p.glob ?? '**/*', maxEntries: p.maxEntries ?? 200 }),
+    summary: (p: FsListParams) => ({ path: p.path, glob: p.glob ?? '*', maxEntries: p.maxEntries ?? 200 }),
     approvalAction: 'read',
-    approvalScope: (p: FsListParams) => p.glob ?? '**/*',
+    approvalScope: (p: FsListParams) => `${p.path ?? '.'}:${p.glob ?? '*'}`,
   },
   {
     name: 'fs.search',
@@ -195,12 +246,12 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     },
     summary: (p: FsSearchParams) => ({
       query: p.query,
-      glob: p.glob ?? '**/*',
+      glob: summarizeSearchGlob(p.glob),
       maxMatches: p.maxMatches ?? 50,
       maxFiles: p.maxFiles ?? 200,
     }),
     approvalAction: 'read',
-    approvalScope: (p: FsSearchParams) => `${p.glob ?? '**/*'}:${p.query}`,
+    approvalScope: (p: FsSearchParams) => `${summarizeSearchGlob(p.glob)}:${p.query}`,
   },
   {
     name: 'fs.edit',

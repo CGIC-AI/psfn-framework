@@ -910,8 +910,19 @@ describe('GatewayClient filesystem RPC wrappers', () => {
     });
     await expect(readPromise).resolves.toEqual({ content: 'hello', truncated: false });
 
+    const listPromise = client.fsList(undefined, 25, { path: 'downloads' });
+    const listReq = conn.sent[1] as { id: number; method: string; params: Record<string, unknown> };
+    expect(listReq.method).toBe('fs.list');
+    expect(listReq.params).toEqual({ path: 'downloads', maxEntries: 25 });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: listReq.id,
+      result: { paths: ['downloads/COMPANION_EXPERIENCE.md'] },
+    });
+    await expect(listPromise).resolves.toEqual(['downloads/COMPANION_EXPERIENCE.md']);
+
     const searchPromise = client.fsSearch({ query: 'alpha', glob: '*.txt', maxMatches: 2 });
-    const searchReq = conn.sent[1] as { id: number; method: string; params: Record<string, unknown> };
+    const searchReq = conn.sent[2] as { id: number; method: string; params: Record<string, unknown> };
     expect(searchReq.method).toBe('fs.search');
     expect(searchReq.params).toEqual({ query: 'alpha', glob: '*.txt', maxMatches: 2 });
     conn._emit({
@@ -937,7 +948,7 @@ describe('GatewayClient filesystem RPC wrappers', () => {
       oldText: 'alpha',
       newText: 'beta',
     });
-    const editReq = conn.sent[2] as { id: number; method: string; params: Record<string, unknown> };
+    const editReq = conn.sent[3] as { id: number; method: string; params: Record<string, unknown> };
     expect(editReq.method).toBe('fs.edit');
     expect(editReq.params).toEqual({
       path: 'notes.txt',

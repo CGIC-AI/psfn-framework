@@ -374,6 +374,13 @@ describe('evaluatePolicy', () => {
     )).toBe('ALLOW');
   });
 
+  it('allows fs.list with a workspace-relative directory path', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { path: 'downloads', maxEntries: 50 } },
+      policyConfig,
+    )).toBe('ALLOW');
+  });
+
   it('allows fs.search with bounded workspace-relative parameters', () => {
     expect(evaluatePolicy(
       {
@@ -487,6 +494,21 @@ describe('evaluatePolicy', () => {
 
     expect(evaluatePolicy(
       { method: 'fs.list', params: { glob: 'src/..' } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { path: '../secrets' } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { path: '/etc' } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { path: 'downloads/*' } },
       policyConfig,
     )).toBe('DENY');
   });

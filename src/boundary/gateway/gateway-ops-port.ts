@@ -10,6 +10,7 @@ import type {
   FilesystemOperations,
   FilesystemWriteResult,
   FilesystemEditResult,
+  FilesystemListOptions,
 } from '../integrations/filesystem/ops.js';
 import type { BeadsOperations } from '../integrations/beads/ops.js';
 import type {
@@ -47,7 +48,9 @@ export function createGatewayOpsPort(port: GatewayOpsPort): GatewayOpsPort {
     },
     filesystem: {
       read: (path: string, options?: { maxBytes?: number }) => port.filesystem.read(path, options),
-      list: (glob?: string, maxEntries?: number) => port.filesystem.list(glob, maxEntries),
+      list: (glob?: string, maxEntries?: number, options?: FilesystemListOptions) => (
+        port.filesystem.list(glob, maxEntries, options)
+      ),
       search: (options) => port.filesystem.search(options),
       write: (options) => port.filesystem.write(options),
       edit: (options) => port.filesystem.edit(options),
@@ -80,7 +83,9 @@ export function createGatewayOpsPortFromClient(gateway: GatewayClient): GatewayO
     },
     filesystem: {
       read: (path: string, options?: { maxBytes?: number }) => gateway.fsReadDetailed(path, options),
-      list: (glob = '**/*', maxEntries = 200) => gateway.fsList(glob, maxEntries),
+      list: (glob?: string, maxEntries = 200, options?: FilesystemListOptions) => (
+        gateway.fsList(glob, maxEntries, options)
+      ),
       search: (options) => gateway.fsSearch(options),
       write: async (options): Promise<FilesystemWriteResult> => {
         const existing = await gateway.fsReadDetailed(options.path).catch((error: unknown) => {

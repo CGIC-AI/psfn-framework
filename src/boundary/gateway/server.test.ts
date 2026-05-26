@@ -509,12 +509,16 @@ describe('GatewayServer', () => {
     }
   });
 
-  it('roots relative fs.read and fs.list to full codebase root in yolo mode while keeping writes in the personal workspace', async () => {
+  it('prefers personal workspace reads and shallow lists in yolo mode while preserving codebase fallback', async () => {
     const codebaseRoot = mkdtempSync(join(tmpdir(), 'gw-yolo-root-'));
-    const workspace = join(codebaseRoot, 'workspace');
-    mkdirSync(workspace, { recursive: true });
+    const workspace = join(codebaseRoot, 'purrsephone');
+    mkdirSync(join(workspace, 'downloads'), { recursive: true });
+    mkdirSync(join(codebaseRoot, 'src'), { recursive: true });
     writeFileSync(join(codebaseRoot, 'AGENTS.md'), 'root-agents');
+    writeFileSync(join(codebaseRoot, 'README.md'), 'root-readme');
+    writeFileSync(join(codebaseRoot, 'src', 'app.ts'), 'repo source');
     writeFileSync(join(workspace, 'AGENTS.md'), 'workspace-agents');
+    writeFileSync(join(workspace, 'downloads', 'COMPANION_EXPERIENCE.md'), 'personal download');
 
     try {
       const { conn } = await setupServerConnection({
@@ -526,15 +530,45 @@ describe('GatewayServer', () => {
       });
 
       const readResponse = await invokeRpc(conn, 970, 'fs.read', { path: 'AGENTS.md' });
-      expect(readResponse.result.content).toBe('root-agents');
+      expect(readResponse.result.content).toBe('workspace-agents');
 
-      const listResponse = await invokeRpc(conn, 971, 'fs.list', {
-        glob: '*.md',
+      const fallbackReadResponse = await invokeRpc(conn, 971, 'fs.read', { path: 'README.md' });
+      expect(fallbackReadResponse.result.content).toBe('root-readme');
+
+      const homeListResponse = await invokeRpc(conn, 972, 'fs.list', {
+        glob: '**/*',
         maxEntries: 20,
       });
-      expect(listResponse.result.paths).toContain('AGENTS.md');
+      expect(homeListResponse.result.paths).toEqual(expect.arrayContaining([
+        'AGENTS.md',
+        'downloads',
+      ]));
+      expect(homeListResponse.result.paths).not.toContain('src/app.ts');
+      expect(homeListResponse.result.paths).not.toContain('downloads/COMPANION_EXPERIENCE.md');
 
-      const writeResponse = await invokeRpc(conn, 972, 'fs.write', {
+      const downloadsListResponse = await invokeRpc(conn, 973, 'fs.list', {
+        path: 'downloads',
+        maxEntries: 20,
+      });
+      expect(downloadsListResponse.result.paths).toEqual([
+        'downloads/COMPANION_EXPERIENCE.md',
+      ]);
+
+      const prefixedDownloadsListResponse = await invokeRpc(conn, 974, 'fs.list', {
+        path: 'purrsephone/downloads',
+        maxEntries: 20,
+      });
+      expect(prefixedDownloadsListResponse.result.paths).toEqual([
+        'downloads/COMPANION_EXPERIENCE.md',
+      ]);
+
+      const repoListResponse = await invokeRpc(conn, 975, 'fs.list', {
+        glob: 'src/*.ts',
+        maxEntries: 20,
+      });
+      expect(repoListResponse.result.paths).toEqual(['src/app.ts']);
+
+      const writeResponse = await invokeRpc(conn, 976, 'fs.write', {
         path: 'yolo-note.txt',
         content: 'workspace-write-only',
       });

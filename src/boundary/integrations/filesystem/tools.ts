@@ -60,6 +60,17 @@ function normalizeSearchGlobParam(value: unknown): string | undefined {
   return value;
 }
 
+function normalizeListGlobParam(value: unknown): string | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const normalized = value.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+  if (normalized.length === 0 || normalized === '**' || normalized === '**/*') {
+    return undefined;
+  }
+  return value;
+}
+
 export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
   return {
     name: 'fs',
@@ -82,10 +93,14 @@ export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
         description: 'Filesystem action. Defaults to list for empty-argument calls.',
       })),
       path: Type.Optional(Type.String({
-        description: 'Personal-root-relative path for action=write/edit; read paths may be broader in gateway yolo mode.',
+        description:
+          'Directory path for action=list, or file path for action=read/write/edit. '
+          + 'Paths are personal-root-relative unless gateway yolo read fallback is configured.',
       })),
       glob: Type.Optional(Type.String({
-        description: 'Used with action=list/search. For search, omit this or use a narrow folder/file glob; bare **/* is retargeted to working folders.',
+        description:
+          'Used with action=list/search. For list, omit this for a shallow directory listing. '
+          + 'For search, omit this or use a narrow folder/file glob; bare **/* is retargeted to working folders.',
       })),
       max_entries: Type.Optional(Type.Integer({
         minimum: 1,
@@ -150,13 +165,19 @@ export function createFsTool(ops: FilesystemOperations): AgentTool<any> {
 
         switch (action) {
           case 'list': {
+            const glob = normalizeListGlobParam(params.glob);
+            const path = typeof params.path === 'string' && params.path.trim().length > 0
+              ? params.path.trim()
+              : undefined;
             const paths = await ops.list(
-              typeof params.glob === 'string' ? params.glob : undefined,
+              glob,
               typeof params.max_entries === 'number' ? params.max_entries : DEFAULT_LIST_MAX_ENTRIES,
+              path ? { path } : undefined,
             );
             return textResult(JSON.stringify({
               action: 'list',
-              glob: typeof params.glob === 'string' && params.glob.trim().length > 0 ? params.glob : '**/*',
+              ...(path ? { path } : {}),
+              glob: glob ?? '*',
               count: paths.length,
               paths,
             }, null, 2));

@@ -152,6 +152,7 @@ export interface FsWriteParams {
 }
 
 export interface FsListParams {
+  path?: string;
   glob?: string;
   maxEntries?: number;
 }

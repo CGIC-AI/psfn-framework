@@ -2,6 +2,7 @@ import type { GatewayOpsPort } from '../../gateway/gateway-ops-port.js';
 import type {
   FilesystemEditOptions,
   FilesystemEditResult,
+  FilesystemListOptions,
   FilesystemOperations,
   FilesystemReadOptions,
   FilesystemReadResult,
@@ -22,8 +23,12 @@ export class GatewayFilesystemOps implements FilesystemOperations {
     return this.filesystemOps.read(path, options);
   }
 
-  async list(glob = '**/*', maxEntries = 200): Promise<string[]> {
-    return this.filesystemOps.list(glob, maxEntries);
+  async list(
+    glob = '**/*',
+    maxEntries = 200,
+    options?: FilesystemListOptions,
+  ): Promise<string[]> {
+    return this.filesystemOps.list(glob, maxEntries, options);
   }
 
   async search(options: FilesystemSearchOptions): Promise<FilesystemSearchResult> {

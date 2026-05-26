@@ -116,6 +116,41 @@ describe('fs tool', () => {
     ]);
   });
 
+  it('defaults list to a shallow personal-root view and honors list path', async () => {
+    mkdirSync(join(workspace, 'downloads'), { recursive: true });
+    mkdirSync(join(workspace, 'src'), { recursive: true });
+    writeFileSync(join(workspace, 'downloads', 'COMPANION_EXPERIENCE.md'), 'personal note\n', 'utf-8');
+    writeFileSync(join(workspace, 'src', 'noise.ts'), 'repo-shaped noise\n', 'utf-8');
+    const tool = createFsTool(ops);
+
+    const homeList = JSON.parse(resultText(await tool.execute('list-home', {
+      action: 'list',
+      glob: '**/*',
+      max_entries: 20,
+    })));
+    const downloadsList = JSON.parse(resultText(await tool.execute('list-downloads', {
+      action: 'list',
+      path: 'downloads',
+      max_entries: 20,
+    })));
+
+    expect(homeList).toMatchObject({
+      action: 'list',
+      glob: '*',
+    });
+    expect(homeList.paths).toEqual(expect.arrayContaining(['docs', 'downloads', 'src']));
+    expect(homeList.paths).not.toContain('docs/notes.txt');
+    expect(homeList.paths).not.toContain('downloads/COMPANION_EXPERIENCE.md');
+    expect(homeList.paths).not.toContain('src/noise.ts');
+    expect(downloadsList).toEqual({
+      action: 'list',
+      path: 'downloads',
+      glob: '*',
+      count: 1,
+      paths: ['downloads/COMPANION_EXPERIENCE.md'],
+    });
+  });
+
   it('writes new files and edits existing files through the unified fs surface', async () => {
     const tool = createFsTool(ops);
 

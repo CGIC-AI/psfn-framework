@@ -7,6 +7,7 @@ import { isInsideAllowedPaths } from '../../gateway/policy.js';
 import type {
   FilesystemEditOptions,
   FilesystemEditResult,
+  FilesystemListOptions,
   FilesystemReadResult,
   FilesystemSearchMatch,
   FilesystemSearchMode,
@@ -17,6 +18,7 @@ import type {
 } from './ops.js';
 
 const DEFAULT_LIST_GLOB = '**/*';
+const DEFAULT_DIRECTORY_LIST_GLOB = '*';
 const DEFAULT_LIST_MAX_ENTRIES = 200;
 const MAX_LIST_MAX_ENTRIES = 500;
 const DEFAULT_SEARCH_MODE: FilesystemSearchMode = 'literal';
@@ -83,6 +85,32 @@ export function buildWorkingFolderSearchGlob(prefix = ''): string {
   const folderGlob = `{${DEFAULT_SEARCH_FOLDERS.join(',')}}`;
   const workingPattern = `{*.${textExtensionGlob},${folderGlob}/*.${textExtensionGlob},${folderGlob}/*/*.${textExtensionGlob},${folderGlob}/*/*/*.${textExtensionGlob}}`;
   return normalizedPrefix.length > 0 ? `${normalizedPrefix}/${workingPattern}` : workingPattern;
+}
+
+function normalizeListPath(value: string | undefined): string {
+  const normalizedPath = normalizeWorkspaceRelativeGlob(value);
+  if (normalizedPath === null) {
+    throw new Error('fs list path must be a workspace-relative directory path');
+  }
+  return normalizedPath === '**/*' ? '' : normalizedPath.replace(/\/\*$/, '').replace(/\/+$/, '');
+}
+
+function normalizeListGlob(glob: string | undefined): string {
+  const normalizedGlob = normalizeWorkspaceRelativeGlob(
+    isBroadSearchGlob(glob) ? DEFAULT_DIRECTORY_LIST_GLOB : glob,
+  );
+  if (!normalizedGlob) {
+    throw new Error('fs list glob must be a non-empty workspace-relative pattern');
+  }
+  return normalizedGlob;
+}
+
+function buildListGlob(glob: string | undefined, options?: FilesystemListOptions): string {
+  const basePath = typeof options?.path === 'string' && options.path.trim().length > 0
+    ? normalizeListPath(options.path)
+    : '';
+  const normalizedGlob = normalizeListGlob(glob);
+  return basePath.length > 0 ? `${basePath}/${normalizedGlob}` : normalizedGlob;
 }
 
 function normalizeWorkspacePath(path: string, root: string, action: 'read' | 'write' | 'edit'): string {
@@ -163,11 +191,13 @@ export async function readTextFile(path: string, maxBytes?: number): Promise<Fil
   }
 }
 
-export async function listWorkspaceFiles(root: string, glob = DEFAULT_LIST_GLOB, maxEntries = DEFAULT_LIST_MAX_ENTRIES): Promise<string[]> {
-  const normalizedGlob = normalizeWorkspaceRelativeGlob(glob);
-  if (!normalizedGlob) {
-    throw new Error('fs list glob must be a non-empty workspace-relative pattern');
-  }
+export async function listWorkspaceFiles(
+  root: string,
+  glob = DEFAULT_LIST_GLOB,
+  maxEntries = DEFAULT_LIST_MAX_ENTRIES,
+  options?: FilesystemListOptions,
+): Promise<string[]> {
+  const normalizedGlob = buildListGlob(glob, options);
 
   const boundedMaxEntries = clampFiniteInteger(maxEntries, DEFAULT_LIST_MAX_ENTRIES, 1, MAX_LIST_MAX_ENTRIES);
   const paths: string[] = [];

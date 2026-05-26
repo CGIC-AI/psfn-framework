@@ -82,6 +82,7 @@
   let models = $state<ModelRegistryEntry[]>([]);
   let budgetPolicy = $state<ModelRegistryBudgetPolicy>({ ...DEFAULT_BUDGET_POLICY });
   let discoveredModels = $state<DiscoveredModel[]>([]);
+  let discoverySearch = $state('');
   let providerRegistry = $state<CanonicalProviderRegistry>({ schemaVersion: 1, providers: [] });
   let providerRegistryInitialJson = $state('{"schemaVersion":1,"providers":[]}');
   let providerValidationErrors = $state<string[]>([]);
@@ -97,6 +98,18 @@
   let providerTypeOptions = $derived.by(() => (
     [...new Set(providerRegistry.providers.map((entry) => entry.type))].sort()
   ));
+  let filteredDiscoveredModels = $derived.by(() => {
+    const terms = discoverySearch
+      .trim()
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean);
+    if (terms.length === 0) return discoveredModels;
+    return discoveredModels.filter((model) => {
+      const searchable = discoverySearchText(model);
+      return terms.every((term) => searchable.includes(term));
+    });
+  });
 
   let purposePrimaryCounts = $derived.by(() => {
     const counts = Object.fromEntries(
@@ -188,6 +201,45 @@
       // Non-JSON response body; fall back to raw text
     }
     return rawBody;
+  }
+
+  function discoverySearchText(model: DiscoveredModel): string {
+    return [
+      model.id,
+      model.description,
+      ...(model.providerHints ?? []),
+      ...(model.zdrProviderTags ?? []),
+      ...(model.zdrProviderNames ?? []),
+      model.supportsVision ? 'vision image multimodal' : '',
+      model.supportsReasoning ? 'reasoning thinking' : '',
+      model.zdrAvailable ? 'zdr zero data retention' : 'no zdr',
+    ]
+      .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      .join(' ')
+      .toLowerCase();
+  }
+
+  function discoveryLimitSummary(model: DiscoveredModel): string {
+    const parts: string[] = [];
+    if (model.contextLength) {
+      parts.push(`ctx ${model.contextLength.toLocaleString()}`);
+    }
+    if (model.maxCompletionTokens) {
+      parts.push(`max out ${model.maxCompletionTokens.toLocaleString()}`);
+    }
+    return parts.length > 0 ? parts.join(' · ') : 'limits unknown';
+  }
+
+  function discoveryZdrProviderSummary(model: DiscoveredModel): string {
+    const tags = model.zdrProviderTags ?? [];
+    if (tags.length > 0) {
+      return tags.slice(0, 3).join(', ') + (tags.length > 3 ? ` +${tags.length - 3}` : '');
+    }
+    const names = model.zdrProviderNames ?? [];
+    if (names.length > 0) {
+      return names.slice(0, 3).join(', ') + (names.length > 3 ? ` +${names.length - 3}` : '');
+    }
+    return 'ZDR endpoint available';
   }
 
   function setProviderRegistryState(nextRegistry: CanonicalProviderRegistry): void {
@@ -1321,8 +1373,86 @@
   {:else if error}
     <div class="card-garden p-6 text-sm text-wilt-600">{error}</div>
   {:else}
-    <div class="grid grid-cols-1 xl:grid-cols-4 gap-4">
-      <div class="xl:col-span-3 space-y-3">
+    <div class="space-y-4">
+      <section class="card-garden p-4 space-y-3" aria-labelledby="discovered-models-heading">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <h2 id="discovered-models-heading" class="text-sm font-serif font-semibold text-shadow-800">Discovered Models</h2>
+            <p class="text-sm text-shadow-600 mt-1">
+              Discovery uses the provider proxy. ZDR tags come from OpenRouter endpoint metadata.
+            </p>
+          </div>
+          <div class="w-full lg:w-80">
+            <label class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1" for="discovered-model-search">
+              Search
+            </label>
+            <input
+              id="discovered-model-search"
+              type="search"
+              value={discoverySearch}
+              oninput={(event) => {
+                discoverySearch = (event.currentTarget as HTMLInputElement).value;
+              }}
+              class="w-full rounded border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-800"
+              placeholder="model, provider, vision, zdr"
+            />
+          </div>
+        </div>
+        {#if discoveryError}
+          <p class="text-sm text-wilt-600">{discoveryError}</p>
+        {/if}
+        {#if discoveredModels.length === 0}
+          <p class="text-sm text-shadow-500">No models discovered yet.</p>
+        {:else if filteredDiscoveredModels.length === 0}
+          <p class="text-sm text-shadow-500">No discovered models match the current search.</p>
+        {:else}
+          <div class="overflow-x-auto pb-1">
+            <div class="flex min-w-full gap-3">
+              {#each filteredDiscoveredModels as discovered}
+                <article class="min-w-[18rem] max-w-[22rem] rounded-lg border border-bark-200 bg-bark-50 px-3 py-2">
+                  <div class="flex items-start justify-between gap-2">
+                    <p class="font-mono text-xs text-shadow-800 break-all">{discovered.id}</p>
+                    {#if discovered.zdrAvailable}
+                      <span class="shrink-0 rounded-full border border-moss-300 bg-moss-50 px-2 py-0.5 text-[11px] font-semibold text-moss-700">
+                        ZDR {discovered.zdrEndpointCount ?? 1}
+                      </span>
+                    {:else}
+                      <span class="shrink-0 rounded-full border border-wilt-200 bg-wilt-50 px-2 py-0.5 text-[11px] font-semibold text-wilt-600">
+                        no ZDR
+                      </span>
+                    {/if}
+                  </div>
+                  {#if discovered.description}
+                    <p class="mt-1 line-clamp-2 text-xs text-shadow-600">{discovered.description}</p>
+                  {/if}
+                  <div class="mt-2 flex flex-wrap gap-1.5">
+                    {#if discovered.supportsVision}
+                      <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-[11px] text-shadow-600">vision</span>
+                    {/if}
+                    {#if discovered.supportsReasoning}
+                      <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-[11px] text-shadow-600">reasoning</span>
+                    {/if}
+                    {#if discovered.zdrAvailable}
+                      <span class="rounded-full border border-moss-200 bg-white px-2 py-0.5 text-[11px] text-moss-700">
+                        {discoveryZdrProviderSummary(discovered)}
+                      </span>
+                    {/if}
+                  </div>
+                  <p class="mt-2 text-xs text-shadow-500">{discoveryLimitSummary(discovered)}</p>
+                  <button
+                    onclick={() => addDiscoveredModel(discovered)}
+                    class="mt-3 px-2.5 py-1 text-xs font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-100 transition-colors"
+                  >
+                    + Add + Autofill
+                  </button>
+                </article>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </section>
+
+      <div class="space-y-3">
         <div class="flex items-center justify-between">
           <h2 class="text-sm font-serif font-semibold text-shadow-800">Model Registry</h2>
           <button
@@ -1596,44 +1726,6 @@
           </article>
         {/each}
       </div>
-
-      <aside class="xl:col-span-1">
-        <div class="card-garden p-4 space-y-3">
-          <h2 class="text-sm font-serif font-semibold text-shadow-800">Discovered Models</h2>
-          <p class="text-sm text-shadow-600">
-            Discovery uses the provider proxy. Add directly from this list to autofill provider, limits, and pricing.
-          </p>
-          {#if discoveryError}
-            <p class="text-sm text-wilt-600">{discoveryError}</p>
-          {/if}
-          {#if discoveredModels.length === 0}
-            <p class="text-sm text-shadow-500">No models discovered yet.</p>
-          {:else}
-            <div class="max-h-[32rem] overflow-auto space-y-2 pr-1">
-              {#each discoveredModels as discovered}
-                <div class="rounded-lg border border-bark-200 bg-bark-50 px-3 py-2">
-                  <p class="font-mono text-xs text-shadow-800 break-all">{discovered.id}</p>
-                  {#if discovered.description}
-                    <p class="text-xs text-shadow-600 mt-1">{discovered.description}</p>
-                  {/if}
-                  <p class="text-xs text-shadow-500 mt-1">
-                    {#if discovered.contextLength}ctx {discovered.contextLength.toLocaleString()}{/if}
-                    {#if discovered.maxCompletionTokens}
-                      {discovered.contextLength ? ' · ' : ''}max out {discovered.maxCompletionTokens.toLocaleString()}
-                    {/if}
-                  </p>
-                  <button
-                    onclick={() => addDiscoveredModel(discovered)}
-                    class="mt-2 px-2.5 py-1 text-xs font-medium rounded border border-gold-400 text-gold-700 hover:bg-gold-100 transition-colors"
-                  >
-                    + Add + Autofill
-                  </button>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      </aside>
     </div>
   {/if}
 </div>

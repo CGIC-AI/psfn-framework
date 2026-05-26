@@ -4,6 +4,7 @@ import { GatewayModelDiscovery, ModelDiscovery } from './discovery.js';
 // Mock global fetch
 const mockFetch = vi.fn();
 const OPENROUTER_MODELS_API_URL = 'https://openrouter.ai/api/v1/models';
+const OPENROUTER_ZDR_ENDPOINTS_API_URL = 'https://openrouter.ai/api/v1/endpoints/zdr';
 
 describe('ModelDiscovery', () => {
   beforeEach(() => {
@@ -56,6 +57,17 @@ describe('ModelDiscovery', () => {
     return {
       ok: true,
       json: async () => ({ data: models }),
+    };
+  }
+
+  function openRouterZdrResponse(endpoints: Array<{
+    model_id?: string;
+    provider_name?: string;
+    tag?: string;
+  }>) {
+    return {
+      ok: true,
+      json: async () => ({ data: endpoints }),
     };
   }
 
@@ -165,6 +177,48 @@ describe('ModelDiscovery', () => {
     expect(models[0].supportsReasoning).toBe(true);
   });
 
+  it('maps OpenRouter ZDR endpoint metadata onto discovered models', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (url === OPENROUTER_ZDR_ENDPOINTS_API_URL) {
+        return Promise.resolve(openRouterZdrResponse([
+          {
+            model_id: 'google/gemini-3.1-flash-lite',
+            provider_name: 'Google',
+            tag: 'google-vertex/us',
+          },
+          {
+            model_id: 'google/gemini-3.1-flash-lite',
+            provider_name: 'Google',
+            tag: 'google-vertex/eu',
+          },
+        ]));
+      }
+      if (url === OPENROUTER_MODELS_API_URL) {
+        return Promise.resolve(openRouterResponse([
+          {
+            id: 'google/gemini-3.1-flash-lite',
+            description: 'Gemini Flash Lite',
+          },
+        ]));
+      }
+      return Promise.resolve(litellmResponse([
+        {
+          id: 'openrouter/google/gemini-3.1-flash-lite',
+          litellm_provider: 'openrouter',
+        },
+      ]));
+    });
+
+    const discovery = createDiscovery('http://localhost:4000/v1');
+    const models = await discovery.getAvailableModels();
+
+    expect(models).toHaveLength(1);
+    expect(models[0].zdrAvailable).toBe(true);
+    expect(models[0].zdrEndpointCount).toBe(2);
+    expect(models[0].zdrProviderTags).toEqual(['google-vertex/us', 'google-vertex/eu']);
+    expect(models[0].zdrProviderNames).toEqual(['Google']);
+  });
+
   it('prefers top_provider context length and preserves pricing keys', async () => {
     mockFetch.mockImplementation((url: string) => {
       if (url.includes('openrouter.ai')) {
@@ -209,8 +263,8 @@ describe('ModelDiscovery', () => {
     await discovery.getAvailableModels();
     await discovery.getAvailableModels();
 
-    // fetch called twice on first call (LiteLLM + OpenRouter), not again
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    // fetch called three times on first call (LiteLLM + OpenRouter metadata + ZDR), not again
+    expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 
   it('invalidateCache forces re-fetch', async () => {
@@ -221,8 +275,8 @@ describe('ModelDiscovery', () => {
     discovery.invalidateCache();
     await discovery.getAvailableModels();
 
-    // 2 calls each time (LiteLLM + OpenRouter)
-    expect(mockFetch).toHaveBeenCalledTimes(4);
+    // 3 calls each time (LiteLLM + OpenRouter metadata + ZDR)
+    expect(mockFetch).toHaveBeenCalledTimes(6);
   });
 
   it('fails closed when LiteLLM fetch fails', async () => {
@@ -288,6 +342,9 @@ describe('ModelDiscovery', () => {
       if (url === configuredOpenRouterUrl) {
         return Promise.resolve(openRouterResponse([]));
       }
+      if (url === 'https://metadata.example.test/api/v1/endpoints/zdr') {
+        return Promise.resolve(openRouterZdrResponse([]));
+      }
       return Promise.reject(new Error(`unexpected URL ${url}`));
     });
 
@@ -297,6 +354,7 @@ describe('ModelDiscovery', () => {
     await discovery.getAvailableModels();
 
     expect(mockFetch).toHaveBeenCalledWith(configuredOpenRouterUrl);
+    expect(mockFetch).toHaveBeenCalledWith('https://metadata.example.test/api/v1/endpoints/zdr');
   });
 
   it('fails closed when openRouterModelsApiUrl is missing', () => {
@@ -323,6 +381,9 @@ describe('ModelDiscovery', () => {
       if (target.includes('/v1/models')) {
         return litellmResponse([{ id: 'model-1', litellm_provider: 'openrouter' }]);
       }
+      if (target.includes('/endpoints/zdr')) {
+        return openRouterZdrResponse([]);
+      }
       if (target.includes('openrouter.ai')) {
         return openRouterResponse([{
           id: 'model-1',
@@ -341,7 +402,7 @@ describe('ModelDiscovery', () => {
 
     expect(models).toHaveLength(1);
     expect(models[0].id).toBe('model-1');
-    expect(injectedFetch).toHaveBeenCalledTimes(2);
+    expect(injectedFetch).toHaveBeenCalledTimes(3);
     expect(mockFetch).not.toHaveBeenCalled();
   });
 

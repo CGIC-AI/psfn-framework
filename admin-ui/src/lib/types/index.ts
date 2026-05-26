@@ -847,6 +847,10 @@ export interface DiscoveredModel {
   pricing?: Record<string, string | number | undefined>;
   supportsVision?: boolean;
   supportsReasoning?: boolean;
+  zdrAvailable?: boolean;
+  zdrEndpointCount?: number;
+  zdrProviderTags?: string[];
+  zdrProviderNames?: string[];
 }
 
 // Scheduler

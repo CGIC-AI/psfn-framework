@@ -15,12 +15,17 @@ export interface DiscoveredModel {
   pricing?: Record<string, string>;
   supportsVision?: boolean;
   supportsReasoning?: boolean;
+  zdrAvailable?: boolean;
+  zdrEndpointCount?: number;
+  zdrProviderTags?: string[];
+  zdrProviderNames?: string[];
 }
 
 export interface ModelDiscoveryOptions {
   fetchFn?: typeof fetch;
   allowDirectNetworkEgress?: boolean;
   openRouterModelsApiUrl: string;
+  openRouterZdrEndpointsApiUrl?: string;
 }
 
 export interface ModelDiscoveryBackend {
@@ -66,6 +71,18 @@ interface OpenRouterModelEntry {
     max_completion_tokens?: number;
   };
   pricing?: Record<string, string | undefined>;
+}
+
+interface OpenRouterZdrEndpointEntry {
+  model_id?: string;
+  provider_name?: string;
+  tag?: string;
+}
+
+interface OpenRouterZdrEndpointSummary {
+  count: number;
+  providerTags: string[];
+  providerNames: string[];
 }
 
 const MODEL_ID_WRAPPER_PREFIXES = new Set(['openrouter', 'litellm', 'proxy']);
@@ -225,6 +242,30 @@ function buildOpenRouterMetaMap(openRouterMeta: OpenRouterModelEntry[]): Map<str
   return metaMap;
 }
 
+function pushUnique(target: string[], value: string | undefined): void {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed || target.includes(trimmed)) return;
+  target.push(trimmed);
+}
+
+function buildOpenRouterZdrEndpointMap(
+  openRouterZdrEndpoints: OpenRouterZdrEndpointEntry[],
+): Map<string, OpenRouterZdrEndpointSummary> {
+  const endpointMap = new Map<string, OpenRouterZdrEndpointSummary>();
+  for (const endpoint of openRouterZdrEndpoints) {
+    const keys = expandModelLookupKeys(endpoint.model_id);
+    if (keys.length === 0) continue;
+    for (const key of keys) {
+      const summary = endpointMap.get(key) ?? { count: 0, providerTags: [], providerNames: [] };
+      summary.count += 1;
+      pushUnique(summary.providerTags, endpoint.tag);
+      pushUnique(summary.providerNames, endpoint.provider_name);
+      endpointMap.set(key, summary);
+    }
+  }
+  return endpointMap;
+}
+
 function findOpenRouterMeta(
   litellmId: string,
   metaMap: Map<string, OpenRouterModelEntry>,
@@ -234,6 +275,34 @@ function findOpenRouterMeta(
     if (matched) return matched;
   }
   return undefined;
+}
+
+function findOpenRouterZdrEndpointSummary(
+  litellmId: string,
+  meta: OpenRouterModelEntry | undefined,
+  endpointMap: Map<string, OpenRouterZdrEndpointSummary>,
+): OpenRouterZdrEndpointSummary | undefined {
+  for (const key of [
+    ...expandModelLookupKeys(litellmId),
+    ...expandModelLookupKeys(meta?.id),
+    ...expandModelLookupKeys(meta?.canonical_slug),
+  ]) {
+    const matched = endpointMap.get(key);
+    if (matched) return matched;
+  }
+  return undefined;
+}
+
+function deriveOpenRouterZdrEndpointsApiUrl(openRouterModelsApiUrl: string): string {
+  try {
+    const parsed = new URL(openRouterModelsApiUrl);
+    parsed.pathname = '/api/v1/endpoints/zdr';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return 'https://openrouter.ai/api/v1/endpoints/zdr';
+  }
 }
 
 const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
@@ -249,6 +318,7 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
   private litellmBaseUrl: string;
   private litellmApiKey?: string;
   private openRouterModelsApiUrl: string;
+  private openRouterZdrEndpointsApiUrl: string;
   private fetchFn?: typeof fetch;
   private allowDirectNetworkEgress: boolean;
   private cache: DiscoveredModel[] | null = null;
@@ -267,6 +337,8 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
       throw new Error('Model discovery requires openRouterModelsApiUrl');
     }
     this.openRouterModelsApiUrl = openRouterModelsApiUrl;
+    this.openRouterZdrEndpointsApiUrl = options.openRouterZdrEndpointsApiUrl?.trim()
+      || deriveOpenRouterZdrEndpointsApiUrl(openRouterModelsApiUrl);
     this.fetchFn = options.fetchFn;
     this.allowDirectNetworkEgress = options.allowDirectNetworkEgress ?? !isGatewayAgentEntrypoint();
   }
@@ -276,17 +348,20 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
       return this.cache;
     }
 
-    const [litellmModels, openRouterMeta] = await Promise.all([
+    const [litellmModels, openRouterMeta, openRouterZdrEndpoints] = await Promise.all([
       this.fetchLiteLLM(),
       this.fetchOpenRouterMeta(),
+      this.fetchOpenRouterZdrEndpoints(),
     ]);
 
     // Build a metadata lookup from OpenRouter
     const metaMap = buildOpenRouterMetaMap(openRouterMeta);
+    const zdrEndpointMap = buildOpenRouterZdrEndpointMap(openRouterZdrEndpoints);
 
     // Merge: LiteLLM provides the available model list, OpenRouter enriches it
     const models: DiscoveredModel[] = litellmModels.map(lm => {
       const meta = findOpenRouterMeta(lm.id, metaMap);
+      const zdrEndpointSummary = findOpenRouterZdrEndpointSummary(lm.id, meta, zdrEndpointMap);
       const providerHints = normalizeProviderHints([
         ...providerHintsFromLiteLLM(lm),
         ...(meta ? ['openrouter'] : []),
@@ -301,6 +376,18 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
         pricing: normalizePricing(meta?.pricing),
         ...(inferSupportsVision(meta) ? { supportsVision: true } : {}),
         ...(inferSupportsReasoning(meta) ? { supportsReasoning: true } : {}),
+        ...(zdrEndpointSummary
+          ? {
+              zdrAvailable: true,
+              zdrEndpointCount: zdrEndpointSummary.count,
+              ...(zdrEndpointSummary.providerTags.length > 0
+                ? { zdrProviderTags: zdrEndpointSummary.providerTags }
+                : {}),
+              ...(zdrEndpointSummary.providerNames.length > 0
+                ? { zdrProviderNames: zdrEndpointSummary.providerNames }
+                : {}),
+            }
+          : {}),
       };
     });
 
@@ -356,6 +443,21 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
       return data.data ?? [];
     } catch (err) {
       log.warn('Failed to fetch OpenRouter metadata', { error: String(err) });
+      return [];
+    }
+  }
+
+  private async fetchOpenRouterZdrEndpoints(): Promise<OpenRouterZdrEndpointEntry[]> {
+    try {
+      const res = await this.resolveFetch()(this.openRouterZdrEndpointsApiUrl);
+      if (!res.ok) {
+        log.warn(`OpenRouter /api/v1/endpoints/zdr returned ${res.status}`);
+        return [];
+      }
+      const data = await res.json() as { data?: OpenRouterZdrEndpointEntry[] };
+      return data.data ?? [];
+    } catch (err) {
+      log.warn('Failed to fetch OpenRouter ZDR endpoints', { error: String(err) });
       return [];
     }
   }

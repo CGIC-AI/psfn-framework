@@ -53,6 +53,7 @@ describe('loadConfig path defaults', () => {
     const config = loadConfig();
     expect(config.systemDataDir).toBe('./data');
     expect(config.companionDataDir).toBe('./companion');
+    expect(config.workspacePath).toBe('./workspace');
     expect(config.dataDir).toBe('./data');
     expect(config.companionId).toBe('test-companion');
     expect(config.characterCardPath).toBe('./companion/companion.json');
@@ -75,6 +76,7 @@ describe('loadConfig path defaults', () => {
     const config = loadConfig();
     expect(config.systemDataDir).toBe('./sandbox-data');
     expect(config.companionDataDir).toBe('./sandbox-data');
+    expect(config.workspacePath).toBe('./workspace');
     expect(config.dataDir).toBe('./sandbox-data');
     expect(config.characterCardPath).toBe('./sandbox-data/companion.json');
     expect(config.databasePath).toBe('sandbox-data/state/companion.db');
@@ -111,9 +113,18 @@ describe('loadConfig path defaults', () => {
     const config = loadConfig();
     expect(config.systemDataDir).toBe('./system-data');
     expect(config.companionDataDir).toBe('./companion-data');
+    expect(config.workspacePath).toBe('./workspace');
     expect(config.dataDir).toBe('./system-data');
     expect(config.characterCardPath).toBe('./companion-data/companion.json');
     expect(config.databasePath).toBe('companion-data/state/companion.db');
+  });
+
+  it('carries explicit personal workspace wiring into runtime config', () => {
+    clearRuntimePathEnv();
+    process.env.WORKSPACE_PATH = './personal-files';
+
+    const config = loadConfig();
+    expect(config.workspacePath).toBe('./personal-files');
   });
 
   it('defaults persistence backend to sqlite', () => {
@@ -152,6 +163,7 @@ describe('loadConfig path defaults', () => {
     const config = loadConfig();
     expect(config.systemDataDir).toBe('./runtime/production/system-data');
     expect(config.companionDataDir).toBe('./runtime/production/companion-data');
+    expect(config.workspacePath).toBe('./runtime/production/workspace');
     expect(config.dataDir).toBe('./runtime/production/system-data');
     expect(config.characterCardPath).toBe('./runtime/production/companion-data/companion.json');
     expect(config.databasePath).toBe('runtime/production/companion-data/state/companion.db');

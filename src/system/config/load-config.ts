@@ -259,6 +259,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     companionId,
     systemDataDir: runtimePathLayout.systemDataDir,
     companionDataDir,
+    workspacePath: runtimePathLayout.workspacePath,
     dataDir,
     databasePath,
     persistenceBackend,

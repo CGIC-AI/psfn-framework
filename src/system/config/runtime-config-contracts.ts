@@ -62,6 +62,7 @@ export interface SubstrateConfig {
   companionId?: string;
   systemDataDir?: string;
   companionDataDir?: string;
+  workspacePath?: string;
   dataDir: string;
   databasePath: string;
   persistenceBackend?: PersistenceBackend;

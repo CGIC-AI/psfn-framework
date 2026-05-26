@@ -201,6 +201,9 @@ export function isFalContentPolicyError(error: unknown): error is FalApiError {
   if (error.status !== 422) return false;
   const text = payloadToString(error.payload).toLowerCase();
   return text.includes('content policy')
+    || text.includes('content_policy')
+    || text.includes('content checker')
+    || text.includes('flagged by a content checker')
     || text.includes('safety')
     || text.includes('moderation')
     || text.includes('nsfw');

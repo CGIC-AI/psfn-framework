@@ -2,6 +2,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { ImageOperations } from './ops.js';
+import { isFalContentPolicyError } from './fal.js';
 import type {
   ImageReferenceSelector,
   ResolvedImageReference,
@@ -86,10 +87,13 @@ function buildToolContent(
   result: ImageGenerationResult,
   review?: ImageVisionReview,
   reviewError?: string,
+  notice?: string,
 ): TextContent[] {
-  const content: TextContent[] = [
-    { type: 'text', text: formatResult(result) },
-  ];
+  const content: TextContent[] = [];
+  if (notice) {
+    content.push({ type: 'text', text: notice });
+  }
+  content.push({ type: 'text', text: formatResult(result) });
   if (review) {
     content.push({ type: 'text', text: formatVisionReview(review) });
   } else if (reviewError) {
@@ -186,7 +190,7 @@ function resolveCurrentTurnVisionReviewFallback(
 
 function buildImageCreateDescription(selfImage: boolean): string {
   if (selfImage) {
-    return 'Generate a dedicated selfie or self-portrait of the companion. Use this explicit path when the request is specifically about her own representation; the runtime Appearance context is loaded for this tool only. When a default reference photo is configured, this tool uses it through the image-edit pipeline unless use_reference_image=false; choose reference_image_id or reference_image_tags for a different saved reference. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
+    return 'Generate a dedicated selfie or self-portrait of the companion. Use this explicit path when the request is specifically about her own representation; the runtime Appearance context is loaded for this tool only. When a default reference photo is configured, this tool uses it through the image-edit pipeline unless use_reference_image=false; choose reference_image_id or reference_image_tags for a different saved reference. If the provider blocks the request for content policy, do not retry minor prompt variants in the same turn; report the block and ask for a safer non-explicit direction. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
   }
   return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits, use the dedicated selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
 }
@@ -342,6 +346,59 @@ function normalizeInputUrls(inputUrls: readonly string[] | undefined): string[] 
     .slice(0, 4);
 }
 
+function isProviderContentPolicyError(error: unknown): boolean {
+  if (isFalContentPolicyError(error)) {
+    return true;
+  }
+  const message = toErrorMessage(error).toLowerCase();
+  return message.includes('content_policy')
+    || message.includes('content policy')
+    || message.includes('content checker')
+    || message.includes('flagged by a content checker')
+    || message.includes('safety checker')
+    || message.includes('moderation')
+    || message.includes('nsfw');
+}
+
+function contentPolicyBlockedResult<TDetails extends { isError?: boolean }>(
+  toolName: string,
+  error: unknown,
+  options?: {
+    fallbackError?: unknown;
+  },
+): AgentToolResult<TDetails> {
+  const fallbackBlocked = options?.fallbackError !== undefined;
+  const message = [
+    `${toolName} was blocked by the image provider content policy.`,
+    fallbackBlocked
+      ? 'A fresh-generation fallback was attempted and was also blocked.'
+      : 'The provider rejected this image request.',
+    'Do not retry the same prompt or minor wording variants in this turn; stop tool attempts, tell the user the provider blocked the image request, and ask for a safer non-explicit direction.',
+    `Provider error: ${toErrorMessage(error)}`,
+    ...(fallbackBlocked ? [`Fallback error: ${toErrorMessage(options.fallbackError)}`] : []),
+  ].join(' ');
+  return textResultWithError(message, true) as AgentToolResult<TDetails>;
+}
+
+function buildSelfImageContentPolicyFallbackPrompt(prompt: string): string {
+  const sanitized = prompt
+    .replace(/\b(sexy|sensual|seductive|flirty|sultry|erotic|provocative|boudoir)\b/gi, 'confident')
+    .replace(/\boff[- ]shoulder\b/gi, 'cozy')
+    .replace(/\brumpled sheets?\b/gi, 'soft decor')
+    .replace(/\bbedroom\b/gi, 'studio interior')
+    .replace(/\binviting\b/gi, 'warm')
+    .replace(/\bknowing smile\b/gi, 'gentle smile')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 800);
+  const basePrompt = sanitized || 'A tasteful companion self-portrait';
+  return [
+    basePrompt,
+    'Tasteful fully clothed companion self-portrait.',
+    'Natural everyday styling, calm confident expression, non-explicit pose, neutral indoor background.',
+  ].join(' ');
+}
+
 async function executeMediaGenerate(
   ops: ImageOperations,
   reviewer: ImageVisionReviewer | undefined,
@@ -387,6 +444,9 @@ async function executeMediaGenerate(
       details: buildMediaResultDetails(result, review.visionReview, review.visionReviewError),
     };
   } catch (error) {
+    if (isProviderContentPolicyError(error)) {
+      return contentPolicyBlockedResult<MediaToolResultDetails>('media generate', error);
+    }
     return textResultWithError(`media generate failed: ${toErrorMessage(error)}`, true);
   }
 }
@@ -443,6 +503,9 @@ async function executeMediaEdit(
       details: buildMediaResultDetails(result, review.visionReview, review.visionReviewError),
     };
   } catch (error) {
+    if (isProviderContentPolicyError(error)) {
+      return contentPolicyBlockedResult<MediaToolResultDetails>('media edit', error);
+    }
     return textResultWithError(`media edit failed: ${toErrorMessage(error)}`, true);
   }
 }
@@ -659,8 +722,13 @@ export function createImageCreateTool(
               defaultToSavedReference: true,
             })
           : null;
-        const result = reference
-          ? await ops.edit({
+        let mode: 'create' | 'edit' = reference ? 'edit' : 'create';
+        let reviewPrompt = params.prompt;
+        let notice: string | undefined;
+        let result: ImageGenerationResult;
+        if (reference) {
+          try {
+            result = await ops.edit({
               prompt: params.prompt,
               imageUrls: [reference.dataUrl],
               provider: params.provider,
@@ -676,8 +744,58 @@ export function createImageCreateTool(
               seed: params.seed,
               sourceToolName: toolName,
               referenceImageIds: [reference.id],
-            })
-          : await ops.create({
+            });
+          } catch (error) {
+            if (!selfImage || !isProviderContentPolicyError(error)) {
+              throw error;
+            }
+            const fallbackPrompt = buildSelfImageContentPolicyFallbackPrompt(params.prompt);
+            try {
+              const fallbackResult = await ops.create({
+                prompt: fallbackPrompt,
+                provider: params.provider,
+                model: params.model,
+                numImages: params.num_images,
+                width: params.width,
+                height: params.height,
+                aspectRatio: params.aspect_ratio,
+                resolution: params.resolution,
+                imageSize: params.image_size,
+                background: params.background,
+                outputFormat: params.output_format,
+                seed: params.seed,
+                guidanceScale: params.guidance_scale,
+                numInferenceSteps: params.num_inference_steps,
+                acceleration: params.acceleration,
+                enablePromptExpansion: params.enable_prompt_expansion,
+                enableSafetyChecker: params.enable_safety_checker,
+                negativePrompt: params.negative_prompt,
+                useTurbo: params.use_turbo,
+                sourceToolName: toolName,
+              });
+              result = {
+                ...fallbackResult,
+                fallbackUsed: true,
+                fallbackReason: fallbackResult.fallbackReason
+                  ?? 'selfie_reference_content_policy_fresh_generation',
+              };
+              mode = 'create';
+              reviewPrompt = fallbackPrompt;
+              notice = [
+                'Reference image edit was blocked by the image provider content policy.',
+                'Generated a fresh non-reference self-portrait with a safer prompt instead.',
+              ].join(' ');
+            } catch (fallbackError) {
+              if (isProviderContentPolicyError(fallbackError)) {
+                return contentPolicyBlockedResult<ImageToolResultDetails>(toolName, error, {
+                  fallbackError,
+                });
+              }
+              throw fallbackError;
+            }
+          }
+        } else {
+          result = await ops.create({
               prompt: params.prompt,
               provider: params.provider,
               model: params.model,
@@ -699,15 +817,16 @@ export function createImageCreateTool(
               useTurbo: params.use_turbo,
               sourceToolName: toolName,
             });
-        chargePaidImageGeneration(result, reference ? 'edit' : 'generate');
+        }
+        chargePaidImageGeneration(result, mode === 'edit' ? 'edit' : 'generate');
         const review = await reviewGeneratedImages(reviewer, {
           imageUrls: result.images.map((image) => image.url),
           imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
-          prompt: params.prompt,
-          mode: reference ? 'edit' : 'create',
+          prompt: reviewPrompt,
+          mode,
         });
         return {
-          content: buildToolContent(result, review.visionReview, review.visionReviewError),
+          content: buildToolContent(result, review.visionReview, review.visionReviewError, notice),
           details: {
             imageResult: result,
             ...(review.visionReview ? { visionReview: review.visionReview } : {}),
@@ -715,6 +834,9 @@ export function createImageCreateTool(
           },
         };
       } catch (error) {
+        if (isProviderContentPolicyError(error)) {
+          return contentPolicyBlockedResult<ImageToolResultDetails>(toolName, error);
+        }
         return textResultWithError(`${toolName} failed: ${toErrorMessage(error)}`, true);
       }
     },
@@ -834,6 +956,9 @@ export function createImageEditTool(
           },
         };
       } catch (error) {
+        if (isProviderContentPolicyError(error)) {
+          return contentPolicyBlockedResult<ImageToolResultDetails>('image_edit', error);
+        }
         return textResultWithError(`image_edit failed: ${toErrorMessage(error)}`, true);
       }
     },

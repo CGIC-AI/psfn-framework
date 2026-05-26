@@ -387,6 +387,111 @@ describe('image tools', () => {
     expect(result.details.imageResult?.requestId).toBe('req-selfie-ref-1');
   });
 
+  it('falls back to fresh generation when a referenced selfie edit hits provider content policy', async () => {
+    const providerBlock = new Error(
+      'FAL edit result fetch failed (422): {"detail":[{"type":"content_policy_violation","msg":"The content could not be processed because it contained material flagged by a content checker."}]}',
+    );
+    const ops = {
+      create: vi.fn(async () => ({
+        provider: 'fal',
+        mode: 'create' as const,
+        model: 'fal-ai/nano-banana-2',
+        fallbackUsed: false,
+        requestId: 'req-selfie-fallback-1',
+        images: [{
+          url: 'https://images.example.test/selfie-fallback.png',
+          contentType: 'image/png',
+          fileName: 'selfie-fallback.png',
+          localPath: '/tmp/selfie-fallback.png',
+        }],
+      })),
+      edit: vi.fn(async () => {
+        throw providerBlock;
+      }),
+    };
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => ({
+        question: 'Describe the generated image.',
+        summary: 'The fallback portrait is fully clothed and coherent.',
+        model: 'vision-model',
+        imageCount: 1,
+      })),
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+
+    const tool = createSelfieTool(ops, reviewer, { referenceResolver });
+    const result = await tool.execute('tool-call-selfie-policy-fallback', {
+      prompt: 'Purrsephone in a soft oversized off-shoulder knit sweater, flirty expression, cozy bedroom background with rumpled sheets',
+      aspect_ratio: '3:4',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    expect(ops.edit).toHaveBeenCalledWith(expect.objectContaining({
+      imageUrls: ['data:image/png;base64,cmVm'],
+      sourceToolName: 'selfie_create',
+      referenceImageIds: ['ref-default'],
+    }));
+    expect(ops.create).toHaveBeenCalledWith(expect.objectContaining({
+      aspectRatio: '3:4',
+      sourceToolName: 'selfie_create',
+    }));
+    const fallbackParams = ops.create.mock.calls[0]?.[0] as { prompt: string };
+    expect(fallbackParams.prompt).toContain('Tasteful fully clothed companion self-portrait');
+    expect(fallbackParams.prompt).not.toMatch(/flirty|off[- ]shoulder|rumpled sheets|bedroom/i);
+    expect(reviewer.analyze).toHaveBeenCalledWith({
+      imageUrls: ['https://images.example.test/selfie-fallback.png'],
+      imageLocalPaths: ['/tmp/selfie-fallback.png'],
+      prompt: fallbackParams.prompt,
+      mode: 'create',
+    });
+    expect(result.details.imageResult?.fallbackUsed).toBe(true);
+    expect(result.details.imageResult?.fallbackReason).toBe('selfie_reference_content_policy_fresh_generation');
+    expect(resultText(result)).toContain('Reference image edit was blocked');
+    expect(resultText(result)).toContain('"requestId": "req-selfie-fallback-1"');
+  });
+
+  it('tells agents to stop retrying selfie prompts when policy fallback is also blocked', async () => {
+    const providerBlock = new Error(
+      'FAL edit result fetch failed (422): {"detail":[{"type":"content_policy_violation","msg":"The content could not be processed because it contained material flagged by a content checker."}]}',
+    );
+    const ops = {
+      create: vi.fn(async () => {
+        throw providerBlock;
+      }),
+      edit: vi.fn(async () => {
+        throw providerBlock;
+      }),
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+
+    const tool = createSelfieTool(ops, undefined, { referenceResolver });
+    const result = await tool.execute('tool-call-selfie-policy-blocked', {
+      prompt: 'a flirty bedroom selfie',
+      aspect_ratio: '3:4',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    expect(ops.edit).toHaveBeenCalledTimes(1);
+    expect(ops.create).toHaveBeenCalledTimes(1);
+    expect(result.details.isError).toBe(true);
+    expect(resultText(result)).toContain('selfie_create was blocked by the image provider content policy');
+    expect(resultText(result)).toContain('A fresh-generation fallback was attempted and was also blocked');
+    expect(resultText(result)).toContain('Do not retry the same prompt');
+    expect(resultText(result)).toContain('stop tool attempts');
+  });
+
   it('lets image_edit append a selected reference photo to the edit inputs', async () => {
     const ops = {
       create: vi.fn(),

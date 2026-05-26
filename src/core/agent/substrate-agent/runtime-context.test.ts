@@ -374,6 +374,32 @@ describe('runtime subject identity', () => {
     expect(authorContext.speakerRole).toBe('user');
   });
 
+  it('marks system-prefixed external turns as system speakers even without provenance', async () => {
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        channelId: 'api:general',
+        channelType: 'api',
+        authorId: 'system:subagent-task',
+        authorName: 'SubagentTask',
+      }),
+      contactStore: null,
+      logger: {
+        warn: () => undefined,
+        debug: () => undefined,
+      },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    expect(authorContext).toMatchObject({
+      trustLevel: 'regular',
+      speakerRole: 'system',
+      resolvedUserName: 'SubagentTask',
+      continuitySubjectKey: 'system:subagent-task',
+      continuityFallbackKeys: [],
+    });
+  });
+
   it('resolves generated handoff trust from source provenance without treating it as user speech', async () => {
     const getByChannelIdentity = vi.fn(() => ({
       id: 'contact-v',

@@ -666,7 +666,12 @@ describe('ImageService', () => {
       const url = String(input);
       if (url === 'https://queue.fal.run/fal-ai/nano-banana-2') {
         return jsonResponse(
-          { error: 'content policy violation' },
+          {
+            detail: [{
+              type: 'content_policy_violation',
+              msg: 'The content could not be processed because it contained material flagged by a content checker.',
+            }],
+          },
           { status: 422 },
         );
       }

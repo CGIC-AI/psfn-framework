@@ -96,6 +96,10 @@ function buildTestRegistry(chat: ModelSlot, background: ModelSlot): CanonicalMod
   };
 }
 
+function parseEntryMetadata(entry: { metadata?: string | null | undefined }): Record<string, unknown> {
+  return JSON.parse(String(entry.metadata ?? '{}')) as Record<string, unknown>;
+}
+
 const CHAT_SLOT: ModelSlot = {
   model: 'deepseek/deepseek-v3.2',
   provider: 'openrouter',
@@ -190,7 +194,15 @@ describe('SubagentFaculty', () => {
 
     const entries = sessionStore.getRecent(`subagent:${result.subagentId}`, 10);
     expect(entries).toHaveLength(2);
-    expect(entries[0]?.content).toBe('inspect runtime state');
+    expect(entries[0]).toMatchObject({
+      role: 'system',
+      authorId: 'system:subagent-task',
+      authorName: 'SubagentTask',
+    });
+    expect(parseEntryMetadata(entries[0] ?? {})).toMatchObject({
+      turn: { speakerRole: 'system' },
+    });
+    expect(entries[0]?.content).toBe('[SYSTEM: SubagentTask] inspect runtime state');
     expect(entries[1]?.content).toBe('task completed');
   });
 
@@ -257,7 +269,12 @@ describe('SubagentFaculty', () => {
       },
     });
     expect(taskView.transcript).toHaveLength(2);
-    expect(taskView.transcript[0]?.content).toBe('capture runtime state');
+    expect(taskView.transcript[0]).toMatchObject({
+      role: 'system',
+      authorId: 'system:subagent-task',
+      authorName: 'SubagentTask',
+    });
+    expect(taskView.transcript[0]?.content).toBe('[SYSTEM: SubagentTask] capture runtime state');
     expect(taskView.transcript[1]?.content).toBe('task completed');
     expect(taskView.artifacts).toEqual([
       expect.objectContaining({
@@ -298,7 +315,12 @@ describe('SubagentFaculty', () => {
       lifecycleState: 'completed',
     });
     expect(detail?.view.task.lifecycleState).toBe('completed');
-    expect(detail?.view.transcript.some(entry => entry.content.includes('look at uncommitted changes first'))).toBe(true);
+    const followUpEntry = detail?.view.transcript.find(entry => entry.content.includes('look at uncommitted changes first'));
+    expect(followUpEntry).toMatchObject({
+      role: 'system',
+      authorId: 'system:subagent-control',
+      authorName: 'SubagentControl',
+    });
     expect(faculty.getResult(task.subagentId)).toMatchObject({
       subagentId: task.subagentId,
       lifecycleState: 'completed',
@@ -384,6 +406,14 @@ describe('SubagentFaculty', () => {
 
     const delegatedEntries = sessionStore.getRecent('api:wyoming:ha-main:voice-pe-kitchen', 10);
     expect(delegatedEntries).toHaveLength(2);
+    expect(delegatedEntries[0]).toMatchObject({
+      role: 'user',
+      authorId: 'wyoming-user:owner',
+      authorName: 'Wyoming Voice User',
+    });
+    expect(parseEntryMetadata(delegatedEntries[0] ?? {})).toMatchObject({
+      turn: { speakerRole: 'user' },
+    });
     expect(delegatedEntries[0]?.content).toBe('status check');
     expect(delegatedEntries[1]?.content).toBe('wyoming delegated response');
     expect(result.gatewayRouting).toEqual({

@@ -1271,6 +1271,16 @@ export async function resolveAuthorContext(input: {
     };
   }
 
+  if (input.message.authorId.startsWith('system:')) {
+    return {
+      trustLevel: 'regular',
+      speakerRole: 'system',
+      resolvedUserName: resolvePromptUserName(input.message),
+      continuitySubjectKey: input.message.authorId,
+      continuityFallbackKeys: [],
+    };
+  }
+
   if (!input.message.authorId || !input.contactStore) {
     return {
       trustLevel: 'regular',

@@ -65,6 +65,8 @@ const DEFAULT_SUBAGENT_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonl
 const APPRENTICE_SUBAGENT_TOOL_EXTRAS = ['contact_list'] as const;
 
 const BLOCKED_SUBAGENT_TOOL_NAMES = new Set(['subagent', 'spawn_subagent', 'spawn_shard', 'shard', 'load_tools', 'toolset']);
+const SUBAGENT_TASK_AUTHOR_ID = 'system:subagent-task';
+const SUBAGENT_TASK_AUTHOR_NAME = 'SubagentTask';
 const SUBAGENT_CONTROL_AUTHOR_ID = 'system:subagent-control';
 const SUBAGENT_CONTROL_AUTHOR_NAME = 'SubagentControl';
 
@@ -750,8 +752,8 @@ export class SubagentFaculty implements SubagentControlPort {
       id: subagentId,
       channelId: executionChannelId,
       channelType: resolveMessageChannelType(executionChannelId),
-      authorId: 'system',
-      authorName: 'SubagentFaculty',
+      authorId: SUBAGENT_TASK_AUTHOR_ID,
+      authorName: SUBAGENT_TASK_AUTHOR_NAME,
       content: request.task,
       timestamp: new Date(),
       routing: {

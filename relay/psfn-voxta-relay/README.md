@@ -27,32 +27,45 @@ The relay intentionally stays JSON-pass-through. It does not depend on
 Published executable on the VaM Windows machine:
 
 ```powershell
-.\PsfnVoxtaRelay.exe `
-  --remote http://purrsephone.local.vega.nyc:8789 `
-  --audio-folder "E:\VAM\Custom\Sounds\Voxta"
+.\PsfnVoxtaRelay.exe
 ```
 
 Configure the AcidBubbles plugin to `127.0.0.1:8789`.
+
+The published folder includes `appsettings.json` beside the EXE:
+
+```json
+{
+  "PsfnVoxtaRelay": {
+    "ListenUrl": "http://127.0.0.1:8789",
+    "Remote": "http://purrsephone.local.vega.nyc:8789",
+    "AudioFolder": "E:\\VAM\\Custom\\Sounds\\Voxta",
+    "RemoteBearerToken": ""
+  }
+}
+```
 
 From source:
 
 ```powershell
 dotnet run --project relay/psfn-voxta-relay/PsfnVoxtaRelay.csproj -- `
-  --remote http://purrsephone.local.vega.nyc:8789 `
-  --audio-folder "E:\VAM\Custom\Sounds\Voxta"
+  --config relay/psfn-voxta-relay/appsettings.json
 ```
 
 ## Config
 
-| CLI option | Environment variable | Default |
-| --- | --- | --- |
-| `--listen` | `PSFN_VOXTA_RELAY_LISTEN_URL` | `http://127.0.0.1:8789` |
-| `--remote-hub` | `PSFN_VOXTA_RELAY_REMOTE_HUB_URL` | `http://purrsephone.local.vega.nyc:8789/hub` |
-| `--api` | `PSFN_VOXTA_RELAY_REMOTE_API_BASE_URL` | inferred from remote hub URL |
-| `--audio-folder` | `PSFN_VOXTA_RELAY_AUDIO_FOLDER` | temp folder fallback |
-| `--token` | `PSFN_VOXTA_RELAY_REMOTE_BEARER_TOKEN` | unset |
+| CLI option | Config key | Environment variable | Default |
+| --- | --- | --- | --- |
+| `--config` | n/a | `PSFN_VOXTA_RELAY_CONFIG` | `appsettings.json` next to the EXE |
+| `--remote` | `Remote` | `PSFN_VOXTA_RELAY_REMOTE_URL` | required unless `RemoteHubUrl` is set |
+| `--listen` | `ListenUrl` | `PSFN_VOXTA_RELAY_LISTEN_URL` | `http://127.0.0.1:8789` |
+| `--remote-hub` | `RemoteHubUrl` | `PSFN_VOXTA_RELAY_REMOTE_HUB_URL` | inferred from `Remote` |
+| `--api` | `RemoteApiBaseUrl` | `PSFN_VOXTA_RELAY_REMOTE_API_BASE_URL` | inferred from remote hub URL |
+| `--audio-folder` | `AudioFolder` | `PSFN_VOXTA_RELAY_AUDIO_FOLDER` | temp folder fallback |
+| `--token` | `RemoteBearerToken` | `PSFN_VOXTA_RELAY_REMOTE_BEARER_TOKEN` | unset |
 
 `--remote <url>` is a shortcut for `--remote-hub <url>/hub` and `--api <url>`.
+Precedence is CLI, then environment, then `appsettings.json`.
 
 ## Build
 

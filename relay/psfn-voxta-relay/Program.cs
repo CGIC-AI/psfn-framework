@@ -606,11 +606,14 @@ public sealed record RelayOptions(
         PSFN Voxta Relay
 
         Usage:
-          PsfnVoxtaRelay.exe --remote http://purrsephone.local.vega.nyc:8789 --audio-folder "E:\VAM\Custom\Sounds\Voxta"
+          PsfnVoxtaRelay.exe
+          PsfnVoxtaRelay.exe --config .\appsettings.json
+          PsfnVoxtaRelay.exe --remote http://your-hub:8789 --audio-folder "E:\VAM\Custom\Sounds\Voxta"
 
         Options:
+          --config <path>       JSON config file. Default: appsettings.json next to the executable.
           --remote <url>         Satellite hub base URL. Sets --remote-hub to <url>/hub and --api to <url>.
-          --remote-hub <url>     Full upstream SignalR hub URL. Default: http://purrsephone.local.vega.nyc:8789/hub
+          --remote-hub <url>     Full upstream SignalR hub URL.
           --api <url>            Upstream REST/API base URL. Default: inferred from --remote-hub
           --listen <url>         Local VaM listen URL. Default: http://127.0.0.1:8789
           --audio-folder <path>  Fallback VaM audio folder. The plugin authenticate packet can override this.
@@ -618,6 +621,8 @@ public sealed record RelayOptions(
           --help                 Print this help.
 
         Environment variable equivalents:
+          PSFN_VOXTA_RELAY_CONFIG
+          PSFN_VOXTA_RELAY_REMOTE_URL
           PSFN_VOXTA_RELAY_LISTEN_URL
           PSFN_VOXTA_RELAY_REMOTE_HUB_URL
           PSFN_VOXTA_RELAY_REMOTE_API_BASE_URL
@@ -633,24 +638,41 @@ public sealed record RelayOptions(
     public static RelayOptions FromArgs(string[] args)
     {
         var cli = ParseArgs(args);
-        var remoteBaseRaw = ReadCli(cli, "remote", "server");
+        var configPath = ReadCli(cli, "config")
+            ?? Environment.GetEnvironmentVariable("PSFN_VOXTA_RELAY_CONFIG")?.Trim()
+            ?? Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+        var fileConfig = RelayFileConfig.Load(configPath);
+
+        var remoteBaseRaw = ReadCli(cli, "remote", "server")
+            ?? Environment.GetEnvironmentVariable("PSFN_VOXTA_RELAY_REMOTE_URL")?.Trim()
+            ?? fileConfig.Remote;
         Uri? remoteBaseUrl = null;
         if (!string.IsNullOrWhiteSpace(remoteBaseRaw))
         {
             remoteBaseUrl = new Uri(remoteBaseRaw);
         }
 
-        var listenUrl = ReadCli(cli, "listen", "listen-url")
-            ?? ReadEnvironment("PSFN_VOXTA_RELAY_LISTEN_URL", "http://127.0.0.1:8789");
-        var remoteHubUrl = new Uri(
-            ReadCli(cli, "remote-hub", "hub")
+        var listenUrl = Read(
+            ReadCli(cli, "listen", "listen-url"),
+            "PSFN_VOXTA_RELAY_LISTEN_URL",
+            fileConfig.ListenUrl,
+            "http://127.0.0.1:8789");
+        var remoteHubRaw = ReadCli(cli, "remote-hub", "hub")
             ?? Environment.GetEnvironmentVariable("PSFN_VOXTA_RELAY_REMOTE_HUB_URL")?.Trim()
+            ?? fileConfig.RemoteHubUrl
             ?? (remoteBaseUrl is not null
                 ? InferHubUrl(remoteBaseUrl).ToString()
-                : "http://purrsephone.local.vega.nyc:8789/hub"));
+                : null);
+        if (string.IsNullOrWhiteSpace(remoteHubRaw))
+        {
+            throw new ArgumentException(
+                "Remote hub URL is required. Set PsfnVoxtaRelay.Remote, PsfnVoxtaRelay.RemoteHubUrl, --remote, --remote-hub, PSFN_VOXTA_RELAY_REMOTE_URL, or PSFN_VOXTA_RELAY_REMOTE_HUB_URL.");
+        }
+        var remoteHubUrl = new Uri(remoteHubRaw);
         var remoteApiBaseUrl = new Uri(
             ReadCli(cli, "api", "remote-api")
             ?? Environment.GetEnvironmentVariable("PSFN_VOXTA_RELAY_REMOTE_API_BASE_URL")?.Trim()
+            ?? fileConfig.RemoteApiBaseUrl
             ?? (remoteBaseUrl is not null
                 ? InferApiBaseUrl(remoteBaseUrl).ToString()
                 : null)
@@ -658,25 +680,26 @@ public sealed record RelayOptions(
         var fallbackAudioFolder = Read(
             ReadCli(cli, "audio-folder", "audio"),
             "PSFN_VOXTA_RELAY_AUDIO_FOLDER",
+            fileConfig.AudioFolder,
             Path.Combine(Path.GetTempPath(), "psfn-voxta-relay-audio"));
         var token = ReadCli(cli, "token", "bearer-token")
-            ?? Environment.GetEnvironmentVariable("PSFN_VOXTA_RELAY_REMOTE_BEARER_TOKEN");
+            ?? Environment.GetEnvironmentVariable("PSFN_VOXTA_RELAY_REMOTE_BEARER_TOKEN")
+            ?? fileConfig.RemoteBearerToken;
         return new RelayOptions(listenUrl, remoteHubUrl, remoteApiBaseUrl, fallbackAudioFolder, token);
     }
 
-    private static string Read(string? cliValue, string environmentName, string fallback)
+    private static string Read(string? cliValue, string environmentName, string? configValue, string fallback)
     {
         if (!string.IsNullOrWhiteSpace(cliValue))
         {
             return cliValue.Trim();
         }
-        return ReadEnvironment(environmentName, fallback);
-    }
-
-    private static string ReadEnvironment(string name, string fallback)
-    {
-        var value = Environment.GetEnvironmentVariable(name);
-        return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+        var environmentValue = Environment.GetEnvironmentVariable(environmentName);
+        if (!string.IsNullOrWhiteSpace(environmentValue))
+        {
+            return environmentValue.Trim();
+        }
+        return string.IsNullOrWhiteSpace(configValue) ? fallback : configValue.Trim();
     }
 
     private static string? ReadCli(Dictionary<string, string> cli, params string[] names)
@@ -754,5 +777,57 @@ public sealed record RelayOptions(
     {
         var normalizedBase = basePath == "/" ? "" : basePath.TrimEnd('/');
         return $"{normalizedBase}/{path.TrimStart('/')}";
+    }
+}
+
+public sealed record RelayFileConfig(
+    string? Remote,
+    string? ListenUrl,
+    string? RemoteHubUrl,
+    string? RemoteApiBaseUrl,
+    string? AudioFolder,
+    string? RemoteBearerToken)
+{
+    public static RelayFileConfig Empty { get; } = new(null, null, null, null, null, null);
+
+    public static RelayFileConfig Load(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+        {
+            return Empty;
+        }
+
+        using var document = JsonDocument.Parse(File.ReadAllBytes(path));
+        var root = document.RootElement;
+        if (root.ValueKind != JsonValueKind.Object)
+        {
+            return Empty;
+        }
+        var section = TryGetProperty(root, "PsfnVoxtaRelay", "psfnVoxtaRelay") ?? root;
+        return new RelayFileConfig(
+            ReadString(section, "Remote", "remote", "Server", "server"),
+            ReadString(section, "ListenUrl", "listenUrl", "Listen", "listen"),
+            ReadString(section, "RemoteHubUrl", "remoteHubUrl", "RemoteHub", "remoteHub", "Hub", "hub"),
+            ReadString(section, "RemoteApiBaseUrl", "remoteApiBaseUrl", "Api", "api", "RemoteApi", "remoteApi"),
+            ReadString(section, "AudioFolder", "audioFolder", "Audio", "audio"),
+            ReadString(section, "RemoteBearerToken", "remoteBearerToken", "Token", "token", "BearerToken", "bearerToken"));
+    }
+
+    private static JsonElement? TryGetProperty(JsonElement element, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (element.TryGetProperty(name, out var value))
+            {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static string? ReadString(JsonElement element, params string[] names)
+    {
+        var value = TryGetProperty(element, names);
+        return value?.ValueKind == JsonValueKind.String ? value.Value.GetString() : null;
     }
 }

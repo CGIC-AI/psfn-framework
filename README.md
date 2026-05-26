@@ -357,9 +357,7 @@ For remote VaM use, run the repo-local relay on the VaM Windows machine and
 point the AcidBubbles plugin at that single local endpoint:
 
 ```powershell
-.\PsfnVoxtaRelay.exe `
-  --remote http://purrsephone.local.vega.nyc:8789 `
-  --audio-folder "E:\VAM\Custom\Sounds\Voxta"
+.\PsfnVoxtaRelay.exe
 ```
 
 The relay exposes local SignalR `/hub` for VaM, forwards REST `/api/...` routes
@@ -368,6 +366,8 @@ VaM audio folder, rewrites audio URLs to local file paths, and owns Windows
 microphone capture when the hub emits `recordingRequest`. Set
 `VOXTA_STT_STREAM_ENABLED=true` on the hub so the relay opens the remote
 `/ws/audio/input/stream?sessionId=<guid>` websocket and streams 16 kHz mono PCM.
+Edit the relay's published `appsettings.json` next to the EXE to set the remote
+hub URL and VaM audio folder.
 
 For VaM vision capture, enable the plugin's ComputerVision service and at least
 one AcidBubbles source toggle (`Screen` or `Eyes`). On the next user turn, the

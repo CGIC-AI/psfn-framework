@@ -26,6 +26,8 @@ class FakeAgent implements AgentRuntimeAdapter {
     channel?: PsfnChannelContext;
   }> = [];
 
+  constructor(private readonly chunks: string[] = ["Hello", " from PSFN"]) {}
+
   async *streamReply(input: {
     userText: string;
     conversationId?: string;
@@ -33,9 +35,10 @@ class FakeAgent implements AgentRuntimeAdapter {
     channel?: PsfnChannelContext;
   }): AsyncGenerator<string, string, void> {
     this.calls.push(input);
-    yield "Hello";
-    yield " from PSFN";
-    return "Hello from PSFN";
+    for (const chunk of this.chunks) {
+      yield chunk;
+    }
+    return this.chunks.join("");
   }
 
   async close(): Promise<void> {}
@@ -307,6 +310,48 @@ test("Voxta facade uses selected VaM character id as assistant sender", async ()
     await waitForCompletion(frames, "send-character");
     assert.equal(replyGenerating.senderId, selectedCharacterId);
     assert.equal(replyChunk.senderId, selectedCharacterId);
+  } finally {
+    socket?.close();
+    await server.close();
+  }
+});
+
+test("Voxta facade sends Latin-1-safe reply text to VaM clients", async () => {
+  const agent = new FakeAgent(["Wait", "\u2014what\u2026 \u201Cyes\u201D"]);
+  const server = new RealtimeHubServer(testHubConfig(), { agent, voxtaTts: null });
+  let socket: WebSocket | null = null;
+
+  try {
+    await server.start();
+    const address = server.address() as AddressInfo;
+    socket = await openSocket(`ws://127.0.0.1:${address.port}/hub`);
+    const frames: unknown[] = [];
+    socket.on("message", (raw) => {
+      frames.push(...decodeSignalRFrames(raw));
+    });
+
+    socket.send(encodeFrame({ protocol: "json", version: 1 }));
+    await waitForFrame(frames, (frame) => isRecord(frame) && Object.keys(frame).length === 0);
+    socket.send(encodeFrame(invocation("auth-latin1", acidBubblesAuthenticate())));
+    await waitForVoxta(frames, "configuration");
+    await waitForCompletion(frames, "auth-latin1");
+    socket.send(encodeFrame(invocation("start-latin1", { $type: "startChat" })));
+    const chatStarted = await waitForVoxta(frames, "chatStarted");
+    await waitForCompletion(frames, "start-latin1");
+
+    socket.send(encodeFrame(invocation("send-latin1", {
+      $type: "send",
+      sessionId: chatStarted.sessionId,
+      text: "say it",
+    })));
+    const replyChunk = await waitForVoxta(frames, "replyChunk");
+    await waitForCompletion(frames, "send-latin1");
+
+    assert.equal(replyChunk.text, "Wait-what... \"yes\"");
+    assert.equal(replyChunk.endIndex, String(replyChunk.text).length);
+    assert.equal([...String(replyChunk.text)].every((char) => char.charCodeAt(0) <= 0xff), true);
+    assert.equal(agent.calls.length, 1);
+    assert.equal(agent.calls[0]?.userText, "say it");
   } finally {
     socket?.close();
     await server.close();

@@ -825,16 +825,17 @@ class VoxtaConnection {
     responseText = responseText.trim();
     this.deps.sessions.append(this.sessionId, { role: "assistant", content: responseText });
     const audioUrl = await this.createSpeechArtifact(messageId, responseText);
+    const wireResponseText = sanitizeVoxtaWireText(responseText);
     await this.sendReceive({
       $type: "replyChunk",
       sessionId: this.sessionId,
       messageId,
       senderId: this.assistant.id,
       role: this.assistant.role,
-      text: responseText,
+      text: wireResponseText,
       audioUrl,
       startIndex: 0,
-      endIndex: responseText.length,
+      endIndex: wireResponseText.length,
       isNarration: false,
       audioGapMs: 0,
       timestamp: new Date().toISOString(),
@@ -989,8 +990,9 @@ class VoxtaConnection {
     if (this.socket.readyState !== WebSocket.OPEN) {
       return;
     }
+    const wirePayload = sanitizeVoxtaWireValue(payload) as Record<string, unknown>;
     await new Promise<void>((resolve, reject) => {
-      this.socket.send(`${JSON.stringify(payload)}${SIGNALR_RECORD_SEPARATOR}`, (error) => {
+      this.socket.send(`${JSON.stringify(wirePayload)}${SIGNALR_RECORD_SEPARATOR}`, (error) => {
         if (error) {
           reject(error);
           return;
@@ -1668,6 +1670,31 @@ function collectVoxtaContextTexts(value: unknown): string[] {
 
 function normalizeVoxtaTemplateTokens(input: string): string {
   return input.replaceAll(/\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g, "{{$1}}");
+}
+
+function sanitizeVoxtaWireValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return sanitizeVoxtaWireText(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeVoxtaWireValue(item));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, sanitizeVoxtaWireValue(item)]),
+  );
+}
+
+function sanitizeVoxtaWireText(input: string): string {
+  return input
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, "\"")
+    .replace(/[\u2013\u2014\u2015\u2212]/g, "-")
+    .replace(/\u2026/g, "...")
+    .replace(/\u00A0/g, " ")
+    .replace(/[^\u0000-\u00ff]/g, "?");
 }
 
 function defaultServiceState(): VoxtaServiceState {

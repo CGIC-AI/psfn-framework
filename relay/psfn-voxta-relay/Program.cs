@@ -207,6 +207,7 @@ public sealed class BridgeSession : IAsyncDisposable
 
         await RewriteAudioFieldAsync(node, "audioUrl");
         await RewriteAudioFieldAsync(node, "thinkingSpeechUrl");
+        SanitizeLatin1Strings(node);
 
         await _localClient.SendAsync("ReceiveMessage", node);
     }
@@ -305,6 +306,79 @@ public sealed class BridgeSession : IAsyncDisposable
             || (node?.GetValueKind() == JsonValueKind.String
                 && bool.TryParse(node.GetValue<string>(), out var value)
                 && value);
+    }
+
+    private static void SanitizeLatin1Strings(JsonNode? node)
+    {
+        switch (node)
+        {
+            case JsonObject obj:
+                foreach (var property in obj.ToArray())
+                {
+                    if (property.Value?.GetValueKind() == JsonValueKind.String)
+                    {
+                        obj[property.Key] = SanitizeLatin1Text(property.Value.GetValue<string>());
+                    }
+                    else
+                    {
+                        SanitizeLatin1Strings(property.Value);
+                    }
+                }
+                break;
+            case JsonArray array:
+                for (var index = 0; index < array.Count; index += 1)
+                {
+                    var item = array[index];
+                    if (item?.GetValueKind() == JsonValueKind.String)
+                    {
+                        array[index] = SanitizeLatin1Text(item.GetValue<string>());
+                    }
+                    else
+                    {
+                        SanitizeLatin1Strings(item);
+                    }
+                }
+                break;
+        }
+    }
+
+    private static string SanitizeLatin1Text(string input)
+    {
+        var output = new StringBuilder(input.Length);
+        foreach (var ch in input)
+        {
+            switch (ch)
+            {
+                case '\u2018':
+                case '\u2019':
+                case '\u201A':
+                case '\u201B':
+                    output.Append('\'');
+                    break;
+                case '\u201C':
+                case '\u201D':
+                case '\u201E':
+                case '\u201F':
+                    output.Append('"');
+                    break;
+                case '\u2013':
+                case '\u2014':
+                case '\u2015':
+                case '\u2212':
+                    output.Append('-');
+                    break;
+                case '\u2026':
+                    output.Append("...");
+                    break;
+                case '\u00A0':
+                    output.Append(' ');
+                    break;
+                default:
+                    output.Append(ch <= '\u00ff' ? ch : '?');
+                    break;
+            }
+        }
+        return output.ToString();
     }
 }
 

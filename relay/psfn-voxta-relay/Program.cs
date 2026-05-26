@@ -171,6 +171,7 @@ public sealed class BridgeSession : IAsyncDisposable
         {
             RewriteAuthenticate(node);
         }
+        SanitizeLatin1Strings(node);
 
         await _sendLock.WaitAsync(cancellationToken);
         try

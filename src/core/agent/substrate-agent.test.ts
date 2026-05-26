@@ -15,6 +15,7 @@ import { EmotionState } from '../emotion/state.js';
 import { parseSessionEmotionState } from '../emotion/session-metadata.js';
 import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
+import { buildDeferredToolHandoffMessage } from './deferred-tool-handoff.js';
 
 const TEST_COMPANION_NAME = 'Companion';
 const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
@@ -1298,12 +1299,20 @@ describe('SubstrateAgent.handleMessage', () => {
       deliveries.push(payload);
     });
 
+    const promptCallsBefore = promptSpy.mock.calls.length;
     mockAssistantResponse('Deferred continuation output');
-    await agent.handleMessage(makeMessage({
-      id: 'deferred-tool-handoff:action-42',
-      channelId: 'terminal:session-a',
-      channelType: 'terminal',
-      content: 'continue with deferred tools',
+    await agent.handleMessage(buildDeferredToolHandoffMessage('action-42', {
+      toolNames: ['image_edit'],
+      intendedAction: 'continue with deferred tools',
+      turn: {
+        turnId: 'source-turn-42',
+        requestId: 'source-turn-42',
+        channelId: 'terminal:session-a',
+        channelType: 'terminal',
+        authorId: 'user-1',
+        authorName: 'TestUser',
+        callType: 'chat',
+      },
     }));
 
     mockAssistantResponse('Foreground response');
@@ -1359,6 +1368,42 @@ describe('SubstrateAgent.handleMessage', () => {
           notificationReason: 'notify_deferred_user_task',
         }),
       ],
+    });
+
+    expect(sessionManager.recordUserMessage).toHaveBeenCalledTimes(1);
+    expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
+      'terminal:session-a',
+      'normal foreground request',
+      'user-1',
+      'TestUser',
+      undefined,
+      'user-1',
+      expect.objectContaining({
+        requestId: 'foreground-turn-1',
+        sourceMessageId: 'foreground-turn-1',
+      }),
+    );
+    expect(sessionManager.recordSystemMessage).toHaveBeenCalledWith(
+      'terminal:session-a',
+      '[SYSTEM: Tool Handoff] continue with deferred tools',
+      'system:tool_handoff',
+      'Tool Handoff',
+      undefined,
+      'user-1',
+      expect.objectContaining({
+        requestId: 'deferred-tool-handoff:action-42',
+        sourceMessageId: 'deferred-tool-handoff:action-42',
+      }),
+    );
+    expect(promptSpy.mock.calls[promptCallsBefore]?.[0]).toMatchObject({
+      role: 'custom',
+      type: 'systemNote',
+      messageClass: MESSAGE_CLASSES.systemNote,
+      content: '[SYSTEM: Tool Handoff] continue with deferred tools',
+    });
+    expect(promptSpy.mock.calls[promptCallsBefore + 1]?.[0]).toMatchObject({
+      role: 'user',
+      content: 'normal foreground request',
     });
 
     expect(agent.getBackgroundContinuationTasks()).toEqual([

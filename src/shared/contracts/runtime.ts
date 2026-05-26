@@ -171,6 +171,14 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   embodimentContext?: EmbodimentPresenceMetadata;
 }
 
+export interface GeneratedMessageProvenanceMetadata {
+  kind: 'deferred_tool_handoff';
+  sourceMessageId: string;
+  sourceChannelId: string;
+  sourceAuthorId: string;
+  sourceAuthorName: string;
+}
+
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'satellite' | 'unknown';
   /**
@@ -192,6 +200,8 @@ export interface MessageRoutingMetadata {
    *  channel identity resolution. Allows Garden admin chat to route to the correct
    *  contact (with nickname etc.) regardless of API auth principal identity. */
   canonicalContactId?: string;
+  /** Internal provenance for generated messages so runtime handoffs do not masquerade as user-authored turns. */
+  generated?: GeneratedMessageProvenanceMetadata;
 }
 
 export interface SubstrateMessage {

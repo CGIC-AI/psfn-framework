@@ -4,6 +4,8 @@ import { CHANNEL_TYPES, type ChannelType, type MessageRoutingMetadata, type Obse
 export const DEFERRED_TOOL_HANDOFF_ACTION_KIND = 'tool_handoff.continue';
 export const DEFAULT_DEFERRED_TOOL_HANDOFF_MAX_RETRIES = 2;
 export const DEFERRED_TOOL_HANDOFF_MESSAGE_ID_PREFIX = 'deferred-tool-handoff:';
+export const DEFERRED_TOOL_HANDOFF_AUTHOR_ID = 'system:tool_handoff';
+export const DEFERRED_TOOL_HANDOFF_AUTHOR_NAME = 'Tool Handoff';
 const MAX_DEFERRED_TOOL_HANDOFF_MAX_RETRIES = 4;
 
 const VALID_CHANNEL_TYPES = new Set<ChannelType>(CHANNEL_TYPES);
@@ -230,11 +232,20 @@ export function buildDeferredToolHandoffMessage(
     id: `${DEFERRED_TOOL_HANDOFF_MESSAGE_ID_PREFIX}${actionId}`,
     channelId: payload.turn.sessionId ?? payload.turn.channelId,
     channelType: payload.turn.channelType,
-    authorId: payload.turn.authorId,
-    authorName: payload.turn.authorName,
+    authorId: DEFERRED_TOOL_HANDOFF_AUTHOR_ID,
+    authorName: DEFERRED_TOOL_HANDOFF_AUTHOR_NAME,
     content: payload.intendedAction,
     timestamp: new Date(),
     ...(payload.turn.isDirectMessage !== undefined ? { isDirectMessage: payload.turn.isDirectMessage } : {}),
-    ...(payload.turn.routing ? { routing: { ...payload.turn.routing } } : {}),
+    routing: {
+      ...(payload.turn.routing ?? {}),
+      generated: {
+        kind: 'deferred_tool_handoff',
+        sourceMessageId: payload.turn.turnId,
+        sourceChannelId: payload.turn.channelId,
+        sourceAuthorId: payload.turn.authorId,
+        sourceAuthorName: payload.turn.authorName,
+      },
+    },
   };
 }

@@ -1,5 +1,9 @@
 import type { AgentTool } from '@mariozechner/pi-agent-core';
-import type { SubstrateMessage, ResponseStyle } from '../../../shared/contracts/runtime.js';
+import type {
+  GeneratedMessageProvenanceMetadata,
+  SubstrateMessage,
+  ResponseStyle,
+} from '../../../shared/contracts/runtime.js';
 import {
   CHARGE_POLICY_RUNTIME_LANE_VALUES,
   CHARGE_POLICY_SURFACE_VALUES,
@@ -113,6 +117,33 @@ const ANALYSIS_WORKBENCH_EXTENSION_SURFACE: ChargePolicySurface = 'analysisWorkb
 
 function isRecordValue(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function normalizeGeneratedMessageProvenance(
+  value: unknown,
+): GeneratedMessageProvenanceMetadata | null {
+  if (!isRecordValue(value)) return null;
+  if (value.kind !== 'deferred_tool_handoff') return null;
+  const sourceMessageId = trimNonEmptyString(value.sourceMessageId);
+  const sourceChannelId = trimNonEmptyString(value.sourceChannelId);
+  const sourceAuthorId = trimNonEmptyString(value.sourceAuthorId);
+  const sourceAuthorName = trimNonEmptyString(value.sourceAuthorName);
+  if (!sourceMessageId || !sourceChannelId || !sourceAuthorId || !sourceAuthorName) {
+    return null;
+  }
+  return {
+    kind: 'deferred_tool_handoff',
+    sourceMessageId,
+    sourceChannelId,
+    sourceAuthorId,
+    sourceAuthorName,
+  };
 }
 
 function isChargePolicyRuntimeLane(value: string): value is ChargePolicyRuntimeLane {
@@ -1100,6 +1131,80 @@ export function resolvePromptUserName(message: SubstrateMessage, contact?: Conta
   return 'User';
 }
 
+async function resolveGeneratedMessageSourceContext(input: {
+  message: SubstrateMessage;
+  contactStore: ContactStorePort | null | undefined;
+  logger: RuntimeContextLogger;
+  provenance: GeneratedMessageProvenanceMetadata;
+}): Promise<Omit<ResolvedAuthorContext, 'speakerRole' | 'resolvedUserName'> | null> {
+  const generatedSourceMessage: SubstrateMessage = {
+    ...input.message,
+    id: input.provenance.sourceMessageId,
+    channelId: input.provenance.sourceChannelId,
+    authorId: input.provenance.sourceAuthorId,
+    authorName: input.provenance.sourceAuthorName,
+  };
+  const fallbackContinuitySubjectKey = resolveContinuitySubjectKey({
+    subjectIdentityKey: input.provenance.sourceAuthorId,
+    authorId: input.provenance.sourceAuthorId,
+  });
+
+  if (!input.contactStore) {
+    return {
+      trustLevel: 'regular',
+      continuitySubjectKey: fallbackContinuitySubjectKey,
+      continuityFallbackKeys: [],
+    };
+  }
+
+  try {
+    const channel = resolveIdentityChannel(generatedSourceMessage);
+    const canonicalHint = input.message.routing?.canonicalContactId?.trim();
+    const hintedContact = canonicalHint ? await input.contactStore.getById(canonicalHint) : undefined;
+    const contact = hintedContact
+      ?? await input.contactStore.getByChannelIdentity(channel, input.provenance.sourceAuthorId);
+    const canonicalContactKey = contact?.id ?? canonicalHint;
+    const explicitChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy);
+    const channelPrivacyLevel = explicitChannelPrivacy
+      ?? (
+        contact && canonicalContactKey
+          ? normalizeChannelVisibility(
+            await input.contactStore.getConversationChannelPrivacy(
+              canonicalContactKey,
+              channel,
+              input.provenance.sourceChannelId,
+            ),
+          )
+          : undefined
+      );
+
+    return {
+      trustLevel: contact?.trustLevel ?? 'regular',
+      ...(canonicalContactKey ? { canonicalContactKey } : {}),
+      continuitySubjectKey: resolveContinuitySubjectKey({
+        canonicalContactKey,
+        subjectIdentityKey: input.provenance.sourceAuthorId,
+        authorId: input.provenance.sourceAuthorId,
+      }),
+      ...(channelPrivacyLevel ? { channelPrivacyLevel } : {}),
+      continuityFallbackKeys: canonicalContactKey
+        ? collectContinuityFallbackKeys(input.provenance.sourceAuthorId, canonicalContactKey, contact)
+        : [],
+    };
+  } catch (error) {
+    input.logger.warn('Failed to resolve generated message source identity for trust/context routing', {
+      authorId: input.provenance.sourceAuthorId,
+      channelId: input.provenance.sourceChannelId,
+      error: toErrorMessage(error),
+    });
+    return {
+      trustLevel: 'regular',
+      continuitySubjectKey: fallbackContinuitySubjectKey,
+      continuityFallbackKeys: [],
+    };
+  }
+}
+
 export async function resolveAuthorContext(input: {
   message: SubstrateMessage;
   contactStore: ContactStorePort | null | undefined;
@@ -1142,6 +1247,27 @@ export async function resolveAuthorContext(input: {
       canonicalContactKey: input.message.authorId,
       continuitySubjectKey: input.message.authorId,
       continuityFallbackKeys: [],
+    };
+  }
+
+  const generatedProvenance = normalizeGeneratedMessageProvenance(input.message.routing?.generated);
+  if (input.message.authorId.startsWith('system:') && generatedProvenance) {
+    const generatedSourceContext = await resolveGeneratedMessageSourceContext({
+      message: input.message,
+      contactStore: input.contactStore,
+      logger: input.logger,
+      provenance: generatedProvenance,
+    });
+    const canonicalContactKey = generatedSourceContext?.canonicalContactKey;
+
+    return {
+      trustLevel: generatedSourceContext?.trustLevel ?? 'regular',
+      speakerRole: 'system',
+      resolvedUserName: resolvePromptUserName(input.message),
+      ...(canonicalContactKey ? { canonicalContactKey } : {}),
+      continuitySubjectKey: generatedSourceContext?.continuitySubjectKey ?? input.message.authorId,
+      ...(generatedSourceContext?.channelPrivacyLevel ? { channelPrivacyLevel: generatedSourceContext.channelPrivacyLevel } : {}),
+      continuityFallbackKeys: generatedSourceContext?.continuityFallbackKeys ?? [],
     };
   }
 

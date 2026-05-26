@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
@@ -372,6 +372,68 @@ describe('runtime subject identity', () => {
     });
 
     expect(authorContext.speakerRole).toBe('user');
+  });
+
+  it('resolves generated handoff trust from source provenance without treating it as user speech', async () => {
+    const getByChannelIdentity = vi.fn(() => ({
+      id: 'contact-v',
+      discordUserId: undefined,
+      displayName: 'V',
+      trustLevel: 'trusted',
+      relationshipType: 'partner',
+      firstSeen: '2026-03-17T12:00:00Z',
+      lastSeen: '2026-03-17T12:00:00Z',
+      channelIdentities: [{ channel: 'api', userId: 'api-user-1' }],
+    }));
+    const getConversationChannelPrivacy = vi.fn(() => 'private');
+    const updateLastSeen = vi.fn();
+    const recordChannelActivity = vi.fn();
+
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        id: 'deferred-tool-handoff:action-1',
+        channelId: 'api:session-1',
+        channelType: 'api',
+        authorId: 'system:tool_handoff',
+        authorName: 'Tool Handoff',
+        routing: {
+          generated: {
+            kind: 'deferred_tool_handoff',
+            sourceMessageId: 'source-turn-1',
+            sourceChannelId: 'api:session-1',
+            sourceAuthorId: 'api-user-1',
+            sourceAuthorName: 'V',
+          },
+        },
+      }),
+      contactStore: {
+        getById: () => undefined,
+        getByChannelIdentity,
+        getConversationChannelPrivacy,
+        updateLastSeen,
+        recordChannelActivity,
+      } as never,
+      logger: {
+        warn: () => undefined,
+        debug: () => undefined,
+      },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    expect(authorContext).toMatchObject({
+      trustLevel: 'trusted',
+      speakerRole: 'system',
+      resolvedUserName: 'Tool Handoff',
+      canonicalContactKey: 'contact-v',
+      continuitySubjectKey: 'contact-v',
+      channelPrivacyLevel: 'private',
+      continuityFallbackKeys: ['api-user-1'],
+    });
+    expect(getByChannelIdentity).toHaveBeenCalledWith('api', 'api-user-1');
+    expect(getConversationChannelPrivacy).toHaveBeenCalledWith('contact-v', 'api', 'api:session-1');
+    expect(updateLastSeen).not.toHaveBeenCalled();
+    expect(recordChannelActivity).not.toHaveBeenCalled();
   });
 
   it('renders charge budget guidance outside the static prompt prefix', () => {

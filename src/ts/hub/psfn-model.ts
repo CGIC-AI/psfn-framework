@@ -230,9 +230,9 @@ export class PsfnModelAdapter implements AgentRuntimeAdapter {
       config: this.runtime.satelliteClaim,
       satelliteClaim,
     }));
-    headers["X-PSFN-Satellite-Claim"] = JSON.stringify(satelliteClaim);
-    headers["X-PSFN-Channel-Metadata"] = JSON.stringify(channelMetadata);
-    return headers;
+    headers["X-PSFN-Satellite-Claim"] = JSON.stringify(sanitizeHeaderJsonValue(satelliteClaim));
+    headers["X-PSFN-Channel-Metadata"] = JSON.stringify(sanitizeHeaderJsonValue(channelMetadata));
+    return sanitizeHttpHeaders(headers);
   }
 
   private buildMessages(
@@ -303,6 +303,50 @@ function buildChannelMetadata(
     ...(channel.contextNotes?.length ? { contextNotes: normalizeContextNotes(channel.contextNotes) } : {}),
     satelliteClaim,
   };
+}
+
+function sanitizeHttpHeaders(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(headers).map(([key, value]) => [key, sanitizeHttpHeaderValue(value)]),
+  );
+}
+
+function sanitizeHeaderJsonValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    return sanitizeHttpHeaderValue(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitizeHeaderJsonValue(item));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, sanitizeHeaderJsonValue(item)]),
+    );
+  }
+  return value;
+}
+
+function sanitizeHttpHeaderValue(value: string): string {
+  let output = "";
+  for (const char of value) {
+    const codePoint = char.codePointAt(0) ?? 0;
+    if (codePoint === 0x2013 || codePoint === 0x2014) {
+      output += "-";
+    } else if (codePoint === 0x2018 || codePoint === 0x2019) {
+      output += "'";
+    } else if (codePoint === 0x201c || codePoint === 0x201d) {
+      output += "'";
+    } else if (codePoint === 0x2026) {
+      output += "...";
+    } else if (codePoint === 0x00a0) {
+      output += " ";
+    } else if (codePoint === 0x09 || (codePoint >= 0x20 && codePoint <= 0xff && codePoint !== 0x7f)) {
+      output += char;
+    } else {
+      output += "?";
+    }
+  }
+  return output.replace(/[\r\n]+/g, " ");
 }
 
 function buildContextualUserText(userText: string, channel: PsfnChannelContext): string {

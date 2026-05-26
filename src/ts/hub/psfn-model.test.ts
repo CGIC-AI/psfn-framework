@@ -215,8 +215,10 @@ test("psfn model adapter sends VaM vision captures as inline image blocks", asyn
 test("psfn model adapter injects retained VaM context into the active user turn", async () => {
   const originalFetch = globalThis.fetch;
   let capturedBody: Record<string, unknown> = {};
+  let capturedHeaders: Record<string, string> = {};
 
   globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    capturedHeaders = init?.headers as Record<string, string>;
     capturedBody = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
     return new Response(
       '{"choices":[{"message":{"role":"assistant","content":"I see it."}}]}',
@@ -249,7 +251,7 @@ test("psfn model adapter injects retained VaM context into the active user turn"
     activeSatellites: [],
     contextNotes: [{
       key: "VaM/Slot2",
-      text: "Purrsephone is standing.",
+      text: "The scene view shows Purrsephone's body and surroundings — use what you see.",
     }],
   };
 
@@ -265,12 +267,18 @@ test("psfn model adapter injects retained VaM context into the active user turn"
 
     assert.deepEqual(capturedBody.messages, [{
       role: "user",
-      content: "Current VaM context:\n- [VaM/Slot2] Purrsephone is standing.\n\nUser turn:\ncan you see?",
+      content: "Current VaM context:\n- [VaM/Slot2] The scene view shows Purrsephone's body and surroundings — use what you see.\n\nUser turn:\ncan you see?",
     }]);
     const channelMetadata = capturedBody.channel_metadata as Record<string, unknown>;
     assert.deepEqual(channelMetadata.contextNotes, [{
       key: "VaM/Slot2",
-      text: "Purrsephone is standing.",
+      text: "The scene view shows Purrsephone's body and surroundings — use what you see.",
+    }]);
+    const metadataHeader = capturedHeaders["X-PSFN-Channel-Metadata"] || "";
+    assert.equal([...metadataHeader].every((char) => (char.codePointAt(0) ?? 0) <= 0xff), true);
+    assert.deepEqual(JSON.parse(metadataHeader).contextNotes, [{
+      key: "VaM/Slot2",
+      text: "The scene view shows Purrsephone's body and surroundings - use what you see.",
     }]);
   } finally {
     globalThis.fetch = originalFetch;

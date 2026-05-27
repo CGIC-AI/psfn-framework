@@ -31,6 +31,7 @@ workspace/
 purrsephone/
 
 # SvelteKit admin UI
+.svelte-kit/
 admin-ui/node_modules/
 admin-ui/build/
 admin-ui/.svelte-kit/
@@ -46,3 +47,6 @@ admin-ui/.svelte-kit/
 
 # Local Fallow cache/workdir
 .fallow/
+
+# Beads / Dolt files (added by bd init)
+.beads-credential-key

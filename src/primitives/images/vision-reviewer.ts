@@ -17,6 +17,7 @@ import {
 import { resolveProviderApiKey } from '../../boundary/custody/credential-vault.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { extractTextContent } from '../llm/conversion.js';
+import { clampVisionCompletionMaxTokens } from '../llm/vision-limits.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import type {
   ImageMode,
@@ -147,7 +148,7 @@ function buildCandidateModelHint(candidate: RoutingCandidate) {
   return {
     provider: candidate.provider,
     model: candidate.model,
-    maxTokens: candidate.maxTokens,
+    maxTokens: clampVisionCompletionMaxTokens(candidate.maxTokens),
     pin: true,
     ...(candidate.contextWindow !== undefined ? { contextWindow: candidate.contextWindow } : {}),
     ...(candidate.thinkingEnabled !== undefined ? { thinkingEnabled: candidate.thinkingEnabled } : {}),
@@ -247,7 +248,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
       context,
       {
         apiKey: resolveApiKey(model, this.config),
-        maxTokens: model.maxTokens,
+        maxTokens: clampVisionCompletionMaxTokens(model.maxTokens),
       },
     );
     const summary = extractVisionResponseSummary(response);

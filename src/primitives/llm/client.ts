@@ -67,6 +67,7 @@ import {
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resolveRuntimeLaneClassForModelCall } from '../../core/agent/worker-lanes.js';
 import { ModelCallGate } from './model-call-gate.js';
+import { clampVisionCompletionMaxTokens } from './vision-limits.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -640,6 +641,19 @@ export class LLMClient {
     return this.dedupeCandidates([hintedCandidate, ...candidates]);
   }
 
+  private applyPurposeOutputLimits(
+    purpose: RoutingPurpose,
+    candidate: RoutingCandidate,
+  ): RoutingCandidate {
+    if (purpose !== 'vision') return candidate;
+    const maxTokens = clampVisionCompletionMaxTokens(candidate.maxTokens);
+    if (maxTokens === candidate.maxTokens) return candidate;
+    return {
+      ...candidate,
+      maxTokens,
+    };
+  }
+
   private buildPiContext(context: LLMContext): PiContext {
     return {
       systemPrompt: mergeSystemContextIntoSystemPrompt(context.systemPrompt, context.messages),
@@ -1198,18 +1212,19 @@ export class LLMClient {
 
     const candidates = this.resolveCandidates(purpose, options.modelHint);
     return this.fallbackRunner.run(purpose, candidates, async (candidate, attempt) => {
+      const effectiveCandidate = this.applyPurposeOutputLimits(purpose, candidate);
       this.evaluateBudgetPreflight(
         purpose,
-        candidate,
+        effectiveCandidate,
         options.estimatedInputTokens ?? 0,
         options.correlation,
       );
-      this.enforceImportRoutingPolicy(purpose, candidate);
+      this.enforceImportRoutingPolicy(purpose, effectiveCandidate);
       return await this.runWithModelCallGate(
         purpose,
-        candidate,
+        effectiveCandidate,
         options.correlation,
-        () => execute(candidate, attempt),
+        () => execute(effectiveCandidate, attempt),
         options.signal,
       );
     }, options.correlation);

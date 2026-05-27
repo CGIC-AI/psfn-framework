@@ -229,6 +229,7 @@ describe('DefaultImageVisionReviewer', () => {
       expect.objectContaining({
         modelHint: expect.objectContaining({
           model: 'fallback-vision-model',
+          maxTokens: 1024,
           pin: true,
         }),
       }),

@@ -1719,6 +1719,8 @@ describe('LLMClient correlation metadata', () => {
     const model = mocks.completeSimple.mock.calls[0][0] as { id: string; input: string[] };
     expect(model.id).toBe('openrouter/vision/model');
     expect(model.input).toContain('image');
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
+    expect(requestOptions.maxTokens).toBe(1024);
   });
 });
 
@@ -1967,6 +1969,77 @@ describe('LLMClient model budget gates and usage metering', () => {
       inputTokens: 9,
       outputTokens: 4,
     });
+  });
+
+  it('caps vision completion output tokens before routing through injected transport', async () => {
+    const config = makeConfig({
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'background',
+            rank: 10,
+            identity: {
+              provider: 'openrouter',
+              model: 'background/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'background', primary: true }],
+            capabilities: { maxOutputTokens: 2048, contextWindow: 64_000 },
+            tuning: { maxOutputTokens: 2048 },
+          },
+          {
+            id: 'vision',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'vision/model',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'vision', primary: true }],
+            capabilities: {
+              maxOutputTokens: 262_142,
+              contextWindow: 262_144,
+              supportsVision: true,
+            },
+            tuning: { maxOutputTokens: 262_142 },
+          },
+        ],
+      },
+    });
+    const transport = {
+      stream: vi.fn(),
+      complete: vi.fn(async () => ({
+        content: 'gateway-vision-result',
+        model: 'vision/model',
+        inputTokens: 1200,
+        outputTokens: 8,
+        stopReason: 'stop',
+        toolCalls: [],
+      })),
+    };
+    const client = new LLMClient(config, { transport: transport as any });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Describe this image' }],
+      },
+      'vision',
+    );
+
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
+    expect(transport.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelHint: expect.objectContaining({
+          model: 'vision/model',
+          provider: 'openrouter',
+          pin: true,
+          maxTokens: 1024,
+        }),
+      }),
+      'vision',
+    );
   });
 
   it('routes streaming through injected transport without calling direct provider transport', async () => {

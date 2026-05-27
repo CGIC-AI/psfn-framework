@@ -1,7 +1,7 @@
 {
-  "database": "dolt",
+  "database": "psfn-satelite-hub",
   "backend": "dolt",
   "dolt_mode": "server",
-  "dolt_database": "dolt",
+  "dolt_database": "psfn-satelite-hub",
   "project_id": "45bfc600-f8ff-4db0-955e-29b90f7cb4e7"
 }

@@ -52,3 +52,10 @@
 # - linear.api-key
 # - github.org
 # - github.repo
+dolt.shared-server: true
+
+dolt.database: "psfn-satelite-hub"
+
+federation.remote: "file:///home/vega/.local/share/beads-migration-backups/psfn-satelite-hub-shared"
+
+sync.remote: "file:///home/vega/.local/share/beads-migration-backups/psfn-satelite-hub-shared"

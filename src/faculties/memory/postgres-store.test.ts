@@ -50,6 +50,17 @@ interface MemoryRow {
   embedding: string | null;
 }
 
+function postgresMemoryMigrationSql(): string {
+  return POSTGRES_MEMORY_MIGRATIONS.join('\n').replace(/\s+/g, ' ').trim();
+}
+
+function expectMemoryMigrationSqlToContain(fragments: readonly string[]): void {
+  const migrationSql = postgresMemoryMigrationSql();
+  for (const fragment of fragments) {
+    expect(migrationSql).toContain(fragment.replace(/\s+/g, ' ').trim());
+  }
+}
+
 function decodeEmbeddingLiteral(value: string | null): number[] {
   if (!value) return [];
   const trimmed = value.trim();
@@ -284,10 +295,106 @@ afterEach(() => {
 
 describe('postgres memory store unit coverage', () => {
   it('keeps the supported postgres migration on l2_memories.embedding and omits the dead embeddings table', () => {
-    const migrationSql = POSTGRES_MEMORY_MIGRATIONS.join('\n');
+    const migrationSql = postgresMemoryMigrationSql();
     expect(migrationSql).toContain('CREATE EXTENSION IF NOT EXISTS vector;');
     expect(migrationSql).toContain('embedding VECTOR');
+    expect(migrationSql).toContain("source_type TEXT NOT NULL DEFAULT 'unknown'");
+    expect(migrationSql).toContain("provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb");
+    expect(migrationSql).toContain(
+      "ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'unknown';",
+    );
+    expect(migrationSql).toContain(
+      "ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb;",
+    );
     expect(migrationSql).not.toContain('CREATE TABLE IF NOT EXISTS l2_memory_embeddings');
+    expect(migrationSql).not.toContain('l2_memory_embeddings USING');
+  });
+
+  it('adds Sprint 9 L2 patch provenance and memory evolution schema', () => {
+    expectMemoryMigrationSqlToContain([
+      'CREATE TABLE IF NOT EXISTS l2_memory_patch_events',
+      'memory_id TEXT NOT NULL REFERENCES l2_memories(id) ON DELETE CASCADE',
+      'source_ref TEXT NOT NULL',
+      'source_type TEXT NOT NULL',
+      "provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb",
+      'patch_json JSONB NOT NULL',
+      'previous_json JSONB NOT NULL',
+      'next_json JSONB NOT NULL',
+      'created_at BIGINT NOT NULL',
+      'CREATE INDEX IF NOT EXISTS idx_l2_memory_patch_events_memory ON l2_memory_patch_events(memory_id, created_at DESC);',
+      'CREATE INDEX IF NOT EXISTS idx_l2_memory_patch_events_provenance_gin ON l2_memory_patch_events USING GIN (provenance_json);',
+      'CREATE TABLE IF NOT EXISTS memory_evolution_links',
+      'source_memory_id TEXT NOT NULL REFERENCES l2_memories(id) ON DELETE CASCADE',
+      'target_memory_id TEXT NOT NULL REFERENCES l2_memories(id) ON DELETE CASCADE',
+      "CHECK (relation IN ('supersedes', 'updates', 'negates', 'conflicts_with'))",
+      'CHECK (confidence >= 0 AND confidence <= 1)',
+      'UNIQUE (source_memory_id, target_memory_id, relation)',
+      'CREATE INDEX IF NOT EXISTS idx_memory_evolution_links_source ON memory_evolution_links(source_memory_id, created_at DESC);',
+      'CREATE INDEX IF NOT EXISTS idx_memory_evolution_links_target ON memory_evolution_links(target_memory_id, created_at DESC);',
+      'CREATE INDEX IF NOT EXISTS idx_memory_evolution_links_relation ON memory_evolution_links(relation, created_at DESC);',
+      'CREATE INDEX IF NOT EXISTS idx_memory_evolution_links_provenance_refs_gin ON memory_evolution_links USING GIN (provenance_refs);',
+    ]);
+  });
+
+  it('adds Sprint 9 L0.1 episodic tables with status, canonicalization, lineage, and overlap indexes', () => {
+    expectMemoryMigrationSqlToContain([
+      'CREATE TABLE IF NOT EXISTS l01_episodes',
+      "status TEXT NOT NULL DEFAULT 'canonical'",
+      'canonical_episode_id TEXT REFERENCES l01_episodes(id) ON DELETE SET NULL',
+      'merged_into_episode_id TEXT REFERENCES l01_episodes(id) ON DELETE SET NULL',
+      'superseded_by_episode_id TEXT REFERENCES l01_episodes(id) ON DELETE SET NULL',
+      'artifact_refs JSONB NOT NULL DEFAULT \'[]\'::jsonb',
+      'provenance_refs JSONB NOT NULL DEFAULT \'[]\'::jsonb',
+      'scope_json JSONB NOT NULL DEFAULT \'{}\'::jsonb',
+      'consent_flags JSONB NOT NULL DEFAULT \'{}\'::jsonb',
+      'embedding VECTOR',
+      'episode_json JSONB NOT NULL',
+      "CHECK (status IN ('candidate', 'canonical', 'merged', 'superseded'))",
+      'CREATE INDEX IF NOT EXISTS idx_l01_episodes_scope_time ON l01_episodes(channel_id, thread_id, started_at, ended_at);',
+      'CREATE INDEX IF NOT EXISTS idx_l01_episodes_embedding_present ON l01_episodes(id) WHERE embedding IS NOT NULL;',
+      'CREATE INDEX IF NOT EXISTS idx_l01_episodes_artifact_refs_gin ON l01_episodes USING GIN (artifact_refs);',
+      'CREATE TABLE IF NOT EXISTS l01_episode_spans',
+      'span_range TSTZRANGE',
+      'span_json JSONB NOT NULL',
+      'PRIMARY KEY (episode_id, span_id)',
+      'CREATE INDEX IF NOT EXISTS idx_l01_episode_spans_range_gist ON l01_episode_spans USING GIST (span_range);',
+      'CREATE TABLE IF NOT EXISTS l01_episode_arcs',
+      'canonical_arc_id TEXT REFERENCES l01_episode_arcs(id) ON DELETE SET NULL',
+      'merged_into_arc_id TEXT REFERENCES l01_episode_arcs(id) ON DELETE SET NULL',
+      'superseded_by_arc_id TEXT REFERENCES l01_episode_arcs(id) ON DELETE SET NULL',
+      'CREATE INDEX IF NOT EXISTS idx_l01_episode_arcs_artifact_refs_gin ON l01_episode_arcs USING GIN (artifact_refs);',
+      'CREATE TABLE IF NOT EXISTS l01_episode_lineage',
+      "CHECK (relation IN ('canonicalizes', 'merges', 'supersedes', 'splits_from', 'derived_from', 'conflicts_with', 'updates'))",
+      'CREATE INDEX IF NOT EXISTS idx_l01_episode_lineage_source ON l01_episode_lineage(source_episode_id, created_at DESC);',
+      'CREATE INDEX IF NOT EXISTS idx_l01_episode_lineage_target ON l01_episode_lineage(target_episode_id, created_at DESC);',
+    ]);
+  });
+
+  it('adds Sprint 9 processing watermarks, episode review workflow, and memory diagnostics schema', () => {
+    expectMemoryMigrationSqlToContain([
+      'CREATE TABLE IF NOT EXISTS l01_processing_watermarks',
+      'previous_watermark_json JSONB NOT NULL DEFAULT \'{}\'::jsonb',
+      'next_watermark_json JSONB NOT NULL DEFAULT \'{}\'::jsonb',
+      "CHECK (status IN ('active', 'reconciling', 'blocked', 'complete'))",
+      "CHECK (reconciliation_status IN ('pending', 'clean', 'needs_review', 'blocked'))",
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_l01_processing_watermarks_unique_scope',
+      'CREATE TABLE IF NOT EXISTS l01_episode_candidates',
+      'candidate_episode_id TEXT REFERENCES l01_episodes(id) ON DELETE SET NULL',
+      'canonical_episode_id TEXT REFERENCES l01_episodes(id) ON DELETE SET NULL',
+      'merged_into_episode_id TEXT REFERENCES l01_episodes(id) ON DELETE SET NULL',
+      'superseded_by_episode_id TEXT REFERENCES l01_episodes(id) ON DELETE SET NULL',
+      "CHECK (status IN ('pending', 'accepted', 'canonical', 'merged', 'superseded', 'rejected', 'needs_review'))",
+      'CREATE INDEX IF NOT EXISTS idx_l01_episode_candidates_watermark ON l01_episode_candidates(source_watermark_id, created_at DESC);',
+      'CREATE TABLE IF NOT EXISTS l01_episode_reviews',
+      "CHECK (recommended_action IN ('canonize', 'merge', 'supersede', 'reject', 'needs_human_review'))",
+      'CREATE INDEX IF NOT EXISTS idx_l01_episode_reviews_provenance_refs_gin ON l01_episode_reviews USING GIN (provenance_refs);',
+      'CREATE TABLE IF NOT EXISTS memory_processing_watermarks',
+      "CHECK (status IN ('active', 'blocked', 'complete'))",
+      'CREATE INDEX IF NOT EXISTS idx_memory_processing_watermarks_scope ON memory_processing_watermarks(scope_ref_kind, scope_ref_id);',
+      'CREATE TABLE IF NOT EXISTS memory_eval_runs',
+      "CHECK (status IN ('pending', 'running', 'passed', 'failed', 'blocked'))",
+      'CREATE INDEX IF NOT EXISTS idx_memory_eval_runs_artifacts_gin ON memory_eval_runs USING GIN (artifacts_json);',
+    ]);
   });
 
   it('supports writer and retriever flow behind MemoryStorePort', async () => {

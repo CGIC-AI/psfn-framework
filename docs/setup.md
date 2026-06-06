@@ -26,6 +26,7 @@ cp .env.example .env
 ```
 
 The root install also provisions `admin-ui/`.
+Default installs skip `onnxruntime-node`'s CUDA side-download and use the bundled CPU runtime. Set `ONNXRUNTIME_NODE_INSTALL_CUDA=v12` for an intentional ONNX Runtime CUDA binary install.
 
 ## What Goes In `.env`
 

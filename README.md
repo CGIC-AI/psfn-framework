@@ -76,6 +76,7 @@ cp .env.example .env
 ```
 
 The root `npm install` also provisions the Garden admin UI dependencies automatically.
+By default, the repo skips `onnxruntime-node`'s CUDA side-download and uses the bundled CPU runtime; set `ONNXRUNTIME_NODE_INSTALL_CUDA=v12` when intentionally installing ONNX Runtime CUDA binaries.
 
 Edit `.env` only for secrets and process/bootstrap wiring:
 

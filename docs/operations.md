@@ -73,7 +73,7 @@ The live alpha migration boundary is defined in [`docs/specifications.md`](./spe
 
 ## Persistence Backends
 
-SQLite remains the default backend for the repo-owned runtime, and PostgreSQL is supported behind the same ports for projection and memory surfaces without changing callers.
+PostgreSQL is the required backend for the repo-owned runtime. SQLite-backed stores are retained only for legacy migration utilities, explicit repair flows, and tests that exercise those adapters directly.
 
 Operational rules:
 
@@ -84,12 +84,12 @@ Operational rules:
 - If a backend or projection strategy changes, run `npm run lint`, `npm run build`, and targeted parity tests for the affected domains before treating the change as safe.
 - If projection drift is suspected, repair from the archive before trusting search results or operator views.
 - Use `npm run session:repair:transcript-projection` to rebuild the searchable transcript projection from authoritative JSONL L0 after drift, backend migration, or recovery work.
-- The repair utility accepts `--data-dir` and `--sessions-dir` overrides and follows the configured SQLite or PostgreSQL session projection backend through the port layer.
+- The repair utility accepts `--data-dir` and `--sessions-dir` overrides and targets the configured PostgreSQL session projection backend through the port layer.
 
 ## Backups And Integrity
 
 - Backup cadence and retention live in `backup.json` and `scheduler.json`.
-- Startup runs SQLite integrity checks.
+- Startup skips SQLite integrity checks for the PostgreSQL runtime backend.
 - Embedding-dimension mismatches are surfaced at startup.
 - Use this verification when backup behavior changes:
 
@@ -178,7 +178,7 @@ Check these first:
 - runtime mode and path layout wiring in `.env`
 - owner-file validity under `system-data/`
 - gateway socket path and process pairing
-- SQLite integrity and embedding-dimension warnings
+- PostgreSQL connectivity, migration, and embedding-dimension warnings
 - backup and migration manifests under the runtime backup root
 
 If behavior seems inconsistent with old docs, prefer the split-runtime topology: gateway owns the public API edge, operator owns Garden HTTP/UI, and agent owns the companion loop plus private admin transport.

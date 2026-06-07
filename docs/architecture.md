@@ -62,8 +62,8 @@ The agent talks to the gateway through `GatewayClient`, which acts as the LLM an
 
 ### Memory
 
-- `MemoryStore` uses SQLite plus `sqlite-vec`.
-- The intended backend shape is port-driven so SQLite can remain the default while PostgreSQL or future backends swap behind `MemoryStorePort`.
+- Runtime memory/session composition requires PostgreSQL-backed ports.
+- SQLite-backed stores remain legacy/migration/test surfaces and must not be selected by runtime defaults.
 - `EpisodicStore` owns the L0.1 `l01_episodes` and `l01_episode_arcs` tables. These records are bounded landmarks with L0 span/artifact provenance, not generic transcript summaries and not L2 typed memories.
 - `EpisodicSynthesizer` runs from rest/me-time sleeptime work after user inactivity. It can create multiple episodes for one day and links longer themes as graph arcs.
 - `MemoryRetriever` combines L0.1 landmark-chain retrieval, semantic retrieval, lexical fallback, trust filtering, emotional continuity, and optional compositional reranking.

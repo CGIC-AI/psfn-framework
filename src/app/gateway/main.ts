@@ -109,7 +109,6 @@ async function main(): Promise<void> {
     eventBus,
     eligibilityGate,
     privilegedServices,
-    auditDb,
     createGatewayServer,
   } = privilegedCore;
   const stopDebugObserver = attachTerminalDebugObserver(eventBus, { scope: 'gateway' });
@@ -166,13 +165,9 @@ async function main(): Promise<void> {
   });
   const { discord, telegram } = channelSurfaces;
 
-  if ((config.persistenceBackend ?? 'sqlite') === 'sqlite') {
-    log.info(`Audit log: ${bootstrap.auditDbPath}`);
-  } else {
-    log.info('Gateway audit persistence backend', {
-      persistenceBackend: config.persistenceBackend ?? 'sqlite',
-    });
-  }
+  log.info('Gateway audit persistence backend', {
+    persistenceBackend: config.persistenceBackend,
+  });
 
   // ── Create gateway server ──
 
@@ -236,12 +231,6 @@ async function main(): Promise<void> {
         { step: 'stop voice surfaces', action: () => voiceSurfaces.stop() },
         { step: 'stop gateway server', action: () => gateway.stop() },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
-        {
-          step: 'close audit database',
-          action: () => {
-            auditDb?.close();
-          },
-        },
       ], log);
       log.info('Stopped');
     })();

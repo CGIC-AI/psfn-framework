@@ -15,7 +15,7 @@ import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.j
 import { createIsolatedE2ERuntime } from './runtime-harness.js';
 import {
   composeIdentity,
-  composeSessionRuntime,
+  composeSessionRuntimeAsync,
   createEmbeddingProviderFromEnv,
   composeSubstrateAgent,
   wireMemoryRuntime,
@@ -69,7 +69,7 @@ async function main(): Promise<void> {
 
     // Core components
     const llmClient = createScriptedE2ELLMProvider();
-    const sessionComposition = composeSessionRuntime({ config });
+    const sessionComposition = await composeSessionRuntimeAsync({ config });
     const { sessionStore, sessionManager } = sessionComposition;
 
     // Embeddings

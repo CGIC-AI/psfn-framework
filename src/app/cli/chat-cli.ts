@@ -21,7 +21,7 @@ import {
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import {
   composeIdentity,
-  composeSessionRuntime,
+  composeSessionRuntimeAsync,
   createEmbeddingProviderFromConfig,
   composeSubstrateAgent,
   wireMemoryRuntime,
@@ -52,7 +52,7 @@ async function main(): Promise<void> {
 
   // Core components
   const llmClient = new LLMClient(config);
-  const sessionComposition = composeSessionRuntime({ config });
+  const sessionComposition = await composeSessionRuntimeAsync({ config });
   const { sessionStore, sessionManager } = sessionComposition;
 
   // Embeddings

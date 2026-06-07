@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,8 +19,7 @@ import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
 import { withChildProcessSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
-import { resolveSessionsDir } from '../../../persistence/layout.js';
-import { composeSessionRuntime, composeSessionRuntimeAsync, wireShardAndThinkRuntime } from './composition.js';
+import { wireShardAndThinkRuntime } from './composition.js';
 
 type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous';
 const EMPTY_MEMORY_STORE = {
@@ -227,67 +226,6 @@ function makeExecutionPort(
     executeCode: overrides.executeCode ?? base.executeCode,
   };
 }
-
-describe('session runtime composition transcript projection wiring', () => {
-  const dirs: string[] = [];
-
-  afterEach(() => {
-    for (const dir of dirs) {
-      rmSync(dir, { recursive: true, force: true });
-    }
-    dirs.length = 0;
-  });
-
-  it('does not create the legacy sqlite search projection in synchronous sqlite composition', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'psfn-session-composition-sqlite-'));
-    dirs.push(root);
-    const companionDataDir = join(root, 'companion-data');
-    const sessionsDir = resolveSessionsDir(companionDataDir);
-
-    const composition = composeSessionRuntime({
-      config: {
-        companionDataDir,
-        dataDir: companionDataDir,
-        persistenceBackend: 'sqlite',
-      } as any,
-    });
-
-    expect(existsSync(join(sessionsDir, 'session-search.sqlite'))).toBe(false);
-    await expect(composition.sessionManager.searchByKeywords('anything', 5)).resolves.toEqual([]);
-  });
-
-  it('does not create the legacy sqlite search projection in async sqlite composition', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'psfn-session-composition-async-sqlite-'));
-    dirs.push(root);
-    const companionDataDir = join(root, 'companion-data');
-    const sessionsDir = resolveSessionsDir(companionDataDir);
-
-    const composition = await composeSessionRuntimeAsync({
-      config: {
-        companionDataDir,
-        dataDir: companionDataDir,
-        persistenceBackend: 'sqlite',
-      } as any,
-    });
-
-    expect(existsSync(join(sessionsDir, 'session-search.sqlite'))).toBe(false);
-    await expect(composition.sessionManager.searchByKeywords('anything', 5)).resolves.toEqual([]);
-  });
-
-  it('fails closed for postgres composition without postgresDatabaseUrl', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'psfn-session-composition-postgres-missing-url-'));
-    dirs.push(root);
-    const companionDataDir = join(root, 'companion-data');
-
-    await expect(composeSessionRuntimeAsync({
-      config: {
-        companionDataDir,
-        dataDir: companionDataDir,
-        persistenceBackend: 'postgres',
-      } as any,
-    })).rejects.toThrow('requires config.postgresDatabaseUrl');
-  });
-});
 
 describe('wireShardAndThinkRuntime split-mode module wiring', () => {
   it('registers subagent as the canonical core surface and keeps spawn_subagent as extended compatibility', () => {

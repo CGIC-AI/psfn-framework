@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { LLMClient } from '../../primitives/llm/client.js';
-import { composeSubstrateAgent, composeIdentity, composeSessionRuntime } from '../startup/composition/composition.js';
+import { composeSubstrateAgent, composeIdentity, composeSessionRuntimeAsync } from '../startup/composition/composition.js';
 import { ElevenLabsTtsClient } from '../../primitives/voice/elevenlabs.js';
 import { DeepgramSttClient } from '../../primitives/voice/deepgram.js';
 import { createApiVoiceWebSocketRuntime } from '../../channels/api/voice-websocket-runtime.js';
@@ -383,10 +383,10 @@ async function main(): Promise<void> {
     console.log(`  Baseline transcript: ${seedBaselineTranscript}`);
     console.log(`  Baseline match: ${baselineMatch.pass} (${baselineMatch.score.toFixed(2)} | ${baselineMatch.reason})`);
 
-  // Build agent + voice runtime using real system components
+    // Build agent + voice runtime using real system components
     const eventBus = new EventBus();
     const llmClient = new LLMClient(config);
-    const { sessionManager } = composeSessionRuntime({ config });
+    const { sessionManager } = await composeSessionRuntimeAsync({ config });
     const agentLoop = composeSubstrateAgent({
       eventBus,
       llmProvider: llmClient,

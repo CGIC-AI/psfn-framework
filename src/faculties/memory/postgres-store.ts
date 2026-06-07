@@ -17,6 +17,9 @@ import type {
   MemoryAbstractionLinkInput,
   MemoryBulkUpdatePatch,
   MemoryDeleteVersion,
+  MemoryEvolutionLink,
+  MemoryEvolutionLinkInput,
+  MemoryEvolutionRelation,
   MemoryListOptions,
   MemoryLink,
   MemoryMaintenanceReview,
@@ -33,12 +36,16 @@ import type {
   ScratchpadEntryReplaceOptions,
   MemoryWriteCommit,
 } from './memory-store-port.js';
+import { MEMORY_EVOLUTION_RELATIONS } from './memory-store-port.js';
 import {
+  inferMemorySourceTypeFromSourceRef,
   normalizeConsentFlags,
   normalizeFormationVAD,
+  normalizeMemoryProvenance,
   normalizeMemoryScopeQuery,
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
+  normalizeMemorySourceType,
   type MemoryScopeQuery,
   type PurrMemory,
 } from './types.js';
@@ -112,6 +119,20 @@ interface MemoryAbstractionLinkRow {
   reason: string | null;
 }
 
+interface MemoryEvolutionLinkRow {
+  id: string;
+  source_memory_id: string;
+  target_memory_id: string;
+  relation: string;
+  confidence: number;
+  reason: string | null;
+  source_ref: string | null;
+  source_type: string | null;
+  provenance_refs: unknown;
+  provenance_json: unknown;
+  created_at: number;
+}
+
 interface MemoryLinkRow {
   id1: string;
   id2: string;
@@ -169,6 +190,11 @@ function decodeJsonObject(value: unknown): Record<string, number> {
   return out;
 }
 
+function decodeJsonRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+  return { ...(value as Record<string, unknown>) };
+}
+
 function decodeStringArray(value: unknown): string[] {
   return decodeJsonArray(value).map(item => item.trim()).filter(Boolean);
 }
@@ -224,6 +250,14 @@ function validateEmbeddingDimensions(embedding: Float32Array, expectedDims: numb
 
 function memoryKey(id1: string, id2: string): string {
   return [id1, id2].sort().join('::');
+}
+
+function memoryEvolutionKey(
+  sourceMemoryId: string,
+  targetMemoryId: string,
+  relation: MemoryEvolutionRelation,
+): string {
+  return `${sourceMemoryId}::${targetMemoryId}::${relation}`;
 }
 
 function clampLimit(limit: number | undefined, fallback: number, min: number, max: number): number {
@@ -313,6 +347,72 @@ function fromMaintenanceReviewRow(row: MemoryMaintenanceReviewPgRow): MemoryMain
   });
 }
 
+function normalizeEvolutionRelation(relation: MemoryEvolutionRelation): MemoryEvolutionRelation {
+  if ((MEMORY_EVOLUTION_RELATIONS as readonly string[]).includes(relation)) {
+    return relation;
+  }
+  throw new Error(`Invalid memory evolution relation: ${String(relation)}`);
+}
+
+function normalizeEvolutionConfidence(confidence: number | undefined): number {
+  const normalized = confidence ?? 1;
+  if (!Number.isFinite(normalized) || normalized < 0 || normalized > 1) {
+    throw new Error('Memory evolution link confidence must be between 0 and 1');
+  }
+  return normalized;
+}
+
+function normalizeEvolutionLinkInput(input: MemoryEvolutionLinkInput): MemoryEvolutionLink {
+  const sourceMemoryId = input.sourceMemoryId.trim();
+  const targetMemoryId = input.targetMemoryId.trim();
+  if (!sourceMemoryId || !targetMemoryId) {
+    throw new Error('sourceMemoryId and targetMemoryId are required');
+  }
+  if (sourceMemoryId === targetMemoryId) {
+    throw new Error('Memory evolution links require distinct source and target memories');
+  }
+  const sourceRef = input.sourceRef?.trim() || undefined;
+  const provenanceRefs = [...new Set((input.provenanceRefs ?? [])
+    .map(ref => ref.trim())
+    .filter(ref => ref.length > 0))];
+  const provenance = normalizeMemoryProvenance(input.provenance);
+  return {
+    id: input.linkId?.trim() || randomUUID(),
+    sourceMemoryId,
+    targetMemoryId,
+    relation: normalizeEvolutionRelation(input.relation),
+    confidence: normalizeEvolutionConfidence(input.confidence),
+    reason: input.reason?.trim() || undefined,
+    sourceRef,
+    sourceType: normalizeMemorySourceType(input.sourceType, sourceRef
+      ? inferMemorySourceTypeFromSourceRef(sourceRef)
+      : 'unknown'),
+    provenanceRefs,
+    ...(provenance ? { provenance } : {}),
+    createdAt: input.createdAt ?? Date.now(),
+  };
+}
+
+function fromEvolutionLinkRow(row: MemoryEvolutionLinkRow): MemoryEvolutionLink {
+  const relation = (MEMORY_EVOLUTION_RELATIONS as readonly string[]).includes(row.relation)
+    ? row.relation as MemoryEvolutionRelation
+    : 'updates';
+  const provenance = normalizeMemoryProvenance(decodeJsonRecord(row.provenance_json));
+  return {
+    id: row.id,
+    sourceMemoryId: row.source_memory_id,
+    targetMemoryId: row.target_memory_id,
+    relation,
+    confidence: row.confidence,
+    ...(row.reason ? { reason: row.reason } : {}),
+    ...(row.source_ref ? { sourceRef: row.source_ref } : {}),
+    sourceType: normalizeMemorySourceType(row.source_type),
+    provenanceRefs: decodeStringArray(row.provenance_refs),
+    ...(provenance ? { provenance } : {}),
+    createdAt: row.created_at,
+  };
+}
+
 function lexicalScore(memory: PurrMemory, query: string): number {
   const tokens = query
     .toLowerCase()
@@ -393,6 +493,7 @@ class PostgresMemoryStore implements MemoryStorePort {
   private embeddings = new Map<string, Float32Array>();
   private deleteVersions = new Map<string, MemoryDeleteVersion>();
   private abstractionLinks = new Map<string, MemoryAbstractionLink>();
+  private memoryEvolutionLinks = new Map<string, MemoryEvolutionLink>();
   private memoryLinks = new Map<string, MemoryLink>();
   private maintenanceReviews = new Map<string, MemoryMaintenanceReview>();
   private contactProfiles = new Map<string, ContactProfileArtifact>();
@@ -467,6 +568,21 @@ class PostgresMemoryStore implements MemoryStorePort {
         ...(row.reason ? { reason: row.reason } : {}),
       };
       this.abstractionLinks.set(link.id, link);
+    }
+
+    const evolutionLinkRows = await queryRows<MemoryEvolutionLinkRow>(this.pool, `
+      SELECT
+        id, source_memory_id, target_memory_id, relation, confidence, reason,
+        source_ref, source_type, provenance_refs, provenance_json, created_at
+      FROM memory_evolution_links
+    `);
+    for (const row of evolutionLinkRows) {
+      const link = fromEvolutionLinkRow(row);
+      this.memoryEvolutionLinks.set(memoryEvolutionKey(
+        link.sourceMemoryId,
+        link.targetMemoryId,
+        link.relation,
+      ), link);
     }
 
     const memoryLinkRows = await queryRows<MemoryLinkRow>(this.pool, `
@@ -879,6 +995,71 @@ class PostgresMemoryStore implements MemoryStorePort {
 
   async getAbstractionLinksForAbstractedMemory(abstractedMemoryId: string): Promise<MemoryAbstractionLink[]> {
     return Array.from(this.abstractionLinks.values()).filter(link => link.abstractedMemoryId === abstractedMemoryId);
+  }
+
+  async recordEvolutionLink(input: MemoryEvolutionLinkInput): Promise<MemoryEvolutionLink> {
+    const link = normalizeEvolutionLinkInput(input);
+    await this.persist(async () => {
+      await executeQuery(this.pool, `
+        INSERT INTO memory_evolution_links (
+          id, source_memory_id, target_memory_id, relation, confidence, reason,
+          source_ref, source_type, provenance_refs, provenance_json, created_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+        ON CONFLICT (source_memory_id, target_memory_id, relation) DO UPDATE SET
+          id = EXCLUDED.id,
+          confidence = EXCLUDED.confidence,
+          reason = EXCLUDED.reason,
+          source_ref = EXCLUDED.source_ref,
+          source_type = EXCLUDED.source_type,
+          provenance_refs = EXCLUDED.provenance_refs,
+          provenance_json = EXCLUDED.provenance_json,
+          created_at = EXCLUDED.created_at
+      `, [
+        link.id,
+        link.sourceMemoryId,
+        link.targetMemoryId,
+        link.relation,
+        link.confidence,
+        link.reason ?? null,
+        link.sourceRef ?? null,
+        link.sourceType,
+        serializeJsonValue(link.provenanceRefs),
+        serializeJsonValue(link.provenance ?? {}),
+        link.createdAt,
+      ]);
+    });
+    this.memoryEvolutionLinks.set(memoryEvolutionKey(
+      link.sourceMemoryId,
+      link.targetMemoryId,
+      link.relation,
+    ), link);
+    return link;
+  }
+
+  async getEvolutionLinksForSourceMemory(
+    sourceMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): Promise<MemoryEvolutionLink[]> {
+    const normalized = sourceMemoryId.trim();
+    if (!normalized) return [];
+    const normalizedRelation = relation ? normalizeEvolutionRelation(relation) : undefined;
+    return Array.from(this.memoryEvolutionLinks.values())
+      .filter(link => link.sourceMemoryId === normalized)
+      .filter(link => normalizedRelation === undefined || link.relation === normalizedRelation)
+      .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id));
+  }
+
+  async getEvolutionLinksForTargetMemory(
+    targetMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): Promise<MemoryEvolutionLink[]> {
+    const normalized = targetMemoryId.trim();
+    if (!normalized) return [];
+    const normalizedRelation = relation ? normalizeEvolutionRelation(relation) : undefined;
+    return Array.from(this.memoryEvolutionLinks.values())
+      .filter(link => link.targetMemoryId === normalized)
+      .filter(link => normalizedRelation === undefined || link.relation === normalizedRelation)
+      .sort((left, right) => right.createdAt - left.createdAt || right.id.localeCompare(left.id));
   }
 
   async getStats(): Promise<MemoryStoreStats> {

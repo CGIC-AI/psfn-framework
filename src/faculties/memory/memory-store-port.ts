@@ -7,7 +7,9 @@ import type {
   CoreMemorySnapshot,
 } from '../core-memory/store.js';
 import type {
+  MemoryProvenance,
   MemoryScopeQuery,
+  MemorySourceType,
   PurrMemory,
 } from './types.js';
 
@@ -44,6 +46,43 @@ export interface MemoryLink {
   id2: string;
   linkType: string;
   createdAt: number;
+}
+
+export const MEMORY_EVOLUTION_RELATIONS = [
+  'supersedes',
+  'updates',
+  'negates',
+  'conflicts_with',
+] as const;
+
+export type MemoryEvolutionRelation = typeof MEMORY_EVOLUTION_RELATIONS[number];
+
+export interface MemoryEvolutionLink {
+  id: string;
+  sourceMemoryId: string;
+  targetMemoryId: string;
+  relation: MemoryEvolutionRelation;
+  confidence: number;
+  reason?: string;
+  sourceRef?: string;
+  sourceType: MemorySourceType;
+  provenanceRefs: string[];
+  provenance?: MemoryProvenance;
+  createdAt: number;
+}
+
+export interface MemoryEvolutionLinkInput {
+  sourceMemoryId: string;
+  targetMemoryId: string;
+  relation: MemoryEvolutionRelation;
+  confidence?: number;
+  reason?: string;
+  sourceRef?: string;
+  sourceType?: MemorySourceType;
+  provenanceRefs?: string[];
+  provenance?: MemoryProvenance;
+  createdAt?: number;
+  linkId?: string;
 }
 
 export interface MemoryAbstractionLink {
@@ -263,6 +302,15 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   getAbstractionLinksForAbstractedMemory(
     abstractedMemoryId: string,
   ): Awaitable<MemoryAbstractionLink[]>;
+  recordEvolutionLink(input: MemoryEvolutionLinkInput): Awaitable<MemoryEvolutionLink>;
+  getEvolutionLinksForSourceMemory(
+    sourceMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): Awaitable<MemoryEvolutionLink[]>;
+  getEvolutionLinksForTargetMemory(
+    targetMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): Awaitable<MemoryEvolutionLink[]>;
   getStats(): Awaitable<MemoryStoreStats>;
   getMemoriesByChannel(channelId: string, limit: number): Awaitable<PurrMemory[]>;
   getMemoriesByContact(contactId: string, limit: number): Awaitable<PurrMemory[]>;
@@ -327,6 +375,15 @@ export interface MemoryStorePort extends ScratchpadProvider {
   recordAbstractionLink(input: MemoryAbstractionLinkInput): Promise<MemoryAbstractionLink>;
   getAbstractionLinksForSourceMemory(sourceMemoryId: string): Promise<MemoryAbstractionLink[]>;
   getAbstractionLinksForAbstractedMemory(abstractedMemoryId: string): Promise<MemoryAbstractionLink[]>;
+  recordEvolutionLink(input: MemoryEvolutionLinkInput): Promise<MemoryEvolutionLink>;
+  getEvolutionLinksForSourceMemory(
+    sourceMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): Promise<MemoryEvolutionLink[]>;
+  getEvolutionLinksForTargetMemory(
+    targetMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): Promise<MemoryEvolutionLink[]>;
   getStats(): Promise<MemoryStoreStats>;
   getMemoriesByChannel(channelId: string, limit: number): Promise<PurrMemory[]>;
   getMemoriesByContact(contactId: string, limit: number): Promise<PurrMemory[]>;
@@ -404,6 +461,13 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     ),
     getAbstractionLinksForAbstractedMemory: async (abstractedMemoryId) => (
       await store.getAbstractionLinksForAbstractedMemory(abstractedMemoryId)
+    ),
+    recordEvolutionLink: async (input) => await store.recordEvolutionLink(input),
+    getEvolutionLinksForSourceMemory: async (sourceMemoryId, relation) => (
+      await store.getEvolutionLinksForSourceMemory(sourceMemoryId, relation)
+    ),
+    getEvolutionLinksForTargetMemory: async (targetMemoryId, relation) => (
+      await store.getEvolutionLinksForTargetMemory(targetMemoryId, relation)
     ),
     getStats: async () => await store.getStats(),
     getMemoriesByChannel: async (channelId, limit) => await store.getMemoriesByChannel(channelId, limit),

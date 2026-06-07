@@ -2,11 +2,15 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { runInTransaction as runSqliteTransaction } from '../../../persistence/sqlite-utils.js';
 import type { MemoryJournal } from '../journal.js';
+import { MEMORY_EVOLUTION_RELATIONS } from '../memory-store-port.js';
 import type {
   MemoryAbstractionLink,
   MemoryAbstractionLinkInput,
   MemoryBulkUpdatePatch,
   MemoryDeleteVersion,
+  MemoryEvolutionLink,
+  MemoryEvolutionLinkInput,
+  MemoryEvolutionRelation,
   MemoryPatchEvent,
   MemorySoftDeleteOptions,
   MemoryStoreUpdatePatch,
@@ -26,12 +30,14 @@ import { embeddingToBuffer, validateEmbeddingDimensions } from './embeddings.js'
 import {
   mapMemoryAbstractionLinkRow,
   mapMemoryDeleteVersionRow,
+  mapMemoryEvolutionLinkRow,
   mapMemoryPatchEventRow,
   mapMemoryRow,
 } from './mappers.js';
 import type {
   MemoryAbstractionLinkRow,
   MemoryDeleteVersionRow,
+  MemoryEvolutionLinkRow,
   MemoryPatchEventRow,
   MemoryRow,
 } from './types.js';
@@ -481,6 +487,149 @@ export function getAbstractionLinksForAbstractedMemory(
     ORDER BY created_at DESC
   `).all(normalized) as MemoryAbstractionLinkRow[];
   return rows.map(mapMemoryAbstractionLinkRow);
+}
+
+function normalizeEvolutionRelation(relation: MemoryEvolutionRelation): MemoryEvolutionRelation {
+  if ((MEMORY_EVOLUTION_RELATIONS as readonly string[]).includes(relation)) {
+    return relation;
+  }
+  throw new Error(`Invalid memory evolution relation: ${String(relation)}`);
+}
+
+function normalizeEvolutionConfidence(confidence: number | undefined): number {
+  const normalized = confidence ?? 1;
+  if (!Number.isFinite(normalized) || normalized < 0 || normalized > 1) {
+    throw new Error('Memory evolution link confidence must be between 0 and 1');
+  }
+  return normalized;
+}
+
+function normalizeEvolutionLinkInput(input: MemoryEvolutionLinkInput): MemoryEvolutionLink {
+  const sourceMemoryId = input.sourceMemoryId.trim();
+  const targetMemoryId = input.targetMemoryId.trim();
+  if (!sourceMemoryId || !targetMemoryId) {
+    throw new Error('sourceMemoryId and targetMemoryId are required');
+  }
+  if (sourceMemoryId === targetMemoryId) {
+    throw new Error('Memory evolution links require distinct source and target memories');
+  }
+
+  const sourceRef = input.sourceRef?.trim() || undefined;
+  const provenanceRefs = [...new Set((input.provenanceRefs ?? [])
+    .map(ref => ref.trim())
+    .filter(ref => ref.length > 0))];
+  const provenance = normalizeMemoryProvenance(input.provenance);
+
+  return {
+    id: input.linkId?.trim() || randomUUID(),
+    sourceMemoryId,
+    targetMemoryId,
+    relation: normalizeEvolutionRelation(input.relation),
+    confidence: normalizeEvolutionConfidence(input.confidence),
+    reason: input.reason?.trim() || undefined,
+    sourceRef,
+    sourceType: normalizeMemorySourceType(input.sourceType, sourceRef
+      ? inferMemorySourceTypeFromSourceRef(sourceRef)
+      : 'unknown'),
+    provenanceRefs,
+    ...(provenance ? { provenance } : {}),
+    createdAt: input.createdAt ?? Date.now(),
+  };
+}
+
+export function recordEvolutionLink(
+  db: Database.Database,
+  input: MemoryEvolutionLinkInput,
+): MemoryEvolutionLink {
+  const link = normalizeEvolutionLinkInput(input);
+
+  db.prepare(`
+    INSERT INTO memory_evolution_links (
+      id,
+      source_memory_id,
+      target_memory_id,
+      relation,
+      confidence,
+      reason,
+      source_ref,
+      source_type,
+      provenance_refs,
+      provenance_json,
+      created_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(source_memory_id, target_memory_id, relation) DO UPDATE SET
+      id = excluded.id,
+      confidence = excluded.confidence,
+      reason = excluded.reason,
+      source_ref = excluded.source_ref,
+      source_type = excluded.source_type,
+      provenance_refs = excluded.provenance_refs,
+      provenance_json = excluded.provenance_json,
+      created_at = excluded.created_at
+  `).run(
+    link.id,
+    link.sourceMemoryId,
+    link.targetMemoryId,
+    link.relation,
+    link.confidence,
+    link.reason ?? null,
+    link.sourceRef ?? null,
+    link.sourceType,
+    JSON.stringify(link.provenanceRefs),
+    JSON.stringify(link.provenance ?? {}),
+    link.createdAt,
+  );
+
+  return link;
+}
+
+export function getEvolutionLinksForSourceMemory(
+  db: Database.Database,
+  sourceMemoryId: string,
+  relation?: MemoryEvolutionRelation,
+): MemoryEvolutionLink[] {
+  const normalized = sourceMemoryId.trim();
+  if (!normalized) return [];
+  const normalizedRelation = relation ? normalizeEvolutionRelation(relation) : undefined;
+  const rows = normalizedRelation
+    ? db.prepare(`
+      SELECT *
+      FROM memory_evolution_links
+      WHERE source_memory_id = ? AND relation = ?
+      ORDER BY created_at DESC, id DESC
+    `).all(normalized, normalizedRelation) as MemoryEvolutionLinkRow[]
+    : db.prepare(`
+      SELECT *
+      FROM memory_evolution_links
+      WHERE source_memory_id = ?
+      ORDER BY created_at DESC, id DESC
+    `).all(normalized) as MemoryEvolutionLinkRow[];
+  return rows.map(mapMemoryEvolutionLinkRow);
+}
+
+export function getEvolutionLinksForTargetMemory(
+  db: Database.Database,
+  targetMemoryId: string,
+  relation?: MemoryEvolutionRelation,
+): MemoryEvolutionLink[] {
+  const normalized = targetMemoryId.trim();
+  if (!normalized) return [];
+  const normalizedRelation = relation ? normalizeEvolutionRelation(relation) : undefined;
+  const rows = normalizedRelation
+    ? db.prepare(`
+      SELECT *
+      FROM memory_evolution_links
+      WHERE target_memory_id = ? AND relation = ?
+      ORDER BY created_at DESC, id DESC
+    `).all(normalized, normalizedRelation) as MemoryEvolutionLinkRow[]
+    : db.prepare(`
+      SELECT *
+      FROM memory_evolution_links
+      WHERE target_memory_id = ?
+      ORDER BY created_at DESC, id DESC
+    `).all(normalized) as MemoryEvolutionLinkRow[];
+  return rows.map(mapMemoryEvolutionLinkRow);
 }
 
 export function bulkDelete(db: Database.Database, ids: string[]): number {

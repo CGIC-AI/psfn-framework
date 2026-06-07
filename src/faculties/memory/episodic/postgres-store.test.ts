@@ -8,7 +8,7 @@ import {
   type Episode,
 } from '../../../shared/contracts/episodic-memory.js';
 import { PostgresEpisodicStore } from './postgres-store.js';
-import type { EpisodeArcWriteInput, EpisodeCreateInput } from './store.js';
+import type { EpisodeArcWriteInput, EpisodeCreateInput, EpisodeUpdateInput } from './store.js';
 
 interface StoredEpisodeRow {
   id: string;
@@ -90,6 +90,21 @@ class FakeEpisodicPool {
       };
       this.episodes.set(row.id, row);
       return queryResult([], 'INSERT');
+    }
+
+    if (normalized.startsWith('update l01_episodes set')) {
+      const row = this.episodes.get(String(values[0] ?? ''));
+      if (row) {
+        row.status = values[4] === null ? null : String(values[4] ?? '');
+        row.canonical_episode_id = values[5] === null ? null : String(values[5] ?? '');
+        row.merged_into_episode_id = values[6] === null ? null : String(values[6] ?? '');
+        row.superseded_by_episode_id = values[7] === null ? null : String(values[7] ?? '');
+        row.thread_id = values[8] === null ? null : String(values[8] ?? '');
+        row.started_at = String(values[10] ?? '');
+        row.ended_at = String(values[11] ?? '');
+        row.episode_json = values[21];
+      }
+      return queryResult([], 'UPDATE');
     }
 
     if (normalized.startsWith('insert into l01_episode_arcs')) {
@@ -247,6 +262,26 @@ function fullEpisode(input: EpisodeCreateInput, id: string): Episode {
   });
 }
 
+function updateFromEpisode(episode: Episode, overrides: Partial<EpisodeUpdateInput> = {}): EpisodeUpdateInput {
+  return {
+    id: episode.id,
+    title: episode.title,
+    landmark: episode.landmark,
+    startedAt: episode.startedAt,
+    endedAt: episode.endedAt,
+    threadId: episode.threadId,
+    channelId: episode.channelId,
+    participantContactIds: episode.participantContactIds,
+    salience: episode.salience,
+    affect: episode.affect,
+    themes: episode.themes,
+    spanRefs: episode.spanRefs,
+    artifactRefs: episode.artifactRefs,
+    provenanceRefs: episode.provenanceRefs,
+    ...overrides,
+  };
+}
+
 describe('PostgresEpisodicStore', () => {
   it('creates, gets, lists, and time-searches canonical episodes', async () => {
     const pool = new FakeEpisodicPool();
@@ -281,6 +316,37 @@ describe('PostgresEpisodicStore', () => {
     await expect(store.searchByThread('thread-alpha')).resolves.toEqual([first, second]);
     expect(pool.episodes.get('episode-1')?.episode_json).toBe(serializeEpisode(first));
     expect(pool.queries.some(query => query.text.includes("status IS NULL OR status = 'canonical'"))).toBe(true);
+  });
+
+  it('updates canonical episodes while preserving their creation timestamp', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeStore(pool);
+    const episode = await store.createEpisode(baseEpisode({ id: 'episode-1' }));
+
+    const updated = await store.updateEpisode(updateFromEpisode(episode, {
+      endedAt: '2026-03-30T10:08:00.000Z',
+      themes: [...episode.themes, 'consolidation'],
+      spanRefs: [
+        ...episode.spanRefs,
+        { spanId: 'span-2', channelId: 'discord:general', startedAt: '2026-03-30T10:05:00.000Z' },
+      ],
+      provenanceRefs: [
+        ...episode.provenanceRefs,
+        { kind: 'l0_span', refId: 'span-2' },
+      ],
+      updatedAt: '2026-04-02T00:00:00.000Z',
+    }));
+
+    expect(updated.createdAt).toBe(episode.createdAt);
+    expect(updated.updatedAt).toBe('2026-04-02T00:00:00.000Z');
+    expect(updated.themes).toEqual(['postgres', 'episodic-memory', 'consolidation']);
+    expect(pool.episodes.get('episode-1')).toMatchObject({
+      status: 'canonical',
+      canonical_episode_id: 'episode-1',
+      ended_at: '2026-03-30T10:08:00.000Z',
+      episode_json: serializeEpisode(updated),
+    });
+    await expect(store.getEpisode('episode-1')).resolves.toEqual(updated);
   });
 
   it('writes canonical arcs and lists only active canonical graph edges', async () => {

@@ -10,7 +10,7 @@ import type {
   EpisodeSalience,
   EpisodeSpanRef,
 } from '../../../shared/contracts/episodic-memory.js';
-import type { EpisodeArcWriteInput, EpisodeCreateInput, EpisodicStorePort } from './store.js';
+import type { EpisodeArcWriteInput, EpisodeCreateInput, EpisodeUpdateInput, EpisodicStorePort } from './store.js';
 
 export interface EpisodicSynthesisSessionReader {
   getRecentMessages(channelId: string, limit: number): SessionEntry[];
@@ -37,6 +37,22 @@ export interface EpisodicSynthesisRunResult {
   linkedArcs: EpisodeArc[];
 }
 
+export interface EpisodicSynthesisWatermarkScope {
+  sessionId: string;
+  threadId?: string;
+  channelId?: string;
+}
+
+export interface EpisodicSynthesisProcessingWatermark extends EpisodicSynthesisWatermarkScope {
+  highWaterTurnId?: string;
+  highWaterMessageId?: string;
+  processedStartedAt: string;
+  processedEndedAt: string;
+  updatedAt: string;
+  canonicalEpisodeIds: string[];
+  skippedEpisodeIds: string[];
+}
+
 interface EpisodeGroup {
   entries: SessionEntry[];
 }
@@ -44,6 +60,17 @@ interface EpisodeGroup {
 interface ThemeScore {
   theme: string;
   score: number;
+}
+
+type EpisodeCandidateInput = EpisodeCreateInput & { id: string };
+
+interface ConsolidationCandidateScore {
+  episode: Episode;
+  spanOverlapRatio: number;
+  themeOverlap: number;
+  artifactOverlap: number;
+  turnBoundaryOverlap: boolean;
+  timeGapMs: number;
 }
 
 const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 96;
@@ -54,6 +81,11 @@ const DEFAULT_MAX_ENTRIES_PER_EPISODE = 14;
 const MIN_CONVERSATIONAL_ENTRIES = 2;
 const MIN_SINGLE_ENTRY_CHARS = 120;
 const MIN_RELATED_THEME_OVERLAP = 1;
+const MIN_CONSOLIDATION_THEME_OVERLAP = 1;
+const MIN_CONSOLIDATION_SPAN_OVERLAP_RATIO = 0.5;
+const MAX_CONSOLIDATION_BOUNDARY_GAP_MS = 10 * 60_000;
+const MIN_CONSOLIDATION_SEARCH_WINDOW_MS = 2 * 60 * 60_000;
+const MAX_CONSOLIDATION_SEARCH_WINDOW_MS = 24 * 60 * 60_000;
 const MINUTE_MS = 60_000;
 const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const STOP_WORDS = new Set([
@@ -327,7 +359,7 @@ function buildProvenanceRefs(
 function buildEpisodeInput(
   sessionId: string,
   group: EpisodeGroup,
-): EpisodeCreateInput {
+): EpisodeCandidateInput {
   const entries = group.entries;
   const first = entries[0];
   const last = entries.at(-1);
@@ -403,6 +435,174 @@ function themeOverlap(left: readonly string[], right: readonly string[]): number
   return left.reduce((count, theme) => count + (rightSet.has(theme) ? 1 : 0), 0);
 }
 
+function mergeStringSets(left: readonly string[], right: readonly string[]): string[] {
+  return [...new Set([...left, ...right])].sort();
+}
+
+function mergeByKey<T>(left: readonly T[], right: readonly T[], keyFor: (value: T) => string): T[] {
+  const values = new Map<string, T>();
+  for (const value of [...left, ...right]) {
+    const key = keyFor(value);
+    if (!values.has(key)) values.set(key, value);
+  }
+  return [...values.values()];
+}
+
+function spanTimeRange(
+  span: EpisodeSpanRef,
+  fallbackStartedAt: string,
+  fallbackEndedAt: string,
+): { startedAt: number; endedAt: number } {
+  return {
+    startedAt: Date.parse(span.startedAt ?? fallbackStartedAt),
+    endedAt: Date.parse(span.endedAt ?? fallbackEndedAt),
+  };
+}
+
+function intervalOverlapRatio(
+  left: { startedAt: number; endedAt: number },
+  right: { startedAt: number; endedAt: number },
+): number {
+  const overlapMs = Math.max(0, Math.min(left.endedAt, right.endedAt) - Math.max(left.startedAt, right.startedAt));
+  const leftDurationMs = Math.max(0, left.endedAt - left.startedAt);
+  const rightDurationMs = Math.max(0, right.endedAt - right.startedAt);
+  const smallerDurationMs = Math.min(leftDurationMs, rightDurationMs);
+
+  if (smallerDurationMs === 0) {
+    const leftInsideRight = left.startedAt >= right.startedAt && left.startedAt <= right.endedAt;
+    const rightInsideLeft = right.startedAt >= left.startedAt && right.startedAt <= left.endedAt;
+    return leftInsideRight || rightInsideLeft ? 1 : 0;
+  }
+
+  return normalizeBoundedUnit(overlapMs / smallerDurationMs);
+}
+
+function spanOverlapRatio(candidate: EpisodeCandidateInput, episode: Episode): number {
+  let best = 0;
+  for (const candidateSpan of candidate.spanRefs) {
+    const candidateRange = spanTimeRange(candidateSpan, candidate.startedAt, candidate.endedAt);
+    for (const episodeSpan of episode.spanRefs) {
+      best = Math.max(
+        best,
+        intervalOverlapRatio(candidateRange, spanTimeRange(episodeSpan, episode.startedAt, episode.endedAt)),
+      );
+    }
+  }
+  return best;
+}
+
+function timeGapMs(candidate: EpisodeCandidateInput, episode: Episode): number {
+  const candidateStart = Date.parse(candidate.startedAt);
+  const candidateEnd = Date.parse(candidate.endedAt);
+  const episodeStart = Date.parse(episode.startedAt);
+  const episodeEnd = Date.parse(episode.endedAt);
+  if (candidateStart <= episodeEnd && episodeStart <= candidateEnd) {
+    return 0;
+  }
+  return candidateStart > episodeEnd ? candidateStart - episodeEnd : episodeStart - candidateEnd;
+}
+
+function hasTurnBoundaryOverlap(candidate: EpisodeCandidateInput, episode: Episode): boolean {
+  const candidateBoundaries = new Set(candidate.spanRefs.flatMap(span => [
+    span.startTurnId,
+    span.endTurnId,
+  ].filter((turnId): turnId is string => typeof turnId === 'string' && turnId.length > 0)));
+
+  return episode.spanRefs.some(span => (
+    (span.startTurnId !== undefined && candidateBoundaries.has(span.startTurnId))
+    || (span.endTurnId !== undefined && candidateBoundaries.has(span.endTurnId))
+  ));
+}
+
+function artifactOverlap(left: readonly EpisodeArtifactRef[], right: readonly EpisodeArtifactRef[]): number {
+  const rightIds = new Set(right.map(ref => ref.artifactId));
+  return left.reduce((count, ref) => count + (rightIds.has(ref.artifactId) ? 1 : 0), 0);
+}
+
+function hasMatchingScope(candidate: EpisodeCandidateInput, episode: Episode): boolean {
+  const candidateSessionIds = new Set(candidate.spanRefs
+    .map(span => span.sessionId)
+    .filter((sessionId): sessionId is string => typeof sessionId === 'string' && sessionId.length > 0));
+  const episodeSessionMatches = episode.spanRefs.some(span => (
+    span.sessionId !== undefined && candidateSessionIds.has(span.sessionId)
+  ));
+  const threadMatches = candidate.threadId !== undefined && episode.threadId === candidate.threadId;
+  const channelMatches = candidate.channelId !== undefined && (
+    episode.channelId === candidate.channelId
+    || episode.spanRefs.some(span => span.channelId === candidate.channelId)
+  );
+
+  return channelMatches && (threadMatches || episodeSessionMatches);
+}
+
+function scoreConsolidationCandidate(
+  candidate: EpisodeCandidateInput,
+  episode: Episode,
+): ConsolidationCandidateScore | null {
+  if (!hasMatchingScope(candidate, episode)) return null;
+  const score: ConsolidationCandidateScore = {
+    episode,
+    spanOverlapRatio: spanOverlapRatio(candidate, episode),
+    themeOverlap: themeOverlap(candidate.themes, episode.themes),
+    artifactOverlap: artifactOverlap(candidate.artifactRefs, episode.artifactRefs),
+    turnBoundaryOverlap: hasTurnBoundaryOverlap(candidate, episode),
+    timeGapMs: timeGapMs(candidate, episode),
+  };
+  const hasSemanticOverlap = score.themeOverlap >= MIN_CONSOLIDATION_THEME_OVERLAP || score.artifactOverlap > 0;
+  const hasSpanOverlap = score.spanOverlapRatio >= MIN_CONSOLIDATION_SPAN_OVERLAP_RATIO
+    || (
+      score.turnBoundaryOverlap
+      && score.timeGapMs <= MAX_CONSOLIDATION_BOUNDARY_GAP_MS
+    );
+  return hasSemanticOverlap && hasSpanOverlap ? score : null;
+}
+
+function mergeEpisodeWithCandidate(
+  canonical: Episode,
+  candidate: EpisodeCandidateInput,
+): EpisodeUpdateInput {
+  return {
+    id: canonical.id,
+    title: canonical.title,
+    landmark: canonical.landmark,
+    startedAt: canonical.startedAt <= candidate.startedAt ? canonical.startedAt : candidate.startedAt,
+    endedAt: canonical.endedAt >= candidate.endedAt ? canonical.endedAt : candidate.endedAt,
+    threadId: canonical.threadId ?? candidate.threadId,
+    channelId: canonical.channelId ?? candidate.channelId,
+    participantContactIds: mergeStringSets(canonical.participantContactIds, candidate.participantContactIds),
+    salience: {
+      score: Math.max(canonical.salience.score, candidate.salience.score),
+      novelty: Math.max(canonical.salience.novelty ?? 0, candidate.salience.novelty ?? 0),
+      emotionalIntensity: Math.max(
+        canonical.salience.emotionalIntensity ?? 0,
+        candidate.salience.emotionalIntensity ?? 0,
+      ),
+    },
+    affect: {
+      ...canonical.affect,
+      arousal: Math.max(canonical.affect.arousal ?? 0, candidate.affect.arousal ?? 0),
+      labels: mergeStringSets(canonical.affect.labels, candidate.affect.labels),
+    },
+    themes: mergeStringSets(canonical.themes, candidate.themes),
+    spanRefs: mergeByKey(canonical.spanRefs, candidate.spanRefs, ref => ref.spanId),
+    artifactRefs: mergeByKey(canonical.artifactRefs, candidate.artifactRefs, ref => ref.artifactId),
+    provenanceRefs: mergeByKey(
+      canonical.provenanceRefs,
+      candidate.provenanceRefs,
+      ref => `${ref.kind}:${ref.refId}:${ref.note ?? ''}`,
+    ),
+  };
+}
+
+function compareConsolidationScores(left: ConsolidationCandidateScore, right: ConsolidationCandidateScore): number {
+  if (right.spanOverlapRatio !== left.spanOverlapRatio) return right.spanOverlapRatio - left.spanOverlapRatio;
+  if (right.themeOverlap !== left.themeOverlap) return right.themeOverlap - left.themeOverlap;
+  if (right.artifactOverlap !== left.artifactOverlap) return right.artifactOverlap - left.artifactOverlap;
+  if (left.turnBoundaryOverlap !== right.turnBoundaryOverlap) return left.turnBoundaryOverlap ? -1 : 1;
+  if (left.timeGapMs !== right.timeGapMs) return left.timeGapMs - right.timeGapMs;
+  return right.episode.startedAt.localeCompare(left.episode.startedAt) || left.episode.id.localeCompare(right.episode.id);
+}
+
 function buildArcInput(source: Episode, target: Episode, overlap: number): EpisodeArcWriteInput {
   const sharedThemes = source.themes.filter(theme => target.themes.includes(theme));
   const themes = sharedThemes.length > 0 ? sharedThemes : target.themes.slice(0, 3);
@@ -447,16 +647,23 @@ function findRelatedSource(
 }
 
 export class EpisodicSynthesizer {
-  private readonly store: Pick<EpisodicStorePort, 'createEpisode' | 'getEpisode' | 'searchByTime' | 'writeEpisodeArc'>;
+  private readonly store: Pick<
+    EpisodicStorePort,
+    'createEpisode' | 'updateEpisode' | 'getEpisode' | 'searchByTime' | 'writeEpisodeArc'
+  >;
   private readonly sessionReader: EpisodicSynthesisSessionReader;
   private readonly transcriptMessageLimit: number;
   private readonly maxEpisodesPerRun: number;
   private readonly maxPriorCandidates: number;
   private readonly gapSplitMs: number;
   private readonly maxEntriesPerEpisode: number;
+  private readonly processingWatermarks = new Map<string, EpisodicSynthesisProcessingWatermark>();
 
   constructor(
-    store: Pick<EpisodicStorePort, 'createEpisode' | 'getEpisode' | 'searchByTime' | 'writeEpisodeArc'>,
+    store: Pick<
+      EpisodicStorePort,
+      'createEpisode' | 'updateEpisode' | 'getEpisode' | 'searchByTime' | 'writeEpisodeArc'
+    >,
     sessionReader: EpisodicSynthesisSessionReader,
     options: EpisodicSynthesisOptions = {},
   ) {
@@ -473,6 +680,19 @@ export class EpisodicSynthesizer {
       options.maxEntriesPerEpisode,
       DEFAULT_MAX_ENTRIES_PER_EPISODE,
     );
+  }
+
+  getProcessingWatermark(
+    scope: EpisodicSynthesisWatermarkScope,
+  ): EpisodicSynthesisProcessingWatermark | undefined {
+    const watermark = this.processingWatermarks.get(this.watermarkKey(scope));
+    return watermark
+      ? {
+        ...watermark,
+        canonicalEpisodeIds: [...watermark.canonicalEpisodeIds],
+        skippedEpisodeIds: [...watermark.skippedEpisodeIds],
+      }
+      : undefined;
   }
 
   async run(input: EpisodicSynthesisRunInput): Promise<EpisodicSynthesisRunResult> {
@@ -492,16 +712,35 @@ export class EpisodicSynthesizer {
     for (const group of groups) {
       const episodeInput = buildEpisodeInput(input.sessionId, group);
       const existing = await this.store.getEpisode(episodeInput.id);
-      const episode = existing ?? (await this.store.createEpisode(episodeInput));
+      let episode: Episode;
+      let created = false;
       if (existing) {
+        episode = existing;
         skippedEpisodeIds.push(existing.id);
       } else {
-        createdEpisodes.push(episode);
+        const consolidationTarget = await this.resolveConsolidationTarget(episodeInput, createdEpisodes);
+        if (consolidationTarget) {
+          episode = await this.store.updateEpisode(
+            mergeEpisodeWithCandidate(consolidationTarget.episode, episodeInput),
+          );
+          const currentRunIndex = createdEpisodes.findIndex(candidate => candidate.id === episode.id);
+          if (currentRunIndex >= 0) {
+            createdEpisodes[currentRunIndex] = episode;
+          }
+          skippedEpisodeIds.push(episode.id);
+        } else {
+          episode = await this.store.createEpisode(episodeInput);
+          created = true;
+          createdEpisodes.push(episode);
+        }
       }
 
-      const priorCandidates = await this.resolvePriorCandidates(episode, createdEpisodes);
-      const related = findRelatedSource(episode, priorCandidates);
-      if (related) {
+      this.recordProcessingWatermark(input, episodeInput, episode, !created);
+
+      if (created) {
+        const priorCandidates = await this.resolvePriorCandidates(episode, createdEpisodes);
+        const related = findRelatedSource(episode, priorCandidates);
+        if (!related) continue;
         linkedArcs.push(await this.store.writeEpisodeArc(
           buildArcInput(related.episode, episode, related.overlap),
         ));
@@ -537,5 +776,75 @@ export class EpisodicSynthesizer {
         return left.id.localeCompare(right.id);
       })
       .slice(0, this.maxPriorCandidates);
+  }
+
+  private async resolveConsolidationTarget(
+    candidate: EpisodeCandidateInput,
+    currentRunEpisodes: readonly Episode[],
+  ): Promise<ConsolidationCandidateScore | null> {
+    const startedAtMs = Date.parse(candidate.startedAt);
+    const endedAtMs = Date.parse(candidate.endedAt);
+    const durationMs = Math.max(0, endedAtMs - startedAtMs);
+    const searchWindowMs = Math.min(
+      MAX_CONSOLIDATION_SEARCH_WINDOW_MS,
+      Math.max(MIN_CONSOLIDATION_SEARCH_WINDOW_MS, durationMs * 2),
+    );
+    const persisted = await this.store.searchByTime({
+      from: new Date(Math.max(0, startedAtMs - searchWindowMs)).toISOString(),
+      to: new Date(endedAtMs + searchWindowMs).toISOString(),
+      limit: this.maxPriorCandidates,
+    });
+    const seenEpisodeIds = new Set<string>();
+    const scores: ConsolidationCandidateScore[] = [];
+
+    for (const episode of [...persisted, ...currentRunEpisodes]) {
+      if (episode.id === candidate.id || seenEpisodeIds.has(episode.id)) continue;
+      seenEpisodeIds.add(episode.id);
+      const score = scoreConsolidationCandidate(candidate, episode);
+      if (score) scores.push(score);
+    }
+
+    return scores.sort(compareConsolidationScores)[0] ?? null;
+  }
+
+  private watermarkKey(scope: EpisodicSynthesisWatermarkScope): string {
+    return [
+      scope.sessionId,
+      scope.threadId ?? '',
+      scope.channelId ?? '',
+    ].join('\u001f');
+  }
+
+  private recordProcessingWatermark(
+    runInput: EpisodicSynthesisRunInput,
+    candidate: EpisodeCandidateInput,
+    canonicalEpisode: Episode,
+    skipped: boolean,
+  ): void {
+    const scope: EpisodicSynthesisWatermarkScope = {
+      sessionId: runInput.sessionId,
+      ...(candidate.threadId ? { threadId: candidate.threadId } : {}),
+      ...(candidate.channelId ? { channelId: candidate.channelId } : {}),
+    };
+    const key = this.watermarkKey(scope);
+    const previous = this.processingWatermarks.get(key);
+    const candidateSpan = candidate.spanRefs[0];
+    const previousCanonicalIds = previous?.canonicalEpisodeIds ?? [];
+    const previousSkippedIds = previous?.skippedEpisodeIds ?? [];
+
+    this.processingWatermarks.set(key, {
+      ...scope,
+      highWaterTurnId: candidateSpan.endTurnId ?? previous?.highWaterTurnId,
+      highWaterMessageId: runInput.sourceMessageId ?? previous?.highWaterMessageId,
+      processedStartedAt: previous && previous.processedStartedAt <= candidate.startedAt
+        ? previous.processedStartedAt
+        : candidate.startedAt,
+      processedEndedAt: previous && previous.processedEndedAt >= candidate.endedAt
+        ? previous.processedEndedAt
+        : candidate.endedAt,
+      updatedAt: candidate.endedAt,
+      canonicalEpisodeIds: mergeStringSets(previousCanonicalIds, [canonicalEpisode.id]),
+      skippedEpisodeIds: skipped ? mergeStringSets(previousSkippedIds, [canonicalEpisode.id]) : previousSkippedIds,
+    });
   }
 }

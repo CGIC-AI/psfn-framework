@@ -21,6 +21,7 @@ import type {
   EpisodeCreateInput,
   EpisodeListOptions,
   EpisodeTimeSearchOptions,
+  EpisodeUpdateInput,
   EpisodicStoreOptions,
   EpisodicStorePort,
 } from './store.js';
@@ -223,6 +224,75 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       json({}),
       serializeEpisode(episode),
       episode.createdAt,
+      episode.updatedAt,
+    ]);
+
+    return episode;
+  }
+
+  async updateEpisode(input: EpisodeUpdateInput): Promise<Episode> {
+    const current = await this.getEpisode(input.id);
+    if (!current) {
+      throw new Error(`episode "${input.id}" does not exist`);
+    }
+
+    const now = this.now().toISOString();
+    const episode = parseEpisode({
+      ...input,
+      schemaVersion: EPISODIC_CONTRACT_VERSION,
+      createdAt: current.createdAt,
+      updatedAt: input.updatedAt ?? now,
+    });
+
+    await executeQuery(this.pool, `
+      UPDATE l01_episodes
+      SET
+        schema_version = $2,
+        title = $3,
+        landmark = $4,
+        status = $5,
+        canonical_episode_id = $6,
+        merged_into_episode_id = $7,
+        superseded_by_episode_id = $8,
+        thread_id = $9,
+        channel_id = $10,
+        started_at = $11,
+        ended_at = $12,
+        participant_contact_ids = $13::jsonb,
+        salience_score = $14,
+        salience_json = $15::jsonb,
+        affect_json = $16::jsonb,
+        themes = $17::jsonb,
+        artifact_refs = $18::jsonb,
+        provenance_refs = $19::jsonb,
+        scope_json = $20::jsonb,
+        consent_flags = $21::jsonb,
+        episode_json = $22::jsonb,
+        updated_at = $23
+      WHERE id = $1
+    `, [
+      episode.id,
+      episode.schemaVersion,
+      episode.title,
+      episode.landmark,
+      'canonical',
+      episode.id,
+      null,
+      null,
+      episode.threadId ?? null,
+      episode.channelId ?? null,
+      episode.startedAt,
+      episode.endedAt,
+      json(episode.participantContactIds),
+      episode.salience.score,
+      json(episode.salience),
+      json(episode.affect),
+      json(episode.themes),
+      json(episode.artifactRefs),
+      json(episode.provenanceRefs),
+      json({}),
+      json({}),
+      serializeEpisode(episode),
       episode.updatedAt,
     ]);
 

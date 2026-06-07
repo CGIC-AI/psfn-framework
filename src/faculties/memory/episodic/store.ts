@@ -20,6 +20,13 @@ export type EpisodeCreateInput = Omit<
   updatedAt?: string;
 };
 
+export type EpisodeUpdateInput = Omit<
+  Episode,
+  'schemaVersion' | 'createdAt' | 'updatedAt'
+> & {
+  updatedAt?: string;
+};
+
 export type EpisodeArcWriteInput = Omit<
   EpisodeArc,
   'schemaVersion' | 'id' | 'createdAt' | 'updatedAt'
@@ -54,6 +61,7 @@ export type EpisodicStoreResult<T> = T | Promise<T>;
 
 export interface EpisodicStorePort {
   createEpisode(input: EpisodeCreateInput): EpisodicStoreResult<Episode>;
+  updateEpisode(input: EpisodeUpdateInput): EpisodicStoreResult<Episode>;
   getEpisode(id: string): EpisodicStoreResult<Episode | undefined>;
   listEpisodes(options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
   searchByTime(options?: EpisodeTimeSearchOptions): EpisodicStoreResult<Episode[]>;
@@ -235,6 +243,45 @@ export class EpisodicStore implements EpisodicStorePort {
       serializeEpisode(episode),
       episode.createdAt,
       episode.updatedAt,
+    );
+
+    return episode;
+  }
+
+  updateEpisode(input: EpisodeUpdateInput): Episode {
+    const current = this.getEpisode(input.id);
+    if (!current) {
+      throw new Error(`episode "${input.id}" does not exist`);
+    }
+
+    const now = this.now().toISOString();
+    const episode = parseEpisode({
+      ...input,
+      schemaVersion: EPISODIC_CONTRACT_VERSION,
+      createdAt: current.createdAt,
+      updatedAt: input.updatedAt ?? now,
+    });
+
+    this.db.prepare(`
+      UPDATE l01_episodes
+      SET
+        thread_id = ?,
+        channel_id = ?,
+        started_at = ?,
+        ended_at = ?,
+        salience_score = ?,
+        episode_json = ?,
+        updated_at = ?
+      WHERE id = ?
+    `).run(
+      episode.threadId ?? null,
+      episode.channelId ?? null,
+      episode.startedAt,
+      episode.endedAt,
+      episode.salience.score,
+      serializeEpisode(episode),
+      episode.updatedAt,
+      episode.id,
     );
 
     return episode;

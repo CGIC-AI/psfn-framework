@@ -223,7 +223,7 @@ export class SessionStore implements TranscriptSearchPort {
     mkdirSync(sessionsDir, { recursive: true });
     if (options.transcriptProjection !== undefined) {
       this.transcriptProjection = options.transcriptProjection;
-    } else if (!options.disableSearchIndex) {
+    } else if (options.enableSearchIndex && !options.disableSearchIndex) {
       try {
         this.transcriptProjection = createDefaultSQLiteTranscriptProjection(
           options.searchIndexPath ?? join(this.sessionsDir, DEFAULT_SQLITE_SESSION_SEARCH_INDEX_FILENAME),

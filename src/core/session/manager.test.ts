@@ -563,7 +563,8 @@ describe('SessionManager', () => {
 
   it('stores role-envelope previews without leaking hidden body text into history or search', async () => {
     const config = makeConfig();
-    const mgr = new SessionManager(store, config);
+    const searchableStore = new SessionStore(dir, { enableSearchIndex: true });
+    const mgr = new SessionManager(searchableStore, config);
     const hiddenBody = 'forensic body that must never enter normal history';
     mgr.recordUserMessage(
       'api:role-envelope-preview',
@@ -594,7 +595,7 @@ describe('SessionManager', () => {
 
     expect(entryId).not.toBeNull();
 
-    const [entry] = store.getRecent('api:role-envelope-preview', 1);
+    const [entry] = searchableStore.getRecent('api:role-envelope-preview', 1);
     expect(entry).toBeDefined();
     expect(entry.content).toBe('Queued a quiet follow-up reminder.');
     expect(resolveSessionEntryRoleEnvelopePreview(entry!)).toEqual({
@@ -617,8 +618,8 @@ describe('SessionManager', () => {
     });
     expect(assembledContext).not.toContain(hiddenBody);
 
-    await expect(store.searchByKeywords('quiet follow-up', 10)).resolves.toHaveLength(1);
-    await expect(store.searchByKeywords(hiddenBody, 10)).resolves.toHaveLength(0);
+    await expect(searchableStore.searchByKeywords('quiet follow-up', 10)).resolves.toHaveLength(1);
+    await expect(searchableStore.searchByKeywords(hiddenBody, 10)).resolves.toHaveLength(0);
   });
 
   it('derives role-envelope refs from persisted preview metadata', () => {

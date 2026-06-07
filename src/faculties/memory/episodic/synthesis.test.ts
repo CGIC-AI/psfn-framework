@@ -116,6 +116,127 @@ describe('EpisodicSynthesizer', () => {
     expect(store.listEpisodes()).toHaveLength(1);
   });
 
+  it('extends an overlapping canonical episode instead of creating a sliding-window duplicate', async () => {
+    const store = makeStore();
+    let entries = [
+      entry(1, '2026-04-01T10:00:00.000Z', 'user', 'Discuss project atlas testing and linting.'),
+      entry(2, '2026-04-01T10:02:00.000Z', 'assistant', 'Project atlas testing and linting are ready to run.'),
+    ];
+    const synthesizer = new EpisodicSynthesizer(store, {
+      getRecentMessages: () => entries,
+    });
+
+    const first = await synthesizer.run({ sessionId: 'terminal:daily' });
+    entries = [
+      ...entries,
+      entry(3, '2026-04-01T10:04:00.000Z', 'user', 'Project atlas linting should include the boundary regression test.'),
+    ];
+    const second = await synthesizer.run({
+      sessionId: 'terminal:daily',
+      sourceMessageId: 'session-entry:3',
+    });
+
+    expect(first.createdEpisodes).toHaveLength(1);
+    expect(second.createdEpisodes).toEqual([]);
+    expect(second.skippedEpisodeIds).toEqual([first.createdEpisodes[0].id]);
+
+    const episodes = store.listEpisodes();
+    expect(episodes).toHaveLength(1);
+    expect(episodes[0]).toMatchObject({
+      id: first.createdEpisodes[0].id,
+      startedAt: '2026-04-01T10:00:00.000Z',
+      endedAt: '2026-04-01T10:04:00.000Z',
+    });
+    expect(episodes[0].spanRefs).toHaveLength(2);
+    expect(episodes[0].provenanceRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'l0_span', refId: episodes[0].spanRefs[0].spanId }),
+      expect.objectContaining({ kind: 'l0_span', refId: episodes[0].spanRefs[1].spanId }),
+      expect.objectContaining({ kind: 'turn', refId: '00000000-0000-7000-a000-000000000003' }),
+    ]));
+
+    expect(synthesizer.getProcessingWatermark({
+      sessionId: 'terminal:daily',
+      threadId: 'terminal:daily',
+      channelId: 'terminal:daily',
+    })).toMatchObject({
+      highWaterTurnId: '00000000-0000-7000-a000-000000000003',
+      highWaterMessageId: 'session-entry:3',
+      processedStartedAt: '2026-04-01T10:00:00.000Z',
+      processedEndedAt: '2026-04-01T10:04:00.000Z',
+      canonicalEpisodeIds: [first.createdEpisodes[0].id],
+      skippedEpisodeIds: [first.createdEpisodes[0].id],
+    });
+
+    const decisions = store.listEpisodeCandidateDecisions({ canonicalEpisodeId: first.createdEpisodes[0].id });
+    expect(decisions).toHaveLength(2);
+    expect(decisions.map(decision => decision.status).sort()).toEqual(['canonical', 'merged']);
+    const mergedDecision = decisions.find(decision => decision.status === 'merged');
+    expect(mergedDecision).toMatchObject({
+      canonicalEpisodeId: first.createdEpisodes[0].id,
+      mergedIntoEpisodeId: first.createdEpisodes[0].id,
+      sourceWatermarkId: expect.any(String),
+      reason: 'candidate span deterministically overlapped an active canonical episode',
+      candidateJson: {
+        decision: {
+          action: 'extend',
+          canonicalEpisodeId: first.createdEpisodes[0].id,
+        },
+      },
+    });
+    const durableWatermark = store.getProcessingWatermark({
+      processor: 'episodic_synthesis',
+      sourceRef: 'terminal:daily',
+      sessionId: 'terminal:daily',
+      threadId: 'terminal:daily',
+      channelId: 'terminal:daily',
+    });
+    expect(durableWatermark).toMatchObject({
+      highWaterTurnId: '00000000-0000-7000-a000-000000000003',
+      highWaterMessageId: 'session-entry:3',
+      reconciliationStatus: 'clean',
+      artifactsJson: {
+        candidateDecisionIds: expect.arrayContaining(decisions.map(decision => decision.id)),
+      },
+    });
+  });
+
+  it('reuses a canonical episode when a rest boundary shifts across an overlapping turn', async () => {
+    const store = makeStore();
+    let entries = [
+      entry(1, '2026-04-01T10:00:00.000Z', 'user', 'Review atlas planner test failures and lint output.'),
+      entry(2, '2026-04-01T10:02:00.000Z', 'assistant', 'Atlas planner tests and lint output are in the same investigation.'),
+    ];
+    const synthesizer = new EpisodicSynthesizer(store, {
+      getRecentMessages: () => entries,
+    });
+
+    const first = await synthesizer.run({ sessionId: 'terminal:daily' });
+    entries = [
+      entry(2, '2026-04-01T10:02:00.000Z', 'assistant', 'Atlas planner tests and lint output are in the same investigation.'),
+      entry(3, '2026-04-01T10:04:00.000Z', 'user', 'Keep the atlas planner lint regression tied to this investigation.'),
+    ];
+    const second = await synthesizer.run({ sessionId: 'terminal:daily' });
+
+    expect(first.createdEpisodes).toHaveLength(1);
+    expect(second.createdEpisodes).toEqual([]);
+    expect(second.skippedEpisodeIds).toEqual([first.createdEpisodes[0].id]);
+
+    const episodes = store.searchByThread('terminal:daily');
+    expect(episodes).toHaveLength(1);
+    expect(episodes[0]).toMatchObject({
+      id: first.createdEpisodes[0].id,
+      startedAt: '2026-04-01T10:00:00.000Z',
+      endedAt: '2026-04-01T10:04:00.000Z',
+    });
+    expect(episodes[0].spanRefs.map(ref => ref.startTurnId)).toEqual([
+      '00000000-0000-7000-a000-000000000001',
+      '00000000-0000-7000-a000-000000000002',
+    ]);
+    expect(episodes[0].provenanceRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'turn', refId: '00000000-0000-7000-a000-000000000003' }),
+    ]));
+  });
+
   it('synthesizes a month-long trip plan as linked bounded episodes instead of one aggregate memory', async () => {
     const store = makeStore();
     const sessionReader = {

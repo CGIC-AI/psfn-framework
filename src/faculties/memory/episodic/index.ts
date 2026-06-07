@@ -5,6 +5,7 @@ export {
   type EpisodeCreateInput,
   type EpisodeListOptions,
   type EpisodeTimeSearchOptions,
+  type EpisodeUpdateInput,
   type EpisodicStoreOptions,
   type EpisodicStorePort,
   type EpisodicStoreResult,
@@ -17,8 +18,10 @@ export {
 export {
   EpisodicSynthesizer,
   type EpisodicSynthesisOptions,
+  type EpisodicSynthesisProcessingWatermark,
   type EpisodicSynthesisRunInput,
   type EpisodicSynthesisRunResult,
+  type EpisodicSynthesisWatermarkScope,
   type EpisodicSynthesisSessionReader,
 } from './synthesis.js';
 export type {

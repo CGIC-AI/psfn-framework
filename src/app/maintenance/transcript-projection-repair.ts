@@ -8,10 +8,6 @@ import {
   createDefaultPostgresSessionAdapters,
   type PostgresSessionAdapters,
 } from '../../persistence/sessions/postgres-adapters.js';
-import {
-  createDefaultSQLiteSessionAdapters,
-  type SQLiteSessionAdapters,
-} from '../../persistence/sessions/sqlite-adapters.js';
 import type { SessionIntegrityProvider } from '../../persistence/sessions/store-primitives.js';
 import type { TranscriptProjectionPort } from '../../persistence/sessions/transcript-projection-port.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -27,7 +23,6 @@ interface CliOptions {
 }
 
 interface TranscriptProjectionRepairCommandDependencies {
-  createSQLiteSessionAdapters?: (sessionsDir: string) => SQLiteSessionAdapters;
   createPostgresSessionAdapters?: (
     databaseUrl: string,
     options: { sessionsDir: string },
@@ -109,32 +104,18 @@ async function resolveTranscriptProjectionRepairTarget(
 ): Promise<TranscriptProjectionRepairTarget> {
   const dataDir = resolve(options.dataDir ?? options.config.dataDir);
   const sessionsDir = resolve(options.sessionsDir ?? resolveSessionsDir(dataDir));
-  const backend = options.config.persistenceBackend ?? 'sqlite';
-
-  let transcriptProjection: TranscriptProjectionPort | null;
-  if (backend === 'postgres') {
-    const databaseUrl = options.config.postgresDatabaseUrl?.trim();
-    if (!databaseUrl) {
-      throw new Error('PostgreSQL transcript projection repair requires config.postgresDatabaseUrl');
-    }
-    const createPostgresSessionAdapters = options.dependencies?.createPostgresSessionAdapters
-      ?? createDefaultPostgresSessionAdapters;
-    const adapters = await createPostgresSessionAdapters(databaseUrl, { sessionsDir });
-    transcriptProjection = adapters.transcriptProjection;
-  } else {
-    const createSQLiteSessionAdapters = options.dependencies?.createSQLiteSessionAdapters
-      ?? createDefaultSQLiteSessionAdapters;
-    const adapters = createSQLiteSessionAdapters(sessionsDir);
-    transcriptProjection = adapters.transcriptProjection;
+  const databaseUrl = options.config.postgresDatabaseUrl?.trim();
+  if (!databaseUrl) {
+    throw new Error('PostgreSQL transcript projection repair requires config.postgresDatabaseUrl');
   }
-
-  if (!transcriptProjection) {
-    throw new Error(`Transcript projection repair requires an enabled transcript projection backend for ${backend}`);
-  }
+  const createPostgresSessionAdapters = options.dependencies?.createPostgresSessionAdapters
+    ?? createDefaultPostgresSessionAdapters;
+  const adapters = await createPostgresSessionAdapters(databaseUrl, { sessionsDir });
+  const transcriptProjection: TranscriptProjectionPort = adapters.transcriptProjection;
 
   return {
     dataDir,
-    persistenceBackend: backend,
+    persistenceBackend: 'postgres',
     sessionsDir,
     transcriptProjection,
     integrityProvider: resolveIntegrityProvider(options.config, options.dependencies),
@@ -150,9 +131,11 @@ export async function runTranscriptProjectionRepairCommand(
     transcriptProjection: target.transcriptProjection,
     integrityProvider: target.integrityProvider,
   });
+  await target.transcriptProjection.flushPendingWrites?.();
 
   return {
     ...report,
+    driftAfter: target.transcriptProjection.listProjectionDrift().length,
     dataDir: target.dataDir,
     persistenceBackend: target.persistenceBackend,
     sessionsDir: target.sessionsDir,

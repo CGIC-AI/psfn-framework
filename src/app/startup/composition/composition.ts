@@ -111,6 +111,7 @@ function createSessionComposition(
     options.config,
     options.eventBus,
     options.promptRegistry ?? null,
+    sessionAdapters.transcriptSearch ?? undefined,
   );
   const internalRoleEnvelopeLedger = wireInternalRoleEnvelopeRuntime(sessionManager, options.config);
 

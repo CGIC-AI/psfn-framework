@@ -72,6 +72,7 @@ export interface SessionStoreOptions {
   integrityProvider?: SessionIntegrityProvider | null;
   integrityKeyring?: SessionHmacKeyring | null;
   sessionArchivePort?: SessionArchivePort | null;
+  enableSearchIndex?: boolean;
   searchIndexPath?: string;
   disableSearchIndex?: boolean;
   transcriptProjection?: TranscriptProjectionPort | null;

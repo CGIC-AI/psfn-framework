@@ -153,7 +153,7 @@ describe('runTranscriptProjectionRepair', () => {
   it('rebuilds sqlite transcript projection state from authoritative JSONL sessions', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-transcript-repair-sqlite-'));
     dirs.push(sessionsDir);
-    const adapters = createDefaultSQLiteSessionAdapters(sessionsDir);
+    const adapters = createDefaultSQLiteSessionAdapters(sessionsDir, { enableSearchIndex: true });
 
     adapters.sessionArchivePort.writeImportedSession({
       sessionsDir,

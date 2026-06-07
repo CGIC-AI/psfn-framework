@@ -181,6 +181,60 @@ describe('postgres session adapters', () => {
     expect(pool.records).toHaveLength(1);
   });
 
+  it('replaces channels, normalizes visibility, and supports explicit drift lifecycle operations', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-session-adapters-replace-'));
+    dirs.push(sessionsDir);
+    const pool = new FakePostgresPool();
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', {
+      sessionsDir,
+      pool: pool as unknown as Pool,
+    });
+
+    adapters.transcriptProjection.upsertSessionEntry({
+      id: 1,
+      channelId: 'api:postgres-replace',
+      role: 'assistant',
+      content: 'old projection needle',
+      timestamp: 1_000,
+      channelVisibility: 'not-a-valid-visibility',
+    });
+    await adapters.transcriptSearch.searchByKeywords('old needle');
+    expect(pool.records).toHaveLength(1);
+    expect(pool.records[0].channelVisibility).toBe('private');
+
+    adapters.transcriptProjection.replaceChannelEntries('api:postgres-replace', [{
+      id: 2,
+      channelId: 'api:postgres-replace',
+      role: 'user',
+      content: 'new projection needle',
+      timestamp: 2_000,
+      channelVisibility: 'semi_private',
+    }]);
+
+    expect(adapters.transcriptProjection.countProjectedMessages('api:postgres-replace')).toBe(1);
+    await expect(adapters.transcriptSearch.searchByKeywords('old needle')).resolves.toHaveLength(0);
+    const replacementHits = await adapters.transcriptSearch.searchByKeywords('new needle');
+    expect(replacementHits).toHaveLength(1);
+    expect(replacementHits[0]).toEqual(expect.objectContaining({
+      channelId: 'api:postgres-replace',
+      messageId: 2,
+      channelVisibility: 'semi_private',
+    }));
+
+    adapters.transcriptProjection.markProjectionDrift('api:postgres-replace', 'manual drift');
+    expect(adapters.transcriptProjection.listProjectionDrift()).toEqual([
+      expect.objectContaining({
+        channelId: 'api:postgres-replace',
+        reason: 'manual drift',
+      }),
+    ]);
+
+    adapters.transcriptProjection.clearProjectionDrift('api:postgres-replace');
+    expect(adapters.transcriptProjection.listProjectionDrift()).toEqual([]);
+    await adapters.transcriptSearch.searchByKeywords('new needle');
+    expect(pool.drift.size).toBe(0);
+  });
+
   it('tracks projection drift when queued postgres writes fail', async () => {
     const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-pg-session-adapters-drift-'));
     dirs.push(sessionsDir);

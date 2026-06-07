@@ -26,6 +26,7 @@ export interface TranscriptProjectionPort {
   markProjectionDrift(channelId: string, reason?: string): void;
   clearProjectionDrift(channelId: string): void;
   listProjectionDrift(): TranscriptProjectionDrift[];
+  flushPendingWrites?(): Promise<void>;
 }
 
 export interface KeywordSearchableTranscriptProjection extends TranscriptProjectionPort {

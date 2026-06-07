@@ -326,10 +326,14 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     ));
   }
 
+  async flushPendingWrites(): Promise<void> {
+    await this.writeChain;
+  }
+
   async searchByKeywords(query: string, limit = DEFAULT_SEARCH_LIMIT): Promise<SessionSearchHit[]> {
     const normalizedQuery = query.trim();
     if (!normalizedQuery) return [];
-    await this.writeChain;
+    await this.flushPendingWrites();
     const boundedLimit = normalizeSearchLimit(limit);
     const rows = await queryRows<SearchRow>(
       this.pool,

@@ -34,6 +34,7 @@
     "session:repair:attribution": "tsx src/app/maintenance/session-attribution-repair.ts",
     "session:repair:integrity": "tsx src/app/maintenance/session-integrity-repair.ts",
     "migrate:embeddings": "tsx src/app/maintenance/migrate-embeddings.ts",
+    "migrate:sqlite-to-postgres-memory": "tsx src/app/maintenance/sqlite-to-postgres-memory-migration.ts",
     "prefetch:hf-models": "tsx scripts/prefetch-hf-models.ts",
     "eval:discover:logprobs": "tsx eval/discovery/probe-logprobs.ts",
     "eval:local:validate": "bash eval/local/scripts/validate-profiles.sh",

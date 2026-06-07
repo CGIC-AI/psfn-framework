@@ -13,7 +13,9 @@ import type {
   PostTurnActionInferer,
 } from '../agent/substrate-agent.js';
 import type { MemoryWriter } from '../../faculties/memory/writer.js';
+import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { EpisodicSynthesizer } from '../../faculties/memory/episodic/synthesis.js';
+import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
 import type { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import type { SessionManager } from '../session/manager.js';
 import type { CoreMemoryStore } from '../../faculties/core-memory/store.js';
@@ -138,6 +140,11 @@ export interface HeartbeatRuntimeOptions {
   coreMemoryStore?: Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
   sleeptimeCadenceTurns?: number;
   episodicSynthesizer?: Pick<EpisodicSynthesizer, 'run'> | null;
+  memoryMaintenanceStore?: Pick<
+    MemoryStorePort,
+    'upsertMemoryMaintenanceReview' | 'listActiveMemories' | 'getById' | 'getMemoryMaintenanceDiagnostics'
+  > | null;
+  episodicDiagnosticsStore?: Pick<EpisodicStorePort, 'getMaintenanceDiagnostics'> | null;
   episodicProcessingRestWindow?: EpisodicProcessingRestWindowConfig;
   intentionAppraisalEnabled?: boolean;
   postTurnActions?: PostTurnActionRuntime;

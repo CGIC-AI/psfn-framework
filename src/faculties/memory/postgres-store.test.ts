@@ -6,6 +6,7 @@ import { createPostgresMemoryStore } from './postgres-store.js';
 import { POSTGRES_MEMORY_MIGRATIONS } from '../../persistence/postgres/migrations.js';
 import type { PurrMemory } from './types.js';
 import { MemoryWriter } from './writer.js';
+import { buildHighImpactLowConfidenceReviewInput } from './maintenance-review.js';
 
 const postgresMocks = vi.hoisted(() => ({
   activePool: null as any,
@@ -544,6 +545,57 @@ describe('postgres memory store unit coverage', () => {
 
     const hydrated = await createPostgresMemoryStore('postgres://unused', 4);
     await expect(hydrated.getEvolutionLinksForTargetMemory('m-target', 'supersedes')).resolves.toEqual([links[0]]);
+  });
+
+  it('reports Postgres memory maintenance review and evolution diagnostics', async () => {
+    postgresMocks.activePool = new FakeMemoryPool();
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    await store.insertMemory(makeMemory('m-source', 'Source memory'), new Float32Array([0.1, 0.2, 0.3, 0.4]));
+    await store.insertMemory(makeMemory('m-target', 'Target memory'), new Float32Array([0.2, 0.3, 0.4, 0.5]));
+    await store.recordEvolutionLink({
+      linkId: 'pg-evolution-supersedes',
+      sourceMemoryId: 'm-source',
+      targetMemoryId: 'm-target',
+      relation: 'supersedes',
+      createdAt: 1_100,
+    });
+    await store.recordEvolutionLink({
+      linkId: 'pg-evolution-conflict',
+      sourceMemoryId: 'm-target',
+      targetMemoryId: 'm-source',
+      relation: 'conflicts_with',
+      createdAt: 1_300,
+    });
+    const review = buildHighImpactLowConfidenceReviewInput({
+      memoryId: 'candidate-boundary-1',
+      text: 'Potential high-impact boundary with weak evidence.',
+      sourceRef: 'source:sleeptime|session:pg',
+      confidence: 0.33,
+      type: 'boundary',
+      tags: ['boundary'],
+      sensitivity: 'confidential',
+    }, 1_000);
+    expect(review).toBeDefined();
+    await store.upsertMemoryMaintenanceReview(review!);
+
+    await expect(store.getMemoryMaintenanceDiagnostics({ now: 4_000 })).resolves.toMatchObject({
+      reviewCount: 1,
+      pendingReviewCount: 1,
+      reviewCountsByKind: { high_impact_low_confidence: 1 },
+      reviewCountsByStatus: { pending: 1 },
+      oldestPendingReviewAgeMs: 3_000,
+      averagePendingReviewAgeMs: 3_000,
+      evolutionDecisionCount: 2,
+      evolutionDecisionCountsByRelation: {
+        supersedes: 1,
+        updates: 0,
+        negates: 0,
+        conflicts_with: 1,
+      },
+      supersessionDecisionCount: 1,
+      conflictDecisionCount: 1,
+      latestEvolutionDecisionAt: 1_300,
+    });
   });
 
   it('rejects invalid postgres memory evolution link confidence and endpoints', async () => {

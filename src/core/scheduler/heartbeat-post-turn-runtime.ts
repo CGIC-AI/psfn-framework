@@ -90,6 +90,8 @@ export function wireHeartbeatPostTurnRuntime(
       cadenceTurns: runtimeOptions.sleeptimeCadenceTurns,
       restWindow: runtimeOptions.episodicProcessingRestWindow,
       episodicSynthesizer: runtimeOptions.episodicSynthesizer,
+      memoryMaintenanceStore: runtimeOptions.memoryMaintenanceStore,
+      episodicDiagnosticsStore: runtimeOptions.episodicDiagnosticsStore,
     })
     : null;
   const intentionAppraisalEnabled = runtimeOptions.intentionAppraisalEnabled !== false;

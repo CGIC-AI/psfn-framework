@@ -17,6 +17,10 @@ import {
   type EpisodeArtifactRef,
   type EpisodeProvenanceRef,
 } from '../../../shared/contracts/episodic-memory.js';
+import {
+  normalizeEpisodicDiagnosticsNow,
+  summarizeEpisodicMaintenanceDiagnostics,
+} from './store.js';
 import type {
   EpisodeArcListOptions,
   EpisodeArcWriteInput,
@@ -28,6 +32,8 @@ import type {
   EpisodeLineage,
   EpisodeLineageRelation,
   EpisodeLineageWriteInput,
+  EpisodicMaintenanceDiagnostics,
+  EpisodicMaintenanceDiagnosticsOptions,
   EpisodeListOptions,
   EpisodeTimeSearchOptions,
   EpisodeUpdateInput,
@@ -977,6 +983,25 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     ]);
 
     return lineage;
+  }
+
+  async getMaintenanceDiagnostics(
+    options: EpisodicMaintenanceDiagnosticsOptions = {},
+  ): Promise<EpisodicMaintenanceDiagnostics> {
+    const [decisions, watermarkRows] = await Promise.all([
+      this.listEpisodeCandidateDecisions({ limit: MAX_LIMIT }),
+      queryRows<PostgresProcessingWatermarkRow>(this.pool, `
+        SELECT *
+        FROM l01_processing_watermarks
+        ORDER BY updated_at ASC, id ASC
+        LIMIT $1
+      `, [MAX_LIMIT]),
+    ]);
+    return summarizeEpisodicMaintenanceDiagnostics({
+      decisions,
+      watermarks: watermarkRows.map(mapWatermarkRow),
+      now: normalizeEpisodicDiagnosticsNow(options.now),
+    });
   }
 
   private async assertEpisodeExists(id: string, field: string): Promise<void> {

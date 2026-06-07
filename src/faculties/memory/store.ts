@@ -21,6 +21,8 @@ import type {
   ScratchpadEntryCreateOptions,
   ScratchpadEntryReplaceOptions,
   MemoryMaintenanceReview,
+  MemoryMaintenanceDiagnostics,
+  MemoryMaintenanceDiagnosticsOptions,
   MemoryMaintenanceReviewInput,
   MemoryMaintenanceReviewListOptions,
   MemoryWriteCommit,
@@ -72,6 +74,7 @@ import {
   upsertMemoryMaintenanceReview,
   listMemoryMaintenanceReviews,
   getMemoryMaintenanceReview,
+  getMemoryMaintenanceDiagnostics,
 } from './store/maintenance-reviews.js';
 import type { MemoryStoreOptions } from './store/types.js';
 import { searchByEmbedding } from './store/vector-search.js';
@@ -224,6 +227,12 @@ export class MemoryStore {
 
   getMemoryMaintenanceReview(id: string): MemoryMaintenanceReview | undefined {
     return getMemoryMaintenanceReview(this.db, id);
+  }
+
+  getMemoryMaintenanceDiagnostics(
+    options: MemoryMaintenanceDiagnosticsOptions = {},
+  ): MemoryMaintenanceDiagnostics {
+    return getMemoryMaintenanceDiagnostics(this.db, options);
   }
 
   getMemoriesByChannel(channelId: string, limit: number): PurrMemory[] {

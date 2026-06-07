@@ -120,14 +120,21 @@ export interface ScratchpadAddResult {
   evictedIds: string[];
 }
 
-export type MemoryMaintenanceReviewKind = 'near_duplicate' | 'provenance_confidence';
+export type MemoryMaintenanceReviewKind =
+  | 'near_duplicate'
+  | 'provenance_confidence'
+  | 'high_impact_low_confidence'
+  | 'stale_memory'
+  | 'conflicting_memory';
 
 export type MemoryMaintenanceReviewStatus = 'pending' | 'quarantined' | 'resolved' | 'dismissed';
 
 export type MemoryMaintenanceRecommendedAction =
   | 'review'
   | 'merge_candidate'
-  | 'corroborate_or_dismiss';
+  | 'corroborate_or_dismiss'
+  | 'verify_or_supersede'
+  | 'resolve_conflict';
 
 export interface MemoryMaintenanceReviewCandidate {
   memoryId: string;
@@ -182,6 +189,24 @@ export interface MemoryMaintenanceReviewListOptions {
   status?: MemoryMaintenanceReviewStatus;
   kind?: MemoryMaintenanceReviewKind;
   limit?: number;
+}
+
+export interface MemoryMaintenanceDiagnostics {
+  reviewCount: number;
+  pendingReviewCount: number;
+  reviewCountsByKind: Record<string, number>;
+  reviewCountsByStatus: Record<string, number>;
+  oldestPendingReviewAgeMs: number;
+  averagePendingReviewAgeMs: number;
+  evolutionDecisionCount: number;
+  evolutionDecisionCountsByRelation: Record<MemoryEvolutionRelation, number>;
+  supersessionDecisionCount: number;
+  conflictDecisionCount: number;
+  latestEvolutionDecisionAt?: number;
+}
+
+export interface MemoryMaintenanceDiagnosticsOptions {
+  now?: number;
 }
 
 export type MemorySearchResult = PurrMemory & { similarity: number };
@@ -343,6 +368,7 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
     options?: MemoryMaintenanceReviewListOptions,
   ): Awaitable<MemoryMaintenanceReview[]>;
   getMemoryMaintenanceReview?(id: string): Awaitable<MemoryMaintenanceReview | undefined>;
+  getMemoryMaintenanceDiagnostics?(options?: MemoryMaintenanceDiagnosticsOptions): Awaitable<MemoryMaintenanceDiagnostics>;
 }
 
 export interface MemoryStorePort extends ScratchpadProvider {
@@ -412,6 +438,7 @@ export interface MemoryStorePort extends ScratchpadProvider {
   upsertMemoryMaintenanceReview?(input: MemoryMaintenanceReviewInput): Promise<MemoryMaintenanceReview>;
   listMemoryMaintenanceReviews?(options?: MemoryMaintenanceReviewListOptions): Promise<MemoryMaintenanceReview[]>;
   getMemoryMaintenanceReview?(id: string): Promise<MemoryMaintenanceReview | undefined>;
+  getMemoryMaintenanceDiagnostics?(options?: MemoryMaintenanceDiagnosticsOptions): Promise<MemoryMaintenanceDiagnostics>;
 }
 
 export interface CoreMemoryStorePort {
@@ -505,6 +532,13 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     ...(store.getMemoryMaintenanceReview
       ? {
         getMemoryMaintenanceReview: async (id) => await store.getMemoryMaintenanceReview!(id),
+      }
+      : {}),
+    ...(store.getMemoryMaintenanceDiagnostics
+      ? {
+        getMemoryMaintenanceDiagnostics: async (options) => (
+          await store.getMemoryMaintenanceDiagnostics!(options)
+        ),
       }
       : {}),
   };

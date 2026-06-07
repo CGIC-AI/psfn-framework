@@ -359,6 +359,29 @@ function buildSpanRef(sessionId: string, entries: readonly SessionEntry[]): Epis
   };
 }
 
+function parseMetadataRecord(entry: SessionEntry): Record<string, unknown> | null {
+  if (!entry.metadata) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(entry.metadata) as unknown;
+  } catch {
+    return null;
+  }
+  return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : null;
+}
+
+function metadataString(record: Record<string, unknown>, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return undefined;
+}
+
 function buildProvenanceRefs(
   sessionId: string,
   spanRef: EpisodeSpanRef,
@@ -371,6 +394,20 @@ function buildProvenanceRefs(
   for (const entry of entries.slice(0, 12)) {
     const turnId = getTurnId(entry);
     provenance.set(`turn:${turnId}`, { kind: 'turn', refId: turnId });
+    const metadata = parseMetadataRecord(entry);
+    if (!metadata) continue;
+    const operatorNoteId = metadataString(metadata, [
+      'operatorNoteId',
+      'operator_note_id',
+      'operatorNoteRef',
+      'operator_note_ref',
+    ]);
+    if (operatorNoteId) {
+      provenance.set(`operator_note:${operatorNoteId}`, {
+        kind: 'operator_note',
+        refId: operatorNoteId,
+      });
+    }
   }
 
   return [...provenance.values()];
@@ -415,14 +452,8 @@ function buildEpisodeInput(
 function inferArtifactRefs(entries: readonly SessionEntry[]): EpisodeArtifactRef[] {
   const refs = new Map<string, EpisodeArtifactRef>();
   for (const entry of entries) {
-    if (!entry.metadata) continue;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(entry.metadata) as unknown;
-    } catch {
-      continue;
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    const parsed = parseMetadataRecord(entry);
+    if (!parsed) continue;
     const artifacts = (parsed as { artifacts?: unknown }).artifacts;
     if (!Array.isArray(artifacts)) continue;
     for (const artifact of artifacts) {
@@ -632,16 +663,71 @@ function compareConsolidationScores(left: ConsolidationCandidateScore, right: Co
   return right.episode.startedAt.localeCompare(left.episode.startedAt) || left.episode.id.localeCompare(right.episode.id);
 }
 
+function episodeEvidenceText(episode: Episode): string {
+  return [
+    episode.title,
+    episode.landmark,
+    ...episode.themes,
+    ...episode.affect.labels,
+  ].join(' ').toLowerCase();
+}
+
+function hasOperatorEvidence(episode: Episode): boolean {
+  return episode.provenanceRefs.some(ref => ref.kind === 'operator_note')
+    || episode.themes.some(theme => /\boperator(?:[-_ ]defined)?\b/i.test(theme));
+}
+
+function classifyArcKind(source: Episode, target: Episode, overlap: number): EpisodeArcWriteInput['arcKind'] {
+  const targetText = episodeEvidenceText(target);
+  const combinedText = `${episodeEvidenceText(source)} ${targetText}`;
+  if (hasOperatorEvidence(source) || hasOperatorEvidence(target)) {
+    return 'operator_defined';
+  }
+  if (/\b(resolved|resolution|fixed|completed|closed|done|finali[sz]ed|shipped|settled|unblocked)\b/.test(targetText)) {
+    return 'resolution';
+  }
+  if (/\b(because|caused|causal|led to|resulted in|triggered|due to|as a result|blocked by|unblocked by)\b/.test(targetText)) {
+    return 'causal';
+  }
+  if (/\b(contrast|different|changed|no longer|instead|opposite|reversed|formerly|moved from|moved to)\b/.test(combinedText)) {
+    return 'contrast';
+  }
+  if (/\b(again|recurr|repeat|same issue|same pattern|returned|routine)\b/.test(targetText)) {
+    return 'recurrence';
+  }
+  if (
+    (source.threadId !== undefined && source.threadId === target.threadId)
+    || /\b(continue|continuation|follow[- ]?up|update|checkpoint|next step|final pass|back to)\b/.test(targetText)
+  ) {
+    return 'continuation';
+  }
+  return overlap > 0 ? 'same_theme' : 'continuation';
+}
+
+function arcConfidence(kind: EpisodeArcWriteInput['arcKind'], overlap: number): number {
+  const baseByKind: Record<EpisodeArcWriteInput['arcKind'], number> = {
+    causal: 0.74,
+    continuation: 0.68,
+    contrast: 0.7,
+    operator_defined: 0.82,
+    recurrence: 0.7,
+    resolution: 0.76,
+    same_theme: 0.55,
+  };
+  return normalizeBoundedUnit(Math.min(0.95, baseByKind[kind] + Math.min(0.16, overlap * 0.04)));
+}
+
 function buildArcInput(source: Episode, target: Episode, overlap: number): EpisodeArcWriteInput {
   const sharedThemes = source.themes.filter(theme => target.themes.includes(theme));
   const themes = sharedThemes.length > 0 ? sharedThemes : target.themes.slice(0, 3);
+  const arcKind = classifyArcKind(source, target, overlap);
   return {
     id: stableId('episode-arc', [source.id, target.id, themes.join('|')]),
     sourceEpisodeId: source.id,
     targetEpisodeId: target.id,
-    arcKind: overlap > 0 ? 'same_theme' : 'continuation',
+    arcKind,
     salience: normalizeBoundedUnit(Math.max(0.35, Math.min(source.salience.score, target.salience.score))),
-    confidence: normalizeBoundedUnit(overlap > 0 ? 0.55 + Math.min(0.3, overlap * 0.1) : 0.45),
+    confidence: arcConfidence(arcKind, overlap),
     themes,
     spanRefs: target.spanRefs,
     artifactRefs: target.artifactRefs,

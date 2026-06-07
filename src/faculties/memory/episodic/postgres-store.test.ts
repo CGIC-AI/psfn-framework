@@ -340,6 +340,15 @@ class FakeEpisodicPool {
   }
 
   private filterWatermarkRows(values: readonly unknown[]): StoredWatermarkRow[] {
+    if (values.length <= 1) {
+      const limit = Number(values[0] ?? this.watermarks.size);
+      return [...this.watermarks.values()]
+        .sort((left, right) => (
+          left.updated_at.localeCompare(right.updated_at)
+          || left.id.localeCompare(right.id)
+        ))
+        .slice(0, limit);
+    }
     const processor = String(values[0] ?? '');
     const sourceRef = String(values[1] ?? '');
     const channelId = String(values[2] ?? '');
@@ -625,6 +634,76 @@ describe('PostgresEpisodicStore', () => {
       target_episode_id: 'episode-2',
       relation: 'derived_from',
       source_ref: decision.id,
+    });
+  });
+
+  it('reports maintenance diagnostics for candidate decisions and watermark queue latency', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeStore(pool);
+    await store.createEpisode(baseEpisode({ id: 'episode-1' }));
+    await store.createEpisode(baseEpisode({
+      id: 'episode-2',
+      startedAt: '2026-03-30T10:04:00.000Z',
+      endedAt: '2026-03-30T10:08:00.000Z',
+      spanRefs: [{ spanId: 'span-2' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+    }));
+    const watermark = await store.upsertProcessingWatermark({
+      id: 'watermark-diagnostics',
+      processor: 'episodic_synthesis',
+      sourceRef: 'terminal:daily',
+      channelId: 'terminal:daily',
+      threadId: 'terminal:daily',
+      sessionId: 'terminal:daily',
+      processedStartedAt: '2026-03-30T10:00:00.000Z',
+      processedEndedAt: '2026-03-30T10:08:00.000Z',
+      status: 'active',
+      reconciliationStatus: 'pending',
+      lastProcessedAt: '2026-03-30T10:08:00.000Z',
+      updatedAt: '2026-03-30T10:10:00.000Z',
+    });
+    await store.writeEpisodeCandidateDecision({
+      id: 'candidate-canonical',
+      candidateEpisodeId: 'episode-1',
+      canonicalEpisodeId: 'episode-1',
+      sourceWatermarkId: watermark.id,
+      status: 'canonical',
+      confidence: 1,
+      candidateJson: {},
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-1' }],
+      createdAt: '2026-03-30T10:02:00.000Z',
+      updatedAt: '2026-03-30T10:02:00.000Z',
+    });
+    await store.writeEpisodeCandidateDecision({
+      id: 'candidate-merged',
+      canonicalEpisodeId: 'episode-1',
+      mergedIntoEpisodeId: 'episode-1',
+      sourceWatermarkId: watermark.id,
+      status: 'merged',
+      confidence: 0.86,
+      candidateJson: {},
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+      createdAt: '2026-03-30T10:08:00.000Z',
+      updatedAt: '2026-03-30T10:08:00.000Z',
+    });
+
+    await expect(store.getMaintenanceDiagnostics({
+      now: '2026-03-30T10:20:00.000Z',
+    })).resolves.toMatchObject({
+      candidateDecisionCount: 2,
+      decisionCountsByStatus: { canonical: 1, merged: 1 },
+      canonicalDecisionCount: 1,
+      duplicateCandidateCount: 1,
+      duplicateEpisodeRate: 0.5,
+      mergeDecisionCount: 1,
+      watermarkCount: 1,
+      pendingWatermarkCount: 1,
+      oldestQueueAgeMs: 10 * 60 * 1000,
+      averageQueueAgeMs: 10 * 60 * 1000,
+      averageProcessingLatencyMs: 2 * 60 * 1000,
+      latestProcessedAt: '2026-03-30T10:08:00.000Z',
     });
   });
 

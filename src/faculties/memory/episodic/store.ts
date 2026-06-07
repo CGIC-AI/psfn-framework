@@ -126,6 +126,28 @@ export interface EpisodeCandidateDecisionListOptions {
   limit?: number;
 }
 
+export interface EpisodicMaintenanceDiagnosticsOptions {
+  now?: string | Date | number;
+}
+
+export interface EpisodicMaintenanceDiagnostics {
+  candidateDecisionCount: number;
+  decisionCountsByStatus: Record<string, number>;
+  canonicalDecisionCount: number;
+  duplicateCandidateCount: number;
+  duplicateEpisodeRate: number;
+  mergeDecisionCount: number;
+  supersessionDecisionCount: number;
+  rejectedDecisionCount: number;
+  reviewDecisionCount: number;
+  watermarkCount: number;
+  pendingWatermarkCount: number;
+  oldestQueueAgeMs: number;
+  averageQueueAgeMs: number;
+  averageProcessingLatencyMs: number;
+  latestProcessedAt?: string;
+}
+
 export type EpisodeLineageRelation =
   | 'canonicalizes'
   | 'merges'
@@ -197,6 +219,7 @@ export interface EpisodicStorePort {
   writeEpisodeCandidateDecision(input: EpisodeCandidateDecisionWriteInput): EpisodicStoreResult<EpisodeCandidateDecision>;
   listEpisodeCandidateDecisions(options?: EpisodeCandidateDecisionListOptions): EpisodicStoreResult<EpisodeCandidateDecision[]>;
   writeEpisodeLineage(input: EpisodeLineageWriteInput): EpisodicStoreResult<EpisodeLineage>;
+  getMaintenanceDiagnostics(options?: EpisodicMaintenanceDiagnosticsOptions): EpisodicStoreResult<EpisodicMaintenanceDiagnostics>;
 }
 
 interface EpisodeRow {
@@ -275,6 +298,10 @@ const EPISODE_LINEAGE_RELATIONS = new Set<EpisodeLineageRelation>([
   'conflicts_with',
   'updates',
 ]);
+
+function isCanonicalIsoInstant(value: string): boolean {
+  return ISO_INSTANT_PATTERN.test(value) && !Number.isNaN(Date.parse(value));
+}
 
 function createEpisodicSchema(db: Database.Database): void {
   db.exec(`
@@ -549,6 +576,101 @@ function normalizeUnit(value: number, field: string): number {
     throw new Error(`${field} must be a finite number between 0 and 1`);
   }
   return value;
+}
+
+export function normalizeEpisodicDiagnosticsNow(value: string | Date | number | undefined): number {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string' && isCanonicalIsoInstant(value)) return Date.parse(value);
+  return Date.now();
+}
+
+function increment(counts: Record<string, number>, key: string): void {
+  counts[key] = (counts[key] ?? 0) + 1;
+}
+
+function parseOptionalInstantMs(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+export function summarizeEpisodicMaintenanceDiagnostics(input: {
+  decisions: readonly EpisodeCandidateDecision[];
+  watermarks: readonly EpisodicProcessingWatermark[];
+  now: number;
+}): EpisodicMaintenanceDiagnostics {
+  const decisionCountsByStatus: Record<string, number> = {};
+  let canonicalDecisionCount = 0;
+  let duplicateCandidateCount = 0;
+  let mergeDecisionCount = 0;
+  let supersessionDecisionCount = 0;
+  let rejectedDecisionCount = 0;
+  let reviewDecisionCount = 0;
+  const queueAges: number[] = [];
+  const processingLatencies: number[] = [];
+  let latestProcessedAt: string | undefined;
+
+  for (const decision of input.decisions) {
+    increment(decisionCountsByStatus, decision.status);
+    if (decision.status === 'canonical' || decision.status === 'accepted') canonicalDecisionCount += 1;
+    if (decision.status === 'merged') {
+      duplicateCandidateCount += 1;
+      mergeDecisionCount += 1;
+    }
+    if (decision.status === 'superseded') {
+      duplicateCandidateCount += 1;
+      supersessionDecisionCount += 1;
+    }
+    if (decision.status === 'rejected') {
+      duplicateCandidateCount += 1;
+      rejectedDecisionCount += 1;
+    }
+    if (decision.status === 'needs_review') {
+      reviewDecisionCount += 1;
+      queueAges.push(Math.max(0, input.now - Date.parse(decision.createdAt)));
+    }
+  }
+
+  let pendingWatermarkCount = 0;
+  for (const watermark of input.watermarks) {
+    if (watermark.status !== 'complete' || watermark.reconciliationStatus !== 'clean') {
+      pendingWatermarkCount += 1;
+      queueAges.push(Math.max(0, input.now - Date.parse(watermark.updatedAt)));
+    }
+    const processedEndedAtMs = parseOptionalInstantMs(watermark.processedEndedAt);
+    const updatedAtMs = parseOptionalInstantMs(watermark.updatedAt);
+    if (processedEndedAtMs !== undefined && updatedAtMs !== undefined) {
+      processingLatencies.push(Math.max(0, updatedAtMs - processedEndedAtMs));
+    }
+    if (!latestProcessedAt || watermark.lastProcessedAt > latestProcessedAt) {
+      latestProcessedAt = watermark.lastProcessedAt;
+    }
+  }
+
+  const queueAgeTotal = queueAges.reduce((sum, age) => sum + age, 0);
+  const processingLatencyTotal = processingLatencies.reduce((sum, latency) => sum + latency, 0);
+  return {
+    candidateDecisionCount: input.decisions.length,
+    decisionCountsByStatus,
+    canonicalDecisionCount,
+    duplicateCandidateCount,
+    duplicateEpisodeRate: input.decisions.length > 0
+      ? duplicateCandidateCount / input.decisions.length
+      : 0,
+    mergeDecisionCount,
+    supersessionDecisionCount,
+    rejectedDecisionCount,
+    reviewDecisionCount,
+    watermarkCount: input.watermarks.length,
+    pendingWatermarkCount,
+    oldestQueueAgeMs: queueAges.length > 0 ? Math.max(...queueAges) : 0,
+    averageQueueAgeMs: queueAges.length > 0 ? queueAgeTotal / queueAges.length : 0,
+    averageProcessingLatencyMs: processingLatencies.length > 0
+      ? processingLatencyTotal / processingLatencies.length
+      : 0,
+    ...(latestProcessedAt ? { latestProcessedAt } : {}),
+  };
 }
 
 function normalizeOptionalUnit(value: number | undefined, field: string): number | undefined {
@@ -1112,6 +1234,23 @@ export class EpisodicStore implements EpisodicStorePort {
     );
 
     return lineage;
+  }
+
+  getMaintenanceDiagnostics(
+    options: EpisodicMaintenanceDiagnosticsOptions = {},
+  ): EpisodicMaintenanceDiagnostics {
+    const decisions = this.listEpisodeCandidateDecisions({ limit: MAX_LIMIT });
+    const watermarks = this.db.prepare(`
+      SELECT *
+      FROM l01_processing_watermarks
+      ORDER BY updated_at ASC, id ASC
+      LIMIT ?
+    `).all(MAX_LIMIT) as ProcessingWatermarkRow[];
+    return summarizeEpisodicMaintenanceDiagnostics({
+      decisions,
+      watermarks: watermarks.map(mapWatermarkRow),
+      now: normalizeEpisodicDiagnosticsNow(options.now),
+    });
   }
 
   private assertEpisodeExists(id: string, field: string): void {

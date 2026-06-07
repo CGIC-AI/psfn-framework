@@ -27,6 +27,9 @@ export const PROVENANCE_CONFIDENCE_REVIEW_EVIDENCE_LIMIT = 1;
 const VALID_REVIEW_KINDS = new Set<MemoryMaintenanceReviewKind>([
   'near_duplicate',
   'provenance_confidence',
+  'high_impact_low_confidence',
+  'stale_memory',
+  'conflicting_memory',
 ]);
 const VALID_REVIEW_STATUSES = new Set<MemoryMaintenanceReviewStatus>([
   'pending',
@@ -38,6 +41,8 @@ const VALID_RECOMMENDED_ACTIONS = new Set<MemoryMaintenanceRecommendedAction>([
   'review',
   'merge_candidate',
   'corroborate_or_dismiss',
+  'verify_or_supersede',
+  'resolve_conflict',
 ]);
 
 const UNIQUE_DETAIL_STOP_WORDS = new Set([
@@ -72,6 +77,30 @@ const UNIQUE_DETAIL_STOP_WORDS = new Set([
   'would',
 ]);
 
+const HIGH_IMPACT_MEMORY_TYPES = new Set<PurrMemory['type']>(['boundary', 'emotional', 'relational']);
+const HIGH_IMPACT_TAG_HINTS = new Set([
+  'boundary',
+  'consent',
+  'contact',
+  'contact_profile',
+  'core_profile',
+  'core_relationship',
+  'emotion',
+  'emotional',
+  'family',
+  'feeling',
+  'identity',
+  'partner',
+  'profile',
+  'relationship',
+  'relationship_core',
+]);
+const HIGH_IMPACT_TEXT_HINT = /\b(identity|profile|partner|family|boundary|consent|feeling|emotion|contact)\b/i;
+const CONFLICT_TEXT_HINT = /\b(no longer|not|never|doesn't|does not|isn't|is not|aren't|are not|must not|should not|cannot|can't|won't|changed|opposite|conflict)\b/i;
+const HIGH_IMPACT_LOW_CONFIDENCE_THRESHOLD = 0.65;
+const STALE_MEMORY_CONFIDENCE_THRESHOLD = 0.58;
+const DEFAULT_STALE_MEMORY_AGE_MS = 90 * 24 * 60 * 60 * 1000;
+
 export interface MemoryMaintenanceReviewStore {
   upsertMemoryMaintenanceReview(input: MemoryMaintenanceReviewInput): Promise<MemoryMaintenanceReview>;
   listMemoryMaintenanceReviews(options?: MemoryMaintenanceReviewListOptions): Promise<MemoryMaintenanceReview[]>;
@@ -87,6 +116,19 @@ export interface MemoryMaintenanceSchedulerOptions {
 export interface PostWriteMaintenanceInput {
   memory: PurrMemory;
   candidates: MemorySearchResult[];
+}
+
+export interface UncertainMemoryReviewSubject {
+  memoryId: string;
+  text: string;
+  sourceRef: string;
+  provenanceRefs?: readonly string[];
+  confidence: number;
+  type?: PurrMemory['type'];
+  tags?: readonly string[];
+  sensitivity?: PurrMemory['sensitivity'];
+  extractedAt?: number;
+  lastAccessed?: number;
 }
 
 export interface StoredMemoryMaintenanceReviewRow {
@@ -491,6 +533,65 @@ function buildCandidateSummary(
   };
 }
 
+function buildUncertainCandidateSummary(
+  subject: UncertainMemoryReviewSubject,
+  comparedTexts: readonly string[] = [],
+  similarity?: number,
+): MemoryMaintenanceReviewCandidate {
+  return {
+    memoryId: coerceSubjectMemoryId(subject.memoryId),
+    text: subject.text,
+    textPreview: previewText(subject.text),
+    sourceRef: subject.sourceRef,
+    provenanceRefs: normalizeStringArray([
+      subject.sourceRef,
+      ...(subject.provenanceRefs ?? []),
+    ]),
+    confidence: subject.confidence,
+    uniqueDetails: extractUniqueDetails(subject.text, comparedTexts),
+    ...(similarity !== undefined ? { similarity } : {}),
+  };
+}
+
+function buildUncertainReviewState(input: {
+  kind: MemoryMaintenanceReviewKind;
+  subject: UncertainMemoryReviewSubject;
+  candidates?: readonly UncertainMemoryReviewSubject[];
+  reason: string;
+  recommendedAction: MemoryMaintenanceRecommendedAction;
+  metadata?: Record<string, unknown>;
+}): MemoryMaintenanceReviewState {
+  const candidates = input.candidates ?? [];
+  const allSubjects = [input.subject, ...candidates];
+  const allTexts = allSubjects.map(subject => subject.text);
+  const candidateSummaries = allSubjects.map(subject => buildUncertainCandidateSummary(
+    subject,
+    allTexts.filter(text => text !== subject.text),
+  ));
+  const uniqueDetails: Record<string, string[]> = {};
+  for (const candidate of candidateSummaries) {
+    uniqueDetails[candidate.memoryId] = candidate.uniqueDetails;
+  }
+  return {
+    schemaVersion: MEMORY_MAINTENANCE_REVIEW_SCHEMA_VERSION,
+    kind: input.kind,
+    status: 'pending',
+    subjectMemoryId: coerceSubjectMemoryId(input.subject.memoryId),
+    candidateMemoryIds: candidates.map(candidate => coerceSubjectMemoryId(candidate.memoryId)),
+    reason: input.reason,
+    recommendedAction: input.recommendedAction,
+    sourceRefs: normalizeStringArray(allSubjects.map(subject => subject.sourceRef)),
+    provenanceRefs: normalizeStringArray(allSubjects.flatMap(subject => [
+      subject.sourceRef,
+      ...(subject.provenanceRefs ?? []),
+    ])),
+    uniqueDetails,
+    candidates: candidateSummaries,
+    createdBy: 'memory_maintenance',
+    ...(input.metadata ? { metadata: input.metadata } : {}),
+  };
+}
+
 function buildReviewState(input: {
   kind: MemoryMaintenanceReviewKind;
   status?: MemoryMaintenanceReviewStatus;
@@ -622,6 +723,166 @@ export function buildProvenanceConfidenceReviewInput(
   };
 }
 
+function normalizedTagsForImpact(tags: readonly string[] | undefined): string[] {
+  return normalizeStringArray(tags).map(tag => tag.toLowerCase().replace(/[^a-z0-9]+/g, '_'));
+}
+
+export function isHighImpactMemorySubject(
+  memory: Pick<PurrMemory, 'type' | 'tags' | 'text' | 'contactId'> | UncertainMemoryReviewSubject,
+): boolean {
+  const type = 'type' in memory ? memory.type : undefined;
+  const tags = normalizedTagsForImpact('tags' in memory ? memory.tags : undefined);
+  return (
+    (type !== undefined && HIGH_IMPACT_MEMORY_TYPES.has(type))
+    || ('contactId' in memory && typeof memory.contactId === 'string' && memory.contactId.trim().length > 0)
+    || tags.some(tag => HIGH_IMPACT_TAG_HINTS.has(tag))
+    || HIGH_IMPACT_TEXT_HINT.test(memory.text)
+  );
+}
+
+export function shouldQueueHighImpactLowConfidenceReview(
+  memory: Pick<PurrMemory, 'type' | 'tags' | 'text' | 'confidence' | 'contactId'> | UncertainMemoryReviewSubject,
+): boolean {
+  if (!isHighImpactMemorySubject(memory)) return false;
+  return memory.confidence < HIGH_IMPACT_LOW_CONFIDENCE_THRESHOLD;
+}
+
+export function buildHighImpactLowConfidenceReviewInput(
+  subject: UncertainMemoryReviewSubject,
+  now: number = Date.now(),
+): MemoryMaintenanceReviewInput | null {
+  if (!shouldQueueHighImpactLowConfidenceReview(subject)) return null;
+  const state = buildUncertainReviewState({
+    kind: 'high_impact_low_confidence',
+    subject,
+    reason: 'High-impact memory candidate has low confidence and needs review before it becomes active memory.',
+    recommendedAction: 'corroborate_or_dismiss',
+    metadata: {
+      confidence: subject.confidence,
+      confidenceThreshold: HIGH_IMPACT_LOW_CONFIDENCE_THRESHOLD,
+      type: subject.type,
+      tags: normalizeStringArray(subject.tags),
+      sensitivity: subject.sensitivity,
+    },
+  });
+  return {
+    id: createReviewId('high_impact_low_confidence', state.subjectMemoryId, []),
+    kind: 'high_impact_low_confidence',
+    subjectMemoryId: state.subjectMemoryId,
+    candidateMemoryIds: [],
+    state,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+export function buildStaleMemoryReviewInput(
+  memory: PurrMemory,
+  now: number = Date.now(),
+  staleAgeMs: number = DEFAULT_STALE_MEMORY_AGE_MS,
+): MemoryMaintenanceReviewInput | null {
+  const recency = Math.max(memory.lastAccessed, memory.extractedAt);
+  const ageMs = Math.max(0, now - recency);
+  if (ageMs < staleAgeMs) return null;
+  if (!isHighImpactMemorySubject(memory) && memory.confidence >= STALE_MEMORY_CONFIDENCE_THRESHOLD) return null;
+  if (memory.confidence >= HIGH_IMPACT_LOW_CONFIDENCE_THRESHOLD && !isHighImpactMemorySubject(memory)) return null;
+  const subject: UncertainMemoryReviewSubject = {
+    memoryId: memory.id,
+    text: memory.text,
+    sourceRef: memory.sourceRef,
+    provenanceRefs: collectMemoryProvenanceRefs(memory),
+    confidence: memory.confidence,
+    type: memory.type,
+    tags: memory.tags,
+    sensitivity: memory.sensitivity,
+    extractedAt: memory.extractedAt,
+    lastAccessed: memory.lastAccessed,
+  };
+  const state = buildUncertainReviewState({
+    kind: 'stale_memory',
+    subject,
+    reason: 'Stale memory has high impact or low confidence and should be verified before use or supersession.',
+    recommendedAction: 'verify_or_supersede',
+    metadata: {
+      ageMs,
+      staleAgeMs,
+      confidence: memory.confidence,
+      lastAccessed: memory.lastAccessed,
+      extractedAt: memory.extractedAt,
+    },
+  });
+  return {
+    id: createReviewId('stale_memory', memory.id, []),
+    kind: 'stale_memory',
+    subjectMemoryId: memory.id,
+    candidateMemoryIds: [],
+    state,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function memoryTextsConflict(left: string, right: string): boolean {
+  return CONFLICT_TEXT_HINT.test(left) || CONFLICT_TEXT_HINT.test(right);
+}
+
+export function buildConflictingMemoryReviewInput(
+  subject: PurrMemory,
+  candidates: readonly PurrMemory[],
+  now: number = Date.now(),
+): MemoryMaintenanceReviewInput | null {
+  const selected = candidates
+    .filter(candidate => candidate.id !== subject.id)
+    .filter(candidate => candidate.type === subject.type)
+    .filter(candidate => (
+      isHighImpactMemorySubject(subject)
+      || isHighImpactMemorySubject(candidate)
+      || memoryTextsConflict(subject.text, candidate.text)
+    ))
+    .slice(0, 5);
+  if (selected.length === 0) return null;
+  const subjectInput: UncertainMemoryReviewSubject = {
+    memoryId: subject.id,
+    text: subject.text,
+    sourceRef: subject.sourceRef,
+    provenanceRefs: collectMemoryProvenanceRefs(subject),
+    confidence: subject.confidence,
+    type: subject.type,
+    tags: subject.tags,
+    sensitivity: subject.sensitivity,
+  };
+  const candidateInputs = selected.map<UncertainMemoryReviewSubject>(candidate => ({
+    memoryId: candidate.id,
+    text: candidate.text,
+    sourceRef: candidate.sourceRef,
+    provenanceRefs: collectMemoryProvenanceRefs(candidate),
+    confidence: candidate.confidence,
+    type: candidate.type,
+    tags: candidate.tags,
+    sensitivity: candidate.sensitivity,
+  }));
+  const state = buildUncertainReviewState({
+    kind: 'conflicting_memory',
+    subject: subjectInput,
+    candidates: candidateInputs,
+    reason: 'Potentially conflicting memories need explicit review before destructive reconciliation.',
+    recommendedAction: 'resolve_conflict',
+    metadata: {
+      candidateCount: selected.length,
+      subjectConfidence: subject.confidence,
+    },
+  });
+  return {
+    id: createReviewId('conflicting_memory', subject.id, state.candidateMemoryIds),
+    kind: 'conflicting_memory',
+    subjectMemoryId: subject.id,
+    candidateMemoryIds: state.candidateMemoryIds,
+    state,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 export function hasMemoryMaintenanceReviewStore(
   store: MemoryStorePort,
 ): store is MemoryStorePort & MemoryMaintenanceReviewStore {
@@ -675,6 +936,25 @@ export class MemoryMaintenanceScheduler {
     const provenanceReview = buildProvenanceConfidenceReviewInput(input.memory, now);
     if (provenanceReview) {
       await this.store.upsertMemoryMaintenanceReview(provenanceReview);
+    }
+    const highImpactReview = buildHighImpactLowConfidenceReviewInput({
+      memoryId: input.memory.id,
+      text: input.memory.text,
+      sourceRef: input.memory.sourceRef,
+      provenanceRefs: collectMemoryProvenanceRefs(input.memory),
+      confidence: input.memory.confidence,
+      type: input.memory.type,
+      tags: input.memory.tags,
+      sensitivity: input.memory.sensitivity,
+      extractedAt: input.memory.extractedAt,
+      lastAccessed: input.memory.lastAccessed,
+    }, now);
+    if (highImpactReview) {
+      await this.store.upsertMemoryMaintenanceReview(highImpactReview);
+    }
+    const conflictReview = buildConflictingMemoryReviewInput(input.memory, input.candidates, now);
+    if (conflictReview) {
+      await this.store.upsertMemoryMaintenanceReview(conflictReview);
     }
   }
 }

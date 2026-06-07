@@ -9,6 +9,8 @@ import {
   type Episode,
   type EpisodeArc,
   type EpisodeArcKind,
+  type EpisodeArtifactRef,
+  type EpisodeProvenanceRef,
 } from '../../../shared/contracts/episodic-memory.js';
 
 export type EpisodeCreateInput = Omit<
@@ -34,6 +36,121 @@ export type EpisodeArcWriteInput = Omit<
   id?: string;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type EpisodicProcessingWatermarkStatus = 'active' | 'reconciling' | 'blocked' | 'complete';
+export type EpisodicReconciliationStatus = 'pending' | 'clean' | 'needs_review' | 'blocked';
+
+export interface EpisodicProcessingWatermarkScope {
+  processor: string;
+  sourceRef: string;
+  channelId?: string;
+  threadId?: string;
+  sessionId?: string;
+}
+
+export interface EpisodicProcessingWatermark extends EpisodicProcessingWatermarkScope {
+  id: string;
+  highWaterTurnId?: string;
+  highWaterMessageId?: string;
+  processedStartedAt?: string;
+  processedEndedAt?: string;
+  previousWatermarkJson: Record<string, unknown>;
+  nextWatermarkJson: Record<string, unknown>;
+  status: EpisodicProcessingWatermarkStatus;
+  reconciliationStatus: EpisodicReconciliationStatus;
+  artifactsJson: Record<string, unknown>;
+  lastProcessedAt: string;
+  updatedAt: string;
+}
+
+export type EpisodicProcessingWatermarkWriteInput = EpisodicProcessingWatermarkScope & {
+  id?: string;
+  highWaterTurnId?: string;
+  highWaterMessageId?: string;
+  processedStartedAt?: string;
+  processedEndedAt?: string;
+  previousWatermarkJson?: Record<string, unknown>;
+  nextWatermarkJson?: Record<string, unknown>;
+  status?: EpisodicProcessingWatermarkStatus;
+  reconciliationStatus?: EpisodicReconciliationStatus;
+  artifactsJson?: Record<string, unknown>;
+  lastProcessedAt?: string;
+  updatedAt?: string;
+};
+
+export type EpisodeCandidateDecisionStatus =
+  | 'pending'
+  | 'accepted'
+  | 'canonical'
+  | 'merged'
+  | 'superseded'
+  | 'rejected'
+  | 'needs_review';
+
+export interface EpisodeCandidateDecision {
+  id: string;
+  candidateEpisodeId?: string;
+  canonicalEpisodeId?: string;
+  mergedIntoEpisodeId?: string;
+  supersededByEpisodeId?: string;
+  sourceWatermarkId?: string;
+  status: EpisodeCandidateDecisionStatus;
+  channelId?: string;
+  threadId?: string;
+  sessionId?: string;
+  startedAt?: string;
+  endedAt?: string;
+  overlapScore?: number;
+  confidence: number;
+  reason?: string;
+  candidateJson: unknown;
+  artifactRefs: EpisodeArtifactRef[];
+  provenanceRefs: EpisodeProvenanceRef[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type EpisodeCandidateDecisionWriteInput = Omit<
+  EpisodeCandidateDecision,
+  'id' | 'createdAt' | 'updatedAt'
+> & {
+  id?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export interface EpisodeCandidateDecisionListOptions {
+  sourceWatermarkId?: string;
+  canonicalEpisodeId?: string;
+  limit?: number;
+}
+
+export type EpisodeLineageRelation =
+  | 'canonicalizes'
+  | 'merges'
+  | 'supersedes'
+  | 'splits_from'
+  | 'derived_from'
+  | 'conflicts_with'
+  | 'updates';
+
+export interface EpisodeLineage {
+  id: string;
+  sourceEpisodeId: string;
+  targetEpisodeId: string;
+  relation: EpisodeLineageRelation;
+  confidence: number;
+  reason?: string;
+  sourceRef?: string;
+  provenanceRefs: EpisodeProvenanceRef[];
+  lineageJson: Record<string, unknown>;
+  createdAt: string;
+}
+
+export type EpisodeLineageWriteInput = Omit<EpisodeLineage, 'id' | 'createdAt'> & {
+  id?: string;
+  createdAt?: string;
 };
 
 export interface EpisodeListOptions {
@@ -71,6 +188,15 @@ export interface EpisodicStorePort {
     episodeId: string,
     options?: EpisodeArcListOptions,
   ): EpisodicStoreResult<EpisodeArc[]>;
+  getProcessingWatermark(
+    scope: EpisodicProcessingWatermarkScope,
+  ): EpisodicStoreResult<EpisodicProcessingWatermark | undefined>;
+  upsertProcessingWatermark(
+    input: EpisodicProcessingWatermarkWriteInput,
+  ): EpisodicStoreResult<EpisodicProcessingWatermark>;
+  writeEpisodeCandidateDecision(input: EpisodeCandidateDecisionWriteInput): EpisodicStoreResult<EpisodeCandidateDecision>;
+  listEpisodeCandidateDecisions(options?: EpisodeCandidateDecisionListOptions): EpisodicStoreResult<EpisodeCandidateDecision[]>;
+  writeEpisodeLineage(input: EpisodeLineageWriteInput): EpisodicStoreResult<EpisodeLineage>;
 }
 
 interface EpisodeRow {
@@ -83,9 +209,72 @@ interface EpisodeArcRow {
   arc_json: string;
 }
 
+interface ProcessingWatermarkRow {
+  id: string;
+  processor: string;
+  source_ref: string;
+  channel_id: string | null;
+  thread_id: string | null;
+  session_id: string | null;
+  high_water_turn_id: string | null;
+  high_water_message_id: string | null;
+  processed_started_at: string | null;
+  processed_ended_at: string | null;
+  previous_watermark_json: string;
+  next_watermark_json: string;
+  status: string;
+  reconciliation_status: string;
+  artifacts_json: string;
+  last_processed_at: string;
+  updated_at: string;
+}
+
+interface EpisodeCandidateDecisionRow {
+  id: string;
+  candidate_episode_id: string | null;
+  canonical_episode_id: string | null;
+  merged_into_episode_id: string | null;
+  superseded_by_episode_id: string | null;
+  source_watermark_id: string | null;
+  status: string;
+  channel_id: string | null;
+  thread_id: string | null;
+  session_id: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  overlap_score: number | null;
+  confidence: number;
+  reason: string | null;
+  candidate_json: string;
+  artifact_refs: string;
+  provenance_refs: string;
+  created_at: string;
+  updated_at: string;
+}
+
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
 const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const WATERMARK_STATUSES = new Set<EpisodicProcessingWatermarkStatus>(['active', 'reconciling', 'blocked', 'complete']);
+const RECONCILIATION_STATUSES = new Set<EpisodicReconciliationStatus>(['pending', 'clean', 'needs_review', 'blocked']);
+const CANDIDATE_DECISION_STATUSES = new Set<EpisodeCandidateDecisionStatus>([
+  'pending',
+  'accepted',
+  'canonical',
+  'merged',
+  'superseded',
+  'rejected',
+  'needs_review',
+]);
+const EPISODE_LINEAGE_RELATIONS = new Set<EpisodeLineageRelation>([
+  'canonicalizes',
+  'merges',
+  'supersedes',
+  'splits_from',
+  'derived_from',
+  'conflicts_with',
+  'updates',
+]);
 
 function createEpisodicSchema(db: Database.Database): void {
   db.exec(`
@@ -129,6 +318,76 @@ function createEpisodicSchema(db: Database.Database): void {
       ON l01_episode_arcs(target_episode_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_l01_episode_arcs_kind
       ON l01_episode_arcs(arc_kind, updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS l01_processing_watermarks (
+      id TEXT PRIMARY KEY,
+      processor TEXT NOT NULL,
+      channel_id TEXT,
+      thread_id TEXT,
+      session_id TEXT,
+      source_ref TEXT NOT NULL,
+      high_water_turn_id TEXT,
+      high_water_message_id TEXT,
+      processed_started_at TEXT,
+      processed_ended_at TEXT,
+      previous_watermark_json TEXT NOT NULL,
+      next_watermark_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      reconciliation_status TEXT NOT NULL,
+      artifacts_json TEXT NOT NULL,
+      last_processed_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_l01_processing_watermarks_unique_scope
+      ON l01_processing_watermarks(processor, source_ref, COALESCE(channel_id, ''), COALESCE(thread_id, ''), COALESCE(session_id, ''));
+
+    CREATE TABLE IF NOT EXISTS l01_episode_candidates (
+      id TEXT PRIMARY KEY,
+      candidate_episode_id TEXT,
+      canonical_episode_id TEXT,
+      merged_into_episode_id TEXT,
+      superseded_by_episode_id TEXT,
+      source_watermark_id TEXT,
+      status TEXT NOT NULL,
+      channel_id TEXT,
+      thread_id TEXT,
+      session_id TEXT,
+      started_at TEXT,
+      ended_at TEXT,
+      overlap_score REAL,
+      confidence REAL NOT NULL,
+      reason TEXT,
+      candidate_json TEXT NOT NULL,
+      artifact_refs TEXT NOT NULL,
+      provenance_refs TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (source_watermark_id) REFERENCES l01_processing_watermarks(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_l01_episode_candidates_watermark
+      ON l01_episode_candidates(source_watermark_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_l01_episode_candidates_canonical
+      ON l01_episode_candidates(canonical_episode_id, status);
+
+    CREATE TABLE IF NOT EXISTS l01_episode_lineage (
+      id TEXT PRIMARY KEY,
+      source_episode_id TEXT NOT NULL,
+      target_episode_id TEXT NOT NULL,
+      relation TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      reason TEXT,
+      source_ref TEXT,
+      provenance_refs TEXT NOT NULL,
+      lineage_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      CHECK (source_episode_id <> target_episode_id),
+      FOREIGN KEY (source_episode_id) REFERENCES l01_episodes(id) ON DELETE CASCADE,
+      FOREIGN KEY (target_episode_id) REFERENCES l01_episodes(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_l01_episode_lineage_source
+      ON l01_episode_lineage(source_episode_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_l01_episode_lineage_target
+      ON l01_episode_lineage(target_episode_id, created_at DESC);
   `);
 }
 
@@ -173,6 +432,30 @@ function parseArcJson(raw: string, id: string): EpisodeArc {
   }
 }
 
+function parseJsonPayload(raw: string, label: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (error) {
+    throw new Error(`${label} JSON is not parseable: ${String(error)}`);
+  }
+}
+
+function parseRecordJson(raw: string, label: string): Record<string, unknown> {
+  const parsed = parseJsonPayload(raw, label);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function parseArrayJson<T>(raw: string, label: string): T[] {
+  const parsed = parseJsonPayload(raw, label);
+  if (!Array.isArray(parsed)) {
+    throw new Error(`${label} must be a JSON array`);
+  }
+  return parsed as T[];
+}
+
 function mapEpisodeRow(row: EpisodeRow): Episode {
   const episode = parseEpisodeJson(row.episode_json, row.id);
   if (episode.id !== row.id) {
@@ -189,12 +472,102 @@ function mapArcRow(row: EpisodeArcRow): EpisodeArc {
   return arc;
 }
 
+function mapWatermarkRow(row: ProcessingWatermarkRow): EpisodicProcessingWatermark {
+  const status = row.status as EpisodicProcessingWatermarkStatus;
+  if (!WATERMARK_STATUSES.has(status)) {
+    throw new Error(`malformed persisted processing watermark "${row.id}": unsupported status`);
+  }
+  const reconciliationStatus = row.reconciliation_status as EpisodicReconciliationStatus;
+  if (!RECONCILIATION_STATUSES.has(reconciliationStatus)) {
+    throw new Error(`malformed persisted processing watermark "${row.id}": unsupported reconciliation status`);
+  }
+  return {
+    id: row.id,
+    processor: row.processor,
+    sourceRef: row.source_ref,
+    ...(row.channel_id ? { channelId: row.channel_id } : {}),
+    ...(row.thread_id ? { threadId: row.thread_id } : {}),
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    ...(row.high_water_turn_id ? { highWaterTurnId: row.high_water_turn_id } : {}),
+    ...(row.high_water_message_id ? { highWaterMessageId: row.high_water_message_id } : {}),
+    ...(row.processed_started_at ? { processedStartedAt: row.processed_started_at } : {}),
+    ...(row.processed_ended_at ? { processedEndedAt: row.processed_ended_at } : {}),
+    previousWatermarkJson: parseRecordJson(row.previous_watermark_json, `processing watermark "${row.id}" previousWatermarkJson`),
+    nextWatermarkJson: parseRecordJson(row.next_watermark_json, `processing watermark "${row.id}" nextWatermarkJson`),
+    status,
+    reconciliationStatus,
+    artifactsJson: parseRecordJson(row.artifacts_json, `processing watermark "${row.id}" artifactsJson`),
+    lastProcessedAt: row.last_processed_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function mapCandidateDecisionRow(row: EpisodeCandidateDecisionRow): EpisodeCandidateDecision {
+  const status = row.status as EpisodeCandidateDecisionStatus;
+  if (!CANDIDATE_DECISION_STATUSES.has(status)) {
+    throw new Error(`malformed persisted episode candidate "${row.id}": unsupported status`);
+  }
+  return {
+    id: row.id,
+    ...(row.candidate_episode_id ? { candidateEpisodeId: row.candidate_episode_id } : {}),
+    ...(row.canonical_episode_id ? { canonicalEpisodeId: row.canonical_episode_id } : {}),
+    ...(row.merged_into_episode_id ? { mergedIntoEpisodeId: row.merged_into_episode_id } : {}),
+    ...(row.superseded_by_episode_id ? { supersededByEpisodeId: row.superseded_by_episode_id } : {}),
+    ...(row.source_watermark_id ? { sourceWatermarkId: row.source_watermark_id } : {}),
+    status,
+    ...(row.channel_id ? { channelId: row.channel_id } : {}),
+    ...(row.thread_id ? { threadId: row.thread_id } : {}),
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.ended_at ? { endedAt: row.ended_at } : {}),
+    ...(row.overlap_score !== null ? { overlapScore: row.overlap_score } : {}),
+    confidence: row.confidence,
+    ...(row.reason ? { reason: row.reason } : {}),
+    candidateJson: parseJsonPayload(row.candidate_json, `episode candidate "${row.id}" candidateJson`),
+    artifactRefs: parseArrayJson<EpisodeArtifactRef>(row.artifact_refs, `episode candidate "${row.id}" artifactRefs`),
+    provenanceRefs: parseArrayJson<EpisodeProvenanceRef>(row.provenance_refs, `episode candidate "${row.id}" provenanceRefs`),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
 function parseRequiredText(value: string, field: string): string {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
     throw new Error(`${field} must be non-empty`);
   }
   return trimmed;
+}
+
+function parseOptionalText(value: string | undefined, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  return parseRequiredText(value, field);
+}
+
+function normalizeUnit(value: number, field: string): number {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`${field} must be a finite number between 0 and 1`);
+  }
+  return value;
+}
+
+function normalizeOptionalUnit(value: number | undefined, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  return normalizeUnit(value, field);
+}
+
+function normalizeWatermarkScope(scope: EpisodicProcessingWatermarkScope): EpisodicProcessingWatermarkScope {
+  return {
+    processor: parseRequiredText(scope.processor, 'processor'),
+    sourceRef: parseRequiredText(scope.sourceRef, 'sourceRef'),
+    ...(scope.channelId !== undefined ? { channelId: parseRequiredText(scope.channelId, 'channelId') } : {}),
+    ...(scope.threadId !== undefined ? { threadId: parseRequiredText(scope.threadId, 'threadId') } : {}),
+    ...(scope.sessionId !== undefined ? { sessionId: parseRequiredText(scope.sessionId, 'sessionId') } : {}),
+  };
+}
+
+function json(value: unknown): string {
+  return JSON.stringify(value);
 }
 
 export class EpisodicStore implements EpisodicStorePort {
@@ -447,6 +820,298 @@ export class EpisodicStore implements EpisodicStorePort {
       LIMIT ?
     `).all(...params, normalizeLimit(options.limit)) as EpisodeArcRow[];
     return rows.map(mapArcRow);
+  }
+
+  getProcessingWatermark(scope: EpisodicProcessingWatermarkScope): EpisodicProcessingWatermark | undefined {
+    const normalized = normalizeWatermarkScope(scope);
+    const row = this.db.prepare(`
+      SELECT *
+      FROM l01_processing_watermarks
+      WHERE processor = ?
+        AND source_ref = ?
+        AND COALESCE(channel_id, '') = ?
+        AND COALESCE(thread_id, '') = ?
+        AND COALESCE(session_id, '') = ?
+      LIMIT 1
+    `).get(
+      normalized.processor,
+      normalized.sourceRef,
+      normalized.channelId ?? '',
+      normalized.threadId ?? '',
+      normalized.sessionId ?? '',
+    ) as ProcessingWatermarkRow | undefined;
+    return row ? mapWatermarkRow(row) : undefined;
+  }
+
+  upsertProcessingWatermark(input: EpisodicProcessingWatermarkWriteInput): EpisodicProcessingWatermark {
+    const scope = normalizeWatermarkScope(input);
+    const now = this.now().toISOString();
+    const watermark: EpisodicProcessingWatermark = {
+      ...scope,
+      id: input.id ?? this.idFactory(),
+      ...(parseOptionalText(input.highWaterTurnId, 'highWaterTurnId') ? { highWaterTurnId: parseRequiredText(input.highWaterTurnId ?? '', 'highWaterTurnId') } : {}),
+      ...(parseOptionalText(input.highWaterMessageId, 'highWaterMessageId') ? { highWaterMessageId: parseRequiredText(input.highWaterMessageId ?? '', 'highWaterMessageId') } : {}),
+      ...(normalizeInstant(input.processedStartedAt, 'processedStartedAt') ? { processedStartedAt: normalizeInstant(input.processedStartedAt, 'processedStartedAt') } : {}),
+      ...(normalizeInstant(input.processedEndedAt, 'processedEndedAt') ? { processedEndedAt: normalizeInstant(input.processedEndedAt, 'processedEndedAt') } : {}),
+      previousWatermarkJson: input.previousWatermarkJson ?? {},
+      nextWatermarkJson: input.nextWatermarkJson ?? {},
+      status: input.status ?? 'active',
+      reconciliationStatus: input.reconciliationStatus ?? 'pending',
+      artifactsJson: input.artifactsJson ?? {},
+      lastProcessedAt: normalizeInstant(input.lastProcessedAt, 'lastProcessedAt') ?? now,
+      updatedAt: normalizeInstant(input.updatedAt, 'updatedAt') ?? now,
+    };
+    if (!WATERMARK_STATUSES.has(watermark.status)) {
+      throw new Error(`watermark status is not supported: ${watermark.status}`);
+    }
+    if (!RECONCILIATION_STATUSES.has(watermark.reconciliationStatus)) {
+      throw new Error(`watermark reconciliationStatus is not supported: ${watermark.reconciliationStatus}`);
+    }
+
+    this.db.prepare(`
+      INSERT INTO l01_processing_watermarks (
+        id,
+        processor,
+        channel_id,
+        thread_id,
+        session_id,
+        source_ref,
+        high_water_turn_id,
+        high_water_message_id,
+        processed_started_at,
+        processed_ended_at,
+        previous_watermark_json,
+        next_watermark_json,
+        status,
+        reconciliation_status,
+        artifacts_json,
+        last_processed_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        processor = excluded.processor,
+        channel_id = excluded.channel_id,
+        thread_id = excluded.thread_id,
+        session_id = excluded.session_id,
+        source_ref = excluded.source_ref,
+        high_water_turn_id = excluded.high_water_turn_id,
+        high_water_message_id = excluded.high_water_message_id,
+        processed_started_at = excluded.processed_started_at,
+        processed_ended_at = excluded.processed_ended_at,
+        previous_watermark_json = excluded.previous_watermark_json,
+        next_watermark_json = excluded.next_watermark_json,
+        status = excluded.status,
+        reconciliation_status = excluded.reconciliation_status,
+        artifacts_json = excluded.artifacts_json,
+        last_processed_at = excluded.last_processed_at,
+        updated_at = excluded.updated_at
+    `).run(
+      watermark.id,
+      watermark.processor,
+      watermark.channelId ?? null,
+      watermark.threadId ?? null,
+      watermark.sessionId ?? null,
+      watermark.sourceRef,
+      watermark.highWaterTurnId ?? null,
+      watermark.highWaterMessageId ?? null,
+      watermark.processedStartedAt ?? null,
+      watermark.processedEndedAt ?? null,
+      json(watermark.previousWatermarkJson),
+      json(watermark.nextWatermarkJson),
+      watermark.status,
+      watermark.reconciliationStatus,
+      json(watermark.artifactsJson),
+      watermark.lastProcessedAt,
+      watermark.updatedAt,
+    );
+
+    return watermark;
+  }
+
+  writeEpisodeCandidateDecision(input: EpisodeCandidateDecisionWriteInput): EpisodeCandidateDecision {
+    const now = this.now().toISOString();
+    const decision: EpisodeCandidateDecision = {
+      id: input.id ?? this.idFactory(),
+      ...(parseOptionalText(input.candidateEpisodeId, 'candidateEpisodeId') ? { candidateEpisodeId: parseRequiredText(input.candidateEpisodeId ?? '', 'candidateEpisodeId') } : {}),
+      ...(parseOptionalText(input.canonicalEpisodeId, 'canonicalEpisodeId') ? { canonicalEpisodeId: parseRequiredText(input.canonicalEpisodeId ?? '', 'canonicalEpisodeId') } : {}),
+      ...(parseOptionalText(input.mergedIntoEpisodeId, 'mergedIntoEpisodeId') ? { mergedIntoEpisodeId: parseRequiredText(input.mergedIntoEpisodeId ?? '', 'mergedIntoEpisodeId') } : {}),
+      ...(parseOptionalText(input.supersededByEpisodeId, 'supersededByEpisodeId') ? { supersededByEpisodeId: parseRequiredText(input.supersededByEpisodeId ?? '', 'supersededByEpisodeId') } : {}),
+      ...(parseOptionalText(input.sourceWatermarkId, 'sourceWatermarkId') ? { sourceWatermarkId: parseRequiredText(input.sourceWatermarkId ?? '', 'sourceWatermarkId') } : {}),
+      status: input.status,
+      ...(parseOptionalText(input.channelId, 'channelId') ? { channelId: parseRequiredText(input.channelId ?? '', 'channelId') } : {}),
+      ...(parseOptionalText(input.threadId, 'threadId') ? { threadId: parseRequiredText(input.threadId ?? '', 'threadId') } : {}),
+      ...(parseOptionalText(input.sessionId, 'sessionId') ? { sessionId: parseRequiredText(input.sessionId ?? '', 'sessionId') } : {}),
+      ...(normalizeInstant(input.startedAt, 'startedAt') ? { startedAt: normalizeInstant(input.startedAt, 'startedAt') } : {}),
+      ...(normalizeInstant(input.endedAt, 'endedAt') ? { endedAt: normalizeInstant(input.endedAt, 'endedAt') } : {}),
+      ...(normalizeOptionalUnit(input.overlapScore, 'overlapScore') !== undefined
+        ? { overlapScore: normalizeOptionalUnit(input.overlapScore, 'overlapScore') }
+        : {}),
+      confidence: normalizeUnit(input.confidence, 'confidence'),
+      ...(parseOptionalText(input.reason, 'reason') ? { reason: parseRequiredText(input.reason ?? '', 'reason') } : {}),
+      candidateJson: input.candidateJson,
+      artifactRefs: input.artifactRefs,
+      provenanceRefs: input.provenanceRefs,
+      createdAt: normalizeInstant(input.createdAt, 'createdAt') ?? now,
+      updatedAt: normalizeInstant(input.updatedAt, 'updatedAt') ?? input.createdAt ?? now,
+    };
+    if (!CANDIDATE_DECISION_STATUSES.has(decision.status)) {
+      throw new Error(`episode candidate status is not supported: ${decision.status}`);
+    }
+
+    this.db.prepare(`
+      INSERT INTO l01_episode_candidates (
+        id,
+        candidate_episode_id,
+        canonical_episode_id,
+        merged_into_episode_id,
+        superseded_by_episode_id,
+        source_watermark_id,
+        status,
+        channel_id,
+        thread_id,
+        session_id,
+        started_at,
+        ended_at,
+        overlap_score,
+        confidence,
+        reason,
+        candidate_json,
+        artifact_refs,
+        provenance_refs,
+        created_at,
+        updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        candidate_episode_id = excluded.candidate_episode_id,
+        canonical_episode_id = excluded.canonical_episode_id,
+        merged_into_episode_id = excluded.merged_into_episode_id,
+        superseded_by_episode_id = excluded.superseded_by_episode_id,
+        source_watermark_id = excluded.source_watermark_id,
+        status = excluded.status,
+        channel_id = excluded.channel_id,
+        thread_id = excluded.thread_id,
+        session_id = excluded.session_id,
+        started_at = excluded.started_at,
+        ended_at = excluded.ended_at,
+        overlap_score = excluded.overlap_score,
+        confidence = excluded.confidence,
+        reason = excluded.reason,
+        candidate_json = excluded.candidate_json,
+        artifact_refs = excluded.artifact_refs,
+        provenance_refs = excluded.provenance_refs,
+        updated_at = excluded.updated_at
+    `).run(
+      decision.id,
+      decision.candidateEpisodeId ?? null,
+      decision.canonicalEpisodeId ?? null,
+      decision.mergedIntoEpisodeId ?? null,
+      decision.supersededByEpisodeId ?? null,
+      decision.sourceWatermarkId ?? null,
+      decision.status,
+      decision.channelId ?? null,
+      decision.threadId ?? null,
+      decision.sessionId ?? null,
+      decision.startedAt ?? null,
+      decision.endedAt ?? null,
+      decision.overlapScore ?? null,
+      decision.confidence,
+      decision.reason ?? null,
+      json(decision.candidateJson),
+      json(decision.artifactRefs),
+      json(decision.provenanceRefs),
+      decision.createdAt,
+      decision.updatedAt,
+    );
+
+    return decision;
+  }
+
+  listEpisodeCandidateDecisions(options: EpisodeCandidateDecisionListOptions = {}): EpisodeCandidateDecision[] {
+    const where: string[] = [];
+    const params: Array<string | number> = [];
+    if (options.sourceWatermarkId !== undefined) {
+      where.push('source_watermark_id = ?');
+      params.push(parseRequiredText(options.sourceWatermarkId, 'sourceWatermarkId'));
+    }
+    if (options.canonicalEpisodeId !== undefined) {
+      where.push('canonical_episode_id = ?');
+      params.push(parseRequiredText(options.canonicalEpisodeId, 'canonicalEpisodeId'));
+    }
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM l01_episode_candidates
+      ${whereClause}
+      ORDER BY created_at ASC, id ASC
+      LIMIT ?
+    `).all(...params, normalizeLimit(options.limit)) as EpisodeCandidateDecisionRow[];
+    return rows.map(mapCandidateDecisionRow);
+  }
+
+  writeEpisodeLineage(input: EpisodeLineageWriteInput): EpisodeLineage {
+    this.assertEpisodeExists(input.sourceEpisodeId, 'lineage.sourceEpisodeId');
+    this.assertEpisodeExists(input.targetEpisodeId, 'lineage.targetEpisodeId');
+    if (input.sourceEpisodeId === input.targetEpisodeId) {
+      throw new Error('episode lineage source and target must differ');
+    }
+    if (!EPISODE_LINEAGE_RELATIONS.has(input.relation)) {
+      throw new Error(`episode lineage relation is not supported: ${input.relation}`);
+    }
+
+    const now = this.now().toISOString();
+    const lineage: EpisodeLineage = {
+      id: input.id ?? this.idFactory(),
+      sourceEpisodeId: parseRequiredText(input.sourceEpisodeId, 'sourceEpisodeId'),
+      targetEpisodeId: parseRequiredText(input.targetEpisodeId, 'targetEpisodeId'),
+      relation: input.relation,
+      confidence: normalizeUnit(input.confidence, 'confidence'),
+      ...(parseOptionalText(input.reason, 'reason') ? { reason: parseRequiredText(input.reason ?? '', 'reason') } : {}),
+      ...(parseOptionalText(input.sourceRef, 'sourceRef') ? { sourceRef: parseRequiredText(input.sourceRef ?? '', 'sourceRef') } : {}),
+      provenanceRefs: input.provenanceRefs,
+      lineageJson: input.lineageJson,
+      createdAt: normalizeInstant(input.createdAt, 'createdAt') ?? now,
+    };
+
+    this.db.prepare(`
+      INSERT INTO l01_episode_lineage (
+        id,
+        source_episode_id,
+        target_episode_id,
+        relation,
+        confidence,
+        reason,
+        source_ref,
+        provenance_refs,
+        lineage_json,
+        created_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        source_episode_id = excluded.source_episode_id,
+        target_episode_id = excluded.target_episode_id,
+        relation = excluded.relation,
+        confidence = excluded.confidence,
+        reason = excluded.reason,
+        source_ref = excluded.source_ref,
+        provenance_refs = excluded.provenance_refs,
+        lineage_json = excluded.lineage_json,
+        created_at = excluded.created_at
+    `).run(
+      lineage.id,
+      lineage.sourceEpisodeId,
+      lineage.targetEpisodeId,
+      lineage.relation,
+      lineage.confidence,
+      lineage.reason ?? null,
+      lineage.sourceRef ?? null,
+      json(lineage.provenanceRefs),
+      json(lineage.lineageJson),
+      lineage.createdAt,
+    );
+
+    return lineage;
   }
 
   private assertEpisodeExists(id: string, field: string): void {

@@ -35,6 +35,62 @@ interface StoredArcRow {
   arc_json: unknown;
 }
 
+interface StoredWatermarkRow {
+  id: string;
+  processor: string;
+  source_ref: string;
+  channel_id: string | null;
+  thread_id: string | null;
+  session_id: string | null;
+  high_water_turn_id: string | null;
+  high_water_message_id: string | null;
+  processed_started_at: string | null;
+  processed_ended_at: string | null;
+  previous_watermark_json: unknown;
+  next_watermark_json: unknown;
+  status: string;
+  reconciliation_status: string;
+  artifacts_json: unknown;
+  last_processed_at: string;
+  updated_at: string;
+}
+
+interface StoredCandidateDecisionRow {
+  id: string;
+  candidate_episode_id: string | null;
+  canonical_episode_id: string | null;
+  merged_into_episode_id: string | null;
+  superseded_by_episode_id: string | null;
+  source_watermark_id: string | null;
+  status: string;
+  channel_id: string | null;
+  thread_id: string | null;
+  session_id: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  overlap_score: number | null;
+  confidence: number;
+  reason: string | null;
+  candidate_json: unknown;
+  artifact_refs: unknown;
+  provenance_refs: unknown;
+  created_at: string;
+  updated_at: string;
+}
+
+interface StoredEpisodeLineageRow {
+  id: string;
+  source_episode_id: string;
+  target_episode_id: string;
+  relation: string;
+  confidence: number;
+  reason: string | null;
+  source_ref: string | null;
+  provenance_refs: unknown;
+  lineage_json: unknown;
+  created_at: string;
+}
+
 function queryResult(rows: unknown[] = [], command = 'SELECT'): QueryResult {
   return {
     rows,
@@ -70,6 +126,9 @@ function isActiveArc(row: StoredArcRow): boolean {
 class FakeEpisodicPool {
   readonly episodes = new Map<string, StoredEpisodeRow>();
   readonly arcs = new Map<string, StoredArcRow>();
+  readonly watermarks = new Map<string, StoredWatermarkRow>();
+  readonly candidateDecisions = new Map<string, StoredCandidateDecisionRow>();
+  readonly lineages = new Map<string, StoredEpisodeLineageRow>();
   readonly queries: Array<{ text: string; values: readonly unknown[] }> = [];
 
   async query(text: string, values: readonly unknown[] = []): Promise<QueryResult> {
@@ -124,6 +183,74 @@ class FakeEpisodicPool {
       return queryResult([], 'INSERT');
     }
 
+    if (normalized.startsWith('insert into l01_processing_watermarks')) {
+      const row: StoredWatermarkRow = {
+        id: String(values[0] ?? ''),
+        processor: String(values[1] ?? ''),
+        channel_id: values[2] === null ? null : String(values[2] ?? ''),
+        thread_id: values[3] === null ? null : String(values[3] ?? ''),
+        session_id: values[4] === null ? null : String(values[4] ?? ''),
+        source_ref: String(values[5] ?? ''),
+        high_water_turn_id: values[6] === null ? null : String(values[6] ?? ''),
+        high_water_message_id: values[7] === null ? null : String(values[7] ?? ''),
+        processed_started_at: values[8] === null ? null : String(values[8] ?? ''),
+        processed_ended_at: values[9] === null ? null : String(values[9] ?? ''),
+        previous_watermark_json: values[10],
+        next_watermark_json: values[11],
+        status: String(values[12] ?? ''),
+        reconciliation_status: String(values[13] ?? ''),
+        artifacts_json: values[14],
+        last_processed_at: String(values[15] ?? ''),
+        updated_at: String(values[16] ?? ''),
+      };
+      this.watermarks.set(row.id, row);
+      return queryResult([], 'INSERT');
+    }
+
+    if (normalized.startsWith('insert into l01_episode_candidates')) {
+      const row: StoredCandidateDecisionRow = {
+        id: String(values[0] ?? ''),
+        candidate_episode_id: values[1] === null ? null : String(values[1] ?? ''),
+        canonical_episode_id: values[2] === null ? null : String(values[2] ?? ''),
+        merged_into_episode_id: values[3] === null ? null : String(values[3] ?? ''),
+        superseded_by_episode_id: values[4] === null ? null : String(values[4] ?? ''),
+        source_watermark_id: values[5] === null ? null : String(values[5] ?? ''),
+        status: String(values[6] ?? ''),
+        channel_id: values[7] === null ? null : String(values[7] ?? ''),
+        thread_id: values[8] === null ? null : String(values[8] ?? ''),
+        session_id: values[9] === null ? null : String(values[9] ?? ''),
+        started_at: values[10] === null ? null : String(values[10] ?? ''),
+        ended_at: values[11] === null ? null : String(values[11] ?? ''),
+        overlap_score: values[12] === null ? null : Number(values[12]),
+        confidence: Number(values[13] ?? 0),
+        reason: values[14] === null ? null : String(values[14] ?? ''),
+        candidate_json: values[15],
+        artifact_refs: values[16],
+        provenance_refs: values[17],
+        created_at: String(values[18] ?? ''),
+        updated_at: String(values[19] ?? ''),
+      };
+      this.candidateDecisions.set(row.id, row);
+      return queryResult([], 'INSERT');
+    }
+
+    if (normalized.startsWith('insert into l01_episode_lineage')) {
+      const row: StoredEpisodeLineageRow = {
+        id: String(values[0] ?? ''),
+        source_episode_id: String(values[1] ?? ''),
+        target_episode_id: String(values[2] ?? ''),
+        relation: String(values[3] ?? ''),
+        confidence: Number(values[4] ?? 0),
+        reason: values[5] === null ? null : String(values[5] ?? ''),
+        source_ref: values[6] === null ? null : String(values[6] ?? ''),
+        provenance_refs: values[7],
+        lineage_json: values[8],
+        created_at: String(values[9] ?? ''),
+      };
+      this.lineages.set(row.id, row);
+      return queryResult([], 'INSERT');
+    }
+
     if (normalized.startsWith('select id, episode_json from l01_episodes where id =')) {
       const row = this.episodes.get(String(values[0] ?? ''));
       return queryResult(row ? [{ id: row.id, episode_json: row.episode_json }] : []);
@@ -140,6 +267,14 @@ class FakeEpisodicPool {
 
     if (normalized.startsWith('select id, arc_json from l01_episode_arcs')) {
       return queryResult(this.filterArcRows(normalized, values));
+    }
+
+    if (normalized.startsWith('select * from l01_processing_watermarks')) {
+      return queryResult(this.filterWatermarkRows(values));
+    }
+
+    if (normalized.startsWith('select * from l01_episode_candidates')) {
+      return queryResult(this.filterCandidateDecisionRows(normalized, values));
     }
 
     throw new Error(`Unhandled SQL in FakeEpisodicPool: ${text}`);
@@ -202,6 +337,41 @@ class FakeEpisodicPool {
       ))
       .slice(0, limit)
       .map(row => ({ id: row.id, arc_json: row.arc_json }));
+  }
+
+  private filterWatermarkRows(values: readonly unknown[]): StoredWatermarkRow[] {
+    const processor = String(values[0] ?? '');
+    const sourceRef = String(values[1] ?? '');
+    const channelId = String(values[2] ?? '');
+    const threadId = String(values[3] ?? '');
+    const sessionId = String(values[4] ?? '');
+    return [...this.watermarks.values()].filter(row => (
+      row.processor === processor
+      && row.source_ref === sourceRef
+      && (row.channel_id ?? '') === channelId
+      && (row.thread_id ?? '') === threadId
+      && (row.session_id ?? '') === sessionId
+    ));
+  }
+
+  private filterCandidateDecisionRows(normalized: string, values: readonly unknown[]): StoredCandidateDecisionRow[] {
+    let cursor = 0;
+    let rows = [...this.candidateDecisions.values()];
+    if (normalized.includes('source_watermark_id =')) {
+      const sourceWatermarkId = String(values[cursor++] ?? '');
+      rows = rows.filter(row => row.source_watermark_id === sourceWatermarkId);
+    }
+    if (normalized.includes('canonical_episode_id =')) {
+      const canonicalEpisodeId = String(values[cursor++] ?? '');
+      rows = rows.filter(row => row.canonical_episode_id === canonicalEpisodeId);
+    }
+    const limit = Number(values[cursor++] ?? rows.length);
+    return rows
+      .sort((left, right) => (
+        left.created_at.localeCompare(right.created_at)
+        || left.id.localeCompare(right.id)
+      ))
+      .slice(0, limit);
   }
 }
 
@@ -347,6 +517,115 @@ describe('PostgresEpisodicStore', () => {
       episode_json: serializeEpisode(updated),
     });
     await expect(store.getEpisode('episode-1')).resolves.toEqual(updated);
+  });
+
+  it('persists processing watermarks across store instances', async () => {
+    const pool = new FakeEpisodicPool();
+    const firstStore = makeStore(pool);
+
+    const watermark = await firstStore.upsertProcessingWatermark({
+      id: 'watermark-1',
+      processor: 'episodic_synthesis',
+      sourceRef: 'terminal:daily',
+      channelId: 'terminal:daily',
+      threadId: 'terminal:daily',
+      sessionId: 'terminal:daily',
+      highWaterTurnId: 'turn-2',
+      highWaterMessageId: 'message-2',
+      processedStartedAt: '2026-03-30T10:00:00.000Z',
+      processedEndedAt: '2026-03-30T10:05:00.000Z',
+      previousWatermarkJson: {},
+      nextWatermarkJson: {
+        canonicalEpisodeIds: ['episode-1'],
+        skippedEpisodeIds: [],
+      },
+      status: 'active',
+      reconciliationStatus: 'clean',
+      artifactsJson: { candidateDecisionIds: ['candidate-1'] },
+      lastProcessedAt: '2026-03-30T10:05:00.000Z',
+      updatedAt: '2026-03-30T10:05:00.000Z',
+    });
+    const secondStore = makeStore(pool);
+
+    await expect(secondStore.getProcessingWatermark({
+      processor: 'episodic_synthesis',
+      sourceRef: 'terminal:daily',
+      channelId: 'terminal:daily',
+      threadId: 'terminal:daily',
+      sessionId: 'terminal:daily',
+    })).resolves.toEqual(watermark);
+    expect(pool.watermarks.get('watermark-1')?.next_watermark_json).toBe(JSON.stringify({
+      canonicalEpisodeIds: ['episode-1'],
+      skippedEpisodeIds: [],
+    }));
+  });
+
+  it('persists candidate reconciliation decisions and episode lineage rows', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeStore(pool);
+    await store.createEpisode(baseEpisode({ id: 'episode-1' }));
+    await store.createEpisode(baseEpisode({
+      id: 'episode-2',
+      startedAt: '2026-03-30T10:04:00.000Z',
+      endedAt: '2026-03-30T10:08:00.000Z',
+      spanRefs: [{ spanId: 'span-2' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+    }));
+    const watermark = await store.upsertProcessingWatermark({
+      id: 'watermark-merge',
+      processor: 'episodic_synthesis',
+      sourceRef: 'terminal:daily',
+      channelId: 'terminal:daily',
+      threadId: 'terminal:daily',
+      sessionId: 'terminal:daily',
+      processedStartedAt: '2026-03-30T10:00:00.000Z',
+      processedEndedAt: '2026-03-30T10:08:00.000Z',
+      lastProcessedAt: '2026-03-30T10:08:00.000Z',
+    });
+
+    const decision = await store.writeEpisodeCandidateDecision({
+      id: 'candidate-decision-1',
+      canonicalEpisodeId: 'episode-1',
+      mergedIntoEpisodeId: 'episode-1',
+      sourceWatermarkId: watermark.id,
+      status: 'merged',
+      channelId: 'terminal:daily',
+      threadId: 'terminal:daily',
+      sessionId: 'terminal:daily',
+      startedAt: '2026-03-30T10:04:00.000Z',
+      endedAt: '2026-03-30T10:08:00.000Z',
+      overlapScore: 0.75,
+      confidence: 0.86,
+      reason: 'candidate extended a canonical episode',
+      candidateJson: { candidateEpisodeId: 'candidate-episode-1' },
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+    });
+    await store.writeEpisodeLineage({
+      id: 'lineage-1',
+      sourceEpisodeId: 'episode-1',
+      targetEpisodeId: 'episode-2',
+      relation: 'derived_from',
+      confidence: 0.7,
+      reason: 'created from related prior episode',
+      sourceRef: decision.id,
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+      lineageJson: { candidateDecisionId: decision.id },
+    });
+
+    await expect(store.listEpisodeCandidateDecisions({ sourceWatermarkId: watermark.id })).resolves.toEqual([decision]);
+    expect(pool.candidateDecisions.get('candidate-decision-1')).toMatchObject({
+      status: 'merged',
+      canonical_episode_id: 'episode-1',
+      merged_into_episode_id: 'episode-1',
+      source_watermark_id: watermark.id,
+    });
+    expect(pool.lineages.get('lineage-1')).toMatchObject({
+      source_episode_id: 'episode-1',
+      target_episode_id: 'episode-2',
+      relation: 'derived_from',
+      source_ref: decision.id,
+    });
   });
 
   it('writes canonical arcs and lists only active canonical graph edges', async () => {

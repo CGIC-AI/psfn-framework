@@ -166,6 +166,38 @@ describe('EpisodicSynthesizer', () => {
       canonicalEpisodeIds: [first.createdEpisodes[0].id],
       skippedEpisodeIds: [first.createdEpisodes[0].id],
     });
+
+    const decisions = store.listEpisodeCandidateDecisions({ canonicalEpisodeId: first.createdEpisodes[0].id });
+    expect(decisions).toHaveLength(2);
+    expect(decisions.map(decision => decision.status).sort()).toEqual(['canonical', 'merged']);
+    const mergedDecision = decisions.find(decision => decision.status === 'merged');
+    expect(mergedDecision).toMatchObject({
+      canonicalEpisodeId: first.createdEpisodes[0].id,
+      mergedIntoEpisodeId: first.createdEpisodes[0].id,
+      sourceWatermarkId: expect.any(String),
+      reason: 'candidate span deterministically overlapped an active canonical episode',
+      candidateJson: {
+        decision: {
+          action: 'extend',
+          canonicalEpisodeId: first.createdEpisodes[0].id,
+        },
+      },
+    });
+    const durableWatermark = store.getProcessingWatermark({
+      processor: 'episodic_synthesis',
+      sourceRef: 'terminal:daily',
+      sessionId: 'terminal:daily',
+      threadId: 'terminal:daily',
+      channelId: 'terminal:daily',
+    });
+    expect(durableWatermark).toMatchObject({
+      highWaterTurnId: '00000000-0000-7000-a000-000000000003',
+      highWaterMessageId: 'session-entry:3',
+      reconciliationStatus: 'clean',
+      artifactsJson: {
+        candidateDecisionIds: expect.arrayContaining(decisions.map(decision => decision.id)),
+      },
+    });
   });
 
   it('reuses a canonical episode when a rest boundary shifts across an overlapping turn', async () => {

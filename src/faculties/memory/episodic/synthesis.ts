@@ -10,7 +10,16 @@ import type {
   EpisodeSalience,
   EpisodeSpanRef,
 } from '../../../shared/contracts/episodic-memory.js';
-import type { EpisodeArcWriteInput, EpisodeCreateInput, EpisodeUpdateInput, EpisodicStorePort } from './store.js';
+import type {
+  EpisodeArcWriteInput,
+  EpisodeCandidateDecision,
+  EpisodeCandidateDecisionStatus,
+  EpisodeCreateInput,
+  EpisodeUpdateInput,
+  EpisodicProcessingWatermark,
+  EpisodicProcessingWatermarkScope,
+  EpisodicStorePort,
+} from './store.js';
 
 export interface EpisodicSynthesisSessionReader {
   getRecentMessages(channelId: string, limit: number): SessionEntry[];
@@ -73,6 +82,15 @@ interface ConsolidationCandidateScore {
   timeGapMs: number;
 }
 
+interface CandidateDecisionResult {
+  status: EpisodeCandidateDecisionStatus;
+  action: 'create' | 'extend' | 'discard';
+  reason: string;
+  canonicalEpisode: Episode;
+  sourceEpisode?: Episode;
+  score?: ConsolidationCandidateScore;
+}
+
 const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 96;
 const DEFAULT_MAX_EPISODES_PER_RUN = 6;
 const DEFAULT_MAX_PRIOR_CANDIDATES = 24;
@@ -86,6 +104,8 @@ const MIN_CONSOLIDATION_SPAN_OVERLAP_RATIO = 0.5;
 const MAX_CONSOLIDATION_BOUNDARY_GAP_MS = 10 * 60_000;
 const MIN_CONSOLIDATION_SEARCH_WINDOW_MS = 2 * 60 * 60_000;
 const MAX_CONSOLIDATION_SEARCH_WINDOW_MS = 24 * 60 * 60_000;
+const WATERMARK_LOOKBACK_MS = Math.max(MAX_CONSOLIDATION_BOUNDARY_GAP_MS, 45 * 60_000);
+const EPISODIC_SYNTHESIS_PROCESSOR = 'episodic_synthesis';
 const MINUTE_MS = 60_000;
 const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const STOP_WORDS = new Set([
@@ -439,6 +459,15 @@ function mergeStringSets(left: readonly string[], right: readonly string[]): str
   return [...new Set([...left, ...right])].sort();
 }
 
+function stringArrayFromRecord(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string[] {
+  const value = record?.[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is string => typeof item === 'string' && item.length > 0);
+}
+
 function mergeByKey<T>(left: readonly T[], right: readonly T[], keyFor: (value: T) => string): T[] {
   const values = new Map<string, T>();
   for (const value of [...left, ...right]) {
@@ -649,7 +678,15 @@ function findRelatedSource(
 export class EpisodicSynthesizer {
   private readonly store: Pick<
     EpisodicStorePort,
-    'createEpisode' | 'updateEpisode' | 'getEpisode' | 'searchByTime' | 'writeEpisodeArc'
+    | 'createEpisode'
+    | 'updateEpisode'
+    | 'getEpisode'
+    | 'searchByTime'
+    | 'writeEpisodeArc'
+    | 'getProcessingWatermark'
+    | 'upsertProcessingWatermark'
+    | 'writeEpisodeCandidateDecision'
+    | 'writeEpisodeLineage'
   >;
   private readonly sessionReader: EpisodicSynthesisSessionReader;
   private readonly transcriptMessageLimit: number;
@@ -662,7 +699,15 @@ export class EpisodicSynthesizer {
   constructor(
     store: Pick<
       EpisodicStorePort,
-      'createEpisode' | 'updateEpisode' | 'getEpisode' | 'searchByTime' | 'writeEpisodeArc'
+      | 'createEpisode'
+      | 'updateEpisode'
+      | 'getEpisode'
+      | 'searchByTime'
+      | 'writeEpisodeArc'
+      | 'getProcessingWatermark'
+      | 'upsertProcessingWatermark'
+      | 'writeEpisodeCandidateDecision'
+      | 'writeEpisodeLineage'
     >,
     sessionReader: EpisodicSynthesisSessionReader,
     options: EpisodicSynthesisOptions = {},
@@ -696,10 +741,15 @@ export class EpisodicSynthesizer {
   }
 
   async run(input: EpisodicSynthesisRunInput): Promise<EpisodicSynthesisRunResult> {
-    const entries = this.sessionReader
+    const rawEntries = this.sessionReader
       .getRecentMessages(input.sessionId, this.transcriptMessageLimit)
       .filter(isConversational)
       .sort(compareEntries);
+    const watermarkScope = this.buildProcessingWatermarkScope(input, rawEntries[0]?.channelId ?? input.sessionId);
+    let durableWatermark = await this.store.getProcessingWatermark(watermarkScope);
+    if (durableWatermark) this.rememberProcessingWatermark(durableWatermark);
+
+    const entries = this.applyWatermarkLookback(rawEntries, durableWatermark);
 
     const groups = groupEntries(entries, {
       gapSplitMs: this.gapSplitMs,
@@ -714,9 +764,16 @@ export class EpisodicSynthesizer {
       const existing = await this.store.getEpisode(episodeInput.id);
       let episode: Episode;
       let created = false;
+      let decision: CandidateDecisionResult;
       if (existing) {
         episode = existing;
         skippedEpisodeIds.push(existing.id);
+        decision = {
+          status: 'superseded',
+          action: 'discard',
+          reason: 'candidate span already covered by canonical episode id',
+          canonicalEpisode: episode,
+        };
       } else {
         const consolidationTarget = await this.resolveConsolidationTarget(episodeInput, createdEpisodes);
         if (consolidationTarget) {
@@ -728,14 +785,40 @@ export class EpisodicSynthesizer {
             createdEpisodes[currentRunIndex] = episode;
           }
           skippedEpisodeIds.push(episode.id);
+          decision = {
+            status: 'merged',
+            action: 'extend',
+            reason: 'candidate span deterministically overlapped an active canonical episode',
+            canonicalEpisode: episode,
+            sourceEpisode: consolidationTarget.episode,
+            score: consolidationTarget,
+          };
         } else {
           episode = await this.store.createEpisode(episodeInput);
           created = true;
           createdEpisodes.push(episode);
+          decision = {
+            status: 'canonical',
+            action: 'create',
+            reason: 'candidate span did not match an active canonical episode',
+            canonicalEpisode: episode,
+          };
         }
       }
 
-      this.recordProcessingWatermark(input, episodeInput, episode, !created);
+      const candidateDecision = await this.persistCandidateDecisionAndWatermark(
+        input,
+        episodeInput,
+        decision,
+        durableWatermark,
+      );
+      durableWatermark = await this.updateWatermarkDecisionArtifacts(
+        input,
+        episodeInput,
+        decision,
+        durableWatermark,
+        candidateDecision,
+      );
 
       if (created) {
         const priorCandidates = await this.resolvePriorCandidates(episode, createdEpisodes);
@@ -744,6 +827,21 @@ export class EpisodicSynthesizer {
         linkedArcs.push(await this.store.writeEpisodeArc(
           buildArcInput(related.episode, episode, related.overlap),
         ));
+        await this.store.writeEpisodeLineage({
+          id: stableId('episode-lineage', [related.episode.id, episode.id, candidateDecision.id]),
+          sourceEpisodeId: related.episode.id,
+          targetEpisodeId: episode.id,
+          relation: 'derived_from',
+          confidence: normalizeBoundedUnit(Math.max(0.45, Math.min(0.9, 0.55 + related.overlap * 0.1))),
+          reason: 'new canonical episode linked to a related prior episode during synthesis',
+          sourceRef: candidateDecision.id,
+          provenanceRefs: episode.provenanceRefs,
+          lineageJson: {
+            schemaVersion: 1,
+            candidateDecisionId: candidateDecision.id,
+            relatedThemeOverlap: related.overlap,
+          },
+        });
       }
     }
 
@@ -815,36 +913,183 @@ export class EpisodicSynthesizer {
     ].join('\u001f');
   }
 
-  private recordProcessingWatermark(
+  private buildProcessingWatermarkScope(
+    runInput: EpisodicSynthesisRunInput,
+    channelId: string,
+  ): EpisodicProcessingWatermarkScope {
+    return {
+      processor: EPISODIC_SYNTHESIS_PROCESSOR,
+      sourceRef: runInput.sessionId,
+      channelId,
+      threadId: runInput.sessionId,
+      sessionId: runInput.sessionId,
+    };
+  }
+
+  private applyWatermarkLookback(
+    entries: readonly SessionEntry[],
+    watermark: EpisodicProcessingWatermark | undefined,
+  ): SessionEntry[] {
+    if (!watermark?.processedEndedAt) return [...entries];
+    const lookbackStart = Date.parse(watermark.processedEndedAt) - Math.max(this.gapSplitMs, WATERMARK_LOOKBACK_MS);
+    return entries.filter(entry => entry.timestamp >= lookbackStart);
+  }
+
+  private rememberProcessingWatermark(watermark: EpisodicProcessingWatermark): void {
+    const scope: EpisodicSynthesisWatermarkScope = {
+      sessionId: watermark.sessionId ?? watermark.sourceRef,
+      ...(watermark.threadId ? { threadId: watermark.threadId } : {}),
+      ...(watermark.channelId ? { channelId: watermark.channelId } : {}),
+    };
+    this.processingWatermarks.set(this.watermarkKey(scope), {
+      ...scope,
+      ...(watermark.highWaterTurnId ? { highWaterTurnId: watermark.highWaterTurnId } : {}),
+      ...(watermark.highWaterMessageId ? { highWaterMessageId: watermark.highWaterMessageId } : {}),
+      processedStartedAt: watermark.processedStartedAt ?? watermark.updatedAt,
+      processedEndedAt: watermark.processedEndedAt ?? watermark.updatedAt,
+      updatedAt: watermark.updatedAt,
+      canonicalEpisodeIds: stringArrayFromRecord(watermark.nextWatermarkJson, 'canonicalEpisodeIds'),
+      skippedEpisodeIds: stringArrayFromRecord(watermark.nextWatermarkJson, 'skippedEpisodeIds'),
+    });
+  }
+
+  private async persistCandidateDecisionAndWatermark(
     runInput: EpisodicSynthesisRunInput,
     candidate: EpisodeCandidateInput,
-    canonicalEpisode: Episode,
-    skipped: boolean,
-  ): void {
-    const scope: EpisodicSynthesisWatermarkScope = {
+    decision: CandidateDecisionResult,
+    previous: EpisodicProcessingWatermark | undefined,
+  ): Promise<EpisodeCandidateDecision> {
+    const watermark = await this.upsertWatermarkForDecision(runInput, candidate, decision, previous, undefined);
+    const candidateDecision = await this.store.writeEpisodeCandidateDecision({
+      id: stableId('episode-candidate-decision', [
+        watermark.id,
+        candidate.id,
+        decision.action,
+        decision.canonicalEpisode.id,
+      ]),
+      candidateEpisodeId: decision.action === 'extend' ? undefined : decision.canonicalEpisode.id,
+      canonicalEpisodeId: decision.canonicalEpisode.id,
+      mergedIntoEpisodeId: decision.action === 'extend' ? decision.canonicalEpisode.id : undefined,
+      supersededByEpisodeId: decision.action === 'discard' ? decision.canonicalEpisode.id : undefined,
+      sourceWatermarkId: watermark.id,
+      status: decision.status,
+      channelId: candidate.channelId,
+      threadId: candidate.threadId,
       sessionId: runInput.sessionId,
-      ...(candidate.threadId ? { threadId: candidate.threadId } : {}),
-      ...(candidate.channelId ? { channelId: candidate.channelId } : {}),
-    };
-    const key = this.watermarkKey(scope);
-    const previous = this.processingWatermarks.get(key);
-    const candidateSpan = candidate.spanRefs[0];
-    const previousCanonicalIds = previous?.canonicalEpisodeIds ?? [];
-    const previousSkippedIds = previous?.skippedEpisodeIds ?? [];
+      startedAt: candidate.startedAt,
+      endedAt: candidate.endedAt,
+      overlapScore: decision.score?.spanOverlapRatio,
+      confidence: this.decisionConfidence(decision),
+      reason: decision.reason,
+      candidateJson: {
+        schemaVersion: 1,
+        candidateEpisode: candidate,
+        decision: this.decisionJson(decision),
+      },
+      artifactRefs: candidate.artifactRefs,
+      provenanceRefs: candidate.provenanceRefs,
+    });
+    return candidateDecision;
+  }
 
-    this.processingWatermarks.set(key, {
+  private async updateWatermarkDecisionArtifacts(
+    runInput: EpisodicSynthesisRunInput,
+    candidate: EpisodeCandidateInput,
+    decision: CandidateDecisionResult,
+    previous: EpisodicProcessingWatermark | undefined,
+    candidateDecision: EpisodeCandidateDecision,
+  ): Promise<EpisodicProcessingWatermark> {
+    return this.upsertWatermarkForDecision(runInput, candidate, decision, previous, candidateDecision.id);
+  }
+
+  private async upsertWatermarkForDecision(
+    runInput: EpisodicSynthesisRunInput,
+    candidate: EpisodeCandidateInput,
+    decision: CandidateDecisionResult,
+    previous: EpisodicProcessingWatermark | undefined,
+    candidateDecisionId: string | undefined,
+  ): Promise<EpisodicProcessingWatermark> {
+    const scope = this.buildProcessingWatermarkScope(runInput, candidate.channelId ?? runInput.sessionId);
+    const previousCanonicalIds = stringArrayFromRecord(previous?.nextWatermarkJson, 'canonicalEpisodeIds');
+    const previousSkippedIds = stringArrayFromRecord(previous?.nextWatermarkJson, 'skippedEpisodeIds');
+    const previousDecisionIds = stringArrayFromRecord(previous?.artifactsJson, 'candidateDecisionIds');
+    const skippedEpisodeIds = decision.action === 'create'
+      ? previousSkippedIds
+      : mergeStringSets(previousSkippedIds, [decision.canonicalEpisode.id]);
+    const candidateDecisionIds = candidateDecisionId
+      ? mergeStringSets(previousDecisionIds, [candidateDecisionId])
+      : previousDecisionIds;
+    const candidateSpan = candidate.spanRefs[0];
+    const watermark = await this.store.upsertProcessingWatermark({
+      id: stableId('l01-processing-watermark', [
+        scope.processor,
+        scope.sourceRef,
+        scope.channelId ?? '',
+        scope.threadId ?? '',
+        scope.sessionId ?? '',
+      ]),
       ...scope,
       highWaterTurnId: candidateSpan.endTurnId ?? previous?.highWaterTurnId,
       highWaterMessageId: runInput.sourceMessageId ?? previous?.highWaterMessageId,
-      processedStartedAt: previous && previous.processedStartedAt <= candidate.startedAt
+      processedStartedAt: previous?.processedStartedAt && previous.processedStartedAt <= candidate.startedAt
         ? previous.processedStartedAt
         : candidate.startedAt,
-      processedEndedAt: previous && previous.processedEndedAt >= candidate.endedAt
+      processedEndedAt: previous?.processedEndedAt && previous.processedEndedAt >= candidate.endedAt
         ? previous.processedEndedAt
         : candidate.endedAt,
+      previousWatermarkJson: previous ? {
+        id: previous.id,
+        highWaterTurnId: previous.highWaterTurnId,
+        highWaterMessageId: previous.highWaterMessageId,
+        processedStartedAt: previous.processedStartedAt,
+        processedEndedAt: previous.processedEndedAt,
+      } : {},
+      nextWatermarkJson: {
+        schemaVersion: 1,
+        highWaterTurnId: candidateSpan.endTurnId ?? previous?.highWaterTurnId,
+        highWaterMessageId: runInput.sourceMessageId ?? previous?.highWaterMessageId,
+        canonicalEpisodeIds: mergeStringSets(previousCanonicalIds, [decision.canonicalEpisode.id]),
+        skippedEpisodeIds,
+        lastDecision: this.decisionJson(decision),
+      },
+      status: 'active',
+      reconciliationStatus: 'clean',
+      artifactsJson: {
+        schemaVersion: 1,
+        candidateDecisionIds,
+        ...(candidateDecisionId ? { lastCandidateDecisionId: candidateDecisionId } : {}),
+      },
+      lastProcessedAt: candidate.endedAt,
       updatedAt: candidate.endedAt,
-      canonicalEpisodeIds: mergeStringSets(previousCanonicalIds, [canonicalEpisode.id]),
-      skippedEpisodeIds: skipped ? mergeStringSets(previousSkippedIds, [canonicalEpisode.id]) : previousSkippedIds,
     });
+    this.rememberProcessingWatermark(watermark);
+    return watermark;
+  }
+
+  private decisionConfidence(decision: CandidateDecisionResult): number {
+    if (!decision.score) return 1;
+    return normalizeBoundedUnit(Math.max(
+      0.55,
+      Math.min(0.95, 0.45 + decision.score.spanOverlapRatio * 0.4 + decision.score.themeOverlap * 0.05),
+    ));
+  }
+
+  private decisionJson(decision: CandidateDecisionResult): Record<string, unknown> {
+    return {
+      action: decision.action,
+      status: decision.status,
+      reason: decision.reason,
+      canonicalEpisodeId: decision.canonicalEpisode.id,
+      ...(decision.sourceEpisode ? { sourceEpisodeId: decision.sourceEpisode.id } : {}),
+      ...(decision.score ? {
+        overlap: {
+          spanOverlapRatio: decision.score.spanOverlapRatio,
+          themeOverlap: decision.score.themeOverlap,
+          artifactOverlap: decision.score.artifactOverlap,
+          turnBoundaryOverlap: decision.score.turnBoundaryOverlap,
+          timeGapMs: decision.score.timeGapMs,
+        },
+      } : {}),
+    };
   }
 }

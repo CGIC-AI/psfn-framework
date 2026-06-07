@@ -16,12 +16,30 @@ const MIGRATION_TABLES = [
   'l2_memories',
   'l2_memory_embeddings',
   'l2_memory_delete_versions',
+  'l2_memory_abstraction_links',
   'l2_memory_patch_events',
   'l2_memory_maintenance_reviews',
   'memory_links',
+  'contact_profiles',
   'scratchpad_entries',
   'l01_episodes',
   'l01_episode_arcs',
+] as const;
+
+const OUT_OF_SCOPE_TABLES = [
+  'contacts',
+  'contact_channel_ids',
+  'contact_channel_activity',
+  'contact_identity_link_verifications',
+  'contact_mutation_audit',
+  'social_graph_entities',
+  'social_relationship_edges',
+  'active_concerns',
+  'intention_pending_follow_ups',
+  'intention_pending_follow_up_quarantine',
+  'behavioral_pattern_events',
+  'gateway_audit',
+  'reflections',
 ] as const;
 
 type MigrationTableName = typeof MIGRATION_TABLES[number];
@@ -41,7 +59,7 @@ interface PostgresPoolLike {
 export interface SqliteToPostgresMemoryMigrationWarning {
   code: string;
   message: string;
-  table?: MigrationTableName;
+  table?: string;
   rowId?: string;
 }
 
@@ -126,20 +144,15 @@ const TABLE_ORDER_COLUMNS: Record<MigrationTableName, readonly string[]> = {
   l2_memories: ['id'],
   l2_memory_embeddings: ['memory_id'],
   l2_memory_delete_versions: ['delete_id'],
+  l2_memory_abstraction_links: ['id'],
   l2_memory_patch_events: ['id'],
   l2_memory_maintenance_reviews: ['id'],
   memory_links: ['id1', 'id2'],
+  contact_profiles: ['contact_id'],
   scratchpad_entries: ['id'],
   l01_episodes: ['id'],
   l01_episode_arcs: ['id'],
 };
-
-const APPLY_UNSUPPORTED_TABLES: readonly MigrationTableName[] = [
-  'l2_memory_delete_versions',
-  'l2_memory_patch_events',
-  'l2_memory_maintenance_reviews',
-  'memory_links',
-];
 
 function createEmptyTableReport(present = false): SqliteMigrationTableReport {
   return {
@@ -206,7 +219,7 @@ function quoteIdentifier(identifier: string): string {
   return `"${identifier}"`;
 }
 
-function tableExists(db: Database.Database, tableName: MigrationTableName): boolean {
+function tableExists(db: Database.Database, tableName: string): boolean {
   const row = db.prepare(`
     SELECT name
     FROM sqlite_master
@@ -489,6 +502,14 @@ function loadSqliteData(sqlitePath: string, embeddingDims: number): LoadedSqlite
         appliedRows: 0,
       };
     }
+    for (const table of OUT_OF_SCOPE_TABLES) {
+      if (!tableExists(db, table)) continue;
+      warnings.push({
+        table,
+        code: 'out_of_scope_table',
+        message: `${table} is present but is outside this memory migration deliverable`,
+      });
+    }
   } finally {
     db.close();
   }
@@ -647,6 +668,187 @@ function prepareScratchpadValues(row: SqliteRow): readonly unknown[] | null {
     id,
     content,
     getNumber(row, 'created_at', 0),
+    getNumber(row, 'updated_at', 0),
+  ];
+}
+
+function prepareDeleteVersionValues(
+  row: SqliteRow,
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+): readonly unknown[] | null {
+  const deleteId = getString(row, 'delete_id');
+  const memoryId = getString(row, 'memory_id');
+  if (!deleteId || !memoryId) return null;
+  const snapshot = decodeJsonValue(row.snapshot_json, null, `delete version ${deleteId} snapshot_json`);
+  if (snapshot.warning || snapshot.value === null) {
+    warnings.push({
+      table: 'l2_memory_delete_versions',
+      rowId: deleteId,
+      code: 'malformed_required_json',
+      message: snapshot.warning ?? 'snapshot_json is required',
+    });
+    return null;
+  }
+  return [
+    deleteId,
+    memoryId,
+    jsonParam(snapshot.value),
+    getNumber(row, 'deleted_at', 0),
+    getOptionalString(row, 'deleted_by'),
+    getOptionalString(row, 'delete_reason'),
+    getNullableNumber(row, 'restored_at'),
+    getOptionalString(row, 'restored_by'),
+  ];
+}
+
+function prepareAbstractionLinkValues(row: SqliteRow): readonly unknown[] | null {
+  const id = getString(row, 'id');
+  const sourceMemoryId = getString(row, 'source_memory_id');
+  const abstractedMemoryId = getString(row, 'abstracted_memory_id');
+  const externalRef = getString(row, 'external_ref');
+  if (!id || !sourceMemoryId || !abstractedMemoryId || !externalRef) return null;
+  return [
+    id,
+    sourceMemoryId,
+    abstractedMemoryId,
+    externalRef,
+    getNumber(row, 'created_at', 0),
+    getOptionalString(row, 'created_by'),
+    getOptionalString(row, 'reason'),
+  ];
+}
+
+function preparePatchEventValues(
+  row: SqliteRow,
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+): readonly unknown[] | null {
+  const id = getString(row, 'id');
+  const memoryId = getString(row, 'memory_id');
+  const sourceRef = getString(row, 'source_ref');
+  const sourceType = getString(row, 'source_type');
+  if (!id || !memoryId || !sourceRef || !sourceType) return null;
+
+  const provenanceJson = decodeJsonValue(row.provenance_json, {}, `patch event ${id} provenance_json`);
+  const patchJson = decodeJsonValue(row.patch_json, null, `patch event ${id} patch_json`);
+  const previousJson = decodeJsonValue(row.previous_json, null, `patch event ${id} previous_json`);
+  const nextJson = decodeJsonValue(row.next_json, null, `patch event ${id} next_json`);
+
+  addJsonWarning(warnings, 'l2_memory_patch_events', id, 'provenance_json', provenanceJson.warning);
+  for (const [field, decoded] of [
+    ['patch_json', patchJson],
+    ['previous_json', previousJson],
+    ['next_json', nextJson],
+  ] as const) {
+    if (decoded.warning || decoded.value === null) {
+      warnings.push({
+        table: 'l2_memory_patch_events',
+        rowId: id,
+        code: 'malformed_required_json',
+        message: decoded.warning ?? `${field} is required`,
+      });
+      return null;
+    }
+  }
+
+  return [
+    id,
+    memoryId,
+    sourceRef,
+    sourceType,
+    jsonParam(provenanceJson.value),
+    getOptionalString(row, 'reason'),
+    jsonParam(patchJson.value),
+    jsonParam(previousJson.value),
+    jsonParam(nextJson.value),
+    getNumber(row, 'created_at', 0),
+  ];
+}
+
+function prepareMaintenanceReviewValues(
+  row: SqliteRow,
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+): readonly unknown[] | null {
+  const id = getString(row, 'id');
+  const kind = getString(row, 'kind');
+  const status = getString(row, 'status');
+  const subjectMemoryId = getString(row, 'subject_memory_id');
+  if (!id || !kind || !status || !subjectMemoryId) return null;
+
+  const candidateMemoryIds = decodeJsonValue(
+    row.candidate_memory_ids,
+    [],
+    `maintenance review ${id} candidate_memory_ids`,
+  );
+  const stateJson = decodeJsonValue(row.state_json, null, `maintenance review ${id} state_json`);
+  addJsonWarning(
+    warnings,
+    'l2_memory_maintenance_reviews',
+    id,
+    'candidate_memory_ids',
+    candidateMemoryIds.warning,
+  );
+  if (stateJson.warning || stateJson.value === null) {
+    warnings.push({
+      table: 'l2_memory_maintenance_reviews',
+      rowId: id,
+      code: 'malformed_required_json',
+      message: stateJson.warning ?? 'state_json is required',
+    });
+    return null;
+  }
+
+  return [
+    id,
+    kind,
+    status,
+    subjectMemoryId,
+    jsonParam(candidateMemoryIds.value),
+    jsonParam(stateJson.value),
+    getOptionalString(row, 'quarantine_reason'),
+    getNumber(row, 'created_at', 0),
+    getNumber(row, 'updated_at', 0),
+  ];
+}
+
+function prepareMemoryLinkValues(row: SqliteRow): readonly unknown[] | null {
+  const id1 = getString(row, 'id1');
+  const id2 = getString(row, 'id2');
+  if (!id1 || !id2) return null;
+  return [
+    id1,
+    id2,
+    getOptionalString(row, 'link_type') ?? 'related',
+    getNumber(row, 'created_at', 0),
+  ];
+}
+
+function prepareContactProfileValues(
+  row: SqliteRow,
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+): readonly unknown[] | null {
+  const contactId = getString(row, 'contact_id');
+  const summaryText = getString(row, 'summary_text') ?? getString(row, 'summary') ?? getString(row, 'profile_json');
+  if (!contactId || !summaryText) return null;
+  if (!getString(row, 'summary_text')) {
+    warnings.push({
+      table: 'contact_profiles',
+      rowId: contactId,
+      code: 'legacy_contact_profile_shape',
+      message: 'used legacy contact profile text column as summary_text',
+    });
+  }
+  const sourceMemoryIds = decodeJsonValue(
+    row.source_memory_ids,
+    [],
+    `contact profile ${contactId} source_memory_ids`,
+  );
+  addJsonWarning(warnings, 'contact_profiles', contactId, 'source_memory_ids', sourceMemoryIds.warning);
+  return [
+    contactId,
+    summaryText,
+    jsonParam(sourceMemoryIds.value),
+    getNumber(row, 'confidence_score', 0),
+    getNumber(row, 'novelty_score', 0),
     getNumber(row, 'updated_at', 0),
   ];
 }
@@ -867,6 +1069,198 @@ async function upsertScratchpadEntries(
   return appliedRows;
 }
 
+async function upsertDeleteVersions(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const values = prepareDeleteVersionValues(row, warnings);
+    if (!values) {
+      const reason = 'required l2_memory_delete_versions fields are missing or malformed';
+      skippedRows.push({ table: 'l2_memory_delete_versions', rowId, reason });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO l2_memory_delete_versions (
+        delete_id, memory_id, snapshot_json, deleted_at, deleted_by, delete_reason, restored_at, restored_by
+      ) VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8)
+      ON CONFLICT (delete_id) DO UPDATE SET
+        memory_id = EXCLUDED.memory_id,
+        snapshot_json = EXCLUDED.snapshot_json,
+        deleted_at = EXCLUDED.deleted_at,
+        deleted_by = EXCLUDED.deleted_by,
+        delete_reason = EXCLUDED.delete_reason,
+        restored_at = EXCLUDED.restored_at,
+        restored_by = EXCLUDED.restored_by
+    `, values);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertAbstractionLinks(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const values = prepareAbstractionLinkValues(row);
+    if (!values) {
+      const reason = 'required l2_memory_abstraction_links fields are missing or invalid';
+      skippedRows.push({ table: 'l2_memory_abstraction_links', rowId, reason });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO l2_memory_abstraction_links (
+        id, source_memory_id, abstracted_memory_id, external_ref, created_at, created_by, reason
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+      ON CONFLICT (id) DO UPDATE SET
+        source_memory_id = EXCLUDED.source_memory_id,
+        abstracted_memory_id = EXCLUDED.abstracted_memory_id,
+        external_ref = EXCLUDED.external_ref,
+        created_at = EXCLUDED.created_at,
+        created_by = EXCLUDED.created_by,
+        reason = EXCLUDED.reason
+    `, values);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertPatchEvents(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const values = preparePatchEventValues(row, warnings);
+    if (!values) {
+      const reason = 'required l2_memory_patch_events fields are missing or malformed';
+      skippedRows.push({ table: 'l2_memory_patch_events', rowId, reason });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO l2_memory_patch_events (
+        id, memory_id, source_ref, source_type, provenance_json, reason,
+        patch_json, previous_json, next_json, created_at
+      ) VALUES ($1,$2,$3,$4,$5::jsonb,$6,$7::jsonb,$8::jsonb,$9::jsonb,$10)
+      ON CONFLICT (id) DO UPDATE SET
+        memory_id = EXCLUDED.memory_id,
+        source_ref = EXCLUDED.source_ref,
+        source_type = EXCLUDED.source_type,
+        provenance_json = EXCLUDED.provenance_json,
+        reason = EXCLUDED.reason,
+        patch_json = EXCLUDED.patch_json,
+        previous_json = EXCLUDED.previous_json,
+        next_json = EXCLUDED.next_json,
+        created_at = EXCLUDED.created_at
+    `, values);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertMaintenanceReviews(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const values = prepareMaintenanceReviewValues(row, warnings);
+    if (!values) {
+      const reason = 'required l2_memory_maintenance_reviews fields are missing or malformed';
+      skippedRows.push({ table: 'l2_memory_maintenance_reviews', rowId, reason });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO l2_memory_maintenance_reviews (
+        id, kind, status, subject_memory_id, candidate_memory_ids, state_json,
+        quarantine_reason, created_at, updated_at
+      ) VALUES ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8,$9)
+      ON CONFLICT (id) DO UPDATE SET
+        kind = EXCLUDED.kind,
+        status = EXCLUDED.status,
+        subject_memory_id = EXCLUDED.subject_memory_id,
+        candidate_memory_ids = EXCLUDED.candidate_memory_ids,
+        state_json = EXCLUDED.state_json,
+        quarantine_reason = EXCLUDED.quarantine_reason,
+        created_at = EXCLUDED.created_at,
+        updated_at = EXCLUDED.updated_at
+    `, values);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertMemoryLinks(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = `${getOptionalString(row, 'id1') ?? 'missing'}::${getOptionalString(row, 'id2') ?? `row:${index}`}`;
+    const values = prepareMemoryLinkValues(row);
+    if (!values) {
+      const reason = 'required memory_links fields are missing or invalid';
+      skippedRows.push({ table: 'memory_links', rowId, reason });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO memory_links (id1, id2, link_type, created_at)
+      VALUES ($1,$2,$3,$4)
+      ON CONFLICT (id1, id2) DO UPDATE SET
+        link_type = EXCLUDED.link_type,
+        created_at = EXCLUDED.created_at
+    `, values);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertContactProfiles(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const values = prepareContactProfileValues(row, warnings);
+    if (!values) {
+      const reason = 'required contact_profiles fields are missing or invalid';
+      skippedRows.push({ table: 'contact_profiles', rowId, reason });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO contact_profiles (
+        contact_id, summary_text, source_memory_ids, confidence_score, novelty_score, updated_at
+      ) VALUES ($1,$2,$3::jsonb,$4,$5,$6)
+      ON CONFLICT (contact_id) DO UPDATE SET
+        summary_text = EXCLUDED.summary_text,
+        source_memory_ids = EXCLUDED.source_memory_ids,
+        confidence_score = EXCLUDED.confidence_score,
+        novelty_score = EXCLUDED.novelty_score,
+        updated_at = EXCLUDED.updated_at
+    `, values);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
 async function upsertEpisodes(
   client: PoolClient,
   rows: readonly SqliteRow[],
@@ -971,21 +1365,6 @@ async function upsertEpisodeArcs(
   return appliedRows;
 }
 
-function addUnsupportedTableWarnings(report: SqliteToPostgresMemoryMigrationReport): void {
-  for (const table of APPLY_UNSUPPORTED_TABLES) {
-    const tableReport = report.tables[table];
-    if (!tableReport.present || tableReport.rowCount === 0) continue;
-    report.warnings.push({
-      table,
-      code: 'unsupported_apply_table',
-      message: `${table} was read and checksummed but is not applied by this first migration deliverable`,
-    });
-    report.repairSuggestions.push(
-      `Add ${table} upsert support before relying on this migration for full cutover state.`,
-    );
-  }
-}
-
 async function applyMigration(
   data: LoadedSqliteData,
   postgresUrl: string,
@@ -1015,6 +1394,40 @@ async function applyMigration(
         client,
         data.rows.l2_memories,
         data.embeddingsByMemoryId,
+        data.warnings,
+        data.skippedRows,
+      );
+      data.tables.l2_memory_delete_versions.appliedRows = await upsertDeleteVersions(
+        client,
+        data.rows.l2_memory_delete_versions,
+        data.warnings,
+        data.skippedRows,
+      );
+      data.tables.l2_memory_abstraction_links.appliedRows = await upsertAbstractionLinks(
+        client,
+        data.rows.l2_memory_abstraction_links,
+        data.skippedRows,
+      );
+      data.tables.l2_memory_patch_events.appliedRows = await upsertPatchEvents(
+        client,
+        data.rows.l2_memory_patch_events,
+        data.warnings,
+        data.skippedRows,
+      );
+      data.tables.l2_memory_maintenance_reviews.appliedRows = await upsertMaintenanceReviews(
+        client,
+        data.rows.l2_memory_maintenance_reviews,
+        data.warnings,
+        data.skippedRows,
+      );
+      data.tables.memory_links.appliedRows = await upsertMemoryLinks(
+        client,
+        data.rows.memory_links,
+        data.skippedRows,
+      );
+      data.tables.contact_profiles.appliedRows = await upsertContactProfiles(
+        client,
+        data.rows.contact_profiles,
         data.warnings,
         data.skippedRows,
       );
@@ -1062,8 +1475,6 @@ export async function runSqliteToPostgresMemoryMigration(
     skippedRows: data.skippedRows,
     repairSuggestions: [],
   };
-
-  addUnsupportedTableWarnings(report);
 
   if (mode === 'apply') {
     await applyMigration(data, postgresUrl, options.dependencies);

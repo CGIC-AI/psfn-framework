@@ -20,6 +20,7 @@ import type { EventBus } from '../../shared/event-bus.js';
 import {
   type TrustLevel,
   type ChannelVisibility,
+  isHighTierTrustLevel,
 } from '../../system/trust/types.js';
 import type { ContextBudgetConfigLike } from '../../shared/context-budget.js';
 import {
@@ -125,6 +126,9 @@ const RECENT_MEMORY_AUGMENT_SCAN_LIMIT = 96;
 const RECENT_MEMORY_AUGMENT_SELECTED_LIMIT = 12;
 const RECENT_MEMORY_AUGMENT_MIN_OVERLAP = 2;
 const RECENT_MEMORY_AUGMENT_BASE_SIMILARITY = 0.62;
+const EVOLUTION_CHAIN_SELECTED_LIMIT = 3;
+const EVOLUTION_CHAIN_PER_MEMORY_LIMIT = 3;
+const EVOLUTION_CHAIN_USEFUL_HINT = /\b(history|lineage|changed|change|updated|update|previous|old|correction|corrected|conflict|contradict|superseded|why)\b/i;
 
 function hasCountEntries(record: Record<string, number | undefined> | undefined): boolean {
   return !!record && Object.values(record).some(count => count > 0);
@@ -1132,7 +1136,15 @@ export class MemoryRetriever implements MemoryProvider {
         ),
         collectEpisodicChainProvenanceRefs(episodicChains),
       );
-      const selectedContactContextById = await this.buildSelectedContactContext(selected, socialContext);
+      const selectedForPrompt = await this.attachEvolutionChains(selected, {
+        contextText,
+        trustLevel: effectiveTrust,
+        channelVisibility,
+        channelMeta,
+        canonicalContactId,
+        operatorApproval,
+      });
+      const selectedContactContextById = await this.buildSelectedContactContext(selectedForPrompt, socialContext);
 
       // Update access stats; fail closed if persistence fails.
       for (const s of selected) {
@@ -1158,7 +1170,7 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.count = selected.length + episodicEpisodeCount;
       telemetry.reason = 'ok';
       await this.emitRetrievalTelemetry(telemetry);
-      return renderPromptBlock(profile, selected, {
+      return renderPromptBlock(profile, selectedForPrompt, {
         emotionalSnapshot,
         emotionalContinuityMemories,
         withheldSummary,
@@ -1437,6 +1449,68 @@ export class MemoryRetriever implements MemoryProvider {
     }
 
     return contexts.size > 0 ? contexts : undefined;
+  }
+
+  private shouldExpandEvolutionChains(input: {
+    contextText: string;
+    trustLevel: TrustLevel;
+    channelVisibility: ChannelVisibility;
+  }): boolean {
+    return input.channelVisibility === 'private'
+      && isHighTierTrustLevel(input.trustLevel)
+      && EVOLUTION_CHAIN_USEFUL_HINT.test(input.contextText);
+  }
+
+  private async attachEvolutionChains(
+    selected: readonly ScoredMemory[],
+    options: {
+      contextText: string;
+      trustLevel: TrustLevel;
+      channelVisibility: ChannelVisibility;
+      channelMeta?: ChannelMeta;
+      canonicalContactId?: string;
+      operatorApproval: boolean;
+    },
+  ): Promise<ScoredMemory[]> {
+    if (!this.shouldExpandEvolutionChains(options)) {
+      return [...selected];
+    }
+
+    const expanded = [...selected];
+    const selectedIds = new Set(expanded.map(item => item.memory.id));
+    for (let index = 0; index < Math.min(expanded.length, EVOLUTION_CHAIN_SELECTED_LIMIT); index++) {
+      const item = expanded[index];
+      const links = (await this.memoryStore.getEvolutionLinksForSourceMemory(item.memory.id))
+        .slice(0, EVOLUTION_CHAIN_PER_MEMORY_LIMIT);
+      const chain: NonNullable<ScoredMemory['evolutionChain']> = [];
+      for (const link of links) {
+        if (selectedIds.has(link.targetMemoryId)) continue;
+        const target = await this.memoryStore.getById(link.targetMemoryId);
+        if (!target || target.deletedAt !== undefined) continue;
+        const accessDecision = evaluateRetrievalAccessDecision(target, {
+          trustLevel: options.trustLevel,
+          channelVisibility: options.channelVisibility,
+          channelMeta: options.channelMeta,
+          canonicalContactId: options.canonicalContactId,
+          operatorApproval: options.operatorApproval,
+        });
+        if (!accessDecision.allowed) continue;
+        chain.push({
+          relation: link.relation,
+          confidence: link.confidence,
+          reason: link.reason,
+          memory: target,
+        });
+      }
+      if (chain.length > 0) {
+        expanded[index] = {
+          ...item,
+          evolutionChain: chain,
+        };
+      }
+    }
+
+    return expanded;
   }
 
   private async applySocialContextRankingAdjustments(

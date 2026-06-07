@@ -58,6 +58,9 @@ function makeMockStore(memories: Array<PurrMemory & { similarity: number }>): Me
     getMemoriesByChannel: vi.fn().mockReturnValue([]),
     getAllActiveMemories: vi.fn().mockReturnValue(memories),
     listActiveMemories: vi.fn().mockReturnValue(memories),
+    recordEvolutionLink: vi.fn(),
+    getEvolutionLinksForSourceMemory: vi.fn().mockReturnValue([]),
+    getEvolutionLinksForTargetMemory: vi.fn().mockReturnValue([]),
   } as unknown as MemoryStorePort;
 }
 
@@ -202,6 +205,81 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).toContain('Personal detail');
     expect(result).toContain('Intimate memory');
     expect(result).toContain('Confidential secret');
+  });
+
+  it('expands bounded evolution chains for useful high-trust private retrieval', async () => {
+    const current = makeMemory({
+      id: 'workspace-current',
+      text: 'Current workspace is /home/ada/new.',
+      tags: ['current_state', 'workspace'],
+      sensitivity: 'public',
+      similarity: 0.96,
+    });
+    const previous = makeMemory({
+      id: 'workspace-old',
+      text: 'Current workspace is /home/ada/old.',
+      tags: ['current_state', 'workspace'],
+      sensitivity: 'public',
+      similarity: 0.2,
+      supersededBy: current.id,
+    });
+    const store = makeMockStore([current]);
+    (store.getEvolutionLinksForSourceMemory as ReturnType<typeof vi.fn>).mockReturnValue([{
+      id: 'evolution-workspace',
+      sourceMemoryId: current.id,
+      targetMemoryId: previous.id,
+      relation: 'supersedes',
+      confidence: 0.93,
+      reason: 'memory_writer:current_state_replacement',
+      sourceType: 'tool_write',
+      provenanceRefs: [],
+      createdAt: Date.now(),
+    }]);
+    (store.getById as ReturnType<typeof vi.fn>).mockImplementation((id: string) => (
+      id === previous.id ? previous : current
+    ));
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('what changed in the workspace history?', 'api:test', 'primary');
+
+    expect(result).toContain('Current workspace is /home/ada/new.');
+    expect(result).toContain('Supersedes [semantic] Current workspace is /home/ada/old.');
+  });
+
+  it('does not expand evolution chains for non-useful retrieval prompts', async () => {
+    const current = makeMemory({
+      id: 'workspace-current',
+      text: 'Current workspace is /home/ada/new.',
+      tags: ['current_state', 'workspace'],
+      sensitivity: 'public',
+      similarity: 0.96,
+    });
+    const previous = makeMemory({
+      id: 'workspace-old',
+      text: 'Current workspace is /home/ada/old.',
+      tags: ['current_state', 'workspace'],
+      sensitivity: 'public',
+      similarity: 0.2,
+      supersededBy: current.id,
+    });
+    const store = makeMockStore([current]);
+    (store.getEvolutionLinksForSourceMemory as ReturnType<typeof vi.fn>).mockReturnValue([{
+      id: 'evolution-workspace',
+      sourceMemoryId: current.id,
+      targetMemoryId: previous.id,
+      relation: 'supersedes',
+      confidence: 0.93,
+      sourceType: 'tool_write',
+      provenanceRefs: [],
+      createdAt: Date.now(),
+    }]);
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('workspace status', 'api:test', 'primary');
+
+    expect(result).toContain('Current workspace is /home/ada/new.');
+    expect(result).not.toContain('Current workspace is /home/ada/old.');
+    expect(store.getEvolutionLinksForSourceMemory).not.toHaveBeenCalled();
   });
 
   it('regular trust returns only public memories', async () => {

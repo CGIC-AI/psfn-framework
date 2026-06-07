@@ -3,6 +3,7 @@ import type {
   ContactProfileArtifact,
   MemoryAbstractionLink,
   MemoryDeleteVersion,
+  MemoryEvolutionLink,
   MemoryLink,
   MemoryPatchEvent,
   ScratchpadEntry,
@@ -59,6 +60,20 @@ export interface MemoryAbstractionLinkRow {
   created_at: number;
   created_by: string | null;
   reason: string | null;
+}
+
+export interface MemoryEvolutionLinkRow {
+  id: string;
+  source_memory_id: string;
+  target_memory_id: string;
+  relation: string;
+  confidence: number;
+  reason: string | null;
+  source_ref: string | null;
+  source_type: string | null;
+  provenance_refs: string | null;
+  provenance_json: string | null;
+  created_at: number;
 }
 
 export interface MemoryPatchEventRow {
@@ -121,6 +136,7 @@ export type {
   ContactProfileArtifact,
   MemoryAbstractionLink,
   MemoryDeleteVersion,
+  MemoryEvolutionLink,
   MemoryLink,
   MemoryPatchEvent,
   MemoryMaintenanceReview,

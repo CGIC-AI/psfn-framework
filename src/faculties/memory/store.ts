@@ -7,6 +7,9 @@ import type {
   MemoryAbstractionLinkInput,
   MemoryBulkUpdatePatch,
   MemoryDeleteVersion,
+  MemoryEvolutionLink,
+  MemoryEvolutionLinkInput,
+  MemoryEvolutionRelation,
   MemoryListOptions,
   MemoryLink,
   MemoryPatchEvent,
@@ -38,6 +41,9 @@ import {
   recordAbstractionLink,
   getAbstractionLinksForSourceMemory,
   getAbstractionLinksForAbstractedMemory,
+  recordEvolutionLink,
+  getEvolutionLinksForSourceMemory,
+  getEvolutionLinksForTargetMemory,
   bulkDelete,
   bulkUpdate,
 } from './store/read-write-operations.js';
@@ -182,6 +188,24 @@ export class MemoryStore {
 
   getAbstractionLinksForAbstractedMemory(abstractedMemoryId: string): MemoryAbstractionLink[] {
     return getAbstractionLinksForAbstractedMemory(this.db, abstractedMemoryId);
+  }
+
+  recordEvolutionLink(input: MemoryEvolutionLinkInput): MemoryEvolutionLink {
+    return recordEvolutionLink(this.db, input);
+  }
+
+  getEvolutionLinksForSourceMemory(
+    sourceMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): MemoryEvolutionLink[] {
+    return getEvolutionLinksForSourceMemory(this.db, sourceMemoryId, relation);
+  }
+
+  getEvolutionLinksForTargetMemory(
+    targetMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): MemoryEvolutionLink[] {
+    return getEvolutionLinksForTargetMemory(this.db, targetMemoryId, relation);
   }
 
   getStats(): { total: number; byType: Record<string, number>; avgSalience: number } {

@@ -3,6 +3,7 @@ import type {
   SensitivityLevel,
   TrustLevel,
 } from '../../../system/trust/types.js';
+import type { MemoryEvolutionRelation } from '../memory-store-port.js';
 import type {
   MemoryPrivacyRiskBreakdown,
   PurrMemory,
@@ -26,6 +27,14 @@ export interface ScoredMemory {
   privacyBreakdown: MemoryPrivacyRiskBreakdown;
   retrievalModeExcluded: boolean;
   score: number;
+  evolutionChain?: MemoryEvolutionPromptLink[];
+}
+
+export interface MemoryEvolutionPromptLink {
+  relation: MemoryEvolutionRelation;
+  confidence: number;
+  reason?: string;
+  memory: PurrMemory;
 }
 
 export interface RetrievalDecisionDiagnostics {

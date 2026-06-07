@@ -6,6 +6,9 @@ import {
   type MemoryAbstractionLinkInput,
   type MemoryBulkUpdatePatch,
   type MemoryDeleteVersion,
+  type MemoryEvolutionLink,
+  type MemoryEvolutionLinkInput,
+  type MemoryEvolutionRelation,
   type MemoryLink,
   type MemoryPatchEvent,
   type MemorySearchResult,
@@ -36,6 +39,7 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
   private readonly memories = new Map<string, PurrMemory>();
   private readonly deleteVersions = new Map<string, MemoryDeleteVersion>();
   private readonly abstractionLinks: MemoryAbstractionLink[] = [];
+  private readonly evolutionLinks: MemoryEvolutionLink[] = [];
   private readonly linkedMemories: MemoryLink[] = [];
   private readonly profiles = new Map<string, ContactProfileArtifact>();
   private readonly scratchpad = new Map<string, ScratchpadEntry>();
@@ -176,6 +180,42 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
 
   getAbstractionLinksForAbstractedMemory(abstractedMemoryId: string): MemoryAbstractionLink[] {
     return this.abstractionLinks.filter(link => link.abstractedMemoryId === abstractedMemoryId);
+  }
+
+  recordEvolutionLink(input: MemoryEvolutionLinkInput): MemoryEvolutionLink {
+    const link: MemoryEvolutionLink = {
+      id: input.linkId ?? `evolution-${this.evolutionLinks.length + 1}`,
+      sourceMemoryId: input.sourceMemoryId,
+      targetMemoryId: input.targetMemoryId,
+      relation: input.relation,
+      confidence: input.confidence ?? 1,
+      ...(input.reason ? { reason: input.reason } : {}),
+      ...(input.sourceRef ? { sourceRef: input.sourceRef } : {}),
+      sourceType: input.sourceType ?? 'unknown',
+      provenanceRefs: input.provenanceRefs ?? [],
+      ...(input.provenance ? { provenance: input.provenance } : {}),
+      createdAt: input.createdAt ?? Date.now(),
+    };
+    this.evolutionLinks.push(link);
+    return link;
+  }
+
+  getEvolutionLinksForSourceMemory(
+    sourceMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): MemoryEvolutionLink[] {
+    return this.evolutionLinks
+      .filter(link => link.sourceMemoryId === sourceMemoryId)
+      .filter(link => relation === undefined || link.relation === relation);
+  }
+
+  getEvolutionLinksForTargetMemory(
+    targetMemoryId: string,
+    relation?: MemoryEvolutionRelation,
+  ): MemoryEvolutionLink[] {
+    return this.evolutionLinks
+      .filter(link => link.targetMemoryId === targetMemoryId)
+      .filter(link => relation === undefined || link.relation === relation);
   }
 
   getStats(): MemoryStoreStats {
@@ -340,7 +380,7 @@ describe('MemoryStorePort', () => {
     expect(retrieved).toContain('V prefers oolong tea in the morning');
   });
 
-  it('delegates transaction and patch event APIs through createMemoryStorePort', async () => {
+  it('delegates transaction, patch event, and evolution link APIs through createMemoryStorePort', async () => {
     const backend = new InMemoryMemoryStorePort();
     const port = createMemoryStorePort(backend);
     const patchEvent: MemoryPatchEvent = {
@@ -361,8 +401,21 @@ describe('MemoryStorePort', () => {
 
     const value = await port.runInTransaction(() => 7);
     await port.recordPatchEvent(patchEvent);
+    const evolutionLink = await port.recordEvolutionLink({
+      linkId: 'evolution-1',
+      sourceMemoryId: 'memory-2',
+      targetMemoryId: 'memory-1',
+      relation: 'updates',
+      confidence: 0.8,
+      provenanceRefs: ['l0:turn-1'],
+      provenance: { turnId: 'turn-1' },
+      createdAt: 456,
+    });
 
     expect(value).toBe(7);
     expect(backend.getPatchEvents()).toEqual([patchEvent]);
+    expect(evolutionLink.relation).toBe('updates');
+    await expect(port.getEvolutionLinksForSourceMemory('memory-2')).resolves.toEqual([evolutionLink]);
+    await expect(port.getEvolutionLinksForTargetMemory('memory-1', 'updates')).resolves.toEqual([evolutionLink]);
   });
 });

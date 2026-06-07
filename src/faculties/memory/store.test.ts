@@ -550,6 +550,82 @@ describe('MemoryStore', () => {
       expect(byAbstracted[0].sourceMemoryId).toBe('m-source');
     });
 
+    it('records and lists first-class memory evolution links', () => {
+      store.insertMemory(makeMemory('m-source', 'Source memory'), makeEmbedding(1));
+      store.insertMemory(makeMemory('m-target', 'Target memory'), makeEmbedding(2));
+      store.insertMemory(makeMemory('m-other', 'Other target memory'), makeEmbedding(3));
+
+      const relations = ['supersedes', 'updates', 'negates', 'conflicts_with'] as const;
+      const links = relations.map((relation, index) => store.recordEvolutionLink({
+        linkId: `evolution-${relation}`,
+        sourceMemoryId: 'm-source',
+        targetMemoryId: index === 3 ? 'm-other' : 'm-target',
+        relation,
+        confidence: 0.25 + (index * 0.2),
+        reason: `${relation} reason`,
+        sourceRef: `source:tool:memory_write|invocation:call-${index}`,
+        sourceType: 'tool_write',
+        provenanceRefs: [`l0:turn-${index}`, '  ', `memory:m-source`],
+        provenance: {
+          toolName: 'memory_write',
+          toolCallId: `call-${index}`,
+        },
+        createdAt: 100 + index,
+      }));
+
+      expect(links.map(link => link.relation)).toEqual([...relations]);
+      expect(links[0]).toMatchObject({
+        id: 'evolution-supersedes',
+        sourceMemoryId: 'm-source',
+        targetMemoryId: 'm-target',
+        relation: 'supersedes',
+        confidence: 0.25,
+        reason: 'supersedes reason',
+        sourceType: 'tool_write',
+        provenanceRefs: ['l0:turn-0', 'memory:m-source'],
+        provenance: {
+          toolName: 'memory_write',
+          toolCallId: 'call-0',
+        },
+        createdAt: 100,
+      });
+
+      const bySource = store.getEvolutionLinksForSourceMemory('m-source');
+      expect(bySource.map(link => link.relation)).toEqual([
+        'conflicts_with',
+        'negates',
+        'updates',
+        'supersedes',
+      ]);
+      expect(store.getEvolutionLinksForSourceMemory('m-source', 'updates')).toEqual([links[1]]);
+
+      const byTarget = store.getEvolutionLinksForTargetMemory('m-target');
+      expect(byTarget.map(link => link.relation)).toEqual(['negates', 'updates', 'supersedes']);
+      expect(store.getEvolutionLinksForTargetMemory('m-other', 'conflicts_with')).toEqual([links[3]]);
+    });
+
+    it('rejects memory evolution links with invalid confidence or endpoints', () => {
+      expect(() => store.recordEvolutionLink({
+        sourceMemoryId: 'm-source',
+        targetMemoryId: 'm-target',
+        relation: 'updates',
+        confidence: -0.01,
+      })).toThrow('confidence must be between 0 and 1');
+
+      expect(() => store.recordEvolutionLink({
+        sourceMemoryId: 'm-source',
+        targetMemoryId: 'm-target',
+        relation: 'updates',
+        confidence: 1.01,
+      })).toThrow('confidence must be between 0 and 1');
+
+      expect(() => store.recordEvolutionLink({
+        sourceMemoryId: 'same',
+        targetMemoryId: 'same',
+        relation: 'conflicts_with',
+      })).toThrow('distinct source and target');
+    });
+
     it('getMemoriesByContact returns active memories for canonical contact', () => {
       const embA = makeEmbedding(1);
       const embB = makeEmbedding(2);

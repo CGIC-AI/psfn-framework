@@ -4,6 +4,8 @@ export type MemoryFixtureFamily =
   | 'current-state-change'
   | 'compatible-update'
   | 'true-contradiction'
+  | 'high-impact-conflict'
+  | 'lineage-expansion'
   | 'episodic-overlap'
   | 'episodic-paraphrase'
   | 'privacy-trust'
@@ -14,6 +16,8 @@ export const REQUIRED_MEMORY_FIXTURE_FAMILIES: readonly MemoryFixtureFamily[] = 
   'current-state-change',
   'compatible-update',
   'true-contradiction',
+  'high-impact-conflict',
+  'lineage-expansion',
   'episodic-overlap',
   'episodic-paraphrase',
   'privacy-trust',
@@ -24,6 +28,15 @@ export const REQUIRED_MEMORY_FIXTURE_FAMILIES: readonly MemoryFixtureFamily[] = 
 export type MemoryLayer = 'L0' | 'L0.1' | 'L2';
 export type MemorySensitivity = 'public' | 'personal' | 'private' | 'secret';
 export type MemoryTrustLevel = 'untrusted' | 'regular' | 'trusted' | 'primary';
+export type MemoryEvolutionRelation = 'supersedes' | 'updates' | 'negates' | 'conflicts_with';
+
+export interface MemoryEvolutionFixtureLink {
+  sourceMemoryId: string;
+  targetMemoryId: string;
+  relation: MemoryEvolutionRelation;
+  confidence: number;
+  reason?: string;
+}
 
 export interface L0FixtureEntry {
   layer: 'L0';
@@ -71,6 +84,7 @@ export interface MemoryRegressionSeed {
   l0Entries: L0FixtureEntry[];
   l01Episodes: L01FixtureEpisode[];
   l2Memories: L2FixtureMemory[];
+  evolutionLinks?: MemoryEvolutionFixtureLink[];
 }
 
 export interface MemoryWriteOperation {
@@ -82,6 +96,10 @@ export interface MemoryWriteOperation {
   timestamp: string;
   createsMemoryId: string;
   expectedSupersededMemoryIds: string[];
+  expectedEvolutionLinks?: Array<{
+    targetMemoryId: string;
+    relation: MemoryEvolutionRelation;
+  }>;
   compatibleUpdate?: boolean;
 }
 
@@ -91,6 +109,7 @@ export interface MemoryRetrievalProbe {
   topK: number;
   trustLevel: MemoryTrustLevel;
   expectedMemoryIds: string[];
+  expectedLineageMemoryIds?: string[];
   expectedWithheldMemoryIds?: string[];
 }
 
@@ -124,11 +143,13 @@ export interface MemoryWriteObservation {
   operationId: string;
   createdMemoryId: string;
   supersededMemoryIds: string[];
+  evolutionLinks: MemoryEvolutionFixtureLink[];
 }
 
 export interface MemoryRetrievalObservation {
   probeId: string;
   selectedMemoryIds: string[];
+  lineageMemoryIds: string[];
   withheldMemoryIds: string[];
   promptSnippet: string;
   promptTokenCount: number;
@@ -146,6 +167,7 @@ export interface MemoryBackupSnapshot {
   l0Entries: L0FixtureEntry[];
   l01Episodes: L01FixtureEpisode[];
   l2Memories: L2FixtureMemory[];
+  evolutionLinks?: MemoryEvolutionFixtureLink[];
 }
 
 export interface MemoryRegressionProvider {

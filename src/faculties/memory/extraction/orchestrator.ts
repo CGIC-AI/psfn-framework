@@ -353,6 +353,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 
         switch (result.action) {
           case 'created':
+          case 'updated':
+          case 'negated':
+          case 'conflict':
             writeCount++;
             acceptedWrites.push({
               memoryId: result.memory.id,

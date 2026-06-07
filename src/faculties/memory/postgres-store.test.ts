@@ -50,6 +50,20 @@ interface MemoryRow {
   embedding: string | null;
 }
 
+interface MemoryEvolutionLinkRow {
+  id: string;
+  source_memory_id: string;
+  target_memory_id: string;
+  relation: string;
+  confidence: number;
+  reason: string | null;
+  source_ref: string | null;
+  source_type: string | null;
+  provenance_refs: unknown;
+  provenance_json: unknown;
+  created_at: number;
+}
+
 function postgresMemoryMigrationSql(): string {
   return POSTGRES_MEMORY_MIGRATIONS.join('\n').replace(/\s+/g, ' ').trim();
 }
@@ -89,6 +103,7 @@ function cosineSimilarity(left: readonly number[], right: readonly number[]): nu
 
 class FakeMemoryPool {
   readonly memories = new Map<string, MemoryRow>();
+  readonly evolutionLinks = new Map<string, MemoryEvolutionLinkRow>();
   readonly maintenanceReviews = new Map<string, Record<string, unknown>>();
   readonly queryFailures: Array<{ fragment: string; error: Error }>;
   readonly schemaHasEmbeddingColumn: boolean;
@@ -200,6 +215,11 @@ class FakeMemoryPool {
       return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
     }
 
+    if (normalized.includes('from memory_evolution_links')) {
+      const rows = [...this.evolutionLinks.values()];
+      return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
+    }
+
     if (normalized.includes('from memory_links')) {
       return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
     }
@@ -251,6 +271,27 @@ class FakeMemoryPool {
       return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
     }
 
+    if (normalized.startsWith('insert into memory_evolution_links')) {
+      const row: MemoryEvolutionLinkRow = {
+        id: String(values[0] ?? ''),
+        source_memory_id: String(values[1] ?? ''),
+        target_memory_id: String(values[2] ?? ''),
+        relation: String(values[3] ?? ''),
+        confidence: Number(values[4] ?? 1),
+        reason: values[5] == null ? null : String(values[5]),
+        source_ref: values[6] == null ? null : String(values[6]),
+        source_type: values[7] == null ? null : String(values[7]),
+        provenance_refs: values[8] ? JSON.parse(String(values[8])) : [],
+        provenance_json: values[9] ? JSON.parse(String(values[9])) : {},
+        created_at: Number(values[10] ?? 0),
+      };
+      this.evolutionLinks.set(
+        `${row.source_memory_id}::${row.target_memory_id}::${row.relation}`,
+        row,
+      );
+      return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
+    }
+
     if (normalized.startsWith('insert into l2_memory_maintenance_reviews')) {
       const row = {
         id: String(values[0] ?? ''),
@@ -283,6 +324,25 @@ function makeEmbeddingProvider(): EmbeddingProviderPort {
     embed: async () => new Float32Array([0.9, 0.1, 0.1, 0.1]),
     embedBatch: async (texts: string[]) => texts.map(() => new Float32Array([0.9, 0.1, 0.1, 0.1])),
     dims: 4,
+  };
+}
+
+function makeMemory(id: string, text: string, overrides: Partial<PurrMemory> = {}): PurrMemory {
+  return {
+    id,
+    text,
+    type: 'semantic',
+    importance: 0.7,
+    confidence: 0.9,
+    emotionalValence: 0,
+    salience: 0.8,
+    sourceRef: `api:test:${id}`,
+    extractedAt: 1_700_000_000_000,
+    lastAccessed: 1_700_000_000_000,
+    accessCount: 1,
+    tags: ['test'],
+    sensitivity: 'personal',
+    ...overrides,
   };
 }
 
@@ -422,6 +482,93 @@ describe('postgres memory store unit coverage', () => {
       allowExitOnIdle: true,
     });
     expect(postgresMocks.ensurePostgresSchema).toHaveBeenCalled();
+  });
+
+  it('persists and hydrates first-class memory evolution links', async () => {
+    const pool = new FakeMemoryPool();
+    postgresMocks.activePool = pool;
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    await store.insertMemory(makeMemory('m-source', 'Source memory'), new Float32Array([0.1, 0.2, 0.3, 0.4]));
+    await store.insertMemory(makeMemory('m-target', 'Target memory'), new Float32Array([0.2, 0.3, 0.4, 0.5]));
+    await store.insertMemory(makeMemory('m-other', 'Other target memory'), new Float32Array([0.3, 0.4, 0.5, 0.6]));
+
+    const relations = ['supersedes', 'updates', 'negates', 'conflicts_with'] as const;
+    const links: Awaited<ReturnType<typeof store.recordEvolutionLink>>[] = [];
+    for (const [index, relation] of relations.entries()) {
+      links.push(await store.recordEvolutionLink({
+        linkId: `pg-evolution-${relation}`,
+        sourceMemoryId: 'm-source',
+        targetMemoryId: index === 3 ? 'm-other' : 'm-target',
+        relation,
+        confidence: 0.2 + (index * 0.2),
+        reason: `${relation} reason`,
+        sourceRef: `source:tool:memory_write|invocation:pg-call-${index}`,
+        sourceType: 'tool_write',
+        provenanceRefs: [`l0:pg-turn-${index}`, 'memory:m-source', ' '],
+        provenance: {
+          toolName: 'memory_write',
+          toolCallId: `pg-call-${index}`,
+        },
+        createdAt: 10_000 + index,
+      }));
+    }
+
+    expect(pool.evolutionLinks.size).toBe(4);
+    expect([...pool.evolutionLinks.values()][0]).toMatchObject({
+      source_memory_id: 'm-source',
+      target_memory_id: 'm-target',
+      relation: 'supersedes',
+      confidence: 0.2,
+      source_type: 'tool_write',
+      provenance_refs: ['l0:pg-turn-0', 'memory:m-source'],
+      provenance_json: {
+        toolName: 'memory_write',
+        toolCallId: 'pg-call-0',
+      },
+    });
+
+    const bySource = await store.getEvolutionLinksForSourceMemory('m-source');
+    expect(bySource.map(link => link.relation)).toEqual([
+      'conflicts_with',
+      'negates',
+      'updates',
+      'supersedes',
+    ]);
+    expect(await store.getEvolutionLinksForSourceMemory('m-source', 'updates')).toEqual([links[1]]);
+    expect((await store.getEvolutionLinksForTargetMemory('m-target')).map(link => link.relation)).toEqual([
+      'negates',
+      'updates',
+      'supersedes',
+    ]);
+    expect(await store.getEvolutionLinksForTargetMemory('m-other', 'conflicts_with')).toEqual([links[3]]);
+
+    const hydrated = await createPostgresMemoryStore('postgres://unused', 4);
+    await expect(hydrated.getEvolutionLinksForTargetMemory('m-target', 'supersedes')).resolves.toEqual([links[0]]);
+  });
+
+  it('rejects invalid postgres memory evolution link confidence and endpoints', async () => {
+    postgresMocks.activePool = new FakeMemoryPool();
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    await expect(store.recordEvolutionLink({
+      sourceMemoryId: 'm-source',
+      targetMemoryId: 'm-target',
+      relation: 'updates',
+      confidence: -0.1,
+    })).rejects.toThrow('confidence must be between 0 and 1');
+
+    await expect(store.recordEvolutionLink({
+      sourceMemoryId: 'm-source',
+      targetMemoryId: 'm-target',
+      relation: 'updates',
+      confidence: 1.1,
+    })).rejects.toThrow('confidence must be between 0 and 1');
+
+    await expect(store.recordEvolutionLink({
+      sourceMemoryId: 'same',
+      targetMemoryId: 'same',
+      relation: 'conflicts_with',
+    })).rejects.toThrow('distinct source and target');
   });
 
   it('rejects inserts when persistence fails and leaves the in-memory cache untouched', async () => {

@@ -4,7 +4,7 @@ import * as sqliteVec from 'sqlite-vec';
 import { MemoryWriter, MemoryWritePolicyError } from './writer.js';
 import type { MemoryWriteOptions } from './writer.js';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
-import type { MemoryStorePort } from './memory-store-port.js';
+import type { MemoryEvolutionLinkInput, MemoryStorePort } from './memory-store-port.js';
 import { MemoryStore } from './store.js';
 import type { PurrMemory } from './types.js';
 import { DEDUP_THRESHOLD, MEMORY_CONFIG } from './types.js';
@@ -37,6 +37,9 @@ function mockMemoryStore(): {
   runInTransaction: ReturnType<typeof vi.fn>;
   softDeleteMemory: ReturnType<typeof vi.fn>;
   recordAbstractionLink: ReturnType<typeof vi.fn>;
+  recordEvolutionLink: ReturnType<typeof vi.fn>;
+  getEvolutionLinksForSourceMemory: ReturnType<typeof vi.fn>;
+  getEvolutionLinksForTargetMemory: ReturnType<typeof vi.fn>;
   getAllActiveMemories: ReturnType<typeof vi.fn>;
   getById: ReturnType<typeof vi.fn>;
   getStats: ReturnType<typeof vi.fn>;
@@ -56,6 +59,21 @@ function mockMemoryStore(): {
     runInTransaction: vi.fn((handler: () => unknown) => handler()),
     softDeleteMemory: vi.fn(),
     recordAbstractionLink: vi.fn(),
+    recordEvolutionLink: vi.fn(async (input: MemoryEvolutionLinkInput) => ({
+      id: input.linkId ?? `evolution:${input.sourceMemoryId}:${input.targetMemoryId}:${input.relation}`,
+      sourceMemoryId: input.sourceMemoryId,
+      targetMemoryId: input.targetMemoryId,
+      relation: input.relation,
+      confidence: input.confidence ?? 1,
+      reason: input.reason,
+      sourceRef: input.sourceRef,
+      sourceType: input.sourceType ?? 'unknown',
+      provenanceRefs: input.provenanceRefs ?? [],
+      provenance: input.provenance,
+      createdAt: input.createdAt ?? Date.now(),
+    })),
+    getEvolutionLinksForSourceMemory: vi.fn(() => []),
+    getEvolutionLinksForTargetMemory: vi.fn(() => []),
     getAllActiveMemories: vi.fn(() => []),
     getById: vi.fn(),
     getStats: vi.fn(() => ({ total: 0, byType: {}, avgSalience: 0 })),
@@ -481,6 +499,121 @@ describe('MemoryWriter', () => {
       // updateMemory should NOT have been called for supersession
       expect(store.updateMemory).not.toHaveBeenCalled();
       expect(store.insertMemory).toHaveBeenCalledOnce();
+    });
+
+    it('links compatible updates without superseding older memories', async () => {
+      const oldMemory = makeExistingMemory({
+        type: 'semantic',
+        text: 'Ada likes oolong tea.',
+        confidence: 0.6,
+        tags: ['preference', 'tea'],
+      });
+
+      store.searchByEmbedding.mockReturnValueOnce([]);
+      store.searchByEmbedding.mockReturnValueOnce([oldMemory]);
+
+      const result = await writer.write({
+        text: 'Ada also likes jasmine tea.',
+        type: 'semantic',
+        confidence: 0.9,
+        tags: ['preference', 'tea'],
+      });
+
+      expect(result.action).toBe('updated');
+      expect(store.updateMemory).not.toHaveBeenCalled();
+      expect(result.supersededMemoryIds).toEqual([]);
+      expect(store.recordEvolutionLink).toHaveBeenCalledWith(expect.objectContaining({
+        sourceMemoryId: result.memory.id,
+        targetMemoryId: oldMemory.id,
+        relation: 'updates',
+        reason: 'memory_writer:compatible_update',
+      }));
+    });
+
+    it('supersedes current-state replacements and records lineage', async () => {
+      const oldMemory = makeExistingMemory({
+        type: 'semantic',
+        text: 'Current workspace is /home/ada/old.',
+        confidence: 0.65,
+        tags: ['current_state', 'workspace'],
+      });
+
+      store.searchByEmbedding.mockReturnValueOnce([]);
+      store.searchByEmbedding.mockReturnValueOnce([oldMemory]);
+
+      const result = await writer.write({
+        text: 'Current workspace is /home/ada/new.',
+        type: 'semantic',
+        confidence: 0.9,
+        tags: ['current_state', 'workspace'],
+      });
+
+      expect(result.action).toBe('superseded');
+      expect(store.updateMemory).toHaveBeenCalledWith(oldMemory.id, {
+        supersededBy: result.memory.id,
+      });
+      expect(store.recordEvolutionLink).toHaveBeenCalledWith(expect.objectContaining({
+        sourceMemoryId: result.memory.id,
+        targetMemoryId: oldMemory.id,
+        relation: 'supersedes',
+        reason: 'memory_writer:current_state_replacement',
+      }));
+    });
+
+    it('records high-impact ambiguous relationship changes as conflicts without supersession', async () => {
+      const oldMemory = makeExistingMemory({
+        type: 'relational',
+        text: "Ada's partner is Morgan.",
+        confidence: 0.65,
+        tags: ['relationship'],
+      });
+
+      store.searchByEmbedding.mockReturnValueOnce([]);
+      store.searchByEmbedding.mockReturnValueOnce([oldMemory]);
+
+      const result = await writer.write({
+        text: "Ada's partner is Riley.",
+        type: 'relational',
+        confidence: 0.95,
+        tags: ['relationship'],
+      });
+
+      expect(result.action).toBe('conflict');
+      expect(store.updateMemory).not.toHaveBeenCalled();
+      expect(store.recordEvolutionLink).toHaveBeenCalledWith(expect.objectContaining({
+        sourceMemoryId: result.memory.id,
+        targetMemoryId: oldMemory.id,
+        relation: 'conflicts_with',
+        reason: 'memory_writer:high_impact_conflict_review',
+      }));
+    });
+
+    it('records high-impact explicit contradictions as negations without blind supersession', async () => {
+      const oldMemory = makeExistingMemory({
+        type: 'boundary',
+        text: 'Ada allows workplace calls after 8pm.',
+        confidence: 0.65,
+        tags: ['boundary'],
+      });
+
+      store.searchByEmbedding.mockReturnValueOnce([]);
+      store.searchByEmbedding.mockReturnValueOnce([oldMemory]);
+
+      const result = await writer.write({
+        text: 'Ada does not allow workplace calls after 8pm.',
+        type: 'boundary',
+        confidence: 0.95,
+        tags: ['boundary'],
+      });
+
+      expect(result.action).toBe('negated');
+      expect(store.updateMemory).not.toHaveBeenCalled();
+      expect(store.recordEvolutionLink).toHaveBeenCalledWith(expect.objectContaining({
+        sourceMemoryId: result.memory.id,
+        targetMemoryId: oldMemory.id,
+        relation: 'negates',
+        reason: 'memory_writer:high_impact_negation_review',
+      }));
     });
 
     it('calls searchByEmbedding with correct thresholds', async () => {

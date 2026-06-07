@@ -1,10 +1,12 @@
 import type {
   MemoryAbstractionLink,
   MemoryDeleteVersion,
+  MemoryEvolutionLink,
   MemoryLink,
   MemoryPatchEvent,
   ScratchpadEntry,
 } from '../memory-store-port.js';
+import { MEMORY_EVOLUTION_RELATIONS } from '../memory-store-port.js';
 import {
   inferMemorySourceTypeFromSourceRef,
   normalizeConsentFlags,
@@ -23,6 +25,7 @@ import {
 import type {
   MemoryAbstractionLinkRow,
   MemoryDeleteVersionRow,
+  MemoryEvolutionLinkRow,
   MemoryLinkRow,
   MemoryPatchEventRow,
   MemoryRow,
@@ -84,6 +87,17 @@ export function mapMemoryAbstractionLinkRow(row: MemoryAbstractionLinkRow): Memo
   };
 }
 
+function parseJsonStringArray(value: string | null): string[] {
+  try {
+    const parsed = JSON.parse(value ?? '[]');
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export function parseJsonRecord(
   value: string | null,
   fallback: Record<string, unknown> = {},
@@ -96,6 +110,26 @@ export function parseJsonRecord(
   } catch {
     return fallback;
   }
+}
+
+export function mapMemoryEvolutionLinkRow(row: MemoryEvolutionLinkRow): MemoryEvolutionLink {
+  const relation = (MEMORY_EVOLUTION_RELATIONS as readonly string[]).includes(row.relation)
+    ? row.relation as MemoryEvolutionLink['relation']
+    : 'updates';
+  const provenance = normalizeMemoryProvenance(parseJsonRecord(row.provenance_json, {}));
+  return {
+    id: row.id,
+    sourceMemoryId: row.source_memory_id,
+    targetMemoryId: row.target_memory_id,
+    relation,
+    confidence: row.confidence,
+    reason: row.reason ?? undefined,
+    sourceRef: row.source_ref ?? undefined,
+    sourceType: normalizeMemorySourceType(row.source_type),
+    provenanceRefs: parseJsonStringArray(row.provenance_refs),
+    ...(provenance ? { provenance } : {}),
+    createdAt: row.created_at,
+  };
 }
 
 export function mapMemoryPatchEventRow(row: MemoryPatchEventRow): MemoryPatchEvent {

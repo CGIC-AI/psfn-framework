@@ -73,13 +73,8 @@ function makeLLMProvider(content: string): LLMProviderPort {
 }
 
 describe('SleeptimeMemoryAgent', () => {
-  it('triggers post-turn actions on configured cadence for external sessions', () => {
-    const llmProvider = makeLLMProvider('{}');
-    const sessionManager = {
-      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([]),
-    };
-    const coreMemoryStore = {
+  function makeCoreMemoryStore() {
+    return {
       getSnapshot: vi.fn().mockReturnValue({
         version: 1,
         updatedAt: '2026-03-01T00:00:00.000Z',
@@ -91,6 +86,15 @@ describe('SleeptimeMemoryAgent', () => {
       }),
       rethink: vi.fn(),
     };
+  }
+
+  it('triggers post-turn actions on configured cadence for external sessions', () => {
+    const llmProvider = makeLLMProvider('{}');
+    const sessionManager = {
+      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getRecentMessages: vi.fn().mockReturnValue([]),
+    };
+    const coreMemoryStore = makeCoreMemoryStore();
     const memoryWriter = {
       write: vi.fn(),
     };
@@ -263,6 +267,241 @@ describe('SleeptimeMemoryAgent', () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it('queues high-impact low-confidence sleeptime candidates for review instead of writing them', async () => {
+    const llmProvider = makeLLMProvider(JSON.stringify({
+      orient: {
+        persona: 'Careful and grounded.',
+        human: 'User may have a sensitive boundary.',
+        goals: 'Review uncertain high-impact claims before persistence.',
+      },
+      memory_writes: [
+        {
+          text: 'User has a hard boundary about family contact.',
+          type: 'boundary',
+          importance: 0.9,
+          confidence: 0.41,
+          emotionalValence: -0.2,
+          tags: ['boundary', 'family'],
+          sensitivity: 'confidential',
+        },
+      ],
+    }));
+    const sessionManager = {
+      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getRecentMessages: vi.fn().mockReturnValue([
+        {
+          id: 1,
+          channelId: 'terminal:test',
+          role: 'user',
+          content: 'Maybe do not use the family contact detail until I confirm it.',
+          timestamp: Date.now(),
+        },
+        {
+          id: 2,
+          channelId: 'terminal:test',
+          role: 'assistant',
+          content: 'I will treat that as uncertain and avoid acting on it.',
+          timestamp: Date.now(),
+        },
+      ]),
+    };
+    const memoryWriter = {
+      write: vi.fn().mockResolvedValue({ action: 'created' }),
+    };
+    const memoryMaintenanceStore = {
+      listActiveMemories: vi.fn().mockResolvedValue([]),
+      getById: vi.fn(),
+      upsertMemoryMaintenanceReview: vi.fn(async input => ({
+        id: input.id ?? 'review-1',
+        kind: input.kind,
+        status: input.state.status,
+        subjectMemoryId: input.subjectMemoryId,
+        candidateMemoryIds: input.candidateMemoryIds ?? [],
+        state: input.state,
+        createdAt: input.createdAt ?? 0,
+        updatedAt: input.updatedAt ?? 0,
+      })),
+      getMemoryMaintenanceDiagnostics: vi.fn().mockResolvedValue({
+        reviewCount: 1,
+        pendingReviewCount: 1,
+        reviewCountsByKind: { high_impact_low_confidence: 1 },
+        reviewCountsByStatus: { pending: 1 },
+        oldestPendingReviewAgeMs: 0,
+        averagePendingReviewAgeMs: 0,
+        evolutionDecisionCount: 0,
+        evolutionDecisionCountsByRelation: {
+          supersedes: 0,
+          updates: 0,
+          negates: 0,
+          conflicts_with: 0,
+        },
+        supersessionDecisionCount: 0,
+        conflictDecisionCount: 0,
+      }),
+    };
+    const agent = new SleeptimeMemoryAgent({
+      llmProvider,
+      sessionManager,
+      coreMemoryStore: makeCoreMemoryStore(),
+      memoryWriter,
+      cadenceTurns: 1,
+      memoryMaintenanceStore,
+    });
+
+    await agent.execute(makeSleeptimeAction());
+
+    expect(memoryWriter.write).not.toHaveBeenCalled();
+    expect(memoryMaintenanceStore.upsertMemoryMaintenanceReview).toHaveBeenCalledOnce();
+    const [review] = memoryMaintenanceStore.upsertMemoryMaintenanceReview.mock.calls[0];
+    expect(review).toMatchObject({
+      kind: 'high_impact_low_confidence',
+      subjectMemoryId: expect.stringContaining('sleeptime-memory-candidate:'),
+      state: {
+        status: 'pending',
+        recommendedAction: 'corroborate_or_dismiss',
+        metadata: expect.objectContaining({
+          confidence: 0.41,
+          type: 'boundary',
+          sensitivity: 'confidential',
+        }),
+      },
+    });
+  });
+
+  it('promotes repeated facts as stable durable memories and writes behavioral summaries from episode arcs', async () => {
+    const llmProvider = makeLLMProvider(JSON.stringify({
+      orient: {
+        persona: 'Concise and implementation-focused.',
+        human: 'User repeats the same validation preference.',
+        goals: 'Keep durable workflow preferences available across rest windows.',
+      },
+      memory_writes: [
+        {
+          text: 'Atlas project uses nightly canary validation for releases.',
+          type: 'semantic',
+          importance: 0.86,
+          confidence: 0.91,
+          emotionalValence: 0.1,
+          tags: ['workflow'],
+          sensitivity: 'personal',
+        },
+      ],
+    }));
+    const sessionManager = {
+      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getRecentMessages: vi.fn().mockReturnValue([
+        {
+          id: 1,
+          channelId: 'terminal:test',
+          role: 'user',
+          content: 'Atlas project uses nightly canary validation for releases.',
+          timestamp: Date.now(),
+        },
+        {
+          id: 2,
+          channelId: 'terminal:test',
+          role: 'assistant',
+          content: 'I will keep atlas project nightly canary validation tied to release work.',
+          timestamp: Date.now(),
+        },
+      ]),
+    };
+    const memoryWriter = {
+      write: vi.fn().mockResolvedValue({ action: 'created' }),
+    };
+    const episodicSynthesizer = {
+      run: vi.fn().mockResolvedValue({
+        consideredEntries: 2,
+        candidateEpisodeCount: 2,
+        createdEpisodes: [],
+        skippedEpisodeIds: [],
+        linkedArcs: [{
+          id: 'arc-recurrence-1',
+          sourceEpisodeId: 'episode-1',
+          targetEpisodeId: 'episode-2',
+          arcKind: 'recurrence',
+          confidence: 0.78,
+          themes: ['atlas', 'validation'],
+        }],
+      }),
+    };
+    const memoryMaintenanceStore = {
+      listActiveMemories: vi.fn().mockResolvedValue([]),
+      getById: vi.fn(),
+      upsertMemoryMaintenanceReview: vi.fn(),
+      getMemoryMaintenanceDiagnostics: vi.fn().mockResolvedValue({
+        reviewCount: 0,
+        pendingReviewCount: 0,
+        reviewCountsByKind: {},
+        reviewCountsByStatus: {},
+        oldestPendingReviewAgeMs: 0,
+        averagePendingReviewAgeMs: 0,
+        evolutionDecisionCount: 0,
+        evolutionDecisionCountsByRelation: {
+          supersedes: 0,
+          updates: 0,
+          negates: 0,
+          conflicts_with: 0,
+        },
+        supersessionDecisionCount: 0,
+        conflictDecisionCount: 0,
+      }),
+    };
+    const episodicDiagnosticsStore = {
+      getMaintenanceDiagnostics: vi.fn().mockReturnValue({
+        candidateDecisionCount: 2,
+        decisionCountsByStatus: { canonical: 2 },
+        canonicalDecisionCount: 2,
+        duplicateCandidateCount: 0,
+        duplicateEpisodeRate: 0,
+        mergeDecisionCount: 0,
+        supersessionDecisionCount: 0,
+        rejectedDecisionCount: 0,
+        reviewDecisionCount: 0,
+        watermarkCount: 1,
+        pendingWatermarkCount: 0,
+        oldestQueueAgeMs: 0,
+        averageQueueAgeMs: 0,
+        averageProcessingLatencyMs: 0,
+      }),
+    };
+    const agent = new SleeptimeMemoryAgent({
+      llmProvider,
+      sessionManager,
+      coreMemoryStore: makeCoreMemoryStore(),
+      memoryWriter,
+      cadenceTurns: 1,
+      episodicSynthesizer,
+      memoryMaintenanceStore,
+      episodicDiagnosticsStore,
+    });
+
+    await agent.execute(makeSleeptimeAction({
+      payload: { sessionId: 'terminal:test' },
+      sourceMessageId: 'msg-42',
+    }));
+
+    expect(memoryWriter.write).toHaveBeenCalledTimes(2);
+    expect(memoryWriter.write).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      text: 'Atlas project uses nightly canary validation for releases.',
+      retentionClass: 'durable',
+      provenanceRefs: expect.arrayContaining(['evidence_count:2', 'source_message:msg-42']),
+      tags: expect.arrayContaining(['workflow', 'sleeptime', 'repeated_fact', 'stable_fact']),
+    }));
+    expect(memoryWriter.write).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      type: 'reflection',
+      text: expect.stringContaining('recurrence pattern'),
+      provenanceRefs: expect.arrayContaining([
+        'l01_episode_arc:arc-recurrence-1',
+        'l01_episode:episode-1',
+        'l01_episode:episode-2',
+      ]),
+      tags: expect.arrayContaining(['behavioral_summary', 'evidence_chain', 'episode_arc:recurrence']),
+    }));
+    expect(memoryMaintenanceStore.upsertMemoryMaintenanceReview).not.toHaveBeenCalled();
+    expect(episodicDiagnosticsStore.getMaintenanceDiagnostics).toHaveBeenCalledOnce();
   });
 
   it('executes sleeptime actions in background mode without waiting for idle foreground turns', async () => {

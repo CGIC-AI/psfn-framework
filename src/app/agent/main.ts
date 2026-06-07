@@ -441,6 +441,8 @@ async function main(): Promise<void> {
       pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
       coreMemoryStore,
       episodicSynthesizer,
+      memoryMaintenanceStore: memoryStore,
+      episodicDiagnosticsStore: episodicStore,
       postTurnActions,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
       intentionAppraisalEnabled: config.intentionAppraisalEnabled !== false,

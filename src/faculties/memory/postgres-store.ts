@@ -20,6 +20,8 @@ import type {
   MemoryEvolutionLink,
   MemoryEvolutionLinkInput,
   MemoryEvolutionRelation,
+  MemoryMaintenanceDiagnostics,
+  MemoryMaintenanceDiagnosticsOptions,
   MemoryListOptions,
   MemoryLink,
   MemoryMaintenanceReview,
@@ -258,6 +260,10 @@ function memoryEvolutionKey(
   relation: MemoryEvolutionRelation,
 ): string {
   return `${sourceMemoryId}::${targetMemoryId}::${relation}`;
+}
+
+function increment(counts: Record<string, number>, key: string): void {
+  counts[key] = (counts[key] ?? 0) + 1;
 }
 
 function clampLimit(limit: number | undefined, fallback: number, min: number, max: number): number {
@@ -1121,6 +1127,54 @@ class PostgresMemoryStore implements MemoryStorePort {
 
   async getMemoryMaintenanceReview(id: string): Promise<MemoryMaintenanceReview | undefined> {
     return this.maintenanceReviews.get(id.trim());
+  }
+
+  async getMemoryMaintenanceDiagnostics(
+    options: MemoryMaintenanceDiagnosticsOptions = {},
+  ): Promise<MemoryMaintenanceDiagnostics> {
+    const now = Number.isFinite(options.now) ? Number(options.now) : Date.now();
+    const reviewCountsByKind: Record<string, number> = {};
+    const reviewCountsByStatus: Record<string, number> = {};
+    const pendingReviewAges: number[] = [];
+    for (const review of this.maintenanceReviews.values()) {
+      increment(reviewCountsByKind, review.kind);
+      increment(reviewCountsByStatus, review.status);
+      if (review.status === 'pending') {
+        pendingReviewAges.push(Math.max(0, now - review.createdAt));
+      }
+    }
+
+    const evolutionDecisionCountsByRelation: Record<MemoryEvolutionRelation, number> = {
+      supersedes: 0,
+      updates: 0,
+      negates: 0,
+      conflicts_with: 0,
+    };
+    let latestEvolutionDecisionAt: number | undefined;
+    for (const link of this.memoryEvolutionLinks.values()) {
+      evolutionDecisionCountsByRelation[link.relation] += 1;
+      latestEvolutionDecisionAt = Math.max(latestEvolutionDecisionAt ?? 0, link.createdAt);
+    }
+
+    const pendingAgeTotal = pendingReviewAges.reduce((sum, age) => sum + age, 0);
+    return {
+      reviewCount: this.maintenanceReviews.size,
+      pendingReviewCount: pendingReviewAges.length,
+      reviewCountsByKind,
+      reviewCountsByStatus,
+      oldestPendingReviewAgeMs: pendingReviewAges.length > 0 ? Math.max(...pendingReviewAges) : 0,
+      averagePendingReviewAgeMs: pendingReviewAges.length > 0
+        ? pendingAgeTotal / pendingReviewAges.length
+        : 0,
+      evolutionDecisionCount: this.memoryEvolutionLinks.size,
+      evolutionDecisionCountsByRelation,
+      supersessionDecisionCount: evolutionDecisionCountsByRelation.supersedes,
+      conflictDecisionCount: evolutionDecisionCountsByRelation.conflicts_with
+        + evolutionDecisionCountsByRelation.negates,
+      ...(latestEvolutionDecisionAt !== undefined && latestEvolutionDecisionAt > 0
+        ? { latestEvolutionDecisionAt }
+        : {}),
+    };
   }
 
   async getMemoriesByChannel(channelId: string, limit: number): Promise<PurrMemory[]> {

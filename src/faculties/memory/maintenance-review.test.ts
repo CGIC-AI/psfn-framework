@@ -10,7 +10,10 @@ import { MemoryStore } from './store.js';
 import type { PurrMemory } from './types.js';
 import { MemoryWriter } from './writer.js';
 import {
+  buildConflictingMemoryReviewInput,
+  buildHighImpactLowConfidenceReviewInput,
   buildProvenanceConfidenceReviewInput,
+  buildStaleMemoryReviewInput,
   extractUniqueDetails,
 } from './maintenance-review.js';
 
@@ -231,6 +234,77 @@ describe('Memory maintenance review state', () => {
     )).toContain('blue');
   });
 
+  it('builds high-impact, stale, and conflicting review states for uncertain memory maintenance', () => {
+    const highImpact = buildHighImpactLowConfidenceReviewInput({
+      memoryId: 'candidate-boundary-1',
+      text: 'User has a family contact boundary that needs confirmation.',
+      sourceRef: 'source:sleeptime|session:test',
+      provenanceRefs: ['sleeptime_action:1'],
+      confidence: 0.42,
+      type: 'boundary',
+      tags: ['family'],
+      sensitivity: 'confidential',
+    }, 10);
+    expect(highImpact).toMatchObject({
+      kind: 'high_impact_low_confidence',
+      subjectMemoryId: 'candidate-boundary-1',
+      createdAt: 10,
+      state: {
+        status: 'pending',
+        recommendedAction: 'corroborate_or_dismiss',
+        metadata: expect.objectContaining({
+          confidence: 0.42,
+          type: 'boundary',
+          sensitivity: 'confidential',
+        }),
+      },
+    });
+
+    const stale = buildStaleMemoryReviewInput(makeMemory('stale-1', 'Old low-confidence profile detail', {
+      confidence: 0.4,
+      tags: ['profile'],
+      extractedAt: 1_000,
+      lastAccessed: 1_000,
+    }), 92 * 24 * 60 * 60 * 1000);
+    expect(stale).toMatchObject({
+      kind: 'stale_memory',
+      subjectMemoryId: 'stale-1',
+      state: {
+        recommendedAction: 'verify_or_supersede',
+        metadata: expect.objectContaining({
+          confidence: 0.4,
+        }),
+      },
+    });
+
+    const conflict = buildConflictingMemoryReviewInput(
+      makeMemory('subject-1', 'User now prefers no weekend reminders.', {
+        type: 'boundary',
+        tags: ['boundary'],
+      }),
+      [
+        makeMemory('candidate-1', 'User prefers weekend reminders.', {
+          type: 'boundary',
+          tags: ['boundary'],
+        }),
+      ],
+      20,
+    );
+    expect(conflict).toMatchObject({
+      kind: 'conflicting_memory',
+      subjectMemoryId: 'subject-1',
+      candidateMemoryIds: ['candidate-1'],
+      createdAt: 20,
+      state: {
+        recommendedAction: 'resolve_conflict',
+        candidates: [
+          expect.objectContaining({ memoryId: 'subject-1' }),
+          expect.objectContaining({ memoryId: 'candidate-1' }),
+        ],
+      },
+    });
+  });
+
   it('persists and exposes review queue metadata/status', async () => {
     const db = new Database(':memory:');
     sqliteVec.load(db);
@@ -285,6 +359,63 @@ describe('Memory maintenance review state', () => {
       expect(saved.state.status).toBe('quarantined');
       expect(store.listMemoryMaintenanceReviews({ status: 'pending' })).toEqual([]);
       expect(store.listMemoryMaintenanceReviews({ status: 'quarantined' })).toEqual([saved]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('reports review queue age and evolution decision diagnostics', () => {
+    const db = new Database(':memory:');
+    sqliteVec.load(db);
+    const store = new MemoryStore(db, 4);
+
+    try {
+      store.insertMemory(makeMemory('memory-1', 'Original durable fact'), makeEmbedding(1));
+      store.insertMemory(makeMemory('memory-2', 'Updated durable fact'), makeEmbedding(2));
+      store.recordEvolutionLink({
+        sourceMemoryId: 'memory-1',
+        targetMemoryId: 'memory-2',
+        relation: 'supersedes',
+        createdAt: 1_100,
+      });
+      store.recordEvolutionLink({
+        sourceMemoryId: 'memory-2',
+        targetMemoryId: 'memory-1',
+        relation: 'conflicts_with',
+        createdAt: 1_300,
+      });
+      const review = buildHighImpactLowConfidenceReviewInput({
+        memoryId: 'candidate-boundary-2',
+        text: 'Potential relationship boundary with low confidence.',
+        sourceRef: 'source:sleeptime|session:test',
+        confidence: 0.3,
+        type: 'boundary',
+        tags: ['relationship'],
+        sensitivity: 'confidential',
+      }, 1_000);
+      expect(review).toBeDefined();
+      store.upsertMemoryMaintenanceReview(review!);
+
+      const diagnostics = store.getMemoryMaintenanceDiagnostics({ now: 4_000 });
+
+      expect(diagnostics).toMatchObject({
+        reviewCount: 1,
+        pendingReviewCount: 1,
+        reviewCountsByKind: { high_impact_low_confidence: 1 },
+        reviewCountsByStatus: { pending: 1 },
+        oldestPendingReviewAgeMs: 3_000,
+        averagePendingReviewAgeMs: 3_000,
+        evolutionDecisionCount: 2,
+        evolutionDecisionCountsByRelation: {
+          supersedes: 1,
+          updates: 0,
+          negates: 0,
+          conflicts_with: 1,
+        },
+        supersessionDecisionCount: 1,
+        conflictDecisionCount: 1,
+        latestEvolutionDecisionAt: 1_300,
+      });
     } finally {
       db.close();
     }

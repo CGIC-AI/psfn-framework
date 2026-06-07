@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { evaluateRestWindowEligibility } from '../../core/scheduler/rest-window.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../shared/contracts/runtime.js';
@@ -5,13 +6,27 @@ import { createComponentLogger } from '../../shared/logger.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
-import type { CoreMemoryStorePort } from './memory-store-port.js';
-import type { MemoryWriteOptions, MemoryWriter } from './writer.js';
+import type {
+  CoreMemoryStorePort,
+  MemoryMaintenanceDiagnostics,
+  MemoryMaintenanceReview,
+  MemoryMaintenanceReviewInput,
+  MemoryStorePort,
+} from './memory-store-port.js';
+import type { MemoryWriteOptions, MemoryWriter, WriteResult } from './writer.js';
 import type { EpisodicSynthesisRunResult, EpisodicSynthesizer } from './episodic/synthesis.js';
+import type { EpisodicMaintenanceDiagnostics } from './episodic/store.js';
+import {
+  buildConflictingMemoryReviewInput,
+  buildHighImpactLowConfidenceReviewInput,
+  buildStaleMemoryReviewInput,
+  type UncertainMemoryReviewSubject,
+} from './maintenance-review.js';
 import {
   VALID_MEMORY_TYPES,
   VALID_SENSITIVITY_LEVELS,
   type MemoryType,
+  type PurrMemory,
   type SensitivityLevel,
 } from './types.js';
 
@@ -23,11 +38,38 @@ const DEFAULT_CADENCE_TURNS = 3;
 const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 24;
 const DEFAULT_MAX_MEMORY_WRITES = 4;
 const MAX_TRANSCRIPT_ENTRY_CHARS = 600;
+const MAX_STALE_REVIEW_SCAN = 50;
+const MAX_STALE_REVIEWS_PER_RUN = 3;
+const MAX_BEHAVIORAL_SUMMARY_WRITES = 1;
+const EVIDENCE_TOKEN_STOP_WORDS = new Set([
+  'about',
+  'after',
+  'also',
+  'because',
+  'before',
+  'being',
+  'from',
+  'have',
+  'need',
+  'only',
+  'that',
+  'there',
+  'this',
+  'with',
+  'would',
+]);
 
 type CoreMemoryRewriter = Pick<CoreMemoryStorePort, 'getSnapshot' | 'rethink'>;
 type SessionMemoryReader = Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>;
 type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
 type SleeptimeEpisodicSynthesizer = Pick<EpisodicSynthesizer, 'run'>;
+type SleeptimeMaintenanceStore = Pick<
+  MemoryStorePort,
+  'upsertMemoryMaintenanceReview' | 'listActiveMemories' | 'getById' | 'getMemoryMaintenanceDiagnostics'
+>;
+type SleeptimeEpisodicDiagnosticsStore = {
+  getMaintenanceDiagnostics(): EpisodicMaintenanceDiagnostics | Promise<EpisodicMaintenanceDiagnostics>;
+};
 
 interface NormalizedMemoryWrite {
   text: string;
@@ -58,6 +100,8 @@ export interface SleeptimeMemoryAgentOptions {
   maxMemoryWrites?: number;
   restWindow?: EpisodicProcessingRestWindowConfig;
   episodicSynthesizer?: SleeptimeEpisodicSynthesizer | null;
+  memoryMaintenanceStore?: SleeptimeMaintenanceStore | null;
+  episodicDiagnosticsStore?: SleeptimeEpisodicDiagnosticsStore | null;
 }
 
 function normalizePositiveInteger(value: number | undefined, fallback: number): number {
@@ -231,6 +275,133 @@ function summarizeEpisodicSynthesis(result: EpisodicSynthesisRunResult): {
   };
 }
 
+function stableId(prefix: string, parts: readonly string[]): string {
+  const fingerprint = createHash('sha256')
+    .update(parts.join('\u001f'))
+    .digest('hex')
+    .slice(0, 24);
+  return `${prefix}:${fingerprint}`;
+}
+
+function normalizeEvidenceTokens(text: string): string[] {
+  const tokens = text
+    .toLowerCase()
+    .match(/[a-z][a-z0-9_-]{3,}/g) ?? [];
+  return [...new Set(tokens.filter(token => !EVIDENCE_TOKEN_STOP_WORDS.has(token)))].slice(0, 8);
+}
+
+function countSupportingTranscriptEntries(
+  memoryText: string,
+  entries: readonly SessionEntry[],
+): number {
+  const tokens = normalizeEvidenceTokens(memoryText);
+  if (tokens.length === 0) return 0;
+  return entries.reduce((count, entry) => {
+    const content = entry.content.toLowerCase();
+    const matches = tokens.reduce((sum, token) => sum + (content.includes(token) ? 1 : 0), 0);
+    return count + (matches >= Math.min(2, tokens.length) ? 1 : 0);
+  }, 0);
+}
+
+function reviewSubjectForMemoryWrite(input: {
+  memory: NormalizedMemoryWrite;
+  sessionId: string;
+  actionId: string;
+  sourceMessageId?: string;
+}): UncertainMemoryReviewSubject {
+  const sourceRef = `source:sleeptime|session:${input.sessionId}|message:${input.sourceMessageId ?? 'unknown'}`;
+  return {
+    memoryId: stableId('sleeptime-memory-candidate', [
+      input.sessionId,
+      input.actionId,
+      input.memory.type,
+      input.memory.text,
+    ]),
+    text: input.memory.text,
+    sourceRef,
+    provenanceRefs: [
+      sourceRef,
+      `sleeptime_action:${input.actionId}`,
+      ...(input.sourceMessageId ? [`source_message:${input.sourceMessageId}`] : []),
+    ],
+    confidence: input.memory.confidence,
+    type: input.memory.type,
+    tags: [...input.memory.tags, 'sleeptime'],
+    sensitivity: input.memory.sensitivity,
+  };
+}
+
+function buildSleepTimeMemoryWritePayload(input: {
+  memory: NormalizedMemoryWrite;
+  sessionId: string;
+  actionId: string;
+  sourceMessageId?: string;
+  evidenceCount: number;
+}): MemoryWriteOptions {
+  const sourceRef = `source:sleeptime|session:${input.sessionId}|message:${input.sourceMessageId ?? 'unknown'}`;
+  const repeatedFact = input.evidenceCount >= 2 && input.memory.confidence >= 0.72 && input.memory.importance >= 0.65;
+  return {
+    text: input.memory.text,
+    type: input.memory.type,
+    importance: input.memory.importance,
+    confidence: input.memory.confidence,
+    emotionalValence: input.memory.emotionalValence,
+    sensitivity: input.memory.sensitivity,
+    sourceRef,
+    provenanceRefs: [
+      sourceRef,
+      `sleeptime_action:${input.actionId}`,
+      `evidence_count:${input.evidenceCount}`,
+      ...(input.sourceMessageId ? [`source_message:${input.sourceMessageId}`] : []),
+    ],
+    tags: [
+      ...input.memory.tags,
+      'sleeptime',
+      ...(repeatedFact ? ['repeated_fact', 'stable_fact'] : []),
+    ],
+    ...(repeatedFact ? { retentionClass: 'durable' as const } : {}),
+  };
+}
+
+function buildBehavioralSummaryWrites(input: {
+  sessionId: string;
+  actionId: string;
+  sourceMessageId?: string;
+  episodicSynthesis: EpisodicSynthesisRunResult | null;
+}): MemoryWriteOptions[] {
+  const arcs = input.episodicSynthesis?.linkedArcs
+    .filter(arc => arc.confidence >= 0.7)
+    .filter(arc => arc.arcKind !== 'same_theme')
+    .slice(0, MAX_BEHAVIORAL_SUMMARY_WRITES) ?? [];
+  return arcs.map(arc => {
+    const themes = arc.themes.slice(0, 3).join(', ') || 'recent continuity';
+    const sourceRef = `source:sleeptime|session:${input.sessionId}|episode_arc:${arc.id}`;
+    return {
+      text: `Sleep-time evidence chain shows a ${arc.arcKind.replace(/_/g, ' ')} pattern around ${themes}.`,
+      type: 'reflection',
+      importance: 0.62,
+      confidence: Math.min(0.84, Math.max(0.7, arc.confidence)),
+      emotionalValence: 0,
+      sensitivity: 'personal',
+      sourceRef,
+      provenanceRefs: [
+        sourceRef,
+        `l01_episode_arc:${arc.id}`,
+        `l01_episode:${arc.sourceEpisodeId}`,
+        `l01_episode:${arc.targetEpisodeId}`,
+        `sleeptime_action:${input.actionId}`,
+        ...(input.sourceMessageId ? [`source_message:${input.sourceMessageId}`] : []),
+      ],
+      tags: [
+        'sleeptime',
+        'behavioral_summary',
+        'evidence_chain',
+        `episode_arc:${arc.arcKind}`,
+      ],
+    };
+  });
+}
+
 export class SleeptimeMemoryAgent {
   private readonly llmProvider: LLMProviderPort;
   private readonly sessionManager: SessionMemoryReader;
@@ -241,6 +412,8 @@ export class SleeptimeMemoryAgent {
   private readonly maxMemoryWrites: number;
   private readonly restWindow?: EpisodicProcessingRestWindowConfig;
   private readonly episodicSynthesizer: SleeptimeEpisodicSynthesizer | null;
+  private readonly memoryMaintenanceStore: SleeptimeMaintenanceStore | null;
+  private readonly episodicDiagnosticsStore: SleeptimeEpisodicDiagnosticsStore | null;
   private readonly turnCountBySession = new Map<string, number>();
 
   constructor(options: SleeptimeMemoryAgentOptions) {
@@ -259,6 +432,8 @@ export class SleeptimeMemoryAgent {
     );
     this.restWindow = options.restWindow;
     this.episodicSynthesizer = options.episodicSynthesizer ?? null;
+    this.memoryMaintenanceStore = options.memoryMaintenanceStore ?? null;
+    this.episodicDiagnosticsStore = options.episodicDiagnosticsStore ?? null;
   }
 
   inferPostTurnActions(input: {
@@ -406,20 +581,31 @@ export class SleeptimeMemoryAgent {
     });
 
     let writtenCount = 0;
+    let reviewQueuedCount = await this.queueStaleMemoryReviews();
     for (const memory of plan.memoryWrites) {
-      const writePayload: MemoryWriteOptions = {
-        text: memory.text,
-        type: memory.type,
-        importance: memory.importance,
-        confidence: memory.confidence,
-        emotionalValence: memory.emotionalValence,
-        sensitivity: memory.sensitivity,
-        sourceRef: `source:sleeptime|session:${sessionId}|message:${action.sourceMessageId}`,
-        tags: [...memory.tags, 'sleeptime'],
-      };
+      const queuedReview = await this.queueUncertainMemoryWriteReview({
+        memory,
+        sessionId,
+        actionId: action.id,
+        sourceMessageId: action.sourceMessageId,
+      });
+      if (queuedReview) {
+        reviewQueuedCount += 1;
+        continue;
+      }
+
+      const evidenceCount = countSupportingTranscriptEntries(memory.text, recentEntries);
+      const writePayload = buildSleepTimeMemoryWritePayload({
+        memory,
+        sessionId,
+        actionId: action.id,
+        sourceMessageId: action.sourceMessageId,
+        evidenceCount,
+      });
       try {
-        await this.memoryWriter.write(writePayload);
+        const result = await this.memoryWriter.write(writePayload);
         writtenCount += 1;
+        reviewQueuedCount += await this.queueConflictReviewFromWriteResult(result);
       } catch (error) {
         log.warn('Sleeptime memory write skipped after error', {
           sessionId,
@@ -429,6 +615,26 @@ export class SleeptimeMemoryAgent {
         });
       }
     }
+    for (const writePayload of buildBehavioralSummaryWrites({
+      sessionId,
+      actionId: action.id,
+      sourceMessageId: action.sourceMessageId,
+      episodicSynthesis,
+    })) {
+      try {
+        await this.memoryWriter.write(writePayload);
+        writtenCount += 1;
+      } catch (error) {
+        log.warn('Sleeptime behavioral summary write skipped after error', {
+          sessionId,
+          actionId: action.id,
+          error: String(error),
+        });
+      }
+    }
+
+    const memoryMaintenanceDiagnostics = await this.getMemoryMaintenanceDiagnostics();
+    const episodicMaintenanceDiagnostics = await this.getEpisodicMaintenanceDiagnostics();
 
     log.info('Sleeptime memory run complete', {
       sessionId,
@@ -437,8 +643,71 @@ export class SleeptimeMemoryAgent {
       transcriptEntries: recentEntries.length,
       memoryWritesRequested: plan.memoryWrites.length,
       memoryWritesSucceeded: writtenCount,
+      memoryMaintenanceReviewsQueued: reviewQueuedCount,
       ...(episodicSynthesis ? summarizeEpisodicSynthesis(episodicSynthesis) : {}),
+      ...(memoryMaintenanceDiagnostics ? { memoryMaintenanceDiagnostics } : {}),
+      ...(episodicMaintenanceDiagnostics ? { episodicMaintenanceDiagnostics } : {}),
     });
+  }
+
+  private async queueMaintenanceReview(
+    input: MemoryMaintenanceReviewInput | null,
+  ): Promise<MemoryMaintenanceReview | null> {
+    if (!input || !this.memoryMaintenanceStore?.upsertMemoryMaintenanceReview) return null;
+    return this.memoryMaintenanceStore.upsertMemoryMaintenanceReview(input);
+  }
+
+  private async queueUncertainMemoryWriteReview(input: {
+    memory: NormalizedMemoryWrite;
+    sessionId: string;
+    actionId: string;
+    sourceMessageId?: string;
+  }): Promise<MemoryMaintenanceReview | null> {
+    const review = buildHighImpactLowConfidenceReviewInput(reviewSubjectForMemoryWrite(input));
+    return this.queueMaintenanceReview(review);
+  }
+
+  private async queueStaleMemoryReviews(): Promise<number> {
+    if (!this.memoryMaintenanceStore?.listActiveMemories || !this.memoryMaintenanceStore.upsertMemoryMaintenanceReview) {
+      return 0;
+    }
+    const memories = await this.memoryMaintenanceStore.listActiveMemories({ limit: MAX_STALE_REVIEW_SCAN });
+    let queued = 0;
+    for (const memory of memories) {
+      if (queued >= MAX_STALE_REVIEWS_PER_RUN) break;
+      const review = await this.queueMaintenanceReview(buildStaleMemoryReviewInput(memory));
+      if (review) queued += 1;
+    }
+    return queued;
+  }
+
+  private async queueConflictReviewFromWriteResult(result: WriteResult): Promise<number> {
+    if (
+      !this.memoryMaintenanceStore?.getById
+      || !this.memoryMaintenanceStore.upsertMemoryMaintenanceReview
+      || !['conflict', 'negated'].includes(result.action)
+      || !result.relatedMemoryIds?.length
+    ) {
+      return 0;
+    }
+
+    const candidates: PurrMemory[] = [];
+    for (const memoryId of result.relatedMemoryIds) {
+      const candidate = await this.memoryMaintenanceStore.getById(memoryId);
+      if (candidate) candidates.push(candidate);
+    }
+    const review = await this.queueMaintenanceReview(buildConflictingMemoryReviewInput(result.memory, candidates));
+    return review ? 1 : 0;
+  }
+
+  private async getMemoryMaintenanceDiagnostics(): Promise<MemoryMaintenanceDiagnostics | null> {
+    if (!this.memoryMaintenanceStore?.getMemoryMaintenanceDiagnostics) return null;
+    return this.memoryMaintenanceStore.getMemoryMaintenanceDiagnostics();
+  }
+
+  private async getEpisodicMaintenanceDiagnostics(): Promise<EpisodicMaintenanceDiagnostics | null> {
+    if (!this.episodicDiagnosticsStore) return null;
+    return this.episodicDiagnosticsStore.getMaintenanceDiagnostics();
   }
 
   private resolveActionSessionId(action: Pick<InferredPostTurnAction, 'channelId' | 'payload'>): string {

@@ -29,6 +29,7 @@ describe('EpisodicSynthesizer', () => {
     timestamp: string,
     role: SessionEntry['role'],
     content: string,
+    metadataOverrides: Record<string, unknown> = {},
   ): SessionEntry {
     const turnId = `00000000-0000-7000-a000-${String(id).padStart(12, '0')}`;
     return {
@@ -46,6 +47,7 @@ describe('EpisodicSynthesizer', () => {
           requestId: `request:${id}`,
           role,
         },
+        ...metadataOverrides,
       }),
     };
   }
@@ -76,7 +78,7 @@ describe('EpisodicSynthesizer', () => {
     expect(result.linkedArcs[0]).toMatchObject({
       sourceEpisodeId: result.createdEpisodes[0].id,
       targetEpisodeId: result.createdEpisodes[1].id,
-      arcKind: 'same_theme',
+      arcKind: 'continuation',
     });
 
     const episodes = store.searchByTime({
@@ -198,6 +200,96 @@ describe('EpisodicSynthesizer', () => {
         candidateDecisionIds: expect.arrayContaining(decisions.map(decision => decision.id)),
       },
     });
+    const diagnostics = store.getMaintenanceDiagnostics({ now: '2026-04-01T10:10:00.000Z' });
+    expect(diagnostics).toMatchObject({
+      candidateDecisionCount: 2,
+      decisionCountsByStatus: { canonical: 1, merged: 1 },
+      duplicateCandidateCount: 1,
+      duplicateEpisodeRate: 0.5,
+      mergeDecisionCount: 1,
+      watermarkCount: 1,
+      pendingWatermarkCount: 1,
+      averageProcessingLatencyMs: 0,
+      latestProcessedAt: '2026-04-01T10:04:00.000Z',
+    });
+    expect(diagnostics.oldestQueueAgeMs).toBe(6 * 60 * 1000);
+  });
+
+  it('classifies richer arc kinds from canonical episode evidence', async () => {
+    const cases = [
+      {
+        expected: 'causal',
+        target: 'Atlas project continued because scheduler flakes blocked validation.',
+      },
+      {
+        expected: 'resolution',
+        target: 'Atlas project issue resolved after the scheduler fix shipped.',
+      },
+      {
+        expected: 'contrast',
+        target: 'Atlas project validation changed and no longer uses smoke-only checks.',
+      },
+      {
+        expected: 'recurrence',
+        target: 'Atlas project same issue returned again during routine validation.',
+      },
+      {
+        expected: 'operator_defined',
+        target: 'Atlas project validation needs a maintainer-defined checkpoint.',
+        metadataOverrides: { operatorNoteId: 'operator-note-1' },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const store = makeStore();
+      try {
+        const sessionReader = {
+          getRecentMessages: () => [
+            entry(10, '2026-04-01T10:00:00.000Z', 'user', 'Atlas project baseline validation plan.'),
+            entry(11, '2026-04-01T10:02:00.000Z', 'assistant', 'Atlas project baseline validation is captured.'),
+            entry(
+              12,
+              '2026-04-01T12:00:00.000Z',
+              'user',
+              testCase.target,
+              testCase.metadataOverrides ?? {},
+            ),
+            entry(
+              13,
+              '2026-04-01T12:02:00.000Z',
+              'assistant',
+              `Captured follow-up for ${testCase.target}`,
+              testCase.metadataOverrides ?? {},
+            ),
+          ],
+        };
+        const synthesizer = new EpisodicSynthesizer(store, sessionReader, {
+          gapSplitMinutes: 45,
+          transcriptMessageLimit: 12,
+        });
+
+        const result = await synthesizer.run({
+          sessionId: `terminal:arc-kind:${testCase.expected}`,
+          sourceMessageId: `source:${testCase.expected}`,
+        });
+
+        expect(result.createdEpisodes).toHaveLength(2);
+        expect(result.linkedArcs).toHaveLength(1);
+        expect(result.linkedArcs[0]).toMatchObject({
+          sourceEpisodeId: result.createdEpisodes[0].id,
+          targetEpisodeId: result.createdEpisodes[1].id,
+          arcKind: testCase.expected,
+        });
+        if (testCase.expected === 'operator_defined') {
+          expect(result.createdEpisodes[1].provenanceRefs).toEqual(expect.arrayContaining([
+            expect.objectContaining({ kind: 'operator_note', refId: 'operator-note-1' }),
+          ]));
+        }
+      } finally {
+        db?.close();
+        db = undefined;
+      }
+    }
   });
 
   it('reuses a canonical episode when a rest boundary shifts across an overlapping turn', async () => {
@@ -305,7 +397,7 @@ describe('EpisodicSynthesizer', () => {
     expect(result.consideredEntries).toBe(8);
     expect(result.createdEpisodes).toHaveLength(4);
     expect(result.linkedArcs).toHaveLength(3);
-    expect(result.linkedArcs.map(arc => arc.arcKind)).toEqual(['same_theme', 'same_theme', 'same_theme']);
+    expect(result.linkedArcs.map(arc => arc.arcKind)).toEqual(['continuation', 'continuation', 'continuation']);
 
     const episodes = store.searchByThread('terminal:trip-month', { limit: 10 });
     expect(episodes.map(episode => episode.startedAt.slice(0, 10))).toEqual([

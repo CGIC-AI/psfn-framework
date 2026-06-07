@@ -18,7 +18,7 @@ graph TB
   %% BOOTSTRAP & COMPOSITION  (src/app/startup/*)
   %% ═══════════════════════════════════════════════
   subgraph Bootstrap["Bootstrap &amp; Composition"]
-    COMP["startup/composition/composition.ts<br/><i>composeIdentity, composeSubstrateAgent,<br/>composeSessionRuntime[Async],<br/>wireMemoryRuntime, wireCoreMemoryRuntime,<br/>wireShardAndThinkRuntime, wireSelfModelRuntime</i>"]
+    COMP["startup/composition/composition.ts<br/><i>composeIdentity, composeSubstrateAgent,<br/>composeSessionRuntimeAsync,<br/>wireMemoryRuntime, wireCoreMemoryRuntime,<br/>wireShardAndThinkRuntime, wireSelfModelRuntime</i>"]
     PARITY["startup/composition/parity.ts<br/><i>wirePromptRuntime, wireCharacterCardRuntime,<br/>wireSettingsRuntime, wireSessionToolsRuntime,<br/>wireFilesystemToolsRuntime, wireHeartbeatRuntime,<br/>wireStaticPromptRegistry,<br/>wireExtendedToolAutoloadPolicy</i>"]
     CHANRT["startup/composition/channel-runtime.ts<br/><i>Discord / Telegram / API / Garden / Wyoming<br/>channel adapter factories</i>"]
     POSTACT["startup/composition/post-turn-actions.ts<br/><i>deferred post-turn action queue + dispatch</i>"]

@@ -124,7 +124,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   } = options;
   const db = options.db ?? null;
   const episodicStore = options.episodicStore ?? (() => {
-    if ((config.persistenceBackend ?? 'sqlite') === 'postgres') {
+    if (config.persistenceBackend === 'postgres') {
       throw new Error('PostgreSQL core runtime requires an injected episodic store');
     }
     return db ? new EpisodicStore(db) : null;

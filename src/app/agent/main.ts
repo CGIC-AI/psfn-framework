@@ -5,11 +5,6 @@
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
-import {
-  createEmbeddingDimensionMismatchWarning,
-  runDatabaseIntegrityCheck,
-  validateEmbeddingDimensions,
-} from '../../persistence/backups/startup-checks.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
 import { EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
@@ -136,14 +131,9 @@ async function main(): Promise<void> {
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
   } = persistenceRuntime;
-  if (db) {
-    runDatabaseIntegrityCheck(db);
-    log.info('SQLite integrity check passed');
-  } else {
-    log.info('Non-sqlite persistence backend selected; skipping SQLite startup checks', {
-      persistenceBackend,
-    });
-  }
+  log.info('PostgreSQL persistence backend selected; skipping SQLite startup checks', {
+    persistenceBackend,
+  });
 
   // ── Load identity (mounted read-only in container) ──
 
@@ -196,20 +186,6 @@ async function main(): Promise<void> {
     pathSnapshot.companionDataDir,
     config.sessionRestartBehavior ?? 'reuse_latest_session',
   );
-
-  if (db) {
-    const embeddingDimensionCheck = validateEmbeddingDimensions(db, gateway.dims);
-    const embeddingDimensionWarning = createEmbeddingDimensionMismatchWarning(
-      embeddingDimensionCheck,
-    );
-    if (embeddingDimensionWarning) {
-      log.warn(embeddingDimensionWarning.message, {
-        configuredDims: embeddingDimensionWarning.configuredDims,
-        storedDims: embeddingDimensionWarning.storedDims,
-        recommendation: embeddingDimensionWarning.recommendation,
-      });
-    }
-  }
 
   const { scheduler, postTurnActions } = buildAgentSchedulerRuntime({
     eventBus,
@@ -380,9 +356,7 @@ async function main(): Promise<void> {
         log.info('Wrote graceful shutdown markers', { channels: markedChannels });
       }
     },
-    closeDatabase: () => {
-      db?.close();
-    },
+    closeDatabase: () => {},
     scheduler,
     moduleLoader,
     memoryExtractor,

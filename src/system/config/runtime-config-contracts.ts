@@ -23,7 +23,7 @@ import type {
 export type { CapabilityTier } from '../capabilities/tier-types.js';
 export type ShardToolsetConfig = Partial<Record<CapabilityTier, string[]>>;
 export type SessionRestartBehavior = 'reuse_latest_session' | 'new_session';
-export type PersistenceBackend = 'sqlite' | 'postgres';
+export type PersistenceBackend = 'postgres';
 export const PROMOTED_EXTENDED_TOOL_SLOTS_MAX = 4;
 
 export interface CompositionalPolicyConfig {

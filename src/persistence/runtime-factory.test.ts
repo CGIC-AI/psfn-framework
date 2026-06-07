@@ -83,11 +83,11 @@ beforeEach(() => {
 });
 
 describe('createAgentPersistenceRuntime', () => {
-  it('selects sqlite companion storage by default', async () => {
-    const runtime = await createAgentPersistenceRuntime({
+  it('fails closed when runtime persistence is not configured for postgres', async () => {
+    await expect(createAgentPersistenceRuntime({
       config: {
         databasePath: '/tmp/companion.db',
-        persistenceBackend: 'sqlite',
+        persistenceBackend: 'sqlite' as never,
       },
       pathSnapshot: {
         systemDataDir: '/tmp/system-data',
@@ -98,19 +98,8 @@ describe('createAgentPersistenceRuntime', () => {
         backupRootDir: '/tmp/backups',
       },
       embeddingDims: 1024,
-    });
-
-    expect(runtime).toEqual({
-      backend: 'sqlite',
-      db: runtimeFactoryMocks.sqliteCompanionStore.db,
-      memoryStore: runtimeFactoryMocks.sqliteMemoryStore as MemoryStorePort,
-      episodicStore: runtimeFactoryMocks.sqliteEpisodicStore,
-      reflectionStore: runtimeFactoryMocks.sqliteReflectionStore,
-    });
-    expect(runtimeFactoryMocks.createSqliteCompanionStore).toHaveBeenCalled();
-    expect(runtimeFactoryMocks.createSqliteEpisodicStore).toHaveBeenCalledWith(
-      runtimeFactoryMocks.sqliteCompanionStore.db,
-    );
+    })).rejects.toThrow('requires config.persistenceBackend=postgres');
+    expect(runtimeFactoryMocks.createSqliteCompanionStore).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.createPostgresMemoryStore).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.createPostgresEpisodicStore).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.connectPostgresReflectionMirror).not.toHaveBeenCalled();

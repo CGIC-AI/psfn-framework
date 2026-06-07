@@ -114,8 +114,8 @@ export function buildAgentSchedulerRuntime(
       verifyRestore: options.backupConfig.verifyRestore,
     });
   } else {
-    log.info('Scheduled SQLite backup task disabled for non-sqlite persistence backend', {
-      persistenceBackend: options.config.persistenceBackend ?? 'sqlite',
+    log.info('Scheduled SQLite backup task disabled for configured persistence backend', {
+      persistenceBackend: options.config.persistenceBackend,
     });
   }
 

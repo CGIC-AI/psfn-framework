@@ -40,6 +40,7 @@ function clearRuntimePathEnv(): void {
   delete process.env.OPENBAO_KV_VERSION;
   delete process.env.OPENBAO_NAMESPACE;
   process.env.COMPANION_ID = 'test-companion';
+  process.env.POSTGRES_DATABASE_URL = 'postgres://postgres:secret@localhost:5432/psfn_test';
 }
 
 afterEach(() => {
@@ -127,13 +128,13 @@ describe('loadConfig path defaults', () => {
     expect(config.workspacePath).toBe('./personal-files');
   });
 
-  it('defaults persistence backend to sqlite', () => {
+  it('defaults persistence backend to postgres when the required database url is configured', () => {
     clearRuntimePathEnv();
 
     const config = loadConfig();
 
-    expect(config.persistenceBackend).toBe('sqlite');
-    expect(config.postgresDatabaseUrl).toBeUndefined();
+    expect(config.persistenceBackend).toBe('postgres');
+    expect(config.postgresDatabaseUrl).toBe('postgres://postgres:secret@localhost:5432/psfn_test');
   });
 
   it('loads postgres backend wiring when explicitly configured', () => {
@@ -147,12 +148,12 @@ describe('loadConfig path defaults', () => {
     expect(config.postgresDatabaseUrl).toBe('postgres://postgres:secret@localhost:5432/psfn');
   });
 
-  it('fails closed when postgres backend is selected without a database url', () => {
+  it('fails closed without a postgres database url', () => {
     clearRuntimePathEnv();
-    process.env.PERSISTENCE_BACKEND = 'postgres';
+    delete process.env.POSTGRES_DATABASE_URL;
 
     expect(() => loadConfig()).toThrow(
-      'POSTGRES_DATABASE_URL is required when PERSISTENCE_BACKEND=postgres',
+      'POSTGRES_DATABASE_URL is required for runtime persistence',
     );
   });
 

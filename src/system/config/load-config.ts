@@ -90,14 +90,14 @@ function requireCompanionId(env: NodeJS.ProcessEnv): string {
 
 function parsePersistenceBackendEnv(value: string | undefined): PersistenceBackend {
   const normalized = value?.trim().toLowerCase() ?? '';
-  if (!normalized || normalized === 'sqlite') {
-    return 'sqlite';
+  if (!normalized) {
+    return 'postgres';
   }
   if (normalized === 'postgres' || normalized === 'postgresql' || normalized === 'pg') {
     return 'postgres';
   }
   throw new Error(
-    `Unsupported PERSISTENCE_BACKEND "${value}". Expected "sqlite" or "postgres".`,
+    `Unsupported PERSISTENCE_BACKEND "${value}". PostgreSQL is the only supported runtime persistence backend.`,
   );
 }
 
@@ -238,8 +238,8 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     ?? `${resolveCompanionStateDir(companionDataDir)}/${databaseBasename}.db`;
   const persistenceBackend = parsePersistenceBackendEnv(env.PERSISTENCE_BACKEND);
   const postgresDatabaseUrl = parseOptionalStringEnv(env.POSTGRES_DATABASE_URL);
-  if (persistenceBackend === 'postgres' && !postgresDatabaseUrl) {
-    throw new Error('POSTGRES_DATABASE_URL is required when PERSISTENCE_BACKEND=postgres');
+  if (!postgresDatabaseUrl) {
+    throw new Error('POSTGRES_DATABASE_URL is required for runtime persistence');
   }
 
   return {

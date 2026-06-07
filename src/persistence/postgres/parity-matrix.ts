@@ -925,9 +925,9 @@ export const POSTGRES_PARITY_MATRIX = [
       ],
     },
     gaps: [
-      'chat-cli is SQLite-only.',
-      'e2e-test and e2e-walkthrough are SQLite-only.',
-      'composeSessionRuntime remains sqlite-only for synchronous composition.',
+      'chat-cli still opens SQLite memory state directly.',
+      'e2e-test and e2e-walkthrough still open SQLite memory fixtures directly.',
+      'CLI/e2e session composition now uses composeSessionRuntimeAsync with the Postgres runtime contract.',
     ],
   },
   {
@@ -985,16 +985,16 @@ export const POSTGRES_PARITY_MATRIX = [
     id: 'config-defaults',
     category: 'configuration',
     title: 'Persistence backend defaults and service/env wiring',
-    status: 'missing',
+    status: 'partial',
     cutoverAction: 'remove_runtime_sqlite',
     sqliteSourceArtifacts: [
-      'loadConfig defaults empty PERSISTENCE_BACKEND to sqlite.',
+      'Legacy loadConfig selected local persistence when PERSISTENCE_BACKEND was empty.',
       'DATABASE_PATH remains a normal runtime env/config path.',
       'service templates and launcher allow DATABASE_PATH.',
     ],
     postgresDestinationArtifacts: [
-      'Required: Postgres default/fail-closed runtime backend contract.',
-      'Required: POSTGRES_DATABASE_URL or owner-file equivalent for Postgres runtime wiring.',
+      'Postgres default/fail-closed runtime backend contract.',
+      'POSTGRES_DATABASE_URL or owner-file equivalent for Postgres runtime wiring.',
       'Required: DATABASE_PATH limited to migration-only input or removed from ordinary production runtime.',
     ],
     codeReferences: [
@@ -1025,7 +1025,7 @@ export const POSTGRES_PARITY_MATRIX = [
       ],
     },
     gaps: [
-      'Empty PERSISTENCE_BACKEND defaults to sqlite.',
+      'POSTGRES_DATABASE_URL is still env-owned runtime wiring.',
       'Runtime config still exposes databasePath as normal state.',
       'Launcher/service surfaces still carry DATABASE_PATH.',
     ],

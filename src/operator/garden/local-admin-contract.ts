@@ -1,6 +1,5 @@
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import { join } from 'node:path';
-import { readSQLiteGatewayAuditHistory } from '../../boundary/gateway/audit.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
@@ -235,10 +234,6 @@ export function createInProcessGardenAdminContract(
   };
 }
 
-function resolveGatewayAuditReader(config: SubstrateConfig): GatewayAuditHistoryReader | null {
-  if ((config.persistenceBackend ?? 'sqlite') !== 'sqlite') {
-    return null;
-  }
-  const auditDbPath = process.env.AUDIT_DB_PATH?.trim() || join(config.dataDir, 'gateway-audit.db');
-  return query => readSQLiteGatewayAuditHistory(auditDbPath, query);
+function resolveGatewayAuditReader(_config: SubstrateConfig): GatewayAuditHistoryReader | null {
+  return null;
 }

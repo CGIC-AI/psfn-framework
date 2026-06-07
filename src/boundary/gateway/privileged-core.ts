@@ -7,9 +7,7 @@ import {
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { GitOps } from '../integrations/git/ops.js';
-import { initDatabase } from '../../persistence/sqlite-utils.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { createSQLiteGatewayAuditStore } from './audit.js';
 import { createPostgresGatewayAuditStore } from './postgres-audit.js';
 import type { GatewayBootstrapInput } from './bootstrap-input.js';
 import { createGatewayPrivilegedServiceRegistry } from './privileged-services.js';
@@ -31,7 +29,7 @@ export interface GatewayPrivilegedCore {
   capabilityRuntime: CapabilityRuntime;
   eligibilityGate: EligibilityGate;
   privilegedServices: ReturnType<typeof createGatewayPrivilegedServiceRegistry>;
-  auditDb: ReturnType<typeof initDatabase> | null;
+  auditDb: null;
   createGatewayServer(input: {
     discordAdapter: ChannelOutboundDock;
   }): GatewayServer;
@@ -72,26 +70,21 @@ export async function buildGatewayPrivilegedCore(
     },
     vaultPolicyConfig: input.bootstrap.policyConfig.vault,
   });
-  const persistenceBackend = input.config.persistenceBackend ?? 'sqlite';
-  const auditDb = persistenceBackend === 'sqlite'
-    ? initDatabase(input.bootstrap.auditDbPath, { foreignKeys: false })
-    : null;
-  const auditStore = persistenceBackend === 'postgres'
-    ? await (() => {
-      const databaseUrl = input.config.postgresDatabaseUrl?.trim();
-      if (!databaseUrl) {
-        throw new Error('Gateway postgres audit persistence requires config.postgresDatabaseUrl');
-      }
-      return createPostgresGatewayAuditStore(databaseUrl);
-    })()
-    : createSQLiteGatewayAuditStore(auditDb!);
+  if (input.config.persistenceBackend !== 'postgres') {
+    throw new Error('Gateway privileged core requires config.persistenceBackend=postgres');
+  }
+  const databaseUrl = input.config.postgresDatabaseUrl?.trim();
+  if (!databaseUrl) {
+    throw new Error('Gateway postgres audit persistence requires config.postgresDatabaseUrl');
+  }
+  const auditStore = await createPostgresGatewayAuditStore(databaseUrl);
 
   return {
     eventBus,
     capabilityRuntime,
     eligibilityGate,
     privilegedServices,
-    auditDb,
+    auditDb: null,
     createGatewayServer: ({ discordAdapter }) => new GatewayServer({
       socketPath: input.bootstrap.socketPath,
       llmProvider: privilegedServices.llmClient,

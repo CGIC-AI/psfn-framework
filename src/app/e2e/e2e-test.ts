@@ -20,7 +20,7 @@ import { initDatabase } from '../../persistence/sqlite-utils.js';
 import { createIsolatedE2ERuntime } from './runtime-harness.js';
 import {
   composeIdentity,
-  composeSessionRuntime,
+  composeSessionRuntimeAsync,
   createEmbeddingProviderFromEnv,
   composeSubstrateAgent,
   wireMemoryRuntime,
@@ -96,7 +96,7 @@ async function main(): Promise<void> {
 
     // Core components
     const llmClient = createScriptedE2ELLMProvider();
-    const sessionComposition = composeSessionRuntime({ config, sessionsDir });
+    const sessionComposition = await composeSessionRuntimeAsync({ config, sessionsDir });
     const { sessionStore, sessionManager } = sessionComposition;
 
     // Embeddings

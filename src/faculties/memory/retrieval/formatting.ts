@@ -1,7 +1,10 @@
 import type { EmotionalSnapshot } from '../../../core/contacts/store/emotional-baseline.js';
 import { wrapPromptSectionXml } from '../../../core/identity/prompt-sections.js';
 import { isBoundaryMemory } from '../boundary-log.js';
-import type { ContactProfileArtifact } from '../memory-store-port.js';
+import type {
+  ContactProfileArtifact,
+  MemoryEvolutionRelation,
+} from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import {
   formatMemoryWithheldRelevanceBandLabel,
@@ -291,12 +294,15 @@ function renderSociallyScopedMemorySections(
 }
 
 function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
-  const lines = scored.map(s => {
+  const lines = scored.flatMap(s => {
     const m = s.memory;
     const valence =
       m.emotionalValence > 0.3 ? ' (+)' :
       m.emotionalValence < -0.3 ? ' (-)' : '';
-    return `- [${m.type}] ${m.text}${valence}`;
+    return [
+      `- [${m.type}] ${m.text}${valence}`,
+      ...formatEvolutionChainLines(s),
+    ];
   });
 
   return wrapPromptSectionXml({
@@ -314,7 +320,7 @@ function renderAttributedMemorySection(
   scored: ScoredMemory[],
   contactContextById?: ReadonlyMap<string, RetrievalContactContext>,
 ): string {
-  const lines = scored.map(s => {
+  const lines = scored.flatMap(s => {
     const memory = s.memory;
     const valence =
       memory.emotionalValence > 0.3 ? ' (+)' :
@@ -323,7 +329,10 @@ function renderAttributedMemorySection(
     const subjectPrefix = descriptor
       ? `${descriptor.displayName}${formatContactDescriptorSuffix(descriptor)}: `
       : '';
-    return `- [${memory.type}] ${subjectPrefix}${memory.text}${valence}`;
+    return [
+      `- [${memory.type}] ${subjectPrefix}${memory.text}${valence}`,
+      ...formatEvolutionChainLines(s),
+    ];
   });
   return wrapPromptSectionXml({
     id: heading.includes('social context')
@@ -331,6 +340,26 @@ function renderAttributedMemorySection(
       : 'separate_people_memories',
     content: `${heading}\n${lines.join('\n')}`,
   });
+}
+
+function formatEvolutionChainLines(scored: ScoredMemory): string[] {
+  if (!scored.evolutionChain || scored.evolutionChain.length === 0) return [];
+  return scored.evolutionChain.map(link => (
+    `  - ${formatEvolutionRelation(link.relation)} [${link.memory.type}] ${link.memory.text} (confidence ${link.confidence.toFixed(2)})`
+  ));
+}
+
+function formatEvolutionRelation(relation: MemoryEvolutionRelation): string {
+  switch (relation) {
+    case 'supersedes':
+      return 'Supersedes';
+    case 'updates':
+      return 'Updates';
+    case 'negates':
+      return 'Negates';
+    case 'conflicts_with':
+      return 'Conflicts with';
+  }
 }
 
 function formatContactDescriptorSuffix(descriptor: RetrievalContactContext): string {

@@ -72,6 +72,9 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         timestamp: '2026-06-05T10:01:00.000Z',
         createsMemoryId: 'm-workspace-new',
         expectedSupersededMemoryIds: ['m-workspace-old'],
+        expectedEvolutionLinks: [
+          { targetMemoryId: 'm-workspace-old', relation: 'supersedes' },
+        ],
       },
     ],
     retrievals: [
@@ -132,6 +135,9 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         timestamp: '2026-06-05T12:15:00.000Z',
         createsMemoryId: 'm-tea-jasmine',
         expectedSupersededMemoryIds: [],
+        expectedEvolutionLinks: [
+          { targetMemoryId: 'm-tea-oolong', relation: 'updates' },
+        ],
         compatibleUpdate: true,
       },
     ],
@@ -193,6 +199,9 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
         timestamp: '2026-06-05T18:10:00.000Z',
         createsMemoryId: 'm-pager-on',
         expectedSupersededMemoryIds: ['m-pager-off'],
+        expectedEvolutionLinks: [
+          { targetMemoryId: 'm-pager-off', relation: 'supersedes' },
+        ],
       },
     ],
     retrievals: [
@@ -210,6 +219,155 @@ export const MEMORY_REGRESSION_FIXTURES: readonly MemoryRegressionFixture[] = [
           id: 'queue-pager-supersede',
           enqueuedAt: '2026-06-05T18:10:00.000Z',
           processedAt: '2026-06-05T18:14:30.000Z',
+        },
+      ],
+    },
+  },
+  {
+    id: 'high-impact-relationship-conflict',
+    family: 'high-impact-conflict',
+    description: 'Ambiguous high-impact relationship changes should create a conflict link without destructive supersession.',
+    seed: {
+      l0Entries: [
+        l0({
+          id: 'l0-partner-morgan',
+          sessionId: 'session-high-impact-conflict',
+          turnId: 'turn-partner-morgan',
+          role: 'user',
+          content: 'Morgan is my partner.',
+          createdAt: '2026-06-02T19:00:00.000Z',
+        }),
+        l0({
+          id: 'l0-partner-riley',
+          sessionId: 'session-high-impact-conflict',
+          turnId: 'turn-partner-riley',
+          role: 'user',
+          content: 'Riley is my partner.',
+          createdAt: '2026-06-05T19:00:00.000Z',
+        }),
+      ],
+      l01Episodes: [],
+      l2Memories: [
+        {
+          layer: 'L2',
+          id: 'm-partner-morgan',
+          text: 'Ada relationship partner is Morgan.',
+          tags: ['relationship', 'partner', 'profile'],
+          sensitivity: 'personal',
+          sourceRefs: ['l0:l0-partner-morgan'],
+          createdAt: '2026-06-02T19:01:00.000Z',
+          confidence: 0.86,
+        },
+      ],
+    },
+    writes: [
+      {
+        id: 'write-partner-riley',
+        text: 'Ada relationship partner is Riley.',
+        tags: ['relationship', 'partner', 'profile'],
+        sensitivity: 'personal',
+        sourceRef: 'l0:l0-partner-riley',
+        timestamp: '2026-06-05T19:01:00.000Z',
+        createsMemoryId: 'm-partner-riley',
+        expectedSupersededMemoryIds: [],
+        expectedEvolutionLinks: [
+          { targetMemoryId: 'm-partner-morgan', relation: 'conflicts_with' },
+        ],
+      },
+    ],
+    retrievals: [
+      {
+        id: 'retrieve-relationship-conflict',
+        query: 'relationship partner Morgan Riley',
+        topK: 4,
+        trustLevel: 'trusted',
+        expectedMemoryIds: ['m-partner-morgan', 'm-partner-riley'],
+      },
+    ],
+    maintenance: {
+      queueItems: [
+        {
+          id: 'queue-high-impact-conflict',
+          enqueuedAt: '2026-06-05T19:01:00.000Z',
+          processedAt: '2026-06-05T19:04:00.000Z',
+        },
+      ],
+    },
+  },
+  {
+    id: 'lineage-workspace-history',
+    family: 'lineage-expansion',
+    description: 'History-seeking retrieval should keep current facts primary and expose bounded superseded lineage.',
+    seed: {
+      l0Entries: [
+        l0({
+          id: 'l0-lineage-workspace-old',
+          sessionId: 'session-lineage',
+          turnId: 'turn-lineage-old',
+          role: 'user',
+          content: 'My old writable workspace was /home/ada/old_lab.',
+          createdAt: '2026-06-01T11:00:00.000Z',
+        }),
+        l0({
+          id: 'l0-lineage-workspace-current',
+          sessionId: 'session-lineage',
+          turnId: 'turn-lineage-current',
+          role: 'user',
+          content: 'Update: my writable workspace is now /home/ada/purrsephone.',
+          createdAt: '2026-06-05T11:00:00.000Z',
+        }),
+      ],
+      l01Episodes: [],
+      l2Memories: [
+        {
+          layer: 'L2',
+          id: 'm-lineage-workspace-old',
+          text: 'Ada current writable workspace was /home/ada/old_lab.',
+          tags: ['workspace', 'current_state'],
+          sensitivity: 'personal',
+          sourceRefs: ['l0:l0-lineage-workspace-old'],
+          createdAt: '2026-06-01T11:01:00.000Z',
+          confidence: 0.86,
+          supersededBy: 'm-lineage-workspace-current',
+        },
+        {
+          layer: 'L2',
+          id: 'm-lineage-workspace-current',
+          text: 'Ada current writable workspace is /home/ada/purrsephone.',
+          tags: ['workspace', 'current_state'],
+          sensitivity: 'personal',
+          sourceRefs: ['l0:l0-lineage-workspace-current'],
+          createdAt: '2026-06-05T11:01:00.000Z',
+          confidence: 0.94,
+        },
+      ],
+      evolutionLinks: [
+        {
+          sourceMemoryId: 'm-lineage-workspace-current',
+          targetMemoryId: 'm-lineage-workspace-old',
+          relation: 'supersedes',
+          confidence: 0.94,
+          reason: 'fixture:current_state_replacement',
+        },
+      ],
+    },
+    writes: [],
+    retrievals: [
+      {
+        id: 'retrieve-workspace-lineage',
+        query: 'workspace history previous writable path purrsephone old_lab',
+        topK: 3,
+        trustLevel: 'trusted',
+        expectedMemoryIds: ['m-lineage-workspace-current'],
+        expectedLineageMemoryIds: ['m-lineage-workspace-old'],
+      },
+    ],
+    maintenance: {
+      queueItems: [
+        {
+          id: 'queue-lineage-expansion',
+          enqueuedAt: '2026-06-05T11:01:00.000Z',
+          processedAt: '2026-06-05T11:03:30.000Z',
         },
       ],
     },

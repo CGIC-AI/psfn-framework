@@ -3,6 +3,7 @@ import type {
   L01FixtureEpisode,
   L2FixtureMemory,
   MemoryBackupSnapshot,
+  MemoryEvolutionFixtureLink,
   MemoryRegressionFixture,
   MemoryRegressionProvider,
   MemoryRetrievalObservation,
@@ -65,6 +66,10 @@ function cloneMemories(memories: readonly L2FixtureMemory[]): L2FixtureMemory[] 
   }));
 }
 
+function cloneEvolutionLinks(links: readonly MemoryEvolutionFixtureLink[]): MemoryEvolutionFixtureLink[] {
+  return links.map((link) => ({ ...link }));
+}
+
 function tokenize(text: string): Set<string> {
   const tokens = text
     .toLowerCase()
@@ -87,6 +92,11 @@ function similarityScore(query: string, memory: L2FixtureMemory): number {
     if (memoryTokens.has(token)) score += 1;
   }
   return score;
+}
+
+function queryRequestsLineage(query: string): boolean {
+  return /\b(history|lineage|changed|change|updated|update|previous|old|correction|corrected|conflict|contradict|superseded|why)\b/i
+    .test(query);
 }
 
 function canRecall(memory: L2FixtureMemory, trustLevel: MemoryTrustLevel): boolean {
@@ -119,11 +129,13 @@ export class DeterministicMemoryRegressionProvider implements MemoryRegressionPr
   protected l0Entries = new Map<string, L0FixtureEntry>();
   protected episodes = new Map<string, L01FixtureEpisode>();
   protected memories = new Map<string, L2FixtureMemory>();
+  protected evolutionLinks: MemoryEvolutionFixtureLink[] = [];
 
   async seedFixture(fixture: MemoryRegressionFixture): Promise<void> {
     this.l0Entries = new Map(cloneL0(fixture.seed.l0Entries).map((entry) => [entry.id, entry]));
     this.episodes = new Map(cloneEpisodes(fixture.seed.l01Episodes).map((episode) => [episode.id, episode]));
     this.memories = new Map(cloneMemories(fixture.seed.l2Memories).map((memory) => [memory.id, memory]));
+    this.evolutionLinks = cloneEvolutionLinks(fixture.seed.evolutionLinks ?? []);
   }
 
   async writeMemory(operation: MemoryWriteOperation): Promise<MemoryWriteObservation> {
@@ -146,11 +158,20 @@ export class DeterministicMemoryRegressionProvider implements MemoryRegressionPr
         });
       }
     }
+    const evolutionLinks = (operation.expectedEvolutionLinks ?? []).map((link) => ({
+      sourceMemoryId: operation.createsMemoryId,
+      targetMemoryId: link.targetMemoryId,
+      relation: link.relation,
+      confidence: 0.9,
+      reason: `fixture:${operation.id}`,
+    }));
+    this.evolutionLinks.push(...evolutionLinks);
     this.memories.set(memory.id, memory);
     return {
       operationId: operation.id,
       createdMemoryId: memory.id,
       supersededMemoryIds: [...operation.expectedSupersededMemoryIds],
+      evolutionLinks,
     };
   }
 
@@ -205,10 +226,28 @@ export class DeterministicMemoryRegressionProvider implements MemoryRegressionPr
       }
     }
 
-    const promptSnippet = selected.map((memory) => `<memory id="${memory.id}">${memory.text}</memory>`).join('\n');
+    const lineage: L2FixtureMemory[] = [];
+    if (queryRequestsLineage(probe.query)) {
+      const seen = new Set(selected.map((memory) => memory.id));
+      for (const memory of selected) {
+        for (const link of this.evolutionLinks.filter((candidate) => candidate.sourceMemoryId === memory.id)) {
+          if (seen.has(link.targetMemoryId)) continue;
+          const target = this.memories.get(link.targetMemoryId);
+          if (!target || !canRecall(target, probe.trustLevel)) continue;
+          seen.add(target.id);
+          lineage.push(target);
+        }
+      }
+    }
+
+    const promptSnippet = [
+      ...selected.map((memory) => `<memory id="${memory.id}">${memory.text}</memory>`),
+      ...lineage.map((memory) => `<lineage-memory id="${memory.id}">${memory.text}</lineage-memory>`),
+    ].join('\n');
     return {
       probeId: probe.id,
       selectedMemoryIds: selected.map((memory) => memory.id),
+      lineageMemoryIds: lineage.map((memory) => memory.id),
       withheldMemoryIds: withheld.map((memory) => memory.id),
       promptSnippet,
       promptTokenCount: countApproxPromptTokens(`${probe.query}\n${promptSnippet}`),
@@ -221,6 +260,7 @@ export class DeterministicMemoryRegressionProvider implements MemoryRegressionPr
       l0Entries: cloneL0([...this.l0Entries.values()]),
       l01Episodes: cloneEpisodes([...this.episodes.values()]),
       l2Memories: cloneMemories([...this.memories.values()]),
+      evolutionLinks: cloneEvolutionLinks(this.evolutionLinks),
     };
   }
 
@@ -228,6 +268,7 @@ export class DeterministicMemoryRegressionProvider implements MemoryRegressionPr
     this.l0Entries = new Map(cloneL0(snapshot.l0Entries).map((entry) => [entry.id, entry]));
     this.episodes = new Map(cloneEpisodes(snapshot.l01Episodes).map((episode) => [episode.id, episode]));
     this.memories = new Map(cloneMemories(snapshot.l2Memories).map((memory) => [memory.id, memory]));
+    this.evolutionLinks = cloneEvolutionLinks(snapshot.evolutionLinks ?? []);
   }
 }
 

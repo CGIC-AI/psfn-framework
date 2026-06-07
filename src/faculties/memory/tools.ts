@@ -307,8 +307,14 @@ export function createMemoryWriteTool(
             return textResult(`Memory created (id: ${result.memory.id}, type: ${type})`);
           case 'deduplicated':
             return textResult(`Duplicate detected — bumped salience on existing memory (id: ${result.existingId})`);
+          case 'updated':
+            return textResult(`Memory created and linked as a compatible update (id: ${result.memory.id}, type: ${type})`);
           case 'superseded':
             return textResult(`Memory created, superseding older conflicting memory (id: ${result.memory.id}, type: ${type})`);
+          case 'negated':
+            return textResult(`Memory created and linked as negating prior memory (id: ${result.memory.id}, type: ${type})`);
+          case 'conflict':
+            return textResult(`Memory created and linked for conflict review (id: ${result.memory.id}, type: ${type})`);
         }
       } catch (error) {
         return textResultWithError(`Error writing memory: ${errorMessage(error)}`, true);
@@ -791,8 +797,14 @@ export function createMemoryTool(
                 return textResult(`Memory created (id: ${result.memory.id}, type: ${type})`);
               case 'deduplicated':
                 return textResult(`Duplicate detected — bumped salience on existing memory (id: ${result.existingId})`);
+              case 'updated':
+                return textResult(`Memory created and linked as a compatible update (id: ${result.memory.id}, type: ${type})`);
               case 'superseded':
                 return textResult(`Memory created, superseding older conflicting memory (id: ${result.memory.id}, type: ${type})`);
+              case 'negated':
+                return textResult(`Memory created and linked as negating prior memory (id: ${result.memory.id}, type: ${type})`);
+              case 'conflict':
+                return textResult(`Memory created and linked for conflict review (id: ${result.memory.id}, type: ${type})`);
             }
             break;
           }

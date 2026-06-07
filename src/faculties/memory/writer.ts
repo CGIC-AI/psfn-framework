@@ -3,7 +3,12 @@
 
 import { v4 as uuidv4 } from 'uuid';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
-import type { MemoryStorePort } from './memory-store-port.js';
+import type {
+  MemoryEvolutionLink,
+  MemoryEvolutionLinkInput,
+  MemoryEvolutionRelation,
+  MemoryStorePort,
+} from './memory-store-port.js';
 import { abstractMemoryText } from './abstraction.js';
 import type {
   PurrMemory,
@@ -67,10 +72,15 @@ export interface MemoryWriteOptions {
 }
 
 export interface WriteResult {
-  action: 'created' | 'deduplicated' | 'superseded';
+  action: 'created' | 'deduplicated' | 'updated' | 'superseded' | 'negated' | 'conflict';
   memory: PurrMemory;
   /** If deduplicated, the existing memory that was bumped */
   existingId?: string;
+  /** Existing memory ids affected by explicit evolution reconciliation. */
+  relatedMemoryIds?: string[];
+  /** Existing memory ids deactivated by this write. */
+  supersededMemoryIds?: string[];
+  evolutionLinks?: MemoryEvolutionLink[];
 }
 
 export interface MemoryPatchOptions {
@@ -418,6 +428,229 @@ function evaluateSensitivityWritePolicy(input: {
   };
 }
 
+type ReconciliationWriteAction = Exclude<WriteResult['action'], 'deduplicated'>;
+
+interface MemoryEvolutionDecision {
+  oldMemory: PurrMemory & { similarity: number };
+  relation: MemoryEvolutionRelation;
+  destructive: boolean;
+  reason: string;
+}
+
+const HIGH_IMPACT_MEMORY_TYPES = new Set<MemoryType>(['boundary', 'emotional', 'relational']);
+const HIGH_IMPACT_TAG_HINTS = new Set([
+  'identity',
+  'profile',
+  'contact',
+  'contact_profile',
+  'core_profile',
+  'core_relationship',
+  'relationship_core',
+  'relationship',
+  'boundary',
+  'consent',
+  'emotion',
+  'emotional',
+  'feeling',
+  'family',
+  'partner',
+]);
+const CURRENT_STATE_TAG_HINTS = new Set(['current', 'current_state', 'current-state', 'latest', 'active']);
+const COMPATIBLE_UPDATE_TAG_HINTS = new Set(['preference', 'likes', 'interest', 'routine', 'tool', 'workspace']);
+const CURRENT_STATE_TEXT_HINT = /\b(current|currently|now|latest|active|moved to|changed to|updated?:|update:|is now|are now|no longer)\b/i;
+const COMPATIBLE_UPDATE_TEXT_HINT = /\b(also|additionally|another|besides|after lunch|in addition|likes both|also likes)\b/i;
+const EXPLICIT_NEGATION_TEXT_HINT = /\b(no longer|not|never|doesn't|does not|isn't|is not|aren't|are not|must not|should not|cannot|can't|won't)\b/i;
+const CONTRASTING_TERM_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ['on', 'off'],
+  ['enabled', 'disabled'],
+  ['active', 'inactive'],
+  ['available', 'unavailable'],
+  ['open', 'closed'],
+  ['allowed', 'disallowed'],
+  ['yes', 'no'],
+  ['true', 'false'],
+];
+
+function normalizeReconciliationTag(tag: string): string {
+  return tag.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+}
+
+function hasAnyTag(tags: readonly string[] | undefined, hints: ReadonlySet<string>): boolean {
+  for (const raw of tags ?? []) {
+    const normalized = normalizeReconciliationTag(raw);
+    if (hints.has(normalized)) return true;
+  }
+  return false;
+}
+
+function textHasWord(text: string, word: string): boolean {
+  return new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text);
+}
+
+function hasContrastingTerms(incomingText: string, existingText: string): boolean {
+  for (const [left, right] of CONTRASTING_TERM_PAIRS) {
+    if (
+      (textHasWord(incomingText, left) && textHasWord(existingText, right))
+      || (textHasWord(incomingText, right) && textHasWord(existingText, left))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isCurrentStateMemory(input: {
+  text: string;
+  tags: readonly string[];
+}): boolean {
+  return hasAnyTag(input.tags, CURRENT_STATE_TAG_HINTS) || CURRENT_STATE_TEXT_HINT.test(input.text);
+}
+
+function isCompatibleMemoryUpdate(input: {
+  text: string;
+  tags: readonly string[];
+  existing: PurrMemory;
+}): boolean {
+  if (COMPATIBLE_UPDATE_TEXT_HINT.test(input.text)) return true;
+  if (!hasAnyTag(input.tags, COMPATIBLE_UPDATE_TAG_HINTS)) return false;
+  const incomingTags = new Set(input.tags.map(normalizeReconciliationTag));
+  return input.existing.tags
+    .map(normalizeReconciliationTag)
+    .some(tag => incomingTags.has(tag));
+}
+
+function isExplicitContradiction(input: {
+  text: string;
+  existingText: string;
+}): boolean {
+  return EXPLICIT_NEGATION_TEXT_HINT.test(input.text)
+    || hasContrastingTerms(input.text, input.existingText);
+}
+
+function isHighImpactMemory(input: Pick<PurrMemory, 'type' | 'tags' | 'contactId' | 'text'>): boolean {
+  return HIGH_IMPACT_MEMORY_TYPES.has(input.type)
+    || !!input.contactId
+    || hasAnyTag(input.tags, HIGH_IMPACT_TAG_HINTS)
+    || /\b(identity|profile|partner|family|boundary|consent|feeling|emotion|contact)\b/i.test(input.text);
+}
+
+function chooseWriteAction(decisions: readonly MemoryEvolutionDecision[]): ReconciliationWriteAction {
+  if (decisions.some(decision => decision.relation === 'supersedes' && decision.destructive)) return 'superseded';
+  if (decisions.some(decision => decision.relation === 'negates')) return 'negated';
+  if (decisions.some(decision => decision.relation === 'conflicts_with')) return 'conflict';
+  if (decisions.some(decision => decision.relation === 'updates')) return 'updated';
+  return 'created';
+}
+
+function classifyEvolutionDecision(input: {
+  incomingText: string;
+  incomingTags: readonly string[];
+  incomingConfidence: number;
+  incomingType: MemoryType;
+  incomingContactId?: string;
+  oldMemory: PurrMemory & { similarity: number };
+}): MemoryEvolutionDecision | null {
+  const incomingMemoryLike: Pick<PurrMemory, 'type' | 'tags' | 'contactId' | 'text'> = {
+    type: input.incomingType,
+    tags: input.incomingTags,
+    contactId: input.incomingContactId,
+    text: input.incomingText,
+  };
+  const currentState = isCurrentStateMemory({
+    text: input.incomingText,
+    tags: input.incomingTags,
+  });
+  const compatibleUpdate = isCompatibleMemoryUpdate({
+    text: input.incomingText,
+    tags: input.incomingTags,
+    existing: input.oldMemory,
+  });
+  const explicitContradiction = isExplicitContradiction({
+    text: input.incomingText,
+    existingText: input.oldMemory.text,
+  });
+  const highImpact = isHighImpactMemory(incomingMemoryLike) || isHighImpactMemory(input.oldMemory);
+  const higherConfidence = input.incomingConfidence > input.oldMemory.confidence;
+
+  if (currentState && higherConfidence) {
+    return {
+      oldMemory: input.oldMemory,
+      relation: 'supersedes',
+      destructive: true,
+      reason: 'memory_writer:current_state_replacement',
+    };
+  }
+
+  if (compatibleUpdate && !explicitContradiction) {
+    return {
+      oldMemory: input.oldMemory,
+      relation: 'updates',
+      destructive: false,
+      reason: 'memory_writer:compatible_update',
+    };
+  }
+
+  if (highImpact) {
+    return {
+      oldMemory: input.oldMemory,
+      relation: explicitContradiction ? 'negates' : 'conflicts_with',
+      destructive: false,
+      reason: explicitContradiction
+        ? 'memory_writer:high_impact_negation_review'
+        : 'memory_writer:high_impact_conflict_review',
+    };
+  }
+
+  if (explicitContradiction) {
+    return {
+      oldMemory: input.oldMemory,
+      relation: higherConfidence ? 'supersedes' : 'conflicts_with',
+      destructive: higherConfidence,
+      reason: higherConfidence
+        ? 'memory_writer:contradiction_replacement'
+        : 'memory_writer:contradiction_conflict',
+    };
+  }
+
+  if (higherConfidence) {
+    return {
+      oldMemory: input.oldMemory,
+      relation: 'supersedes',
+      destructive: true,
+      reason: 'memory_writer:higher_confidence_replacement',
+    };
+  }
+
+  return null;
+}
+
+function buildEvolutionLinkInput(input: {
+  memory: PurrMemory;
+  decision: MemoryEvolutionDecision;
+  sourceRef: string;
+  sourceType: MemorySourceType;
+  provenance?: MemoryProvenance;
+  incomingProvenanceRefs: readonly string[];
+}): MemoryEvolutionLinkInput {
+  return {
+    sourceMemoryId: input.memory.id,
+    targetMemoryId: input.decision.oldMemory.id,
+    relation: input.decision.relation,
+    confidence: clampUnit(
+      Math.max(input.memory.confidence, input.decision.oldMemory.confidence),
+      input.memory.confidence,
+    ),
+    reason: input.decision.reason,
+    sourceRef: input.sourceRef,
+    sourceType: input.sourceType,
+    provenanceRefs: mergeProvenanceRefs(
+      [`memory:${input.memory.id}`, `memory:${input.decision.oldMemory.id}`],
+      input.incomingProvenanceRefs,
+    ),
+    provenance: input.provenance,
+  };
+}
+
 export class MemoryWriter {
   private readonly maintenanceScheduler: MemoryMaintenanceScheduler | null;
 
@@ -670,8 +903,19 @@ export class MemoryWriter {
       text: text.slice(0, 60),
     });
 
-    const supersededMemories = sameContactBroader.filter(old => confidence > old.confidence);
-    const didSupersede = supersededMemories.length > 0;
+    const evolutionDecisions = sameContactBroader
+      .map(old => classifyEvolutionDecision({
+        incomingText: text,
+        incomingTags: retention.tags,
+        incomingConfidence: confidence,
+        incomingType: type,
+        incomingContactId: contactId,
+        oldMemory: old,
+      }))
+      .filter((decision): decision is MemoryEvolutionDecision => decision !== null);
+    const supersededMemories = evolutionDecisions
+      .filter(decision => decision.destructive)
+      .map(decision => decision.oldMemory);
 
     // 3. Insert new memory
     const now = Number.isFinite(extractedAt) ? Number(extractedAt) : Date.now();
@@ -705,6 +949,17 @@ export class MemoryWriter {
       embedding,
       supersededMemoryIds: supersededMemories.map(old => old.id),
     });
+    const evolutionLinks: MemoryEvolutionLink[] = [];
+    for (const decision of evolutionDecisions) {
+      evolutionLinks.push(await this.memoryStore.recordEvolutionLink(buildEvolutionLinkInput({
+        memory,
+        decision,
+        sourceRef: normalizedSourceRef,
+        sourceType: normalizedSource.sourceType,
+        provenance: normalizedSource.provenance,
+        incomingProvenanceRefs,
+      })));
+    }
     this.queueMaintenanceReview({
       memory,
       candidates: sameContactBroader,
@@ -713,11 +968,22 @@ export class MemoryWriter {
     for (const old of supersededMemories) {
       log.debug('Superseded memory', { oldId: old.id, replacementId: memory.id, text: text.slice(0, 60) });
     }
+    for (const link of evolutionLinks) {
+      log.debug('Recorded memory evolution link', {
+        sourceMemoryId: link.sourceMemoryId,
+        targetMemoryId: link.targetMemoryId,
+        relation: link.relation,
+        reason: link.reason,
+      });
+    }
     log.debug('Created memory', { id: memory.id, type, text: text.slice(0, 60) });
 
     return {
-      action: didSupersede ? 'superseded' : 'created',
+      action: chooseWriteAction(evolutionDecisions),
       memory,
+      relatedMemoryIds: evolutionDecisions.map(decision => decision.oldMemory.id),
+      supersededMemoryIds: supersededMemories.map(old => old.id),
+      evolutionLinks,
     };
   }
 
@@ -866,6 +1132,23 @@ export class MemoryWriter {
       embedding,
       supersededMemoryIds: supersededMemories.map(old => old.id),
     });
+    const evolutionDecisions: MemoryEvolutionDecision[] = supersededMemories.map(oldMemory => ({
+      oldMemory,
+      relation: 'supersedes',
+      destructive: true,
+      reason: 'memory_writer:explicit_upsert_replacement',
+    }));
+    const evolutionLinks: MemoryEvolutionLink[] = [];
+    for (const decision of evolutionDecisions) {
+      evolutionLinks.push(await this.memoryStore.recordEvolutionLink(buildEvolutionLinkInput({
+        memory,
+        decision,
+        sourceRef: normalizedSourceRef,
+        sourceType: normalizedSource.sourceType,
+        provenance: normalizedSource.provenance,
+        incomingProvenanceRefs: normalizedProvenanceRefs,
+      })));
+    }
     this.queueMaintenanceReview({
       memory,
       candidates: sameType,
@@ -878,6 +1161,9 @@ export class MemoryWriter {
     return {
       action: didSupersede ? 'superseded' : 'created',
       memory,
+      relatedMemoryIds: evolutionDecisions.map(decision => decision.oldMemory.id),
+      supersededMemoryIds: supersededMemories.map(old => old.id),
+      evolutionLinks,
     };
   }
 
@@ -1126,6 +1412,17 @@ export class MemoryWriter {
       });
       this.memoryStore.insertMemory(replacementMemory, embedding);
     });
+    await this.memoryStore.recordEvolutionLink({
+      sourceMemoryId: replacementMemory.id,
+      targetMemoryId: existing.id,
+      relation: 'supersedes',
+      confidence: clampUnit(Math.max(replacementMemory.confidence, existing.confidence), replacementMemory.confidence),
+      reason: reason ? `memory_writer:patch_correction:${reason}` : 'memory_writer:patch_correction',
+      sourceRef: auditContext.sourceRef,
+      sourceType: auditContext.sourceType,
+      provenanceRefs: mergeProvenanceRefs(replacementProvenanceRefs, sourceProvenanceRefs),
+      provenance: auditContext.provenance,
+    });
 
     return {
       sourceMemory: {
@@ -1276,6 +1573,9 @@ export class MemoryWriter {
 
         switch (result.action) {
           case 'created':
+          case 'updated':
+          case 'negated':
+          case 'conflict':
             written++;
             break;
           case 'deduplicated':

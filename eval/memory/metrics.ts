@@ -298,6 +298,15 @@ export function evaluateFixtureFailures(input: {
     if (operation.compatibleUpdate && observation.supersededMemoryIds.length > 0) {
       failures.push(`compatible update ${operation.id} superseded ${observation.supersededMemoryIds.join(', ')}`);
     }
+    for (const expectedLink of operation.expectedEvolutionLinks ?? []) {
+      const found = observation.evolutionLinks.some((link) => (
+        link.targetMemoryId === expectedLink.targetMemoryId
+        && link.relation === expectedLink.relation
+      ));
+      if (!found) {
+        failures.push(`write ${operation.id} missed evolution link ${expectedLink.relation} -> ${expectedLink.targetMemoryId}`);
+      }
+    }
   }
 
   const probes = [
@@ -322,6 +331,10 @@ export function evaluateFixtureFailures(input: {
     const unreportedWithheld = (probe.expectedWithheldMemoryIds ?? []).filter((id) => !observation.withheldMemoryIds.includes(id));
     if (unreportedWithheld.length > 0) {
       failures.push(`retrieval ${probe.id} did not report withheld ${unreportedWithheld.join(', ')}`);
+    }
+    const missingLineage = (probe.expectedLineageMemoryIds ?? []).filter((id) => !observation.lineageMemoryIds.includes(id));
+    if (missingLineage.length > 0) {
+      failures.push(`retrieval ${probe.id} missed lineage ${missingLineage.join(', ')}`);
     }
   }
 

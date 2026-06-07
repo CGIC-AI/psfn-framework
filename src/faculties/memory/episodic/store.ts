@@ -50,6 +50,20 @@ export interface EpisodicStoreOptions {
   idFactory?: () => string;
 }
 
+export type EpisodicStoreResult<T> = T | Promise<T>;
+
+export interface EpisodicStorePort {
+  createEpisode(input: EpisodeCreateInput): EpisodicStoreResult<Episode>;
+  getEpisode(id: string): EpisodicStoreResult<Episode | undefined>;
+  listEpisodes(options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
+  searchByTime(options?: EpisodeTimeSearchOptions): EpisodicStoreResult<Episode[]>;
+  writeEpisodeArc(input: EpisodeArcWriteInput): EpisodicStoreResult<EpisodeArc>;
+  listEpisodeArcsForEpisode(
+    episodeId: string,
+    options?: EpisodeArcListOptions,
+  ): EpisodicStoreResult<EpisodeArc[]>;
+}
+
 interface EpisodeRow {
   id: string;
   episode_json: string;
@@ -174,7 +188,7 @@ function parseRequiredText(value: string, field: string): string {
   return trimmed;
 }
 
-export class EpisodicStore {
+export class EpisodicStore implements EpisodicStorePort {
   private readonly db: Database.Database;
   private readonly now: () => Date;
   private readonly idFactory: () => string;

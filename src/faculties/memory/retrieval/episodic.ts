@@ -8,16 +8,13 @@ import {
   type EpisodeSpanRef,
 } from '../../../shared/contracts/episodic-memory.js';
 import { trustAtLeast, type ChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
-import type { EpisodeArcListOptions, EpisodeListOptions } from '../episodic/store.js';
+import type { EpisodicStorePort } from '../episodic/store.js';
 import type { MemoryScopeQuery } from '../types.js';
 
-type Awaitable<T> = T | Promise<T>;
-
-export interface EpisodicRetrievalStore {
-  listEpisodes(options?: EpisodeListOptions): Awaitable<Episode[]>;
-  getEpisode(id: string): Awaitable<Episode | undefined>;
-  listEpisodeArcsForEpisode(episodeId: string, options?: EpisodeArcListOptions): Awaitable<EpisodeArc[]>;
-}
+export type EpisodicRetrievalStore = Pick<
+  EpisodicStorePort,
+  'listEpisodes' | 'getEpisode' | 'listEpisodeArcsForEpisode'
+>;
 
 export interface EpisodicRetrievalChain {
   rootEpisodeId: string;

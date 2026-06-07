@@ -341,10 +341,12 @@ export class SleeptimeMemoryAgent {
       return;
     }
 
-    const episodicSynthesis = this.episodicSynthesizer?.run({
-      sessionId,
-      sourceMessageId: action.sourceMessageId,
-    });
+    const episodicSynthesis = this.episodicSynthesizer
+      ? await this.episodicSynthesizer.run({
+        sessionId,
+        sourceMessageId: action.sourceMessageId,
+      })
+      : null;
 
     const currentSnapshot = this.coreMemoryStore.getSnapshot();
     const transcript = recentEntries.map(summarizeSessionEntry).join('\n');

@@ -6,7 +6,14 @@ export {
   type EpisodeListOptions,
   type EpisodeTimeSearchOptions,
   type EpisodicStoreOptions,
+  type EpisodicStorePort,
+  type EpisodicStoreResult,
 } from './store.js';
+export {
+  PostgresEpisodicStore,
+  createPostgresEpisodicStore,
+  createPostgresEpisodicStoreFromPool,
+} from './postgres-store.js';
 export {
   EpisodicSynthesizer,
   type EpisodicSynthesisOptions,

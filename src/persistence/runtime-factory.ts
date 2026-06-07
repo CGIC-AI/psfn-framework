@@ -2,6 +2,11 @@ import type Database from 'better-sqlite3';
 import { MemoryJournal } from '../faculties/memory/journal.js';
 import type { MemoryStorePort } from '../faculties/memory/memory-store-port.js';
 import { createPostgresMemoryStore } from '../faculties/memory/postgres-store.js';
+import {
+  createPostgresEpisodicStore,
+  EpisodicStore,
+  type EpisodicStorePort,
+} from '../faculties/memory/episodic/index.js';
 import { createPostgresContactStore } from '../core/contacts/postgres-adapter.js';
 import type { ContactStorePort } from '../core/contacts/contact-store-port.js';
 import { createPostgresIntentionPorts } from '../core/intention/postgres-adapters.js';
@@ -35,6 +40,7 @@ export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
   db: Database.Database | null;
   memoryStore: MemoryStorePort;
+  episodicStore: EpisodicStorePort;
   reflectionStore: ReflectionMetacognitionJournalStore;
   contactStore?: ContactStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
@@ -69,6 +75,7 @@ export async function createAgentPersistenceRuntime(
         scratchpadMirrorPath: resolveScratchpadMirrorPath(options.pathSnapshot.companionDataDir),
         journal: new MemoryJournal(resolveMemoryJournalPath(options.pathSnapshot.companionDataDir)),
       }),
+      episodicStore: createPostgresEpisodicStore(databaseUrl),
       reflectionStore: new ReflectionMetacognitionJournalStore(
         resolveReflectionMetacognitionJournalPath(options.pathSnapshot.companionDataDir),
         {
@@ -93,6 +100,7 @@ export async function createAgentPersistenceRuntime(
     backend,
     db: sqliteCompanionStore.db,
     memoryStore: sqliteCompanionStore.memoryStore,
+    episodicStore: new EpisodicStore(sqliteCompanionStore.db),
     reflectionStore: sqliteCompanionStore.reflectionStore,
   };
 }

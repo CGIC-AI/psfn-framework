@@ -10,7 +10,7 @@ import type {
   EpisodeSalience,
   EpisodeSpanRef,
 } from '../../../shared/contracts/episodic-memory.js';
-import type { EpisodeArcWriteInput, EpisodeCreateInput, EpisodicStore } from './store.js';
+import type { EpisodeArcWriteInput, EpisodeCreateInput, EpisodicStorePort } from './store.js';
 
 export interface EpisodicSynthesisSessionReader {
   getRecentMessages(channelId: string, limit: number): SessionEntry[];
@@ -447,7 +447,7 @@ function findRelatedSource(
 }
 
 export class EpisodicSynthesizer {
-  private readonly store: Pick<EpisodicStore, 'createEpisode' | 'getEpisode' | 'searchByTime' | 'writeEpisodeArc'>;
+  private readonly store: Pick<EpisodicStorePort, 'createEpisode' | 'getEpisode' | 'searchByTime' | 'writeEpisodeArc'>;
   private readonly sessionReader: EpisodicSynthesisSessionReader;
   private readonly transcriptMessageLimit: number;
   private readonly maxEpisodesPerRun: number;
@@ -456,7 +456,7 @@ export class EpisodicSynthesizer {
   private readonly maxEntriesPerEpisode: number;
 
   constructor(
-    store: Pick<EpisodicStore, 'createEpisode' | 'getEpisode' | 'searchByTime' | 'writeEpisodeArc'>,
+    store: Pick<EpisodicStorePort, 'createEpisode' | 'getEpisode' | 'searchByTime' | 'writeEpisodeArc'>,
     sessionReader: EpisodicSynthesisSessionReader,
     options: EpisodicSynthesisOptions = {},
   ) {
@@ -475,7 +475,7 @@ export class EpisodicSynthesizer {
     );
   }
 
-  run(input: EpisodicSynthesisRunInput): EpisodicSynthesisRunResult {
+  async run(input: EpisodicSynthesisRunInput): Promise<EpisodicSynthesisRunResult> {
     const entries = this.sessionReader
       .getRecentMessages(input.sessionId, this.transcriptMessageLimit)
       .filter(isConversational)
@@ -491,18 +491,18 @@ export class EpisodicSynthesizer {
 
     for (const group of groups) {
       const episodeInput = buildEpisodeInput(input.sessionId, group);
-      const existing = this.store.getEpisode(episodeInput.id);
-      const episode = existing ?? this.store.createEpisode(episodeInput);
+      const existing = await this.store.getEpisode(episodeInput.id);
+      const episode = existing ?? (await this.store.createEpisode(episodeInput));
       if (existing) {
         skippedEpisodeIds.push(existing.id);
       } else {
         createdEpisodes.push(episode);
       }
 
-      const priorCandidates = this.resolvePriorCandidates(episode, createdEpisodes);
+      const priorCandidates = await this.resolvePriorCandidates(episode, createdEpisodes);
       const related = findRelatedSource(episode, priorCandidates);
       if (related) {
-        linkedArcs.push(this.store.writeEpisodeArc(
+        linkedArcs.push(await this.store.writeEpisodeArc(
           buildArcInput(related.episode, episode, related.overlap),
         ));
       }
@@ -517,11 +517,14 @@ export class EpisodicSynthesizer {
     };
   }
 
-  private resolvePriorCandidates(episode: Episode, currentRunEpisodes: readonly Episode[]): Episode[] {
+  private async resolvePriorCandidates(
+    episode: Episode,
+    currentRunEpisodes: readonly Episode[],
+  ): Promise<Episode[]> {
     const dayWindowMs = 30 * 24 * 60 * 60 * 1000;
     const to = episode.startedAt;
     const from = new Date(Math.max(0, Date.parse(to) - dayWindowMs)).toISOString();
-    const persisted = this.store.searchByTime({
+    const persisted = await this.store.searchByTime({
       from,
       to,
       limit: this.maxPriorCandidates,

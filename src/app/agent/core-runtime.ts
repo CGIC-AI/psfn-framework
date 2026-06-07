@@ -3,7 +3,7 @@ import type { CoreSubstrateConfig } from '../../system/config/runtime-config-con
 import type { EventBus } from '../../shared/event-bus.js';
 import { MemoryStore } from '../../faculties/memory/store.js';
 import { MemoryJournal } from '../../faculties/memory/journal.js';
-import { EpisodicStore } from '../../faculties/memory/episodic/index.js';
+import { EpisodicStore, type EpisodicStorePort } from '../../faculties/memory/episodic/index.js';
 import {
   createMemoryStorePort,
   type CoreMemoryStorePort,
@@ -72,6 +72,7 @@ export interface AgentCoreRuntimeOptions {
   gateway: GatewayClient;
   db?: Database.Database | null;
   memoryStore?: MemoryStorePort;
+  episodicStore?: EpisodicStorePort | null;
   contactStore?: ContactStorePort;
   card: CharacterCardV2;
   systemPrompt: string;
@@ -122,6 +123,12 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     intentionProviders,
   } = options;
   const db = options.db ?? null;
+  const episodicStore = options.episodicStore ?? (() => {
+    if ((config.persistenceBackend ?? 'sqlite') === 'postgres') {
+      throw new Error('PostgreSQL core runtime requires an injected episodic store');
+    }
+    return db ? new EpisodicStore(db) : null;
+  })();
 
   const promptRegistry = wireStaticPromptRegistry(pathSnapshot.companionDataDir);
   const llmProvider = createLLMProviderPort(gateway);
@@ -270,7 +277,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     config,
     promptRegistry,
     contactStore,
-    episodicStore: db ? new EpisodicStore(db) : null,
+    episodicStore,
   });
   const promptState = createPromptStatePort({
     layers: promptStore,

@@ -50,7 +50,7 @@ describe('EpisodicSynthesizer', () => {
     };
   }
 
-  it('creates multiple same-day episodes with L0 span provenance and graph links', () => {
+  it('creates multiple same-day episodes with L0 span provenance and graph links', async () => {
     const store = makeStore();
     const sessionReader = {
       getRecentMessages: () => [
@@ -65,7 +65,7 @@ describe('EpisodicSynthesizer', () => {
       transcriptMessageLimit: 12,
     });
 
-    const result = synthesizer.run({
+    const result = await synthesizer.run({
       sessionId: 'terminal:daily',
       sourceMessageId: 'turn:4',
     });
@@ -97,7 +97,7 @@ describe('EpisodicSynthesizer', () => {
     ]));
   });
 
-  it('is idempotent for repeated rest runs over the same spans', () => {
+  it('is idempotent for repeated rest runs over the same spans', async () => {
     const store = makeStore();
     const entries = [
       entry(1, '2026-04-01T10:00:00.000Z', 'user', 'Discuss project atlas testing and linting.'),
@@ -107,8 +107,8 @@ describe('EpisodicSynthesizer', () => {
       getRecentMessages: () => entries,
     });
 
-    const first = synthesizer.run({ sessionId: 'terminal:daily' });
-    const second = synthesizer.run({ sessionId: 'terminal:daily' });
+    const first = await synthesizer.run({ sessionId: 'terminal:daily' });
+    const second = await synthesizer.run({ sessionId: 'terminal:daily' });
 
     expect(first.createdEpisodes).toHaveLength(1);
     expect(second.createdEpisodes).toEqual([]);
@@ -116,7 +116,7 @@ describe('EpisodicSynthesizer', () => {
     expect(store.listEpisodes()).toHaveLength(1);
   });
 
-  it('synthesizes a month-long trip plan as linked bounded episodes instead of one aggregate memory', () => {
+  it('synthesizes a month-long trip plan as linked bounded episodes instead of one aggregate memory', async () => {
     const store = makeStore();
     const sessionReader = {
       getRecentMessages: () => [
@@ -176,7 +176,7 @@ describe('EpisodicSynthesizer', () => {
       transcriptMessageLimit: 20,
     });
 
-    const result = synthesizer.run({
+    const result = await synthesizer.run({
       sessionId: 'terminal:trip-month',
       sourceMessageId: 'turn:108',
     });
@@ -208,7 +208,7 @@ describe('EpisodicSynthesizer', () => {
     ))).toBe(false);
   });
 
-  it('force-runs synthesis for isolated shakedown sessions without waiting for rest windows', () => {
+  it('force-runs synthesis for isolated shakedown sessions without waiting for rest windows', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'episodic-force-synthesis-'));
     try {
       const companionDbPath = join(tempDir, 'companion.db');
@@ -242,7 +242,7 @@ describe('EpisodicSynthesizer', () => {
         });
       });
 
-      const result = runForcedEpisodicSynthesis({
+      const result = await runForcedEpisodicSynthesis({
         companionDbPath,
         sessionsDir,
         sessionId,

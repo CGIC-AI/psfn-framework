@@ -12,7 +12,7 @@ import {
 } from '../../persistence/backups/startup-checks.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
-import { EpisodicStore, EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
+import { EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
@@ -130,6 +130,7 @@ async function main(): Promise<void> {
     backend: persistenceBackend,
     db,
     memoryStore: companionMemoryStore,
+    episodicStore: companionEpisodicStore,
     reflectionStore,
     contactStore: persistedContactStore,
     intentionRuntime: persistedIntentionRuntime,
@@ -162,6 +163,7 @@ async function main(): Promise<void> {
     gateway,
     db,
     memoryStore: companionMemoryStore,
+    episodicStore: companionEpisodicStore,
     contactStore: persistedContactStore,
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
@@ -261,10 +263,8 @@ async function main(): Promise<void> {
 
   // Memory write/import tools — intentional memory creation
   const memoryWriter = new MemoryWriter(memoryStore, gateway);
-  const episodicStore = db ? new EpisodicStore(db) : null;
-  const episodicSynthesizer = episodicStore
-    ? new EpisodicSynthesizer(episodicStore, sessionManager)
-    : null;
+  const episodicStore = companionEpisodicStore;
+  const episodicSynthesizer = new EpisodicSynthesizer(episodicStore, sessionManager);
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
   );

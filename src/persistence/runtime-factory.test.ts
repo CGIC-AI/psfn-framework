@@ -6,8 +6,10 @@ import { createAgentPersistenceRuntime } from './runtime-factory.js';
 
 const runtimeFactoryMocks = vi.hoisted(() => ({
   sqliteMemoryStore: { kind: 'sqlite-memory-store' },
+  sqliteEpisodicStore: { kind: 'sqlite-episodic-store' },
   sqliteReflectionStore: { kind: 'sqlite-reflection-store' },
   postgresMemoryStore: { kind: 'postgres-memory-store' },
+  postgresEpisodicStore: { kind: 'postgres-episodic-store' },
   postgresReflectionMirror: { kind: 'postgres-reflection-mirror' },
   postgresContactStore: { kind: 'postgres-contact-store' },
   postgresIntentionRuntime: {
@@ -22,9 +24,13 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   },
   createSqliteCompanionStore: vi.fn(() => runtimeFactoryMocks.sqliteCompanionStore),
   createPostgresMemoryStore: vi.fn(async () => runtimeFactoryMocks.postgresMemoryStore),
+  createPostgresEpisodicStore: vi.fn(() => runtimeFactoryMocks.postgresEpisodicStore),
   createPostgresContactStore: vi.fn(async () => runtimeFactoryMocks.postgresContactStore),
   createPostgresIntentionPorts: vi.fn(async () => runtimeFactoryMocks.postgresIntentionRuntime),
   connectPostgresReflectionMirror: vi.fn(async () => runtimeFactoryMocks.postgresReflectionMirror),
+  createSqliteEpisodicStore: vi.fn(function EpisodicStore() {
+    return runtimeFactoryMocks.sqliteEpisodicStore;
+  }),
   createReflectionMetacognitionJournalStore: vi.fn(function ReflectionMetacognitionJournalStore(path: string, options: unknown) {
     return {
       kind: 'reflection-metacognition-journal-store',
@@ -40,6 +46,11 @@ vi.mock('./sqlite-companion-store.js', () => ({
 
 vi.mock('../faculties/memory/postgres-store.js', () => ({
   createPostgresMemoryStore: runtimeFactoryMocks.createPostgresMemoryStore,
+}));
+
+vi.mock('../faculties/memory/episodic/index.js', () => ({
+  createPostgresEpisodicStore: runtimeFactoryMocks.createPostgresEpisodicStore,
+  EpisodicStore: runtimeFactoryMocks.createSqliteEpisodicStore,
 }));
 
 vi.mock('../core/contacts/postgres-adapter.js', () => ({
@@ -63,9 +74,11 @@ vi.mock('./journals/reflection-metacognition-journal.js', () => ({
 beforeEach(() => {
   runtimeFactoryMocks.createSqliteCompanionStore.mockClear();
   runtimeFactoryMocks.createPostgresMemoryStore.mockClear();
+  runtimeFactoryMocks.createPostgresEpisodicStore.mockClear();
   runtimeFactoryMocks.createPostgresContactStore.mockClear();
   runtimeFactoryMocks.createPostgresIntentionPorts.mockClear();
   runtimeFactoryMocks.connectPostgresReflectionMirror.mockClear();
+  runtimeFactoryMocks.createSqliteEpisodicStore.mockClear();
   runtimeFactoryMocks.createReflectionMetacognitionJournalStore.mockClear();
 });
 
@@ -91,10 +104,15 @@ describe('createAgentPersistenceRuntime', () => {
       backend: 'sqlite',
       db: runtimeFactoryMocks.sqliteCompanionStore.db,
       memoryStore: runtimeFactoryMocks.sqliteMemoryStore as MemoryStorePort,
+      episodicStore: runtimeFactoryMocks.sqliteEpisodicStore,
       reflectionStore: runtimeFactoryMocks.sqliteReflectionStore,
     });
     expect(runtimeFactoryMocks.createSqliteCompanionStore).toHaveBeenCalled();
+    expect(runtimeFactoryMocks.createSqliteEpisodicStore).toHaveBeenCalledWith(
+      runtimeFactoryMocks.sqliteCompanionStore.db,
+    );
     expect(runtimeFactoryMocks.createPostgresMemoryStore).not.toHaveBeenCalled();
+    expect(runtimeFactoryMocks.createPostgresEpisodicStore).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.connectPostgresReflectionMirror).not.toHaveBeenCalled();
   });
 
@@ -121,6 +139,7 @@ describe('createAgentPersistenceRuntime', () => {
       backend: 'postgres',
       db: null,
       memoryStore: runtimeFactoryMocks.postgresMemoryStore as MemoryStorePort,
+      episodicStore: runtimeFactoryMocks.postgresEpisodicStore,
       reflectionStore: {
         kind: 'reflection-metacognition-journal-store',
         path: '/tmp/companion-data/state/notes/reflections/metacognition/journal.jsonl',
@@ -141,6 +160,9 @@ describe('createAgentPersistenceRuntime', () => {
         scratchpadMirrorPath: '/tmp/companion-data/state/notes/scratchpad.json',
         journal: expect.any(Object),
       }),
+    );
+    expect(runtimeFactoryMocks.createPostgresEpisodicStore).toHaveBeenCalledWith(
+      'postgres://postgres:secret@localhost:5432/psfn',
     );
     expect(runtimeFactoryMocks.connectPostgresReflectionMirror).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',

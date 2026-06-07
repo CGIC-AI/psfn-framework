@@ -25,6 +25,7 @@ import {
 } from '../../system/capabilities/approval-queue-port.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type {
   IntentionRuntimeProviders,
@@ -54,6 +55,7 @@ export interface BootstrapAgentCoreRuntimeOptions {
   gateway: GatewayClient;
   db?: Database.Database | null;
   memoryStore: MemoryStorePort;
+  episodicStore: EpisodicStorePort;
   contactStore?: ContactStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
@@ -70,6 +72,7 @@ export async function bootstrapAgentCoreRuntime(
     gateway,
     db,
     memoryStore,
+    episodicStore,
     contactStore,
     intentionRuntime,
     intentionProviders,
@@ -119,6 +122,7 @@ export async function bootstrapAgentCoreRuntime(
     gateway,
     db,
     memoryStore,
+    episodicStore,
     contactStore,
     card,
     systemPrompt,

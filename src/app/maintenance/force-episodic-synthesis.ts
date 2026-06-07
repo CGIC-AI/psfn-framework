@@ -47,9 +47,9 @@ function parsePositiveInteger(value: string, field: string): number {
   return parsed;
 }
 
-export function runForcedEpisodicSynthesis(
+export async function runForcedEpisodicSynthesis(
   input: ForcedEpisodicSynthesisInput,
-): ForcedEpisodicSynthesisResult {
+): Promise<ForcedEpisodicSynthesisResult> {
   if (input.allowIsolatedRuntime !== true) {
     throw new Error('Forced episodic synthesis requires allowIsolatedRuntime=true');
   }
@@ -76,7 +76,7 @@ export function runForcedEpisodicSynthesis(
         maxEntriesPerEpisode: input.maxEntriesPerEpisode,
       },
     );
-    const result = synthesizer.run({
+    const result = await synthesizer.run({
       sessionId,
       sourceMessageId: input.sourceMessageId,
     });
@@ -166,7 +166,7 @@ async function main(): Promise<void> {
     console.log(usage());
     return;
   }
-  const result = runForcedEpisodicSynthesis({
+  const result = await runForcedEpisodicSynthesis({
     companionDbPath: options.companionDbPath ?? '',
     sessionsDir: options.sessionsDir ?? '',
     sessionId: options.sessionId ?? '',

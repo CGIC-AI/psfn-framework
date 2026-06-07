@@ -286,6 +286,23 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     return rows.map(mapEpisodeRow);
   }
 
+  async searchByThread(threadId: string, options: EpisodeListOptions = {}): Promise<Episode[]> {
+    const normalizedThreadId = parseRequiredText(threadId, 'threadId');
+    const rows = await queryRows<PostgresEpisodeRow>(this.pool, `
+      SELECT id, episode_json
+      FROM l01_episodes
+      WHERE ${ACTIVE_CANONICAL_EPISODE_FILTER}
+        AND thread_id = $1
+      ORDER BY started_at ASC, id ASC
+      LIMIT $2 OFFSET $3
+    `, [
+      normalizedThreadId,
+      normalizeLimit(options.limit),
+      normalizeOffset(options.offset),
+    ]);
+    return rows.map(mapEpisodeRow);
+  }
+
   async writeEpisodeArc(input: EpisodeArcWriteInput): Promise<EpisodeArc> {
     await this.assertEpisodeExists(input.sourceEpisodeId, 'sourceEpisodeId');
     await this.assertEpisodeExists(input.targetEpisodeId, 'targetEpisodeId');

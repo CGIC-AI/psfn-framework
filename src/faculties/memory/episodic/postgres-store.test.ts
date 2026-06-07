@@ -16,6 +16,7 @@ interface StoredEpisodeRow {
   canonical_episode_id: string | null;
   merged_into_episode_id: string | null;
   superseded_by_episode_id: string | null;
+  thread_id: string | null;
   started_at: string;
   ended_at: string;
   episode_json: unknown;
@@ -82,6 +83,7 @@ class FakeEpisodicPool {
         canonical_episode_id: values[5] === null ? null : String(values[5] ?? ''),
         merged_into_episode_id: values[6] === null ? null : String(values[6] ?? ''),
         superseded_by_episode_id: values[7] === null ? null : String(values[7] ?? ''),
+        thread_id: values[8] === null ? null : String(values[8] ?? ''),
         started_at: String(values[10] ?? ''),
         ended_at: String(values[11] ?? ''),
         episode_json: values[21],
@@ -132,6 +134,10 @@ class FakeEpisodicPool {
     let cursor = 0;
     let rows = [...this.episodes.values()].filter(isActiveEpisode);
 
+    if (normalized.includes('thread_id =')) {
+      const threadId = String(values[cursor++] ?? '');
+      rows = rows.filter(row => row.thread_id === threadId);
+    }
     if (normalized.includes('ended_at >=')) {
       const from = String(values[cursor++] ?? '');
       rows = rows.filter(row => row.ended_at >= from);
@@ -272,6 +278,7 @@ describe('PostgresEpisodicStore', () => {
       from: '2026-03-30T00:00:00.000Z',
       to: '2026-03-30T23:59:59.999Z',
     })).resolves.toEqual([first]);
+    await expect(store.searchByThread('thread-alpha')).resolves.toEqual([first, second]);
     expect(pool.episodes.get('episode-1')?.episode_json).toBe(serializeEpisode(first));
     expect(pool.queries.some(query => query.text.includes("status IS NULL OR status = 'canonical'"))).toBe(true);
   });
@@ -300,6 +307,7 @@ describe('PostgresEpisodicStore', () => {
       canonical_episode_id: ignoredEpisode.id,
       merged_into_episode_id: null,
       superseded_by_episode_id: null,
+      thread_id: ignoredEpisode.threadId ?? null,
       started_at: ignoredEpisode.startedAt,
       ended_at: ignoredEpisode.endedAt,
       episode_json: serializeEpisode(ignoredEpisode),

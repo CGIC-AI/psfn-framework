@@ -13,7 +13,7 @@ import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
-import type { EpisodicStore } from '../../faculties/memory/episodic/store.js';
+import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
 import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';
 import { resolveAdminTransportSocketPath } from '../../operator/garden/transport-paths.js';
 
@@ -28,7 +28,7 @@ export interface StartOptionalAdminTransportServerOptions {
   eventBus: EventBus;
   scheduler: Scheduler;
   postTurnActions: PostTurnActionRuntime;
-  episodicStore?: EpisodicStore | null;
+  episodicStore?: EpisodicStorePort | null;
   card: CharacterCardV2;
   shardManager: ShardExecutionPort;
   cardVersionStore: CharacterCardVersionStore;

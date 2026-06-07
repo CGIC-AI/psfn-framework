@@ -18,7 +18,7 @@ import type { SessionManager } from '../../core/session/manager.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
-import type { EpisodicStore } from '../../faculties/memory/episodic/store.js';
+import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
@@ -69,10 +69,7 @@ export interface InProcessGardenAdminContractOptions {
   apiHost?: string;
   apiPort?: number;
   memoryStore: MemoryStorePort;
-  episodicStore?: Pick<
-    EpisodicStore,
-    'getEpisode' | 'listEpisodeArcsForEpisode' | 'listEpisodes' | 'searchByThread' | 'searchByTime'
-  > | null;
+  episodicStore?: EpisodicStorePort | null;
   sessionStore: SessionStore;
   sessionManager: SessionManager;
   scheduler: Scheduler;

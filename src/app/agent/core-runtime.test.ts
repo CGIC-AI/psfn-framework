@@ -27,4 +27,13 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('wireCoreMemoryRuntime(');
     expect(coreRuntimeSource).toContain('wireMemoryRuntime(');
   });
+
+  it('threads injected episodic stores instead of disabling L0.1 when sqlite db is absent', () => {
+    const agentMainSource = readSource('main.ts');
+    const coreRuntimeSource = readSource('core-runtime.ts');
+    expect(agentMainSource).toContain('episodicStore: companionEpisodicStore');
+    expect(agentMainSource).not.toContain('db ? new EpisodicStore(db) : null');
+    expect(coreRuntimeSource).toContain('PostgreSQL core runtime requires an injected episodic store');
+    expect(coreRuntimeSource).not.toContain('episodicStore: db ? new EpisodicStore(db) : null');
+  });
 });

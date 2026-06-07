@@ -57,6 +57,7 @@ export interface EpisodicStorePort {
   getEpisode(id: string): EpisodicStoreResult<Episode | undefined>;
   listEpisodes(options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
   searchByTime(options?: EpisodeTimeSearchOptions): EpisodicStoreResult<Episode[]>;
+  searchByThread(threadId: string, options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
   writeEpisodeArc(input: EpisodeArcWriteInput): EpisodicStoreResult<EpisodeArc>;
   listEpisodeArcsForEpisode(
     episodeId: string,

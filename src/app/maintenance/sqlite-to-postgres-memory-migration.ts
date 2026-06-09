@@ -2056,11 +2056,10 @@ async function applyMigration(
         data.warnings,
         data.skippedRows,
       );
-      const migratedMemoryIds = new Set(
-        data.rows.l2_memories
-          .map(row => getString(row, 'id'))
-          .filter((id): id is string => id !== null),
+      const presentMemoryIdRows = await client.query<{ id: string } & QueryResultRow>(
+        'SELECT id FROM l2_memories',
       );
+      const migratedMemoryIds = new Set(presentMemoryIdRows.rows.map(row => row.id));
       data.tables.l2_memory_delete_versions.appliedRows = await upsertDeleteVersions(
         client,
         data.rows.l2_memory_delete_versions,

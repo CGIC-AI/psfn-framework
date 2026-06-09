@@ -123,6 +123,12 @@ class FakeMigrationPool {
     if (normalized.startsWith('select setval(')) {
       return queryResult<Row>();
     }
+    if (normalized.startsWith('select id from l2_memories')) {
+      return {
+        rows: [...this.memoryRows.keys()].map(id => ({ id })) as unknown as Row[],
+        rowCount: this.memoryRows.size,
+      } as QueryResult<Row>;
+    }
     throw new Error(`Unhandled fake Postgres SQL: ${text}`);
   }
 }

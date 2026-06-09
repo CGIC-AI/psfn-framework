@@ -1004,7 +1004,7 @@ export function buildScratchpadContextBlock(input: {
 
     const lines = [
       '[Scratchpad]',
-      'Working notes (short-term, may be stale; verify before acting):',
+      'Working notes (short-term, may be stale; verify before acting; manage them via the scratchpad tool):',
     ];
 
     let included = 0;
@@ -1019,7 +1019,7 @@ export function buildScratchpadContextBlock(input: {
         ? `${normalized.slice(0, SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS - 3)}...`
         : normalized;
 
-      const line = `- ${entry.id}: ${clipped}`;
+      const line = `- ${clipped}`;
       const projectedChars = usedChars + 1 + line.length;
       if (projectedChars > SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS) break;
 

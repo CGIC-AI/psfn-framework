@@ -148,7 +148,7 @@ function renderWithheldSummary(summary: MemoryWithheldSummary): string {
 }
 
 function renderEpisodicLandmarkChains(chains: readonly EpisodicRetrievalChain[]): string {
-  const lines = ['Episodic landmark chains selected before raw span/artifact drill-down:'];
+  const lines = ['Episodes from your shared history related to this conversation:'];
   chains.forEach((chain, chainIndex) => {
     const chainTerms = chain.matchedTerms.length > 0
       ? `; matched: ${chain.matchedTerms.join(', ')}`
@@ -163,51 +163,32 @@ function renderEpisodicLandmarkChains(chains: readonly EpisodicRetrievalChain[])
           || arc.targetEpisodeId === episode.id
         ));
       const arcPrefix = incomingArc
-        ? `${incomingArc.arcKind} from ${otherEpisodeId(incomingArc, episode.id)} -> `
+        ? `${incomingArc.arcKind} from ${otherEpisodeTitle(chain, incomingArc, episode.id)} -> `
         : '';
       const themes = episode.themes.length > 0 ? episode.themes.slice(0, 5).join(', ') : 'none';
       lines.push(
         `- ${arcPrefix}${compactPromptLine(episode.title, 96)} (${episode.startedAt} to ${episode.endedAt}; themes: ${themes}; salience ${episode.salience.score.toFixed(2)})`,
       );
       lines.push(`  Landmark: ${compactPromptLine(episode.landmark, 260)}`);
-      const refs = formatEpisodeRawRefs(episode);
-      if (refs) {
-        lines.push(`  Raw refs for drill-down: ${refs}`);
-      }
     });
   });
 
-  lines.push('Use these landmarks as scoped recall waypoints; drill into raw span/artifact refs only when needed.');
+  lines.push('Use these landmarks to orient recall; search the session history when you need the full conversation behind one.');
   return wrapPromptSectionXml({
     id: 'episodic_landmark_chains',
     content: lines.join('\n'),
   });
 }
 
-function otherEpisodeId(
+function otherEpisodeTitle(
+  chain: EpisodicRetrievalChain,
   arc: EpisodicRetrievalChain['arcs'][number],
   episodeId: string,
 ): string {
-  return arc.sourceEpisodeId === episodeId ? arc.targetEpisodeId : arc.sourceEpisodeId;
-}
-
-function formatEpisodeRawRefs(
-  episode: EpisodicRetrievalChain['episodes'][number],
-): string {
-  const parts: string[] = [];
-  if (episode.spanRefs.length > 0) {
-    parts.push(`spans ${episode.spanRefs.slice(0, 4).map(ref => ref.spanId).join(', ')}`);
-  }
-  if (episode.artifactRefs.length > 0) {
-    parts.push(`artifacts ${episode.artifactRefs.slice(0, 4).map(ref => ref.artifactId).join(', ')}`);
-  }
-  const provenanceRefs = episode.provenanceRefs
-    .slice(0, 6)
-    .map(ref => `${ref.kind}:${ref.refId}`);
-  if (provenanceRefs.length > 0) {
-    parts.push(`provenance ${provenanceRefs.join(', ')}`);
-  }
-  return parts.join('; ');
+  const otherId = arc.sourceEpisodeId === episodeId ? arc.targetEpisodeId : arc.sourceEpisodeId;
+  const other = chain.episodes.find(episode => episode.id === otherId);
+  if (!other) return 'an earlier episode';
+  return `"${compactPromptLine(other.title, 64)}"`;
 }
 
 function compactPromptLine(value: string, maxChars: number): string {

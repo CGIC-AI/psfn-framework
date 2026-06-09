@@ -345,7 +345,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Confidential secret');
   });
 
-  it('retrieves scoped episodic landmark chains and preserves raw refs for drill-down', async () => {
+  it('retrieves scoped episodic landmark chains and keeps raw span/artifact refs out of companion context', async () => {
     const store = makeMockStore([]);
     const embedding = makeMockEmbedding();
     const vacationStart = makeEpisode({
@@ -423,11 +423,12 @@ describe('MemoryRetriever trust-gated filtering', () => {
       snapshot,
     );
 
-    expect(result).toContain('Episodic landmark chains selected before raw span/artifact drill-down');
+    expect(result).toContain('Episodes from your shared history related to this conversation:');
     expect(result).toContain('Sicily vacation planning');
     expect(result).toContain('Sicily hotel resolution');
-    expect(result).toContain('span-vacation-start');
-    expect(result).toContain('artifact-flight-options');
+    expect(result).not.toContain('span-vacation-start');
+    expect(result).not.toContain('artifact-flight-options');
+    expect(result).not.toContain('Raw refs');
     expect(result).not.toContain('Pregnancy appointment logistics');
     expect(episodicStore.listEpisodeArcsForEpisode).toHaveBeenCalledWith(vacationStart.id, {
       direction: 'both',
@@ -580,10 +581,10 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     expect(result).toContain('Wedding cake tasting shortlist');
     expect(result).toContain('Bakery deposit and tasting appointment');
-    expect(result).toContain('span-wedding-cake');
-    expect(result).toContain('span-bakery-deposit');
-    expect(result).toContain('artifact-cake-shortlist');
-    expect(result).toContain('artifact-bakery-contract');
+    expect(result).not.toContain('span-wedding-cake');
+    expect(result).not.toContain('span-bakery-deposit');
+    expect(result).not.toContain('artifact-cake-shortlist');
+    expect(result).not.toContain('artifact-bakery-contract');
     expect(result).not.toContain('Wedding venue walkthrough');
     expect(result).not.toContain('First dance our song idea');
     expect(result).not.toContain('Pregnancy timeline check-in');

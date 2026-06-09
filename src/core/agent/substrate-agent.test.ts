@@ -4588,7 +4588,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[1]).toContain('[Scratchpad]');
-    expect(buildCall[1]).toContain('sp-1');
+    expect(buildCall[1]).not.toContain('sp-1');
     expect(buildCall[1]).toContain('confirm backup status');
   });
 

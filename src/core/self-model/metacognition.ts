@@ -266,7 +266,7 @@ function detectAvoidanceFlag(
   }
   const responseTokens = lookback.map(text => tokenizeSignalTerms(text));
   let consideredConcernCount = 0;
-  const unresolvedConcernIds: string[] = [];
+  const unresolvedConcernTexts: string[] = [];
 
   for (const concern of input.internalState.attention.activeConcerns) {
     const concernTokens = tokenizeSignalTerms(concern.text);
@@ -274,16 +274,27 @@ function detectAvoidanceFlag(
     consideredConcernCount += 1;
     const addressed = responseTokens.some(tokens => tokenCoverage(concernTokens, tokens) >= config.avoidanceConcernCoverageThreshold);
     if (!addressed) {
-      unresolvedConcernIds.push(concern.id);
+      unresolvedConcernTexts.push(concern.text);
     }
   }
 
-  if (consideredConcernCount === 0 || unresolvedConcernIds.length === 0) {
+  if (consideredConcernCount === 0 || unresolvedConcernTexts.length === 0) {
     return null;
   }
-  const confidence = roundDecimal(clampUnit(unresolvedConcernIds.length / consideredConcernCount));
-  const evidence = `unresolved_concerns=${unresolvedConcernIds.join(',')}; lookback_turns=${lookback.length}`;
+  const confidence = roundDecimal(clampUnit(unresolvedConcernTexts.length / consideredConcernCount));
+  const excerpts = unresolvedConcernTexts
+    .slice(0, 2)
+    .map(text => `"${compactConcernExcerpt(text)}"`)
+    .join(', ');
+  const count = unresolvedConcernTexts.length;
+  const evidence = `${count} open concern${count === 1 ? '' : 's'} untouched across the last ${lookback.length} turns (${excerpts})`;
   return buildMetacognitiveFlag('avoidance', confidence, evidence);
+}
+
+function compactConcernExcerpt(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (compact.length <= 60) return compact;
+  return `${compact.slice(0, 57)}...`;
 }
 
 function detectHighEngagementFlag(

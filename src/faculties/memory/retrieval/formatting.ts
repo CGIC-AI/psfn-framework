@@ -169,7 +169,7 @@ function renderEpisodicLandmarkChains(chains: readonly EpisodicRetrievalChain[])
       lines.push(
         `- ${arcPrefix}${compactPromptLine(episode.title, 96)} (${formatEpisodeTimeRange(episode.startedAt, episode.endedAt)}; themes: ${themes})`,
       );
-      lines.push(`  Landmark: ${compactPromptLine(episode.landmark, 260)}`);
+      lines.push(`  Landmark: ${compactPromptLine(stripLandmarkTimestampTail(episode.landmark), 260)}`);
     });
   });
 
@@ -214,6 +214,15 @@ function compactMemoryTextForPrompt(text: string): string {
 const UTC_MONTH_NAMES = [
   'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
 ] as const;
+
+// Auto-generated landmarks end with a raw ISO range that duplicates the
+// readable time range already on the episode line.
+function stripLandmarkTimestampTail(landmark: string): string {
+  return landmark
+    .replace(/\s*from \d{4}-\d{2}-\d{2}T[\d:.]+Z to \d{4}-\d{2}-\d{2}T[\d:.]+Z\.?/g, '.')
+    .replace(/\.\.+$/, '.')
+    .trim();
+}
 
 function formatEpisodeTimeRange(startedAt: string, endedAt: string): string {
   const start = new Date(startedAt);

@@ -160,4 +160,14 @@ describe('renderPromptBlock companion-facing rendering contract', () => {
     expect(rendered).not.toContain('2026-05-02T01:10:00.000Z');
     expect(rendered).not.toContain('salience 0.8');
   });
+
+  it('strips redundant ISO timestamp tails from auto-generated landmarks', () => {
+    const chain = buildEpisodicChainFixture();
+    (chain.episodes[0] as { landmark: string }).landmark =
+      'A 14-message exchange with 7 user turns and 7 assistant turns around ears, look from 2026-05-14T12:04:42.103Z to 2026-05-14T12:32:53.743Z.';
+    const rendered = renderPromptBlock(undefined, [], { episodicChains: [chain] });
+
+    expect(rendered).toContain('around ears, look.');
+    expect(rendered).not.toContain('2026-05-14T12:04:42.103Z');
+  });
 });

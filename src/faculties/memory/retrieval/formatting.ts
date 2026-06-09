@@ -119,7 +119,7 @@ function renderEmotionalContinuityMemories(memories: PurrMemory[]): string {
       : memory.emotionalValence <= -0.25
         ? ' (-)'
         : '';
-    return `- [emotional] ${memory.text}${marker}`;
+    return `- [emotional] ${compactMemoryTextForPrompt(memory.text)}${marker}`;
   });
   return wrapPromptSectionXml({
     id: 'cross_session_emotional_continuity',
@@ -167,7 +167,7 @@ function renderEpisodicLandmarkChains(chains: readonly EpisodicRetrievalChain[])
         : '';
       const themes = episode.themes.length > 0 ? episode.themes.slice(0, 5).join(', ') : 'none';
       lines.push(
-        `- ${arcPrefix}${compactPromptLine(episode.title, 96)} (${episode.startedAt} to ${episode.endedAt}; themes: ${themes}; salience ${episode.salience.score.toFixed(2)})`,
+        `- ${arcPrefix}${compactPromptLine(episode.title, 96)} (${formatEpisodeTimeRange(episode.startedAt, episode.endedAt)}; themes: ${themes})`,
       );
       lines.push(`  Landmark: ${compactPromptLine(episode.landmark, 260)}`);
     });
@@ -195,6 +195,42 @@ function compactPromptLine(value: string, maxChars: number): string {
   const compact = value.replace(/\s+/g, ' ').trim();
   if (compact.length <= maxChars) return compact;
   return `${compact.slice(0, maxChars - 3)}...`;
+}
+
+// Memory text written by reflection/deliberation flows can carry machine
+// artifacts (fenced JSON self-reports, carry-forward scaffolding) appended
+// after the narrative paragraph. The narrative is the memory; the artifact
+// belongs to records and tooling, never to companion-facing context.
+function compactMemoryTextForPrompt(text: string): string {
+  const fenceIndex = text.indexOf('```');
+  const narrative = (fenceIndex >= 0 ? text.slice(0, fenceIndex) : text)
+    .replace(/\*\*carry_forward:\*\*[\s\S]*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (narrative.length > 0) return narrative;
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+const UTC_MONTH_NAMES = [
+  'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+] as const;
+
+function formatEpisodeTimeRange(startedAt: string, endedAt: string): string {
+  const start = new Date(startedAt);
+  const end = new Date(endedAt);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return `${startedAt} to ${endedAt}`;
+  }
+  const day = (date: Date): string => (
+    `${UTC_MONTH_NAMES[date.getUTCMonth()]} ${date.getUTCDate()} ${date.getUTCFullYear()}`
+  );
+  const clock = (date: Date): string => (
+    `${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}`
+  );
+  if (start.toISOString().slice(0, 10) === end.toISOString().slice(0, 10)) {
+    return `${day(start)}, ${clock(start)}-${clock(end)} UTC`;
+  }
+  return `${day(start)} ${clock(start)} UTC to ${day(end)} ${clock(end)} UTC`;
 }
 
 function formatMemoriesForPrompt(
@@ -281,7 +317,7 @@ function renderMemorySection(heading: string, scored: ScoredMemory[]): string {
       m.emotionalValence > 0.3 ? ' (+)' :
       m.emotionalValence < -0.3 ? ' (-)' : '';
     return [
-      `- [${m.type}] ${m.text}${valence}`,
+      `- [${m.type}] ${compactMemoryTextForPrompt(m.text)}${valence}`,
       ...formatEvolutionChainLines(s),
     ];
   });
@@ -311,7 +347,7 @@ function renderAttributedMemorySection(
       ? `${descriptor.displayName}${formatContactDescriptorSuffix(descriptor)}: `
       : '';
     return [
-      `- [${memory.type}] ${subjectPrefix}${memory.text}${valence}`,
+      `- [${memory.type}] ${subjectPrefix}${compactMemoryTextForPrompt(memory.text)}${valence}`,
       ...formatEvolutionChainLines(s),
     ];
   });
@@ -326,7 +362,7 @@ function renderAttributedMemorySection(
 function formatEvolutionChainLines(scored: ScoredMemory): string[] {
   if (!scored.evolutionChain || scored.evolutionChain.length === 0) return [];
   return scored.evolutionChain.map(link => (
-    `  - ${formatEvolutionRelation(link.relation)} [${link.memory.type}] ${link.memory.text} (confidence ${link.confidence.toFixed(2)})`
+    `  - ${formatEvolutionRelation(link.relation)} [${link.memory.type}] ${compactMemoryTextForPrompt(link.memory.text)} (confidence ${link.confidence.toFixed(2)})`
   ));
 }
 
@@ -360,6 +396,6 @@ export function renderProactiveRecall(memory: PurrMemory): string {
     memory.emotionalValence < -0.3 ? ' (-)' : '';
   return [
     'Spontaneous recall:',
-    `- [${memory.type}] ${memory.text}${valenceSuffix}`,
+    `- [${memory.type}] ${compactMemoryTextForPrompt(memory.text)}${valenceSuffix}`,
   ].join('\n');
 }

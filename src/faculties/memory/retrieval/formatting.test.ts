@@ -115,4 +115,49 @@ describe('renderPromptBlock companion-facing rendering contract', () => {
     );
     expectNoIdentifierLeaks(rendered);
   });
+
+  it('strips fenced machine artifacts and carry-forward scaffolding from reflection memory text', () => {
+    const reflectionMemory = {
+      id: 'b58f3d6e-0000-4000-8000-00000000abcd',
+      type: 'reflection',
+      text: [
+        'The day carried warmth alongside recurring friction — the fixes landed and the bond held.',
+        '',
+        '```json',
+        '{',
+        '  "schemaVersion": 1,',
+        '  "artifactType": "psfn.acac_self_report",',
+        '  "agency": 0.55',
+        '}',
+        '```',
+        '',
+        '**carry_forward:**',
+        '- Ask how he is holding up after the recovery effort.',
+      ].join('\n'),
+      emotionalValence: 0.4,
+      tags: ['heartbeat', 'reflection'],
+    } as unknown as PurrMemory;
+    const rendered = renderPromptBlock(undefined, [
+      { memory: reflectionMemory, score: 0.8 } as unknown as ScoredMemory,
+    ]);
+
+    expect(rendered).toContain(
+      '- [reflection] The day carried warmth alongside recurring friction — the fixes landed and the bond held.',
+    );
+    expect(rendered).not.toContain('```');
+    expect(rendered).not.toContain('artifactType');
+    expect(rendered).not.toContain('schemaVersion');
+    expect(rendered).not.toContain('carry_forward');
+    expectNoIdentifierLeaks(rendered);
+  });
+
+  it('renders episode time ranges as readable dates without salience bookkeeping', () => {
+    const rendered = renderPromptBlock(undefined, [], {
+      episodicChains: [buildEpisodicChainFixture()],
+    });
+
+    expect(rendered).toContain('May 2 2026, 01:10-03:40 UTC');
+    expect(rendered).not.toContain('2026-05-02T01:10:00.000Z');
+    expect(rendered).not.toContain('salience 0.8');
+  });
 });

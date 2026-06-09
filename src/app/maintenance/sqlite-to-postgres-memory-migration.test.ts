@@ -31,6 +31,7 @@ class FakeMigrationPool {
   readonly patchEventRows = new Map<string, readonly unknown[]>();
   readonly maintenanceReviewRows = new Map<string, readonly unknown[]>();
   readonly memoryLinkRows = new Map<string, readonly unknown[]>();
+  readonly genericRows = new Map<string, Map<string, readonly unknown[]>>();
   readonly contactProfileRows = new Map<string, readonly unknown[]>();
   readonly scratchpadRows = new Map<string, readonly unknown[]>();
   readonly episodeRows = new Map<string, readonly unknown[]>();
@@ -110,6 +111,16 @@ class FakeMigrationPool {
     }
     if (normalized.startsWith('insert into l01_episode_arcs')) {
       this.arcRows.set(String(values[0]), values);
+      return queryResult<Row>();
+    }
+    if (normalized.startsWith('insert into ')) {
+      const tableName = normalized.slice('insert into '.length).split(/[\s(]/, 1)[0];
+      const tableRows = this.genericRows.get(tableName) ?? new Map<string, readonly unknown[]>();
+      tableRows.set(String(values[0]), values);
+      this.genericRows.set(tableName, tableRows);
+      return queryResult<Row>();
+    }
+    if (normalized.startsWith('select setval(')) {
       return queryResult<Row>();
     }
     throw new Error(`Unhandled fake Postgres SQL: ${text}`);

@@ -10,7 +10,12 @@ import {
   ensurePostgresSchema,
   withPostgresClient,
 } from '../../persistence/postgres.js';
-import { POSTGRES_MEMORY_MIGRATIONS } from '../../persistence/postgres/migrations.js';
+import {
+  POSTGRES_CONTACT_MIGRATIONS,
+  POSTGRES_INTENTION_MIGRATIONS,
+  POSTGRES_MEMORY_MIGRATIONS,
+  POSTGRES_REFLECTION_MIGRATIONS,
+} from '../../persistence/postgres/migrations.js';
 
 const MIGRATION_TABLES = [
   'l2_memories',
@@ -24,9 +29,6 @@ const MIGRATION_TABLES = [
   'scratchpad_entries',
   'l01_episodes',
   'l01_episode_arcs',
-] as const;
-
-const OUT_OF_SCOPE_TABLES = [
   'contacts',
   'contact_channel_ids',
   'contact_channel_activity',
@@ -38,8 +40,11 @@ const OUT_OF_SCOPE_TABLES = [
   'intention_pending_follow_ups',
   'intention_pending_follow_up_quarantine',
   'behavioral_pattern_events',
-  'gateway_audit',
   'reflections',
+] as const;
+
+const OUT_OF_SCOPE_TABLES = [
+  'gateway_audit',
 ] as const;
 
 type MigrationTableName = typeof MIGRATION_TABLES[number];
@@ -152,6 +157,18 @@ const TABLE_ORDER_COLUMNS: Record<MigrationTableName, readonly string[]> = {
   scratchpad_entries: ['id'],
   l01_episodes: ['id'],
   l01_episode_arcs: ['id'],
+  contacts: ['id'],
+  contact_channel_ids: ['channel', 'channel_user_id'],
+  contact_channel_activity: ['contact_id', 'channel', 'channel_id'],
+  contact_identity_link_verifications: ['id'],
+  contact_mutation_audit: ['id'],
+  social_graph_entities: ['id'],
+  social_relationship_edges: ['id'],
+  active_concerns: ['id'],
+  intention_pending_follow_ups: ['id'],
+  intention_pending_follow_up_quarantine: ['id'],
+  behavioral_pattern_events: ['id'],
+  reflections: ['id'],
 };
 
 function createEmptyTableReport(present = false): SqliteMigrationTableReport {
@@ -1365,6 +1382,633 @@ async function upsertEpisodeArcs(
   return appliedRows;
 }
 
+function jsonParamOrNull(value: unknown): string | null {
+  return value === null || value === undefined ? null : JSON.stringify(value);
+}
+
+function getBooleanOrNull(row: SqliteRow, field: string): boolean | null {
+  const value = row[field];
+  if (value === undefined || value === null) return null;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  if (typeof value === 'string') {
+    const trimmed = value.trim().toLowerCase();
+    if (trimmed === 'true' || trimmed === '1') return true;
+    if (trimmed === 'false' || trimmed === '0') return false;
+  }
+  return null;
+}
+
+async function upsertContacts(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const id = getString(row, 'id');
+    const displayName = getString(row, 'display_name');
+    const firstSeen = getString(row, 'first_seen');
+    const lastSeen = getString(row, 'last_seen');
+    if (!id || !displayName || !firstSeen || !lastSeen) {
+      skippedRows.push({ table: 'contacts', rowId, reason: 'required contacts fields are missing or invalid' });
+      continue;
+    }
+    const baseline = decodeJsonValue(row.emotional_baseline, {}, 'contacts.emotional_baseline');
+    addJsonWarning(warnings, 'contacts', rowId, 'emotional_baseline', baseline.warning);
+    const timeSeries = decodeJsonValue(row.emotional_time_series, [], 'contacts.emotional_time_series');
+    addJsonWarning(warnings, 'contacts', rowId, 'emotional_time_series', timeSeries.warning);
+    await client.query(`
+      INSERT INTO contacts (
+        id, discord_user_id, display_name, nickname, trust_level, relationship_type,
+        emotional_baseline, emotional_time_series, first_seen, last_seen, notes
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11)
+      ON CONFLICT (id) DO UPDATE SET
+        discord_user_id = EXCLUDED.discord_user_id,
+        display_name = EXCLUDED.display_name,
+        nickname = EXCLUDED.nickname,
+        trust_level = EXCLUDED.trust_level,
+        relationship_type = EXCLUDED.relationship_type,
+        emotional_baseline = EXCLUDED.emotional_baseline,
+        emotional_time_series = EXCLUDED.emotional_time_series,
+        first_seen = EXCLUDED.first_seen,
+        last_seen = EXCLUDED.last_seen,
+        notes = EXCLUDED.notes
+    `, [
+      id,
+      getOptionalString(row, 'discord_user_id'),
+      displayName,
+      getOptionalString(row, 'nickname'),
+      getString(row, 'trust_level') ?? 'regular',
+      getString(row, 'relationship_type') ?? 'stranger',
+      jsonParam(baseline.value),
+      jsonParam(timeSeries.value),
+      firstSeen,
+      lastSeen,
+      getOptionalString(row, 'notes'),
+    ]);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertContactChannelIds(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const contactId = getString(row, 'contact_id');
+    const channel = getString(row, 'channel');
+    const channelUserId = getString(row, 'channel_user_id');
+    const firstSeen = getString(row, 'first_seen');
+    const lastSeen = getString(row, 'last_seen');
+    if (!contactId || !channel || !channelUserId || !firstSeen || !lastSeen) {
+      skippedRows.push({
+        table: 'contact_channel_ids',
+        rowId: `row:${index}`,
+        reason: 'required contact_channel_ids fields are missing or invalid',
+      });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO contact_channel_ids (
+        contact_id, channel, channel_user_id, privacy_level, first_seen, last_seen
+      ) VALUES ($1,$2,$3,$4,$5,$6)
+      ON CONFLICT (channel, channel_user_id) DO UPDATE SET
+        contact_id = EXCLUDED.contact_id,
+        privacy_level = EXCLUDED.privacy_level,
+        first_seen = EXCLUDED.first_seen,
+        last_seen = EXCLUDED.last_seen
+    `, [
+      contactId,
+      channel,
+      channelUserId,
+      getString(row, 'privacy_level') ?? 'semi_private',
+      firstSeen,
+      lastSeen,
+    ]);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertContactChannelActivity(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const contactId = getString(row, 'contact_id');
+    const channel = getString(row, 'channel');
+    const channelId = getString(row, 'channel_id');
+    const firstSeen = getString(row, 'first_seen');
+    const lastSeen = getString(row, 'last_seen');
+    if (!contactId || !channel || !channelId || !firstSeen || !lastSeen) {
+      skippedRows.push({
+        table: 'contact_channel_activity',
+        rowId: `row:${index}`,
+        reason: 'required contact_channel_activity fields are missing or invalid',
+      });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO contact_channel_activity (
+        contact_id, channel, channel_id, privacy_level, first_seen, last_seen
+      ) VALUES ($1,$2,$3,$4,$5,$6)
+      ON CONFLICT (contact_id, channel, channel_id) DO UPDATE SET
+        privacy_level = EXCLUDED.privacy_level,
+        first_seen = EXCLUDED.first_seen,
+        last_seen = EXCLUDED.last_seen
+    `, [
+      contactId,
+      channel,
+      channelId,
+      getOptionalString(row, 'privacy_level'),
+      firstSeen,
+      lastSeen,
+    ]);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertContactIdentityLinkVerifications(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const id = getString(row, 'id');
+    const contactId = getString(row, 'contact_id');
+    const sourceChannel = getString(row, 'source_channel');
+    const sourceUserId = getString(row, 'source_user_id');
+    const targetChannel = getString(row, 'target_channel');
+    const targetUserId = getString(row, 'target_user_id');
+    const nonce = getString(row, 'nonce');
+    const expiresAt = getString(row, 'expires_at');
+    const signature = getString(row, 'signature');
+    const createdAt = getString(row, 'created_at');
+    const updatedAt = getString(row, 'updated_at');
+    if (!id || !contactId || !sourceChannel || !sourceUserId || !targetChannel
+      || !targetUserId || !nonce || !expiresAt || !signature || !createdAt || !updatedAt) {
+      skippedRows.push({
+        table: 'contact_identity_link_verifications',
+        rowId,
+        reason: 'required contact_identity_link_verifications fields are missing or invalid',
+      });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO contact_identity_link_verifications (
+        id, contact_id, source_channel, source_user_id, target_channel, target_user_id,
+        nonce, expires_at, signature, status, created_at, updated_at, verified_at, failure_reason
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+      ON CONFLICT (id) DO UPDATE SET
+        status = EXCLUDED.status,
+        updated_at = EXCLUDED.updated_at,
+        verified_at = EXCLUDED.verified_at,
+        failure_reason = EXCLUDED.failure_reason
+    `, [
+      id, contactId, sourceChannel, sourceUserId, targetChannel, targetUserId,
+      nonce, expiresAt, signature,
+      getString(row, 'status') ?? 'pending',
+      createdAt, updatedAt,
+      getOptionalString(row, 'verified_at'),
+      getOptionalString(row, 'failure_reason'),
+    ]);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertContactMutationAudit(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const id = getNullableNumber(row, 'id');
+    const contactId = getString(row, 'contact_id');
+    const actor = getString(row, 'actor');
+    const field = getString(row, 'field');
+    const timestamp = getString(row, 'timestamp');
+    if (id === null || !contactId || !actor || !field || !timestamp) {
+      skippedRows.push({
+        table: 'contact_mutation_audit',
+        rowId: `row:${index}`,
+        reason: 'required contact_mutation_audit fields are missing or invalid',
+      });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO contact_mutation_audit (id, contact_id, actor, field, old_value, new_value, timestamp)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+      ON CONFLICT (id) DO NOTHING
+    `, [
+      id, contactId, actor, field,
+      getOptionalString(row, 'old_value'),
+      getOptionalString(row, 'new_value'),
+      timestamp,
+    ]);
+    appliedRows += 1;
+  }
+  await client.query(`
+    SELECT setval(
+      pg_get_serial_sequence('contact_mutation_audit', 'id'),
+      GREATEST((SELECT COALESCE(MAX(id), 0) FROM contact_mutation_audit), 1)
+    )
+  `);
+  return appliedRows;
+}
+
+async function upsertSocialGraphEntities(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const id = getString(row, 'id');
+    const displayName = getString(row, 'display_name');
+    const createdAt = getString(row, 'created_at');
+    const updatedAt = getString(row, 'updated_at');
+    if (!id || !displayName || !createdAt || !updatedAt) {
+      skippedRows.push({
+        table: 'social_graph_entities',
+        rowId,
+        reason: 'required social_graph_entities fields are missing or invalid',
+      });
+      continue;
+    }
+    const provenance = decodeJsonValue(row.provenance_refs, [], 'social_graph_entities.provenance_refs');
+    addJsonWarning(warnings, 'social_graph_entities', rowId, 'provenance_refs', provenance.warning);
+    await client.query(`
+      INSERT INTO social_graph_entities (
+        id, entity_kind, display_name, contact_id, sensitivity, provenance_refs,
+        confidence, source, created_at, updated_at
+      ) VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10)
+      ON CONFLICT (id) DO UPDATE SET
+        entity_kind = EXCLUDED.entity_kind,
+        display_name = EXCLUDED.display_name,
+        contact_id = EXCLUDED.contact_id,
+        sensitivity = EXCLUDED.sensitivity,
+        provenance_refs = EXCLUDED.provenance_refs,
+        confidence = EXCLUDED.confidence,
+        source = EXCLUDED.source,
+        updated_at = EXCLUDED.updated_at
+    `, [
+      id,
+      getString(row, 'entity_kind') ?? 'person',
+      displayName,
+      getOptionalString(row, 'contact_id'),
+      getString(row, 'sensitivity') ?? 'personal',
+      jsonParam(provenance.value),
+      getNumber(row, 'confidence', 1),
+      getString(row, 'source') ?? 'contact',
+      createdAt,
+      updatedAt,
+    ]);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertSocialRelationshipEdges(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const id = getString(row, 'id');
+    const sourceEntityId = getString(row, 'source_entity_id');
+    const targetEntityId = getString(row, 'target_entity_id');
+    const relationshipType = getString(row, 'relationship_type');
+    const createdAt = getString(row, 'created_at');
+    const updatedAt = getString(row, 'updated_at');
+    if (!id || !sourceEntityId || !targetEntityId || !relationshipType || !createdAt || !updatedAt) {
+      skippedRows.push({
+        table: 'social_relationship_edges',
+        rowId,
+        reason: 'required social_relationship_edges fields are missing or invalid',
+      });
+      continue;
+    }
+    const provenance = decodeJsonValue(row.provenance_refs, [], 'social_relationship_edges.provenance_refs');
+    addJsonWarning(warnings, 'social_relationship_edges', rowId, 'provenance_refs', provenance.warning);
+    const evidence = decodeJsonValue(row.evidence_memory_ids, [], 'social_relationship_edges.evidence_memory_ids');
+    addJsonWarning(warnings, 'social_relationship_edges', rowId, 'evidence_memory_ids', evidence.warning);
+    await client.query(`
+      INSERT INTO social_relationship_edges (
+        id, source_entity_id, target_entity_id, relationship_type, directional,
+        sensitivity, provenance_refs, evidence_memory_ids, confidence, created_at, updated_at
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11)
+      ON CONFLICT (id) DO UPDATE SET
+        source_entity_id = EXCLUDED.source_entity_id,
+        target_entity_id = EXCLUDED.target_entity_id,
+        relationship_type = EXCLUDED.relationship_type,
+        directional = EXCLUDED.directional,
+        sensitivity = EXCLUDED.sensitivity,
+        provenance_refs = EXCLUDED.provenance_refs,
+        evidence_memory_ids = EXCLUDED.evidence_memory_ids,
+        confidence = EXCLUDED.confidence,
+        updated_at = EXCLUDED.updated_at
+    `, [
+      id, sourceEntityId, targetEntityId, relationshipType,
+      getBooleanOrNull(row, 'directional') ?? true,
+      getString(row, 'sensitivity') ?? 'personal',
+      jsonParam(provenance.value),
+      jsonParam(evidence.value),
+      getNumber(row, 'confidence', 0.7),
+      createdAt, updatedAt,
+    ]);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertActiveConcerns(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const id = getString(row, 'id');
+    const text = getString(row, 'text');
+    const priority = getString(row, 'priority');
+    const source = getString(row, 'source');
+    const createdAt = getString(row, 'created_at');
+    const expiresAt = getString(row, 'expires_at');
+    if (!id || !text || !priority || !source || !createdAt || !expiresAt) {
+      skippedRows.push({ table: 'active_concerns', rowId, reason: 'required active_concerns fields are missing or invalid' });
+      continue;
+    }
+    const formationVad = decodeJsonValue(row.formation_vad, null, 'active_concerns.formation_vad');
+    addJsonWarning(warnings, 'active_concerns', rowId, 'formation_vad', formationVad.warning);
+    await client.query(`
+      INSERT INTO active_concerns (
+        id, text, priority, source, created_at, expires_at, resolved_at,
+        resolution_outcome, contact_id, formation_vad
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+      ON CONFLICT (id) DO UPDATE SET
+        text = EXCLUDED.text,
+        priority = EXCLUDED.priority,
+        source = EXCLUDED.source,
+        expires_at = EXCLUDED.expires_at,
+        resolved_at = EXCLUDED.resolved_at,
+        resolution_outcome = EXCLUDED.resolution_outcome,
+        contact_id = EXCLUDED.contact_id,
+        formation_vad = EXCLUDED.formation_vad
+    `, [
+      id, text, priority, source, createdAt, expiresAt,
+      getOptionalString(row, 'resolved_at'),
+      getOptionalString(row, 'resolution_outcome'),
+      getOptionalString(row, 'contact_id'),
+      jsonParamOrNull(formationVad.value),
+    ]);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertIntentionPendingFollowUps(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const id = getString(row, 'id');
+    const content = getString(row, 'content');
+    const priority = getString(row, 'priority');
+    const timing = getString(row, 'timing');
+    const createdAt = getString(row, 'created_at');
+    const channelId = getString(row, 'channel_id');
+    const channelType = getString(row, 'channel_type');
+    const authorId = getString(row, 'author_id');
+    const authorName = getString(row, 'author_name');
+    if (!id || !content || !priority || !timing || !createdAt || !channelId || !channelType || !authorId || !authorName) {
+      skippedRows.push({
+        table: 'intention_pending_follow_ups',
+        rowId,
+        reason: 'required intention_pending_follow_ups fields are missing or invalid',
+      });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO intention_pending_follow_ups (
+        id, content, priority, timing, created_at, channel_id, channel_type,
+        author_id, author_name, due_at, contact_id, source_message_id,
+        context_summary, wake_conditions, activated_at, activation_reason
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+      ON CONFLICT (id) DO UPDATE SET
+        content = EXCLUDED.content,
+        priority = EXCLUDED.priority,
+        timing = EXCLUDED.timing,
+        due_at = EXCLUDED.due_at,
+        contact_id = EXCLUDED.contact_id,
+        source_message_id = EXCLUDED.source_message_id,
+        context_summary = EXCLUDED.context_summary,
+        wake_conditions = EXCLUDED.wake_conditions,
+        activated_at = EXCLUDED.activated_at,
+        activation_reason = EXCLUDED.activation_reason
+    `, [
+      id, content, priority, timing, createdAt, channelId, channelType, authorId, authorName,
+      getOptionalString(row, 'due_at'),
+      getOptionalString(row, 'contact_id'),
+      getOptionalString(row, 'source_message_id'),
+      getOptionalString(row, 'context_summary'),
+      getOptionalString(row, 'wake_conditions'),
+      getOptionalString(row, 'activated_at'),
+      getOptionalString(row, 'activation_reason'),
+    ]);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertIntentionFollowUpQuarantine(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const id = getString(row, 'id');
+    const reason = getString(row, 'reason');
+    const rawEntry = getOptionalString(row, 'raw_entry');
+    const quarantinedAt = getString(row, 'quarantined_at');
+    if (!id || !reason || rawEntry === null || !quarantinedAt) {
+      skippedRows.push({
+        table: 'intention_pending_follow_up_quarantine',
+        rowId,
+        reason: 'required intention_pending_follow_up_quarantine fields are missing or invalid',
+      });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO intention_pending_follow_up_quarantine (
+        id, follow_up_id, reason, source, raw_entry, quarantined_at
+      ) VALUES ($1,$2,$3,$4,$5,$6)
+      ON CONFLICT (id) DO NOTHING
+    `, [
+      id,
+      getOptionalString(row, 'follow_up_id'),
+      reason,
+      getOptionalString(row, 'source'),
+      rawEntry,
+      quarantinedAt,
+    ]);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertBehavioralPatternEvents(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const id = getString(row, 'id');
+    const contactId = getString(row, 'contact_id');
+    const sourceMessageId = getString(row, 'source_message_id');
+    const strategy = getString(row, 'strategy');
+    const responseExcerpt = getOptionalString(row, 'response_excerpt');
+    const createdAt = getString(row, 'created_at');
+    if (!id || !contactId || !sourceMessageId || !strategy || responseExcerpt === null || !createdAt) {
+      skippedRows.push({
+        table: 'behavioral_pattern_events',
+        rowId,
+        reason: 'required behavioral_pattern_events fields are missing or invalid',
+      });
+      continue;
+    }
+    await client.query(`
+      INSERT INTO behavioral_pattern_events (
+        id, contact_id, source_message_id, strategy, response_excerpt, created_at,
+        outcome_score, outcome_observed_at, outcome_source_message_id, promoted_at, promoted_memory_id
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      ON CONFLICT (id) DO UPDATE SET
+        outcome_score = EXCLUDED.outcome_score,
+        outcome_observed_at = EXCLUDED.outcome_observed_at,
+        outcome_source_message_id = EXCLUDED.outcome_source_message_id,
+        promoted_at = EXCLUDED.promoted_at,
+        promoted_memory_id = EXCLUDED.promoted_memory_id
+    `, [
+      id, contactId, sourceMessageId, strategy, responseExcerpt, createdAt,
+      getNullableNumber(row, 'outcome_score'),
+      getOptionalString(row, 'outcome_observed_at'),
+      getOptionalString(row, 'outcome_source_message_id'),
+      getOptionalString(row, 'promoted_at'),
+      getOptionalString(row, 'promoted_memory_id'),
+    ]);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
+async function upsertReflections(
+  client: PoolClient,
+  rows: readonly SqliteRow[],
+  warnings: SqliteToPostgresMemoryMigrationWarning[],
+  skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
+): Promise<number> {
+  let appliedRows = 0;
+  for (const [index, row] of rows.entries()) {
+    const rowId = rowIdentifier(row, `row:${index}`);
+    const id = getString(row, 'id');
+    const kind = getString(row, 'kind');
+    const occurredAt = getString(row, 'occurred_at');
+    const initiatorSurface = getString(row, 'initiator_surface');
+    const initiatedBy = getString(row, 'initiated_by');
+    const mirroredAt = getString(row, 'mirrored_at');
+    if (!id || !kind || !occurredAt || !initiatorSurface || !initiatedBy || !mirroredAt) {
+      skippedRows.push({ table: 'reflections', rowId, reason: 'required reflections fields are missing or invalid' });
+      continue;
+    }
+    const payload = decodeJsonValue(row.payload_json, null, 'reflections.payload_json');
+    addJsonWarning(warnings, 'reflections', rowId, 'payload_json', payload.warning);
+    if (payload.value === null) {
+      skippedRows.push({ table: 'reflections', rowId, reason: 'reflections.payload_json is missing or malformed' });
+      continue;
+    }
+    const metacognitiveFlags = decodeJsonValue(row.metacognitive_flags_json, [], 'reflections.metacognitive_flags_json');
+    addJsonWarning(warnings, 'reflections', rowId, 'metacognitive_flags_json', metacognitiveFlags.warning);
+    const mutationBefore = decodeJsonValue(row.mutation_before_json, null, 'reflections.mutation_before_json');
+    addJsonWarning(warnings, 'reflections', rowId, 'mutation_before_json', mutationBefore.warning);
+    const mutationAfter = decodeJsonValue(row.mutation_after_json, null, 'reflections.mutation_after_json');
+    addJsonWarning(warnings, 'reflections', rowId, 'mutation_after_json', mutationAfter.warning);
+    const deliberation = decodeJsonValue(row.deliberation_json, null, 'reflections.deliberation_json');
+    addJsonWarning(warnings, 'reflections', rowId, 'deliberation_json', deliberation.warning);
+    const provenanceRefs = decodeJsonValue(
+      row.substrate_provenance_refs_json,
+      [],
+      'reflections.substrate_provenance_refs_json',
+    );
+    addJsonWarning(warnings, 'reflections', rowId, 'substrate_provenance_refs_json', provenanceRefs.warning);
+    await client.query(`
+      INSERT INTO reflections (
+        id, kind, occurred_at, template_id, template_name, execution_source,
+        initiator_surface, initiated_by, reason, channel_id, send_to_discord_effective,
+        mode, internal_state_snapshot_ref, metacognitive_flags, reflection_journal_entry_id,
+        daily_journal_entry_id, process_id, mutation_before, mutation_after, prompt,
+        reflection, deliberation, substrate_boundary, substrate_provenance_refs,
+        payload, mirrored_at
+      ) VALUES (
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15,$16,$17,
+        $18::jsonb,$19::jsonb,$20,$21,$22::jsonb,$23,$24::jsonb,$25::jsonb,$26
+      )
+      ON CONFLICT (id) DO NOTHING
+    `, [
+      id, kind, occurredAt,
+      getOptionalString(row, 'template_id'),
+      getOptionalString(row, 'template_name'),
+      getOptionalString(row, 'execution_source'),
+      initiatorSurface, initiatedBy,
+      getOptionalString(row, 'reason'),
+      getOptionalString(row, 'channel_id'),
+      getBooleanOrNull(row, 'send_to_discord_effective'),
+      getOptionalString(row, 'mode'),
+      getOptionalString(row, 'internal_state_snapshot_ref'),
+      jsonParam(metacognitiveFlags.value),
+      getOptionalString(row, 'reflection_journal_entry_id'),
+      getOptionalString(row, 'daily_journal_entry_id'),
+      getOptionalString(row, 'process_id'),
+      jsonParamOrNull(mutationBefore.value),
+      jsonParamOrNull(mutationAfter.value),
+      getOptionalString(row, 'prompt'),
+      getOptionalString(row, 'reflection'),
+      jsonParamOrNull(deliberation.value),
+      getOptionalString(row, 'substrate_boundary'),
+      jsonParam(provenanceRefs.value),
+      jsonParam(payload.value),
+      mirroredAt,
+    ]);
+    appliedRows += 1;
+  }
+  return appliedRows;
+}
+
 async function applyMigration(
   data: LoadedSqliteData,
   postgresUrl: string,
@@ -1387,7 +2031,12 @@ async function applyMigration(
 
   const pool = createPool(postgresUrl);
   try {
-    await ensureSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
+    await ensureSchema(pool, [
+      ...POSTGRES_MEMORY_MIGRATIONS,
+      ...POSTGRES_CONTACT_MIGRATIONS,
+      ...POSTGRES_INTENTION_MIGRATIONS,
+      ...POSTGRES_REFLECTION_MIGRATIONS,
+    ]);
     await validatePostgresTarget(pool);
     await transaction(pool, async (client) => {
       data.tables.l2_memories.appliedRows = await upsertMemories(
@@ -1445,6 +2094,71 @@ async function applyMigration(
       data.tables.l01_episode_arcs.appliedRows = await upsertEpisodeArcs(
         client,
         data.rows.l01_episode_arcs,
+        data.warnings,
+        data.skippedRows,
+      );
+      data.tables.contacts.appliedRows = await upsertContacts(
+        client,
+        data.rows.contacts,
+        data.warnings,
+        data.skippedRows,
+      );
+      data.tables.contact_channel_ids.appliedRows = await upsertContactChannelIds(
+        client,
+        data.rows.contact_channel_ids,
+        data.skippedRows,
+      );
+      data.tables.contact_channel_activity.appliedRows = await upsertContactChannelActivity(
+        client,
+        data.rows.contact_channel_activity,
+        data.skippedRows,
+      );
+      data.tables.contact_identity_link_verifications.appliedRows = await upsertContactIdentityLinkVerifications(
+        client,
+        data.rows.contact_identity_link_verifications,
+        data.skippedRows,
+      );
+      data.tables.contact_mutation_audit.appliedRows = await upsertContactMutationAudit(
+        client,
+        data.rows.contact_mutation_audit,
+        data.skippedRows,
+      );
+      data.tables.social_graph_entities.appliedRows = await upsertSocialGraphEntities(
+        client,
+        data.rows.social_graph_entities,
+        data.warnings,
+        data.skippedRows,
+      );
+      data.tables.social_relationship_edges.appliedRows = await upsertSocialRelationshipEdges(
+        client,
+        data.rows.social_relationship_edges,
+        data.warnings,
+        data.skippedRows,
+      );
+      data.tables.active_concerns.appliedRows = await upsertActiveConcerns(
+        client,
+        data.rows.active_concerns,
+        data.warnings,
+        data.skippedRows,
+      );
+      data.tables.intention_pending_follow_ups.appliedRows = await upsertIntentionPendingFollowUps(
+        client,
+        data.rows.intention_pending_follow_ups,
+        data.skippedRows,
+      );
+      data.tables.intention_pending_follow_up_quarantine.appliedRows = await upsertIntentionFollowUpQuarantine(
+        client,
+        data.rows.intention_pending_follow_up_quarantine,
+        data.skippedRows,
+      );
+      data.tables.behavioral_pattern_events.appliedRows = await upsertBehavioralPatternEvents(
+        client,
+        data.rows.behavioral_pattern_events,
+        data.skippedRows,
+      );
+      data.tables.reflections.appliedRows = await upsertReflections(
+        client,
+        data.rows.reflections,
         data.warnings,
         data.skippedRows,
       );

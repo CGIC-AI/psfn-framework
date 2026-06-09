@@ -7,6 +7,7 @@ import type {
   ActiveConcernContextProvider,
   ConcernStorePort,
 } from './concern-store-port.js';
+import type { ActiveConcernVAD } from './concerns.js';
 import {
   type PendingFollowUpContextProvider,
 } from './pending-follow-ups.js';
@@ -67,6 +68,7 @@ export interface IntentionAppraisalHooks {
     channelId: string;
     canonicalContactKey?: string;
     sourceMessageId: string;
+    formationVAD?: ActiveConcernVAD;
   }): Promise<void>;
   onIntentionFollowUpDecision(input: {
     decision: IntentionActionDecision;
@@ -152,6 +154,7 @@ export function createIntentionAppraisalHooks(
     onIntentionConcernDecision: async ({
       decision,
       canonicalContactKey,
+      formationVAD,
     }) => {
       if (decision.type !== 'concern') {
         return;
@@ -164,6 +167,7 @@ export function createIntentionAppraisalHooks(
         decision,
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         ...(expiresAt ? { expiresAt } : {}),
+        ...(formationVAD ? { formationVAD } : {}),
       });
     },
     onIntentionFollowUpDecision: async ({

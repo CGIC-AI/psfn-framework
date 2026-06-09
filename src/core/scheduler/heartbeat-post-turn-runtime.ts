@@ -325,6 +325,7 @@ export function wireHeartbeatPostTurnRuntime(
               channelId: resolvedSessionId,
               canonicalContactKey: context.canonicalContactKey,
               sourceMessageId: context.message.id,
+              formationVAD: { ...internalState.emotional.vad },
             });
           }
         }

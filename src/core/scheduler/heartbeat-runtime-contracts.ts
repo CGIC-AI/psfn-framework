@@ -81,6 +81,7 @@ export interface HeartbeatRuntimeOptions {
     channelId: string;
     canonicalContactKey?: string;
     sourceMessageId: string;
+    formationVAD?: { valence: number; arousal: number; dominance: number };
   }) => Promise<void> | void;
   onIntentionFollowUpDecision?: (input: {
     decision: IntentionActionDecision;

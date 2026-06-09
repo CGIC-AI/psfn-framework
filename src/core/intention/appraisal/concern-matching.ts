@@ -1,4 +1,4 @@
-import type { ActiveConcernPriority } from '../concerns.js';
+import type { ActiveConcernPriority, ActiveConcernVAD } from '../concerns.js';
 import type { ConcernStorePort } from '../concern-store-port.js';
 import type {
   ActiveConcernSnapshot,
@@ -79,6 +79,7 @@ export async function createConcernFromDecision(input: {
   decision: IntentionActionDecision;
   contactId?: string;
   expiresAt?: string;
+  formationVAD?: ActiveConcernVAD;
 }): Promise<void> {
   const text = resolveConcernDecisionText(input.decision);
   const matched = await hasRecentlyResolvedSimilarConcern({
@@ -95,6 +96,7 @@ export async function createConcernFromDecision(input: {
     source: 'appraisal',
     ...(input.contactId ? { contactId: input.contactId } : {}),
     ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+    ...(input.formationVAD ? { formationVAD: input.formationVAD } : {}),
   });
 }
 

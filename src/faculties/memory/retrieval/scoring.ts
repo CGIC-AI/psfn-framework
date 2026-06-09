@@ -66,6 +66,17 @@ export function collectSelectedProvenanceRefs(
     refs.add('retrieval:lexical_fallback');
   }
   for (const item of scored) {
+    // The metacognition monitor counts memory-backed evidence by the
+    // `memory:` prefix; without these entries supporting_memories is
+    // structurally zero and confabulation_risk pins at max confidence.
+    if (item.memory.id?.trim()) {
+      refs.add(`memory:${item.memory.id.trim()}`);
+    }
+    for (const link of item.evolutionChain ?? []) {
+      if (link.relation === 'conflicts_with' || link.relation === 'negates') {
+        refs.add(`memory:${link.memory.id}|conflict:${link.relation}`);
+      }
+    }
     if (item.memory.sourceRef.trim()) {
       refs.add(item.memory.sourceRef.trim());
     }

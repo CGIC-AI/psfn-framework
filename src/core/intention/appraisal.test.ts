@@ -604,7 +604,7 @@ describe('intention appraisal action mapping', () => {
       expect(candidates[0]?.runAt).toBe(1_700_000_460_000);
       expect(candidates[1]).toMatchObject({
         kind: 'heartbeat.run_template',
-        payload: { templateId: 'emotional-check' },
+        payload: { templateId: 'daily-review' },
       });
       expect(candidates[2]).toMatchObject({
         kind: INTENTION_REMINDER_ACTION_KIND,

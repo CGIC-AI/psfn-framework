@@ -18,7 +18,8 @@ import {
 } from './cross-channel-continuity-port.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import type { UserContinuityStore } from './continuity.js';
-import type { SessionEntry } from './types.js';
+import type { SessionEntry, SessionEntryRole } from './types.js';
+import { detectInternalOriginForUserAttribution } from './entry-attribution.js';
 import type { SessionSearchHit } from '../../persistence/sessions/transcript-projection-port.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { InternalRoleEnvelopeLedger } from '../internal-role-envelopes/types.js';
@@ -560,6 +561,37 @@ export class SessionManager {
       : turnMetadata;
     const continuityKey = continuityUserId ?? authorId;
 
+    // Authorship integrity guard (charter laws 17/19): internal-origin
+    // messages must never persist as partner speech. The read-time
+    // normalizer already classifies these signatures as system; storing
+    // them as user lets a future consumer or a missed normalization path
+    // present them as the partner talking inside her head.
+    const guardReason = detectInternalOriginForUserAttribution({
+      channelId: resolvedChannelId,
+      content,
+      authorId,
+      authorName,
+      metadata,
+      ...(options.requestId ? { requestId: options.requestId } : {}),
+      ...(options.sourceMessageId ? { sourceMessageId: options.sourceMessageId } : {}),
+    });
+    const entryRole: SessionEntryRole = guardReason ? 'system' : 'user';
+    if (guardReason) {
+      log.warn('Authorship guard re-tagged internal-origin message submitted as user speech', {
+        channelId: resolvedChannelId,
+        reason: guardReason,
+        authorId,
+        authorName,
+      });
+      void this.eventBus?.emit('session.authorship_guard.retagged', {
+        channelId: resolvedChannelId,
+        reason: guardReason,
+        authorId,
+        authorName,
+        timestamp,
+      });
+    }
+
     if (!shouldPersistSessionChannel(resolvedChannelId)) {
       if (
         continuityKey
@@ -569,7 +601,7 @@ export class SessionManager {
           continuityUserId: continuityKey,
           entry: {
             channelId: resolvedChannelId,
-            role: 'user',
+            role: entryRole,
             content,
             authorId,
             authorName,
@@ -585,7 +617,7 @@ export class SessionManager {
 
     const entryId = this.store.append({
       channelId: resolvedChannelId,
-      role: 'user',
+      role: entryRole,
       content,
       authorId,
       authorName,
@@ -599,7 +631,7 @@ export class SessionManager {
         continuityUserId: continuityKey,
         entry: {
           channelId: resolvedChannelId,
-          role: 'user',
+          role: entryRole,
           content,
           authorId,
           authorName,
@@ -611,17 +643,19 @@ export class SessionManager {
       });
     }
 
-    this.mirrorMessageToActiveSessions({
-      continuityKey,
-      sourceChannelId: resolvedChannelId,
-      sourceVisibility: channelVisibility,
-      sourceRole: 'user',
-      sourceAuthorName: authorName,
-      content,
-      trustLevel: options.trustLevel ?? 'regular',
-      timestamp,
-      mirrorEnabled: options.mirror !== false,
-    });
+    if (!guardReason) {
+      this.mirrorMessageToActiveSessions({
+        continuityKey,
+        sourceChannelId: resolvedChannelId,
+        sourceVisibility: channelVisibility,
+        sourceRole: 'user',
+        sourceAuthorName: authorName,
+        content,
+        trustLevel: options.trustLevel ?? 'regular',
+        timestamp,
+        mirrorEnabled: options.mirror !== false,
+      });
+    }
     return entryId;
   }
 

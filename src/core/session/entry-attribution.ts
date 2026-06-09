@@ -175,6 +175,44 @@ export function normalizeSessionEntryAttribution(
   };
 }
 
+/**
+ * Write-time authorship integrity detector (charter laws 17/19, section 8.2).
+ *
+ * The read-time normalizer above re-tags known internal signatures when
+ * building context, but that alone lets a mistagged entry persist as partner
+ * speech and regress whenever a new internal system forgets its provenance.
+ * This detector lets the session manager refuse user attribution for
+ * internal-origin entries at append time, so internal messages can never be
+ * stored as if the partner authored them.
+ */
+export function detectInternalOriginForUserAttribution(
+  entry: Pick<SessionEntry, 'content' | 'authorId' | 'authorName' | 'metadata' | 'channelId'>
+    & Partial<ParsedTurnMetadata>,
+): string | null {
+  const authorId = entry.authorId?.trim() ?? '';
+  if (authorId === 'scheduler') return 'scheduler_author';
+  if (authorId.startsWith('system:')) return 'system_author_prefix';
+  if (authorId.startsWith('internal:')) return 'internal_author_prefix';
+
+  if (isIntentionAppraisalArtifact(entry)) return 'intention_appraisal_artifact';
+
+  const parsedTurn = parseTurnMetadata(entry.metadata);
+  const requestId = typeof entry.requestId === 'string' && entry.requestId.trim().length > 0
+    ? entry.requestId.trim()
+    : parsedTurn.requestId;
+  const sourceMessageId = typeof entry.sourceMessageId === 'string' && entry.sourceMessageId.trim().length > 0
+    ? entry.sourceMessageId.trim()
+    : parsedTurn.sourceMessageId;
+  if (
+    entry.channelId.startsWith('internal:')
+    && (startsWithReflectionRequest(requestId) || startsWithReflectionRequest(sourceMessageId))
+  ) {
+    return 'internal_reflection_request';
+  }
+
+  return null;
+}
+
 export function formatAttributedSystemContent(content: string, authorName?: string): string {
   const trimmed = content.trim();
   if (!trimmed) return content;

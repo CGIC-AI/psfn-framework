@@ -338,6 +338,13 @@ export interface EventMap {
   };
   'session.created': { channelId: string };
   'session.compacted': { channelId: string; before: number; after: number };
+  'session.authorship_guard.retagged': {
+    channelId: string;
+    reason: string;
+    authorId: string;
+    authorName: string;
+    timestamp: number;
+  };
   'schedule.tick': { timestamp: number };
   'schedule.task.run': { taskId: string; taskName: string; type: string } & EventCorrelationFields;
   'schedule.task.denied': {

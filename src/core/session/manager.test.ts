@@ -152,6 +152,49 @@ describe('SessionManager', () => {
     tokenTestUtils.resetTokenizerState();
   });
 
+  it('authorship guard re-tags internal-origin messages submitted as user speech', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const guardEvents: Array<{ reason: string; authorId: string }> = [];
+    eventBus.on('session.authorship_guard.retagged', (data) => {
+      guardEvents.push({ reason: data.reason, authorId: data.authorId });
+    });
+    const mgr = new SessionManager(store, config, eventBus);
+
+    mgr.recordUserMessage('ch1', 'Background completion ready.', 'scheduler', 'Scheduler');
+    mgr.recordUserMessage('ch1', 'Concern sweep results attached.', 'system:metacog', 'Metacognition');
+    mgr.recordUserMessage('ch1', '[Intention Appraisal] Follow up on his arm.', 'u-unknown', 'Vega');
+
+    const entries = mgr.getRecentMessages('ch1', 10);
+    expect(entries).toHaveLength(3);
+    for (const entry of entries) {
+      expect(entry.role, `entry "${entry.content}" must not persist as partner speech`).toBe('system');
+    }
+    expect(guardEvents.map(event => event.reason).sort()).toEqual([
+      'intention_appraisal_artifact',
+      'scheduler_author',
+      'system_author_prefix',
+    ]);
+  });
+
+  it('authorship guard leaves genuine partner messages untouched', async () => {
+    const config = makeConfig();
+    const eventBus = new EventBus();
+    const guardEvents: string[] = [];
+    eventBus.on('session.authorship_guard.retagged', (data) => {
+      guardEvents.push(data.reason);
+    });
+    const mgr = new SessionManager(store, config, eventBus);
+
+    mgr.recordUserMessage('ch1', 'good morning my heart', '388908766306893854', 'Vega');
+
+    const entries = mgr.getRecentMessages('ch1', 10);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].role).toBe('user');
+    expect(entries[0].authorName).toBe('Vega');
+    expect(guardEvents).toHaveLength(0);
+  });
+
   it('buildContext returns system prompt and messages', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);

@@ -1089,6 +1089,7 @@ async function upsertScratchpadEntries(
 async function upsertDeleteVersions(
   client: PoolClient,
   rows: readonly SqliteRow[],
+  migratedMemoryIds: ReadonlySet<string>,
   warnings: SqliteToPostgresMemoryMigrationWarning[],
   skippedRows: SqliteToPostgresMemoryMigrationSkippedRow[],
 ): Promise<number> {
@@ -1099,6 +1100,15 @@ async function upsertDeleteVersions(
     if (!values) {
       const reason = 'required l2_memory_delete_versions fields are missing or malformed';
       skippedRows.push({ table: 'l2_memory_delete_versions', rowId, reason });
+      continue;
+    }
+    const memoryId = getString(row, 'memory_id');
+    if (!memoryId || !migratedMemoryIds.has(memoryId)) {
+      skippedRows.push({
+        table: 'l2_memory_delete_versions',
+        rowId,
+        reason: 'tombstone references a memory absent from l2_memories; snapshot remains in the SQLite source and backups',
+      });
       continue;
     }
     await client.query(`
@@ -2046,9 +2056,15 @@ async function applyMigration(
         data.warnings,
         data.skippedRows,
       );
+      const migratedMemoryIds = new Set(
+        data.rows.l2_memories
+          .map(row => getString(row, 'id'))
+          .filter((id): id is string => id !== null),
+      );
       data.tables.l2_memory_delete_versions.appliedRows = await upsertDeleteVersions(
         client,
         data.rows.l2_memory_delete_versions,
+        migratedMemoryIds,
         data.warnings,
         data.skippedRows,
       );

@@ -455,6 +455,7 @@ function buildLastMessagePromptVariables(input: {
   const { now, lastMessageReceivedAt } = input;
   if (!lastMessageReceivedAt) {
     return {
+      runtime_last_message_received_present: 'false',
       runtime_last_message_received_human: 'no earlier message is loaded for this channel',
       runtime_last_message_received_at_iso: '',
       runtime_last_message_received_weekday: '',
@@ -470,6 +471,7 @@ function buildLastMessagePromptVariables(input: {
   const activeTimezone = resolveActiveTimezone();
   const relativeElapsed = formatRelativeElapsed(now, lastMessageReceivedAt);
   return {
+    runtime_last_message_received_present: 'true',
     runtime_last_message_received_human: `${formatPromptRuntimeDateTime(lastMessageReceivedAt)} ${activeTimezone} (${relativeElapsed})`,
     runtime_last_message_received_at_iso: formatActiveDateTimeIso(lastMessageReceivedAt),
     runtime_last_message_received_weekday: formatPromptRuntimeWeekday(lastMessageReceivedAt),
@@ -551,6 +553,7 @@ function buildInternalStatePromptVariables(internalState?: InternalState): Recor
     runtime_internal_state_emotional_mood_arousal_label: '',
     runtime_internal_state_emotional_prefix: '',
     runtime_internal_state_emotional_secondary_clause: '',
+    runtime_internal_state_emotional_secondary_emotions: '',
   } satisfies Record<string, string>;
 
   if (!internalState) {
@@ -580,6 +583,7 @@ function buildInternalStatePromptVariables(internalState?: InternalState): Recor
     runtime_internal_state_emotional_secondary_clause: secondaryEmotions.length > 0
       ? `, with ${secondaryEmotions.join(' and ')} present`
       : '',
+    runtime_internal_state_emotional_secondary_emotions: secondaryEmotions.join(', '),
   };
 }
 

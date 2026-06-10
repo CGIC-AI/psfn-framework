@@ -189,6 +189,7 @@ const RUNTIME_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_ago}}', 'Relative time since the most recent pre-turn message.', '16 minutes ago'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_days_hours}}', 'Approximate elapsed time since the most recent pre-turn message in day/hour form.', '2 days 3 hours'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_missing_notice}}', 'Fallback note when no earlier message is loaded for the current channel.', 'No earlier message is loaded for this channel.'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_present}}', 'Whether an earlier message is loaded for the current channel (bare boolean for custom phrasing).', 'true'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_internal_turn_kind}}', 'Internal task kind for heartbeat/reflection/planning/maintenance turns when applicable.', 'reflection'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_speaking_with_name}}', 'Resolved speaking-partner display name for user-facing turns.', 'Vega'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_speaking_with_trust_level}}', 'Trust level for the current speaking partner when the turn is user-facing.', 'trusted'),
@@ -271,6 +272,7 @@ const INTERNAL_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_emotional_mood_arousal_label}}', 'Mood arousal label from the current internal emotional state.', 'calm'),
   createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_emotional_prefix}}', 'Optional prose prefix when secondary emotions are present.', 'mostly '),
   createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_emotional_secondary_clause}}', 'Optional prose clause describing secondary emotions.', ', with hopeful and curious secondary emotions present'),
+  createPromptRuntimeMacroHint('internal_state', '{{runtime_internal_state_emotional_secondary_emotions}}', 'Bare comma-separated secondary emotion names for custom phrasing.', 'hopeful, curious'),
 ];
 
 const ATTENTION_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [

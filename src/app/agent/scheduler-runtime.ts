@@ -1,6 +1,10 @@
 import type Database from 'better-sqlite3';
 import type { BackupRuntimeConfig } from '../../persistence/backups/config.js';
-import { registerScheduledBackupTask } from '../../persistence/backups/service.js';
+import {
+  SCHEDULED_BACKUP_TASK_ID,
+  SCHEDULED_BACKUP_TASK_NAME,
+  registerScheduledBackupTask,
+} from '../../persistence/backups/service.js';
 import { wirePostTurnActionRuntime } from '../startup/composition/post-turn-actions.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
@@ -93,31 +97,45 @@ export function buildAgentSchedulerRuntime(
     state: 'idle',
   });
 
-  if (options.db) {
-    registerScheduledBackupTask({
-      scheduler,
-      db: options.db,
-      databasePath: options.config.databasePath,
-      sessionsDir: resolveSessionsDir(options.pathSnapshot.companionDataDir),
-      memoriesJournalPath: resolveMemoryJournalPath(options.pathSnapshot.companionDataDir),
-      characterCardPath: options.config.characterCardPath,
-      characterCardHistoryPath: resolveCharacterCardHistoryPath(options.pathSnapshot.companionDataDir),
-      config: options.backupConfig,
-    });
-    log.info('Scheduled backups enabled', {
-      intervalMs: options.backupConfig.intervalMs,
-      maxRotatingBackups: options.backupConfig.maxRotatingBackups,
-      maxWeeklyBackups: options.backupConfig.maxWeeklyBackups,
-      maxMonthlyBackups: options.backupConfig.maxMonthlyBackups,
-      backupRootDir: options.backupConfig.rootDir,
-      mirrorDir: options.backupConfig.mirrorDir || '(none)',
-      verifyRestore: options.backupConfig.verifyRestore,
-    });
-  } else {
-    log.info('Scheduled SQLite backup task disabled for configured persistence backend', {
-      persistenceBackend: options.config.persistenceBackend,
-    });
+  const postgresDatabaseUrl = options.config.postgresDatabaseUrl?.trim() || '';
+  if (!options.db && !postgresDatabaseUrl) {
+    throw new Error(
+      'Scheduled backups require a SQLite handle or config.postgresDatabaseUrl — refusing to run without a database backup source',
+    );
   }
+  registerScheduledBackupTask({
+    scheduler,
+    ...(options.db
+      ? { db: options.db, databasePath: options.config.databasePath }
+      : {}),
+    ...(postgresDatabaseUrl
+      ? { postgres: { databaseUrl: postgresDatabaseUrl } }
+      : {}),
+    sessionsDir: resolveSessionsDir(options.pathSnapshot.companionDataDir),
+    memoriesJournalPath: resolveMemoryJournalPath(options.pathSnapshot.companionDataDir),
+    characterCardPath: options.config.characterCardPath,
+    characterCardHistoryPath: resolveCharacterCardHistoryPath(options.pathSnapshot.companionDataDir),
+    config: options.backupConfig,
+    onBackupFailure: (error) => {
+      void options.eventBus.emit('backup.failed', {
+        taskId: SCHEDULED_BACKUP_TASK_ID,
+        taskName: SCHEDULED_BACKUP_TASK_NAME,
+        error: error instanceof Error ? error.message : String(error),
+        timestamp: Date.now(),
+      });
+    },
+  });
+  log.info('Scheduled backups enabled', {
+    intervalMs: options.backupConfig.intervalMs,
+    sqliteSource: Boolean(options.db),
+    postgresSource: Boolean(postgresDatabaseUrl),
+    maxRotatingBackups: options.backupConfig.maxRotatingBackups,
+    maxWeeklyBackups: options.backupConfig.maxWeeklyBackups,
+    maxMonthlyBackups: options.backupConfig.maxMonthlyBackups,
+    backupRootDir: options.backupConfig.rootDir,
+    mirrorDir: options.backupConfig.mirrorDir || '(none)',
+    verifyRestore: options.backupConfig.verifyRestore,
+  });
 
   scheduler.registerHeartbeat(async () => {
     const now = Date.now();

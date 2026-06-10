@@ -1,7 +1,10 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { ensureRepositoryBackupRestoreFixture } from './backup-restore-fixture.js';
-import { verifyBackupRestore } from '../src/persistence/backups/service.js';
+import {
+  verifyBackupRestore,
+  verifyPostgresDumpArchive,
+} from '../src/persistence/backups/service.js';
 
 interface CliArgs {
   backupRootDir?: string;
@@ -95,7 +98,12 @@ function resolveLatestBackupDir(backupRootDir: string): string {
   return join(backupRootDir, candidates[candidates.length - 1]);
 }
 
-function resolveDatabaseSnapshotPath(backupDir: string): string {
+interface DatabaseSnapshotPaths {
+  sqlitePath?: string;
+  postgresDumpPath?: string;
+}
+
+function resolveDatabaseSnapshotPaths(backupDir: string): DatabaseSnapshotPaths {
   const databaseDir = join(backupDir, 'database');
   if (!existsSync(databaseDir)) {
     throw new Error(`Backup database directory missing: ${databaseDir}`);
@@ -110,7 +118,12 @@ function resolveDatabaseSnapshotPath(backupDir: string): string {
     throw new Error(`No database snapshot file found in ${databaseDir}`);
   }
 
-  return join(databaseDir, candidates[0]);
+  const postgresDump = candidates.find(name => name.endsWith('.dump'));
+  const sqliteSnapshot = candidates.find(name => !name.endsWith('.dump'));
+  return {
+    ...(sqliteSnapshot ? { sqlitePath: join(databaseDir, sqliteSnapshot) } : {}),
+    ...(postgresDump ? { postgresDumpPath: join(databaseDir, postgresDump) } : {}),
+  };
 }
 
 function listSessionSnapshotFiles(sessionSnapshotDir: string): string[] {
@@ -123,38 +136,52 @@ function listSessionSnapshotFiles(sessionSnapshotDir: string): string[] {
     .sort((a, b) => a.localeCompare(b));
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const backupRootDir = args.backupDir ? undefined : resolveDefaultBackupRootDir(args);
   const backupDir = resolve(args.backupDir ?? resolveLatestBackupDir(backupRootDir!));
-  const databaseBackupPath = resolveDatabaseSnapshotPath(backupDir);
+  const { sqlitePath, postgresDumpPath } = resolveDatabaseSnapshotPaths(backupDir);
   const sessionSnapshotDir = join(backupDir, 'sessions');
   const expectedSessionFiles = listSessionSnapshotFiles(sessionSnapshotDir);
 
-  const verification = verifyBackupRestore({
-    databaseBackupPath,
-    sessionSnapshotDir,
-    expectedSessionFiles,
-    restoreScratchRootDir: args.restoreScratchRootDir ? resolve(args.restoreScratchRootDir) : undefined,
-    cleanupRestoreDir: !args.keepRestoreDir,
-  });
+  const sqliteVerification = sqlitePath
+    ? verifyBackupRestore({
+      databaseBackupPath: sqlitePath,
+      sessionSnapshotDir,
+      expectedSessionFiles,
+      restoreScratchRootDir: args.restoreScratchRootDir ? resolve(args.restoreScratchRootDir) : undefined,
+      cleanupRestoreDir: !args.keepRestoreDir,
+    })
+    : undefined;
+
+  const postgresDumpVerification = postgresDumpPath
+    ? await verifyPostgresDumpArchive(postgresDumpPath)
+    : undefined;
 
   console.log(JSON.stringify({
     backupDir,
-    databaseBackupPath,
     sessionSnapshotDir,
     expectedSessionFiles: expectedSessionFiles.length,
     verified: true,
-    integrityDetails: verification.integrityDetails,
-    restoreDir: verification.restoreDir,
-    cleanupRestoreDir: verification.cleanupRestoreDir,
+    ...(sqlitePath
+      ? {
+        databaseBackupPath: sqlitePath,
+        integrityDetails: sqliteVerification?.integrityDetails,
+        restoreDir: sqliteVerification?.restoreDir,
+        cleanupRestoreDir: sqliteVerification?.cleanupRestoreDir,
+      }
+      : {}),
+    ...(postgresDumpPath
+      ? {
+        postgresDumpPath,
+        postgresDumpTocEntries: postgresDumpVerification?.tocEntryCount,
+      }
+      : {}),
   }, null, 2));
 }
 
-try {
-  main();
-} catch (error) {
+main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`[verify-backup-restore] ${message}`);
   process.exit(1);
-}
+});

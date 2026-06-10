@@ -89,6 +89,9 @@ Operational rules:
 ## Backups And Integrity
 
 - Backup cadence and retention live in `backup.json` and `scheduler.json`.
+- Under the PostgreSQL runtime backend the scheduled backup captures a `pg_dump` custom-format archive (requires `pg_dump`/`pg_restore` on PATH) plus session JSONL, memory journal, and character-card files; the scheduler refuses to start without a database backup source.
+- Backup verification checks the dump archive table of contents via `pg_restore --list`; full restore-into-scratch-database fidelity verification is tracked separately.
+- A failed scheduled backup logs an error and emits a `backup.failed` event on the runtime event bus.
 - Startup skips SQLite integrity checks for the PostgreSQL runtime backend.
 - Embedding-dimension mismatches are surfaced at startup.
 - Use this verification when backup behavior changes:

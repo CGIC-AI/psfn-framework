@@ -795,7 +795,7 @@ export const POSTGRES_PARITY_MATRIX = [
     id: 'backup-service',
     category: 'operations',
     title: 'Backup and restore verification',
-    status: 'missing',
+    status: 'partial',
     cutoverAction: 'add_postgres_adapter',
     sqliteSourceArtifacts: [
       'BetterSqlite3 backup() snapshot of companion.db',
@@ -804,8 +804,9 @@ export const POSTGRES_PARITY_MATRIX = [
       'optional memory journal and character-card files',
     ],
     postgresDestinationArtifacts: [
-      'Missing: Postgres backup/export path or documented external backup contract',
-      'Missing: Postgres restore verification checks',
+      'pg_dump custom-format archive captured by runBackupCycle when Postgres dump config is provided',
+      'pg_restore --list table-of-contents verification of the captured archive',
+      'Missing: full restore-into-scratch-database fidelity verification (schema, vectors, row counts, semantic queries)',
     ],
     codeReferences: [
       'src/persistence/backups/service.ts',
@@ -833,9 +834,8 @@ export const POSTGRES_PARITY_MATRIX = [
       ],
     },
     gaps: [
-      'runBackupCycle requires a SQLite db handle and uses db.backup().',
-      'verifyBackupRestore opens restored database with BetterSqlite3 and PRAGMA integrity_check.',
-      'Agent scheduler disables scheduled SQLite backup task for non-sqlite persistence without replacing database backup coverage.',
+      'Postgres dump verification is archive-level (pg_restore --list); restore-into-scratch-database fidelity checks are not yet implemented.',
+      'Companion file tree coverage (journals, generated media, vault notes, scratchpad) is incomplete in the snapshot set.',
     ],
   },
   {

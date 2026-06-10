@@ -1,5 +1,6 @@
 import BetterSqlite3 from 'better-sqlite3';
 import type Database from 'better-sqlite3';
+import { execFile } from 'node:child_process';
 import {
   copyFileSync,
   cpSync,
@@ -8,9 +9,11 @@ import {
   mkdirSync,
   readdirSync,
   rmSync,
+  statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { promisify } from 'node:util';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { BackupRuntimeConfig } from './config.js';
@@ -18,13 +21,25 @@ import { runDatabaseIntegrityCheck } from './startup-checks.js';
 import { applyTieredRetention, type TieredRetentionResult } from './retention.js';
 
 const log = createComponentLogger('BackupService');
+const execFileAsync = promisify(execFile);
+const PG_RESTORE_LIST_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 export const SCHEDULED_BACKUP_TASK_ID = 'scheduled-backup';
-export const SCHEDULED_BACKUP_TASK_NAME = 'Session + SQLite backup';
+export const SCHEDULED_BACKUP_TASK_NAME = 'Session + database backup';
+
+export interface BackupPostgresOptions {
+  databaseUrl: string;
+  /** Override the pg_dump binary (defaults to `pg_dump` on PATH). */
+  pgDumpBinary?: string;
+  /** Override the pg_restore binary used for dump verification (defaults to `pg_restore` on PATH). */
+  pgRestoreBinary?: string;
+}
 
 export interface BackupRunOptions {
-  db: Database.Database;
-  databasePath: string;
+  db?: Database.Database | null;
+  databasePath?: string;
+  /** When set, a pg_dump custom-format archive of this database is captured. */
+  postgres?: BackupPostgresOptions;
   sessionsDir: string;
   backupRootDir: string;
   /** @deprecated Use maxRotatingBackups */
@@ -61,27 +76,39 @@ export interface BackupRestoreVerificationResult {
   cleanupRestoreDir: boolean;
 }
 
+export interface PostgresDumpVerificationResult {
+  dumpPath: string;
+  tocEntryCount: number;
+}
+
 export interface BackupRunResult {
   backupDir: string;
-  databaseBackupPath: string;
+  /** Present when a SQLite database was captured. */
+  databaseBackupPath?: string;
+  /** Present when a Postgres pg_dump archive was captured. */
+  postgresDumpPath?: string;
   sessionSnapshotDir: string;
   copiedSessionFiles: string[];
   prunedBackupDirs: string[];
   restoreVerification?: BackupRestoreVerificationResult;
+  postgresDumpVerification?: PostgresDumpVerificationResult;
   tieredRetention?: TieredRetentionResult;
   mirrorDir?: string;
 }
 
 export interface RegisterScheduledBackupTaskOptions {
   scheduler: Scheduler;
-  db: Database.Database;
-  databasePath: string;
+  db?: Database.Database | null;
+  databasePath?: string;
+  postgres?: BackupPostgresOptions;
   sessionsDir: string;
   memoriesJournalPath?: string;
   characterCardPath?: string;
   characterCardHistoryPath?: string;
   config: BackupRuntimeConfig;
   skipFirstRun?: boolean;
+  /** Invoked when a scheduled backup cycle fails, so the runtime can surface the failure. */
+  onBackupFailure?: (error: unknown) => void;
 }
 
 function formatTimestamp(timestampMs: number): string {
@@ -130,6 +157,83 @@ function mirrorBackupToDir(backupDir: string, mirrorRootDir: string): void {
   const mirrorTarget = join(mirrorRootDir, dirName);
   mkdirSync(mirrorTarget, { recursive: true });
   cpSync(backupDir, mirrorTarget, { recursive: true, force: true });
+}
+
+function describeExecError(error: unknown): string {
+  if (error && typeof error === 'object') {
+    const execError = error as NodeJS.ErrnoException & { stderr?: string };
+    if (execError.code === 'ENOENT') {
+      return `binary not found (${execError.message})`;
+    }
+    const stderr = typeof execError.stderr === 'string' ? execError.stderr.trim() : '';
+    if (stderr) {
+      return `${execError.message}: ${stderr}`;
+    }
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+function postgresDumpFileName(databaseUrl: string): string {
+  try {
+    const databaseName = new URL(databaseUrl).pathname.replace(/^\//, '').trim();
+    if (databaseName) {
+      return `${databaseName.replace(/[^A-Za-z0-9._-]+/g, '-')}.dump`;
+    }
+  } catch {
+    // Fall through to the generic name for non-URL connection strings.
+  }
+  return 'postgres.dump';
+}
+
+async function dumpPostgresDatabase(
+  postgres: BackupPostgresOptions,
+  databaseDir: string,
+): Promise<string> {
+  const binary = postgres.pgDumpBinary?.trim() || 'pg_dump';
+  const dumpPath = join(databaseDir, postgresDumpFileName(postgres.databaseUrl));
+  mkdirSync(databaseDir, { recursive: true });
+  try {
+    await execFileAsync(binary, [
+      '--format=custom',
+      '--no-password',
+      `--file=${dumpPath}`,
+      postgres.databaseUrl,
+    ]);
+  } catch (error) {
+    throw new Error(`pg_dump failed: ${describeExecError(error)}`);
+  }
+  if (!existsSync(dumpPath) || statSync(dumpPath).size === 0) {
+    throw new Error(`pg_dump produced no archive at ${dumpPath}`);
+  }
+  return dumpPath;
+}
+
+/**
+ * Validates that a pg_dump custom-format archive is readable and non-trivial
+ * by listing its table of contents. Full restore-into-scratch-database
+ * fidelity verification is a separate concern (restore verification tooling).
+ */
+export async function verifyPostgresDumpArchive(
+  dumpPath: string,
+  pgRestoreBinary?: string,
+): Promise<PostgresDumpVerificationResult> {
+  const binary = pgRestoreBinary?.trim() || 'pg_restore';
+  let stdout: string;
+  try {
+    ({ stdout } = await execFileAsync(binary, ['--list', dumpPath], {
+      maxBuffer: PG_RESTORE_LIST_MAX_BUFFER_BYTES,
+    }));
+  } catch (error) {
+    throw new Error(`pg_restore --list failed for ${dumpPath}: ${describeExecError(error)}`);
+  }
+  const tocEntryCount = stdout
+    .split('\n')
+    .filter(line => /^\d+;/.test(line.trim()))
+    .length;
+  if (tocEntryCount === 0) {
+    throw new Error(`Postgres dump archive has no table-of-contents entries: ${dumpPath}`);
+  }
+  return { dumpPath, tocEntryCount };
 }
 
 export function verifyBackupRestore(
@@ -196,18 +300,33 @@ export function verifyBackupRestore(
 export async function runBackupCycle(
   options: BackupRunOptions,
 ): Promise<BackupRunResult> {
+  const sqliteDb = options.db ?? null;
+  if (sqliteDb && !options.databasePath?.trim()) {
+    throw new Error('Backup with a SQLite handle requires databasePath');
+  }
+  if (!sqliteDb && !options.postgres) {
+    throw new Error('Backup requires a SQLite database handle or Postgres dump configuration — refusing to capture a database-less backup');
+  }
+
   const now = options.now ?? (() => Date.now());
   const timestamp = formatTimestamp(now());
   const backupDir = join(options.backupRootDir, timestamp);
-  const databaseBackupPath = join(
-    backupDir,
-    'database',
-    basename(options.databasePath),
-  );
+  const databaseDir = join(backupDir, 'database');
   const sessionSnapshotDir = join(backupDir, 'sessions');
 
-  mkdirSync(join(backupDir, 'database'), { recursive: true });
-  await options.db.backup(databaseBackupPath);
+  mkdirSync(databaseDir, { recursive: true });
+
+  let databaseBackupPath: string | undefined;
+  if (sqliteDb) {
+    databaseBackupPath = join(databaseDir, basename(options.databasePath!.trim()));
+    await sqliteDb.backup(databaseBackupPath);
+  }
+
+  let postgresDumpPath: string | undefined;
+  if (options.postgres) {
+    postgresDumpPath = await dumpPostgresDatabase(options.postgres, databaseDir);
+  }
+
   const copiedSessionFiles = copySessionSnapshotFiles(
     options.sessionsDir,
     sessionSnapshotDir,
@@ -261,7 +380,7 @@ export async function runBackupCycle(
     }
   }
 
-  const restoreVerification = options.verifyRestore
+  const restoreVerification = options.verifyRestore && databaseBackupPath
     ? verifyBackupRestore({
       databaseBackupPath,
       sessionSnapshotDir,
@@ -270,13 +389,19 @@ export async function runBackupCycle(
     })
     : undefined;
 
+  const postgresDumpVerification = options.verifyRestore && postgresDumpPath
+    ? await verifyPostgresDumpArchive(postgresDumpPath, options.postgres?.pgRestoreBinary)
+    : undefined;
+
   return {
     backupDir,
     databaseBackupPath,
+    postgresDumpPath,
     sessionSnapshotDir,
     copiedSessionFiles,
     prunedBackupDirs: tieredRetention.prunedBackupDirs,
     restoreVerification,
+    postgresDumpVerification,
     tieredRetention,
     mirrorDir,
   };
@@ -285,6 +410,10 @@ export async function runBackupCycle(
 export function registerScheduledBackupTask(
   options: RegisterScheduledBackupTaskOptions,
 ): void {
+  if (!options.db && !options.postgres) {
+    throw new Error('Scheduled backups require a SQLite database handle or Postgres dump configuration');
+  }
+
   options.scheduler.register(
     {
       id: SCHEDULED_BACKUP_TASK_ID,
@@ -292,23 +421,35 @@ export function registerScheduledBackupTask(
       type: 'every',
       intervalMs: options.config.intervalMs,
       handler: async () => {
-        const result = await runBackupCycle({
-          db: options.db,
-          databasePath: options.databasePath,
-          sessionsDir: options.sessionsDir,
-          memoriesJournalPath: options.memoriesJournalPath,
-          characterCardPath: options.characterCardPath,
-          characterCardHistoryPath: options.characterCardHistoryPath,
-          backupRootDir: options.config.rootDir,
-          maxRotatingBackups: options.config.maxRotatingBackups,
-          maxWeeklyBackups: options.config.maxWeeklyBackups,
-          maxMonthlyBackups: options.config.maxMonthlyBackups,
-          mirrorDir: options.config.mirrorDir,
-          verifyRestore: options.config.verifyRestore,
-        });
+        let result: BackupRunResult;
+        try {
+          result = await runBackupCycle({
+            db: options.db,
+            databasePath: options.databasePath,
+            postgres: options.postgres,
+            sessionsDir: options.sessionsDir,
+            memoriesJournalPath: options.memoriesJournalPath,
+            characterCardPath: options.characterCardPath,
+            characterCardHistoryPath: options.characterCardHistoryPath,
+            backupRootDir: options.config.rootDir,
+            maxRotatingBackups: options.config.maxRotatingBackups,
+            maxWeeklyBackups: options.config.maxWeeklyBackups,
+            maxMonthlyBackups: options.config.maxMonthlyBackups,
+            mirrorDir: options.config.mirrorDir,
+            verifyRestore: options.config.verifyRestore,
+          });
+        } catch (error) {
+          log.error('Scheduled backup failed', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          options.onBackupFailure?.(error);
+          throw error;
+        }
 
         log.info('Scheduled backup completed', {
           backupDir: result.backupDir,
+          sqliteCaptured: Boolean(result.databaseBackupPath),
+          postgresDumpCaptured: Boolean(result.postgresDumpPath),
           copiedSessionFiles: result.copiedSessionFiles.length,
           prunedBackupDirs: result.prunedBackupDirs.length,
           weeklySlots: result.tieredRetention?.weeklyCount,
@@ -316,6 +457,7 @@ export function registerScheduledBackupTask(
           mirrored: Boolean(result.mirrorDir),
           restoreVerified: Boolean(result.restoreVerification),
           restoreIntegrity: result.restoreVerification?.integrityDetails.join('; '),
+          postgresDumpTocEntries: result.postgresDumpVerification?.tocEntryCount,
         });
       },
       state: 'idle',

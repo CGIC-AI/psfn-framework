@@ -27,6 +27,36 @@ function asDb(value: BackupDbLike): Database.Database {
   return value as unknown as Database.Database;
 }
 
+function writeStubPgDump(root: string): string {
+  const stubPath = join(root, 'stub-pg-dump.sh');
+  writeFileSync(
+    stubPath,
+    '#!/bin/sh\nout=""\nfor arg in "$@"; do case "$arg" in --file=*) out="${arg#--file=}";; esac; done\nprintf "stub-dump" > "$out"\n',
+    { mode: 0o755 },
+  );
+  return stubPath;
+}
+
+function writeFailingStubPgDump(root: string): string {
+  const stubPath = join(root, 'stub-pg-dump-fail.sh');
+  writeFileSync(
+    stubPath,
+    '#!/bin/sh\necho "connection to server failed" >&2\nexit 1\n',
+    { mode: 0o755 },
+  );
+  return stubPath;
+}
+
+function writeStubPgRestore(root: string): string {
+  const stubPath = join(root, 'stub-pg-restore.sh');
+  writeFileSync(
+    stubPath,
+    '#!/bin/sh\necho ";"\necho "1; 0 100 TABLE public l2_memories psfn"\necho "2; 0 101 TABLE public reflections psfn"\n',
+    { mode: 0o755 },
+  );
+  return stubPath;
+}
+
 describe('runBackupCycle', () => {
   const roots: string[] = [];
 
@@ -147,6 +177,88 @@ describe('runBackupCycle', () => {
       liveDb.close();
     }
   });
+
+  it('captures a Postgres dump archive without a SQLite handle', async () => {
+    const root = join(tmpdir(), `psfn-backup-pg-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    const backupRootDir = join(root, 'backups');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
+
+    const result = await runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeStubPgDump(root),
+      },
+      sessionsDir,
+      backupRootDir,
+      maxRotatingBackups: 7,
+      maxWeeklyBackups: 0,
+      maxMonthlyBackups: 0,
+      now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
+    });
+
+    expect(result.databaseBackupPath).toBeUndefined();
+    expect(result.postgresDumpPath).toBeDefined();
+    expect(result.postgresDumpPath).toContain(join('database', 'psfn.dump'));
+    expect(existsSync(result.postgresDumpPath!)).toBe(true);
+    expect(result.copiedSessionFiles).toEqual(['channel.jsonl']);
+  });
+
+  it('verifies the Postgres dump archive table of contents when enabled', async () => {
+    const root = join(tmpdir(), `psfn-backup-pg-verify-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    const backupRootDir = join(root, 'backups');
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
+
+    const result = await runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeStubPgDump(root),
+        pgRestoreBinary: writeStubPgRestore(root),
+      },
+      sessionsDir,
+      backupRootDir,
+      verifyRestore: true,
+      now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
+    });
+
+    expect(result.postgresDumpVerification).toBeDefined();
+    expect(result.postgresDumpVerification?.tocEntryCount).toBe(2);
+  });
+
+  it('fails closed when pg_dump fails', async () => {
+    const root = join(tmpdir(), `psfn-backup-pg-fail-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    const backupRootDir = join(root, 'backups');
+    mkdirSync(sessionsDir, { recursive: true });
+
+    await expect(runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeFailingStubPgDump(root),
+      },
+      sessionsDir,
+      backupRootDir,
+      now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
+    })).rejects.toThrow(/pg_dump failed.*connection to server failed/s);
+  });
+
+  it('refuses to run without any database backup source', async () => {
+    const root = join(tmpdir(), `psfn-backup-no-source-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+
+    await expect(runBackupCycle({
+      sessionsDir,
+      backupRootDir: join(root, 'backups'),
+    })).rejects.toThrow('refusing to capture a database-less backup');
+  });
 });
 
 describe('verifyBackupRestore', () => {
@@ -226,5 +338,63 @@ describe('registerScheduledBackupTask', () => {
 
     await scheduler.tick();
     expect(backup).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws at registration when no database backup source is configured', () => {
+    const scheduler = new Scheduler(new EventBus(), {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+
+    expect(() => registerScheduledBackupTask({
+      scheduler,
+      sessionsDir: '/tmp/nowhere',
+      config: {
+        intervalMs: 60_000,
+        maxRotatingBackups: 7,
+        maxWeeklyBackups: 0,
+        maxMonthlyBackups: 0,
+        rootDir: '/tmp/nowhere-backups',
+        mirrorDir: '',
+        verifyRestore: false,
+      },
+    })).toThrow('Scheduled backups require');
+  });
+
+  it('invokes onBackupFailure when a scheduled backup cycle fails', async () => {
+    const root = join(tmpdir(), `psfn-backup-scheduler-fail-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+
+    const scheduler = new Scheduler(new EventBus(), {
+      tickIntervalMs: 100,
+      heartbeatIntervalMs: 1_000,
+    });
+    const onBackupFailure = vi.fn();
+
+    registerScheduledBackupTask({
+      scheduler,
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeFailingStubPgDump(root),
+      },
+      sessionsDir,
+      config: {
+        intervalMs: 60_000,
+        maxRotatingBackups: 7,
+        maxWeeklyBackups: 0,
+        maxMonthlyBackups: 0,
+        rootDir: join(root, 'backups'),
+        mirrorDir: '',
+        verifyRestore: false,
+      },
+      skipFirstRun: false,
+      onBackupFailure,
+    });
+
+    await scheduler.tick();
+    expect(onBackupFailure).toHaveBeenCalledTimes(1);
+    expect(String(onBackupFailure.mock.calls[0]?.[0])).toContain('pg_dump failed');
   });
 });

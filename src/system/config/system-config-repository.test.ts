@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -24,6 +24,14 @@ describe('createOwnerFileConfigStore', () => {
     const dataDir = join(root, 'data');
     mkdirSync(dataDir, { recursive: true });
     tempDirs.push(root);
+    // Owner files must pre-exist: loading fails closed instead of copying
+    // seed templates implicitly, so bootstrap them the documented way.
+    for (const ownerFile of ['settings', 'models', 'providers', 'scheduler', 'capability-tier', 'trust-policy', 'charge-policy', 'backup', 'skills']) {
+      copyFileSync(
+        join(process.cwd(), 'config', `${ownerFile}.seed.json`),
+        join(dataDir, `${ownerFile}.json`),
+      );
+    }
     return dataDir;
   }
 

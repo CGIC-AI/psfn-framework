@@ -65,6 +65,7 @@ function makeMockStore(memories: ScenarioMemory[]): MemoryStore {
     getMemoriesByContact: vi.fn().mockReturnValue([]),
     getMemoriesByChannel: vi.fn().mockReturnValue([]),
     getAllActiveMemories: vi.fn().mockReturnValue(memories),
+    listActiveMemories: vi.fn().mockResolvedValue(memories),
   } as unknown as MemoryStore;
 }
 

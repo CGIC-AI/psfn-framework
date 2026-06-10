@@ -64,31 +64,15 @@ describe('embedding providers', () => {
     vi.unstubAllGlobals();
   });
 
-  it('defaults to the seeded transformers provider when EMBEDDING_PROVIDER is unset', async () => {
+  it('fails closed when EMBEDDING_PROVIDER is unset instead of silently defaulting', () => {
     delete process.env.EMBEDDING_PROVIDER;
     process.env.TRANSFORMERS_MODEL = 'seed-default-transformers';
     process.env.TRANSFORMERS_EMBEDDING_DIMS = '2';
-    const tensorData = new Float32Array([0.1, 0.2]);
-    mockExtractor.mockResolvedValue({
-      data: tensorData,
-      dims: [1, 2],
-    });
-    mockPipeline.mockResolvedValue(mockExtractor);
 
-    const provider = createEmbeddingProviderFromEnv();
-
-    expect(provider.kind).toBe('transformers');
-    expect(provider.dims).toBe(2);
-
-    const embedding = await provider.embed('hello world');
-    expect(embedding).toEqual(new Float32Array([0.1, 0.2]));
-
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(mockPipeline).toHaveBeenCalledWith(
-      'feature-extraction',
-      'seed-default-transformers',
-      expect.objectContaining({ dtype: 'fp32' }),
+    expect(() => createEmbeddingProviderFromEnv()).toThrow(
+      /embeddingProvider is required in settings\.json/,
     );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('OllamaEmbeddingProvider embeds with explicit config', async () => {

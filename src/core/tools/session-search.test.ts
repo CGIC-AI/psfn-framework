@@ -42,15 +42,66 @@ function toolText(result: { content: Array<{ type: string; text: string }> }): s
   return result.content.map(entry => entry.text).join('');
 }
 
+
+class InMemoryTranscriptSearch {
+  private readonly entries: Array<{
+    channelId: string;
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content: string;
+    timestamp: number;
+    channelVisibility: 'private' | 'semi_private' | 'public' | 'broadcast';
+  }> = [];
+
+  record(entry: {
+    channelId: string;
+    role: 'user' | 'assistant' | 'system' | 'tool';
+    content: string;
+    timestamp: number;
+    channelVisibility: 'private' | 'semi_private' | 'public' | 'broadcast';
+  }): void {
+    this.entries.push(entry);
+  }
+
+  async searchByKeywords(query: string, limit = 10) {
+    const needle = query.toLowerCase();
+    return this.entries
+      .filter(entry => entry.content.toLowerCase().includes(needle))
+      .slice(0, limit)
+      .map((entry, index) => ({
+        channelId: entry.channelId,
+        messageId: index + 1,
+        role: entry.role,
+        content: entry.content,
+        timestamp: entry.timestamp,
+        channelVisibility: entry.channelVisibility,
+        score: 1,
+        snippet: entry.content,
+      }));
+  }
+}
+
 describe('session search tools', () => {
   let dir: string;
   let store: SessionStore;
   let manager: SessionManager;
+  let transcriptSearch: InMemoryTranscriptSearch;
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'psfn-session-search-tools-'));
     store = new SessionStore(join(dir, 'sessions'));
-    manager = new SessionManager(store, makeConfig({ dataDir: dir }));
+    transcriptSearch = new InMemoryTranscriptSearch();
+    const originalAppend = store.append.bind(store);
+    store.append = ((entry: Parameters<SessionStore['append']>[0]) => {
+      transcriptSearch.record({
+        channelId: entry.channelId,
+        role: entry.role,
+        content: entry.content,
+        timestamp: entry.timestamp,
+        channelVisibility: entry.channelVisibility,
+      });
+      return originalAppend(entry);
+    }) as SessionStore['append'];
+    manager = new SessionManager(store, makeConfig({ dataDir: dir }), undefined, undefined, transcriptSearch);
   });
 
   afterEach(() => {

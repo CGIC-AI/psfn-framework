@@ -255,8 +255,12 @@ describe('Wyoming config parsing', () => {
     const origEnabled = process.env.WYOMING_ENABLED;
     const origPort = process.env.WYOMING_PORT;
     const origHost = process.env.WYOMING_HOST;
+    const origCompanionId = process.env.COMPANION_ID;
+    const origPostgresUrl = process.env.POSTGRES_DATABASE_URL;
 
     try {
+      process.env.COMPANION_ID = 'companion-test';
+      process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
       // Test default (disabled)
       delete process.env.WYOMING_ENABLED;
       delete process.env.WYOMING_PORT;
@@ -281,6 +285,10 @@ describe('Wyoming config parsing', () => {
       else delete process.env.WYOMING_PORT;
       if (origHost !== undefined) process.env.WYOMING_HOST = origHost;
       else delete process.env.WYOMING_HOST;
+      if (origCompanionId !== undefined) process.env.COMPANION_ID = origCompanionId;
+      else delete process.env.COMPANION_ID;
+      if (origPostgresUrl !== undefined) process.env.POSTGRES_DATABASE_URL = origPostgresUrl;
+      else delete process.env.POSTGRES_DATABASE_URL;
     }
   });
 
@@ -289,8 +297,12 @@ describe('Wyoming config parsing', () => {
 
     const origHost = process.env.WYOMING_HOST;
     const origPort = process.env.WYOMING_PORT;
+    const origCompanionId = process.env.COMPANION_ID;
+    const origPostgresUrl = process.env.POSTGRES_DATABASE_URL;
 
     try {
+      process.env.COMPANION_ID = 'companion-test';
+      process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
       // Default host
       delete process.env.WYOMING_HOST;
       delete process.env.WYOMING_PORT;
@@ -309,6 +321,10 @@ describe('Wyoming config parsing', () => {
       else delete process.env.WYOMING_HOST;
       if (origPort !== undefined) process.env.WYOMING_PORT = origPort;
       else delete process.env.WYOMING_PORT;
+      if (origCompanionId !== undefined) process.env.COMPANION_ID = origCompanionId;
+      else delete process.env.COMPANION_ID;
+      if (origPostgresUrl !== undefined) process.env.POSTGRES_DATABASE_URL = origPostgresUrl;
+      else delete process.env.POSTGRES_DATABASE_URL;
     }
   });
 });

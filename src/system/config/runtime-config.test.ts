@@ -160,6 +160,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
 
     process.env.DATA_DIR = dataDir;
     process.env.COMPANION_ID = 'test-companion';
+    process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
     process.env.CONFIG_DIR = 'config';
     process.env.PRIMARY_MODEL = 'env-primary-should-be-ignored';
     process.env.THINK_MAX_TOKENS = '999999';

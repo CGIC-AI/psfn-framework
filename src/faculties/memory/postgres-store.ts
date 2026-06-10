@@ -448,11 +448,38 @@ export async function createPostgresMemoryStoreFromPool(
   embeddingDims: number,
   options: PostgresMemoryStoreOptions = {},
 ): Promise<MemoryStorePort> {
+  // A pre-existing l2_memories without its embedding column is a broken
+  // schema, not a fresh database; surface the fail-closed guidance before
+  // the idempotent migrations trip over the missing column with a raw
+  // Postgres error.
+  await assertExistingMemorySchemaHasEmbeddingColumn(pool);
   await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
   await validatePostgresMemorySchema(pool);
   const store = new PostgresMemoryStore(pool, embeddingDims, options);
   await store.waitUntilReady();
   return store;
+}
+
+async function assertExistingMemorySchemaHasEmbeddingColumn(pool: Pool): Promise<void> {
+  const tables = await queryRows<MemorySchemaTableRow>(pool, `
+    SELECT table_name
+    FROM information_schema.tables
+    WHERE table_schema = current_schema()
+      AND table_name = 'l2_memories'
+  `);
+  if (tables.length === 0) return;
+  const embeddingColumns = await queryRows<MemorySchemaColumnRow>(pool, `
+    SELECT table_name, column_name, data_type, udt_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'l2_memories'
+      AND column_name = 'embedding'
+  `);
+  if (embeddingColumns.length === 0) {
+    throw new Error(
+      'PostgreSQL memory schema is missing l2_memories.embedding; recreate the memory schema before starting the memory store',
+    );
+  }
 }
 
 async function validatePostgresMemorySchema(pool: Pool): Promise<void> {

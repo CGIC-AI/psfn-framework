@@ -63,6 +63,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 ### Prerequisites
 
 - **Node.js 22+**
+- **PostgreSQL 16+ with the pgvector extension** — runtime persistence (memories, episodes, contacts, intentions) is Postgres-only; startup fails closed without `POSTGRES_DATABASE_URL`
 - **One LLM provider credential** for the provider/model registry you plan to use. The shipped example owner files include OpenRouter, so using those examples usually means `OPENROUTER_API_KEY`.
 - **Discord bot** token and application ID only if you plan to use the Discord channel
 - **Ollama only if you choose the Ollama embedding provider**. PSFN also supports local in-process transformers embeddings.
@@ -92,7 +93,7 @@ OPENROUTER_API_KEY=sk-or-...
 DATA_DIR=./data
 WORKSPACE_PATH=./purrsephone
 CHARACTER_CARD_PATH=./data/companion.json
-DATABASE_PATH=./data/companion.db
+POSTGRES_DATABASE_URL=postgresql://psfn:password@127.0.0.1:5432/psfn
 
 # Production split-root layout (set both or neither)
 # PSFN_RUNTIME_LAYOUT_MODE=production
@@ -260,8 +261,8 @@ Gateway (host)                         Agent (isolated)
 +----------------------------+         +-----------------------------+
 | Discord / Telegram / API   |         | Agent loop                  |
 | LLM and embedding clients  | <-sock-> | Session manager (JSONL L0)  |
-| Provider/API secrets       |         | Memory store (SQLite+vec)   |
-| Gateway policy and SSRF    |         | L0.1 episodic store         |
+| Provider/API secrets       |         | Memory store (Postgres+vec) |
+| Gateway policy and SSRF    |         | L0.1 episodic store (PG)    |
 | Shell/git/fs/vault/beads   |         | Scheduler and reflections   |
 | Audit and charge events    |         | Prompt stack and identity   |
 +----------------------------+         | Trust/contact/runtime tools |
@@ -276,7 +277,7 @@ Operator / Garden (localhost)
 |-------|---------|
 | **Runtime Core** | Bootstrap, agent loop, event bus, shutdown, model roster, token and charge budgeting, editable settings, lifecycle, bidirectional gateway RPC |
 | **Analysis Workbench** | Bounded RLM-style code execution, sub-LM checks, context-as-object, and evidence summaries for large-context tasks |
-| **Memory System** | L0 archive (JSONL sessions), L0.1 episodic episodes/arcs, L2 extraction/retrieval/decay (SQLite+sqlite-vec), 7 memory types, writer, tools |
+| **Memory System** | L0 archive (JSONL sessions), L0.1 episodic episodes/arcs, L2 extraction/retrieval/decay (PostgreSQL + pgvector), 7 memory types, writer, tools |
 | **Trust & Privacy** | Honne/tatemae: 4-tier trust, 4-tier sensitivity, 5-layer policy, contact store, channel visibility, persona adaptation |
 | **Identity & Prompts** | Character card loader, 5-layer prompt stack with versioning/rollback/admin UI/agent tools |
 | **Repository Work** | Unified `repo` surface for inspection and guarded mutation when policy/tier/runtime allow it |
@@ -288,8 +289,8 @@ Operator / Garden (localhost)
 
 - **System owner files**: JSON under the system-data config domain; `settings.json`, `models.json`, `providers.json`, `scheduler.json`, `capability-tier.json`, `trust-policy.json`, `charge-policy.json`, `backup.json`, `skills.json`, and generated `channels.json`
 - **Sessions (L0)**: Append-only JSONL files, one per channel
-- **Episodes (L0.1)**: SQLite-backed episode landmarks and graph arcs with L0 span/artifact provenance
-- **Memories (L2)**: SQLite + sqlite-vec extracted facts, emotions, boundaries, reflections, relational notes, and procedural knowledge with salience decay
+- **Episodes (L0.1)**: PostgreSQL-backed episode landmarks and graph arcs with L0 span/artifact provenance
+- **Memories (L2)**: PostgreSQL + pgvector extracted facts, emotions, boundaries, reflections, relational notes, and procedural knowledge with salience decay
 - **Contacts**: Trust levels, relationship notes, channel identities, and visibility metadata
 - **Prompt layers and identity**: Companion-owned JSON/JSONL state with versioning and rollback
 - **Charge and audit logs**: JSONL ledgers for run charge, Garden/operator audit, gateway decisions, and tool/runtime events
@@ -308,6 +309,7 @@ Skills are reusable workflow guidance, not world-execution tools. The runtime ma
 | **Repository** | `repo action=inspect` in parent read-only mode; mutation actions remain gated and are not the default parent-agent path |
 | **Vault** | `vault action=read|write|search|daily` |
 | **Values** | `orient`, `values_add`, `values_update` |
+| **North Star** | `north_star` for charter/identity anchor review and updates |
 | **Scheduler** | `schedule` with `action=list_templates|update_template|run_template|create_reminder|create_follow_up` |
 | **Beads and lifecycle** | `beads action=ready|show|create|update|close|sync`, `system action=read|restart|rebuild`, `notify action=brief|send|approval_request` |
 | **Media** | `media action=generate|edit|analyze`; dedicated `selfie_create` and legacy image aliases may still be exposed during migration |
@@ -370,7 +372,7 @@ npm run eval:companion-shape:report # Offline companion-shape report from captur
 | Language | TypeScript (strict mode) |
 | Runtime | Node.js 22+ |
 | LLM | [@mariozechner/pi-ai](https://github.com/nickvdyck/pi-ai) + pi-agent-core |
-| Database | better-sqlite3 + sqlite-vec |
+| Database | PostgreSQL 17 + pgvector (runtime persistence); better-sqlite3 retained for legacy migration tooling |
 | Discord | discord.js |
 | IPC | json-rpc-2.0 over NDJSON Unix socket |
 | Build | tsup |

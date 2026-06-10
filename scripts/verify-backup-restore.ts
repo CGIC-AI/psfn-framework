@@ -5,6 +5,10 @@ import {
   verifyBackupRestore,
   verifyPostgresDumpArchive,
 } from '../src/persistence/backups/service.js';
+import {
+  COMPANION_TREE_MANIFEST_NAME,
+  verifyCompanionTreeSnapshot,
+} from '../src/persistence/backups/companion-tree.js';
 
 interface CliArgs {
   backupRootDir?: string;
@@ -158,6 +162,10 @@ async function main(): Promise<void> {
     ? await verifyPostgresDumpArchive(postgresDumpPath)
     : undefined;
 
+  const companionTreeVerification = existsSync(join(backupDir, COMPANION_TREE_MANIFEST_NAME))
+    ? verifyCompanionTreeSnapshot(backupDir)
+    : undefined;
+
   console.log(JSON.stringify({
     backupDir,
     sessionSnapshotDir,
@@ -175,6 +183,12 @@ async function main(): Promise<void> {
       ? {
         postgresDumpPath,
         postgresDumpTocEntries: postgresDumpVerification?.tocEntryCount,
+      }
+      : {}),
+    ...(companionTreeVerification
+      ? {
+        companionTreeVerifiedFiles: companionTreeVerification.verifiedFileCount,
+        companionTreeBytes: companionTreeVerification.totalBytes,
       }
       : {}),
   }, null, 2));

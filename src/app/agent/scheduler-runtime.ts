@@ -111,6 +111,7 @@ export function buildAgentSchedulerRuntime(
     ...(postgresDatabaseUrl
       ? { postgres: { databaseUrl: postgresDatabaseUrl } }
       : {}),
+    companionDataDir: options.pathSnapshot.companionDataDir,
     sessionsDir: resolveSessionsDir(options.pathSnapshot.companionDataDir),
     memoriesJournalPath: resolveMemoryJournalPath(options.pathSnapshot.companionDataDir),
     characterCardPath: options.config.characterCardPath,

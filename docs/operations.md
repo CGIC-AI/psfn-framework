@@ -90,6 +90,7 @@ Operational rules:
 
 - Backup cadence and retention live in `backup.json` and `scheduler.json`.
 - Under the PostgreSQL runtime backend the scheduled backup captures a `pg_dump` custom-format archive (requires `pg_dump`/`pg_restore` on PATH) plus session JSONL, memory journal, and character-card files; the scheduler refuses to start without a database backup source.
+- The scheduled backup also captures the full companion-data file tree (journals, generated media/selfies, vault notes, prompt and card history, scratchpad) into `companion-tree/` with a per-file sha256 manifest; the walk is exhaustive except for sessions (captured separately), backup targets, and repair snapshots, so new companion-authored file classes can never silently fall out of scope.
 - Backup verification checks the dump archive table of contents via `pg_restore --list`; full restore-into-scratch-database fidelity verification is tracked separately.
 - A failed scheduled backup logs an error and emits a `backup.failed` event on the runtime event bus.
 - Startup skips SQLite integrity checks for the PostgreSQL runtime backend.

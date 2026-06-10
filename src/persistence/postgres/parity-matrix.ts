@@ -835,7 +835,6 @@ export const POSTGRES_PARITY_MATRIX = [
     },
     gaps: [
       'Postgres dump verification is archive-level (pg_restore --list); restore-into-scratch-database fidelity checks are not yet implemented.',
-      'Companion file tree coverage (journals, generated media, vault notes, scratchpad) is incomplete in the snapshot set.',
     ],
   },
   {

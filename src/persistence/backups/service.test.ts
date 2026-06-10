@@ -248,6 +248,41 @@ describe('runBackupCycle', () => {
     })).rejects.toThrow(/pg_dump failed.*connection to server failed/s);
   });
 
+  it('captures and verifies the companion file tree when companionDataDir is set', async () => {
+    const root = join(tmpdir(), `psfn-backup-tree-${Date.now()}`);
+    roots.push(root);
+    const companionDataDir = join(root, 'companion-data');
+    const sessionsDir = join(companionDataDir, 'state', 'sessions');
+    const backupRootDir = join(root, 'backups');
+    mkdirSync(sessionsDir, { recursive: true });
+    mkdirSync(join(companionDataDir, 'vault'), { recursive: true });
+    mkdirSync(join(companionDataDir, 'images'), { recursive: true });
+    writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
+    writeFileSync(join(companionDataDir, 'companion.json'), '{"name":"Companion"}\n', 'utf-8');
+    writeFileSync(join(companionDataDir, 'vault', 'note.md'), 'note\n', 'utf-8');
+    writeFileSync(join(companionDataDir, 'images', 'selfie.png'), 'png', 'utf-8');
+
+    const result = await runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeStubPgDump(root),
+        pgRestoreBinary: writeStubPgRestore(root),
+      },
+      companionDataDir,
+      sessionsDir,
+      backupRootDir,
+      verifyRestore: true,
+      now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
+    });
+
+    expect(result.companionTree).toBeDefined();
+    expect(result.companionTree?.fileCount).toBe(3);
+    expect(existsSync(join(result.companionTree!.treeDir, 'vault', 'note.md'))).toBe(true);
+    expect(existsSync(join(result.companionTree!.treeDir, 'images', 'selfie.png'))).toBe(true);
+    expect(existsSync(join(result.companionTree!.treeDir, 'state', 'sessions'))).toBe(false);
+    expect(result.companionTreeVerification?.verifiedFileCount).toBe(3);
+  });
+
   it('refuses to run without any database backup source', async () => {
     const root = join(tmpdir(), `psfn-backup-no-source-${Date.now()}`);
     roots.push(root);

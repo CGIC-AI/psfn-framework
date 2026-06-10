@@ -16,6 +16,12 @@ import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
+import {
+  captureCompanionTree,
+  verifyCompanionTreeSnapshot,
+  type CompanionTreeCaptureResult,
+  type CompanionTreeVerificationResult,
+} from './companion-tree.js';
 import type { BackupRuntimeConfig } from './config.js';
 import { runDatabaseIntegrityCheck } from './startup-checks.js';
 import { applyTieredRetention, type TieredRetentionResult } from './retention.js';
@@ -40,6 +46,12 @@ export interface BackupRunOptions {
   databasePath?: string;
   /** When set, a pg_dump custom-format archive of this database is captured. */
   postgres?: BackupPostgresOptions;
+  /**
+   * When set, the full companion-data file tree is captured with a per-file
+   * hash manifest (sessions and backup targets excluded — sessions are
+   * captured separately).
+   */
+  companionDataDir?: string;
   sessionsDir: string;
   backupRootDir: string;
   /** @deprecated Use maxRotatingBackups */
@@ -92,6 +104,8 @@ export interface BackupRunResult {
   prunedBackupDirs: string[];
   restoreVerification?: BackupRestoreVerificationResult;
   postgresDumpVerification?: PostgresDumpVerificationResult;
+  companionTree?: CompanionTreeCaptureResult;
+  companionTreeVerification?: CompanionTreeVerificationResult;
   tieredRetention?: TieredRetentionResult;
   mirrorDir?: string;
 }
@@ -101,6 +115,7 @@ export interface RegisterScheduledBackupTaskOptions {
   db?: Database.Database | null;
   databasePath?: string;
   postgres?: BackupPostgresOptions;
+  companionDataDir?: string;
   sessionsDir: string;
   memoriesJournalPath?: string;
   characterCardPath?: string;
@@ -344,6 +359,26 @@ export async function runBackupCycle(
   copyOptionalBackupFile(options.characterCardPath, companionDir);
   copyOptionalBackupFile(options.characterCardHistoryPath, companionDir);
 
+  let companionTree: CompanionTreeCaptureResult | undefined;
+  const companionDataDir = options.companionDataDir?.trim();
+  if (companionDataDir) {
+    companionTree = captureCompanionTree({
+      companionDataDir,
+      backupDir,
+      excludePaths: [
+        // Sessions get a dedicated first-class snapshot above.
+        options.sessionsDir,
+        // Never recurse into backup targets.
+        options.backupRootDir,
+        ...(options.mirrorDir?.trim() ? [options.mirrorDir.trim()] : []),
+        'backups',
+        // Runtime repair snapshots are recovery artifacts, not companion-authored state.
+        'state/repair-backups',
+      ],
+      now,
+    });
+  }
+
   // Apply tiered GFS retention (or fall back to flat count if tiering not configured).
   const maxRotating = options.maxRotatingBackups
     ?? options.retentionCount
@@ -393,6 +428,10 @@ export async function runBackupCycle(
     ? await verifyPostgresDumpArchive(postgresDumpPath, options.postgres?.pgRestoreBinary)
     : undefined;
 
+  const companionTreeVerification = options.verifyRestore && companionTree
+    ? verifyCompanionTreeSnapshot(backupDir)
+    : undefined;
+
   return {
     backupDir,
     databaseBackupPath,
@@ -402,6 +441,8 @@ export async function runBackupCycle(
     prunedBackupDirs: tieredRetention.prunedBackupDirs,
     restoreVerification,
     postgresDumpVerification,
+    companionTree,
+    companionTreeVerification,
     tieredRetention,
     mirrorDir,
   };
@@ -427,6 +468,7 @@ export function registerScheduledBackupTask(
             db: options.db,
             databasePath: options.databasePath,
             postgres: options.postgres,
+            companionDataDir: options.companionDataDir,
             sessionsDir: options.sessionsDir,
             memoriesJournalPath: options.memoriesJournalPath,
             characterCardPath: options.characterCardPath,
@@ -458,6 +500,9 @@ export function registerScheduledBackupTask(
           restoreVerified: Boolean(result.restoreVerification),
           restoreIntegrity: result.restoreVerification?.integrityDetails.join('; '),
           postgresDumpTocEntries: result.postgresDumpVerification?.tocEntryCount,
+          companionTreeFiles: result.companionTree?.fileCount,
+          companionTreeBytes: result.companionTree?.totalBytes,
+          companionTreeVerifiedFiles: result.companionTreeVerification?.verifiedFileCount,
         });
       },
       state: 'idle',

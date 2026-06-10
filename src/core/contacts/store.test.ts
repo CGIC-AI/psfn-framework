@@ -1134,3 +1134,61 @@ describe('ContactStore', () => {
     });
   });
 });
+
+describe('ContactStore machine-intelligence flag', () => {
+  let db: Database.Database;
+  let store: ContactStore;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    store = new ContactStore(db, PRIMARY_USER_ID);
+  });
+
+  it('defaults to not-MI, sets and round-trips the flag with audit', () => {
+    const contact = store.resolveChannelIdentity('discord', 'artemis-001', 'Artemis');
+    expect(contact.isMachineIntelligence).toBeUndefined();
+
+    expect(store.setMachineIntelligence(contact.id, true, 'test')).toBe(true);
+    const flagged = store.getById(contact.id);
+    expect(flagged?.isMachineIntelligence).toBe(true);
+
+    // Setting the same value is a no-op success; clearing works too.
+    expect(store.setMachineIntelligence(contact.id, true)).toBe(true);
+    expect(store.setMachineIntelligence(contact.id, false)).toBe(true);
+    expect(store.getById(contact.id)?.isMachineIntelligence).toBeUndefined();
+
+    const audit = store.listMutationAuditEntries({ contactId: contact.id });
+    expect(audit.some(entry => entry.field === 'is_machine_intelligence')).toBe(true);
+  });
+
+  it('returns false for unknown contacts', () => {
+    expect(store.setMachineIntelligence('missing-contact', true)).toBe(false);
+  });
+
+  it('survives schema migration on a pre-flag database', () => {
+    const legacy = new Database(':memory:');
+    legacy.exec(`
+      CREATE TABLE contacts (
+        id TEXT PRIMARY KEY,
+        discord_user_id TEXT UNIQUE,
+        display_name TEXT NOT NULL,
+        nickname TEXT,
+        trust_level TEXT NOT NULL DEFAULT 'regular',
+        relationship_type TEXT NOT NULL DEFAULT 'stranger',
+        emotional_baseline TEXT DEFAULT '{}',
+        first_seen TEXT NOT NULL,
+        last_seen TEXT NOT NULL,
+        notes TEXT
+      );
+    `);
+    legacy.prepare(`
+      INSERT INTO contacts (id, display_name, first_seen, last_seen)
+      VALUES ('legacy-1', 'Legacy', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+    `).run();
+    const migrated = new ContactStore(legacy, PRIMARY_USER_ID);
+    expect(migrated.getById('legacy-1')?.isMachineIntelligence).toBeUndefined();
+    expect(migrated.setMachineIntelligence('legacy-1', true)).toBe(true);
+    expect(migrated.getById('legacy-1')?.isMachineIntelligence).toBe(true);
+    legacy.close();
+  });
+});

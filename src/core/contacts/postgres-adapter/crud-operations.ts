@@ -244,7 +244,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const row = await queryOne<ContactRow>(
       this.pool,
       `
-        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
+        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
                emotional_baseline, first_seen, last_seen, notes
         FROM contacts
         WHERE discord_user_id = $1
@@ -264,7 +264,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const rows = await queryRows<ContactRow>(
       this.pool,
       `
-        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
+        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
                emotional_baseline, first_seen, last_seen, notes
         FROM contacts
         WHERE trust_level = $1
@@ -282,6 +282,26 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
 
   async updateLastSeen(id: string): Promise<void> {
     await this.touchContactLastSeen(id);
+  },
+
+  async setMachineIntelligence(id: string, isMachineIntelligence: boolean, actor?: string): Promise<boolean> {
+    const contact = await this.loadContactById(id);
+    if (!contact) return false;
+    const current = contact.isMachineIntelligence === true;
+    if (current === isMachineIntelligence) return true;
+    await this.pool.query(
+      'UPDATE contacts SET is_machine_intelligence = $1 WHERE id = $2',
+      [isMachineIntelligence, id],
+    );
+    await this.appendMutationAuditEntry(
+      id,
+      'is_machine_intelligence',
+      String(current),
+      String(isMachineIntelligence),
+      actor,
+    );
+    await this.syncContactExports();
+    return true;
   },
 
   async updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string): Promise<boolean> {
@@ -358,7 +378,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const sourceRow = await queryOne<ContactRow>(
         this.pool,
         `
-          SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
+          SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
                  emotional_baseline, emotional_time_series, first_seen, last_seen, notes
           FROM contacts
           WHERE id = $1
@@ -369,7 +389,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const targetRow = await queryOne<ContactRow>(
         this.pool,
         `
-          SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
+          SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
                  emotional_baseline, emotional_time_series, first_seen, last_seen, notes
           FROM contacts
           WHERE id = $1
@@ -1070,7 +1090,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const rows = await queryRows<ContactRow>(
       this.pool,
       `
-        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
+        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
                emotional_baseline, first_seen, last_seen, notes
         FROM contacts
         ORDER BY last_seen DESC

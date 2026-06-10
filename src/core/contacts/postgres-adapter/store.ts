@@ -46,6 +46,7 @@ export class PostgresContactStore implements ContactStorePort {
   declare suggestLowTierTrustDrift: ContactStorePort['suggestLowTierTrustDrift'];
   declare applyLowTierTrustDriftSuggestion: ContactStorePort['applyLowTierTrustDriftSuggestion'];
   declare setTrustLevel: ContactStorePort['setTrustLevel'];
+  declare setMachineIntelligence: ContactStorePort['setMachineIntelligence'];
   declare updateLastSeen: ContactStorePort['updateLastSeen'];
   declare updateIdentityProfile: ContactStorePort['updateIdentityProfile'];
   declare recordChannelActivity: ContactStorePort['recordChannelActivity'];

@@ -24,6 +24,12 @@ function ensureConversationChannelPrivacyColumn(db: Database.Database): void {
   }
 }
 
+function ensureMachineIntelligenceColumn(db: Database.Database): void {
+  if (!hasColumn(db, 'contacts', 'is_machine_intelligence')) {
+    db.exec('ALTER TABLE contacts ADD COLUMN is_machine_intelligence INTEGER NOT NULL DEFAULT 0');
+  }
+}
+
 function ensureNicknameColumn(db: Database.Database): void {
   if (!hasColumn(db, 'contacts', 'nickname')) {
     db.exec('ALTER TABLE contacts ADD COLUMN nickname TEXT');
@@ -60,7 +66,8 @@ export function initializeContactStoreSchema(db: Database.Database): void {
       emotional_time_series TEXT NOT NULL DEFAULT '[]',
       first_seen TEXT NOT NULL,
       last_seen TEXT NOT NULL,
-      notes TEXT
+      notes TEXT,
+      is_machine_intelligence INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS contact_channel_ids (
@@ -183,6 +190,7 @@ export function initializeContactStoreSchema(db: Database.Database): void {
   `);
 
   ensureNicknameColumn(db);
+  ensureMachineIntelligenceColumn(db);
   ensureEmotionalTimeSeriesColumn(db);
   ensureChannelPrivacyColumn(db);
   ensureConversationChannelPrivacyColumn(db);

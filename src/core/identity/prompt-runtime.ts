@@ -190,6 +190,7 @@ const RUNTIME_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_days_hours}}', 'Approximate elapsed time since the most recent pre-turn message in day/hour form.', '2 days 3 hours'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_missing_notice}}', 'Fallback note when no earlier message is loaded for the current channel.', 'No earlier message is loaded for this channel.'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_present}}', 'Whether an earlier message is loaded for the current channel (bare boolean for custom phrasing).', 'true'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_speaking_with_is_machine_intelligence}}', 'Whether the resolved speaking partner is another machine intelligence (peer companion/agent).', 'false'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_internal_turn_kind}}', 'Internal task kind for heartbeat/reflection/planning/maintenance turns when applicable.', 'reflection'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_speaking_with_name}}', 'Resolved speaking-partner display name for user-facing turns.', 'Vega'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_speaking_with_trust_level}}', 'Trust level for the current speaking partner when the turn is user-facing.', 'trusted'),

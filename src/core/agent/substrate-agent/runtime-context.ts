@@ -266,6 +266,8 @@ export interface ResolvedAuthorContext {
   trustLevel: TrustLevel;
   speakerRole: 'user' | 'system';
   resolvedUserName: string;
+  /** True when the resolved contact is another machine intelligence (peer companion/agent). */
+  speakingWithIsMachineIntelligence?: boolean;
   canonicalContactKey?: string;
   subjectIdentityKey?: string;
   continuitySubjectKey?: string;
@@ -1214,6 +1216,7 @@ async function resolveGeneratedMessageSourceContext(input: {
 
     return {
       trustLevel: contact?.trustLevel ?? 'regular',
+      ...(contact?.isMachineIntelligence ? { speakingWithIsMachineIntelligence: true } : {}),
       ...(canonicalContactKey ? { canonicalContactKey } : {}),
       continuitySubjectKey: resolveContinuitySubjectKey({
         canonicalContactKey,
@@ -1365,6 +1368,7 @@ export async function resolveAuthorContext(input: {
       trustLevel: contact.trustLevel,
       speakerRole: 'user',
       resolvedUserName: resolvePromptUserName(input.message, contact),
+      ...(contact.isMachineIntelligence ? { speakingWithIsMachineIntelligence: true } : {}),
       canonicalContactKey,
       continuitySubjectKey: resolveContinuitySubjectKey({
         canonicalContactKey,

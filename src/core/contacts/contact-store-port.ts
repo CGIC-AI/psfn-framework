@@ -79,6 +79,7 @@ export interface ContactStorePort {
     actor?: string,
     options?: ContactTrustMutationOptions,
   ): Awaitable<boolean>;
+  setMachineIntelligence(id: string, isMachineIntelligence: boolean, actor?: string): Awaitable<boolean>;
   updateLastSeen(id: string): Awaitable<void>;
   updateIdentityProfile(contactId: string, displayName: string, nickname?: string, actor?: string): Awaitable<boolean>;
   recordChannelActivity(

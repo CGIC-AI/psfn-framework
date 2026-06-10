@@ -67,12 +67,12 @@ class FakePostgresPool {
       return result([{ exists: true }]);
     }
 
-    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, emotional_baseline, first_seen, last_seen, notes from contacts where id = $1 limit 1')) {
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes from contacts where id = $1 limit 1')) {
       const row = this.contacts.get(String(values[0] ?? ''));
       return result(row ? [row] : []);
     }
 
-    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, emotional_baseline, first_seen, last_seen, notes from contacts where discord_user_id = $1 limit 1')) {
+    if (normalized.startsWith('select id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence, emotional_baseline, first_seen, last_seen, notes from contacts where discord_user_id = $1 limit 1')) {
       const needle = String(values[0] ?? '');
       const row = [...this.contacts.values()].find(contact => contact.discord_user_id === needle);
       return result(row ? [row] : []);

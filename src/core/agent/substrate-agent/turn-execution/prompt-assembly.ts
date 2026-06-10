@@ -135,6 +135,9 @@ export async function assembleTurnPrompt(input: {
     authorContext.subjectIdentityKey,
     runtimeNow,
   );
+  templateVariables.runtime_speaking_with_is_machine_intelligence = authorContext.speakingWithIsMachineIntelligence === true
+    ? 'true'
+    : 'false';
   const preTurnInternalStateSnapshotRef = buildInternalStateSnapshotRef(preTurnInternalState);
   const preTurnMetacognitiveFlags = runtime.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
     internalState: preTurnInternalState,

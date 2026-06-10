@@ -116,6 +116,7 @@ export type ContactIdentityLinkVerificationResult =
 
 export const CONTACT_MUTATION_AUDIT_FIELDS = [
   'trust_level',
+  'is_machine_intelligence',
   'notes',
   'display_name',
   'nickname',
@@ -249,6 +250,8 @@ export interface Contact {
   trustLevel: TrustLevel;
   relationshipType: RelationshipType;
   emotionalBaseline?: Record<string, number>;  // e.g. { warmth: 0.7, formality: 0.3 }
+  /** True when this contact is another machine intelligence (peer companion/agent) — orthogonal to relationshipType. */
+  isMachineIntelligence?: boolean;
   firstSeen: string;  // ISO timestamp
   lastSeen: string;   // ISO timestamp
   notes?: string;

@@ -35,6 +35,7 @@ export function rowToContact(row: ContactRow): Contact {
     nickname: row.nickname ?? undefined,
     trustLevel: row.trust_level as TrustLevel,
     relationshipType: row.relationship_type as RelationshipType,
+    ...(row.is_machine_intelligence ? { isMachineIntelligence: true } : {}),
     emotionalBaseline,
     firstSeen: row.first_seen,
     lastSeen: row.last_seen,

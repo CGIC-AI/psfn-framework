@@ -27,6 +27,8 @@ const CONTACT_ACTION_NAMES = [
   'contact_link_identity',
   'set_channel_privacy',
   'contact_set_channel_privacy',
+  'set_machine_intelligence',
+  'contact_set_machine_intelligence',
 ] as const;
 const CONTACT_ACTION_HELP = [
   'list',
@@ -35,6 +37,7 @@ const CONTACT_ACTION_HELP = [
   'set_trust',
   'link_identity',
   'set_channel_privacy',
+  'set_machine_intelligence',
 ].join(', ');
 
 type ContactActionName = (typeof CONTACT_ACTION_NAMES)[number];
@@ -44,7 +47,8 @@ type ContactAction =
   | 'note'
   | 'set_trust'
   | 'link_identity'
-  | 'set_channel_privacy';
+  | 'set_channel_privacy'
+  | 'set_machine_intelligence';
 
 interface ContactSetTrustParams {
   contactId: string;
@@ -55,6 +59,7 @@ interface ContactSetTrustParams {
 
 interface ContactToolParams extends Partial<ContactSetTrustParams> {
   action?: ContactActionName;
+  isMachineIntelligence?: boolean;
   notes?: string;
   channel?: string;
   channelUserId?: string;
@@ -108,6 +113,9 @@ function normalizeContactAction(params: ContactToolParams): ContactAction {
     case 'set_channel_privacy':
     case 'contact_set_channel_privacy':
       return 'set_channel_privacy';
+    case 'set_machine_intelligence':
+    case 'contact_set_machine_intelligence':
+      return 'set_machine_intelligence';
     default:
       throw new Error(`action must be one of: ${CONTACT_ACTION_HELP}`);
   }
@@ -318,6 +326,7 @@ async function executeContactLookup(
     + `Contact: ${contactName}\n`
     + `Trust: ${contact.trustLevel}\n`
     + `Relationship: ${contact.relationshipType}\n`
+    + (contact.isMachineIntelligence ? 'Machine intelligence: yes (peer companion/agent)\n' : '')
     + (identities ? `Identities: ${identities}\n` : '')
     + (channels ? `Channels: ${channels}\n` : '')
     + `First seen: ${contact.firstSeen}\n`
@@ -413,7 +422,35 @@ async function executeUnifiedContactAction(
       return await executeContactLinkIdentity(contactStore, params);
     case 'set_channel_privacy':
       return await executeContactSetChannelPrivacy(contactStore, params);
+    case 'set_machine_intelligence':
+      return await executeContactSetMachineIntelligence(contactStore, params);
   }
+}
+
+async function executeContactSetMachineIntelligence(
+  contactStore: ContactStorePort,
+  params: ContactToolParams,
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  const contactId = params.contactId?.trim() ?? '';
+  if (!contactId) {
+    return textResultWithError('Missing contactId', true);
+  }
+  if (typeof params.isMachineIntelligence !== 'boolean') {
+    return textResultWithError('Provide isMachineIntelligence: true or false', true);
+  }
+  const applied = await contactStore.setMachineIntelligence(
+    contactId,
+    params.isMachineIntelligence,
+    'agent:tool:contact_set_machine_intelligence',
+  );
+  if (!applied) {
+    return textResultWithError(`Contact not found: ${contactId}`, true);
+  }
+  return textResult(
+    `Contact ${contactId} is now marked as ${params.isMachineIntelligence
+      ? 'a machine intelligence (peer companion/agent — conversation loop risk applies)'
+      : 'not a machine intelligence'}.`,
+  );
 }
 
 export function createContactTool(contactStore: ContactStorePort): AgentTool<any> {
@@ -436,6 +473,9 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
       })),
       notes: Type.Optional(Type.String({
         description: 'Notes to store when action=note.',
+      })),
+      isMachineIntelligence: Type.Optional(Type.Boolean({
+        description: 'For action=set_machine_intelligence: whether this contact is another machine intelligence (peer companion/agent).',
       })),
       trustLevel: Type.Optional(Type.Unsafe<TrustLevel>({
         type: 'string',
@@ -506,6 +546,8 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
         case 'contact_link_identity':
         case 'set_channel_privacy':
         case 'contact_set_channel_privacy':
+        case 'set_machine_intelligence':
+        case 'contact_set_machine_intelligence':
           return 'identity.write.runtime';
         default:
           return ['identity.read', 'identity.write.runtime'] as const;

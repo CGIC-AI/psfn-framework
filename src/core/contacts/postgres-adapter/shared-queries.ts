@@ -30,7 +30,7 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
     return await queryOne<ContactRow>(
       this.pool,
       `
-        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type,
+        SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
                emotional_baseline, first_seen, last_seen, notes
         FROM contacts
         WHERE id = $1

@@ -555,6 +555,17 @@ export class ContactStore implements ContactStorePort {
     return true;
   }
 
+  setMachineIntelligence(id: string, isMachineIntelligence: boolean, actor?: string): boolean {
+    const contact = this.getById(id);
+    if (!contact) return false;
+    const current = contact.isMachineIntelligence === true;
+    if (current === isMachineIntelligence) return true;
+    this.db.prepare('UPDATE contacts SET is_machine_intelligence = ? WHERE id = ?')
+      .run(isMachineIntelligence ? 1 : 0, id);
+    appendMutationAuditEntry(this.db, id, 'is_machine_intelligence', String(current), String(isMachineIntelligence), actor);
+    return true;
+  }
+
   updateLastSeen(id: string): void {
     updateContactLastSeen(this.db, id);
   }

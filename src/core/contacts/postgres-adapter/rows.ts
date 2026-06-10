@@ -5,6 +5,7 @@ export interface ContactRow {
   nickname: string | null;
   trust_level: string;
   relationship_type: string;
+  is_machine_intelligence?: boolean | null;
   emotional_baseline: unknown;
   emotional_time_series?: unknown;
   first_seen: string;

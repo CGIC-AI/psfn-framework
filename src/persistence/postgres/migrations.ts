@@ -466,10 +466,12 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
     last_seen TEXT NOT NULL,
     notes TEXT,
     channel_identities JSONB NOT NULL DEFAULT '[]'::jsonb,
-    conversation_channels JSONB NOT NULL DEFAULT '[]'::jsonb
+    conversation_channels JSONB NOT NULL DEFAULT '[]'::jsonb,
+    is_machine_intelligence BOOLEAN NOT NULL DEFAULT FALSE
   );
   `,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS emotional_time_series JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS is_machine_intelligence BOOLEAN NOT NULL DEFAULT FALSE;`,
   `CREATE INDEX IF NOT EXISTS idx_contacts_trust ON contacts(trust_level);`,
   `CREATE INDEX IF NOT EXISTS idx_contacts_discord ON contacts(discord_user_id);`,
   `

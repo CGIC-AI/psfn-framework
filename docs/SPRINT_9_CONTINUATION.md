@@ -11,13 +11,12 @@
 3. **Cache reorder (`7jl`, closed)** — re-measure prompt composition on natural turns against the recorded baseline (static 717 / suffix 2,340 / memory 4,063 tokens).
 4. **Backups** — `systemctl list-timers psfn-backup.timer`; confirm `auto-*` sets accumulating on the NAS.
 
-## Re-check vision and selfies
+## Re-check vision and selfies — RESOLVED 2026-06-10 (deployed to Pi)
 
-The uncommitted image/vision hotfixes from the old checkout were **not** carried over at cutover (preserved as `snap-uncommitted.patch` in the snapshot; touches `src/primitives/images/fal.ts` + tests). Her reflections also record selfie-tool failures pre-cutover ("rendering errors, then no image sent").
-
-- Test image generation (`selfie_create` / `media action=generate`) and vision (send her an image attachment) on the live system.
-- If broken, diff `snap-uncommitted.patch` against the sprint branch's `fal.ts` and port what's still needed.
-- The vision-recovery path now returns an honest "image reader failed" notice after 3 attempts — if she says that, the reader/pipeline is failing, not the model.
+- **Selfie pipeline (`psfn-framework-jz7`, closed):** `selfie_create` now runs a tiered reference-EDIT chain — `openai/gpt-image-2/edit` → `fal-ai/nano-banana-2/edit` → `xai/grok-imagine-image/quality/edit` — advancing on content-policy 422s and timeouts, never dropping the reference image. `edit_model` selects the starting tier (start at nano/grok for swimwear-tier content). Grok endpoints validated against fal.ai docs and smoke-tested live (quality is an endpoint path, not a param). Lost hotfix superseded: FAL queue timeout is now 300s.
+- **Vision (`psfn-framework-ask`, closed):** model config was fine (gemini-3.1-flash-lite → gpt-5.4-mini). Real causes: 30s vision turn timeout (model finished at 70s on the Pi) → now 120s; flaky router DNS killing `web.fetch_binary` via the fail-closed SSRF check → gateway now retries one transient DNS failure, and the Pi got a `1.1.1.1` fallback nameserver (router first, via nmcli on eth0).
+- Residual: one observed `Agent is already processing a prompt` collision when the vision fallback reply raced an in-flight prompt — masked by the honest fallback; investigate if it recurs at the 120s timeout.
+- Still worth an end-to-end check: ask her for a selfie and send her an image over Discord on the new build.
 
 ## Then: work order
 

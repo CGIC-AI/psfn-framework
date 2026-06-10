@@ -24,6 +24,7 @@ import {
   wireHeartbeatRuntime,
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
+import { rehydratePersistedInternalState } from '../../core/self-model/internal-state-persistence.js';
 import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
@@ -186,6 +187,30 @@ async function main(): Promise<void> {
     pathSnapshot.companionDataDir,
     config.sessionRestartBehavior ?? 'reuse_latest_session',
   );
+
+  agentLoop.setInternalStateStore(persistenceRuntime.internalStateStore);
+  const internalStateRehydration = await rehydratePersistedInternalState({
+    store: persistenceRuntime.internalStateStore,
+    agent: agentLoop,
+  });
+  if (internalStateRehydration.outcome === 'restored') {
+    log.info('Rehydrated persisted internal state', {
+      savedAt: internalStateRehydration.savedAt,
+      ageMs: internalStateRehydration.ageMs,
+    });
+  } else if (internalStateRehydration.outcome === 'gap_detected') {
+    log.warn('Persisted internal state too stale to rehydrate; continuity gap surfaced', {
+      offlineSince: internalStateRehydration.gap.offlineSince,
+      gapMs: internalStateRehydration.gap.gapMs,
+    });
+    await eventBus.emit('internal_state.gap_detected', {
+      offlineSince: internalStateRehydration.gap.offlineSince,
+      gapMs: internalStateRehydration.gap.gapMs,
+      timestamp: Date.now(),
+    });
+  } else {
+    log.info('No persisted internal state snapshot found; starting fresh');
+  }
 
   const { scheduler, postTurnActions } = buildAgentSchedulerRuntime({
     eventBus,

@@ -42,6 +42,7 @@ import {
   METACOGNITIVE_PERSONA_GUIDANCE_BODY_TEMPLATE,
 } from '../../self-model/metacognition.js';
 import type { InternalState } from '../../self-model/state.js';
+import type { InternalStateContinuityGap } from '../../self-model/internal-state-persistence.js';
 import type { AdaptiveLoadedExtendedToolState } from '../adaptive-tools-telemetry.js';
 import type { ExtendedToolTurnClass } from '../extended-tool-autoload-policy.js';
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
@@ -205,6 +206,30 @@ function buildChargeBudgetContextBlock(input: {
 
   return wrapPromptSectionXml({
     id: 'runtime_charge_budget',
+    content: lines.join('\n'),
+  });
+}
+
+function formatGapDuration(gapMs: number): string {
+  const hours = gapMs / (60 * 60 * 1000);
+  if (hours < 48) {
+    return `${String(Math.round(hours))} hours`;
+  }
+  return `${String(Math.round(hours / 24))} days`;
+}
+
+export function buildInternalStateContinuityGapContextBlock(
+  gap: InternalStateContinuityGap | null | undefined,
+): string {
+  if (!gap) return '';
+  const lines = [
+    '[Continuity notice]',
+    `The runtime restarted after being offline for about ${formatGapDuration(gap.gapMs)} (last running state was saved ${gap.offlineSince}).`,
+    'Your internal emotional and attention state from before the gap was too old to carry forward safely, so this is a fresh start of that state — it will rebuild naturally as you talk.',
+    'A gap this long usually means something interrupted the system itself (maintenance, a crash, or hardware trouble) rather than an ordinary quiet stretch. It is okay to notice the gap, wonder about it, or ask what happened.',
+  ];
+  return wrapPromptSectionXml({
+    id: 'runtime_continuity_notice',
     content: lines.join('\n'),
   });
 }
@@ -923,6 +948,7 @@ export function buildRuntimeContext(input: {
   behavioralNotesBlock?: string;
   formatTopEmotions: (discrete: Record<string, number>) => string;
   config?: Record<string, unknown>;
+  internalStateContinuityGap?: InternalStateContinuityGap | null;
 }): string {
   const runtimeContextExtra = (() => {
     const raw = input.templateVariables?.runtime_context_extra;
@@ -934,6 +960,10 @@ export function buildRuntimeContext(input: {
       id: 'companion_runtime_context',
       content: runtimeContextExtra,
     }));
+  }
+  const continuityGapContext = buildInternalStateContinuityGapContextBlock(input.internalStateContinuityGap);
+  if (continuityGapContext) {
+    sections.push(continuityGapContext);
   }
   const chargeBudgetContext = buildChargeBudgetContextBlock({ config: input.config });
   if (chargeBudgetContext) {

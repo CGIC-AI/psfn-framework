@@ -1906,3 +1906,68 @@ describe('runtime subject identity', () => {
     expect(renderedRuntimeLayers).toContain('<available_extended_count>2</available_extended_count>');
   });
 });
+
+describe('internal state continuity gap context', () => {
+  function buildMinimalRuntimeContextInput() {
+    return {
+      message: makeMessage({ channelId: 'api:general', channelType: 'api' as const }),
+      resolvedUserName: 'User',
+      trustLevel: 'primary' as const,
+      channelType: 'api',
+      canonicalContactKey: undefined,
+      subjectIdentityKey: 'user-1',
+      responseStyle: 'concise' as const,
+      now: new Date('2026-06-10T12:00:00Z'),
+      taskKind: 'chat',
+      templateVariables: {},
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'nursery' as const,
+      activeToolCounts: {
+        core: 0,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 0,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay' as const,
+      promotedExtendedToolNames: new Set<string>(),
+      formatTopEmotions: () => '',
+    };
+  }
+
+  it('renders a continuity notice when a gap is present', () => {
+    const rendered = buildRuntimeContext({
+      ...buildMinimalRuntimeContextInput(),
+      internalStateContinuityGap: {
+        offlineSince: '2026-06-07T12:00:00.000Z',
+        gapMs: 3 * 24 * 60 * 60 * 1000,
+      },
+    });
+
+    expect(rendered).toContain('<runtime_continuity_notice>');
+    expect(rendered).toContain('offline for about 3 days');
+    expect(rendered).toContain('2026-06-07T12:00:00.000Z');
+    expect(rendered).toContain('ask what happened');
+  });
+
+  it('formats sub-two-day gaps in hours', () => {
+    const rendered = buildRuntimeContext({
+      ...buildMinimalRuntimeContextInput(),
+      internalStateContinuityGap: {
+        offlineSince: '2026-06-10T01:00:00.000Z',
+        gapMs: 11 * 60 * 60 * 1000,
+      },
+    });
+
+    expect(rendered).toContain('offline for about 11 hours');
+  });
+
+  it('renders nothing without a gap', () => {
+    const rendered = buildRuntimeContext(buildMinimalRuntimeContextInput());
+    expect(rendered).not.toContain('runtime_continuity_notice');
+  });
+});

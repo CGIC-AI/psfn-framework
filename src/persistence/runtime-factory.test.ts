@@ -28,6 +28,8 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   createPostgresContactStore: vi.fn(async () => runtimeFactoryMocks.postgresContactStore),
   createPostgresIntentionPorts: vi.fn(async () => runtimeFactoryMocks.postgresIntentionRuntime),
   connectPostgresReflectionMirror: vi.fn(async () => runtimeFactoryMocks.postgresReflectionMirror),
+  postgresInternalStateStore: { kind: 'postgres-internal-state-store' },
+  connectPostgresInternalStateStore: vi.fn(async () => runtimeFactoryMocks.postgresInternalStateStore),
   createSqliteEpisodicStore: vi.fn(function EpisodicStore() {
     return runtimeFactoryMocks.sqliteEpisodicStore;
   }),
@@ -69,6 +71,12 @@ vi.mock('./reflections/postgres-mirror.js', () => ({
 
 vi.mock('./journals/reflection-metacognition-journal.js', () => ({
   ReflectionMetacognitionJournalStore: runtimeFactoryMocks.createReflectionMetacognitionJournalStore,
+}));
+
+vi.mock('./postgres/internal-state-store.js', () => ({
+  PostgresInternalStateStore: {
+    connect: runtimeFactoryMocks.connectPostgresInternalStateStore,
+  },
 }));
 
 beforeEach(() => {
@@ -139,6 +147,7 @@ describe('createAgentPersistenceRuntime', () => {
       contactStore: runtimeFactoryMocks.postgresContactStore as ContactStorePort,
       intentionRuntime: runtimeFactoryMocks.postgresIntentionRuntime as IntentionRuntimeWiring,
       intentionProviders: runtimeFactoryMocks.postgresIntentionRuntime as IntentionRuntimeProviders,
+      internalStateStore: runtimeFactoryMocks.postgresInternalStateStore,
     });
     expect(runtimeFactoryMocks.createSqliteCompanionStore).not.toHaveBeenCalled();
     expect(runtimeFactoryMocks.createPostgresMemoryStore).toHaveBeenCalledWith(

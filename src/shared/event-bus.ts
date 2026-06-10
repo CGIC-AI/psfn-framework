@@ -359,6 +359,7 @@ export interface EventMap {
   } & EventCorrelationFields;
   'schedule.healthcheck': { timestamp: number; taskCount: number };
   'backup.failed': { taskId: string; taskName: string; error: string; timestamp: number };
+  'internal_state.gap_detected': { offlineSince: string; gapMs: number; timestamp: number };
   'model.budget.blocked': ModelBudgetBlockedEvent;
   'channel.voice.start': { guildId: string; channelId: string; userId: string };
   'channel.voice.end': { guildId: string; channelId: string; userId: string; reason: string };

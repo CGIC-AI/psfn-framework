@@ -89,6 +89,11 @@ import {
   type InternalState,
 } from '../self-model/state.js';
 import {
+  type InternalStateContinuityGap,
+  type InternalStateStorePort,
+  type PersistedInternalStateRecord,
+} from '../self-model/internal-state-persistence.js';
+import {
   buildPromptPrefixCacheKey as buildPromptPrefixCacheKeyForTurn,
   buildStaticPromptSettingsHash as buildStaticPromptSettingsHashForTurn,
   captureTurnPromptSnapshot as captureTurnPromptSnapshotForTurn,
@@ -226,6 +231,9 @@ export class SubstrateAgent {
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
   private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
+  private internalStateStore: InternalStateStorePort | null = null;
+  private internalStateContinuityGap: InternalStateContinuityGap | null = null;
+  private internalStateContinuityGapRenderCount = 0;
   private runtimeMode: RuntimeMode;
 
   private get activeTurnCorrelation(): CorrelationMetadata | null {
@@ -780,6 +788,47 @@ export class SubstrateAgent {
     return cloneMetacognitiveFlags(this.currentMetacognitiveFlags);
   }
 
+  setInternalStateStore(store: InternalStateStorePort | null): void {
+    this.internalStateStore = store;
+  }
+
+  /** Restores a validated persisted snapshot as the current running state (startup rehydration). */
+  restorePersistedInternalState(record: PersistedInternalStateRecord): void {
+    this.currentInternalState = cloneInternalState(record.state);
+    this.currentInternalStateSnapshotRef = record.snapshotRef;
+    this.currentMetacognitiveFlags = cloneMetacognitiveFlags(record.metacognitiveFlags);
+    this.internalStateContinuityGap = null;
+    this.internalStateContinuityGapRenderCount = 0;
+  }
+
+  /** Records that persisted state was too stale to restore; surfaced to her on the next turn. */
+  noteInternalStateContinuityGap(gap: InternalStateContinuityGap): void {
+    this.internalStateContinuityGap = gap;
+    this.internalStateContinuityGapRenderCount = 0;
+  }
+
+  getInternalStateContinuityGap(): InternalStateContinuityGap | null {
+    return this.internalStateContinuityGap;
+  }
+
+  private persistCurrentInternalState(): void {
+    if (!this.internalStateStore || !this.currentInternalState || !this.currentInternalStateSnapshotRef) {
+      return;
+    }
+    const record: PersistedInternalStateRecord = {
+      state: cloneInternalState(this.currentInternalState),
+      snapshotRef: this.currentInternalStateSnapshotRef,
+      metacognitiveFlags: cloneMetacognitiveFlags(this.currentMetacognitiveFlags),
+      savedAt: new Date().toISOString(),
+    };
+    this.internalStateStore.save(record).catch((error: unknown) => {
+      log.error('Failed to persist current internal state', {
+        error: toErrorMessage(error),
+        snapshotRef: record.snapshotRef,
+      });
+    });
+  }
+
   registerPostTurnActionInferer(inferer: PostTurnActionInferer): () => void {
     return this.turnSupportRuntime.registerPostTurnActionInferer(inferer);
   }
@@ -880,6 +929,12 @@ export class SubstrateAgent {
           this.currentInternalState = state;
           this.currentInternalStateSnapshotRef = snapshotRef;
           this.currentMetacognitiveFlags = cloneMetacognitiveFlags(metacognitiveFlags);
+          // A continuity gap stays visible for the first turn after restart
+          // (state is recomputed before the prompt renders), then clears.
+          if (this.internalStateContinuityGap && this.internalStateContinuityGapRenderCount > 0) {
+            this.internalStateContinuityGap = null;
+          }
+          this.persistCurrentInternalState();
         },
         buildRuntimeContext: (
           turnMessage,
@@ -1134,6 +1189,9 @@ export class SubstrateAgent {
     emotionAppraisalChain: readonly EmotionAppraisalEntry[] = [],
   ): string {
     const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
+    if (this.internalStateContinuityGap) {
+      this.internalStateContinuityGapRenderCount += 1;
+    }
     return buildRuntimeContextForTurn({
       message,
       resolvedUserName,
@@ -1164,6 +1222,7 @@ export class SubstrateAgent {
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       formatTopEmotions: (discrete) => this.emotionSelfModelRuntime.formatTopEmotions(discrete),
       config: this.config as unknown as Record<string, unknown>,
+      internalStateContinuityGap: this.internalStateContinuityGap,
     });
   }
 

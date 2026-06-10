@@ -685,6 +685,18 @@ export const POSTGRES_TRANSCRIPT_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_session_projection_drift_marked_at ON session_projection_drift(marked_at DESC, channel_id ASC);`,
 ];
 
+export const POSTGRES_INTERNAL_STATE_MIGRATIONS = [
+  `
+  CREATE TABLE IF NOT EXISTS internal_state_snapshots (
+    id TEXT PRIMARY KEY,
+    state JSONB NOT NULL,
+    snapshot_ref TEXT NOT NULL,
+    metacognitive_flags JSONB NOT NULL DEFAULT '[]'::jsonb,
+    saved_at TEXT NOT NULL
+  );
+  `,
+];
+
 export const POSTGRES_REFLECTION_MIGRATIONS = [
   `
   CREATE TABLE IF NOT EXISTS reflections (

@@ -5558,3 +5558,69 @@ describe('SubstrateAgent steering + follow-up', () => {
     abortSpy.mockRestore();
   });
 });
+
+describe('SubstrateAgent internal state persistence', () => {
+  function makeAgent(): SubstrateAgent {
+    return new SubstrateAgent(
+      new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'System prompt', makeConfig(),
+    );
+  }
+
+  const persistedState = {
+    emotional: {
+      vad: { valence: 0.4, arousal: 0.1, dominance: 0 },
+      mood: { valence: 0.3, arousal: 0, dominance: 0.1 },
+      discreteEmotions: { joy: 0.6 },
+      confidence: 0.8,
+    },
+    cognitive: { certaintyLevel: 0.7, topicEngagement: 0.5, processingQuality: 'fluent' as const },
+    attention: {
+      activeConcerns: [],
+      pendingFollowUps: [],
+      careReminders: [],
+      salientEntities: ['garden'],
+      conversationTrajectory: 'casual' as const,
+    },
+    relational: {
+      contactId: 'contact-1',
+      trustLevel: 'primary' as const,
+      baselineValence: 0.2,
+      moodDrift: 0,
+      recentInteractionFrequency: 0.5,
+      lastSeenDeltaSeconds: 120,
+    },
+  };
+
+  it('restores a persisted snapshot as current state and clears any gap', () => {
+    const agent = makeAgent();
+    expect(agent.getCurrentInternalState()).toBeNull();
+
+    agent.noteInternalStateContinuityGap({ offlineSince: '2026-06-07T12:00:00.000Z', gapMs: 1000 });
+    expect(agent.getInternalStateContinuityGap()).not.toBeNull();
+
+    agent.restorePersistedInternalState({
+      state: persistedState,
+      snapshotRef: 'internal-state-v1:abc123',
+      metacognitiveFlags: [{ flag: 'high_engagement', confidence: 0.7, evidence: 'long exchange' }],
+      savedAt: '2026-06-10T08:00:00.000Z',
+    });
+
+    expect(agent.getCurrentInternalState()?.relational.contactId).toBe('contact-1');
+    expect(agent.getCurrentInternalStateSnapshotRef()).toBe('internal-state-v1:abc123');
+    expect(agent.getCurrentMetacognitiveFlags()).toHaveLength(1);
+    expect(agent.getInternalStateContinuityGap()).toBeNull();
+  });
+
+  it('exposes a noted continuity gap until state re-forms', () => {
+    const agent = makeAgent();
+    agent.noteInternalStateContinuityGap({
+      offlineSince: '2026-06-07T12:00:00.000Z',
+      gapMs: 3 * 24 * 60 * 60 * 1000,
+    });
+    expect(agent.getInternalStateContinuityGap()).toEqual({
+      offlineSince: '2026-06-07T12:00:00.000Z',
+      gapMs: 3 * 24 * 60 * 60 * 1000,
+    });
+    expect(agent.getCurrentInternalState()).toBeNull();
+  });
+});

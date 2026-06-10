@@ -9,6 +9,7 @@ import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
 import { EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
 import { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
+import { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
@@ -268,6 +269,7 @@ async function main(): Promise<void> {
   const episodicStore = companionEpisodicStore;
   const episodicSynthesizer = new EpisodicSynthesizer(episodicStore, sessionManager);
   const sleepConsolidator = new SleepCycleEpisodeConsolidator(episodicStore, sessionManager, llmProvider);
+  const arcWeaver = new EpisodeArcWeaver(episodicStore, llmProvider);
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
   );
@@ -443,6 +445,7 @@ async function main(): Promise<void> {
       coreMemoryStore,
       episodicSynthesizer,
       sleepConsolidator,
+      arcWeaver,
       memoryMaintenanceStore: memoryStore,
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,

@@ -16,6 +16,7 @@ import type { MemoryWriter } from '../../faculties/memory/writer.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { EpisodicSynthesizer } from '../../faculties/memory/episodic/synthesis.js';
 import type { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
+import type { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
 import type { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import type { SessionManager } from '../session/manager.js';
@@ -143,6 +144,7 @@ export interface HeartbeatRuntimeOptions {
   sleeptimeCadenceTurns?: number;
   episodicSynthesizer?: Pick<EpisodicSynthesizer, 'run'> | null;
   sleepConsolidator?: Pick<SleepCycleEpisodeConsolidator, 'run'> | null;
+  arcWeaver?: Pick<EpisodeArcWeaver, 'run'> | null;
   memoryMaintenanceStore?: Pick<
     MemoryStorePort,
     'upsertMemoryMaintenanceReview' | 'listActiveMemories' | 'getById' | 'getMemoryMaintenanceDiagnostics'

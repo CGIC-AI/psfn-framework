@@ -16,6 +16,13 @@ export {
   createPostgresEpisodicStoreFromPool,
 } from './postgres-store.js';
 export {
+  EpisodeArcWeaver,
+  parseProposedArcs,
+  type ArcFormationOptions,
+  type ArcFormationRunInput,
+  type ArcFormationRunResult,
+} from './arc-formation.js';
+export {
   SleepCycleEpisodeConsolidator,
   buildMergeChains,
   type SleepConsolidationSessionReader,

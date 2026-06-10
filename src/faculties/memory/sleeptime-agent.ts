@@ -16,6 +16,7 @@ import type {
 import type { MemoryWriteOptions, MemoryWriter, WriteResult } from './writer.js';
 import type { EpisodicSynthesisRunResult, EpisodicSynthesizer } from './episodic/synthesis.js';
 import type { SleepCycleEpisodeConsolidator } from './episodic/sleep-consolidation.js';
+import type { EpisodeArcWeaver } from './episodic/arc-formation.js';
 import type { EpisodicMaintenanceDiagnostics } from './episodic/store.js';
 import {
   buildConflictingMemoryReviewInput,
@@ -65,6 +66,7 @@ type SessionMemoryReader = Pick<SessionManager, 'resolveSessionChannelId' | 'get
 type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
 type SleeptimeEpisodicSynthesizer = Pick<EpisodicSynthesizer, 'run'>;
 type SleeptimeEpisodeConsolidator = Pick<SleepCycleEpisodeConsolidator, 'run'>;
+type SleeptimeArcWeaver = Pick<EpisodeArcWeaver, 'run'>;
 type SleeptimeMaintenanceStore = Pick<
   MemoryStorePort,
   'upsertMemoryMaintenanceReview' | 'listActiveMemories' | 'getById' | 'getMemoryMaintenanceDiagnostics'
@@ -103,6 +105,7 @@ export interface SleeptimeMemoryAgentOptions {
   restWindow?: EpisodicProcessingRestWindowConfig;
   episodicSynthesizer?: SleeptimeEpisodicSynthesizer | null;
   sleepConsolidator?: SleeptimeEpisodeConsolidator | null;
+  arcWeaver?: SleeptimeArcWeaver | null;
   memoryMaintenanceStore?: SleeptimeMaintenanceStore | null;
   episodicDiagnosticsStore?: SleeptimeEpisodicDiagnosticsStore | null;
 }
@@ -416,6 +419,7 @@ export class SleeptimeMemoryAgent {
   private readonly restWindow?: EpisodicProcessingRestWindowConfig;
   private readonly episodicSynthesizer: SleeptimeEpisodicSynthesizer | null;
   private readonly sleepConsolidator: SleeptimeEpisodeConsolidator | null;
+  private readonly arcWeaver: SleeptimeArcWeaver | null;
   private readonly memoryMaintenanceStore: SleeptimeMaintenanceStore | null;
   private readonly episodicDiagnosticsStore: SleeptimeEpisodicDiagnosticsStore | null;
   private readonly turnCountBySession = new Map<string, number>();
@@ -437,6 +441,7 @@ export class SleeptimeMemoryAgent {
     this.restWindow = options.restWindow;
     this.episodicSynthesizer = options.episodicSynthesizer ?? null;
     this.sleepConsolidator = options.sleepConsolidator ?? null;
+    this.arcWeaver = options.arcWeaver ?? null;
     this.memoryMaintenanceStore = options.memoryMaintenanceStore ?? null;
     this.episodicDiagnosticsStore = options.episodicDiagnosticsStore ?? null;
   }
@@ -530,6 +535,13 @@ export class SleeptimeMemoryAgent {
 
     const sleepConsolidation = this.sleepConsolidator
       ? await this.sleepConsolidator.run({
+        sessionId,
+        sourceMessageId: action.sourceMessageId,
+      })
+      : null;
+
+    const arcFormation = this.arcWeaver
+      ? await this.arcWeaver.run({
         sessionId,
         sourceMessageId: action.sourceMessageId,
       })
@@ -658,6 +670,7 @@ export class SleeptimeMemoryAgent {
       memoryMaintenanceReviewsQueued: reviewQueuedCount,
       ...(episodicSynthesis ? summarizeEpisodicSynthesis(episodicSynthesis) : {}),
       ...(sleepConsolidation ? { sleepConsolidation } : {}),
+      ...(arcFormation?.ran ? { arcFormation } : {}),
       ...(memoryMaintenanceDiagnostics ? { memoryMaintenanceDiagnostics } : {}),
       ...(episodicMaintenanceDiagnostics ? { episodicMaintenanceDiagnostics } : {}),
     });

@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
   statSync,
 } from 'node:fs';
@@ -22,6 +23,10 @@ import {
   type CompanionTreeCaptureResult,
   type CompanionTreeVerificationResult,
 } from './companion-tree.js';
+import {
+  verifyPostgresDumpRestore,
+  type PostgresRestoreVerificationResult,
+} from './postgres-restore.js';
 import type { BackupRuntimeConfig } from './config.js';
 import { runDatabaseIntegrityCheck } from './startup-checks.js';
 import { applyTieredRetention, type TieredRetentionResult } from './retention.js';
@@ -35,10 +40,18 @@ export const SCHEDULED_BACKUP_TASK_NAME = 'Session + database backup';
 
 export interface BackupPostgresOptions {
   databaseUrl: string;
+  /**
+   * Dedicated scratch database for full restore verification. When set and
+   * verifyRestore is enabled, every cycle restores the dump into this
+   * database and asserts schema, pgvector, and critical-table fidelity.
+   */
+  restoreVerifyDatabaseUrl?: string;
   /** Override the pg_dump binary (defaults to `pg_dump` on PATH). */
   pgDumpBinary?: string;
   /** Override the pg_restore binary used for dump verification (defaults to `pg_restore` on PATH). */
   pgRestoreBinary?: string;
+  /** Override the psql binary used for restore verification (defaults to `psql` on PATH). */
+  psqlBinary?: string;
 }
 
 export interface BackupRunOptions {
@@ -104,8 +117,10 @@ export interface BackupRunResult {
   prunedBackupDirs: string[];
   restoreVerification?: BackupRestoreVerificationResult;
   postgresDumpVerification?: PostgresDumpVerificationResult;
+  postgresRestoreVerification?: PostgresRestoreVerificationResult;
   companionTree?: CompanionTreeCaptureResult;
   companionTreeVerification?: CompanionTreeVerificationResult;
+  l0JournalVerification?: { lineCount: number };
   tieredRetention?: TieredRetentionResult;
   mirrorDir?: string;
 }
@@ -186,6 +201,22 @@ function describeExecError(error: unknown): string {
     }
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+function verifyJsonlSnapshot(path: string): { lineCount: number } {
+  const lines = readFileSync(path, 'utf-8').split('\n');
+  let lineCount = 0;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index].trim();
+    if (!line) continue;
+    try {
+      JSON.parse(line);
+    } catch {
+      throw new Error(`L0 journal snapshot has invalid JSONL at ${path}:${index + 1}`);
+    }
+    lineCount += 1;
+  }
+  return { lineCount };
 }
 
 function postgresDumpFileName(databaseUrl: string): string {
@@ -349,10 +380,12 @@ export async function runBackupCycle(
 
   // Back up the L0 memories journal (notes/memories.jsonl) if available.
   const { memoriesJournalPath } = options;
+  let memoriesJournalBackupPath: string | undefined;
   if (memoriesJournalPath && existsSync(memoriesJournalPath)) {
     const notesDir = join(backupDir, 'notes');
     mkdirSync(notesDir, { recursive: true });
-    copyFileSync(memoriesJournalPath, join(notesDir, basename(memoriesJournalPath)));
+    memoriesJournalBackupPath = join(notesDir, basename(memoriesJournalPath));
+    copyFileSync(memoriesJournalPath, memoriesJournalBackupPath);
   }
 
   const companionDir = join(backupDir, 'companion');
@@ -428,8 +461,24 @@ export async function runBackupCycle(
     ? await verifyPostgresDumpArchive(postgresDumpPath, options.postgres?.pgRestoreBinary)
     : undefined;
 
+  const postgresRestoreVerification = options.verifyRestore
+    && postgresDumpPath
+    && options.postgres?.restoreVerifyDatabaseUrl
+    ? await verifyPostgresDumpRestore({
+      dumpPath: postgresDumpPath,
+      scratchDatabaseUrl: options.postgres.restoreVerifyDatabaseUrl,
+      sourceDatabaseUrl: options.postgres.databaseUrl,
+      psqlBinary: options.postgres.psqlBinary,
+      pgRestoreBinary: options.postgres.pgRestoreBinary,
+    })
+    : undefined;
+
   const companionTreeVerification = options.verifyRestore && companionTree
     ? verifyCompanionTreeSnapshot(backupDir)
+    : undefined;
+
+  const l0JournalVerification = options.verifyRestore && memoriesJournalBackupPath
+    ? verifyJsonlSnapshot(memoriesJournalBackupPath)
     : undefined;
 
   return {
@@ -441,8 +490,10 @@ export async function runBackupCycle(
     prunedBackupDirs: tieredRetention.prunedBackupDirs,
     restoreVerification,
     postgresDumpVerification,
+    postgresRestoreVerification,
     companionTree,
     companionTreeVerification,
+    l0JournalVerification,
     tieredRetention,
     mirrorDir,
   };
@@ -500,9 +551,12 @@ export function registerScheduledBackupTask(
           restoreVerified: Boolean(result.restoreVerification),
           restoreIntegrity: result.restoreVerification?.integrityDetails.join('; '),
           postgresDumpTocEntries: result.postgresDumpVerification?.tocEntryCount,
+          postgresRestoreVerified: Boolean(result.postgresRestoreVerification),
+          postgresRestoredTables: result.postgresRestoreVerification?.restoredTableCount,
           companionTreeFiles: result.companionTree?.fileCount,
           companionTreeBytes: result.companionTree?.totalBytes,
           companionTreeVerifiedFiles: result.companionTreeVerification?.verifiedFileCount,
+          l0JournalLines: result.l0JournalVerification?.lineCount,
         });
       },
       state: 'idle',

@@ -806,7 +806,7 @@ export const POSTGRES_PARITY_MATRIX = [
     postgresDestinationArtifacts: [
       'pg_dump custom-format archive captured by runBackupCycle when Postgres dump config is provided',
       'pg_restore --list table-of-contents verification of the captured archive',
-      'Missing: full restore-into-scratch-database fidelity verification (schema, vectors, row counts, semantic queries)',
+      'Scheduled scratch-database restore verification: schema restored, pgvector distance operator on restored vectors, critical-table presence, source-vs-restored row presence',
     ],
     codeReferences: [
       'src/persistence/backups/service.ts',
@@ -834,7 +834,7 @@ export const POSTGRES_PARITY_MATRIX = [
       ],
     },
     gaps: [
-      'Postgres dump verification is archive-level (pg_restore --list); restore-into-scratch-database fidelity checks are not yet implemented.',
+      'Restore verification asserts schema/vector/row presence but does not yet replay representative semantic retrieval fixtures against the restored database.',
     ],
   },
   {

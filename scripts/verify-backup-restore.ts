@@ -9,12 +9,15 @@ import {
   COMPANION_TREE_MANIFEST_NAME,
   verifyCompanionTreeSnapshot,
 } from '../src/persistence/backups/companion-tree.js';
+import { verifyPostgresDumpRestore } from '../src/persistence/backups/postgres-restore.js';
 
 interface CliArgs {
   backupRootDir?: string;
   backupDir?: string;
   restoreScratchRootDir?: string;
   keepRestoreDir: boolean;
+  postgresRestoreUrl?: string;
+  postgresSourceUrl?: string;
 }
 
 function printUsage(): void {
@@ -27,6 +30,8 @@ function printUsage(): void {
       '  --backup-dir <path>           Exact backup snapshot directory to verify',
       '  --restore-scratch-root <path> Root for temporary restore rehearsal directory',
       '  --keep-restore-dir            Preserve restore rehearsal directory for inspection',
+      '  --postgres-restore-url <url>  Scratch database URL for full pg_restore fidelity verification (schema is wiped each run)',
+      '  --postgres-source-url <url>   Source database URL for restored-vs-source row count assertions',
       '  --help                        Show this help text',
     ].join('\n'),
   );
@@ -63,6 +68,20 @@ function parseArgs(argv: string[]): CliArgs {
       const value = argv[index + 1];
       if (!value) throw new Error('--restore-scratch-root requires a value');
       args.restoreScratchRootDir = value;
+      index += 1;
+      continue;
+    }
+    if (arg === '--postgres-restore-url') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('--postgres-restore-url requires a value');
+      args.postgresRestoreUrl = value;
+      index += 1;
+      continue;
+    }
+    if (arg === '--postgres-source-url') {
+      const value = argv[index + 1];
+      if (!value) throw new Error('--postgres-source-url requires a value');
+      args.postgresSourceUrl = value;
       index += 1;
       continue;
     }
@@ -162,6 +181,17 @@ async function main(): Promise<void> {
     ? await verifyPostgresDumpArchive(postgresDumpPath)
     : undefined;
 
+  if (args.postgresRestoreUrl && !postgresDumpPath) {
+    throw new Error('--postgres-restore-url was provided but the backup contains no Postgres dump');
+  }
+  const postgresRestoreVerification = postgresDumpPath && args.postgresRestoreUrl
+    ? await verifyPostgresDumpRestore({
+      dumpPath: postgresDumpPath,
+      scratchDatabaseUrl: args.postgresRestoreUrl,
+      sourceDatabaseUrl: args.postgresSourceUrl,
+    })
+    : undefined;
+
   const companionTreeVerification = existsSync(join(backupDir, COMPANION_TREE_MANIFEST_NAME))
     ? verifyCompanionTreeSnapshot(backupDir)
     : undefined;
@@ -183,6 +213,14 @@ async function main(): Promise<void> {
       ? {
         postgresDumpPath,
         postgresDumpTocEntries: postgresDumpVerification?.tocEntryCount,
+      }
+      : {}),
+    ...(postgresRestoreVerification
+      ? {
+        postgresRestoredTables: postgresRestoreVerification.restoredTableCount,
+        postgresVectorExtension: postgresRestoreVerification.vectorExtensionPresent,
+        postgresVectorColumnChecked: postgresRestoreVerification.vectorColumnChecked,
+        postgresTableCounts: postgresRestoreVerification.tableCounts,
       }
       : {}),
     ...(companionTreeVerification

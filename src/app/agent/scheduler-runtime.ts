@@ -5,6 +5,7 @@ import {
   SCHEDULED_BACKUP_TASK_NAME,
   registerScheduledBackupTask,
 } from '../../persistence/backups/service.js';
+import { deriveRestoreVerifyDatabaseUrl } from '../../persistence/backups/postgres-restore.js';
 import { wirePostTurnActionRuntime } from '../startup/composition/post-turn-actions.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import type { GatewayClient } from '../../boundary/gateway/client.js';
@@ -109,7 +110,24 @@ export function buildAgentSchedulerRuntime(
       ? { db: options.db, databasePath: options.config.databasePath }
       : {}),
     ...(postgresDatabaseUrl
-      ? { postgres: { databaseUrl: postgresDatabaseUrl } }
+      ? {
+        postgres: {
+          databaseUrl: postgresDatabaseUrl,
+          ...(options.backupConfig.verifyRestore
+            ? {
+              restoreVerifyDatabaseUrl: (() => {
+                const derived = deriveRestoreVerifyDatabaseUrl(postgresDatabaseUrl);
+                if (!derived) {
+                  throw new Error(
+                    'Backup verifyRestore is enabled but the restore-verify scratch database URL cannot be derived from config.postgresDatabaseUrl',
+                  );
+                }
+                return derived;
+              })(),
+            }
+            : {}),
+        },
+      }
       : {}),
     companionDataDir: options.pathSnapshot.companionDataDir,
     sessionsDir: resolveSessionsDir(options.pathSnapshot.companionDataDir),

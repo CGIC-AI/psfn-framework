@@ -111,3 +111,55 @@ describe('RunChargeLedger', () => {
     expect(data.events[0].event.quota).toBe(10);
   });
 });
+
+describe('RunChargeLedger calendar accrual', () => {
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // 1_800_000_000_000 = 2027-01-15T08:53:20Z
+  const NOW_MS = 1_800_000_000_000;
+
+  it('buckets spend per UTC calendar day and rolls up month-to-date', () => {
+    const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
+    const ledger = new RunChargeLedger(ledgerPath, null, { now: () => NOW_MS });
+
+    // Two events today, one yesterday, one earlier in the month, one last month.
+    ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 60_000, amount: 3 }));
+    ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 30_000, amount: 2, lane: 'background' }));
+    ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 24 * 60 * 60_000, amount: 5 }));
+    ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 10 * 24 * 60 * 60_000, amount: 7 }));
+    ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 40 * 24 * 60 * 60_000, amount: 11 }));
+
+    const { calendar } = ledger.getData();
+
+    expect(calendar.monthKey).toBe('2027-01');
+    expect(calendar.monthToDateAmount).toBe(3 + 2 + 5 + 7);
+    expect(calendar.monthToDateEventCount).toBe(4);
+
+    // Daily buckets cover the 31-day window only, most recent first.
+    expect(calendar.daily.map(day => day.dayKey)).toEqual(['2027-01-15', '2027-01-14', '2027-01-05']);
+    expect(calendar.daily[0].amount).toBe(5);
+    expect(calendar.daily[0].eventCount).toBe(2);
+    expect(calendar.daily[0].byLane.map(lane => lane.key).sort()).toEqual(['background', 'interactive']);
+    expect(calendar.daily[1].amount).toBe(5);
+    expect(calendar.daily[2].amount).toBe(7);
+  });
+
+  it('keeps calendar accrual stable regardless of the query filter', () => {
+    const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
+    const ledger = new RunChargeLedger(ledgerPath, null, { now: () => NOW_MS });
+    ledger.recordChargeEvent(makeEvent({ timestampMs: NOW_MS - 60_000, amount: 3 }));
+    ledger.recordChargeEvent(makeEvent({
+      timestampMs: NOW_MS - 30_000,
+      amount: 2,
+      lineage: { runId: 'run-other', rootRunId: 'run-other' },
+    }));
+
+    const filtered = ledger.getData({ runId: 'run-other' });
+    expect(filtered.aggregates.amount).toBe(2);
+    expect(filtered.calendar.monthToDateAmount).toBe(5);
+  });
+});

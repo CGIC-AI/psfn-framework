@@ -399,6 +399,37 @@
       </div>
     </section>
 
+    <section class="grid gap-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]" aria-label="Calendar accrual">
+      <div class="card-garden p-5">
+        <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Month to date · {charges?.calendar.monthKey ?? DASH}</p>
+        <p class="mt-3 text-3xl font-serif font-bold text-gold-600">{formatCharge(charges?.calendar.monthToDateAmount)}</p>
+        <p class="mt-2 text-sm text-shadow-600">
+          {formatInteger(charges?.calendar.monthToDateEventCount)} charge events this calendar month. Daily accrual resets at UTC midnight and rolls up toward the monthly budget cap.
+        </p>
+      </div>
+      <div class="card-garden overflow-hidden">
+        <div class="border-b border-bark-300 px-5 py-4">
+          <h2 class="font-serif text-lg font-semibold text-shadow-900">Daily accrual</h2>
+          <p class="mt-1 text-sm text-shadow-600">Charge units per UTC calendar day over the last 31 days.</p>
+        </div>
+        <div class="max-h-80 divide-y divide-bark-200 overflow-y-auto">
+          {#each charges?.calendar.daily ?? [] as day}
+            <div class="flex items-center justify-between gap-4 px-5 py-3">
+              <div>
+                <p class="font-mono text-sm font-medium text-shadow-800">{day.dayKey}</p>
+                <p class="text-xs text-shadow-500">
+                  {#each day.byLane as lane, index}{index > 0 ? ' · ' : ''}{lane.key} {formatCharge(lane.amount)}{/each}
+                </p>
+              </div>
+              <p class="text-sm text-shadow-600">{formatCharge(day.amount)} / {formatInteger(day.eventCount)} events</p>
+            </div>
+          {:else}
+            <p class="px-5 py-4 text-sm text-shadow-600">No charges recorded in the last 31 days.</p>
+          {/each}
+        </div>
+      </div>
+    </section>
+
     <section class="grid gap-4 lg:grid-cols-2" aria-label="Charge breakdowns">
       <div class="card-garden overflow-hidden">
         <div class="border-b border-bark-300 px-5 py-4">

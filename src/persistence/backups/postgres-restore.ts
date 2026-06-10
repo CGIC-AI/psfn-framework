@@ -17,9 +17,12 @@ export const DEFAULT_RESTORE_CRITICAL_TABLES = [
 export interface PostgresRestoreVerificationOptions {
   dumpPath: string;
   /**
-   * Dedicated scratch database used as the restore target. Its `public`
-   * schema is dropped and recreated by every verification run — it must never
-   * point at a database holding real data.
+   * Dedicated scratch database used as the restore target. All user tables,
+   * sequences, and views in its `public` schema are dropped by every
+   * verification run — it must never point at a database holding real data.
+   * One-time setup: create the database owned by the runtime role and run
+   * `CREATE EXTENSION vector` in it as superuser (pgvector is untrusted on
+   * stock installs, so the restore cannot recreate it).
    */
   scratchDatabaseUrl: string;
   /**
@@ -84,12 +87,28 @@ function quoteIdentifier(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
 
+// Drops restored user objects while preserving the pgvector extension: the
+// extension requires superuser to (re)create on untrusted installs, so it is
+// installed once at scratch-database setup and must survive wipes.
+const WIPE_SCRATCH_OBJECTS_SQL = `
+CREATE SCHEMA IF NOT EXISTS public;
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+    EXECUTE format('DROP TABLE IF EXISTS public.%I CASCADE', r.tablename);
+  END LOOP;
+  FOR r IN SELECT sequencename FROM pg_sequences WHERE schemaname = 'public' LOOP
+    EXECUTE format('DROP SEQUENCE IF EXISTS public.%I CASCADE', r.sequencename);
+  END LOOP;
+  FOR r IN SELECT viewname FROM pg_views WHERE schemaname = 'public' LOOP
+    EXECUTE format('DROP VIEW IF EXISTS public.%I CASCADE', r.viewname);
+  END LOOP;
+END $$;
+`;
+
 async function wipeScratchSchema(binary: string, scratchDatabaseUrl: string): Promise<void> {
-  await runPsql(
-    binary,
-    scratchDatabaseUrl,
-    'DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;',
-  );
+  await runPsql(binary, scratchDatabaseUrl, WIPE_SCRATCH_OBJECTS_SQL);
 }
 
 /**

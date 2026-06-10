@@ -667,3 +667,52 @@ describe('PromptComposer', () => {
     });
   });
 });
+
+describe('values feedback loop across store instances', () => {
+  it('values appended by the reflection runtime appear in the next composed prompt', () => {
+    // The heartbeat template runtime and wirePromptRuntime each construct
+    // their own ValuesJournalStore over the same journal path; the loop only
+    // works if a write through one instance is visible to the composer's
+    // provider on the next turn.
+    const loopDir = mkdtempSync(join(tmpdir(), 'psfn-values-loop-'));
+    try {
+      const journalPath = join(loopDir, 'values-journal.jsonl');
+      const reflectionRuntimeStore = new ValuesJournalStore(journalPath);
+      const composerStore = new ValuesJournalStore(journalPath);
+      const layerStore = new PromptLayerStore(
+        join(loopDir, 'layers.json'),
+        join(loopDir, 'history.jsonl'),
+      );
+      layerStore.create({ type: 'base', name: 'Base', content: 'BASE' });
+      const composer = new PromptComposer(layerStore, undefined, undefined, {
+        enableConstitution: true,
+        companionValuesLayerProvider: () => composerStore.buildCompanionDerivedLayer(),
+      });
+
+      const before = composer.composeSplit();
+      expect(before.text).not.toContain('Care over throughput');
+
+      // Mirrors the weekly-review persistence path in heartbeat-template-runtime.
+      reflectionRuntimeStore.append({
+        templateId: 'weekly-review',
+        templateName: 'Weekly Reflection',
+        prompt: 'Reflect on values.',
+        reflection: 'Care over throughput: protect the relationship before optimizing tasks.',
+        provenance: {
+          source: 'companion_reflection',
+          templateId: 'weekly-review',
+          templateName: 'Weekly Reflection',
+          channelId: 'internal:reflection:weekly-review',
+        },
+      });
+
+      const after = composer.composeSplit();
+      expect(after.dynamicSuffix).toContain('Care over throughput');
+      expect(after.dynamicSuffix).toContain('<companion_values>');
+      // Stays out of the cached static prefix so journal growth cannot churn it.
+      expect(after.staticPrefix).not.toContain('Care over throughput');
+    } finally {
+      rmSync(loopDir, { recursive: true, force: true });
+    }
+  });
+});

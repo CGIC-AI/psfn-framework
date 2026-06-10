@@ -21,7 +21,7 @@
 ## Then: work order
 
 1. `0a5.2` sleep-cycle thematic consolidation → `0a5.3` arcs → `0a5.4` dream pass (mandatory, window 02:00–08:00 operator-local)
-2. `zn9.1` in-app Postgres backup + `zn9.2` companion file tree → `zn9.3` restore verification (then remove the interim timer)
+2. ~~`zn9.1` + `zn9.2` + `zn9.3`~~ **DONE 2026-06-10, live on the Pi**: scheduled in-app backup now captures pg_dump + full companion tree (hash manifest) and proves restore fidelity into a scratch DB every cycle; decant rehearsal passed against live data (counts matched source). Interim timer stays until the new system-data/env coverage bead lands (it uniquely covers config owners + env files). Note: live restore showed `l01_episodes` = 113 — episodic synthesis has been firing (feeds the `0a5.1` overnight check).
 3. `1xb.1` Discord DM egress (minimal change — adapter rebuild is coming) → `1xb.3` weighted thoughts → `1xb.2` outbox initiation
 4. `75f.1` values feedback loop, `b5m.5` whispers (only after the shipped authorship guard semantics — self-attributed, never user-role)
 5. `isi.1` MI contact flagging unblocks the fatigue chain (needed before Artemis returns)

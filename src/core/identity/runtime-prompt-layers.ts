@@ -407,34 +407,39 @@ const REQUIRED_RUNTIME_PROMPT_SIGNAL_DEFINITIONS: readonly RequiredRuntimePrompt
   ),
 ] as const;
 
+// Ordered most-stable-first for prompt prefix caching: provider caches die at
+// the first changed byte, so per-turn volatile content (timestamps, elapsed
+// time) must render LAST. Live churn evidence (2026-06-09, consecutive turns):
+// runtime_self changed 1 line, runtime_attention/tooling change on appraisal
+// and tool activity, runtime_state changes every turn by definition.
 const RUNTIME_PROMPT_LAYER_DEFINITIONS: readonly RuntimePromptLayerDefinition[] = [
-  {
-    identifier: 'runtime.state',
-    name: 'Runtime State',
-    priority: 100,
-    schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
-    content: RUNTIME_STATE_LAYER_CONTENT,
-  },
   {
     identifier: 'runtime.self',
     name: 'Runtime Self',
-    priority: 110,
+    priority: 100,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
     content: RUNTIME_SELF_LAYER_CONTENT,
   },
   {
     identifier: 'runtime.attention',
     name: 'Runtime Attention',
-    priority: 120,
+    priority: 110,
     schema: OPTIONAL_RUNTIME_LAYER_SCHEMA,
     content: RUNTIME_ATTENTION_LAYER_CONTENT,
   },
   {
     identifier: 'runtime.tooling',
     name: 'Tooling',
-    priority: 130,
+    priority: 120,
     schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
     content: RUNTIME_TOOLING_LAYER_CONTENT,
+  },
+  {
+    identifier: 'runtime.state',
+    name: 'Runtime State',
+    priority: 130,
+    schema: REQUIRED_RUNTIME_LAYER_SCHEMA,
+    content: RUNTIME_STATE_LAYER_CONTENT,
   },
 ] as const;
 
@@ -636,7 +641,7 @@ export function ensureRuntimePromptLayers(
     createdUmbrellaIdentifiers.push(definition.identifier);
   };
 
-  for (const identifier of ['runtime.state', 'runtime.self', 'runtime.attention'] as const) {
+  for (const identifier of ['runtime.self', 'runtime.attention'] as const) {
     const definition = getRuntimePromptLayerDefinition(identifier);
     if (definition) {
       createOrNormalizeUmbrella(definition);
@@ -672,6 +677,13 @@ export function ensureRuntimePromptLayers(
         }
       }
     }
+  }
+
+  // runtime.state seeds last to match its cache-aware priority: it carries
+  // per-turn timestamps that must render after the stable umbrellas.
+  const stateDefinition = getRuntimePromptLayerDefinition('runtime.state');
+  if (stateDefinition) {
+    createOrNormalizeUmbrella(stateDefinition);
   }
 
   const runtimeLayers = promptStore.getAll().filter(layer => layer.type === 'runtime');

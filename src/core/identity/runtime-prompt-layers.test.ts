@@ -252,10 +252,10 @@ describe('runtime prompt layer schema', () => {
   it('returns cloned schema metadata for callers', () => {
     const definitions = getRuntimePromptLayerDefinitions();
     expect(definitions.map(definition => definition.identifier)).toEqual([
-      'runtime.state',
       'runtime.self',
       'runtime.attention',
       'runtime.tooling',
+      'runtime.state',
     ]);
     definitions[0]!.schema.required = false;
     expect(getRuntimePromptLayerDefinition('runtime.state')?.schema.required).toBe(true);
@@ -441,14 +441,14 @@ describe('runtime prompt layer schema', () => {
     const summary = ensureRuntimePromptLayers(store, { logger });
 
     expect(store.getByType('runtime').map(layer => layer.identifier)).toEqual([
-      'runtime.state',
       'runtime.self',
       'runtime.attention',
       'runtime.tooling',
+      'runtime.state',
     ]);
     expect(summary).toMatchObject({
       outcome: 'seeded_umbrella_defaults',
-      createdUmbrellaIdentifiers: ['runtime.state', 'runtime.self', 'runtime.attention', 'runtime.tooling'],
+      createdUmbrellaIdentifiers: ['runtime.self', 'runtime.attention', 'runtime.tooling', 'runtime.state'],
     });
     expect(events).toEqual([
       {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -465,6 +465,20 @@ describe('AdminServer JSON API routes', () => {
     testConfig.dataDir = tempDir;
     testConfig.characterCardPath = join(tempDir, 'character.json');
     writeFileSync(testConfig.characterCardPath, `${JSON.stringify(testCard, null, 2)}\n`, 'utf-8');
+    // Owner files must pre-exist: services fail closed on missing owner
+    // files rather than seeding them implicitly. Bootstrap from the repo's
+    // seed templates exactly as a deployment would.
+    writeFileSync(
+      join(tempDir, 'settings.json'),
+      `${JSON.stringify({ embeddingProvider: 'transformers', transformersModel: 'test-model', embeddingDims: 2, sessionHistoryBudgetPct: testConfig.sessionHistoryBudgetPct }, null, 2)}\n`,
+      'utf-8',
+    );
+    for (const ownerFile of ['models', 'providers', 'scheduler', 'capability-tier', 'trust-policy', 'charge-policy', 'backup', 'skills']) {
+      copyFileSync(
+        join(process.cwd(), 'config', `${ownerFile}.seed.json`),
+        join(tempDir, `${ownerFile}.json`),
+      );
+    }
     const sessionsDir = join(tempDir, 'sessions');
     mkdirSync(sessionsDir, { recursive: true });
 

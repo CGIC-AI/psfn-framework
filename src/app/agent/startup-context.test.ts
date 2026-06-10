@@ -177,6 +177,7 @@ describe('prepareAgentStartupContext', () => {
     process.env.WORKSPACE_PATH = workspaceDir;
     process.env.CHARACTER_CARD_PATH = join(systemDataDir, 'purrsephone.json');
     process.env.COMPANION_ID = 'test-companion';
+    process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
     process.env.LITELLM_API_KEY = 'test-litellm-key';
     process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
 

@@ -4,12 +4,14 @@
 - Branch: `sprint_9_memory` @ green — **4,029/4,029 tests passing**
 - Live deployment: the Pi (`ssh psfn-pi`, checkout `~/psfn-framework-source`) runs the Postgres-only build; pre-cutover build preserved at `~/psfn-framework-prev-20260609`; full snapshot at NAS `psfn-bak/pi-full-snapshot-20260609T215118Z`; interim `psfn-backup.timer` runs 6-hourly.
 
-## First: verify what ran overnight
+## First: verify what ran overnight — CHECKED 2026-06-10 (15:30–16:00 UTC)
 
-1. **Episodic synthesis (`0a5.1`)** — did sleeptime fire during the rest window? `psql .../psfn`: new rows in `l01_episodes` / `l01_episode_candidates` / watermarks. Acceptance: merged/extended episodes, not overlapping near-duplicates. If confirmed, close `0a5.1` as superseded-by-implementation.
-2. **Honest instruments (`b5m.1` notes)** — new reflections should show *varied* confabulation confidence (no longer pinned at 0.95 / supporting_memories=0); new concerns should carry `formation_vad`.
-3. **Cache reorder (`7jl`, closed)** — re-measure prompt composition on natural turns against the recorded baseline (static 717 / suffix 2,340 / memory 4,063 tokens).
-4. **Backups** — `systemctl list-timers psfn-backup.timer`; confirm `auto-*` sets accumulating on the NAS.
+1. ~~**Episodic synthesis (`0a5.1`)**~~ **CONFIRMED, bead closed.** Sleeptime ran 04:00–04:02 UTC: 4 memory writes, 6 candidates → 6 canonical episodes, 6 arc links, `duplicateEpisodeRate=0`, watermarks clean. Only the create path was exercised live (no spans overlapped an active episode); merge/extend stays test-covered until a live overlap occurs. One intimate-class write correctly rejected on novelty threshold (fail-closed working).
+2. **Honest instruments (`b5m.1`)** — MIXED. Metacognitive flags vary across recent reflections (`[]` vs `avoidance`+evidence). `formation_vad` unvalidated: 0/8 recent concerns carry it, but none formed post-deploy. **NEW FINDING (on `b5m.1`):** daily-review FIRED at 10:00:54 UTC but FAILED — `requires InternalState input, but no InternalState snapshot is available`. `SubstrateAgent.currentInternalState` is in-memory only (set during turns); the 02:14 UTC restart plus a quiet morning left it null. Fix direction: rehydrate last persisted snapshot at startup or give templates a cold-start path; keep fail-closed if neither exists.
+3. **Cache reorder (`7jl`, closed)** — not re-measured yet; needs Garden telemetry over natural turns.
+4. **Backups** — CONFIRMED in production. Two in-app cycles (08:14, 14:15 UTC): pg_dump 273 TOC entries, restore-verified into scratch (33 tables), companion tree 50 files hash-verified, NAS-mirrored, GFS pruning active. Interim timer also accumulating `auto-*` sets 6-hourly on the NAS.
+
+Note: commit attribution on this branch was rewritten 2026-06-10 (`o_0` → `axAilotl`, contributor identity had leaked into repo config); remote and Pi were force-synced to the rewritten history. Pre-rewrite tip preserved locally at `backup/sprint_9_memory-pre-author-fix`.
 
 ## Re-check vision and selfies — RESOLVED 2026-06-10 (deployed to Pi)
 

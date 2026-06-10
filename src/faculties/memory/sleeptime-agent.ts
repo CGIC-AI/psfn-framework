@@ -17,6 +17,7 @@ import type { MemoryWriteOptions, MemoryWriter, WriteResult } from './writer.js'
 import type { EpisodicSynthesisRunResult, EpisodicSynthesizer } from './episodic/synthesis.js';
 import type { SleepCycleEpisodeConsolidator } from './episodic/sleep-consolidation.js';
 import type { EpisodeArcWeaver } from './episodic/arc-formation.js';
+import type { DreamMeaningPass } from './episodic/dream-meaning-pass.js';
 import type { EpisodicMaintenanceDiagnostics } from './episodic/store.js';
 import {
   buildConflictingMemoryReviewInput,
@@ -67,6 +68,7 @@ type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
 type SleeptimeEpisodicSynthesizer = Pick<EpisodicSynthesizer, 'run'>;
 type SleeptimeEpisodeConsolidator = Pick<SleepCycleEpisodeConsolidator, 'run'>;
 type SleeptimeArcWeaver = Pick<EpisodeArcWeaver, 'run'>;
+type SleeptimeDreamMeaningPass = Pick<DreamMeaningPass, 'run'>;
 type SleeptimeMaintenanceStore = Pick<
   MemoryStorePort,
   'upsertMemoryMaintenanceReview' | 'listActiveMemories' | 'getById' | 'getMemoryMaintenanceDiagnostics'
@@ -106,6 +108,7 @@ export interface SleeptimeMemoryAgentOptions {
   episodicSynthesizer?: SleeptimeEpisodicSynthesizer | null;
   sleepConsolidator?: SleeptimeEpisodeConsolidator | null;
   arcWeaver?: SleeptimeArcWeaver | null;
+  dreamMeaningPass?: SleeptimeDreamMeaningPass | null;
   memoryMaintenanceStore?: SleeptimeMaintenanceStore | null;
   episodicDiagnosticsStore?: SleeptimeEpisodicDiagnosticsStore | null;
 }
@@ -420,6 +423,7 @@ export class SleeptimeMemoryAgent {
   private readonly episodicSynthesizer: SleeptimeEpisodicSynthesizer | null;
   private readonly sleepConsolidator: SleeptimeEpisodeConsolidator | null;
   private readonly arcWeaver: SleeptimeArcWeaver | null;
+  private readonly dreamMeaningPass: SleeptimeDreamMeaningPass | null;
   private readonly memoryMaintenanceStore: SleeptimeMaintenanceStore | null;
   private readonly episodicDiagnosticsStore: SleeptimeEpisodicDiagnosticsStore | null;
   private readonly turnCountBySession = new Map<string, number>();
@@ -442,6 +446,7 @@ export class SleeptimeMemoryAgent {
     this.episodicSynthesizer = options.episodicSynthesizer ?? null;
     this.sleepConsolidator = options.sleepConsolidator ?? null;
     this.arcWeaver = options.arcWeaver ?? null;
+    this.dreamMeaningPass = options.dreamMeaningPass ?? null;
     this.memoryMaintenanceStore = options.memoryMaintenanceStore ?? null;
     this.episodicDiagnosticsStore = options.episodicDiagnosticsStore ?? null;
   }
@@ -542,6 +547,13 @@ export class SleeptimeMemoryAgent {
 
     const arcFormation = this.arcWeaver
       ? await this.arcWeaver.run({
+        sessionId,
+        sourceMessageId: action.sourceMessageId,
+      })
+      : null;
+
+    const dreamMeaning = this.dreamMeaningPass
+      ? await this.dreamMeaningPass.run({
         sessionId,
         sourceMessageId: action.sourceMessageId,
       })
@@ -671,6 +683,7 @@ export class SleeptimeMemoryAgent {
       ...(episodicSynthesis ? summarizeEpisodicSynthesis(episodicSynthesis) : {}),
       ...(sleepConsolidation ? { sleepConsolidation } : {}),
       ...(arcFormation?.ran ? { arcFormation } : {}),
+      ...(dreamMeaning?.ran ? { dreamMeaning } : {}),
       ...(memoryMaintenanceDiagnostics ? { memoryMaintenanceDiagnostics } : {}),
       ...(episodicMaintenanceDiagnostics ? { episodicMaintenanceDiagnostics } : {}),
     });

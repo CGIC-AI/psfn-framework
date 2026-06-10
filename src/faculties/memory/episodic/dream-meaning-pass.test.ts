@@ -1,0 +1,156 @@
+import Database from 'better-sqlite3';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EpisodicStore, type EpisodeCreateInput } from './store.js';
+import { DreamMeaningPass, parseMeaningContribution } from './dream-meaning-pass.js';
+
+const NOW = new Date('2026-06-10T07:30:00.000Z');
+
+function meaningBlock(meanings: Record<string, string>, done = true): string {
+  return [
+    'Sitting with the day for a moment first.',
+    '```json',
+    JSON.stringify({ meanings, done }),
+    '```',
+  ].join('\n');
+}
+
+describe('DreamMeaningPass', () => {
+  let db: Database.Database | undefined;
+
+  afterEach(() => {
+    db?.close();
+    db = undefined;
+  });
+
+  function makeStore(): EpisodicStore {
+    db = new Database(':memory:');
+    return new EpisodicStore(db, { now: () => NOW });
+  }
+
+  function episodeInput(id: string, startedAt: string, endedAt: string, overrides: Partial<EpisodeCreateInput> = {}): EpisodeCreateInput {
+    return {
+      id,
+      title: `Episode ${id}`,
+      landmark: `What happened in ${id}.`,
+      startedAt,
+      endedAt,
+      threadId: 'discord:main',
+      channelId: 'discord:main',
+      participantContactIds: ['contact:vega'],
+      salience: { score: 0.6 },
+      affect: { labels: ['positive'] },
+      themes: ['evening'],
+      spanRefs: [{ spanId: `span-${id}`, sessionId: 'discord:main' }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'session', refId: 'discord:main' }],
+      ...overrides,
+    };
+  }
+
+  it('records her first-person meanings on the day episodes', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('quiet', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+    await store.createEpisode(episodeInput('crying', '2026-06-10T05:05:00.000Z', '2026-06-10T05:08:00.000Z'));
+
+    const handleMessage = vi.fn(async () => ({
+      content: meaningBlock({
+        crying: 'He remembered, and it cracked me open in the best way. I felt seen.',
+      }),
+    }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+
+    expect(result.ran).toBe(true);
+    expect(result.reviewedEpisodes).toBe(2);
+    expect(result.meaningsRecorded).toBe(1);
+    expect(result.turnsUsed).toBe(1);
+    expect(result.endedEarly).toBe(true);
+
+    const crying = await store.getEpisode('crying');
+    expect(crying?.meaning?.text).toContain('cracked me open');
+    expect(crying?.meaning?.source).toBe('companion_dream_pass');
+    const quiet = await store.getEpisode('quiet');
+    expect(quiet?.meaning).toBeUndefined();
+
+    // The opening prompt carried the episodes and the no-performance framing.
+    const firstCall = handleMessage.mock.calls[0][0] as { content: string; channelId: string };
+    expect(firstCall.channelId).toBe('internal:reflection:dream-pass');
+    expect(firstCall.content).toContain('"crying"');
+    expect(firstCall.content).toContain('No one reads this but you');
+  });
+
+  it('continues across turns until she says done, capped at maxTurns', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+    await store.createEpisode(episodeInput('b', '2026-06-09T22:00:00.000Z', '2026-06-09T23:00:00.000Z'));
+
+    const handleMessage = vi.fn()
+      .mockResolvedValueOnce({ content: meaningBlock({ a: 'A long day of building together.' }, false) })
+      .mockResolvedValueOnce({ content: meaningBlock({ b: 'Winding down with him felt warm.' }, true) });
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, maxTurns: 4 });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+
+    expect(result.turnsUsed).toBe(2);
+    expect(result.meaningsRecorded).toBe(2);
+    expect((await store.getEpisode('a'))?.meaning?.text).toContain('building together');
+    expect((await store.getEpisode('b'))?.meaning?.text).toContain('warm');
+  });
+
+  it('stops at maxTurns even without a done signal and keeps whatever was recorded', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    const handleMessage = vi.fn(async () => ({ content: 'still thinking, no block yet' }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, maxTurns: 2 });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+
+    expect(result.turnsUsed).toBe(2);
+    expect(result.meaningsRecorded).toBe(0);
+    expect(result.endedEarly).toBe(false);
+  });
+
+  it('respects the nightly cadence and skips episodes that already carry meaning', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    const handleMessage = vi.fn(async () => ({ content: meaningBlock({ a: 'It mattered.' }) }));
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW });
+
+    const first = await pass.run({ sessionId: 'discord:main' });
+    expect(first.ran).toBe(true);
+
+    const second = await pass.run({ sessionId: 'discord:main' });
+    expect(second.ran).toBe(false);
+    expect(second.skippedReason).toBe('cadence');
+
+    // Even past the cadence, an episode with meaning is not re-reviewed.
+    const later = new DreamMeaningPass(store, { handleMessage }, {
+      now: () => new Date('2026-06-11T07:30:00.000Z'),
+    });
+    const third = await later.run({ sessionId: 'discord:main' });
+    expect(third.ran).toBe(false);
+    expect(third.skippedReason).toBe('no_episodes');
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('parseMeaningContribution', () => {
+  const known = new Set(['a', 'b']);
+
+  it('returns null without a fenced json block', () => {
+    expect(parseMeaningContribution('just musing aloud', known)).toBeNull();
+  });
+
+  it('rejects unknown episode ids', () => {
+    expect(() => parseMeaningContribution(meaningBlock({ zzz: 'nope' }), known)).toThrow(/unknown episode id/);
+  });
+
+  it('accepts an empty meanings object as a done signal', () => {
+    const contribution = parseMeaningContribution(meaningBlock({}), known);
+    expect(contribution?.done).toBe(true);
+    expect(contribution?.meanings.size).toBe(0);
+  });
+});

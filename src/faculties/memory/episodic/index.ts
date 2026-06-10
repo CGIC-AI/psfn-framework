@@ -16,6 +16,14 @@ export {
   createPostgresEpisodicStoreFromPool,
 } from './postgres-store.js';
 export {
+  DreamMeaningPass,
+  parseMeaningContribution,
+  type DreamMeaningPassOptions,
+  type DreamMeaningPassRunInput,
+  type DreamMeaningPassRunResult,
+  type DreamPassAgent,
+} from './dream-meaning-pass.js';
+export {
   EpisodeArcWeaver,
   parseProposedArcs,
   type ArcFormationOptions,

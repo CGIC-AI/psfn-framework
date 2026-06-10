@@ -10,6 +10,7 @@ import { MemoryWriter } from '../../faculties/memory/writer.js';
 import { EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
 import { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
 import { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
+import { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
@@ -270,6 +271,7 @@ async function main(): Promise<void> {
   const episodicSynthesizer = new EpisodicSynthesizer(episodicStore, sessionManager);
   const sleepConsolidator = new SleepCycleEpisodeConsolidator(episodicStore, sessionManager, llmProvider);
   const arcWeaver = new EpisodeArcWeaver(episodicStore, llmProvider);
+  const dreamMeaningPass = new DreamMeaningPass(episodicStore, agentLoop);
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
   );
@@ -446,6 +448,7 @@ async function main(): Promise<void> {
       episodicSynthesizer,
       sleepConsolidator,
       arcWeaver,
+      dreamMeaningPass,
       memoryMaintenanceStore: memoryStore,
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,

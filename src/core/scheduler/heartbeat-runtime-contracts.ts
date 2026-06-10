@@ -18,6 +18,7 @@ import type { EpisodicSynthesizer } from '../../faculties/memory/episodic/synthe
 import type { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
 import type { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import type { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
+import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
 import type { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import type { SessionManager } from '../session/manager.js';
@@ -147,6 +148,7 @@ export interface HeartbeatRuntimeOptions {
   sleepConsolidator?: Pick<SleepCycleEpisodeConsolidator, 'run'> | null;
   arcWeaver?: Pick<EpisodeArcWeaver, 'run'> | null;
   dreamMeaningPass?: Pick<DreamMeaningPass, 'run'> | null;
+  proactiveOutbound?: Pick<ProactiveOutboundDispatcher, 'dispatch'> | null;
   memoryMaintenanceStore?: Pick<
     MemoryStorePort,
     'upsertMemoryMaintenanceReview' | 'listActiveMemories' | 'getById' | 'getMemoryMaintenanceDiagnostics'

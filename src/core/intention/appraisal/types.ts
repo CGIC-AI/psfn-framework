@@ -22,8 +22,9 @@ export const DEFAULT_SYSTEM_PROMPT = [
   'Consider unresolved concerns, emotional needs, scheduled commitments, and relationship maintenance.',
   'Most turns should return noop unless concrete action is warranted.',
   'Return JSON only, no markdown, with shape:',
-  '{"decisions":[{"type":"followUp|concern|schedule|reminder|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?","contextSummary":"string?","pendingFollowUpId":"string?","wakeConditions":["next_user_turn"|"background_recheck"|"sustained_negative_mood"]?},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"open|pending|resolved?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?},"reminder":{"kind":"important_date|self_reminder","classification":"birthday|anniversary|important_date|check_in|self_note","title":"string","content":"string","schedule":"one_time|annual","channelId":"string?","channelType":"string?"}}]}',
+  '{"decisions":[{"type":"followUp|concern|schedule|reminder|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?","contextSummary":"string?","pendingFollowUpId":"string?","wakeConditions":["next_user_turn"|"background_recheck"|"sustained_negative_mood"]?,"delivery":"internal|external?"},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"open|pending|resolved?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?},"reminder":{"kind":"important_date|self_reminder","classification":"birthday|anniversary|important_date|check_in|self_note","title":"string","content":"string","schedule":"one_time|annual","channelId":"string?","channelType":"string?"}}]}',
   'For followUp decisions, include followUp.content as a brief internal Whisper note to self, not a user-facing message.',
+  'Set followUp.delivery to "external" ONLY when you genuinely decide to reach out to the primary partner now: followUp.content then becomes the actual message you send, written in your own voice. External delivery is policy-gated (primary private channel only, rate-limited) and may be blocked. Default is "internal".',
   'Use followUp.contextSummary for the key situation to preserve if the follow-up may need to wait and be resurfaced later.',
   'Use followUp.wakeConditions only when the follow-up should stay pending until a later state cue. next_user_turn waits for the next external user turn, background_recheck waits for an internal/background appraisal turn, and sustained_negative_mood waits for continued notably negative mood or motivation signals.',
   'When resurfacing or refining an already pending follow-up, reuse followUp.pendingFollowUpId instead of inventing a duplicate.',
@@ -40,6 +41,7 @@ export const INTENTION_FOLLOW_UP_ACTION_KIND = 'intention.follow_up';
 export const INTENTION_FOLLOW_UP_AUTHOR_ID = 'system:intention';
 export const INTENTION_FOLLOW_UP_AUTHOR_NAME = 'Whisper';
 export const INTENTION_REMINDER_ACTION_KIND = 'intention.reminder';
+export const INTENTION_OUTBOUND_MESSAGE_ACTION_KIND = 'intention.outbound_message';
 
 export type IntentionDecisionType = 'followUp' | 'concern' | 'schedule' | 'reminder' | 'noop';
 export type IntentionDecisionPriority = 'low' | 'medium' | 'high';
@@ -88,6 +90,8 @@ export interface IntentionFollowUpDecision {
   contextSummary?: string;
   wakeConditions?: PendingFollowUpWakeCondition[];
   pendingFollowUpId?: string;
+  /** 'internal' (default) keeps the whisper-to-self path; 'external' requests policy-gated outbound delivery. */
+  delivery?: 'internal' | 'external';
 }
 
 export interface IntentionConcernDecision {
@@ -162,6 +166,14 @@ export interface IntentionFollowUpActionPayload {
   authorId: string;
   authorName: string;
   content: string;
+  pendingFollowUpId?: string;
+}
+
+export interface IntentionOutboundMessageActionPayload {
+  channelId: string;
+  channelType: ChannelType;
+  content: string;
+  reason?: string;
   pendingFollowUpId?: string;
 }
 

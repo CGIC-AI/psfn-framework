@@ -11,6 +11,7 @@ import { resolveConsolidatedReflectionTemplateId } from '../../scheduler/heartbe
 import {
   DEFAULT_FOLLOW_UP_PENDING_DELAY_MS,
   INTENTION_FOLLOW_UP_ACTION_KIND,
+  INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
   INTENTION_REMINDER_ACTION_KIND,
@@ -18,6 +19,7 @@ import {
   type IntentionDecisionActionContext,
   type IntentionDecisionActionOptions,
   type IntentionFollowUpActionPayload,
+  type IntentionOutboundMessageActionPayload,
   type IntentionReminderActionPayload,
 } from './types.js';
 import {
@@ -104,6 +106,24 @@ export function decisionsToPostTurnActionCandidates(
       const runAt = resolveFollowUpRunAt(decision, Date.now(), options);
       const channelId = decision.followUp?.channelId?.trim() || context.message.channelId;
       const channelType = decision.followUp?.channelType ?? context.message.channelType;
+      if (decision.followUp?.delivery === 'external') {
+        candidates.push({
+          kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
+          dedupeKey: `${INTENTION_OUTBOUND_MESSAGE_ACTION_KIND}:${context.message.id}:${hashString(content)}`,
+          payload: {
+            channelId,
+            channelType,
+            content,
+            reason: decision.reason,
+            ...(decision.followUp.pendingFollowUpId
+              ? { pendingFollowUpId: decision.followUp.pendingFollowUpId }
+              : {}),
+          } satisfies IntentionOutboundMessageActionPayload,
+          maxRetries: 1,
+          ...(runAt !== undefined ? { runAt } : {}),
+        });
+        continue;
+      }
       const dedupeKey = `${INTENTION_FOLLOW_UP_ACTION_KIND}:${context.message.id}:${hashString(content)}`;
       candidates.push({
         kind: INTENTION_FOLLOW_UP_ACTION_KIND,
@@ -210,6 +230,30 @@ export function normalizeIntentionFollowUpActionPayload(payload: unknown): Inten
     authorId,
     authorName,
     content,
+    ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
+  };
+}
+
+export function normalizeIntentionOutboundMessageActionPayload(
+  payload: unknown,
+): IntentionOutboundMessageActionPayload | null {
+  if (!isRecord(payload)) return null;
+  const channelId = typeof payload.channelId === 'string' ? payload.channelId.trim() : '';
+  const content = typeof payload.content === 'string' ? payload.content.trim() : '';
+  const reason = typeof payload.reason === 'string' ? payload.reason.trim() : '';
+  const pendingFollowUpId = typeof payload.pendingFollowUpId === 'string'
+    ? payload.pendingFollowUpId.trim()
+    : '';
+  const channelType = payload.channelType;
+  if (!channelId || !content) return null;
+  if (typeof channelType !== 'string' || !CHANNEL_TYPES.includes(channelType as ChannelType)) {
+    return null;
+  }
+  return {
+    channelId,
+    channelType: channelType as ChannelType,
+    content,
+    ...(reason ? { reason } : {}),
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
   };
 }

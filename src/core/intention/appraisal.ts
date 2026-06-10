@@ -9,6 +9,7 @@ export {
 export {
   decisionsToPostTurnActionCandidates,
   normalizeIntentionFollowUpActionPayload,
+  normalizeIntentionOutboundMessageActionPayload,
   normalizeIntentionReminderActionPayload,
   pendingFollowUpsToPostTurnActionCandidates,
   toInferredPostTurnActions,

@@ -95,6 +95,9 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
   const pendingFollowUpId = typeof value.pendingFollowUpId === 'string'
     ? value.pendingFollowUpId.trim()
     : '';
+  const delivery = value.delivery === 'external' || value.delivery === 'internal'
+    ? value.delivery
+    : undefined;
   const wakeConditions = Array.isArray(value.wakeConditions)
     ? [...new Set(
       value.wakeConditions
@@ -115,6 +118,7 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
     ...(contextSummary ? { contextSummary } : {}),
     ...(wakeConditions.length > 0 ? { wakeConditions } : {}),
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
+    ...(delivery ? { delivery } : {}),
   };
 }
 

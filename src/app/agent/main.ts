@@ -11,6 +11,7 @@ import { EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
 import { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
 import { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
+import { ProactiveOutboundDispatcher } from '../../core/intention/proactive-outbound.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
@@ -414,6 +415,17 @@ async function main(): Promise<void> {
   const gatewaySender = {
     send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
   };
+  // First proactive-outreach slice: only the configured primary heartbeat DM
+  // is an approved target. Contact-graph channel resolution arrives with the
+  // durable outbox (1xb.2).
+  const proactiveOutbound = heartbeatChannelId
+    ? new ProactiveOutboundDispatcher({
+      sender: gatewaySender,
+      rateLimiter: externalRateLimiter,
+      isApprovedPrimaryChannel: (channelId) => channelId === heartbeatChannelId,
+      eventBus,
+    })
+    : null;
 
   // Vault auto-publisher (for heartbeat reflections → Obsidian vault)
   const vaultAutoPublisher = await createOptionalVaultAutoPublisher(gateway, config);
@@ -449,6 +461,7 @@ async function main(): Promise<void> {
       sleepConsolidator,
       arcWeaver,
       dreamMeaningPass,
+      proactiveOutbound,
       memoryMaintenanceStore: memoryStore,
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,

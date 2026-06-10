@@ -18,10 +18,12 @@ import {
 import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,
+  INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
   INTENTION_REMINDER_ACTION_KIND,
   decisionsToPostTurnActionCandidates,
   isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
+  normalizeIntentionOutboundMessageActionPayload,
   normalizeIntentionReminderActionPayload,
   pendingFollowUpsToPostTurnActionCandidates,
   sessionEntriesToIntentionMessages,
@@ -601,6 +603,38 @@ export function wireHeartbeatPostTurnRuntime(
           runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
         },
       );
+      if (runtimeOptions.proactiveOutbound) {
+        const proactiveOutbound = runtimeOptions.proactiveOutbound;
+        runtimeOptions.postTurnActions.registerHandler(
+          INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
+          async (action) => {
+            const payload = normalizeIntentionOutboundMessageActionPayload(action.payload);
+            if (!payload) {
+              throw new Error(`Intention outbound action "${action.id}" payload is missing required fields`);
+            }
+            if (payload.pendingFollowUpId && runtimeOptions.onIntentionFollowUpActivated) {
+              const activated = await runtimeOptions.onIntentionFollowUpActivated({
+                pendingFollowUpId: payload.pendingFollowUpId,
+                activationReason: 'post_turn_action',
+              });
+              if (activated === false) {
+                return;
+              }
+            }
+            await proactiveOutbound.dispatch({
+              actionId: action.id,
+              channelId: payload.channelId,
+              channelType: payload.channelType,
+              content: payload.content,
+              ...(payload.reason ? { reason: payload.reason } : {}),
+            });
+          },
+          {
+            executionMode: 'background',
+            runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
+          },
+        );
+      }
       runtimeOptions.postTurnActions.registerHandler(
         INTENTION_REMINDER_ACTION_KIND,
         async (action) => {

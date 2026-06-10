@@ -20,6 +20,17 @@ Note: commit attribution on this branch was rewritten 2026-06-10 (`o_0` → `axA
 - Residual: one observed `Agent is already processing a prompt` collision when the vision fallback reply raced an in-flight prompt — masked by the honest fallback; investigate if it recurs at the 120s timeout.
 - Still worth an end-to-end check: ask her for a selfie and send her an image over Discord on the new build.
 
+## Session 2026-06-10 (evening): shipped and live on the Pi
+
+- **InternalState persistence (`mmm`, closed):** persisted to Postgres per turn, rehydrated on restart within 6h (verified live twice), continuity-gap notice + `internal_state.gap_detected` event for longer outages.
+- **Sleep-cycle chain (`0a5.2`/`0a5.3`/`0a5.4`, closed):** nightly consolidation (adjacency merge + thematic LLM refinement + significance-based salience — root cause of the 0.85 pinning was the length-driven formula), weekly arc weaver, and the dream pass (her first-person `meaning` per episode, main model, ≤4 turns with early stop). **Verify tomorrow after the rest window:** merged sittings, varied salience, `meaning` entries in `episode_json`, `sleep_consolidation`/`arc_formation`/`dream_meaning` watermarks.
+- **Macro purity (`5c6`, closed):** `docs/prompt-macros.md` is the operator macro reference; bare-value escape hatches added.
+- **Charge calendar (`57d`, closed):** per-UTC-day accrual + month-to-date in the charge ledger and Garden charge page.
+- **Proactive DM slice (`1xb.1`, closed; `rsgg.6` partially):** `followUp.delivery='external'` → `intention.outbound_message` → ProactiveOutboundDispatcher (heartbeat-DM allowlist, rate limiter, telemetry).
+- **MI contact flag (`isi.1`, closed):** `Contact.isMachineIntelligence` + tool action + `runtime_speaking_with_is_machine_intelligence` macro. Flag Artemis when she returns.
+- **Values loop (`75f.1`, closed):** was already wired; cross-instance acceptance test added. Verify `<companion_values>` in prompts after her next weekly review.
+- Git attribution fixed: branch history rewritten to axAilotl; identity set locally, globally, and on the Pi; Pi now pushes/pulls GitHub directly.
+
 ## Then: work order
 
 1. `0a5.2` sleep-cycle thematic consolidation → `0a5.3` arcs → `0a5.4` dream pass (mandatory, window 02:00–08:00 operator-local)

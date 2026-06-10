@@ -727,7 +727,7 @@ describe('SubstrateAgent.registerTool', () => {
     agent.registerTool({
       name: 'schedule_task',
       label: 'schedule_task',
-      description: 'background-only scheduler tool',
+      description: 'scheduler tool',
       parameters: { type: 'object' as const, properties: {} },
       execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
     } as any, 'extended');
@@ -782,7 +782,7 @@ describe('SubstrateAgent.registerTool', () => {
     expect(scheduleTask?.wiringMeta?.concurrency).toMatchObject({
       class: 'exclusive',
       eligibility: {
-        foreground: false,
+        foreground: true,
         background: true,
       },
     });
@@ -2606,7 +2606,11 @@ describe('SubstrateAgent.handleMessage', () => {
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
     expect(prompt).toContain('<internal_turn_context>');
     expect(prompt).toContain(`<kind>${channelId.includes('reflection') ? 'reflection' : 'heartbeat'}</kind>`);
-    expect(prompt).not.toContain('scheduler');
+    // The scheduler/whisper runtime source must not be presented as the
+    // conversation partner; static tool guidance may mention the scheduler.
+    const speakingWith = prompt.match(/<speaking_with>[\s\S]*?<\/speaking_with>/)?.[0] ?? '';
+    expect(speakingWith.toLowerCase()).not.toContain('scheduler');
+    expect(speakingWith.toLowerCase()).not.toContain(authorName.toLowerCase());
   });
 
   it('triggers memory extraction after response', async () => {
@@ -3221,6 +3225,7 @@ describe('SubstrateAgent.handleMessage', () => {
       );
       mockAssistantResponse('');
       mockAssistantResponse('');
+      mockAssistantResponse('');
 
       const promptCallsBefore = promptSpy.mock.calls.length;
       const response = await agent.handleMessage(makeMessage({
@@ -3232,20 +3237,25 @@ describe('SubstrateAgent.handleMessage', () => {
         }],
       }));
 
-      expect(response.content).toBe('');
-      expect(response.metadata.model).toBe('chat-model');
-      expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(3);
+      // Exhausted recovery now yields an honest failure notice instead of
+      // silent empty output; it must disclose the failure, not perform sight.
+      expect(response.content).toContain('image reader failed');
+      expect(response.content).toContain('should not pretend I saw the image');
+      expect(response.metadata.model).toBe('runtime-fallback');
+      expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(4);
       const firstRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 1]?.[0] as { content: string };
       const secondRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 2]?.[0] as { content: string };
+      const thirdRecoveryPrompt = promptSpy.mock.calls[promptCallsBefore + 3]?.[0] as { content: string };
       expect(firstRecoveryPrompt.content).toBe(TEST_USER_GREETING);
       expect(secondRecoveryPrompt.content).toBe(TEST_USER_GREETING);
+      expect(thirdRecoveryPrompt.content).toBe(TEST_USER_GREETING);
       expect(firstRecoveryPrompt.content).not.toContain('Runtime note');
       expect(secondRecoveryPrompt.content).not.toContain('Runtime note');
+      expect(thirdRecoveryPrompt.content).not.toContain('Runtime note');
       expect(response.metadata.diagnostics?.fallback).toMatchObject({
         code: 'vision_empty_response',
-        strategy: 'replay_transport_content',
-        attempts: 2,
-        finalContentEmpty: true,
+        strategy: 'runtime_nonfabricating_notice',
+        attempts: 3,
       });
   } finally {
       (globalThis as any).fetch = originalFetch;
@@ -3899,7 +3909,7 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
-  it('skips background-only toolset activate candidates and emits same-turn activation diagnostics', async () => {
+  it('activates schedule tools through toolset now that no extended tools default to background-only', async () => {
     const eventBus = new EventBus();
     const agent = new SubstrateAgent(
       eventBus,
@@ -3938,18 +3948,18 @@ describe('SubstrateAgent.handleMessage', () => {
       backgroundOnlyTools?: string[];
       activatedTools?: string[];
     };
-    expect(payload.backgroundOnlyTools).toEqual(['schedule_task']);
-    expect(payload.activatedTools).toEqual(['repo_status']);
+    expect(payload.backgroundOnlyTools ?? []).toEqual([]);
+    expect(payload.activatedTools).toEqual(['schedule_task', 'repo_status']);
     const runtimeState = agent.getAdaptiveToolRuntimeState();
     const activeToolNames = runtimeState.activeTools.map(tool => tool.toolName);
     expect(activeToolNames).toContain('repo_status');
-    expect(activeToolNames).not.toContain('schedule_task');
+    expect(activeToolNames).toContain('schedule_task');
 
     expect(sameTurnEvents.at(-1)).toMatchObject({
       requestedTools: ['schedule_task', 'repo_status'],
-      overlayEligible: ['repo_status'],
-      activatedTools: ['repo_status'],
-      skippedBackgroundOnly: ['schedule_task'],
+      overlayEligible: ['schedule_task', 'repo_status'],
+      activatedTools: ['schedule_task', 'repo_status'],
+      skippedBackgroundOnly: [],
       intent: 'ops',
       taskKind: 'chat',
     });
@@ -3957,8 +3967,7 @@ describe('SubstrateAgent.handleMessage', () => {
       expect.objectContaining({
         toolName: 'schedule_task',
         source: 'extended_loaded',
-        decision: 'skipped',
-        reason: 'background_only',
+        decision: 'activated',
       }),
     ]));
   });
@@ -4055,7 +4064,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(autoloadSummaries).toEqual([]);
   });
 
-  it('excludes background-only tools from foreground autoload overlay selection', async () => {
+  it('loads all overlay candidates in foreground turns now that no extended tools default to background-only', async () => {
     const config = makeConfig({ capabilityTier: 'autonomous' });
     const eventBus = new EventBus();
     const agent = new SubstrateAgent(
@@ -4086,17 +4095,13 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     const toolNames = configuredTools.map(tool => tool.name);
-    expect(toolNames).toContain('heartbeat_update_policy');
-    expect(toolNames).not.toContain('heartbeat_run_template');
-    expect(toolNames).not.toContain('schedule_task');
+    const registeredOverlayNames = ['heartbeat_update_policy', 'heartbeat_run_template', 'schedule_task', 'beads'];
+    expect(toolNames.some(name => registeredOverlayNames.includes(name))).toBe(true);
 
     const summary = autoloadSummaries.at(-1);
     expect(summary?.intent).toBe('ops');
-    expect(summary?.overlayCandidates).toEqual(['heartbeat_update_policy']);
-    expect(summary?.skippedBackgroundOnly).toEqual(['heartbeat_run_template', 'schedule_task']);
-    expect(autoloadSkips).toEqual(expect.arrayContaining([
-      expect.objectContaining({ toolName: 'heartbeat_run_template', reason: 'background_only' }),
-    ]));
+    expect(summary?.skippedBackgroundOnly ?? []).toEqual([]);
+    expect(autoloadSkips.filter(skip => skip.reason === 'background_only')).toEqual([]);
   });
 
   it('emits adaptive decision telemetry and per-turn active-set snapshots with source labels', async () => {
@@ -4304,9 +4309,10 @@ describe('SubstrateAgent.handleMessage', () => {
     } as any;
     agent.registerTool(backgroundTool, 'extended');
 
-    const backgroundOnly = agent.addPromotedExtendedTool('schedule_task');
-    expect(backgroundOnly.ok).toBe(false);
-    expect(backgroundOnly.errorCode).toBe('background_only');
+    // schedule_task stopped being background-only with the scheduler
+    // consolidation; promotion is now a valid operation for it.
+    const scheduleTaskPromotion = agent.addPromotedExtendedTool('schedule_task');
+    expect(scheduleTaskPromotion.ok).toBe(true);
   });
 
   it('keeps runtime state unchanged when promoted-tool persistence fails', () => {

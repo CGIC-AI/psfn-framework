@@ -207,6 +207,10 @@ describe('extended-tool-autoload-policy', () => {
   it('classifies tools with explicit core, overlay, and background semantics', () => {
     expect(classifyToolForTurn('repo_status', { coreToolNames: ['repo_status'] })).toBe('core');
     expect(classifyToolForTurn('schedule', { coreToolNames: ['schedule'] })).toBe('core');
+    // No extended tools default to background-only since the scheduler
+    // consolidation, but an explicit configuration still classifies them.
+    expect(classifyToolForTurn('schedule_task')).toBe('overlay');
+    expect(classifyToolForTurn('schedule_task', { backgroundOnlyToolNames: ['schedule_task'] })).toBe('background');
     expect(classifyToolForTurn('repo_diff')).toBe('overlay');
     expect(classifyToolForTurn('   ')).toBe('background');
   });

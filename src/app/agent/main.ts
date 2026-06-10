@@ -8,6 +8,7 @@ import { GatewayClient } from '../../boundary/gateway/client.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
 import { EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
+import { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
@@ -266,6 +267,7 @@ async function main(): Promise<void> {
   const memoryWriter = new MemoryWriter(memoryStore, gateway);
   const episodicStore = companionEpisodicStore;
   const episodicSynthesizer = new EpisodicSynthesizer(episodicStore, sessionManager);
+  const sleepConsolidator = new SleepCycleEpisodeConsolidator(episodicStore, sessionManager, llmProvider);
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
   );
@@ -440,6 +442,7 @@ async function main(): Promise<void> {
       pendingFollowUpStore: intentionRuntime.pendingFollowUpStore,
       coreMemoryStore,
       episodicSynthesizer,
+      sleepConsolidator,
       memoryMaintenanceStore: memoryStore,
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,

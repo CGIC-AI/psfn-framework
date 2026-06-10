@@ -90,6 +90,7 @@ export function wireHeartbeatPostTurnRuntime(
       cadenceTurns: runtimeOptions.sleeptimeCadenceTurns,
       restWindow: runtimeOptions.episodicProcessingRestWindow,
       episodicSynthesizer: runtimeOptions.episodicSynthesizer,
+      sleepConsolidator: runtimeOptions.sleepConsolidator,
       memoryMaintenanceStore: runtimeOptions.memoryMaintenanceStore,
       episodicDiagnosticsStore: runtimeOptions.episodicDiagnosticsStore,
     })

@@ -201,6 +201,8 @@ export type EpisodicStoreResult<T> = T | Promise<T>;
 export interface EpisodicStorePort {
   createEpisode(input: EpisodeCreateInput): EpisodicStoreResult<Episode>;
   updateEpisode(input: EpisodeUpdateInput): EpisodicStoreResult<Episode>;
+  /** Folds an episode into a canonical target: it stops appearing in list/search results but remains retrievable by id. */
+  markEpisodeMerged(episodeId: string, mergedIntoEpisodeId: string): EpisodicStoreResult<void>;
   getEpisode(id: string): EpisodicStoreResult<Episode | undefined>;
   listEpisodes(options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
   searchByTime(options?: EpisodeTimeSearchOptions): EpisodicStoreResult<Episode[]>;
@@ -312,6 +314,8 @@ function createEpisodicSchema(db: Database.Database): void {
       started_at TEXT NOT NULL,
       ended_at TEXT NOT NULL,
       salience_score REAL NOT NULL,
+      status TEXT,
+      merged_into_episode_id TEXT,
       episode_json TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -703,6 +707,39 @@ export class EpisodicStore implements EpisodicStorePort {
     this.idFactory = options.idFactory ?? randomUUID;
     this.db.pragma('foreign_keys = ON');
     createEpisodicSchema(this.db);
+    this.ensureMergeColumns();
+  }
+
+  // Pre-existing databases predate the merge-tracking columns; CREATE TABLE
+  // IF NOT EXISTS does not add them.
+  private ensureMergeColumns(): void {
+    const columns = this.db.prepare("SELECT name FROM pragma_table_info('l01_episodes')").all() as Array<{ name: string }>;
+    const names = new Set(columns.map(column => column.name));
+    if (!names.has('status')) {
+      this.db.exec('ALTER TABLE l01_episodes ADD COLUMN status TEXT');
+    }
+    if (!names.has('merged_into_episode_id')) {
+      this.db.exec('ALTER TABLE l01_episodes ADD COLUMN merged_into_episode_id TEXT');
+    }
+  }
+
+  markEpisodeMerged(episodeId: string, mergedIntoEpisodeId: string): void {
+    const sourceId = parseRequiredText(episodeId, 'episode id');
+    const targetId = parseRequiredText(mergedIntoEpisodeId, 'merged-into episode id');
+    if (sourceId === targetId) {
+      throw new Error('an episode cannot be merged into itself');
+    }
+    if (!this.getEpisode(targetId)) {
+      throw new Error(`merge target episode "${targetId}" does not exist`);
+    }
+    const result = this.db.prepare(`
+      UPDATE l01_episodes
+      SET status = 'merged', merged_into_episode_id = ?, updated_at = ?
+      WHERE id = ?
+    `).run(targetId, this.now().toISOString(), sourceId);
+    if (result.changes === 0) {
+      throw new Error(`episode "${sourceId}" does not exist`);
+    }
   }
 
   createEpisode(input: EpisodeCreateInput): Episode {
@@ -786,6 +823,7 @@ export class EpisodicStore implements EpisodicStorePort {
     const rows = this.db.prepare(`
       SELECT id, episode_json
       FROM l01_episodes
+      WHERE merged_into_episode_id IS NULL
       ORDER BY started_at ASC, id ASC
       LIMIT ? OFFSET ?
     `).all(normalizeLimit(options.limit), normalizeOffset(options.offset)) as EpisodeRow[];
@@ -810,7 +848,7 @@ export class EpisodicStore implements EpisodicStorePort {
       throw new Error('from must be before or equal to to');
     }
 
-    const where: string[] = [];
+    const where: string[] = ['merged_into_episode_id IS NULL'];
     const params: Array<string | number> = [];
     if (from !== undefined) {
       where.push('ended_at >= ?');
@@ -821,11 +859,10 @@ export class EpisodicStore implements EpisodicStorePort {
       params.push(to);
     }
 
-    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
     const rows = this.db.prepare(`
       SELECT id, episode_json
       FROM l01_episodes
-      ${whereClause}
+      WHERE ${where.join(' AND ')}
       ORDER BY started_at ASC, id ASC
       LIMIT ? OFFSET ?
     `).all(
@@ -841,7 +878,7 @@ export class EpisodicStore implements EpisodicStorePort {
     const rows = this.db.prepare(`
       SELECT id, episode_json
       FROM l01_episodes
-      WHERE thread_id = ?
+      WHERE thread_id = ? AND merged_into_episode_id IS NULL
       ORDER BY started_at ASC, id ASC
       LIMIT ? OFFSET ?
     `).all(

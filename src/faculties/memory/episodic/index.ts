@@ -16,6 +16,14 @@ export {
   createPostgresEpisodicStoreFromPool,
 } from './postgres-store.js';
 export {
+  SleepCycleEpisodeConsolidator,
+  buildMergeChains,
+  type SleepConsolidationSessionReader,
+  type SleepCycleConsolidationOptions,
+  type SleepCycleConsolidationResult,
+  type SleepCycleConsolidationRunInput,
+} from './sleep-consolidation.js';
+export {
   EpisodicSynthesizer,
   type EpisodicSynthesisOptions,
   type EpisodicSynthesisProcessingWatermark,

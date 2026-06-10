@@ -490,6 +490,26 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     return episode;
   }
 
+  async markEpisodeMerged(episodeId: string, mergedIntoEpisodeId: string): Promise<void> {
+    const sourceId = parseRequiredText(episodeId, 'episode id');
+    const targetId = parseRequiredText(mergedIntoEpisodeId, 'merged-into episode id');
+    if (sourceId === targetId) {
+      throw new Error('an episode cannot be merged into itself');
+    }
+    const target = await this.getEpisode(targetId);
+    if (!target) {
+      throw new Error(`merge target episode "${targetId}" does not exist`);
+    }
+    const result = await executeQuery(this.pool, `
+      UPDATE l01_episodes
+      SET status = 'merged', merged_into_episode_id = $2, updated_at = $3
+      WHERE id = $1
+    `, [sourceId, targetId, this.now().toISOString()]);
+    if (result.rowCount === 0) {
+      throw new Error(`episode "${sourceId}" does not exist`);
+    }
+  }
+
   async listEpisodes(options: EpisodeListOptions = {}): Promise<Episode[]> {
     const rows = await queryRows<PostgresEpisodeRow>(this.pool, `
       SELECT id, episode_json

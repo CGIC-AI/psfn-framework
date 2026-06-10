@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { compactMemoryTextForPrompt } from '../../faculties/memory/retrieval/formatting.js';
 import type { Scheduler } from './scheduler.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -1575,8 +1576,11 @@ export function createHeartbeatTemplateRuntime(
     metadata: ValuesDeliberationMetadata,
   ): Promise<void> => {
     if (!runtimeOptions.memoryWriter) return;
+    // Store the narrative paragraph as the memory; the full deliberation
+    // output (including any fenced self-report artifact) already persists
+    // in the reflection journal with provenance.
     await runtimeOptions.memoryWriter.write({
-      text: reflection,
+      text: compactMemoryTextForPrompt(reflection),
       type: 'reflection',
       importance: 0.72,
       confidence: 0.78,

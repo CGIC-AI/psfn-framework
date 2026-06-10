@@ -201,7 +201,9 @@ function compactPromptLine(value: string, maxChars: number): string {
 // artifacts (fenced JSON self-reports, carry-forward scaffolding) appended
 // after the narrative paragraph. The narrative is the memory; the artifact
 // belongs to records and tooling, never to companion-facing context.
-function compactMemoryTextForPrompt(text: string): string {
+// Exported so the reflection writer can store narrative-only text at the
+// source; this render-time pass remains the safety net for legacy memories.
+export function compactMemoryTextForPrompt(text: string): string {
   const fenceIndex = text.indexOf('```');
   const narrative = (fenceIndex >= 0 ? text.slice(0, fenceIndex) : text)
     .replace(/\*\*carry_forward:\*\*[\s\S]*$/i, '')
@@ -371,7 +373,7 @@ function renderAttributedMemorySection(
 function formatEvolutionChainLines(scored: ScoredMemory): string[] {
   if (!scored.evolutionChain || scored.evolutionChain.length === 0) return [];
   return scored.evolutionChain.map(link => (
-    `  - ${formatEvolutionRelation(link.relation)} [${link.memory.type}] ${compactMemoryTextForPrompt(link.memory.text)} (confidence ${link.confidence.toFixed(2)})`
+    `  - ${formatEvolutionRelation(link.relation)} [${link.memory.type}] ${compactMemoryTextForPrompt(link.memory.text)}${link.confidence < 0.6 ? ' (tentative link)' : ''}`
   ));
 }
 

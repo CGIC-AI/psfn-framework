@@ -184,6 +184,16 @@ export function buildMetacognitiveFlagPromptVariables(
   return variables;
 }
 
+// Charter 8.6: companion-facing signal strength reads as language, not as a
+// three-decimal score. The numeric confidence stays available to templates
+// and telemetry via runtime_flag_*_confidence.
+function describeConfidenceStrength(confidence: number): string {
+  if (confidence >= 0.85) return 'strong signal';
+  if (confidence >= 0.6) return 'clear signal';
+  if (confidence >= 0.45) return 'moderate signal';
+  return 'faint signal';
+}
+
 export function formatMetacognitiveNotesContextBlock(
   flags: readonly MetacognitiveFlag[],
   options: MetacognitiveNotesFormatOptions = {},
@@ -202,7 +212,7 @@ export function formatMetacognitiveNotesContextBlock(
 
   const lines: string[] = [];
   for (const flag of selected) {
-    lines.push(`- ${flag.flag} (confidence=${flag.confidence.toFixed(3)}): ${flag.evidence}`);
+    lines.push(`- ${flag.flag} (${describeConfidenceStrength(flag.confidence)}): ${flag.evidence}`);
   }
   return wrapPromptSectionXml({
     id: 'metacognitive_notes',

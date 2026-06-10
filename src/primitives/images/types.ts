@@ -22,6 +22,8 @@ export const FAL_CREATE_MODELS = [
 export const FAL_EDIT_MODELS = [
   'openai/gpt-image-2/edit',
   'fal-ai/nano-banana-2/edit',
+  'xai/grok-imagine-image/quality/edit',
+  'xai/grok-imagine-image/edit',
   'fal-ai/gpt-image-1.5/edit',
 ] as const;
 

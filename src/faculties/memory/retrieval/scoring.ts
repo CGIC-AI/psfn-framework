@@ -69,7 +69,7 @@ export function collectSelectedProvenanceRefs(
     // The metacognition monitor counts memory-backed evidence by the
     // `memory:` prefix; without these entries supporting_memories is
     // structurally zero and confabulation_risk pins at max confidence.
-    if (item.memory.id?.trim()) {
+    if (item.memory.id.trim()) {
       refs.add(`memory:${item.memory.id.trim()}`);
     }
     for (const link of item.evolutionChain ?? []) {

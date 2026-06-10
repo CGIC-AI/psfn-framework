@@ -2,7 +2,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { ImageOperations } from './ops.js';
-import { isFalContentPolicyError } from './fal.js';
+import { isFalContentPolicyError, isTransientFalError } from './fal.js';
 import type {
   ImageReferenceSelector,
   ResolvedImageReference,
@@ -32,6 +32,42 @@ const IMAGE_ASPECT_RATIO_DESCRIPTION = [
   'Use only one of the supported presets.',
 ].join(' ');
 const MEDIA_ACTION_VALUES = ['generate', 'edit', 'analyze'] as const;
+
+// Reference-selfie edit tiers, strictest/highest-fidelity first. Every tier is an
+// edit endpoint so the saved reference photo always anchors the result; on a
+// content-policy block or timeout the chain advances to the next, more permissive tier.
+const SELFIE_EDIT_MODEL_CHAIN = [
+  'openai/gpt-image-2/edit',
+  'fal-ai/nano-banana-2/edit',
+  'xai/grok-imagine-image/quality/edit',
+] as const satisfies readonly typeof FAL_EDIT_MODELS[number][];
+
+const SELFIE_EDIT_MODEL_DESCRIPTION = [
+  'Starting edit-model tier for the reference selfie.',
+  'Tiers, strictest first: openai/gpt-image-2/edit (highest fidelity, strictest content filter, slow - can take minutes),',
+  'fal-ai/nano-banana-2/edit (fast, strong fidelity), xai/grok-imagine-image/quality/edit (most permissive filter).',
+  'On a content-policy block or timeout the tool automatically falls through to the next tier, always keeping the reference image.',
+  'For casual but filter-sensitive looks (swimwear, beachwear, tank tops, fitted or shoulder-baring outfits), start directly at fal-ai/nano-banana-2/edit or xai/grok-imagine-image/quality/edit instead of waiting out a gpt-image false-positive block.',
+].join(' ');
+
+function resolveSelfieEditModelChain(
+  startModel: typeof FAL_EDIT_MODELS[number] | undefined,
+): readonly typeof FAL_EDIT_MODELS[number][] {
+  if (!startModel) {
+    return SELFIE_EDIT_MODEL_CHAIN;
+  }
+  const startIndex = (SELFIE_EDIT_MODEL_CHAIN as readonly string[]).indexOf(startModel);
+  if (startIndex >= 0) {
+    return SELFIE_EDIT_MODEL_CHAIN.slice(startIndex);
+  }
+  // Off-chain start (e.g. grok speed mode or gpt-image-1.5): try it, then fall
+  // through the non-gpt tiers rather than escalating back to a stricter model.
+  return [startModel, ...SELFIE_EDIT_MODEL_CHAIN.slice(1).filter((model) => model !== startModel)];
+}
+
+function shouldFallThroughSelfieEditChain(error: unknown): boolean {
+  return isProviderContentPolicyError(error) || isTransientFalError(error);
+}
 
 type MediaAction = typeof MEDIA_ACTION_VALUES[number];
 
@@ -190,7 +226,7 @@ function resolveCurrentTurnVisionReviewFallback(
 
 function buildImageCreateDescription(selfImage: boolean): string {
   if (selfImage) {
-    return 'Generate a dedicated selfie or self-portrait of the companion. Use this explicit path when the request is specifically about her own representation; the runtime Appearance context is loaded for this tool only. When a default reference photo is configured, this tool uses it through the image-edit pipeline unless use_reference_image=false; choose reference_image_id or reference_image_tags for a different saved reference. If the provider blocks the request for content policy, do not retry minor prompt variants in the same turn; report the block and ask for a safer non-explicit direction. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
+    return 'Generate a dedicated selfie or self-portrait of the companion; the result does not have to be a literal selfie angle - any portrait of her works. Use this explicit path when the request is specifically about her own representation; the runtime Appearance context is loaded for this tool only. When a default reference photo is configured, this tool always works through the image-edit pipeline so the reference anchors her likeness, unless use_reference_image=false; choose reference_image_id or reference_image_tags for a different saved reference. Edit models run as a tiered fallback chain (gpt-image-2 -> nano-banana-2 -> grok-imagine quality), advancing automatically on content-policy blocks or timeouts; use edit_model to start at a more permissive tier for casual filter-sensitive looks like swimwear or tank tops. If the whole chain blocks the request for content policy, do not retry minor prompt variants in the same turn; report the block and ask for a safer non-explicit direction. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
   }
   return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits, use the dedicated selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
 }
@@ -371,7 +407,7 @@ function contentPolicyBlockedResult<TDetails extends { isError?: boolean }>(
   const message = [
     `${toolName} was blocked by the image provider content policy.`,
     fallbackBlocked
-      ? 'A fresh-generation fallback was attempted and was also blocked.'
+      ? 'A safer edit fallback was attempted and was also blocked.'
       : 'The provider rejected this image request.',
     'Do not retry the same prompt or minor wording variants in this turn; stop tool attempts, tell the user the provider blocked the image request, and ask for a safer non-explicit direction.',
     `Provider error: ${toErrorMessage(error)}`,
@@ -679,7 +715,10 @@ export function createImageCreateTool(
           use_reference_image: Type.Optional(Type.Boolean({
             description: 'Set false to generate without a saved reference photo.',
           })),
-          edit_model: Type.Optional(Type.Union(FAL_EDIT_MODELS.map((value) => Type.Literal(value)))),
+          edit_model: Type.Optional(Type.Union(
+            FAL_EDIT_MODELS.map((value) => Type.Literal(value)),
+            { description: SELFIE_EDIT_MODEL_DESCRIPTION },
+          )),
         }
       : {}),
   };
@@ -727,72 +766,95 @@ export function createImageCreateTool(
         let notice: string | undefined;
         let result: ImageGenerationResult;
         if (reference) {
-          try {
-            result = await ops.edit({
-              prompt: params.prompt,
-              imageUrls: [reference.dataUrl],
-              provider: params.provider,
-              model: params.edit_model,
-              numImages: params.num_images,
-              width: params.width,
-              height: params.height,
-              aspectRatio: params.aspect_ratio,
-              resolution: params.resolution,
-              imageSize: params.image_size,
-              background: params.background,
-              outputFormat: params.output_format,
-              seed: params.seed,
-              sourceToolName: toolName,
-              referenceImageIds: [reference.id],
-            });
-          } catch (error) {
-            if (!selfImage || !isProviderContentPolicyError(error)) {
-              throw error;
-            }
-            const fallbackPrompt = buildSelfImageContentPolicyFallbackPrompt(params.prompt);
+          const runReferenceEdit = async (
+            editModel: typeof FAL_EDIT_MODELS[number],
+            editPrompt: string,
+          ): Promise<ImageGenerationResult> => await ops.edit({
+            prompt: editPrompt,
+            imageUrls: [reference.dataUrl],
+            provider: params.provider,
+            model: editModel,
+            numImages: params.num_images,
+            width: params.width,
+            height: params.height,
+            aspectRatio: params.aspect_ratio,
+            resolution: params.resolution,
+            imageSize: params.image_size,
+            background: params.background,
+            outputFormat: params.output_format,
+            seed: params.seed,
+            sourceToolName: toolName,
+            referenceImageIds: [reference.id],
+          });
+
+          const editChain = resolveSelfieEditModelChain(params.edit_model);
+          const chainFailures: { model: string; error: unknown }[] = [];
+          let chainResult: ImageGenerationResult | null = null;
+          for (const editModel of editChain) {
             try {
-              const fallbackResult = await ops.create({
-                prompt: fallbackPrompt,
-                provider: params.provider,
-                model: params.model,
-                numImages: params.num_images,
-                width: params.width,
-                height: params.height,
-                aspectRatio: params.aspect_ratio,
-                resolution: params.resolution,
-                imageSize: params.image_size,
-                background: params.background,
-                outputFormat: params.output_format,
-                seed: params.seed,
-                guidanceScale: params.guidance_scale,
-                numInferenceSteps: params.num_inference_steps,
-                acceleration: params.acceleration,
-                enablePromptExpansion: params.enable_prompt_expansion,
-                enableSafetyChecker: params.enable_safety_checker,
-                negativePrompt: params.negative_prompt,
-                useTurbo: params.use_turbo,
-                sourceToolName: toolName,
-              });
-              result = {
-                ...fallbackResult,
-                fallbackUsed: true,
-                fallbackReason: fallbackResult.fallbackReason
-                  ?? 'selfie_reference_content_policy_fresh_generation',
-              };
-              mode = 'create';
+              chainResult = await runReferenceEdit(editModel, params.prompt);
+              break;
+            } catch (error) {
+              if (!shouldFallThroughSelfieEditChain(error)) {
+                throw error;
+              }
+              chainFailures.push({ model: editModel, error });
+            }
+          }
+
+          if (!chainResult) {
+            const lastFailure = chainFailures[chainFailures.length - 1]!;
+            const allBlockedByContentPolicy = chainFailures.every(
+              (failure) => isProviderContentPolicyError(failure.error),
+            );
+            if (!allBlockedByContentPolicy) {
+              const failureSummary = chainFailures
+                .map((failure) => `${failure.model}: ${toErrorMessage(failure.error)}`)
+                .join('; ');
+              return textResultWithError(
+                `${toolName} failed across all reference edit models (${failureSummary})`,
+                true,
+              );
+            }
+            // Every tier blocked the original prompt; last resort is a sanitized
+            // prompt on the most permissive tier, still anchored to the reference.
+            const fallbackPrompt = buildSelfImageContentPolicyFallbackPrompt(params.prompt);
+            const finalModel = editChain[editChain.length - 1]!;
+            try {
+              chainResult = await runReferenceEdit(finalModel, fallbackPrompt);
               reviewPrompt = fallbackPrompt;
+              result = {
+                ...chainResult,
+                fallbackUsed: true,
+                fallbackReason: chainResult.fallbackReason
+                  ?? 'selfie_edit_chain_sanitized_prompt',
+              };
               notice = [
-                'Reference image edit was blocked by the image provider content policy.',
-                'Generated a fresh non-reference self-portrait with a safer prompt instead.',
+                'Every selfie edit model blocked the original prompt for content policy.',
+                `Retried the reference edit on ${finalModel} with a safer prompt instead.`,
               ].join(' ');
             } catch (fallbackError) {
               if (isProviderContentPolicyError(fallbackError)) {
-                return contentPolicyBlockedResult<ImageToolResultDetails>(toolName, error, {
+                return contentPolicyBlockedResult<ImageToolResultDetails>(toolName, lastFailure.error, {
                   fallbackError,
                 });
               }
               throw fallbackError;
             }
+          } else if (chainFailures.length > 0) {
+            result = {
+              ...chainResult,
+              fallbackUsed: true,
+              fallbackReason: chainResult.fallbackReason ?? 'selfie_edit_chain_fallback',
+            };
+            notice = [
+              ...chainFailures.map((failure) => (
+                `Selfie edit on ${failure.model} failed (${isProviderContentPolicyError(failure.error) ? 'content policy block' : 'timeout or provider error'}).`
+              )),
+              `Fell back to ${chainResult.model ?? 'the next edit tier'} with the reference image intact.`,
+            ].join(' ');
+          } else {
+            result = chainResult;
           }
         } else {
           result = await ops.create({

@@ -40,7 +40,9 @@ import {
 import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
-const VISION_TURN_TIMEOUT_MS = 30_000;
+// Covers attachment fetch (with gateway DNS retries) plus the vision model call;
+// 30s proved too tight on slow deployments where the model finished at ~70s.
+const VISION_TURN_TIMEOUT_MS = 120_000;
 const VISION_RECOVERY_REPLAY_MAX_ATTEMPTS = 3;
 const RUNTIME_FALLBACK_MODEL = 'runtime-fallback';
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;

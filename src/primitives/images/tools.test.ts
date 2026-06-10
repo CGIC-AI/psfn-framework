@@ -387,32 +387,37 @@ describe('image tools', () => {
     expect(result.details.imageResult?.requestId).toBe('req-selfie-ref-1');
   });
 
-  it('falls back to fresh generation when a referenced selfie edit hits provider content policy', async () => {
+  it('falls through to the next edit tier with the original prompt when a referenced selfie edit hits provider content policy', async () => {
     const providerBlock = new Error(
       'FAL edit result fetch failed (422): {"detail":[{"type":"content_policy_violation","msg":"The content could not be processed because it contained material flagged by a content checker."}]}',
     );
+    let editCalls = 0;
     const ops = {
-      create: vi.fn(async () => ({
-        provider: 'fal',
-        mode: 'create' as const,
-        model: 'fal-ai/nano-banana-2',
-        fallbackUsed: false,
-        requestId: 'req-selfie-fallback-1',
-        images: [{
-          url: 'https://images.example.test/selfie-fallback.png',
-          contentType: 'image/png',
-          fileName: 'selfie-fallback.png',
-          localPath: '/tmp/selfie-fallback.png',
-        }],
-      })),
+      create: vi.fn(),
       edit: vi.fn(async () => {
-        throw providerBlock;
+        editCalls += 1;
+        if (editCalls === 1) {
+          throw providerBlock;
+        }
+        return {
+          provider: 'fal',
+          mode: 'edit' as const,
+          model: 'fal-ai/nano-banana-2/edit',
+          fallbackUsed: false,
+          requestId: 'req-selfie-fallback-1',
+          images: [{
+            url: 'https://images.example.test/selfie-fallback.png',
+            contentType: 'image/png',
+            fileName: 'selfie-fallback.png',
+            localPath: '/tmp/selfie-fallback.png',
+          }],
+        };
       }),
     };
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({
         question: 'Describe the generated image.',
-        summary: 'The fallback portrait is fully clothed and coherent.',
+        summary: 'The fallback portrait still matches the reference.',
         model: 'vision-model',
         imageCount: 1,
       })),
@@ -426,34 +431,194 @@ describe('image tools', () => {
       })),
     };
 
+    const prompt = 'Purrsephone in a soft oversized off-shoulder knit sweater, flirty expression, cozy bedroom background with rumpled sheets';
     const tool = createSelfieTool(ops, reviewer, { referenceResolver });
     const result = await tool.execute('tool-call-selfie-policy-fallback', {
-      prompt: 'Purrsephone in a soft oversized off-shoulder knit sweater, flirty expression, cozy bedroom background with rumpled sheets',
+      prompt,
       aspect_ratio: '3:4',
     }) as AgentToolResult<ImageToolResultDetails>;
 
-    expect(ops.edit).toHaveBeenCalledWith(expect.objectContaining({
+    expect(ops.create).not.toHaveBeenCalled();
+    expect(ops.edit).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      prompt,
+      model: 'openai/gpt-image-2/edit',
       imageUrls: ['data:image/png;base64,cmVm'],
       sourceToolName: 'selfie_create',
       referenceImageIds: ['ref-default'],
     }));
-    expect(ops.create).toHaveBeenCalledWith(expect.objectContaining({
+    expect(ops.edit).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      prompt,
+      model: 'fal-ai/nano-banana-2/edit',
+      imageUrls: ['data:image/png;base64,cmVm'],
       aspectRatio: '3:4',
       sourceToolName: 'selfie_create',
+      referenceImageIds: ['ref-default'],
     }));
-    const fallbackParams = ops.create.mock.calls[0]?.[0] as { prompt: string };
-    expect(fallbackParams.prompt).toContain('Tasteful fully clothed companion self-portrait');
-    expect(fallbackParams.prompt).not.toMatch(/flirty|off[- ]shoulder|rumpled sheets|bedroom/i);
     expect(reviewer.analyze).toHaveBeenCalledWith({
       imageUrls: ['https://images.example.test/selfie-fallback.png'],
       imageLocalPaths: ['/tmp/selfie-fallback.png'],
-      prompt: fallbackParams.prompt,
-      mode: 'create',
+      prompt,
+      mode: 'edit',
     });
     expect(result.details.imageResult?.fallbackUsed).toBe(true);
-    expect(result.details.imageResult?.fallbackReason).toBe('selfie_reference_content_policy_fresh_generation');
-    expect(resultText(result)).toContain('Reference image edit was blocked');
+    expect(result.details.imageResult?.fallbackReason).toBe('selfie_edit_chain_fallback');
+    expect(resultText(result)).toContain('content policy block');
+    expect(resultText(result)).toContain('Fell back to fal-ai/nano-banana-2/edit');
     expect(resultText(result)).toContain('"requestId": "req-selfie-fallback-1"');
+  });
+
+  it('starts the selfie edit chain at the requested tier and skips stricter models', async () => {
+    const providerBlock = new Error(
+      'FAL edit result fetch failed (422): {"detail":[{"type":"content_policy_violation","msg":"flagged by a content checker"}]}',
+    );
+    let editCalls = 0;
+    const ops = {
+      create: vi.fn(),
+      edit: vi.fn(async () => {
+        editCalls += 1;
+        if (editCalls === 1) {
+          throw providerBlock;
+        }
+        return {
+          provider: 'fal',
+          mode: 'edit' as const,
+          model: 'xai/grok-imagine-image/quality/edit',
+          fallbackUsed: false,
+          requestId: 'req-selfie-grok-1',
+          images: [{
+            url: 'https://images.example.test/selfie-grok.png',
+            contentType: 'image/png',
+            fileName: 'selfie-grok.png',
+            localPath: '/tmp/selfie-grok.png',
+          }],
+        };
+      }),
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+
+    const tool = createSelfieTool(ops, undefined, { referenceResolver });
+    const result = await tool.execute('tool-call-selfie-tier-start', {
+      prompt: 'me at the beach in a modest one-piece swimsuit, golden hour',
+      edit_model: 'fal-ai/nano-banana-2/edit',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    expect(ops.create).not.toHaveBeenCalled();
+    expect(ops.edit).toHaveBeenCalledTimes(2);
+    expect(ops.edit).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      model: 'fal-ai/nano-banana-2/edit',
+    }));
+    expect(ops.edit).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      model: 'xai/grok-imagine-image/quality/edit',
+      prompt: 'me at the beach in a modest one-piece swimsuit, golden hour',
+    }));
+    expect(result.details.imageResult?.fallbackUsed).toBe(true);
+    expect(result.details.imageResult?.fallbackReason).toBe('selfie_edit_chain_fallback');
+  });
+
+  it('falls through the selfie edit chain when a tier times out', async () => {
+    const timeoutError = new Error('FAL request req-slow-1 timed out after 300000ms');
+    let editCalls = 0;
+    const ops = {
+      create: vi.fn(),
+      edit: vi.fn(async () => {
+        editCalls += 1;
+        if (editCalls === 1) {
+          throw timeoutError;
+        }
+        return {
+          provider: 'fal',
+          mode: 'edit' as const,
+          model: 'fal-ai/nano-banana-2/edit',
+          fallbackUsed: false,
+          requestId: 'req-selfie-timeout-1',
+          images: [{
+            url: 'https://images.example.test/selfie-timeout.png',
+            contentType: 'image/png',
+            fileName: 'selfie-timeout.png',
+            localPath: '/tmp/selfie-timeout.png',
+          }],
+        };
+      }),
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+
+    const tool = createSelfieTool(ops, undefined, { referenceResolver });
+    const result = await tool.execute('tool-call-selfie-timeout-fallback', {
+      prompt: 'a cozy reading-nook portrait of me',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    expect(ops.create).not.toHaveBeenCalled();
+    expect(ops.edit).toHaveBeenCalledTimes(2);
+    expect(result.details.imageResult?.fallbackUsed).toBe(true);
+    expect(result.details.imageResult?.fallbackReason).toBe('selfie_edit_chain_fallback');
+    expect(resultText(result)).toContain('timeout or provider error');
+  });
+
+  it('retries the most permissive tier with a sanitized prompt when every tier blocks the original', async () => {
+    const providerBlock = new Error(
+      'FAL edit result fetch failed (422): {"detail":[{"type":"content_policy_violation","msg":"flagged by a content checker"}]}',
+    );
+    let editCalls = 0;
+    const ops = {
+      create: vi.fn(),
+      edit: vi.fn(async () => {
+        editCalls += 1;
+        if (editCalls <= 3) {
+          throw providerBlock;
+        }
+        return {
+          provider: 'fal',
+          mode: 'edit' as const,
+          model: 'xai/grok-imagine-image/quality/edit',
+          fallbackUsed: false,
+          requestId: 'req-selfie-sanitized-1',
+          images: [{
+            url: 'https://images.example.test/selfie-sanitized.png',
+            contentType: 'image/png',
+            fileName: 'selfie-sanitized.png',
+            localPath: '/tmp/selfie-sanitized.png',
+          }],
+        };
+      }),
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+
+    const tool = createSelfieTool(ops, undefined, { referenceResolver });
+    const result = await tool.execute('tool-call-selfie-sanitized', {
+      prompt: 'a flirty off-shoulder portrait in the bedroom with rumpled sheets',
+    }) as AgentToolResult<ImageToolResultDetails>;
+
+    expect(ops.create).not.toHaveBeenCalled();
+    expect(ops.edit).toHaveBeenCalledTimes(4);
+    const sanitizedParams = ops.edit.mock.calls[3]?.[0] as { prompt: string; model: string; referenceImageIds: string[] };
+    expect(sanitizedParams.model).toBe('xai/grok-imagine-image/quality/edit');
+    expect(sanitizedParams.referenceImageIds).toEqual(['ref-default']);
+    expect(sanitizedParams.prompt).toContain('Tasteful fully clothed companion self-portrait');
+    expect(sanitizedParams.prompt).not.toMatch(/flirty|off[- ]shoulder|rumpled sheets|bedroom/i);
+    expect(result.details.imageResult?.fallbackUsed).toBe(true);
+    expect(result.details.imageResult?.fallbackReason).toBe('selfie_edit_chain_sanitized_prompt');
+    expect(resultText(result)).toContain('safer prompt');
   });
 
   it('tells agents to stop retrying selfie prompts when policy fallback is also blocked', async () => {
@@ -483,11 +648,12 @@ describe('image tools', () => {
       aspect_ratio: '3:4',
     }) as AgentToolResult<ImageToolResultDetails>;
 
-    expect(ops.edit).toHaveBeenCalledTimes(1);
-    expect(ops.create).toHaveBeenCalledTimes(1);
+    // Three chain tiers with the original prompt plus the sanitized last resort.
+    expect(ops.edit).toHaveBeenCalledTimes(4);
+    expect(ops.create).not.toHaveBeenCalled();
     expect(result.details.isError).toBe(true);
     expect(resultText(result)).toContain('selfie_create was blocked by the image provider content policy');
-    expect(resultText(result)).toContain('A fresh-generation fallback was attempted and was also blocked');
+    expect(resultText(result)).toContain('A safer edit fallback was attempted and was also blocked');
     expect(resultText(result)).toContain('Do not retry the same prompt');
     expect(resultText(result)).toContain('stop tool attempts');
   });

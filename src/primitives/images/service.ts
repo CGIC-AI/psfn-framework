@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { ComfyUiImageClient } from './comfyui.js';
-import { FalApiError, FalImageClient, isFalContentPolicyError } from './fal.js';
+import { FalImageClient, isFalContentPolicyError, isTransientFalError } from './fal.js';
 import { resolveInlineOrEnvCredential } from '../../boundary/custody/credential-vault.js';
 import {
   resolveConfiguredCompanionDataDir,
@@ -30,14 +30,6 @@ function hasWorkflowForMode(
   mode: ImageMode,
 ): boolean {
   return Boolean(config.imageWorkflows?.comfyUi?.[mode]?.workflow);
-}
-
-function isTransientFalError(error: unknown): boolean {
-  if (error instanceof FalApiError) {
-    return error.status === 408 || error.status === 409 || error.status === 425 || error.status === 429 || error.status >= 500;
-  }
-  const message = error instanceof Error ? error.message : String(error);
-  return /\b(fetch failed|network|timeout|timed out|econnreset|econnrefused|etimedout|socket hang up)\b/i.test(message);
 }
 
 function inferExtension(url: string, contentType: string | undefined): string {

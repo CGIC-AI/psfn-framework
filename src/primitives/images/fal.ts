@@ -12,7 +12,8 @@ import {
 
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run';
 const DEFAULT_FAL_POLL_INTERVAL_MS = 1_500;
-const DEFAULT_FAL_TIMEOUT_MS = 120_000;
+// gpt-image edit jobs routinely take well over two minutes on the FAL queue.
+const DEFAULT_FAL_TIMEOUT_MS = 300_000;
 
 interface QueueStatusResponse {
   status?: 'IN_QUEUE' | 'IN_PROGRESS' | 'COMPLETED';
@@ -59,6 +60,28 @@ function isGptImageModel(model: string): boolean {
 
 function isGrokImagineModel(model: string): boolean {
   return model === 'xai/grok-imagine-image';
+}
+
+function isGrokImagineEditModel(model: string): boolean {
+  return model === 'xai/grok-imagine-image/edit'
+    || model === 'xai/grok-imagine-image/quality/edit';
+}
+
+// Grok Imagine edit accepts only lowercase "1k" / "2k" resolutions.
+function resolveGrokImagineEditResolution(resolution: string | undefined): string {
+  const normalized = resolution?.trim().toLowerCase();
+  return normalized === '1k' || normalized === '2k' ? normalized : '2k';
+}
+
+// Grok Imagine edit rejects aspect ratios outside its own enum with a schema 422,
+// which must not be mistaken for a content-policy block.
+const GROK_IMAGINE_EDIT_ASPECT_RATIOS = new Set([
+  'auto', '2:1', '20:9', '19.5:9', '16:9', '4:3', '3:2', '1:1',
+  '2:3', '3:4', '9:16', '9:19.5', '9:20', '1:2',
+]);
+
+function resolveGrokImagineEditAspectRatio(aspectRatio: string | undefined): string | undefined {
+  return aspectRatio && GROK_IMAGINE_EDIT_ASPECT_RATIOS.has(aspectRatio) ? aspectRatio : undefined;
 }
 
 function isFlux2DevModel(model: string): boolean {
@@ -194,6 +217,14 @@ export class FalApiError extends Error {
     this.status = status;
     this.payload = payload;
   }
+}
+
+export function isTransientFalError(error: unknown): boolean {
+  if (error instanceof FalApiError) {
+    return error.status === 408 || error.status === 409 || error.status === 425 || error.status === 429 || error.status >= 500;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(fetch failed|network|timeout|timed out|econnreset|econnrefused|etimedout|socket hang up)\b/i.test(message);
 }
 
 export function isFalContentPolicyError(error: unknown): error is FalApiError {
@@ -338,6 +369,12 @@ export class FalImageClient {
         safety_tolerance: '6',
         limit_generations: true,
         ...(params.seed !== undefined ? { seed: params.seed } : {}),
+      });
+    } else if (isGrokImagineEditModel(model)) {
+      const grokAspectRatio = resolveGrokImagineEditAspectRatio(params.aspectRatio);
+      Object.assign(input, {
+        ...(grokAspectRatio ? { aspect_ratio: grokAspectRatio } : {}),
+        resolution: resolveGrokImagineEditResolution(params.resolution),
       });
     } else {
       Object.assign(input, {

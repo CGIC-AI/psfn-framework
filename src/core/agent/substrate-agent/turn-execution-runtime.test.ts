@@ -1993,7 +1993,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       }));
 
       await flushAsyncWork();
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(120_000);
 
       await expect(turnResultPromise).resolves.toMatchObject({
         content: expect.stringContaining('image reader failed'),

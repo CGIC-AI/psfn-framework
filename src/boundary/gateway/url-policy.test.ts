@@ -517,6 +517,21 @@ describe('checkResolvedIP', () => {
     expect(result.reason).toContain('DNS resolution failed');
   });
 
+  it('retries a transient DNS resolution failure before failing closed', async () => {
+    let calls = 0;
+    const flakyResolver: DnsResolver = async () => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error('EAI_AGAIN');
+      }
+      return { address: '93.184.216.34', family: 4 };
+    };
+    const result = await checkResolvedIP('flaky.example.com', flakyResolver);
+    expect(result.allowed).toBe(true);
+    expect(result.address).toBe('93.184.216.34');
+    expect(calls).toBe(2);
+  });
+
   it('blocks hostname resolving to IPv4-mapped IPv6', async () => {
     const result = await checkResolvedIP('evil.com', fakeResolver('::ffff:127.0.0.1'));
     expect(result.allowed).toBe(false);

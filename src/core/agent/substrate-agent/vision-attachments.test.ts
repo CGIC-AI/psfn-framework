@@ -70,6 +70,94 @@ describe('buildTurnUserContent', () => {
     });
   });
 
+  it('fans more than four images out as concurrent chunked reviews merged into one labelled summary', async () => {
+    const started: number[] = [];
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const analyze = vi.fn(async (request: { imageUrls: string[] }) => {
+      started.push(request.imageUrls.length);
+      // Both chunks must be in flight before either resolves — proves the
+      // calls run concurrently rather than sequentially.
+      if (started.length === 2) release();
+      await gate;
+      return {
+        question: 'q',
+        summary: `saw ${String(request.imageUrls.length)} image(s)`,
+        model: 'vision-model',
+        imageCount: request.imageUrls.length,
+      };
+    });
+    const attachments = Array.from({ length: 6 }, (_, index) => ({
+      url: `https://media.discordapp.net/attachments/a/b/photo-${String(index + 1)}.jpg`,
+      contentType: 'image/jpeg',
+      name: `photo-${String(index + 1)}.jpg`,
+    }));
+
+    const result = await buildTurnUserContent({
+      message: makeMessage({ attachments }),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      visionReviewer: { analyze },
+    });
+
+    expect(analyze).toHaveBeenCalledTimes(2);
+    expect(started).toEqual([4, 2]);
+    expect(result.content).toContain('Images 1-4: saw 4 image(s)');
+    expect(result.content).toContain('Images 5-6: saw 2 image(s)');
+    expect(result.currentTurnVisionReview?.imageUrls).toHaveLength(6);
+  });
+
+  it('keeps successful chunk summaries and reports failed chunks explicitly', async () => {
+    const analyze = vi.fn(async (request: { imageUrls: string[] }) => {
+      if (request.imageUrls.length === 4) {
+        return { question: 'q', summary: 'first four look great', model: 'vision-model', imageCount: 4 };
+      }
+      throw new Error('vision backend choked');
+    });
+    const attachments = Array.from({ length: 5 }, (_, index) => ({
+      url: `https://media.discordapp.net/attachments/a/b/photo-${String(index + 1)}.jpg`,
+      contentType: 'image/jpeg',
+      name: `photo-${String(index + 1)}.jpg`,
+    }));
+
+    const result = await buildTurnUserContent({
+      message: makeMessage({ attachments }),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      visionReviewer: { analyze },
+    });
+
+    expect(result.content).toContain('Images 1-4: first four look great');
+    expect(result.content).toContain('Vision review failed for Image 5');
+    expect(result.content).toContain('Do not pretend you saw those');
+    expect(result.currentTurnVisionReview?.imageUrls).toHaveLength(4);
+  });
+
+  it('reports images dropped beyond the per-turn ceiling instead of silently truncating', async () => {
+    const { reviewer, analyze } = makeReviewer();
+    const attachments = Array.from({ length: 15 }, (_, index) => ({
+      url: `https://media.discordapp.net/attachments/a/b/photo-${String(index + 1)}.jpg`,
+      contentType: 'image/jpeg',
+      name: `photo-${String(index + 1)}.jpg`,
+    }));
+
+    const result = await buildTurnUserContent({
+      message: makeMessage({ attachments }),
+      llmClient: {} as any,
+      runtimeMode: 'gateway',
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      visionReviewer: reviewer,
+    });
+
+    // 12 reviewed across 3 concurrent chunks, 3 dropped with notice.
+    expect(analyze).toHaveBeenCalledTimes(3);
+    expect(result.content).toContain('3 additional image attachment(s) exceeded the 12-image per-turn limit');
+  });
+
   it('does not treat pasted image urls as automatic current-turn vision input without attachments', async () => {
     const imageUrl = 'https://cdn.discordapp.com/attachments/a/b/current-photo.png?ex=fresh';
     const { reviewer, analyze } = makeReviewer('A close-up portrait with blue eyes and white hair.');

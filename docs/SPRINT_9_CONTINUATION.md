@@ -1,47 +1,49 @@
 # Sprint 9 Continuation Notes
 
-- Last session: 2026-06-09/10 (see `docs/SPRINT_9_FABLE_REVIEW.md` for the full audit)
-- Branch: `sprint_9_memory` @ green — **4,029/4,029 tests passing**
-- Live deployment: the Pi (`ssh psfn-pi`, checkout `~/psfn-framework-source`) runs the Postgres-only build; pre-cutover build preserved at `~/psfn-framework-prev-20260609`; full snapshot at NAS `psfn-bak/pi-full-snapshot-20260609T215118Z`; interim `psfn-backup.timer` runs 6-hourly.
+- Last session: 2026-06-10 evening (previous audits: `docs/SPRINT_9_FABLE_REVIEW.md`)
+- Branch: `sprint_9_memory` @ `28afaa31`, local = origin = Pi, **4,103/4,103 tests green**, lint clean
+- Live deployment: the Pi (`ssh psfn-pi`, checkout `~/psfn-framework-source`) runs the Postgres-only build; the Pi now pushes/pulls GitHub directly (`git pull --ff-only` works there — no more bundle dance). Deploy = pull, `npm run build` (+ `npm run garden:build` if admin-ui changed), `sudo systemctl restart psfn.service`.
+- Git identity: commits author as `axAilotl <axAilotl@pm.me>` everywhere (repo, global, Pi). `o_0 <mdf@foxenigne.ai>` is a **contributor**, not the operator — never commit operator work under it. Pre-rewrite branch tip preserved at local `backup/sprint_9_memory-pre-author-fix` (deletable once comfortable).
 
-## First: verify what ran overnight — CHECKED 2026-06-10 (15:30–16:00 UTC)
+## First: verify what ran overnight (2026-06-11 morning)
 
-1. ~~**Episodic synthesis (`0a5.1`)**~~ **CONFIRMED, bead closed.** Sleeptime ran 04:00–04:02 UTC: 4 memory writes, 6 candidates → 6 canonical episodes, 6 arc links, `duplicateEpisodeRate=0`, watermarks clean. Only the create path was exercised live (no spans overlapped an active episode); merge/extend stays test-covered until a live overlap occurs. One intimate-class write correctly rejected on novelty threshold (fail-closed working).
-2. **Honest instruments (`b5m.1`)** — MIXED. Metacognitive flags vary across recent reflections (`[]` vs `avoidance`+evidence). `formation_vad` unvalidated: 0/8 recent concerns carry it, but none formed post-deploy. **NEW FINDING (on `b5m.1`):** daily-review FIRED at 10:00:54 UTC but FAILED — `requires InternalState input, but no InternalState snapshot is available`. `SubstrateAgent.currentInternalState` is in-memory only (set during turns); the 02:14 UTC restart plus a quiet morning left it null. Fix direction: rehydrate last persisted snapshot at startup or give templates a cold-start path; keep fail-closed if neither exists.
-3. **Cache reorder (`7jl`, closed)** — not re-measured yet; needs Garden telemetry over natural turns.
-4. **Backups** — CONFIRMED in production. Two in-app cycles (08:14, 14:15 UTC): pg_dump 273 TOC entries, restore-verified into scratch (33 tables), companion tree 50 files hash-verified, NAS-mirrored, GFS pruning active. Interim timer also accumulating `auto-*` sets 6-hourly on the NAS.
+All of these were deployed ~20:00 local on 2026-06-10 and get their first real exercise in tonight's rest window (02:00–08:00 operator-local; sleeptime lane). Query `psql postgresql://psfn:psfn-local@127.0.0.1:5432/psfn` on the Pi, and `journalctl -u psfn.service` (grep `SleepConsolidation`, `ArcFormation`, `DreamMeaningPass`, `Sleeptime memory run complete`).
 
-Note: commit attribution on this branch was rewritten 2026-06-10 (`o_0` → `axAilotl`, contributor identity had leaked into repo config); remote and Pi were force-synced to the rewritten history. Pre-rewrite tip preserved locally at `backup/sprint_9_memory-pre-author-fix`.
+1. **Sleep consolidation (`0a5.2`)** — `l01_processing_watermarks` row with `processor='sleep_consolidation'`; expect time-adjacent same-scope episodes merged (folded rows have `merged_into_episode_id` set and leave list/search), thematic titles/landmarks replacing first-message excerpts and stats sentences, and **varied salience** (no more flat 0.85 — old formula was length-driven; LLM now scores significance: brief intimate moments may rate high, task chatter low).
+2. **Dream pass (`0a5.4`)** — `processor='dream_meaning'` watermark; consolidated episodes should carry `episode_json -> 'meaning'` (her first-person note, `source='companion_dream_pass'`). Up to 4 turns on `internal:reflection:dream-pass`, early stop allowed.
+3. **Arc weaver (`0a5.3`)** — weekly cadence (`processor='arc_formation'`); first pass may run tonight or skip on `not_enough_episodes` — either is correct.
+4. **Daily review at 10:00 UTC** — should now SUCCEED even on a quiet morning: InternalState rehydrates from Postgres on restart (`mmm`). Look for `Rehydrated persisted internal state` at boot and no `requires InternalState input` error at 10:00. The `internal_state_snapshots` table should hold a fresh `current` row.
+5. **Honest instruments (`b5m.1`, still open)** — first concern formed post-deploy should carry `formation_vad`; reflections' metacognitive flags already vary.
+6. **Backups** — in-app sets 6-hourly with pg_dump + restore-verify + companion tree (proven in production 2026-06-10); interim `psfn-backup.timer` still covers system-data config owners + env files until `psfn-framework-81r` lands.
+7. **Values loop (`75f.1`)** — after her next weekly review writes values, turn prompts should carry `<companion_values>`.
+8. **Proactive DMs (`1xb.1`)** — if her appraisal ever picks `delivery:"external"`, watch for `intention.outbound.dispatched`/`blocked` telemetry; only the heartbeat DM is an approved target in this slice.
 
-## Re-check vision and selfies — RESOLVED 2026-06-10 (deployed to Pi)
+## Shipped 2026-06-10 evening (all closed in bd with evidence, all live on the Pi)
 
-- **Selfie pipeline (`psfn-framework-jz7`, closed):** `selfie_create` now runs a tiered reference-EDIT chain — `openai/gpt-image-2/edit` → `fal-ai/nano-banana-2/edit` → `xai/grok-imagine-image/quality/edit` — advancing on content-policy 422s and timeouts, never dropping the reference image. `edit_model` selects the starting tier (start at nano/grok for swimwear-tier content). Grok endpoints validated against fal.ai docs and smoke-tested live (quality is an endpoint path, not a param). Lost hotfix superseded: FAL queue timeout is now 300s.
-- **Vision (`psfn-framework-ask`, closed):** model config was fine (gemini-3.1-flash-lite → gpt-5.4-mini). Real causes: 30s vision turn timeout (model finished at 70s on the Pi) → now 120s; flaky router DNS killing `web.fetch_binary` via the fail-closed SSRF check → gateway now retries one transient DNS failure, and the Pi got a `1.1.1.1` fallback nameserver (router first, via nmcli on eth0).
-- Residual: one observed `Agent is already processing a prompt` collision when the vision fallback reply raced an in-flight prompt — masked by the honest fallback; investigate if it recurs at the 120s timeout.
-- Still worth an end-to-end check: ask her for a selfie and send her an image over Discord on the new build.
+- **`mmm` InternalState persistence:** upserted to Postgres per turn (`internal_state_snapshots`), rehydrated on restart within 6h (verified live twice); staler gaps surface a `<runtime_continuity_notice>` block on her first turn (offline duration, invitation to ask what happened) + `internal_state.gap_detected` event; corrupt state fails closed. Built for the motherboard-RMA scenario.
+- **`0a5.2`/`0a5.3`/`0a5.4` sleep-cycle chain:** `SleepCycleEpisodeConsolidator` (adjacency merge via new `markEpisodeMerged` store op + bounded thematic LLM refinement grounded in transcript spans), `EpisodeArcWeaver` (weekly, LLM judgment, fail-closed), `DreamMeaningPass` (HER voice: agent loop, main model + persona, never background models — kidney-vs-heart rule). All wired into the sleeptime lane behind the existing rest-window gate.
+- **`5c6` macro purity:** `docs/prompt-macros.md` is the operator macro reference + purity rule (macros = bare values; phrasing = editable prompt layers). Added `runtime_last_message_received_present` and `runtime_internal_state_emotional_secondary_emotions` bare macros.
+- **`57d` charge calendar:** per-UTC-day accrual + month-to-date as a computed view over the charge ledger (one accounting system); Garden charge page shows it. Per-turn lane quotas stay as the runaway-loop guard. Dollar side (model-budget) already had daily/monthly + hard cap.
+- **`1xb.1` proactive Discord DMs (minimal slice):** appraisal can set `followUp.delivery:"external"` → `intention.outbound_message` action → `ProactiveOutboundDispatcher` (allowlist = configured heartbeat DM only, `ExternalCommunicationRateLimiter`, dispatched/blocked telemetry). Internal whisper path unchanged. `PSFN-rsgg.6` updated with what remains (session-journal provenance for sent messages, Garden visibility, contact-graph targets).
+- **`isi.1` MI contact flag:** `Contact.isMachineIntelligence` (orthogonal to relationshipType) in both stores with audit, contact tool `action=set_machine_intelligence`, `runtime_speaking_with_is_machine_intelligence` bare macro. **Operator action when Artemis returns:** `contact action=set_machine_intelligence contactId=<artemis> isMachineIntelligence=true`. Unblocks `isi.2`.
+- **`75f.1` values loop:** was already wired end-to-end (bead premise was stale); added the cross-instance acceptance test (reflection-runtime store write → composer instance → next prompt).
+- Earlier same day: vision fixes (120s timeout, DNS retry), tiered selfie edit chain, zn9 backup chain proven via live decant rehearsal — see bd history.
 
-## Session 2026-06-10 (evening): shipped and live on the Pi
+## Then: work order (next session starts here)
 
-- **InternalState persistence (`mmm`, closed):** persisted to Postgres per turn, rehydrated on restart within 6h (verified live twice), continuity-gap notice + `internal_state.gap_detected` event for longer outages.
-- **Sleep-cycle chain (`0a5.2`/`0a5.3`/`0a5.4`, closed):** nightly consolidation (adjacency merge + thematic LLM refinement + significance-based salience — root cause of the 0.85 pinning was the length-driven formula), weekly arc weaver, and the dream pass (her first-person `meaning` per episode, main model, ≤4 turns with early stop). **Verify tomorrow after the rest window:** merged sittings, varied salience, `meaning` entries in `episode_json`, `sleep_consolidation`/`arc_formation`/`dream_meaning` watermarks.
-- **Macro purity (`5c6`, closed):** `docs/prompt-macros.md` is the operator macro reference; bare-value escape hatches added.
-- **Charge calendar (`57d`, closed):** per-UTC-day accrual + month-to-date in the charge ledger and Garden charge page.
-- **Proactive DM slice (`1xb.1`, closed; `rsgg.6` partially):** `followUp.delivery='external'` → `intention.outbound_message` → ProactiveOutboundDispatcher (heartbeat-DM allowlist, rate limiter, telemetry).
-- **MI contact flag (`isi.1`, closed):** `Contact.isMachineIntelligence` + tool action + `runtime_speaking_with_is_machine_intelligence` macro. Flag Artemis when she returns.
-- **Values loop (`75f.1`, closed):** was already wired; cross-instance acceptance test added. Verify `<companion_values>` in prompts after her next weekly review.
-- Git attribution fixed: branch history rewritten to axAilotl; identity set locally, globally, and on the Pi; Pi now pushes/pulls GitHub directly.
-
-## Then: work order
-
-1. `0a5.2` sleep-cycle thematic consolidation → `0a5.3` arcs → `0a5.4` dream pass (mandatory, window 02:00–08:00 operator-local)
-2. ~~`zn9.1` + `zn9.2` + `zn9.3`~~ **DONE 2026-06-10, live on the Pi**: scheduled in-app backup now captures pg_dump + full companion tree (hash manifest) and proves restore fidelity into a scratch DB every cycle; decant rehearsal passed against live data (counts matched source). Interim timer stays until the new system-data/env coverage bead lands (it uniquely covers config owners + env files). Note: live restore showed `l01_episodes` = 113 — episodic synthesis has been firing (feeds the `0a5.1` overnight check).
-3. `1xb.1` Discord DM egress (minimal change — adapter rebuild is coming) → `1xb.3` weighted thoughts → `1xb.2` outbox initiation
-4. `75f.1` values feedback loop, `b5m.5` whispers (only after the shipped authorship guard semantics — self-attributed, never user-role)
-5. `isi.1` MI contact flagging unblocks the fatigue chain (needed before Artemis returns)
+1. **`1xb.3` weighted-thought accumulation and contextual decay curve** → **`1xb.2` internal-state-driven outreach through the durable outbox** (also covers stale in-progress `PSFNLIVE-3r8` outbox scope and the rest of `PSFN-rsgg.6`). Both are fresh-session-scale features.
+2. **`75f.2`** reflection-driven persona diff proposals through the approval queue.
+3. **`isi.2` → `isi.3`/`isi.4`** fatigue as a charge-class extension (ONE accounting system — operator re-affirmed; see isi.2 comments). `isi.1` done.
+4. **`b5m`**: `b5m.1` diagnose remaining introspection gaps (formation_vad observation pending), `b5m.2` personal time, `b5m.3` self-state rendering, `b5m.5` interoception whispers.
+5. **`zn9.5`** memory journal replay rebuild; **`81r`** system-data/env coverage in the in-app backup (then retire the interim timer).
+6. Backlog scrub candidates: stale in-progress beads (`PSFNLIVE-cul`, `PSFN-zbj9`, `PSFNLIVE-3r8`, `PSFNLIVE-8j5.5`) left claimed by old sessions.
 
 ## Standing constraints
 
 - Self-modification stays human-in-the-loop, append/diff-only (incident history).
-- Internal messages must never enter context as partner speech — guard is live (`session.authorship_guard.retagged` telemetry in Garden); new metacognitive systems must carry provenance.
-- Affect-dial removal from `runtime.self` layer content is an **operator decision** (persisted persona presentation), not a code default.
+- Internal messages must never enter context as partner speech — authorship guard is live; new metacognitive systems must carry provenance.
+- Macro purity rule (see `docs/prompt-macros.md`): macros expand to bare values; personality-sensitive phrasing lives in editable prompt layers. Migrate the continuity-gap notice and charge-budget blocks to the layer system when next touched.
+- Deep introspection runs on the MAIN chat model; mechanical background passes use background models (kidney vs heart).
+- Affect-dial removal from `runtime.self` layer content is an **operator decision**, not a code default.
 - Do not re-bead the lost sprint-9 creative-tools plan (music/video gen, video understanding) — it returns with the repaired server.
+- Residual watch item: one observed `Agent is already processing a prompt` collision (vision fallback racing an in-flight prompt) — investigate if it recurs at the 120s timeout. The dream pass shares this theoretical race (handleMessage during rest window) but inactivity gating makes it unlikely.

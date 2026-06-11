@@ -557,7 +557,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
           mergedTrustLevel,
           mergedRelationshipType,
           mergedBaseline,
-          mergedEmotionalTimeSeries,
+          JSON.stringify(mergedEmotionalTimeSeries),
           mergedFirstSeen,
           mergedLastSeen,
           mergedNotes ?? null,
@@ -604,7 +604,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
             last_seen = $3
         WHERE id = $4
       `,
-      [updatedBaseline, updatedTimeSeries, new Date().toISOString(), id],
+      // node-pg encodes JS arrays as Postgres array literals, which are not
+      // valid JSON for a jsonb column — serialize explicitly.
+      [updatedBaseline, JSON.stringify(updatedTimeSeries), new Date().toISOString(), id],
     );
     await this.syncContactExports();
     return await this.getById(id);

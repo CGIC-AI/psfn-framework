@@ -15,17 +15,19 @@ export interface PersistEmotionalStateOptions {
   telemetryEnabled: boolean;
 }
 
-export function persistEmotionalStateFromExtraction(
+export async function persistEmotionalStateFromExtraction(
   options: PersistEmotionalStateOptions,
-): void {
+): Promise<void> {
   if (!options.canonicalContactId) return;
   if (!options.contactStore) return;
 
   const signal = deriveEmotionalSignal(options.acceptedFacts, options.recentEntries);
   if (!signal) return;
 
+  // This function must never reject: it runs fire-and-forget after
+  // extraction, and an unhandled rejection here takes the whole agent down.
   try {
-    const updated = options.contactStore.updateEmotionalBaseline(options.canonicalContactId, {
+    const updated = await options.contactStore.updateEmotionalBaseline(options.canonicalContactId, {
       valence: signal.valence,
       confidence: signal.confidence,
       observedAtMs: Date.now(),

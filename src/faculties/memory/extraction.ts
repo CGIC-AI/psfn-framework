@@ -509,7 +509,7 @@ export class MemoryExtractor {
     acceptedFacts: ExtractedFact[],
     recentEntries: SessionEntry[],
   ): void {
-    persistEmotionalStateFromExtraction({
+    void persistEmotionalStateFromExtraction({
       canonicalContactId,
       acceptedFacts,
       recentEntries,

@@ -78,7 +78,7 @@ class FakePostgresPool {
       return result(row ? [row] : []);
     }
 
-    if (normalized.startsWith('select c.id, c.discord_user_id, c.display_name, c.nickname, c.trust_level, c.relationship_type, c.emotional_baseline, c.first_seen, c.last_seen, c.notes from contacts c inner join contact_channel_ids i on i.contact_id = c.id where i.channel = $1 and i.channel_user_id = $2 limit 1')) {
+    if (normalized.startsWith('select c.id, c.discord_user_id, c.display_name, c.nickname, c.trust_level, c.relationship_type, c.is_machine_intelligence, c.emotional_baseline, c.first_seen, c.last_seen, c.notes from contacts c inner join contact_channel_ids i on i.contact_id = c.id where i.channel = $1 and i.channel_user_id = $2 limit 1')) {
       const row = this.findContactByChannelIdentity(String(values[0] ?? ''), String(values[1] ?? ''));
       return result(row ? [row] : []);
     }
@@ -147,7 +147,15 @@ class FakePostgresPool {
       const row = this.contacts.get(String(values[3] ?? ''));
       if (!row) return result();
       row.emotional_baseline = values[0] ?? row.emotional_baseline;
-      row.emotional_time_series = values[1] ?? row.emotional_time_series ?? [];
+      // Faithful to real Postgres: a jsonb parameter must arrive as JSON text.
+      // node-pg encodes raw JS arrays as Postgres array literals, which real
+      // Postgres rejects with 22P02 — exactly the crash-loop bug of 2026-06-11.
+      if (Array.isArray(values[1])) {
+        throw new Error('invalid input syntax for type json (22P02): array literal passed to jsonb column');
+      }
+      row.emotional_time_series = typeof values[1] === 'string'
+        ? JSON.parse(values[1])
+        : values[1] ?? row.emotional_time_series ?? [];
       row.last_seen = String(values[2] ?? row.last_seen);
       return result();
     }

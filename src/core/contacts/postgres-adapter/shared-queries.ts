@@ -62,7 +62,7 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
     const row = await queryOne<ContactRow>(
       this.pool,
       `
-        SELECT c.id, c.discord_user_id, c.display_name, c.nickname, c.trust_level, c.relationship_type,
+        SELECT c.id, c.discord_user_id, c.display_name, c.nickname, c.trust_level, c.relationship_type, c.is_machine_intelligence,
                c.emotional_baseline, c.first_seen, c.last_seen, c.notes
         FROM contacts c
         INNER JOIN contact_channel_ids i ON i.contact_id = c.id

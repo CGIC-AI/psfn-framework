@@ -919,6 +919,48 @@ describe('LLMClient completion model hints', () => {
     expect(requestOptions.maxTokens).toBe(77);
   });
 
+  it('caps hinted-model output at the registry entry maxOutputTokens', async () => {
+    const config = makeConfig();
+    config.modelRegistry!.models.push({
+      id: 'claude-opus-3',
+      rank: 200,
+      identity: {
+        provider: 'anthropic',
+        model: 'anthropic/claude-3-opus-20240229',
+        source: { type: 'litellm' },
+      },
+      purposes: [{ purpose: 'moa', primary: false }],
+      capabilities: { maxOutputTokens: 4096, contextWindow: 200_000 },
+    });
+    const client = new LLMClient(config, 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'capped response' }],
+      model: 'anthropic/claude-3-opus-20240229',
+      usage: { input: 12, output: 4 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: '',
+        messages: [{ role: 'user', content: 'Reply' }],
+      },
+      'reasoning',
+      {
+        disableRetry: true,
+        modelHint: {
+          provider: 'anthropic',
+          model: 'anthropic/claude-3-opus-20240229',
+          pin: true,
+        },
+      },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { maxTokens: number };
+    expect(requestOptions.maxTokens).toBe(4096);
+  });
+
   it('fails closed when modelHint.model references a legacy slot key', async () => {
     const client = new LLMClient(makeConfig(), 'http://litellm.test/v1');
     mocks.completeSimple.mockResolvedValue({

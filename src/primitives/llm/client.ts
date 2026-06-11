@@ -520,8 +520,16 @@ export class LLMClient {
 
     let provider = modelHint.provider ?? qualified?.provider ?? baseCandidate.provider;
     let model = qualified?.model ?? hintedModel ?? baseCandidate.model;
-    let maxTokens = modelHint.maxTokens ?? baseCandidate.maxTokens;
-    const contextWindow = modelHint.contextWindow ?? baseCandidate.contextWindow;
+    const registryEntry = this.findRegistryModelEntry(provider, model);
+    // The hinted model's own catalog output cap beats the base candidate's:
+    // inheriting a roster default above the target model's maximum (e.g. 16384
+    // onto claude-3-opus's 4096) is a guaranteed 400 from the provider.
+    const registryMaxTokens = toPositiveInteger(registryEntry?.tuning?.maxOutputTokens)
+      ?? toPositiveInteger(registryEntry?.capabilities?.maxOutputTokens);
+    const registryContextWindow = toPositiveInteger(registryEntry?.tuning?.contextWindow)
+      ?? toPositiveInteger(registryEntry?.capabilities?.contextWindow);
+    let maxTokens = modelHint.maxTokens ?? registryMaxTokens ?? baseCandidate.maxTokens;
+    const contextWindow = modelHint.contextWindow ?? registryContextWindow ?? baseCandidate.contextWindow;
     const thinkingEnabled = modelHint.thinkingEnabled ?? baseCandidate.thinkingEnabled;
     const thinkingEffort = modelHint.thinkingEffort ?? baseCandidate.thinkingEffort;
     const temperature = modelHint.temperature ?? baseCandidate.temperature;
@@ -529,7 +537,6 @@ export class LLMClient {
     const topK = modelHint.topK ?? baseCandidate.topK;
     const frequencyPenalty = modelHint.frequencyPenalty ?? baseCandidate.frequencyPenalty;
     const repetitionPenalty = modelHint.repetitionPenalty ?? baseCandidate.repetitionPenalty;
-    const registryEntry = this.findRegistryModelEntry(provider, model);
     const supportsVision = typeof registryEntry?.capabilities?.supportsVision === 'boolean'
       ? registryEntry.capabilities.supportsVision
       : baseCandidate.supportsVision;

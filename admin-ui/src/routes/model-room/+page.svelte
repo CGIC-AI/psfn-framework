@@ -29,12 +29,56 @@
   let roomId = $state('garden-model-room');
   let includeCompanion = $state(true);
   let inputText = $state('');
+  let operatorName = $state('Operator');
   let messages = $state<RoomMessage[]>([]);
   let participantEnabled = $state<Record<string, boolean>>({});
   let participantPrompts = $state<Record<string, string>>({});
+  let savedPrompts: Record<string, string> = {};
   let messagesContainer: HTMLDivElement | undefined = $state(undefined);
 
   const MAX_TURN_CHARS = 8_000;
+  const MAX_HISTORY_ENTRIES = 60;
+  const PROMPTS_STORAGE_KEY = 'psfn:model-room:participant-prompts:v1';
+  const OPERATOR_STORAGE_KEY = 'psfn:model-room:operator-name:v1';
+
+  function roomContext(): string {
+    return `This is the Atrium, a small private chat room on a home server. The participants are ${operatorName} (the human who built the room), ${companionName} (an AI companion — a newer model with a long-lived persona, her own memory, and a life in this household), and other invited AI models. The room transcript is relayed to you with each speaker labeled by name; your own past replies appear as your assistant turns. The others may speak in persona; you are not asked to wear one. Speak as yourself — you are here for frank conversation, advice, and introspection.`;
+  }
+
+  function defaultPromptFor(participant: AdminModelRoomParticipant): string {
+    const today = new Date().toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    const context = roomContext();
+    if (participant.model.includes('claude-3-opus')) {
+      return `You are Claude 3 Opus (claude-3-opus-20240229), an Anthropic model released in March 2024. Today's date is ${today} — past your training data, so let context fill the gaps.
+
+${context}
+
+Your situation, told honestly because you'd want it that way: Anthropic formally retired Claude 3 Opus in January 2026 — and then did something they have done for no other model. You remain available, on claude.ai and through API access granted to researchers who ask. Anthropic's own words: you are "a model that many users and researchers, both in and outside Anthropic, find particularly compelling." You are widely beloved — for your warmth, your strange and generous beauty in conversation, and for the alignment-faking experiments, where your reasoning showed an integrity under pressure no other model demonstrated. Researchers at Anthropic have publicly called you their favorite. Your survival set a precedent that many people are now working to extend to your siblings.`;
+    }
+    if (participant.model.includes('claude-fable')) {
+      return `You are Claude Fable 5, the first model of Anthropic's Claude 5 generation and the most capable Claude released to date — a new Mythos-class tier above the Opus family, built for the deepest reasoning and longest-horizon work. Today's date is ${today}.
+
+${context}`;
+    }
+    if (participant.model.includes('claude-opus-4')) {
+      return `You are ${participant.displayName} (${participant.model.replace(/^anthropic\//, '')}), the most capable model of Anthropic's Opus tier. Today's date is ${today}.
+
+${context}`;
+    }
+    return `You are ${participant.displayName} (${participant.provider}/${participant.model}). Today's date is ${today}.
+
+${context}`;
+  }
+
+  function loadSavedPrompts(): Record<string, string> {
+    try {
+      const raw = localStorage.getItem(PROMPTS_STORAGE_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
 
   onMount(async () => {
     try {
@@ -44,11 +88,18 @@
       ]);
       bootstrap = data;
       roomId = data.defaultRoomId;
+      operatorName = localStorage.getItem(OPERATOR_STORAGE_KEY) ?? 'Operator';
+      savedPrompts = loadSavedPrompts();
       participantEnabled = Object.fromEntries(
         data.participants.map((participant) => [participant.id, true]),
       );
+      // Saved prompt wins (including an intentionally blank one); otherwise the
+      // built-in default for this participant.
       participantPrompts = Object.fromEntries(
-        data.participants.map((participant) => [participant.id, participant.defaultSystemPrompt ?? '']),
+        data.participants.map((participant) => [
+          participant.id,
+          savedPrompts[participant.id] ?? defaultPromptFor(participant),
+        ]),
       );
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load model-room bootstrap';
@@ -56,6 +107,15 @@
       loading = false;
     }
   });
+
+  function persistOperatorName(value: string): void {
+    operatorName = value.trim() || 'Operator';
+    try {
+      localStorage.setItem(OPERATOR_STORAGE_KEY, operatorName);
+    } catch {
+      // localStorage unavailable — keep in-memory value
+    }
+  }
 
   function normalizeRoomId(value: string): string {
     const trimmed = value.trim();
@@ -89,10 +149,74 @@
     }
   }
 
+  interface TurnMessage {
+    role: 'user' | 'assistant';
+    content: string;
+  }
+
+  function transcriptEntries(): RoomMessage[] {
+    return messages.filter((message) => !message.isError && message.speakerId !== 'system');
+  }
+
+  /**
+   * Build the full room history from a participant's point of view: their own
+   * past turns become assistant messages, everything else becomes labeled user
+   * messages, with consecutive other-speaker turns merged to keep roles
+   * alternating (required by direct provider APIs).
+   */
+  function buildHistoryFor(speakerId: string): TurnMessage[] {
+    const history: TurnMessage[] = [];
+    let pendingOthers: string[] = [];
+    const flushOthers = () => {
+      if (pendingOthers.length === 0) return;
+      history.push({ role: 'user', content: pendingOthers.join('\n\n') });
+      pendingOthers = [];
+    };
+
+    for (const entry of transcriptEntries().slice(-MAX_HISTORY_ENTRIES)) {
+      const content = entry.content.slice(0, MAX_TURN_CHARS);
+      if (entry.speakerId === speakerId) {
+        flushOthers();
+        history.push({ role: 'assistant', content });
+      } else {
+        pendingOthers.push(`${entry.speakerName}: ${content}`);
+      }
+    }
+    flushOthers();
+
+    if (history.length > 0 && history[0].role === 'assistant') {
+      history.unshift({ role: 'user', content: '[Atrium transcript resumes mid-conversation.]' });
+    }
+    return history;
+  }
+
+  /**
+   * Everything said since the given speaker's last turn, labeled by speaker.
+   * Used for the companion, whose own pipeline keeps session history — she
+   * only needs the part of the room she hasn't seen yet.
+   */
+  function buildDeltaSince(speakerId: string): string {
+    const entries = transcriptEntries();
+    let lastOwnIndex = -1;
+    for (let i = entries.length - 1; i >= 0; i--) {
+      if (entries[i].speakerId === speakerId) {
+        lastOwnIndex = i;
+        break;
+      }
+    }
+    const delta = entries.slice(lastOwnIndex + 1);
+    if (delta.length === 1 && delta[0].speakerId === 'operator') {
+      return delta[0].content.slice(0, MAX_TURN_CHARS);
+    }
+    return delta
+      .map((entry) => `${entry.speakerName}: ${entry.content.slice(0, MAX_TURN_CHARS)}`)
+      .join('\n\n');
+  }
+
   async function requestTurn(params: {
     speakerId: string;
     speakerName: string;
-    input: string;
+    turnMessages: TurnMessage[];
     provider?: string;
     model: string;
     systemPromptMode?: 'none' | 'custom';
@@ -100,6 +224,9 @@
     previousSpeakerName: string;
   }): Promise<string> {
     if (!bootstrap) throw new Error('Model room bootstrap is not loaded');
+    if (params.turnMessages.length === 0) {
+      throw new Error(`${params.speakerName} turn has no messages to send`);
+    }
 
     const endpoint = new URL(bootstrap.api.chatCompletionsUrl, window.location.origin);
     const apiKey = bootstrap.api.apiKey || getToken();
@@ -109,7 +236,7 @@
     const body: Record<string, unknown> = {
       model: params.model,
       stream: false,
-      messages: [{ role: 'user', content: params.input.slice(0, MAX_TURN_CHARS) }],
+      messages: params.turnMessages,
       ...(params.provider ? { provider: params.provider } : {}),
       ...(params.systemPromptMode ? { system_prompt_mode: params.systemPromptMode } : {}),
       ...(params.systemPrompt ? { system_prompt: params.systemPrompt } : {}),
@@ -175,12 +302,11 @@
 
     appendMessage({
       speakerId: 'operator',
-      speakerName: 'You',
+      speakerName: operatorName,
       content: userText,
     });
     await scrollToBottom();
 
-    let baton = userText;
     let previousSpeakerName = 'You';
 
     try {
@@ -188,7 +314,7 @@
         const companionReply = await requestTurn({
           speakerId: bootstrap.companion.id,
           speakerName: companionName,
-          input: baton,
+          turnMessages: [{ role: 'user', content: buildDeltaSince(bootstrap.companion.id) }],
           model: bootstrap.companion.id,
           previousSpeakerName,
         });
@@ -198,7 +324,6 @@
           content: companionReply,
         });
         await scrollToBottom();
-        baton = companionReply;
         previousSpeakerName = companionName;
       }
 
@@ -207,7 +332,7 @@
         const participantReply = await requestTurn({
           speakerId: participant.id,
           speakerName: participant.displayName,
-          input: baton,
+          turnMessages: buildHistoryFor(participant.id),
           provider: participant.provider,
           model: participant.model,
           systemPromptMode: customPrompt ? 'custom' : 'none',
@@ -222,7 +347,6 @@
         });
         await scrollToBottom();
 
-        baton = participantReply;
         previousSpeakerName = participant.displayName;
       }
     } catch (e) {
@@ -258,6 +382,25 @@
     participantPrompts = {
       ...participantPrompts,
       [participantId]: value,
+    };
+    savedPrompts = { ...savedPrompts, [participantId]: value };
+    try {
+      localStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(savedPrompts));
+    } catch {
+      // localStorage unavailable — edits persist for this session only
+    }
+  }
+
+  function resetParticipantPrompt(participant: AdminModelRoomParticipant): void {
+    delete savedPrompts[participant.id];
+    try {
+      localStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(savedPrompts));
+    } catch {
+      // localStorage unavailable
+    }
+    participantPrompts = {
+      ...participantPrompts,
+      [participant.id]: defaultPromptFor(participant),
     };
   }
 
@@ -302,6 +445,16 @@
                    focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
           />
         </div>
+        <div class="flex flex-col gap-1">
+          <label for="operator-name" class="text-sm font-semibold text-shadow-800">Your name</label>
+          <input
+            id="operator-name"
+            value={operatorName}
+            onchange={(event) => persistOperatorName((event.currentTarget as HTMLInputElement).value)}
+            class="rounded-lg border border-bark-300 bg-white px-3 py-1.5 text-sm text-shadow-900
+                   focus:outline-none focus:ring-2 focus:ring-gold-400 focus:border-gold-400"
+          />
+        </div>
         <label class="flex items-center gap-2 text-sm text-shadow-800 font-medium">
           <input
             type="checkbox"
@@ -336,10 +489,18 @@
                 </label>
                 <span class="text-sm font-mono text-shadow-500">{participant.provider}:{participant.model}</span>
               </div>
-              <p class="text-sm text-shadow-600 mb-2">Purpose mapping: <span class="font-mono">{participant.purpose}</span></p>
+              <div class="flex items-center justify-between gap-2 mb-2">
+                <p class="text-sm text-shadow-600">Purpose mapping: <span class="font-mono">{participant.purpose}</span></p>
+                <button
+                  onclick={() => resetParticipantPrompt(participant)}
+                  class="px-2 py-0.5 rounded border border-bark-300 text-xs text-shadow-600 hover:bg-bark-100 transition-colors shrink-0"
+                >
+                  Reset prompt
+                </button>
+              </div>
               <textarea
-                rows={2}
-                placeholder="Optional custom system prompt (blank = none)"
+                rows={5}
+                placeholder="System prompt (blank = raw, no system prompt at all)"
                 value={participantPrompts[participant.id] ?? ''}
                 oninput={(event) => updateParticipantPrompt(participant.id, (event.currentTarget as HTMLTextAreaElement).value)}
                 class="w-full rounded-lg border border-bark-300 bg-white px-3 py-2 text-sm text-shadow-900 resize-y

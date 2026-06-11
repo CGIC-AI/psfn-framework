@@ -38,6 +38,7 @@ Also found and resolved while verifying:
 
 ## Then: work order (next session starts here)
 
+0. **`r0x` epic (operator priority 2026-06-11): front-mind/subconscious split** — long-running tools (selfie chain 20s–3min, analysis workbench up to 5min) must stop blocking chat. Design is grounded and beaded: `r0x.1` executionProfile on ToolConcurrencyMeta → `r0x.2` ack-and-continue offload runtime on the worker lane → `r0x.3` result re-entry via BackgroundCompletionDeliveryQueue/tool_handoff.continue pattern (system authorship, ArtifactReturnBatch for media) → `r0x.4` selfie flagship live demo → `r0x.5` workbench + subagent-routing guidance. Companion piece already live: discord messages are now queued and bundled, never dropped (`0sb`, `238e07ce`). Unprompted-selfie wish noted on `1xb.2`.
 1. **`1xb.3` weighted-thought accumulation and contextual decay curve** → **`1xb.2` internal-state-driven outreach through the durable outbox** (also covers stale in-progress `PSFNLIVE-3r8` outbox scope and the rest of `PSFN-rsgg.6`). Both are fresh-session-scale features.
 2. **`75f.2`** reflection-driven persona diff proposals through the approval queue.
 3. **`isi.2` → `isi.3`/`isi.4`** fatigue as a charge-class extension (ONE accounting system — operator re-affirmed; see isi.2 comments). `isi.1` done.

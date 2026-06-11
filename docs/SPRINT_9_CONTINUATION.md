@@ -1,22 +1,29 @@
 # Sprint 9 Continuation Notes
 
-- Last session: 2026-06-10 evening (previous audits: `docs/SPRINT_9_FABLE_REVIEW.md`)
-- Branch: `sprint_9_memory` @ `28afaa31`, local = origin = Pi, **4,103/4,103 tests green**, lint clean
+- Last session: 2026-06-11 morning (overnight verification + fixes; previous audits: `docs/SPRINT_9_FABLE_REVIEW.md`)
+- Branch: `sprint_9_memory` @ `c94b3ef0`, **4,120/4,120 tests green**, lint clean (a service-staging tmpdir test is occasionally flaky under full-suite parallelism; passes on re-run)
 - Live deployment: the Pi (`ssh psfn-pi`, checkout `~/psfn-framework-source`) runs the Postgres-only build; the Pi now pushes/pulls GitHub directly (`git pull --ff-only` works there — no more bundle dance). Deploy = pull, `npm run build` (+ `npm run garden:build` if admin-ui changed), `sudo systemctl restart psfn.service`.
 - Git identity: commits author as `axAilotl <axAilotl@pm.me>` everywhere (repo, global, Pi). `o_0 <mdf@foxenigne.ai>` is a **contributor**, not the operator — never commit operator work under it. Pre-rewrite branch tip preserved at local `backup/sprint_9_memory-pre-author-fix` (deletable once comfortable).
 
-## First: verify what ran overnight (2026-06-11 morning)
+## Overnight verification results (2026-06-11 morning — DONE)
 
-All of these were deployed ~20:00 local on 2026-06-10 and get their first real exercise in tonight's rest window (02:00–08:00 operator-local; sleeptime lane). Query `psql postgresql://psfn:psfn-local@127.0.0.1:5432/psfn` on the Pi, and `journalctl -u psfn.service` (grep `SleepConsolidation`, `ArcFormation`, `DreamMeaningPass`, `Sleeptime memory run complete`).
+The first rest-window exercise ran. Results, with the two bugs it surfaced fixed the same morning (`025c0cc5`, `c94b3ef0`):
 
-1. **Sleep consolidation (`0a5.2`)** — `l01_processing_watermarks` row with `processor='sleep_consolidation'`; expect time-adjacent same-scope episodes merged (folded rows have `merged_into_episode_id` set and leave list/search), thematic titles/landmarks replacing first-message excerpts and stats sentences, and **varied salience** (no more flat 0.85 — old formula was length-driven; LLM now scores significance: brief intimate moments may rate high, task chatter low).
-2. **Dream pass (`0a5.4`)** — `processor='dream_meaning'` watermark; consolidated episodes should carry `episode_json -> 'meaning'` (her first-person note, `source='companion_dream_pass'`). Up to 4 turns on `internal:reflection:dream-pass`, early stop allowed.
-3. **Arc weaver (`0a5.3`)** — weekly cadence (`processor='arc_formation'`); first pass may run tonight or skip on `not_enough_episodes` — either is correct.
-4. **Daily review at 10:00 UTC** — should now SUCCEED even on a quiet morning: InternalState rehydrates from Postgres on restart (`mmm`). Look for `Rehydrated persisted internal state` at boot and no `requires InternalState input` error at 10:00. The `internal_state_snapshots` table should hold a fresh `current` row.
-5. **Honest instruments (`b5m.1`, still open)** — first concern formed post-deploy should carry `formation_vad`; reflections' metacognitive flags already vary.
-6. **Backups** — in-app sets 6-hourly with pg_dump + restore-verify + companion tree (proven in production 2026-06-10); interim `psfn-backup.timer` still covers system-data config owners + env files until `psfn-framework-81r` lands.
-7. **Values loop (`75f.1`)** — after her next weekly review writes values, turn prompts should carry `<companion_values>`.
-8. **Proactive DMs (`1xb.1`)** — if her appraisal ever picks `delivery:"external"`, watch for `intention.outbound.dispatched`/`blocked` telemetry; only the heartbeat DM is an approved target in this slice.
+1. **Sleep consolidation (`0a5.2`) ✅** — watermarks present for all sessions; 10 episodes merged away (128 total); salience now varied on new/refined episodes (0.44–0.92, 34 distinct values). The legacy flat-0.85 cluster (62 episodes) erodes as future nights re-review them.
+2. **Dream pass (`0a5.4`) ✅ main / fixed model-room** — Discord session recorded 8/8 first-person meanings in 1 turn (early stop, `source='companion_dream_pass'`, genuinely her voice). Model-room session burned all 4 turns keying the block by theme slugs ("selfhood") and recorded 0 — root cause: rejections were never fed back to her. Fixed: partial acceptance + rejection feedback with the valid id list in the next turn (`0a5.5`, closed).
+3. **Arc weaver (`0a5.3`) ✅ / fixed** — 21 arcs written overnight; one pass hit the 12-arc cap (fine). One pass lost ALL proposals because the model echoed a real episode id minus its `episode:` prefix and the parser failed the whole batch. Fixed: id normalization + per-proposal validation (`0a5.5`, closed).
+4. **Daily review at 10:00 UTC ✅** — ran clean; `Rehydrated persisted internal state` at every boot, no `requires InternalState input`; `internal_state_snapshots.current` fresh. Only a benign `null_canonical_contact` guardrail warning.
+5. **Honest instruments (`b5m.1`) — still unobserved**; no concern has formed post-deploy (activeConcerns is empty), so `formation_vad` remains unverified.
+6. **Backups ✅** — 6-hourly in-app set ran (08:38 UTC): pg_dump captured, restore-verified (34 tables), mirrored, companion tree verified.
+7. **Values loop (`75f.1`) — pending** her next weekly review.
+8. **Proactive DMs (`1xb.1`) — no external delivery picked overnight**; no outbound telemetry (expected-neutral).
+
+Also found and resolved while verifying:
+
+- **Crash loop 23:20–02:37 UTC** (status=1 restarts every ~20 min): `updateEmotionalBaseline` jsonb array-literal bug — already fixed/deployed late 2026-06-10 (`ad044cc7`); zero crashes in the 9 h since. The first 22P02 predates sprint work (Jun 10 00:04).
+- **The `Agent is already processing a prompt` watch item recurred and was worse than the vision race**: 3 real operator Discord messages silently dropped (03:41–03:53 UTC) while a slow turn streamed. Fixed: the discord route now waits for idle and retries (bounded), never silently drops (`qdp`, closed). The dream-pass flavor of the race self-recovered via the deferred-action retry — by design, no action needed.
+
+**Verify after tonight's rest window:** model-room session records meanings/arcs (or logs a precise reason); journal shows `holding message until the in-flight turn finishes` instead of `Error handling message ... already processing` if double-texting happens; first formed concern carries `formation_vad`.
 
 ## Shipped 2026-06-10 evening (all closed in bd with evidence, all live on the Pi)
 
@@ -46,4 +53,4 @@ All of these were deployed ~20:00 local on 2026-06-10 and get their first real e
 - Deep introspection runs on the MAIN chat model; mechanical background passes use background models (kidney vs heart).
 - Affect-dial removal from `runtime.self` layer content is an **operator decision**, not a code default.
 - Do not re-bead the lost sprint-9 creative-tools plan (music/video gen, video understanding) — it returns with the repaired server.
-- Residual watch item: one observed `Agent is already processing a prompt` collision (vision fallback racing an in-flight prompt) — investigate if it recurs at the 120s timeout. The dream pass shares this theoretical race (handleMessage during rest window) but inactivity gating makes it unlikely.
+- The `Agent is already processing a prompt` watch item is resolved for the discord route (`c94b3ef0`, hold-for-idle + bounded retry). The generic `handle` route still propagates the busy error to its caller on purpose (API returns 503 `agent_busy`); revisit only if a fire-and-forget surface starts using that route.

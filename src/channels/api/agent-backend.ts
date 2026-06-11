@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import type {
   Attachment,
   ChannelType,
+  ContextMessage,
+  LLMContext,
   MessageModelOverride,
   MessagePromptOverride,
   MessageRoutingMetadata,
@@ -9,6 +11,7 @@ import type {
   ResponseStyle,
   SubstrateMessage,
 } from '../../shared/contracts/runtime.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type {
   SatelliteRegistryConfig,
   SatelliteRoutingMetadata,
@@ -115,6 +118,8 @@ export interface AgentApiBackendConfig {
   agentLoop: SubstrateAgent;
   eventBus: EventBus;
   sessionManager: SessionManager;
+  /** Required for direct (raw) model completions that bypass the companion turn pipeline. */
+  llmProvider?: LLMProviderPort;
   contactStore?: ContactStorePort;
   healthChecks?: ApiServerHealthChecks;
   schedulerHealthcheckStaleAfterMs?: number;
@@ -128,6 +133,7 @@ export class AgentApiBackend {
   private readonly agentLoop: SubstrateAgent;
   private readonly eventBus: EventBus;
   private readonly sessionManager: SessionManager;
+  private readonly llmProvider: LLMProviderPort | null;
   private readonly contactStore: ContactStorePort | null;
   private readonly healthChecks: ApiServerHealthChecks;
   private readonly schedulerHealthcheckStaleAfterMs: number;
@@ -145,6 +151,7 @@ export class AgentApiBackend {
     this.agentLoop = config.agentLoop;
     this.eventBus = config.eventBus;
     this.sessionManager = config.sessionManager;
+    this.llmProvider = config.llmProvider ?? null;
     this.contactStore = config.contactStore ?? null;
     this.healthChecks = config.healthChecks ?? {};
     this.schedulerHealthcheckStaleAfterMs = this.parseSchedulerHealthcheckStaleAfterMs(
@@ -235,6 +242,18 @@ export class AgentApiBackend {
     signal?: AbortSignal;
     timeoutMs?: number;
   }): Promise<ApiChatCompletionRpcResult> {
+    const overrides = this.parseTurnRoutingOverrides(params.request);
+    if (!overrides.ok) {
+      return this.fail(400, 'invalid_request', overrides.error);
+    }
+    // A provider/model override with system_prompt_mode none|custom is a direct
+    // model conversation (model room): it must not see the companion's memory,
+    // contacts, or session context. system_prompt_mode=default opts back into
+    // the full companion pipeline with the overridden model.
+    if (overrides.value.modelOverride && overrides.value.promptOverride) {
+      return await this.executeDirectModelCompletion(params, overrides.value);
+    }
+
     const pendingTurn = await this.prepareTurn(
       params.request,
       params.headers,
@@ -314,6 +333,118 @@ export class AgentApiBackend {
       turnCompletion.dispose();
       unsubscribe();
       this.activeRequests.delete(params.requestId);
+    }
+  }
+
+  /**
+   * Direct (raw) model completion for model-room participant turns.
+   *
+   * Bypasses the companion turn pipeline entirely: no memory retrieval, no
+   * contact/trust context, no session history, no persona system prompt. The
+   * request messages and the optional custom system prompt are the whole
+   * context. The model hint is pinned so a provider failure surfaces as an
+   * error instead of silently falling back to the companion's chat model.
+   */
+  private async executeDirectModelCompletion(
+    params: {
+      requestId: string;
+      request: ChatCompletionRequest;
+      headers: ApiRpcHeaders;
+      onDelta?: (text: string) => void | Promise<void>;
+      timeoutMs?: number;
+    },
+    overrides: TurnRoutingOverrides,
+  ): Promise<ApiChatCompletionRpcResult> {
+    const modelOverride = overrides.modelOverride;
+    const promptOverride = overrides.promptOverride;
+    if (!modelOverride || !promptOverride) {
+      return this.fail(500, 'internal_error', 'Direct model completion requires model and prompt overrides');
+    }
+    if (!this.llmProvider) {
+      return this.fail(
+        503,
+        'direct_model_unavailable',
+        'Direct model completions are unavailable because no LLM provider port is configured',
+      );
+    }
+
+    const messages: ContextMessage[] = [];
+    for (const message of params.request.messages) {
+      if (message.role !== 'user' && message.role !== 'assistant') {
+        return this.fail(
+          400,
+          'invalid_request',
+          'Direct model turns only accept user and assistant messages; use system_prompt_mode=custom with system_prompt for system instructions',
+        );
+      }
+      const text = getMessageTextContent(message).trim();
+      if (!text) continue;
+      messages.push({ role: message.role, content: text });
+    }
+    if (!messages.some(message => message.role === 'user')) {
+      return this.fail(400, 'invalid_request', 'Direct model turns require at least one non-empty user message');
+    }
+
+    const channelId = this.readHeader(params.headers, 'x-channel-id', 256)
+      ?? `api:model-room:${params.requestId}`;
+    const context: LLMContext = {
+      systemPrompt: promptOverride.mode === 'custom' ? promptOverride.systemPrompt ?? '' : '',
+      messages,
+      modelHint: {
+        provider: modelOverride.provider,
+        model: modelOverride.model,
+        pin: true,
+        ...(modelOverride.maxTokens !== undefined ? { maxTokens: modelOverride.maxTokens } : {}),
+      },
+      correlation: {
+        requestId: params.requestId,
+        channelId,
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'model_room.direct',
+        purpose: 'model_room.direct',
+      },
+    };
+
+    const timeoutMs = this.normalizeChatCompletionTimeoutMs(params.timeoutMs);
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const completion = this.llmProvider.complete(context, 'reasoning');
+      const response = timeoutMs === null
+        ? await completion
+        : await Promise.race([
+          completion,
+          new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(() => {
+              reject(new Error('api_chat_completion_timeout'));
+            }, timeoutMs);
+            timeoutHandle.unref();
+          }),
+        ]);
+      if (!response.content || !response.content.trim()) {
+        return this.fail(502, 'model_error', `Direct model ${modelOverride.provider}/${modelOverride.model} returned empty content`);
+      }
+      // Direct completions do not stream; emit the full text as one delta so
+      // SSE clients still receive content.
+      await params.onDelta?.(response.content);
+      return {
+        ok: true,
+        response: {
+          content: response.content,
+          channelId,
+          inputTokens: response.inputTokens,
+          outputTokens: response.outputTokens,
+        },
+      };
+    } catch (error) {
+      if (error instanceof Error && error.message === 'api_chat_completion_timeout') {
+        return this.fail(504, 'request_timeout', 'Direct model completion timed out');
+      }
+      return this.fail(502, 'model_error', `Direct model ${modelOverride.provider}/${modelOverride.model} failed: ${toErrorMessage(error)}`);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
     }
   }
 

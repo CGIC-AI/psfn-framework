@@ -327,6 +327,7 @@ async function main(): Promise<void> {
     agentLoop,
     eventBus,
     sessionManager,
+    llmProvider,
     contactStore,
     healthChecks: apiHealthChecks,
     externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),

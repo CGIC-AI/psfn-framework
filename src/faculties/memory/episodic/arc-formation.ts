@@ -5,6 +5,7 @@ import {
   type Episode,
   type EpisodeArcKind,
 } from '../../../shared/contracts/episodic-memory.js';
+import { resolveKnownEpisodeId } from './episode-ids.js';
 import type { EpisodicStorePort } from './store.js';
 
 const log = createComponentLogger('ArcFormation');
@@ -100,52 +101,74 @@ function extractJsonObject(content: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
-export function parseProposedArcs(content: string, knownEpisodeIds: ReadonlySet<string>): ProposedArc[] {
+export interface ProposedArcParseResult {
+  proposals: ProposedArc[];
+  /** Proposals dropped during validation, with the reason each was dropped. */
+  rejectedProposals: string[];
+}
+
+/**
+ * One invalid proposal must not discard the rest of the batch: each entry
+ * validates independently, and everything dropped is reported by reason.
+ */
+export function parseProposedArcs(content: string, knownEpisodeIds: ReadonlySet<string>): ProposedArcParseResult {
   const raw = extractJsonObject(content);
   if (!Array.isArray(raw.arcs)) {
     throw new Error('arc judgment response must contain an arcs array');
   }
   const proposals: ProposedArc[] = [];
+  const rejectedProposals: string[] = [];
   for (const entry of raw.arcs) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      throw new Error('arc proposal must be an object');
+    try {
+      proposals.push(parseArcProposal(entry, knownEpisodeIds));
+    } catch (error) {
+      rejectedProposals.push(error instanceof Error ? error.message : String(error));
     }
-    const record = entry as Record<string, unknown>;
-    const episodeIds = Array.isArray(record.episode_ids)
-      ? record.episode_ids.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
-      : [];
-    if (episodeIds.length < 2) {
-      throw new Error('arc proposal must list at least two episode ids');
-    }
-    for (const id of episodeIds) {
-      if (!knownEpisodeIds.has(id)) {
-        throw new Error(`arc proposal references unknown episode id "${id}"`);
-      }
-    }
-    if (new Set(episodeIds).size !== episodeIds.length) {
-      throw new Error('arc proposal episode ids must be unique');
-    }
-    const kind = typeof record.kind === 'string' ? record.kind.trim() : '';
-    if (!ARC_KIND_SET.has(kind) || kind === 'operator_defined') {
-      throw new Error(`arc proposal kind "${kind}" is not a valid machine arc kind`);
-    }
-    const label = typeof record.label === 'string' ? record.label.trim().toLowerCase() : '';
-    if (!label || label.length > 80) {
-      throw new Error('arc proposal label must be a non-empty string up to 80 chars');
-    }
-    const confidence = record.confidence;
-    if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-      throw new Error('arc proposal confidence must be a finite number in [0, 1]');
-    }
-    proposals.push({
-      episodeIds,
-      kind: kind as EpisodeArcKind,
-      label,
-      confidence: Math.round(confidence * 100) / 100,
-      reason: typeof record.reason === 'string' ? record.reason.trim() : '',
-    });
   }
-  return proposals;
+  return { proposals, rejectedProposals };
+}
+
+function parseArcProposal(entry: unknown, knownEpisodeIds: ReadonlySet<string>): ProposedArc {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+    throw new Error('arc proposal must be an object');
+  }
+  const record = entry as Record<string, unknown>;
+  const rawEpisodeIds = Array.isArray(record.episode_ids)
+    ? record.episode_ids.filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+    : [];
+  if (rawEpisodeIds.length < 2) {
+    throw new Error('arc proposal must list at least two episode ids');
+  }
+  const episodeIds: string[] = [];
+  for (const id of rawEpisodeIds) {
+    const resolvedId = resolveKnownEpisodeId(id, knownEpisodeIds);
+    if (!resolvedId) {
+      throw new Error(`arc proposal references unknown episode id "${id}"`);
+    }
+    episodeIds.push(resolvedId);
+  }
+  if (new Set(episodeIds).size !== episodeIds.length) {
+    throw new Error('arc proposal episode ids must be unique');
+  }
+  const kind = typeof record.kind === 'string' ? record.kind.trim() : '';
+  if (!ARC_KIND_SET.has(kind) || kind === 'operator_defined') {
+    throw new Error(`arc proposal kind "${kind}" is not a valid machine arc kind`);
+  }
+  const label = typeof record.label === 'string' ? record.label.trim().toLowerCase() : '';
+  if (!label || label.length > 80) {
+    throw new Error('arc proposal label must be a non-empty string up to 80 chars');
+  }
+  const confidence = record.confidence;
+  if (typeof confidence !== 'number' || !Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    throw new Error('arc proposal confidence must be a finite number in [0, 1]');
+  }
+  return {
+    episodeIds,
+    kind: kind as EpisodeArcKind,
+    label,
+    confidence: Math.round(confidence * 100) / 100,
+    reason: typeof record.reason === 'string' ? record.reason.trim() : '',
+  };
 }
 
 /**
@@ -216,15 +239,23 @@ export class EpisodeArcWeaver {
       return result;
     }
 
-    const proposals = await this.judgeArcs(episodes, input);
-    result.proposedArcs = proposals.length;
+    const { proposals, rejectedProposals } = await this.judgeArcs(episodes, input);
+    result.proposedArcs = proposals.length + rejectedProposals.length;
+    result.rejectedArcs = rejectedProposals.length;
+    if (rejectedProposals.length > 0) {
+      log.warn('Arc proposals dropped during validation', {
+        sessionId: input.sessionId,
+        dropped: rejectedProposals,
+      });
+    }
 
     const episodesById = new Map(episodes.map(episode => [episode.id, episode]));
-    for (const proposal of proposals) {
+    for (let index = 0; index < proposals.length; index += 1) {
+      const proposal = proposals[index];
       if (result.writtenArcs >= this.maxArcsPerRun) {
         log.info('Arc cap reached for this pass; remaining proposals deferred', {
           maxArcsPerRun: this.maxArcsPerRun,
-          deferred: proposals.length - result.proposedArcs + result.rejectedArcs,
+          deferred: proposals.length - index,
         });
         break;
       }
@@ -287,7 +318,7 @@ export class EpisodeArcWeaver {
     ));
   }
 
-  private async judgeArcs(episodes: readonly Episode[], input: ArcFormationRunInput): Promise<ProposedArc[]> {
+  private async judgeArcs(episodes: readonly Episode[], input: ArcFormationRunInput): Promise<ProposedArcParseResult> {
     const requestPrompt = [
       'Episodes in chronological order:',
       JSON.stringify(episodes.map(summarizeEpisodeForJudgment), null, 2),
@@ -317,7 +348,7 @@ export class EpisodeArcWeaver {
         sessionId: input.sessionId,
         error: error instanceof Error ? error.message : String(error),
       });
-      return [];
+      return { proposals: [], rejectedProposals: [] };
     }
   }
 }

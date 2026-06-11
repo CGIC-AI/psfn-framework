@@ -5,6 +5,7 @@ import {
   createWorkerExecutionPolicy,
 } from '../../../core/agent/worker-lanes.js';
 import type { Episode } from '../../../shared/contracts/episodic-memory.js';
+import { resolveKnownEpisodeId } from './episode-ids.js';
 import type { EpisodicStorePort } from './store.js';
 
 const log = createComponentLogger('DreamMeaningPass');
@@ -56,6 +57,8 @@ const MEANING_BLOCK_PATTERN = /```json\s*([\s\S]*?)```/i;
 interface MeaningContribution {
   meanings: Map<string, string>;
   done: boolean;
+  /** Entries dropped during validation, with the reason each was dropped. */
+  rejections: string[];
 }
 
 function toIsoInstant(ms: number): string {
@@ -91,6 +94,16 @@ const CONTINUATION_PROMPT = [
   'If you are done, include the fenced json block with any remaining meanings (or an empty meanings object) and "done": true.',
 ].join('\n');
 
+function buildFeedbackPrompt(feedback: readonly string[], knownEpisodeIds: ReadonlySet<string>): string {
+  return [
+    'Some of your last json block could not be recorded:',
+    ...feedback.map(reason => `- ${reason}`),
+    `The keys of the meanings object must be these episode ids exactly: ${[...knownEpisodeIds].join(', ')}`,
+    '',
+    CONTINUATION_PROMPT,
+  ].join('\n');
+}
+
 export function parseMeaningContribution(content: string, knownEpisodeIds: ReadonlySet<string>): MeaningContribution | null {
   const match = MEANING_BLOCK_PATTERN.exec(content);
   if (!match?.[1]) return null;
@@ -103,18 +116,23 @@ export function parseMeaningContribution(content: string, knownEpisodeIds: Reado
     throw new Error('meaning block must contain a meanings object');
   }
   const meanings = new Map<string, string>();
+  const rejections: string[] = [];
   for (const [episodeId, text] of Object.entries(record.meanings as Record<string, unknown>)) {
-    if (!knownEpisodeIds.has(episodeId)) {
-      throw new Error(`meaning block references unknown episode id "${episodeId}"`);
+    const resolvedId = resolveKnownEpisodeId(episodeId, knownEpisodeIds);
+    if (!resolvedId) {
+      rejections.push(`meaning block references unknown episode id "${episodeId}"`);
+      continue;
     }
     if (typeof text !== 'string' || text.trim().length === 0) {
-      throw new Error(`meaning for episode "${episodeId}" must be a non-empty string`);
+      rejections.push(`meaning for episode "${episodeId}" must be a non-empty string`);
+      continue;
     }
-    meanings.set(episodeId, text.trim().slice(0, MAX_MEANING_CHARS));
+    meanings.set(resolvedId, text.trim().slice(0, MAX_MEANING_CHARS));
   }
   return {
     meanings,
     done: record.done !== false,
+    rejections,
   };
 }
 
@@ -205,21 +223,34 @@ export class DreamMeaningPass {
       });
 
       let contribution: MeaningContribution | null = null;
+      let feedback: string[] = [];
       try {
         contribution = parseMeaningContribution(response.content, knownIds);
       } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
         log.warn('Dream pass turn produced an invalid meaning block; continuing', {
           turn: turnsUsed,
-          error: error instanceof Error ? error.message : String(error),
+          error: reason,
         });
+        feedback = [reason];
       }
       if (contribution) {
         for (const [episodeId, text] of contribution.meanings) {
           collected.set(episodeId, text);
         }
-        done = contribution.done;
+        if (contribution.rejections.length > 0) {
+          // A rejected entry overrides "done": she gets another turn (still
+          // bounded by maxTurns) with the rejection reasons in front of her.
+          log.warn('Dream pass meanings dropped during validation; asking again with feedback', {
+            turn: turnsUsed,
+            rejections: contribution.rejections,
+          });
+          feedback = contribution.rejections;
+        } else {
+          done = contribution.done;
+        }
       }
-      prompt = CONTINUATION_PROMPT;
+      prompt = feedback.length > 0 ? buildFeedbackPrompt(feedback, knownIds) : CONTINUATION_PROMPT;
     }
 
     const recordedAt = toIsoInstant(this.now().getTime());

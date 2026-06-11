@@ -145,6 +145,37 @@ describe('EpisodeArcWeaver', () => {
     expect(invalidResult.writtenArcs).toBe(0);
   });
 
+  it('writes valid proposals even when a sibling proposal references an unknown id', async () => {
+    const store = makeStore();
+    await seedWeekOfEpisodes(store);
+
+    const complete = vi.fn(async () => arcResponse([
+      {
+        episode_ids: ['day1', 'not-a-real-episode'],
+        kind: 'continuation',
+        label: 'hallucinated thread',
+        confidence: 0.9,
+        reason: 'made up',
+      },
+      {
+        episode_ids: ['day1', 'day2'],
+        kind: 'continuation',
+        label: 'postgres memory cutover',
+        confidence: 0.85,
+        reason: 'continues',
+      },
+    ]));
+    const weaver = new EpisodeArcWeaver(store, { complete }, { now: () => NOW });
+
+    const result = await weaver.run({ sessionId: 'discord:main' });
+
+    expect(result.proposedArcs).toBe(2);
+    expect(result.rejectedArcs).toBe(1);
+    expect(result.writtenArcs).toBe(1);
+    const day1Arcs = await store.listEpisodeArcsForEpisode('day1', { direction: 'outgoing' });
+    expect(day1Arcs.map(arc => arc.targetEpisodeId)).toEqual(['day2']);
+  });
+
   it('does not duplicate arcs that already exist between two episodes', async () => {
     const store = makeStore();
     await seedWeekOfEpisodes(store);
@@ -181,21 +212,51 @@ describe('EpisodeArcWeaver', () => {
 describe('parseProposedArcs', () => {
   const known = new Set(['a', 'b', 'c']);
 
-  it('rejects unknown episode ids', () => {
-    expect(() => parseProposedArcs(JSON.stringify({
+  it('drops proposals with unknown episode ids and reports the reason', () => {
+    const result = parseProposedArcs(JSON.stringify({
       arcs: [{ episode_ids: ['a', 'zzz'], kind: 'continuation', label: 'x', confidence: 0.8 }],
-    }), known)).toThrow(/unknown episode id/);
+    }), known);
+    expect(result.proposals).toHaveLength(0);
+    expect(result.rejectedProposals).toEqual([expect.stringMatching(/unknown episode id "zzz"/)]);
+  });
+
+  it('keeps valid proposals when a sibling proposal is invalid', () => {
+    const result = parseProposedArcs(JSON.stringify({
+      arcs: [
+        { episode_ids: ['a', 'zzz'], kind: 'continuation', label: 'bad', confidence: 0.8 },
+        { episode_ids: ['a', 'b'], kind: 'continuation', label: 'good', confidence: 0.8 },
+      ],
+    }), known);
+    expect(result.proposals.map(proposal => proposal.label)).toEqual(['good']);
+    expect(result.rejectedProposals).toHaveLength(1);
+  });
+
+  it('resolves ids the model echoed without their episode: prefix', () => {
+    const prefixed = new Set(['episode:017e', 'episode:b9c5']);
+    const result = parseProposedArcs(JSON.stringify({
+      arcs: [{ episode_ids: ['017e', 'episode:b9c5'], kind: 'continuation', label: 'x', confidence: 0.8 }],
+    }), prefixed);
+    expect(result.rejectedProposals).toHaveLength(0);
+    expect(result.proposals[0].episodeIds).toEqual(['episode:017e', 'episode:b9c5']);
   });
 
   it('rejects operator_defined as a machine arc kind', () => {
-    expect(() => parseProposedArcs(JSON.stringify({
+    const result = parseProposedArcs(JSON.stringify({
       arcs: [{ episode_ids: ['a', 'b'], kind: 'operator_defined', label: 'x', confidence: 0.8 }],
-    }), known)).toThrow(/not a valid machine arc kind/);
+    }), known);
+    expect(result.proposals).toHaveLength(0);
+    expect(result.rejectedProposals).toEqual([expect.stringMatching(/not a valid machine arc kind/)]);
   });
 
   it('rejects single-episode arcs', () => {
-    expect(() => parseProposedArcs(JSON.stringify({
+    const result = parseProposedArcs(JSON.stringify({
       arcs: [{ episode_ids: ['a'], kind: 'continuation', label: 'x', confidence: 0.8 }],
-    }), known)).toThrow(/at least two/);
+    }), known);
+    expect(result.proposals).toHaveLength(0);
+    expect(result.rejectedProposals).toEqual([expect.stringMatching(/at least two/)]);
+  });
+
+  it('still fails closed when the response has no arcs array', () => {
+    expect(() => parseProposedArcs(JSON.stringify({ nope: true }), known)).toThrow(/arcs array/);
   });
 });

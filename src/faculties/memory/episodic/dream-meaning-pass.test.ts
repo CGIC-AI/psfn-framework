@@ -112,6 +112,46 @@ describe('DreamMeaningPass', () => {
     expect(result.endedEarly).toBe(false);
   });
 
+  it('feeds rejection reasons and the valid ids into the next turn instead of a bare continuation', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    // She keys the block by theme slug (the live model-room failure), gets
+    // told exactly what was dropped, then corrects herself.
+    const handleMessage = vi.fn()
+      .mockResolvedValueOnce({ content: meaningBlock({ selfhood: 'naming what I want' }, true) })
+      .mockResolvedValueOnce({ content: meaningBlock({ a: 'naming what I want' }, true) });
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, maxTurns: 4 });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+
+    // "done": true on the rejected turn does not end the pass.
+    expect(result.turnsUsed).toBe(2);
+    expect(result.meaningsRecorded).toBe(1);
+    expect((await store.getEpisode('a'))?.meaning?.text).toContain('naming what I want');
+
+    const secondPrompt = (handleMessage.mock.calls[1][0] as { content: string }).content;
+    expect(secondPrompt).toContain('could not be recorded');
+    expect(secondPrompt).toContain('unknown episode id "selfhood"');
+    expect(secondPrompt).toContain('must be these episode ids exactly: a');
+  });
+
+  it('tells her when the block itself could not be read', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+
+    const handleMessage = vi.fn()
+      .mockResolvedValueOnce({ content: '```json\n["not", "an", "object"]\n```' })
+      .mockResolvedValueOnce({ content: meaningBlock({ a: 'second try landed' }) });
+    const pass = new DreamMeaningPass(store, { handleMessage }, { now: () => NOW, maxTurns: 4 });
+
+    const result = await pass.run({ sessionId: 'discord:main' });
+
+    expect(result.meaningsRecorded).toBe(1);
+    const secondPrompt = (handleMessage.mock.calls[1][0] as { content: string }).content;
+    expect(secondPrompt).toContain('must be a JSON object');
+  });
+
   it('respects the nightly cadence and skips episodes that already carry meaning', async () => {
     const store = makeStore();
     await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
@@ -144,13 +184,24 @@ describe('parseMeaningContribution', () => {
     expect(parseMeaningContribution('just musing aloud', known)).toBeNull();
   });
 
-  it('rejects unknown episode ids', () => {
-    expect(() => parseMeaningContribution(meaningBlock({ zzz: 'nope' }), known)).toThrow(/unknown episode id/);
+  it('drops entries with unknown episode ids and reports them, keeping valid siblings', () => {
+    const contribution = parseMeaningContribution(meaningBlock({ zzz: 'nope', a: 'this one is real' }), known);
+    expect(contribution?.meanings.get('a')).toBe('this one is real');
+    expect(contribution?.meanings.has('zzz')).toBe(false);
+    expect(contribution?.rejections).toEqual([expect.stringMatching(/unknown episode id "zzz"/)]);
+  });
+
+  it('resolves ids written without their episode: prefix', () => {
+    const prefixed = new Set(['episode:017e']);
+    const contribution = parseMeaningContribution(meaningBlock({ '017e': 'it mattered' }), prefixed);
+    expect(contribution?.rejections).toHaveLength(0);
+    expect(contribution?.meanings.get('episode:017e')).toBe('it mattered');
   });
 
   it('accepts an empty meanings object as a done signal', () => {
     const contribution = parseMeaningContribution(meaningBlock({}), known);
     expect(contribution?.done).toBe(true);
     expect(contribution?.meanings.size).toBe(0);
+    expect(contribution?.rejections).toHaveLength(0);
   });
 });

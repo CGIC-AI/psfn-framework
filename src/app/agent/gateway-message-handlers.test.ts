@@ -376,10 +376,14 @@ describe('registerGatewayMessageHandlers', () => {
     expect(harness.log.error).not.toHaveBeenCalled();
   });
 
-  it('surfaces the busy error after bounded retries instead of waiting forever', async () => {
-    const handleMessage = vi.fn(async () => {
-      throw new Error('Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.');
-    });
+  it('keeps waiting through repeated busy collisions instead of ever dropping', async () => {
+    const busyError = new Error('Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.');
+    const handleMessage = vi.fn()
+      .mockRejectedValueOnce(busyError)
+      .mockRejectedValueOnce(busyError)
+      .mockRejectedValueOnce(busyError)
+      .mockRejectedValueOnce(busyError)
+      .mockResolvedValueOnce(makeResponse('finally through'));
     const harness = createHarness({ handleMessage });
     const message = makeMessage({
       channelId: 'discord:general',
@@ -389,13 +393,96 @@ describe('registerGatewayMessageHandlers', () => {
 
     await harness.onDiscordMessage(message);
 
-    // Initial attempt + 3 retries, each gated on idle.
-    expect(handleMessage).toHaveBeenCalledTimes(4);
-    expect(harness.agentLoop.waitForIdle).toHaveBeenCalledTimes(3);
-    expect(harness.log.error).toHaveBeenCalledWith('Error handling message', expect.objectContaining({
+    expect(handleMessage).toHaveBeenCalledTimes(5);
+    expect(harness.agentLoop.waitForIdle).toHaveBeenCalledTimes(4);
+    expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'finally through');
+    expect(harness.log.error).not.toHaveBeenCalled();
+  });
+
+  it('bundles same-author messages that arrive while a turn is processing into one follow-up turn', async () => {
+    let releaseFirstTurn: (response: AgentResponse) => void = () => {};
+    const firstTurn = new Promise<AgentResponse>((resolve) => {
+      releaseFirstTurn = resolve;
+    });
+    const handleMessage = vi.fn()
+      .mockImplementationOnce(async () => firstTurn)
+      .mockImplementation(async () => makeResponse('saw everything'));
+    const harness = createHarness({ handleMessage });
+
+    const makeBurstMessage = (id: string, content: string) => makeMessage({
+      id,
+      content,
       channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+      attachments: undefined,
+    });
+
+    const firstDelivery = harness.onDiscordMessage(makeBurstMessage('msg-a', 'first thing'));
+    await harness.onDiscordMessage(makeBurstMessage('msg-b', 'second thing'));
+    await harness.onDiscordMessage(makeBurstMessage('msg-c', 'and a third'));
+    releaseFirstTurn(makeResponse('reply to the first'));
+    await firstDelivery;
+
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    const bundled = handleMessage.mock.calls[1][0] as SubstrateMessage;
+    expect(bundled.content).toBe('second thing\nand a third');
+    expect(bundled.id).toBe('msg-c');
+    expect(harness.gateway.discordSend).toHaveBeenNthCalledWith(1, 'discord:general', 'reply to the first');
+    expect(harness.gateway.discordSend).toHaveBeenNthCalledWith(2, 'discord:general', 'saw everything');
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('discord.message.bundled', {
+      channelId: 'discord:general',
+      messageIds: ['msg-b', 'msg-c'],
+      count: 2,
+    });
+    expect(harness.log.error).not.toHaveBeenCalled();
+  });
+
+  it('does not bundle messages from different authors into one user turn', async () => {
+    let releaseFirstTurn: (response: AgentResponse) => void = () => {};
+    const firstTurn = new Promise<AgentResponse>((resolve) => {
+      releaseFirstTurn = resolve;
+    });
+    const handleMessage = vi.fn()
+      .mockImplementationOnce(async () => firstTurn)
+      .mockImplementation(async () => makeResponse('separate reply'));
+    const harness = createHarness({ handleMessage });
+
+    const firstDelivery = harness.onDiscordMessage(makeMessage({
+      id: 'msg-a',
+      content: 'opener',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+      attachments: undefined,
     }));
-    expect(harness.gateway.discordSend).not.toHaveBeenCalled();
+    await harness.onDiscordMessage(makeMessage({
+      id: 'msg-b',
+      content: 'from vega',
+      authorId: 'user-1',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+      attachments: undefined,
+    }));
+    await harness.onDiscordMessage(makeMessage({
+      id: 'msg-c',
+      content: 'from someone else',
+      authorId: 'user-2',
+      authorName: 'Someone Else',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+      attachments: undefined,
+    }));
+    releaseFirstTurn(makeResponse('first reply'));
+    await firstDelivery;
+
+    // Three turns total: opener, vega's queued message, the other author's.
+    expect(handleMessage).toHaveBeenCalledTimes(3);
+    expect((handleMessage.mock.calls[1][0] as SubstrateMessage).content).toBe('from vega');
+    expect((handleMessage.mock.calls[2][0] as SubstrateMessage).content).toBe('from someone else');
+    expect(harness.safeguardAuditTrail.append).not.toHaveBeenCalledWith('discord.message.bundled', expect.anything());
   });
 
   it('drops duplicate discord notifications by message id within dedupe window', async () => {

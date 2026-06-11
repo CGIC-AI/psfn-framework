@@ -7,7 +7,11 @@ import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runt
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
 const AGENT_BUSY_PATTERN = /already processing a prompt/i;
-const MAX_AGENT_BUSY_RETRIES = 3;
+
+interface QueuedDiscordMessage {
+  message: SubstrateMessage;
+  dedupeKey: string | null;
+}
 
 interface RecentHandleMessageResult {
   completedAt: number;
@@ -88,24 +92,115 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     }
   };
 
-  // A conversational message that lands while a turn is in flight must not be
-  // dropped: hold it until the agent goes idle and deliver it as its own turn.
-  // Bounded so a pathological prompt storm still surfaces as an error instead
-  // of waiting forever.
-  const handleMessageWhenIdle = async (message: SubstrateMessage): Promise<AgentResponse> => {
-    for (let attempt = 0; ; attempt += 1) {
+  // No conversational message is ever dropped: if the agent is busy we wait
+  // for idle and try again, indefinitely and loudly. A wedged agent surfaces
+  // as repeated warnings in the journal, never as silent message loss.
+  const promptWhenIdle = async (message: SubstrateMessage): Promise<AgentResponse> => {
+    for (let attempt = 1; ; attempt += 1) {
       try {
         return await agentLoop.handleMessage(message);
       } catch (err) {
-        const busy = err instanceof Error && AGENT_BUSY_PATTERN.test(err.message);
-        if (!busy || attempt >= MAX_AGENT_BUSY_RETRIES) throw err;
-        log.info('Agent busy; holding message until the in-flight turn finishes', {
+        if (!(err instanceof Error) || !AGENT_BUSY_PATTERN.test(err.message)) throw err;
+        log.warn('Agent busy; holding discord message until in-flight work finishes', {
           channelId: message.channelId,
           messageId: message.id,
-          attempt: attempt + 1,
+          attempt,
         });
         await agentLoop.waitForIdle();
       }
+    }
+  };
+
+  // Messages that arrive while a turn is in flight queue here and are
+  // bundled — same channel, same author, contiguous — into a single turn, so
+  // a burst of operator messages gets one reply that has seen all of them.
+  const discordPromptQueue: QueuedDiscordMessage[] = [];
+  let discordPumpActive = false;
+
+  const takeNextDiscordBundle = (): QueuedDiscordMessage[] => {
+    const first = discordPromptQueue.shift();
+    if (!first) return [];
+    const bundle = [first];
+    let index = 0;
+    while (index < discordPromptQueue.length) {
+      const entry = discordPromptQueue[index];
+      if (entry.message.channelId === first.message.channelId) {
+        if (entry.message.authorId !== first.message.authorId) break;
+        bundle.push(entry);
+        discordPromptQueue.splice(index, 1);
+        continue;
+      }
+      index += 1;
+    }
+    return bundle;
+  };
+
+  const bundleDiscordMessages = (entries: readonly QueuedDiscordMessage[]): SubstrateMessage => {
+    if (entries.length === 1) return entries[0].message;
+    const messages = entries.map((entry) => entry.message);
+    const newest = messages[messages.length - 1];
+    return {
+      ...newest,
+      content: messages
+        .map((entry) => entry.content)
+        .filter((content) => content.trim().length > 0)
+        .join('\n'),
+      attachments: messages.flatMap((entry) => entry.attachments ?? []),
+    };
+  };
+
+  const pumpDiscordQueue = async (): Promise<void> => {
+    if (discordPumpActive) return;
+    discordPumpActive = true;
+    try {
+      while (discordPromptQueue.length > 0) {
+        const entries = takeNextDiscordBundle();
+        if (entries.length === 0) break;
+        const message = bundleDiscordMessages(entries);
+        if (entries.length > 1) {
+          const messageIds = entries.map((entry) => entry.message.id);
+          log.info('Bundling discord messages that arrived during an in-flight turn', {
+            channelId: message.channelId,
+            messageIds,
+          });
+          safeguardAuditTrail.append('discord.message.bundled', {
+            channelId: message.channelId,
+            messageIds,
+            count: entries.length,
+          });
+        }
+        try {
+          const response = await promptWhenIdle(message);
+          if (response.content.trim()) {
+            await gateway.discordSend(message.channelId, response.content);
+          }
+          for (const attachment of response.attachments ?? []) {
+            await gateway.discordSendMedia(message.channelId, attachment);
+          }
+        } catch (err) {
+          const errorText = toErrorMessage(err);
+          log.error('Error handling message', {
+            channelId: message.channelId,
+            messageId: message.id,
+            error: errorText,
+          });
+          safeguardAuditTrail.append('discord.message.error', {
+            channelId: message.channelId,
+            messageId: message.id,
+            error: errorText,
+          });
+        } finally {
+          const completedAt = Date.now();
+          for (const entry of entries) {
+            if (entry.dedupeKey) {
+              inFlightDiscordMessages.delete(entry.dedupeKey);
+              recentDiscordMessages.set(entry.dedupeKey, completedAt);
+            }
+          }
+        }
+      }
+    } finally {
+      discordPumpActive = false;
     }
   };
 
@@ -289,52 +384,51 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
       message.timestamp = new Date(message.timestamp);
     }
 
-    try {
-      trackSessionActivity(message);
-      const attachments = message.attachments ?? [];
-      const isObservationOnly = message.routing?.responseMode === 'observe';
-      log.info(`Message from ${message.authorName}: ${message.content.slice(0, 50)}...`, {
-        channelId: message.channelId,
-        attachmentCount: attachments.length,
-        attachmentTypes: attachments.map((attachment) => attachment.contentType),
-        attachmentNames: attachments.map((attachment) => attachment.name),
-        responseMode: message.routing?.responseMode ?? 'respond',
-      });
+    const attachments = message.attachments ?? [];
+    const isObservationOnly = message.routing?.responseMode === 'observe';
+    log.info(`Message from ${message.authorName}: ${message.content.slice(0, 50)}...`, {
+      channelId: message.channelId,
+      attachmentCount: attachments.length,
+      attachmentTypes: attachments.map((attachment) => attachment.contentType),
+      attachmentNames: attachments.map((attachment) => attachment.name),
+      responseMode: message.routing?.responseMode ?? 'respond',
+    });
 
-      if (isObservationOnly) {
+    if (isObservationOnly) {
+      try {
+        trackSessionActivity(message);
         await agentLoop.observeMessage(message);
         safeguardAuditTrail.append('discord.message.observed', {
           channelId: message.channelId,
           messageId: message.id,
           authorId: message.authorId,
         });
-        return;
+      } catch (err) {
+        const errorText = toErrorMessage(err);
+        log.error('Error handling message', {
+          channelId: message.channelId,
+          messageId: message.id,
+          error: errorText,
+        });
+        safeguardAuditTrail.append('discord.message.error', {
+          channelId: message.channelId,
+          messageId: message.id,
+          error: errorText,
+        });
+      } finally {
+        if (dedupeKey) {
+          inFlightDiscordMessages.delete(dedupeKey);
+          recentDiscordMessages.set(dedupeKey, Date.now());
+        }
       }
-
-      const response = await handleMessageWhenIdle(message);
-      if (response.content.trim()) {
-        await gateway.discordSend(message.channelId, response.content);
-      }
-      for (const attachment of response.attachments ?? []) {
-        await gateway.discordSendMedia(message.channelId, attachment);
-      }
-    } catch (err) {
-      const errorText = toErrorMessage(err);
-      log.error('Error handling message', {
-        channelId: message.channelId,
-        messageId: message.id,
-        error: errorText,
-      });
-      safeguardAuditTrail.append('discord.message.error', {
-        channelId: message.channelId,
-        messageId: message.id,
-        error: errorText,
-      });
-    } finally {
-      if (dedupeKey) {
-        inFlightDiscordMessages.delete(dedupeKey);
-        recentDiscordMessages.set(dedupeKey, Date.now());
-      }
+      return;
     }
+
+    trackSessionActivity(message);
+    discordPromptQueue.push({ message, dedupeKey });
+    // The pump owns reply delivery, error reporting, and dedupe bookkeeping
+    // for everything queued; later arrivals return immediately and ride the
+    // already-running pump.
+    await pumpDiscordQueue();
   });
 }

@@ -59,6 +59,7 @@ function createHarness(overrides?: {
   }>;
   handleMessage?: (message: SubstrateMessage) => Promise<AgentResponse>;
   observeMessage?: (message: SubstrateMessage) => Promise<void>;
+  waitForIdle?: () => Promise<void>;
 }) {
   let onHandleMessage:
     | ((message: SubstrateMessage) => Promise<AgentResponse>)
@@ -80,6 +81,7 @@ function createHarness(overrides?: {
   const agentLoop = {
     handleMessage: vi.fn(overrides?.handleMessage ?? (async () => makeResponse('primary response'))),
     observeMessage: vi.fn(overrides?.observeMessage ?? (async () => {})),
+    waitForIdle: vi.fn(overrides?.waitForIdle ?? (async () => {})),
   };
   const shardManager = {
     delegateSatelliteSession: vi.fn(
@@ -353,6 +355,47 @@ describe('registerGatewayMessageHandlers', () => {
     });
     expect(harness.gateway.discordSend).not.toHaveBeenCalled();
     expect(harness.gateway.discordSendMedia).not.toHaveBeenCalled();
+  });
+
+  it('holds a discord message until the in-flight turn finishes instead of dropping it', async () => {
+    const handleMessage = vi.fn()
+      .mockRejectedValueOnce(new Error('Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.'))
+      .mockResolvedValueOnce(makeResponse('after the turn finished'));
+    const harness = createHarness({ handleMessage });
+    const message = makeMessage({
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+    });
+
+    await harness.onDiscordMessage(message);
+
+    expect(harness.agentLoop.waitForIdle).toHaveBeenCalledTimes(1);
+    expect(handleMessage).toHaveBeenCalledTimes(2);
+    expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'after the turn finished');
+    expect(harness.log.error).not.toHaveBeenCalled();
+  });
+
+  it('surfaces the busy error after bounded retries instead of waiting forever', async () => {
+    const handleMessage = vi.fn(async () => {
+      throw new Error('Agent is already processing a prompt. Use steer() or followUp() to queue messages, or wait for completion.');
+    });
+    const harness = createHarness({ handleMessage });
+    const message = makeMessage({
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+    });
+
+    await harness.onDiscordMessage(message);
+
+    // Initial attempt + 3 retries, each gated on idle.
+    expect(handleMessage).toHaveBeenCalledTimes(4);
+    expect(harness.agentLoop.waitForIdle).toHaveBeenCalledTimes(3);
+    expect(harness.log.error).toHaveBeenCalledWith('Error handling message', expect.objectContaining({
+      channelId: 'discord:general',
+    }));
+    expect(harness.gateway.discordSend).not.toHaveBeenCalled();
   });
 
   it('drops duplicate discord notifications by message id within dedupe window', async () => {

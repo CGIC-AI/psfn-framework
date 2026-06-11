@@ -6,6 +6,8 @@ import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 
 const DUPLICATE_MESSAGE_WINDOW_MS = 2 * 60_000;
+const AGENT_BUSY_PATTERN = /already processing a prompt/i;
+const MAX_AGENT_BUSY_RETRIES = 3;
 
 interface RecentHandleMessageResult {
   completedAt: number;
@@ -28,6 +30,8 @@ export interface GatewayMessageGateway {
 export interface GatewayMessageAgentLoop {
   handleMessage(message: SubstrateMessage): Promise<AgentResponse>;
   observeMessage(message: SubstrateMessage): Promise<void>;
+  /** Resolves when the agent has finished all in-flight work (prompt + steering + follow-ups). */
+  waitForIdle(): Promise<void>;
 }
 
 export type GatewayMessageShardManager = Pick<ShardExecutionPort, 'delegateSatelliteSession'>;
@@ -80,6 +84,27 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     for (const [key, seenAt] of recentDiscordMessages.entries()) {
       if (seenAt < minTimestamp) {
         recentDiscordMessages.delete(key);
+      }
+    }
+  };
+
+  // A conversational message that lands while a turn is in flight must not be
+  // dropped: hold it until the agent goes idle and deliver it as its own turn.
+  // Bounded so a pathological prompt storm still surfaces as an error instead
+  // of waiting forever.
+  const handleMessageWhenIdle = async (message: SubstrateMessage): Promise<AgentResponse> => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await agentLoop.handleMessage(message);
+      } catch (err) {
+        const busy = err instanceof Error && AGENT_BUSY_PATTERN.test(err.message);
+        if (!busy || attempt >= MAX_AGENT_BUSY_RETRIES) throw err;
+        log.info('Agent busy; holding message until the in-flight turn finishes', {
+          channelId: message.channelId,
+          messageId: message.id,
+          attempt: attempt + 1,
+        });
+        await agentLoop.waitForIdle();
       }
     }
   };
@@ -286,7 +311,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
         return;
       }
 
-      const response = await agentLoop.handleMessage(message);
+      const response = await handleMessageWhenIdle(message);
       if (response.content.trim()) {
         await gateway.discordSend(message.channelId, response.content);
       }

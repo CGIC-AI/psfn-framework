@@ -434,7 +434,7 @@ export async function handleMessageForTurn(
       turnCorrelationBase,
       turnCallType,
       turnSnapshot,
-      memoryManifestSeed: observability.getMemoryManifestSeed(),
+      memoryManifestSeed: preTurnState.memoryManifestSeed ?? observability.getMemoryManifestSeed(),
       getRetrievalProvenanceRefs: observability.getRetrievalProvenanceRefs,
       getObservedTurnRetrievals: observability.getObservedTurnRetrievals,
       observability,

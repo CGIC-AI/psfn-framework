@@ -730,8 +730,22 @@ describe('handleMessageForTurn compaction scheduling', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       memoryProvider: {
-        captureTurnMemorySnapshot: vi.fn(async () => undefined),
-        retrieve: vi.fn(async () => 'Retrieved memory block'),
+        getActiveMemoryContext: vi.fn(() => ({
+          key: 'active-memory:key',
+          subjectKey: 'contact:contact-1',
+          channelId: 'ch1',
+          trustLevel: 'regular',
+          channelVisibility: 'private',
+          visibilityScope: 'non_broadcast',
+          contextBlock: 'Retrieved memory block',
+          contextChars: 'Retrieved memory block'.length,
+          selectedMemoryIds: ['mem-1'],
+          generatedAt: Date.now(),
+          lastRefreshStartedAt: Date.now(),
+          refreshStatus: 'ready',
+          versionPointer: 'active-memory-v1',
+        })),
+        refreshActiveMemoryContext: vi.fn(async () => null),
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
     runtime.captureTurnPromptSnapshot = vi.fn(() => ({
@@ -1198,16 +1212,32 @@ describe('handleMessageForTurn failure persistence', () => {
 });
 
 describe('handleMessageForTurn pre-response concurrency', () => {
-  it('starts emotion observation and memory snapshot capture in parallel, and waits for both before retrieval', async () => {
+  it('uses active memory immediately and schedules refresh without waiting for it', async () => {
     const eventBus = new EventBus();
     const emotionDeferred = createDeferred<null>();
-    const memorySnapshotDeferred = createDeferred<{ snapshot: string }>();
-    const retrieveDeferred = createDeferred<string>();
-    const proactiveRecallDeferred = createDeferred<string>();
+    const refreshDeferred = createDeferred<null>();
     const observeEmotionState = vi.fn(() => emotionDeferred.promise);
-    const captureTurnMemorySnapshot = vi.fn(() => memorySnapshotDeferred.promise);
-    const retrieve = vi.fn(() => retrieveDeferred.promise);
-    const retrieveProactiveRecall = vi.fn(() => proactiveRecallDeferred.promise);
+    const getActiveMemoryContext = vi.fn(() => ({
+      key: 'active-memory:key',
+      subjectKey: 'contact:contact-1',
+      channelId: 'ch1',
+      trustLevel: 'regular',
+      channelVisibility: 'private',
+      visibilityScope: 'non_broadcast',
+      contextBlock: 'already recalled memory',
+      contextChars: 'already recalled memory'.length,
+      selectedMemoryIds: ['mem-1'],
+      generatedAt: Date.now(),
+      lastRefreshStartedAt: Date.now(),
+      refreshStatus: 'ready',
+      versionPointer: 'active-memory-v1',
+      manifestSeed: {
+        reason: 'active_projection',
+        returnedCount: 1,
+        selectedTypes: { semantic: 1 },
+      },
+    }));
+    const refreshActiveMemoryContext = vi.fn(() => refreshDeferred.promise);
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1222,9 +1252,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       memoryProvider: {
-        captureTurnMemorySnapshot,
-        retrieve,
-        retrieveProactiveRecall,
+        getActiveMemoryContext,
+        refreshActiveMemoryContext,
       } as unknown as TurnExecutionRuntime['memoryProvider'],
       emotionSelfModelRuntimeOverrides: {
         observeEmotionState,
@@ -1236,37 +1265,25 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     await flushAsyncWork();
 
     expect(observeEmotionState).toHaveBeenCalledTimes(1);
-    expect(captureTurnMemorySnapshot).toHaveBeenCalledTimes(1);
-    expect(retrieve).not.toHaveBeenCalled();
-    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
+    expect(getActiveMemoryContext).toHaveBeenCalledTimes(1);
+    expect(refreshActiveMemoryContext).toHaveBeenCalledTimes(1);
     expect(buildContext).not.toHaveBeenCalled();
 
     emotionDeferred.resolve(null);
-    await flushAsyncWork();
-
-    expect(retrieve).not.toHaveBeenCalled();
-    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
-    expect(buildContext).not.toHaveBeenCalled();
-
-    memorySnapshotDeferred.resolve({ snapshot: 'memory' });
     await vi.waitFor(() => {
-      expect(retrieve).toHaveBeenCalledTimes(1);
-      expect(retrieveProactiveRecall).toHaveBeenCalledTimes(1);
+      expect(buildContext).toHaveBeenCalledTimes(1);
     });
-    expect(buildContext).not.toHaveBeenCalled();
-
-    retrieveDeferred.resolve('memories');
-    proactiveRecallDeferred.resolve('proactive');
+    expect(buildContext.mock.calls[0]?.[2]).toBe('already recalled memory');
 
     await expect(responsePromise).resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+    refreshDeferred.resolve(null);
   });
 
-  it('runs memory retrieval and proactive recall concurrently, and waits for both before building context', async () => {
+  it('does not call fresh retrieval on the foreground response path', async () => {
     const eventBus = new EventBus();
-    const retrieveDeferred = createDeferred<string>();
-    const proactiveRecallDeferred = createDeferred<string>();
-    const retrieve = vi.fn(() => retrieveDeferred.promise);
-    const retrieveProactiveRecall = vi.fn(() => proactiveRecallDeferred.promise);
+    const captureTurnMemorySnapshot = vi.fn(async () => ({ snapshot: 'memory' }));
+    const retrieve = vi.fn(async () => 'fresh memories');
+    const retrieveProactiveRecall = vi.fn(async () => 'proactive');
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1281,38 +1298,26 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       memoryProvider: {
-        captureTurnMemorySnapshot: vi.fn(async () => ({ snapshot: 'memory' })),
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext: vi.fn(async () => null),
+        captureTurnMemorySnapshot,
         retrieve,
         retrieveProactiveRecall,
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
 
-    const responsePromise = handleMessageForTurn(runtime, createMessage('msg-parallel-memory'));
+    await expect(handleMessageForTurn(runtime, createMessage('msg-parallel-memory')))
+      .resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
 
-    await vi.waitFor(() => {
-      expect(retrieve).toHaveBeenCalledTimes(1);
-      expect(retrieveProactiveRecall).toHaveBeenCalledTimes(1);
-    });
-    expect(buildContext).not.toHaveBeenCalled();
-
-    retrieveDeferred.resolve('memories');
-    await flushAsyncWork();
-
-    expect(buildContext).not.toHaveBeenCalled();
-
-    proactiveRecallDeferred.resolve('proactive');
-    await vi.waitFor(() => {
-      expect(buildContext).toHaveBeenCalledTimes(1);
-    });
-
-    await expect(responsePromise).resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+    expect(captureTurnMemorySnapshot).not.toHaveBeenCalled();
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
+    expect(buildContext).toHaveBeenCalledTimes(1);
   });
 
-  it('threads temporal retrieval mode through memory snapshot capture and retrieval', async () => {
+  it('threads temporal retrieval mode through active memory refresh scheduling', async () => {
     const eventBus = new EventBus();
-    const captureTurnMemorySnapshot = vi.fn(async () => ({ snapshot: 'memory' }));
-    const retrieve = vi.fn(async () => 'memories');
-    const retrieveProactiveRecall = vi.fn(async () => 'proactive');
+    const refreshActiveMemoryContext = vi.fn(async () => null);
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1328,9 +1333,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordAssistantMessage: vi.fn(() => 2),
       buildTurnBudgetCharacteristics: vi.fn(() => ({ messageText: 'what time is it?' })),
       memoryProvider: {
-        captureTurnMemorySnapshot,
-        retrieve,
-        retrieveProactiveRecall,
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext,
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
 
@@ -1338,30 +1342,16 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       content: 'what time is it?',
     }));
 
-    expect(captureTurnMemorySnapshot).toHaveBeenCalledWith(
-      'what time is it?',
-      'ch1',
-      'regular',
-      {},
-      'contact-1',
-      expect.objectContaining({ messageText: 'what time is it?' }),
-      undefined,
-      { retrievalMode: 'temporal' },
-      'temporal',
-    );
-    expect(retrieve).toHaveBeenCalledWith(
-      'what time is it?',
-      'ch1',
-      'regular',
-      {},
-      'contact-1',
-      expect.objectContaining({ snapshot: 'memory' }),
-      expect.objectContaining({ messageText: 'what time is it?' }),
-      undefined,
-      undefined,
-      { retrievalMode: 'temporal' },
-      'temporal',
-    );
+    expect(refreshActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+      contextText: 'what time is it?',
+      channelId: 'ch1',
+      trustLevel: 'regular',
+      channelMeta: {},
+      canonicalContactId: 'contact-1',
+      turnBudgetCharacteristics: expect.objectContaining({ messageText: 'what time is it?' }),
+      callerContext: { retrievalMode: 'temporal' },
+      retrievalMode: 'temporal',
+    }));
   });
 
   it('attaches structured observability warnings to the context stage when chat context is stale or contradictory', async () => {
@@ -1498,27 +1488,23 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       expect(contextStage?.data.observabilityWarnings.map((warning: { code: string }) => warning.code).sort()).toEqual([
         'history_span_exceeded',
         'stale_tool_observation_verbatim',
-        'temporal_reflection_only_retrieval',
         'values_activity_contradiction',
       ]);
       expect(contextStage?.data.observabilityCounters).toEqual({
-        warningCount: 4,
+        warningCount: 3,
         historySpanExceededCount: 1,
-        temporalReflectionOnlyRetrievalCount: 2,
         staleToolObservationVerbatimCount: 1,
-        valuesActivityContradictionCount: 2,
+        valuesActivityContradictionCount: 1,
       });
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it('threads the active focus scope into subagent memory retrieval calls', async () => {
+  it('threads the active focus scope into active memory refresh scheduling', async () => {
     const eventBus = new EventBus();
     const focusScopeQuery = buildFocusMemoryScopeQuery('Memory Improvement');
-    const captureTurnMemorySnapshot = vi.fn(async () => ({ snapshot: 'memory' }));
-    const retrieve = vi.fn(async () => 'memories');
-    const retrieveProactiveRecall = vi.fn(async () => 'proactive');
+    const refreshActiveMemoryContext = vi.fn(async () => null);
     const sessionManager = {
       getActiveFocusMemoryScopeQuery: vi.fn(() => focusScopeQuery),
     } as unknown as SessionManager;
@@ -1536,52 +1522,26 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       memoryProvider: {
-        captureTurnMemorySnapshot,
-        retrieve,
-        retrieveProactiveRecall,
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext,
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
 
     await handleMessageForTurn(runtime, createMessage('msg-focus-scope'));
 
-    expect(captureTurnMemorySnapshot).toHaveBeenCalledWith(
-      'Hello there',
-      'ch1',
-      'regular',
-      {},
-      'contact-1',
-      expect.any(Object),
-      focusScopeQuery,
-      undefined,
-      undefined,
-    );
-    expect(retrieve).toHaveBeenCalledWith(
-      'Hello there',
-      'ch1',
-      'regular',
-      {},
-      'contact-1',
-      expect.any(Object),
-      expect.any(Object),
-      undefined,
-      focusScopeQuery,
-      undefined,
-      undefined,
-    );
-    expect(retrieveProactiveRecall).toHaveBeenCalledWith(
-      'ch1',
-      'regular',
-      {},
-      'contact-1',
-      expect.any(Object),
-      expect.any(Object),
-      focusScopeQuery,
-    );
+    expect(refreshActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+      contextText: 'Hello there',
+      channelId: 'ch1',
+      trustLevel: 'regular',
+      channelMeta: {},
+      canonicalContactId: 'contact-1',
+      turnBudgetCharacteristics: expect.any(Object),
+      scopeQuery: focusScopeQuery,
+    }));
   });
 
-  it('fails closed when proactive recall rejects before the response is built', async () => {
+  it('keeps the foreground response path open when active memory refresh rejects', async () => {
     const eventBus = new EventBus();
-    const proactiveRecallError = new Error('proactive recall failed');
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1596,24 +1556,37 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       memoryProvider: {
-        captureTurnMemorySnapshot: vi.fn(async () => ({ snapshot: 'memory' })),
-        retrieve: vi.fn(async () => 'memories'),
-        retrieveProactiveRecall: vi.fn(async () => {
-          throw proactiveRecallError;
+        getActiveMemoryContext: vi.fn(() => ({
+          key: 'active-memory:key',
+          subjectKey: 'contact:contact-1',
+          channelId: 'ch1',
+          trustLevel: 'regular',
+          channelVisibility: 'private',
+          visibilityScope: 'non_broadcast',
+          contextBlock: 'previously recalled memory',
+          contextChars: 'previously recalled memory'.length,
+          selectedMemoryIds: ['mem-1'],
+          generatedAt: Date.now(),
+          lastRefreshStartedAt: Date.now(),
+          refreshStatus: 'ready',
+          versionPointer: 'active-memory-v1',
+        })),
+        refreshActiveMemoryContext: vi.fn(async () => {
+          throw new Error('active memory refresh failed');
         }),
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
 
-    await expect(handleMessageForTurn(runtime, createMessage('msg-proactive-error'))).rejects.toThrow(
-      'proactive recall failed',
-    );
-    expect(buildContext).not.toHaveBeenCalled();
+    await expect(handleMessageForTurn(runtime, createMessage('msg-active-memory-refresh-error')))
+      .resolves.toMatchObject({ content: 'assistant reply', channelId: 'ch1' });
+    expect(buildContext).toHaveBeenCalledTimes(1);
+    expect(buildContext.mock.calls[0]?.[2]).toBe('previously recalled memory');
   });
 
   it('bypasses generic memory retrieval for live image turns', async () => {
     const eventBus = new EventBus();
-    const retrieve = vi.fn(async () => 'stale image memory');
-    const retrieveProactiveRecall = vi.fn(async () => 'more stale image memory');
+    const getActiveMemoryContext = vi.fn(() => null);
+    const refreshActiveMemoryContext = vi.fn(async () => null);
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
@@ -1628,9 +1601,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       recordUserMessage: vi.fn(() => 1),
       recordAssistantMessage: vi.fn(() => 2),
       memoryProvider: {
-        captureTurnMemorySnapshot: vi.fn(async () => ({ snapshot: 'memory' })),
-        retrieve,
-        retrieveProactiveRecall,
+        getActiveMemoryContext,
+        refreshActiveMemoryContext,
       } as unknown as TurnExecutionRuntime['memoryProvider'],
     });
 
@@ -1644,8 +1616,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       }],
     }));
 
-    expect(retrieve).not.toHaveBeenCalled();
-    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
+    expect(getActiveMemoryContext).not.toHaveBeenCalled();
+    expect(refreshActiveMemoryContext).not.toHaveBeenCalled();
     expect(buildContext.mock.calls[0]?.[2]).toBe('');
   });
 

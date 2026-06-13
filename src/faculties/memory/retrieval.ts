@@ -15,6 +15,7 @@ import type {
   RetrievalModeInput,
 } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
+import type { ContextManifestMemorySeed } from '../../core/session/context-manifest.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import {
@@ -80,6 +81,13 @@ import {
   renderProactiveRecall,
   renderPromptBlock,
 } from './retrieval/formatting.js';
+import type {
+  ActiveMemoryContextRequest,
+  ActiveMemoryContextSnapshot,
+} from './active-context.js';
+import {
+  resolveActiveMemoryContextIdentity,
+} from './active-context.js';
 import {
   cloneRetrievalCallerContext,
   cloneRetrievalModeInput,
@@ -128,6 +136,10 @@ const RECENT_MEMORY_AUGMENT_MIN_OVERLAP = 2;
 const RECENT_MEMORY_AUGMENT_BASE_SIMILARITY = 0.62;
 const EVOLUTION_CHAIN_SELECTED_LIMIT = 3;
 const EVOLUTION_CHAIN_PER_MEMORY_LIMIT = 3;
+const ACTIVE_MEMORY_ENTRY_LIMIT_MULTIPLIER = 2;
+const ACTIVE_MEMORY_ENTRY_MIN_LIMIT = 12;
+const ACTIVE_MEMORY_MISS_LIMIT = 3;
+const ACTIVE_MEMORY_MISS_DECAY = 0.72;
 const EVOLUTION_CHAIN_USEFUL_HINT = /\b(history|lineage|changed|change|updated|update|previous|old|correction|corrected|conflict|contradict|superseded|why)\b/i;
 
 function hasCountEntries(record: Record<string, number | undefined> | undefined): boolean {
@@ -252,6 +264,39 @@ export class RetrievalIntegrityError extends Error {
   }
 }
 
+interface ActiveMemoryEntry {
+  scored: ScoredMemory;
+  retainedScore: number;
+  firstSelectedAt: number;
+  lastSelectedAt: number;
+  missCount: number;
+}
+
+interface ActiveMemoryState {
+  snapshot: ActiveMemoryContextSnapshot;
+  entries: Map<string, ActiveMemoryEntry>;
+  profile?: ContactProfileArtifact;
+  emotionalSnapshot?: EmotionalSnapshot;
+  emotionalContinuityMemories: PurrMemory[];
+  withheldSummary?: MemoryWithheldSummary;
+  socialContext?: RetrievalSocialContext;
+  contactContextById?: ReadonlyMap<string, RetrievalContactContext>;
+  episodicChains: EpisodicRetrievalChain[];
+  refreshSerial: number;
+  maxEntries: number;
+}
+
+interface ActiveMemoryRefreshTarget {
+  request: ActiveMemoryContextRequest;
+  startedAt: number;
+  identity: ReturnType<typeof resolveActiveMemoryContextIdentity>;
+}
+
+interface ActiveMemoryRefreshLoop {
+  latestRequest?: ActiveMemoryContextRequest;
+  running: Promise<ActiveMemoryContextSnapshot | null>;
+}
+
 export interface MemoryRetrieverConfig {
   retrievalBudgetPct?: number;
   contextWindow?: number;
@@ -288,6 +333,8 @@ export class MemoryRetriever implements MemoryProvider {
   private proactiveRecallMinTurnsBetween: number;
   private proactiveTurnCounter: number;
   private lastProactiveRecallTurn: number;
+  private activeMemoryContexts: Map<string, ActiveMemoryState>;
+  private activeMemoryRefreshLoops: Map<string, ActiveMemoryRefreshLoop>;
 
   constructor(
     memoryStore: MemoryStorePort,
@@ -331,6 +378,8 @@ export class MemoryRetriever implements MemoryProvider {
     this.episodicStore = episodicStore ?? null;
     this.proactiveTurnCounter = 0;
     this.lastProactiveRecallTurn = Number.NEGATIVE_INFINITY;
+    this.activeMemoryContexts = new Map();
+    this.activeMemoryRefreshLoops = new Map();
   }
 
   private resolveRetrievalBudget(
@@ -351,6 +400,173 @@ export class MemoryRetriever implements MemoryProvider {
         ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
       },
     );
+  }
+
+  getActiveMemoryContext(request: ActiveMemoryContextRequest): ActiveMemoryContextSnapshot | null {
+    const identity = resolveActiveMemoryContextIdentity(request);
+    const state = this.activeMemoryContexts.get(identity.key);
+    if (!state) return null;
+    return this.cloneActiveMemorySnapshot(state.snapshot);
+  }
+
+  refreshActiveMemoryContext(request: ActiveMemoryContextRequest): Promise<ActiveMemoryContextSnapshot | null> {
+    const identity = resolveActiveMemoryContextIdentity(request);
+    const existing = this.activeMemoryRefreshLoops.get(identity.key);
+    if (existing) {
+      existing.latestRequest = request;
+      return existing.running;
+    }
+
+    const loop: ActiveMemoryRefreshLoop = {
+      running: Promise.resolve(null),
+    };
+    loop.running = this.runActiveMemoryRefreshLoop(identity.key, request)
+      .finally(() => {
+        if (this.activeMemoryRefreshLoops.get(identity.key) === loop) {
+          this.activeMemoryRefreshLoops.delete(identity.key);
+        }
+      });
+    this.activeMemoryRefreshLoops.set(identity.key, loop);
+    return loop.running;
+  }
+
+  private async runActiveMemoryRefreshLoop(
+    key: string,
+    initialRequest: ActiveMemoryContextRequest,
+  ): Promise<ActiveMemoryContextSnapshot | null> {
+    let nextRequest: ActiveMemoryContextRequest | undefined = initialRequest;
+    let latestSnapshot: ActiveMemoryContextSnapshot | null = null;
+    while (nextRequest) {
+      latestSnapshot = await this.performActiveMemoryRefresh(nextRequest);
+      const loop = this.activeMemoryRefreshLoops.get(key);
+      nextRequest = loop?.latestRequest;
+      if (loop) {
+        delete loop.latestRequest;
+      }
+    }
+    return latestSnapshot;
+  }
+
+  private async performActiveMemoryRefresh(
+    request: ActiveMemoryContextRequest,
+  ): Promise<ActiveMemoryContextSnapshot | null> {
+    const identity = resolveActiveMemoryContextIdentity(request);
+    const startedAt = Date.now();
+    this.markActiveMemoryRefreshing(identity.key, startedAt);
+
+    try {
+      const turnSnapshot = typeof this.captureTurnMemorySnapshot === 'function'
+        ? await this.captureTurnMemorySnapshot(
+          request.contextText,
+          request.channelId,
+          request.trustLevel,
+          request.channelMeta,
+          request.canonicalContactId,
+          request.turnBudgetCharacteristics,
+          request.scopeQuery,
+          request.callerContext,
+          request.retrievalMode,
+        )
+        : undefined;
+
+      await this.retrieve(
+        request.contextText,
+        request.channelId,
+        request.trustLevel,
+        request.channelMeta,
+        request.canonicalContactId,
+        turnSnapshot,
+        request.turnBudgetCharacteristics,
+        undefined,
+        request.scopeQuery,
+        request.callerContext,
+        request.retrievalMode,
+        {
+          request,
+          startedAt,
+          identity,
+        },
+      );
+      return this.cloneActiveMemorySnapshot(this.activeMemoryContexts.get(identity.key)?.snapshot ?? null);
+    } catch (error) {
+      return this.markActiveMemoryDegraded(identity.key, request.channelId, startedAt, error);
+    }
+  }
+
+  private markActiveMemoryRefreshing(key: string, startedAt: number): void {
+    const state = this.activeMemoryContexts.get(key);
+    if (!state) return;
+    state.snapshot = {
+      ...state.snapshot,
+      refreshStatus: 'refreshing',
+      lastRefreshStartedAt: startedAt,
+    };
+  }
+
+  private markActiveMemoryDegraded(
+    key: string,
+    channelId: string,
+    startedAt: number,
+    error: unknown,
+  ): ActiveMemoryContextSnapshot | null {
+    const errorText = toErrorMessage(error);
+    const state = this.activeMemoryContexts.get(key);
+    log.error('Active memory context refresh failed; keeping previous active context', {
+      key,
+      channelId,
+      error: errorText,
+    });
+    void this.eventBus?.emit('memory.active_context.refresh', {
+      channelId,
+      key,
+      phase: 'degraded',
+      error: errorText,
+      timestamp: Date.now(),
+    }).catch((emitError: unknown) => {
+      log.debug('Failed to emit active memory refresh degradation event', {
+        key,
+        channelId,
+        error: toErrorMessage(emitError),
+      });
+    });
+    if (!state) return null;
+    state.snapshot = {
+      ...state.snapshot,
+      refreshStatus: 'degraded',
+      lastRefreshStartedAt: startedAt,
+      lastRefreshCompletedAt: Date.now(),
+      lastRefreshError: errorText,
+    };
+    return this.cloneActiveMemorySnapshot(state.snapshot);
+  }
+
+  private cloneActiveMemorySnapshot(
+    snapshot: ActiveMemoryContextSnapshot | null,
+  ): ActiveMemoryContextSnapshot | null {
+    if (!snapshot) return null;
+    return {
+      ...snapshot,
+      selectedMemoryIds: [...snapshot.selectedMemoryIds],
+      ...(snapshot.manifestSeed
+        ? {
+          manifestSeed: {
+            ...snapshot.manifestSeed,
+            ...(snapshot.manifestSeed.selectedTypes
+              ? { selectedTypes: { ...snapshot.manifestSeed.selectedTypes } }
+              : {}),
+            ...(snapshot.manifestSeed.policyRejectedReasonTags
+              ? { policyRejectedReasonTags: { ...snapshot.manifestSeed.policyRejectedReasonTags } }
+              : {}),
+            ...(snapshot.manifestSeed.withheldReasonCounts
+              ? { withheldReasonCounts: { ...snapshot.manifestSeed.withheldReasonCounts } }
+              : {}),
+            ...(snapshot.manifestSeed.withheldRelevanceBands
+              ? { withheldRelevanceBands: { ...snapshot.manifestSeed.withheldRelevanceBands } }
+              : {}),
+          },
+        }
+        : {}),
+    };
   }
 
   private async resolveContactProfileAccess(
@@ -586,6 +802,231 @@ export class MemoryRetriever implements MemoryProvider {
     };
   }
 
+  private cloneScoredPromptMemory(input: ScoredMemory): ScoredMemory {
+    return {
+      ...input,
+      memory: cloneScoredMemory(input.memory),
+      privacyBreakdown: { ...input.privacyBreakdown },
+      ...(input.evolutionChain
+        ? {
+          evolutionChain: input.evolutionChain.map(link => ({
+            ...link,
+            memory: cloneMemory(link.memory),
+          })),
+        }
+        : {}),
+    };
+  }
+
+  private buildManifestSeedFromTelemetry(telemetry: RetrievalTelemetry): ContextManifestMemorySeed {
+    return {
+      reason: telemetry.reason,
+      retrievalSource: telemetry.retrievalSource,
+      candidateCount: telemetry.candidateCount,
+      policyAllowedCount: telemetry.policyAllowedCount ?? 0,
+      rankedCount: telemetry.rankedCount,
+      returnedCount: telemetry.returnedCount,
+      retrievalLimit: telemetry.retrievalLimit,
+      retrievalBudgetPct: telemetry.retrievalBudgetPct,
+      retrievalTokenBudget: telemetry.retrievalTokenBudget,
+      retrievalLimitMode: telemetry.retrievalLimitMode,
+      ...(telemetry.contactScopeRejectedCount !== undefined
+        ? { contactScopeRejectedCount: telemetry.contactScopeRejectedCount }
+        : {}),
+      sensitivityRejectedCount: telemetry.sensitivityRejectedCount ?? 0,
+      policyRejectedCount: telemetry.policyRejectedCount ?? 0,
+      ...(telemetry.policyRejectedReasonTags
+        ? { policyRejectedReasonTags: { ...telemetry.policyRejectedReasonTags } }
+        : {}),
+      ...(telemetry.withheldCount !== undefined ? { withheldCount: telemetry.withheldCount } : {}),
+      ...(telemetry.withheldReasonCounts
+        ? { withheldReasonCounts: { ...telemetry.withheldReasonCounts } }
+        : {}),
+      ...(telemetry.withheldRelevanceBands
+        ? { withheldRelevanceBands: { ...telemetry.withheldRelevanceBands } }
+        : {}),
+      scoreRejectedCount: telemetry.scoreRejectedCount ?? 0,
+      budgetCappedCount: telemetry.budgetCappedCount ?? 0,
+      ...(telemetry.selectedTypes ? { selectedTypes: { ...telemetry.selectedTypes } } : {}),
+      ...(telemetry.compositionalMode ? { compositionalMode: telemetry.compositionalMode } : {}),
+    };
+  }
+
+  private finalizeRetrievalPromptBlock(input: {
+    activeContextTarget?: ActiveMemoryRefreshTarget;
+    profile?: ContactProfileArtifact;
+    selectedForPrompt?: ScoredMemory[];
+    emotionalSnapshot?: EmotionalSnapshot;
+    emotionalContinuityMemories?: PurrMemory[];
+    withheldSummary?: MemoryWithheldSummary;
+    socialContext?: RetrievalSocialContext;
+    contactContextById?: ReadonlyMap<string, RetrievalContactContext>;
+    episodicChains?: EpisodicRetrievalChain[];
+    telemetry: RetrievalTelemetry;
+  }): string {
+    const block = renderPromptBlock(input.profile, input.selectedForPrompt ?? [], {
+      emotionalSnapshot: input.emotionalSnapshot,
+      emotionalContinuityMemories: input.emotionalContinuityMemories,
+      withheldSummary: input.withheldSummary,
+      socialContext: input.socialContext,
+      contactContextById: input.contactContextById,
+      episodicChains: input.episodicChains,
+    });
+
+    if (!input.activeContextTarget) {
+      return block;
+    }
+
+    return this.applyActiveMemoryContextRefresh({
+      target: input.activeContextTarget,
+      profile: input.profile,
+      selectedForPrompt: input.selectedForPrompt ?? [],
+      emotionalSnapshot: input.emotionalSnapshot,
+      emotionalContinuityMemories: input.emotionalContinuityMemories ?? [],
+      withheldSummary: input.withheldSummary,
+      socialContext: input.socialContext,
+      contactContextById: input.contactContextById,
+      episodicChains: input.episodicChains ?? [],
+      manifestSeed: this.buildManifestSeedFromTelemetry(input.telemetry),
+    }).contextBlock;
+  }
+
+  private applyActiveMemoryContextRefresh(input: {
+    target: ActiveMemoryRefreshTarget;
+    profile?: ContactProfileArtifact;
+    selectedForPrompt: ScoredMemory[];
+    emotionalSnapshot?: EmotionalSnapshot;
+    emotionalContinuityMemories: PurrMemory[];
+    withheldSummary?: MemoryWithheldSummary;
+    socialContext?: RetrievalSocialContext;
+    contactContextById?: ReadonlyMap<string, RetrievalContactContext>;
+    episodicChains: EpisodicRetrievalChain[];
+    manifestSeed: ContextManifestMemorySeed;
+  }): ActiveMemoryContextSnapshot {
+    const { target } = input;
+    const now = Date.now();
+    const existing = this.activeMemoryContexts.get(target.identity.key);
+    const previousEntries = existing?.entries ?? new Map<string, ActiveMemoryEntry>();
+    const nextEntries = new Map<string, ActiveMemoryEntry>();
+    const selectedIds = new Set(input.selectedForPrompt.map(item => item.memory.id));
+    const maxEntries = Math.max(
+      ACTIVE_MEMORY_ENTRY_MIN_LIMIT,
+      (input.manifestSeed.retrievalLimit ?? ACTIVE_MEMORY_ENTRY_MIN_LIMIT) * ACTIVE_MEMORY_ENTRY_LIMIT_MULTIPLIER,
+      input.selectedForPrompt.length,
+    );
+
+    for (const [id, entry] of previousEntries.entries()) {
+      if (selectedIds.has(id)) continue;
+      const missCount = entry.missCount + 1;
+      if (missCount >= ACTIVE_MEMORY_MISS_LIMIT) continue;
+      const retainedScore = entry.retainedScore * ACTIVE_MEMORY_MISS_DECAY;
+      nextEntries.set(id, {
+        ...entry,
+        scored: this.cloneScoredPromptMemory(entry.scored),
+        retainedScore,
+        missCount,
+      });
+    }
+
+    for (const scored of input.selectedForPrompt) {
+      const id = scored.memory.id;
+      const previous = previousEntries.get(id);
+      nextEntries.set(id, {
+        scored: this.cloneScoredPromptMemory(scored),
+        retainedScore: Math.max(scored.score, previous?.retainedScore ?? 0),
+        firstSelectedAt: previous?.firstSelectedAt ?? now,
+        lastSelectedAt: now,
+        missCount: 0,
+      });
+    }
+
+    const rankedEntries = [...nextEntries.entries()]
+      .sort(([, left], [, right]) => (
+        right.retainedScore - left.retainedScore
+        || right.lastSelectedAt - left.lastSelectedAt
+        || right.scored.memory.importance - left.scored.memory.importance
+      ))
+      .slice(0, maxEntries);
+    const cappedEntries = new Map(rankedEntries);
+    const selectedForActivePrompt = rankedEntries.map(([, entry]) => this.cloneScoredPromptMemory(entry.scored));
+    const profile = input.profile ?? existing?.profile;
+    const emotionalSnapshot = input.emotionalSnapshot ?? existing?.emotionalSnapshot;
+    const emotionalContinuityMemories = input.emotionalContinuityMemories.length > 0
+      ? input.emotionalContinuityMemories.map(memory => cloneMemory(memory))
+      : existing?.emotionalContinuityMemories.map(memory => cloneMemory(memory)) ?? [];
+    const withheldSummary = input.withheldSummary ?? existing?.withheldSummary;
+    const socialContext = input.socialContext ?? existing?.socialContext;
+    const contactContextById = input.contactContextById ?? existing?.contactContextById;
+    const episodicChains = input.episodicChains.length > 0
+      ? input.episodicChains.map(cloneEpisodicRetrievalChain)
+      : existing?.episodicChains.map(cloneEpisodicRetrievalChain) ?? [];
+    const contextBlock = renderPromptBlock(profile, selectedForActivePrompt, {
+      emotionalSnapshot,
+      emotionalContinuityMemories,
+      withheldSummary,
+      socialContext,
+      contactContextById,
+      episodicChains,
+    });
+    const selectedMemoryIds = [...cappedEntries.keys()];
+    const refreshSerial = (existing?.refreshSerial ?? 0) + 1;
+    const snapshot: ActiveMemoryContextSnapshot = {
+      key: target.identity.key,
+      subjectKey: target.identity.subjectKey,
+      channelId: target.request.channelId,
+      trustLevel: target.identity.trustLevel,
+      channelVisibility: target.identity.channelVisibility,
+      visibilityScope: target.identity.visibilityScope,
+      contextBlock,
+      contextChars: contextBlock.length,
+      selectedMemoryIds,
+      generatedAt: now,
+      lastRefreshStartedAt: target.startedAt,
+      lastRefreshCompletedAt: now,
+      refreshStatus: 'ready',
+      versionPointer: buildSnapshotVersionPointer([
+        target.identity.key,
+        refreshSerial,
+        selectedMemoryIds.join(','),
+        contextBlock,
+      ]),
+      manifestSeed: {
+        ...input.manifestSeed,
+        reason: input.manifestSeed.reason ?? 'active_projection',
+        returnedCount: selectedMemoryIds.length,
+      },
+    };
+
+    this.activeMemoryContexts.set(target.identity.key, {
+      snapshot,
+      entries: cappedEntries,
+      ...(profile ? { profile: cloneContactProfileArtifact(profile) } : {}),
+      ...(emotionalSnapshot ? { emotionalSnapshot: cloneEmotionalSnapshot(emotionalSnapshot) } : {}),
+      emotionalContinuityMemories,
+      ...(withheldSummary ? { withheldSummary: cloneMemoryWithheldSummary(withheldSummary) } : {}),
+      ...(socialContext ? { socialContext } : {}),
+      ...(contactContextById ? { contactContextById } : {}),
+      episodicChains,
+      refreshSerial,
+      maxEntries,
+    });
+    void this.eventBus?.emit('memory.active_context.refresh', {
+      channelId: target.request.channelId,
+      key: target.identity.key,
+      phase: 'ready',
+      selectedMemoryIds,
+      contextChars: contextBlock.length,
+      timestamp: now,
+    }).catch((emitError: unknown) => {
+      log.debug('Failed to emit active memory refresh event', {
+        key: target.identity.key,
+        channelId: target.request.channelId,
+        error: toErrorMessage(emitError),
+      });
+    });
+    return snapshot;
+  }
+
   async retrieve(
     contextText: string,
     channelId: string,
@@ -598,6 +1039,7 @@ export class MemoryRetriever implements MemoryProvider {
     scopeQuery?: MemoryScopeQuery,
     callerContext?: RetrievalCallerContext,
     retrievalMode?: RetrievalModeInput,
+    activeContextTarget?: ActiveMemoryRefreshTarget,
   ): Promise<string> {
     const hasDirectRetrievalContext = callerContext !== undefined || retrievalMode !== undefined;
     const effectiveCallerContext = hasDirectRetrievalContext
@@ -718,12 +1160,15 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.reason = 'empty_input';
       applyWithheldSummaryTelemetry(telemetry, withheldSummary);
       await this.emitRetrievalTelemetry(telemetry);
-      return renderPromptBlock(profile, [], {
+      return this.finalizeRetrievalPromptBlock({
+        activeContextTarget,
+        profile,
         emotionalSnapshot,
         emotionalContinuityMemories: fallbackEmotionalContinuity,
         withheldSummary,
         socialContext,
         episodicChains,
+        telemetry,
       });
     }
 
@@ -796,12 +1241,15 @@ export class MemoryRetriever implements MemoryProvider {
               collectEpisodicChainProvenanceRefs(episodicChains),
             );
             await this.emitRetrievalTelemetry(telemetry);
-            return renderPromptBlock(profile, [], {
+            return this.finalizeRetrievalPromptBlock({
+              activeContextTarget,
+              profile,
               emotionalSnapshot,
               emotionalContinuityMemories: fallbackEmotionalContinuity,
               withheldSummary,
               socialContext,
               episodicChains,
+              telemetry,
             });
           }
           log.info('Retrieval: no candidates (semantic + lexical)', {
@@ -813,12 +1261,15 @@ export class MemoryRetriever implements MemoryProvider {
             queryLength: contextText.length,
           });
           await this.emitRetrievalTelemetry(telemetry);
-          return renderPromptBlock(profile, [], {
+          return this.finalizeRetrievalPromptBlock({
+            activeContextTarget,
+            profile,
             emotionalSnapshot,
             emotionalContinuityMemories: fallbackEmotionalContinuity,
             withheldSummary,
             socialContext,
             episodicChains,
+            telemetry,
           });
         }
       }
@@ -905,12 +1356,15 @@ export class MemoryRetriever implements MemoryProvider {
             collectEpisodicChainProvenanceRefs(episodicChains),
           );
           await this.emitRetrievalTelemetry(telemetry);
-          return renderPromptBlock(profile, [], {
+          return this.finalizeRetrievalPromptBlock({
+            activeContextTarget,
+            profile,
             emotionalSnapshot,
             emotionalContinuityMemories: fallbackEmotionalContinuity,
             withheldSummary,
             socialContext,
             episodicChains,
+            telemetry,
           });
         }
         telemetry.reason = 'trust_filtered';
@@ -925,12 +1379,15 @@ export class MemoryRetriever implements MemoryProvider {
           rejectedByPolicy: diagnostics.rejectedByPolicy,
           rejectedByPolicyReasonTags: diagnostics.rejectedByPolicyReasonTag,
         });
-        return renderPromptBlock(profile, [], {
+        return this.finalizeRetrievalPromptBlock({
+          activeContextTarget,
+          profile,
           emotionalSnapshot,
           emotionalContinuityMemories: fallbackEmotionalContinuity,
           withheldSummary,
           socialContext,
           episodicChains,
+          telemetry,
         });
       }
 
@@ -1014,12 +1471,15 @@ export class MemoryRetriever implements MemoryProvider {
             collectEpisodicChainProvenanceRefs(episodicChains),
           );
           await this.emitRetrievalTelemetry(telemetry);
-          return renderPromptBlock(profile, [], {
+          return this.finalizeRetrievalPromptBlock({
+            activeContextTarget,
+            profile,
             emotionalSnapshot,
             emotionalContinuityMemories: fallbackEmotionalContinuity,
             withheldSummary,
             socialContext,
             episodicChains,
+            telemetry,
           });
         }
         telemetry.reason = 'score_filtered';
@@ -1029,12 +1489,15 @@ export class MemoryRetriever implements MemoryProvider {
           trustLevel: effectiveTrust,
           policyAllowedCount: diagnostics.policyAllowedCount,
         });
-        return renderPromptBlock(profile, [], {
+        return this.finalizeRetrievalPromptBlock({
+          activeContextTarget,
+          profile,
           emotionalSnapshot,
           emotionalContinuityMemories: fallbackEmotionalContinuity,
           withheldSummary,
           socialContext,
           episodicChains,
+          telemetry,
         });
       }
 
@@ -1170,13 +1633,17 @@ export class MemoryRetriever implements MemoryProvider {
       telemetry.count = selected.length + episodicEpisodeCount;
       telemetry.reason = 'ok';
       await this.emitRetrievalTelemetry(telemetry);
-      return renderPromptBlock(profile, selectedForPrompt, {
+      return this.finalizeRetrievalPromptBlock({
+        activeContextTarget,
+        profile,
+        selectedForPrompt,
         emotionalSnapshot,
         emotionalContinuityMemories,
         withheldSummary,
         socialContext,
         contactContextById: selectedContactContextById,
         episodicChains,
+        telemetry,
       });
     } catch (error) {
       telemetry.reason = 'error';

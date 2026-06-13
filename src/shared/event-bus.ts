@@ -284,6 +284,15 @@ export interface EventMap {
     compositionalEvaluationBatchCount?: number;
     compositionalFinalistCount?: number;
   } & EventCorrelationFields;
+  'memory.active_context.refresh': {
+    channelId: string;
+    key: string;
+    phase: 'ready' | 'degraded';
+    selectedMemoryIds?: string[];
+    contextChars?: number;
+    error?: string;
+    timestamp: number;
+  } & EventCorrelationFields;
   'broadcast.pre_send.classified': {
     channelId: string;
     risky: boolean;

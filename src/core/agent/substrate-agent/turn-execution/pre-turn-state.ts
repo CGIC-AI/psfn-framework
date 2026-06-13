@@ -1,16 +1,16 @@
 import type { CorrelationMetadata, SubstrateMessage, TurnID } from '../../../../shared/contracts/runtime.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../../shared/context-budget.js';
-import { runWithRequestContext } from '../../../../primitives/llm/request-context.js';
 import { resolveBroadcastVisibilityScope, type BroadcastVisibilityScope } from '../../../../system/trust/broadcast-safety.js';
 import { classifyChannel, type ChannelMeta } from '../../../../system/trust/policy.js';
 import { normalizeChannelVisibility, type ChannelVisibility, type TrustLevel } from '../../../../system/trust/types.js';
 import type { MemoryScopeQuery, RetrievalCallerContext, RetrievalModeInput } from '../../../../faculties/memory/types.js';
+import type { ContextManifestMemorySeed } from '../../../session/context-manifest.js';
 import { formatAttributedSystemContent } from '../../../session/entry-attribution.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { EmotionStateSnapshot } from '../../../emotion/state.js';
 import type { EmotionAppraisalEntry } from '../../../emotion/appraisal.js';
 import type { InternalState } from '../../../self-model/state.js';
-import type { TurnMemorySnapshot, TurnSessionContextSnapshot, TurnSnapshot } from '../../../turns/snapshot.js';
+import type { TurnSessionContextSnapshot, TurnSnapshot } from '../../../turns/snapshot.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import { resolveActiveEmanationState } from '../../active-emanation-state.js';
@@ -51,6 +51,7 @@ export interface PreTurnComputationResult {
   preTurnInternalState: InternalState;
   memoryContextBlock: string;
   memoryContextChars: number;
+  memoryManifestSeed?: ContextManifestMemorySeed;
   scratchpadBlock: string;
 }
 
@@ -286,8 +287,6 @@ export async function computePreTurnState(input: {
     focusMemoryScopeQuery,
     temporalRetrievalCallerContext,
     temporalRetrievalMode,
-    viewerRequestContext,
-    turnCorrelationBase,
     observability,
   } = input;
 
@@ -306,25 +305,55 @@ export async function computePreTurnState(input: {
     )
     : undefined;
   const memoryRetrievalContextText = buildMemoryRetrievalContextText(message, sessionContextSnapshot);
-  const [emotionSnapshot, memorySnapshot] = await Promise.all([
-    runtime.emotionSelfModelRuntime.observeEmotionState(
-      message.content,
-      emotionSessionId,
-    ),
-    memoryProvider && typeof memoryProvider.captureTurnMemorySnapshot === 'function'
-      ? memoryProvider.captureTurnMemorySnapshot(
-        memoryRetrievalContextText,
-        message.channelId,
-        trustLevel,
-        channelMeta,
-        authorContext.canonicalContactKey,
-        turnBudgetCharacteristics,
-        focusMemoryScopeQuery ?? undefined,
-        temporalRetrievalCallerContext,
-        temporalRetrievalMode,
-      )
-      : Promise.resolve(undefined),
-  ]);
+  const activeMemoryRequest = {
+    contextText: memoryRetrievalContextText,
+    channelId: message.channelId,
+    trustLevel,
+    channelMeta,
+    turnBudgetCharacteristics,
+    ...(authorContext.canonicalContactKey ? { canonicalContactId: authorContext.canonicalContactKey } : {}),
+    ...(focusMemoryScopeQuery ? { scopeQuery: focusMemoryScopeQuery } : {}),
+    ...(temporalRetrievalCallerContext ? { callerContext: temporalRetrievalCallerContext } : {}),
+    ...(temporalRetrievalMode ? { retrievalMode: temporalRetrievalMode } : {}),
+  };
+  const activeMemoryContext = memoryProvider && !bypassMemoryForVisionTurn
+    && typeof memoryProvider.getActiveMemoryContext === 'function'
+    ? memoryProvider.getActiveMemoryContext(activeMemoryRequest)
+    : null;
+  const activeMemoryRefreshScheduled = !!(
+    memoryProvider
+    && !bypassMemoryForVisionTurn
+    && typeof memoryProvider.refreshActiveMemoryContext === 'function'
+  );
+  if (activeMemoryRefreshScheduled) {
+    void memoryProvider.refreshActiveMemoryContext(activeMemoryRequest).catch((error: unknown) => {
+      const errorText = toErrorMessage(error);
+      log.error('Active memory context refresh failed after scheduling', {
+        channelId: message.channelId,
+        turnId,
+        requestId,
+        error: errorText,
+      });
+      void runtime.eventBus.emit('memory.active_context.refresh', {
+        channelId: message.channelId,
+        key: activeMemoryContext?.key ?? 'unresolved',
+        phase: 'degraded',
+        error: errorText,
+        timestamp: Date.now(),
+      }).catch((emitError: unknown) => {
+        log.debug('Failed to emit active memory refresh degradation event', {
+          channelId: message.channelId,
+          turnId,
+          requestId,
+          error: toErrorMessage(emitError),
+        });
+      });
+    });
+  }
+  const emotionSnapshot = await runtime.emotionSelfModelRuntime.observeEmotionState(
+    message.content,
+    emotionSessionId,
+  );
   const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
   const turnSnapshot: TurnSnapshot = {
     turnId,
@@ -335,12 +364,11 @@ export async function computePreTurnState(input: {
     ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
     prompt: promptSnapshot,
     ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot as TurnSessionContextSnapshot } : {}),
-    ...(memorySnapshot ? { memory: memorySnapshot as TurnMemorySnapshot } : {}),
   };
   observability.emitTurnSnapshotInBackground(turnSnapshot);
 
   const memoryStageStart = Date.now();
-  const internalStatePromise = runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
+  const preTurnInternalState = await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
     message,
     responseText: '',
     trustLevel,
@@ -349,65 +377,18 @@ export async function computePreTurnState(input: {
     toolCallCount: 0,
     sessionChannelId: emotionSessionId,
   });
-  const memoryPromise = runWithRequestContext(
-    {
-      ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.memory'),
-      ...viewerRequestContext,
-    },
-    async () => {
-      const memoriesBlockPromise = memoryProvider
-        && !bypassMemoryForVisionTurn
-        ? memoryProvider.retrieve(
-          memoryRetrievalContextText,
-          message.channelId,
-          trustLevel,
-          channelMeta,
-          authorContext.canonicalContactKey,
-          memorySnapshot,
-          turnBudgetCharacteristics,
-          undefined,
-          focusMemoryScopeQuery ?? undefined,
-          temporalRetrievalCallerContext,
-          temporalRetrievalMode,
-        )
-        : Promise.resolve('');
-      const proactiveRecallBlockPromise = memoryProvider
-        && !bypassMemoryForVisionTurn
-        && typeof memoryProvider.retrieveProactiveRecall === 'function'
-        ? memoryProvider.retrieveProactiveRecall(
-          message.channelId,
-          trustLevel,
-          channelMeta,
-          authorContext.canonicalContactKey,
-          memorySnapshot,
-          turnBudgetCharacteristics,
-          focusMemoryScopeQuery ?? undefined,
-        )
-        : Promise.resolve('');
-      const [memoriesBlock, proactiveRecallBlock] = await Promise.all([
-        memoriesBlockPromise,
-        proactiveRecallBlockPromise,
-      ]);
-      return { memoriesBlock, proactiveRecallBlock };
-    },
-  );
-  const [{ memoriesBlock, proactiveRecallBlock }, preTurnInternalState] = await Promise.all([
-    memoryPromise,
-    internalStatePromise,
-  ]);
-  const memoryContextBlock = [memoriesBlock, proactiveRecallBlock]
-    .map(section => section.trim())
-    .filter(section => section.length > 0)
-    .join('\n\n');
+  const memoryContextBlock = bypassMemoryForVisionTurn ? '' : activeMemoryContext?.contextBlock ?? '';
   const memoryContextChars = memoryContextBlock.length;
   const scratchpadBlock = runtime.buildScratchpadContextBlock();
   observability.emitObservedTurnStage('memory', {
     durationMs: Date.now() - memoryStageStart,
     hasMemoryProvider: memoryProvider != null,
     memoryChars: memoryContextChars,
-    proactiveRecallChars: proactiveRecallBlock.length,
-    proactiveRecallIncluded: proactiveRecallBlock.length > 0,
     memoryBypassedForVisionTurn: bypassMemoryForVisionTurn,
+    activeMemoryContextKey: activeMemoryContext?.key ?? null,
+    activeMemoryContextVersion: activeMemoryContext?.versionPointer ?? null,
+    activeMemoryRefreshStatus: activeMemoryContext?.refreshStatus ?? 'not_ready',
+    activeMemoryRefreshScheduled,
     scratchpadChars: scratchpadBlock.length,
     scratchpadIncluded: scratchpadBlock.length > 0,
   });
@@ -419,6 +400,7 @@ export async function computePreTurnState(input: {
     preTurnInternalState,
     memoryContextBlock,
     memoryContextChars,
+    ...(activeMemoryContext?.manifestSeed ? { memoryManifestSeed: activeMemoryContext.manifestSeed } : {}),
     scratchpadBlock,
   };
 }

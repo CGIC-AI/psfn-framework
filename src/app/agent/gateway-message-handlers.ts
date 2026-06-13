@@ -427,8 +427,14 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     trackSessionActivity(message);
     discordPromptQueue.push({ message, dedupeKey });
     // The pump owns reply delivery, error reporting, and dedupe bookkeeping
-    // for everything queued; later arrivals return immediately and ride the
-    // already-running pump.
-    await pumpDiscordQueue();
+    // for everything queued. Notification receipt must not await backend turn
+    // work such as memory retrieval or model generation.
+    void pumpDiscordQueue().catch((err: unknown) => {
+      log.error('Discord message pump failed', {
+        channelId: message.channelId,
+        messageId: message.id,
+        error: toErrorMessage(err),
+      });
+    });
   });
 }

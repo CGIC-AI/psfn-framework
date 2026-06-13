@@ -12,6 +12,10 @@ import type {
   RetrievalCallerContext,
   RetrievalModeInput,
 } from '../../faculties/memory/types.js';
+import type {
+  ActiveMemoryContextRequest,
+  ActiveMemoryContextSnapshot,
+} from '../../faculties/memory/active-context.js';
 export type { ScratchpadEntry, ScratchpadProvider } from './scratchpad-port.js';
 
 export interface LLMProviderPort {
@@ -41,6 +45,8 @@ export interface RetrievalVADInput {
 }
 
 export interface MemoryProvider {
+  getActiveMemoryContext?(request: ActiveMemoryContextRequest): ActiveMemoryContextSnapshot | null;
+  refreshActiveMemoryContext?(request: ActiveMemoryContextRequest): Promise<ActiveMemoryContextSnapshot | null>;
   captureTurnMemorySnapshot?(
     contextText: string,
     channelId: string,

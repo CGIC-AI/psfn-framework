@@ -171,6 +171,72 @@ function countRenderedMemories(block: string): number {
   return matches ? matches.length : 0;
 }
 
+describe('MemoryRetriever active memory context', () => {
+  beforeEach(() => {
+    idCounter = 0;
+  });
+
+  it('retains existing recalled memories when a later refresh has no candidates', async () => {
+    const recalled = makeMemory({
+      text: 'V prefers oolong tea in the afternoon.',
+      sensitivity: 'public',
+      similarity: 0.95,
+    });
+    const store = makeMockStore([recalled]);
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalBudgetPct: 0.1 }, makeMockEventBus());
+    const request = {
+      contextText: 'oolong tea',
+      channelId: 'api:test',
+      trustLevel: 'regular' as const,
+    };
+
+    await retriever.refreshActiveMemoryContext(request);
+    const first = retriever.getActiveMemoryContext(request);
+    expect(first?.contextBlock).toContain('oolong tea');
+    expect(first?.selectedMemoryIds).toContain(recalled.id);
+
+    (store.searchByEmbedding as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+    await retriever.refreshActiveMemoryContext({
+      ...request,
+      contextText: 'unrelated operational chatter',
+    });
+
+    const second = retriever.getActiveMemoryContext(request);
+    expect(second?.contextBlock).toContain('oolong tea');
+    expect(second?.selectedMemoryIds).toContain(recalled.id);
+    expect(second?.refreshStatus).toBe('ready');
+  });
+
+  it('marks refresh degraded and keeps the previous active context when retrieval fails', async () => {
+    const recalled = makeMemory({
+      text: 'V prefers oolong tea in the afternoon.',
+      sensitivity: 'public',
+      similarity: 0.95,
+    });
+    const store = makeMockStore([recalled]);
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalBudgetPct: 0.1 }, makeMockEventBus());
+    const request = {
+      contextText: 'oolong tea',
+      channelId: 'api:test',
+      trustLevel: 'regular' as const,
+    };
+
+    await retriever.refreshActiveMemoryContext(request);
+    (store.searchByEmbedding as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('vector store unavailable'));
+
+    await retriever.refreshActiveMemoryContext({
+      ...request,
+      contextText: 'fresh cue',
+    });
+
+    const active = retriever.getActiveMemoryContext(request);
+    expect(active?.contextBlock).toContain('oolong tea');
+    expect(active?.selectedMemoryIds).toContain(recalled.id);
+    expect(active?.refreshStatus).toBe('degraded');
+    expect(active?.lastRefreshError).toBe('vector store unavailable');
+  });
+});
+
 // ── Tests ──
 
 describe('MemoryRetriever trust-gated filtering', () => {

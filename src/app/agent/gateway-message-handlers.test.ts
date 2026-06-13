@@ -44,6 +44,16 @@ function makeResponse(content: string): AgentResponse {
   };
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 function createHarness(overrides?: {
   config?: SubstrateConfig;
   delegateSatelliteSession?: (request: {
@@ -269,7 +279,32 @@ describe('registerGatewayMessageHandlers', () => {
       },
     );
     expect(harness.agentLoop.handleMessage).toHaveBeenCalledWith(message);
-    expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'discord response');
+    await vi.waitFor(() => {
+      expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'discord response');
+    });
+  });
+
+  it('returns from discord notification receipt before backend turn work finishes', async () => {
+    const deferredTurn = createDeferred<AgentResponse>();
+    const harness = createHarness({
+      handleMessage: async () => deferredTurn.promise,
+    });
+    const message = makeMessage({
+      channelId: 'discord:general',
+      channelType: 'discord',
+      routing: undefined,
+    });
+
+    await expect(harness.onDiscordMessage(message)).resolves.toBeUndefined();
+
+    expect(harness.trackSessionActivity).toHaveBeenCalledWith(message);
+    expect(harness.agentLoop.handleMessage).toHaveBeenCalledWith(message);
+    expect(harness.gateway.discordSend).not.toHaveBeenCalled();
+
+    deferredTurn.resolve(makeResponse('eventual response'));
+    await vi.waitFor(() => {
+      expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'eventual response');
+    });
   });
 
   it('records passive discord observations without generating or sending a response', async () => {
@@ -320,13 +355,15 @@ describe('registerGatewayMessageHandlers', () => {
 
     await harness.onDiscordMessage(message);
 
-    expect(harness.gateway.discordSend).not.toHaveBeenCalled();
-    expect(harness.gateway.discordSendMedia).toHaveBeenCalledWith('discord:general', {
-      url: 'https://images.example.test/purr.png',
-      contentType: 'image/png',
-      name: 'purr.png',
-      localPath: '/tmp/purr.png',
+    await vi.waitFor(() => {
+      expect(harness.gateway.discordSendMedia).toHaveBeenCalledWith('discord:general', {
+        url: 'https://images.example.test/purr.png',
+        contentType: 'image/png',
+        name: 'purr.png',
+        localPath: '/tmp/purr.png',
+      });
     });
+    expect(harness.gateway.discordSend).not.toHaveBeenCalled();
   });
 
   it('records diagnostics when discord agent handling fails', async () => {
@@ -343,10 +380,12 @@ describe('registerGatewayMessageHandlers', () => {
 
     await harness.onDiscordMessage(message);
 
-    expect(harness.log.error).toHaveBeenCalledWith('Error handling message', {
-      channelId: 'discord:general',
-      messageId: 'msg-1',
-      error: 'agent handling failure',
+    await vi.waitFor(() => {
+      expect(harness.log.error).toHaveBeenCalledWith('Error handling message', {
+        channelId: 'discord:general',
+        messageId: 'msg-1',
+        error: 'agent handling failure',
+      });
     });
     expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('discord.message.error', {
       channelId: 'discord:general',
@@ -370,9 +409,11 @@ describe('registerGatewayMessageHandlers', () => {
 
     await harness.onDiscordMessage(message);
 
-    expect(harness.agentLoop.waitForIdle).toHaveBeenCalledTimes(1);
-    expect(handleMessage).toHaveBeenCalledTimes(2);
-    expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'after the turn finished');
+    await vi.waitFor(() => {
+      expect(harness.agentLoop.waitForIdle).toHaveBeenCalledTimes(1);
+      expect(handleMessage).toHaveBeenCalledTimes(2);
+      expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'after the turn finished');
+    });
     expect(harness.log.error).not.toHaveBeenCalled();
   });
 
@@ -393,9 +434,11 @@ describe('registerGatewayMessageHandlers', () => {
 
     await harness.onDiscordMessage(message);
 
-    expect(handleMessage).toHaveBeenCalledTimes(5);
-    expect(harness.agentLoop.waitForIdle).toHaveBeenCalledTimes(4);
-    expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'finally through');
+    await vi.waitFor(() => {
+      expect(handleMessage).toHaveBeenCalledTimes(5);
+      expect(harness.agentLoop.waitForIdle).toHaveBeenCalledTimes(4);
+      expect(harness.gateway.discordSend).toHaveBeenCalledWith('discord:general', 'finally through');
+    });
     expect(harness.log.error).not.toHaveBeenCalled();
   });
 
@@ -418,13 +461,15 @@ describe('registerGatewayMessageHandlers', () => {
       attachments: undefined,
     });
 
-    const firstDelivery = harness.onDiscordMessage(makeBurstMessage('msg-a', 'first thing'));
+    await harness.onDiscordMessage(makeBurstMessage('msg-a', 'first thing'));
     await harness.onDiscordMessage(makeBurstMessage('msg-b', 'second thing'));
     await harness.onDiscordMessage(makeBurstMessage('msg-c', 'and a third'));
     releaseFirstTurn(makeResponse('reply to the first'));
-    await firstDelivery;
 
-    expect(handleMessage).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => {
+      expect(handleMessage).toHaveBeenCalledTimes(2);
+      expect(harness.gateway.discordSend).toHaveBeenNthCalledWith(2, 'discord:general', 'saw everything');
+    });
     const bundled = handleMessage.mock.calls[1][0] as SubstrateMessage;
     expect(bundled.content).toBe('second thing\nand a third');
     expect(bundled.id).toBe('msg-c');
@@ -448,7 +493,7 @@ describe('registerGatewayMessageHandlers', () => {
       .mockImplementation(async () => makeResponse('separate reply'));
     const harness = createHarness({ handleMessage });
 
-    const firstDelivery = harness.onDiscordMessage(makeMessage({
+    await harness.onDiscordMessage(makeMessage({
       id: 'msg-a',
       content: 'opener',
       channelId: 'discord:general',
@@ -476,16 +521,17 @@ describe('registerGatewayMessageHandlers', () => {
       attachments: undefined,
     }));
     releaseFirstTurn(makeResponse('first reply'));
-    await firstDelivery;
 
     // Three turns total: opener, vega's queued message, the other author's.
-    expect(handleMessage).toHaveBeenCalledTimes(3);
+    await vi.waitFor(() => {
+      expect(handleMessage).toHaveBeenCalledTimes(3);
+    });
     expect((handleMessage.mock.calls[1][0] as SubstrateMessage).content).toBe('from vega');
     expect((handleMessage.mock.calls[2][0] as SubstrateMessage).content).toBe('from someone else');
     expect(harness.safeguardAuditTrail.append).not.toHaveBeenCalledWith('discord.message.bundled', expect.anything());
   });
 
-  it('drops duplicate discord notifications by message id within dedupe window', async () => {
+  it('drops duplicate discord notifications by message id while in-flight and after completion', async () => {
     const harness = createHarness({
       handleMessage: async () => makeResponse('discord response'),
     });
@@ -499,8 +545,19 @@ describe('registerGatewayMessageHandlers', () => {
     await harness.onDiscordMessage(message);
     await harness.onDiscordMessage(message);
 
-    expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
-    expect(harness.gateway.discordSend).toHaveBeenCalledTimes(1);
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
+      route: 'discord',
+      channelId: 'discord:general',
+      messageId: 'msg-dup-1',
+      disposition: 'in_flight',
+    });
+    await vi.waitFor(() => {
+      expect(harness.agentLoop.handleMessage).toHaveBeenCalledTimes(1);
+      expect(harness.gateway.discordSend).toHaveBeenCalledTimes(1);
+    });
+
+    await harness.onDiscordMessage(message);
+
     expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
       route: 'discord',
       channelId: 'discord:general',

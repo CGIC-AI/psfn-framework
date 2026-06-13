@@ -1,81 +1,77 @@
 # OpenRouter Logprob Discovery
 
-This directory contains a low-cost discovery harness for checking which OpenRouter models and upstream providers actually return `logprobs`.
+This directory contains an observed-behavior harness for checking which OpenRouter models and upstream providers actually return token logprobs.
 
-The harness uses three OpenRouter surfaces:
+The harness intentionally treats OpenRouter metadata and provider docs as context only. The support index is built from live `POST /api/v1/chat/completions` responses when `OPENROUTER_API_KEY` is available.
 
-- `GET /api/v1/models`
-- `GET /api/v1/models/<author>/<slug>/endpoints`
-- `POST /api/v1/chat/completions`
+## Probe Suite
 
-It keeps probe cost low by using a tiny prompt, `max_tokens=16`, deterministic sampling, bounded concurrency, and per-provider routing isolation.
+Each live target uses the same canonical probes:
 
-## Default target set
+| Probe | Prompt | Purpose |
+| --- | --- | --- |
+| `basic_generated_logprobs` | `Reply with exactly one word: blue` | Generated-token logprobs |
+| `top_alternatives` | `Reply with exactly one word: blue` | Alternate candidate tokens from `top_logprobs` |
+| `streaming` | `Reply with exactly one word: blue` | Per-chunk streaming logprobs |
+| `prompt_scoring` | `Reply with exactly one word: blue` | Prompt/input token logprobs |
+| `deterministic_classification` | `Answer only yes or no: Is Paris in France?` | Label probability usefulness |
+| `tokenization_edge` | `Reply with exactly this string: unbelievable` | Multi-token output shape |
+| `top_logprobs_max` | `Reply with exactly one word: blue` | Observed max `top_logprobs` behavior |
 
-If no models are passed on the CLI, the script extracts the current OpenRouter-backed model roster from [config/models.seed.json](/mnt/samesung/ai/psfn-worktrees/eval-l5f6-2tk7-s1/config/models.seed.json).
+The request settings are deterministic and small: `temperature=0`, `top_p=1`, `seed=1`, `max_tokens=1..5`, tools off, JSON mode off, and no reasoning flags.
 
-Override that with either:
+## OpenRouter Routing Layers
 
-- repeated `--model <author/slug>`
-- `--models-file <path>`
+For every model, the tool tests:
 
-`--models-file` accepts either a plain array of model ids:
+- OpenRouter default routing
+- OpenRouter routing with `provider.allow_fallbacks=false` and `provider.require_parameters=true`
+- Each healthy endpoint provider pinned with `provider.order`, `provider.only`, `allow_fallbacks=false`, and `require_parameters=true`
 
-```json
-[
-  "z-ai/glm-5",
-  "deepseek/deepseek-v3.2"
-]
-```
-
-Or an object with `models` or `targets`, where each entry may also pin provider slugs:
-
-```json
-{
-  "targets": [
-    { "model": "z-ai/glm-5" },
-    { "model": "deepseek/deepseek-v3.2", "providers": ["deepseek", "deepinfra"] }
-  ]
-}
-```
+Provider pinning follows OpenRouter's documented provider-selection request body. The index still records observed behavior only.
 
 ## Usage
 
 Metadata-only discovery works without credentials:
 
 ```bash
-npx tsx eval/discovery/openrouter-logprob-discovery.ts \
-  --out eval/discovery/artifacts/openrouter-logprob-support.json
+npm run eval:discover:logprobs -- --probe-mode none
 ```
 
-Live completion probing requires `OPENROUTER_API_KEY`:
+Live probing requires `OPENROUTER_API_KEY`:
 
 ```bash
 OPENROUTER_API_KEY=sk-or-... \
-npx tsx eval/discovery/openrouter-logprob-discovery.ts \
-  --live \
-  --out eval/discovery/artifacts/openrouter-logprob-support.json
+npm run eval:discover:logprobs -- \
+  --model moonshotai/kimi-k2.5 \
+  --output eval/discovery/artifacts/openrouter-logprob-support.json
 ```
 
-Target a custom model list:
+Options:
 
-```bash
-OPENROUTER_API_KEY=sk-or-... \
-npx tsx eval/discovery/openrouter-logprob-discovery.ts \
-  --live \
-  --models-file eval/discovery/my-target-models.json \
-  --out eval/discovery/artifacts/openrouter-logprob-support.json
+```text
+--api-base-url <url>   Override API base URL
+--output <path>        Output index JSON
+--raw-dir <path>       Sanitized raw response archive directory
+--probe-mode <mode>    none, ambiguous, supported, all
+--model <id>           Restrict to a model id; repeatable
 ```
+
+Default live mode is `all`, which probes every healthy endpoint provider returned by OpenRouter. Use `supported` to limit provider-pinned probes to endpoints that claim `logprobs` or `top_logprobs`, plus endpoints with no parameter metadata.
 
 ## Output
 
-The output artifact is JSON and includes:
+The output JSON includes:
 
-- the exact CLI settings used for the run
-- model-level metadata claims from `/models`
-- per-provider endpoint metadata from `/models/<author>/<slug>/endpoints`
-- a router-level live probe using `provider.require_parameters=true`
-- per-provider live probes using `provider.only=[slug]` and `allow_fallbacks=false`
-- probe status classification: `supported`, `unsupported`, `blocked`, `skipped`, or `error`
+- Canonical test definitions
+- Model and endpoint metadata context
+- Router-level observations
+- Provider-pinned observations
+- Sanitized raw response archive paths
+- Compatibility fields for the calibration collector
+- `engineerView`: provider/model/endpoint support rows
+- `useCaseView`: recommendations for label confidence, calibration experiments, scoring, and router exploration
 
-Provider breakdown is automatic when OpenRouter exposes endpoint data for the model. If the endpoint list is unavailable, the harness still records the model-level metadata and router probe result.
+Raw archives are sanitized recursively for keys containing `key`, `authorization`, or `token`.
+
+Retest monthly, and immediately when a provider changes model versions, adds reasoning behavior, changes pricing, or moves endpoints.

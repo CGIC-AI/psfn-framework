@@ -12,6 +12,7 @@ import {
 interface CliOptions {
   apiBaseUrl: string;
   outputPath: string;
+  rawArchiveDir: string;
   probeMode: ProbeMode;
   targets: TargetModel[];
 }
@@ -19,18 +20,19 @@ interface CliOptions {
 function printUsage(): void {
   console.log('Usage: npm run eval:discover:logprobs -- [options]');
   console.log('');
-  console.log('Build an OpenRouter logprob support table for the bead target models.');
+  console.log('Build an observed-behavior OpenRouter logprob support index for target models and providers.');
   console.log('');
   console.log('Options:');
   console.log(`  --api-base-url <url>      Override API base URL (default: ${DEFAULT_OPENROUTER_API_BASE_URL})`);
   console.log('  --output <path>           Output JSON path (default: eval/discovery/logprob-support.json)');
-  console.log('  --probe-mode <mode>       Probe mode: none, ambiguous, supported (default: ambiguous)');
+  console.log('  --raw-dir <path>          Sanitized raw response archive dir (default: eval/discovery/artifacts/raw-logprob-responses)');
+  console.log('  --probe-mode <mode>       Probe mode: none, ambiguous, supported, all (default: all)');
   console.log('  --model <id>              Restrict to a specific model id (repeatable)');
   console.log('  --help                    Show this help');
   console.log('');
   console.log('Notes:');
-  console.log('  - GET /models and /models/:id/endpoints are used for the zero-cost first pass.');
-  console.log('  - Live POST probes only run when OPENROUTER_API_KEY is available and probe mode allows it.');
+  console.log('  - Live POST probes run only when OPENROUTER_API_KEY is available and probe mode allows it.');
+  console.log('  - Each live probe records observed response shape; metadata is kept only as context.');
 }
 
 function normalizeOptionalString(value: string | undefined): string | undefined {
@@ -45,10 +47,17 @@ function resolveOutputPath(value: string | undefined): string {
     : path.resolve(process.cwd(), configured);
 }
 
+function resolveRawArchiveDir(value: string | undefined): string {
+  const configured = normalizeOptionalString(value) ?? 'eval/discovery/artifacts/raw-logprob-responses';
+  return path.isAbsolute(configured)
+    ? configured
+    : path.resolve(process.cwd(), configured);
+}
+
 function resolveProbeMode(value: string | undefined): ProbeMode {
   const normalized = normalizeOptionalString(value)?.toLowerCase();
-  if (!normalized) return 'ambiguous';
-  if (normalized === 'none' || normalized === 'ambiguous' || normalized === 'supported') {
+  if (!normalized) return 'all';
+  if (normalized === 'none' || normalized === 'ambiguous' || normalized === 'supported' || normalized === 'all') {
     return normalized;
   }
   throw new Error(`Unsupported probe mode: ${value}`);
@@ -69,7 +78,8 @@ function resolveTargets(selectedModelIds: string[]): TargetModel[] {
 function parseCliOptions(args: string[]): CliOptions {
   let apiBaseUrl = DEFAULT_OPENROUTER_API_BASE_URL;
   let outputPath = resolveOutputPath(undefined);
-  let probeMode: ProbeMode = 'ambiguous';
+  let rawArchiveDir = resolveRawArchiveDir(undefined);
+  let probeMode: ProbeMode = 'all';
   const selectedModels: string[] = [];
 
   for (let index = 0; index < args.length; index += 1) {
@@ -91,6 +101,15 @@ function parseCliOptions(args: string[]): CliOptions {
         }
         index += 1;
         outputPath = resolveOutputPath(value);
+        break;
+      }
+      case '--raw-dir': {
+        const value = normalizeOptionalString(args[index + 1]);
+        if (!value) {
+          throw new Error('--raw-dir requires a non-empty value');
+        }
+        index += 1;
+        rawArchiveDir = resolveRawArchiveDir(value);
         break;
       }
       case '--probe-mode': {
@@ -122,6 +141,7 @@ function parseCliOptions(args: string[]): CliOptions {
   return {
     apiBaseUrl,
     outputPath,
+    rawArchiveDir,
     probeMode,
     targets: resolveTargets(selectedModels),
   };
@@ -141,6 +161,7 @@ async function main(): Promise<void> {
     apiKey,
     probeMode: options.probeMode,
     targets: options.targets,
+    rawArchiveDir: options.rawArchiveDir,
   });
 
   mkdirSync(path.dirname(options.outputPath), { recursive: true });
@@ -154,6 +175,7 @@ async function main(): Promise<void> {
   console.log(`[eval:discover:logprobs] supportedModels=${supportedModels}/${result.targets.length}`);
   console.log(`[eval:discover:logprobs] supportedProviders=${supportedProviders}`);
   console.log(`[eval:discover:logprobs] output=${options.outputPath}`);
+  console.log(`[eval:discover:logprobs] rawArchiveDir=${options.rawArchiveDir}`);
 
   if (result.warnings.length > 0) {
     for (const warning of result.warnings) {

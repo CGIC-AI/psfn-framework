@@ -13,8 +13,21 @@ function createJsonResponse(payload: unknown, status = 200): Response {
   });
 }
 
+function createSseResponse(chunks: unknown[]): Response {
+  const body = chunks
+    .map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`)
+    .join('')
+    + 'data: [DONE]\n\n';
+  return new Response(body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/event-stream',
+    },
+  });
+}
+
 describe('discoverOpenRouterLogprobSupport', () => {
-  it('derives per-endpoint logprob support from OpenRouter endpoint metadata', async () => {
+  it('keeps endpoint metadata when live probes are disabled', async () => {
     const mockFetch = vi.fn(async (input: string | URL) => {
       const url = String(input);
       if (url.endsWith('/models')) {
@@ -53,13 +66,15 @@ describe('discoverOpenRouterLogprobSupport', () => {
 
     const result = await discoverOpenRouterLogprobSupport({
       fetchFn: mockFetch,
-      probeMode: 'ambiguous',
+      probeMode: 'none',
       targets: [{ id: 'moonshotai/kimi-k2.5', group: 'key' }],
     });
 
     const model = result.models['moonshotai/kimi-k2.5'];
+    expect(result.schemaVersion).toBe(2);
     expect(model.supported).toBe(true);
     expect(model.topLogprobsSupported).toBe(true);
+    expect(model.routerObservations).toEqual([]);
     expect(model.providers).toEqual([
       expect.objectContaining({
         id: 'chutes/int4',
@@ -76,7 +91,8 @@ describe('discoverOpenRouterLogprobSupport', () => {
     ]);
   });
 
-  it('runs an exact-provider live probe when probe mode requires it', async () => {
+  it('runs canonical route layers and provider-pinned live probes', async () => {
+    const requestBodies: Array<Record<string, unknown>> = [];
     const mockFetch = vi.fn(async (input: string | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith('/models')) {
@@ -105,21 +121,49 @@ describe('discoverOpenRouterLogprobSupport', () => {
         });
       }
       if (url.endsWith('/chat/completions')) {
-        const body = JSON.parse(String(init?.body ?? '{}')) as {
-          provider?: { order?: string[] };
-        };
-        expect(body.provider?.order).toEqual(['inceptron/int4']);
+        const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        requestBodies.push(body);
+        if (body.stream === true) {
+          return createSseResponse([
+            {
+              id: 'chatcmpl-stream',
+              model: 'z-ai/glm-5',
+              choices: [
+                {
+                  logprobs: {
+                    content: [
+                      {
+                        token: 'blue',
+                        logprob: -0.001,
+                        bytes: [98, 108, 117, 101],
+                        top_logprobs: [
+                          { token: 'blue', logprob: -0.001 },
+                          { token: 'red', logprob: -6 },
+                        ],
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          ]);
+        }
         return createJsonResponse({
           id: 'chatcmpl-test',
           model: 'z-ai/glm-5',
+          provider: 'inceptron/int4',
           choices: [
             {
               logprobs: {
                 content: [
                   {
-                    token: 'ok',
+                    token: 'blue',
                     logprob: -0.001,
-                    top_logprobs: [{ token: 'ok', logprob: -0.001 }],
+                    bytes: [98, 108, 117, 101],
+                    top_logprobs: [
+                      { token: 'blue', logprob: -0.001 },
+                      { token: 'red', logprob: -6 },
+                    ],
                   },
                 ],
               },
@@ -137,15 +181,37 @@ describe('discoverOpenRouterLogprobSupport', () => {
       targets: [{ id: 'z-ai/glm-5', group: 'key' }],
     });
 
-    const provider = result.models['z-ai/glm-5'].providers[0];
+    const model = result.models['z-ai/glm-5'];
+    const provider = model.providers[0];
+    expect(model.routerObservations).toHaveLength(14);
+    expect(provider.observations).toHaveLength(7);
     expect(provider.logprobs).toBe(true);
     expect(provider.topLogprobs).toBe(true);
+    expect(provider.streamingLogprobs).toBe(true);
+    expect(provider.bytesOrTokenTextIncluded).toBe(true);
+    expect(provider.generatedLogprobs).toBe('yes');
+    expect(provider.observedStatus).toBe('Top-k works');
     expect(provider.discoverySource).toBe('endpoint_metadata+live_probe');
     expect(provider.probe).toEqual(expect.objectContaining({
       attempted: true,
       status: 'supported',
-      responseId: 'chatcmpl-test',
       responseModel: 'z-ai/glm-5',
     }));
+    expect(result.engineerView.length).toBeGreaterThan(0);
+    expect(result.useCaseView).toEqual(expect.arrayContaining([
+      expect.objectContaining({ useCase: 'Cheap label confidence' }),
+    ]));
+
+    expect(requestBodies.some((body) => body.provider === undefined)).toBe(true);
+    expect(requestBodies.some((body) => {
+      const providerBody = body.provider as { allow_fallbacks?: boolean; require_parameters?: boolean } | undefined;
+      return providerBody?.allow_fallbacks === false && providerBody.require_parameters === true;
+    })).toBe(true);
+    expect(requestBodies.some((body) => {
+      const providerBody = body.provider as { order?: string[]; only?: string[]; allow_fallbacks?: boolean } | undefined;
+      return providerBody?.order?.[0] === 'inceptron/int4'
+        && providerBody.only?.[0] === 'inceptron/int4'
+        && providerBody.allow_fallbacks === false;
+    })).toBe(true);
   });
 });

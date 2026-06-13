@@ -1468,7 +1468,7 @@ describe('DiscordAdapter DM routing', () => {
     }
   });
 
-  it('queues contended messages in gateway mode when no direct agent is attached', async () => {
+  it('queues every contended message in gateway mode when no direct agent is attached', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);
     await adapter.init();
@@ -1509,14 +1509,21 @@ describe('DiscordAdapter DM routing', () => {
         content: 'second',
       }),
     );
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'dm-3',
+        content: 'third',
+      }),
+    );
 
     expect(handler).toHaveBeenCalledTimes(1);
     releaseFirst?.();
     await firstDispatch;
     await vi.waitFor(() => {
-      expect(handler).toHaveBeenCalledTimes(2);
+      expect(handler).toHaveBeenCalledTimes(3);
     });
-    expect(handler.mock.calls.map((call) => call[0].id)).toEqual(['dm-1', 'dm-2']);
+    expect(handler.mock.calls.map((call) => call[0].id)).toEqual(['dm-1', 'dm-2', 'dm-3']);
+    expect(interactive.sent).toEqual(['reply-dm-1', 'reply-dm-2', 'reply-dm-3']);
   });
 });
 

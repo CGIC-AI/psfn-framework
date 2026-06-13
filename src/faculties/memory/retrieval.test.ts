@@ -3206,6 +3206,36 @@ describe('MemoryRetriever caller-context retrieval modes', () => {
     );
   });
 
+  it('does not fail temporal retrieval when a memory has an invalid timestamp', async () => {
+    const memories = [
+      makeMemory({
+        text: 'Memory with malformed extracted timestamp',
+        sensitivity: 'public',
+        similarity: 0.9,
+        importance: 0.9,
+        salience: 0.9,
+        extractedAt: Number.NaN,
+        lastAccessed: Number.NaN,
+      }),
+    ];
+    const retriever = new MemoryRetriever(makeMockStore(memories), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve(
+      'timestamp resilience question',
+      'api:test',
+      'primary',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { retrievalMode: 'temporal' },
+    );
+
+    expect(result).toContain('Memory with malformed extracted timestamp');
+  });
+
   it('reflection mode excludes reflection memories from ranked retrieval', async () => {
     const now = Date.now();
     const memories = [

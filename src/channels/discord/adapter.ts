@@ -34,7 +34,6 @@ import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { DiscordVoiceRuntime } from './voice.js';
 import {
-  DeferredLatestByChannel,
   emitTurnContentionTelemetry,
   type TurnContentionPhase,
   type TurnContentionPolicy,
@@ -153,7 +152,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private voiceHandler: MessageHandler | null = null;
   private agent: SubstrateAgent | null = null;
   private processing = new Set<string>();
-  private pendingByChannel = new DeferredLatestByChannel<PendingDiscordTurn>();
+  private pendingByChannel = new Map<string, PendingDiscordTurn[]>();
   private lockStartedAt = new Map<string, number>();
   private lockContention = new Map<string, number>();
   private lockPolicy = new Map<string, TurnContentionPolicy>();
@@ -507,15 +506,19 @@ export class DiscordAdapter implements ChannelAdapterPort {
         log.debug('Steering message into active stream', { channelId });
         void this.agent.steer(substrateMsg);
       } else {
-        // Gateway mode has no direct agent instance, so keep latest message queued
-        // instead of dropping it during lock contention.
-        const deferred = this.pendingByChannel.set(channelId, turn);
-        this.emitQueueTelemetry(channelId, 'contended', 'defer-latest', {
-          queueDepth: deferred.queueDepth,
+        // Gateway mode has no direct agent instance to steer, so preserve all
+        // contended messages for the agent-side queue to bundle or process.
+        const pending = this.pendingByChannel.get(channelId) ?? [];
+        pending.push(turn);
+        this.pendingByChannel.set(channelId, pending);
+        this.emitQueueTelemetry(channelId, 'contended', 'queue', {
+          queueDepth: pending.length,
           waitMs,
-          superseded: deferred.replaced,
         });
-        log.debug('Queueing contended Discord message for deferred processing', { channelId });
+        log.debug('Queueing contended Discord message for deferred processing', {
+          channelId,
+          queueDepth: pending.length,
+        });
       }
       return;
     }
@@ -524,7 +527,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
     const lockStartMs = Date.now();
     this.lockStartedAt.set(channelId, lockStartMs);
     this.lockContention.set(channelId, 0);
-    const lockPolicy: TurnContentionPolicy = this.agent ? 'steer' : 'defer-latest';
+    const lockPolicy: TurnContentionPolicy = this.agent ? 'steer' : 'queue';
     this.lockPolicy.set(channelId, lockPolicy);
     this.emitQueueTelemetry(channelId, 'acquired', lockPolicy, {
       queueDepth: 0,
@@ -593,7 +596,11 @@ export class DiscordAdapter implements ChannelAdapterPort {
       this.clearLongRunningToolsForChannel(channelId);
       await this.clearStatus(channelId, 'compaction');
       await this.clearStatus(channelId, 'long-running');
-      const pending = this.pendingByChannel.take(channelId);
+      const pendingQueue = this.pendingByChannel.get(channelId);
+      const pending = pendingQueue?.shift();
+      if (pendingQueue && pendingQueue.length === 0) {
+        this.pendingByChannel.delete(channelId);
+      }
       if (pending) {
         queueMicrotask(() => {
           this.processMessage(pending).catch((error) => {

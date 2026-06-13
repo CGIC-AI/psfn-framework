@@ -198,6 +198,7 @@ function computeRetrievalRecencyBoost(
   now: number,
   temporalMode: boolean,
 ): number {
+  if (!Number.isFinite(extractedAt)) return 1;
   const ageDays = Math.max(0, (now - extractedAt) / (1000 * 60 * 60 * 24));
   const decayDays = temporalMode ? TEMPORAL_RECENCY_DECAY_DAYS : DEFAULT_RECENCY_DECAY_DAYS;
   return 1 / (1 + ageDays / decayDays);
@@ -233,10 +234,12 @@ function isReflectionRetrievalCandidate(
 }
 
 function isSameUtcDay(left: number, right: number): boolean {
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
   return formatUtcDate(left) === formatUtcDate(right);
 }
 
 function formatUtcDate(epochMs: number): string {
+  if (!Number.isFinite(epochMs)) return '';
   return new Date(epochMs).toISOString().slice(0, 10);
 }
 
@@ -296,7 +299,9 @@ function deriveAccessReinforcement(
 ): number {
   const effectiveLastAccessed = Number.isFinite(memory.lastAccessed)
     ? memory.lastAccessed
-    : memory.extractedAt;
+    : Number.isFinite(memory.extractedAt)
+      ? memory.extractedAt
+      : Date.now();
   const ageMs = Math.max(0, Date.now() - effectiveLastAccessed);
   const ageDays = ageMs / (1000 * 60 * 60 * 24);
   const freshnessDays = Math.max(1, MEMORY_CONFIG.retrievalAccessFreshnessDays);

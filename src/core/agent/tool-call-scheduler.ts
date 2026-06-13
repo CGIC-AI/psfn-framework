@@ -6,7 +6,23 @@ import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.j
 
 export interface ToolCallSchedulerOptions {
   maxParallelToolCalls: number;
+  maxFailuresPerSignature?: number;
+  guard?: ToolCallExecutionGuard;
   onTelemetry?: (eventName: string, payload: Record<string, unknown>) => void;
+}
+
+export interface ToolCallExecutionGuard {
+  inFlightSignatures: Set<string>;
+  successfulSignatures: Set<string>;
+  failureCountsBySignature: Map<string, number>;
+}
+
+export function createToolCallExecutionGuard(): ToolCallExecutionGuard {
+  return {
+    inFlightSignatures: new Set(),
+    successfulSignatures: new Set(),
+    failureCountsBySignature: new Map(),
+  };
 }
 
 interface ToolCallDescriptor {
@@ -202,6 +218,50 @@ async function executeSingleToolCall(
   options: ToolCallSchedulerOptions,
 ): Promise<ToolResultMessage> {
   const { toolCall, tool } = descriptor;
+  const guard = options.guard;
+  const signature = buildToolCallSignature(toolCall);
+  const maxFailures = Number.isFinite(options.maxFailuresPerSignature)
+    ? Math.max(1, Math.floor(options.maxFailuresPerSignature as number))
+    : 2;
+  if (guard) {
+    if (guard.inFlightSignatures.has(signature)) {
+      options.onTelemetry?.('agent.tools.scheduler.skipped', {
+        reason: 'duplicate_in_flight',
+        toolName: toolCall.name,
+      });
+      return skipToolCall(
+        toolCall,
+        context.stream,
+        'Internal tool status: skipped duplicate tool call because the same tool/action/input is already in flight. This is not a user-facing message.',
+      );
+    }
+    if (guard.successfulSignatures.has(signature)) {
+      options.onTelemetry?.('agent.tools.scheduler.skipped', {
+        reason: 'duplicate_completed',
+        toolName: toolCall.name,
+      });
+      return skipToolCall(
+        toolCall,
+        context.stream,
+        'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a user-facing message.',
+      );
+    }
+    const failures = guard.failureCountsBySignature.get(signature) ?? 0;
+    if (failures >= maxFailures) {
+      options.onTelemetry?.('agent.tools.scheduler.skipped', {
+        reason: 'tool_signature_degraded',
+        toolName: toolCall.name,
+        failures,
+      });
+      return skipToolCall(
+        toolCall,
+        context.stream,
+        `Internal tool status: ${toolCall.name} is degraded for this action/input after ${failures} failed attempts this turn. Stop retrying it for now and notify the operator if it affects the conversation. This is not a user-facing message.`,
+      );
+    }
+    guard.inFlightSignatures.add(signature);
+  }
+
   context.stream.push({
     type: 'tool_execution_start',
     toolCallId: toolCall.id,
@@ -242,6 +302,18 @@ async function executeSingleToolCall(
       toolName: toolCall.name,
       toolCallId: toolCall.id,
     });
+  }
+
+  if (guard) {
+    guard.inFlightSignatures.delete(signature);
+    if (isError) {
+      guard.failureCountsBySignature.set(
+        signature,
+        (guard.failureCountsBySignature.get(signature) ?? 0) + 1,
+      );
+    } else {
+      guard.successfulSignatures.add(signature);
+    }
   }
 
   context.stream.push({
@@ -301,6 +373,23 @@ function skipToolCall(
   stream.push({ type: 'message_start', message: toolResultMessage });
   stream.push({ type: 'message_end', message: toolResultMessage });
   return toolResultMessage;
+}
+
+function buildToolCallSignature(toolCall: any): string {
+  return `${String(toolCall.name)}:${stableStringify(toolCall.arguments)}`;
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record).sort().map(key => (
+    `${JSON.stringify(key)}:${stableStringify(record[key])}`
+  )).join(',')}}`;
 }
 
 function resolveQueuedMessageAttribution(messages: readonly AgentMessage[]): QueuedMessageAttribution {

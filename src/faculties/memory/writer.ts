@@ -552,7 +552,7 @@ function classifyEvolutionDecision(input: {
 }): MemoryEvolutionDecision | null {
   const incomingMemoryLike: Pick<PurrMemory, 'type' | 'tags' | 'contactId' | 'text'> = {
     type: input.incomingType,
-    tags: input.incomingTags,
+    tags: [...input.incomingTags],
     contactId: input.incomingContactId,
     text: input.incomingText,
   };

@@ -1040,7 +1040,7 @@ export function buildScratchpadContextBlock(input: {
 
     const lines = [
       '[Scratchpad]',
-      'Working notes (short-term, may be stale; verify before acting; manage them via the scratchpad tool):',
+      'Working notes (24h temporary context; verify before acting; not for durable reminders, proactive follow-ups, journals, or stable memories):',
     ];
 
     let included = 0;

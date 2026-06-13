@@ -7,6 +7,7 @@ import {
   executeQuery,
   queryRows,
 } from '../../persistence/postgres.js';
+import { createComponentLogger } from '../../shared/logger.js';
 import {
   POSTGRES_MEMORY_MIGRATIONS,
 } from '../../persistence/postgres/migrations.js';
@@ -55,6 +56,10 @@ import {
   mapStoredMemoryMaintenanceReviewRow,
   normalizeMemoryMaintenanceReviewInput,
 } from './maintenance-review.js';
+
+const SCRATCHPAD_TTL_MS = 24 * 60 * 60 * 1000;
+const SCRATCHPAD_MAX_ENTRIES = 64;
+const log = createComponentLogger('PostgresMemoryStore');
 
 interface MemoryRow {
   id: string;
@@ -669,6 +674,7 @@ class PostgresMemoryStore implements MemoryStorePort {
         updatedAt: row.updated_at,
       });
     }
+    this.pruneExpiredScratchpadEntries();
   }
 
   private persist<T>(task: () => Promise<T>): Promise<T> {
@@ -813,6 +819,34 @@ class PostgresMemoryStore implements MemoryStorePort {
       entries: this.listScratchpadEntries(),
     };
     writeJsonAtomic(this.scratchpadMirrorPath, payload);
+  }
+
+  private collectExpiredScratchpadEntryIds(now = Date.now()): string[] {
+    const cutoff = now - SCRATCHPAD_TTL_MS;
+    return Array.from(this.scratchpadEntries.values())
+      .filter(entry => entry.updatedAt < cutoff)
+      .map(entry => entry.id);
+  }
+
+  private pruneExpiredScratchpadEntries(now = Date.now()): string[] {
+    const expiredIds = this.collectExpiredScratchpadEntryIds(now);
+    if (expiredIds.length === 0) {
+      return [];
+    }
+
+    for (const id of expiredIds) {
+      this.scratchpadEntries.delete(id);
+    }
+
+    void this.persist(async () => {
+      for (const id of expiredIds) {
+        await executeQuery(this.pool, 'DELETE FROM scratchpad_entries WHERE id = $1', [id]);
+      }
+    }).catch((error: unknown) => {
+      log.warn('Failed to prune expired scratchpad entries', { error: String(error) });
+    });
+    this.syncScratchpadMirror();
+    return expiredIds;
   }
 
   async insertMemory(memory: PurrMemory, embedding: Float32Array): Promise<void> {
@@ -1372,17 +1406,20 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   async getScratchpadEntry(id: string): Promise<ScratchpadEntry | undefined> {
+    this.pruneExpiredScratchpadEntries();
     return this.scratchpadEntries.get(id.trim());
   }
 
   listScratchpadEntries(limit: number = 64): ScratchpadEntry[] {
+    this.pruneExpiredScratchpadEntries();
     return Array.from(this.scratchpadEntries.values())
       .sort((left, right) => right.updatedAt - left.updatedAt || right.createdAt - left.createdAt)
-      .slice(0, clampLimit(limit, 64, 1, 64));
+      .slice(0, clampLimit(limit, SCRATCHPAD_MAX_ENTRIES, 1, SCRATCHPAD_MAX_ENTRIES));
   }
 
   private async pruneScratchpadEntries(): Promise<string[]> {
-    const maxEntries = 64;
+    this.pruneExpiredScratchpadEntries();
+    const maxEntries = SCRATCHPAD_MAX_ENTRIES;
     const ordered = Array.from(this.scratchpadEntries.values())
       .sort((left, right) => left.updatedAt - right.updatedAt || left.createdAt - right.createdAt);
     const overflow = Math.max(0, ordered.length - maxEntries);

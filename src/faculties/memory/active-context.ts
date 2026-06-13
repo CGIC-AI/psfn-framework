@@ -53,7 +53,7 @@ export interface ActiveMemoryContextIdentity {
 
 function serializeRetrievalModeInput(value: RetrievalModeInput | undefined): string {
   if (!value) return '';
-  return Array.isArray(value) ? [...value].sort().join(',') : value;
+  return typeof value === 'string' ? value : [...value].sort().join(',');
 }
 
 function serializeScopeQuery(query: MemoryScopeQuery | undefined): string {

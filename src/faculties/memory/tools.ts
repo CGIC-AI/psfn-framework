@@ -131,12 +131,12 @@ function formatScratchpadList(
   entries: Array<{ id: string; content: string; updatedAt: number }>,
 ): string {
   if (entries.length === 0) {
-    return 'Scratchpad is empty. Use it for temporary long-context notes, excerpts, and working summaries.';
+    return 'Scratchpad is empty. Use it for temporary same-day working notes, excerpts, and working summaries.';
   }
 
   const lines = [
-    `Scratchpad entries (${entries.length}) [ephemeral long-context workspace]:`,
-    'Temporary notes are not canonical memory or orientation. Promote only stable facts, decisions, or polished artifacts when warranted.',
+    `Scratchpad entries (${entries.length}) [24h ephemeral working context]:`,
+    'Do not use scratchpad for durable reminders, proactive follow-ups, relationship state, journals, or stable memories. Promote stable facts to memory, follow-ups to orient open threads, and durable notes to journal.',
   ];
   for (const entry of entries) {
     lines.push(`- ${entry.id} [${new Date(entry.updatedAt).toISOString()}]: ${entry.content}`);
@@ -962,8 +962,9 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): AgentTool<an
   return {
     name: 'scratchpad',
     description:
-      'Ephemeral long-context note workspace for temporary excerpts, summaries, and working notes. '
-      + 'Use action=list|add|replace|append|remove. Scratchpad stays distinct from orient and durable memory.',
+      '24h ephemeral working-note workspace for temporary excerpts, summaries, and same-day task context. '
+      + 'Use action=list|add|replace|append|remove. Do not use scratchpad for durable reminders, proactive follow-ups, relationship state, journals, or stable memories. '
+      + 'Use orient concerns/open threads for reminders and proactive follow-ups, memory for stable facts, and journal for durable markdown notes.',
     label: 'scratchpad',
     parameters: Type.Object({
       action: Type.Unsafe<ScratchpadToolAction>({

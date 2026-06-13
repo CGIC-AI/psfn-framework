@@ -3,7 +3,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type { ToolResultMessage } from '@mariozechner/pi-ai';
 import type { ToolConcurrencyMeta, WirableTool } from './tool-wiring-validator.js';
-import { executeToolCallsWithScheduler } from './tool-call-scheduler.js';
+import { createToolCallExecutionGuard, executeToolCallsWithScheduler } from './tool-call-scheduler.js';
 
 function makeTool(
   name: string,
@@ -490,6 +490,119 @@ describe('tool-call-scheduler', () => {
       }),
     );
   });
+
+  it('skips identical calls that already succeeded in the same turn', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'oriented' }],
+      details: {},
+    }));
+    const orient = makeTool(
+      'orient',
+      execute,
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'core:orient',
+        }),
+      },
+    );
+    const telemetry = vi.fn();
+
+    const result = await executeToolCallsWithScheduler(
+      [orient],
+      makeAssistantMessage(['orient', 'orient']),
+      undefined,
+      { stream: { push: () => undefined } },
+      {
+        maxParallelToolCalls: 1,
+        guard: createToolCallExecutionGuard(),
+        onTelemetry: telemetry,
+      },
+    );
+
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result.toolResults).toHaveLength(2);
+    expect((result.toolResults[0] as ToolResultMessage).isError).toBe(false);
+    expect((result.toolResults[1] as ToolResultMessage).isError).toBe(true);
+    expect((result.toolResults[1] as ToolResultMessage).content).toEqual([
+      {
+        type: 'text',
+        text: 'Internal tool status: skipped duplicate tool call because the same tool/action/input already succeeded this turn. This is not a user-facing message.',
+      },
+    ]);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.skipped',
+      expect.objectContaining({
+        reason: 'duplicate_completed',
+        toolName: 'orient',
+      }),
+    );
+  });
+
+  it('stops retrying the same failing call after the per-turn failure limit', async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'scratchpad backend unavailable' }],
+      details: { isError: true },
+    }));
+    const scratchpad = makeTool(
+      'scratchpad',
+      execute,
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:scratchpad',
+        }),
+      },
+    );
+    const guard = createToolCallExecutionGuard();
+    const telemetry = vi.fn();
+    const options = {
+      maxParallelToolCalls: 1,
+      maxFailuresPerSignature: 2,
+      guard,
+      onTelemetry: telemetry,
+    };
+
+    await executeToolCallsWithScheduler(
+      [scratchpad],
+      makeAssistantMessage(['scratchpad']),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+    await executeToolCallsWithScheduler(
+      [scratchpad],
+      makeAssistantMessage(['scratchpad']),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+    const thirdResult = await executeToolCallsWithScheduler(
+      [scratchpad],
+      makeAssistantMessage(['scratchpad']),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect((thirdResult.toolResults[0] as ToolResultMessage).isError).toBe(true);
+    expect((thirdResult.toolResults[0] as ToolResultMessage).content).toEqual([
+      {
+        type: 'text',
+        text: 'Internal tool status: scratchpad is degraded for this action/input after 2 failed attempts this turn. Stop retrying it for now and notify the operator if it affects the conversation. This is not a user-facing message.',
+      },
+    ]);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.skipped',
+      expect.objectContaining({
+        reason: 'tool_signature_degraded',
+        toolName: 'scratchpad',
+        failures: 2,
+      }),
+    );
+  });
+
   it('emits cancelled telemetry when execution aborts before a tool call runs', async () => {
     const telemetry = vi.fn();
     const controller = new AbortController();

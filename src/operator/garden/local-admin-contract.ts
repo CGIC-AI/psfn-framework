@@ -129,6 +129,11 @@ export function createInProcessGardenAdminContract(
   const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
     resolvePromptRuntimeLayoutPath(companionDataDir),
   );
+  const adaptiveTools = new AdminAdaptiveToolsDataService({
+    eventBus: options.eventBus,
+    stateProvider: options.adaptiveToolsStateProvider ?? null,
+    toolHealthProvider: options.toolHealthProvider ?? null,
+  });
 
   return {
     dashboard: new AdminDashboardDataService({
@@ -138,6 +143,7 @@ export function createInProcessGardenAdminContract(
       scheduler: options.scheduler,
       shardManager: options.shardManager,
       eventBus: options.eventBus,
+      adaptiveToolsService: adaptiveTools,
       resolveLastActiveSessionId,
     }),
     images: new AdminImagesDataService({
@@ -150,11 +156,7 @@ export function createInProcessGardenAdminContract(
       ? new AdminActionPipeDataService(options.postTurnActions)
       : null,
     shards: new AdminShardFoldReviewDataService(options.shardManager),
-    adaptiveTools: new AdminAdaptiveToolsDataService({
-      eventBus: options.eventBus,
-      stateProvider: options.adaptiveToolsStateProvider ?? null,
-      toolHealthProvider: options.toolHealthProvider ?? null,
-    }),
+    adaptiveTools,
     episodicMemory: options.episodicStore
       ? new AdminEpisodicMemoryDataService(options.episodicStore)
       : null,

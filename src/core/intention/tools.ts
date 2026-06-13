@@ -38,7 +38,9 @@ export function createListConcernsTool(store: ConcernStorePort): AgentTool<any> 
   return {
     name: 'list_concerns',
     label: 'list_concerns',
-    description: 'List active concerns. Optionally include resolved/expired concerns and filter by contact.',
+    description:
+      'List active open threads, reminders, checkups, and proactive follow-up items. '
+      + 'These are not necessarily negative problems; they are short-lived attention threads.',
     parameters: Type.Object({
       contactId: Type.Optional(Type.String({ minLength: 1, description: 'Optional contact id filter.' })),
       includeResolved: Type.Optional(Type.Boolean({
@@ -81,7 +83,7 @@ export function createResolveConcernTool(store: ConcernStorePort): AgentTool<any
     name: 'resolve_concern',
     label: 'resolve_concern',
     description:
-      'Resolve an active concern once it has been handled or no longer needs tracking. '
+      'Resolve an active open thread once it has genuinely been handled or no longer needs tracking. '
       + 'Pass concernId copied exactly from the concern.id returned by create_concern or list_concerns.',
     parameters: Type.Object({
       concernId: Type.String({
@@ -120,7 +122,9 @@ export function createCreateConcernTool(store: ConcernStorePort): AgentTool<any>
   return {
     name: 'create_concern',
     label: 'create_concern',
-    description: 'Create a new active concern for short-lived follow-up tracking.',
+    description:
+      'Create a new active open thread for short-lived reminders, checkups, proactive communication, or follow-up tracking. '
+      + 'Use this for items like "reach out tonight"; do not put those durable follow-ups in scratchpad.',
     parameters: Type.Object({
       text: Type.String({
         minLength: 1,

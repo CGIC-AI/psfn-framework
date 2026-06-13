@@ -246,7 +246,7 @@ function buildGatewayPolicyConfig(
     ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
   const vaultToolsEnabled = parseBooleanEnvWithFallback(
     env.VAULT_TOOLS_ENABLED,
-    Boolean(config.obsidianVaultName),
+    false,
   );
   const vaultAllowActions = parseVaultActionsEnv(env.VAULT_ALLOW_ACTIONS)
     ?? (vaultToolsEnabled ? [...ALL_VAULT_ACTIONS] : undefined);

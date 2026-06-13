@@ -65,6 +65,13 @@ interface MemoryEvolutionLinkRow {
   created_at: number;
 }
 
+interface ScratchpadTestRow {
+  id: string;
+  content: string;
+  created_at: number;
+  updated_at: number;
+}
+
 function postgresMemoryMigrationSql(): string {
   return POSTGRES_MEMORY_MIGRATIONS.join('\n').replace(/\s+/g, ' ').trim();
 }
@@ -106,6 +113,7 @@ class FakeMemoryPool {
   readonly memories = new Map<string, MemoryRow>();
   readonly evolutionLinks = new Map<string, MemoryEvolutionLinkRow>();
   readonly maintenanceReviews = new Map<string, Record<string, unknown>>();
+  readonly scratchpadEntries = new Map<string, ScratchpadTestRow>();
   readonly queryFailures: Array<{ fragment: string; error: Error }>;
   readonly schemaHasEmbeddingColumn: boolean;
   readonly schemaHasLegacyEmbeddingTable: boolean;
@@ -234,8 +242,27 @@ class FakeMemoryPool {
       return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
     }
 
+    if (normalized.startsWith('insert into scratchpad_entries')) {
+      const row: ScratchpadTestRow = {
+        id: String(values[0] ?? ''),
+        content: String(values[1] ?? ''),
+        created_at: Number(values[2] ?? 0),
+        updated_at: Number(values[3] ?? 0),
+      };
+      this.scratchpadEntries.set(row.id, row);
+      return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (normalized.startsWith('delete from scratchpad_entries')) {
+      const id = String(values[0] ?? '');
+      const deleted = this.scratchpadEntries.delete(id);
+      return { rows: [], rowCount: deleted ? 1 : 0, command: 'DELETE', oid: 0, fields: [] } as QueryResult;
+    }
+
     if (normalized.includes('from scratchpad_entries')) {
-      return { rows: [], rowCount: 0, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
+      const rows = [...this.scratchpadEntries.values()]
+        .sort((left, right) => right.updated_at - left.updated_at || right.created_at - left.created_at);
+      return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
     }
 
     if (normalized.startsWith('insert into l2_memories')) {
@@ -483,6 +510,39 @@ describe('postgres memory store unit coverage', () => {
       allowExitOnIdle: true,
     });
     expect(postgresMocks.ensurePostgresSchema).toHaveBeenCalled();
+  });
+
+  it('expires Postgres scratchpad entries older than 24 hours during hydration', async () => {
+    const pool = new FakeMemoryPool();
+    const now = Date.now();
+    pool.scratchpadEntries.set('fresh-note', {
+      id: 'fresh-note',
+      content: 'Keep the current working note.',
+      created_at: now - 1_000,
+      updated_at: now - 1_000,
+    });
+    pool.scratchpadEntries.set('expired-note', {
+      id: 'expired-note',
+      content: 'Old scratchpad content should not enter chat context.',
+      created_at: now - (25 * 60 * 60 * 1000),
+      updated_at: now - (25 * 60 * 60 * 1000),
+    });
+    postgresMocks.activePool = pool;
+
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+
+    expect(store.listScratchpadEntries()).toEqual([
+      {
+        id: 'fresh-note',
+        content: 'Keep the current working note.',
+        createdAt: now - 1_000,
+        updatedAt: now - 1_000,
+      },
+    ]);
+    expect(await store.getScratchpadEntry('expired-note')).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(pool.scratchpadEntries.has('expired-note')).toBe(false);
+    });
   });
 
   it('persists and hydrates first-class memory evolution links', async () => {

@@ -21,6 +21,12 @@ export interface DashboardSessionContextPressure {
   hasTelemetry: boolean;
 }
 
+export interface DashboardToolStatus {
+  name: string;
+  status: 'healthy' | 'degraded' | 'unavailable' | 'not_applicable';
+  detail?: string;
+}
+
 export interface DashboardStats {
   memoryTotal: number;
   memoryByType: Record<string, number>;
@@ -35,6 +41,8 @@ export interface DashboardStats {
     cacheReadTokens: number;
     llmCalls: number;
     toolCalls: number;
+    lastTtftMs: number | null;
+    averageTtftMs: number | null;
     activeSessionContextPressure: DashboardSessionContextPressure;
     estimatedCostUsd: number;
     costWindows: {
@@ -42,6 +50,7 @@ export interface DashboardStats {
       byWindow: DashboardCostWindowTotals;
     };
   };
+  toolStatus: DashboardToolStatus[];
   recentAnalysisWorkbenchTraces: AnalysisWorkbenchTraceView[];
 }
 

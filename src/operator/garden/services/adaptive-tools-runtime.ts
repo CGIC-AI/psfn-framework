@@ -24,21 +24,6 @@ interface DerivedToolDefinition {
   wiringMeta?: RuntimeToolCatalogEntry['wiringMeta'];
 }
 
-const CONDITIONAL_TOOLS: DerivedToolDefinition[] = [
-  {
-    name: 'vault',
-    description: 'Unified durable vault surface for Obsidian notes, search, and daily journaling.',
-    scope: 'conditional',
-    registered: false,
-    wiringMeta: {
-      requiredServices: ['vault'],
-      requiredGatewayMethods: ['vault.write', 'vault.read', 'vault.search', 'vault.daily'],
-    },
-  },
-];
-
-const ALL_VAULT_ACTIONS = ['write', 'read', 'search', 'daily'] as const;
-
 export function cloneRuntimeState(state: AdaptiveToolRuntimeState): AdaptiveToolRuntimeState {
   return {
     ...state,
@@ -96,7 +81,7 @@ export function deriveToolHealthViews(params: {
   serviceHealth: RuntimeServiceHealth[];
   recentFailures: readonly AdminToolFailureEvent[];
 }): AdminToolHealthView[] {
-  const definitions = resolveToolDefinitions(params.catalog, params.serviceHealth);
+  const definitions = resolveToolDefinitions(params.catalog);
   const serviceById = new Map(params.serviceHealth.map(service => [service.serviceId, service]));
   const activeSources = new Map(params.state?.activeTools.map(tool => [tool.toolName, tool.source]) ?? []);
   const failureByTool = new Map<string, AdminToolFailureEvent>();
@@ -180,10 +165,7 @@ export function deriveToolInventoryGroups(toolHealth: AdminToolHealthView[]): Ad
   return groups;
 }
 
-function resolveToolDefinitions(
-  catalog: RuntimeToolCatalogSnapshot | null,
-  serviceHealth: RuntimeServiceHealth[],
-): DerivedToolDefinition[] {
+function resolveToolDefinitions(catalog: RuntimeToolCatalogSnapshot | null): DerivedToolDefinition[] {
   const definitions = new Map<string, DerivedToolDefinition>();
   for (const tool of catalog?.tools ?? []) {
     definitions.set(tool.name, {
@@ -193,16 +175,6 @@ function resolveToolDefinitions(
       registered: true,
       ...(tool.wiringMeta ? { wiringMeta: cloneToolWiringMeta(tool.wiringMeta) } : {}),
     });
-  }
-
-  const vaultService = serviceHealth.find(service => service.serviceId === 'vault');
-  if (vaultService && !definitions.has('vault') && vaultService.status !== 'healthy') {
-    for (const conditionalTool of CONDITIONAL_TOOLS) {
-      definitions.set(conditionalTool.name, {
-        ...conditionalTool,
-        ...(conditionalTool.wiringMeta ? { wiringMeta: cloneToolWiringMeta(conditionalTool.wiringMeta) } : {}),
-      });
-    }
   }
 
   return [...definitions.values()].sort((left, right) => {
@@ -226,10 +198,6 @@ function resolveToolHealth(
   lastFailure: AdminToolFailureEvent | undefined,
 ): AdminToolHealthView['health'] {
   if (!definition.registered) {
-    const serviceBackedStatus = resolveServiceBackedStatus(definition, serviceById);
-    if (serviceBackedStatus) {
-      return serviceBackedStatus;
-    }
     return {
       status: 'unavailable',
       detail: 'Tool is not registered in this runtime.',
@@ -256,13 +224,6 @@ function resolveToolHealth(
     });
   }
 
-  if (definition.name === 'vault') {
-    const actionStatus = resolveVaultActionCoverageStatus(serviceById.get('vault'));
-    if (actionStatus) {
-      statuses.push(actionStatus);
-    }
-  }
-
   const baseStatus = foldStatuses(statuses);
   if (lastFailure && baseStatus.status !== 'unavailable' && baseStatus.status !== 'not_applicable') {
     return {
@@ -271,38 +232,6 @@ function resolveToolHealth(
     };
   }
   return baseStatus;
-}
-
-function resolveServiceBackedStatus(
-  definition: DerivedToolDefinition,
-  serviceById: Map<string, RuntimeServiceHealth>,
-): AdminToolHealthView['health'] | null {
-  if (definition.name === 'vault') {
-    const vaultHealth = serviceById.get('vault');
-    if (!vaultHealth) {
-      return {
-        status: 'unavailable',
-        detail: 'Vault service health is unavailable.',
-      };
-    }
-
-    const actionStatus = resolveVaultActionCoverageStatus(vaultHealth);
-    if (actionStatus) {
-      return vaultHealth.status === 'healthy'
-        ? actionStatus
-        : {
-          status: vaultHealth.status,
-          detail: vaultHealth.detail,
-        };
-    }
-
-    return {
-      status: vaultHealth.status === 'healthy' ? 'unavailable' : vaultHealth.status,
-      detail: vaultHealth.detail,
-    };
-  }
-
-  return null;
 }
 
 function foldStatuses(statuses: Array<{ status: RuntimeServiceHealthStatus; detail: string }>): AdminToolHealthView['health'] {
@@ -335,32 +264,6 @@ function statusPriority(status: RuntimeServiceHealthStatus): number {
     default:
       return 1;
   }
-}
-
-function resolveVaultActionCoverageStatus(
-  vaultHealth: RuntimeServiceHealth | undefined,
-): { status: RuntimeServiceHealthStatus; detail: string } | null {
-  if (!vaultHealth?.availableActions) {
-    return null;
-  }
-
-  const availableActionSet = new Set(vaultHealth.availableActions);
-  const missingActions = ALL_VAULT_ACTIONS.filter(action => !availableActionSet.has(action));
-  if (missingActions.length === 0) {
-    return null;
-  }
-
-  if (missingActions.length === ALL_VAULT_ACTIONS.length) {
-    return {
-      status: 'unavailable',
-      detail: 'Vault actions are not enabled in this runtime.',
-    };
-  }
-
-  return {
-    status: 'degraded',
-    detail: `Vault is missing actions required by the unified tool: ${missingActions.join(', ')}.`,
-  };
 }
 
 function resolveContextAvailability(

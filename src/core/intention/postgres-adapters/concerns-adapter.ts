@@ -87,6 +87,11 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
 
     const contactId = normalizeContactId(input.contactId);
     const formationVAD = serializeFormationVAD(input.formationVAD);
+    const activeDuplicate = this.snapshotActiveConcerns(contactId)
+      .find(concern => scoreConcernSimilarity(concern.text, text) >= CONCERN_DUPLICATE_SIMILARITY_THRESHOLD);
+    if (activeDuplicate) {
+      return activeDuplicate;
+    }
     const id = normalizeRequiredText(this.idFactory(), 'id', 128);
 
     const row = await queryOne<ActiveConcernRow>(

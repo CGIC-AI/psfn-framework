@@ -1,6 +1,10 @@
 import { EventStream, type AssistantMessage } from '@mariozechner/pi-ai';
 import type { AgentContext, AgentLoopConfig, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
-import { executeToolCallsWithScheduler, type ToolCallSchedulerOptions } from './tool-call-scheduler.js';
+import {
+  createToolCallExecutionGuard,
+  executeToolCallsWithScheduler,
+  type ToolCallSchedulerOptions,
+} from './tool-call-scheduler.js';
 import {
   AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT,
   AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN,
@@ -89,6 +93,7 @@ async function runLoop(
   let firstTurn = true;
   let assistantStepCount = 0;
   let checkInMessageSent = false;
+  const toolExecutionGuard = createToolCallExecutionGuard();
   let pendingMessages = (await config.getSteeringMessages?.()) || [];
 
   for (;;) {
@@ -151,7 +156,10 @@ async function runLoop(
           message,
           config.getSteeringMessages,
           { signal, stream },
-          schedulerOptions,
+          {
+            ...schedulerOptions,
+            guard: toolExecutionGuard,
+          },
         );
         toolResults.push(...toolExecution.toolResults);
         steeringAfterTools = toolExecution.steeringMessages ?? null;

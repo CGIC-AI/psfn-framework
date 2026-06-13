@@ -1183,7 +1183,8 @@ describe('scratchpad tools', () => {
     const tool = createScratchpadTool(store as unknown as MemoryStorePort);
 
     const listed = await tool.execute('scratchpad-list', { action: 'list' });
-    expect(resultText(listed as any)).toContain('ephemeral long-context workspace');
+    expect(resultText(listed as any)).toContain('24h ephemeral working context');
+    expect(resultText(listed as any)).toContain('durable reminders');
     expect(store.listScratchpadEntries).toHaveBeenCalledWith(20);
 
     const appended = await tool.execute('scratchpad-append', {

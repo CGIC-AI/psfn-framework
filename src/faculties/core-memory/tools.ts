@@ -9,7 +9,6 @@ import type { ConcernStorePort } from '../../core/intention/concern-store-port.j
 import {
   createCreateConcernTool,
   createListConcernsTool,
-  createResolveConcernTool,
 } from '../../core/intention/tools.js';
 import { createValuesListTool, type ValuesListParams } from '../values/tools.js';
 import type { ValuesJournalStore } from '../values/store.js';
@@ -65,6 +64,7 @@ interface OrientToolParams extends ValuesListParams {
   includeResolved?: boolean;
   includeExpired?: boolean;
   concernId?: string;
+  concernIds?: string[];
   outcome?: string;
 }
 
@@ -124,9 +124,10 @@ export function createOrientTool(
       + 'Use action=append for incremental updates, action=replace to rewrite one block, '
       + 'action=reorient for a holistic refresh of all three blocks, '
       + 'action=values_list to inspect recent values reflections, and '
-      + 'action=create_concern|list_concerns|resolve_concern to manage active open threads. '
-      + 'For action=resolve_concern, pass concernId copied exactly from the concern.id returned by '
-      + 'create_concern or list_concerns; do not use tool_search, fs, or analysis_workbench to rediscover it.',
+      + 'action=create_concern|list_concerns|resolve_concern to manage active open threads, reminders, checkups, and proactive communication items. '
+      + 'Open threads are not necessarily problems. Put follow-ups such as "reach out tonight" here, not in scratchpad. '
+      + 'For action=resolve_concern, pass concernId or concernIds copied exactly from the concern.id returned by create_concern or list_concerns; '
+      + 'do not use tool_search, fs, or analysis_workbench to rediscover it.',
     parameters: Type.Object({
       action: Type.Unsafe<OrientAction>({
         type: 'string',
@@ -184,7 +185,14 @@ export function createOrientTool(
       })),
       concernId: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Required for action=resolve_concern. Copy the exact concern.id from create_concern or list_concerns.',
+        description: 'Used for action=resolve_concern. Copy the exact concern.id from create_concern or list_concerns.',
+      })),
+      concernIds: Type.Optional(Type.Array(Type.String({
+        minLength: 1,
+      }), {
+        minItems: 1,
+        maxItems: 20,
+        description: 'Used for action=resolve_concern to resolve multiple open thread ids in one call.',
       })),
       outcome: Type.Optional(Type.String({
         minLength: 1,
@@ -237,22 +245,41 @@ export function createOrientTool(
         }
 
         if (action === 'resolve_concern') {
-          const concernId = ensureString(params.concernId);
-          if (!concernId) {
+          const concernIds = Array.isArray(params.concernIds)
+            ? params.concernIds.map(ensureString).filter((id): id is string => Boolean(id))
+            : [];
+          const singleConcernId = ensureString(params.concernId);
+          if (singleConcernId) {
+            concernIds.unshift(singleConcernId);
+          }
+          const uniqueConcernIds = [...new Set(concernIds)];
+          if (uniqueConcernIds.length === 0) {
             return textResultWithError(JSON.stringify({
               error: 'missing_required_parameter',
               action: 'resolve_concern',
-              required: 'concernId',
-              hint: 'Retry orient with action="resolve_concern" and concernId set to the concern.id returned by create_concern or list_concerns. Do not use tool_search, fs, or analysis_workbench for this.',
+              required: 'concernId or concernIds',
+              hint: 'Retry orient with action="resolve_concern" and concernId or concernIds set to ids returned by create_concern or list_concerns. Do not use tool_search, fs, or analysis_workbench for this.',
             }, null, 2), true);
           }
-          return createResolveConcernTool(requireConcernStore(options.concernStore)).execute(
-            toolCallId,
-            {
-              concernId,
-              outcome: params.outcome,
-            },
-          );
+          const concernStore = requireConcernStore(options.concernStore);
+          const resolved = [];
+          const missing = [];
+          for (const concernId of uniqueConcernIds) {
+            const concern = await concernStore.resolveConcern(concernId, { outcome: params.outcome });
+            if (concern) {
+              resolved.push(concern);
+            } else {
+              missing.push(concernId);
+            }
+          }
+          const resultText = JSON.stringify({
+            resolved: resolved.length,
+            missing,
+            concerns: resolved,
+          }, null, 2);
+          return missing.length > 0
+            ? textResultWithError(resultText, true)
+            : textResult(resultText);
         }
 
         if (action === 'append') {

@@ -56,9 +56,9 @@ import {
 } from './session-activity.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import {
-  createOptionalVaultAutoPublisher,
-  registerOptionalVaultTools,
-} from './vault-runtime.js';
+  createOptionalJournalAutoPublisher,
+  registerMarkdownJournalTools,
+} from './journal-runtime.js';
 import { prepareAgentStartupContext } from './startup-context.js';
 import { AgentApiBackend } from '../../channels/api/agent-backend.js';
 import { resolveActiveHealthProbeConfig } from '../../channels/api/active-health-probe.js';
@@ -293,8 +293,8 @@ async function main(): Promise<void> {
   registerBeadsTools(agentLoop, new GatewayBeadsOps(gatewayOps), { gatewayMode: true });
   log.info('Beads issue-management tools enabled');
 
-  // Vault tools — Obsidian note read/write via gateway shell.exec
-  await registerOptionalVaultTools(agentLoop, gateway, config);
+  // Journal tools — durable markdown notes in the personal workspace.
+  registerMarkdownJournalTools(agentLoop, pathSnapshot.workspaceRoot);
 
   // Validate tool wiring — catch misconfigured tools before they crash at invocation
   agentLoop.validateToolWiring('gateway', gateway, DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE);
@@ -428,8 +428,8 @@ async function main(): Promise<void> {
     })
     : null;
 
-  // Vault auto-publisher (for heartbeat reflections → Obsidian vault)
-  const vaultAutoPublisher = await createOptionalVaultAutoPublisher(gateway, config);
+  // Journal auto-publisher (for heartbeat reflections -> markdown journal)
+  const journalAutoPublisher = createOptionalJournalAutoPublisher(pathSnapshot.workspaceRoot, config);
 
   // Heartbeat reflections — policy-driven multi-template reflection system
   wireHeartbeatRuntime(
@@ -468,7 +468,7 @@ async function main(): Promise<void> {
       postTurnActions,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
       intentionAppraisalEnabled: config.intentionAppraisalEnabled !== false,
-      ...(vaultAutoPublisher ? { vaultAutoPublisher } : {}),
+      ...(journalAutoPublisher ? { vaultAutoPublisher: journalAutoPublisher } : {}),
     },
   );
 

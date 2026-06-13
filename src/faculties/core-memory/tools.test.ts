@@ -1,4 +1,3 @@
-import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -6,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createOrientTool,
 } from './tools.js';
-import { ActiveConcernStore } from '../../core/intention/concerns.js';
-import { createConcernStorePort } from '../../core/intention/concern-store-port.js';
+import type { ActiveConcern } from '../../core/intention/concerns.js';
+import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import { ValuesJournalStore } from '../values/store.js';
 import type {
   CoreMemoryAppendOptions,
@@ -41,6 +40,61 @@ function makeSnapshot(overrides?: Partial<CoreMemorySnapshot>): CoreMemorySnapsh
       goals: makeBlock('goals'),
     },
     ...overrides,
+  };
+}
+
+function createFakeConcernStore(): ConcernStorePort {
+  const concerns = new Map<string, ActiveConcern>();
+  let nextId = 1;
+
+  return {
+    create: vi.fn(async (input) => {
+      const now = new Date().toISOString();
+      const concern: ActiveConcern = {
+        id: `concern-${nextId++}`,
+        text: input.text,
+        priority: input.priority ?? 'medium',
+        source: input.source ?? 'agent',
+        createdAt: input.createdAt ?? now,
+        expiresAt: input.expiresAt ?? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        ...(input.contactId ? { contactId: input.contactId } : {}),
+        ...(input.formationVAD ? { formationVAD: input.formationVAD } : {}),
+      };
+      concerns.set(concern.id, concern);
+      return { ...concern };
+    }),
+    getById: vi.fn(async (id) => {
+      const concern = concerns.get(id);
+      return concern ? { ...concern } : null;
+    }),
+    getActiveConcerns: vi.fn(async (contactId) => (
+      [...concerns.values()]
+        .filter(concern => !concern.resolvedAt && (!contactId || concern.contactId === contactId))
+        .map(concern => ({ ...concern }))
+    )),
+    list: vi.fn(async (options = {}) => (
+      [...concerns.values()]
+        .filter((concern) => {
+          if (options.contactId && concern.contactId !== options.contactId) return false;
+          if (!options.includeResolved && concern.resolvedAt) return false;
+          return true;
+        })
+        .slice(0, options.limit ?? 32)
+        .map(concern => ({ ...concern }))
+    )),
+    listRecentlyResolvedConcerns: vi.fn(async () => []),
+    findRecentlyResolvedSimilarConcern: vi.fn(async () => null),
+    resolveConcern: vi.fn(async (id, options = {}) => {
+      const concern = concerns.get(id);
+      if (!concern || concern.resolvedAt) return null;
+      const resolved: ActiveConcern = {
+        ...concern,
+        resolvedAt: options.resolvedAt ?? new Date().toISOString(),
+        ...(options.outcome ? { resolutionOutcome: options.outcome } : {}),
+      };
+      concerns.set(id, resolved);
+      return { ...resolved };
+    }),
   };
 }
 
@@ -217,8 +271,7 @@ describe('orient tool', () => {
   });
 
   it('routes concern lifecycle actions through orient when concern support is wired', async () => {
-    const db = new Database(':memory:');
-    const concernStore = createConcernStorePort(new ActiveConcernStore(db));
+    const concernStore = createFakeConcernStore();
     const tool = createOrientTool({
       append: vi.fn(),
       replace: vi.fn(),
@@ -257,16 +310,57 @@ describe('orient tool', () => {
       outcome: 'Handled in orient.',
     });
     const resolvedPayload = JSON.parse(resultText(resolvedResult)) as {
-      resolved: boolean;
-      concern: { resolutionOutcome?: string };
+      resolved: number;
+      missing: string[];
+      concerns: Array<{ resolutionOutcome?: string }>;
     };
-    expect(resolvedPayload.resolved).toBe(true);
-    expect(resolvedPayload.concern.resolutionOutcome).toBe('Handled in orient.');
+    expect(resolvedPayload.resolved).toBe(1);
+    expect(resolvedPayload.missing).toEqual([]);
+    expect(resolvedPayload.concerns[0]?.resolutionOutcome).toBe('Handled in orient.');
+  });
+
+  it('resolves multiple concerns in one orient action', async () => {
+    const concernStore = createFakeConcernStore();
+    const tool = createOrientTool({
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    }, {
+      concernStore,
+    });
+
+    const firstResult = await tool.execute('call-concern-create-1', {
+      action: 'create_concern',
+      text: 'Check in tonight.',
+    });
+    const secondResult = await tool.execute('call-concern-create-2', {
+      action: 'create_concern',
+      text: 'Ask about sleep tomorrow.',
+    });
+    const firstPayload = JSON.parse(resultText(firstResult)) as { concern: { id: string } };
+    const secondPayload = JSON.parse(resultText(secondResult)) as { concern: { id: string } };
+
+    const resolvedResult = await tool.execute('call-concern-resolve-many', {
+      action: 'resolve_concern',
+      concernIds: [firstPayload.concern.id, secondPayload.concern.id],
+      outcome: 'Handled together.',
+    });
+    const payload = JSON.parse(resultText(resolvedResult)) as {
+      resolved: number;
+      missing: string[];
+      concerns: Array<{ id: string; resolutionOutcome?: string }>;
+    };
+
+    expect(payload.resolved).toBe(2);
+    expect(payload.missing).toEqual([]);
+    expect(payload.concerns.map(concern => concern.id).sort()).toEqual(
+      [firstPayload.concern.id, secondPayload.concern.id].sort(),
+    );
+    expect(payload.concerns.every(concern => concern.resolutionOutcome === 'Handled together.')).toBe(true);
   });
 
   it('returns an actionable error when resolving a concern without concernId through orient', async () => {
-    const db = new Database(':memory:');
-    const concernStore = createConcernStorePort(new ActiveConcernStore(db));
+    const concernStore = createFakeConcernStore();
     const tool = createOrientTool({
       append: vi.fn(),
       replace: vi.fn(),
@@ -286,8 +380,8 @@ describe('orient tool', () => {
 
     expect(result.details.isError).toBe(true);
     expect(payload.error).toBe('missing_required_parameter');
-    expect(payload.required).toBe('concernId');
-    expect(payload.hint).toContain('concern.id');
+    expect(payload.required).toBe('concernId or concernIds');
+    expect(payload.hint).toContain('concernId or concernIds');
     expect(payload.hint).toContain('Do not use tool_search');
   });
 });

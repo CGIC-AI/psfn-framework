@@ -77,6 +77,7 @@ describe('resolveGatewayBootstrapInput', () => {
         GIT_REPO_ROOT: process.cwd(),
         MODULE_REGISTRY_PATH: 'registry/module-registry.json',
         GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        BEADS_TOOLS_ENABLED: 'true',
         NTFY_BASE_URL: 'https://ntfy.local',
         NTFY_TOPIC: 'alerts',
         NTFY_TOKEN: 'ntfy-token',
@@ -122,6 +123,9 @@ describe('resolveGatewayBootstrapInput', () => {
       enabled: true,
       allowActions: ['ready', 'show', 'create', 'update', 'close', 'sync'],
     });
+    expect(bootstrap.policyConfig.vault).toEqual({
+      enabled: false,
+    });
     expect(bootstrap.providerEnv.OPENAI_API_KEY).toBe('openai-secret');
     expect(bootstrap.discordStartRetry).toEqual({
       baseDelayMs: 11,
@@ -166,6 +170,25 @@ describe('resolveGatewayBootstrapInput', () => {
 
     expect(bootstrap.policyConfig.beads).toEqual({
       enabled: false,
+    });
+  });
+
+  it('only enables legacy vault tools when explicitly requested', () => {
+    const bootstrap = resolveGatewayBootstrapInput({
+      config: createConfig(),
+      env: {
+        PSFN_RUNTIME_MODE: 'split',
+        WORKSPACE_PATH: '/workspace',
+        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        VAULT_TOOLS_ENABLED: 'true',
+        VAULT_ALLOW_ACTIONS: 'read,search',
+      },
+      startupHydration: createStartupHydration(),
+    });
+
+    expect(bootstrap.policyConfig.vault).toEqual({
+      enabled: true,
+      allowActions: ['read', 'search'],
     });
   });
 });

@@ -191,7 +191,7 @@ describe('discoverOpenRouterLogprobSupport', () => {
     expect(provider.bytesOrTokenTextIncluded).toBe(true);
     expect(provider.generatedLogprobs).toBe('yes');
     expect(provider.observedStatus).toBe('Top-k works');
-    expect(provider.discoverySource).toBe('endpoint_metadata+live_probe');
+    expect(provider.discoverySource).toBe('live_probe');
     expect(provider.probe).toEqual(expect.objectContaining({
       attempted: true,
       status: 'supported',

@@ -489,6 +489,17 @@ function shouldProbeProvider(
   return provider.supportedParameters.length === 0;
 }
 
+function clearMetadataSupportForLiveMode(provider: ProviderSupportRecord): void {
+  provider.logprobs = false;
+  provider.topLogprobs = false;
+  provider.topLogprobsMax = 0;
+  provider.promptLogprobs = false;
+  provider.streamingLogprobs = false;
+  provider.generatedLogprobs = 'no';
+  provider.observedStatus = 'Skipped';
+  provider.discoverySource = 'unknown';
+}
+
 function tokenFromTopLogprob(entry: unknown): string | undefined {
   if (!entry || typeof entry !== 'object') return undefined;
   return normalizeOptionalString((entry as { token?: unknown }).token);
@@ -1114,7 +1125,11 @@ export async function discoverOpenRouterLogprobSupport(
     }
 
     for (const provider of providers) {
-      if (!apiKey || !shouldProbeProvider(provider, probeMode)) continue;
+      const shouldProbe = apiKey ? shouldProbeProvider(provider, probeMode) : false;
+      if (apiKey && probeMode !== 'none') {
+        clearMetadataSupportForLiveMode(provider);
+      }
+      if (!apiKey || !shouldProbe) continue;
       const route = buildProviderRoute(provider.id);
       for (const probe of CANONICAL_PROBES) {
         try {

@@ -214,18 +214,9 @@ interface ExtractedLogprobs {
 const DEFAULT_TIMEOUT_MS = 20_000;
 
 export const TARGET_MODELS: readonly TargetModel[] = Object.freeze([
-  { id: 'moonshotai/kimi-k2.5', group: 'key' },
-  { id: 'z-ai/glm-5', group: 'key' },
-  { id: 'deepseek/deepseek-v3.2', group: 'key' },
-  { id: 'minimax/minimax-m2.7', group: 'key' },
-  { id: 'qwen/qwen3.6-plus:free', group: 'key' },
-  { id: 'openai/gpt-5.3-chat', group: 'additional' },
-  { id: 'arcee-ai/trinity-large-thinking', group: 'additional' },
-  { id: 'google/gemini-3.1-pro-preview', group: 'additional' },
-  { id: 'nvidia/nemotron-3-super-120b-a12b', group: 'additional' },
-  { id: 'xiaomi/mimo-v2-pro', group: 'additional' },
-  { id: 'stepfun/step-3.5-flash:free', group: 'additional' },
-  { id: 'mistralai/mistral-small-2603', group: 'additional' },
+  { id: 'z-ai/glm-5.1', group: 'key' },
+  { id: 'moonshotai/kimi-k2.6', group: 'key' },
+  { id: 'deepseek/deepseek-v4-pro', group: 'key' },
 ]);
 
 export const CANONICAL_PROBES: readonly ProbeDefinition[] = Object.freeze([

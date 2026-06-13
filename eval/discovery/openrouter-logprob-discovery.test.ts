@@ -34,14 +34,14 @@ describe('discoverOpenRouterLogprobSupport', () => {
         return createJsonResponse({
           data: [
             {
-              id: 'moonshotai/kimi-k2.5',
-              name: 'MoonshotAI: Kimi K2.5',
+              id: 'moonshotai/kimi-k2.6',
+              name: 'MoonshotAI: Kimi K2.6',
               supported_parameters: ['logprobs', 'top_logprobs'],
             },
           ],
         });
       }
-      if (url.endsWith('/models/moonshotai/kimi-k2.5/endpoints')) {
+      if (url.endsWith('/models/moonshotai/kimi-k2.6/endpoints')) {
         return createJsonResponse({
           data: {
             endpoints: [
@@ -67,10 +67,10 @@ describe('discoverOpenRouterLogprobSupport', () => {
     const result = await discoverOpenRouterLogprobSupport({
       fetchFn: mockFetch,
       probeMode: 'none',
-      targets: [{ id: 'moonshotai/kimi-k2.5', group: 'key' }],
+      targets: [{ id: 'moonshotai/kimi-k2.6', group: 'key' }],
     });
 
-    const model = result.models['moonshotai/kimi-k2.5'];
+    const model = result.models['moonshotai/kimi-k2.6'];
     expect(result.schemaVersion).toBe(2);
     expect(model.supported).toBe(true);
     expect(model.topLogprobsSupported).toBe(true);
@@ -99,14 +99,14 @@ describe('discoverOpenRouterLogprobSupport', () => {
         return createJsonResponse({
           data: [
             {
-              id: 'z-ai/glm-5',
-              name: 'GLM-5',
+              id: 'z-ai/glm-5.1',
+              name: 'GLM 5.1',
               supported_parameters: ['logprobs', 'top_logprobs'],
             },
           ],
         });
       }
-      if (url.endsWith('/models/z-ai/glm-5/endpoints')) {
+      if (url.endsWith('/models/z-ai/glm-5.1/endpoints')) {
         return createJsonResponse({
           data: {
             endpoints: [
@@ -127,7 +127,7 @@ describe('discoverOpenRouterLogprobSupport', () => {
           return createSseResponse([
             {
               id: 'chatcmpl-stream',
-              model: 'z-ai/glm-5',
+              model: 'z-ai/glm-5.1',
               choices: [
                 {
                   logprobs: {
@@ -150,7 +150,7 @@ describe('discoverOpenRouterLogprobSupport', () => {
         }
         return createJsonResponse({
           id: 'chatcmpl-test',
-          model: 'z-ai/glm-5',
+          model: 'z-ai/glm-5.1',
           provider: 'inceptron/int4',
           choices: [
             {
@@ -178,10 +178,10 @@ describe('discoverOpenRouterLogprobSupport', () => {
       fetchFn: mockFetch,
       apiKey: 'test-key',
       probeMode: 'supported' satisfies ProbeMode,
-      targets: [{ id: 'z-ai/glm-5', group: 'key' }],
+      targets: [{ id: 'z-ai/glm-5.1', group: 'key' }],
     });
 
-    const model = result.models['z-ai/glm-5'];
+    const model = result.models['z-ai/glm-5.1'];
     const provider = model.providers[0];
     expect(model.routerObservations).toHaveLength(14);
     expect(provider.observations).toHaveLength(7);
@@ -195,7 +195,7 @@ describe('discoverOpenRouterLogprobSupport', () => {
     expect(provider.probe).toEqual(expect.objectContaining({
       attempted: true,
       status: 'supported',
-      responseModel: 'z-ai/glm-5',
+      responseModel: 'z-ai/glm-5.1',
     }));
     expect(result.engineerView.length).toBeGreaterThan(0);
     expect(result.useCaseView).toEqual(expect.arrayContaining([

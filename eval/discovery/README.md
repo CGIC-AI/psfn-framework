@@ -32,6 +32,12 @@ Provider pinning follows OpenRouter's documented provider-selection request body
 
 ## Usage
 
+Default targets are the current OpenRouter model IDs for the requested probe set:
+
+- `z-ai/glm-5.1`
+- `moonshotai/kimi-k2.6`
+- `deepseek/deepseek-v4-pro`
+
 Metadata-only discovery works without credentials:
 
 ```bash
@@ -43,7 +49,7 @@ Live probing requires `OPENROUTER_API_KEY`:
 ```bash
 OPENROUTER_API_KEY=sk-or-... \
 npm run eval:discover:logprobs -- \
-  --model moonshotai/kimi-k2.5 \
+  --model moonshotai/kimi-k2.6 \
   --output eval/discovery/artifacts/openrouter-logprob-support.json
 ```
 

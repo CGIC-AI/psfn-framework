@@ -79,6 +79,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       auditHistoryService: config.services.auditHistory,
       chargeLedgerService: config.services.charges,
       modelUsageService: config.services.modelUsage,
+      observerEvalSidecarService: config.services.observerEvalSidecar,
       actionPipeService: config.services.actionPipe,
       shardFoldReviewService: config.services.shards,
       adaptiveToolsService: config.services.adaptiveTools,

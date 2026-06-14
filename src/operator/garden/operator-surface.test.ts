@@ -267,6 +267,22 @@ async function createHarness(): Promise<Harness> {
         expensiveEvents: [],
       })),
     },
+    observerEvalSidecar: {
+      getHealth: vi.fn(async () => ({
+        status: 'disabled',
+        observedAt: 1_780_000_000_000,
+        runtime: null,
+        persistence: {
+          available: false,
+          evalOwned: false,
+          authoritative: false,
+        },
+      })),
+      getLatestObservation: vi.fn(),
+      queryObservations: vi.fn(),
+      queryRuns: vi.fn(),
+      exportObservations: vi.fn(),
+    },
     adaptiveTools: null,
     images: {} as GardenAdminDomainServices['images'],
     memory: {} as GardenAdminDomainServices['memory'],
@@ -386,6 +402,14 @@ describe('Garden operator surface', () => {
     const payload = JSON.parse(res.body) as { totals: { totalTokens: number }; query: { limit?: number; sinceMs?: number } };
     expect(payload.totals.totalTokens).toBe(15);
     expect(payload.query).toMatchObject({ limit: 5, sinceMs: 100 });
+  });
+
+  it('proxies observer eval sidecar health through the operator surface', async () => {
+    const res = await requestPort(harness.port, 'GET', '/api/admin/evals/observer-sidecar/health');
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as { status: string; persistence: { available: boolean } };
+    expect(payload.status).toBe('disabled');
+    expect(payload.persistence.available).toBe(false);
   });
 
   it('proxies canonical admin settings owner-file routes through the operator surface', async () => {

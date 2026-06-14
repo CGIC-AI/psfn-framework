@@ -166,8 +166,12 @@ function hydrateEvent(
   if (!rates) return event;
   const estimatedCostUsd = estimateEventCostUsd(event, rates);
   if (!Number.isFinite(estimatedCostUsd) || estimatedCostUsd <= 0) return event;
+  const { providerCostUsd, ...eventWithoutProviderCost } = event;
   return {
-    ...event,
+    ...eventWithoutProviderCost,
+    ...(typeof providerCostUsd === 'number' && Number.isFinite(providerCostUsd) && providerCostUsd > 0
+      ? { providerCostUsd }
+      : {}),
     estimatedCostUsd,
     costSource: 'estimate',
     metadata: {
@@ -185,9 +189,13 @@ function cloneTotals(source: ModelUsageTotals): ModelUsageTotals {
 }
 
 function eventCost(event: ModelUsageEvent): number {
-  return (typeof event.providerCostUsd === 'number' && Number.isFinite(event.providerCostUsd) && event.providerCostUsd >= 0)
-    ? event.providerCostUsd
-    : (Number.isFinite(event.estimatedCostUsd) && event.estimatedCostUsd > 0 ? event.estimatedCostUsd : 0);
+  if (typeof event.providerCostUsd === 'number' && Number.isFinite(event.providerCostUsd) && event.providerCostUsd > 0) {
+    return event.providerCostUsd;
+  }
+  if (Number.isFinite(event.estimatedCostUsd) && event.estimatedCostUsd > 0) {
+    return event.estimatedCostUsd;
+  }
+  return 0;
 }
 
 function hydrateTotals(source: ModelUsageTotals, costDeltaUsd: number): ModelUsageTotals {

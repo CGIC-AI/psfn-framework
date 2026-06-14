@@ -110,6 +110,7 @@ describe('AdminModelUsageDataService', () => {
         },
       },
     });
+    expect(data.recentEvents[0]?.providerCostUsd).toBeUndefined();
     expect(data.totals.estimatedCostUsd).toBeCloseTo(0.004, 8);
     expect(data.totals.totalCostUsd).toBeCloseTo(0.004, 8);
     expect(data.byModel[0]?.totalCostUsd).toBeCloseTo(0.004, 8);

@@ -11,6 +11,10 @@ import { POSTGRES_OBSERVER_EVAL_SIDECAR_MIGRATIONS } from '../../../persistence/
 import type { ObserverEmotionCrosswalkOutput } from './crosswalk.js';
 import type { EmoSimAdapterRunResult } from './emosim-adapter.js';
 import type { ObserverAppraisalProjectionResult } from './projection.js';
+import {
+  createObserverEvalComparisonMetricsFromCrosswalk,
+  type ObserverEvalSidecarComparisonMetrics,
+} from './metrics.js';
 import type {
   ObserverEvalPrivacyDecision,
   ObserverEvalSanitizedInputPayload,
@@ -18,12 +22,15 @@ import type {
 } from './privacy.js';
 import type { ObserverEvalSidecarConfig } from './types.js';
 
+export {
+  OBSERVER_EVAL_COMPARISON_METRICS_VERSION,
+  type ObserverEvalSidecarComparisonMetrics,
+} from './metrics.js';
+
 export const OBSERVER_EVAL_SIDECAR_PERSISTENCE_SCHEMA_VERSION = 1 as const;
 export const OBSERVER_EVAL_SIDECAR_EVAL_OWNER = 'observer_sidecar_eval' as const;
 export const OBSERVER_EVAL_SIDECAR_NON_AUTHORITATIVE_NOTICE =
   'Observer sidecar persistence is eval-owned telemetry only; it is not companion memory, production EmotionState, InternalState, prompt state, contacts, or concerns.' as const;
-export const OBSERVER_EVAL_COMPARISON_METRICS_VERSION =
-  'psfn.observer-sidecar.comparison-metrics.v1' as const;
 
 const DEFAULT_QUERY_LIMIT = 100;
 const MAX_QUERY_LIMIT = 1_000;
@@ -81,17 +88,6 @@ export interface ObserverEvalPsfnEmotionReference {
   snapshotRef?: string;
   appraisalEntryCount: number;
   snapshotSource: 'observeEmotionState' | 'observer-sanitized-input';
-}
-
-export interface ObserverEvalSidecarComparisonMetrics {
-  schemaVersion: typeof OBSERVER_EVAL_SIDECAR_PERSISTENCE_SCHEMA_VERSION;
-  metricsVersion: typeof OBSERVER_EVAL_COMPARISON_METRICS_VERSION;
-  divergenceScore: number | null;
-  vadDistance: number | null;
-  familyMismatch: boolean | null;
-  directionMismatch: boolean | null;
-  unmappedSignal: number | null;
-  details?: Record<string, unknown>;
 }
 
 export interface ObserverEvalSidecarErrorState {
@@ -505,17 +501,7 @@ export function createObserverEvalComparisonMetrics(
   crosswalk: ObserverEmotionCrosswalkOutput | undefined,
   details?: Record<string, unknown>,
 ): ObserverEvalSidecarComparisonMetrics {
-  const comparison = crosswalk?.derived.comparison;
-  return {
-    schemaVersion: OBSERVER_EVAL_SIDECAR_PERSISTENCE_SCHEMA_VERSION,
-    metricsVersion: OBSERVER_EVAL_COMPARISON_METRICS_VERSION,
-    divergenceScore: comparison?.valenceArousal.delta.euclideanDistance ?? null,
-    vadDistance: comparison?.valenceArousal.delta.euclideanDistance ?? null,
-    familyMismatch: comparison?.labels.familyMismatch ?? null,
-    directionMismatch: comparison?.intensity.directionMismatch ?? null,
-    unmappedSignal: comparison?.unknowns.unmappedIntensity ?? null,
-    ...(details ? { details: cloneRecord(details) } : {}),
-  };
+  return createObserverEvalComparisonMetricsFromCrosswalk(crosswalk, details);
 }
 
 function normalizeRunRecord(

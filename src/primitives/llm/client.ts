@@ -55,6 +55,11 @@ import {
   ModelBudgetExceededError,
   normalizeModelIdForProvider,
 } from './model-budget.js';
+import {
+  latestCapturedProviderCostUsd,
+  type CapturedOpenAICompatibleResponseHeaders,
+  withOpenAICompatibleResponseHeaderCapture,
+} from './openai-compatible-response-headers.js';
 import { countMessageTokens } from './tokens.js';
 import {
   type CredentialReference,
@@ -794,6 +799,33 @@ export class LLMClient {
     return null;
   }
 
+  private resolveResponseHeaderCaptureBaseUrl(model: Model<any>): string | undefined {
+    return typeof model.baseUrl === 'string' && model.baseUrl.trim().length > 0
+      ? model.baseUrl
+      : undefined;
+  }
+
+  private applyCapturedProviderCost(
+    response: LLMResponse,
+    captures: readonly CapturedOpenAICompatibleResponseHeaders[],
+  ): LLMResponse {
+    const providerCostUsd = latestCapturedProviderCostUsd(captures);
+    if (providerCostUsd === undefined) return response;
+
+    const usageDetails = response.usageDetails ?? normalizeLLMUsageDetails(undefined, response.inputTokens, response.outputTokens);
+    return {
+      ...response,
+      usageDetails: {
+        ...usageDetails,
+        cost: {
+          ...(usageDetails.cost ?? {}),
+          total: providerCostUsd,
+          currency: usageDetails.cost?.currency ?? 'USD',
+        },
+      },
+    };
+  }
+
   private async runWithModelCallGate<T>(
     purpose: RoutingPurpose,
     candidate: RoutingCandidate,
@@ -882,7 +914,13 @@ export class LLMClient {
       correlation,
     });
     const chargeSnapshot = getRunChargeSnapshot();
-    const providerCostUsd = normalizeUsageCost(usageDetails?.cost?.total);
+    const observedInputTokens = usageDetails?.input ?? inputTokens;
+    const observedOutputTokens = usageDetails?.output ?? outputTokens;
+    const providerCostUsd = resolveProviderUsageCostUsd(
+      usageDetails?.cost?.total,
+      observedInputTokens,
+      observedOutputTokens,
+    );
     const estimatedCostUsd = normalizeUsageCost(budgetRecord.estimatedCostUsd) ?? 0;
     const logicalCallId = this.createUsageLogicalCallId(callKind, purpose, candidate, correlation, options.attempt);
     const metadata = {
@@ -925,8 +963,8 @@ export class LLMClient {
       ...(candidate.slotKey ? { slotKey: candidate.slotKey } : {}),
       requestedProvider: candidate.provider,
       requestedModel: candidate.model,
-      inputTokens: usageDetails?.input ?? inputTokens,
-      outputTokens: usageDetails?.output ?? outputTokens,
+      inputTokens: observedInputTokens,
+      outputTokens: observedOutputTokens,
       cacheReadTokens: usageDetails?.cacheRead ?? 0,
       cacheWriteTokens: usageDetails?.cacheWrite ?? 0,
       ...(usageDetails?.totalTokens !== undefined ? { totalTokens: usageDetails.totalTokens } : {}),
@@ -970,111 +1008,117 @@ export class LLMClient {
           const providerObservability = this.buildProviderObservability(candidateTarget, model, piContext, correlation);
 
           return withRetry(async () => {
-            const eventStream = streamSimple(
-              model,
-              piContext,
-              requestOptions,
-            );
+            const { result, captures } = await withOpenAICompatibleResponseHeaderCapture(
+              this.resolveResponseHeaderCaptureBaseUrl(model),
+              async () => {
+                const eventStream = streamSimple(
+                  model,
+                  piContext,
+                  requestOptions,
+                );
 
-            let content = '';
-            let reasoning = '';
-            const toolCalls: ToolCall[] = [];
-            let response: LLMResponse | null = null;
-            let emittedData = false;
+                let content = '';
+                let reasoning = '';
+                const toolCalls: ToolCall[] = [];
+                let response: LLMResponse | null = null;
+                let emittedData = false;
 
-            try {
-              for await (const event of eventStream) {
-                switch (event.type) {
-                  case 'text_delta':
-                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
-                    emittedData = true;
-                    content += event.delta;
-                    callbacks?.onText?.(event.delta);
-                    break;
+                try {
+                  for await (const event of eventStream) {
+                    switch (event.type) {
+                      case 'text_delta':
+                        if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
+                        emittedData = true;
+                        content += event.delta;
+                        callbacks?.onText?.(event.delta);
+                        break;
 
-                  case 'thinking_delta':
-                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
-                    emittedData = true;
-                    reasoning += event.delta;
-                    break;
+                      case 'thinking_delta':
+                        if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
+                        emittedData = true;
+                        reasoning += event.delta;
+                        break;
 
-                  case 'toolcall_end':
-                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
-                    emittedData = true;
-                    toolCalls.push({
-                      id: event.toolCall.id,
-                      name: event.toolCall.name,
-                      input: event.toolCall.arguments,
-                    });
-                    callbacks?.onToolCall?.(event.toolCall.name, event.toolCall.arguments);
-                    break;
+                      case 'toolcall_end':
+                        if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
+                        emittedData = true;
+                        toolCalls.push({
+                          id: event.toolCall.id,
+                          name: event.toolCall.name,
+                          input: event.toolCall.arguments,
+                        });
+                        callbacks?.onToolCall?.(event.toolCall.name, event.toolCall.arguments);
+                        break;
 
-                  case 'done': {
-                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
-                    const contentBlocks = event.message.content as unknown[];
-                    // If text_delta events didn't fire, extract text from content blocks
-                    if (!content) {
-                      content = extractTextContent(contentBlocks);
+                      case 'done': {
+                        if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
+                        const contentBlocks = event.message.content as unknown[];
+                        // If text_delta events didn't fire, extract text from content blocks
+                        if (!content) {
+                          content = extractTextContent(contentBlocks);
+                        }
+                        // Extract reasoning from content blocks if thinking_delta didn't fire
+                        if (!reasoning) {
+                          reasoning = extractReasoningContent(contentBlocks);
+                        }
+                        const finalToolCalls = extractToolCallsFromContentBlocks(contentBlocks);
+                        // Normalize away stringified content block arrays from streaming
+                        content = normalizeContent(content);
+                        const usageDetails = normalizeLLMUsageDetails(
+                          event.message.usage,
+                          event.message.usage.input,
+                          event.message.usage.output,
+                        );
+                        response = {
+                          content,
+                          ...(reasoning ? { reasoning } : {}),
+                          providerObservability,
+                          toolCalls: finalToolCalls.length > 0 ? finalToolCalls : toolCalls,
+                          model: event.message.model,
+                          inputTokens: usageDetails.input,
+                          outputTokens: usageDetails.output,
+                          usageDetails,
+                          stopReason: event.reason,
+                        };
+                        break;
+                      }
+
+                      case 'error': {
+                        const error = new Error(event.error.errorMessage ?? 'LLM stream error');
+                        if (emittedData) {
+                          markErrorAsNonRetryable(error);
+                        }
+                        throw error;
+                      }
                     }
-                    // Extract reasoning from content blocks if thinking_delta didn't fire
-                    if (!reasoning) {
-                      reasoning = extractReasoningContent(contentBlocks);
-                    }
-                    const finalToolCalls = extractToolCallsFromContentBlocks(contentBlocks);
-                    // Normalize away stringified content block arrays from streaming
-                    content = normalizeContent(content);
-                    const usageDetails = normalizeLLMUsageDetails(
-                      event.message.usage,
-                      event.message.usage.input,
-                      event.message.usage.output,
-                    );
-                    response = {
-                      content,
-                      ...(reasoning ? { reasoning } : {}),
-                      providerObservability,
-                      toolCalls: finalToolCalls.length > 0 ? finalToolCalls : toolCalls,
-                      model: event.message.model,
-                      inputTokens: usageDetails.input,
-                      outputTokens: usageDetails.output,
-                      usageDetails,
-                      stopReason: event.reason,
-                    };
-                    break;
                   }
-
-                  case 'error': {
-                    const error = new Error(event.error.errorMessage ?? 'LLM stream error');
-                    if (emittedData) {
-                      markErrorAsNonRetryable(error);
-                    }
-                    throw error;
+                } catch (error) {
+                  const err = error instanceof Error ? error : new Error(String(error));
+                  if (emittedData) {
+                    markErrorAsNonRetryable(err);
                   }
+                  throw err;
                 }
-              }
-            } catch (error) {
-              const err = error instanceof Error ? error : new Error(String(error));
-              if (emittedData) {
-                markErrorAsNonRetryable(err);
-              }
-              throw err;
-            }
 
-            if (response) {
-              return response;
-            }
+                if (response) {
+                  return response;
+                }
 
-            log.warn('Stream completed without done event', { model: String(model.id), hasContent: !!content });
-            return {
-              content,
-              ...(reasoning ? { reasoning } : {}),
-              providerObservability,
-              toolCalls,
-              model: String(model.id),
-              inputTokens: 0,
-              outputTokens: 0,
-              usageDetails: normalizeLLMUsageDetails(undefined, 0, 0),
-              stopReason: 'unknown',
-            };
+                log.warn('Stream completed without done event', { model: String(model.id), hasContent: !!content });
+                return {
+                  content,
+                  ...(reasoning ? { reasoning } : {}),
+                  providerObservability,
+                  toolCalls,
+                  model: String(model.id),
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  usageDetails: normalizeLLMUsageDetails(undefined, 0, 0),
+                  stopReason: 'unknown',
+                };
+              },
+            );
+            return this.applyCapturedProviderCost(result, captures);
           }, llmRetryConfig(this.config), {
             onRetry: ({ attempt, maxRetries, delayMs, error }) => {
               log.warn('LLM stream failed, retrying', {
@@ -1165,11 +1209,18 @@ export class LLMClient {
 
         const request = async () => {
           try {
-            return await completeSimple(
-              model,
-              piContext,
-              requestOptions,
+            const { result, captures } = await withOpenAICompatibleResponseHeaderCapture(
+              this.resolveResponseHeaderCaptureBaseUrl(model),
+              async () => await completeSimple(
+                model,
+                piContext,
+                requestOptions,
+              ),
             );
+            return {
+              response: result,
+              providerResponseCostUsd: latestCapturedProviderCostUsd(captures),
+            };
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));
             if (isAbortError(err) || options.signal?.aborted) {
@@ -1180,13 +1231,17 @@ export class LLMClient {
         };
 
         if (options.disableRetry) {
+          const requestResult = await request();
           return {
-            response: await request(),
+            response: requestResult.response,
+            ...(requestResult.providerResponseCostUsd !== undefined
+              ? { providerResponseCostUsd: requestResult.providerResponseCostUsd }
+              : {}),
             providerObservability,
           };
         }
 
-        const response = await withRetry(request, llmRetryConfig(this.config), {
+        const requestResult = await withRetry(request, llmRetryConfig(this.config), {
           onRetry: ({ attempt, maxRetries, delayMs, error }) => {
             log.warn('LLM complete failed, retrying', {
               model: String(model.id),
@@ -1201,7 +1256,13 @@ export class LLMClient {
             });
           },
         });
-        return { response, providerObservability };
+        return {
+          response: requestResult.response,
+          ...(requestResult.providerResponseCostUsd !== undefined
+            ? { providerResponseCostUsd: requestResult.providerResponseCostUsd }
+            : {}),
+          providerObservability,
+        };
       },
         {
           modelHint,
@@ -1244,11 +1305,27 @@ export class LLMClient {
     const reasoning = typeof completionResponse.reasoning === 'string'
       ? completionResponse.reasoning
       : extractReasoningContent(contentBlocks);
-    const usageDetails = normalizeLLMUsageDetails(
+    const responseProviderCostUsd = 'providerResponseCostUsd' in response
+      && typeof response.providerResponseCostUsd === 'number'
+      && Number.isFinite(response.providerResponseCostUsd)
+      && response.providerResponseCostUsd >= 0
+      ? response.providerResponseCostUsd
+      : undefined;
+    const baseUsageDetails = normalizeLLMUsageDetails(
       completionResponse.usage,
       completionResponse.inputTokens ?? 0,
       completionResponse.outputTokens ?? 0,
     );
+    const usageDetails = responseProviderCostUsd !== undefined
+      ? {
+          ...baseUsageDetails,
+          cost: {
+            ...(baseUsageDetails.cost ?? {}),
+            total: responseProviderCostUsd,
+            currency: baseUsageDetails.cost?.currency ?? 'USD',
+          },
+        }
+      : baseUsageDetails;
     const inputTokens = usageDetails.input;
     const outputTokens = usageDetails.output;
 
@@ -1406,6 +1483,18 @@ function normalizeUsageCount(value: unknown): number {
 function normalizeUsageCost(value: unknown): number | undefined {
   const numeric = toFiniteNumber(value);
   return numeric !== undefined && numeric >= 0 ? numeric : undefined;
+}
+
+function resolveProviderUsageCostUsd(
+  value: unknown,
+  inputTokens: number,
+  outputTokens: number,
+): number | undefined {
+  const cost = normalizeUsageCost(value);
+  if (cost === undefined) return undefined;
+  if (cost > 0) return cost;
+  const billableTokenCount = Math.max(0, Math.floor(inputTokens)) + Math.max(0, Math.floor(outputTokens));
+  return billableTokenCount > 0 ? undefined : 0;
 }
 
 function normalizeUsageCountFromRecord(record: Record<string, unknown>, ...keys: string[]): number {

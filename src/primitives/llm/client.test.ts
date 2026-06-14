@@ -1913,6 +1913,108 @@ describe('LLMClient model budget gates and usage metering', () => {
     }));
   });
 
+  it('uses LiteLLM response cost headers when normalized usage body reports zero cost', async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response('', {
+      status: 200,
+      headers: {
+        'x-litellm-response-cost': '0.456',
+      },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+      const client = new LLMClient(makeConfig(), {
+        litellmBaseUrl: 'http://litellm.test/v1',
+        usageRecorder,
+      });
+
+      mocks.completeSimple.mockImplementation(async () => {
+        await fetch('http://litellm.test/v1/chat/completions');
+        return {
+          content: [{ type: 'text', text: 'done' }],
+          model: 'deepseek/deepseek-v4-pro',
+          usage: {
+            prompt_tokens: 25,
+            completion_tokens: 5,
+            total_tokens: 30,
+            cost: 0,
+          },
+          stopReason: 'stop',
+        };
+      });
+
+      const response = await client.complete(
+        {
+          systemPrompt: 'System',
+          messages: [{ role: 'user', content: 'Summarize this quickly' }],
+        },
+        'background',
+        { disableRetry: true },
+      );
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(response.usageDetails?.cost?.total).toBe(0.456);
+      expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+        providerCostUsd: 0.456,
+        costSource: 'provider',
+      }));
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+    }
+  });
+
+  it('falls back to registry estimates when token-bearing usage only reports zero provider cost', async () => {
+    const config = makeConfig();
+    const baseRegistry = config.modelRegistry!;
+    config.modelRegistry = {
+      ...baseRegistry,
+      models: baseRegistry.models.map((entry) => (
+        entry.id === 'background'
+          ? {
+              ...entry,
+              cost: { inputPer1MUsd: 2, outputPer1MUsd: 4, currency: 'USD' },
+            }
+          : entry
+      )),
+    };
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: {
+        prompt_tokens: 1000,
+        completion_tokens: 500,
+        total_tokens: 1500,
+        cost: 0,
+      },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Summarize this quickly' }],
+      },
+      'background',
+      { disableRetry: true },
+    );
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.not.objectContaining({
+      providerCostUsd: expect.any(Number),
+    }));
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      estimatedCostUsd: 0.004,
+      costSource: 'estimate',
+    }));
+  });
+
   it('skips budget-blocked primary candidate and falls back to secondary chat candidate', async () => {
     const config = makeConfig();
     const baseRegistry = config.modelRegistry!;

@@ -148,6 +148,7 @@ import {
   type PromotedToolMutationResult,
 } from './substrate-agent/tool-runtime-facade.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
+import type { ObserverEvalSidecarRuntime } from '../eval/observer-sidecar/types.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -200,6 +201,7 @@ export interface SubstrateAgentOptions {
   runtimeMode?: RuntimeMode;
   emotionRuntime?: EmotionRuntimeWiring;
   selfModelRuntime?: SelfModelRuntimeWiring;
+  observerEvalSidecar?: ObserverEvalSidecarRuntime;
   streamTransport?: SubstrateStreamTransport;
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
@@ -277,6 +279,7 @@ export class SubstrateAgent {
   // SKILL.md runtime — null until skills system is wired
   skillsRuntime: SkillsRuntime | null = null;
   imageVisionReviewer: ImageVisionReviewer | null = null;
+  observerEvalSidecar: ObserverEvalSidecarRuntime | null = null;
 
   constructor(
     eventBus: EventBus,
@@ -297,6 +300,7 @@ export class SubstrateAgent {
     this.config = config;
     this.runtimeMode = options?.runtimeMode ?? 'gateway';
     this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
+    this.observerEvalSidecar = options?.observerEvalSidecar ?? null;
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
       sessionManager: this.sessionManager,
       llmProvider: this.llmClient,
@@ -860,6 +864,7 @@ export class SubstrateAgent {
       skillsRuntime: this.skillsRuntime,
       evaluateReflectionNudge: (toolSummary) => this.reflectionNudge.evaluate(toolSummary),
       emotionSelfModelRuntime: this.emotionSelfModelRuntime,
+      observerEvalSidecar: this.observerEvalSidecar,
       turnSupportRuntime: this.turnSupportRuntime,
       toolRuntimeFacade: this.toolRuntimeFacade,
       callbacks: {

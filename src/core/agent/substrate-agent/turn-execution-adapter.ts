@@ -23,6 +23,7 @@ import type { InternalState } from '../../self-model/state.js';
 import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
+import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
 
 interface TurnExecutionAdapterCallbacks {
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
@@ -129,6 +130,7 @@ export interface TurnExecutionAdapterOptions {
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
+  observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   turnSupportRuntime: TurnSupportRuntime;
   toolRuntimeFacade: ToolRuntimeFacade;
   callbacks: TurnExecutionAdapterCallbacks;
@@ -154,6 +156,7 @@ export function createTurnExecutionRuntimeAdapter(
     skillsRuntime: options.skillsRuntime,
     evaluateReflectionNudge: (toolSummary) => options.evaluateReflectionNudge(toolSummary),
     emotionSelfModelRuntime: options.emotionSelfModelRuntime,
+    observerEvalSidecar: options.observerEvalSidecar ?? null,
     pinDeferredContinuationSessionContext: (deferredContinuationId, channelId) => options.turnSupportRuntime
       .pinDeferredContinuationSessionContext(deferredContinuationId, channelId),
     resolveTaskKind: (message) => options.callbacks.resolveTaskKind(message),

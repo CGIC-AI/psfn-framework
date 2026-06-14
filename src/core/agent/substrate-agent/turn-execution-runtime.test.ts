@@ -13,6 +13,12 @@ import {
   normalizeToolObservation,
 } from '../../session/tool-observation.js';
 import type { InternalState } from '../../self-model/state.js';
+import type { EmotionStateSnapshot } from '../../emotion/state.js';
+import type {
+  ObserverEvalInput,
+  ObserverEvalLifecycleState,
+  ObserverEvalSidecarRuntime,
+} from '../../eval/observer-sidecar/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
@@ -294,6 +300,7 @@ function createRuntime(params: {
   memoryProvider?: TurnExecutionRuntime['memoryProvider'];
   imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
   emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
+  observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   configOverrides?: Partial<SubstrateConfig>;
 }) {
   const agentState = {
@@ -366,6 +373,7 @@ function createRuntime(params: {
     skillsRuntime: null,
     evaluateReflectionNudge: vi.fn(() => null),
     emotionSelfModelRuntime,
+    observerEvalSidecar: params.observerEvalSidecar ?? null,
     pinDeferredContinuationSessionContext: vi.fn(() => () => undefined),
     resolveTaskKind: vi.fn(() => undefined),
     buildTurnBudgetCharacteristics: params.buildTurnBudgetCharacteristics ?? vi.fn(() => ({ mode: 'default' })),
@@ -467,6 +475,242 @@ function createRuntime(params: {
 
   return runtime;
 }
+
+const OBSERVER_TEST_MESSAGE_CONTENT = 'Observer seam probe';
+const TEST_EMOTION_SNAPSHOT: EmotionStateSnapshot = {
+  vad: { valence: 0.24, arousal: 0.41, dominance: -0.12 },
+  mood: { valence: 0.08, arousal: 0.18, dominance: -0.04 },
+  discrete: { curiosity: 0.7, concern: 0.2 },
+  confidence: 0.82,
+};
+
+function cloneTestEmotionSnapshot(): EmotionStateSnapshot {
+  return {
+    vad: { ...TEST_EMOTION_SNAPSHOT.vad },
+    mood: { ...TEST_EMOTION_SNAPSHOT.mood },
+    discrete: { ...TEST_EMOTION_SNAPSHOT.discrete },
+    confidence: TEST_EMOTION_SNAPSHOT.confidence,
+  };
+}
+
+async function runObserverSidecarTurn(observerEvalSidecar?: ObserverEvalSidecarRuntime | null) {
+  const eventBus = new EventBus();
+  const emotionSnapshot = cloneTestEmotionSnapshot();
+  const observeEmotionState = vi.fn(async () => emotionSnapshot);
+  type ComputeInternalStateInput = Parameters<
+    TurnExecutionRuntime['emotionSelfModelRuntime']['computeInternalStateForTurn']
+  >[0];
+  const computeInternalStateForTurn = vi.fn((_input: ComputeInternalStateInput) => TEST_INTERNAL_STATE);
+  const buildContext = vi.fn(async () => ({
+    systemPrompt: 'System prompt',
+    messages: [],
+    manifest: undefined,
+  }));
+  const recordAssistantMessage = vi.fn(() => 2);
+  const runtime = createRuntime({
+    eventBus,
+    sessionManager: {} as SessionManager,
+    buildContext,
+    scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+    awaitPendingAutoCompaction: vi.fn(async () => undefined),
+    recordUserMessage: vi.fn(() => 1),
+    recordAssistantMessage,
+    observerEvalSidecar,
+    emotionSelfModelRuntimeOverrides: {
+      observeEmotionState,
+      computeInternalStateForTurn,
+    },
+  });
+
+  const response = await handleMessageForTurn(runtime, createMessage('msg-observer-sidecar', {
+    content: OBSERVER_TEST_MESSAGE_CONTENT,
+    isDirectMessage: true,
+    routing: {
+      source: 'api',
+      channelPrivacy: 'private',
+    },
+  }));
+
+  return {
+    response,
+    computeInternalStateForTurn,
+    recordAssistantMessage,
+    emotionSnapshot,
+  };
+}
+
+function expectProductionEmotionSnapshotUnchanged(result: Awaited<ReturnType<typeof runObserverSidecarTurn>>) {
+  expect(result.response.metadata.internalState?.emotional).toEqual(TEST_INTERNAL_STATE.emotional);
+  expect(result.emotionSnapshot).toEqual(TEST_EMOTION_SNAPSHOT);
+  expect(result.computeInternalStateForTurn).toHaveBeenCalledTimes(2);
+  for (const call of result.computeInternalStateForTurn.mock.calls) {
+    expect(call[0].emotionSnapshot).toEqual(TEST_EMOTION_SNAPSHOT);
+  }
+  expect(result.recordAssistantMessage.mock.calls[0]?.[6]).toEqual(TEST_EMOTION_SNAPSHOT);
+}
+
+describe('handleMessageForTurn observer eval sidecar seam', () => {
+  it('leaves the production emotion snapshot unchanged when the sidecar is absent', async () => {
+    const result = await runObserverSidecarTurn();
+
+    expectProductionEmotionSnapshotUnchanged(result);
+  });
+
+  it('does not invoke a disabled sidecar and leaves the production emotion snapshot unchanged', async () => {
+    const observeTurn = vi.fn();
+    const lifecycleStates: ObserverEvalLifecycleState[] = [];
+    const result = await runObserverSidecarTurn({
+      config: { enabled: false, sidecarId: 'observer-test' },
+      observer: { observeTurn },
+      onLifecycleState: vi.fn((state: ObserverEvalLifecycleState) => {
+        lifecycleStates.push(state);
+      }),
+    });
+
+    expect(observeTurn).not.toHaveBeenCalled();
+    expect(lifecycleStates).toEqual([
+      expect.objectContaining({
+        status: 'disabled',
+        sidecarId: 'observer-test',
+        reason: 'config_disabled',
+      }),
+    ]);
+    expectProductionEmotionSnapshotUnchanged(result);
+  });
+
+  it('reports an unavailable sidecar without changing the production emotion snapshot', async () => {
+    const lifecycleStates: ObserverEvalLifecycleState[] = [];
+    const result = await runObserverSidecarTurn({
+      config: { enabled: true, sidecarId: 'observer-test' },
+      observer: null,
+      onLifecycleState: vi.fn((state: ObserverEvalLifecycleState) => {
+        lifecycleStates.push(state);
+      }),
+    });
+
+    expect(lifecycleStates).toEqual([
+      expect.objectContaining({
+        status: 'unavailable',
+        sidecarId: 'observer-test',
+        reason: 'observer_not_configured',
+      }),
+    ]);
+    expectProductionEmotionSnapshotUnchanged(result);
+  });
+
+  it('passes a frozen copy-only payload to an enabled sidecar without changing production emotion state', async () => {
+    const lifecycleStates: ObserverEvalLifecycleState[] = [];
+    let receivedInput: ObserverEvalInput | null = null;
+    const observeTurn = vi.fn((input: ObserverEvalInput) => {
+      receivedInput = input;
+      const mutableInput = input as unknown as {
+        emotion: {
+          snapshot: {
+            confidence: number;
+            vad: { valence: number };
+            discrete: Record<string, number>;
+          } | null;
+        };
+      };
+      try {
+        if (mutableInput.emotion.snapshot) {
+          mutableInput.emotion.snapshot.confidence = 0;
+          mutableInput.emotion.snapshot.vad.valence = -1;
+          mutableInput.emotion.snapshot.discrete.curiosity = 0;
+        }
+      } catch {
+        // Frozen payloads throw under ESM strict mode; copy-only behavior is
+        // asserted through the unchanged production snapshot below.
+      }
+    });
+
+    const result = await runObserverSidecarTurn({
+      config: { enabled: true, sidecarId: 'observer-test', deployment: 'test' },
+      observer: { observeTurn },
+      onLifecycleState: vi.fn((state: ObserverEvalLifecycleState) => {
+        lifecycleStates.push(state);
+      }),
+    });
+
+    expect(observeTurn).toHaveBeenCalledTimes(1);
+    expect(receivedInput).not.toBeNull();
+    const input = receivedInput as ObserverEvalInput;
+    expect(Object.isFrozen(input)).toBe(true);
+    expect(Object.isFrozen(input.emotion)).toBe(true);
+    expect(Object.isFrozen(input.emotion.snapshot?.vad)).toBe(true);
+    expect(input).toMatchObject({
+      schemaVersion: 1,
+      turn: {
+        requestId: 'msg-observer-sidecar',
+        sourceMessageId: 'msg-observer-sidecar',
+        channelId: 'ch1',
+        channelType: 'api',
+      },
+      source: {
+        routingSource: 'api',
+        isDirectMessage: true,
+        channelPrivacy: 'private',
+      },
+      emotion: {
+        snapshot: TEST_EMOTION_SNAPSHOT,
+        appraisalEntryCount: 0,
+      },
+      metadata: {
+        trustLevel: 'regular',
+        speakerRole: 'user',
+        contactResolved: true,
+        contentLength: OBSERVER_TEST_MESSAGE_CONTENT.length,
+        attachmentCount: 0,
+        hasVisionInput: false,
+      },
+      provenance: {
+        seam: 'substrate-agent.pre-turn.emotion-observed',
+        emotionSnapshotSource: 'observeEmotionState',
+        correlation: {
+          callType: 'chat',
+          purpose: 'agent.turn',
+        },
+      },
+    });
+    expect(lifecycleStates).toEqual([
+      expect.objectContaining({
+        status: 'enabled',
+        sidecarId: 'observer-test',
+      }),
+    ]);
+    expectProductionEmotionSnapshotUnchanged(result);
+  });
+
+  it('records a degraded sidecar lifecycle state without changing the running turn', async () => {
+    const observeTurn = vi.fn(() => {
+      throw new Error('sidecar failed');
+    });
+    const lifecycleStates: ObserverEvalLifecycleState[] = [];
+
+    const result = await runObserverSidecarTurn({
+      config: { enabled: true, sidecarId: 'observer-test' },
+      observer: { observeTurn },
+      onLifecycleState: vi.fn((state: ObserverEvalLifecycleState) => {
+        lifecycleStates.push(state);
+      }),
+    });
+
+    expect(observeTurn).toHaveBeenCalledTimes(1);
+    expect(lifecycleStates).toEqual([
+      expect.objectContaining({
+        status: 'degraded',
+        sidecarId: 'observer-test',
+        reason: 'observer_failed',
+        error: { message: 'sidecar failed' },
+      }),
+    ]);
+    expect(result.response).toMatchObject({
+      content: 'assistant reply',
+      channelId: 'ch1',
+    });
+    expectProductionEmotionSnapshotUnchanged(result);
+  });
+});
 
 describe('handleMessageForTurn compaction scheduling', () => {
   it('returns the response without waiting for post-turn compaction and does not pass an llm to buildContext', async () => {

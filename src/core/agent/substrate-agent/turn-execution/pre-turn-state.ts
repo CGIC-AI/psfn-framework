@@ -11,6 +11,8 @@ import type { EmotionStateSnapshot } from '../../../emotion/state.js';
 import type { EmotionAppraisalEntry } from '../../../emotion/appraisal.js';
 import type { InternalState } from '../../../self-model/state.js';
 import type { TurnSessionContextSnapshot, TurnSnapshot } from '../../../turns/snapshot.js';
+import { dispatchObserverEvalTurn } from '../../../eval/observer-sidecar/runtime.js';
+import type { ObserverEvalLifecycleState } from '../../../eval/observer-sidecar/types.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import { resolveActiveEmanationState } from '../../active-emanation-state.js';
@@ -48,6 +50,7 @@ export interface PreTurnComputationResult {
   turnSnapshot: TurnSnapshot;
   emotionSnapshot: EmotionStateSnapshot | null;
   emotionAppraisalChain: readonly EmotionAppraisalEntry[];
+  observerEvalLifecycleState: ObserverEvalLifecycleState;
   preTurnInternalState: InternalState;
   memoryContextBlock: string;
   memoryContextChars: number;
@@ -291,6 +294,7 @@ export async function computePreTurnState(input: {
     focusMemoryScopeQuery,
     temporalRetrievalCallerContext,
     temporalRetrievalMode,
+    turnCorrelationBase,
     observability,
   } = input;
 
@@ -359,11 +363,55 @@ export async function computePreTurnState(input: {
     emotionSessionId,
   );
   const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
+  const turnSnapshotCapturedAt = Date.now();
+  const observerEvalLifecycleState = await dispatchObserverEvalTurn({
+    sidecarRuntime: runtime.observerEvalSidecar,
+    logger: log,
+    input: {
+      schemaVersion: 1,
+      turn: {
+        turnId,
+        requestId,
+        sourceMessageId: message.id,
+        channelId: message.channelId,
+        channelType: message.channelType,
+        messageTimestampMs: message.timestamp.getTime(),
+        ...(taskKind ? { taskKind } : {}),
+      },
+      source: {
+        routingSource: message.routing?.source ?? 'unspecified',
+        isDirectMessage: message.isDirectMessage ?? false,
+        ...(channelMeta.privacyLevel ? { channelPrivacy: channelMeta.privacyLevel } : {}),
+      },
+      emotion: {
+        snapshot: emotionSnapshot,
+        appraisalEntryCount: emotionAppraisalChain.length,
+      },
+      metadata: {
+        trustLevel,
+        speakerRole: authorContext.speakerRole,
+        contactResolved: Boolean(authorContext.canonicalContactKey),
+        contentLength: message.content.length,
+        attachmentCount: message.attachments?.length ?? 0,
+        hasVisionInput: bypassMemoryForVisionTurn,
+      },
+      provenance: {
+        seam: 'substrate-agent.pre-turn.emotion-observed',
+        capturedAt: turnSnapshotCapturedAt,
+        emotionSessionId,
+        emotionSnapshotSource: 'observeEmotionState',
+        correlation: {
+          callType: turnCorrelationBase.callType,
+          purpose: turnCorrelationBase.purpose,
+        },
+      },
+    },
+  });
   const turnSnapshot: TurnSnapshot = {
     turnId,
     requestId,
     channelId: message.channelId,
-    capturedAt: Date.now(),
+    capturedAt: turnSnapshotCapturedAt,
     trustLevel,
     ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
     prompt: promptSnapshot,
@@ -401,6 +449,7 @@ export async function computePreTurnState(input: {
     turnSnapshot,
     emotionSnapshot,
     emotionAppraisalChain,
+    observerEvalLifecycleState,
     preTurnInternalState,
     memoryContextBlock,
     memoryContextChars,

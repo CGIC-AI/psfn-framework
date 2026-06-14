@@ -25,6 +25,7 @@ import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, Messag
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
 import { isTemporalContextBudgetTurn } from '../../../shared/context-budget.js';
+import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
 import { createTurnId } from '../../turns/id.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
@@ -78,6 +79,7 @@ export interface TurnExecutionRuntime {
   skillsRuntime: SkillsRuntime | null;
   evaluateReflectionNudge: (toolSummary: TurnToolSummary) => string | null;
   emotionSelfModelRuntime: EmotionSelfModelRuntime;
+  observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   pinDeferredContinuationSessionContext: (
     deferredContinuationId: string | null,
     channelId: string,

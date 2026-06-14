@@ -422,6 +422,32 @@ describe('AdminServer Garden routing', () => {
       expect(payload.stats.sessionCount).toBeTypeOf('number');
     });
 
+    it('reports disabled observer sidecar health without requiring telemetry exposure', async () => {
+      const healthRes = await request(harness.port, 'GET', '/api/admin/evals/observer-sidecar/health');
+      expect(healthRes.status).toBe(200);
+      const healthPayload = JSON.parse(healthRes.body) as {
+        status: string;
+        runtime: { status: string; enabled: boolean } | null;
+        persistence: { available: boolean; authoritative: boolean };
+      };
+      expect(healthPayload.status).toBe('disabled');
+      expect(healthPayload.runtime).toMatchObject({
+        status: 'disabled',
+        enabled: false,
+      });
+      expect(healthPayload.persistence).toEqual({
+        available: false,
+        evalOwned: false,
+        authoritative: false,
+      });
+
+      const observationsRes = await request(harness.port, 'GET', '/api/admin/evals/observer-sidecar/observations');
+      expect(observationsRes.status).toBe(503);
+      expect(JSON.parse(observationsRes.body)).toEqual({
+        error: 'Observer eval sidecar persistence unavailable',
+      });
+    });
+
     it('keeps canonical /api/admin chat and models routes aligned', async () => {
       const bootstrapRes = await request(harness.port, 'GET', '/api/admin/chat/bootstrap');
       expect(bootstrapRes.status).toBe(200);

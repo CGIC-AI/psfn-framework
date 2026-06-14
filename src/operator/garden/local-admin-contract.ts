@@ -37,7 +37,10 @@ import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { createPostgresModelUsageStoreFromConfig } from '../../persistence/postgres/model-usage-store.js';
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import {
+  createDefaultObserverEvalSidecarSettings,
+  type SubstrateConfig,
+} from '../../system/config/runtime-config-contracts.js';
 import type {
   AdaptiveToolsStateProvider,
   AdminModelDiscoveryApi,
@@ -256,10 +259,7 @@ function createObserverEvalSidecarAdminService(input: {
   config: SubstrateConfig;
   runtime?: ObserverEvalSidecarRuntime | null;
 }): AdminObserverEvalSidecarService | null {
-  const settings = input.config.observerEvalSidecar;
-  if (!settings?.garden.exposeHealth && !settings?.garden.exposeTelemetry) {
-    return null;
-  }
+  const settings = input.config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings();
 
   const postgresDatabaseUrl = input.config.postgresDatabaseUrl?.trim();
   const persistence = settings.persistence.enabled
@@ -271,9 +271,7 @@ function createObserverEvalSidecarAdminService(input: {
 
   return new AdminObserverEvalSidecarDataService({
     persistence,
-    getHealthSnapshot: settings.garden.exposeHealth
-      ? () => getObserverEvalSidecarHealthSnapshot(input.runtime)
-      : null,
+    getHealthSnapshot: () => getObserverEvalSidecarHealthSnapshot(input.runtime),
   });
 }
 

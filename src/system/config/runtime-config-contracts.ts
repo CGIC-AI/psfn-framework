@@ -67,8 +67,8 @@ export function createDefaultObserverEvalSidecarSettings(): ObserverEvalSidecarS
       maxStoredObservations: 10_000,
     },
     garden: {
-      exposeHealth: false,
-      exposeTelemetry: false,
+      exposeHealth: true,
+      exposeTelemetry: true,
     },
   };
 }

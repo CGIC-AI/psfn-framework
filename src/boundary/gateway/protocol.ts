@@ -6,6 +6,7 @@ import type {
   CompletionPurpose,
   ContextMessage,
   LLMProviderObservability,
+  LLMUsageDetails,
   ModelThinkingEffort,
   ObservabilityCallType,
   SubstrateMessage,
@@ -341,6 +342,7 @@ export interface LLMChatResult {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  usageDetails?: LLMUsageDetails;
   stopReason: string;
   requestId?: string;
 }
@@ -352,6 +354,7 @@ export interface LLMCompleteResult {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  usageDetails?: LLMUsageDetails;
   stopReason: string;
 }
 

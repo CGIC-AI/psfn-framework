@@ -19,6 +19,7 @@ import type {
 import type { SessionHmacKeyring } from '../../../persistence/journals/journal-utils.js';
 import type { ApprovalBoundaryService } from '../approval-boundary.js';
 import type { PolicyConfig } from '../policy.js';
+import type { ModelUsageRecorder } from '../../../shared/telemetry/model-usage.js';
 
 export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
@@ -28,6 +29,7 @@ export interface GatewayMethodRuntime {
   discordAdapter: ChannelOutboundDock;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
+  modelUsageRecorder?: ModelUsageRecorder;
   policyConfig: PolicyConfig;
   workspacePath: string;
   sessionHmacKeyring: SessionHmacKeyring;

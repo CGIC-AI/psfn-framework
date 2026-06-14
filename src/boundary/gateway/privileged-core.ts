@@ -93,6 +93,7 @@ export async function buildGatewayPrivilegedCore(
       discordAdapter,
       gitOps,
       imageConfig: input.config,
+      ...(privilegedServices.modelUsageStore ? { modelUsageRecorder: privilegedServices.modelUsageStore } : {}),
       policyConfig: {
         ...input.bootstrap.policyConfig,
         ...(privilegedServices.vaultOps

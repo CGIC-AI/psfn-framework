@@ -24,6 +24,7 @@ import type {
   AdminImagesService,
   AdminIdentityService,
   AdminMemoryService,
+  AdminModelUsageService,
   AdminPromptsService,
   AdminShardFoldReviewService,
   AdminSessionService,
@@ -52,6 +53,10 @@ import type {
 import type { AdminChatBootstrapUpdateInput } from './chat/types.js';
 import { isShardFoldReviewUnavailableError } from './services/shard-fold-review-service.js';
 import { buildAdminSatelliteRegistryView } from './services/satellite-registry-service.js';
+import {
+  MODEL_USAGE_CALL_KINDS,
+  type ModelUsageCallKind,
+} from '../../shared/telemetry/model-usage.js';
 import {
   ADMIN_AUDIT_ACTION_TYPES,
   ADMIN_AUDIT_DECISIONS,
@@ -136,6 +141,7 @@ const ADMIN_CHAT_MODEL_ROOM_BOOTSTRAP_API_PATH = '/api/admin/chat/model-room/boo
 const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
 const ADMIN_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
 const CHARGE_LEDGER_UNAVAILABLE_ERROR = 'Charge ledger backend unavailable';
+const MODEL_USAGE_UNAVAILABLE_ERROR = 'Model usage telemetry backend unavailable';
 const ACTION_PIPE_UNAVAILABLE_ERROR = 'Action pipe backend unavailable';
 const AUDIT_HISTORY_UNAVAILABLE_ERROR = 'Audit history backend unavailable';
 const ADMIN_AUDIT_HISTORY_SOURCES = ['garden', 'gateway', 'charge'] as const;
@@ -224,12 +230,27 @@ function parseAuditSourceQuery(
   };
 }
 
+function parseModelUsageCallKindQuery(
+  value: string | null,
+): { ok: true; value?: ModelUsageCallKind } | { ok: false; error: string } {
+  if (value === null || value.trim() === '') return { ok: true };
+  const normalized = value.trim();
+  if (MODEL_USAGE_CALL_KINDS.includes(normalized as ModelUsageCallKind)) {
+    return { ok: true, value: normalized as ModelUsageCallKind };
+  }
+  return {
+    ok: false,
+    error: `Invalid callKind query parameter. Expected one of: ${MODEL_USAGE_CALL_KINDS.join(', ')}.`,
+  };
+}
+
 export function buildAdminApiRoutes(options: {
   config: SubstrateConfig;
   dashboardService: AdminDashboardService;
   imagesService: AdminImagesService;
   auditHistoryService?: AdminAuditHistoryService | null;
   chargeLedgerService?: AdminChargeLedgerService | null;
+  modelUsageService?: AdminModelUsageService | null;
   actionPipeService?: AdminActionPipeService | null;
   shardFoldReviewService: AdminShardFoldReviewService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
@@ -261,6 +282,7 @@ export function buildAdminApiRoutes(options: {
     imagesService,
     auditHistoryService,
     chargeLedgerService,
+    modelUsageService,
     actionPipeService,
     shardFoldReviewService,
     adaptiveToolsService,
@@ -517,6 +539,58 @@ export function buildAdminApiRoutes(options: {
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load charge ledger data'),
+          }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/model-usage'),
+      handle: (req, res) => {
+        if (!modelUsageService) {
+          sendJson(res, 503, { error: MODEL_USAGE_UNAVAILABLE_ERROR });
+          return;
+        }
+
+        const url = parseRequestUrl(req, '/api/admin/model-usage');
+        const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+        if (!limit.ok) {
+          sendJson(res, 400, { error: limit.error });
+          return;
+        }
+        const sinceMs = toFiniteQueryNumber(url.searchParams.get('sinceMs'), 'sinceMs');
+        if (!sinceMs.ok) {
+          sendJson(res, 400, { error: sinceMs.error });
+          return;
+        }
+        const untilMs = toFiniteQueryNumber(url.searchParams.get('untilMs'), 'untilMs');
+        if (!untilMs.ok) {
+          sendJson(res, 400, { error: untilMs.error });
+          return;
+        }
+        const callKind = parseModelUsageCallKindQuery(url.searchParams.get('callKind'));
+        if (!callKind.ok) {
+          sendJson(res, 400, { error: callKind.error });
+          return;
+        }
+        const provider = url.searchParams.get('provider')?.trim() || undefined;
+        const model = url.searchParams.get('model')?.trim() || undefined;
+        const toolName = url.searchParams.get('toolName')?.trim() || undefined;
+        const runId = url.searchParams.get('runId')?.trim() || undefined;
+
+        modelUsageService.getModelUsageData({
+          ...(limit.value !== undefined ? { limit: limit.value } : {}),
+          ...(sinceMs.value !== undefined ? { sinceMs: sinceMs.value } : {}),
+          ...(untilMs.value !== undefined ? { untilMs: untilMs.value } : {}),
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {}),
+          ...(toolName ? { toolName } : {}),
+          ...(callKind.value !== undefined ? { callKind: callKind.value } : {}),
+          ...(runId ? { runId } : {}),
+        }).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to load model usage telemetry'),
           }),
         );
       },

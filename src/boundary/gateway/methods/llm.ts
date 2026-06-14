@@ -15,6 +15,9 @@ import {
   inferCallType as inferCorrelationCallType,
   resolveCorrelationMetadata,
 } from '../../../primitives/llm/correlation.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+
+const log = createComponentLogger('GatewayLLMMethods');
 
 const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
@@ -58,6 +61,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         model: response.model,
         inputTokens: response.inputTokens,
         outputTokens: response.outputTokens,
+        ...(response.usageDetails ? { usageDetails: response.usageDetails } : {}),
         stopReason: response.stopReason,
         requestId,
       };
@@ -114,6 +118,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         model: response.model,
         inputTokens: response.inputTokens,
         outputTokens: response.outputTokens,
+        ...(response.usageDetails ? { usageDetails: response.usageDetails } : {}),
         stopReason: response.stopReason,
       };
     },
@@ -141,8 +146,15 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.embed',
     handler: async (params: LLMEmbedParams, runtime) => {
-      const embeddings = await runtime.embeddingService.embedBatch(params.texts);
-      return { embeddings: embeddings.map(e => Array.from(e)) };
+      const startedAtMs = Date.now();
+      try {
+        const embeddings = await runtime.embeddingService.embedBatch(params.texts);
+        recordEmbeddingUsage(runtime, params, startedAtMs, 'success');
+        return { embeddings: embeddings.map(e => Array.from(e)) };
+      } catch (error) {
+        recordEmbeddingUsage(runtime, params, startedAtMs, 'failure', error);
+        throw error;
+      }
     },
     summary: (p: LLMEmbedParams) => ({ textCount: p.texts.length }),
   },
@@ -214,6 +226,64 @@ function inferCallType(
   channelId: string | undefined,
 ): ObservabilityCallType {
   return inferCorrelationCallType(purpose, channelId);
+}
+
+function recordEmbeddingUsage(
+  runtime: GatewayMethodRuntime,
+  params: LLMEmbedParams,
+  startedAtMs: number,
+  status: 'success' | 'failure',
+  error?: unknown,
+): void {
+  const completedAtMs = Date.now();
+  const provider = typeof (runtime.embeddingService as { kind?: unknown }).kind === 'string'
+    ? String((runtime.embeddingService as { kind: string }).kind)
+    : 'embedding';
+  const model = typeof (runtime.embeddingService as { model?: unknown }).model === 'string'
+    ? String((runtime.embeddingService as { model: string }).model)
+    : `dims:${runtime.embeddingService.dims}`;
+  const logicalCallId = [
+    'embedding',
+    process.pid,
+    completedAtMs,
+    Math.random().toString(16).slice(2, 10),
+  ].join(':');
+  void runtime.modelUsageRecorder?.recordUsageEvent({
+    logicalCallId,
+    recordedAtMs: completedAtMs,
+    startedAtMs,
+    completedAtMs,
+    durationMs: Math.max(0, completedAtMs - startedAtMs),
+    status,
+    callKind: 'embedding',
+    callType: 'memory',
+    purpose: 'embedding',
+    originType: 'memory',
+    originStage: 'embedding',
+    service: 'memory',
+    process: 'embedding',
+    provider,
+    model,
+    totalTokens: 0,
+    costSource: 'none',
+    ...(error
+      ? {
+          errorCode: error instanceof Error ? error.name : 'EmbeddingError',
+          errorMessage: error instanceof Error ? error.message : String(error),
+        }
+      : {}),
+    metadata: {
+      textCount: params.texts.length,
+      totalInputChars: params.texts.reduce((total, text) => total + text.length, 0),
+      dims: runtime.embeddingService.dims,
+    },
+  }).catch((recordError) => {
+    log.warn('Failed to persist embedding usage event', {
+      error: recordError instanceof Error ? recordError.message : String(recordError),
+      provider,
+      model,
+    });
+  });
 }
 
 function toSummaryCorrelation(

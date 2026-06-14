@@ -358,6 +358,25 @@ export interface LLMContext {
   systemPromptSections?: PromptSectionTelemetry[];
 }
 
+export interface LLMUsageCostDetails {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+  currency?: string;
+}
+
+export interface LLMUsageDetails {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  totalTokens: number;
+  cost?: LLMUsageCostDetails;
+  raw?: Record<string, unknown>;
+}
+
 export interface StreamCallbacks {
   onText?: (text: string) => void;
   onToolCall?: (name: string, input: Record<string, unknown>) => void;
@@ -373,6 +392,7 @@ export interface LLMResponse {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  usageDetails?: LLMUsageDetails;
   stopReason: string;
 }
 

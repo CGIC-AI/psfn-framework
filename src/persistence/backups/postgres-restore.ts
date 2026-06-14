@@ -12,6 +12,7 @@ export const DEFAULT_RESTORE_CRITICAL_TABLES = [
   'contacts',
   'reflections',
   'session_messages_projection',
+  'model_usage_events',
 ] as const;
 
 export interface PostgresRestoreVerificationOptions {

@@ -5,6 +5,11 @@
     type AdminChargeLedgerData,
     type RunChargeRunSummary,
   } from '$lib/api/endpoints/charges';
+  import {
+    getModelUsage,
+    type AdminModelUsageData,
+    type ModelUsageBreakdown,
+  } from '$lib/api/endpoints/model-usage';
   import { getSubConfig, saveSubConfig } from '$lib/api/endpoints/settings';
   import {
     CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES,
@@ -31,7 +36,9 @@
   const REFERENCE_MODEL_CLASS_VALUES = CHARGE_POLICY_REFERENCE_MODEL_CLASS_VALUES;
 
   let charges = $state<AdminChargeLedgerData | null>(null);
+  let modelUsage = $state<AdminModelUsageData | null>(null);
   let policy = $state<ChargePolicyConfig | null>(null);
+  let activeTab = $state<'charges' | 'token-usage'>('charges');
   let historicalWindows = $state<HistoricalWindow[]>([]);
   let loading = $state(true);
   let refreshing = $state(false);
@@ -57,6 +64,8 @@
   let activeRun = $derived(charges?.activeRun ?? null);
   let recentRuns = $derived(charges?.recentRuns ?? []);
   let recentEvents = $derived(charges?.events ?? []);
+  let recentModelUsageEvents = $derived(modelUsage?.recentEvents ?? []);
+  let expensiveModelUsageEvents = $derived(modelUsage?.expensiveEvents ?? []);
 
   async function loadAll(): Promise<void> {
     errorMessage = '';
@@ -70,12 +79,14 @@
     ];
 
     try {
-      const [chargeData, policyJson, ...windowData] = await Promise.all([
+      const [chargeData, usageData, policyJson, ...windowData] = await Promise.all([
         getCharges({ limit: 200 }),
+        getModelUsage({ limit: 200, sinceMs: timestamp - 30 * DAY_MS }),
         getSubConfig('charge-policy'),
         ...windows.map(window => getCharges({ limit: 500, sinceMs: window.sinceMs })),
       ]);
       charges = chargeData;
+      modelUsage = usageData;
       historicalWindows = windows.map((window, index) => ({
         ...window,
         data: windowData[index] ?? null,
@@ -109,6 +120,27 @@
   function formatInteger(value: number | undefined): string {
     if (value === undefined || !Number.isFinite(value)) return '0';
     return new Intl.NumberFormat('en-US').format(value);
+  }
+
+  function formatUsd(value: number | undefined): string {
+    if (value === undefined || !Number.isFinite(value)) return '$0.00';
+    if (value > 0 && value < 0.01) return `$${value.toFixed(4)}`;
+    return new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: 'USD',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value);
+  }
+
+  function formatDurationMs(value: number | null | undefined): string {
+    if (value === null || value === undefined || !Number.isFinite(value)) return DASH;
+    if (value < 1_000) return `${Math.round(value)} ms`;
+    return `${(value / 1_000).toFixed(2)} s`;
+  }
+
+  function formatBreakdownCost(item: ModelUsageBreakdown): string {
+    return `${formatUsd(item.totalCostUsd)} / ${formatInteger(item.totalTokens)} tokens`;
   }
 
   function formatTime(timestampMs: number | undefined): string {
@@ -312,6 +344,24 @@
       {/each}
     </div>
   {:else}
+    <div class="flex flex-wrap gap-2 border-b border-bark-300 pb-3">
+      <button
+        type="button"
+        onclick={() => activeTab = 'charges'}
+        class="rounded-lg px-3 py-2 text-sm font-medium transition-colors {activeTab === 'charges' ? 'bg-shadow-900 text-white' : 'border border-bark-300 text-shadow-700 hover:bg-bark-100'}"
+      >
+        Charge Policy
+      </button>
+      <button
+        type="button"
+        onclick={() => activeTab = 'token-usage'}
+        class="rounded-lg px-3 py-2 text-sm font-medium transition-colors {activeTab === 'token-usage' ? 'bg-shadow-900 text-white' : 'border border-bark-300 text-shadow-700 hover:bg-bark-100'}"
+      >
+        Token Usage
+      </button>
+    </div>
+
+    {#if activeTab === 'charges'}
     <section class="space-y-4" aria-labelledby="charge-overview-heading">
       <div>
         <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Ledger</p>
@@ -722,5 +772,189 @@
         {/each}
       </div>
     </section>
+    {:else}
+      <section class="space-y-4" aria-labelledby="model-usage-heading">
+        <div>
+          <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Postgres Ledger</p>
+          <h2 id="model-usage-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+            Persisted model usage
+          </h2>
+          <p class="mt-1 text-sm text-shadow-600">
+            Last 30 days across chat, subagent, tool, embedding, and image calls.
+          </p>
+        </div>
+
+        <div class="grid gap-4 md:grid-cols-4">
+          <div class="card-garden p-5">
+            <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Calls</p>
+            <p class="mt-3 text-3xl font-serif font-bold text-shadow-900">{formatInteger(modelUsage?.totals.calls)}</p>
+            <p class="mt-2 text-sm text-shadow-600">
+              {formatInteger(modelUsage?.totals.successfulCalls)} succeeded / {formatInteger(modelUsage?.totals.failedCalls)} failed
+            </p>
+          </div>
+          <div class="card-garden p-5">
+            <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Tokens</p>
+            <p class="mt-3 text-3xl font-serif font-bold text-petal-500">{formatInteger(modelUsage?.totals.totalTokens)}</p>
+            <p class="mt-2 text-sm text-shadow-600">
+              {formatInteger(modelUsage?.totals.inputTokens)} in / {formatInteger(modelUsage?.totals.outputTokens)} out
+            </p>
+          </div>
+          <div class="card-garden p-5">
+            <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Cost</p>
+            <p class="mt-3 text-3xl font-serif font-bold text-gold-600">{formatUsd(modelUsage?.totals.totalCostUsd)}</p>
+            <p class="mt-2 text-sm text-shadow-600">
+              {formatUsd(modelUsage?.totals.providerCostUsd)} provider / {formatUsd(modelUsage?.totals.estimatedCostUsd)} estimated
+            </p>
+          </div>
+          <div class="card-garden p-5">
+            <p class="text-xs uppercase tracking-[0.18em] text-shadow-500">Latency</p>
+            <p class="mt-3 text-3xl font-serif font-bold text-moss-600">{formatDurationMs(modelUsage?.totals.averageTtftMs)}</p>
+            <p class="mt-2 text-sm text-shadow-600">Avg TTFT; avg duration {formatDurationMs(modelUsage?.totals.averageDurationMs)}</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid gap-4 lg:grid-cols-2" aria-label="Model usage breakdowns">
+        <div class="card-garden overflow-hidden">
+          <div class="border-b border-bark-300 px-5 py-4">
+            <h2 class="font-serif text-lg font-semibold text-shadow-900">By model</h2>
+          </div>
+          <div class="divide-y divide-bark-200">
+            {#each modelUsage?.byModel ?? [] as item}
+              <div class="flex items-center justify-between gap-4 px-5 py-3">
+                <div>
+                  <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
+                  <p class="text-xs text-shadow-500">{formatInteger(item.calls)} calls</p>
+                </div>
+                <p class="text-sm text-shadow-600">{formatBreakdownCost(item)}</p>
+              </div>
+            {:else}
+              <p class="px-5 py-4 text-sm text-shadow-600">No model usage recorded.</p>
+            {/each}
+          </div>
+        </div>
+
+        <div class="card-garden overflow-hidden">
+          <div class="border-b border-bark-300 px-5 py-4">
+            <h2 class="font-serif text-lg font-semibold text-shadow-900">By purpose</h2>
+          </div>
+          <div class="divide-y divide-bark-200">
+            {#each modelUsage?.byPurpose ?? [] as item}
+              <div class="flex items-center justify-between gap-4 px-5 py-3">
+                <div>
+                  <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
+                  <p class="text-xs text-shadow-500">{formatInteger(item.calls)} calls</p>
+                </div>
+                <p class="text-sm text-shadow-600">{formatBreakdownCost(item)}</p>
+              </div>
+            {:else}
+              <p class="px-5 py-4 text-sm text-shadow-600">No purpose usage recorded.</p>
+            {/each}
+          </div>
+        </div>
+
+        <div class="card-garden overflow-hidden">
+          <div class="border-b border-bark-300 px-5 py-4">
+            <h2 class="font-serif text-lg font-semibold text-shadow-900">By tool</h2>
+          </div>
+          <div class="divide-y divide-bark-200">
+            {#each modelUsage?.byTool ?? [] as item}
+              <div class="flex items-center justify-between gap-4 px-5 py-3">
+                <div>
+                  <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
+                  <p class="text-xs text-shadow-500">{formatInteger(item.calls)} calls</p>
+                </div>
+                <p class="text-sm text-shadow-600">{formatBreakdownCost(item)}</p>
+              </div>
+            {:else}
+              <p class="px-5 py-4 text-sm text-shadow-600">No tool usage recorded.</p>
+            {/each}
+          </div>
+        </div>
+
+        <div class="card-garden overflow-hidden">
+          <div class="border-b border-bark-300 px-5 py-4">
+            <h2 class="font-serif text-lg font-semibold text-shadow-900">By call kind</h2>
+          </div>
+          <div class="divide-y divide-bark-200">
+            {#each modelUsage?.byCallKind ?? [] as item}
+              <div class="flex items-center justify-between gap-4 px-5 py-3">
+                <div>
+                  <p class="font-mono text-sm font-medium text-shadow-800">{item.key}</p>
+                  <p class="text-xs text-shadow-500">{formatInteger(item.calls)} calls</p>
+                </div>
+                <p class="text-sm text-shadow-600">{formatBreakdownCost(item)}</p>
+              </div>
+            {:else}
+              <p class="px-5 py-4 text-sm text-shadow-600">No call-kind usage recorded.</p>
+            {/each}
+          </div>
+        </div>
+      </section>
+
+      <section class="card-garden overflow-hidden" aria-labelledby="expensive-model-events-heading">
+        <div class="border-b border-bark-300 px-5 py-4">
+          <h2 id="expensive-model-events-heading" class="font-serif text-lg font-semibold text-shadow-900">Highest-cost calls</h2>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="min-w-full divide-y divide-bark-200 text-left text-sm">
+            <thead class="bg-bark-50 text-xs uppercase tracking-[0.16em] text-shadow-500">
+              <tr>
+                <th class="px-5 py-3 font-semibold">When</th>
+                <th class="px-5 py-3 font-semibold">Kind</th>
+                <th class="px-5 py-3 font-semibold">Model</th>
+                <th class="px-5 py-3 font-semibold">Purpose</th>
+                <th class="px-5 py-3 font-semibold">Tokens</th>
+                <th class="px-5 py-3 font-semibold">Cost</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-bark-200">
+              {#each expensiveModelUsageEvents as event}
+                <tr>
+                  <td class="px-5 py-3 text-shadow-600">{formatTime(event.recordedAtMs)}</td>
+                  <td class="px-5 py-3 font-mono text-xs text-shadow-700">{event.callKind}</td>
+                  <td class="px-5 py-3 text-shadow-600">{event.provider}:{event.model}</td>
+                  <td class="px-5 py-3 text-shadow-600">{event.purpose}</td>
+                  <td class="px-5 py-3 text-shadow-600">{formatInteger(event.totalTokens)}</td>
+                  <td class="px-5 py-3 font-semibold text-shadow-900">{formatUsd(event.providerCostUsd ?? event.estimatedCostUsd)}</td>
+                </tr>
+              {:else}
+                <tr>
+                  <td colspan="6" class="px-5 py-4 text-shadow-600">No model usage calls recorded.</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card-garden overflow-hidden" aria-labelledby="recent-model-events-heading">
+        <div class="border-b border-bark-300 px-5 py-4">
+          <h2 id="recent-model-events-heading" class="font-serif text-lg font-semibold text-shadow-900">Recent model usage events</h2>
+        </div>
+        <div class="max-h-96 divide-y divide-bark-200 overflow-y-auto">
+          {#each recentModelUsageEvents as event}
+            <div class="grid gap-2 px-5 py-3 text-sm md:grid-cols-[1fr_auto]">
+              <div>
+                <p class="font-medium text-shadow-800">{event.provider}:{event.model}</p>
+                <p class="mt-1 text-xs text-shadow-500">
+                  {event.callKind} | {event.callType} | {event.purpose}
+                  {#if event.toolName} | tool {event.toolName}{/if}
+                  {#if event.chargeRunId} | run {shortId(event.chargeRunId)}{/if}
+                </p>
+              </div>
+              <div class="text-left md:text-right">
+                <p class="font-semibold text-shadow-900">{formatInteger(event.totalTokens)} tokens</p>
+                <p class="text-xs text-shadow-500">
+                  {formatUsd(event.providerCostUsd ?? event.estimatedCostUsd)} | {formatTime(event.recordedAtMs)}
+                </p>
+              </div>
+            </div>
+          {:else}
+            <p class="px-5 py-4 text-sm text-shadow-600">No recent model usage events recorded.</p>
+          {/each}
+        </div>
+      </section>
+    {/if}
   {/if}
 </div>

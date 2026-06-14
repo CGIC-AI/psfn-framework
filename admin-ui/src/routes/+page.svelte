@@ -286,8 +286,7 @@
               </div>
             </div>
             <p class="text-sm text-shadow-600">
-              Token usage tracking per model requires persistent storage (coming in a future release).
-              Current data reflects active-session telemetry.
+              Current-session telemetry is shown here. Persisted per-model usage is available on Charge / Budget.
             </p>
           </div>
         {:else}

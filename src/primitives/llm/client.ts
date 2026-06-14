@@ -10,6 +10,8 @@ import type {
   CompletionPurpose,
   CorrelationMetadata,
   LLMContext,
+  LLMUsageCostDetails,
+  LLMUsageDetails,
   LLMPromptCacheObservability,
   LLMProviderObservability,
   LLMModelHint,
@@ -68,6 +70,8 @@ import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resolveRuntimeLaneClassForModelCall } from '../../core/agent/worker-lanes.js';
 import { ModelCallGate } from './model-call-gate.js';
 import { clampVisionCompletionMaxTokens } from './vision-limits.js';
+import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
+import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
 
 const log = createComponentLogger('LLMClient');
 
@@ -96,6 +100,7 @@ export interface LLMClientRuntimeOptions {
   eligibilityGate?: EligibilityGate;
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  usageRecorder?: ModelUsageRecorder;
 }
 
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
@@ -138,6 +143,8 @@ export class LLMClient {
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
   private onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   private modelCallGate: ModelCallGate;
+  private usageRecorder?: ModelUsageRecorder;
+  private usageCallCounter = 0;
 
   constructor(
     config: SubstrateConfig,
@@ -155,6 +162,7 @@ export class LLMClient {
     this.eligibilityGate = runtimeOptions.eligibilityGate;
     this.onEligibilityDecision = runtimeOptions.onEligibilityDecision;
     this.onBudgetBlocked = runtimeOptions.onBudgetBlocked;
+    this.usageRecorder = runtimeOptions.usageRecorder;
     this.modelCallGate = new ModelCallGate();
   }
 
@@ -823,21 +831,119 @@ export class LLMClient {
     }
   }
 
+  private createUsageLogicalCallId(
+    callKind: 'chat' | 'completion',
+    purpose: RoutingPurpose,
+    candidate: RoutingCandidate,
+    correlation: ResolvedCorrelationMetadata | undefined,
+    attempt: number,
+  ): string {
+    this.usageCallCounter += 1;
+    return [
+      'llm',
+      process.pid,
+      this.usageCallCounter,
+      callKind,
+      purpose,
+      correlation?.requestId ?? 'unknown',
+      correlation?.toolCallId ?? 'none',
+      candidate.provider,
+      candidate.model,
+      attempt,
+    ].join(':');
+  }
+
   private recordUsage(
     purpose: RoutingPurpose,
+    callKind: 'chat' | 'completion',
     candidate: RoutingCandidate,
     inputTokens: number,
     outputTokens: number,
     correlation: ResolvedCorrelationMetadata | undefined,
+    usageDetails: LLMUsageDetails | undefined,
+    options: {
+      startedAtMs: number;
+      completedAtMs: number;
+      ttftMs?: number;
+      attempt: number;
+      stopReason?: string;
+      metadata?: Record<string, unknown>;
+    },
   ): void {
-    this.budgetController.recordUsage({
+    const service = this.resolveBudgetService(purpose, correlation);
+    const process = this.resolveBudgetProcess(purpose, correlation);
+    const budgetRecord = this.budgetController.recordUsage({
       candidate,
       purpose,
-      service: this.resolveBudgetService(purpose, correlation),
-      process: this.resolveBudgetProcess(purpose, correlation),
+      service,
+      process,
       inputTokens,
       outputTokens,
       correlation,
+    });
+    const chargeSnapshot = getRunChargeSnapshot();
+    const providerCostUsd = normalizeUsageCost(usageDetails?.cost?.total);
+    const estimatedCostUsd = normalizeUsageCost(budgetRecord.estimatedCostUsd) ?? 0;
+    const logicalCallId = this.createUsageLogicalCallId(callKind, purpose, candidate, correlation, options.attempt);
+    const metadata = {
+      ...(options.metadata ?? {}),
+      ...(usageDetails?.raw ? { rawUsage: usageDetails.raw } : {}),
+      ...(usageDetails?.cost ? { providerCost: usageDetails.cost } : {}),
+    };
+
+    void this.usageRecorder?.recordUsageEvent({
+      logicalCallId,
+      attempt: options.attempt,
+      recordedAtMs: options.completedAtMs,
+      startedAtMs: options.startedAtMs,
+      completedAtMs: options.completedAtMs,
+      durationMs: Math.max(0, options.completedAtMs - options.startedAtMs),
+      ...(options.ttftMs !== undefined ? { ttftMs: options.ttftMs } : {}),
+      status: 'success',
+      callKind,
+      callType: correlation?.callType ?? (callKind === 'chat' ? 'chat' : 'background'),
+      purpose,
+      ...(correlation?.originType ? { originType: correlation.originType } : {}),
+      ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
+      service,
+      process,
+      ...(correlation?.turnId ? { turnId: correlation.turnId } : {}),
+      ...(correlation?.requestId ? { requestId: correlation.requestId } : {}),
+      ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
+      ...(correlation?.toolName ? { toolName: correlation.toolName } : {}),
+      ...(correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+      ...(chargeSnapshot
+        ? {
+            chargeLane: chargeSnapshot.lane,
+            chargeRunId: chargeSnapshot.lineage.runId,
+            chargeRootRunId: chargeSnapshot.lineage.rootRunId,
+            ...(chargeSnapshot.lineage.parentRunId ? { chargeParentRunId: chargeSnapshot.lineage.parentRunId } : {}),
+          }
+        : {}),
+      provider: candidate.provider,
+      model: normalizeModelIdForProvider(candidate.provider, candidate.model),
+      ...(candidate.slotKey ? { slotKey: candidate.slotKey } : {}),
+      requestedProvider: candidate.provider,
+      requestedModel: candidate.model,
+      inputTokens: usageDetails?.input ?? inputTokens,
+      outputTokens: usageDetails?.output ?? outputTokens,
+      cacheReadTokens: usageDetails?.cacheRead ?? 0,
+      cacheWriteTokens: usageDetails?.cacheWrite ?? 0,
+      ...(usageDetails?.totalTokens !== undefined ? { totalTokens: usageDetails.totalTokens } : {}),
+      ...(providerCostUsd !== undefined ? { providerCostUsd } : {}),
+      estimatedCostUsd,
+      costSource: providerCostUsd !== undefined ? 'provider' : (estimatedCostUsd > 0 ? 'estimate' : 'none'),
+      ...(usageDetails?.cost?.currency ? { currency: usageDetails.cost.currency } : {}),
+      ...(options.stopReason ? { stopReason: options.stopReason } : {}),
+      metadata,
+    }).catch((error) => {
+      log.warn('Failed to persist model usage event', {
+        error: error instanceof Error ? error.message : String(error),
+        provider: candidate.provider,
+        model: candidate.model,
+        purpose,
+        ...correlation,
+      });
     });
   }
 
@@ -846,6 +952,8 @@ export class LLMClient {
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
     const modelHint = this.mergeModelHints(context.modelHint, undefined);
+    const startedAtMs = Date.now();
+    let firstTokenAtMs: number | undefined;
 
     try {
       const { result: finalResponse, candidate, attempts } = await this.runWithFallback(
@@ -878,17 +986,20 @@ export class LLMClient {
               for await (const event of eventStream) {
                 switch (event.type) {
                   case 'text_delta':
+                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
                     emittedData = true;
                     content += event.delta;
                     callbacks?.onText?.(event.delta);
                     break;
 
                   case 'thinking_delta':
+                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
                     emittedData = true;
                     reasoning += event.delta;
                     break;
 
                   case 'toolcall_end':
+                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
                     emittedData = true;
                     toolCalls.push({
                       id: event.toolCall.id,
@@ -899,6 +1010,7 @@ export class LLMClient {
                     break;
 
                   case 'done': {
+                    if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
                     const contentBlocks = event.message.content as unknown[];
                     // If text_delta events didn't fire, extract text from content blocks
                     if (!content) {
@@ -911,14 +1023,20 @@ export class LLMClient {
                     const finalToolCalls = extractToolCallsFromContentBlocks(contentBlocks);
                     // Normalize away stringified content block arrays from streaming
                     content = normalizeContent(content);
+                    const usageDetails = normalizeLLMUsageDetails(
+                      event.message.usage,
+                      event.message.usage.input,
+                      event.message.usage.output,
+                    );
                     response = {
                       content,
                       ...(reasoning ? { reasoning } : {}),
                       providerObservability,
                       toolCalls: finalToolCalls.length > 0 ? finalToolCalls : toolCalls,
                       model: event.message.model,
-                      inputTokens: event.message.usage.input,
-                      outputTokens: event.message.usage.output,
+                      inputTokens: usageDetails.input,
+                      outputTokens: usageDetails.output,
+                      usageDetails,
                       stopReason: event.reason,
                     };
                     break;
@@ -954,6 +1072,7 @@ export class LLMClient {
               model: String(model.id),
               inputTokens: 0,
               outputTokens: 0,
+              usageDetails: normalizeLLMUsageDetails(undefined, 0, 0),
               stopReason: 'unknown',
             };
           }, llmRetryConfig(this.config), {
@@ -988,10 +1107,23 @@ export class LLMClient {
 
       this.recordUsage(
         'chat',
+        'chat',
         candidate,
         finalResponse.inputTokens,
         finalResponse.outputTokens,
         correlation,
+        finalResponse.usageDetails,
+        {
+          startedAtMs,
+          completedAtMs: Date.now(),
+          ...(firstTokenAtMs !== undefined ? { ttftMs: Math.max(0, firstTokenAtMs - startedAtMs) } : {}),
+          attempt: attempts,
+          stopReason: finalResponse.stopReason,
+          metadata: {
+            fallbackAttempts: attempts,
+            toolCallCount: finalResponse.toolCalls.length,
+          },
+        },
       );
 
       callbacks?.onDone?.(finalResponse);
@@ -1013,6 +1145,7 @@ export class LLMClient {
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext);
     const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
     const modelHint = this.mergeModelHints(context.modelHint, options.modelHint);
+    const startedAtMs = Date.now();
 
     const { result: response, candidate, attempts } = await this.runWithFallback(
       routingPurpose,
@@ -1094,7 +1227,7 @@ export class LLMClient {
         : response
     ) as {
       content: unknown;
-      usage?: { input: number; output: number };
+      usage?: unknown;
       reasoning?: string;
       toolCalls?: ToolCall[];
       model: string;
@@ -1111,15 +1244,33 @@ export class LLMClient {
     const reasoning = typeof completionResponse.reasoning === 'string'
       ? completionResponse.reasoning
       : extractReasoningContent(contentBlocks);
-    const inputTokens = completionResponse.usage?.input ?? completionResponse.inputTokens ?? 0;
-    const outputTokens = completionResponse.usage?.output ?? completionResponse.outputTokens ?? 0;
+    const usageDetails = normalizeLLMUsageDetails(
+      completionResponse.usage,
+      completionResponse.inputTokens ?? 0,
+      completionResponse.outputTokens ?? 0,
+    );
+    const inputTokens = usageDetails.input;
+    const outputTokens = usageDetails.output;
 
     this.recordUsage(
       routingPurpose,
+      'completion',
       candidate,
       inputTokens,
       outputTokens,
       correlation,
+      usageDetails,
+      {
+        startedAtMs,
+        completedAtMs: Date.now(),
+        attempt: attempts,
+        stopReason: completionResponse.stopReason ?? 'unknown',
+        metadata: {
+          completionPurpose: purpose,
+          routingPurpose,
+          fallbackAttempts: attempts,
+        },
+      },
     );
 
     return {
@@ -1136,6 +1287,7 @@ export class LLMClient {
       model: completionResponse.model,
       inputTokens,
       outputTokens,
+      usageDetails,
       stopReason: completionResponse.stopReason ?? 'unknown',
     };
   }
@@ -1240,6 +1392,74 @@ export class LLMClient {
 
 function isAbortError(error: Error): boolean {
   return error.name === 'AbortError' || /aborted|abort|cancelled|canceled/i.test(error.message);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function normalizeUsageCount(value: unknown): number {
+  const numeric = toFiniteNumber(value);
+  return numeric !== undefined && numeric > 0 ? Math.floor(numeric) : 0;
+}
+
+function normalizeUsageCost(value: unknown): number | undefined {
+  const numeric = toFiniteNumber(value);
+  return numeric !== undefined && numeric >= 0 ? numeric : undefined;
+}
+
+function normalizeLLMUsageCostDetails(value: unknown): LLMUsageCostDetails | undefined {
+  if (!isRecord(value)) return undefined;
+  const input = normalizeUsageCost(value.input);
+  const output = normalizeUsageCost(value.output);
+  const cacheRead = normalizeUsageCost(value.cacheRead);
+  const cacheWrite = normalizeUsageCost(value.cacheWrite);
+  const total = normalizeUsageCost(value.total);
+  const currency = typeof value.currency === 'string' && value.currency.trim().length > 0
+    ? value.currency.trim().toUpperCase()
+    : undefined;
+  if (
+    input === undefined
+    && output === undefined
+    && cacheRead === undefined
+    && cacheWrite === undefined
+    && total === undefined
+    && currency === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...(input !== undefined ? { input } : {}),
+    ...(output !== undefined ? { output } : {}),
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    ...(total !== undefined ? { total } : {}),
+    ...(currency ? { currency } : {}),
+  };
+}
+
+function normalizeLLMUsageDetails(
+  value: unknown,
+  fallbackInputTokens: number,
+  fallbackOutputTokens: number,
+): LLMUsageDetails {
+  const record = isRecord(value) ? value : {};
+  const input = normalizeUsageCount(record.input ?? fallbackInputTokens);
+  const output = normalizeUsageCount(record.output ?? fallbackOutputTokens);
+  const cacheRead = normalizeUsageCount(record.cacheRead);
+  const cacheWrite = normalizeUsageCount(record.cacheWrite);
+  const totalTokens = normalizeUsageCount(record.totalTokens)
+    || input + output + cacheRead + cacheWrite;
+  const cost = normalizeLLMUsageCostDetails(record.cost);
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens,
+    ...(cost ? { cost } : {}),
+    ...(isRecord(value) ? { raw: { ...value } } : {}),
+  };
 }
 
 function toFiniteNumber(value: unknown): number | undefined {

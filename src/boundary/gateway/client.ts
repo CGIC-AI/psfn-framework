@@ -495,6 +495,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         model: result.model,
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
+        ...(result.usageDetails ? { usageDetails: result.usageDetails } : {}),
         stopReason: result.stopReason,
       };
 
@@ -567,6 +568,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       model: result.model,
       inputTokens: result.inputTokens,
       outputTokens: result.outputTokens,
+      ...(result.usageDetails ? { usageDetails: result.usageDetails } : {}),
       stopReason: result.stopReason,
     };
   }

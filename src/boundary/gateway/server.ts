@@ -43,6 +43,7 @@ import {
 import { GatewayRuntimeHealthTracker } from './runtime-health.js';
 import { evaluatePolicy } from './policy.js';
 import type { ApiStreamDeltaNotification } from '../../channels/api/types.js';
+import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -92,6 +93,7 @@ export interface GatewayServerOptions {
   discordAdapter: ChannelOutboundDock;
   gitOps?: GitOperations;
   imageConfig?: ImageRuntimeConfig;
+  modelUsageRecorder?: ModelUsageRecorder;
   policyConfig: PolicyConfig;
   ntfy?: GatewayNtfyConfig;
   auditStore?: GatewayAuditStorePort;
@@ -199,6 +201,7 @@ export class GatewayServer {
       discordAdapter: this.options.discordAdapter,
       gitOps: this.options.gitOps,
       imageConfig: this.options.imageConfig,
+      ...(this.options.modelUsageRecorder ? { modelUsageRecorder: this.options.modelUsageRecorder } : {}),
       policyConfig: this.options.policyConfig,
       workspacePath: this.options.policyConfig.workspacePath,
       sessionHmacKeyring: this.sessionHmacKeyring,

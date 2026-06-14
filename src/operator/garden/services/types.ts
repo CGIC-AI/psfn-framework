@@ -39,6 +39,10 @@ import type {
   RunChargeLedgerQuery,
 } from '../../../shared/telemetry/charge-ledger.js';
 import type {
+  ModelUsageData,
+  ModelUsageQuery,
+} from '../../../shared/telemetry/model-usage.js';
+import type {
   PostTurnActionQueueStatus,
   PostTurnActionStatusRecord,
 } from '../../../core/agent/post-turn-action-runtime.js';
@@ -171,6 +175,10 @@ export interface AdminImagesService {
 
 export interface AdminChargeLedgerService {
   getChargeLedgerData(query?: RunChargeLedgerQuery): Promise<RunChargeLedgerData>;
+}
+
+export interface AdminModelUsageService {
+  getModelUsageData(query?: ModelUsageQuery): Promise<ModelUsageData>;
 }
 
 export interface AdminActionPipeMutationResult {

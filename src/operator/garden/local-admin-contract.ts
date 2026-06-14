@@ -32,6 +32,7 @@ import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
+import { createPostgresModelUsageStoreFromConfig } from '../../persistence/postgres/model-usage-store.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
@@ -56,6 +57,7 @@ import { AdminEpisodicMemoryDataService } from './services/episodic-memory-servi
 import { AdminIdentityDataService } from './services/identity-service.js';
 import { AdminImagesDataService } from './services/images-service.js';
 import { AdminMemoryDataService } from './services/memory-service.js';
+import { AdminModelUsageDataService } from './services/model-usage-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
 import { AdminSchedulerService } from './services/scheduler-service.js';
 import { AdminSessionDataService } from './services/session-service.js';
@@ -104,6 +106,7 @@ export function createInProcessGardenAdminContract(
   });
   const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
   const chargeLedger = new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
+  const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
   const auditHistory = new AdminAuditHistoryDataService({
     gardenStore: new GardenAuditHistoryJsonlStore(join(options.config.dataDir, 'garden-audit-history.jsonl')),
     gatewayReader: resolveGatewayAuditReader(options.config),
@@ -152,6 +155,7 @@ export function createInProcessGardenAdminContract(
     }),
     auditHistory,
     charges: new AdminChargeLedgerDataService(chargeLedger),
+    modelUsage: modelUsageStore ? new AdminModelUsageDataService(modelUsageStore) : null,
     actionPipe: options.postTurnActions
       ? new AdminActionPipeDataService(options.postTurnActions)
       : null,

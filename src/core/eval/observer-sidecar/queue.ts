@@ -14,6 +14,11 @@ import type {
   ObserverEvalSidecarRuntime,
   ObserverEvalSidecarShutdownOptions,
 } from './types.js';
+import {
+  createObserverEvalLogSafeInput,
+  sanitizeObserverEvalError,
+  type ObserverEvalSanitizedInputPayload,
+} from './privacy.js';
 
 const DEFAULT_MAX_QUEUED_TURNS = 32;
 const DEFAULT_OBSERVER_TIMEOUT_MS = 5_000;
@@ -33,6 +38,7 @@ interface ObserverEvalQueueOptions {
 
 interface ObserverEvalQueueTask {
   input: ObserverEvalInput;
+  logSafeInput: ObserverEvalSanitizedInputPayload;
   turnId: ObserverEvalInputPayload['turn']['turnId'];
   requestId: string;
   channelId: string;
@@ -117,6 +123,7 @@ export class ObserverEvalSidecarQueue {
 
     const task: ObserverEvalQueueTask = {
       input: createObserverEvalInput(inputPayload),
+      logSafeInput: createObserverEvalLogSafeInput(inputPayload),
       turnId: inputPayload.turn.turnId,
       requestId: inputPayload.turn.requestId,
       channelId: inputPayload.turn.channelId,
@@ -282,9 +289,8 @@ export class ObserverEvalSidecarQueue {
         this.stats.retried += 1;
         this.logger?.debug('Observer eval sidecar retrying observation', {
           sidecarId: this.runtime.config?.sidecarId ?? null,
-          turnId: task.turnId,
-          requestId: task.requestId,
-          channelId: task.channelId,
+          turn: task.logSafeInput.turn,
+          privacy: task.logSafeInput.privacy,
           reason: result.reason,
           attempt,
         });
@@ -332,6 +338,7 @@ export class ObserverEvalSidecarQueue {
     inputPayload: ObserverEvalInputPayload,
     reason: ObserverEvalSidecarDropReason,
   ): ObserverEvalLifecycleState {
+    const logSafeInput = createObserverEvalLogSafeInput(inputPayload);
     this.stats.dropped += 1;
     this.incrementDropCount(reason);
     this.stats.lastDrop = {
@@ -342,9 +349,8 @@ export class ObserverEvalSidecarQueue {
     };
     this.logger?.debug('Observer eval sidecar observation dropped', {
       sidecarId: this.runtime.config?.sidecarId ?? null,
-      turnId: inputPayload.turn.turnId,
-      requestId: inputPayload.turn.requestId,
-      channelId: inputPayload.turn.channelId,
+      turn: logSafeInput.turn,
+      privacy: logSafeInput.privacy,
       reason,
     });
     return this.emitLifecycle({
@@ -382,6 +388,7 @@ export class ObserverEvalSidecarQueue {
     result: ObserverEvalAttemptFailure,
     attempt: number,
   ): void {
+    const sanitizedError = sanitizeObserverEvalError(result.message);
     if (result.reason === 'observer_timeout') {
       this.stats.timedOut += 1;
     } else {
@@ -392,24 +399,23 @@ export class ObserverEvalSidecarQueue {
       reason: result.reason,
       turnId: task.turnId,
       requestId: task.requestId,
-      message: result.message,
+      message: sanitizedError.message,
       attempt,
       observedAt: Date.now(),
     };
     this.logger?.debug('Observer eval sidecar degraded', {
       sidecarId: this.runtime.config?.sidecarId ?? null,
-      turnId: task.turnId,
-      requestId: task.requestId,
-      channelId: task.channelId,
+      turn: task.logSafeInput.turn,
+      privacy: task.logSafeInput.privacy,
       reason: result.reason,
-      error: result.message,
+      error: sanitizedError,
     });
     this.emitLifecycle({
       status: 'degraded',
       observedAt: Date.now(),
       ...this.sidecarIdPayload(),
       reason: result.reason,
-      error: { message: result.message },
+      error: sanitizedError,
       queue: this.lifecycleQueueSnapshot(),
     });
   }

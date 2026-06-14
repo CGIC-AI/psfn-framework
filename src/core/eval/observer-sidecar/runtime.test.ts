@@ -139,7 +139,7 @@ describe('observer eval sidecar queue runtime', () => {
     expect(snapshot.failureCounts.observer_failed).toBe(1);
     expect(snapshot.lastFailure).toMatchObject({
       reason: 'observer_failed',
-      message: 'sidecar exploded',
+      message: 'Observer eval sidecar error redacted',
       requestId: 'request-1',
     });
     expect(lifecycleStates.map(state => state.reason)).toEqual([

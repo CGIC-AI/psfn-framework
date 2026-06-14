@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import type { ObserverEvalInputPayload, ObserverEvalLifecycleStatePayload } from './types.js';
-import { dispatchObserverEvalTurn } from './runtime.js';
+import {
+  dispatchObserverEvalTurn,
+  drainObserverEvalSidecarQueue,
+} from './runtime.js';
 import {
   createObserverEvalLogSafeInput,
   createObserverEvalLogSafeLifecycleState,
@@ -322,23 +325,31 @@ describe('observer eval privacy boundary', () => {
       },
     }));
 
-    const state = await dispatchObserverEvalTurn({
-      input,
-      logger,
-      sidecarRuntime: {
-        config: { enabled: true, sidecarId: 'observer-test' },
-        observer: {
-          observeTurn: () => {
-            throw new Error(`sidecar saw ${RAW_SECRET}`);
-          },
-        },
-        onLifecycleState: (lifecycleState) => {
-          lifecycleStates.push(lifecycleState as ObserverEvalLifecycleStatePayload);
+    const sidecarRuntime = {
+      config: { enabled: true, sidecarId: 'observer-test' },
+      observer: {
+        observeTurn: () => {
+          throw new Error(`sidecar saw ${RAW_SECRET}`);
         },
       },
-    });
+      onLifecycleState: (lifecycleState: ObserverEvalLifecycleStatePayload) => {
+        lifecycleStates.push(lifecycleState);
+      },
+    };
 
-    expect(state).toMatchObject({
+    const queuedState = await dispatchObserverEvalTurn({
+      input,
+      logger,
+      sidecarRuntime,
+    });
+    await drainObserverEvalSidecarQueue(sidecarRuntime);
+    const degradedState = lifecycleStates.at(-1);
+
+    expect(queuedState).toMatchObject({
+      status: 'enabled',
+      reason: 'queued',
+    });
+    expect(degradedState).toMatchObject({
       status: 'degraded',
       reason: 'observer_failed',
       error: {
@@ -347,8 +358,7 @@ describe('observer eval privacy boundary', () => {
         redactionReason: 'raw_error_redacted',
       },
     });
-    expect(lifecycleStates).toHaveLength(1);
-    expect(lifecycleStates[0]).toEqual(state);
+    expect(lifecycleStates).toHaveLength(2);
     expect(logger.debug).toHaveBeenCalledWith(
       'Observer eval sidecar degraded',
       expect.objectContaining({
@@ -364,7 +374,8 @@ describe('observer eval privacy boundary', () => {
         }),
       }),
     );
-    expectNoRawLeak(state);
+    expectNoRawLeak(queuedState);
+    expectNoRawLeak(degradedState);
     expectNoRawLeak(lifecycleStates);
     expectNoRawLeak(logger.debug.mock.calls);
   });

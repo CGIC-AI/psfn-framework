@@ -1,7 +1,11 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveredModel } from '../../../primitives/llm/discovery.js';
 import type { GatewayMethodRuntime } from './types.js';
 import { registerLLMMethods } from './llm.js';
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function createHarness() {
   const methods = new Map<string, (params: any) => Promise<any>>();
@@ -276,6 +280,56 @@ describe('registerLLMMethods', () => {
       backendApi: 'openai-completions',
       systemRole: {
         transport: 'openai_system',
+      },
+    });
+  });
+
+  it('pipes upstream LiteLLM cost from the gateway edge into llm.complete usage details', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({
+      usage: {
+        prompt_tokens: 10,
+        completion_tokens: 2,
+        total_tokens: 12,
+        cost: 0.123,
+      },
+    }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })));
+    const harness = createHarness();
+    harness.complete.mockImplementationOnce(async () => {
+      await fetch('http://litellm.test/v1/chat/completions');
+      return {
+        content: 'completed',
+        model: 'mock-model',
+        inputTokens: 10,
+        outputTokens: 2,
+        usageDetails: {
+          input: 10,
+          output: 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 12,
+          cost: { total: 0 },
+        },
+        stopReason: 'stop',
+      };
+    });
+
+    const result = await harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'summarize' }],
+      systemPrompt: 'system',
+      purpose: 'summary',
+    });
+
+    expect(result.usageDetails).toMatchObject({
+      input: 10,
+      output: 2,
+      cost: {
+        total: 0.123,
+        currency: 'USD',
       },
     });
   });

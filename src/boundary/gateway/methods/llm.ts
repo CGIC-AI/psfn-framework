@@ -16,6 +16,10 @@ import {
   resolveCorrelationMetadata,
 } from '../../../primitives/llm/correlation.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import {
+  applyGatewayCapturedProviderCost,
+  withGatewayLLMCostCapture,
+} from '../llm-cost-capture.js';
 
 const log = createComponentLogger('GatewayLLMMethods');
 
@@ -39,20 +43,23 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolCallId: params.toolCallId,
         purpose,
       });
-      const response = await runtime.llmProvider.stream(
-        {
-          systemPrompt: params.systemPrompt,
-          messages: params.messages,
-          ...(params.tools?.length ? { tools: params.tools } : {}),
-          ...(modelHint ? { modelHint } : {}),
-          correlation,
-        },
-        params.stream ? {
-          onText: (text) => {
-            runtime.notifyAll('llm.chunk', { requestId, text } satisfies LLMChunkNotification);
+      const captured = await withGatewayLLMCostCapture(
+        async () => await runtime.llmProvider.stream(
+          {
+            systemPrompt: params.systemPrompt,
+            messages: params.messages,
+            ...(params.tools?.length ? { tools: params.tools } : {}),
+            ...(modelHint ? { modelHint } : {}),
+            correlation,
           },
-        } : undefined,
+          params.stream ? {
+            onText: (text) => {
+              runtime.notifyAll('llm.chunk', { requestId, text } satisfies LLMChunkNotification);
+            },
+          } : undefined,
+        ),
       );
+      const response = applyGatewayCapturedProviderCost(captured.result, captured.captures);
       return {
         content: response.content,
         ...(response.reasoning ? { reasoning: response.reasoning } : {}),
@@ -102,15 +109,18 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
         toolCallId: params.toolCallId,
         purpose: params.purpose,
       });
-      const response = await runtime.llmProvider.complete(
-        {
-          systemPrompt: params.systemPrompt,
-          messages: params.messages,
-          ...(modelHint ? { modelHint } : {}),
-          correlation,
-        },
-        params.purpose,
+      const captured = await withGatewayLLMCostCapture(
+        async () => await runtime.llmProvider.complete(
+          {
+            systemPrompt: params.systemPrompt,
+            messages: params.messages,
+            ...(modelHint ? { modelHint } : {}),
+            correlation,
+          },
+          params.purpose,
+        ),
       );
+      const response = applyGatewayCapturedProviderCost(captured.result, captured.captures);
       return {
         content: response.content,
         ...(response.reasoning ? { reasoning: response.reasoning } : {}),

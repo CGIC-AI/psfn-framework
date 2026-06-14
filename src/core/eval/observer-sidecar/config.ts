@@ -173,7 +173,7 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
     await persistence.upsertRun({
       runId: this.runId,
       sidecarId: this.options.config.sidecarId ?? OBSERVER_EVAL_RUN_PREFIX,
-      deployment: this.options.config.deploymentTarget ?? 'test_persona',
+      deployment: toObserverEvalPersistenceDeployment(this.options.config.deploymentTarget),
       status: 'running',
       startedAtMs: this.startedAtMs,
       retention: this.makeRetention(this.startedAtMs),
@@ -227,4 +227,13 @@ function buildObservationError(
 function normalizeIdPart(value: string): string {
   const normalized = value.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '');
   return normalized.length > 0 ? normalized : 'unknown';
+}
+
+export function toObserverEvalPersistenceDeployment(
+  deploymentTarget: ObserverEvalSidecarConfig['deploymentTarget'] | undefined,
+): 'live' | 'eval' | 'test' {
+  if (deploymentTarget === 'live' || deploymentTarget === 'eval') {
+    return deploymentTarget;
+  }
+  return 'test';
 }

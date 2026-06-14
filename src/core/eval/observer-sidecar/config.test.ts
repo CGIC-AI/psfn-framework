@@ -3,7 +3,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDefaultObserverEvalSidecarSettings } from '../../../system/config/runtime-config-contracts.js';
-import { createObserverEvalSidecarRuntimeFromConfig } from './config.js';
+import {
+  createObserverEvalSidecarRuntimeFromConfig,
+  toObserverEvalPersistenceDeployment,
+} from './config.js';
 import type { ObserverEvalInputPayload } from './types.js';
 
 const tempDirs: string[] = [];
@@ -52,6 +55,13 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
     await expect(runtime.observer?.observeTurn(makeObserverInput())).rejects.toThrow(
       'EmoSim statemashine.py was not found',
     );
+  });
+
+  it('maps test persona deployment targets to the persistence deployment label', () => {
+    expect(toObserverEvalPersistenceDeployment('live')).toBe('live');
+    expect(toObserverEvalPersistenceDeployment('eval')).toBe('eval');
+    expect(toObserverEvalPersistenceDeployment('test_persona')).toBe('test');
+    expect(toObserverEvalPersistenceDeployment(undefined)).toBe('test');
   });
 });
 

@@ -249,6 +249,8 @@ interface SqlWhere {
   values: unknown[];
 }
 
+const storeByDatabaseUrl = new Map<string, PostgresObserverEvalSidecarStore>();
+
 export class PostgresObserverEvalSidecarStore implements ObserverEvalSidecarPersistencePort {
   private readonly ready: Promise<void>;
   private readonly nowMs: () => number;
@@ -494,7 +496,17 @@ export function createPostgresObserverEvalSidecarStore(
   databaseUrl: string,
   options: StoreOptions = {},
 ): PostgresObserverEvalSidecarStore {
-  return PostgresObserverEvalSidecarStore.connect(databaseUrl, options);
+  if (!options.nowMs) {
+    const existing = storeByDatabaseUrl.get(databaseUrl);
+    if (existing) {
+      return existing;
+    }
+  }
+  const store = PostgresObserverEvalSidecarStore.connect(databaseUrl, options);
+  if (!options.nowMs) {
+    storeByDatabaseUrl.set(databaseUrl, store);
+  }
+  return store;
 }
 
 export function createObserverEvalComparisonMetrics(

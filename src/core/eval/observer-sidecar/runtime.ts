@@ -1,16 +1,19 @@
+import {
+  createStaticHealthSnapshot,
+  notifyObserverEvalLifecycle,
+  ObserverEvalSidecarQueue,
+} from './queue.js';
 import type {
-  ObserverEvalInput,
   ObserverEvalInputPayload,
   ObserverEvalLifecycleState,
-  ObserverEvalLifecycleStatePayload,
-  ObserverEvalReadonly,
+  ObserverEvalSidecarHealthSnapshot,
   ObserverEvalSidecarLogger,
   ObserverEvalSidecarRuntime,
+  ObserverEvalSidecarShutdownOptions,
 } from './types.js';
-import {
-  createObserverEvalLogSafeInput,
-  sanitizeObserverEvalError,
-} from './privacy.js';
+
+export { createObserverEvalInput } from './queue.js';
+export type { ObserverEvalSidecarShutdownOptions } from './types.js';
 
 export interface ObserverEvalDispatchInput {
   sidecarRuntime?: ObserverEvalSidecarRuntime | null;
@@ -18,88 +21,90 @@ export interface ObserverEvalDispatchInput {
   logger?: ObserverEvalSidecarLogger;
 }
 
-export function createObserverEvalInput(input: ObserverEvalInputPayload): ObserverEvalInput {
-  return deepFreeze(structuredClone(input));
-}
+const queueByRuntime = new WeakMap<ObserverEvalSidecarRuntime, ObserverEvalSidecarQueue>();
 
-export async function dispatchObserverEvalTurn(
+export function dispatchObserverEvalTurn(
   dispatchInput: ObserverEvalDispatchInput,
 ): Promise<ObserverEvalLifecycleState> {
   const { sidecarRuntime } = dispatchInput;
   const sidecarId = sidecarRuntime?.config?.sidecarId;
 
-  if (!sidecarRuntime || !sidecarRuntime.config?.enabled) {
-    return notifyLifecycle(sidecarRuntime, {
+  if (!sidecarRuntime || sidecarRuntime.config?.enabled !== true) {
+    return Promise.resolve(notifyObserverEvalLifecycle(sidecarRuntime, {
       status: 'disabled',
       observedAt: Date.now(),
       ...(sidecarId ? { sidecarId } : {}),
       reason: sidecarRuntime ? 'config_disabled' : 'runtime_not_configured',
-    }, dispatchInput.logger);
+    }, dispatchInput.logger));
   }
 
   if (!sidecarRuntime.observer) {
-    return notifyLifecycle(sidecarRuntime, {
+    return Promise.resolve(notifyObserverEvalLifecycle(sidecarRuntime, {
       status: 'unavailable',
       observedAt: Date.now(),
       ...(sidecarId ? { sidecarId } : {}),
       reason: 'observer_not_configured',
-    }, dispatchInput.logger);
+    }, dispatchInput.logger));
   }
 
-  const observerInput = createObserverEvalInput(dispatchInput.input);
-  try {
-    await sidecarRuntime.observer.observeTurn(observerInput);
-    return notifyLifecycle(sidecarRuntime, {
-      status: 'enabled',
-      observedAt: Date.now(),
-      ...(sidecarId ? { sidecarId } : {}),
-    }, dispatchInput.logger);
-  } catch (error) {
-    const sanitizedError = sanitizeObserverEvalError(error);
-    const logSafeInput = createObserverEvalLogSafeInput(dispatchInput.input);
-    dispatchInput.logger?.debug('Observer eval sidecar degraded', {
-      sidecarId: sidecarId ?? null,
-      turn: logSafeInput.turn,
-      privacy: logSafeInput.privacy,
-      error: sanitizedError,
-    });
-    return notifyLifecycle(sidecarRuntime, {
-      status: 'degraded',
-      observedAt: Date.now(),
-      ...(sidecarId ? { sidecarId } : {}),
-      reason: 'observer_failed',
-      error: sanitizedError,
-    }, dispatchInput.logger);
-  }
+  const queue = getOrCreateQueue(sidecarRuntime, dispatchInput.logger);
+  queue.updateLogger(dispatchInput.logger);
+  return Promise.resolve(queue.enqueue(dispatchInput.input));
 }
 
-async function notifyLifecycle(
-  sidecarRuntime: ObserverEvalSidecarRuntime | null | undefined,
-  state: ObserverEvalLifecycleStatePayload,
+export function getObserverEvalSidecarHealthSnapshot(
+  sidecarRuntime?: ObserverEvalSidecarRuntime | null,
+): ObserverEvalSidecarHealthSnapshot {
+  if (!sidecarRuntime) {
+    return createStaticHealthSnapshot(null);
+  }
+
+  const queue = queueByRuntime.get(sidecarRuntime);
+  return queue?.getHealthSnapshot() ?? createStaticHealthSnapshot(sidecarRuntime);
+}
+
+export async function drainObserverEvalSidecarQueue(
+  sidecarRuntime?: ObserverEvalSidecarRuntime | null,
+): Promise<ObserverEvalSidecarHealthSnapshot> {
+  if (!sidecarRuntime) {
+    return createStaticHealthSnapshot(null);
+  }
+
+  const queue = queueByRuntime.get(sidecarRuntime);
+  if (!queue) {
+    return createStaticHealthSnapshot(sidecarRuntime);
+  }
+
+  await queue.drainNow();
+  return queue.getHealthSnapshot();
+}
+
+export async function shutdownObserverEvalSidecar(
+  sidecarRuntime?: ObserverEvalSidecarRuntime | null,
+  options: ObserverEvalSidecarShutdownOptions = {},
+): Promise<ObserverEvalSidecarHealthSnapshot> {
+  if (!sidecarRuntime) {
+    return createStaticHealthSnapshot(null);
+  }
+
+  const queue = queueByRuntime.get(sidecarRuntime);
+  if (!queue) {
+    return createStaticHealthSnapshot(sidecarRuntime);
+  }
+
+  return queue.shutdown(options);
+}
+
+function getOrCreateQueue(
+  runtime: ObserverEvalSidecarRuntime,
   logger: ObserverEvalSidecarLogger | undefined,
-): Promise<ObserverEvalLifecycleState> {
-  const readonlyState = deepFreeze(structuredClone(state));
-  try {
-    await sidecarRuntime?.onLifecycleState?.(readonlyState);
-  } catch (error) {
-    const sanitizedError = sanitizeObserverEvalError(error);
-    logger?.debug('Observer eval sidecar lifecycle hook failed', {
-      status: state.status,
-      sidecarId: state.sidecarId ?? null,
-      error: sanitizedError,
-    });
-  }
-  return readonlyState;
-}
-
-function deepFreeze<T>(value: T): ObserverEvalReadonly<T> {
-  if (value === null || typeof value !== 'object') {
-    return value as ObserverEvalReadonly<T>;
+): ObserverEvalSidecarQueue {
+  const existing = queueByRuntime.get(runtime);
+  if (existing) {
+    return existing;
   }
 
-  for (const child of Object.values(value as Record<string, unknown>)) {
-    deepFreeze(child);
-  }
-
-  return Object.freeze(value) as ObserverEvalReadonly<T>;
+  const queue = new ObserverEvalSidecarQueue(runtime, logger);
+  queueByRuntime.set(runtime, queue);
+  return queue;
 }

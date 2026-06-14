@@ -19,6 +19,7 @@ import type {
   ObserverEvalLifecycleState,
   ObserverEvalSidecarRuntime,
 } from '../../eval/observer-sidecar/types.js';
+import { drainObserverEvalSidecarQueue } from '../../eval/observer-sidecar/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
@@ -623,14 +624,18 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
         // asserted through the unchanged production snapshot below.
       }
     });
-
-    const result = await runObserverSidecarTurn({
+    const sidecarRuntime: ObserverEvalSidecarRuntime = {
       config: { enabled: true, sidecarId: 'observer-test', deployment: 'test' },
       observer: { observeTurn },
       onLifecycleState: vi.fn((state: ObserverEvalLifecycleState) => {
         lifecycleStates.push(state);
       }),
-    });
+    };
+
+    const result = await runObserverSidecarTurn(sidecarRuntime);
+    expectProductionEmotionSnapshotUnchanged(result);
+
+    await drainObserverEvalSidecarQueue(sidecarRuntime);
 
     expect(observeTurn).toHaveBeenCalledTimes(1);
     expect(receivedInput).not.toBeNull();
@@ -676,9 +681,9 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
       expect.objectContaining({
         status: 'enabled',
         sidecarId: 'observer-test',
+        reason: 'queued',
       }),
     ]);
-    expectProductionEmotionSnapshotUnchanged(result);
   });
 
   it('records a degraded sidecar lifecycle state without changing the running turn', async () => {
@@ -686,17 +691,30 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
       throw new Error('sidecar failed');
     });
     const lifecycleStates: ObserverEvalLifecycleState[] = [];
-
-    const result = await runObserverSidecarTurn({
+    const sidecarRuntime: ObserverEvalSidecarRuntime = {
       config: { enabled: true, sidecarId: 'observer-test' },
       observer: { observeTurn },
       onLifecycleState: vi.fn((state: ObserverEvalLifecycleState) => {
         lifecycleStates.push(state);
       }),
+    };
+
+    const result = await runObserverSidecarTurn(sidecarRuntime);
+
+    expectProductionEmotionSnapshotUnchanged(result);
+    expect(result.response).toMatchObject({
+      content: 'assistant reply',
+      channelId: 'ch1',
     });
 
+    await drainObserverEvalSidecarQueue(sidecarRuntime);
     expect(observeTurn).toHaveBeenCalledTimes(1);
     expect(lifecycleStates).toEqual([
+      expect.objectContaining({
+        status: 'enabled',
+        sidecarId: 'observer-test',
+        reason: 'queued',
+      }),
       expect.objectContaining({
         status: 'degraded',
         sidecarId: 'observer-test',
@@ -710,11 +728,37 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
         },
       }),
     ]);
+  });
+
+  it('returns the running turn without waiting for pending sidecar observer work', async () => {
+    const observerCompletion = createDeferred<void>();
+    const observeTurn = vi.fn(() => observerCompletion.promise);
+    const sidecarRuntime: ObserverEvalSidecarRuntime = {
+      config: { enabled: true, sidecarId: 'observer-test' },
+      observer: { observeTurn },
+    };
+
+    const result = await runObserverSidecarTurn(sidecarRuntime);
+
     expect(result.response).toMatchObject({
       content: 'assistant reply',
       channelId: 'ch1',
     });
     expectProductionEmotionSnapshotUnchanged(result);
+
+    let drainSettled = false;
+    const drainPromise = drainObserverEvalSidecarQueue(sidecarRuntime).then(snapshot => {
+      drainSettled = true;
+      return snapshot;
+    });
+    await flushAsyncWork();
+
+    expect(observeTurn).toHaveBeenCalledTimes(1);
+    expect(drainSettled).toBe(false);
+
+    observerCompletion.resolve();
+    const snapshot = await drainPromise;
+    expect(snapshot.counts.completed).toBe(1);
   });
 });
 

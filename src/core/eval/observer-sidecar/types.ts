@@ -77,6 +77,18 @@ export type ObserverEvalInput = ObserverEvalReadonly<ObserverEvalInputPayload>;
 
 export type ObserverEvalLifecycleStatus = 'disabled' | 'enabled' | 'degraded' | 'unavailable';
 
+export type ObserverEvalSidecarOverflowPolicy = 'drop_newest';
+
+export type ObserverEvalSidecarDropReason =
+  | 'queue_full'
+  | 'shutting_down'
+  | 'shutdown_timeout';
+
+export type ObserverEvalSidecarFailureReason =
+  | 'observer_failed'
+  | 'observer_timeout'
+  | 'observer_unavailable';
+
 export interface ObserverEvalLifecycleStatePayload {
   status: ObserverEvalLifecycleStatus;
   observedAt: number;
@@ -88,14 +100,39 @@ export interface ObserverEvalLifecycleStatePayload {
     redactionReason?: string;
     rawMessageLength?: number;
   };
+  queue?: {
+    acceptedCount: number;
+    queuedCount: number;
+    runningCount: number;
+    maxQueuedTurns: number;
+  };
+  drop?: {
+    reason: ObserverEvalSidecarDropReason;
+    droppedCount: number;
+  };
 }
 
 export type ObserverEvalLifecycleState = ObserverEvalReadonly<ObserverEvalLifecycleStatePayload>;
+
+export interface ObserverEvalSidecarQueueConfig {
+  maxQueuedTurns?: number;
+  overflowPolicy?: ObserverEvalSidecarOverflowPolicy;
+  observerTimeoutMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
+  shutdownDrainTimeoutMs?: number;
+}
+
+export interface ObserverEvalSidecarShutdownOptions {
+  drain?: boolean;
+  timeoutMs?: number;
+}
 
 export interface ObserverEvalSidecarConfig {
   enabled?: boolean;
   sidecarId?: string;
   deployment?: 'live' | 'eval' | 'test';
+  queue?: ObserverEvalSidecarQueueConfig;
 }
 
 export interface ObserverEvalSidecarPort {
@@ -111,6 +148,52 @@ export interface ObserverEvalSidecarRuntime {
   observer?: ObserverEvalSidecarPort | null;
   onLifecycleState?: ObserverEvalLifecycleHook;
 }
+
+export interface ObserverEvalSidecarHealthSnapshotPayload {
+  status: ObserverEvalLifecycleStatus;
+  observedAt: number;
+  sidecarId?: string;
+  enabled: boolean;
+  available: boolean;
+  accepting: boolean;
+  queue: {
+    queuedCount: number;
+    runningCount: number;
+    maxQueuedTurns: number;
+    overflowPolicy: ObserverEvalSidecarOverflowPolicy;
+    shuttingDown: boolean;
+  };
+  counts: {
+    accepted: number;
+    completed: number;
+    dropped: number;
+    failed: number;
+    timedOut: number;
+    retried: number;
+    lifecycleHookFailed: number;
+    shutdownTimedOut: number;
+  };
+  dropCounts: Partial<Record<ObserverEvalSidecarDropReason, number>>;
+  failureCounts: Partial<Record<ObserverEvalSidecarFailureReason, number>>;
+  lastDrop?: {
+    reason: ObserverEvalSidecarDropReason;
+    turnId: TurnID;
+    requestId: string;
+    observedAt: number;
+  };
+  lastFailure?: {
+    reason: ObserverEvalSidecarFailureReason;
+    turnId: TurnID;
+    requestId: string;
+    message: string;
+    attempt: number;
+    observedAt: number;
+  };
+  lastLifecycleState?: ObserverEvalLifecycleState;
+}
+
+export type ObserverEvalSidecarHealthSnapshot =
+  ObserverEvalReadonly<ObserverEvalSidecarHealthSnapshotPayload>;
 
 export interface ObserverEvalSidecarLogger {
   debug(message: string, payload: Record<string, unknown>): void;

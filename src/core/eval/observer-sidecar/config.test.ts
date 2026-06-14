@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createDefaultObserverEvalSidecarSettings } from '../../../system/config/runtime-config-contracts.js';
 import {
   createObserverEvalSidecarRuntimeFromConfig,
+  shouldPropagateObserverEvalObservationError,
   toObserverEvalPersistenceDeployment,
 } from './config.js';
 import type { ObserverEvalInputPayload } from './types.js';
@@ -63,7 +64,24 @@ describe('createObserverEvalSidecarRuntimeFromConfig', () => {
     expect(toObserverEvalPersistenceDeployment('test_persona')).toBe('test');
     expect(toObserverEvalPersistenceDeployment(undefined)).toBe('test');
   });
+
+  it('keeps persisted recoverable observation errors out of runtime health failures', () => {
+    expect(shouldPropagateObserverEvalObservationError(undefined, true)).toBe(false);
+    expect(shouldPropagateObserverEvalObservationError(makeObservationError(true), true)).toBe(false);
+    expect(shouldPropagateObserverEvalObservationError(makeObservationError(true), false)).toBe(true);
+    expect(shouldPropagateObserverEvalObservationError(makeObservationError(false), true)).toBe(true);
+  });
 });
+
+function makeObservationError(recoverable: boolean) {
+  return {
+    message: 'observation unavailable',
+    code: 'observation-unavailable',
+    recoverable,
+    redacted: true as const,
+    redactionReason: 'observer_eval_projection_error',
+  };
+}
 
 function makeObserverInput(): ObserverEvalInputPayload {
   return {

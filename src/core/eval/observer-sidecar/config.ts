@@ -124,7 +124,7 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
       });
     }
 
-    if (error) {
+    if (shouldPropagateObserverEvalObservationError(error, Boolean(this.options.persistence))) {
       throw new Error(error.message);
     }
   }
@@ -222,6 +222,19 @@ function buildObservationError(
     };
   }
   return undefined;
+}
+
+export function shouldPropagateObserverEvalObservationError(
+  error: ObserverEvalSidecarErrorState | undefined,
+  persistenceAvailable: boolean,
+): boolean {
+  if (!error) {
+    return false;
+  }
+  if (!persistenceAvailable) {
+    return true;
+  }
+  return error.recoverable !== true;
 }
 
 function normalizeIdPart(value: string): string {

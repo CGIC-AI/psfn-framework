@@ -600,21 +600,25 @@ function ensureThinkingContentIndex(state: TransportMessageState): number {
 }
 
 function buildUsage(response: LLMResponse): AssistantMessage['usage'] {
-  const input = toUsageCount(response.inputTokens);
-  const output = toUsageCount(response.outputTokens);
-  const totalTokens = input + output;
+  const usageDetails = response.usageDetails;
+  const input = toUsageCount(usageDetails?.input ?? response.inputTokens);
+  const output = toUsageCount(usageDetails?.output ?? response.outputTokens);
+  const cacheRead = toUsageCount(usageDetails?.cacheRead);
+  const cacheWrite = toUsageCount(usageDetails?.cacheWrite);
+  const totalTokens = toUsageCount(usageDetails?.totalTokens)
+    || input + output + cacheRead + cacheWrite;
   return {
     input,
     output,
-    cacheRead: 0,
-    cacheWrite: 0,
+    cacheRead,
+    cacheWrite,
     totalTokens,
     cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      total: 0,
+      input: toUsageCost(usageDetails?.cost?.input),
+      output: toUsageCost(usageDetails?.cost?.output),
+      cacheRead: toUsageCost(usageDetails?.cost?.cacheRead),
+      cacheWrite: toUsageCost(usageDetails?.cost?.cacheWrite),
+      total: toUsageCost(usageDetails?.cost?.total),
     },
   };
 }
@@ -960,6 +964,12 @@ function assertValidTerminalAssistantMessage(
 function toUsageCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0
     ? Math.floor(value)
+    : 0;
+}
+
+function toUsageCost(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? value
     : 0;
 }
 

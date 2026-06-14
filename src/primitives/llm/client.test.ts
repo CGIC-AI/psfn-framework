@@ -1790,6 +1790,129 @@ describe('LLMClient model budget gates and usage metering', () => {
     mocks.getEnvApiKey.mockReturnValue(undefined);
   });
 
+  it('normalizes OpenRouter streaming usage accounting into provider cost telemetry', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: {
+            completion_tokens: 2,
+            completion_tokens_details: { reasoning_tokens: 1 },
+            cost: 0.95,
+            cost_details: { upstream_inference_cost: 19 },
+            prompt_tokens: 194,
+            prompt_tokens_details: {
+              cached_tokens: 7,
+              cache_write_tokens: 11,
+            },
+            total_tokens: 196,
+          },
+          content: [{ type: 'text', text: 'ok' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello there' }],
+      correlation: {
+        turnId: 'turn-openrouter-usage-1',
+        requestId: 'req-openrouter-usage-1',
+        channelId: 'channel-openrouter-usage-1',
+        callType: 'chat',
+      },
+    });
+
+    expect(response).toMatchObject({
+      inputTokens: 194,
+      outputTokens: 2,
+      usageDetails: {
+        input: 194,
+        output: 2,
+        cacheRead: 7,
+        cacheWrite: 11,
+        totalTokens: 196,
+        cost: { total: 0.95 },
+      },
+    });
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      inputTokens: 194,
+      outputTokens: 2,
+      cacheReadTokens: 7,
+      cacheWriteTokens: 11,
+      totalTokens: 196,
+      providerCostUsd: 0.95,
+      costSource: 'provider',
+      metadata: expect.objectContaining({
+        providerCost: { total: 0.95 },
+        rawUsage: expect.objectContaining({
+          cost: 0.95,
+          cost_details: { upstream_inference_cost: 19 },
+        }),
+      }),
+    }));
+  });
+
+  it('normalizes OpenRouter completion usage accounting into provider cost telemetry', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      usageRecorder,
+    });
+
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'done' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: {
+        prompt_tokens: 25,
+        completion_tokens: 5,
+        prompt_tokens_details: { cached_tokens: 3 },
+        total_tokens: 30,
+        cost: 0.123,
+      },
+      stopReason: 'stop',
+    });
+
+    const response = await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Summarize this quickly' }],
+      },
+      'background',
+      { disableRetry: true },
+    );
+
+    expect(response).toMatchObject({
+      inputTokens: 25,
+      outputTokens: 5,
+      usageDetails: {
+        input: 25,
+        output: 5,
+        cacheRead: 3,
+        cacheWrite: 0,
+        totalTokens: 30,
+        cost: { total: 0.123 },
+      },
+    });
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      callKind: 'completion',
+      inputTokens: 25,
+      outputTokens: 5,
+      cacheReadTokens: 3,
+      totalTokens: 30,
+      providerCostUsd: 0.123,
+      costSource: 'provider',
+    }));
+  });
+
   it('skips budget-blocked primary candidate and falls back to secondary chat candidate', async () => {
     const config = makeConfig();
     const baseRegistry = config.modelRegistry!;

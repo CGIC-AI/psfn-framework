@@ -213,6 +213,14 @@ describe('createSubstrateStreamFn', () => {
           model: 'gateway-model',
           inputTokens: 11,
           outputTokens: 7,
+          usageDetails: {
+            input: 11,
+            output: 7,
+            cacheRead: 3,
+            cacheWrite: 2,
+            totalTokens: 18,
+            cost: { total: 0.42 },
+          },
           stopReason: 'stop',
         };
       }),
@@ -251,9 +259,17 @@ describe('createSubstrateStreamFn', () => {
       'toolcall_end',
       'done',
     ]);
-    const doneEvent = events.at(-1) as { type: string; message: { content: unknown[]; model: string } };
+    const doneEvent = events.at(-1) as { type: string; message: { content: unknown[]; model: string; usage: Record<string, unknown> } };
     expect(doneEvent.type).toBe('done');
     expect(doneEvent.message.model).toBe('gateway-model');
+    expect(doneEvent.message.usage).toMatchObject({
+      input: 11,
+      output: 7,
+      cacheRead: 3,
+      cacheWrite: 2,
+      totalTokens: 18,
+      cost: { total: 0.42 },
+    });
     expect(doneEvent.message.content).toEqual([
       { type: 'text', text: 'hello world' },
       { type: 'thinking', thinking: 'step by step' },

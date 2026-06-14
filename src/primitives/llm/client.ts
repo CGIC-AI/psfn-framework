@@ -1408,7 +1408,24 @@ function normalizeUsageCost(value: unknown): number | undefined {
   return numeric !== undefined && numeric >= 0 ? numeric : undefined;
 }
 
+function normalizeUsageCountFromRecord(record: Record<string, unknown>, ...keys: string[]): number {
+  for (const key of keys) {
+    const count = normalizeUsageCount(record[key]);
+    if (count > 0) return count;
+  }
+  return 0;
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
 function normalizeLLMUsageCostDetails(value: unknown): LLMUsageCostDetails | undefined {
+  const totalFromNumericCost = normalizeUsageCost(value);
+  if (totalFromNumericCost !== undefined) {
+    return { total: totalFromNumericCost };
+  }
+
   if (!isRecord(value)) return undefined;
   const input = normalizeUsageCost(value.input);
   const output = normalizeUsageCost(value.output);
@@ -1444,11 +1461,16 @@ function normalizeLLMUsageDetails(
   fallbackOutputTokens: number,
 ): LLMUsageDetails {
   const record = isRecord(value) ? value : {};
-  const input = normalizeUsageCount(record.input ?? fallbackInputTokens);
-  const output = normalizeUsageCount(record.output ?? fallbackOutputTokens);
-  const cacheRead = normalizeUsageCount(record.cacheRead);
-  const cacheWrite = normalizeUsageCount(record.cacheWrite);
-  const totalTokens = normalizeUsageCount(record.totalTokens)
+  const promptTokenDetails = optionalRecord(record.prompt_tokens_details);
+  const input = normalizeUsageCountFromRecord(record, 'input', 'prompt_tokens')
+    || normalizeUsageCount(fallbackInputTokens);
+  const output = normalizeUsageCountFromRecord(record, 'output', 'completion_tokens')
+    || normalizeUsageCount(fallbackOutputTokens);
+  const cacheRead = normalizeUsageCountFromRecord(record, 'cacheRead')
+    || normalizeUsageCount(promptTokenDetails.cached_tokens);
+  const cacheWrite = normalizeUsageCountFromRecord(record, 'cacheWrite')
+    || normalizeUsageCount(promptTokenDetails.cache_write_tokens);
+  const totalTokens = normalizeUsageCountFromRecord(record, 'totalTokens', 'total_tokens')
     || input + output + cacheRead + cacheWrite;
   const cost = normalizeLLMUsageCostDetails(record.cost);
   return {

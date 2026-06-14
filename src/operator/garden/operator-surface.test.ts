@@ -241,6 +241,32 @@ async function createHarness(): Promise<Harness> {
       getShardFoldReview: vi.fn(async () => null),
       resolveShardFoldReview: vi.fn(async () => ({ ok: false, message: 'Shard fold review not found' })),
     },
+    modelUsage: {
+      getModelUsageData: vi.fn(async query => ({
+        query: query ?? {},
+        totals: {
+          calls: 1,
+          successfulCalls: 1,
+          failedCalls: 0,
+          inputTokens: 12,
+          outputTokens: 3,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          totalTokens: 15,
+          providerCostUsd: 0.001,
+          estimatedCostUsd: 0,
+          totalCostUsd: 0.001,
+          averageDurationMs: 120,
+          averageTtftMs: 40,
+        },
+        byModel: [],
+        byPurpose: [],
+        byTool: [],
+        byCallKind: [],
+        recentEvents: [],
+        expensiveEvents: [],
+      })),
+    },
     adaptiveTools: null,
     images: {} as GardenAdminDomainServices['images'],
     memory: {} as GardenAdminDomainServices['memory'],
@@ -352,6 +378,14 @@ describe('Garden operator surface', () => {
     expect(res.status).toBe(200);
     const payload = JSON.parse(res.body) as { stats: { sessionCount: number } };
     expect(payload.stats.sessionCount).toBeTypeOf('number');
+  });
+
+  it('proxies persisted model usage routes through the operator surface', async () => {
+    const res = await requestPort(harness.port, 'GET', '/api/admin/model-usage?limit=5&sinceMs=100');
+    expect(res.status).toBe(200);
+    const payload = JSON.parse(res.body) as { totals: { totalTokens: number }; query: { limit?: number; sinceMs?: number } };
+    expect(payload.totals.totalTokens).toBe(15);
+    expect(payload.query).toMatchObject({ limit: 5, sinceMs: 100 });
   });
 
   it('proxies canonical admin settings owner-file routes through the operator surface', async () => {

@@ -2,6 +2,12 @@ import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import type {
   ChannelType,
   MessageRoutingMetadata,
+  ObserverEvalSidecarAdapterSettings,
+  ObserverEvalSidecarDeploymentTarget,
+  ObserverEvalSidecarGardenExposureSettings,
+  ObserverEvalSidecarMode,
+  ObserverEvalSidecarOverflowPolicy,
+  ObserverEvalSidecarPersistenceSettings,
   ObservabilityCallType,
   TurnID,
 } from '../../../shared/contracts/runtime.js';
@@ -77,7 +83,7 @@ export type ObserverEvalInput = ObserverEvalReadonly<ObserverEvalInputPayload>;
 
 export type ObserverEvalLifecycleStatus = 'disabled' | 'enabled' | 'degraded' | 'unavailable';
 
-export type ObserverEvalSidecarOverflowPolicy = 'drop_newest';
+export type { ObserverEvalSidecarOverflowPolicy } from '../../../shared/contracts/runtime.js';
 
 export type ObserverEvalSidecarDropReason =
   | 'queue_full'
@@ -131,8 +137,12 @@ export interface ObserverEvalSidecarShutdownOptions {
 export interface ObserverEvalSidecarConfig {
   enabled?: boolean;
   sidecarId?: string;
-  deployment?: 'live' | 'eval' | 'test';
+  deploymentTarget?: ObserverEvalSidecarDeploymentTarget;
+  mode?: ObserverEvalSidecarMode;
   queue?: ObserverEvalSidecarQueueConfig;
+  adapter?: ObserverEvalSidecarAdapterSettings;
+  persistence?: ObserverEvalSidecarPersistenceSettings;
+  garden?: ObserverEvalSidecarGardenExposureSettings;
 }
 
 export interface ObserverEvalSidecarPort {

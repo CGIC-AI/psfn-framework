@@ -57,6 +57,7 @@ import type { CharacterCardVersionStore } from '../../core/identity/card-version
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { createPromptGenerationFailureAlertHandler } from '../startup/support/operator-alerts.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
+import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/observer-sidecar/config.js';
 import {
   resolveContactsDir,
   resolveMemoryJournalPath,
@@ -172,6 +173,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
     },
     emotionRuntime,
+    observerEvalSidecar: createObserverEvalSidecarRuntimeFromConfig(config),
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);

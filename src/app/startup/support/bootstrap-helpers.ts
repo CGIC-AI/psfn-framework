@@ -35,6 +35,7 @@ import {
   assertPersistenceCutoverReady,
   buildPersistenceCutoverOptionsFromConfig,
 } from '../../../persistence/cutover.js';
+import { validateObserverEvalSidecarStartupConfig } from '../../../system/config/observer-eval-sidecar-config.js';
 export type {
   RuntimeVoiceConnectorBinding,
   RuntimeVoiceProviderGate,
@@ -241,6 +242,7 @@ export function hydrateCanonicalStartupConfig(
   const startupRuntimeSettings = configStore.loadStartupRuntimeSettings();
   const { settingsDomains } = startupRuntimeSettings;
   applySettings(config, settingsDomains.runtime);
+  validateObserverEvalSidecarStartupConfig(config, pathSnapshot);
   if (secretAuthority === 'gateway') {
     assertSecuritySensitiveStartupConfig(config);
   }

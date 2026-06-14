@@ -27,6 +27,7 @@ import {
   type EmotionRuntimeWiring,
   type SubstrateAgentOptions,
 } from '../../../core/agent/substrate-agent.js';
+import type { ObserverEvalSidecarRuntime } from '../../../core/eval/observer-sidecar/types.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import type { EpisodicRetrievalStore } from '../../../faculties/memory/retrieval/episodic.js';
 import { MemoryExtractor } from '../../../faculties/memory/extraction.js';
@@ -179,6 +180,7 @@ export interface SubstrateAgentCompositionOptions {
   config: CoreSubstrateConfig;
   runtimeMode?: RuntimeMode;
   emotionRuntime?: EmotionRuntimeWiring;
+  observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   streamRuntimeOptions?: SubstrateAgentOptions['streamRuntimeOptions'];
   streamTransport?: SubstrateAgentOptions['streamTransport'];
 }
@@ -198,6 +200,7 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
         : {}),
       ...(options.runtimeMode ? { runtimeMode: options.runtimeMode } : {}),
       ...(options.emotionRuntime ? { emotionRuntime: options.emotionRuntime } : {}),
+      ...(options.observerEvalSidecar ? { observerEvalSidecar: options.observerEvalSidecar } : {}),
       ...(options.streamRuntimeOptions ? { streamRuntimeOptions: options.streamRuntimeOptions } : {}),
       ...(options.streamTransport ? { streamTransport: options.streamTransport } : {}),
     },

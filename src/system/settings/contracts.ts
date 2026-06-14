@@ -1,4 +1,4 @@
-import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelRoleAssignments, ModelSlot } from '../../shared/contracts/runtime.js';
+import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelRoleAssignments, ModelSlot, ObserverEvalSidecarSettings } from '../../shared/contracts/runtime.js';
 import type { CapabilityTier, CompositionalPolicyConfig, SessionRestartBehavior, SubstrateConfig } from '../config/runtime-config-contracts.js';
 import type { ImageWorkflowSettings } from '../../primitives/images/types.js';
 
@@ -127,6 +127,7 @@ export interface EditableSettings {
   embeddingApiModel?: string;
   embeddingApiDims?: number;
   compositionalPolicy?: CompositionalPolicyConfig;
+  observerEvalSidecar?: ObserverEvalSidecarSettings;
   wyomingShardRouting?: SubstrateConfig['wyomingShardRouting'];
   shardToolsets?: SubstrateConfig['shardToolsets'];
   webFetchAllowHttp?: boolean;
@@ -250,6 +251,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'embeddingApiModel',
   'embeddingApiDims',
   'compositionalPolicy',
+  'observerEvalSidecar',
   'webFetchAllowHttp',
   'webFetchDomainAllowlist',
   'webFetchAllowInternalNetwork',
@@ -310,6 +312,7 @@ export type RuntimeSettingValue =
   | null
   | string[]
   | CompositionalPolicyConfig
+  | ObserverEvalSidecarSettings
   | ImageWorkflowSettings
   | Record<string, boolean>
   | Partial<Record<'nursery' | 'apprentice' | 'autonomous' | 'custom', string[]>>

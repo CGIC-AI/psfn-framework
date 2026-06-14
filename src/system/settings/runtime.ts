@@ -1,6 +1,7 @@
 import {
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   DEFAULT_UI_THEME_ID,
+  createDefaultObserverEvalSidecarSettings,
   type SubstrateConfig,
 } from '../config/runtime-config-contracts.js';
 import {
@@ -190,6 +191,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     analysisWorkbenchMaxTokens: config.analysisWorkbenchMaxTokens ?? null,
     analysisWorkbenchMaxWallTimeMs: config.analysisWorkbenchMaxWallTimeMs ?? null,
     analysisWorkbenchMaxSubQueries: config.analysisWorkbenchMaxSubQueries ?? null,
+    observerEvalSidecar: structuredClone(
+      config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings(),
+    ),
     retryMaxAttempts: config.retryMaxAttempts ?? null,
     retryBaseDelayMs: config.retryBaseDelayMs ?? null,
   } satisfies SnapshotSection<
@@ -212,6 +216,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'analysisWorkbenchMaxTokens'
     | 'analysisWorkbenchMaxWallTimeMs'
     | 'analysisWorkbenchMaxSubQueries'
+    | 'observerEvalSidecar'
     | 'retryMaxAttempts'
     | 'retryBaseDelayMs'
   >;
@@ -638,6 +643,9 @@ function applyWebAndGardenSettings(
     config.imageWorkflows = normalizeImageWorkflowSettings(
       settings.imageWorkflows,
     );
+  }
+  if ('observerEvalSidecar' in settings) {
+    config.observerEvalSidecar = structuredClone(settings.observerEvalSidecar);
   }
   if ('uiThemeId' in settings) {
     const trimmedThemeId = settings.uiThemeId?.trim() ?? '';

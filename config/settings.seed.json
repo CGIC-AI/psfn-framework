@@ -32,6 +32,33 @@
   "analysisWorkbenchMaxTokens": 76000,
   "analysisWorkbenchMaxWallTimeMs": 300000,
   "analysisWorkbenchMaxSubQueries": 12,
+  "observerEvalSidecar": {
+    "enabled": false,
+    "sidecarId": "observer-eval-sidecar",
+    "deploymentTarget": "test_persona",
+    "mode": "observe_only",
+    "queue": {
+      "maxQueuedTurns": 32,
+      "overflowPolicy": "drop_newest",
+      "observerTimeoutMs": 5000,
+      "maxRetries": 0,
+      "retryDelayMs": 0,
+      "shutdownDrainTimeoutMs": 5000
+    },
+    "adapter": {
+      "kind": "disabled",
+      "includeWorldState": false
+    },
+    "persistence": {
+      "enabled": false,
+      "retentionDays": 14,
+      "maxStoredObservations": 10000
+    },
+    "garden": {
+      "exposeHealth": false,
+      "exposeTelemetry": false
+    }
+  },
   "importProcessingRouteMode": "background",
   "importProcessingStrictPolicy": false,
   "openRouterModelsApiUrl": "https://openrouter.ai/api/v1/models",

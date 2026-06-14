@@ -15,6 +15,7 @@ import type {
   ModelPurpose,
   ModelRoleAssignments,
   ModelSlot,
+  ObserverEvalSidecarSettings,
   ResponseStyleOverrides,
   RuntimeConfigHooks,
   TextEmotionDType,
@@ -39,6 +40,36 @@ export function createDefaultCompositionalPolicyConfig(): CompositionalPolicyCon
     allowedTiers: [],
     allowedChannelTypes: [],
     allowedPurposes: [],
+  };
+}
+
+export function createDefaultObserverEvalSidecarSettings(): ObserverEvalSidecarSettings {
+  return {
+    enabled: false,
+    sidecarId: 'observer-eval-sidecar',
+    deploymentTarget: 'test_persona',
+    mode: 'observe_only',
+    queue: {
+      maxQueuedTurns: 32,
+      overflowPolicy: 'drop_newest',
+      observerTimeoutMs: 5_000,
+      maxRetries: 0,
+      retryDelayMs: 0,
+      shutdownDrainTimeoutMs: 5_000,
+    },
+    adapter: {
+      kind: 'disabled',
+      includeWorldState: false,
+    },
+    persistence: {
+      enabled: false,
+      retentionDays: 14,
+      maxStoredObservations: 10_000,
+    },
+    garden: {
+      exposeHealth: false,
+      exposeTelemetry: false,
+    },
   };
 }
 
@@ -117,6 +148,7 @@ export interface SubstrateConfig {
   promotedExtendedTools?: string[];
   capabilityTier?: CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
+  observerEvalSidecar?: ObserverEvalSidecarSettings;
   shardToolsets?: ShardToolsetConfig;
   voiceEnabled?: boolean;
   discordBackfillOnStartup?: boolean;

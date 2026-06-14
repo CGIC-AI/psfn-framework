@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadAgentConfig, loadConfig } from './load-config.js';
+import { createDefaultObserverEvalSidecarSettings } from './runtime-config-contracts.js';
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -255,6 +256,7 @@ describe('loadConfig path defaults', () => {
     expect(config.analysisWorkbenchMaxTokens).toBe(76_000);
     expect(config.analysisWorkbenchMaxWallTimeMs).toBe(300_000);
     expect(config.analysisWorkbenchMaxSubQueries).toBe(12);
+    expect(config.observerEvalSidecar).toEqual(createDefaultObserverEvalSidecarSettings());
     expect(config.deepgramModel).toBeUndefined();
     expect(config.deepgramSttEndpoint).toBeUndefined();
     expect(config.deepgramListenEndpoint).toBeUndefined();

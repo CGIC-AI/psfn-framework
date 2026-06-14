@@ -6,7 +6,10 @@ import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
 import { createEnvCredentialVault } from '../../../boundary/custody/credential-vault.js';
 import type { CanonicalModelRegistry } from '../../../shared/contracts/runtime.js';
 import type { ConfigStorePort } from '../../../system/config/config-store.js';
-import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import {
+  createDefaultObserverEvalSidecarSettings,
+  type SubstrateConfig,
+} from '../../../system/config/runtime-config-contracts.js';
 import {
   createEligibilityGate,
   EligibilityDeniedError,
@@ -1247,6 +1250,96 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(result.chargePolicyConfig.runChargeQuotaByLane.interactive).toBe(30);
     expect(config.chargePolicy?.surfaceCosts.shardLaunch).toBe(8);
     expect(result.diagnostics.legacySettingsKeys).toEqual([]);
+  });
+
+  it('hydrates observer eval sidecar settings for isolated test-persona deployments', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-sidecar-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
+
+    const observerEvalSidecar = {
+      ...createDefaultObserverEvalSidecarSettings(),
+      enabled: true,
+      sidecarId: 'observer-eval-test-persona',
+      deploymentTarget: 'test_persona' as const,
+      adapter: {
+        kind: 'emosim' as const,
+        emosimRoot: join(rootDir, 'vendor', 'emo_sim'),
+        pythonExecutable: 'python3',
+        timeoutMs: 4000,
+        includeWorldState: true,
+      },
+      persistence: {
+        enabled: true,
+        rootDir: join(rootDir, 'observer-eval-data'),
+        retentionDays: 21,
+        maxStoredObservations: 7500,
+      },
+      garden: {
+        exposeHealth: true,
+        exposeTelemetry: true,
+      },
+    };
+    saveSettings(systemDataDir, { observerEvalSidecar });
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    const result = hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    });
+
+    expect(result.settingsDomains.runtime.observerEvalSidecar).toEqual(observerEvalSidecar);
+    expect(config.observerEvalSidecar).toEqual(observerEvalSidecar);
+  });
+
+  it('fails closed when observer eval persistence shares a runtime state root', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-hydration-sidecar-overlap-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionDataDir = join(rootDir, 'companion-data');
+    const legacyDataDir = join(rootDir, 'legacy-data-empty');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    mkdirSync(legacyDataDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeHydrationOwnerExamples(systemDataDir);
+
+    saveSettings(systemDataDir, {
+      observerEvalSidecar: {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        adapter: {
+          kind: 'emosim',
+          emosimRoot: join(rootDir, 'vendor', 'emo_sim'),
+          includeWorldState: false,
+        },
+        persistence: {
+          enabled: true,
+          rootDir: join(companionDataDir, 'observer-eval'),
+          retentionDays: 14,
+          maxStoredObservations: 1000,
+        },
+      },
+    });
+
+    const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
+    expect(() => hydrateCanonicalStartupConfig(config, {
+      env: {
+        ...process.env,
+        CONFIG_DIR: './config',
+        PSFN_RUNTIME_LAYOUT_MODE: 'continuous',
+        DATA_DIR: legacyDataDir,
+      },
+    })).toThrow('observerEvalSidecar.persistence.rootDir');
   });
 
   it('returns parity-consistent canonical startup snapshots across entrypoint callers', () => {

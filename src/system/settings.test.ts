@@ -13,7 +13,11 @@ import {
   RUNTIME_SETTINGS_KEYS,
   normalizeEditableSettings,
 } from './settings.js';
-import { createDefaultCompositionalPolicyConfig, type SubstrateConfig } from './config/runtime-config-contracts.js';
+import {
+  createDefaultCompositionalPolicyConfig,
+  createDefaultObserverEvalSidecarSettings,
+  type SubstrateConfig,
+} from './config/runtime-config-contracts.js';
 import type { CanonicalModelRegistry } from '../shared/contracts/runtime.js';
 import { registerStreamingSttProvider } from '../primitives/voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../primitives/voice/connectors/tts/index.js';
@@ -354,6 +358,7 @@ describe('settings', () => {
         shardToolsets: {
           nursery: ['tool-a'],
         },
+        observerEvalSidecar: createDefaultObserverEvalSidecarSettings(),
       };
 
       saveSettings(tempDir, settings);
@@ -440,6 +445,101 @@ describe('settings', () => {
 
       expect(normalized.profileSynthesisSourceMemoryLimit).toBe(20);
       expect(normalized.profileSynthesisMinSourceMemories).toBe(20);
+    });
+
+    it('normalizes observer eval sidecar deployment settings strictly', () => {
+      const settings = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        sidecarId: ' eval-sidecar ',
+        deploymentTarget: 'test_persona' as const,
+        queue: {
+          maxQueuedTurns: '12',
+          overflowPolicy: 'drop_newest',
+          observerTimeoutMs: '2500',
+          maxRetries: '1',
+          retryDelayMs: '100',
+          shutdownDrainTimeoutMs: '3000',
+        },
+        adapter: {
+          kind: 'emosim' as const,
+          emosimRoot: ' /repo/vendor/emo_sim ',
+          pythonExecutable: ' python3 ',
+          timeoutMs: '4000',
+          deterministicSeed: ' seed-a ',
+          includeWorldState: true,
+        },
+        persistence: {
+          enabled: true,
+          rootDir: ' /repo/runtime/eval/observer-sidecar ',
+          retentionDays: '21',
+          maxStoredObservations: '7500',
+        },
+        garden: {
+          exposeHealth: true,
+          exposeTelemetry: false,
+        },
+      };
+
+      const normalized = normalizeEditableSettings({
+        observerEvalSidecar: settings as any,
+      });
+
+      expect(normalized.observerEvalSidecar).toEqual({
+        enabled: true,
+        sidecarId: 'eval-sidecar',
+        deploymentTarget: 'test_persona',
+        mode: 'observe_only',
+        queue: {
+          maxQueuedTurns: 12,
+          overflowPolicy: 'drop_newest',
+          observerTimeoutMs: 2500,
+          maxRetries: 1,
+          retryDelayMs: 100,
+          shutdownDrainTimeoutMs: 3000,
+        },
+        adapter: {
+          kind: 'emosim',
+          emosimRoot: '/repo/vendor/emo_sim',
+          pythonExecutable: 'python3',
+          timeoutMs: 4000,
+          deterministicSeed: 'seed-a',
+          includeWorldState: true,
+        },
+        persistence: {
+          enabled: true,
+          rootDir: '/repo/runtime/eval/observer-sidecar',
+          retentionDays: 21,
+          maxStoredObservations: 7500,
+        },
+        garden: {
+          exposeHealth: true,
+          exposeTelemetry: false,
+        },
+      });
+    });
+
+    it('fails closed for partial observer eval sidecar settings', () => {
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: {
+          enabled: true,
+        } as any,
+      })).toThrow('observerEvalSidecar.queue');
+    });
+
+    it('fails closed when observer eval sidecar is enabled without an adapter root', () => {
+      const sidecar = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        adapter: {
+          kind: 'emosim' as const,
+          includeWorldState: false,
+        },
+      };
+
+      expect(() => normalizeEditableSettings({
+        observerEvalSidecar: sidecar,
+      })).toThrow('observerEvalSidecar.adapter.emosimRoot');
     });
 
     it('fails closed for legacy model fields without canonical modelRegistry', () => {
@@ -799,6 +899,41 @@ describe('settings', () => {
         allowedChannelTypes: ['api', 'discord'],
         allowedPurposes: ['retrieval'],
       });
+    });
+
+    it('applies observer eval sidecar deployment settings as one validated runtime object', () => {
+      const config = makeConfig();
+      const sidecar = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        sidecarId: 'observer-eval-test-persona',
+        deploymentTarget: 'test_persona' as const,
+        adapter: {
+          kind: 'emosim' as const,
+          emosimRoot: '/repo/vendor/emo_sim',
+          pythonExecutable: 'python3',
+          timeoutMs: 2500,
+          deterministicSeed: 'test-persona-seed',
+          includeWorldState: true,
+        },
+        persistence: {
+          enabled: true,
+          rootDir: '/repo/runtime/eval/observer-sidecar',
+          retentionDays: 30,
+          maxStoredObservations: 5000,
+        },
+        garden: {
+          exposeHealth: true,
+          exposeTelemetry: false,
+        },
+      };
+
+      applySettings(config, {
+        observerEvalSidecar: sidecar,
+      });
+
+      expect(config.observerEvalSidecar).toEqual(sidecar);
+      expect(config.observerEvalSidecar).not.toBe(sidecar);
     });
 
     it('applies import-processing routing controls', () => {
@@ -1574,6 +1709,7 @@ describe('settings', () => {
       expect(snapshot.analysisWorkbenchMaxTokens).toBeNull();
       expect(snapshot.analysisWorkbenchMaxWallTimeMs).toBeNull();
       expect(snapshot.analysisWorkbenchMaxSubQueries).toBeNull();
+      expect(snapshot.observerEvalSidecar).toEqual(createDefaultObserverEvalSidecarSettings());
       expect(snapshot.sessionRestartBehavior).toBe('reuse_latest_session');
       expect(snapshot.observationMaskingWindow).toBe(1);
       expect(snapshot.compactionEmotionalSalienceThresholdPct).toBe(75);
@@ -1619,6 +1755,7 @@ describe('settings', () => {
 
     it('validates setting key membership', () => {
       expect(isRuntimeSettingKey('analysisWorkbenchMaxSubQueries')).toBe(true);
+      expect(isRuntimeSettingKey('observerEvalSidecar')).toBe(true);
       expect(isRuntimeSettingKey('sessionRestartBehavior')).toBe(true);
       expect(isRuntimeSettingKey('compositionalPolicy')).toBe(true);
       expect(isRuntimeSettingKey('promotedExtendedTools')).toBe(true);
@@ -1644,6 +1781,25 @@ describe('settings', () => {
       config.promotedExtendedTools = ['repo_status', 'session_list'];
       const snapshot = getRuntimeSettingsSnapshot(config);
       expect(snapshot.promotedExtendedTools).toEqual(['repo_status', 'session_list']);
+    });
+
+    it('includes observer eval sidecar settings in snapshot when configured', () => {
+      const config = makeConfig();
+      config.observerEvalSidecar = {
+        ...createDefaultObserverEvalSidecarSettings(),
+        enabled: true,
+        sidecarId: 'observer-eval-live',
+        deploymentTarget: 'live',
+        adapter: {
+          kind: 'emosim',
+          emosimRoot: '/repo/vendor/emo_sim',
+          includeWorldState: false,
+        },
+      };
+
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.observerEvalSidecar).toEqual(config.observerEvalSidecar);
+      expect(snapshot.observerEvalSidecar).not.toBe(config.observerEvalSidecar);
     });
 
     it('honors explicit sttProvider selection and defaults to disabled when unset in snapshot', () => {

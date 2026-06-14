@@ -1,5 +1,6 @@
 import {
   DEFAULT_UI_THEME_ID,
+  createDefaultObserverEvalSidecarSettings,
   PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
 } from '../config/runtime-config-contracts.js';
 import { normalizeImageWorkflowSettings } from '../../primitives/images/types.js';
@@ -10,6 +11,16 @@ import {
 import { normalizeCompositionalPolicyConfig } from '../capabilities/compositional-policy.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
+import {
+  OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS,
+  OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS,
+  OBSERVER_EVAL_SIDECAR_MODES,
+  type ObserverEvalSidecarAdapterKind,
+  type ObserverEvalSidecarDeploymentTarget,
+  type ObserverEvalSidecarMode,
+  type ObserverEvalSidecarOverflowPolicy,
+  type ObserverEvalSidecarSettings,
+} from '../../shared/contracts/runtime.js';
 import {
   normalizeSttProvider,
   normalizeTtsProvider,
@@ -47,6 +58,15 @@ const TEXT_EMOTION_DTYPE_VALUES = [
   'q4f16',
 ] as const;
 const TEXT_EMOTION_DTYPE_SET = new Set<string>(TEXT_EMOTION_DTYPE_VALUES);
+const OBSERVER_EVAL_SIDECAR_ADAPTER_KIND_SET = new Set<string>(
+  OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS,
+);
+const OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGET_SET = new Set<string>(
+  OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS,
+);
+const OBSERVER_EVAL_SIDECAR_MODE_SET = new Set<string>(
+  OBSERVER_EVAL_SIDECAR_MODES,
+);
 
 function normalizeTextEmotionDtype(
   value: unknown,
@@ -163,6 +183,210 @@ function normalizeShardToolsetConfig(
   return parsed;
 }
 
+function expectRecord(value: unknown, fieldPath: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected object`);
+  }
+  return value;
+}
+
+function expectBoolean(value: unknown, fieldPath: string): boolean {
+  const normalized = toBoolean(value);
+  if (normalized === undefined) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected boolean`);
+  }
+  return normalized;
+}
+
+function expectNonEmptyString(value: unknown, fieldPath: string): string {
+  const normalized = toNonEmptyString(value);
+  if (!normalized) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected non-empty string`);
+  }
+  return normalized;
+}
+
+function expectIntegerInRange(
+  value: unknown,
+  fieldPath: string,
+  min: number,
+  max: number,
+): number {
+  const normalized = toIntegerInRange(value, min, max);
+  if (normalized === undefined) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected integer ${min}-${max}`);
+  }
+  return normalized;
+}
+
+function optionalNonEmptyString(value: unknown, fieldPath: string): string | undefined {
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  return expectNonEmptyString(value, fieldPath);
+}
+
+function expectEnumValue<T extends string>(
+  value: unknown,
+  fieldPath: string,
+  allowed: ReadonlySet<string>,
+  description: string,
+): T {
+  if (typeof value !== 'string') {
+    throw new Error(`Invalid settings at ${fieldPath}: expected ${description}`);
+  }
+  const normalized = value.trim();
+  if (!allowed.has(normalized)) {
+    throw new Error(`Invalid settings at ${fieldPath}: expected ${description}`);
+  }
+  return normalized as T;
+}
+
+function normalizeObserverEvalSidecarSettings(
+  value: unknown,
+  fieldPath: string,
+): ObserverEvalSidecarSettings {
+  const root = expectRecord(value, fieldPath);
+  const queue = expectRecord(root.queue, `${fieldPath}.queue`);
+  const adapter = expectRecord(root.adapter, `${fieldPath}.adapter`);
+  const persistence = expectRecord(root.persistence, `${fieldPath}.persistence`);
+  const garden = expectRecord(root.garden, `${fieldPath}.garden`);
+  const defaults = createDefaultObserverEvalSidecarSettings();
+
+  const enabled = expectBoolean(root.enabled, `${fieldPath}.enabled`);
+  const sidecarId = expectNonEmptyString(root.sidecarId, `${fieldPath}.sidecarId`);
+  const deploymentTarget = expectEnumValue<ObserverEvalSidecarDeploymentTarget>(
+    root.deploymentTarget,
+    `${fieldPath}.deploymentTarget`,
+    OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGET_SET,
+    `one of: ${OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS.join(', ')}`,
+  );
+  const mode = expectEnumValue<ObserverEvalSidecarMode>(
+    root.mode,
+    `${fieldPath}.mode`,
+    OBSERVER_EVAL_SIDECAR_MODE_SET,
+    `one of: ${OBSERVER_EVAL_SIDECAR_MODES.join(', ')}`,
+  );
+  const adapterKind = expectEnumValue<ObserverEvalSidecarAdapterKind>(
+    adapter.kind,
+    `${fieldPath}.adapter.kind`,
+    OBSERVER_EVAL_SIDECAR_ADAPTER_KIND_SET,
+    `one of: ${OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS.join(', ')}`,
+  );
+  const emosimRoot = optionalNonEmptyString(adapter.emosimRoot, `${fieldPath}.adapter.emosimRoot`);
+  const pythonExecutable = optionalNonEmptyString(
+    adapter.pythonExecutable,
+    `${fieldPath}.adapter.pythonExecutable`,
+  );
+  const deterministicSeed = optionalNonEmptyString(
+    adapter.deterministicSeed,
+    `${fieldPath}.adapter.deterministicSeed`,
+  );
+  const adapterTimeoutMs = adapter.timeoutMs === undefined
+    ? undefined
+    : expectIntegerInRange(adapter.timeoutMs, `${fieldPath}.adapter.timeoutMs`, 1, 600_000);
+
+  if (enabled && adapterKind === 'disabled') {
+    throw new Error(
+      `Invalid settings at ${fieldPath}.adapter.kind: enabled sidecar requires a non-disabled adapter`,
+    );
+  }
+  if (enabled && adapterKind === 'emosim' && !emosimRoot) {
+    throw new Error(
+      `Invalid settings at ${fieldPath}.adapter.emosimRoot: required when enabled sidecar uses adapter.kind=emosim`,
+    );
+  }
+
+  const persistenceEnabled = expectBoolean(
+    persistence.enabled,
+    `${fieldPath}.persistence.enabled`,
+  );
+  const persistenceRootDir = optionalNonEmptyString(
+    persistence.rootDir,
+    `${fieldPath}.persistence.rootDir`,
+  );
+  if (persistenceEnabled && !persistenceRootDir) {
+    throw new Error(
+      `Invalid settings at ${fieldPath}.persistence.rootDir: required when persistence.enabled=true`,
+    );
+  }
+
+  return {
+    enabled,
+    sidecarId,
+    deploymentTarget,
+    mode,
+    queue: {
+      maxQueuedTurns: expectIntegerInRange(
+        queue.maxQueuedTurns,
+        `${fieldPath}.queue.maxQueuedTurns`,
+        0,
+        100_000,
+      ),
+      overflowPolicy: expectEnumValue<ObserverEvalSidecarOverflowPolicy>(
+        queue.overflowPolicy,
+        `${fieldPath}.queue.overflowPolicy`,
+        new Set(['drop_newest']),
+        'drop_newest',
+      ),
+      observerTimeoutMs: expectIntegerInRange(
+        queue.observerTimeoutMs,
+        `${fieldPath}.queue.observerTimeoutMs`,
+        1,
+        600_000,
+      ),
+      maxRetries: expectIntegerInRange(
+        queue.maxRetries,
+        `${fieldPath}.queue.maxRetries`,
+        0,
+        10,
+      ),
+      retryDelayMs: expectIntegerInRange(
+        queue.retryDelayMs,
+        `${fieldPath}.queue.retryDelayMs`,
+        0,
+        600_000,
+      ),
+      shutdownDrainTimeoutMs: expectIntegerInRange(
+        queue.shutdownDrainTimeoutMs,
+        `${fieldPath}.queue.shutdownDrainTimeoutMs`,
+        1,
+        600_000,
+      ),
+    },
+    adapter: {
+      kind: adapterKind,
+      ...(emosimRoot ? { emosimRoot } : {}),
+      ...(pythonExecutable ? { pythonExecutable } : {}),
+      ...(adapterTimeoutMs !== undefined ? { timeoutMs: adapterTimeoutMs } : {}),
+      ...(deterministicSeed ? { deterministicSeed } : {}),
+      includeWorldState: adapter.includeWorldState === undefined
+        ? defaults.adapter.includeWorldState
+        : expectBoolean(adapter.includeWorldState, `${fieldPath}.adapter.includeWorldState`),
+    },
+    persistence: {
+      enabled: persistenceEnabled,
+      ...(persistenceRootDir ? { rootDir: persistenceRootDir } : {}),
+      retentionDays: expectIntegerInRange(
+        persistence.retentionDays,
+        `${fieldPath}.persistence.retentionDays`,
+        1,
+        3650,
+      ),
+      maxStoredObservations: expectIntegerInRange(
+        persistence.maxStoredObservations,
+        `${fieldPath}.persistence.maxStoredObservations`,
+        1,
+        10_000_000,
+      ),
+    },
+    garden: {
+      exposeHealth: expectBoolean(garden.exposeHealth, `${fieldPath}.garden.exposeHealth`),
+      exposeTelemetry: expectBoolean(garden.exposeTelemetry, `${fieldPath}.garden.exposeTelemetry`),
+    },
+  };
+}
+
 function hasSetting(settings: EditableSettings, key: string): boolean {
   return key in settings;
 }
@@ -247,6 +471,12 @@ function normalizeEndpointAndGardenSettings(
   if ('uiThemeId' in settings) {
     normalized.uiThemeId =
       toNonEmptyString(settings.uiThemeId) ?? DEFAULT_UI_THEME_ID;
+  }
+  if ('observerEvalSidecar' in settings) {
+    normalized.observerEvalSidecar = normalizeObserverEvalSidecarSettings(
+      settings.observerEvalSidecar,
+      'observerEvalSidecar',
+    );
   }
 }
 

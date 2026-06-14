@@ -97,6 +97,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   analysisWorkbenchMaxTokens: { sectionId: 'analysis-workbench', surface: 'advanced' },
   analysisWorkbenchMaxWallTimeMs: { sectionId: 'analysis-workbench', surface: 'advanced' },
   analysisWorkbenchMaxSubQueries: { sectionId: 'analysis-workbench', surface: 'advanced' },
+  observerEvalSidecar: { sectionId: 'analysis-workbench', surface: 'advanced' },
   capabilityTier: { sectionId: 'trust', surface: 'custom', editorId: 'capabilities' },
   customTokens: { sectionId: 'trust', surface: 'custom', editorId: 'capabilities' },
   retryMaxAttempts: { sectionId: 'llm', surface: 'advanced' },

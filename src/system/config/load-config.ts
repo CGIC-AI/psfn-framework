@@ -20,6 +20,7 @@ import type {
 import {
   type CapabilityTier,
   createDefaultCompositionalPolicyConfig,
+  createDefaultObserverEvalSidecarSettings,
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   type PersistenceBackend,
   DEFAULT_UI_THEME_ID,
@@ -357,6 +358,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     embeddingApiModel: undefined,
     embeddingApiDims: undefined,
     compositionalPolicy: createDefaultCompositionalPolicyConfig(),
+    observerEvalSidecar: createDefaultObserverEvalSidecarSettings(),
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,
     webFetchLocalCrawlerEnabled: false,

@@ -658,6 +658,70 @@ export const IMPORT_PROCESSING_ROUTE_MODES: readonly ImportProcessingRouteMode[]
   'local_endpoint',
 ];
 
+export const OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS = [
+  'live',
+  'eval',
+  'test_persona',
+] as const;
+export type ObserverEvalSidecarDeploymentTarget =
+  typeof OBSERVER_EVAL_SIDECAR_DEPLOYMENT_TARGETS[number];
+
+export const OBSERVER_EVAL_SIDECAR_MODES = [
+  'observe_only',
+] as const;
+export type ObserverEvalSidecarMode =
+  typeof OBSERVER_EVAL_SIDECAR_MODES[number];
+
+export const OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS = [
+  'disabled',
+  'emosim',
+] as const;
+export type ObserverEvalSidecarAdapterKind =
+  typeof OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS[number];
+
+export type ObserverEvalSidecarOverflowPolicy = 'drop_newest';
+
+export interface ObserverEvalSidecarQueueSettings {
+  maxQueuedTurns: number;
+  overflowPolicy: ObserverEvalSidecarOverflowPolicy;
+  observerTimeoutMs: number;
+  maxRetries: number;
+  retryDelayMs: number;
+  shutdownDrainTimeoutMs: number;
+}
+
+export interface ObserverEvalSidecarAdapterSettings {
+  kind: ObserverEvalSidecarAdapterKind;
+  emosimRoot?: string;
+  pythonExecutable?: string;
+  timeoutMs?: number;
+  deterministicSeed?: string;
+  includeWorldState: boolean;
+}
+
+export interface ObserverEvalSidecarPersistenceSettings {
+  enabled: boolean;
+  rootDir?: string;
+  retentionDays: number;
+  maxStoredObservations: number;
+}
+
+export interface ObserverEvalSidecarGardenExposureSettings {
+  exposeHealth: boolean;
+  exposeTelemetry: boolean;
+}
+
+export interface ObserverEvalSidecarSettings {
+  enabled: boolean;
+  sidecarId: string;
+  deploymentTarget: ObserverEvalSidecarDeploymentTarget;
+  mode: ObserverEvalSidecarMode;
+  queue: ObserverEvalSidecarQueueSettings;
+  adapter: ObserverEvalSidecarAdapterSettings;
+  persistence: ObserverEvalSidecarPersistenceSettings;
+  garden: ObserverEvalSidecarGardenExposureSettings;
+}
+
 export interface RuntimeConfigHooks {
   refreshModels?: () => void;
   refreshCapabilities?: () => void;

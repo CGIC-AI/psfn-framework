@@ -50,6 +50,7 @@ export const navGroups: NavGroup[] = [
   navGroup('review', 'Review & Safety', [
     { id: 'prompts', path: '/prompts', defaultLabel: 'Prompts', icon: '\u{1FAB4}' },
     { id: 'prompt-monitor', path: '/prompt-monitor', defaultLabel: 'Prompt Monitor', icon: '\u{1F9F5}' },
+    { id: 'evals-emotion-sidecar', path: '/evals/emotion-sidecar', defaultLabel: 'Evals', icon: '\u{1F4CA}' },
     { id: 'confirmations', path: '/confirmations', defaultLabel: 'Confirmations', icon: '\u{1F512}' },
     { id: 'telemetry', path: '/telemetry', defaultLabel: 'Events & Audit', icon: '\u{1F4A7}' },
   ]),

@@ -58,6 +58,7 @@ import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { createPromptGenerationFailureAlertHandler } from '../startup/support/operator-alerts.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
 import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/observer-sidecar/config.js';
+import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
 import {
   resolveContactsDir,
   resolveMemoryJournalPath,
@@ -101,6 +102,7 @@ export interface AgentCoreRuntime {
   intentionRuntime: IntentionRuntimeWiring;
   intentionAppraisalHooks: IntentionAppraisalHooks;
   intentionBehavioralHooks: IntentionBehavioralPatternHooks;
+  observerEvalSidecar: ObserverEvalSidecarRuntime;
   memoryExtractor: MemoryExtractor;
   imageVisionReviewer: DefaultImageVisionReviewer;
 }
@@ -134,6 +136,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const promptRegistry = wireStaticPromptRegistry(pathSnapshot.companionDataDir);
   const llmProvider = createLLMProviderPort(gateway);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
+  const observerEvalSidecar = createObserverEvalSidecarRuntimeFromConfig(config);
   const sessionComposition = await composeSessionRuntimeAsync({
     config,
     eventBus,
@@ -173,7 +176,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
     },
     emotionRuntime,
-    observerEvalSidecar: createObserverEvalSidecarRuntimeFromConfig(config),
+    observerEvalSidecar,
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
@@ -298,6 +301,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     intentionRuntime,
     intentionAppraisalHooks,
     intentionBehavioralHooks,
+    observerEvalSidecar,
     memoryExtractor,
     imageVisionReviewer,
   };

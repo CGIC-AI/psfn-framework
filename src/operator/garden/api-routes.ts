@@ -25,7 +25,6 @@ import type {
   AdminIdentityService,
   AdminMemoryService,
   AdminModelUsageService,
-  AdminObserverEvalSidecarService,
   AdminPromptsService,
   AdminShardFoldReviewService,
   AdminSessionService,
@@ -65,6 +64,7 @@ import {
 } from './audit-timeline.js';
 import {
   isObserverEvalSidecarApiUnavailableError,
+  type AdminObserverEvalSidecarService,
 } from './services/observer-eval-sidecar-service.js';
 
 export interface AdminApiRoute {

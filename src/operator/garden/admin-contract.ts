@@ -29,12 +29,12 @@ import type {
   AdminIdentityService,
   AdminMemoryService,
   AdminModelUsageService,
-  AdminObserverEvalSidecarService,
   AdminPromptsService,
   AdminShardFoldReviewService,
   AdminSessionService,
   AdminSettingsService,
 } from './services/types.js';
+import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
 
 export interface ConfirmationQueueAdminApi {
   listConfirmationQueue(): Promise<ConfirmationListResult>;

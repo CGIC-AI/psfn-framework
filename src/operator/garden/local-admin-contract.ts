@@ -15,6 +15,8 @@ import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
+import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
+import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
@@ -33,6 +35,7 @@ import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { createPostgresModelUsageStoreFromConfig } from '../../persistence/postgres/model-usage-store.js';
+import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
@@ -58,6 +61,10 @@ import { AdminIdentityDataService } from './services/identity-service.js';
 import { AdminImagesDataService } from './services/images-service.js';
 import { AdminMemoryDataService } from './services/memory-service.js';
 import { AdminModelUsageDataService } from './services/model-usage-service.js';
+import {
+  AdminObserverEvalSidecarDataService,
+  type AdminObserverEvalSidecarService,
+} from './services/observer-eval-sidecar-service.js';
 import { AdminPromptsDataService } from './services/prompts-service.js';
 import { AdminSchedulerService } from './services/scheduler-service.js';
 import { AdminSessionDataService } from './services/session-service.js';
@@ -88,6 +95,7 @@ export interface InProcessGardenAdminContractOptions {
   adaptiveToolsStateProvider?: AdaptiveToolsStateProvider | null;
   toolHealthProvider?: AdminToolHealthProvider | null;
   postTurnActions?: PostTurnActionRuntime | null;
+  observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
 }
 
 export function createInProcessGardenAdminContract(
@@ -156,6 +164,10 @@ export function createInProcessGardenAdminContract(
     auditHistory,
     charges: new AdminChargeLedgerDataService(chargeLedger),
     modelUsage: modelUsageStore ? new AdminModelUsageDataService(modelUsageStore) : null,
+    observerEvalSidecar: createObserverEvalSidecarAdminService({
+      config: options.config,
+      runtime: options.observerEvalSidecar ?? null,
+    }),
     actionPipe: options.postTurnActions
       ? new AdminActionPipeDataService(options.postTurnActions)
       : null,
@@ -238,6 +250,31 @@ export function createInProcessGardenAdminContract(
       resolveGlobalDefaultSessionId: resolveLastActiveSessionId,
     }),
   };
+}
+
+function createObserverEvalSidecarAdminService(input: {
+  config: SubstrateConfig;
+  runtime?: ObserverEvalSidecarRuntime | null;
+}): AdminObserverEvalSidecarService | null {
+  const settings = input.config.observerEvalSidecar;
+  if (!settings?.garden.exposeHealth && !settings?.garden.exposeTelemetry) {
+    return null;
+  }
+
+  const postgresDatabaseUrl = input.config.postgresDatabaseUrl?.trim();
+  const persistence = settings.persistence.enabled
+    && settings.garden.exposeTelemetry
+    && input.config.persistenceBackend === 'postgres'
+    && postgresDatabaseUrl
+    ? createPostgresObserverEvalSidecarStore(postgresDatabaseUrl)
+    : null;
+
+  return new AdminObserverEvalSidecarDataService({
+    persistence,
+    getHealthSnapshot: settings.garden.exposeHealth
+      ? () => getObserverEvalSidecarHealthSnapshot(input.runtime)
+      : null,
+  });
 }
 
 function resolveGatewayAuditReader(_config: SubstrateConfig): GatewayAuditHistoryReader | null {

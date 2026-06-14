@@ -41,6 +41,7 @@ export interface StartOptionalAdminTransportServerOptions {
     | 'contactStore'
     | 'promptState'
     | 'skillsRuntime'
+    | 'observerEvalSidecar'
     | 'agentLoop'
   >;
 }
@@ -77,6 +78,7 @@ export async function startOptionalAdminTransportServer(
     modelDiscovery,
     promptState: options.coreRuntime.promptState,
     skillsRuntime: options.coreRuntime.skillsRuntime,
+    observerEvalSidecar: options.coreRuntime.observerEvalSidecar,
     confirmationQueueApi: createGatewayConfirmationQueueAdminApi(
       options.gateway,
       options.cardProposalQueue,

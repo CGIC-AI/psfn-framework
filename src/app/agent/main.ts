@@ -183,6 +183,7 @@ async function main(): Promise<void> {
     intentionAppraisalHooks,
     intentionBehavioralHooks,
     memoryExtractor,
+    observerEvalSidecar,
   } = coreRuntime;
 
   sessionManager.characterName = card.data.name;
@@ -365,6 +366,7 @@ async function main(): Promise<void> {
       promptState,
       skillsRuntime,
       agentLoop,
+      observerEvalSidecar,
     },
   });
   if (adminTransport) {

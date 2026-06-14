@@ -118,17 +118,6 @@ export type {
   AdminAuditHistoryQuery,
   AdminAuditHistoryService,
 } from './audit-history-service.js';
-export type {
-  AdminObserverEvalSidecarService,
-  AdminObserverEvalSidecarHealthData,
-  AdminObserverEvalSidecarObservationFilters,
-  AdminObserverEvalSidecarObservationListData,
-  AdminObserverEvalSidecarLatestData,
-  AdminObserverEvalSidecarRunFilters,
-  AdminObserverEvalSidecarRunListData,
-  AdminObserverEvalSidecarExportData,
-  AdminObserverEvalSidecarObservationView,
-} from './observer-eval-sidecar-service.js';
 
 export interface AdminDashboardData {
   stats: DashboardStats;

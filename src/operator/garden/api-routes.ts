@@ -25,6 +25,7 @@ import type {
   AdminIdentityService,
   AdminMemoryService,
   AdminModelUsageService,
+  AdminObserverEvalSidecarService,
   AdminPromptsService,
   AdminShardFoldReviewService,
   AdminSessionService,
@@ -62,6 +63,9 @@ import {
   ADMIN_AUDIT_DECISIONS,
   ADMIN_AUDIT_TIME_RANGES,
 } from './audit-timeline.js';
+import {
+  isObserverEvalSidecarApiUnavailableError,
+} from './services/observer-eval-sidecar-service.js';
 
 export interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -142,9 +146,13 @@ const MODEL_DISCOVERY_UNAVAILABLE_ERROR = 'Model discovery backend unavailable';
 const ADMIN_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
 const CHARGE_LEDGER_UNAVAILABLE_ERROR = 'Charge ledger backend unavailable';
 const MODEL_USAGE_UNAVAILABLE_ERROR = 'Model usage telemetry backend unavailable';
+const OBSERVER_EVAL_SIDECAR_UNAVAILABLE_ERROR = 'Observer eval sidecar backend unavailable';
 const ACTION_PIPE_UNAVAILABLE_ERROR = 'Action pipe backend unavailable';
 const AUDIT_HISTORY_UNAVAILABLE_ERROR = 'Audit history backend unavailable';
 const ADMIN_AUDIT_HISTORY_SOURCES = ['garden', 'gateway', 'charge'] as const;
+const OBSERVER_EVAL_PRIVACY_CLASSES = ['public', 'private', 'restricted', 'closed', 'fail_closed'] as const;
+const OBSERVER_EVAL_OBSERVATION_STATUSES = ['ok', 'degraded', 'error'] as const;
+const OBSERVER_EVAL_RUN_STATUSES = ['running', 'completed', 'degraded', 'failed'] as const;
 
 function toFiniteQueryNumber(
   value: string | null,
@@ -244,6 +252,48 @@ function parseModelUsageCallKindQuery(
   };
 }
 
+function parseObserverEvalPrivacyClassQuery(
+  value: string | null,
+): { ok: true; value?: typeof OBSERVER_EVAL_PRIVACY_CLASSES[number] } | { ok: false; error: string } {
+  if (value === null || value.trim() === '') return { ok: true };
+  const normalized = value.trim();
+  if (OBSERVER_EVAL_PRIVACY_CLASSES.includes(normalized as typeof OBSERVER_EVAL_PRIVACY_CLASSES[number])) {
+    return { ok: true, value: normalized as typeof OBSERVER_EVAL_PRIVACY_CLASSES[number] };
+  }
+  return {
+    ok: false,
+    error: `Invalid privacyClass query parameter. Expected one of: ${OBSERVER_EVAL_PRIVACY_CLASSES.join(', ')}.`,
+  };
+}
+
+function parseObserverEvalObservationStatusQuery(
+  value: string | null,
+): { ok: true; value?: typeof OBSERVER_EVAL_OBSERVATION_STATUSES[number] } | { ok: false; error: string } {
+  if (value === null || value.trim() === '') return { ok: true };
+  const normalized = value.trim();
+  if (OBSERVER_EVAL_OBSERVATION_STATUSES.includes(normalized as typeof OBSERVER_EVAL_OBSERVATION_STATUSES[number])) {
+    return { ok: true, value: normalized as typeof OBSERVER_EVAL_OBSERVATION_STATUSES[number] };
+  }
+  return {
+    ok: false,
+    error: `Invalid status query parameter. Expected one of: ${OBSERVER_EVAL_OBSERVATION_STATUSES.join(', ')}.`,
+  };
+}
+
+function parseObserverEvalRunStatusQuery(
+  value: string | null,
+): { ok: true; value?: typeof OBSERVER_EVAL_RUN_STATUSES[number] } | { ok: false; error: string } {
+  if (value === null || value.trim() === '') return { ok: true };
+  const normalized = value.trim();
+  if (OBSERVER_EVAL_RUN_STATUSES.includes(normalized as typeof OBSERVER_EVAL_RUN_STATUSES[number])) {
+    return { ok: true, value: normalized as typeof OBSERVER_EVAL_RUN_STATUSES[number] };
+  }
+  return {
+    ok: false,
+    error: `Invalid status query parameter. Expected one of: ${OBSERVER_EVAL_RUN_STATUSES.join(', ')}.`,
+  };
+}
+
 export function buildAdminApiRoutes(options: {
   config: SubstrateConfig;
   dashboardService: AdminDashboardService;
@@ -251,6 +301,7 @@ export function buildAdminApiRoutes(options: {
   auditHistoryService?: AdminAuditHistoryService | null;
   chargeLedgerService?: AdminChargeLedgerService | null;
   modelUsageService?: AdminModelUsageService | null;
+  observerEvalSidecarService?: AdminObserverEvalSidecarService | null;
   actionPipeService?: AdminActionPipeService | null;
   shardFoldReviewService: AdminShardFoldReviewService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
@@ -283,6 +334,7 @@ export function buildAdminApiRoutes(options: {
     auditHistoryService,
     chargeLedgerService,
     modelUsageService,
+    observerEvalSidecarService,
     actionPipeService,
     shardFoldReviewService,
     adaptiveToolsService,
@@ -420,6 +472,100 @@ export function buildAdminApiRoutes(options: {
   const statusFromReferenceError = (error: unknown): number => {
     const message = error instanceof Error ? error.message : String(error);
     return message.includes('not found') ? 404 : 400;
+  };
+
+  const handleObserverEvalError = (
+    res: ServerResponse,
+    error: unknown,
+    fallback: string,
+  ): void => {
+    const status = isObserverEvalSidecarApiUnavailableError(error) ? 503 : 500;
+    sendJson(res, status, {
+      error: toSanitizedMessage(error, fallback),
+    });
+  };
+
+  const parseObserverEvalObservationQuery = (
+    req: IncomingMessage,
+    routePath: string,
+  ): {
+    ok: true;
+    value: Parameters<NonNullable<AdminObserverEvalSidecarService>['queryObservations']>[0];
+  } | { ok: false; error: string } => {
+    const url = parseRequestUrl(req, routePath);
+    const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+    if (!limit.ok) return { ok: false, error: limit.error };
+    const sinceMs = toFiniteQueryNumber(url.searchParams.get('sinceMs'), 'sinceMs');
+    if (!sinceMs.ok) return { ok: false, error: sinceMs.error };
+    const untilMs = toFiniteQueryNumber(url.searchParams.get('untilMs'), 'untilMs');
+    if (!untilMs.ok) return { ok: false, error: untilMs.error };
+    const minDivergenceScore = toFiniteQueryNumber(
+      url.searchParams.get('minDivergenceScore'),
+      'minDivergenceScore',
+    );
+    if (!minDivergenceScore.ok) return { ok: false, error: minDivergenceScore.error };
+    const privacyClass = parseObserverEvalPrivacyClassQuery(url.searchParams.get('privacyClass'));
+    if (!privacyClass.ok) return { ok: false, error: privacyClass.error };
+    const status = parseObserverEvalObservationStatusQuery(url.searchParams.get('status'));
+    if (!status.ok) return { ok: false, error: status.error };
+    return {
+      ok: true,
+      value: {
+        ...(limit.value !== undefined ? { limit: limit.value } : {}),
+        ...(sinceMs.value !== undefined ? { sinceMs: sinceMs.value } : {}),
+        ...(untilMs.value !== undefined ? { untilMs: untilMs.value } : {}),
+        ...(minDivergenceScore.value !== undefined ? { minDivergenceScore: minDivergenceScore.value } : {}),
+        ...(privacyClass.value !== undefined ? { privacyClass: privacyClass.value } : {}),
+        ...(status.value !== undefined ? { status: status.value } : {}),
+        ...(url.searchParams.get('runId')?.trim() ? { runId: url.searchParams.get('runId')!.trim() } : {}),
+        ...(url.searchParams.get('evalSessionId')?.trim()
+          ? { evalSessionId: url.searchParams.get('evalSessionId')!.trim() }
+          : {}),
+        ...(url.searchParams.get('scenarioId')?.trim()
+          ? { scenarioId: url.searchParams.get('scenarioId')!.trim() }
+          : {}),
+        ...(url.searchParams.get('testRunId')?.trim()
+          ? { testRunId: url.searchParams.get('testRunId')!.trim() }
+          : {}),
+        ...(url.searchParams.get('turnId')?.trim() ? { turnId: url.searchParams.get('turnId')!.trim() } : {}),
+      },
+    };
+  };
+
+  const parseObserverEvalRunQuery = (
+    req: IncomingMessage,
+    routePath: string,
+  ): {
+    ok: true;
+    value: Parameters<NonNullable<AdminObserverEvalSidecarService>['queryRuns']>[0];
+  } | { ok: false; error: string } => {
+    const url = parseRequestUrl(req, routePath);
+    const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+    if (!limit.ok) return { ok: false, error: limit.error };
+    const sinceMs = toFiniteQueryNumber(url.searchParams.get('sinceMs'), 'sinceMs');
+    if (!sinceMs.ok) return { ok: false, error: sinceMs.error };
+    const untilMs = toFiniteQueryNumber(url.searchParams.get('untilMs'), 'untilMs');
+    if (!untilMs.ok) return { ok: false, error: untilMs.error };
+    const status = parseObserverEvalRunStatusQuery(url.searchParams.get('status'));
+    if (!status.ok) return { ok: false, error: status.error };
+    return {
+      ok: true,
+      value: {
+        ...(limit.value !== undefined ? { limit: limit.value } : {}),
+        ...(sinceMs.value !== undefined ? { sinceMs: sinceMs.value } : {}),
+        ...(untilMs.value !== undefined ? { untilMs: untilMs.value } : {}),
+        ...(status.value !== undefined ? { status: status.value } : {}),
+        ...(url.searchParams.get('evalSessionId')?.trim()
+          ? { evalSessionId: url.searchParams.get('evalSessionId')!.trim() }
+          : {}),
+        ...(url.searchParams.get('scenarioId')?.trim()
+          ? { scenarioId: url.searchParams.get('scenarioId')!.trim() }
+          : {}),
+        ...(url.searchParams.get('testRunId')?.trim()
+          ? { testRunId: url.searchParams.get('testRunId')!.trim() }
+          : {}),
+      },
+    };
   };
 
   return [
@@ -592,6 +738,97 @@ export function buildAdminApiRoutes(options: {
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load model usage telemetry'),
           }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/evals/observer-sidecar/health'),
+      handle: (_req, res) => {
+        if (!observerEvalSidecarService) {
+          sendJson(res, 503, { error: OBSERVER_EVAL_SIDECAR_UNAVAILABLE_ERROR });
+          return;
+        }
+        observerEvalSidecarService.getHealth().then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => handleObserverEvalError(res, error, 'Failed to load observer eval sidecar health'),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/evals/observer-sidecar/latest'),
+      handle: (req, res) => {
+        if (!observerEvalSidecarService) {
+          sendJson(res, 503, { error: OBSERVER_EVAL_SIDECAR_UNAVAILABLE_ERROR });
+          return;
+        }
+        const parsed = parseObserverEvalObservationQuery(req, '/api/admin/evals/observer-sidecar/latest');
+        if (!parsed.ok) {
+          sendJson(res, 400, { error: parsed.error });
+          return;
+        }
+        const { limit: _limit, ...filters } = parsed.value ?? {};
+        observerEvalSidecarService.getLatestObservation(filters).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => handleObserverEvalError(res, error, 'Failed to load observer eval latest observation'),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/evals/observer-sidecar/observations'),
+      handle: (req, res) => {
+        if (!observerEvalSidecarService) {
+          sendJson(res, 503, { error: OBSERVER_EVAL_SIDECAR_UNAVAILABLE_ERROR });
+          return;
+        }
+        const parsed = parseObserverEvalObservationQuery(req, '/api/admin/evals/observer-sidecar/observations');
+        if (!parsed.ok) {
+          sendJson(res, 400, { error: parsed.error });
+          return;
+        }
+        observerEvalSidecarService.queryObservations(parsed.value).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => handleObserverEvalError(res, error, 'Failed to load observer eval observations'),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/evals/observer-sidecar/runs'),
+      handle: (req, res) => {
+        if (!observerEvalSidecarService) {
+          sendJson(res, 503, { error: OBSERVER_EVAL_SIDECAR_UNAVAILABLE_ERROR });
+          return;
+        }
+        const parsed = parseObserverEvalRunQuery(req, '/api/admin/evals/observer-sidecar/runs');
+        if (!parsed.ok) {
+          sendJson(res, 400, { error: parsed.error });
+          return;
+        }
+        observerEvalSidecarService.queryRuns(parsed.value).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => handleObserverEvalError(res, error, 'Failed to load observer eval runs'),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/evals/observer-sidecar/export'),
+      handle: (req, res) => {
+        if (!observerEvalSidecarService) {
+          sendJson(res, 503, { error: OBSERVER_EVAL_SIDECAR_UNAVAILABLE_ERROR });
+          return;
+        }
+        const parsed = parseObserverEvalObservationQuery(req, '/api/admin/evals/observer-sidecar/export');
+        if (!parsed.ok) {
+          sendJson(res, 400, { error: parsed.error });
+          return;
+        }
+        observerEvalSidecarService.exportObservations(parsed.value).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => handleObserverEvalError(res, error, 'Failed to export observer eval observations'),
         );
       },
     },

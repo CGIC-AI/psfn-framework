@@ -29,6 +29,7 @@ import type {
   AdminIdentityService,
   AdminMemoryService,
   AdminModelUsageService,
+  AdminObserverEvalSidecarService,
   AdminPromptsService,
   AdminShardFoldReviewService,
   AdminSessionService,
@@ -126,6 +127,7 @@ export interface GardenAdminDomainServices {
   auditHistory: AdminAuditHistoryService;
   charges?: AdminChargeLedgerService | null;
   modelUsage?: AdminModelUsageService | null;
+  observerEvalSidecar?: AdminObserverEvalSidecarService | null;
   actionPipe?: AdminActionPipeService | null;
   shards: AdminShardFoldReviewService;
   adaptiveTools?: AdminAdaptiveToolsService | null;

@@ -43,11 +43,13 @@ export function recordUserMessage(input: {
   requestId: string;
   trustLevel: TrustLevel;
   continuityUserId?: string;
+  contentOverride?: string;
 }): number | null {
+  const content = input.contentOverride ?? input.message.content;
   if (input.continuityUserId) {
     return input.sessionManager.recordUserMessage(
       input.message.channelId,
-      input.message.content,
+      content,
       input.message.authorId,
       input.message.authorName,
       input.message.isDirectMessage,
@@ -64,7 +66,7 @@ export function recordUserMessage(input: {
 
   return input.sessionManager.recordUserMessage(
     input.message.channelId,
-    input.message.content,
+    content,
     input.message.authorId,
     input.message.authorName,
     input.message.isDirectMessage,
@@ -183,6 +185,7 @@ export function buildTurnRecord(input: {
   turnSnapshot?: TurnSnapshot;
   turnObservability?: TurnObservabilityRecord;
   internalStateSnapshotRef?: string;
+  persistedUserMessageContent?: string;
   hashPromptText: (text: string) => string;
 }): TurnRecord {
   const toolCalls = buildTurnToolCalls(input.turnMessages);
@@ -211,7 +214,7 @@ export function buildTurnRecord(input: {
     status,
     userMessage: {
       role: input.speakerRole,
-      content: input.message.content,
+      content: input.persistedUserMessageContent ?? input.message.content,
       timestamp: input.message.timestamp.getTime(),
       sourceMessageId: input.message.id,
       authorId: input.message.authorId,

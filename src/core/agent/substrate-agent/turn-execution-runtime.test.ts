@@ -1666,6 +1666,60 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     expect((runtime.agent.prompt as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]?.content).toContain(
       'Current image review: A catgirl sits on a server rack holding a pink rifle.',
     );
+    expect(recordUserMessage).toHaveBeenCalledTimes(1);
+    const persistedUserContent = recordUserMessage.mock.calls[0]?.[5] as string;
+    expect(persistedUserContent).toContain('do you see it?');
+    expect(persistedUserContent).toContain('---\nImage attachment:');
+    expect(persistedUserContent).toContain('Description: A catgirl sits on a server rack holding a pink rifle.');
+    expect(persistedUserContent).toContain('Model: vision-model');
+    expect(persistedUserContent).toContain('Image count: 1');
+    const buildTurnRecordMock = runtime.buildTurnRecord as unknown as ReturnType<typeof vi.fn>;
+    expect(buildTurnRecordMock.mock.calls[0]?.[0]?.persistedUserMessageContent).toBe(persistedUserContent);
+  });
+
+  it('persists an unavailable image-description block when dedicated image review fails', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordUserMessage = vi.fn(() => 1);
+    const analyze = vi.fn(async () => {
+      throw new Error('provider failed with signed_url_secret=abc123');
+    });
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage,
+      recordAssistantMessage: vi.fn(() => 2),
+      imageVisionReviewer: { analyze },
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-vision-review-failure', {
+      channelType: 'discord',
+      content: 'what did i send?',
+      attachments: [{
+        url: 'https://cdn.discordapp.com/attachments/1/2/current-image.png?ex=fresh',
+        contentType: 'image/png',
+        name: 'current-image.png',
+      }],
+    }));
+
+    expect(analyze).toHaveBeenCalledTimes(3);
+    const persistedUserContent = recordUserMessage.mock.calls[0]?.[5] as string;
+    expect(persistedUserContent).toContain('what did i send?');
+    expect(persistedUserContent).toContain('---\nImage attachment:');
+    expect(persistedUserContent).toContain(
+      'Description unavailable: vision pipeline failed before image contents could be inspected.',
+    );
+    expect(persistedUserContent).toContain('Image count: 1');
+    expect(persistedUserContent).not.toContain('signed_url_secret');
+    const buildTurnRecordMock = runtime.buildTurnRecord as unknown as ReturnType<typeof vi.fn>;
+    expect(buildTurnRecordMock.mock.calls[0]?.[0]?.persistedUserMessageContent).toBe(persistedUserContent);
   });
 
   it('exposes current-turn image attachment context to tools during prompt execution', async () => {

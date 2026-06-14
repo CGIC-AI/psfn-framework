@@ -74,6 +74,7 @@ export async function schedulePostTurnWork(input: {
   emotionSessionId: string;
   channelMeta: ChannelMeta;
   turnBudgetCharacteristics: ContextBudgetTurnCharacteristics;
+  persistedUserMessageContent?: string;
   observability: Pick<
     TurnExecutionObservability,
     'emitObservedTurnStage'
@@ -119,6 +120,7 @@ export async function schedulePostTurnWork(input: {
     emotionSessionId,
     channelMeta,
     turnBudgetCharacteristics,
+    persistedUserMessageContent,
     observability,
   } = input;
 
@@ -172,6 +174,7 @@ export async function schedulePostTurnWork(input: {
       speakerRole,
       canonicalContactKey,
       retrievalProvenanceRefs,
+      ...(persistedUserMessageContent ? { persistedUserMessageContent } : {}),
       turnSnapshot,
       turnObservability: {
         stages: observability.getObservedTurnStages(),

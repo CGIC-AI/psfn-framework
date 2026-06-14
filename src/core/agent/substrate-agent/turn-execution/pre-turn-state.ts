@@ -125,6 +125,7 @@ export async function prepareTurnIdentityState(input: {
   requestId: string;
   turnCorrelationBase: CorrelationMetadata;
   observability: Pick<TurnExecutionObservability, 'emitObservedTurnStage'>;
+  deferSessionEntryPersistence?: boolean;
 }): Promise<PreparedTurnIdentityState> {
   const {
     runtime,
@@ -133,6 +134,7 @@ export async function prepareTurnIdentityState(input: {
     requestId,
     turnCorrelationBase,
     observability,
+    deferSessionEntryPersistence = false,
   } = input;
 
   const trustStageStart = Date.now();
@@ -218,21 +220,23 @@ export async function prepareTurnIdentityState(input: {
   runtime.emotionSelfModelRuntime.assertSelfModelRuntimeConfigured();
   await runtime.sessionManager.awaitPendingAutoCompaction(message.channelId);
 
-  const userSessionEntryId = authorContext.speakerRole === 'system'
-    ? runtime.recordSystemMessage(
-      message,
-      turnId,
-      requestId,
-      attributedSystemContent,
-      continuitySubjectKey,
-    )
-    : runtime.recordUserMessage(
-      message,
-      turnId,
-      requestId,
-      authorContext.trustLevel,
-      continuitySubjectKey,
-    );
+  const userSessionEntryId = deferSessionEntryPersistence
+    ? null
+    : authorContext.speakerRole === 'system'
+      ? runtime.recordSystemMessage(
+        message,
+        turnId,
+        requestId,
+        attributedSystemContent,
+        continuitySubjectKey,
+      )
+      : runtime.recordUserMessage(
+        message,
+        turnId,
+        requestId,
+        authorContext.trustLevel,
+        continuitySubjectKey,
+      );
 
   return {
     authorContext,

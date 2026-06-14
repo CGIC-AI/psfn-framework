@@ -53,6 +53,7 @@ interface ResolvedVisionAttachmentSet {
 export interface TurnUserContentBuildResult {
   content: UserMessage['content'];
   currentTurnVisionReview?: CurrentTurnVisionReviewContext;
+  persistedUserContent?: string;
 }
 
 /** Max images per single vision-model call. */
@@ -153,6 +154,13 @@ export function hasVisionTurnInputs(message?: SubstrateMessage): boolean {
   return hasVisionAttachments(message);
 }
 
+export function buildPersistedVisionUnavailableUserContent(message: SubstrateMessage): string {
+  return appendPersistedImageAttachmentBlock(message.content, buildPersistedImageAttachmentBlock({
+    imageCount: countVisionTurnImageInputs(message),
+    unavailableReason: 'vision pipeline failed before image contents could be inspected.',
+  }));
+}
+
 export async function buildTurnUserContent(input: {
   message: SubstrateMessage;
   llmClient: LLMProviderPort;
@@ -190,6 +198,14 @@ export async function buildTurnUserContent(input: {
           semanticText,
           extraNotes,
         }),
+        persistedUserContent: appendPersistedImageAttachmentBlock(
+          input.message.content,
+          buildPersistedImageAttachmentBlock({
+            summary: review.summary,
+            model: review.model,
+            imageCount: review.imageCount,
+          }),
+        ),
         currentTurnVisionReview: {
           imageUrls: [...review.reviewedUrls],
           question: review.question,
@@ -209,6 +225,7 @@ export async function buildTurnUserContent(input: {
           semanticText,
           errorMessage,
         }),
+        persistedUserContent: buildPersistedVisionUnavailableUserContent(input.message),
       };
     }
   }
@@ -268,6 +285,8 @@ interface ChunkedVisionReviewResult {
   summary: string;
   question: string;
   reviewedUrls: string[];
+  imageCount: number;
+  model?: string;
   /** Explicit notes for chunks whose review failed — never silently dropped. */
   failureNotes: string[];
 }
@@ -296,6 +315,8 @@ async function analyzeVisionUrlsInChunks(input: {
   const summaries: string[] = [];
   const reviewedUrls: string[] = [];
   const failureNotes: string[] = [];
+  let reviewedImageCount = 0;
+  let model: string | undefined;
   settled.forEach((result, index) => {
     const chunk = chunks[index];
     const start = index * VISION_ATTACHMENT_MAX_COUNT + 1;
@@ -306,6 +327,12 @@ async function analyzeVisionUrlsInChunks(input: {
     if (result.status === 'fulfilled') {
       summaries.push(rangeLabel ? `${rangeLabel}: ${result.value.summary}` : result.value.summary);
       reviewedUrls.push(...chunk);
+      reviewedImageCount += Number.isFinite(result.value.imageCount)
+        ? result.value.imageCount
+        : chunk.length;
+      if (!model && typeof result.value.model === 'string' && result.value.model.trim().length > 0) {
+        model = result.value.model.trim();
+      }
       return;
     }
     failureNotes.push(
@@ -329,8 +356,49 @@ async function analyzeVisionUrlsInChunks(input: {
     summary: summaries.join('\n'),
     question: firstFulfilled?.value.question ?? input.question,
     reviewedUrls,
+    imageCount: reviewedImageCount || reviewedUrls.length,
+    ...(model ? { model } : {}),
     failureNotes,
   };
+}
+
+function countVisionTurnImageInputs(message?: SubstrateMessage): number {
+  return message?.attachments
+    ?.filter((attachment) => resolveAttachmentImageContentType(attachment) !== null)
+    .length ?? 0;
+}
+
+function appendPersistedImageAttachmentBlock(content: string, block: string): string {
+  const trimmedContent = content.trimEnd();
+  if (trimmedContent.length === 0) {
+    return block;
+  }
+  return `${trimmedContent}\n\n${block}`;
+}
+
+function buildPersistedImageAttachmentBlock(input: {
+  imageCount: number;
+  summary?: string;
+  model?: string;
+  unavailableReason?: string;
+}): string {
+  const lines = [
+    '---',
+    'Image attachment:',
+  ];
+  const summary = input.summary?.trim();
+  if (summary && summary.length > 0) {
+    lines.push(`Description: ${summary}`);
+  } else {
+    lines.push(`Description unavailable: ${input.unavailableReason ?? 'vision pipeline did not return a description.'}`);
+  }
+  const model = input.model?.trim();
+  if (model && model.length > 0) {
+    lines.push(`Model: ${model}`);
+  }
+  lines.push(`Image count: ${String(Math.max(1, input.imageCount))}`);
+  lines.push('---');
+  return lines.join('\n');
 }
 
 async function analyzeWithDedicatedVisionRetry(input: {

@@ -30,6 +30,7 @@ import { buildRuntimeDatetimeAnchorRetryPrompt, buildRuntimeDatetimeContradictio
 import { resolveAppearanceContextFromTemplateVariables } from '../runtime-context.js';
 import { sanitizePersistedReasoningText } from '../turn-records.js';
 import {
+  buildPersistedVisionUnavailableUserContent,
   buildTurnUserContent,
   hasVisionTurnInputs,
 } from '../vision-attachments.js';
@@ -61,6 +62,7 @@ export interface AgentInvocationResult {
   fallbackDiagnostics: AgentResponse['metadata']['diagnostics'] | undefined;
   runtimeContradictionDiagnostics: NonNullable<AgentResponse['metadata']['diagnostics']> | undefined;
   turnIntent: string | null;
+  persistedUserMessageContent?: string;
 }
 
 async function runWithVisionTurnTimeout<T>({
@@ -381,6 +383,7 @@ export async function invokeAgentForTurn(input: {
       fallbackDiagnostics,
       runtimeContradictionDiagnostics,
       turnIntent,
+      ...(isVisionTurn ? { persistedUserMessageContent: buildPersistedVisionUnavailableUserContent(message) } : {}),
     };
   }
 
@@ -477,6 +480,7 @@ export async function invokeAgentForTurn(input: {
         message,
         errorMessage,
       }),
+      persistedUserContent: buildPersistedVisionUnavailableUserContent(message),
     };
   }
   const selfieAppearanceContext = activeTools.some((tool) => tool.name === 'selfie_create')
@@ -824,5 +828,8 @@ export async function invokeAgentForTurn(input: {
     fallbackDiagnostics,
     runtimeContradictionDiagnostics,
     turnIntent,
+    ...(turnUserContentBuildResult.persistedUserContent
+      ? { persistedUserMessageContent: turnUserContentBuildResult.persistedUserContent }
+      : {}),
   };
 }

@@ -57,6 +57,7 @@ import {
   collectTurnResponseAttachments,
   schedulePostTurnWork,
 } from './turn-execution/post-turn-scheduling.js';
+import { hasVisionTurnInputs } from './vision-attachments.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -116,6 +117,7 @@ export interface TurnExecutionRuntime {
     requestId: string,
     trustLevel: TrustLevel,
     continuityUserId?: string,
+    contentOverride?: string,
   ) => number | null;
   recordSystemMessage: (
     message: SubstrateMessage,
@@ -275,6 +277,7 @@ export interface TurnExecutionRuntime {
     turnSnapshot?: TurnSnapshot;
     turnObservability?: TurnObservabilityRecord;
     internalStateSnapshotRef?: string;
+    persistedUserMessageContent?: string;
   }) => TurnRecord;
   queueBackgroundContinuationCompletion: (
     deferredContinuationId: string,
@@ -331,6 +334,7 @@ export async function handleMessageForTurn(
   });
   const turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
   const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
+  const deferSessionEntryPersistence = hasVisionTurnInputs(message);
   const observability = createTurnExecutionObservability({
     runtime,
     message,
@@ -347,6 +351,7 @@ export async function handleMessageForTurn(
     requestId,
     turnCorrelationBase,
     observability,
+    deferSessionEntryPersistence,
   });
   const {
     authorContext,
@@ -356,7 +361,8 @@ export async function handleMessageForTurn(
     viewerRequestContext,
     baseVisionToolRequestContext,
     continuitySubjectKey,
-    userSessionEntryId,
+    attributedSystemContent,
+    userSessionEntryId: preparedUserSessionEntryId,
     emotionSessionId,
     trustLevel,
     speakerRole,
@@ -370,11 +376,32 @@ export async function handleMessageForTurn(
   let turnSnapshot: TurnSnapshot | undefined;
   let turnMessages: AgentMessage[] = [];
   let responseModel = runtime.agent.state.model.id;
+  let userSessionEntryId = preparedUserSessionEntryId;
   let assistantSessionEntryId: number | null = null;
   let internalStateSnapshotRef: string | undefined;
+  let persistedUserMessageContent: string | undefined;
   const invocationState: AgentInvocationMutableState = {
     turnMessages,
     turnStartMessageIndex: null,
+  };
+  const recordDeferredSessionEntry = (contentOverride?: string): number | null => {
+    if (speakerRole === 'system') {
+      return runtime.recordSystemMessage(
+        message,
+        turnId,
+        requestId,
+        contentOverride ?? attributedSystemContent,
+        continuitySubjectKey,
+      );
+    }
+    return runtime.recordUserMessage(
+      message,
+      turnId,
+      requestId,
+      trustLevel,
+      continuitySubjectKey,
+      contentOverride,
+    );
   };
 
   try {
@@ -468,6 +495,10 @@ export async function handleMessageForTurn(
     });
     turnMessages = invocationResult.turnMessages;
     responseModel = invocationResult.responseModel;
+    persistedUserMessageContent = invocationResult.persistedUserMessageContent;
+    if (deferSessionEntryPersistence && userSessionEntryId == null) {
+      userSessionEntryId = recordDeferredSessionEntry(persistedUserMessageContent);
+    }
     const {
       firstTokenAt,
       turnUsage,
@@ -651,6 +682,7 @@ export async function handleMessageForTurn(
       channelMeta,
       turnBudgetCharacteristics,
       observability,
+      persistedUserMessageContent,
     });
 
     return agentResponse;
@@ -671,6 +703,18 @@ export async function handleMessageForTurn(
       assistantMessageContent = undefined;
     }
     const failedCompletedAt = Date.now();
+    if (deferSessionEntryPersistence && userSessionEntryId == null) {
+      try {
+        userSessionEntryId = recordDeferredSessionEntry(persistedUserMessageContent);
+      } catch (recordError) {
+        log.warn('Deferred user session entry persistence failed during turn error handling', {
+          channelId: message.channelId,
+          turnId,
+          requestId,
+          error: toErrorMessage(recordError),
+        });
+      }
+    }
     runtime.sessionManager.recordTurn(
       runtime.buildTurnRecord({
         message,
@@ -692,6 +736,7 @@ export async function handleMessageForTurn(
         speakerRole,
         canonicalContactKey,
         retrievalProvenanceRefs: observability.getRetrievalProvenanceRefs(),
+        ...(persistedUserMessageContent ? { persistedUserMessageContent } : {}),
         ...(turnSnapshot ? { turnSnapshot } : {}),
         turnObservability: {
           stages: observability.getObservedTurnStages(),

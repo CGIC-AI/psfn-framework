@@ -11,6 +11,58 @@ describe('turn-records tool persistence', () => {
     expect(sanitizePersistedReasoningText('[Scratchpad]\nWorking notes (short-term, may be stale; verify before acting):\n- old note')).toBeUndefined();
   });
 
+  it('uses enriched persisted user content when the stored turn has current image description context', () => {
+    const record = buildTurnRecord({
+      message: {
+        id: 'source-message-image',
+        channelId: 'api:test',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+        content: 'what did i send?',
+        timestamp: new Date(1_700_000_000_000),
+      },
+      turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+      requestId: 'req-turn-records-image',
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_000_250,
+      userSessionEntryId: 1,
+      assistantSessionEntryId: 2,
+      response: {
+        content: 'It was a catgirl on a server rack.',
+        channelId: 'api:test',
+        metadata: {
+          model: 'test-model',
+          inputTokens: 10,
+          outputTokens: 6,
+          durationMs: 250,
+        },
+      },
+      turnMessages: [],
+      promptMode: 'default',
+      promptText: 'prompt',
+      contextMessageCount: 1,
+      memoryContextChars: 0,
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      retrievalProvenanceRefs: [],
+      persistedUserMessageContent: [
+        'what did i send?',
+        '',
+        '---',
+        'Image attachment:',
+        'Description: A catgirl sits on a server rack.',
+        'Model: vision-model',
+        'Image count: 1',
+        '---',
+      ].join('\n'),
+      hashPromptText: () => 'prompt-hash',
+    });
+
+    expect(record.userMessage.content).toContain('Description: A catgirl sits on a server rack.');
+    expect(record.userMessage.content).not.toBe('what did i send?');
+  });
+
   it('preserves tool arguments, results, and rationale in the turn record', () => {
     const record = buildTurnRecord({
       message: {

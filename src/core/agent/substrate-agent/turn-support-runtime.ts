@@ -310,6 +310,7 @@ export class TurnSupportRuntime {
     requestId: string,
     trustLevel: TrustLevel,
     continuityUserId?: string,
+    contentOverride?: string,
   ): number | null {
     return recordUserMessageForTurn({
       sessionManager: this.sessionManager,
@@ -318,6 +319,7 @@ export class TurnSupportRuntime {
       requestId,
       trustLevel,
       continuityUserId,
+      contentOverride,
     });
   }
 
@@ -403,6 +405,7 @@ export class TurnSupportRuntime {
     turnSnapshot?: TurnSnapshot;
     turnObservability?: TurnObservabilityRecord;
     internalStateSnapshotRef?: string;
+    persistedUserMessageContent?: string;
   }): TurnRecord {
     const roleEnvelopeRefs = this.sessionManager.getRoleEnvelopeRefsForEntries(
       input.message.channelId,

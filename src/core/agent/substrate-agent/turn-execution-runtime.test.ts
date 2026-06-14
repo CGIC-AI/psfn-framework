@@ -701,7 +701,13 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
         status: 'degraded',
         sidecarId: 'observer-test',
         reason: 'observer_failed',
-        error: { message: 'sidecar failed' },
+        error: {
+          message: 'Observer eval sidecar error redacted',
+          redacted: true,
+          redactionReason: 'raw_error_redacted',
+          rawMessageLength: 'sidecar failed'.length,
+          errorKind: 'error',
+        },
       }),
     ]);
     expect(result.response).toMatchObject({

@@ -7,6 +7,10 @@ import type {
   ObserverEvalSidecarLogger,
   ObserverEvalSidecarRuntime,
 } from './types.js';
+import {
+  createObserverEvalLogSafeInput,
+  sanitizeObserverEvalError,
+} from './privacy.js';
 
 export interface ObserverEvalDispatchInput {
   sidecarRuntime?: ObserverEvalSidecarRuntime | null;
@@ -51,20 +55,20 @@ export async function dispatchObserverEvalTurn(
       ...(sidecarId ? { sidecarId } : {}),
     }, dispatchInput.logger);
   } catch (error) {
-    const message = toErrorMessage(error);
+    const sanitizedError = sanitizeObserverEvalError(error);
+    const logSafeInput = createObserverEvalLogSafeInput(dispatchInput.input);
     dispatchInput.logger?.debug('Observer eval sidecar degraded', {
       sidecarId: sidecarId ?? null,
-      turnId: dispatchInput.input.turn.turnId,
-      requestId: dispatchInput.input.turn.requestId,
-      channelId: dispatchInput.input.turn.channelId,
-      error: message,
+      turn: logSafeInput.turn,
+      privacy: logSafeInput.privacy,
+      error: sanitizedError,
     });
     return notifyLifecycle(sidecarRuntime, {
       status: 'degraded',
       observedAt: Date.now(),
       ...(sidecarId ? { sidecarId } : {}),
       reason: 'observer_failed',
-      error: { message },
+      error: sanitizedError,
     }, dispatchInput.logger);
   }
 }
@@ -78,10 +82,11 @@ async function notifyLifecycle(
   try {
     await sidecarRuntime?.onLifecycleState?.(readonlyState);
   } catch (error) {
+    const sanitizedError = sanitizeObserverEvalError(error);
     logger?.debug('Observer eval sidecar lifecycle hook failed', {
       status: state.status,
       sidecarId: state.sidecarId ?? null,
-      error: toErrorMessage(error),
+      error: sanitizedError,
     });
   }
   return readonlyState;
@@ -97,11 +102,4 @@ function deepFreeze<T>(value: T): ObserverEvalReadonly<T> {
   }
 
   return Object.freeze(value) as ObserverEvalReadonly<T>;
-}
-
-function toErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  return String(error);
 }

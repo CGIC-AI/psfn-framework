@@ -5,7 +5,7 @@ import type {
   ObservabilityCallType,
   TurnID,
 } from '../../../shared/contracts/runtime.js';
-import type { ChannelVisibility, TrustLevel } from '../../../system/trust/types.js';
+import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../../system/trust/types.js';
 
 export type ObserverEvalReadonly<T> =
   T extends (...args: readonly unknown[]) => unknown
@@ -46,6 +46,11 @@ export interface ObserverEvalTurnMetadata {
   contentLength: number;
   attachmentCount: number;
   hasVisionInput: boolean;
+  /**
+   * Explicit upstream privacy classification for this turn. Privacy consumers
+   * must fail closed when this is absent or invalid; do not infer it from text.
+   */
+  sensitivity?: SensitivityLevel;
 }
 
 export interface ObserverEvalProvenance {
@@ -79,6 +84,9 @@ export interface ObserverEvalLifecycleStatePayload {
   reason?: string;
   error?: {
     message: string;
+    redacted?: boolean;
+    redactionReason?: string;
+    rawMessageLength?: number;
   };
 }
 

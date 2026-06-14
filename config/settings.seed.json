@@ -55,8 +55,8 @@
       "maxStoredObservations": 10000
     },
     "garden": {
-      "exposeHealth": false,
-      "exposeTelemetry": false
+      "exposeHealth": true,
+      "exposeTelemetry": true
     }
   },
   "importProcessingRouteMode": "background",

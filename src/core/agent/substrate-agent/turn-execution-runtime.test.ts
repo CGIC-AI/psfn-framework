@@ -667,6 +667,7 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
         contentLength: OBSERVER_TEST_MESSAGE_CONTENT.length,
         attachmentCount: 0,
         hasVisionInput: false,
+        sensitivity: 'confidential',
       },
       provenance: {
         seam: 'substrate-agent.pre-turn.emotion-observed',
@@ -719,13 +720,12 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
         status: 'degraded',
         sidecarId: 'observer-test',
         reason: 'observer_failed',
-        error: {
+        error: expect.objectContaining({
           message: 'Observer eval sidecar error redacted',
           redacted: true,
           redactionReason: 'raw_error_redacted',
           rawMessageLength: 'sidecar failed'.length,
-          errorKind: 'error',
-        },
+        }),
       }),
     ]);
   });

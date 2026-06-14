@@ -1,7 +1,7 @@
 import type { CorrelationMetadata, SubstrateMessage, TurnID } from '../../../../shared/contracts/runtime.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../../shared/context-budget.js';
 import { resolveBroadcastVisibilityScope, type BroadcastVisibilityScope } from '../../../../system/trust/broadcast-safety.js';
-import { classifyChannel, type ChannelMeta } from '../../../../system/trust/policy.js';
+import { classifyChannel, getVisibilityDisclosureCeiling, type ChannelMeta } from '../../../../system/trust/policy.js';
 import { normalizeChannelVisibility, type ChannelVisibility, type TrustLevel } from '../../../../system/trust/types.js';
 import type { MemoryScopeQuery, RetrievalCallerContext, RetrievalModeInput } from '../../../../faculties/memory/types.js';
 import type { ContextManifestMemorySeed } from '../../../session/context-manifest.js';
@@ -364,6 +364,7 @@ export async function computePreTurnState(input: {
   );
   const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
   const turnSnapshotCapturedAt = Date.now();
+  const observerEvalChannelVisibility = classifyChannel(message.channelId, channelMeta);
   const observerEvalLifecycleState = await dispatchObserverEvalTurn({
     sidecarRuntime: runtime.observerEvalSidecar,
     logger: log,
@@ -394,6 +395,7 @@ export async function computePreTurnState(input: {
         contentLength: message.content.length,
         attachmentCount: message.attachments?.length ?? 0,
         hasVisionInput: bypassMemoryForVisionTurn,
+        sensitivity: getVisibilityDisclosureCeiling(observerEvalChannelVisibility),
       },
       provenance: {
         seam: 'substrate-agent.pre-turn.emotion-observed',

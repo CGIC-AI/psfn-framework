@@ -16,7 +16,7 @@ export interface ProactiveOutboundDispatchInput {
 
 export type ProactiveOutboundDispatchResult =
   | { outcome: 'sent' }
-  | { outcome: 'blocked'; reason: string };
+  | { outcome: 'blocked'; reason: string; retryAfterMs?: number };
 
 export interface ProactiveOutboundDispatcherOptions {
   sender: MessageSender;
@@ -51,15 +51,23 @@ export class ProactiveOutboundDispatcher {
 
   async dispatch(input: ProactiveOutboundDispatchInput): Promise<ProactiveOutboundDispatchResult> {
     const content = input.content.trim();
-    const blocked = async (reason: string): Promise<ProactiveOutboundDispatchResult> => {
+    const blocked = async (
+      reason: string,
+      retryAfterMs?: number,
+    ): Promise<ProactiveOutboundDispatchResult> => {
       log.warn('Proactive outbound message blocked', {
         actionId: input.actionId,
         channelId: input.channelId,
         channelType: input.channelType,
         reason,
+        ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
       });
       await this.emit('intention.outbound.blocked', input, reason);
-      return { outcome: 'blocked', reason };
+      return {
+        outcome: 'blocked',
+        reason,
+        ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+      };
     };
 
     if (!content) {
@@ -80,7 +88,7 @@ export class ProactiveOutboundDispatcher {
       scope: 'proactive-outbound',
     });
     if (!rateDecision.allowed) {
-      return blocked('rate_limited');
+      return blocked('rate_limited', rateDecision.retryAfterMs);
     }
 
     await this.sender.send(input.channelId, content);

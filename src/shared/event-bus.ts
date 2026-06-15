@@ -61,6 +61,7 @@ export interface EventMap {
       | 'deduplicated'
       | 'started'
       | 'succeeded'
+      | 'rescheduled'
       | 'retry_scheduled'
       | 'failed'
       | 'dropped_budget'

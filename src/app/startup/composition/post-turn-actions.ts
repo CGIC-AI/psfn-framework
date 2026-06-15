@@ -508,6 +508,7 @@ export function wirePostTurnActionRuntime(
       | 'deduplicated'
       | 'started'
       | 'succeeded'
+      | 'rescheduled'
       | 'retry_scheduled'
       | 'failed'
       | 'dropped_budget'
@@ -819,6 +820,32 @@ export function wirePostTurnActionRuntime(
         if (result) {
           handlerResult = result;
         }
+        if (typeof result?.rescheduleAt === 'number') {
+          break;
+        }
+      }
+      if (typeof handlerResult?.rescheduleAt === 'number') {
+        const rescheduleAt = normalizeActionRunAt(handlerResult.rescheduleAt);
+        if (rescheduleAt === undefined || rescheduleAt <= Date.now()) {
+          throw new Error(`Deferred action handler returned invalid rescheduleAt for "${entry.action.kind}"`);
+        }
+        entry.attempt = Math.max(0, entry.attempt - 1);
+        entry.nextRunAt = rescheduleAt;
+        persistQueue();
+        const delayMs = Math.max(1, rescheduleAt - Date.now());
+        log.info('Deferred action rescheduled by handler', {
+          actionId: entry.action.id,
+          actionKind: entry.action.kind,
+          nextRunAt: entry.nextRunAt,
+          delayMs,
+          detail: handlerResult.detail,
+        });
+        emitTelemetry('rescheduled', entry, {
+          delayMs,
+          nextRetryAt: entry.nextRunAt,
+          ...(handlerResult.detail ? { error: handlerResult.detail } : {}),
+        });
+        return true;
       }
       queue.delete(entry.action.dedupeKey);
       persistQueue();

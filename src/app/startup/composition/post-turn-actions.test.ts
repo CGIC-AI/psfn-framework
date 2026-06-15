@@ -499,6 +499,71 @@ describe('wirePostTurnActionRuntime', () => {
     }
   });
 
+  it('lets handlers reschedule an action without consuming retry attempts', async () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(1_700_000_000_000);
+
+      const eventBus = new EventBus();
+      const scheduler = new Scheduler(eventBus, {
+        tickIntervalMs: 100,
+        heartbeatIntervalMs: 1_000,
+      });
+      const runtime = wirePostTurnActionRuntime({
+        eventBus,
+        scheduler,
+        agentLoop: {
+          waitForIdle: vi.fn().mockResolvedValue(undefined),
+        },
+        intervalMs: 1,
+      });
+      const handler = vi.fn().mockResolvedValue({
+        detail: 'quiet_hours',
+        rescheduleAt: 1_700_000_060_000,
+      });
+      runtime.registerHandler('heartbeat.run_template', handler, {
+        executionMode: 'background',
+      });
+
+      const phases: string[] = [];
+      eventBus.on('agent.post_turn.action.telemetry', ({ phase }) => {
+        phases.push(phase);
+      });
+
+      await eventBus.emit('agent.post_turn.actions.inferred', {
+        message: makeMessage(),
+        response: makeResponse(),
+        actions: [
+          makeAction({
+            id: 'reschedule-action',
+            dedupeKey: 'reschedule:key',
+            maxRetries: 1,
+          }),
+        ],
+      });
+
+      await scheduler.tick();
+
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(runtime.getStatus()).toMatchObject({
+        queueDepth: 1,
+        scheduledCount: 1,
+        queued: [
+          expect.objectContaining({
+            actionId: 'reschedule-action',
+            state: 'scheduled',
+            attempt: 0,
+            maxAttempts: 2,
+            nextRunAt: 1_700_000_060_000,
+          }),
+        ],
+      });
+      expect(phases).toContain('rescheduled');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('retries failures with bounded attempts and then marks failed', async () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {

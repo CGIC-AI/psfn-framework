@@ -85,7 +85,7 @@ describe('ProactiveOutboundDispatcher', () => {
       channelId: PRIMARY_DM_CHANNEL,
       channelType: 'discord',
       content: 'second within the hour',
-    })).toEqual({ outcome: 'blocked', reason: 'rate_limited' });
+    })).toMatchObject({ outcome: 'blocked', reason: 'rate_limited' });
     expect(send).toHaveBeenCalledTimes(1);
   });
 });
@@ -113,6 +113,39 @@ describe('external follow-up translation', () => {
     expect(payload?.content).toBe('hey, you went quiet — everything okay?');
     expect(payload?.channelId).toBe(PRIMARY_DM_CHANNEL);
     expect(payload?.reason).toBe('checking in after a long quiet stretch');
+  });
+
+  it('time-gates external follow-ups behind future concern boundaries and quiet hours', () => {
+    const nowSpy = vi.spyOn(Date, 'now');
+    try {
+      nowSpy.mockReturnValue(Date.parse('2026-06-15T18:00:00.000Z'));
+      const decisions: IntentionActionDecision[] = [{
+        type: 'followUp',
+        priority: 'high',
+        reason: 'User asked for a doctor reminder tomorrow.',
+        timing: 'immediate',
+        followUp: {
+          content: 'Remember to contact the doctor.',
+          delivery: 'external',
+        },
+      }];
+
+      const candidates = decisionsToPostTurnActionCandidates(decisions, context, {
+        minimumOutboundRunAt: Date.parse('2026-06-16T00:00:00.000Z'),
+        proactiveOutboundQuietHours: {
+          enabled: true,
+          startLocalTime: '00:00',
+          endLocalTime: '08:00',
+          timeZone: 'UTC',
+        },
+      });
+
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]?.kind).toBe(INTENTION_OUTBOUND_MESSAGE_ACTION_KIND);
+      expect(candidates[0]?.runAt).toBe(Date.parse('2026-06-16T08:00:00.000Z'));
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('keeps default follow-ups on the internal whisper path', () => {

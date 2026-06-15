@@ -8,6 +8,7 @@ import {
 } from '../../../shared/contracts/runtime.js';
 import type { PendingFollowUp } from '../pending-follow-ups.js';
 import { resolveConsolidatedReflectionTemplateId } from '../../scheduler/heartbeat-policy.js';
+import { evaluateProactiveOutboundTimeGate } from '../proactive-time-gate.js';
 import {
   DEFAULT_FOLLOW_UP_PENDING_DELAY_MS,
   INTENTION_FOLLOW_UP_ACTION_KIND,
@@ -79,6 +80,32 @@ function resolveReminderRunAt(
   return undefined;
 }
 
+function normalizeOutboundMinimumRunAt(value: number | undefined): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+function resolveOutboundRunAt(
+  requestedRunAt: number | undefined,
+  now: number,
+  options: IntentionDecisionActionOptions,
+): number | undefined {
+  const minimumOutboundRunAt = normalizeOutboundMinimumRunAt(options.minimumOutboundRunAt);
+  const earliestSendAtMs = Math.max(
+    now,
+    requestedRunAt ?? now,
+    minimumOutboundRunAt ?? now,
+  );
+  const gate = evaluateProactiveOutboundTimeGate({
+    nowMs: now,
+    earliestSendAtMs,
+    quietHours: options.proactiveOutboundQuietHours,
+  });
+  return gate.allowed ? earliestSendAtMs : gate.nextEligibleAtMs;
+}
+
 function normalizeCandidatePayload(payload: PostTurnActionCandidate['payload']): Record<string, unknown> {
   if (!isRecord(payload)) return {};
   const normalizedEntries = Object.entries(payload)
@@ -93,6 +120,7 @@ export function decisionsToPostTurnActionCandidates(
   options: IntentionDecisionActionOptions = {},
 ): PostTurnActionCandidate[] {
   const candidates: PostTurnActionCandidate[] = [];
+  const now = options.now ?? Date.now();
 
   for (const decision of decisions) {
     if (decision.type === 'followUp') {
@@ -103,10 +131,11 @@ export function decisionsToPostTurnActionCandidates(
       if (hasStateWakeConditions && decision.dueAt === undefined && decision.timing !== 'immediate') {
         continue;
       }
-      const runAt = resolveFollowUpRunAt(decision, Date.now(), options);
+      const runAt = resolveFollowUpRunAt(decision, now, options);
       const channelId = decision.followUp?.channelId?.trim() || context.message.channelId;
       const channelType = decision.followUp?.channelType ?? context.message.channelType;
       if (decision.followUp?.delivery === 'external') {
+        const outboundRunAt = resolveOutboundRunAt(runAt, now, options);
         candidates.push({
           kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
           dedupeKey: `${INTENTION_OUTBOUND_MESSAGE_ACTION_KIND}:${context.message.id}:${hashString(content)}`,
@@ -120,7 +149,7 @@ export function decisionsToPostTurnActionCandidates(
               : {}),
           } satisfies IntentionOutboundMessageActionPayload,
           maxRetries: 1,
-          ...(runAt !== undefined ? { runAt } : {}),
+          ...(outboundRunAt !== undefined ? { runAt: outboundRunAt } : {}),
         });
         continue;
       }
@@ -164,7 +193,7 @@ export function decisionsToPostTurnActionCandidates(
     if (decision.type === 'reminder') {
       const reminderId = decision.reminder?.reminderId?.trim() ?? '';
       if (!reminderId) continue;
-      const runAt = resolveReminderRunAt(decision, Date.now());
+      const runAt = resolveReminderRunAt(decision, now);
       const dedupeSuffix = typeof runAt === 'number' && Number.isFinite(runAt)
         ? String(runAt)
         : 'unscheduled';

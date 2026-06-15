@@ -30,6 +30,7 @@ import {
   toInferredPostTurnActions,
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
+import { evaluateProactiveOutboundTimeGate } from '../intention/proactive-time-gate.js';
 import { cloneInternalState } from '../self-model/state.js';
 import {
   BACKGROUND_CONTINUATION_RUNTIME_CLASS,
@@ -121,6 +122,20 @@ export function wireHeartbeatPostTurnRuntime(
     : null;
   const intentionSessionsInFlight = new Set<string>();
   const motivationBridge = intentionAppraisal ? new MotivationBridge() : null;
+
+  const resolveMinimumOutboundRunAt = (
+    concerns: readonly { dueAt?: number }[] | undefined,
+    now: number,
+  ): number | undefined => {
+    const futureConcernDueTimes = (concerns ?? [])
+      .map(concern => concern.dueAt)
+      .filter((dueAt): dueAt is number => (
+        typeof dueAt === 'number'
+        && Number.isFinite(dueAt)
+        && dueAt > now
+      ));
+    return futureConcernDueTimes.length > 0 ? Math.min(...futureConcernDueTimes) : undefined;
+  };
 
   const emitDeferredToolHandoffTelemetry = (
     payload: {
@@ -377,14 +392,20 @@ export function wireHeartbeatPostTurnRuntime(
           }
         }
 
+        const candidateNow = Date.now();
         const decisionCandidates = decisionsToPostTurnActionCandidates(
           decisions,
           {
             message: context.message,
           },
-          isBackgroundAppraisalChannel(context.message.channelId)
-            ? { surfacePendingFollowUpsImmediately: true }
-            : {},
+          {
+            now: candidateNow,
+            minimumOutboundRunAt: resolveMinimumOutboundRunAt(activeConcerns, candidateNow),
+            proactiveOutboundQuietHours: runtimeOptions.episodicProcessingRestWindow,
+            ...(isBackgroundAppraisalChannel(context.message.channelId)
+              ? { surfacePendingFollowUpsImmediately: true }
+              : {}),
+          },
         );
         const resurfacedPendingFollowUps = runtimeOptions.getPendingFollowUpsForResurfacing
           ? await runtimeOptions.getPendingFollowUpsForResurfacing({
@@ -612,22 +633,49 @@ export function wireHeartbeatPostTurnRuntime(
             if (!payload) {
               throw new Error(`Intention outbound action "${action.id}" payload is missing required fields`);
             }
-            if (payload.pendingFollowUpId && runtimeOptions.onIntentionFollowUpActivated) {
-              const activated = await runtimeOptions.onIntentionFollowUpActivated({
-                pendingFollowUpId: payload.pendingFollowUpId,
-                activationReason: 'post_turn_action',
-              });
-              if (activated === false) {
-                return;
-              }
+            const timeGate = evaluateProactiveOutboundTimeGate({
+              nowMs: Date.now(),
+              earliestSendAtMs: action.runAt,
+              quietHours: runtimeOptions.episodicProcessingRestWindow,
+            });
+            if (!timeGate.allowed) {
+              return {
+                detail: timeGate.reason,
+                rescheduleAt: timeGate.nextEligibleAtMs,
+              };
             }
-            await proactiveOutbound.dispatch({
+            const dispatchResult = await proactiveOutbound.dispatch({
               actionId: action.id,
               channelId: payload.channelId,
               channelType: payload.channelType,
               content: payload.content,
               ...(payload.reason ? { reason: payload.reason } : {}),
             });
+            if (
+              dispatchResult.outcome === 'blocked'
+              && dispatchResult.reason === 'rate_limited'
+              && typeof dispatchResult.retryAfterMs === 'number'
+              && Number.isFinite(dispatchResult.retryAfterMs)
+              && dispatchResult.retryAfterMs > 0
+            ) {
+              return {
+                detail: 'rate_limited',
+                rescheduleAt: Date.now() + dispatchResult.retryAfterMs,
+              };
+            }
+            if (
+              dispatchResult.outcome === 'sent'
+              && payload.pendingFollowUpId
+              && runtimeOptions.onIntentionFollowUpActivated
+            ) {
+              await runtimeOptions.onIntentionFollowUpActivated({
+                pendingFollowUpId: payload.pendingFollowUpId,
+                activationReason: 'post_turn_action',
+              });
+            }
+            return dispatchResult.outcome === 'sent'
+              ? { detail: 'sent' }
+              : { detail: `blocked:${dispatchResult.reason}` };
           },
           {
             executionMode: 'background',

@@ -1189,7 +1189,12 @@ describe('handleMessageForTurn compaction scheduling', () => {
     });
     runtime.captureTurnPromptSnapshot = vi.fn(() => ({
       staticPrefixTemplate: 'Static prefix template',
-      dynamicSuffixTemplate: 'Dynamic suffix template',
+      dynamicSuffixTemplate: [
+        'Dynamic suffix template',
+        '<current_datetime>',
+        '<date>Stale legacy date</date>',
+        '</current_datetime>',
+      ].join('\n'),
       staticHash: 'static-hash',
       versionPointer: 'prompt-v1',
     }));
@@ -1226,6 +1231,105 @@ describe('handleMessageForTurn compaction scheduling', () => {
     ]);
     expect(providerWireMessages?.some(message => message.role === 'assistant'
       && message.content.includes('Queue a private follow-up reminder.'))).toBe(false);
+  });
+
+  it('appends the current datetime anchor at the end of the provider system prompt', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'Final system prompt',
+      systemPromptSections: [
+        {
+          id: 'final_system_prompt',
+          title: 'Final System Prompt',
+          content: 'Final system prompt',
+          charCount: 'Final system prompt'.length,
+          tokenCount: 3,
+        },
+      ],
+      messages: [
+        { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
+        { role: 'user', content: 'Current user message' },
+      ],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+    });
+    runtime.captureTurnPromptSnapshot = vi.fn(() => ({
+      staticPrefixTemplate: 'Static prefix template',
+      dynamicSuffixTemplate: 'Dynamic suffix template',
+      staticHash: 'static-hash',
+      versionPointer: 'prompt-v1',
+    }));
+    runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
+    runtime.buildScratchpadContextBlock = vi.fn(() => '');
+    runtime.getPersonaAdaptation = vi.fn(() => null);
+    runtime.buildDynamicPromptTemplateVariables = vi.fn(() => ({
+      active_timezone: 'America/New_York',
+      runtime_current_weekday: 'Wednesday',
+      runtime_current_date_human: 'March 18, 2026',
+      runtime_current_time_human: '9:30 AM',
+      runtime_current_datetime_iso: '2026-03-18T09:30:00.000-04:00',
+    }));
+
+    await handleMessageForTurn(runtime, createMessage('msg-current-datetime-anchor'));
+
+    const fullPrompt = buildContext.mock.calls[0]?.[1] as string;
+    const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
+    const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
+    const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    const currentDatetimeAnchor = [
+      '<current_datetime>',
+      '<weekday>Wednesday</weekday>',
+      '<date>March 18, 2026</date>',
+      '<time>9:30 AM</time>',
+      '<timezone>America/New_York</timezone>',
+      '<iso>2026-03-18T09:30:00.000-04:00</iso>',
+      '</current_datetime>',
+    ].join('\n');
+    const mergedSystemPrompt = [
+      'Final system prompt',
+      '<session_context>',
+      '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.',
+      '</session_context>',
+      currentDatetimeAnchor,
+    ].join('\n\n');
+    const finalSystemPrompt = promptContext?.finalSystemPrompt as string | undefined;
+    const providerWireMessages = (promptContext?.providerObservability as {
+      providerWireMessages?: Array<{ role: string; source: string; content: string }>;
+    } | undefined)?.providerWireMessages;
+    const finalSystemSections = promptContext?.finalSystemSections as Array<{ id: string; content: string }> | undefined;
+
+    expect(fullPrompt).toContain('Dynamic suffix template');
+    expect(fullPrompt).not.toContain('Stale legacy date');
+    expect(finalSystemPrompt).toBe(mergedSystemPrompt);
+    expect(finalSystemPrompt?.endsWith(currentDatetimeAnchor)).toBe(true);
+    expect(finalSystemPrompt?.indexOf('</session_context>')).toBeLessThan(
+      finalSystemPrompt?.lastIndexOf('<current_datetime>') ?? -1,
+    );
+    expect(providerWireMessages?.[0]).toEqual({
+      role: 'system',
+      source: 'system_prompt',
+      content: mergedSystemPrompt,
+    });
+    expect(providerWireMessages?.[1]).toEqual({
+      role: 'user',
+      source: 'message',
+      content: 'Current user message',
+    });
+    expect(finalSystemSections).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'runtime.current_datetime',
+        content: currentDatetimeAnchor,
+      }),
+    ]));
   });
 
   it('keeps runtime-layer suffixes active when a custom system prompt override is used', async () => {

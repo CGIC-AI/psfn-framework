@@ -191,11 +191,17 @@ describe('runtime prompt block schema', () => {
   it('classifies required, optional, immutable, and editable runtime blocks', () => {
     const persona = getPromptRuntimeBlockDefinition('runtime.persona_adaptation');
     const scratchpad = getPromptRuntimeBlockDefinition('runtime.scratchpad');
+    const currentDatetime = getPromptRuntimeBlockDefinition('runtime.current_datetime');
     const currentMessages = getPromptRuntimeBlockDefinition('session.current_messages');
 
     expect(persona?.schema.classification).toBe('required_runtime_aware');
     expect(isPromptRuntimeBlockRequired(persona!)).toBe(true);
     expect(isPromptRuntimeBlockCompanionEditable(persona!)).toBe(true);
+
+    expect(currentDatetime?.schema.classification).toBe('required_runtime_aware');
+    expect(isPromptRuntimeBlockRequired(currentDatetime!)).toBe(true);
+    expect(isPromptRuntimeBlockCompanionEditable(currentDatetime!)).toBe(false);
+    expect(currentDatetime?.reorderable).toBe(false);
 
     expect(scratchpad?.schema.classification).toBe('optional_runtime_aware');
     expect(isPromptRuntimeBlockRequired(scratchpad!)).toBe(false);
@@ -215,6 +221,7 @@ describe('runtime prompt block schema', () => {
       'session.compaction_summary',
       'session.focus_knowledge',
       'session.continuity',
+      'runtime.current_datetime',
     ]);
     expect(getPromptRuntimeBlockIdsByClassification('immutable_provider_managed')).toEqual([
       'session.current_messages',

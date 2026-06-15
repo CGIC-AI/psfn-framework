@@ -146,15 +146,23 @@ function wrapRuntimeUmbrella(tag: string, sections: readonly string[]): string {
   return `<${tag}>\n${sections.map(section => section.trim()).join('\n\n')}\n</${tag}>`;
 }
 
-const RUNTIME_STATE_LAYER_CONTENT = wrapRuntimeUmbrella('runtime_state', [
+const CURRENT_DATETIME_LAYER_CONTENT = "<current_datetime>\n<weekday>{{runtime_current_weekday}}</weekday>\n<date>{{runtime_current_date_human}}</date>\n<time>{{runtime_current_time_human}}</time>\n<timezone>{{active_timezone}}</timezone>\n</current_datetime>";
+
+const RUNTIME_STATE_LAYER_SECTIONS = [
   "<last_message_received>\n<weekday>{{runtime_last_message_received_weekday}}</weekday>\n<date>{{runtime_last_message_received_date_human}}</date>\n<time>{{runtime_last_message_received_time_human}}</time>\n<timezone>{{runtime_last_message_received_timezone}}</timezone>\n<elapsed_time_since_last>{{runtime_last_message_received_ago}}</elapsed_time_since_last>\n<status>{{runtime_last_message_received_missing_notice}}</status>\n</last_message_received>",
   "<internal_turn_context>\n<kind>{{runtime_internal_turn_kind}}</kind>\n</internal_turn_context>",
   "<speaking_with>\n<name>{{runtime_speaking_with_name}}</name>\n<trust_level>{{runtime_speaking_with_trust_level}}</trust_level>\n</speaking_with>",
   "<channel_context>\n<type>{{runtime_channel_type}}</type>\n<visibility>{{runtime_channel_visibility}}</visibility>\n</channel_context>",
   "<model_context>\n<identifier>{{model}}</identifier>\n</model_context>",
   "<capability_tier>\n<tier>{{runtime_capability_tier}}</tier>\n</capability_tier>",
-  "<current_datetime>\n<weekday>{{runtime_current_weekday}}</weekday>\n<date>{{runtime_current_date_human}}</date>\n<time>{{runtime_current_time_human}}</time>\n<timezone>{{active_timezone}}</timezone>\n</current_datetime>",
+] as const;
+
+const LEGACY_RUNTIME_STATE_LAYER_CONTENT_WITH_CURRENT_DATETIME = wrapRuntimeUmbrella('runtime_state', [
+  ...RUNTIME_STATE_LAYER_SECTIONS,
+  CURRENT_DATETIME_LAYER_CONTENT,
 ]);
+
+const RUNTIME_STATE_LAYER_CONTENT = wrapRuntimeUmbrella('runtime_state', RUNTIME_STATE_LAYER_SECTIONS);
 
 const RUNTIME_SELF_LAYER_CONTENT = wrapRuntimeUmbrella('runtime_self', [
   `<trust>\n${TRUST_GUIDANCE_BODY_TEMPLATE}\n</trust>`,
@@ -364,12 +372,6 @@ const REQUIRED_RUNTIME_PROMPT_SIGNAL_DEFINITIONS: readonly RequiredRuntimePrompt
     ['<capability_tier>', '{{runtime_capability_tier}}'],
   ),
   createRequiredRuntimePromptSignalDefinition(
-    'runtime.current_datetime',
-    'Current Date & Time',
-    ['runtime.state'],
-    ['<current_datetime>', '{{runtime_current_'],
-  ),
-  createRequiredRuntimePromptSignalDefinition(
     'runtime.trust',
     'Trust Guidance',
     ['runtime.self'],
@@ -556,16 +558,19 @@ function normalizeRuntimeLayerMetadata(
   layer: PromptLayer,
   definition: RuntimePromptLayerDefinition,
 ): boolean {
+  const shouldUpgradeContent = definition.identifier === 'runtime.state'
+    && layer.content === LEGACY_RUNTIME_STATE_LAYER_CONTENT_WITH_CURRENT_DATETIME;
   const metadataPatch = {
     ...(layer.identifier !== definition.identifier ? { identifier: definition.identifier } : {}),
     ...(layer.role !== 'system' ? { role: 'system' as const } : {}),
     ...(layer.promptOrder !== definition.priority ? { promptOrder: definition.priority } : {}),
   };
   const needsPriority = layer.priority !== definition.priority;
-  if (Object.keys(metadataPatch).length === 0 && !needsPriority) {
+  if (Object.keys(metadataPatch).length === 0 && !needsPriority && !shouldUpgradeContent) {
     return false;
   }
   promptStore.update(layer.id, {
+    ...(shouldUpgradeContent ? { content: definition.content } : {}),
     ...(needsPriority ? { priority: definition.priority } : {}),
     ...(Object.keys(metadataPatch).length > 0 ? { metadata: metadataPatch } : {}),
   }, 'system:runtime-layer-seed', `Normalize seeded runtime prompt layer ${definition.identifier}`);

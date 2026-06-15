@@ -354,6 +354,7 @@ export type PromptRuntimeBlockId =
   | 'runtime.persona_adaptation'
   | 'runtime.context'
   | 'runtime.scratchpad'
+  | 'runtime.current_datetime'
   | 'memory.core'
   | 'memory.retrieval'
   | 'session.compaction_summary'
@@ -539,6 +540,18 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     contentVisible: false,
   },
   {
+    id: 'runtime.current_datetime',
+    label: 'Current Date & Time',
+    description: 'Fresh per-turn clock anchor rendered as the final system prompt block immediately before conversation messages.',
+    source: 'turn-execution-runtime:current datetime anchor',
+    schema: REQUIRED_RUNTIME_AWARE_SCHEMA,
+    placement: 'system_prompt',
+    visibility: 'runtime_generated',
+    reorderable: false,
+    contentVisible: true,
+    lockedReason: 'Fixed last so date-sensitive reminders and temporal instructions stay grounded.',
+  },
+  {
     id: 'session.current_messages',
     label: 'Current Conversation Messages',
     description: 'Current-session transcript passed as provider chat messages, not system prompt text.',
@@ -595,7 +608,7 @@ const PROMPT_RUNTIME_BLOCK_MAP = new Map(
 const DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER: PromptRuntimeSystemPromptBlockId[] = PROMPT_RUNTIME_BLOCKS
   .filter(
     (block): block is PromptRuntimeBlockDefinition & { id: PromptRuntimeSystemPromptBlockId } =>
-      block.placement === 'system_prompt',
+      block.placement === 'system_prompt' && block.reorderable,
   )
   .map(block => block.id);
 

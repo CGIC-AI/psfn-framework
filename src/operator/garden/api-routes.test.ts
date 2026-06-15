@@ -3204,10 +3204,10 @@ describe('AdminServer JSON API routes', () => {
     const promptsBeforeReorderRes = await request(port, 'GET', '/api/admin/prompts', undefined, authHeaders);
     expect(promptsBeforeReorderRes.status).toBe(200);
     const promptsBeforeReorderPayload = JSON.parse(promptsBeforeReorderRes.body) as {
-      runtimeBlocks: Array<{ id: string; placement: string }>;
+      runtimeBlocks: Array<{ id: string; placement: string; reorderable: boolean }>;
     };
     const reorderedRuntimeBlockIds = promptsBeforeReorderPayload.runtimeBlocks
-      .filter(block => block.placement === 'system_prompt')
+      .filter(block => block.placement === 'system_prompt' && block.reorderable)
       .map(block => block.id);
     const [movedRuntimeBlockId] = reorderedRuntimeBlockIds.splice(reorderedRuntimeBlockIds.length - 1, 1);
     if (movedRuntimeBlockId) reorderedRuntimeBlockIds.unshift(movedRuntimeBlockId);
@@ -3224,10 +3224,10 @@ describe('AdminServer JSON API routes', () => {
     const promptsAfterReorderRes = await request(port, 'GET', '/api/admin/prompts', undefined, authHeaders);
     expect(promptsAfterReorderRes.status).toBe(200);
     const promptsAfterReorderPayload = JSON.parse(promptsAfterReorderRes.body) as {
-      runtimeBlocks: Array<{ id: string; placement: string }>;
+      runtimeBlocks: Array<{ id: string; placement: string; reorderable: boolean }>;
     };
     const runtimeOrderIds = promptsAfterReorderPayload.runtimeBlocks
-      .filter(block => block.placement === 'system_prompt')
+      .filter(block => block.placement === 'system_prompt' && block.reorderable)
       .map(block => block.id);
     expect(runtimeOrderIds[0]).toBe(movedRuntimeBlockId);
     expect(promptStore.getById(layerId)?.content).toContain('Updated API prompt content');

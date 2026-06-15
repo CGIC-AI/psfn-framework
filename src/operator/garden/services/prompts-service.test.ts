@@ -268,9 +268,19 @@ describe('AdminPromptsDataService', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'runtime.current_datetime',
       'session.current_messages',
       'tools.active_schemas',
     ]);
+    expect(listed.runtimeBlocks.find(block => block.id === 'runtime.current_datetime')).toMatchObject({
+      schemaClassification: 'required_runtime_aware',
+      required: true,
+      immutable: false,
+      providerManaged: false,
+      reorderable: false,
+      placement: 'system_prompt',
+      contentVisible: true,
+    });
     expect(listed.runtimeBlocks.find(block => block.id === 'session.current_messages')).toMatchObject({
       schemaClassification: 'immutable_provider_managed',
       required: true,

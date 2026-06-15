@@ -49,6 +49,56 @@ export interface TurnPromptAssemblyResult {
   templateVariables: Record<string, string>;
 }
 
+function readPromptVariable(variables: Record<string, unknown>, key: string): string {
+  const value = variables[key];
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function buildCurrentDatetimeProximityAnchor(variables: Record<string, unknown>): string {
+  const fields = [
+    ['weekday', readPromptVariable(variables, 'runtime_current_weekday')],
+    ['date', readPromptVariable(variables, 'runtime_current_date_human')],
+    ['time', readPromptVariable(variables, 'runtime_current_time_human')],
+    ['timezone', readPromptVariable(variables, 'active_timezone')],
+    ['iso', readPromptVariable(variables, 'runtime_current_datetime_iso')],
+  ] as const;
+  const renderedFields = fields
+    .filter(([, value]) => value.length > 0)
+    .map(([tag, value]) => `<${tag}>${value}</${tag}>`);
+  if (renderedFields.length === 0) {
+    return '';
+  }
+  return [
+    '<current_datetime>',
+    ...renderedFields,
+    '</current_datetime>',
+  ].join('\n');
+}
+
+function stripCurrentDatetimePromptBlocks(text: string): string {
+  return text
+    .replace(/<current_datetime>\s*[\s\S]*?<\/current_datetime>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function appendCurrentDatetimeProximityAnchor(
+  systemPrompt: string,
+  variables: Record<string, unknown>,
+): { systemPrompt: string; anchor: string } {
+  const anchor = buildCurrentDatetimeProximityAnchor(variables);
+  if (!anchor) {
+    return { systemPrompt, anchor };
+  }
+  const trimmedSystemPrompt = systemPrompt.trim();
+  return {
+    systemPrompt: trimmedSystemPrompt
+      ? `${trimmedSystemPrompt}\n\n${anchor}`
+      : anchor,
+    anchor,
+  };
+}
+
 function buildTurnObservabilityWarningPayload(input: {
   callType: ObservabilityCallType;
   nowMs: number;
@@ -187,10 +237,10 @@ export async function assembleTurnPrompt(input: {
   );
   const dynamicSuffixTemplate = turnSnapshot.prompt?.dynamicSuffixTemplate
     || DEFAULT_RUNTIME_PROMPT_TEMPLATE;
-  const renderedDynamicSuffix = injectPromptRuntimeTokens(dynamicSuffixTemplate, {
+  const renderedDynamicSuffix = stripCurrentDatetimePromptBlocks(injectPromptRuntimeTokens(dynamicSuffixTemplate, {
     now: runtimeNow,
     variables: promptRuntimeVariables,
-  });
+  }));
   const promptRuntimeLayout = resolveCachedPromptRuntimeLayoutStore(runtime.config);
   const personaHint = runtime.getPersonaAdaptation(
     trustLevel,
@@ -261,9 +311,12 @@ export async function assembleTurnPrompt(input: {
       turnBudgetCharacteristics,
     ),
   );
-  const providerSystemPrompt = mergeSystemContextIntoSystemPrompt(
-    context.systemPrompt,
-    context.messages,
+  const { systemPrompt: providerSystemPrompt, anchor: currentDatetimeProximityAnchor } = appendCurrentDatetimeProximityAnchor(
+    stripCurrentDatetimePromptBlocks(mergeSystemContextIntoSystemPrompt(
+      context.systemPrompt,
+      context.messages,
+    )),
+    promptRuntimeVariables,
   );
   const systemContextPromptBlock = buildSystemContextPromptBlock(context.messages);
   const contextMessageCount = context.messages.length;
@@ -339,6 +392,15 @@ export async function assembleTurnPrompt(input: {
             content: systemContextPromptBlock,
             charCount: systemContextPromptBlock.length,
             tokenCount: countTokens(systemContextPromptBlock),
+          }]
+          : []),
+        ...(currentDatetimeProximityAnchor
+          ? [{
+            id: 'runtime.current_datetime',
+            title: 'Current Date & Time',
+            content: currentDatetimeProximityAnchor,
+            charCount: currentDatetimeProximityAnchor.length,
+            tokenCount: countTokens(currentDatetimeProximityAnchor),
           }]
           : []),
       ]

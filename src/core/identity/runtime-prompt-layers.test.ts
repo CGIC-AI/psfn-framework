@@ -271,7 +271,6 @@ describe('runtime prompt layer schema', () => {
       'runtime.channel_context',
       'runtime.model_context',
       'runtime.capability_tier',
-      'runtime.current_datetime',
       'runtime.trust',
       'runtime.emotional_affect',
       'runtime.metacognitive_guidance',
@@ -285,8 +284,8 @@ describe('runtime prompt layer schema', () => {
   });
 
   it('uses atomic macros and moved prose inside the umbrella templates', () => {
-    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_current_weekday}}');
-    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_current_time_human}}');
+    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).not.toContain('<current_datetime>');
+    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).not.toContain('{{runtime_current_weekday}}');
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_last_message_received_timezone}}');
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_last_message_received_missing_notice}}');
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_internal_turn_kind}}');
@@ -410,7 +409,6 @@ describe('runtime prompt layer schema', () => {
       'runtime.channel_context',
       'runtime.model_context',
       'runtime.capability_tier',
-      'runtime.current_datetime',
       'runtime.trust',
       'runtime.emotional_affect',
       'runtime.metacognitive_guidance',

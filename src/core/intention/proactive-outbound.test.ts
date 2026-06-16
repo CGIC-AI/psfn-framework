@@ -104,6 +104,8 @@ describe('external follow-up translation', () => {
       followUp: {
         content: 'hey, you went quiet — everything okay?',
         delivery: 'external',
+        concernIds: [' concern-1 ', 'concern-2', 'concern-1'],
+        requiresActiveConcern: true,
       },
     }];
     const candidates = decisionsToPostTurnActionCandidates(decisions, context);
@@ -113,6 +115,8 @@ describe('external follow-up translation', () => {
     expect(payload?.content).toBe('hey, you went quiet — everything okay?');
     expect(payload?.channelId).toBe(PRIMARY_DM_CHANNEL);
     expect(payload?.reason).toBe('checking in after a long quiet stretch');
+    expect(payload?.concernIds).toEqual(['concern-1', 'concern-2']);
+    expect(payload?.requiresActiveConcern).toBe(true);
   });
 
   it('time-gates external follow-ups behind future concern boundaries and quiet hours', () => {

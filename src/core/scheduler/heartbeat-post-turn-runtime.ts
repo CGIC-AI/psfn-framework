@@ -20,6 +20,7 @@ import {
   INTENTION_FOLLOW_UP_ACTION_KIND,
   INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
   INTENTION_REMINDER_ACTION_KIND,
+  type IntentionOutboundMessageActionPayload,
   decisionsToPostTurnActionCandidates,
   isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
@@ -30,6 +31,7 @@ import {
   toInferredPostTurnActions,
 } from '../intention/appraisal.js';
 import { MotivationBridge } from '../intention/motivation.js';
+import { isPendingFollowUpExpired } from '../intention/pending-follow-ups.js';
 import { evaluateProactiveOutboundTimeGate } from '../intention/proactive-time-gate.js';
 import { cloneInternalState } from '../self-model/state.js';
 import {
@@ -135,6 +137,67 @@ export function wireHeartbeatPostTurnRuntime(
         && dueAt > now
       ));
     return futureConcernDueTimes.length > 0 ? Math.min(...futureConcernDueTimes) : undefined;
+  };
+
+  const normalizeConcernIds = (
+    concerns: readonly { id?: string }[] | undefined,
+  ): string[] => {
+    const ids: string[] = [];
+    for (const concern of concerns ?? []) {
+      const id = concern.id?.trim();
+      if (id && !ids.includes(id)) {
+        ids.push(id);
+      }
+    }
+    return ids;
+  };
+
+  const decisionReferencesConcernPressure = (decision: { reason?: string; followUp?: { content?: string } }): boolean => {
+    const text = `${decision.reason ?? ''} ${decision.followUp?.content ?? ''}`.toLowerCase();
+    return /\bconcerns?\b/.test(text) || /\bopen threads?\b/.test(text) || /\bactive high-priority\b/.test(text);
+  };
+
+  const resolveOutboundProvenanceBlockReason = async (
+    action: { channelId: string },
+    payload: IntentionOutboundMessageActionPayload,
+  ): Promise<string | undefined> => {
+    const hasPendingFollowUpLink = Boolean(payload.pendingFollowUpId);
+    const linkedConcernIds = payload.concernIds ?? [];
+    const requiresActiveConcern = payload.requiresActiveConcern === true;
+
+    if (!hasPendingFollowUpLink && linkedConcernIds.length === 0 && !requiresActiveConcern) {
+      return 'missing_live_provenance';
+    }
+
+    if (payload.pendingFollowUpId) {
+      if (!runtimeOptions.pendingFollowUpStore) {
+        return 'pending_follow_up_unavailable';
+      }
+      const followUp = await runtimeOptions.pendingFollowUpStore.peek(payload.pendingFollowUpId);
+      if (!followUp || followUp.activatedAt || isPendingFollowUpExpired(followUp, Date.now())) {
+        return 'stale_pending_follow_up';
+      }
+    }
+
+    if (linkedConcernIds.length > 0 || requiresActiveConcern) {
+      if (!runtimeOptions.getActiveConcerns) {
+        return 'active_concern_unavailable';
+      }
+      const activeConcerns = await Promise.resolve(runtimeOptions.getActiveConcerns({
+        channelId: action.channelId,
+      }));
+      const activeConcernIds = new Set(normalizeConcernIds(activeConcerns));
+      if (linkedConcernIds.length > 0) {
+        const hasLiveLinkedConcern = linkedConcernIds.some(id => activeConcernIds.has(id));
+        if (!hasLiveLinkedConcern) {
+          return 'stale_concern';
+        }
+      } else if (activeConcernIds.size === 0) {
+        return 'active_concern_missing';
+      }
+    }
+
+    return undefined;
   };
 
   const emitDeferredToolHandoffTelemetry = (
@@ -392,6 +455,25 @@ export function wireHeartbeatPostTurnRuntime(
           }
         }
 
+        const activeConcernIds = normalizeConcernIds(activeConcerns);
+        for (const decision of decisions) {
+          if (decision.type !== 'followUp' || decision.followUp?.delivery !== 'external') {
+            continue;
+          }
+          const suppliedConcernIds = decision.followUp.concernIds ?? [];
+          if (suppliedConcernIds.length === 0 && activeConcernIds.length > 0) {
+            decision.followUp = {
+              ...decision.followUp,
+              concernIds: activeConcernIds,
+            };
+          } else if (suppliedConcernIds.length === 0 && decisionReferencesConcernPressure(decision)) {
+            decision.followUp = {
+              ...decision.followUp,
+              requiresActiveConcern: true,
+            };
+          }
+        }
+
         const candidateNow = Date.now();
         const decisionCandidates = decisionsToPostTurnActionCandidates(
           decisions,
@@ -633,6 +715,17 @@ export function wireHeartbeatPostTurnRuntime(
             if (!payload) {
               throw new Error(`Intention outbound action "${action.id}" payload is missing required fields`);
             }
+            const provenanceBlockReason = await resolveOutboundProvenanceBlockReason(action, payload);
+            if (provenanceBlockReason) {
+              log.info('Intention outbound action blocked by stale or missing provenance', {
+                actionId: action.id,
+                channelId: action.channelId,
+                reason: provenanceBlockReason,
+                pendingFollowUpId: payload.pendingFollowUpId,
+                concernIds: payload.concernIds,
+              });
+              return { detail: `blocked:${provenanceBlockReason}` };
+            }
             const timeGate = evaluateProactiveOutboundTimeGate({
               nowMs: Date.now(),
               earliestSendAtMs: action.runAt,
@@ -662,16 +755,6 @@ export function wireHeartbeatPostTurnRuntime(
                 detail: 'rate_limited',
                 rescheduleAt: Date.now() + dispatchResult.retryAfterMs,
               };
-            }
-            if (
-              dispatchResult.outcome === 'sent'
-              && payload.pendingFollowUpId
-              && runtimeOptions.onIntentionFollowUpActivated
-            ) {
-              await runtimeOptions.onIntentionFollowUpActivated({
-                pendingFollowUpId: payload.pendingFollowUpId,
-                activationReason: 'post_turn_action',
-              });
             }
             return dispatchResult.outcome === 'sent'
               ? { detail: 'sent' }

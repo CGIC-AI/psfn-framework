@@ -95,6 +95,7 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
   const pendingFollowUpId = typeof value.pendingFollowUpId === 'string'
     ? value.pendingFollowUpId.trim()
     : '';
+  const concernIds = parseConcernIds(value);
   const delivery = value.delivery === 'external' || value.delivery === 'internal'
     ? value.delivery
     : undefined;
@@ -118,8 +119,27 @@ function parseFollowUpPayload(value: unknown): IntentionFollowUpDecision | undef
     ...(contextSummary ? { contextSummary } : {}),
     ...(wakeConditions.length > 0 ? { wakeConditions } : {}),
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
+    ...(concernIds.length > 0 ? { concernIds } : {}),
     ...(delivery ? { delivery } : {}),
   };
+}
+
+function parseConcernIds(value: Record<string, unknown>): string[] {
+  const ids: string[] = [];
+  const appendId = (candidate: unknown): void => {
+    if (typeof candidate !== 'string') return;
+    const normalized = candidate.trim();
+    if (normalized && !ids.includes(normalized)) {
+      ids.push(normalized);
+    }
+  };
+  appendId(value.concernId);
+  if (Array.isArray(value.concernIds)) {
+    for (const candidate of value.concernIds) {
+      appendId(candidate);
+    }
+  }
+  return ids;
 }
 
 function parseConcernPayload(value: unknown): IntentionConcernDecision | undefined {

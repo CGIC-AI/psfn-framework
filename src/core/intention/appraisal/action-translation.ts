@@ -114,6 +114,19 @@ function normalizeCandidatePayload(payload: PostTurnActionCandidate['payload']):
   return Object.fromEntries(normalizedEntries);
 }
 
+function normalizeConcernIds(value: readonly string[] | undefined): string[] {
+  if (!Array.isArray(value)) return [];
+  const ids: string[] = [];
+  for (const candidate of value) {
+    if (typeof candidate !== 'string') continue;
+    const normalized = candidate.trim();
+    if (normalized && !ids.includes(normalized)) {
+      ids.push(normalized);
+    }
+  }
+  return ids;
+}
+
 export function decisionsToPostTurnActionCandidates(
   decisions: readonly IntentionActionDecision[],
   context: IntentionDecisionActionContext,
@@ -136,6 +149,7 @@ export function decisionsToPostTurnActionCandidates(
       const channelType = decision.followUp?.channelType ?? context.message.channelType;
       if (decision.followUp?.delivery === 'external') {
         const outboundRunAt = resolveOutboundRunAt(runAt, now, options);
+        const concernIds = normalizeConcernIds(decision.followUp.concernIds);
         candidates.push({
           kind: INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
           dedupeKey: `${INTENTION_OUTBOUND_MESSAGE_ACTION_KIND}:${context.message.id}:${hashString(content)}`,
@@ -146,6 +160,10 @@ export function decisionsToPostTurnActionCandidates(
             reason: decision.reason,
             ...(decision.followUp.pendingFollowUpId
               ? { pendingFollowUpId: decision.followUp.pendingFollowUpId }
+              : {}),
+            ...(concernIds.length > 0 ? { concernIds } : {}),
+            ...(decision.followUp.requiresActiveConcern === true
+              ? { requiresActiveConcern: true }
               : {}),
           } satisfies IntentionOutboundMessageActionPayload,
           maxRetries: 1,
@@ -273,6 +291,10 @@ export function normalizeIntentionOutboundMessageActionPayload(
   const pendingFollowUpId = typeof payload.pendingFollowUpId === 'string'
     ? payload.pendingFollowUpId.trim()
     : '';
+  const concernIds = Array.isArray(payload.concernIds)
+    ? normalizeConcernIds(payload.concernIds.filter((id): id is string => typeof id === 'string'))
+    : [];
+  const requiresActiveConcern = payload.requiresActiveConcern === true;
   const channelType = payload.channelType;
   if (!channelId || !content) return null;
   if (typeof channelType !== 'string' || !CHANNEL_TYPES.includes(channelType as ChannelType)) {
@@ -284,6 +306,8 @@ export function normalizeIntentionOutboundMessageActionPayload(
     content,
     ...(reason ? { reason } : {}),
     ...(pendingFollowUpId ? { pendingFollowUpId } : {}),
+    ...(concernIds.length > 0 ? { concernIds } : {}),
+    ...(requiresActiveConcern ? { requiresActiveConcern } : {}),
   };
 }
 

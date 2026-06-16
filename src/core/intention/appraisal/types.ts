@@ -23,10 +23,11 @@ export const DEFAULT_SYSTEM_PROMPT = [
   'Consider unresolved concerns, emotional needs, scheduled commitments, and relationship maintenance.',
   'Most turns should return noop unless concrete action is warranted.',
   'Return JSON only, no markdown, with shape:',
-  '{"decisions":[{"type":"followUp|concern|schedule|reminder|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?","contextSummary":"string?","pendingFollowUpId":"string?","wakeConditions":["next_user_turn"|"background_recheck"|"sustained_negative_mood"]?,"delivery":"internal|external?"},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"open|pending|resolved?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?},"reminder":{"kind":"important_date|self_reminder","classification":"birthday|anniversary|important_date|check_in|self_note","title":"string","content":"string","schedule":"one_time|annual","channelId":"string?","channelType":"string?"}}]}',
+  '{"decisions":[{"type":"followUp|concern|schedule|reminder|noop","priority":"low|medium|high","reason":"string","timing":"immediate|soon|scheduled|none","dueAt":number?,"followUp":{"content":"string","channelId":"string?","channelType":"string?","contextSummary":"string?","pendingFollowUpId":"string?","concernIds":["string"]?,"wakeConditions":["next_user_turn"|"background_recheck"|"sustained_negative_mood"]?,"delivery":"internal|external?"},"concern":{"title":"string","summary":"string?","dueAt":number?,"priority":"low|medium|high?","status":"open|pending|resolved?"},"schedule":{"templateId":"string","sendToDiscordOverride":boolean?},"reminder":{"kind":"important_date|self_reminder","classification":"birthday|anniversary|important_date|check_in|self_note","title":"string","content":"string","schedule":"one_time|annual","channelId":"string?","channelType":"string?"}}]}',
   'For followUp decisions, include followUp.content as a brief internal Whisper note to self, not a user-facing message.',
   'Set followUp.delivery to "external" ONLY when you genuinely decide to reach out to the primary partner now: followUp.content then becomes the actual message you send, written in your own voice. External delivery is policy-gated (primary private channel only, rate-limited) and may be blocked. Default is "internal".',
   'If the user asked for a future reminder/check-in ("tomorrow", a weekday, a calendar date, or any later time), set dueAt to the earliest intended send time as epoch milliseconds in the supplied timezone. Do not use external delivery before that dueAt.',
+  'When a followUp is based on supplied activeConcerns, include the exact activeConcerns ids in followUp.concernIds.',
   'Use followUp.contextSummary for the key situation to preserve if the follow-up may need to wait and be resurfaced later.',
   'Use followUp.wakeConditions only when the follow-up should stay pending until a later state cue. next_user_turn waits for the next external user turn, background_recheck waits for an internal/background appraisal turn, and sustained_negative_mood waits for continued notably negative mood or motivation signals.',
   'When resurfacing or refining an already pending follow-up, reuse followUp.pendingFollowUpId instead of inventing a duplicate.',
@@ -92,6 +93,8 @@ export interface IntentionFollowUpDecision {
   contextSummary?: string;
   wakeConditions?: PendingFollowUpWakeCondition[];
   pendingFollowUpId?: string;
+  concernIds?: string[];
+  requiresActiveConcern?: boolean;
   /** 'internal' (default) keeps the whisper-to-self path; 'external' requests policy-gated outbound delivery. */
   delivery?: 'internal' | 'external';
 }
@@ -177,6 +180,8 @@ export interface IntentionOutboundMessageActionPayload {
   content: string;
   reason?: string;
   pendingFollowUpId?: string;
+  concernIds?: string[];
+  requiresActiveConcern?: boolean;
 }
 
 export interface IntentionReminderActionPayload {

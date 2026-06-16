@@ -622,10 +622,10 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     ? (params.turnSnapshot.orientation ?? computedOrientationTelemetry)
     : computedOrientationTelemetry;
 
+  const orientationSectionText = orientationTelemetry.fired && orientationTelemetry.noteText
+    ? orientationTelemetry.noteText
+    : '';
   let continuitySectionText = '';
-  if (orientationTelemetry.fired && orientationTelemetry.noteText) {
-    continuitySectionText = orientationTelemetry.noteText;
-  }
   if (crossChannel.length > 0) {
     const roleNames = { charName: params.characterName };
     const continuityBlock = crossChannel
@@ -644,9 +644,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
         return wrapUntrustedContext(rawContent);
       })
       .join('\n');
-    continuitySectionText = continuitySectionText.length > 0
-      ? `${continuitySectionText}\n\n[Recent activity from other channels]\n${continuityBlock}`
-      : '[Recent activity from other channels]\n' + continuityBlock;
+    continuitySectionText = '[Recent activity from other channels]\n' + continuityBlock;
   }
 
   const promptRuntimeLayout = resolveCachedPromptRuntimeLayoutStore(params.config);
@@ -666,6 +664,10 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     {
       id: 'session.focus_knowledge' as PromptRuntimeSystemPromptBlockId,
       content: focusKnowledgeSectionText,
+    },
+    {
+      id: 'session.orientation' as PromptRuntimeSystemPromptBlockId,
+      content: orientationSectionText,
     },
     {
       id: 'session.continuity' as PromptRuntimeSystemPromptBlockId,
@@ -788,6 +790,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
           section: 'compaction_summary',
           tokenCount: countTokens(compactionSummarySectionText) + countTokens(focusKnowledgeSectionText),
         },
+        { section: 'orientation', tokenCount: countTokens(orientationSectionText) },
         { section: 'continuity', tokenCount: countTokens(continuitySectionText) },
         { section: 'session_history', tokenCount: sessionMessageTokenCount },
       ],
@@ -830,6 +833,16 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       id: 'focus_knowledge',
       title: 'Focus Knowledge',
       content: focusKnowledgeSectionText,
+    },
+    {
+      id: 'wake_orientation',
+      title: 'Wake Orientation',
+      content: orientationSectionText,
+    },
+    {
+      id: 'cross_channel_continuity',
+      title: 'Cross-Channel Continuity',
+      content: continuitySectionText,
     },
   ]);
 

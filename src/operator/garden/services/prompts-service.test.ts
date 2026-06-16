@@ -251,6 +251,7 @@ describe('AdminPromptsDataService', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
     ], 'admin');
 
     const service = new AdminPromptsDataService({
@@ -268,10 +269,20 @@ describe('AdminPromptsDataService', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
       'runtime.current_datetime',
       'session.current_messages',
       'tools.active_schemas',
     ]);
+    expect(listed.runtimeBlocks.find(block => block.id === 'session.orientation')).toMatchObject({
+      schemaClassification: 'required_runtime_aware',
+      required: true,
+      immutable: false,
+      providerManaged: false,
+      reorderable: true,
+      placement: 'system_prompt',
+      contentVisible: true,
+    });
     expect(listed.runtimeBlocks.find(block => block.id === 'runtime.current_datetime')).toMatchObject({
       schemaClassification: 'required_runtime_aware',
       required: true,
@@ -581,6 +592,7 @@ describe('AdminPromptsDataService', () => {
         'runtime.scratchpad',
         'session.compaction_summary',
         'session.focus_knowledge',
+        'session.orientation',
       ],
     }));
 
@@ -594,6 +606,7 @@ describe('AdminPromptsDataService', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
     ]);
   });
 

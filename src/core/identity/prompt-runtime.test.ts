@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -220,6 +220,7 @@ describe('runtime prompt block schema', () => {
       'memory.retrieval',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
       'session.continuity',
       'runtime.current_datetime',
     ]);
@@ -421,6 +422,7 @@ describe('injectPromptRuntimeTokens', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
     ], 'admin');
 
     const reloadedStore = new PromptRuntimeLayoutStore(join(root, 'prompt-runtime-layout.json'));
@@ -433,6 +435,7 @@ describe('injectPromptRuntimeTokens', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
     ]);
 
     const ordered = orderPromptRuntimeSystemPromptSections([
@@ -461,6 +464,7 @@ describe('injectPromptRuntimeTokens', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
     ], 'admin');
 
     const secondStore = resolveCachedPromptRuntimeLayoutStore({ companionDataDir: root });
@@ -474,6 +478,7 @@ describe('injectPromptRuntimeTokens', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
     ]);
   });
 
@@ -495,6 +500,7 @@ describe('injectPromptRuntimeTokens', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
     ], 'admin');
 
     const reloadedStore = new PromptRuntimeLayoutStore(join(root, 'prompt-runtime-layout.json'));
@@ -502,6 +508,39 @@ describe('injectPromptRuntimeTokens', () => {
     expect(reloadedStore.getEditableBlockContentMap()).toMatchObject({
       'runtime.context': 'Companion-specific runtime guidance.',
     });
+  });
+
+  it('preserves saved runtime order while inserting newly added reorderable blocks', () => {
+    const root = makeTempDir();
+    writeFileSync(join(root, 'prompt-runtime-layout.json'), JSON.stringify({
+      version: 1,
+      systemPromptBlockOrder: [
+        'session.continuity',
+        'memory.core',
+        'memory.retrieval',
+        'runtime.persona_adaptation',
+        'runtime.context',
+        'runtime.scratchpad',
+        'session.compaction_summary',
+        'session.focus_knowledge',
+      ],
+      editableBlockContent: {},
+      updatedAt: '2026-06-16T00:00:00.000Z',
+      updatedBy: 'admin',
+    }));
+
+    const store = new PromptRuntimeLayoutStore(join(root, 'prompt-runtime-layout.json'));
+    expect(store.getSystemPromptBlockOrder()).toEqual([
+      'session.orientation',
+      'session.continuity',
+      'memory.core',
+      'memory.retrieval',
+      'runtime.persona_adaptation',
+      'runtime.context',
+      'runtime.scratchpad',
+      'session.compaction_summary',
+      'session.focus_knowledge',
+    ]);
   });
 
   it('rejects invalid runtime block orders that do not include the full reorderable set', () => {

@@ -290,6 +290,15 @@ describe('SessionManager', () => {
       expect(ctx.systemPrompt).toContain('[Welcome back]');
       expect(ctx.systemPrompt).toContain('Recent continuity');
       expect(ctx.systemPrompt).not.toContain('Open threads');
+      expect(ctx.systemPrompt.indexOf('[Welcome back]')).toBeLessThan(
+        ctx.systemPrompt.indexOf('[Recent activity from other channels]'),
+      );
+      const orientationSection = ctx.systemPromptSections.find(section => section.id === 'wake_orientation');
+      expect(orientationSection?.content).toContain('[Welcome back]');
+      expect(orientationSection?.content).toContain('Recent continuity');
+      const continuitySection = ctx.systemPromptSections.find(section => section.id === 'cross_channel_continuity');
+      expect(continuitySection?.content).toContain('[Recent activity from other channels]');
+      expect(continuitySection?.content).toContain('The visibility audit is still open in the side thread.');
     } finally {
       nowSpy.mockRestore();
     }
@@ -370,6 +379,12 @@ describe('SessionManager', () => {
       expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
       expect(ctx.systemPrompt).toContain('Earlier reflection summary');
       expect(ctx.systemPrompt).not.toContain('Heartbeat should stay hidden');
+      const orientationSection = ctx.systemPromptSections.find(section => section.id === 'wake_orientation');
+      expect(orientationSection?.content).toContain('[Welcome back]');
+      expect(orientationSection?.content).toContain('Earlier reflection summary');
+      const continuitySection = ctx.systemPromptSections.find(section => section.id === 'cross_channel_continuity');
+      expect(continuitySection?.content).toContain('[Recent activity from other channels]');
+      expect(continuitySection?.content).toContain('Earlier reflection summary');
     } finally {
       nowSpy.mockRestore();
     }
@@ -456,6 +471,7 @@ describe('SessionManager', () => {
       'runtime.scratchpad',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
       'session.continuity',
     ], 'admin');
     const mgr = new SessionManager(store, config);

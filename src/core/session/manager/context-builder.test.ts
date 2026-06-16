@@ -7,13 +7,15 @@ import { collectRecentEntriesWithinHistorySpan } from '../manager-primitives.js'
 import type { SessionEntry } from '../types.js';
 
 describe('orientation context surface wiring', () => {
-  it('threads orientation telemetry into continuity assembly without relying on legacy token-section labels', () => {
+  it('threads orientation telemetry into a dedicated runtime prompt section', () => {
     const builderSource = readFileSync(resolve('src/core/session/manager/context-builder.ts'), 'utf-8');
     const manifestSource = readFileSync(resolve('src/core/session/context-manifest.ts'), 'utf-8');
 
     expect(builderSource).toContain('buildOrientationNoteTelemetry');
     expect(builderSource).toContain('params.turnSnapshot && !isInternalReflectionChannel(params.channelId)');
-    expect(builderSource).toContain('continuitySectionText = orientationTelemetry.noteText');
+    expect(builderSource).toContain('const orientationSectionText = orientationTelemetry.fired && orientationTelemetry.noteText');
+    expect(builderSource).toContain("id: 'session.orientation'");
+    expect(builderSource).toContain("id: 'wake_orientation'");
     expect(manifestSource).toContain("| 'orientation'");
   });
 

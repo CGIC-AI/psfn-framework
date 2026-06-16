@@ -359,6 +359,7 @@ export type PromptRuntimeBlockId =
   | 'memory.retrieval'
   | 'session.compaction_summary'
   | 'session.focus_knowledge'
+  | 'session.orientation'
   | 'session.continuity'
   | 'session.current_messages'
   | 'tools.active_schemas';
@@ -399,6 +400,7 @@ export type PromptRuntimeSystemPromptBlockId = Extract<
   | 'memory.retrieval'
   | 'session.compaction_summary'
   | 'session.focus_knowledge'
+  | 'session.orientation'
   | 'session.continuity'
 >;
 
@@ -529,6 +531,17 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     contentVisible: false,
   },
   {
+    id: 'session.orientation',
+    label: 'Wake Orientation',
+    description: 'Idle-gap welcome-back note with elapsed time and recent continuity when the channel has been inactive long enough.',
+    source: 'session-context:orientation telemetry',
+    schema: REQUIRED_RUNTIME_AWARE_SCHEMA,
+    placement: 'system_prompt',
+    visibility: 'runtime_generated',
+    reorderable: true,
+    contentVisible: true,
+  },
+  {
     id: 'session.continuity',
     label: 'Cross-Channel Continuity',
     description: 'Recent activity from other eligible channels.',
@@ -652,18 +665,64 @@ function normalizeSystemPromptBlockOrder(value: unknown): PromptRuntimeSystemPro
 
   const seen = new Set<PromptRuntimeSystemPromptBlockId>();
   const normalized: PromptRuntimeSystemPromptBlockId[] = [];
+  let invalidEntryFound = false;
   for (const entry of value) {
     if (typeof entry !== 'string' || !isPromptRuntimeSystemPromptBlockId(entry) || seen.has(entry)) {
+      invalidEntryFound = true;
       continue;
     }
     seen.add(entry);
     normalized.push(entry);
   }
 
-  if (normalized.length !== DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER.length) {
+  if (invalidEntryFound || normalized.length === 0) {
     return [...DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER];
   }
+
+  for (const defaultId of DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER) {
+    if (seen.has(defaultId)) continue;
+
+    let insertAt = normalized.length;
+    const defaultIndex = DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER.indexOf(defaultId);
+    for (let index = defaultIndex + 1; index < DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER.length; index += 1) {
+      const nextDefaultId = DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER[index];
+      const nextDefaultIndex = normalized.indexOf(nextDefaultId);
+      if (nextDefaultIndex >= 0) {
+        insertAt = nextDefaultIndex;
+        break;
+      }
+    }
+    if (insertAt === normalized.length) {
+      for (let index = defaultIndex - 1; index >= 0; index -= 1) {
+        const previousDefaultId = DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER[index];
+        const previousDefaultIndex = normalized.indexOf(previousDefaultId);
+        if (previousDefaultIndex >= 0) {
+          insertAt = previousDefaultIndex + 1;
+          break;
+        }
+      }
+    }
+
+    normalized.splice(insertAt, 0, defaultId);
+    seen.add(defaultId);
+  }
+
   return normalized;
+}
+
+function isCompleteSystemPromptBlockOrder(value: readonly unknown[]): value is PromptRuntimeSystemPromptBlockId[] {
+  if (value.length !== DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER.length) {
+    return false;
+  }
+
+  const seen = new Set<PromptRuntimeSystemPromptBlockId>();
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !isPromptRuntimeSystemPromptBlockId(entry) || seen.has(entry)) {
+      return false;
+    }
+    seen.add(entry);
+  }
+  return DEFAULT_SYSTEM_PROMPT_BLOCK_ORDER.every(id => seen.has(id));
 }
 
 function normalizeEditableBlockContent(value: unknown): Partial<Record<PromptRuntimeEditableBlockId, string>> {
@@ -855,10 +914,10 @@ export class PromptRuntimeLayoutStore {
     blockIds: PromptRuntimeSystemPromptBlockId[],
     updatedBy: string,
   ): PromptRuntimeLayout {
-    const normalized = normalizeSystemPromptBlockOrder(blockIds);
-    if (normalized.length !== blockIds.length) {
+    if (!isCompleteSystemPromptBlockOrder(blockIds)) {
       throw new Error('systemPromptBlockOrder must include each reorderable runtime block exactly once');
     }
+    const normalized = normalizeSystemPromptBlockOrder(blockIds);
 
     this.layout = {
       version: PROMPT_RUNTIME_LAYOUT_VERSION,

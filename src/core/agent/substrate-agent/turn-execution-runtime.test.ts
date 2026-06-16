@@ -1379,6 +1379,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       'memory.retrieval',
       'session.compaction_summary',
       'session.focus_knowledge',
+      'session.orientation',
       'session.continuity',
     ], 'admin');
 

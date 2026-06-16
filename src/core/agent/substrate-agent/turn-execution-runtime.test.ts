@@ -1048,7 +1048,15 @@ describe('handleMessageForTurn compaction scheduling', () => {
       staticHash: 'static-hash',
       versionPointer: 'prompt-v1',
     }));
-    runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    const temporalRulesBlock = [
+      '<temporal_rules>',
+      '<rule>Treat runtime.current_datetime as the canonical source for the current date and time.</rule>',
+      '</temporal_rules>',
+    ].join('\n');
+    runtime.resolveStaticPromptPrefix = vi.fn(() => [
+      'Rendered static prefix',
+      temporalRulesBlock,
+    ].join('\n\n'));
     runtime.getPersonaAdaptation = vi.fn(() => 'Persona hint');
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => 'Scratchpad block');
@@ -1105,7 +1113,10 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
     const toolContext = recordedInput.turnSnapshot?.toolContext as Record<string, unknown> | undefined;
     expect(promptContext).toMatchObject({
-      renderedStaticPrefix: 'Rendered static prefix',
+      renderedStaticPrefix: [
+        'Rendered static prefix',
+        temporalRulesBlock,
+      ].join('\n\n'),
       renderedDynamicSuffix: 'Dynamic suffix template',
       runtimeContext: 'Runtime context block',
       memoryContextBlock: 'Retrieved memory block',
@@ -1267,7 +1278,15 @@ describe('handleMessageForTurn compaction scheduling', () => {
       staticHash: 'static-hash',
       versionPointer: 'prompt-v1',
     }));
-    runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    const temporalRulesBlock = [
+      '<temporal_rules>',
+      '<rule>Treat runtime.current_datetime as the canonical source for the current date and time.</rule>',
+      '</temporal_rules>',
+    ].join('\n');
+    runtime.resolveStaticPromptPrefix = vi.fn(() => [
+      'Rendered static prefix',
+      temporalRulesBlock,
+    ].join('\n\n'));
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => '');
     runtime.getPersonaAdaptation = vi.fn(() => null);
@@ -1277,6 +1296,10 @@ describe('handleMessageForTurn compaction scheduling', () => {
       runtime_current_date_human: 'March 18, 2026',
       runtime_current_time_human: '9:30 AM',
       runtime_current_datetime_iso: '2026-03-18T09:30:00.000-04:00',
+      runtime_current_today: '2026-03-18',
+      runtime_current_yesterday: '2026-03-17',
+      runtime_current_tomorrow: '2026-03-19',
+      runtime_current_part_of_day: 'late morning',
     }));
 
     await handleMessageForTurn(runtime, createMessage('msg-current-datetime-anchor'));
@@ -1286,13 +1309,17 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
     const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
     const currentDatetimeAnchor = [
-      '<current_datetime>',
+      '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,wake_orientation,cross_channel_continuity">',
+      '<iso>2026-03-18T09:30:00.000-04:00</iso>',
+      '<timezone>America/New_York</timezone>',
       '<weekday>Wednesday</weekday>',
       '<date>March 18, 2026</date>',
       '<time>9:30 AM</time>',
-      '<timezone>America/New_York</timezone>',
-      '<iso>2026-03-18T09:30:00.000-04:00</iso>',
-      '</current_datetime>',
+      '<today>2026-03-18</today>',
+      '<yesterday>2026-03-17</yesterday>',
+      '<tomorrow>2026-03-19</tomorrow>',
+      '<part_of_day>late morning</part_of_day>',
+      '</runtime.current_datetime>',
     ].join('\n');
     const mergedSystemPrompt = [
       'Final system prompt',
@@ -1305,14 +1332,16 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const providerWireMessages = (promptContext?.providerObservability as {
       providerWireMessages?: Array<{ role: string; source: string; content: string }>;
     } | undefined)?.providerWireMessages;
+    const inputSections = promptContext?.inputSections as Array<{ id: string; content: string }> | undefined;
     const finalSystemSections = promptContext?.finalSystemSections as Array<{ id: string; content: string }> | undefined;
 
     expect(fullPrompt).toContain('Dynamic suffix template');
+    expect(fullPrompt).toContain(temporalRulesBlock);
     expect(fullPrompt).not.toContain('Stale legacy date');
     expect(finalSystemPrompt).toBe(mergedSystemPrompt);
     expect(finalSystemPrompt?.endsWith(currentDatetimeAnchor)).toBe(true);
     expect(finalSystemPrompt?.indexOf('</session_context>')).toBeLessThan(
-      finalSystemPrompt?.lastIndexOf('<current_datetime>') ?? -1,
+      finalSystemPrompt?.lastIndexOf('<runtime.current_datetime') ?? -1,
     );
     expect(providerWireMessages?.[0]).toEqual({
       role: 'system',
@@ -1326,8 +1355,18 @@ describe('handleMessageForTurn compaction scheduling', () => {
     });
     expect(finalSystemSections).toEqual(expect.arrayContaining([
       expect.objectContaining({
+        id: 'temporal_rules',
+        content: temporalRulesBlock,
+      }),
+      expect.objectContaining({
         id: 'runtime.current_datetime',
         content: currentDatetimeAnchor,
+      }),
+    ]));
+    expect(inputSections).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'temporal_rules',
+        content: temporalRulesBlock,
       }),
     ]));
   });

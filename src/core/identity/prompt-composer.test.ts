@@ -10,6 +10,11 @@ import {
   NORTH_STAR_LAYER_HEADER,
   PromptComposer,
 } from './prompt-composer.js';
+import {
+  ensureTemporalRulesPromptLayer,
+  TEMPORAL_RULES_LAYER_CONTENT,
+  TEMPORAL_RULES_LAYER_IDENTIFIER,
+} from './temporal-rules-layer.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 
@@ -62,6 +67,56 @@ describe('PromptComposer', () => {
   }
 
   describe('layer ordering', () => {
+    it('seeds temporal rules as a static operator layer near the bottom of the prefix', () => {
+      const base = store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main', promptOrder: 0 });
+      const operator = store.create({
+        type: 'operator',
+        name: 'Operator',
+        content: 'OPERATOR',
+        identifier: 'operator.policy',
+        promptOrder: 20,
+      });
+
+      ensureTemporalRulesPromptLayer(store);
+
+      const temporalLayer = store.getAll().find(layer => layer.identifier === TEMPORAL_RULES_LAYER_IDENTIFIER);
+      expect(temporalLayer).toMatchObject({
+        type: 'operator',
+        name: 'Temporal Grounding Rules',
+        content: TEMPORAL_RULES_LAYER_CONTENT,
+        enabled: true,
+      });
+
+      const result = composer.composeSplit();
+      expect(result.staticLayerIds).toContain(base.id);
+      expect(result.staticLayerIds).toContain(operator.id);
+      expect(result.staticLayerIds).toContain(temporalLayer?.id);
+      expect(result.dynamicSuffix).not.toContain('<temporal_rules>');
+      expect(result.staticPrefix.indexOf('OPERATOR')).toBeLessThan(result.staticPrefix.indexOf('<temporal_rules>'));
+      expect(result.staticPrefix).toContain('Treat runtime.current_datetime as the canonical source');
+    });
+
+    it('keeps customized temporal rules content while normalizing layer metadata', () => {
+      ensureTemporalRulesPromptLayer(store);
+      const temporalLayer = store.getAll().find(layer => layer.identifier === TEMPORAL_RULES_LAYER_IDENTIFIER);
+      expect(temporalLayer).toBeDefined();
+      store.update(
+        temporalLayer!.id,
+        '<temporal_rules>\n<rule>Custom temporal wording.</rule>\n</temporal_rules>',
+        'admin',
+      );
+
+      ensureTemporalRulesPromptLayer(store);
+
+      const updated = store.getById(temporalLayer!.id);
+      expect(updated?.content).toContain('Custom temporal wording.');
+      expect(updated).toMatchObject({
+        identifier: TEMPORAL_RULES_LAYER_IDENTIFIER,
+        role: 'system',
+        promptOrder: 990,
+      });
+    });
+
     it('preserves the stored order when composing enabled layers', () => {
       const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
       const base = store.create({ type: 'base', name: 'Base', content: 'BASE' });

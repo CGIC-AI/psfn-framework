@@ -7,8 +7,8 @@ export interface PromptSectionInput {
   content: string;
 }
 
-const WRAPPED_PROMPT_SECTION_PATTERN = /<([a-z0-9_]+)>\n?([\s\S]*?)<\/\1>/g;
-const SINGLE_WRAPPED_PROMPT_SECTION_PATTERN = /^<([a-z0-9_]+)>\n?([\s\S]*?)<\/\1>$/;
+const WRAPPED_PROMPT_SECTION_PATTERN = /<([a-z0-9_.-]+)(?:\s+[^>]*)?>\n?([\s\S]*?)<\/\1>/gi;
+const SINGLE_WRAPPED_PROMPT_SECTION_PATTERN = /^<([a-z0-9_.-]+)(?:\s+[^>]*)?>\n?([\s\S]*?)<\/\1>$/i;
 
 function normalizeLineEndings(value: string): string {
   return value.replace(/\r\n?/g, '\n');

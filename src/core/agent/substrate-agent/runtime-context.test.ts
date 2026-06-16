@@ -1179,6 +1179,10 @@ describe('runtime subject identity', () => {
     });
 
     expect(variables.runtime_current_datetime_iso).toBe('2026-03-18T09:30:00.000-04:00');
+    expect(variables.runtime_current_today).toBe('2026-03-18');
+    expect(variables.runtime_current_yesterday).toBe('2026-03-17');
+    expect(variables.runtime_current_tomorrow).toBe('2026-03-19');
+    expect(variables.runtime_current_part_of_day).toBe('late morning');
     expect(variables.runtime_last_message_received_weekday).toBe('Monday');
     expect(variables.runtime_last_message_received_date_human).toBe('March 16, 2026');
     expect(variables.runtime_last_message_received_time_human).toBe('5:15 AM');

@@ -51,16 +51,25 @@ const CONTRADICTION_PATTERNS = [
 function hasRuntimeDatetimeAnchor(promptContext: RuntimeDatetimePromptContextLike | null | undefined): boolean {
   if (!promptContext) return false;
 
-  if (promptContext.assembledPrompt?.includes('<current_datetime>')) {
+  if (
+    promptContext.assembledPrompt?.includes('<runtime.current_datetime')
+    || promptContext.assembledPrompt?.includes('<current_datetime>')
+  ) {
     return true;
   }
 
-  if (promptContext.runtimeContext?.includes('<current_datetime>')) {
+  if (
+    promptContext.runtimeContext?.includes('<runtime.current_datetime')
+    || promptContext.runtimeContext?.includes('<current_datetime>')
+  ) {
     return true;
   }
 
   return promptContext.runtimeContextSections?.some(section => (
     section.id === 'current_datetime'
+    || section.id === 'runtime_current_datetime'
+    || section.id === 'runtime.current_datetime'
+    || section.content?.includes('<runtime.current_datetime')
     || section.content?.includes('<current_datetime>')
   )) ?? false;
 }

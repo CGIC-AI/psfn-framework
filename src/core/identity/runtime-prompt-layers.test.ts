@@ -150,7 +150,7 @@ const LEGACY_RUNTIME_LAYER_SEEDS = [
     identifier: 'runtime.current_datetime',
     name: 'Current Date & Time',
     priority: 290,
-    content: "<current_datetime>\n<weekday>{{runtime_current_weekday}}</weekday>\n<date>{{runtime_current_date_human}}</date>\n<time>{{runtime_current_time_human}}</time>\n<timezone>{{active_timezone}}</timezone>\n</current_datetime>",
+    content: '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,wake_orientation,cross_channel_continuity">\n<iso>{{runtime_current_datetime_iso}}</iso>\n<timezone>{{active_timezone}}</timezone>\n<weekday>{{runtime_current_weekday}}</weekday>\n<date>{{runtime_current_date_human}}</date>\n<time>{{runtime_current_time_human}}</time>\n<today>{{runtime_current_today}}</today>\n<yesterday>{{runtime_current_yesterday}}</yesterday>\n<tomorrow>{{runtime_current_tomorrow}}</tomorrow>\n<part_of_day>{{runtime_current_part_of_day}}</part_of_day>\n</runtime.current_datetime>',
   },
 ] as const;
 
@@ -200,7 +200,7 @@ const REQUIRED_RUNTIME_SIGNAL_SECTIONS: Record<string, string> = {
   'runtime.channel_context': '<channel_context>{{runtime_channel_visibility}}</channel_context>',
   'runtime.model_context': '<model_context>{{model}}</model_context>',
   'runtime.capability_tier': '<capability_tier>{{runtime_capability_tier}}</capability_tier>',
-  'runtime.current_datetime': '<current_datetime>{{runtime_current_weekday}}</current_datetime>',
+  'runtime.current_datetime': '<runtime.current_datetime>{{runtime_current_datetime_iso}}</runtime.current_datetime>',
   'runtime.trust': '<trust>{{#if runtime_trust_is_primary}}primary{{/if}}</trust>',
   'runtime.emotional_affect': '<emotional_affect>{{runtime_affect_mode_label}}</emotional_affect>',
   'runtime.metacognitive_guidance': '<metacognitive_persona_guidance>{{runtime_flag_uncertainty_present}}</metacognitive_persona_guidance>',

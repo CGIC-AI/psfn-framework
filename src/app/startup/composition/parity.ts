@@ -32,6 +32,7 @@ import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
 import { PromptComposer } from '../../../core/identity/prompt-composer.js';
 import { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
 import { ensureRuntimePromptLayers } from '../../../core/identity/runtime-prompt-layers.js';
+import { ensureTemporalRulesPromptLayer } from '../../../core/identity/temporal-rules-layer.js';
 import {
   type CharacterCardVersionStore,
 } from '../../../core/identity/card-versioning.js';
@@ -120,6 +121,7 @@ export function wirePromptRuntime(
   });
   const northStarStore = new NorthStarStore(resolveNorthStarPath(dataDir));
   promptStore.seedFromCharacterCard(baseSystemPrompt);
+  ensureTemporalRulesPromptLayer(promptStore);
   ensureRuntimePromptLayers(promptStore);
 
   target.promptComposer = new PromptComposer(

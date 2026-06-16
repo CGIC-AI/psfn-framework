@@ -648,12 +648,12 @@ describe('SessionManager with continuity', () => {
     // Build context for channel 2 — should include ch1 messages as cross-channel
     const ctx = await mgr.buildContext('sillytavern:ch2', 'System prompt', '', undefined, 'user1');
 
-    expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
     expect(ctx.systemPrompt).toContain('I like cats');
     expect(ctx.systemPrompt).toContain('Me too!');
     // Should NOT contain the ch2 message in the continuity block (it's already in local)
     // but the ch2 entry will be in the continuity store, excluded by channelId
-    expect(ctx.systemPrompt).not.toContain('[from sillytavern:ch2]');
+    expect(ctx.systemPrompt).not.toContain('<source>sillytavern:ch2</source>');
   });
 
   it('buildContext includes lower-sensitivity semi_private continuity in private channels', async () => {
@@ -666,10 +666,10 @@ describe('SessionManager with continuity', () => {
 
     const ctx = await mgr.buildContext('api:private-main', 'System prompt', '', undefined, 'user1');
 
-    expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
     expect(ctx.systemPrompt).toContain('Guild follow-up');
     expect(ctx.systemPrompt).toContain('Guild response');
-    expect(ctx.systemPrompt).not.toContain('[from api:private-main]');
+    expect(ctx.systemPrompt).not.toContain('<source>api:private-main</source>');
   });
 
   it('keeps heartbeat journals out of prompt-facing cross-channel continuity', async () => {
@@ -695,7 +695,7 @@ describe('SessionManager with continuity', () => {
       DEFAULT_COMPANION_ID,
     );
 
-    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
     expect(ctx.systemPrompt).not.toContain('Earlier heartbeat summary');
   });
 
@@ -767,14 +767,14 @@ describe('SessionManager with continuity', () => {
         DEFAULT_COMPANION_ID,
       );
 
-      expect(ctx.systemPrompt).toContain('[Welcome back]');
-      expect(ctx.systemPrompt).toContain('Last time here');
+      expect(ctx.systemPrompt).toContain('<wake_orientation authority="idle_gap_context"');
+      expect(ctx.systemPrompt).toContain('<last_time_here>');
       expect(ctx.systemPrompt).toContain('Recovery mattered most.');
-      expect(ctx.systemPrompt).toContain('Recent continuity');
-      expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+      expect(ctx.systemPrompt).toContain('<recent_continuity>');
+      expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
       expect(ctx.systemPrompt).toContain('Earlier reflection summary');
       expect(ctx.systemPrompt).toContain('The API thread still needs recovery notes.');
-      expect(ctx.systemPrompt).not.toContain('[from internal:reflection:daily]');
+      expect(ctx.systemPrompt).not.toContain('<source>internal:reflection:daily</source>');
       expect(ctx.systemPrompt).not.toContain('Earlier heartbeat summary');
     } finally {
       nowSpy.mockRestore();
@@ -790,7 +790,7 @@ describe('SessionManager with continuity', () => {
     const ctx = await mgr.buildContext('ch1', 'System prompt', '');
     expect(ctx.systemPrompt).toBe('System prompt');
     expect(ctx.messages).toHaveLength(1);
-    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
   });
 
   it('buildContext works without userId (no continuity injection)', async () => {
@@ -810,7 +810,7 @@ describe('SessionManager with continuity', () => {
 
     // buildContext without userId — should not include continuity
     const ctx = await mgr.buildContext('ch2', 'System prompt', '');
-    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
   });
 
   it('does not duplicate messages from current channel in continuity block', async () => {
@@ -823,7 +823,7 @@ describe('SessionManager with continuity', () => {
 
     // Build context for api:ch1 — continuity should NOT include api:ch1 messages
     const ctx = await mgr.buildContext('api:ch1', 'System prompt', '', undefined, 'user1');
-    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
   });
 
   it('does not duplicate legacy continuity entries missing originChannelId', async () => {
@@ -841,7 +841,7 @@ describe('SessionManager with continuity', () => {
 
     const ctx = await mgr.buildContext('api:ch1', 'System prompt', '', undefined, 'user1');
     expect(ctx.systemPrompt).not.toContain('Legacy continuity without explicit origin');
-    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
   });
 
   it('records Discord DM messages as private visibility via isDirectMessage flag', () => {
@@ -922,7 +922,7 @@ describe('SessionManager with continuity', () => {
       { isDirectMessage: true },
     );
 
-    expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
     expect(ctx.systemPrompt).toContain('Private API context');
   });
 
@@ -950,7 +950,7 @@ describe('SessionManager with continuity', () => {
       { isDirectMessage: false },
     );
 
-    expect(ctx.systemPrompt).not.toContain('[Recent activity from other channels]');
+    expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
     expect(ctx.systemPrompt).not.toContain('Private API context');
   });
 
@@ -973,7 +973,7 @@ describe('SessionManager with continuity', () => {
     });
     const ctx = await mgr.buildContext('api:ch3', 'System prompt', '', undefined, 'user1');
 
-    expect(ctx.systemPrompt).toContain('[from api:dm-channel]');
-    expect(ctx.systemPrompt).toContain('[from api:other-channel]');
+    expect(ctx.systemPrompt).toContain('<source>api:dm-channel</source>');
+    expect(ctx.systemPrompt).toContain('<source>api:other-channel</source>');
   });
 });

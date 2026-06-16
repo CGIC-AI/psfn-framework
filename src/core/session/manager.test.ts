@@ -285,20 +285,26 @@ describe('SessionManager', () => {
       expect(snapshot.orientation?.noteText).toContain('Last time here');
       expect(snapshot.orientation?.noteText).toContain('Recent continuity');
       expect(snapshot.orientation?.noteText).not.toContain('Open threads');
+      expect(snapshot.orientation?.lastUserMessage).toBe('Please keep the visibility work focused.');
 
       const ctx = await mgr.buildContext('api:main', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
-      expect(ctx.systemPrompt).toContain('[Welcome back]');
-      expect(ctx.systemPrompt).toContain('Recent continuity');
+      expect(ctx.systemPrompt).toContain('<wake_orientation authority="idle_gap_context"');
+      expect(ctx.systemPrompt).toContain('<elapsed_since_last_active_human>about 4 hours</elapsed_since_last_active_human>');
+      expect(ctx.systemPrompt).toContain('<last_user_message>Please keep the visibility work focused.</last_user_message>');
+      expect(ctx.systemPrompt).toContain('<recent_continuity>');
+      expect(ctx.systemPrompt).toContain('The visibility audit is still open in the side thread.');
       expect(ctx.systemPrompt).not.toContain('Open threads');
-      expect(ctx.systemPrompt.indexOf('[Welcome back]')).toBeLessThan(
-        ctx.systemPrompt.indexOf('[Recent activity from other channels]'),
+      expect(ctx.systemPrompt.indexOf('<wake_orientation')).toBeLessThan(
+        ctx.systemPrompt.indexOf('<cross_channel_continuity'),
       );
       const orientationSection = ctx.systemPromptSections.find(section => section.id === 'wake_orientation');
-      expect(orientationSection?.content).toContain('[Welcome back]');
-      expect(orientationSection?.content).toContain('Recent continuity');
+      expect(orientationSection?.content).toContain('<wake_orientation authority="idle_gap_context"');
+      expect(orientationSection?.content).toContain('<recent_continuity>');
+      expect(orientationSection?.content).toContain('The visibility audit is still open in the side thread.');
       const continuitySection = ctx.systemPromptSections.find(section => section.id === 'cross_channel_continuity');
-      expect(continuitySection?.content).toContain('[Recent activity from other channels]');
-      expect(continuitySection?.content).toContain('The visibility audit is still open in the side thread.');
+      expect(continuitySection?.content).toContain('<cross_channel_continuity authority="retrieved_context"');
+      expect(continuitySection?.content).toContain('<source>api:side</source>');
+      expect(continuitySection?.content).toContain('<text>The visibility audit is still open in the side thread.</text>');
     } finally {
       nowSpy.mockRestore();
     }
@@ -375,15 +381,15 @@ describe('SessionManager', () => {
         [],
         snapshot,
       );
-      expect(ctx.systemPrompt).toContain('[Welcome back]');
-      expect(ctx.systemPrompt).toContain('[Recent activity from other channels]');
+      expect(ctx.systemPrompt).toContain('<wake_orientation authority="idle_gap_context"');
+      expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
       expect(ctx.systemPrompt).toContain('Earlier reflection summary');
       expect(ctx.systemPrompt).not.toContain('Heartbeat should stay hidden');
       const orientationSection = ctx.systemPromptSections.find(section => section.id === 'wake_orientation');
-      expect(orientationSection?.content).toContain('[Welcome back]');
+      expect(orientationSection?.content).toContain('<wake_orientation authority="idle_gap_context"');
       expect(orientationSection?.content).toContain('Earlier reflection summary');
       const continuitySection = ctx.systemPromptSections.find(section => section.id === 'cross_channel_continuity');
-      expect(continuitySection?.content).toContain('[Recent activity from other channels]');
+      expect(continuitySection?.content).toContain('<cross_channel_continuity authority="retrieved_context"');
       expect(continuitySection?.content).toContain('Earlier reflection summary');
     } finally {
       nowSpy.mockRestore();
@@ -425,7 +431,7 @@ describe('SessionManager', () => {
       expect(snapshot.orientation?.noteText).toBeUndefined();
 
       const ctx = await mgr.buildContext('ch1', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
-      expect(ctx.systemPrompt).not.toContain('[Welcome back]');
+      expect(ctx.systemPrompt).not.toContain('<wake_orientation');
     } finally {
       nowSpy.mockRestore();
     }
@@ -1686,9 +1692,9 @@ describe('SessionManager', () => {
 
     expect(ctx.systemPrompt).toContain('Canonical continuity message');
     expect(ctx.systemPrompt).toContain('Legacy continuity message');
-    expect(ctx.systemPrompt).toContain('[from api:origin-1]');
-    expect(ctx.systemPrompt).toContain('[from api:origin-2]');
-    expect(ctx.systemPrompt).toContain('[from api:origin-3]');
+    expect(ctx.systemPrompt).toContain('<source>api:origin-1</source>');
+    expect(ctx.systemPrompt).toContain('<source>api:origin-2</source>');
+    expect(ctx.systemPrompt).toContain('<source>api:origin-3</source>');
   });
 
   it('buildContext reuses a captured turn snapshot when live session state drifts', async () => {

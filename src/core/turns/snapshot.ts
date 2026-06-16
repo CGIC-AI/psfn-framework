@@ -80,6 +80,7 @@ export interface TurnOrientationSnapshot {
   noteText?: string;
   sessionSummary?: string;
   continuitySummary?: string;
+  lastUserMessage?: string;
   openThreadSummary?: string;
   sourceCounts: {
     session: number;

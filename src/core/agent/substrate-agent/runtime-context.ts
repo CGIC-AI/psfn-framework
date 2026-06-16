@@ -49,6 +49,7 @@ import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { resolvePreferredContactName } from '../../contacts/preferred-name.js';
 import {
+  formatActiveDate,
   formatActiveDateTimeIso,
   formatActiveDateTimeLabel,
   resolveActiveTimezone,
@@ -353,6 +354,36 @@ function formatPromptRuntimeTime(now: Date): string {
     minute: '2-digit',
     hour12: true,
   }).format(now);
+}
+
+function formatPromptRuntimeRelativeDate(now: Date, dayOffset: number): string {
+  const [yearText, monthText, dayText] = formatActiveDate(now).split('-');
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    return formatActiveDate(now);
+  }
+  const shifted = new Date(Date.UTC(year, month - 1, day + dayOffset));
+  return shifted.toISOString().slice(0, 10);
+}
+
+function formatPromptRuntimePartOfDay(now: Date): string {
+  const hourPart = new Intl.DateTimeFormat('en-US', {
+    timeZone: resolveActiveTimezone(),
+    hour: 'numeric',
+    hour12: false,
+  }).formatToParts(now).find(part => part.type === 'hour')?.value;
+  const parsedHour = Number(hourPart);
+  if (!Number.isFinite(parsedHour)) return '';
+  const hour = parsedHour % 24;
+  if (hour < 5) return 'overnight';
+  if (hour < 9) return 'morning';
+  if (hour < 12) return 'late morning';
+  if (hour < 15) return 'early afternoon';
+  if (hour < 18) return 'late afternoon';
+  if (hour < 21) return 'evening';
+  return 'night';
 }
 
 function buildExtendedToolGuide(input: {
@@ -857,6 +888,10 @@ export function buildDynamicPromptTemplateVariables(input: {
     runtime_current_weekday: formatPromptRuntimeWeekday(now),
     runtime_current_date_human: formatPromptRuntimeDate(now),
     runtime_current_time_human: formatPromptRuntimeTime(now),
+    runtime_current_today: formatPromptRuntimeRelativeDate(now, 0),
+    runtime_current_yesterday: formatPromptRuntimeRelativeDate(now, -1),
+    runtime_current_tomorrow: formatPromptRuntimeRelativeDate(now, 1),
+    runtime_current_part_of_day: formatPromptRuntimePartOfDay(now),
     ...lastMessagePromptVariables,
     runtime_internal_turn_context: internalTurn ? `This is an internal ${input.taskKind ?? 'background'} turn.` : '',
     runtime_internal_turn_kind: internalTurn ? (input.taskKind ?? 'background') : '',

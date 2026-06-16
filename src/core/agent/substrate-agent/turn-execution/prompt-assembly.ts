@@ -56,11 +56,15 @@ function readPromptVariable(variables: Record<string, unknown>, key: string): st
 
 function buildCurrentDatetimeProximityAnchor(variables: Record<string, unknown>): string {
   const fields = [
+    ['iso', readPromptVariable(variables, 'runtime_current_datetime_iso')],
+    ['timezone', readPromptVariable(variables, 'active_timezone')],
     ['weekday', readPromptVariable(variables, 'runtime_current_weekday')],
     ['date', readPromptVariable(variables, 'runtime_current_date_human')],
     ['time', readPromptVariable(variables, 'runtime_current_time_human')],
-    ['timezone', readPromptVariable(variables, 'active_timezone')],
-    ['iso', readPromptVariable(variables, 'runtime_current_datetime_iso')],
+    ['today', readPromptVariable(variables, 'runtime_current_today')],
+    ['yesterday', readPromptVariable(variables, 'runtime_current_yesterday')],
+    ['tomorrow', readPromptVariable(variables, 'runtime_current_tomorrow')],
+    ['part_of_day', readPromptVariable(variables, 'runtime_current_part_of_day')],
   ] as const;
   const renderedFields = fields
     .filter(([, value]) => value.length > 0)
@@ -69,14 +73,15 @@ function buildCurrentDatetimeProximityAnchor(variables: Record<string, unknown>)
     return '';
   }
   return [
-    '<current_datetime>',
+    '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,wake_orientation,cross_channel_continuity">',
     ...renderedFields,
-    '</current_datetime>',
+    '</runtime.current_datetime>',
   ].join('\n');
 }
 
 function stripCurrentDatetimePromptBlocks(text: string): string {
   return text
+    .replace(/<runtime\.current_datetime(?:\s+[^>]*)?>\s*[\s\S]*?<\/runtime\.current_datetime>/g, '')
     .replace(/<current_datetime>\s*[\s\S]*?<\/current_datetime>/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -287,6 +292,8 @@ export async function assembleTurnPrompt(input: {
       ? (promptOverride.systemPrompt ?? '')
       : '';
   }
+  const staticTemporalRuleSections = extractWrappedPromptSections(renderedStaticPrefix)
+    .filter(section => section.id === 'temporal_rules');
   const fullPrompt = [promptPrefix, renderedDynamicSuffix, ...orderedRuntimeSections.map(section => section.content)]
     .map(section => section.trim())
     .filter(section => section.length > 0)
@@ -360,6 +367,11 @@ export async function assembleTurnPrompt(input: {
         title: 'Rendered Static Prefix',
         content: renderedStaticPrefix,
       },
+      ...staticTemporalRuleSections.map(section => ({
+        id: section.id,
+        title: section.title,
+        content: section.content,
+      })),
       {
         id: 'rendered_dynamic_suffix',
         title: 'Rendered Dynamic Suffix',
@@ -385,6 +397,7 @@ export async function assembleTurnPrompt(input: {
     finalSystemSections: context.systemPromptSections
       ? [
         ...context.systemPromptSections,
+        ...staticTemporalRuleSections,
         ...(systemContextPromptBlock
           ? [{
             id: 'session_context',

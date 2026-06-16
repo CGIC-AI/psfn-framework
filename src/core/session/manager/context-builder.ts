@@ -55,6 +55,7 @@ import { runAutoCompaction, shouldCompact } from './compaction-service.js';
 import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
 import { buildPromptSectionTelemetryList } from '../../identity/prompt-sections.js';
+import { formatActiveDateTimeIso } from '../../../shared/time/active-timezone.js';
 
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
@@ -137,6 +138,7 @@ export interface OrientationNoteTelemetry {
   noteText?: string;
   sessionSummary?: string;
   continuitySummary?: string;
+  lastUserMessage?: string;
   sourceCounts: {
     session: number;
     continuity: number;
@@ -307,6 +309,83 @@ function formatIdleGap(idleGapMs: number): string {
     : `${days} day${days === 1 ? '' : 's'}`;
 }
 
+function formatIsoDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const days = Math.floor(totalSeconds / 86_400);
+  const hours = Math.floor((totalSeconds % 86_400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const datePart = days > 0 ? `${days}D` : '';
+  const timeParts = [
+    hours > 0 ? `${hours}H` : '',
+    minutes > 0 || (hours > 0 && seconds > 0) ? `${minutes}M` : '',
+    seconds > 0 || (days === 0 && hours === 0 && minutes === 0) ? `${seconds}S` : '',
+  ].filter(part => part.length > 0).join('');
+  return `P${datePart}${timeParts ? `T${timeParts}` : ''}`;
+}
+
+function escapeXmlText(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+function xmlElement(tag: string, value: string | undefined): string {
+  const trimmed = value?.trim() ?? '';
+  return trimmed.length > 0 ? `<${tag}>${escapeXmlText(trimmed)}</${tag}>` : '';
+}
+
+function buildStructuredWakeOrientationBlock(orientation: OrientationNoteTelemetry): string {
+  if (!orientation.fired || !orientation.lastActivityAt || orientation.idleGapMs === undefined) {
+    return '';
+  }
+  const lines = [
+    '<wake_orientation authority="idle_gap_context" scope="current_channel_only" may_not_override="runtime.current_datetime">',
+    '<idle_threshold_exceeded>true</idle_threshold_exceeded>',
+    xmlElement('last_active_at_iso', formatActiveDateTimeIso(new Date(orientation.lastActivityAt))),
+    xmlElement('elapsed_since_last_active_iso', formatIsoDuration(orientation.idleGapMs)),
+    xmlElement('elapsed_since_last_active_human', `about ${formatIdleGap(orientation.idleGapMs)}`),
+    xmlElement('last_user_message', orientation.lastUserMessage),
+    xmlElement('last_time_here', orientation.sessionSummary),
+    xmlElement('recent_continuity', orientation.continuitySummary),
+    '</wake_orientation>',
+  ].filter(line => line.length > 0);
+  return lines.join('\n');
+}
+
+function buildStructuredContinuityBlock(
+  entries: readonly SessionEntry[],
+  retrievedAtMs: number,
+  characterName?: string,
+): string {
+  if (entries.length === 0) return '';
+  const roleNames = { charName: characterName };
+  const itemBlocks = entries.map(entry => {
+    const sourceChannelId = (entry.originChannelId ?? entry.channelId).trim();
+    const speaker = entry.role === 'user'
+      ? (entry.authorName ?? resolveRoleName('user', roleNames))
+      : resolveRoleName('assistant', roleNames);
+    const originVisibility = parseChannelVisibility(entry.channelVisibility)
+      ?? classifyChannel(entry.originChannelId ?? entry.channelId);
+    const trust = isUntrustedVisibility(originVisibility) ? 'untrusted' : 'context';
+    return [
+      `<item trust="${trust}" executable="false">`,
+      xmlElement('source', sourceChannelId || entry.channelId),
+      xmlElement('speaker', speaker),
+      xmlElement('text', entry.content),
+      '<status>as_reported_by_source</status>',
+      '</item>',
+    ].filter(line => line.length > 0).join('\n');
+  });
+  return [
+    '<cross_channel_continuity authority="retrieved_context" scope="other_channels_only" may_not_override="runtime.current_datetime">',
+    xmlElement('retrieved_at_iso', formatActiveDateTimeIso(new Date(retrievedAtMs))),
+    ...itemBlocks,
+    '</cross_channel_continuity>',
+  ].join('\n');
+}
+
 export function buildOrientationNoteTelemetry(params: {
   channelId: string;
   recentActivityEntries: SessionEntry[];
@@ -377,6 +456,9 @@ export function buildOrientationNoteTelemetry(params: {
 
   const sessionSummary = summarizeConversationEntries(priorEntries, params.characterName);
   const continuitySummary = summarizeConversationEntries(params.continuityEntries, params.characterName);
+  const lastUserMessage = relevantRecentEntries
+    .findLast(entry => entry.role === 'user')
+    ?.content;
 
   const noteParts = [
     '[Welcome back]',
@@ -399,6 +481,7 @@ export function buildOrientationNoteTelemetry(params: {
     noteText: noteParts.join('\n').trim(),
     sessionSummary,
     continuitySummary,
+    ...(lastUserMessage ? { lastUserMessage: compactPromptText(lastUserMessage) } : {}),
     sourceCounts,
   };
 }
@@ -622,30 +705,12 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     ? (params.turnSnapshot.orientation ?? computedOrientationTelemetry)
     : computedOrientationTelemetry;
 
-  const orientationSectionText = orientationTelemetry.fired && orientationTelemetry.noteText
-    ? orientationTelemetry.noteText
-    : '';
-  let continuitySectionText = '';
-  if (crossChannel.length > 0) {
-    const roleNames = { charName: params.characterName };
-    const continuityBlock = crossChannel
-      .map(e => {
-        const sourceChannelId = (e.originChannelId ?? e.channelId).trim();
-        const origin = sourceChannelId ? ` [from ${sourceChannelId}]` : '';
-        const speaker = e.role === 'user'
-          ? (e.authorName ?? resolveRoleName('user', roleNames))
-          : resolveRoleName('assistant', roleNames);
-        const rawContent = `${speaker}${origin}: ${e.content}`;
-        const originVisibility = parseChannelVisibility(e.channelVisibility)
-          ?? classifyChannel(e.originChannelId ?? e.channelId);
-        if (!isUntrustedVisibility(originVisibility)) {
-          return rawContent;
-        }
-        return wrapUntrustedContext(rawContent);
-      })
-      .join('\n');
-    continuitySectionText = '[Recent activity from other channels]\n' + continuityBlock;
-  }
+  const orientationSectionText = buildStructuredWakeOrientationBlock(orientationTelemetry);
+  const continuitySectionText = buildStructuredContinuityBlock(
+    crossChannel,
+    orientationTelemetry.observedAt,
+    params.characterName,
+  );
 
   const promptRuntimeLayout = resolveCachedPromptRuntimeLayoutStore(params.config);
   const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([

@@ -366,10 +366,44 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.approval-panel {
+  border-top: 1px solid var(--color-bark-300);
+  background: var(--color-gold-50);
+  padding: 0.65rem 0.75rem;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.approval-panel > div {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.approval-panel svg {
+  width: 1rem;
+  height: 1rem;
+  color: var(--color-gold-700);
+}
+
+.approval-panel p {
+  margin: 0;
+  color: var(--color-gold-700);
+  font-size: 0.86rem;
+  overflow-wrap: anywhere;
+}
+
+.approval-card {
+  border: 1px solid var(--color-gold-300);
+  border-radius: 8px;
+  padding: 0.55rem;
+  background: var(--color-bark-50);
+}
+
 .chat-pane {
   min-height: 0;
   display: grid;
-  grid-template-rows: 1fr auto auto auto;
+  grid-template-rows: 1fr auto auto auto auto;
   overflow: hidden;
 }
 

@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Loader2,
+  LockKeyhole,
   Plug,
   Send,
   Signal,
@@ -21,6 +22,7 @@ import {
 } from '../lib/stream/hub-stream.js';
 import { derivePresenceState, formatElapsed } from '../lib/presence.js';
 import { deriveOperationalTraces, type OperationalTrace } from '../lib/traces.js';
+import { deriveApprovalPanelState } from '../lib/approvals.js';
 import { readCompanionUiRuntimeConfig } from './config.js';
 
 export function App() {
@@ -112,6 +114,7 @@ export function App() {
   const canSend = streamState.connection === 'ready' || streamState.connection === 'connected';
   const presence = derivePresenceState(streamState, nowMs);
   const traces = useMemo(() => deriveOperationalTraces(streamState), [streamState]);
+  const approvals = useMemo(() => deriveApprovalPanelState(streamState), [streamState]);
   const connectionTone = streamState.connection === 'ready'
     ? 'good'
     : streamState.connection === 'failed' || streamState.connection === 'disconnected'
@@ -190,6 +193,7 @@ export function App() {
 
         <ActivityStrip presence={presence} eventCount={streamState.sequence} status={streamState.status} />
         <TraceDrawer open={drawerOpen} traces={traces} onToggle={() => setDrawerOpen((value) => !value)} />
+        <ApprovalPanel state={approvals} />
 
         <form className="composer" onSubmit={sendMessage}>
           <button type="button" onClick={interrupt} disabled={!canSend} title="Interrupt">
@@ -297,6 +301,27 @@ function TraceRow({ trace }: { trace: OperationalTrace }) {
         ))}
       </dl>
     </article>
+  );
+}
+
+function ApprovalPanel({ state }: { state: ReturnType<typeof deriveApprovalPanelState> }) {
+  return (
+    <section className="approval-panel" aria-label="Approvals">
+      <div>
+        <LockKeyhole aria-hidden />
+        <strong>Approvals</strong>
+      </div>
+      {state.requests.length === 0 ? (
+        <p>{state.blockedReason ?? 'No pending approvals'}</p>
+      ) : (
+        state.requests.map((request) => (
+          <article className="approval-card" key={request.id}>
+            <strong>{request.title}</strong>
+            <p>{request.redactedContext}</p>
+          </article>
+        ))
+      )}
+    </section>
   );
 }
 

@@ -17,6 +17,8 @@ const GLOBAL_IGNORES = [
   '**/logs/**',
   'import/**',
   '**/import/**',
+  'PSFN-Satellite-Hub/**',
+  '**/PSFN-Satellite-Hub/**',
 ];
 
 export default [

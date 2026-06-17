@@ -1,6 +1,8 @@
 import {
   AlertTriangle,
   CircleStop,
+  ChevronDown,
+  ChevronRight,
   Loader2,
   Plug,
   Send,
@@ -18,6 +20,7 @@ import {
   type HubStreamState,
 } from '../lib/stream/hub-stream.js';
 import { derivePresenceState, formatElapsed } from '../lib/presence.js';
+import { deriveOperationalTraces, type OperationalTrace } from '../lib/traces.js';
 import { readCompanionUiRuntimeConfig } from './config.js';
 
 export function App() {
@@ -29,6 +32,7 @@ export function App() {
   const [input, setInput] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [nowMs, setNowMs] = useState(Date.now());
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const storeRef = useRef<HubStreamStore | null>(null);
 
   useEffect(() => {
@@ -107,6 +111,7 @@ export function App() {
 
   const canSend = streamState.connection === 'ready' || streamState.connection === 'connected';
   const presence = derivePresenceState(streamState, nowMs);
+  const traces = useMemo(() => deriveOperationalTraces(streamState), [streamState]);
   const connectionTone = streamState.connection === 'ready'
     ? 'good'
     : streamState.connection === 'failed' || streamState.connection === 'disconnected'
@@ -184,6 +189,7 @@ export function App() {
         </div>
 
         <ActivityStrip presence={presence} eventCount={streamState.sequence} status={streamState.status} />
+        <TraceDrawer open={drawerOpen} traces={traces} onToggle={() => setDrawerOpen((value) => !value)} />
 
         <form className="composer" onSubmit={sendMessage}>
           <button type="button" onClick={interrupt} disabled={!canSend} title="Interrupt">
@@ -234,6 +240,63 @@ function ActivityStrip({
       <PresenceItem label="Status" value={status ?? presence.silence} />
       <PresenceItem label="Events" value={String(eventCount)} />
     </section>
+  );
+}
+
+function TraceDrawer({
+  open,
+  traces,
+  onToggle,
+}: {
+  open: boolean;
+  traces: OperationalTrace[];
+  onToggle: () => void;
+}) {
+  const latest = traces.at(-1);
+  return (
+    <section className="trace-drawer" aria-label="Operational traces">
+      <button type="button" onClick={onToggle} className="trace-toggle" aria-expanded={open}>
+        {open ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
+        <span>Activity</span>
+        <strong>{latest ? latest.operationClass : 'none'}</strong>
+      </button>
+      {open && (
+        <div className="trace-list">
+          {traces.length === 0 ? (
+            <p className="trace-empty">No hub events</p>
+          ) : traces.slice(-12).map((trace) => (
+            <TraceRow trace={trace} key={trace.id} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function TraceRow({ trace }: { trace: OperationalTrace }) {
+  return (
+    <article className={`trace-row ${trace.status}`}>
+      <div>
+        <strong>{trace.operationClass}</strong>
+        <span>{trace.summary}</span>
+      </div>
+      <dl>
+        <div>
+          <dt>Seq</dt>
+          <dd>{trace.sequence}</dd>
+        </div>
+        <div>
+          <dt>Type</dt>
+          <dd>{trace.type}</dd>
+        </div>
+        {Object.entries(trace.metadata).map(([key, value]) => (
+          <div key={key}>
+            <dt>{key}</dt>
+            <dd>{String(value)}</dd>
+          </div>
+        ))}
+      </dl>
+    </article>
   );
 }
 

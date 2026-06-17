@@ -261,10 +261,115 @@ button:focus-visible {
   overflow-wrap: anywhere;
 }
 
+.trace-drawer {
+  border-top: 1px solid var(--color-bark-300);
+  background: var(--color-bark-50);
+}
+
+.trace-toggle {
+  width: 100%;
+  border: 0;
+  border-radius: 0;
+  justify-content: flex-start;
+  padding: 0.65rem 0.75rem;
+  background: var(--color-bark-50);
+}
+
+.trace-toggle span {
+  font-weight: 800;
+}
+
+.trace-toggle strong {
+  margin-left: auto;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-bark-700);
+  font-size: 0.78rem;
+}
+
+.trace-list {
+  border-top: 1px solid var(--color-bark-200);
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.6rem;
+  max-height: 15rem;
+  overflow: auto;
+}
+
+.trace-empty {
+  margin: 0;
+  color: var(--color-bark-700);
+  font-size: 0.9rem;
+}
+
+.trace-row {
+  border: 1px solid var(--color-bark-300);
+  border-radius: 8px;
+  padding: 0.55rem;
+  background: var(--color-bark-50);
+}
+
+.trace-row.active {
+  border-color: var(--color-petal-300);
+  background: var(--color-petal-50);
+}
+
+.trace-row.done {
+  border-color: var(--color-moss-300);
+  background: var(--color-moss-50);
+}
+
+.trace-row.failed {
+  border-color: var(--color-wilt-400);
+  background: var(--color-wilt-50);
+}
+
+.trace-row > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.trace-row > div span {
+  color: var(--color-bark-700);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+
+.trace-row dl {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.45rem 0 0;
+}
+
+.trace-row dl div {
+  display: inline-flex;
+  gap: 0.25rem;
+  border: 1px solid var(--color-bark-300);
+  border-radius: 999px;
+  padding: 0.15rem 0.42rem;
+  font-size: 0.72rem;
+  max-width: 100%;
+}
+
+.trace-row dt {
+  color: var(--color-bark-700);
+  font-weight: 800;
+}
+
+.trace-row dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
 .chat-pane {
   min-height: 0;
   display: grid;
-  grid-template-rows: 1fr auto auto;
+  grid-template-rows: 1fr auto auto auto;
   overflow: hidden;
 }
 

@@ -241,36 +241,53 @@ function normalizeModalityTokens(values: readonly unknown[]): string[] {
   return tokens;
 }
 
-function inferOutputsText(meta: OpenRouterModelEntry): boolean {
-  const explicitOutputModalities = Array.isArray(meta.architecture?.output_modalities)
+function readModalitySideTokens(value: string, side: 'input' | 'output'): string[] {
+  const arrowIndex = value.indexOf('->');
+  const sideValue = arrowIndex >= 0
+    ? (side === 'input' ? value.slice(0, arrowIndex) : value.slice(arrowIndex + 2))
+    : value;
+  return normalizeModalityTokens([sideValue]);
+}
+
+function inferDiscoveryTextModel(meta: OpenRouterModelEntry): boolean {
+  const outputModalities = Array.isArray(meta.architecture?.output_modalities)
     ? normalizeModalityTokens(meta.architecture.output_modalities)
     : [];
-  if (explicitOutputModalities.length > 0) {
-    return explicitOutputModalities.includes('text');
+  const modality = typeof meta.architecture?.modality === 'string'
+    ? meta.architecture.modality.trim()
+    : '';
+  const inferredOutputModalities = outputModalities.length > 0
+    ? outputModalities
+    : (modality.length > 0 ? readModalitySideTokens(modality, 'output') : []);
+
+  if (inferredOutputModalities.length > 0 && (
+    inferredOutputModalities.length !== 1
+    || inferredOutputModalities[0] !== 'text'
+  )) {
+    return false;
   }
 
-  if (typeof meta.architecture?.modality === 'string') {
-    const normalizedModality = meta.architecture.modality.trim();
-    if (normalizedModality.length > 0) {
-      const arrowIndex = normalizedModality.indexOf('->');
-      const outputSide = arrowIndex >= 0
-        ? normalizedModality.slice(arrowIndex + 2)
-        : normalizedModality;
-      const tokens = normalizeModalityTokens([outputSide]);
-      if (tokens.length > 0) {
-        return tokens.includes('text');
-      }
-    }
-  }
-
-  const modalities = Array.isArray(meta.modalities)
-    ? normalizeModalityTokens(meta.modalities)
+  const inputModalities = Array.isArray(meta.architecture?.input_modalities)
+    ? normalizeModalityTokens(meta.architecture.input_modalities)
     : [];
-  if (modalities.length > 0) {
-    return modalities.includes('text');
+  const inferredInputModalities = inputModalities.length > 0
+    ? inputModalities
+    : (modality.length > 0 ? readModalitySideTokens(modality, 'input') : []);
+
+  if (inferredInputModalities.length === 0) {
+    return true;
   }
 
-  return true;
+  const inputSet = new Set(inferredInputModalities);
+  if (!inputSet.has('text')) {
+    return false;
+  }
+
+  const auxiliaryModalities = inferredInputModalities.filter(modality => modality !== 'text');
+  if (auxiliaryModalities.length > 1) {
+    return false;
+  }
+  return auxiliaryModalities.every(modality => modality === 'image' || modality === 'file');
 }
 
 function buildLiteLLMModelMap(litellmModels: LiteLLMModelEntry[]): Map<string, LiteLLMModelEntry> {
@@ -437,7 +454,7 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
       this.fetchOpenRouterZdrEndpoints(),
     ]);
 
-    const textModels = openRouterMeta.filter(inferOutputsText);
+    const textModels = openRouterMeta.filter(inferDiscoveryTextModel);
     const litellmModelMap = buildLiteLLMModelMap(litellmModels);
     const zdrEndpointMap = buildOpenRouterZdrEndpointMap(openRouterZdrEndpoints);
     const models = textModels.map(meta => discoveredModelFromOpenRouterMeta(meta, litellmModelMap, zdrEndpointMap));

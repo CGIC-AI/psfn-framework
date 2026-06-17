@@ -164,8 +164,8 @@ describe('ModelDiscovery', () => {
           {
             id: 'google/gemini-3.1-flash-lite-preview',
             architecture: {
-              modality: 'text+image+file+audio+video->text',
-              input_modalities: ['text', 'image', 'video'],
+              modality: 'text+image->text',
+              input_modalities: ['text', 'image'],
               output_modalities: ['text'],
             },
             supported_parameters: ['reasoning', 'max_tokens'],
@@ -190,7 +190,7 @@ describe('ModelDiscovery', () => {
     expect(models[0].supportsReasoning).toBe(true);
   });
 
-  it('filters OpenRouter discovery to text-output models', async () => {
+  it('filters OpenRouter discovery to the supported text model catalog', async () => {
     mockFetch.mockImplementation((url: string) => {
       if (url === OPENROUTER_ZDR_ENDPOINTS_API_URL) {
         return Promise.resolve(openRouterZdrResponse([]));
@@ -198,7 +198,7 @@ describe('ModelDiscovery', () => {
       if (url === OPENROUTER_MODELS_API_URL) {
         return Promise.resolve(openRouterResponse([
           {
-            id: 'text/model',
+            id: 'text-only/model',
             architecture: {
               modality: 'text->text',
               input_modalities: ['text'],
@@ -206,11 +206,43 @@ describe('ModelDiscovery', () => {
             },
           },
           {
-            id: 'image/model',
+            id: 'vision-text/model',
             architecture: {
-              modality: 'text->image',
-              input_modalities: ['text'],
-              output_modalities: ['image'],
+              modality: 'text+image->text',
+              input_modalities: ['text', 'image'],
+              output_modalities: ['text'],
+            },
+          },
+          {
+            id: 'file-text/model',
+            architecture: {
+              modality: 'text+file->text',
+              input_modalities: ['text', 'file'],
+              output_modalities: ['text'],
+            },
+          },
+          {
+            id: 'image-file-text/model',
+            architecture: {
+              modality: 'text+image+file->text',
+              input_modalities: ['text', 'image', 'file'],
+              output_modalities: ['text'],
+            },
+          },
+          {
+            id: 'video-text/model',
+            architecture: {
+              modality: 'text+image+video->text',
+              input_modalities: ['text', 'image', 'video'],
+              output_modalities: ['text'],
+            },
+          },
+          {
+            id: 'text-image-output/model',
+            architecture: {
+              modality: 'text+image->text+image',
+              input_modalities: ['text', 'image'],
+              output_modalities: ['text', 'image'],
             },
           },
         ]));
@@ -221,7 +253,11 @@ describe('ModelDiscovery', () => {
     const discovery = createDiscovery('http://localhost:4000/v1');
     const models = await discovery.getAvailableModels();
 
-    expect(models.map(model => model.id)).toEqual(['text/model']);
+    expect(models.map(model => model.id)).toEqual([
+      'text-only/model',
+      'vision-text/model',
+      'file-text/model',
+    ]);
   });
 
   it('maps OpenRouter ZDR endpoint metadata onto discovered models', async () => {

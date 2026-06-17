@@ -45,6 +45,7 @@ describe('ModelDiscovery', () => {
     name?: string;
     description?: string;
     context_length?: number;
+    modalities?: string[] | null;
     architecture?: {
       modality?: string | null;
       input_modalities?: string[];
@@ -71,24 +72,34 @@ describe('ModelDiscovery', () => {
     };
   }
 
-  it('fetches and merges models from LiteLLM + OpenRouter', async () => {
+  it('uses OpenRouter models as the authoritative discovery list and enriches with LiteLLM hints', async () => {
     mockFetch.mockImplementation((url: string) => {
-      if (url.includes('openrouter.ai')) {
+      if (url === OPENROUTER_ZDR_ENDPOINTS_API_URL) {
+        return Promise.resolve(openRouterZdrResponse([]));
+      }
+      if (url === OPENROUTER_MODELS_API_URL) {
         return Promise.resolve(openRouterResponse([
           {
             id: 'z-ai/glm-5',
             name: 'GLM-5',
             description: 'A great model',
+            architecture: { output_modalities: ['text'] },
             context_length: 128000,
             top_provider: { max_completion_tokens: 16384 },
             pricing: { prompt: '0.001', completion: '0.002' },
+          },
+          {
+            id: 'anthropic/claude-sonnet-4.6',
+            name: 'Claude Sonnet 4.6',
+            architecture: { output_modalities: ['text'] },
+            context_length: 200000,
           },
         ]));
       }
       if (url.includes('localhost')) {
         return Promise.resolve(litellmResponse([
           { id: 'z-ai/glm-5', litellm_provider: 'openrouter' },
-          { id: 'deepseek/deepseek-v3.2' },
+          { id: 'proxy-only/model' },
         ]));
       }
       return Promise.reject(new Error('unexpected URL'));
@@ -105,9 +116,10 @@ describe('ModelDiscovery', () => {
     expect(models[0].providerHints).toContain('openrouter');
     expect(models[0].providerHints).toContain('z-ai');
     expect(models[0].pricing).toEqual({ prompt: '0.001', completion: '0.002' });
-    // Second model has no OpenRouter metadata
-    expect(models[1].id).toBe('deepseek/deepseek-v3.2');
-    expect(models[1].description).toBeUndefined();
+    expect(models[1].id).toBe('anthropic/claude-sonnet-4.6');
+    expect(models[1].description).toBe('Claude Sonnet 4.6');
+    expect(models[1].providerHints).toContain('openrouter');
+    expect(models[1].providerHints).toContain('anthropic');
   });
 
   it('matches OpenRouter metadata when LiteLLM ids include wrapper prefixes', async () => {
@@ -118,6 +130,7 @@ describe('ModelDiscovery', () => {
             id: 'z-ai/glm-5',
             canonical_slug: 'z-ai/glm-5',
             description: 'GLM-5 via OpenRouter',
+            architecture: { output_modalities: ['text'] },
             top_provider: { context_length: 262_144, max_completion_tokens: 32_768 },
             pricing: { prompt: '0.0000008', completion: '0.0000032' },
           },
@@ -135,7 +148,7 @@ describe('ModelDiscovery', () => {
     const models = await discovery.getAvailableModels();
 
     expect(models).toHaveLength(1);
-    expect(models[0].id).toBe('openrouter/z-ai/glm-5');
+    expect(models[0].id).toBe('z-ai/glm-5');
     expect(models[0].description).toBe('GLM-5 via OpenRouter');
     expect(models[0].contextLength).toBe(262_144);
     expect(models[0].maxCompletionTokens).toBe(32_768);
@@ -177,6 +190,40 @@ describe('ModelDiscovery', () => {
     expect(models[0].supportsReasoning).toBe(true);
   });
 
+  it('filters OpenRouter discovery to text-output models', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (url === OPENROUTER_ZDR_ENDPOINTS_API_URL) {
+        return Promise.resolve(openRouterZdrResponse([]));
+      }
+      if (url === OPENROUTER_MODELS_API_URL) {
+        return Promise.resolve(openRouterResponse([
+          {
+            id: 'text/model',
+            architecture: {
+              modality: 'text->text',
+              input_modalities: ['text'],
+              output_modalities: ['text'],
+            },
+          },
+          {
+            id: 'image/model',
+            architecture: {
+              modality: 'text->image',
+              input_modalities: ['text'],
+              output_modalities: ['image'],
+            },
+          },
+        ]));
+      }
+      return Promise.resolve(litellmResponse([]));
+    });
+
+    const discovery = createDiscovery('http://localhost:4000/v1');
+    const models = await discovery.getAvailableModels();
+
+    expect(models.map(model => model.id)).toEqual(['text/model']);
+  });
+
   it('maps OpenRouter ZDR endpoint metadata onto discovered models', async () => {
     mockFetch.mockImplementation((url: string) => {
       if (url === OPENROUTER_ZDR_ENDPOINTS_API_URL) {
@@ -198,6 +245,7 @@ describe('ModelDiscovery', () => {
           {
             id: 'google/gemini-3.1-flash-lite',
             description: 'Gemini Flash Lite',
+            architecture: { output_modalities: ['text'] },
           },
         ]));
       }
@@ -213,6 +261,7 @@ describe('ModelDiscovery', () => {
     const models = await discovery.getAvailableModels();
 
     expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('google/gemini-3.1-flash-lite');
     expect(models[0].zdrAvailable).toBe(true);
     expect(models[0].zdrEndpointCount).toBe(2);
     expect(models[0].zdrProviderTags).toEqual(['google-vertex/us', 'google-vertex/eu']);
@@ -225,6 +274,7 @@ describe('ModelDiscovery', () => {
         return Promise.resolve(openRouterResponse([
           {
             id: 'meta/provider',
+            architecture: { output_modalities: ['text'] },
             context_length: 64_000,
             top_provider: { context_length: 131_072, max_completion_tokens: 4096 },
             pricing: {
@@ -279,31 +329,40 @@ describe('ModelDiscovery', () => {
     expect(mockFetch).toHaveBeenCalledTimes(6);
   });
 
-  it('fails closed when LiteLLM fetch fails', async () => {
+  it('uses OpenRouter models when LiteLLM enrichment fails', async () => {
     mockFetch.mockImplementation((url: string) => {
-      if (url.includes('openrouter.ai')) {
-        return Promise.resolve(openRouterResponse([]));
+      if (url === OPENROUTER_ZDR_ENDPOINTS_API_URL) {
+        return Promise.resolve(openRouterZdrResponse([]));
+      }
+      if (url === OPENROUTER_MODELS_API_URL) {
+        return Promise.resolve(openRouterResponse([
+          { id: 'model-1', architecture: { output_modalities: ['text'] } },
+        ]));
       }
       return Promise.reject(new Error('connection refused'));
     });
 
     const discovery = createDiscovery('http://localhost:4000');
-    await expect(discovery.getAvailableModels()).rejects.toThrow('connection refused');
+    const models = await discovery.getAvailableModels();
+
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('model-1');
+    expect(models[0].providerHints).toEqual(['openrouter', 'model-1']);
   });
 
-  it('handles OpenRouter fetch failure gracefully', async () => {
+  it('fails closed when OpenRouter metadata fetch fails', async () => {
     mockFetch.mockImplementation((url: string) => {
-      if (url.includes('/v1/models')) {
+      if (url === 'http://localhost:4000/v1/models') {
         return Promise.resolve(litellmResponse([{ id: 'model-1' }]));
+      }
+      if (url === OPENROUTER_ZDR_ENDPOINTS_API_URL) {
+        return Promise.resolve(openRouterZdrResponse([]));
       }
       return Promise.reject(new Error('network error'));
     });
 
     const discovery = createDiscovery('http://localhost:4000');
-    const models = await discovery.getAvailableModels();
-    expect(models).toHaveLength(1);
-    expect(models[0].id).toBe('model-1');
-    expect(models[0].description).toBeUndefined();
+    await expect(discovery.getAvailableModels()).rejects.toThrow('network error');
   });
 
   it('sends auth header when API key provided', async () => {

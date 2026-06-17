@@ -227,19 +227,62 @@ function inferSupportsReasoning(meta: OpenRouterModelEntry | undefined): boolean
   return undefined;
 }
 
-function buildOpenRouterMetaMap(openRouterMeta: OpenRouterModelEntry[]): Map<string, OpenRouterModelEntry> {
-  const metaMap = new Map<string, OpenRouterModelEntry>();
-  for (const meta of openRouterMeta) {
-    for (const key of [
-      ...expandModelLookupKeys(meta.id),
-      ...expandModelLookupKeys(meta.canonical_slug),
-    ]) {
-      if (!metaMap.has(key)) {
-        metaMap.set(key, meta);
+function normalizeModalityTokens(values: readonly unknown[]): string[] {
+  const tokens: string[] = [];
+  for (const value of values) {
+    const normalized = normalizeLowerToken(value);
+    if (!normalized) continue;
+    for (const token of normalized.split(/[^a-z0-9]+/i)) {
+      if (token.length > 0) {
+        tokens.push(token);
       }
     }
   }
-  return metaMap;
+  return tokens;
+}
+
+function inferOutputsText(meta: OpenRouterModelEntry): boolean {
+  const explicitOutputModalities = Array.isArray(meta.architecture?.output_modalities)
+    ? normalizeModalityTokens(meta.architecture.output_modalities)
+    : [];
+  if (explicitOutputModalities.length > 0) {
+    return explicitOutputModalities.includes('text');
+  }
+
+  if (typeof meta.architecture?.modality === 'string') {
+    const normalizedModality = meta.architecture.modality.trim();
+    if (normalizedModality.length > 0) {
+      const arrowIndex = normalizedModality.indexOf('->');
+      const outputSide = arrowIndex >= 0
+        ? normalizedModality.slice(arrowIndex + 2)
+        : normalizedModality;
+      const tokens = normalizeModalityTokens([outputSide]);
+      if (tokens.length > 0) {
+        return tokens.includes('text');
+      }
+    }
+  }
+
+  const modalities = Array.isArray(meta.modalities)
+    ? normalizeModalityTokens(meta.modalities)
+    : [];
+  if (modalities.length > 0) {
+    return modalities.includes('text');
+  }
+
+  return true;
+}
+
+function buildLiteLLMModelMap(litellmModels: LiteLLMModelEntry[]): Map<string, LiteLLMModelEntry> {
+  const modelMap = new Map<string, LiteLLMModelEntry>();
+  for (const model of litellmModels) {
+    for (const key of expandModelLookupKeys(model.id)) {
+      if (!modelMap.has(key)) {
+        modelMap.set(key, model);
+      }
+    }
+  }
+  return modelMap;
 }
 
 function pushUnique(target: string[], value: string | undefined): void {
@@ -266,12 +309,15 @@ function buildOpenRouterZdrEndpointMap(
   return endpointMap;
 }
 
-function findOpenRouterMeta(
-  litellmId: string,
-  metaMap: Map<string, OpenRouterModelEntry>,
-): OpenRouterModelEntry | undefined {
-  for (const key of expandModelLookupKeys(litellmId)) {
-    const matched = metaMap.get(key);
+function findLiteLLMModel(
+  meta: OpenRouterModelEntry,
+  litellmModelMap: Map<string, LiteLLMModelEntry>,
+): LiteLLMModelEntry | undefined {
+  for (const key of [
+    ...expandModelLookupKeys(meta.id),
+    ...expandModelLookupKeys(meta.canonical_slug),
+  ]) {
+    const matched = litellmModelMap.get(key);
     if (matched) return matched;
   }
   return undefined;
@@ -291,6 +337,43 @@ function findOpenRouterZdrEndpointSummary(
     if (matched) return matched;
   }
   return undefined;
+}
+
+function discoveredModelFromOpenRouterMeta(
+  meta: OpenRouterModelEntry,
+  litellmModelMap: Map<string, LiteLLMModelEntry>,
+  endpointMap: Map<string, OpenRouterZdrEndpointSummary>,
+): DiscoveredModel {
+  const litellmModel = findLiteLLMModel(meta, litellmModelMap);
+  const zdrEndpointSummary = findOpenRouterZdrEndpointSummary(litellmModel?.id ?? meta.id, meta, endpointMap);
+  const providerHints = normalizeProviderHints([
+    'openrouter',
+    ...(litellmModel ? providerHintsFromLiteLLM(litellmModel) : []),
+    providerFromModelId(meta.canonical_slug ?? meta.id),
+  ]);
+
+  return {
+    id: meta.id,
+    description: meta.description ?? meta.name,
+    ...(providerHints.length > 0 ? { providerHints } : {}),
+    contextLength: meta.top_provider?.context_length ?? meta.context_length,
+    maxCompletionTokens: meta.top_provider?.max_completion_tokens,
+    pricing: normalizePricing(meta.pricing),
+    ...(inferSupportsVision(meta) ? { supportsVision: true } : {}),
+    ...(inferSupportsReasoning(meta) ? { supportsReasoning: true } : {}),
+    ...(zdrEndpointSummary
+      ? {
+          zdrAvailable: true,
+          zdrEndpointCount: zdrEndpointSummary.count,
+          ...(zdrEndpointSummary.providerTags.length > 0
+            ? { zdrProviderTags: zdrEndpointSummary.providerTags }
+            : {}),
+          ...(zdrEndpointSummary.providerNames.length > 0
+            ? { zdrProviderNames: zdrEndpointSummary.providerNames }
+            : {}),
+        }
+      : {}),
+  };
 }
 
 function deriveOpenRouterZdrEndpointsApiUrl(openRouterModelsApiUrl: string): string {
@@ -349,47 +432,15 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
     }
 
     const [litellmModels, openRouterMeta, openRouterZdrEndpoints] = await Promise.all([
-      this.fetchLiteLLM(),
+      this.fetchLiteLLMForEnrichment(),
       this.fetchOpenRouterMeta(),
       this.fetchOpenRouterZdrEndpoints(),
     ]);
 
-    // Build a metadata lookup from OpenRouter
-    const metaMap = buildOpenRouterMetaMap(openRouterMeta);
+    const textModels = openRouterMeta.filter(inferOutputsText);
+    const litellmModelMap = buildLiteLLMModelMap(litellmModels);
     const zdrEndpointMap = buildOpenRouterZdrEndpointMap(openRouterZdrEndpoints);
-
-    // Merge: LiteLLM provides the available model list, OpenRouter enriches it
-    const models: DiscoveredModel[] = litellmModels.map(lm => {
-      const meta = findOpenRouterMeta(lm.id, metaMap);
-      const zdrEndpointSummary = findOpenRouterZdrEndpointSummary(lm.id, meta, zdrEndpointMap);
-      const providerHints = normalizeProviderHints([
-        ...providerHintsFromLiteLLM(lm),
-        ...(meta ? ['openrouter'] : []),
-        providerFromModelId(meta?.canonical_slug ?? meta?.id ?? lm.id),
-      ]);
-      return {
-        id: lm.id,
-        description: meta?.description ?? meta?.name,
-        ...(providerHints.length > 0 ? { providerHints } : {}),
-        contextLength: meta?.top_provider?.context_length ?? meta?.context_length,
-        maxCompletionTokens: meta?.top_provider?.max_completion_tokens,
-        pricing: normalizePricing(meta?.pricing),
-        ...(inferSupportsVision(meta) ? { supportsVision: true } : {}),
-        ...(inferSupportsReasoning(meta) ? { supportsReasoning: true } : {}),
-        ...(zdrEndpointSummary
-          ? {
-              zdrAvailable: true,
-              zdrEndpointCount: zdrEndpointSummary.count,
-              ...(zdrEndpointSummary.providerTags.length > 0
-                ? { zdrProviderTags: zdrEndpointSummary.providerTags }
-                : {}),
-              ...(zdrEndpointSummary.providerNames.length > 0
-                ? { zdrProviderNames: zdrEndpointSummary.providerNames }
-                : {}),
-            }
-          : {}),
-      };
-    });
+    const models = textModels.map(meta => discoveredModelFromOpenRouterMeta(meta, litellmModelMap, zdrEndpointMap));
 
     this.cache = models;
     this.cacheTime = Date.now();
@@ -432,18 +483,28 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
     }
   }
 
+  private async fetchLiteLLMForEnrichment(): Promise<LiteLLMModelEntry[]> {
+    try {
+      return await this.fetchLiteLLM();
+    } catch {
+      return [];
+    }
+  }
+
   private async fetchOpenRouterMeta(): Promise<OpenRouterModelEntry[]> {
     try {
       const res = await this.resolveFetch()(this.openRouterModelsApiUrl);
       if (!res.ok) {
-        log.warn(`OpenRouter /api/v1/models returned ${res.status}`);
-        return [];
+        throw new Error(`OpenRouter /api/v1/models returned ${res.status}`);
       }
       const data = await res.json() as { data?: OpenRouterModelEntry[] };
-      return data.data ?? [];
+      if (!Array.isArray(data.data)) {
+        throw new Error('OpenRouter /api/v1/models returned invalid payload');
+      }
+      return data.data;
     } catch (err) {
       log.warn('Failed to fetch OpenRouter metadata', { error: String(err) });
-      return [];
+      throw err instanceof Error ? err : new Error(String(err));
     }
   }
 

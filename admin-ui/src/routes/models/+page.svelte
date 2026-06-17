@@ -1379,7 +1379,7 @@
           <div>
             <h2 id="discovered-models-heading" class="text-sm font-serif font-semibold text-shadow-800">Discovered Models</h2>
             <p class="text-sm text-shadow-600 mt-1">
-              Discovery uses the provider proxy. ZDR tags come from OpenRouter endpoint metadata.
+              Discovery uses OpenRouter model metadata. ZDR tags come from OpenRouter endpoint metadata.
             </p>
           </div>
           <div class="w-full lg:w-80">

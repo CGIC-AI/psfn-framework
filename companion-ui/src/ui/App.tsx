@@ -3,6 +3,7 @@ import {
   CircleStop,
   ChevronDown,
   ChevronRight,
+  FileX2,
   Loader2,
   LockKeyhole,
   Plug,
@@ -23,6 +24,7 @@ import {
 import { derivePresenceState, formatElapsed } from '../lib/presence.js';
 import { deriveOperationalTraces, type OperationalTrace } from '../lib/traces.js';
 import { deriveApprovalPanelState } from '../lib/approvals.js';
+import { deriveArtifactShelfState } from '../lib/artifacts.js';
 import { readCompanionUiRuntimeConfig } from './config.js';
 
 export function App() {
@@ -115,6 +117,7 @@ export function App() {
   const presence = derivePresenceState(streamState, nowMs);
   const traces = useMemo(() => deriveOperationalTraces(streamState), [streamState]);
   const approvals = useMemo(() => deriveApprovalPanelState(streamState), [streamState]);
+  const artifacts = useMemo(() => deriveArtifactShelfState(streamState), [streamState]);
   const connectionTone = streamState.connection === 'ready'
     ? 'good'
     : streamState.connection === 'failed' || streamState.connection === 'disconnected'
@@ -194,6 +197,7 @@ export function App() {
         <ActivityStrip presence={presence} eventCount={streamState.sequence} status={streamState.status} />
         <TraceDrawer open={drawerOpen} traces={traces} onToggle={() => setDrawerOpen((value) => !value)} />
         <ApprovalPanel state={approvals} />
+        <ArtifactShelf state={artifacts} />
 
         <form className="composer" onSubmit={sendMessage}>
           <button type="button" onClick={interrupt} disabled={!canSend} title="Interrupt">
@@ -318,6 +322,27 @@ function ApprovalPanel({ state }: { state: ReturnType<typeof deriveApprovalPanel
           <article className="approval-card" key={request.id}>
             <strong>{request.title}</strong>
             <p>{request.redactedContext}</p>
+          </article>
+        ))
+      )}
+    </section>
+  );
+}
+
+function ArtifactShelf({ state }: { state: ReturnType<typeof deriveArtifactShelfState> }) {
+  return (
+    <section className="artifact-shelf" aria-label="Artifacts">
+      <div>
+        <FileX2 aria-hidden />
+        <strong>Artifacts</strong>
+      </div>
+      {state.items.length === 0 ? (
+        <p>{state.blockedReason ?? 'No artifacts'}</p>
+      ) : (
+        state.items.map((item) => (
+          <article className="artifact-item" key={item.id}>
+            <strong>{item.label}</strong>
+            <p>{item.mediaType} · {item.provenance}</p>
           </article>
         ))
       )}

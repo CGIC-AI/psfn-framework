@@ -17,6 +17,7 @@ import {
   HubStreamStore,
   type HubStreamState,
 } from '../lib/stream/hub-stream.js';
+import { derivePresenceState, formatElapsed } from '../lib/presence.js';
 import { readCompanionUiRuntimeConfig } from './config.js';
 
 export function App() {
@@ -27,6 +28,7 @@ export function App() {
   const [streamState, setStreamState] = useState<HubStreamState>(() => createInitialHubStreamState());
   const [input, setInput] = useState('');
   const [connecting, setConnecting] = useState(false);
+  const [nowMs, setNowMs] = useState(Date.now());
   const storeRef = useRef<HubStreamStore | null>(null);
 
   useEffect(() => {
@@ -41,6 +43,11 @@ export function App() {
       storeRef.current?.destroy();
       storeRef.current = null;
     };
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const identityLabel = useMemo(() => {
@@ -99,6 +106,7 @@ export function App() {
   }
 
   const canSend = streamState.connection === 'ready' || streamState.connection === 'connected';
+  const presence = derivePresenceState(streamState, nowMs);
   const connectionTone = streamState.connection === 'ready'
     ? 'good'
     : streamState.connection === 'failed' || streamState.connection === 'disconnected'
@@ -152,13 +160,6 @@ export function App() {
         </section>
       )}
 
-      <section className="presence-strip" aria-label="Presence">
-        <PresenceItem label="Connection" value={streamState.connection} />
-        <PresenceItem label="Phase" value={streamState.phase} />
-        <PresenceItem label="Status" value={streamState.status ?? 'none'} />
-        <PresenceItem label="Events" value={String(streamState.sequence)} />
-      </section>
-
       <section className="chat-pane" aria-label="Chat">
         <div className="messages">
           {streamState.messages.length === 0 && !streamState.liveAssistant ? (
@@ -181,6 +182,8 @@ export function App() {
             </>
           )}
         </div>
+
+        <ActivityStrip presence={presence} eventCount={streamState.sequence} status={streamState.status} />
 
         <form className="composer" onSubmit={sendMessage}>
           <button type="button" onClick={interrupt} disabled={!canSend} title="Interrupt">
@@ -208,6 +211,29 @@ function PresenceItem({ label, value }: { label: string; value: string }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function ActivityStrip({
+  presence,
+  eventCount,
+  status,
+}: {
+  presence: ReturnType<typeof derivePresenceState>;
+  eventCount: number;
+  status: string | null;
+}) {
+  return (
+    <section className={`activity-strip ${presence.failed ? 'failed' : ''}`} aria-label="Activity">
+      <PresenceItem label="Connection" value={presence.connection} />
+      <PresenceItem label="Phase" value={presence.phase} />
+      <PresenceItem label="Operation" value={presence.operationClass} />
+      <PresenceItem label="Elapsed" value={formatElapsed(presence.elapsedMs)} />
+      <PresenceItem label="Input" value={presence.inputExpected} />
+      <PresenceItem label="Emanation" value={presence.satelliteId ?? presence.emanation} />
+      <PresenceItem label="Status" value={status ?? presence.silence} />
+      <PresenceItem label="Events" value={String(eventCount)} />
+    </section>
   );
 }
 

@@ -223,21 +223,30 @@ button:focus-visible {
   flex: 0 0 auto;
 }
 
-.presence-strip {
+.activity-strip {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0;
   overflow: hidden;
 }
 
-.presence-strip div {
+.activity-strip {
+  border-top: 1px solid var(--color-bark-300);
+  background: var(--color-bark-50);
+}
+
+.activity-strip.failed {
+  background: var(--color-wilt-50);
+}
+
+.activity-strip div {
   min-width: 0;
   padding: 0.65rem 0.75rem;
   border-right: 1px solid var(--color-bark-200);
   border-bottom: 1px solid var(--color-bark-200);
 }
 
-.presence-strip span {
+.activity-strip span {
   display: block;
   color: var(--color-bark-700);
   font-size: 0.68rem;
@@ -246,7 +255,7 @@ button:focus-visible {
   letter-spacing: 0.08em;
 }
 
-.presence-strip strong {
+.activity-strip strong {
   display: block;
   margin-top: 0.15rem;
   overflow-wrap: anywhere;
@@ -255,7 +264,7 @@ button:focus-visible {
 .chat-pane {
   min-height: 0;
   display: grid;
-  grid-template-rows: 1fr auto;
+  grid-template-rows: 1fr auto auto;
   overflow: hidden;
 }
 
@@ -341,7 +350,7 @@ button:focus-visible {
     grid-template-columns: auto auto;
   }
 
-  .presence-strip {
+  .activity-strip {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 

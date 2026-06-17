@@ -1,0 +1,357 @@
+:root {
+  --color-bark-50: #ffffff;
+  --color-bark-100: #fafafa;
+  --color-bark-200: #f0f0ee;
+  --color-bark-300: #e0dfdc;
+  --color-bark-400: #c5c3bf;
+  --color-bark-700: #646260;
+  --color-bark-900: #343230;
+  --color-gold-50: #fdf8eb;
+  --color-gold-300: #e4bc44;
+  --color-gold-400: #d4a520;
+  --color-gold-700: #7a5d10;
+  --color-moss-50: #f0f7ec;
+  --color-moss-300: #88c56c;
+  --color-moss-700: #2b591d;
+  --color-petal-50: #fdf3f5;
+  --color-petal-300: #eca3b6;
+  --color-petal-500: #cc4d6e;
+  --color-shadow-50: #f7f7f7;
+  --color-shadow-200: #d9d9d8;
+  --color-shadow-400: #555553;
+  --color-shadow-600: #333331;
+  --color-shadow-800: #1c1c1b;
+  --color-wilt-50: #fef5ec;
+  --color-wilt-400: #e88832;
+  --color-wilt-600: #b05210;
+  --font-serif: "Playfair Display", Georgia, serif;
+  --font-sans: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--color-shadow-800);
+  background: var(--color-bark-100);
+  font-family: var(--font-sans);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: var(--color-bark-100);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  min-height: 42px;
+  border: 1px solid var(--color-bark-300);
+  border-radius: 8px;
+  background: var(--color-bark-50);
+  color: var(--color-shadow-600);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.55rem 0.75rem;
+}
+
+button svg {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+button:disabled {
+  opacity: 0.5;
+}
+
+.primary {
+  border-color: var(--color-gold-300);
+  background: var(--color-gold-300);
+  color: var(--color-shadow-800);
+  font-weight: 700;
+}
+
+.icon-only {
+  aspect-ratio: 1;
+  padding: 0;
+  width: 44px;
+}
+
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto auto auto auto 1fr;
+  gap: 0.75rem;
+  padding: max(0.75rem, env(safe-area-inset-top)) 0.75rem max(0.75rem, env(safe-area-inset-bottom));
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.topbar,
+.setup-panel,
+.presence-strip,
+.chat-pane,
+.failure-band {
+  background: var(--color-bark-50);
+  border: 1px solid var(--color-bark-300);
+  border-radius: 8px;
+}
+
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.85rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.15rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 0.68rem;
+  color: var(--color-bark-700);
+  font-weight: 700;
+}
+
+h1 {
+  margin: 0;
+  font-family: var(--font-serif);
+  font-size: clamp(1.2rem, 1rem + 1vw, 1.85rem);
+  line-height: 1.12;
+  letter-spacing: 0;
+}
+
+.status-pill {
+  border-radius: 999px;
+  border: 1px solid var(--color-bark-300);
+  padding: 0.38rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.status-pill.good {
+  background: var(--color-moss-50);
+  border-color: var(--color-moss-300);
+  color: var(--color-moss-700);
+}
+
+.status-pill.wait {
+  background: var(--color-gold-50);
+  border-color: var(--color-gold-300);
+  color: var(--color-gold-700);
+}
+
+.status-pill.bad,
+.failure-band {
+  background: var(--color-wilt-50);
+  border-color: var(--color-wilt-400);
+  color: var(--color-wilt-600);
+}
+
+.setup-panel {
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.75rem;
+}
+
+.setup-panel label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.setup-panel span {
+  color: var(--color-bark-700);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+input,
+textarea {
+  width: 100%;
+  border: 1px solid var(--color-bark-300);
+  border-radius: 8px;
+  background: var(--color-bark-50);
+  color: var(--color-shadow-800);
+  min-height: 42px;
+  padding: 0.62rem 0.72rem;
+}
+
+textarea {
+  resize: none;
+}
+
+input:focus,
+textarea:focus,
+button:focus-visible {
+  outline: 2px solid var(--color-gold-300);
+  outline-offset: 2px;
+}
+
+.setup-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.failure-band {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.failure-band svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+}
+
+.presence-strip {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  overflow: hidden;
+}
+
+.presence-strip div {
+  min-width: 0;
+  padding: 0.65rem 0.75rem;
+  border-right: 1px solid var(--color-bark-200);
+  border-bottom: 1px solid var(--color-bark-200);
+}
+
+.presence-strip span {
+  display: block;
+  color: var(--color-bark-700);
+  font-size: 0.68rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.presence-strip strong {
+  display: block;
+  margin-top: 0.15rem;
+  overflow-wrap: anywhere;
+}
+
+.chat-pane {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  overflow: hidden;
+}
+
+.messages {
+  min-height: 280px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.85rem;
+}
+
+.message {
+  max-width: min(82%, 42rem);
+  border: 1px solid var(--color-bark-300);
+  border-radius: 8px;
+  padding: 0.72rem 0.82rem;
+  background: var(--color-shadow-50);
+}
+
+.message p {
+  margin: 0;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.message.user {
+  align-self: flex-end;
+  background: var(--color-gold-50);
+  border-color: var(--color-gold-300);
+}
+
+.message.assistant {
+  align-self: flex-start;
+  background: var(--color-bark-50);
+}
+
+.message.live {
+  border-color: var(--color-petal-300);
+  background: var(--color-petal-50);
+}
+
+.empty-state {
+  margin: auto;
+  display: grid;
+  place-items: center;
+  gap: 0.45rem;
+  color: var(--color-bark-700);
+}
+
+.empty-state svg {
+  width: 2rem;
+  height: 2rem;
+  color: var(--color-gold-400);
+}
+
+.empty-state p {
+  margin: 0;
+  font-weight: 800;
+}
+
+.composer {
+  border-top: 1px solid var(--color-bark-300);
+  padding: 0.65rem;
+  display: grid;
+  grid-template-columns: 44px 1fr 44px;
+  gap: 0.5rem;
+  align-items: end;
+}
+
+@media (min-width: 720px) {
+  .app-shell {
+    padding: 1rem;
+  }
+
+  .setup-panel {
+    grid-template-columns: minmax(16rem, 1.4fr) minmax(10rem, 0.8fr) minmax(10rem, 0.8fr) auto;
+    align-items: end;
+  }
+
+  .setup-actions {
+    grid-template-columns: auto auto;
+  }
+
+  .presence-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .messages {
+    min-height: 430px;
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

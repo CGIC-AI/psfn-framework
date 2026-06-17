@@ -1,0 +1,21 @@
+{
+  "name": "psfn-companion-ui",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "PWA Companion Cockpit — client of the PSFN-Satellite Hub. Relational chat + presence/operational state only. No core, no server.",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.11",
+    "@typescript-eslint/eslint-plugin": "8.56.0",
+    "@typescript-eslint/parser": "8.56.0",
+    "eslint": "10.0.0",
+    "typescript": "5.9.3",
+    "vitest": "4.0.18"
+  }
+}

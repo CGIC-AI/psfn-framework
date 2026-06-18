@@ -3,4 +3,6 @@ dist/
 build/
 .svelte-kit/
 *.log
+.env.local
+.runtime/
 .DS_Store

@@ -41,11 +41,12 @@ export interface PsfnRuntimeConfig {
 
 export interface HubConfig {
   agentRuntime: "psfn" | "hermes";
+  textOnlyMode: boolean;
   bindHost: string;
   port: number;
-  deepgramApiKey: string;
-  elevenlabsApiKey: string;
-  elevenlabsVoiceId: string;
+  deepgramApiKey: string | null;
+  elevenlabsApiKey: string | null;
+  elevenlabsVoiceId: string | null;
   elevenlabsModelId: string;
   artifactsRoot: string;
   psfn: PsfnRuntimeConfig | null;
@@ -192,14 +193,16 @@ export function loadHubConfig(projectRoot: string): HubConfig {
   const agentRuntime = loadAgentRuntime();
   const psfn = agentRuntime === "psfn" ? loadPsfnRuntime(projectRoot) : null;
   const hermes = agentRuntime === "hermes" ? loadHermesRuntime(projectRoot) : null;
+  const textOnlyMode = process.env.HUB_TEXT_ONLY?.trim() === "true";
 
   return {
     agentRuntime,
+    textOnlyMode,
     bindHost: process.env.REALTIME_VOICE_BIND_HOST || "0.0.0.0",
     port: Number.parseInt(process.env.REALTIME_VOICE_PORT || "8787", 10),
-    deepgramApiKey: required("DEEPGRAM_API_KEY"),
-    elevenlabsApiKey: required("ELEVENLABS_API_KEY"),
-    elevenlabsVoiceId: required("ELEVENLABS_VOICE_ID"),
+    deepgramApiKey: textOnlyMode ? optional("DEEPGRAM_API_KEY") ?? null : required("DEEPGRAM_API_KEY"),
+    elevenlabsApiKey: textOnlyMode ? optional("ELEVENLABS_API_KEY") ?? null : required("ELEVENLABS_API_KEY"),
+    elevenlabsVoiceId: textOnlyMode ? optional("ELEVENLABS_VOICE_ID") ?? null : required("ELEVENLABS_VOICE_ID"),
     elevenlabsModelId: process.env.ELEVENLABS_MODEL_ID || "eleven_flash_v2_5",
     artifactsRoot: resolvePath(projectRoot, process.env.ARTIFACT_ROOT || ".artifacts/runtime-ts"),
     psfn,

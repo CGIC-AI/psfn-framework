@@ -804,6 +804,7 @@ function testHubConfig(overrides: {
   });
   return {
     agentRuntime: "psfn",
+    textOnlyMode: false,
     bindHost: "127.0.0.1",
     port: 0,
     deepgramApiKey: "test-deepgram",

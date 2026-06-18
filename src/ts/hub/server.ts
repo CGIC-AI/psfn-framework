@@ -65,18 +65,26 @@ export class RealtimeHubServer {
     this.embodiedSessions = new EmbodiedSessionRegistry(resolveChannelType(config));
     this.agent = options.agent ?? createAgentRuntime(config);
     this.tts = new ElevenLabsStream(
-      config.elevenlabsApiKey,
+      config.elevenlabsApiKey ?? "",
       config.elevenlabsModelId,
-      config.elevenlabsVoiceId,
+      config.elevenlabsVoiceId ?? "",
     );
+    const voxtaTts = options.voxtaTts === null
+      ? undefined
+      : options.voxtaTts
+        ?? (config.elevenlabsApiKey && config.elevenlabsVoiceId ? new ElevenLabsVoxtaTts(this.tts) : undefined);
+    const voxtaStt = options.voxtaStt === null
+      ? undefined
+      : options.voxtaStt
+        ?? (config.deepgramApiKey ? new DeepgramVoxtaStt(config.deepgramApiKey) : undefined);
     this.voxta = new VoxtaFacade({
       config: config.voxta,
       sessions: this.sessions,
       embodiedSessions: this.embodiedSessions,
       agent: this.agent,
       artifactsRoot: config.artifactsRoot,
-      tts: options.voxtaTts === null ? undefined : options.voxtaTts ?? new ElevenLabsVoxtaTts(this.tts),
-      stt: options.voxtaStt === null ? undefined : options.voxtaStt ?? new DeepgramVoxtaStt(config.deepgramApiKey),
+      tts: voxtaTts,
+      stt: voxtaStt,
     });
     this.httpServer = http.createServer((request, response) => {
       if (this.voxta.handleHttp(request, response)) {
@@ -231,27 +239,6 @@ class RealtimeConnection {
       void this.cleanup();
     });
 
-    this.sttSession = new DeepgramRealtimeSession(this.config.deepgramApiKey, 16000, {
-      onInterim: (event) => {
-        this.messageChain = this.messageChain
-          .then(() => this.handleInterim(event))
-          .catch((error) => {
-            console.error("Realtime interim handling failed:", error);
-          });
-      },
-      onUtterance: (event) => {
-        this.messageChain = this.messageChain
-          .then(() => this.handleUtterance(event))
-          .catch((error) => {
-            console.error("Realtime utterance handling failed:", error);
-          });
-      },
-      onError: (error) => {
-        console.error("Deepgram realtime session failed:", error);
-      },
-    });
-    await this.sttSession.start();
-
     console.log("Realtime client connected");
     await this.send({
       type: "session.ready",
@@ -260,7 +247,7 @@ class RealtimeConnection {
       deviceId: this.deviceId,
       deviceName: this.deviceName,
       satelliteId: this.satelliteId,
-      audioFormat: "pcm_s16le_16000_mono_in/mp3_44100_out",
+      audioFormat: this.config.deepgramApiKey ? "pcm_s16le_16000_mono_in/mp3_44100_out" : "text_only",
       identity: await this.resolveRuntimeIdentity(),
     });
   }
@@ -429,6 +416,9 @@ class RealtimeConnection {
     message: Extract<ClientToHubMessage, { type: "relay.stt" }>,
   ): Promise<void> {
     try {
+      if (!this.config.deepgramApiKey) {
+        throw new Error("Deepgram STT is not configured for this hub");
+      }
       const transcript = await transcribePcmClip(
         this.config.deepgramApiKey,
         decodeAudioChunk(message.audio),
@@ -455,6 +445,9 @@ class RealtimeConnection {
     }
 
     try {
+      if (!this.config.elevenlabsApiKey || !this.config.elevenlabsVoiceId) {
+        throw new Error("ElevenLabs TTS is not configured for this hub");
+      }
       for await (const audioChunk of this.tts.streamText(singleValueStream(spokenText))) {
         await this.send({
           type: "relay.tts.chunk",
@@ -473,15 +466,23 @@ class RealtimeConnection {
   }
 
   private async handleAudio(chunk: Buffer): Promise<void> {
-    if (!this.sttSession || chunk.length === 0) {
+    if (chunk.length === 0) {
       return;
     }
+    if (!this.config.deepgramApiKey) {
+      await this.send({
+        type: "error-event",
+        data: { message: "Deepgram STT is not configured for this hub" },
+      });
+      return;
+    }
+    await this.ensureSttSession();
     if (this.replyTask && !this.replyAbort) {
       return;
     }
     const turn = this.ensureActiveTurn();
     appendPcm(turn, chunk);
-    this.sttSession.sendAudio(chunk);
+    this.sttSession?.sendAudio(chunk);
   }
 
   private async handleInterim(event: TranscriptInterim): Promise<void> {
@@ -567,6 +568,9 @@ class RealtimeConnection {
         const spokenSegmentText = sanitizeSpokenText(segmentText);
         if (!spokenSegmentText) {
           continue;
+        }
+        if (!this.config.elevenlabsApiKey || !this.config.elevenlabsVoiceId) {
+          throw new Error("ElevenLabs TTS is not configured for this hub");
         }
         await this.send({
           type: "text",
@@ -709,6 +713,35 @@ class RealtimeConnection {
     });
     this.activeTurn = turn;
     return turn;
+  }
+
+  private async ensureSttSession(): Promise<void> {
+    if (this.sttSession) {
+      return;
+    }
+    if (!this.config.deepgramApiKey) {
+      throw new Error("Deepgram STT is not configured for this hub");
+    }
+    this.sttSession = new DeepgramRealtimeSession(this.config.deepgramApiKey, 16000, {
+      onInterim: (event) => {
+        this.messageChain = this.messageChain
+          .then(() => this.handleInterim(event))
+          .catch((error) => {
+            console.error("Realtime interim handling failed:", error);
+          });
+      },
+      onUtterance: (event) => {
+        this.messageChain = this.messageChain
+          .then(() => this.handleUtterance(event))
+          .catch((error) => {
+            console.error("Realtime utterance handling failed:", error);
+          });
+      },
+      onError: (error) => {
+        console.error("Deepgram realtime session failed:", error);
+      },
+    });
+    await this.sttSession.start();
   }
 
   private async cleanup(): Promise<void> {

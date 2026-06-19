@@ -4,12 +4,14 @@ import type { ReactNode } from 'react';
 export function OverlayFrame({
   children,
   onClose,
+  side = 'right',
 }: {
   children: ReactNode;
   onClose: () => void;
+  side?: 'left' | 'right';
 }) {
   return (
-    <div className="overlay-root" role="presentation">
+    <div className={`overlay-root ${side}`} role="presentation">
       <button className="overlay-backdrop" type="button" onClick={onClose} aria-label="Close overlay" />
       {children}
     </div>

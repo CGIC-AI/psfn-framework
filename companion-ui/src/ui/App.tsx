@@ -1,5 +1,4 @@
 import {
-  CircleStop,
   Menu,
   Settings,
   Wifi,
@@ -98,6 +97,10 @@ export function App() {
   const canSend = streamState.connection === 'ready' || streamState.connection === 'connected';
   const connectionTone = getConnectionTone(streamState.connection, connecting);
   const spriteState = deriveSpriteState(streamState, traces, composer.micActive, connecting);
+  const latestTrace = traces.at(-1);
+  const companionTalking = Boolean(streamState.liveAssistant)
+    || (latestTrace?.operationClass === 'relay_tts' && latestTrace.status === 'active');
+  const voiceStopActive = composer.micMode === 'voice' && companionTalking;
 
   async function connect() {
     if (!hubUrl || connecting) return;
@@ -133,10 +136,6 @@ export function App() {
 
   function disconnect() {
     storeRef.current?.disconnect();
-  }
-
-  function interrupt() {
-    storeRef.current?.interrupt();
   }
 
   function sendUserText(text: string) {
@@ -193,10 +192,18 @@ export function App() {
         <AttachmentTray attachments={composer.pendingAttachments} onRemove={composer.removeAttachment} />
       )}
 
-      <Composer canSend={canSend} controller={composer} onSendText={sendUserText} />
+      <Composer
+        canSend={canSend}
+        controller={composer}
+        onSendText={sendUserText}
+        voiceStopActive={voiceStopActive}
+      />
 
       {overlay && (
-        <OverlayFrame onClose={() => setOverlay(null)}>
+        <OverlayFrame
+          onClose={() => setOverlay(null)}
+          side={overlay === 'activity' ? 'left' : 'right'}
+        >
           {overlay === 'settings' ? (
             <SettingsDrawer
               autoConnect={autoConnect}
@@ -233,15 +240,6 @@ export function App() {
         </OverlayFrame>
       )}
 
-      <button
-        className="interrupt-fab"
-        type="button"
-        onClick={interrupt}
-        disabled={!canSend}
-        aria-label="Interrupt companion"
-      >
-        <CircleStop aria-hidden />
-      </button>
     </main>
   );
 }

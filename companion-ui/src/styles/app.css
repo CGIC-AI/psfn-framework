@@ -484,6 +484,14 @@ button:focus-visible {
   box-shadow: 0 8px 22px rgba(137, 96, 30, 0.24);
 }
 
+.send-button.stop-playback {
+  border-color: rgba(166, 79, 54, 0.42);
+  background:
+    radial-gradient(circle at 38% 28%, rgba(255, 253, 248, 0.78), transparent 28%),
+    linear-gradient(135deg, #d98f75, #9d513b);
+  color: #fffdf8;
+}
+
 .composer-menu-wrap {
   position: relative;
 }
@@ -821,26 +829,19 @@ button:focus-visible {
   color: var(--color-error);
 }
 
-.interrupt-fab {
-  position: fixed;
-  right: calc(max(1rem, env(safe-area-inset-right)) + 58px);
-  bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 18px);
-  z-index: 8;
-  width: 42px;
-  height: 42px;
-  min-height: 42px;
-  padding: 0;
-  border-radius: 50%;
-  background: rgba(255, 253, 248, 0.9);
-  box-shadow: var(--shadow-soft);
-}
-
 .overlay-root {
   position: fixed;
   inset: 0;
   z-index: 20;
   display: flex;
+}
+
+.overlay-root.right {
   justify-content: flex-end;
+}
+
+.overlay-root.left {
+  justify-content: flex-start;
 }
 
 .overlay-backdrop {
@@ -866,6 +867,13 @@ button:focus-visible {
     linear-gradient(180deg, rgba(255, 253, 248, 0.96), rgba(247, 241, 231, 0.94));
   box-shadow: -18px 0 48px rgba(72, 52, 24, 0.18);
   animation: drawerIn 190ms ease-out;
+}
+
+.overlay-root.left .overlay-drawer {
+  border-left: 0;
+  border-right: 1px solid rgba(201, 163, 90, 0.32);
+  box-shadow: 18px 0 48px rgba(72, 52, 24, 0.18);
+  animation-name: drawerInLeft;
 }
 
 .drawer-header {
@@ -1263,10 +1271,7 @@ button:focus-visible {
   .overlay-drawer {
     width: 100vw;
     border-left: 0;
-  }
-
-  .interrupt-fab {
-    display: none;
+    border-right: 0;
   }
 }
 
@@ -1384,6 +1389,17 @@ button:focus-visible {
 @keyframes drawerIn {
   from {
     transform: translateX(24px);
+    opacity: 0.65;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes drawerInLeft {
+  from {
+    transform: translateX(-24px);
     opacity: 0.65;
   }
   to {

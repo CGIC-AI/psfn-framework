@@ -3,6 +3,7 @@ import {
   type KeyboardEvent,
 } from 'react';
 import {
+  CircleStop,
   Mic,
   Plus,
   Send,
@@ -12,10 +13,12 @@ import { AttachmentMenu } from './context-layers.js';
 
 export function Composer({
   canSend,
+  voiceStopActive,
   controller,
   onSendText,
 }: {
   canSend: boolean;
+  voiceStopActive: boolean;
   controller: ComposerController;
   onSendText: (text: string) => void;
 }) {
@@ -95,12 +98,13 @@ export function Composer({
         </button>
       </div>
       <button
-        className="send-button"
-        type="submit"
-        disabled={!canSend || !controller.input.trim()}
-        aria-label="Send message"
+        className={`send-button ${voiceStopActive ? 'stop-playback' : ''}`}
+        type={voiceStopActive ? 'button' : 'submit'}
+        onClick={voiceStopActive ? controller.stopVoicePlayback : undefined}
+        disabled={!voiceStopActive && (!canSend || !controller.input.trim())}
+        aria-label={voiceStopActive ? 'Stop voice playback' : 'Send message'}
       >
-        <Send aria-hidden />
+        {voiceStopActive ? <CircleStop aria-hidden /> : <Send aria-hidden />}
       </button>
     </form>
   );

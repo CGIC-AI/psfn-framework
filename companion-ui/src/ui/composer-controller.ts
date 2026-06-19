@@ -49,6 +49,11 @@ export function useComposerController() {
     selectMicMode(micMode === 'dictation' ? 'voice' : 'dictation');
   }
 
+  function stopVoicePlayback() {
+    window.speechSynthesis.cancel();
+    setVoiceNotice('Stopped companion voice playback. The text response remains in the thread.');
+  }
+
   function openAttachmentPicker(kind: AttachmentKind) {
     setAttachmentMenuOpen(false);
     if (kind === 'file') fileInputRef.current?.click();
@@ -93,6 +98,7 @@ export function useComposerController() {
     selectMicMode,
     setAttachmentMenuOpen,
     setInput,
+    stopVoicePlayback,
     toggleMic,
     toggleMicMode,
     voiceNotice,

@@ -150,9 +150,9 @@ conversation lists, sidebars, top banners, or always-visible debug panels.
 
 ## Drawers And Diagnostics
 
-Settings and Activity slide over the chat from the right and do not push the
-thread layout or reset its scroll position. On small screens, drawers cover the
-full viewport.
+Activity slides over the chat from the left. Settings slides over the chat from
+the right. Neither drawer pushes the thread layout or resets its scroll
+position. On small screens, drawers cover the full viewport.
 
 Activity is the event-bus transparency surface. It is redacted and secondary by
 design. It shows chronological hub events with filters for:

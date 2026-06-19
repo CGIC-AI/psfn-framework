@@ -1,0 +1,27 @@
+[Unit]
+Description=PSFN Companion UI LAN Dev Server
+After=network-online.target psfn-satellite-hub.service
+Wants=network-online.target
+Requires=psfn-satellite-hub.service
+RequiresMountsFor=/home/psfn/psfn-framework-source /home/psfn/psfn-satellite-hub
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=psfn
+Group=psfn
+WorkingDirectory=/home/psfn/psfn-framework-source/companion-ui
+Environment=HOME=/home/psfn
+Environment=PATH=/opt/node-v22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/node-v22/bin/npm run dev -- --host 0.0.0.0 --port 5173
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=psfn-companion-ui
+
+[Install]
+WantedBy=multi-user.target

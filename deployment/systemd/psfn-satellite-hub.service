@@ -1,0 +1,27 @@
+[Unit]
+Description=PSFN Satellite Hub
+After=network-online.target psfn.service
+Wants=network-online.target
+Requires=psfn.service
+RequiresMountsFor=/home/psfn/psfn-satellite-hub /home/psfn/psfn-framework-source /var/lib/psfn/runtime
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=psfn
+Group=psfn
+WorkingDirectory=/home/psfn/psfn-satellite-hub
+Environment=HOME=/home/psfn
+Environment=PATH=/opt/node-v22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/node-v22/bin/npm run hub:ts
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=psfn-satellite-hub
+
+[Install]
+WantedBy=multi-user.target

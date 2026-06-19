@@ -1,43 +1,87 @@
 import {
+  Activity,
   AlertTriangle,
-  CircleStop,
+  Camera,
   ChevronDown,
-  ChevronRight,
-  FileX2,
+  CircleStop,
+  FileText,
+  Image,
   Loader2,
   LockKeyhole,
+  Menu,
+  Mic,
+  Paperclip,
   Plug,
+  Plus,
+  Radio,
   Send,
-  Signal,
-  SignalZero,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Volume2,
+  Wifi,
+  WifiOff,
+  X,
 } from 'lucide-react';
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  FormEvent,
+  KeyboardEvent,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
 } from '../lib/api/auth.js';
 import { SatelliteHubClient } from '../lib/api/client.js';
+import { deriveApprovalPanelState } from '../lib/approvals.js';
+import { deriveArtifactShelfState } from '../lib/artifacts.js';
 import {
   createInitialHubStreamState,
   HubStreamStore,
   type HubStreamState,
 } from '../lib/stream/hub-stream.js';
-import { derivePresenceState, formatElapsed } from '../lib/presence.js';
 import { deriveOperationalTraces, type OperationalTrace } from '../lib/traces.js';
-import { deriveApprovalPanelState } from '../lib/approvals.js';
-import { deriveArtifactShelfState } from '../lib/artifacts.js';
 import { readCompanionUiRuntimeConfig } from './config.js';
+
+type OverlayDrawer = 'activity' | 'settings' | null;
+type ActivityFilter = 'all' | 'messages' | 'artifacts' | 'approvals' | 'voice' | 'tools' | 'system' | 'errors';
+type MicMode = 'dictation' | 'voice';
+type SpriteState = 'attentive' | 'speaking' | 'listening' | 'thinking' | 'tool_use' | 'error';
+
+const ACTIVITY_FILTERS: ActivityFilter[] = [
+  'all',
+  'messages',
+  'artifacts',
+  'approvals',
+  'voice',
+  'tools',
+  'system',
+  'errors',
+];
 
 export function App() {
   const [configError, setConfigError] = useState<string | null>(null);
-  const [hubUrl, setHubUrl] = useState<string>('');
+  const [hubUrl, setHubUrl] = useState('');
   const [sessionId, setSessionId] = useState('psfn-satellite-mobile-chat-app');
   const [channelId, setChannelId] = useState('');
   const [streamState, setStreamState] = useState<HubStreamState>(() => createInitialHubStreamState());
   const [input, setInput] = useState('');
   const [connecting, setConnecting] = useState(false);
-  const [nowMs, setNowMs] = useState(Date.now());
-  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [overlay, setOverlay] = useState<OverlayDrawer>(null);
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [micMode, setMicMode] = useState<MicMode>('dictation');
+  const [micActive, setMicActive] = useState(false);
+  const [autoConnect, setAutoConnect] = useState(false);
+  const [autoReconnect, setAutoReconnect] = useState('exponential');
+  const [spriteEnabled, setSpriteEnabled] = useState(true);
+  const [spriteAnimations, setSpriteAnimations] = useState(true);
   const storeRef = useRef<HubStreamStore | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const threadEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     try {
@@ -54,9 +98,31 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
+    const inputElement = inputRef.current;
+    if (!inputElement) return;
+    inputElement.style.height = 'auto';
+    inputElement.style.height = `${Math.min(inputElement.scrollHeight, 160)}px`;
+  }, [input]);
+
+  useEffect(() => {
+    threadEndRef.current?.scrollIntoView({ block: 'end' });
+  }, [streamState.messages.length, streamState.liveAssistant?.content]);
+
+  useEffect(() => {
+    if (overlay === null) return undefined;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOverlay(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [overlay]);
+
+  useEffect(() => {
+    if (!autoConnect || !hubUrl || storeRef.current || connecting) return;
+    void connect();
+  }, [autoConnect, connecting, hubUrl]);
 
   const identityLabel = useMemo(() => {
     const companion = streamState.session?.identity?.companion?.name;
@@ -65,6 +131,17 @@ export function App() {
     if (companion) return companion;
     return PSFN_SATELLITE_MOBILE_CHAT_APP_NAME;
   }, [streamState.session?.identity?.companion?.name, streamState.session?.identity?.user?.name]);
+
+  const traces = useMemo(() => deriveOperationalTraces(streamState), [streamState]);
+  const filteredTraces = useMemo(
+    () => traces.filter((trace) => traceMatchesFilter(trace, activityFilter)),
+    [activityFilter, traces],
+  );
+  const approvals = useMemo(() => deriveApprovalPanelState(streamState), [streamState]);
+  const artifacts = useMemo(() => deriveArtifactShelfState(streamState), [streamState]);
+  const canSend = streamState.connection === 'ready' || streamState.connection === 'connected';
+  const connectionTone = getConnectionTone(streamState.connection, connecting);
+  const spriteState = deriveSpriteState(streamState, traces, micActive, connecting);
 
   async function connect() {
     if (!hubUrl || connecting) return;
@@ -80,6 +157,7 @@ export function App() {
     store.subscribe(setStreamState);
     try {
       await store.connect();
+      setConfigError(null);
     } catch (error) {
       setStreamState((current) => ({
         ...current,
@@ -105,251 +183,694 @@ export function App() {
     storeRef.current?.interrupt();
   }
 
-  function sendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  function sendMessage(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
     const text = input.trim();
     if (!text) return;
     storeRef.current?.sendUserText(text, { interrupt: true });
     setInput('');
   }
 
-  const canSend = streamState.connection === 'ready' || streamState.connection === 'connected';
-  const presence = derivePresenceState(streamState, nowMs);
-  const traces = useMemo(() => deriveOperationalTraces(streamState), [streamState]);
-  const approvals = useMemo(() => deriveApprovalPanelState(streamState), [streamState]);
-  const artifacts = useMemo(() => deriveArtifactShelfState(streamState), [streamState]);
-  const connectionTone = streamState.connection === 'ready'
-    ? 'good'
-    : streamState.connection === 'failed' || streamState.connection === 'disconnected'
-      ? 'bad'
-      : 'wait';
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
+    event.preventDefault();
+    sendMessage();
+  }
+
+  function toggleMic() {
+    setMicActive((value) => !value);
+  }
+
+  function switchMicMode() {
+    setMicMode((value) => (value === 'dictation' ? 'voice' : 'dictation'));
+    setMicActive(false);
+  }
 
   return (
     <main className="app-shell">
-      <section className="topbar" aria-label="Satellite connection">
-        <div>
-          <p className="eyebrow">Satellite</p>
-          <h1>{identityLabel}</h1>
-        </div>
-        <StatusPill tone={connectionTone} label={streamState.connection} />
-      </section>
+      <div className="ornament ornament-left" aria-hidden />
+      <div className="ornament ornament-right" aria-hidden />
 
-      <section className="setup-panel" aria-label="Connection settings">
-        <label>
-          <span>Hub WS</span>
-          <input
-            value={hubUrl}
-            onChange={(event) => setHubUrl(event.target.value)}
-            placeholder="ws://hub.local:8787/"
-            inputMode="url"
-          />
-        </label>
-        <label>
-          <span>Session</span>
-          <input value={sessionId} onChange={(event) => setSessionId(event.target.value)} />
-        </label>
-        <label>
-          <span>Channel</span>
-          <input value={channelId} onChange={(event) => setChannelId(event.target.value)} placeholder="optional" />
-        </label>
-        <div className="setup-actions">
-          <button className="primary" type="button" onClick={() => void connect()} disabled={!hubUrl || connecting}>
-            {connecting ? <Loader2 aria-hidden className="spin" /> : <Plug aria-hidden />}
-            Connect
-          </button>
-          <button type="button" onClick={disconnect} disabled={streamState.connection === 'idle'}>
-            <CircleStop aria-hidden />
-            Close
-          </button>
-        </div>
-      </section>
+      <button
+        className="floating-button activity-button"
+        type="button"
+        onClick={() => setOverlay('activity')}
+        aria-label="Open activity and events"
+      >
+        <Menu aria-hidden />
+      </button>
 
-      {(configError || streamState.failure) && (
-        <section className="failure-band" role="status">
-          <AlertTriangle aria-hidden />
-          <span>{streamState.failure?.message ?? configError}</span>
-        </section>
-      )}
+      <div className="floating-status" aria-label={`Connection ${streamState.connection}`}>
+        {connectionTone === 'bad' ? <WifiOff aria-hidden /> : <Wifi aria-hidden />}
+        <span>{connecting ? 'Connecting' : streamState.connection}</span>
+      </div>
 
-      <section className="chat-pane" aria-label="Chat">
-        <div className="messages">
+      <button
+        className="floating-button settings-button"
+        type="button"
+        onClick={() => setOverlay('settings')}
+        aria-label="Open settings"
+      >
+        <Settings aria-hidden />
+      </button>
+
+      <section className="thread-viewport" aria-label="Companion chat">
+        <div className="message-list" aria-live="polite">
           {streamState.messages.length === 0 && !streamState.liveAssistant ? (
-            <div className="empty-state">
-              {streamState.connection === 'ready' ? <Signal aria-hidden /> : <SignalZero aria-hidden />}
-              <p>{streamState.connection === 'ready' ? 'Ready' : 'Disconnected'}</p>
+            <div className="thread-empty">
+              <Sparkles aria-hidden />
+              <p>{streamState.connection === 'ready' ? 'Ready for the thread.' : 'Open settings to connect.'}</p>
             </div>
           ) : (
             <>
               {streamState.messages.map((message) => (
-                <article className={`message ${message.role}`} key={message.id}>
-                  <p>{message.content}</p>
+                <article className={`message-row ${message.role}`} key={message.id}>
+                  {message.role === 'assistant' && <AvatarMark />}
+                  <div className="message-bubble">
+                    <p>{message.content}</p>
+                  </div>
                 </article>
               ))}
               {streamState.liveAssistant && (
-                <article className="message assistant live">
-                  <p>{streamState.liveAssistant.content}</p>
+                <article className="message-row assistant live">
+                  <AvatarMark />
+                  <div className="message-bubble">
+                    <p>{streamState.liveAssistant.content}</p>
+                  </div>
                 </article>
               )}
             </>
           )}
+          <div ref={threadEndRef} />
         </div>
-
-        <ActivityStrip presence={presence} eventCount={streamState.sequence} status={streamState.status} />
-        <TraceDrawer open={drawerOpen} traces={traces} onToggle={() => setDrawerOpen((value) => !value)} />
-        <ApprovalPanel state={approvals} />
-        <ArtifactShelf state={artifacts} />
-
-        <form className="composer" onSubmit={sendMessage}>
-          <button type="button" onClick={interrupt} disabled={!canSend} title="Interrupt">
-            <CircleStop aria-hidden />
-          </button>
-          <textarea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            placeholder="Message"
-            rows={1}
-            disabled={!canSend}
-          />
-          <button className="primary icon-only" type="submit" disabled={!canSend || !input.trim()} title="Send">
-            <Send aria-hidden />
-          </button>
-        </form>
       </section>
+
+      {spriteEnabled && (
+        <CompanionSprite
+          state={spriteState}
+          animated={spriteAnimations}
+          label={identityLabel}
+        />
+      )}
+
+      <ToastLayer
+        approvals={approvals}
+        artifacts={artifacts}
+        error={streamState.failure?.message ?? configError}
+      />
+
+      <form className="composer-shell" onSubmit={sendMessage}>
+        <div className="composer-menu-wrap">
+          <button
+            className="composer-button"
+            type="button"
+            onClick={() => setAttachmentMenuOpen((value) => !value)}
+            aria-expanded={attachmentMenuOpen}
+            aria-label="Open attachment menu"
+          >
+            <Plus aria-hidden />
+          </button>
+          {attachmentMenuOpen && <AttachmentMenu />}
+        </div>
+        <textarea
+          ref={inputRef}
+          value={input}
+          onChange={(event) => setInput(event.target.value)}
+          onKeyDown={handleComposerKeyDown}
+          placeholder="Message your companion..."
+          rows={1}
+          disabled={!canSend}
+          aria-label="Message your companion"
+        />
+        <div className="mic-control">
+          <button
+            className={`composer-button mic-button ${micActive ? 'active' : ''} ${micMode}`}
+            type="button"
+            onClick={toggleMic}
+            title={micMode === 'dictation' ? 'Dictation' : 'Voice chat'}
+            aria-label={micMode === 'dictation' ? 'Toggle dictation' : 'Toggle voice chat'}
+          >
+            <Mic aria-hidden />
+          </button>
+          <button className="mic-mode" type="button" onClick={switchMicMode}>
+            {micMode === 'dictation' ? 'Dictation' : 'Voice'}
+          </button>
+        </div>
+        <button
+          className="send-button"
+          type="submit"
+          disabled={!canSend || !input.trim()}
+          aria-label="Send message"
+        >
+          <Send aria-hidden />
+        </button>
+      </form>
+
+      {overlay && (
+        <OverlayFrame onClose={() => setOverlay(null)}>
+          {overlay === 'settings' ? (
+            <SettingsDrawer
+              autoConnect={autoConnect}
+              autoReconnect={autoReconnect}
+              channelId={channelId}
+              connecting={connecting}
+              hubUrl={hubUrl}
+              micMode={micMode}
+              sessionId={sessionId}
+              spriteAnimations={spriteAnimations}
+              spriteEnabled={spriteEnabled}
+              streamState={streamState}
+              onAutoConnectChange={setAutoConnect}
+              onAutoReconnectChange={setAutoReconnect}
+              onChannelIdChange={setChannelId}
+              onClose={() => setOverlay(null)}
+              onConnect={() => void connect()}
+              onDisconnect={disconnect}
+              onHubUrlChange={setHubUrl}
+              onMicModeChange={setMicMode}
+              onSessionIdChange={setSessionId}
+              onSpriteAnimationsChange={setSpriteAnimations}
+              onSpriteEnabledChange={setSpriteEnabled}
+            />
+          ) : (
+            <ActivityDrawer
+              filter={activityFilter}
+              onClose={() => setOverlay(null)}
+              onFilterChange={setActivityFilter}
+              traces={filteredTraces}
+              totalCount={traces.length}
+            />
+          )}
+        </OverlayFrame>
+      )}
+
+      <button
+        className="interrupt-fab"
+        type="button"
+        onClick={interrupt}
+        disabled={!canSend}
+        aria-label="Interrupt companion"
+      >
+        <CircleStop aria-hidden />
+      </button>
     </main>
   );
 }
 
-function PresenceItem({ label, value }: { label: string; value: string }) {
+function OverlayFrame({
+  children,
+  onClose,
+}: {
+  children: ReactNode;
+  onClose: () => void;
+}) {
   return (
-    <div>
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <div className="overlay-root" role="presentation">
+      <button className="overlay-backdrop" type="button" onClick={onClose} aria-label="Close overlay" />
+      {children}
     </div>
   );
 }
 
-function ActivityStrip({
-  presence,
-  eventCount,
-  status,
+function SettingsDrawer({
+  autoConnect,
+  autoReconnect,
+  channelId,
+  connecting,
+  hubUrl,
+  micMode,
+  sessionId,
+  spriteAnimations,
+  spriteEnabled,
+  streamState,
+  onAutoConnectChange,
+  onAutoReconnectChange,
+  onChannelIdChange,
+  onClose,
+  onConnect,
+  onDisconnect,
+  onHubUrlChange,
+  onMicModeChange,
+  onSessionIdChange,
+  onSpriteAnimationsChange,
+  onSpriteEnabledChange,
 }: {
-  presence: ReturnType<typeof derivePresenceState>;
-  eventCount: number;
-  status: string | null;
+  autoConnect: boolean;
+  autoReconnect: string;
+  channelId: string;
+  connecting: boolean;
+  hubUrl: string;
+  micMode: MicMode;
+  sessionId: string;
+  spriteAnimations: boolean;
+  spriteEnabled: boolean;
+  streamState: HubStreamState;
+  onAutoConnectChange: (value: boolean) => void;
+  onAutoReconnectChange: (value: string) => void;
+  onChannelIdChange: (value: string) => void;
+  onClose: () => void;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onHubUrlChange: (value: string) => void;
+  onMicModeChange: (value: MicMode) => void;
+  onSessionIdChange: (value: string) => void;
+  onSpriteAnimationsChange: (value: boolean) => void;
+  onSpriteEnabledChange: (value: boolean) => void;
 }) {
   return (
-    <section className={`activity-strip ${presence.failed ? 'failed' : ''}`} aria-label="Activity">
-      <PresenceItem label="Connection" value={presence.connection} />
-      <PresenceItem label="Phase" value={presence.phase} />
-      <PresenceItem label="Operation" value={presence.operationClass} />
-      <PresenceItem label="Elapsed" value={formatElapsed(presence.elapsedMs)} />
-      <PresenceItem label="Input" value={presence.inputExpected} />
-      <PresenceItem label="Emanation" value={presence.satelliteId ?? presence.emanation} />
-      <PresenceItem label="Status" value={status ?? presence.silence} />
-      <PresenceItem label="Events" value={String(eventCount)} />
-    </section>
+    <aside className="overlay-drawer" aria-label="Settings">
+      <DrawerHeader icon={<Settings aria-hidden />} title="Settings" onClose={onClose} />
+      <div className="drawer-content">
+        <section className="settings-section">
+          <h2>Connection</h2>
+          <LabelledInput label="Hub URL" value={hubUrl} onChange={onHubUrlChange} placeholder="ws://hub.local:8787/" />
+          <LabelledInput label="Session" value={sessionId} onChange={onSessionIdChange} />
+          <LabelledInput label="Channel" value={channelId} onChange={onChannelIdChange} placeholder="optional" />
+          <ToggleRow label="Auto-connect on start" checked={autoConnect} onChange={onAutoConnectChange} />
+          <label className="field-label">
+            <span>Reconnect behavior</span>
+            <select value={autoReconnect} onChange={(event) => onAutoReconnectChange(event.target.value)}>
+              <option value="exponential">Exponential backoff</option>
+              <option value="manual">Manual only</option>
+            </select>
+          </label>
+          <div className="drawer-actions">
+            <button className="primary-action" type="button" onClick={onConnect} disabled={!hubUrl || connecting}>
+              {connecting ? <Loader2 aria-hidden className="spin" /> : <Plug aria-hidden />}
+              Connect
+            </button>
+            <button type="button" onClick={onDisconnect} disabled={streamState.connection === 'idle'}>
+              <CircleStop aria-hidden />
+              Close
+            </button>
+          </div>
+        </section>
+
+        <section className="settings-section">
+          <h2>Audio</h2>
+          <label className="field-label">
+            <span>Microphone input</span>
+            <select defaultValue="default">
+              <option value="default">Default microphone</option>
+            </select>
+          </label>
+          <label className="field-label">
+            <span>Speaker output</span>
+            <select defaultValue="default">
+              <option value="default">Default speakers</option>
+            </select>
+          </label>
+          <SegmentedControl
+            label="Mic mode"
+            options={[
+              { label: 'Dictation', value: 'dictation' },
+              { label: 'Voice', value: 'voice' },
+            ]}
+            value={micMode}
+            onChange={onMicModeChange}
+          />
+          <label className="field-label">
+            <span>Voice message behavior</span>
+            <select defaultValue="text-visible">
+              <option value="text-visible">Text remains visible</option>
+            </select>
+          </label>
+        </section>
+
+        <section className="settings-section">
+          <h2>Notifications</h2>
+          <ToggleRow label="Approval request popups" checked onChange={() => undefined} />
+          <ToggleRow label="Artifact created toasts" checked onChange={() => undefined} />
+          <ToggleRow label="Sound effects" checked={false} onChange={() => undefined} />
+          <ToggleRow label="Voice playback" checked={micMode === 'voice'} onChange={() => undefined} />
+        </section>
+
+        <section className="settings-section">
+          <h2>Companion</h2>
+          <ToggleRow label="Sprite enabled" checked={spriteEnabled} onChange={onSpriteEnabledChange} />
+          <label className="field-label">
+            <span>Sprite emotion source</span>
+            <select defaultValue="stream">
+              <option value="stream">Local stream state</option>
+            </select>
+          </label>
+          <ToggleRow label="Animation enabled" checked={spriteAnimations} onChange={onSpriteAnimationsChange} />
+          <ToggleRow label="Speaking animation enabled" checked={spriteAnimations} onChange={onSpriteAnimationsChange} />
+          <ToggleRow label="Tool-use animation enabled" checked={spriteAnimations} onChange={onSpriteAnimationsChange} />
+        </section>
+
+        <details className="settings-section advanced-section">
+          <summary>
+            <span>Advanced</span>
+            <ChevronDown aria-hidden />
+          </summary>
+          <p>Activity, diagnostics, and raw protocol inspection live in the Activity drawer.</p>
+          <p>Raw logs stay redacted; transcript content is not copied into diagnostics.</p>
+        </details>
+      </div>
+    </aside>
   );
 }
 
-function TraceDrawer({
-  open,
+function ActivityDrawer({
+  filter,
+  onClose,
+  onFilterChange,
   traces,
-  onToggle,
+  totalCount,
 }: {
-  open: boolean;
+  filter: ActivityFilter;
+  onClose: () => void;
+  onFilterChange: (filter: ActivityFilter) => void;
   traces: OperationalTrace[];
-  onToggle: () => void;
+  totalCount: number;
 }) {
-  const latest = traces.at(-1);
   return (
-    <section className="trace-drawer" aria-label="Operational traces">
-      <button type="button" onClick={onToggle} className="trace-toggle" aria-expanded={open}>
-        {open ? <ChevronDown aria-hidden /> : <ChevronRight aria-hidden />}
-        <span>Activity</span>
-        <strong>{latest ? latest.operationClass : 'none'}</strong>
-      </button>
-      {open && (
-        <div className="trace-list">
-          {traces.length === 0 ? (
-            <p className="trace-empty">No hub events</p>
-          ) : traces.slice(-12).map((trace) => (
-            <TraceRow trace={trace} key={trace.id} />
+    <aside className="overlay-drawer activity-drawer" aria-label="Activity and events">
+      <DrawerHeader icon={<Activity aria-hidden />} title="Activity" onClose={onClose} />
+      <div className="drawer-content">
+        <div className="filter-bar" role="tablist" aria-label="Activity filters">
+          {ACTIVITY_FILTERS.map((option) => (
+            <button
+              className={filter === option ? 'active' : ''}
+              type="button"
+              role="tab"
+              aria-selected={filter === option}
+              onClick={() => onFilterChange(option)}
+              key={option}
+            >
+              {option}
+            </button>
           ))}
         </div>
-      )}
-    </section>
+        <div className="activity-count">
+          Showing {traces.length} of {totalCount}
+        </div>
+        <div className="event-list">
+          {traces.length === 0 ? (
+            <p className="drawer-empty">No matching events</p>
+          ) : (
+            traces.slice().reverse().map((trace) => <TraceRow trace={trace} key={trace.id} />)
+          )}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function DrawerHeader({
+  icon,
+  onClose,
+  title,
+}: {
+  icon: ReactNode;
+  onClose: () => void;
+  title: string;
+}) {
+  return (
+    <header className="drawer-header">
+      <div>
+        {icon}
+        <h1>{title}</h1>
+      </div>
+      <button type="button" onClick={onClose} aria-label={`Close ${title}`}>
+        <X aria-hidden />
+      </button>
+    </header>
   );
 }
 
 function TraceRow({ trace }: { trace: OperationalTrace }) {
   return (
-    <article className={`trace-row ${trace.status}`}>
-      <div>
-        <strong>{trace.operationClass}</strong>
-        <span>{trace.summary}</span>
-      </div>
-      <dl>
+    <article className={`event-row ${trace.status}`}>
+      <div className="event-icon">{iconForTrace(trace)}</div>
+      <div className="event-body">
         <div>
-          <dt>Seq</dt>
-          <dd>{trace.sequence}</dd>
+          <strong>{titleForTrace(trace)}</strong>
+          <time>{formatClock(trace.receivedAt)}</time>
         </div>
-        <div>
-          <dt>Type</dt>
-          <dd>{trace.type}</dd>
-        </div>
-        {Object.entries(trace.metadata).map(([key, value]) => (
-          <div key={key}>
-            <dt>{key}</dt>
-            <dd>{String(value)}</dd>
+        <p>{trace.summary}</p>
+        <dl>
+          <div>
+            <dt>Type</dt>
+            <dd>{trace.type}</dd>
           </div>
-        ))}
-      </dl>
+          <div>
+            <dt>Seq</dt>
+            <dd>{trace.sequence}</dd>
+          </div>
+          {Object.entries(trace.metadata).map(([key, value]) => (
+            <div key={key}>
+              <dt>{key}</dt>
+              <dd>{String(value)}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
     </article>
   );
 }
 
-function ApprovalPanel({ state }: { state: ReturnType<typeof deriveApprovalPanelState> }) {
+function ToastLayer({
+  approvals,
+  artifacts,
+  error,
+}: {
+  approvals: ReturnType<typeof deriveApprovalPanelState>;
+  artifacts: ReturnType<typeof deriveArtifactShelfState>;
+  error: string | null;
+}) {
+  const hasToasts = error || approvals.requests.length > 0 || artifacts.items.length > 0;
+  if (!hasToasts) return null;
+
   return (
-    <section className="approval-panel" aria-label="Approvals">
-      <div>
-        <LockKeyhole aria-hidden />
-        <strong>Approvals</strong>
-      </div>
-      {state.requests.length === 0 ? (
-        <p>{state.blockedReason ?? 'No pending approvals'}</p>
-      ) : (
-        state.requests.map((request) => (
-          <article className="approval-card" key={request.id}>
-            <strong>{request.title}</strong>
+    <section className="toast-layer" aria-label="Contextual updates">
+      {error && (
+        <article className="context-toast error-toast">
+          <AlertTriangle aria-hidden />
+          <div>
+            <strong>Connection issue</strong>
+            <p>{error}</p>
+          </div>
+        </article>
+      )}
+      {approvals.requests.map((request) => (
+        <article className="context-toast approval-toast" key={request.id}>
+          <LockKeyhole aria-hidden />
+          <div>
+            <strong>Approval Request</strong>
             <p>{request.redactedContext}</p>
-          </article>
-        ))
-      )}
+            <div className="toast-actions">
+              <button type="button" disabled>Deny</button>
+              <button type="button" disabled>Approve</button>
+            </div>
+          </div>
+        </article>
+      ))}
+      {artifacts.items.map((item) => (
+        <article className="context-toast artifact-toast" key={item.id}>
+          <FileText aria-hidden />
+          <div>
+            <strong>Artifact Created</strong>
+            <p>{item.label} · {item.mediaType}</p>
+            <div className="toast-actions">
+              <button type="button" disabled>View</button>
+            </div>
+          </div>
+        </article>
+      ))}
     </section>
   );
 }
 
-function ArtifactShelf({ state }: { state: ReturnType<typeof deriveArtifactShelfState> }) {
+function CompanionSprite({
+  animated,
+  label,
+  state,
+}: {
+  animated: boolean;
+  label: string;
+  state: SpriteState;
+}) {
   return (
-    <section className="artifact-shelf" aria-label="Artifacts">
-      <div>
-        <FileX2 aria-hidden />
-        <strong>Artifacts</strong>
-      </div>
-      {state.items.length === 0 ? (
-        <p>{state.blockedReason ?? 'No artifacts'}</p>
-      ) : (
-        state.items.map((item) => (
-          <article className="artifact-item" key={item.id}>
-            <strong>{item.label}</strong>
-            <p>{item.mediaType} · {item.provenance}</p>
-          </article>
-        ))
-      )}
-    </section>
+    <button
+      className={`companion-sprite ${state} ${animated ? 'animated' : 'static'}`}
+      type="button"
+      aria-label={`${label} sprite, ${state}`}
+      title={label}
+    >
+      <span className="sprite-aura" aria-hidden />
+      <span className="sprite-face" aria-hidden>
+        <span className="sprite-ear left" />
+        <span className="sprite-ear right" />
+        <span className="sprite-hair" />
+        <span className="sprite-eye left" />
+        <span className="sprite-eye right" />
+        <span className="sprite-mouth" />
+      </span>
+      <span className="sprite-state">{state.replace('_', ' ')}</span>
+    </button>
   );
 }
 
-function StatusPill({ tone, label }: { tone: 'good' | 'wait' | 'bad'; label: string }) {
-  return <div className={`status-pill ${tone}`}>{label}</div>;
+function AttachmentMenu() {
+  return (
+    <div className="attachment-menu" role="menu">
+      <button type="button" role="menuitem">
+        <Paperclip aria-hidden />
+        Upload file
+      </button>
+      <button type="button" role="menuitem">
+        <Image aria-hidden />
+        Upload image
+      </button>
+      <button type="button" role="menuitem">
+        <Camera aria-hidden />
+        Take photo
+      </button>
+    </div>
+  );
+}
+
+function LabelledInput({
+  label,
+  onChange,
+  placeholder,
+  value,
+}: {
+  label: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  value: string;
+}) {
+  return (
+    <label className="field-label">
+      <span>{label}</span>
+      <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+    </label>
+  );
+}
+
+function ToggleRow({
+  checked,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="toggle-row">
+      <span>{label}</span>
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+    </label>
+  );
+}
+
+function SegmentedControl<T extends string>({
+  label,
+  onChange,
+  options,
+  value,
+}: {
+  label: string;
+  onChange: (value: T) => void;
+  options: Array<{ label: string; value: T }>;
+  value: T;
+}) {
+  return (
+    <div className="segmented-field">
+      <span>{label}</span>
+      <div>
+        {options.map((option) => (
+          <button
+            className={value === option.value ? 'active' : ''}
+            type="button"
+            onClick={() => onChange(option.value)}
+            key={option.value}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AvatarMark() {
+  return (
+    <div className="avatar-mark" aria-hidden>
+      <Sparkles />
+    </div>
+  );
+}
+
+function traceMatchesFilter(trace: OperationalTrace, filter: ActivityFilter): boolean {
+  if (filter === 'all') return true;
+  const operation = trace.operationClass.toLowerCase();
+  const type = trace.type.toLowerCase();
+  switch (filter) {
+    case 'messages':
+      return type === 'message' || operation.includes('message');
+    case 'artifacts':
+      return operation.includes('artifact');
+    case 'approvals':
+      return operation.includes('approval');
+    case 'voice':
+      return operation.includes('relay_stt') || operation.includes('relay_tts') || type.includes('audio');
+    case 'tools':
+      return operation.includes('tool');
+    case 'system':
+      return operation.includes('hub') || operation.includes('heartbeat') || type === 'pong';
+    case 'errors':
+      return trace.status === 'failed' || type.includes('error');
+  }
+}
+
+function iconForTrace(trace: OperationalTrace) {
+  if (trace.status === 'failed') return <AlertTriangle aria-hidden />;
+  if (trace.operationClass.includes('message')) return <Radio aria-hidden />;
+  if (trace.operationClass.includes('relay')) return <Volume2 aria-hidden />;
+  if (trace.operationClass.includes('hub')) return <Wifi aria-hidden />;
+  return <ShieldCheck aria-hidden />;
+}
+
+function titleForTrace(trace: OperationalTrace): string {
+  if (trace.operationClass.includes('assistant_message')) return 'Message Received';
+  if (trace.operationClass.includes('user_message')) return 'Message Sent';
+  if (trace.operationClass.includes('relay_stt')) return 'Voice Transcript';
+  if (trace.operationClass.includes('relay_tts')) return 'Voice Playback';
+  if (trace.operationClass.includes('hub_error')) return 'Error';
+  if (trace.operationClass.includes('hub_session')) return 'Session Started';
+  if (trace.operationClass.includes('hub_handshake')) return 'Connected';
+  if (trace.operationClass.includes('hub_status')) return 'System';
+  return trace.operationClass.replaceAll('_', ' ');
+}
+
+function formatClock(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function getConnectionTone(connection: HubStreamState['connection'], connecting: boolean): 'good' | 'wait' | 'bad' {
+  if (connecting || connection === 'connecting') return 'wait';
+  if (connection === 'ready' || connection === 'connected') return 'good';
+  if (connection === 'failed' || connection === 'disconnected') return 'bad';
+  return 'wait';
+}
+
+function deriveSpriteState(
+  streamState: HubStreamState,
+  traces: OperationalTrace[],
+  micActive: boolean,
+  connecting: boolean,
+): SpriteState {
+  if (streamState.failure) return 'error';
+  if (micActive) return 'listening';
+  if (streamState.liveAssistant) return 'speaking';
+  if (connecting || streamState.connection === 'connecting') return 'thinking';
+  if (traces.at(-1)?.operationClass.includes('relay')) return 'tool_use';
+  return 'attentive';
 }

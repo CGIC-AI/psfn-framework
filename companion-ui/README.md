@@ -43,6 +43,10 @@ VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL=ws://hub.local:8787/
 Use `ws://` or `wss://`. The client rejects empty values and rejects admin API
 paths.
 
+The hub URL, session id, and optional channel id are edited in the in-app
+Settings drawer, opened from the floating gear button. They are not shown on
+the primary chat surface.
+
 The default satellite identity sent in `hello` is:
 
 ```text
@@ -127,16 +131,63 @@ Unknown hub message types fail closed during framing.
 
 ## Current UI Surfaces
 
-- Connection setup for hub websocket URL, session, and optional channel.
-- Streaming chat transcript with live assistant draft handling.
-- Presence strip for connection, phase, operation class, elapsed time, input
-  expectation, satellite identity, status, and event count.
-- Redacted activity drawer over hub events. It records metadata and redacts raw
-  transcript content.
-- Approval panel that fails closed until the hub exposes approval
-  request/decision messages.
-- Artifact shelf that fails closed until the hub exposes scoped artifact events
-  and read access.
+The primary screen is one continuous relationship thread. There are no
+conversation lists, sidebars, top banners, or always-visible debug panels.
+
+- Floating Activity button: opens the Activity / Events drawer.
+- Floating Settings button: opens connection, audio, notification, companion,
+  and advanced settings.
+- Tiny connection indicator: shows the current hub connection state without
+  becoming a header.
+- Message thread: renders user and assistant text messages, including live
+  assistant draft streaming.
+- Composer: one rounded surface with a plus button, multiline text input, mic
+  control, and send button.
+- Floating sprite: reflects high-level local state such as attentive, speaking,
+  listening, thinking, tool-use, or error.
+- Contextual toast layer: holds errors and any future approval/artifact cards
+  above the composer.
+
+## Drawers And Diagnostics
+
+Settings and Activity slide over the chat from the right and do not push the
+thread layout or reset its scroll position. On small screens, drawers cover the
+full viewport.
+
+Activity is the event-bus transparency surface. It is redacted and secondary by
+design. It shows chronological hub events with filters for:
+
+- All
+- Messages
+- Artifacts
+- Approvals
+- Voice
+- Tools
+- System
+- Errors
+
+Transcript content is not copied into raw diagnostics.
+
+## Composer Controls
+
+The plus button opens one attachment menu:
+
+- Upload file
+- Upload image
+- Take photo
+
+Selected files are staged as removable local-only cards above the composer. The
+current client does not send file payloads to the hub because the scoped
+artifact/file transport is not implemented here yet.
+
+The mic button defaults to Dictation and can toggle to Voice Chat. Both modes
+are compact composer states, not separate tabs. Text remains the canonical
+conversation record. Browser audio capture and TTS transport are shown
+fail-closed until the hub/client voice path is implemented.
+
+Approval and artifact UI is contextual only. It does not live as a permanent
+section on the main page. Until the hub exposes those protocol events, the
+client keeps them fail-closed.
 
 Open follow-up beads for those hub protocol gaps:
 

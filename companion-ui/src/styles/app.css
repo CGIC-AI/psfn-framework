@@ -405,6 +405,73 @@ button:focus-visible {
   background: transparent;
 }
 
+.hidden-file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.attachment-tray {
+  position: fixed;
+  left: 50%;
+  bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 88px);
+  transform: translateX(-50%);
+  z-index: 6;
+  width: min(calc(100vw - 2rem), 700px);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
+  gap: 0.55rem;
+}
+
+.pending-attachment {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.55rem;
+  border: 1px solid rgba(143, 187, 232, 0.42);
+  border-radius: 8px;
+  background: rgba(234, 244, 255, 0.94);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: blur(14px);
+}
+
+.pending-attachment > svg {
+  width: 1rem;
+  height: 1rem;
+  margin: auto;
+  color: #2f6da2;
+}
+
+.pending-attachment strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-attachment p {
+  margin: 0.1rem 0 0;
+  color: var(--color-muted);
+  font-size: 0.76rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.pending-attachment button {
+  width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(255, 253, 248, 0.78);
+}
+
 .mic-control {
   display: grid;
   justify-items: center;
@@ -487,6 +554,15 @@ button:focus-visible {
 
 .error-toast > svg {
   color: var(--color-error);
+}
+
+.voice-toast {
+  border-color: rgba(143, 187, 232, 0.42);
+  background: rgba(234, 244, 255, 0.96);
+}
+
+.voice-toast > svg {
+  color: #2f6da2;
 }
 
 .toast-actions {
@@ -1061,6 +1137,16 @@ button:focus-visible {
     bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 78px);
     width: calc(100vw - 1rem);
     grid-template-columns: 1fr;
+  }
+
+  .attachment-tray {
+    bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 78px);
+    width: calc(100vw - 1rem);
+    grid-template-columns: 1fr;
+  }
+
+  .toast-layer:has(+ .attachment-tray) {
+    bottom: calc(max(0.9rem, env(safe-area-inset-bottom)) + 146px);
   }
 
   .context-toast:not(:first-child) {

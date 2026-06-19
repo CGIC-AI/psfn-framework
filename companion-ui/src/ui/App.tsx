@@ -27,6 +27,7 @@ import {
   FormEvent,
   KeyboardEvent,
   type ReactNode,
+  ChangeEvent,
   useEffect,
   useMemo,
   useRef,
@@ -50,6 +51,15 @@ type OverlayDrawer = 'activity' | 'settings' | null;
 type ActivityFilter = 'all' | 'messages' | 'artifacts' | 'approvals' | 'voice' | 'tools' | 'system' | 'errors';
 type MicMode = 'dictation' | 'voice';
 type SpriteState = 'attentive' | 'speaking' | 'listening' | 'thinking' | 'tool_use' | 'error';
+type AttachmentKind = 'file' | 'image' | 'camera';
+
+interface PendingAttachment {
+  id: string;
+  kind: AttachmentKind;
+  name: string;
+  mediaType: string;
+  size: number;
+}
 
 const ACTIVITY_FILTERS: ActivityFilter[] = [
   'all',
@@ -79,9 +89,14 @@ export function App() {
   const [autoReconnect, setAutoReconnect] = useState('exponential');
   const [spriteEnabled, setSpriteEnabled] = useState(true);
   const [spriteAnimations, setSpriteAnimations] = useState(true);
+  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
   const storeRef = useRef<HubStreamStore | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     try {
@@ -198,12 +213,46 @@ export function App() {
   }
 
   function toggleMic() {
-    setMicActive((value) => !value);
+    setMicActive((value) => {
+      const next = !value;
+      setVoiceNotice(next
+        ? `${micMode === 'dictation' ? 'Dictation' : 'Voice chat'} capture is selected. Browser audio capture is not wired to the hub yet, so text remains the source of truth.`
+        : null);
+      return next;
+    });
   }
 
   function switchMicMode() {
     setMicMode((value) => (value === 'dictation' ? 'voice' : 'dictation'));
     setMicActive(false);
+    setVoiceNotice(null);
+  }
+
+  function openAttachmentPicker(kind: AttachmentKind) {
+    setAttachmentMenuOpen(false);
+    if (kind === 'file') fileInputRef.current?.click();
+    if (kind === 'image') imageInputRef.current?.click();
+    if (kind === 'camera') cameraInputRef.current?.click();
+  }
+
+  function handleAttachmentFiles(event: ChangeEvent<HTMLInputElement>, kind: AttachmentKind) {
+    const files = Array.from(event.target.files ?? []);
+    if (files.length === 0) return;
+    setPendingAttachments((current) => [
+      ...current,
+      ...files.map((file) => ({
+        id: `${kind}:${file.name}:${file.size}:${file.lastModified}:${crypto.randomUUID()}`,
+        kind,
+        name: file.name,
+        mediaType: file.type || 'application/octet-stream',
+        size: file.size,
+      })),
+    ]);
+    event.target.value = '';
+  }
+
+  function removeAttachment(id: string) {
+    setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id));
   }
 
   return (
@@ -277,7 +326,12 @@ export function App() {
         approvals={approvals}
         artifacts={artifacts}
         error={streamState.failure?.message ?? configError}
+        voiceNotice={voiceNotice}
       />
+
+      {pendingAttachments.length > 0 && (
+        <AttachmentTray attachments={pendingAttachments} onRemove={removeAttachment} />
+      )}
 
       <form className="composer-shell" onSubmit={sendMessage}>
         <div className="composer-menu-wrap">
@@ -290,7 +344,30 @@ export function App() {
           >
             <Plus aria-hidden />
           </button>
-          {attachmentMenuOpen && <AttachmentMenu />}
+          {attachmentMenuOpen && <AttachmentMenu onPick={openAttachmentPicker} />}
+          <input
+            ref={fileInputRef}
+            className="hidden-file-input"
+            type="file"
+            multiple
+            onChange={(event) => handleAttachmentFiles(event, 'file')}
+          />
+          <input
+            ref={imageInputRef}
+            className="hidden-file-input"
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={(event) => handleAttachmentFiles(event, 'image')}
+          />
+          <input
+            ref={cameraInputRef}
+            className="hidden-file-input"
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={(event) => handleAttachmentFiles(event, 'camera')}
+          />
         </div>
         <textarea
           ref={inputRef}
@@ -635,16 +712,27 @@ function ToastLayer({
   approvals,
   artifacts,
   error,
+  voiceNotice,
 }: {
   approvals: ReturnType<typeof deriveApprovalPanelState>;
   artifacts: ReturnType<typeof deriveArtifactShelfState>;
   error: string | null;
+  voiceNotice: string | null;
 }) {
-  const hasToasts = error || approvals.requests.length > 0 || artifacts.items.length > 0;
+  const hasToasts = error || voiceNotice || approvals.requests.length > 0 || artifacts.items.length > 0;
   if (!hasToasts) return null;
 
   return (
     <section className="toast-layer" aria-label="Contextual updates">
+      {voiceNotice && (
+        <article className="context-toast voice-toast">
+          <Mic aria-hidden />
+          <div>
+            <strong>Voice Mode</strong>
+            <p>{voiceNotice}</p>
+          </div>
+        </article>
+      )}
       {error && (
         <article className="context-toast error-toast">
           <AlertTriangle aria-hidden />
@@ -683,6 +771,31 @@ function ToastLayer({
   );
 }
 
+function AttachmentTray({
+  attachments,
+  onRemove,
+}: {
+  attachments: PendingAttachment[];
+  onRemove: (id: string) => void;
+}) {
+  return (
+    <section className="attachment-tray" aria-label="Pending attachments">
+      {attachments.map((attachment) => (
+        <article className="pending-attachment" key={attachment.id}>
+          {attachment.kind === 'file' ? <Paperclip aria-hidden /> : <Image aria-hidden />}
+          <div>
+            <strong>{attachment.name}</strong>
+            <p>{attachment.mediaType} · {formatFileSize(attachment.size)} · local only</p>
+          </div>
+          <button type="button" onClick={() => onRemove(attachment.id)} aria-label={`Remove ${attachment.name}`}>
+            <X aria-hidden />
+          </button>
+        </article>
+      ))}
+    </section>
+  );
+}
+
 function CompanionSprite({
   animated,
   label,
@@ -713,18 +826,18 @@ function CompanionSprite({
   );
 }
 
-function AttachmentMenu() {
+function AttachmentMenu({ onPick }: { onPick: (kind: AttachmentKind) => void }) {
   return (
     <div className="attachment-menu" role="menu">
-      <button type="button" role="menuitem">
+      <button type="button" role="menuitem" onClick={() => onPick('file')}>
         <Paperclip aria-hidden />
         Upload file
       </button>
-      <button type="button" role="menuitem">
+      <button type="button" role="menuitem" onClick={() => onPick('image')}>
         <Image aria-hidden />
         Upload image
       </button>
-      <button type="button" role="menuitem">
+      <button type="button" role="menuitem" onClick={() => onPick('camera')}>
         <Camera aria-hidden />
         Take photo
       </button>
@@ -852,6 +965,14 @@ function formatClock(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '';
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  if (kb < 1024) return `${kb.toFixed(kb >= 10 ? 0 : 1)} KB`;
+  const mb = kb / 1024;
+  return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
 }
 
 function getConnectionTone(connection: HubStreamState['connection'], connecting: boolean): 'good' | 'wait' | 'bad' {

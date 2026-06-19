@@ -1,18 +1,11 @@
 import {
   CircleStop,
   Menu,
-  Mic,
-  Plus,
-  Send,
   Settings,
-  Sparkles,
   Wifi,
   WifiOff,
 } from 'lucide-react';
 import {
-  type ChangeEvent,
-  type FormEvent,
-  type KeyboardEvent,
   useEffect,
   useMemo,
   useRef,
@@ -31,11 +24,14 @@ import {
 } from '../lib/stream/hub-stream.js';
 import { deriveOperationalTraces } from '../lib/traces.js';
 import { ActivityDrawer, traceMatchesFilter } from './activity-drawer.js';
-import { AvatarMark, CompanionSprite, deriveSpriteState } from './companion-sprite.js';
-import { AttachmentMenu, AttachmentTray, ToastLayer } from './context-layers.js';
+import { CompanionSprite, deriveSpriteState } from './companion-sprite.js';
+import { Composer } from './composer.js';
+import { useComposerController } from './composer-controller.js';
+import { AttachmentTray, ToastLayer } from './context-layers.js';
 import { OverlayFrame } from './overlay-drawer.js';
 import { SettingsDrawer } from './settings-drawer.js';
-import type { ActivityFilter, AttachmentKind, MicMode, OverlayDrawer, PendingAttachment } from './types.js';
+import { ThreadView } from './thread-view.js';
+import type { ActivityFilter, OverlayDrawer } from './types.js';
 import { readCompanionUiRuntimeConfig } from './config.js';
 
 export function App() {
@@ -44,25 +40,15 @@ export function App() {
   const [sessionId, setSessionId] = useState('psfn-satellite-mobile-chat-app');
   const [channelId, setChannelId] = useState('');
   const [streamState, setStreamState] = useState<HubStreamState>(() => createInitialHubStreamState());
-  const [input, setInput] = useState('');
   const [connecting, setConnecting] = useState(false);
   const [overlay, setOverlay] = useState<OverlayDrawer>(null);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
-  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
-  const [micMode, setMicMode] = useState<MicMode>('dictation');
-  const [micActive, setMicActive] = useState(false);
   const [autoConnect, setAutoConnect] = useState(false);
   const [autoReconnect, setAutoReconnect] = useState('exponential');
   const [spriteEnabled, setSpriteEnabled] = useState(true);
   const [spriteAnimations, setSpriteAnimations] = useState(true);
-  const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
-  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  const composer = useComposerController();
   const storeRef = useRef<HubStreamStore | null>(null);
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const threadEndRef = useRef<HTMLDivElement | null>(null);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const imageInputRef = useRef<HTMLInputElement | null>(null);
-  const cameraInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     try {
@@ -77,17 +63,6 @@ export function App() {
       storeRef.current = null;
     };
   }, []);
-
-  useEffect(() => {
-    const inputElement = inputRef.current;
-    if (!inputElement) return;
-    inputElement.style.height = 'auto';
-    inputElement.style.height = `${Math.min(inputElement.scrollHeight, 160)}px`;
-  }, [input]);
-
-  useEffect(() => {
-    threadEndRef.current?.scrollIntoView({ block: 'end' });
-  }, [streamState.messages.length, streamState.liveAssistant?.content]);
 
   useEffect(() => {
     if (overlay === null) return undefined;
@@ -122,7 +97,7 @@ export function App() {
   const artifacts = useMemo(() => deriveArtifactShelfState(streamState), [streamState]);
   const canSend = streamState.connection === 'ready' || streamState.connection === 'connected';
   const connectionTone = getConnectionTone(streamState.connection, connecting);
-  const spriteState = deriveSpriteState(streamState, traces, micActive, connecting);
+  const spriteState = deriveSpriteState(streamState, traces, composer.micActive, connecting);
 
   async function connect() {
     if (!hubUrl || connecting) return;
@@ -164,61 +139,8 @@ export function App() {
     storeRef.current?.interrupt();
   }
 
-  function sendMessage(event?: FormEvent<HTMLFormElement>) {
-    event?.preventDefault();
-    const text = input.trim();
-    if (!text) return;
+  function sendUserText(text: string) {
     storeRef.current?.sendUserText(text, { interrupt: true });
-    setInput('');
-  }
-
-  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
-    event.preventDefault();
-    sendMessage();
-  }
-
-  function toggleMic() {
-    setMicActive((value) => {
-      const next = !value;
-      setVoiceNotice(next
-        ? `${micMode === 'dictation' ? 'Dictation' : 'Voice chat'} capture is selected. Browser audio capture is not wired to the hub yet, so text remains the source of truth.`
-        : null);
-      return next;
-    });
-  }
-
-  function switchMicMode() {
-    setMicMode((value) => (value === 'dictation' ? 'voice' : 'dictation'));
-    setMicActive(false);
-    setVoiceNotice(null);
-  }
-
-  function openAttachmentPicker(kind: AttachmentKind) {
-    setAttachmentMenuOpen(false);
-    if (kind === 'file') fileInputRef.current?.click();
-    if (kind === 'image') imageInputRef.current?.click();
-    if (kind === 'camera') cameraInputRef.current?.click();
-  }
-
-  function handleAttachmentFiles(event: ChangeEvent<HTMLInputElement>, kind: AttachmentKind) {
-    const files = Array.from(event.target.files ?? []);
-    if (files.length === 0) return;
-    setPendingAttachments((current) => [
-      ...current,
-      ...files.map((file) => ({
-        id: `${kind}:${file.name}:${file.size}:${file.lastModified}:${crypto.randomUUID()}`,
-        kind,
-        name: file.name,
-        mediaType: file.type || 'application/octet-stream',
-        size: file.size,
-      })),
-    ]);
-    event.target.value = '';
-  }
-
-  function removeAttachment(id: string) {
-    setPendingAttachments((current) => current.filter((attachment) => attachment.id !== id));
   }
 
   return (
@@ -249,36 +171,7 @@ export function App() {
         <Settings aria-hidden />
       </button>
 
-      <section className="thread-viewport" aria-label="Companion chat">
-        <div className="message-list" aria-live="polite">
-          {streamState.messages.length === 0 && !streamState.liveAssistant ? (
-            <div className="thread-empty">
-              <Sparkles aria-hidden />
-              <p>{streamState.connection === 'ready' ? 'Ready for the thread.' : 'Open settings to connect.'}</p>
-            </div>
-          ) : (
-            <>
-              {streamState.messages.map((message) => (
-                <article className={`message-row ${message.role}`} key={message.id}>
-                  {message.role === 'assistant' && <AvatarMark />}
-                  <div className="message-bubble">
-                    <p>{message.content}</p>
-                  </div>
-                </article>
-              ))}
-              {streamState.liveAssistant && (
-                <article className="message-row assistant live">
-                  <AvatarMark />
-                  <div className="message-bubble">
-                    <p>{streamState.liveAssistant.content}</p>
-                  </div>
-                </article>
-              )}
-            </>
-          )}
-          <div ref={threadEndRef} />
-        </div>
-      </section>
+      <ThreadView streamState={streamState} />
 
       {spriteEnabled && (
         <CompanionSprite
@@ -292,83 +185,15 @@ export function App() {
         approvals={approvals}
         artifacts={artifacts}
         error={streamState.failure?.message ?? configError}
-        stacked={pendingAttachments.length > 0}
-        voiceNotice={voiceNotice}
+        stacked={composer.pendingAttachments.length > 0}
+        voiceNotice={composer.voiceNotice}
       />
 
-      {pendingAttachments.length > 0 && (
-        <AttachmentTray attachments={pendingAttachments} onRemove={removeAttachment} />
+      {composer.pendingAttachments.length > 0 && (
+        <AttachmentTray attachments={composer.pendingAttachments} onRemove={composer.removeAttachment} />
       )}
 
-      <form className="composer-shell" onSubmit={sendMessage}>
-        <div className="composer-menu-wrap">
-          <button
-            className="composer-button"
-            type="button"
-            onClick={() => setAttachmentMenuOpen((value) => !value)}
-            aria-expanded={attachmentMenuOpen}
-            aria-label="Open attachment menu"
-          >
-            <Plus aria-hidden />
-          </button>
-          {attachmentMenuOpen && <AttachmentMenu onPick={openAttachmentPicker} />}
-          <input
-            ref={fileInputRef}
-            className="hidden-file-input"
-            type="file"
-            multiple
-            onChange={(event) => handleAttachmentFiles(event, 'file')}
-          />
-          <input
-            ref={imageInputRef}
-            className="hidden-file-input"
-            type="file"
-            accept="image/*"
-            multiple
-            onChange={(event) => handleAttachmentFiles(event, 'image')}
-          />
-          <input
-            ref={cameraInputRef}
-            className="hidden-file-input"
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={(event) => handleAttachmentFiles(event, 'camera')}
-          />
-        </div>
-        <textarea
-          ref={inputRef}
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={handleComposerKeyDown}
-          placeholder="Message your companion..."
-          rows={1}
-          disabled={!canSend}
-          aria-label="Message your companion"
-        />
-        <div className="mic-control">
-          <button
-            className={`composer-button mic-button ${micActive ? 'active' : ''} ${micMode}`}
-            type="button"
-            onClick={toggleMic}
-            title={micMode === 'dictation' ? 'Dictation' : 'Voice chat'}
-            aria-label={micMode === 'dictation' ? 'Toggle dictation' : 'Toggle voice chat'}
-          >
-            <Mic aria-hidden />
-          </button>
-          <button className="mic-mode" type="button" onClick={switchMicMode}>
-            {micMode === 'dictation' ? 'Dictation' : 'Voice'}
-          </button>
-        </div>
-        <button
-          className="send-button"
-          type="submit"
-          disabled={!canSend || !input.trim()}
-          aria-label="Send message"
-        >
-          <Send aria-hidden />
-        </button>
-      </form>
+      <Composer canSend={canSend} controller={composer} onSendText={sendUserText} />
 
       {overlay && (
         <OverlayFrame onClose={() => setOverlay(null)}>
@@ -379,7 +204,7 @@ export function App() {
               channelId={channelId}
               connecting={connecting}
               hubUrl={hubUrl}
-              micMode={micMode}
+              micMode={composer.micMode}
               sessionId={sessionId}
               spriteAnimations={spriteAnimations}
               spriteEnabled={spriteEnabled}
@@ -391,7 +216,7 @@ export function App() {
               onConnect={() => void connect()}
               onDisconnect={disconnect}
               onHubUrlChange={setHubUrl}
-              onMicModeChange={setMicMode}
+              onMicModeChange={composer.selectMicMode}
               onSessionIdChange={setSessionId}
               onSpriteAnimationsChange={setSpriteAnimations}
               onSpriteEnabledChange={setSpriteEnabled}

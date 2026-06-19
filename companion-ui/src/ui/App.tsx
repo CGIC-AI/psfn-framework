@@ -326,6 +326,7 @@ export function App() {
         approvals={approvals}
         artifacts={artifacts}
         error={streamState.failure?.message ?? configError}
+        stacked={pendingAttachments.length > 0}
         voiceNotice={voiceNotice}
       />
 
@@ -712,18 +713,20 @@ function ToastLayer({
   approvals,
   artifacts,
   error,
+  stacked,
   voiceNotice,
 }: {
   approvals: ReturnType<typeof deriveApprovalPanelState>;
   artifacts: ReturnType<typeof deriveArtifactShelfState>;
   error: string | null;
+  stacked: boolean;
   voiceNotice: string | null;
 }) {
   const hasToasts = error || voiceNotice || approvals.requests.length > 0 || artifacts.items.length > 0;
   if (!hasToasts) return null;
 
   return (
-    <section className="toast-layer" aria-label="Contextual updates">
+    <section className={`toast-layer ${stacked ? 'stacked' : ''}`} aria-label="Contextual updates">
       {voiceNotice && (
         <article className="context-toast voice-toast">
           <Mic aria-hidden />

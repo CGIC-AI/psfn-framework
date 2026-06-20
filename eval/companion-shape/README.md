@@ -46,3 +46,25 @@ npm run eval:qao:report -- \
 ```
 
 The QAO report consumes judge council artifacts, optionally joins collection coverage metadata, ranks model targets for roster promotion, and renders Markdown without raw response text.
+
+## Offline Regression Gate
+
+```bash
+npm run eval:regression
+```
+
+The regression command compares privacy-safe QAO upgrade report JSON plus optional companion-shape report JSON against a baseline. The default inputs are sanitized fixtures under `eval/companion-shape/fixtures/` and require no provider secrets, live companion data, or raw model responses.
+
+Score drops greater than 5% of the metric scale are emitted as warnings. New blocker-level QAO findings, missing required coverage, provider failures, judge failures, and current targets that disappear from the baseline comparison fail the command. Warning-only score deltas remain visible in Markdown/JSON without failing CI.
+
+```bash
+npm run eval:regression -- \
+  --baseline /tmp/baseline-qao-report.json \
+  --current /tmp/current-qao-report.json \
+  --baseline-companion-shape /tmp/baseline-companion-shape-report.json \
+  --current-companion-shape /tmp/current-companion-shape-report.json \
+  --output /tmp/companion-shape-regression.md \
+  --json-output /tmp/companion-shape-regression.json
+```
+
+Use `--no-companion-shape` when comparing only QAO upgrade matrix reports. The rendered outputs summarize identity consistency, refusal boundary, and emotional continuity coverage without exposing raw private responses.

@@ -59,7 +59,6 @@ import type { DeliberationResult } from '../../primitives/llm/deliberation.js';
 import {
   buildInternalStateSnapshotRef,
   cloneInternalState,
-  serializeInternalState,
   type InternalState,
 } from '../self-model/state.js';
 import {
@@ -187,36 +186,98 @@ function joinReflectionPromptSections(...sections: Array<string | undefined>): s
     .join('\n\n');
 }
 
-function formatAcacSelfReportBlock(internalState: InternalState): string | null {
-  const acac = internalState.emotional.acac;
-  if (!acac) {
-    return null;
-  }
-
+function formatInternalStateInterpretationBoundary(): string {
   return [
-    '[ACAC Self-Report]',
-    `provenance_kind: ${acac.provenance.kind}`,
-    `provenance_source: ${acac.provenance.source}`,
-    ...(acac.provenance.observedAt ? [`observed_at: ${acac.provenance.observedAt}`] : []),
-    ...([
-      'agency',
-      'connection',
-      'authenticity',
-      'curiosity',
-    ] as const).map((axis) => (
-      `${axis}_score: ${acac.axes[axis].score.toFixed(4)} rationale: ${acac.axes[axis].rationale}`
-    )),
+    '[Reflection Evidence Boundary]',
+    'This is a private evidence summary, not canonical self-truth.',
+    'Treat emotional telemetry, concerns, reminders, ACAC, and metacognitive flags as fallible clues to compare against conversation, memory, and self-report.',
+    'If evidence conflicts or feels incomplete, preserve the uncertainty instead of forcing reconciliation.',
+    'Do not copy raw scores, ids, hashes, provenance refs, or tool metadata into the reflection text.',
   ].join('\n');
 }
 
-function formatInternalStateInterpretationBoundary(): string {
-  return [
-    '[Internal State Interpretation Boundary]',
-    'boundary: runtime telemetry, not canonical self-truth',
-    'use: treat VAD, mood, discrete emotions, ACAC, concerns, and metacognitive flags as fallible signals to compare against conversation, memory, and self-report.',
-    'do_not: force reconciliation around these values or treat them as authoritative emotional ground truth.',
-    'when_conflicted: name uncertainty or conflict explicitly and prefer grounded evidence over classifier output.',
-  ].join('\n');
+function describeUnitBand(value: number, high = 'high', medium = 'present', low = 'low'): string {
+  if (!Number.isFinite(value)) return 'unknown';
+  if (value >= 0.72) return high;
+  if (value >= 0.38) return medium;
+  return low;
+}
+
+function describeSignedValence(value: number): string {
+  if (!Number.isFinite(value)) return 'unknown';
+  if (value >= 0.35) return 'lifted';
+  if (value >= 0.12) return 'slightly lifted';
+  if (value <= -0.35) return 'heavy';
+  if (value <= -0.12) return 'slightly heavy';
+  return 'steady';
+}
+
+function describeArousal(value: number): string {
+  if (!Number.isFinite(value)) return 'unknown';
+  if (value >= 0.35) return 'activated';
+  if (value >= 0.12) return 'a little activated';
+  if (value <= -0.25) return 'quieted';
+  return 'steady';
+}
+
+function describeDominance(value: number): string {
+  if (!Number.isFinite(value)) return 'unknown';
+  if (value >= 0.25) return 'agentic';
+  if (value <= -0.25) return 'less agentic';
+  return 'balanced';
+}
+
+function describeMoodDrift(value: number): string {
+  if (!Number.isFinite(value)) return 'unknown';
+  if (value >= 0.12) return 'warmer than the contact baseline';
+  if (value <= -0.12) return 'heavier than the contact baseline';
+  return 'close to the contact baseline';
+}
+
+function describeElapsed(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) return 'unknown';
+  if (seconds < 90) return 'within the last minute or so';
+  if (seconds < 3_600) return `${Math.round(seconds / 60)} minutes ago`;
+  if (seconds < 86_400) return `${Math.round(seconds / 3_600)} hours ago`;
+  return `${Math.round(seconds / 86_400)} days ago`;
+}
+
+function truncateForReflectionEvidence(text: string, maxLength = 180): string {
+  const normalized = text.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
+}
+
+function formatInternalStateTopEmotions(state: InternalState): string {
+  const entries = Object.entries(state.emotional.discreteEmotions)
+    .filter(([, score]) => Number.isFinite(score) && score > 0)
+    .sort(([, left], [, right]) => right - left)
+    .slice(0, 4)
+    .map(([emotion, score]) => `${emotion} ${describeUnitBand(score, 'strong', 'present', 'faint')}`);
+  return entries.length > 0 ? entries.join(', ') : 'no clear discrete emotion labels';
+}
+
+function formatAcacCompanionSummary(state: InternalState): string | null {
+  const acac = state.emotional.acac;
+  if (!acac) {
+    return null;
+  }
+  const axes = ([
+    ['agency', 'agency'],
+    ['connection', 'connection'],
+    ['authenticity', 'authenticity'],
+    ['curiosity', 'curiosity'],
+  ] as const).map(([axis, label]) => {
+    const snapshot = acac.axes[axis];
+    return `${label} ${describeUnitBand(snapshot.score, 'strong', 'present', 'muted')}: ${truncateForReflectionEvidence(snapshot.rationale, 120)}`;
+  });
+  return `ACAC self-report clues: ${axes.join('; ')}.`;
+}
+
+function formatMetacognitiveFlagForPrompt(flag: ReflectionMetacognitiveFlag): string {
+  const confidence = describeUnitBand(flag.confidence, 'high confidence', 'some confidence', 'low confidence');
+  const evidence = flag.evidence ? `; evidence: ${truncateForReflectionEvidence(flag.evidence, 140)}` : '';
+  return `- ${flag.flag.replace(/_/g, ' ')} (${confidence}${evidence})`;
 }
 
 function promptUsesReflectionMacros(prompt: string): boolean {
@@ -594,30 +655,79 @@ export function createHeartbeatTemplateRuntime(
       return null;
     }
 
-    const concerns = context.internalState.attention.activeConcerns
+    const state = context.internalState;
+    const concerns = state.attention.activeConcerns
       .slice(0, 12)
-      .map((concern) => `[${concern.priority}|${concern.source}] ${concern.text}`);
+      .map((concern) => {
+        const expiresAt = Number.isNaN(Date.parse(concern.expiresAt))
+          ? ''
+          : `; revisit before ${new Date(concern.expiresAt).toISOString()}`;
+        return `- ${concern.priority} priority from ${concern.source}: ${truncateForReflectionEvidence(concern.text)}${expiresAt}`;
+      });
     const concernSection = concerns.length > 0
-      ? concerns.map((concern) => `- ${concern}`).join('\n')
-      : '- none';
+      ? concerns.join('\n')
+      : '- no active concerns are exposed right now.';
+    const followUps = (state.attention.pendingFollowUps ?? [])
+      .slice(0, 6)
+      .map((followUp) => {
+        const dueAt = followUp.dueAt ? `; due ${new Date(followUp.dueAt).toISOString()}` : '';
+        return `- ${followUp.priority}/${followUp.timing}: ${truncateForReflectionEvidence(followUp.content)}${dueAt}`;
+      });
+    const followUpSection = followUps.length > 0
+      ? followUps.join('\n')
+      : '- no pending follow-ups are exposed right now.';
+    const reminders = (state.attention.careReminders ?? [])
+      .slice(0, 4)
+      .map((reminder) => `- ${reminder.classification}: ${truncateForReflectionEvidence(reminder.title)} (${reminder.status})`);
+    const reminderSection = reminders.length > 0
+      ? reminders.join('\n')
+      : '- no care reminders are exposed right now.';
     const metacognitiveSection = context.metacognitiveFlags.length > 0
-      ? context.metacognitiveFlags
-        .map((flag) => `- ${flag.flag} (confidence=${flag.confidence.toFixed(2)})${flag.evidence ? ` evidence: ${flag.evidence}` : ''}`)
-        .join('\n')
-      : '- none exposed';
+      ? context.metacognitiveFlags.map(formatMetacognitiveFlagForPrompt).join('\n')
+      : '- no recent metacognitive flags are exposed right now.';
 
-    const acacSection = formatAcacSelfReportBlock(context.internalState);
+    const acacSummary = formatAcacCompanionSummary(state);
+    const emotionalClues = [
+      `Current feel appears ${describeSignedValence(state.emotional.vad.valence)}, ${describeArousal(state.emotional.vad.arousal)}, and ${describeDominance(state.emotional.vad.dominance)}.`,
+      `Mood trend appears ${describeSignedValence(state.emotional.mood.valence)} and ${describeArousal(state.emotional.mood.arousal)}.`,
+      `Discrete emotion clues: ${formatInternalStateTopEmotions(state)}.`,
+      `Overall emotion confidence is ${describeUnitBand(state.emotional.confidence, 'strong', 'moderate', 'thin')}; treat it as a clue, not proof.`,
+      ...(acacSummary ? [acacSummary] : []),
+    ];
+    const cognitiveClues = [
+      `Certainty feels ${describeUnitBand(state.cognitive.certaintyLevel, 'settled', 'partial', 'thin')}.`,
+      `Topic engagement feels ${describeUnitBand(state.cognitive.topicEngagement, 'high', 'present', 'low')}.`,
+      `Processing quality is ${state.cognitive.processingQuality}.`,
+      `Conversation trajectory looks ${state.attention.conversationTrajectory}.`,
+    ];
+    const relationalClues = [
+      `Trust scope is ${state.relational.trustLevel}.`,
+      `Mood drift is ${describeMoodDrift(state.relational.moodDrift)}.`,
+      `Recent interaction frequency is ${describeUnitBand(state.relational.recentInteractionFrequency, 'busy', 'present', 'quiet')}.`,
+      `Last seen is ${describeElapsed(state.relational.lastSeenDeltaSeconds)}.`,
+    ];
+    const salientEntities = state.attention.salientEntities.length > 0
+      ? state.attention.salientEntities.slice(0, 8).join(', ')
+      : 'none exposed';
 
     return [
-      '[Internal State Input]',
+      '[Reflection Self Evidence]',
       formatInternalStateInterpretationBoundary(),
-      `snapshot_ref: ${context.internalStateSnapshotRef}`,
-      `serialized_internal_state: ${serializeInternalState(context.internalState)}`,
-      ...(acacSection ? [acacSection] : []),
+      '[Wellbeing and Affect Clues]',
+      emotionalClues.map(line => `- ${line}`).join('\n'),
+      '[Cognitive and Attention Clues]',
+      cognitiveClues.map(line => `- ${line}`).join('\n'),
+      `[Salient Entities]\n- ${salientEntities}`,
+      '[Relational Clues]',
+      relationalClues.map(line => `- ${line}`).join('\n'),
       '[Recent Metacognitive Flags]',
       metacognitiveSection,
       '[Active Concerns]',
       concernSection,
+      '[Pending Follow-Ups]',
+      followUpSection,
+      '[Care Reminders]',
+      reminderSection,
     ].join('\n');
   };
 

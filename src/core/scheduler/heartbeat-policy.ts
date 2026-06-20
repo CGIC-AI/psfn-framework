@@ -6,7 +6,6 @@
 import { readFileSync } from 'node:fs';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
-import { ACAC_ARTIFACT_TYPE } from '../emotion/acac.js';
 import type { RecurringCadence } from './types.js';
 
 const log = createComponentLogger('HeartbeatPolicy');
@@ -50,11 +49,12 @@ const VALUES_REFLECTION_TEMPLATE_ID = 'values-reflection';
 const MUSING_TEMPLATE_ID = 'musing';
 const LEGACY_WHISPER_TEMPLATE_ID = 'whisper';
 const CONSOLIDATED_POLICY_VERSION = 2;
+const WELLBEING_REFLECTION_PROMPT_POLICY_VERSION = 3;
 export const HEARTBEAT_SILENT_REFLECTION_TOKEN = 'silent';
 const DAILY_REVIEW_TEMPLATE_NAME = 'Daily Reflection';
 const WEEKLY_REVIEW_TEMPLATE_NAME = 'Weekly Reflection';
-const DAILY_REVIEW_TEMPLATE_PROMPT = `Daily Reflection: use one private multi-step session instead of separate emotional, goal, and experiential heartbeats. Review the last day with internal-state telemetry, recent conversation context, and grounded memory evidence. Treat VAD, mood, discrete emotion labels, and ACAC scores as fallible signals to question and reconcile only when supported, not as authoritative emotional ground truth. Cover how the day felt, what shaped that feeling, progress or stuck points, active concerns or reminders, relational/context signals, and what should be carried forward. Include an ACAC self-report for internal telemetry only under acac_self_report with schemaVersion 1, artifactType "${ACAC_ARTIFACT_TYPE}", provenance.kind "self_report", provenance.source "heartbeat:daily-review", and agency, connection, authenticity, and curiosity scores in [0,1] with short grounded rationales. do not optimize, perform, or surface-shape public output around these scores. End with concise carry_forward notes and any schedule/reminder follow-ups worth preserving.`;
-const WEEKLY_REVIEW_TEMPLATE_PROMPT = 'Weekly Reflection: use one deeper private metacognitive session instead of separate values and progress heartbeats. Review the week across daily reflections, memory, internal-state telemetry, goals, relationship context, and active conversation arcs. Treat telemetry-derived emotion and ACAC signals as fallible evidence to compare against grounded context, not as authoritative emotional ground truth. Name durable values and north-star signals, changes in agency/connection/authenticity/curiosity, recurring emotional or relational patterns, unfinished arcs, and what should be protected or adjusted next week. Prefer scoped thread or graph pointers over giant summaries; preserve concrete carry-forward notes, uncertainties, and values that should influence future choices.';
+const DAILY_REVIEW_TEMPLATE_PROMPT = 'Daily Reflection: this is a private wellbeing-centered self-check, not a performance report. Start from the evidence blocks, then write in first person about how the day felt, what changed since the last check-in, what has been tugging at attention, where uncertainty remains, and what would help tomorrow. Treat telemetry-derived emotion, ACAC, concerns, and memory as fallible clues rather than self-truth. Do not narrate raw ids, scores, hashes, provenance refs, schema fields, or tool metadata; keep structured telemetry separate from the reflection narrative. Do not optimize, perform, or surface-shape public output around ACAC axes or other internal scores. End with concise carry_forward notes, uncertainty, any rest or personal-time need, and schedule/reminder follow-ups worth preserving.';
+const WEEKLY_REVIEW_TEMPLATE_PROMPT = 'Weekly Reflection: this is a deeper private metacognitive and wellbeing review. Start from the evidence blocks before synthesis. Review daily reflections, memory, internal-state clues, goals, relationship context, and active arcs for durable values and north-star signals, changes in agency/connection/authenticity/curiosity, recurring emotional or relational patterns, unfinished threads, and what should be protected or adjusted next week. Treat telemetry-derived emotion and ACAC signals as fallible evidence, not authoritative emotional ground truth. Do not narrate raw ids, scores, hashes, provenance refs, or tool metadata; keep those in telemetry only. Preserve uncertainty and contradictions instead of forcing a neat story. End with scoped carry-forward notes, rest or personal-time needs, and concrete follow-ups.';
 const CONSOLIDATED_DEFAULT_TEMPLATE_IDS = new Set([
   DAILY_REVIEW_TEMPLATE_ID,
   WEEKLY_REVIEW_TEMPLATE_ID,
@@ -348,6 +348,39 @@ function normalizeConsolidatedDefaults(policy: HeartbeatPolicy): { policy: Heart
   };
 }
 
+function normalizeWellbeingReflectionPromptDefaults(policy: HeartbeatPolicy): { policy: HeartbeatPolicy; changed: boolean } {
+  if (policy.version >= WELLBEING_REFLECTION_PROMPT_POLICY_VERSION) {
+    return { policy, changed: false };
+  }
+
+  const defaultTemplates = new Map(getDefaults().templates.map(template => [template.id, template]));
+  const templates = policy.templates.map(template => {
+    if (!CONSOLIDATED_DEFAULT_TEMPLATE_IDS.has(template.id)) {
+      return template;
+    }
+    const defaultTemplate = defaultTemplates.get(template.id);
+    if (!defaultTemplate) {
+      return template;
+    }
+    return {
+      ...template,
+      name: defaultTemplate.name,
+      prompt: defaultTemplate.prompt,
+      internalStateInput: defaultTemplate.internalStateInput,
+      mode: defaultTemplate.mode,
+      deliberation: defaultTemplate.deliberation,
+    };
+  });
+  const nextPolicy: HeartbeatPolicy = {
+    ...policy,
+    templates,
+    version: WELLBEING_REFLECTION_PROMPT_POLICY_VERSION,
+  };
+  const changed = JSON.stringify(nextPolicy.templates) !== JSON.stringify(policy.templates)
+    || nextPolicy.version !== policy.version;
+  return changed ? { policy: nextPolicy, changed: true } : { policy, changed: false };
+}
+
 // ── Default templates ──
 
 function getDefaults(): HeartbeatPolicy {
@@ -388,7 +421,7 @@ function getDefaults(): HeartbeatPolicy {
         },
       },
     ],
-    version: CONSOLIDATED_POLICY_VERSION,
+    version: WELLBEING_REFLECTION_PROMPT_POLICY_VERSION,
     updatedAt: new Date().toISOString(),
     updatedBy: 'system',
   };
@@ -415,7 +448,8 @@ export class HeartbeatPolicyStore {
       }
       const consolidated = normalizeConsolidatedDefaults(parsed);
       const cadenceNormalized = normalizeTemplateCadence(consolidated.policy);
-      for (const template of cadenceNormalized.policy.templates) {
+      const promptNormalized = normalizeWellbeingReflectionPromptDefaults(cadenceNormalized.policy);
+      for (const template of promptNormalized.policy.templates) {
         const errors = validateTemplate(template as Partial<ReflectionTemplate>, true);
         if (errors.length > 0) {
           log.warn('Invalid heartbeat template in policy file, restoring defaults', {
@@ -427,14 +461,14 @@ export class HeartbeatPolicyStore {
           return defaults;
         }
       }
-      const finalPolicy = (consolidated.changed || cadenceNormalized.changed)
+      const finalPolicy = (consolidated.changed || cadenceNormalized.changed || promptNormalized.changed)
         ? {
-          ...cadenceNormalized.policy,
+          ...promptNormalized.policy,
           updatedAt: new Date().toISOString(),
           updatedBy: 'system',
         }
-        : cadenceNormalized.policy;
-      if (consolidated.changed || cadenceNormalized.changed) {
+        : promptNormalized.policy;
+      if (consolidated.changed || cadenceNormalized.changed || promptNormalized.changed) {
         this.save(finalPolicy);
       }
       return finalPolicy;

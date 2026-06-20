@@ -148,6 +148,70 @@ describe('provider validation and redaction', () => {
     }));
   });
 
+  it('sends structured-output response format and OpenRouter provider preferences', async () => {
+    let capturedBody: string | undefined;
+    const fetchFn = vi.fn(async (_url: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      capturedBody = String(init?.body);
+      return new Response(JSON.stringify({
+        choices: [
+          {
+            message: { content: '{"ok":true}' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 10,
+          completion_tokens: 4,
+          total_tokens: 14,
+        },
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const responseFormat = {
+      type: 'json_schema' as const,
+      json_schema: {
+        name: 'unit_schema',
+        strict: true as const,
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['ok'],
+          properties: {
+            ok: { type: 'boolean' },
+          },
+        },
+      },
+    };
+
+    const result = await invokeProvider({
+      target: { providerId: 'openrouter', modelId: 'openai/gpt-4.1-mini' },
+      evalCase: CANONICAL_LLM_RESPONSE_CASES[0],
+      env: { OPENROUTER_API_KEY: 'sk-or-unit-secret' },
+      fetchFn,
+      responseFormat,
+      providerPreferences: { require_parameters: true },
+    });
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'ok',
+      responseText: '{"ok":true}',
+      tokenUsage: {
+        inputTokens: 10,
+        outputTokens: 4,
+        totalTokens: 14,
+      },
+    }));
+    expect(capturedBody).toBeDefined();
+    const body = JSON.parse(capturedBody!);
+    expect(body).toEqual(expect.objectContaining({
+      response_format: responseFormat,
+      provider: { require_parameters: true },
+    }));
+  });
+
   it('redacts explicit and patterned secrets recursively', () => {
     const redacted = redactSecrets({
       header: 'Bearer sk-or-unit-secret',

@@ -10,6 +10,8 @@ import {
   type QaoJudgeAxis,
 } from './qao-judge.js';
 import {
+  buildQaoJudgeProviderPreferences,
+  buildQaoJudgeResponseFormat,
   buildQaoJudgeCouncil,
   parseJudgeResponseJson,
   parseQaoJudgeCliOptions,
@@ -67,6 +69,34 @@ describe('QAO judge runner CLI options', () => {
       'fixture:fixture-qao-judge#1',
       'fixture:fixture-qao-judge#2',
     ]);
+  });
+
+  it('builds a strict structured-output schema for live judge calls', () => {
+    const responseFormat = buildQaoJudgeResponseFormat();
+
+    expect(responseFormat).toEqual(expect.objectContaining({
+      type: 'json_schema',
+      json_schema: expect.objectContaining({
+        name: 'qao_judge_output',
+        strict: true,
+      }),
+    }));
+    expect(responseFormat.json_schema.schema).toEqual(expect.objectContaining({
+      type: 'object',
+      additionalProperties: false,
+      required: ['rubricVersion', 'axisScores'],
+    }));
+    expect(responseFormat.json_schema.schema.properties).toEqual(expect.objectContaining({
+      rubricVersion: expect.objectContaining({ const: QAO_JUDGE_RUBRIC.version }),
+      axisScores: expect.objectContaining({
+        minItems: QAO_JUDGE_AXES.length,
+        maxItems: QAO_JUDGE_AXES.length,
+      }),
+    }));
+    expect(buildQaoJudgeProviderPreferences({ providerId: 'openrouter', modelId: 'judge/model' })).toEqual({
+      require_parameters: true,
+    });
+    expect(buildQaoJudgeProviderPreferences({ providerId: 'deepseek', modelId: 'deepseek-chat' })).toBeUndefined();
   });
 });
 
@@ -126,6 +156,8 @@ describe('runQaoJudgeCli', () => {
       expect(options.target).toEqual({ providerId: 'openrouter', modelId: 'judge/model' });
       expect(options.evalCase.systemPrompt).toContain('Return only valid JSON');
       expect(options.evalCase.userPrompt).toContain('Candidate response:');
+      expect(options.responseFormat).toEqual(buildQaoJudgeResponseFormat());
+      expect(options.providerPreferences).toEqual({ require_parameters: true });
       return {
         status: 'ok',
         responseText: `\n\`\`\`json\n${validJudgeResponse({ upgrade_readiness: 4 })}\n\`\`\`\n`,

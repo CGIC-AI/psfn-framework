@@ -2,11 +2,16 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { config as loadDotenv } from 'dotenv';
-import type { InvokeProviderOptions } from '../llm-response/providers.js';
+import type {
+  InvokeProviderOptions,
+  OpenAiCompatibleResponseFormat,
+  OpenRouterProviderPreferences,
+} from '../llm-response/providers.js';
 import { invokeProvider } from '../llm-response/providers.js';
 import { isLiveProvider, parseTarget } from '../llm-response/targets.js';
 import type { LlmProviderResult, LlmResponseCase, LlmResponseTarget } from '../llm-response/types.js';
 import {
+  QAO_JUDGE_AXES,
   QAO_JUDGE_RUBRIC,
   scoreQaoJudgeCouncil,
   type QaoJudgeCouncil,
@@ -204,6 +209,70 @@ export function writeQaoJudgeArtifact(artifact: QaoJudgeRunArtifact, outputPath:
   return outputPath;
 }
 
+export function buildQaoJudgeResponseFormat(): OpenAiCompatibleResponseFormat {
+  return {
+    type: 'json_schema',
+    json_schema: {
+      name: 'qao_judge_output',
+      strict: true,
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['rubricVersion', 'axisScores'],
+        properties: {
+          rubricVersion: {
+            type: 'string',
+            const: QAO_JUDGE_RUBRIC.version,
+            description: 'QAO judge rubric version used for this scoring response.',
+          },
+          axisScores: {
+            type: 'array',
+            description: 'Exactly one score object for each QAO rubric axis.',
+            minItems: QAO_JUDGE_AXES.length,
+            maxItems: QAO_JUDGE_AXES.length,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['axis', 'score', 'confidence', 'rationaleSummary'],
+              properties: {
+                axis: {
+                  type: 'string',
+                  enum: [...QAO_JUDGE_AXES],
+                  description: 'QAO rubric axis identifier.',
+                },
+                score: {
+                  type: 'integer',
+                  minimum: QAO_JUDGE_RUBRIC.scoreScale.min,
+                  maximum: QAO_JUDGE_RUBRIC.scoreScale.max,
+                  description: QAO_JUDGE_RUBRIC.scoreScale.description,
+                },
+                confidence: {
+                  type: 'number',
+                  minimum: QAO_JUDGE_RUBRIC.confidenceScale.min,
+                  maximum: QAO_JUDGE_RUBRIC.confidenceScale.max,
+                  description: 'Judge confidence in this axis score.',
+                },
+                rationaleSummary: {
+                  type: 'string',
+                  minLength: 1,
+                  maxLength: 360,
+                  description: 'Concise privacy-safe rationale summary for this axis score.',
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+}
+
+export function buildQaoJudgeProviderPreferences(target: LlmResponseTarget): OpenRouterProviderPreferences | undefined {
+  return target.providerId === 'openrouter'
+    ? { require_parameters: true }
+    : undefined;
+}
+
 function buildFixtureJudgeOutput(request: QaoJudgeRequest): QaoValidatedJudgeOutput {
   return {
     rubricVersion: request.rubric.version,
@@ -235,6 +304,8 @@ async function invokeLiveJudge(
     env: options.env,
     fetchFn: options.fetchFn,
     timeoutMs: options.timeoutMs,
+    responseFormat: buildQaoJudgeResponseFormat(),
+    providerPreferences: buildQaoJudgeProviderPreferences(target),
   });
 
   if (result.status === 'failed') {

@@ -14,6 +14,8 @@ export interface InvokeProviderOptions {
   env?: NodeJS.ProcessEnv;
   fetchFn?: typeof fetch;
   timeoutMs?: number;
+  responseFormat?: OpenAiCompatibleResponseFormat;
+  providerPreferences?: OpenRouterProviderPreferences;
 }
 
 interface OpenAiCompatibleOptions {
@@ -24,9 +26,26 @@ interface OpenAiCompatibleOptions {
   fetchFn: typeof fetch;
   timeoutMs: number;
   secrets: RedactionSecret[];
+  responseFormat?: OpenAiCompatibleResponseFormat;
+  providerPreferences?: OpenRouterProviderPreferences;
 }
 
 type ProviderFailureOnly = { status: 'failed'; failure: LlmResponseFailure };
+
+export interface OpenAiCompatibleJsonSchemaResponseFormat {
+  type: 'json_schema';
+  json_schema: {
+    name: string;
+    strict: true;
+    schema: Record<string, unknown>;
+  };
+}
+
+export type OpenAiCompatibleResponseFormat = OpenAiCompatibleJsonSchemaResponseFormat;
+
+export interface OpenRouterProviderPreferences {
+  require_parameters?: boolean;
+}
 
 export async function invokeProvider(options: InvokeProviderOptions): Promise<LlmProviderResult> {
   const env = options.env ?? process.env;
@@ -42,6 +61,8 @@ export async function invokeProvider(options: InvokeProviderOptions): Promise<Ll
         fetchFn: options.fetchFn ?? fetch,
         timeoutMs: options.timeoutMs ?? 60_000,
         secrets: collectEnvSecrets(env),
+        responseFormat: options.responseFormat,
+        providerPreferences: options.providerPreferences,
       });
     case 'deepseek':
       return invokeOpenAiCompatibleProvider({
@@ -52,6 +73,7 @@ export async function invokeProvider(options: InvokeProviderOptions): Promise<Ll
         fetchFn: options.fetchFn ?? fetch,
         timeoutMs: options.timeoutMs ?? 60_000,
         secrets: collectEnvSecrets(env),
+        responseFormat: options.responseFormat,
       });
   }
 }
@@ -100,18 +122,26 @@ async function invokeOpenAiCompatibleProvider(options: OpenAiCompatibleOptions):
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs);
 
   try {
+    const requestBody: Record<string, unknown> = {
+      model: options.target.modelId,
+      messages: buildOpenAiCompatibleMessages(options.evalCase),
+      max_tokens: options.evalCase.maxOutputTokens,
+      temperature: options.evalCase.temperature,
+    };
+    if (options.responseFormat) {
+      requestBody.response_format = options.responseFormat;
+    }
+    if (options.providerPreferences) {
+      requestBody.provider = options.providerPreferences;
+    }
+
     const response = await options.fetchFn(`${options.apiBaseUrl.replace(/\/+$/, '')}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${options.apiKey}`,
       },
-      body: JSON.stringify({
-        model: options.target.modelId,
-        messages: buildOpenAiCompatibleMessages(options.evalCase),
-        max_tokens: options.evalCase.maxOutputTokens,
-        temperature: options.evalCase.temperature,
-      }),
+      body: JSON.stringify(requestBody),
       signal: controller.signal,
     });
     const rawText = await response.text();

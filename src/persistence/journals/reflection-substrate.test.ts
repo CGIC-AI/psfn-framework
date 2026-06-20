@@ -213,20 +213,25 @@ describe('reflection substrate stores', () => {
     });
 
     expect(bundle.canonicalTruthBoundary).toBe(NON_CANONICAL_REFLECTION_SUBSTRATE);
-    expect(bundle.relational).toContain('[Reflection Contact Context]');
-    expect(bundle.relational).toContain('contact_id: contact-1');
-    expect(bundle.relational).toContain('recent_contact_status: active');
-    expect(bundle.relational).toContain('last_seen_delta_seconds: 90');
+    expect(bundle.relational).toContain('[Reflection Contact Evidence]');
+    expect(bundle.relational).toContain('Current contact: Ari; trust scope trusted.');
+    expect(bundle.relational).toContain('Recent contact status: active.');
+    expect(bundle.relational).not.toContain('contact_id:');
+    expect(bundle.relational).not.toContain('last_seen_delta_seconds:');
     expect(bundle.relational).toContain('I wanted to follow up on yesterday.');
     expect(bundle.relational).toContain('Clarify the recovery timeline');
     expect(bundle.relational).toContain('Check in about the recovery plan');
     expect(bundle.relational).not.toContain('stale silence');
     expect(bundle.self).toContain('contact-scoped recollection');
-    expect(bundle.affect).toContain('[Reflection Affect Context]');
-    expect(bundle.affect).toContain('current_vad: valence=0.200 arousal=-0.150 dominance=0.050');
-    expect(bundle.affect).toContain('emotional_snapshot');
-    expect(bundle.affect).toContain('emotional_time_series:');
-    expect(bundle.affect).toContain('- 2023-11-14T22:13:20.000Z valence=0.180 confidence=0.840');
+    expect(bundle.affect).toContain('[Reflection Affect Evidence]');
+    expect(bundle.affect).toContain('Current affect appears slightly lifted, steady, and balanced.');
+    expect(bundle.affect).toContain('Contact mood snapshot appears slightly lifted');
+    expect(bundle.affect).toContain('Mood drift is close to the contact baseline.');
+    expect(bundle.affect).toContain('Recent affect trend:');
+    expect(bundle.affect).toContain('2023-11-14T22:13:20.000Z: slightly lifted (strong confidence)');
+    expect(bundle.affect).not.toContain('current_vad:');
+    expect(bundle.affect).not.toContain('emotional_snapshot');
+    expect(bundle.affect).not.toContain('confidence=');
     expect(bundle.provenanceRefs).toEqual(expect.arrayContaining([
       'reflection_contact:contact-1',
       'reflection_contact_session:discord:primary-session',

@@ -13,6 +13,8 @@ This directory is the repo-owned home for evaluation assets. `PSFN-rp6i` only es
 - `src/promptfoo.ts`: typed Promptfoo config surface backed by the base JSON config.
 - `src/index.ts`: single re-export surface for downstream eval tooling.
 - `companion-shape/`: offline companion-shape scorecard generator for captured model outputs.
+- `llm-response/`: generic live/fixture response collection harness for provider/model sweeps, latency/token/failure metadata, sanitized raw responses, and companion-shape-compatible response projections.
+- `companion-shape/qao-scenarios.json`: privacy-safe QAO persona-gate questions for model-upgrade and persona-drift checks.
 
 ## Shared Contracts
 
@@ -43,3 +45,19 @@ Once a concrete provider/test overlay exists, Promptfoo can be pointed at the ba
 ```bash
 npx promptfoo eval -c eval/promptfooconfig.base.json
 ```
+
+## LLM Response Harness
+
+The generic response harness defaults to a fixture provider and does not require secrets:
+
+```bash
+npm run eval:llm-response -- --run-id fixture-smoke
+```
+
+Live providers are opt-in only. Use `--live` and pass explicit targets such as `openrouter:<model>` or `deepseek:<model>`. API keys are read from `OPENROUTER_API_KEY` or `DEEPSEEK_API_KEY`, and secret values are redacted from artifacts and raw response captures.
+
+## Persona And QAO Runbook
+
+The current eval stack can compare model outputs and judge-model scores against privacy-safe baselines. It does not inspect hidden activations or logprobs by default; that evidence remains deferred until local/open-model and DeepSeek logprob paths are wired.
+
+For operator steps, current QAO questions, and research lineage, see `eval/companion-shape/README.md`.

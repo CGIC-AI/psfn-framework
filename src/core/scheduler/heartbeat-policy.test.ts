@@ -22,7 +22,7 @@ describe('HeartbeatPolicyStore', () => {
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
     expect(policy.templates).toHaveLength(2);
-    expect(policy.version).toBe(2);
+    expect(policy.version).toBe(3);
     expect(policy.updatedBy).toBe('system');
 
     const ids = policy.templates.map(t => t.id);
@@ -66,15 +66,61 @@ describe('HeartbeatPolicyStore', () => {
     expect(dailyReview!.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
   });
 
-  it('daily-review prompts for ACAC self-report without surface-output shaping', () => {
+  it('daily-review treats ACAC as a private clue without schema narration', () => {
     const policy = store.load();
     const template = policy.templates.find(t => t.id === 'daily-review');
-    expect(template?.prompt).toContain('ACAC self-report');
-    expect(template?.prompt).toContain('do not optimize, perform, or surface-shape public output');
-    expect(template?.prompt).toContain('artifactType "psfn.acac_self_report"');
-    expect(template?.prompt).toContain('provenance.kind "self_report"');
-    expect(template?.prompt).toContain('provenance.source "heartbeat:daily-review"');
-    expect(template?.prompt).toContain('agency, connection, authenticity, and curiosity');
+    expect(template?.prompt).toContain('private wellbeing-centered self-check');
+    expect(template?.prompt).toContain('ACAC, concerns, and memory as fallible clues');
+    expect(template?.prompt).toContain('keep structured telemetry separate from the reflection narrative');
+    expect(template?.prompt).toContain('Do not optimize, perform, or surface-shape public output around ACAC axes');
+    expect(template?.prompt).not.toContain('artifactType');
+    expect(template?.prompt).not.toContain('provenance.kind');
+    expect(template?.prompt).not.toContain('acac_self_report');
+  });
+
+  it('migrates version-2 default reflection prompts to wellbeing-centered wording', () => {
+    const policyPath = join(tmpDir, 'heartbeat-policy.json');
+    writeFileSync(
+      policyPath,
+      JSON.stringify({
+        templates: [
+          {
+            id: 'daily-review',
+            name: 'Daily Reflection',
+            prompt: 'Daily Reflection: Review telemetry and emit acac_self_report with artifactType "psfn.acac_self_report".',
+            intervalMs: 24 * 60 * 60_000,
+            cadence: { kind: 'daily', hour: 7, minute: 0, timezone: 'local' },
+            enabled: false,
+            sendToDiscord: false,
+            internalStateInput: true,
+          },
+          {
+            id: 'weekly-review',
+            name: 'Weekly Reflection',
+            prompt: 'Weekly Reflection: Review internal-state telemetry.',
+            intervalMs: 7 * 24 * 60 * 60_000,
+            cadence: { kind: 'relative' },
+            enabled: true,
+            sendToDiscord: false,
+            internalStateInput: true,
+          },
+        ],
+        version: 2,
+        updatedAt: '2026-03-01T00:00:00.000Z',
+        updatedBy: 'system',
+      }),
+      'utf-8',
+    );
+
+    const loaded = store.load();
+    const daily = loaded.templates.find(t => t.id === 'daily-review');
+    const weekly = loaded.templates.find(t => t.id === 'weekly-review');
+    expect(loaded.version).toBe(3);
+    expect(daily?.enabled).toBe(false);
+    expect(daily?.cadence).toEqual({ kind: 'daily', hour: 7, minute: 0, timezone: 'local' });
+    expect(daily?.prompt).toContain('private wellbeing-centered self-check');
+    expect(daily?.prompt).not.toContain('acac_self_report');
+    expect(weekly?.prompt).toContain('deeper private metacognitive and wellbeing review');
   });
 
   it('scheduled reflection templates do not send to Discord by default', () => {

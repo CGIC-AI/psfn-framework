@@ -471,8 +471,9 @@ describe('wireHeartbeatRuntime', () => {
       const valuesCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
         (call) => call[0]?.channelId === 'internal:reflection:weekly-review',
       );
-      expect(valuesCall?.[0]?.content).toContain('[Internal State Input]');
-      expect(valuesCall?.[0]?.content).toContain('serialized_internal_state:');
+      expect(valuesCall?.[0]?.content).toContain('[Reflection Self Evidence]');
+      expect(valuesCall?.[0]?.content).toContain('[Reflection Evidence Boundary]');
+      expect(valuesCall?.[0]?.content).not.toContain('serialized_internal_state:');
     } finally {
       nowSpy.mockRestore();
     }
@@ -611,8 +612,8 @@ describe('wireHeartbeatRuntime', () => {
       expect(firstDeliberationCall?.messages?.[0]?.content).not.toContain(
         '<appearance_context>',
       );
-      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Internal State Input]');
-      expect(firstDeliberationCall?.messages?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Reflection Self Evidence]');
+      expect(firstDeliberationCall?.messages?.[0]?.content).not.toContain(`snapshot_ref: ${narrative.snapshotRef}`);
       expect(firstDeliberationCall?.correlation).toMatchObject({
         callType: 'scheduled',
         originType: 'scheduled',
@@ -713,7 +714,8 @@ describe('wireHeartbeatRuntime', () => {
       expect(metacognitionEntry.initiatorSurface).toBe('scheduler:reflection_template');
       expect(metacognitionEntry.reason).toBe('Scheduled reflection run');
       expect(metacognitionEntry.reflectionJournalEntryId).toBeDefined();
-      expect(metacognitionEntry.prompt).toContain('[Internal State Input]');
+      expect(metacognitionEntry.prompt).toContain('[Reflection Self Evidence]');
+      expect(metacognitionEntry.prompt).not.toContain('serialized_internal_state:');
     } finally {
       nowSpy.mockRestore();
     }
@@ -763,8 +765,8 @@ describe('wireHeartbeatRuntime', () => {
       (call) => call[0]?.channelId === 'internal:reflection:daily-review',
     );
     expect(experientialCall).toBeDefined();
-    expect(experientialCall?.[0]?.content).toContain('[Internal State Input]');
-    expect(experientialCall?.[0]?.content).toContain(`snapshot_ref: ${narrative.snapshotRef}`);
+    expect(experientialCall?.[0]?.content).toContain('[Reflection Self Evidence]');
+    expect(experientialCall?.[0]?.content).not.toContain(`snapshot_ref: ${narrative.snapshotRef}`);
     expect(experientialCall?.[0]?.content).toContain('[Recent Metacognitive Flags]');
     expect(experientialCall?.[0]?.content).toContain('[Active Concerns]');
   });

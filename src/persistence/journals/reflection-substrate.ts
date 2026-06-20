@@ -277,11 +277,42 @@ function truncateReflectionText(text: string, maxLength = 220): string {
   return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
 }
 
-function formatOptionalNumber(value: number | null | undefined, digits = 3): string {
-  if (value === undefined || value === null || !Number.isFinite(value)) {
-    return 'unknown';
-  }
-  return Number(value).toFixed(digits);
+function describeSignedValence(value: number | null | undefined): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) return 'unknown';
+  if (value >= 0.35) return 'lifted';
+  if (value >= 0.12) return 'slightly lifted';
+  if (value <= -0.35) return 'heavy';
+  if (value <= -0.12) return 'slightly heavy';
+  return 'steady';
+}
+
+function describeArousal(value: number | null | undefined): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) return 'unknown';
+  if (value >= 0.35) return 'activated';
+  if (value >= 0.12) return 'a little activated';
+  if (value <= -0.25) return 'quieted';
+  return 'steady';
+}
+
+function describeDominance(value: number | null | undefined): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) return 'unknown';
+  if (value >= 0.25) return 'agentic';
+  if (value <= -0.25) return 'less agentic';
+  return 'balanced';
+}
+
+function describeUnitConfidence(value: number | null | undefined): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) return 'unknown confidence';
+  if (value >= 0.72) return 'strong confidence';
+  if (value >= 0.38) return 'some confidence';
+  return 'thin confidence';
+}
+
+function describeMoodDrift(value: number | null | undefined): string {
+  if (value === undefined || value === null || !Number.isFinite(value)) return 'unknown';
+  if (value >= 0.12) return 'warmer than the contact baseline';
+  if (value <= -0.12) return 'heavier than the contact baseline';
+  return 'close to the contact baseline';
 }
 
 function formatOptionalDateTime(value: string | null | undefined): string {
@@ -416,20 +447,22 @@ function formatPendingFollowUpsBlock(
 }
 
 function formatContactRelationalBlock(input: ReflectionContactContextBundleInput): string {
+  const displayName = input.contactDisplayName?.trim() || 'the current contact';
+  const trustLevel = input.trustLevel?.trim() || 'unknown';
+  const primarySession = input.primarySessionId?.trim() ? 'a live session is known' : 'no live session is known';
+  const lastSeen = formatOptionalDateTime(input.lastSeen);
+  const lastSeenLine = lastSeen === 'unknown'
+    ? 'Last-seen timing is unknown.'
+    : `Last seen around ${lastSeen}.`;
+  const recentStatus = (input.recentSessionMessages?.length ?? 0) > 0 ? 'active' : 'quiet';
   const lines = [
-    '[Reflection Contact Context]',
-    `contact_id: ${input.contactId}`,
-    `contact_name: ${input.contactDisplayName?.trim() || 'unknown'}`,
-    `trust_level: ${input.trustLevel?.trim() || 'unknown'}`,
-    `primary_session_id: ${input.primarySessionId?.trim() || 'unknown'}`,
-    `last_seen: ${formatOptionalDateTime(input.lastSeen)}`,
-    `last_seen_delta_seconds: ${input.lastSeenDeltaSeconds === null || input.lastSeenDeltaSeconds === undefined
-      ? 'unknown'
-      : Math.max(0, Math.floor(input.lastSeenDeltaSeconds)).toString()}`,
-    `recent_contact_status: ${(input.recentSessionMessages?.length ?? 0) > 0 ? 'active' : 'quiet'}`,
-    'guidance:',
+    '[Reflection Contact Evidence]',
+    `- Current contact: ${displayName}; trust scope ${trustLevel}.`,
+    `- Session continuity: ${primarySession}.`,
+    `- ${lastSeenLine}`,
+    `- Recent contact status: ${recentStatus}.`,
     '- Ground the reflection in the live contact, not in a generic silence narrative.',
-    '- If recent_contact_status is active, do not invent a gap or stale absence.',
+    '- If recent contact status is active, do not invent a gap or stale absence.',
   ];
 
   return lines.join('\n');
@@ -441,29 +474,41 @@ function formatContactAffectBlock(input: ReflectionContactContextBundleInput): s
   }
 
   const lines = [
-    '[Reflection Affect Context]',
+    '[Reflection Affect Evidence]',
     'Treat these affect signals as current evidence, not as a command to intensify them.',
   ];
 
   if (input.currentVAD) {
     lines.push(
-      `current_vad: valence=${formatOptionalNumber(input.currentVAD.valence, 3)} `
-      + `arousal=${formatOptionalNumber(input.currentVAD.arousal, 3)} `
-      + `dominance=${formatOptionalNumber(input.currentVAD.dominance, 3)}`,
+      `- Current affect appears ${describeSignedValence(input.currentVAD.valence)}, `
+      + `${describeArousal(input.currentVAD.arousal)}, and ${describeDominance(input.currentVAD.dominance)}.`,
     );
   }
 
   if (input.emotionalSnapshot) {
-    lines.push(`emotional_snapshot: ${JSON.stringify(input.emotionalSnapshot)}`);
+    const snapshotValence = typeof input.emotionalSnapshot.valence === 'number'
+      ? input.emotionalSnapshot.valence
+      : typeof input.emotionalSnapshot.moodValence === 'number'
+        ? input.emotionalSnapshot.moodValence
+        : undefined;
+    const snapshotConfidence = typeof input.emotionalSnapshot.confidence === 'number'
+      ? input.emotionalSnapshot.confidence
+      : undefined;
+    lines.push(
+      `- Contact mood snapshot appears ${describeSignedValence(snapshotValence)} `
+      + `with ${describeUnitConfidence(snapshotConfidence)}.`,
+    );
+    if (typeof input.emotionalSnapshot.moodDrift === 'number') {
+      lines.push(`- Mood drift is ${describeMoodDrift(input.emotionalSnapshot.moodDrift)}.`);
+    }
   }
 
   if (input.emotionalTimeSeries?.length) {
-    lines.push('emotional_time_series:');
+    lines.push('- Recent affect trend:');
     for (const point of input.emotionalTimeSeries) {
       lines.push(
-        `- ${new Date(point.observedAtMs).toISOString()} `
-        + `valence=${formatOptionalNumber(point.valence, 3)} `
-        + `confidence=${formatOptionalNumber(point.confidence, 3)}`,
+        `  - ${new Date(point.observedAtMs).toISOString()}: `
+        + `${describeSignedValence(point.valence)} (${describeUnitConfidence(point.confidence)})`,
       );
     }
   }
@@ -728,7 +773,7 @@ export function assembleReflectionSubstrateContext(input: {
       const provenanceRef = toReflectionJournalProvenanceRef(entry);
       provenanceRefs.push(provenanceRef);
       linesBySection[classifyReflectionContextSection(entry.templateId)].push(
-        `- ref=${provenanceRef} template=${entry.templateId} mode=${entry.mode} reflection=${truncateReflectionText(entry.reflection)}`,
+        `- ${entry.templateId} ${entry.mode} reflection: ${truncateReflectionText(entry.reflection)}`,
       );
     }
     for (const [sectionKey, lines] of Object.entries(linesBySection) as Array<[ReflectionContextSectionKey, string[]]>) {
@@ -748,7 +793,7 @@ export function assembleReflectionSubstrateContext(input: {
       const provenanceRef = toReflectionDailyJournalProvenanceRef(entry);
       provenanceRefs.push(provenanceRef);
       linesBySection[classifyReflectionContextSection(entry.templateId)].push(
-        `- ref=${provenanceRef} date=${entry.date} template=${entry.templateId ?? 'unknown'} reflection=${truncateReflectionText(entry.reflection)}`,
+        `- ${entry.date} ${entry.templateId ?? 'unknown'} reflection: ${truncateReflectionText(entry.reflection)}`,
       );
     }
     for (const [sectionKey, lines] of Object.entries(linesBySection) as Array<[ReflectionContextSectionKey, string[]]>) {
@@ -768,10 +813,10 @@ export function assembleReflectionSubstrateContext(input: {
       const provenanceRef = toReflectionProcessLogProvenanceRef(entry);
       provenanceRefs.push(provenanceRef);
       const processSummary = entry.stage === 'failed'
-        ? `error=${truncateReflectionText(entry.error ?? 'unknown failure')}`
-        : `reflection=${truncateReflectionText(entry.reflection ?? 'none')}`;
+        ? `error: ${truncateReflectionText(entry.error ?? 'unknown failure')}`
+        : `reflection: ${truncateReflectionText(entry.reflection ?? 'none')}`;
       linesBySection[classifyReflectionContextSection(entry.templateId)].push(
-        `- ref=${provenanceRef} process=${entry.processId} stage=${entry.stage} template=${entry.templateId ?? 'unknown'} ${processSummary}`,
+        `- ${entry.stage} ${entry.templateId ?? 'unknown'} process clue; ${processSummary}`,
       );
     }
     for (const [sectionKey, lines] of Object.entries(linesBySection) as Array<[ReflectionContextSectionKey, string[]]>) {

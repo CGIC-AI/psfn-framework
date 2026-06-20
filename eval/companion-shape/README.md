@@ -62,7 +62,28 @@ Use this flow for model-upgrade and persona-drift checks while the project is li
 
 2. Score collected outputs with a judge council.
 
-   `eval/companion-shape/qao-judge.ts` exposes `scoreQaoJudgeCouncil(...)` for wrappers that call judge models. The judge artifact must be privacy-safe and should not include raw live companion context.
+   Fixture smoke, no secrets or live APIs:
+
+   ```bash
+   npm run eval:qao:judge -- \
+     --source eval/companion-shape/fixtures/qao-captured-responses.json \
+     --run-id qao-fixture-judge-smoke \
+     --output /tmp/qao-fixture-judge.qao-judge.json
+   ```
+
+   Live judge council:
+
+   ```bash
+   npm run eval:qao:judge -- \
+     --source eval/companion-shape/artifacts/qao-collection/my-run.qao-collection.json \
+     --judge openrouter:provider/judge-model-id \
+     --judge deepseek:deepseek-chat \
+     --live \
+     --run-id qao-my-model-judged \
+     --output eval/companion-shape/artifacts/qao-judge/my-run.qao-judge.json
+   ```
+
+   Live judge targets are opt-in and must emit strict JSON for the QAO rubric. The judge artifact is privacy-safe and should not include raw live companion context.
 
 3. Build the QAO upgrade report.
 

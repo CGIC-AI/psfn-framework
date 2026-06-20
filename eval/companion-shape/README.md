@@ -34,3 +34,15 @@ npm run eval:companion-shape:report -- \
 ```
 
 The Markdown report ranks model/provider pairs, records missing scenario coverage, and flags missing required signals or stale-tool-name regressions. The JSON report is intended for trend tracking across shakedown rounds.
+
+## QAO Upgrade Matrix
+
+```bash
+npm run eval:qao:report -- \
+  --judge eval/companion-shape/artifacts/qao-judge/my-run.qao-judge.json \
+  --collection eval/companion-shape/artifacts/qao-collection/my-run.qao-collection.json \
+  --output /tmp/qao-upgrade-report.md \
+  --json-output /tmp/qao-upgrade-report.json
+```
+
+The QAO report consumes judge council artifacts, optionally joins collection coverage metadata, ranks model targets for roster promotion, and renders Markdown without raw response text.

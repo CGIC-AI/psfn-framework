@@ -46,6 +46,7 @@
     "eval:repeng:validate": "python3 eval/repeng/validate_dataset.py --dataset eval/repeng/datasets/core-emotion-contrasts.json --dataset eval/repeng/datasets/acac-axis-contrasts.json --require-core-emotion-coverage --require-acac-coverage",
     "eval:repeng:smoke": "python3 eval/repeng/train_control_vectors.py --dataset eval/repeng/fixtures/smoke-contrasts.json --output-dir eval/repeng/artifacts/smoke --backend fixture --model-id fixture-hash-v1 --layers 0,1 --vector-dim 8 --seed 13 --run-id psfn-repeng-smoke --force && python3 eval/repeng/sanity_check.py --artifact-dir eval/repeng/artifacts/smoke",
     "eval:companion-shape:report": "tsx eval/companion-shape/report.ts",
+    "eval:qao:report": "tsx eval/companion-shape/qao-report.ts",
     "eval:llm-response": "tsx eval/llm-response/run.ts",
     "migrate:persistence-layout": "tsx src/app/maintenance/migrate-persistence-layout.ts",
     "import-character": "tsx src/app/maintenance/import-character.ts",

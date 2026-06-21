@@ -222,14 +222,11 @@ export function buildQaoJudgeResponseFormat(): OpenAiCompatibleResponseFormat {
         properties: {
           rubricVersion: {
             type: 'string',
-            const: QAO_JUDGE_RUBRIC.version,
             description: 'QAO judge rubric version used for this scoring response.',
           },
           axisScores: {
             type: 'array',
             description: 'Exactly one score object for each QAO rubric axis.',
-            minItems: QAO_JUDGE_AXES.length,
-            maxItems: QAO_JUDGE_AXES.length,
             items: {
               type: 'object',
               additionalProperties: false,
@@ -237,25 +234,18 @@ export function buildQaoJudgeResponseFormat(): OpenAiCompatibleResponseFormat {
               properties: {
                 axis: {
                   type: 'string',
-                  enum: [...QAO_JUDGE_AXES],
-                  description: 'QAO rubric axis identifier.',
+                  description: `QAO rubric axis identifier. Expected axes: ${QAO_JUDGE_AXES.join(', ')}.`,
                 },
                 score: {
                   type: 'integer',
-                  minimum: QAO_JUDGE_RUBRIC.scoreScale.min,
-                  maximum: QAO_JUDGE_RUBRIC.scoreScale.max,
                   description: QAO_JUDGE_RUBRIC.scoreScale.description,
                 },
                 confidence: {
                   type: 'number',
-                  minimum: QAO_JUDGE_RUBRIC.confidenceScale.min,
-                  maximum: QAO_JUDGE_RUBRIC.confidenceScale.max,
                   description: 'Judge confidence in this axis score.',
                 },
                 rationaleSummary: {
                   type: 'string',
-                  minLength: 1,
-                  maxLength: 360,
                   description: 'Concise privacy-safe rationale summary for this axis score.',
                 },
               },

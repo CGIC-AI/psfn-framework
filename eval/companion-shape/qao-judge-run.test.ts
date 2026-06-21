@@ -87,12 +87,16 @@ describe('QAO judge runner CLI options', () => {
       required: ['rubricVersion', 'axisScores'],
     }));
     expect(responseFormat.json_schema.schema.properties).toEqual(expect.objectContaining({
-      rubricVersion: expect.objectContaining({ const: QAO_JUDGE_RUBRIC.version }),
-      axisScores: expect.objectContaining({
-        minItems: QAO_JUDGE_AXES.length,
-        maxItems: QAO_JUDGE_AXES.length,
-      }),
+      rubricVersion: expect.objectContaining({ type: 'string' }),
+      axisScores: expect.objectContaining({ type: 'array' }),
     }));
+    const schemaText = JSON.stringify(responseFormat.json_schema.schema);
+    expect(schemaText).not.toContain('"const"');
+    expect(schemaText).not.toContain('"enum"');
+    expect(schemaText).not.toContain('"minItems"');
+    expect(schemaText).not.toContain('"maxItems"');
+    expect(schemaText).not.toContain('"minimum"');
+    expect(schemaText).not.toContain('"maximum"');
     expect(buildQaoJudgeProviderPreferences({ providerId: 'openrouter', modelId: 'judge/model' })).toEqual({
       require_parameters: true,
     });

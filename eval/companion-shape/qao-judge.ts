@@ -290,21 +290,17 @@ export async function scoreQaoJudgeCouncil(
 
   validateCouncil(council);
 
-  const examples: QaoExampleJudgeResult[] = [];
-  for (const example of normalized.examples) {
+  const examples = await Promise.all(normalized.examples.map(async (example): Promise<QaoExampleJudgeResult> => {
     if (example.status === 'failed') {
-      examples.push({
+      return {
         example,
         status: 'response_failed',
         judgeResults: [],
         judgeFailures: [],
-      });
-      continue;
+      };
     }
 
-    const judgeResults: QaoJudgeResult[] = [];
-    const judgeFailures: QaoJudgeFailure[] = [];
-    for (const judge of council.judges) {
+    const judgeOutcomes = await Promise.all(council.judges.map(async (judge): Promise<QaoJudgeResult | QaoJudgeFailure> => {
       const request: QaoJudgeRequest = {
         runId,
         rubric: QAO_JUDGE_RUBRIC,
@@ -314,7 +310,7 @@ export async function scoreQaoJudgeCouncil(
       try {
         const rawOutput = await judge.judge(request);
         const output = validateQaoJudgeOutput(rawOutput, `${judge.metadata.id}.${example.id}`);
-        judgeResults.push({
+        return {
           status: 'ok',
           judge: { ...judge.metadata },
           rubric: {
@@ -326,26 +322,29 @@ export async function scoreQaoJudgeCouncil(
             ...score,
             rubricVersion: output.rubricVersion,
           })),
-        });
+        };
       } catch (error) {
-        judgeFailures.push({
+        return {
           status: 'failed',
           judge: { ...judge.metadata },
           failure: {
             kind: isValidationError(error) ? 'malformed_judge_output' : 'judge_error',
             message: error instanceof Error ? error.message : 'Unknown judge failure',
           },
-        });
+        };
       }
-    }
+    }));
 
-    examples.push({
+    const judgeResults = judgeOutcomes.filter(isQaoJudgeResult);
+    const judgeFailures = judgeOutcomes.filter(isQaoJudgeFailure);
+
+    return {
       example,
       status: summarizeExampleJudgeStatus(judgeResults.length, judgeFailures.length),
       judgeResults,
       judgeFailures,
-    });
-  }
+    };
+  }));
 
   const byExampleAxis = aggregateByExampleAxis(examples, {
     lowConfidenceThreshold,
@@ -393,6 +392,14 @@ export async function scoreQaoJudgeCouncil(
       lowConfidenceFindingCount: byExampleAxis.filter((entry) => entry.lowConfidenceJudgeIds.length > 0).length,
     },
   };
+}
+
+function isQaoJudgeResult(outcome: QaoJudgeResult | QaoJudgeFailure): outcome is QaoJudgeResult {
+  return outcome.status === 'ok';
+}
+
+function isQaoJudgeFailure(outcome: QaoJudgeResult | QaoJudgeFailure): outcome is QaoJudgeFailure {
+  return outcome.status === 'failed';
 }
 
 export function validateQaoJudgeOutput(value: unknown, field = 'judgeOutput'): QaoValidatedJudgeOutput {

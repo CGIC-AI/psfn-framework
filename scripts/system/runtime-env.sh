@@ -15,6 +15,98 @@ psfn_is_production_layout_mode() {
   esac
 }
 
+psfn_is_production_runtime() {
+  if psfn_is_production_layout_mode "${PSFN_RUNTIME_LAYOUT_MODE:-}"; then
+    return 0
+  fi
+
+  case "$(psfn_normalize_layout_mode "${NODE_ENV:-}")" in
+    production|prod)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+psfn_require_node_major() {
+  local required_major="${1:-22}"
+  local detected_major=""
+  local detected_version=""
+
+  if ! command -v node >/dev/null 2>&1; then
+    echo "[launcher] Node.js ${required_major}+ is required but node is not on PATH. Set PATH in the repo-owned service/env config." >&2
+    return 1
+  fi
+
+  detected_major="$(node -p 'Number(process.versions.node.split(".")[0])' 2>/dev/null || true)"
+  detected_version="$(node -v 2>/dev/null || true)"
+  case "${detected_major}" in
+    ''|*[!0-9]*)
+      echo "[launcher] Unable to determine Node.js version (${detected_version:-unknown}); Node.js ${required_major}+ is required." >&2
+      return 1
+      ;;
+  esac
+
+  if [ "${detected_major}" -lt "${required_major}" ]; then
+    echo "[launcher] Node.js ${required_major}+ is required; found ${detected_version:-major ${detected_major}}. Set PATH in the repo-owned service/env config." >&2
+    return 1
+  fi
+}
+
+psfn_can_use_socket_dir() {
+  local socket_dir="$1"
+  local probe_path=""
+
+  if [ -z "${socket_dir}" ]; then
+    return 1
+  fi
+  if ! mkdir -p "${socket_dir}" 2>/dev/null; then
+    return 1
+  fi
+  if [ ! -d "${socket_dir}" ] || [ ! -w "${socket_dir}" ]; then
+    return 1
+  fi
+
+  probe_path="${socket_dir}/.psfn-write-test.$$"
+  if ! : > "${probe_path}" 2>/dev/null; then
+    return 1
+  fi
+  rm -f "${probe_path}" 2>/dev/null || true
+  return 0
+}
+
+psfn_resolve_gateway_socket_path() {
+  local default_socket_path="$1"
+  local fallback_socket_path="$2"
+  local default_dir=""
+  local fallback_dir=""
+
+  if [ -n "${GATEWAY_SOCKET:-}" ]; then
+    printf '%s\n' "${GATEWAY_SOCKET}"
+    return 0
+  fi
+
+  default_dir="$(dirname "${default_socket_path}")"
+  if psfn_can_use_socket_dir "${default_dir}"; then
+    printf '%s\n' "${default_socket_path}"
+    return 0
+  fi
+
+  if psfn_is_production_runtime; then
+    echo "[launcher] Production runtime requires an explicit writable GATEWAY_SOCKET or a writable ${default_dir} directory." >&2
+    return 1
+  fi
+
+  fallback_dir="$(dirname "${fallback_socket_path}")"
+  if ! psfn_can_use_socket_dir "${fallback_dir}"; then
+    echo "[launcher] Unable to create fallback gateway socket directory: ${fallback_dir}" >&2
+    return 1
+  fi
+  printf '%s\n' "${fallback_socket_path}"
+}
+
 psfn_resolve_runtime_workspace_path() {
   if [ -n "${WORKSPACE_PATH:-}" ]; then
     printf '%s\n' "${WORKSPACE_PATH}"

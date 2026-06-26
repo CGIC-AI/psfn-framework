@@ -89,6 +89,8 @@ if [ "${PSFN_RUNTIME_MODE}" = "yolo" ]; then
   echo "[${MODE_LABEL}] YOLO mode active: gateway fs.read can access full codebase paths; fs.write remains personal-workspace-scoped."
 fi
 
+psfn_require_node_major 22
+
 echo "[${MODE_LABEL}] verifying startup owner files..."
 if [ -x "./node_modules/.bin/tsx" ]; then
   ./node_modules/.bin/tsx scripts/verify-startup-owner-files.ts
@@ -101,13 +103,9 @@ SOCKET_SUFFIX="$(basename "${ROOT_DIR}" | tr -cs 'A-Za-z0-9._-' '-')"
 FALLBACK_SOCKET_PATH="${XDG_RUNTIME_DIR:-/tmp}/psfn-gateway-${SOCKET_SUFFIX}/gateway.sock"
 
 if [ -z "${GATEWAY_SOCKET:-}" ]; then
-  default_dir="$(dirname "${DEFAULT_SOCKET_PATH}")"
-  if mkdir -p "${default_dir}" 2>/dev/null && [ -w "${default_dir}" ]; then
-    export GATEWAY_SOCKET="${DEFAULT_SOCKET_PATH}"
-  else
-    fallback_dir="$(dirname "${FALLBACK_SOCKET_PATH}")"
-    mkdir -p "${fallback_dir}"
-    export GATEWAY_SOCKET="${FALLBACK_SOCKET_PATH}"
+  RESOLVED_GATEWAY_SOCKET="$(psfn_resolve_gateway_socket_path "${DEFAULT_SOCKET_PATH}" "${FALLBACK_SOCKET_PATH}")"
+  export GATEWAY_SOCKET="${RESOLVED_GATEWAY_SOCKET}"
+  if [ "${GATEWAY_SOCKET}" = "${FALLBACK_SOCKET_PATH}" ]; then
     echo "[${MODE_LABEL}] /run/psfn not writable; using GATEWAY_SOCKET=${GATEWAY_SOCKET}"
   fi
 fi

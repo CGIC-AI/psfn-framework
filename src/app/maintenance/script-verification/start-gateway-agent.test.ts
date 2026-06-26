@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -81,6 +81,20 @@ describe('start-gateway-agent launcher supervision', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).not.toContain('export LIFECYCLE_RESTART_COMMAND="npm run');
   });
+
+  it('checks Node.js before running TypeScript entrypoints', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('psfn_require_node_major 22');
+    expect(launcher.indexOf('psfn_require_node_major 22')).toBeLessThan(
+      launcher.indexOf('scripts/verify-startup-owner-files.ts'),
+    );
+  });
+
+  it('delegates gateway socket selection to the runtime-env guard', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('psfn_resolve_gateway_socket_path "${DEFAULT_SOCKET_PATH}" "${FALLBACK_SOCKET_PATH}"');
+    expect(launcher).not.toContain('if mkdir -p "${default_dir}"');
+  });
 });
 
 describe('psfn_source_dotenv_preserving_existing_env', () => {
@@ -159,5 +173,100 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
       './workspace',
       './workspace',
     ]);
+  });
+
+  it('fails clearly when the launcher sees an unsupported Node.js version', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'psfn-launcher-node-'));
+    tempDirs.push(workDir);
+    const fakeNode = join(workDir, 'node');
+    writeFileSync(
+      fakeNode,
+      [
+        '#!/usr/bin/env bash',
+        'if [ "$1" = "-p" ]; then',
+        '  printf "20\\n"',
+        'else',
+        '  printf "v20.19.2\\n"',
+        'fi',
+      ].join('\n'),
+      'utf8',
+    );
+    chmodSync(fakeNode, 0o755);
+
+    let error: unknown;
+    try {
+      execFileSync(
+        'bash',
+        [
+          '-lc',
+          [
+            `source ${JSON.stringify(runtimeEnvPath)}`,
+            `PATH=${JSON.stringify(`${workDir}:/usr/bin:/bin`)}`,
+            'psfn_require_node_major 22',
+          ].join('; '),
+        ],
+        { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' },
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeDefined();
+    expect(String((error as { stderr?: Buffer }).stderr)).toContain('Node.js 22+ is required; found v20.19.2');
+  });
+
+  it('fails closed instead of using the fallback socket in production mode', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'psfn-launcher-socket-'));
+    tempDirs.push(workDir);
+    const fallbackDir = join(workDir, 'fallback');
+    const fallbackSocket = join(fallbackDir, 'gateway.sock');
+
+    let error: unknown;
+    try {
+      execFileSync(
+        'bash',
+        [
+          '-lc',
+          [
+            `source ${JSON.stringify(runtimeEnvPath)}`,
+            'unset GATEWAY_SOCKET',
+            'export PSFN_RUNTIME_LAYOUT_MODE=production',
+            `psfn_resolve_gateway_socket_path /proc/psfn-denied/gateway.sock ${JSON.stringify(fallbackSocket)}`,
+          ].join('; '),
+        ],
+        { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' },
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeDefined();
+    expect(String((error as { stderr?: Buffer }).stderr)).toContain(
+      'Production runtime requires an explicit writable GATEWAY_SOCKET',
+    );
+    expect(existsSync(fallbackDir)).toBe(false);
+  });
+
+  it('keeps the fallback socket available for local continuous launches', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'psfn-launcher-socket-'));
+    tempDirs.push(workDir);
+    const fallbackDir = join(workDir, 'fallback');
+    const fallbackSocket = join(fallbackDir, 'gateway.sock');
+
+    const output = execFileSync(
+      'bash',
+      [
+        '-lc',
+        [
+          `source ${JSON.stringify(runtimeEnvPath)}`,
+          'unset GATEWAY_SOCKET PSFN_RUNTIME_LAYOUT_MODE NODE_ENV',
+          `psfn_resolve_gateway_socket_path /proc/psfn-denied/gateway.sock ${JSON.stringify(fallbackSocket)}`,
+        ].join('; '),
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    ).trim();
+
+    expect(output).toBe(fallbackSocket);
+    expect(existsSync(fallbackDir)).toBe(true);
   });
 });

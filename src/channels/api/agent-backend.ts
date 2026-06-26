@@ -175,11 +175,12 @@ export class AgentApiBackend {
   }
 
   async handleHealth(): Promise<ApiHealthRpcResult> {
-    return await buildApiHealthResponse({
+    const result = await buildApiHealthResponse({
       healthChecks: this.healthChecks,
       lastSchedulerHealthcheckAtMs: this.lastSchedulerHealthcheckAtMs,
       schedulerHealthcheckStaleAfterMs: this.schedulerHealthcheckStaleAfterMs,
     });
+    return result.body;
   }
 
   async handleTelemetryIngest(

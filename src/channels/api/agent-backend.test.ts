@@ -10,6 +10,38 @@ function createSessionManagerStub() {
   } as any;
 }
 
+describe('AgentApiBackend health RPC', () => {
+  it('returns the health body directly instead of an HTTP response envelope', async () => {
+    const backend = new AgentApiBackend({
+      agentLoop: { handleMessage: vi.fn(), abort: vi.fn() } as any,
+      eventBus: new EventBus(),
+      sessionManager: createSessionManagerStub(),
+      healthChecks: {
+        memory: () => ({ status: 'healthy' }),
+        llm: () => ({ status: 'healthy' }),
+        discord: () => ({ status: 'healthy' }),
+        embeddings: () => ({ status: 'healthy' }),
+        scheduler: () => ({ status: 'healthy' }),
+      },
+    });
+
+    const health = await backend.handleHealth();
+
+    expect(health).toMatchObject({
+      status: 'healthy',
+      subsystems: {
+        memory: { status: 'healthy' },
+        llm: { status: 'healthy' },
+        discord: { status: 'healthy' },
+        embeddings: { status: 'healthy' },
+        scheduler: { status: 'healthy' },
+      },
+    });
+    expect(health).not.toHaveProperty('statusCode');
+    expect(health).not.toHaveProperty('body');
+  });
+});
+
 describe('AgentApiBackend chat completion deadlines', () => {
   it('returns at visible turn completion instead of waiting for post-turn cleanup', async () => {
     vi.useFakeTimers();

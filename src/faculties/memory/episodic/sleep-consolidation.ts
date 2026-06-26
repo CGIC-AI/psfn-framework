@@ -19,6 +19,8 @@ export interface SleepCycleConsolidationOptions {
   reviewWindowMs?: number;
   /** Episodes in the same scope closer than this are one sitting and merge. */
   adjacencyGapMs?: number;
+  /** How far back the bounded LLM cleanup reviews episodes. */
+  refinementWindowMs?: number;
   /** Cap on LLM refinement calls per run. */
   maxRefinementsPerRun?: number;
   transcriptMessageLimit?: number;
@@ -46,7 +48,10 @@ interface EpisodeRefinement {
   salienceReason: string;
 }
 
-const DEFAULT_REVIEW_WINDOW_MS = 36 * 60 * 60_000;
+// Keep deterministic repair broad enough to fold historical canonical overlap
+// backlogs; LLM refinement remains separately bounded below.
+const DEFAULT_REVIEW_WINDOW_MS = 60 * 24 * 60 * 60_000;
+const DEFAULT_REFINEMENT_WINDOW_MS = 36 * 60 * 60_000;
 const DEFAULT_ADJACENCY_GAP_MS = 45 * 60_000;
 const DEFAULT_MAX_REFINEMENTS_PER_RUN = 8;
 const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 200;
@@ -93,14 +98,20 @@ function mergeUnique<T>(left: readonly T[], right: readonly T[], key: (item: T) 
   return [...seen.values()];
 }
 
-function sameSitting(previous: Episode, next: Episode, adjacencyGapMs: number): boolean {
-  const sameChannel = (previous.channelId ?? '') === (next.channelId ?? '');
-  const sameThread = (previous.threadId ?? '') === (next.threadId ?? '');
+function sameEpisodeScope(left: Episode, right: Episode): boolean {
+  const sameChannel = (left.channelId ?? '') === (right.channelId ?? '');
+  const sameThread = (left.threadId ?? '') === (right.threadId ?? '');
   if (!sameChannel || !sameThread) return false;
-  const sameParticipants = [...previous.participantContactIds].sort().join(',')
-    === [...next.participantContactIds].sort().join(',');
-  if (!sameParticipants) return false;
-  const gapMs = parseInstant(next.startedAt) - parseInstant(previous.endedAt);
+  return [...left.participantContactIds].sort().join(',')
+    === [...right.participantContactIds].sort().join(',');
+}
+
+function sameSitting(chain: readonly Episode[], next: Episode, adjacencyGapMs: number): boolean {
+  if (chain.length === 0) return false;
+  const anchor = chain[0];
+  if (!sameEpisodeScope(anchor, next)) return false;
+  const chainEndMs = Math.max(...chain.map(episode => parseInstant(episode.endedAt)));
+  const gapMs = parseInstant(next.startedAt) - chainEndMs;
   return gapMs <= adjacencyGapMs;
 }
 
@@ -111,15 +122,13 @@ export function buildMergeChains(episodes: readonly Episode[], adjacencyGapMs: n
   ));
   const chains: Episode[][] = [];
   let currentChain: Episode[] = [];
-  let previous: Episode | null = null;
   for (const episode of ordered) {
-    if (previous && sameSitting(previous, episode, adjacencyGapMs)) {
+    if (sameSitting(currentChain, episode, adjacencyGapMs)) {
       currentChain.push(episode);
     } else {
       currentChain = [episode];
       chains.push(currentChain);
     }
-    previous = episode;
   }
   return chains;
 }
@@ -257,6 +266,7 @@ export class SleepCycleEpisodeConsolidator {
   private readonly now: () => Date;
   private readonly reviewWindowMs: number;
   private readonly adjacencyGapMs: number;
+  private readonly refinementWindowMs: number;
   private readonly maxRefinementsPerRun: number;
   private readonly transcriptMessageLimit: number;
   private readonly maxTranscriptCharsPerEpisode: number;
@@ -273,6 +283,7 @@ export class SleepCycleEpisodeConsolidator {
     this.now = options.now ?? (() => new Date());
     this.reviewWindowMs = options.reviewWindowMs ?? DEFAULT_REVIEW_WINDOW_MS;
     this.adjacencyGapMs = options.adjacencyGapMs ?? DEFAULT_ADJACENCY_GAP_MS;
+    this.refinementWindowMs = options.refinementWindowMs ?? DEFAULT_REFINEMENT_WINDOW_MS;
     this.maxRefinementsPerRun = options.maxRefinementsPerRun ?? DEFAULT_MAX_REFINEMENTS_PER_RUN;
     this.transcriptMessageLimit = options.transcriptMessageLimit ?? DEFAULT_TRANSCRIPT_MESSAGE_LIMIT;
     this.maxTranscriptCharsPerEpisode = options.maxTranscriptCharsPerEpisode ?? DEFAULT_MAX_TRANSCRIPT_CHARS;
@@ -344,7 +355,9 @@ export class SleepCycleEpisodeConsolidator {
     }
 
     // Stage 2 — bounded LLM cleanup of titles, landmarks, themes, salience.
+    const refinementCutoffIso = toIsoInstant(nowMs - this.refinementWindowMs);
     const refinementQueue = consolidated
+      .filter(episode => episode.endedAt >= refinementCutoffIso)
       .filter(episode => !refinedEpisodeIds.has(episode.id))
       .sort((left, right) => right.startedAt.localeCompare(left.startedAt))
       .slice(0, this.maxRefinementsPerRun);

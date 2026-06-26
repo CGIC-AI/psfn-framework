@@ -148,6 +148,33 @@ describe('SleepCycleEpisodeConsolidator', () => {
     expect(await store.listEpisodes()).toHaveLength(3);
   });
 
+  it('repairs historical overlaps outside the old short review window', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('old-wide', '2026-05-24T02:27:00.000Z', '2026-05-24T04:01:00.000Z'));
+    await store.createEpisode(episodeInput('old-nested', '2026-05-24T03:13:00.000Z', '2026-05-24T04:19:00.000Z'));
+
+    const complete = vi.fn(async () => refinementResponse());
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      { getRecentMessages: () => [] },
+      { complete },
+      { now: () => NOW },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+
+    expect(result.reviewedEpisodes).toBe(2);
+    expect(result.mergeChains).toBe(1);
+    expect(result.mergedAwayEpisodes).toBe(1);
+    expect(result.refinementSkipped).toBe(0);
+    expect(complete).not.toHaveBeenCalled();
+
+    const active = await store.listEpisodes();
+    expect(active.map(episode => episode.id)).toEqual(['old-wide']);
+    expect(active[0]?.startedAt).toBe('2026-05-24T02:27:00.000Z');
+    expect(active[0]?.endedAt).toBe('2026-05-24T04:19:00.000Z');
+  });
+
   it('keeps deterministic fields when the refinement response is invalid', async () => {
     const store = makeStore();
     await store.createEpisode(episodeInput('solo', '2026-06-10T01:00:00.000Z', '2026-06-10T01:30:00.000Z'));
@@ -278,5 +305,38 @@ describe('buildMergeChains', () => {
     ] as never, 45 * 60_000);
 
     expect(chains.map(chain => chain.map(episode => episode.id))).toEqual([['a', 'b'], ['c']]);
+  });
+
+  it('keeps nested overlaps in one chain using the chain end, not only the previous episode end', () => {
+    const make = (id: string, startedAt: string, endedAt: string) => ({
+      schemaVersion: 1,
+      id,
+      title: id,
+      landmark: id,
+      startedAt,
+      endedAt,
+      threadId: 't',
+      channelId: 'c',
+      participantContactIds: ['p'],
+      salience: { score: 0.5 },
+      affect: { labels: [] },
+      themes: [],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+      createdAt: NOW.toISOString(),
+      updatedAt: NOW.toISOString(),
+    });
+    const chains = buildMergeChains([
+      make('wide', '2026-06-10T00:00:00.000Z', '2026-06-10T02:00:00.000Z'),
+      make('nested', '2026-06-10T00:15:00.000Z', '2026-06-10T00:20:00.000Z'),
+      make('tail-overlap', '2026-06-10T01:45:00.000Z', '2026-06-10T02:10:00.000Z'),
+    ] as never, 10 * 60_000);
+
+    expect(chains.map(chain => chain.map(episode => episode.id))).toEqual([[
+      'wide',
+      'nested',
+      'tail-overlap',
+    ]]);
   });
 });

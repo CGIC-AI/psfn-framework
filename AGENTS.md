@@ -180,6 +180,7 @@ Guardrails:
 - Do not create or expand god files.
 - Prefer focused modules with clear ownership boundaries.
 - Extend existing primitives before inventing new parallel abstractions.
+- Reuse shared type guards instead of redefining them locally. For example, use `isRecord` from `src/shared/utils/types.ts` rather than adding per-file `function isRecord` copies. If you need a new guard, add it to the shared utils module once and import it everywhere (see bead `psfn-framework-qfa`).
 - If a file is getting large, split by domain capability before adding more.
 - Verify new runtime code is wired to a real entrypoint or registry path.
 - Before closing work, confirm there are no unreachable production modules or unwired settings.

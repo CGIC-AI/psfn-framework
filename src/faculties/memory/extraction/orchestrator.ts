@@ -14,7 +14,7 @@ import { classifyChannel } from '../../../system/trust/policy.js';
 import { extractBoundaryFactsFromEntries } from '../boundary-log.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { ExtractedFact } from '../types.js';
-import type { WriteResult } from '../writer.js';
+import { MemoryWritePolicyError, type WriteResult } from '../writer.js';
 import { parseFactsXml } from './parser.js';
 import {
   buildExtractionEntryChunks,
@@ -70,6 +70,14 @@ export class ExtractionIntegrityError extends Error {
     this.context = context;
     this.cause = cause;
   }
+}
+
+function extractionRejectionReasonForWritePolicy(
+  error: MemoryWritePolicyError,
+): ExtractionRejectionReason {
+  return error.reason === 'novelty_below_threshold'
+    ? 'low_novelty'
+    : 'low_importance';
 }
 
 export interface ExtractionRunOptions {
@@ -377,6 +385,25 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
             break;
         }
       } catch (error) {
+        if (error instanceof MemoryWritePolicyError) {
+          const reason = extractionRejectionReasonForWritePolicy(error);
+          rejectionBreakdown[reason]++;
+          if (options.telemetryEnabled) {
+            log.info('Skipped extracted fact rejected by memory write policy', {
+              channelId: options.channelId,
+              triggerReason: options.triggerReason,
+              factIndex: candidate.index,
+              factType: fact.type,
+              reason: error.reason,
+              sensitivity: error.sensitivity,
+              salience: error.salience,
+              minSalience: error.minSalience,
+              novelty: error.novelty,
+              minNovelty: error.minNovelty,
+            });
+          }
+          continue;
+        }
         throw new ExtractionIntegrityError(
           `Failed to process extracted fact at index ${candidate.index}`,
           {

@@ -4,6 +4,7 @@ import {
   runExtractionOrchestration,
   type ExtractionRunOptions,
 } from './orchestrator.js';
+import { MemoryWritePolicyError } from '../writer.js';
 
 function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): ExtractionRunOptions {
   const recoveredEntries = [
@@ -91,6 +92,57 @@ describe('runExtractionOrchestration fail-closed errors', () => {
       cause: processFactFailure,
     });
     expect(options.emitExtractionEnd).not.toHaveBeenCalled();
+  });
+
+  it('skips memory write policy rejections without aborting the extraction run', async () => {
+    const policyFailure = new MemoryWritePolicyError({
+      reason: 'novelty_below_threshold',
+      sensitivity: 'intimate',
+      salience: 0.8,
+      novelty: 0.17,
+      minSalience: 0.6,
+      minNovelty: 0.18,
+    });
+    const processFact = vi.fn()
+      .mockRejectedValueOnce(policyFailure)
+      .mockResolvedValueOnce({
+        action: 'created',
+        memory: { id: 'mem-2' },
+      });
+    const options = buildOptions({
+      llmClient: {
+        complete: vi.fn().mockResolvedValue({
+          content: `<response>
+<fact>
+<text>User prefers quiet evening check-ins</text>
+<type>relational</type>
+<importance>0.9</importance>
+<confidence>0.95</confidence>
+</fact>
+<fact>
+<text>User enjoys board games</text>
+<type>semantic</type>
+<importance>0.8</importance>
+<confidence>0.9</confidence>
+</fact>
+</response>`,
+        }),
+      } as ExtractionRunOptions['llmClient'],
+      processFact,
+    });
+
+    await expect(runExtractionOrchestration(options)).resolves.toBeUndefined();
+
+    expect(processFact).toHaveBeenCalledTimes(2);
+    expect(options.recordExtractionMarker).toHaveBeenCalledWith('api:test', 2);
+    expect(options.emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+      acceptedCount: 1,
+      rejectedCount: 1,
+      writeCount: 1,
+      rejectionBreakdown: expect.objectContaining({
+        low_novelty: 1,
+      }),
+    }));
   });
 
   it('surfaces orchestration failures with structured context instead of swallowing', async () => {

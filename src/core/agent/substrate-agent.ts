@@ -160,6 +160,13 @@ function resolveRuntimePromptGuidanceVariables(config: SubstrateConfig): Record<
   };
 }
 
+function resolveConfiguredCharacterName(config: CoreSubstrateConfig): string | undefined {
+  const candidate = typeof config.characterName === 'string'
+    ? config.characterName.trim()
+    : '';
+  return candidate || undefined;
+}
+
 export type {
   LLMProviderPort,
   EmbeddingProviderPort,
@@ -293,7 +300,9 @@ export class SubstrateAgent {
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
     this.systemPrompt = systemPrompt;
-    this.characterName = options?.characterName?.trim() || deriveCharacterNameForRuntime(systemPrompt);
+    this.characterName = options?.characterName?.trim()
+      || resolveConfiguredCharacterName(config)
+      || deriveCharacterNameForRuntime(systemPrompt);
     const fallbackPromptVariables = { ...(options?.characterPromptVariables ?? {}) };
     this.resolveCharacterPromptVariables = options?.characterPromptVariablesProvider
       ?? (() => fallbackPromptVariables);

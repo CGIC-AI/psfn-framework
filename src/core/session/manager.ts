@@ -296,6 +296,15 @@ export class SessionManager {
     this.internalRoleEnvelopeLedger = null;
   }
 
+  private resolveContextCharacterName(): string | undefined {
+    const runtimeName = this.characterName?.trim();
+    if (runtimeName) return runtimeName;
+    const configuredName = typeof this.config.characterName === 'string'
+      ? this.config.characterName.trim()
+      : '';
+    return configuredName || undefined;
+  }
+
   get continuityStore(): UserContinuityStore | null {
     return this.continuityStoreRef;
   }
@@ -964,7 +973,7 @@ export class SessionManager {
       config: this.config,
       store: this.store,
       crossChannelContinuity: this.crossChannelContinuity,
-      characterName: this.characterName,
+      characterName: this.resolveContextCharacterName(),
       ...params,
     });
   }
@@ -1018,7 +1027,7 @@ export class SessionManager {
         });
       },
       crossChannelContinuity: this.crossChannelContinuity,
-      characterName: this.characterName,
+      characterName: this.resolveContextCharacterName(),
       turnSnapshot,
       focusKnowledgeTexts,
       focusCompactionRanges,
@@ -1067,7 +1076,7 @@ export class SessionManager {
       entries: recent,
       channelVisibility: classifyChannel(resolvedChannelId, channelMeta),
       tokenBudget: historyBudget.tokenBudget,
-      characterName: this.characterName,
+      characterName: this.resolveContextCharacterName(),
     });
     recent = assembledHistory.verbatimEntries;
     const focusKnowledgeTexts = this.getFocusKnowledgeTexts(resolvedChannelId);
@@ -1105,7 +1114,7 @@ export class SessionManager {
       recentActivityEntries: orientationRecentActivityEntries,
       continuityEntries: orientationContinuityEntries,
       focusKnowledgeTexts,
-      characterName: this.characterName,
+      characterName: this.resolveContextCharacterName(),
     });
 
     return {

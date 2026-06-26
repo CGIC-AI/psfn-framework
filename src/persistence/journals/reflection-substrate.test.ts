@@ -182,6 +182,7 @@ describe('reflection substrate stores', () => {
   it('assembles a contact-scoped reflection context bundle with live chat, memories, and follow-ups', () => {
     const bundle = assembleReflectionContactContextBundle({
       contactId: 'contact-1',
+      companionName: 'Purrsephone',
       contactDisplayName: 'Ari',
       trustLevel: 'trusted',
       primarySessionId: 'discord:primary-session',
@@ -219,6 +220,8 @@ describe('reflection substrate stores', () => {
     expect(bundle.relational).not.toContain('contact_id:');
     expect(bundle.relational).not.toContain('last_seen_delta_seconds:');
     expect(bundle.relational).toContain('I wanted to follow up on yesterday.');
+    expect(bundle.relational).toContain('Purrsephone: I am here and tracking that thread.');
+    expect(bundle.relational).not.toContain('Assistant: I am here and tracking that thread.');
     expect(bundle.relational).toContain('Clarify the recovery timeline');
     expect(bundle.relational).toContain('Check in about the recovery plan');
     expect(bundle.relational).not.toContain('stale silence');
@@ -243,6 +246,7 @@ describe('reflection substrate stores', () => {
   it('seeds a recent session tail into the reflection memory section when retrieval is empty', () => {
     const bundle = assembleReflectionContactContextBundle({
       contactId: 'contact-1',
+      companionName: 'Purrsephone',
       contactDisplayName: 'Ari',
       trustLevel: 'trusted',
       primarySessionId: 'discord:primary-session',
@@ -258,6 +262,8 @@ describe('reflection substrate stores', () => {
     expect(bundle.self).toContain('Memory retrieval was empty, so use this recent live tail as the fallback evidence.');
     expect(bundle.self).toContain('I just sent the update.');
     expect(bundle.self).toContain('I am tracking the update now.');
+    expect(bundle.self).toContain('Purrsephone: I am tracking the update now.');
+    expect(bundle.self).not.toContain('Assistant: I am tracking the update now.');
     expect(bundle.provenanceRefs).toEqual(expect.arrayContaining([
       'reflection_contact:contact-1',
       'reflection_contact_session_tail:discord:primary-session',

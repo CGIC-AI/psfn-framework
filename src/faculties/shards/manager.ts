@@ -215,16 +215,20 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     const shardId = `shard-${randomUUID()}`;
     const channelId = `shard:${shardId}`;
     const coreCompanionId = resolveCompanionIdFromConfig(this.deps.config);
+    const coreCompanionName = resolveCompanionNameFromConfig(this.deps.config);
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
       ...this.deps.config,
       companionId: shardCompanionId,
     };
-    const contextPack = shardConfig.contextPack ?? await this.buildContextPack(
-      shardId,
-      channelId,
-      shardConfig,
-    );
+    const contextPack = shardConfig.contextPack
+      ? this.withCompanionNameForContextPack(shardConfig.contextPack, coreCompanionName)
+      : await this.buildContextPack(
+        shardId,
+        channelId,
+        shardConfig,
+        coreCompanionName,
+      );
     const preparedConfig = contextPack
       ? { ...shardConfig, contextPack }
       : shardConfig;
@@ -233,7 +237,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       channelId,
       channelType: 'api',
       authorId: coreCompanionId,
-      authorName: resolveCompanionNameFromConfig(this.deps.config),
+      authorName: coreCompanionName,
       content: shardConfig.task,
       timestamp: new Date(),
     };
@@ -906,6 +910,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     shardId: string,
     shardChannelId: string,
     shardConfig: ShardConfig,
+    companionName: string,
   ): Promise<ShardContextPack | null> {
     const source = this.normalizeSourceContext(shardConfig.sourceContext);
     if (!source) {
@@ -980,8 +985,20 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       purpose: 'shard_context',
       task: shardConfig.task,
       source,
+      companionName,
       sessionEntries,
       ...(memoryBlock ? { memoryBlock } : {}),
+    };
+  }
+
+  private withCompanionNameForContextPack(
+    contextPack: ShardContextPack,
+    companionName: string,
+  ): ShardContextPack {
+    const existingCompanionName = contextPack.companionName?.trim();
+    return {
+      ...contextPack,
+      companionName: existingCompanionName || companionName,
     };
   }
 
@@ -1175,10 +1192,11 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   }
 
   private renderContextPack(contextPack: ShardContextPack): string {
+    const companionName = contextPack.companionName?.trim() || 'Assistant';
     const sourceConversation = contextPack.sessionEntries
       .map(entry => {
         const speaker = entry.role === 'assistant'
-          ? 'Assistant'
+          ? entry.authorName?.trim() || companionName
           : entry.role === 'system'
             ? 'System'
             : (entry.authorName?.trim() || 'User');

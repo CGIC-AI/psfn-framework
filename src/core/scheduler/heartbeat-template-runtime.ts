@@ -476,6 +476,18 @@ function buildUnsupportedReflectionSupportFlags(
   }];
 }
 
+function resolveCompanionNameFromCharacterVariables(
+  provider: HeartbeatRuntimeOptions['characterPromptVariablesProvider'] | undefined,
+): string | undefined {
+  if (!provider) return undefined;
+  const variables = provider();
+  for (const key of ['char', 'character_name', 'name', 'character', 'character.name']) {
+    const candidate = variables[key].trim();
+    if (candidate) return candidate;
+  }
+  return undefined;
+}
+
 export interface HeartbeatTemplateRuntime {
   policyStore: HeartbeatPolicyStore;
   valuesJournal: ValuesJournalStore;
@@ -1079,6 +1091,7 @@ export function createHeartbeatTemplateRuntime(
     return {
       bundle: assembleReflectionContactContextBundle({
         contactId: reflectionCanonicalContactId,
+        companionName: resolveCompanionNameFromCharacterVariables(runtimeOptions.characterPromptVariablesProvider),
         contactDisplayName,
         trustLevel,
         primarySessionId,

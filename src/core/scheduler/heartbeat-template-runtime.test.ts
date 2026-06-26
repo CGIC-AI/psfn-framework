@@ -1479,7 +1479,6 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         role: 'assistant' as const,
         content: 'I am here and tracking that thread.',
         timestamp: 1_700_000_000_100,
-        authorName: 'Companion',
       },
     ];
     const currentContact = {
@@ -1543,6 +1542,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
       runtimeOptions: {
+        characterPromptVariablesProvider: () => ({ char: 'Purrsephone' }),
         sessionManager: {
           resolveSessionChannelId: (channelId: string) => channelId,
           getRecentMessages: (channelId: string, limit?: number) => (
@@ -1608,6 +1608,8 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(contactSection).toContain('Current contact: Ari; trust scope trusted.');
     expect(contactSection).toContain('Recent contact status: active.');
     expect(contactSection).not.toContain('contact_id:');
+    expect(recentSessionSection).toContain('Purrsephone: I am here and tracking that thread.');
+    expect(recentSessionSection).not.toContain('Assistant: I am here and tracking that thread.');
     expect(getPromptBulletLines(recentSessionSection)).toHaveLength(2);
     expect(relationalSubstrateSection).toContain('canonical_truth_boundary:');
     expect(relationalSubstrateSection).toContain('daily-review');

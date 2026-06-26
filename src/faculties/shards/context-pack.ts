@@ -161,10 +161,11 @@ export function renderShardParentContextSnapshot(
   parentContext: ShardParentContextSnapshot,
   taskMaxChars: number,
 ): string {
+  const companionName = parentContext.companionName?.trim() || 'Assistant';
   const sourceConversation = parentContext.transcript.entries
     .map(entry => {
       const speaker = entry.role === 'assistant'
-        ? 'Assistant'
+        ? entry.authorName?.trim() || companionName
         : entry.role === 'system'
           ? 'System'
           : (entry.authorName?.trim() || 'User');

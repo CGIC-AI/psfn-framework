@@ -2776,6 +2776,31 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Assistant');
     expect(ctx.systemPrompt).not.toContain('PSFN');
   });
+
+  it('uses configured companion identity before generic assistant labels', async () => {
+    const config = makeConfig({ characterName: 'ConfigBot' });
+    const continuityDir = join(dir, 'continuity');
+    const continuityStore = new UserContinuityStore(continuityDir);
+    const mgr = new SessionManager(store, config);
+    mgr.continuityStore = continuityStore;
+
+    continuityStore.append('user1', {
+      channelId: 'api:other',
+      role: 'assistant',
+      content: 'I helped with something.',
+      timestamp: 1000,
+      originChannelId: 'api:other',
+      channelVisibility: 'private',
+    });
+
+    mgr.recordUserMessage('api:main', 'Hello', 'user1', 'Alice');
+    mgr.recordAssistantMessage('api:main', 'Hi there');
+
+    const ctx = await mgr.buildContext('api:main', 'Sys', '', undefined, 'user1');
+
+    expect(ctx.systemPrompt).toContain('ConfigBot');
+    expect(ctx.systemPrompt).not.toContain('Assistant');
+  });
 });
 
 describe('resolveRoleName', () => {

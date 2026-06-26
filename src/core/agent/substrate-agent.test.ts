@@ -3718,6 +3718,25 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(buildCall[1]).not.toContain('{{user}}');
   });
 
+  it('uses configured characterName for macros when no constructor characterName is provided', async () => {
+    const config = makeConfig({ characterName: 'ConfigCompanion' });
+    const sessionManager = makeMockSessionManager();
+    const agent = new SubstrateAgent(
+      new EventBus(),
+      makeMockLLMProvider(),
+      sessionManager,
+      'Identity: {{char}}.',
+      config,
+    );
+
+    await agent.handleMessage(makeMessage({ authorName: 'PrimaryUser' }));
+
+    const buildCall = (sessionManager.buildContext as any).mock.calls[0];
+    expect(buildCall[1]).toContain('Identity: ConfigCompanion.');
+    expect(buildCall[1]).not.toContain('Identity: Assistant.');
+    expect(buildCall[1]).not.toContain('{{char}}');
+  });
+
   it('resolves character macros from current provider variables on each turn', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();

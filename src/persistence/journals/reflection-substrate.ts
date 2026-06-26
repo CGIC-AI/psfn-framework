@@ -156,6 +156,7 @@ export interface ReflectionContactPendingFollowUp {
 
 export interface ReflectionContactContextBundleInput {
   contactId: string;
+  companionName?: string;
   contactDisplayName?: string;
   trustLevel?: string;
   primarySessionId?: string;
@@ -332,6 +333,7 @@ function joinContextSections(...sections: Array<string | undefined>): string {
 function formatRecentSessionMessagesBlock(
   messages: readonly ReflectionContactRecentMessage[] | undefined,
   primarySessionId?: string,
+  companionName?: string,
 ): { block?: string; provenanceRefs: string[] } {
   if (!messages || messages.length === 0) {
     return { provenanceRefs: [] };
@@ -345,7 +347,7 @@ function formatRecentSessionMessagesBlock(
 
   messages.slice(-12).forEach((message) => {
     const speaker = message.role === 'assistant'
-      ? message.authorName?.trim() || 'Assistant'
+      ? message.authorName?.trim() || companionName?.trim() || 'Assistant'
       : message.authorName?.trim() || 'User';
     const content = truncateReflectionText(message.content, 240);
     lines.push(`- ${speaker}: ${content}`);
@@ -364,6 +366,7 @@ function formatRecentSessionMessagesBlock(
 function formatRecentSessionTailBlock(
   messages: readonly ReflectionContactRecentMessage[] | undefined,
   primarySessionId?: string,
+  companionName?: string,
 ): { block?: string; provenanceRefs: string[] } {
   const tailMessages = messages?.slice(-4);
   if (!tailMessages || tailMessages.length === 0) {
@@ -378,7 +381,7 @@ function formatRecentSessionTailBlock(
 
   tailMessages.forEach((message) => {
     const speaker = message.role === 'assistant'
-      ? message.authorName?.trim() || 'Assistant'
+      ? message.authorName?.trim() || companionName?.trim() || 'Assistant'
       : message.authorName?.trim() || 'User';
     const content = truncateReflectionText(message.content, 240);
     lines.push(`- ${speaker}: ${content}`);
@@ -558,7 +561,11 @@ export function assembleReflectionContactContextBundle(
     `reflection_contact:${input.contactId}`,
   ]);
 
-  const recentSessionBlock = formatRecentSessionMessagesBlock(input.recentSessionMessages, input.primarySessionId);
+  const recentSessionBlock = formatRecentSessionMessagesBlock(
+    input.recentSessionMessages,
+    input.primarySessionId,
+    input.companionName,
+  );
   if (recentSessionBlock.block) {
     relationalSections.push(recentSessionBlock.block);
     recentSessionBlock.provenanceRefs.forEach(ref => provenanceRefs.add(ref));
@@ -592,7 +599,11 @@ export function assembleReflectionContactContextBundle(
       if (normalized) provenanceRefs.add(normalized);
     }
   } else {
-    const tailBlock = formatRecentSessionTailBlock(input.recentSessionMessages, input.primarySessionId);
+    const tailBlock = formatRecentSessionTailBlock(
+      input.recentSessionMessages,
+      input.primarySessionId,
+      input.companionName,
+    );
     if (tailBlock.block) {
       selfSections.push('[Reflection Memory Retrieval]', tailBlock.block);
       tailBlock.provenanceRefs.forEach(ref => provenanceRefs.add(ref));

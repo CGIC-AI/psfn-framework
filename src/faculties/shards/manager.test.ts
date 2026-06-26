@@ -927,6 +927,8 @@ describe('ShardManager', () => {
     expect(setPromptText).toContain('[Shard context pack]');
     expect(setPromptText).toContain(`Source channel: ${sourceChannelId}`);
     expect(setPromptText).toContain('Source embodiment: display');
+    expect(setPromptText).toContain('Companion: Earlier project summary');
+    expect(setPromptText).not.toContain('Assistant: Earlier project summary');
     expect(setPromptText).toContain('PrimaryUser: Please check the deployment blockers.');
     expect(setPromptText).toContain('Remember the staging database migration is still pending.');
 

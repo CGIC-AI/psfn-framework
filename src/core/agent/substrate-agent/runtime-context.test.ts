@@ -682,7 +682,7 @@ describe('runtime subject identity', () => {
     expect(renderedRuntimeLayers).toContain('<visibility>broadcast</visibility>');
   });
 
-  it('does not expose appearance context for generic image tools', () => {
+  it('keeps appearance context available for chat when generic image tools are active', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord',
@@ -745,12 +745,14 @@ describe('runtime subject identity', () => {
     });
 
     expect(variables.runtime_self_image_tool_active).toBe('false');
-    expect(variables.runtime_appearance_context_body).toBe('');
-    expect(rendered).not.toContain('<appearance_context>');
+    expect(variables.runtime_appearance_context_body).toBe(
+      templateVariables['character.visual_description'],
+    );
+    expect(rendered).toContain('<appearance_context>');
     expect(rendered).not.toContain('<self_image_tool_guidance>');
   });
 
-  it('does not expose appearance context for the unified media tool', () => {
+  it('keeps appearance context available for chat when the unified media tool is active', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord',
@@ -813,8 +815,10 @@ describe('runtime subject identity', () => {
     });
 
     expect(variables.runtime_self_image_tool_active).toBe('false');
-    expect(variables.runtime_appearance_context_body).toBe('');
-    expect(rendered).not.toContain('<appearance_context>');
+    expect(variables.runtime_appearance_context_body).toBe(
+      templateVariables['character.visual_description'],
+    );
+    expect(rendered).toContain('<appearance_context>');
     expect(rendered).not.toContain('<self_image_tool_guidance>');
   });
 

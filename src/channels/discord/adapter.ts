@@ -121,6 +121,27 @@ interface PendingDiscordTurn {
   respondToMessage: boolean;
 }
 
+function coalescePendingDiscordTurns(turns: PendingDiscordTurn[]): PendingDiscordTurn | null {
+  if (turns.length === 0) return null;
+  if (turns.length === 1) return turns[0];
+
+  const latest = turns[turns.length - 1]!;
+  const messages = turns.map(turn => turn.substrateMsg);
+  return {
+    ...latest,
+    substrateMsg: {
+      ...latest.substrateMsg,
+      content: messages
+        .map(message => message.content)
+        .filter(content => content.trim().length > 0)
+        .join('\n'),
+      attachments: messages.flatMap(message => message.attachments ?? []),
+    },
+    replyToOriginal: turns.some(turn => turn.replyToOriginal),
+    respondToMessage: turns.some(turn => turn.respondToMessage),
+  };
+}
+
 export class DiscordAdapter implements ChannelAdapterPort {
   readonly id = 'discord';
   readonly name = this.id;
@@ -597,11 +618,24 @@ export class DiscordAdapter implements ChannelAdapterPort {
       await this.clearStatus(channelId, 'compaction');
       await this.clearStatus(channelId, 'long-running');
       const pendingQueue = this.pendingByChannel.get(channelId);
-      const pending = pendingQueue?.shift();
-      if (pendingQueue && pendingQueue.length === 0) {
+      const coalescedQueueDepth = pendingQueue?.length ?? 0;
+      const coalescedMessageIds = pendingQueue?.map(entry => entry.substrateMsg.id) ?? [];
+      const pending = pendingQueue ? coalescePendingDiscordTurns(pendingQueue.splice(0)) : null;
+      if (pendingQueue) {
         this.pendingByChannel.delete(channelId);
       }
       if (pending) {
+        if (coalescedQueueDepth > 1) {
+          this.emitQueueTelemetry(channelId, 'coalesced', 'queue', {
+            queueDepth: coalescedQueueDepth,
+            waitMs: Math.max(0, Date.now() - lockStartMs),
+          });
+          log.info('Coalescing queued Discord messages into one deferred turn', {
+            channelId,
+            queueDepth: coalescedQueueDepth,
+            messageIds: coalescedMessageIds,
+          });
+        }
         queueMicrotask(() => {
           this.processMessage(pending).catch((error) => {
             log.error('Deferred Discord message handling error', { channelId, error: String(error) });

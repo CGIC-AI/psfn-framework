@@ -715,7 +715,7 @@ describe('settings', () => {
             repetition_penalty: '1.2',
             thinking: {
               enabled: 'true',
-              effort: 'HIGH',
+              effort: 'XHIGH',
               budget_tokens: '2048',
             },
           },
@@ -729,7 +729,7 @@ describe('settings', () => {
       expect(primaryTuning?.frequencyPenalty).toBe(-0.4);
       expect(primaryTuning?.repetitionPenalty).toBe(1.2);
       expect(primaryTuning?.thinkingEnabled).toBe(true);
-      expect(primaryTuning?.thinkingEffort).toBe('high');
+      expect(primaryTuning?.thinkingEffort).toBe('xhigh');
       expect(primaryTuning?.thinkingBudgetTokens).toBe(2048);
       expect(primaryTuning?.top_p).toBeUndefined();
       expect(primaryTuning?.top_k).toBeUndefined();

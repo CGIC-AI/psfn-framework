@@ -3,6 +3,12 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { ComfyUiImageClient } from './comfyui.js';
 import { FalImageClient, isFalContentPolicyError, isTransientFalError } from './fal.js';
+import {
+  FAL_CREATE_MODELS,
+  FAL_EDIT_MODELS,
+  type FalCreateModel,
+  type FalEditModel,
+} from './types.js';
 import { resolveInlineOrEnvCredential } from '../../boundary/custody/credential-vault.js';
 import {
   resolveConfiguredCompanionDataDir,
@@ -23,7 +29,17 @@ import type {
 
 const log = createComponentLogger('ImageService');
 const FAL_TRANSIENT_ATTEMPTS = 2;
+const FAL_TRANSIENT_MODEL_ATTEMPTS = 2;
 const GENERATED_IMAGE_META_SUFFIX = '.image-meta.json';
+
+const DEFAULT_FAL_CREATE_MODEL_CHAIN: readonly FalCreateModel[] = FAL_CREATE_MODELS.slice(
+  0,
+  FAL_TRANSIENT_MODEL_ATTEMPTS,
+);
+const DEFAULT_FAL_EDIT_MODEL_CHAIN: readonly FalEditModel[] = FAL_EDIT_MODELS.slice(
+  0,
+  FAL_TRANSIENT_MODEL_ATTEMPTS,
+);
 
 function hasWorkflowForMode(
   config: ImageRuntimeConfig,
@@ -81,6 +97,30 @@ function resolveConfiguredCompanionDataDirOrNull(config: ImageRuntimeConfig): st
   } catch {
     return null;
   }
+}
+
+function resolveFalFallbackModelChain(
+  mode: ImageMode,
+  params: ImageCreateParams | ImageEditParams,
+  provider: ImageCreateParams['provider'] | ImageEditParams['provider'],
+): readonly (FalCreateModel | FalEditModel | undefined)[] {
+  if (params.model || provider !== 'auto') {
+    return [params.model];
+  }
+  return mode === 'create'
+    ? DEFAULT_FAL_CREATE_MODEL_CHAIN
+    : DEFAULT_FAL_EDIT_MODEL_CHAIN;
+}
+
+function applyFalModel(
+  mode: ImageMode,
+  params: ImageCreateParams | ImageEditParams,
+  model: FalCreateModel | FalEditModel | undefined,
+): ImageCreateParams | ImageEditParams {
+  if (!model) return params;
+  return mode === 'create'
+    ? { ...params, model: model as FalCreateModel }
+    : { ...params, model: model as FalEditModel };
 }
 
 function buildGeneratedImageMetadata(
@@ -161,28 +201,7 @@ export class ImageService implements ImageOperations {
 
     try {
       const falClient = new FalImageClient(falApiKey, this.fetchImpl);
-      let result: ImageGenerationResult | null = null;
-      for (let attempt = 1; attempt <= FAL_TRANSIENT_ATTEMPTS; attempt += 1) {
-        try {
-          result = mode === 'create'
-            ? await falClient.create(params)
-            : await falClient.edit(params);
-          break;
-        } catch (error) {
-          if (attempt >= FAL_TRANSIENT_ATTEMPTS || !isTransientFalError(error)) {
-            throw error;
-          }
-          log.warn('Retrying transient FAL image request failure', {
-            mode,
-            attempt,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-      if (!result) {
-        throw new Error('FAL image request did not return a result');
-      }
-      return await this.persistGeneratedImages(result, params);
+      return await this.persistGeneratedImages(await this.runFal(mode, params, provider, falClient), params);
     } catch (error) {
       if (
         provider === 'auto'
@@ -199,6 +218,76 @@ export class ImageService implements ImageOperations {
       }
       throw error;
     }
+  }
+
+  private async runFal(
+    mode: ImageMode,
+    params: ImageCreateParams | ImageEditParams,
+    provider: ImageCreateParams['provider'] | ImageEditParams['provider'],
+    falClient: FalImageClient,
+  ): Promise<ImageGenerationResult> {
+    const modelChain = resolveFalFallbackModelChain(mode, params, provider);
+    let lastError: unknown;
+    for (let modelIndex = 0; modelIndex < modelChain.length; modelIndex += 1) {
+      const model = modelChain[modelIndex];
+      const candidateParams = applyFalModel(mode, params, model);
+      try {
+        const result = await this.runFalCandidate(mode, candidateParams, falClient);
+        if (modelIndex === 0) {
+          return result;
+        }
+        return {
+          ...result,
+          fallbackUsed: true,
+          fallbackReason: 'fal_transient_model_fallback',
+        };
+      } catch (error) {
+        lastError = error;
+        const nextModel = modelChain[modelIndex + 1];
+        if (nextModel && isTransientFalError(error)) {
+          log.warn('Falling back to alternate FAL image model after transient failures', {
+            mode,
+            failedModel: model,
+            nextModel,
+            attempts: FAL_TRANSIENT_ATTEMPTS,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError ?? 'FAL image request failed'));
+  }
+
+  private async runFalCandidate(
+    mode: ImageMode,
+    params: ImageCreateParams | ImageEditParams,
+    falClient: FalImageClient,
+  ): Promise<ImageGenerationResult> {
+    let result: ImageGenerationResult | null = null;
+    for (let attempt = 1; attempt <= FAL_TRANSIENT_ATTEMPTS; attempt += 1) {
+      try {
+        result = mode === 'create'
+          ? await falClient.create(params as ImageCreateParams)
+          : await falClient.edit(params as ImageEditParams);
+        break;
+      } catch (error) {
+        if (attempt >= FAL_TRANSIENT_ATTEMPTS || !isTransientFalError(error)) {
+          throw error;
+        }
+        log.warn('Retrying transient FAL image request failure', {
+          mode,
+          attempt,
+          model: params.model,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    if (!result) {
+      throw new Error('FAL image request did not return a result');
+    }
+    return result;
   }
 
   private async runComfy(

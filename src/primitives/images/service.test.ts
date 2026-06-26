@@ -175,6 +175,53 @@ describe('ImageService', () => {
     expect(fetchMock.mock.calls.filter(([url]) => String(url) === 'https://queue.fal.run/fal-ai/nano-banana-2')).toHaveLength(2);
   });
 
+  it('falls back to the next default FAL model after two transient failures in auto mode', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-2') {
+        throw new TypeError('fetch failed');
+      }
+
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-pro') {
+        return jsonResponse({
+          status: 'COMPLETED',
+          request_id: 'fal-fallback-1',
+          response_url: 'https://queue.fal.run/fal-ai/nano-banana-pro/requests/fal-fallback-1',
+        });
+      }
+
+      if (url === 'https://queue.fal.run/fal-ai/nano-banana-pro/requests/fal-fallback-1') {
+        return jsonResponse({
+          images: [
+            {
+              url: 'https://cdn.example.test/fallback.png',
+              content_type: 'image/png',
+              file_name: 'fallback.png',
+            },
+          ],
+        });
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'a lighthouse at dusk',
+    });
+
+    expect(result.model).toBe('fal-ai/nano-banana-pro');
+    expect(result.fallbackUsed).toBe(true);
+    expect(result.fallbackReason).toBe('fal_transient_model_fallback');
+    expect(fetchMock.mock.calls.filter(([url]) => String(url) === 'https://queue.fal.run/fal-ai/nano-banana-2')).toHaveLength(2);
+  });
+
   it('persists generated outputs into the companion images directory when companion storage is configured', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-image-service-'));
     tempDirs.push(companionDataDir);

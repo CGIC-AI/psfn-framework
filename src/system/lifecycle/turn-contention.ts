@@ -1,7 +1,7 @@
 import type { EventBus } from '../../shared/event-bus.js';
 
 export type TurnContentionPolicy = 'drop' | 'defer-latest' | 'queue' | 'steer';
-export type TurnContentionPhase = 'acquired' | 'contended' | 'released';
+export type TurnContentionPhase = 'acquired' | 'contended' | 'coalesced' | 'released';
 
 export interface TurnContentionTelemetry {
   channelId: string;

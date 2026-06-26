@@ -863,9 +863,9 @@ export function buildDynamicPromptTemplateVariables(input: {
   const skillsIndexBody = unwrapPromptSectionBody(input.skillsContext);
   const skillsVariables = buildSkillsPromptVariables(input.skillsContext);
   const selfImageToolActive = hasActiveSelfImageTool();
-  const appearanceContextBody = selfImageToolActive
-    ? resolveAppearanceContextFromTemplateVariables(input.templateVariables)
-    : '';
+  const appearanceContextBody = internalTurn
+    ? ''
+    : resolveAppearanceContextFromTemplateVariables(input.templateVariables);
   const extendedToolVariables = buildExtendedToolPromptVariables({
     extendedTools: input.extendedTools,
     extendedToolGuide,

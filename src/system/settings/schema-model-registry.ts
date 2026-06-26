@@ -40,6 +40,7 @@ const MODEL_REGISTRY_THINKING_EFFORT_VALUES = new Set([
   'low',
   'medium',
   'high',
+  'xhigh',
 ]);
 const MODEL_REGISTRY_TEMPERATURE_RANGE = { min: 0, max: 2 } as const;
 const MODEL_REGISTRY_TOP_P_RANGE = { min: 0, max: 1 } as const;

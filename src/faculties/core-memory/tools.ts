@@ -125,6 +125,7 @@ export function createOrientTool(
       + 'action=reorient for a holistic refresh of all three blocks, '
       + 'action=values_list to inspect recent values reflections, and '
       + 'action=create_concern|list_concerns|resolve_concern to manage active open threads, reminders, checkups, and proactive communication items. '
+      + 'When you decide "I should check this later", "I will follow up", "ask about this tomorrow", or similar, call orient action=create_concern in the same turn instead of only saying it in chat or journal prose. '
       + 'Open threads are not necessarily problems. Put follow-ups such as "reach out tonight" here, not in scratchpad. '
       + 'For action=resolve_concern, pass concernId or concernIds copied exactly from the concern.id returned by create_concern or list_concerns; '
       + 'do not use tool_search, fs, or analysis_workbench to rediscover it.',

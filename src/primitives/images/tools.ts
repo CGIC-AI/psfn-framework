@@ -226,14 +226,14 @@ function resolveCurrentTurnVisionReviewFallback(
 
 function buildImageCreateDescription(selfImage: boolean): string {
   if (selfImage) {
-    return 'Generate a dedicated selfie or self-portrait of the companion; the result does not have to be a literal selfie angle - any portrait of her works. Use this explicit path when the request is specifically about her own representation; the runtime Appearance context is loaded for this tool only. When a default reference photo is configured, this tool always works through the image-edit pipeline so the reference anchors her likeness, unless use_reference_image=false; choose reference_image_id or reference_image_tags for a different saved reference. Edit models run as a tiered fallback chain (gpt-image-2 -> nano-banana-2 -> grok-imagine quality), advancing automatically on content-policy blocks or timeouts; use edit_model to start at a more permissive tier for casual filter-sensitive looks like swimwear or tank tops. If the whole chain blocks the request for content policy, do not retry minor prompt variants in the same turn; report the block and ask for a safer non-explicit direction. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
+    return 'Generate a dedicated selfie or self-portrait of the companion; the result does not have to be a literal selfie angle - any portrait of her works. Use this explicit path when the request is specifically about her own representation; the always-on appearance context is the identity anchor, and this tool adds the self-image reference workflow. When a default reference photo is configured, this tool always works through the image-edit pipeline so the reference anchors her likeness, unless use_reference_image=false; choose reference_image_id or reference_image_tags for a different saved reference. Edit models run as a tiered fallback chain (gpt-image-2 -> nano-banana-2 -> grok-imagine quality), advancing automatically on content-policy blocks or timeouts; use edit_model to start at a more permissive tier for casual filter-sensitive looks like swimwear or tank tops. If the whole chain blocks the request for content policy, do not retry minor prompt variants in the same turn; report the block and ask for a safer non-explicit direction. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
   }
   return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits, use the dedicated selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
 }
 
 function buildImageCreatePromptDescription(selfImage: boolean): string {
   if (selfImage) {
-    return 'Full generation prompt for a selfie or self-portrait. The runtime Appearance context is available on this tool; combine it with the desired pose, camera angle, lighting, background, and style.';
+    return 'Full generation prompt for a selfie or self-portrait. Combine the always-on appearance context with the desired pose, camera angle, lighting, background, and style.';
   }
   return 'Full generation prompt. For selfies or self-portraits, use the dedicated selfie_create tool instead of this generic path.';
 }
@@ -610,7 +610,7 @@ export function createMediaTool(
     name: 'media',
     label: 'media',
     description:
-      'Unified media surface for generate, edit, and analyze actions. Use action="generate" for new image outputs, action="edit" to transform existing inputs, and action="analyze" to inspect visible contents. For selfies or self-portraits, use the dedicated selfie_create tool so appearance context is only loaded behind that explicit gate. Current implementation is image-backed.',
+      'Unified media surface for generate, edit, and analyze actions. Use action="generate" for new image outputs, action="edit" to transform existing inputs, and action="analyze" to inspect visible contents. For selfies or self-portraits, use the dedicated selfie_create tool so the self-image reference workflow is active. Current implementation is image-backed.',
     parameters: Type.Object({
       action: Type.Union(
         MEDIA_ACTION_VALUES.map((value) => Type.Literal(value)),
@@ -930,11 +930,11 @@ export function createImageEditTool(
     name: 'image_edit',
     label: 'image_edit',
     description:
-      'Edit one or more existing images. Write the prompt as the exact transformation you want, including what should change and what must stay the same. For self-image work, use the dedicated selfie_create tool for a fresh companion representation instead of relying on hidden appearance context. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful edits also return a vision review of the produced image, so use that instead of asking the user to check whether it still looks like you unless you need their aesthetic preference.',
+      'Edit one or more existing images. Write the prompt as the exact transformation you want, including what should change and what must stay the same. For self-image work, use the dedicated selfie_create tool for a fresh companion representation and reference anchoring. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful edits also return a vision review of the produced image, so use that instead of asking the user to check whether it still looks like you unless you need their aesthetic preference.',
     parameters: Type.Object({
       prompt: Type.String({
         description:
-          'Full edit instruction. State the target result clearly and mention any identity details that must remain unchanged; for self-image work, use the dedicated selfie_create tool instead of relying on hidden appearance context.',
+          'Full edit instruction. State the target result clearly and mention any identity details that must remain unchanged; for self-image work, use the dedicated selfie_create tool for reference anchoring.',
       }),
       image_urls: Type.Array(Type.String(), { minItems: 1, maxItems: 4 }),
       ...referenceSelectionSchema(),

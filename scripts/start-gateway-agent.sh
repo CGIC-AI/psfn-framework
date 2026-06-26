@@ -421,7 +421,20 @@ cleanup() {
   release_launcher_lock
 }
 
-trap cleanup INT TERM EXIT
+handle_shutdown_signal() {
+  local signal="$1"
+  cleanup_children
+  release_launcher_lock
+  trap - INT TERM EXIT
+  if [ "${signal}" = "TERM" ]; then
+    exit 0
+  fi
+  exit 130
+}
+
+trap 'handle_shutdown_signal INT' INT
+trap 'handle_shutdown_signal TERM' TERM
+trap cleanup EXIT
 
 acquire_launcher_lock
 

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -46,7 +46,9 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(launcher).toContain('cleanup_children');
     expect(launcher).toContain(
       [
-        'trap cleanup INT TERM EXIT',
+        "trap 'handle_shutdown_signal INT' INT",
+        "trap 'handle_shutdown_signal TERM' TERM",
+        'trap cleanup EXIT',
         '',
         'acquire_launcher_lock',
         '',
@@ -73,6 +75,86 @@ describe('start-gateway-agent launcher supervision', () => {
         '  exec "$0" "$@"',
       ].join('\n'),
     );
+  });
+
+  it('normalizes expected SIGTERM shutdown to exit 0 after cleanup', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'psfn-launcher-sigterm-'));
+    const scriptsDir = join(workDir, 'scripts');
+    const systemDir = join(scriptsDir, 'system');
+    const tsxDir = join(workDir, 'node_modules/.bin');
+    const fakeBinDir = join(workDir, 'fake-bin');
+    mkdirSync(systemDir, { recursive: true });
+    mkdirSync(tsxDir, { recursive: true });
+    mkdirSync(fakeBinDir, { recursive: true });
+
+    const launcherPath = join(scriptsDir, 'start-gateway-agent.sh');
+    writeFileSync(launcherPath, readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8'), 'utf8');
+    chmodSync(launcherPath, 0o755);
+    writeFileSync(join(systemDir, 'runtime-env.sh'), readFileSync(runtimeEnvPath, 'utf8'), 'utf8');
+
+    const fakeTsxPath = join(tsxDir, 'tsx');
+    writeFileSync(
+      fakeTsxPath,
+      [
+        '#!/usr/bin/env bash',
+        'case "$1" in',
+        '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
+        '  *) sleep 30 ;;',
+        'esac',
+      ].join('\n'),
+      'utf8',
+    );
+    chmodSync(fakeTsxPath, 0o755);
+
+    const fakeNodePath = join(fakeBinDir, 'node');
+    writeFileSync(
+      fakeNodePath,
+      [
+        '#!/usr/bin/env bash',
+        'if [ "$1" = "-p" ]; then',
+        '  printf "22\\n"',
+        'else',
+        '  printf "v22.22.3\\n"',
+        'fi',
+      ].join('\n'),
+      'utf8',
+    );
+    chmodSync(fakeNodePath, 0o755);
+
+    try {
+      const output = execFileSync(
+        'bash',
+        [
+          '-lc',
+          [
+            'set -euo pipefail',
+            'PSFN_SKIP_DOTENV=true',
+            `PATH=${JSON.stringify(`${fakeBinDir}:/usr/bin:/bin`)}`,
+            `XDG_RUNTIME_DIR=${JSON.stringify(join(workDir, 'runtime'))}`,
+            `GATEWAY_SOCKET=${JSON.stringify(join(workDir, 'runtime/gateway.sock'))}`,
+            './scripts/start-gateway-agent.sh >launcher.out 2>&1 &',
+            'launcher_pid=$!',
+            'sleep 0.5',
+            'kill -TERM "${launcher_pid}"',
+            'set +e',
+            'wait "${launcher_pid}"',
+            'status=$?',
+            'set -e',
+            'printf "status=%s\\n" "${status}"',
+            'grep -E "starting gateway|starting agent|starting operator" launcher.out || true',
+            'test ! -d "$(dirname "${GATEWAY_SOCKET}")/launcher.lock"',
+          ].join('\n'),
+        ],
+        { cwd: workDir, encoding: 'utf8', timeout: 10000 },
+      );
+
+      expect(output).toContain('status=0');
+      expect(output).toContain('starting gateway');
+      expect(output).not.toContain('starting agent');
+      expect(output).not.toContain('starting operator');
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   it('keeps the live user unit pointed at the launcher instead of npm', () => {

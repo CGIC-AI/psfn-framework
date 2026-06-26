@@ -353,6 +353,10 @@ for _ in $(seq 1 200); do
 done
 
 if [ ! -S "${SOCKET_PATH}" ]; then
+  if psfn_is_production_runtime; then
+    echo "[${MODE_LABEL}] gateway socket not detected; refusing to start agent in production"
+    exit 1
+  fi
   echo "[${MODE_LABEL}] warning: gateway socket not detected yet, starting agent anyway"
 fi
 

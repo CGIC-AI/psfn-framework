@@ -103,6 +103,15 @@ describe('start-gateway-agent launcher supervision', () => {
       launcher.indexOf('# Local-dev defaults so split/yolo mode is one-command.'),
     );
   });
+
+  it('refuses to start the agent without a gateway socket in production', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('if psfn_is_production_runtime; then');
+    expect(launcher).toContain('gateway socket not detected; refusing to start agent in production');
+    expect(launcher.indexOf('gateway socket not detected; refusing to start agent in production')).toBeLessThan(
+      launcher.indexOf('warning: gateway socket not detected yet, starting agent anyway'),
+    );
+  });
 });
 
 describe('psfn_source_dotenv_preserving_existing_env', () => {

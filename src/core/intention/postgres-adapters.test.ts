@@ -453,6 +453,7 @@ describe('postgres intention adapters', () => {
 
     const active = await ports.concernStore.getActiveConcerns('contact-a');
     expect(active).toHaveLength(1);
+    expect(ports.concernProvider.getActiveConcerns('contact-a')).toHaveLength(1);
     expect(active[0]).toMatchObject({
       text: 'Check hydration reminder',
       contactId: 'contact-a',
@@ -465,6 +466,7 @@ describe('postgres intention adapters', () => {
       resolvedAt: '2026-03-28T01:00:00.000Z',
     });
     expect(resolved?.resolutionOutcome).toBe('Handled already');
+    expect(ports.concernProvider.getActiveConcerns('contact-a')).toEqual([]);
 
     const recent = await ports.concernStore.listRecentlyResolvedConcerns('contact-a', {
       asOf: '2026-03-28T02:00:00.000Z',

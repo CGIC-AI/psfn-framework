@@ -263,7 +263,13 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       `,
       [normalizedId, resolvedAt, outcome ?? null],
     );
-    return row ? mapActiveConcernRow(row) : null;
+    if (!row) {
+      this.activeConcernCache.delete(normalizedId);
+      return null;
+    }
+    const concern = mapActiveConcernRow(row);
+    this.activeConcernCache.set(concern.id, concern);
+    return concern;
   }
 
   private resolveConcernTtlMs(priority: 'high' | 'medium' | 'low'): number {

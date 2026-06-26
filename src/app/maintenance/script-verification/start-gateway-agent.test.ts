@@ -8,6 +8,13 @@ const repoRoot = process.cwd();
 const runtimeEnvPath = join(repoRoot, 'scripts/system/runtime-env.sh');
 
 describe('start-gateway-agent launcher supervision', () => {
+  it('has valid bash syntax', () => {
+    execFileSync('bash', ['-n', join(repoRoot, 'scripts/start-gateway-agent.sh')], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+    });
+  });
+
   it('starts children in dedicated sessions and kills process groups on shutdown', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).toContain('setsid "$@" &');
@@ -29,6 +36,43 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(launcher).toContain('wait_for_exited_pid_status');
     expect(launcher).toContain('if [ "${EXIT_STATUS}" -ne "${PSFN_LIFECYCLE_RESTART_EXIT_CODE}" ]; then');
     expect(launcher).toContain('EXIT_STATUS="${PSFN_LIFECYCLE_RESTART_EXIT_CODE}"');
+  });
+
+  it('refuses duplicate launcher starts with a socket-scoped launcher lock', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('LAUNCHER_LOCK_DIR="${socket_dir}/launcher.lock"');
+    expect(launcher).toContain('launcher lock held by pid ${existing_pid}; refusing to start another launcher');
+    expect(launcher).toContain('release_launcher_lock');
+    expect(launcher).toContain('cleanup_children');
+    expect(launcher).toContain(
+      [
+        'trap cleanup INT TERM EXIT',
+        '',
+        'acquire_launcher_lock',
+        '',
+        'echo "[${MODE_LABEL}] verifying startup owner files..."',
+      ].join('\n'),
+    );
+    expect(launcher).toContain(
+      [
+        'echo "[${MODE_LABEL}] verifying startup owner files..."',
+        'if [ -x "./node_modules/.bin/tsx" ]; then',
+        '  ./node_modules/.bin/tsx scripts/verify-startup-owner-files.ts',
+        'else',
+        '  npm run verify:startup-owner-files',
+        'fi',
+        '',
+        'echo "[${MODE_LABEL}] starting gateway..."',
+      ].join('\n'),
+    );
+    expect(launcher).toContain(
+      [
+        'echo "[${MODE_LABEL}] lifecycle restart requested; stopping children and re-execing launcher"',
+        '  cleanup_children',
+        '  trap - INT TERM EXIT',
+        '  exec "$0" "$@"',
+      ].join('\n'),
+    );
   });
 
   it('keeps the live user unit pointed at the launcher instead of npm', () => {

@@ -93,13 +93,6 @@ fi
 
 psfn_require_node_major 22
 
-echo "[${MODE_LABEL}] verifying startup owner files..."
-if [ -x "./node_modules/.bin/tsx" ]; then
-  ./node_modules/.bin/tsx scripts/verify-startup-owner-files.ts
-else
-  npm run verify:startup-owner-files
-fi
-
 DEFAULT_SOCKET_PATH="/run/psfn/gateway.sock"
 SOCKET_SUFFIX="$(basename "${ROOT_DIR}" | tr -cs 'A-Za-z0-9._-' '-')"
 FALLBACK_SOCKET_PATH="${XDG_RUNTIME_DIR:-/tmp}/psfn-gateway-${SOCKET_SUFFIX}/gateway.sock"
@@ -117,6 +110,8 @@ if [ -z "${ADMIN_TRANSPORT_SOCKET:-}" ]; then
 fi
 
 SOCKET_PATH="${GATEWAY_SOCKET}"
+LAUNCHER_LOCK_DIR=""
+LAUNCHER_LOCK_HELD=0
 GATEWAY_PID=""
 AGENT_PID=""
 OPERATOR_PID=""
@@ -270,6 +265,92 @@ wait_for_lifecycle_restart_child() {
   return 1
 }
 
+launcher_pid_is_active() {
+  local pid="$1"
+  if [ -z "${pid}" ]; then
+    return 1
+  fi
+  case "${pid}" in
+    *[!0-9]*)
+      return 1
+      ;;
+  esac
+  if ! kill -0 "${pid}" 2>/dev/null; then
+    return 1
+  fi
+
+  local command_line=""
+  command_line="$(ps -o args= -p "${pid}" 2>/dev/null || true)"
+  case "${command_line}" in
+    *start-gateway-agent.sh*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+acquire_launcher_lock() {
+  local socket_dir=""
+  local existing_pid=""
+  local existing_root=""
+  local attempt
+
+  socket_dir="$(dirname "${SOCKET_PATH}")"
+  LAUNCHER_LOCK_DIR="${socket_dir}/launcher.lock"
+
+  if [ -z "${socket_dir}" ] || [ "${socket_dir}" = "/" ]; then
+    echo "[${MODE_LABEL}] invalid gateway socket directory for launcher lock: ${socket_dir}" >&2
+    return 1
+  fi
+  if ! mkdir -p "${socket_dir}" 2>/dev/null; then
+    echo "[${MODE_LABEL}] unable to create gateway socket directory for launcher lock: ${socket_dir}" >&2
+    return 1
+  fi
+
+  for attempt in 1 2; do
+    if mkdir "${LAUNCHER_LOCK_DIR}" 2>/dev/null; then
+      printf '%s\n' "$$" > "${LAUNCHER_LOCK_DIR}/pid"
+      printf '%s\n' "${ROOT_DIR}" > "${LAUNCHER_LOCK_DIR}/root"
+      printf '%s\n' "${SOCKET_PATH}" > "${LAUNCHER_LOCK_DIR}/socket"
+      LAUNCHER_LOCK_HELD=1
+      return 0
+    fi
+
+    existing_pid="$(cat "${LAUNCHER_LOCK_DIR}/pid" 2>/dev/null || true)"
+    existing_root="$(cat "${LAUNCHER_LOCK_DIR}/root" 2>/dev/null || true)"
+    if [ "${existing_pid}" = "$$" ] && [ "${existing_root}" = "${ROOT_DIR}" ]; then
+      LAUNCHER_LOCK_HELD=1
+      return 0
+    fi
+
+    if launcher_pid_is_active "${existing_pid}"; then
+      echo "[${MODE_LABEL}] launcher lock held by pid ${existing_pid}; refusing to start another launcher for ${SOCKET_PATH}" >&2
+      return 1
+    fi
+
+    echo "[${MODE_LABEL}] removing stale launcher lock at ${LAUNCHER_LOCK_DIR}" >&2
+    rm -rf "${LAUNCHER_LOCK_DIR}"
+  done
+
+  echo "[${MODE_LABEL}] unable to acquire launcher lock at ${LAUNCHER_LOCK_DIR}" >&2
+  return 1
+}
+
+release_launcher_lock() {
+  if [ "${LAUNCHER_LOCK_HELD}" -ne 1 ] || [ -z "${LAUNCHER_LOCK_DIR}" ]; then
+    return
+  fi
+
+  local existing_pid=""
+  existing_pid="$(cat "${LAUNCHER_LOCK_DIR}/pid" 2>/dev/null || true)"
+  if [ "${existing_pid}" = "$$" ]; then
+    rm -rf "${LAUNCHER_LOCK_DIR}"
+  fi
+  LAUNCHER_LOCK_HELD=0
+}
+
 start_gateway() {
   if [ -x "./node_modules/.bin/tsx" ]; then
     launch_background ./node_modules/.bin/tsx src/app/gateway/main.ts
@@ -329,13 +410,27 @@ stop_pid() {
   wait "${pid}" 2>/dev/null || true
 }
 
-cleanup() {
+cleanup_children() {
   stop_pid "${OPERATOR_PID}"
   stop_pid "${AGENT_PID}"
   stop_pid "${GATEWAY_PID}"
 }
 
+cleanup() {
+  cleanup_children
+  release_launcher_lock
+}
+
 trap cleanup INT TERM EXIT
+
+acquire_launcher_lock
+
+echo "[${MODE_LABEL}] verifying startup owner files..."
+if [ -x "./node_modules/.bin/tsx" ]; then
+  ./node_modules/.bin/tsx scripts/verify-startup-owner-files.ts
+else
+  npm run verify:startup-owner-files
+fi
 
 echo "[${MODE_LABEL}] starting gateway..."
 start_gateway
@@ -381,7 +476,7 @@ fi
 
 if [ "${EXIT_STATUS}" -eq "${PSFN_LIFECYCLE_RESTART_EXIT_CODE}" ]; then
   echo "[${MODE_LABEL}] lifecycle restart requested; stopping children and re-execing launcher"
-  cleanup
+  cleanup_children
   trap - INT TERM EXIT
   exec "$0" "$@"
 fi

@@ -310,6 +310,95 @@ describe('wireIntentionRuntime', () => {
     })).rejects.toThrow('Concern decision must include title or summary');
   });
 
+  it('surfaces eligible pending follow-ups through appraisal hooks', async () => {
+    const db = new Database(':memory:');
+    const target = new FakeTarget();
+    const runtime = wireIntentionRuntime(target, db);
+    const hooks = createIntentionAppraisalHooks(runtime.concernStore, runtime.pendingFollowUpStore);
+    const now = Date.parse('2026-03-26T12:00:00.000Z');
+    const createdAt = new Date(now - 60_000).toISOString();
+
+    const due = await runtime.pendingFollowUpStore.enqueue({
+      content: 'Due follow-up',
+      priority: 'medium',
+      timing: 'scheduled',
+      createdAt,
+      dueAt: new Date(now - 1_000).toISOString(),
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-due',
+    });
+    const wakeOnUserTurn = await runtime.pendingFollowUpStore.enqueue({
+      content: 'Wake on user turn',
+      priority: 'low',
+      timing: 'soon',
+      createdAt,
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-wake-user',
+      wakeConditions: ['next_user_turn'],
+    });
+    await runtime.pendingFollowUpStore.enqueue({
+      content: 'Future follow-up',
+      priority: 'medium',
+      timing: 'scheduled',
+      createdAt,
+      dueAt: new Date(now + 60_000).toISOString(),
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-future',
+    });
+    await runtime.pendingFollowUpStore.enqueue({
+      content: 'Wrong channel',
+      priority: 'medium',
+      timing: 'scheduled',
+      createdAt,
+      dueAt: new Date(now - 1_000).toISOString(),
+      channelId: 'discord:other',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-other-channel',
+    });
+    await runtime.pendingFollowUpStore.enqueue({
+      content: 'Wrong contact',
+      priority: 'medium',
+      timing: 'scheduled',
+      createdAt,
+      dueAt: new Date(now - 1_000).toISOString(),
+      channelId: 'discord:primary',
+      channelType: 'discord',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'contact-b',
+      sourceMessageId: 'msg-other-contact',
+    });
+
+    const surfaced = await hooks.getPendingFollowUpsForResurfacing({
+      channelId: 'discord:primary',
+      canonicalContactKey: 'contact-a',
+      sourceMessageId: 'msg-current',
+      isBackgroundTurn: false,
+      now,
+      currentMoodValence: 0,
+    });
+
+    expect(surfaced.map(followUp => followUp.id)).toEqual([
+      due.id,
+      wakeOnUserTurn.id,
+    ]);
+  });
+
   it('suppresses concern creation when a similar concern was just resolved', async () => {
     const db = new Database(':memory:');
     const target = new FakeTarget();

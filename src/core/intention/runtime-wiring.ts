@@ -9,7 +9,10 @@ import type {
 } from './concern-store-port.js';
 import type { ActiveConcernVAD } from './concerns.js';
 import {
+  evaluatePendingFollowUpWakeState,
+  filterPendingFollowUpsForActiveChannel,
   type PendingFollowUpContextProvider,
+  type PendingFollowUp,
 } from './pending-follow-ups.js';
 import type { PendingFollowUpStorePort } from './pending-follow-up-store-port.js';
 import type {
@@ -77,6 +80,15 @@ export interface IntentionAppraisalHooks {
     canonicalContactKey?: string;
     sourceMessageId: string;
   }): Promise<string | undefined>;
+  getPendingFollowUpsForResurfacing(input: {
+    channelId: string;
+    canonicalContactKey?: string;
+    sourceMessageId: string;
+    isBackgroundTurn: boolean;
+    now: number;
+    motivationSignals?: readonly string[];
+    currentMoodValence?: number | null;
+  }): Promise<readonly PendingFollowUp[]>;
   onIntentionFollowUpActivated(input: {
     pendingFollowUpId: string;
     activationReason?: string;
@@ -133,6 +145,8 @@ function normalizeObservedAtIso(value: number | undefined): string | undefined {
   }
   return new Date(Math.floor(value)).toISOString();
 }
+
+const PENDING_FOLLOW_UP_RESURFACE_LIMIT = 3;
 
 export function createIntentionAppraisalHooks(
   concernStore: ConcernStorePort,
@@ -197,6 +211,33 @@ export function createIntentionAppraisalHooks(
         sourceMessageId,
       });
       return followUp.id;
+    },
+    getPendingFollowUpsForResurfacing: async ({
+      channelId,
+      canonicalContactKey,
+      isBackgroundTurn,
+      now,
+      motivationSignals,
+      currentMoodValence,
+    }) => {
+      if (!pendingFollowUpStore) {
+        return [];
+      }
+      const asOf = new Date(now).toISOString();
+      const pendingFollowUps = await pendingFollowUpStore.list({
+        ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
+        includeActivated: false,
+        includeExpired: false,
+        asOf,
+      });
+      return filterPendingFollowUpsForActiveChannel(pendingFollowUps, channelId)
+        .filter(followUp => evaluatePendingFollowUpWakeState(followUp, {
+          now,
+          isBackgroundTurn,
+          ...(motivationSignals ? { motivationSignals } : {}),
+          ...(currentMoodValence !== undefined ? { currentMoodValence } : {}),
+        }).eligibleNow)
+        .slice(0, PENDING_FOLLOW_UP_RESURFACE_LIMIT);
     },
     onIntentionFollowUpActivated: async ({
       pendingFollowUpId,

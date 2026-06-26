@@ -95,6 +95,14 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(launcher).toContain('psfn_resolve_gateway_socket_path "${DEFAULT_SOCKET_PATH}" "${FALLBACK_SOCKET_PATH}"');
     expect(launcher).not.toContain('if mkdir -p "${default_dir}"');
   });
+
+  it('checks the production launcher environment before injecting local defaults', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('psfn_require_production_launcher_env');
+    expect(launcher.indexOf('psfn_require_production_launcher_env')).toBeLessThan(
+      launcher.indexOf('# Local-dev defaults so split/yolo mode is one-command.'),
+    );
+  });
 });
 
 describe('psfn_source_dotenv_preserving_existing_env', () => {
@@ -268,5 +276,108 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
 
     expect(output).toBe(fallbackSocket);
     expect(existsSync(fallbackDir)).toBe(true);
+  });
+
+  it('requires explicit production API, admin, and session auth config', () => {
+    let error: unknown;
+    try {
+      execFileSync(
+        'bash',
+        [
+          '-lc',
+          [
+            `source ${JSON.stringify(runtimeEnvPath)}`,
+            'export PSFN_RUNTIME_LAYOUT_MODE=production',
+            'psfn_require_production_launcher_env',
+          ].join('; '),
+        ],
+        { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' },
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeDefined();
+    expect(String((error as { stderr?: Buffer }).stderr)).toContain(
+      'Production runtime requires API_HOST',
+    );
+  });
+
+  it('rejects insecure production API and admin overrides', () => {
+    let error: unknown;
+    try {
+      execFileSync(
+        'bash',
+        [
+          '-lc',
+          [
+            `source ${JSON.stringify(runtimeEnvPath)}`,
+            'export PSFN_RUNTIME_LAYOUT_MODE=production',
+            'export API_HOST=0.0.0.0 API_PORT=10053 API_KEY=test-api-key',
+            'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054 ADMIN_TOKEN=test-admin-token',
+            'export GATEWAY_SESSION_HMAC_KEYS=test-keyring',
+            'export ALLOW_INSECURE_LOCAL_API=true',
+            'psfn_require_production_launcher_env',
+          ].join('; '),
+        ],
+        { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' },
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeDefined();
+    expect(String((error as { stderr?: Buffer }).stderr)).toContain(
+      'Production runtime forbids ALLOW_INSECURE_LOCAL_API=true',
+    );
+  });
+
+  it('rejects the default dev session HMAC key in production', () => {
+    let error: unknown;
+    try {
+      execFileSync(
+        'bash',
+        [
+          '-lc',
+          [
+            `source ${JSON.stringify(runtimeEnvPath)}`,
+            'export PSFN_RUNTIME_LAYOUT_MODE=production',
+            'export API_HOST=0.0.0.0 API_PORT=10053 API_KEY=test-api-key',
+            'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054 ADMIN_TOKEN=test-admin-token',
+            'export GATEWAY_SESSION_HMAC_KEY=psfn-dev-session-hmac',
+            'psfn_require_production_launcher_env',
+          ].join('; '),
+        ],
+        { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' },
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeDefined();
+    expect(String((error as { stderr?: Buffer }).stderr)).toContain(
+      'Production runtime forbids the default dev GATEWAY_SESSION_HMAC_KEY',
+    );
+  });
+
+  it('accepts explicit production API, admin, and session auth config', () => {
+    const output = execFileSync(
+      'bash',
+      [
+        '-lc',
+        [
+          `source ${JSON.stringify(runtimeEnvPath)}`,
+          'export PSFN_RUNTIME_LAYOUT_MODE=production',
+          'export API_HOST=0.0.0.0 API_PORT=10053 API_KEY=test-api-key',
+          'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054 ADMIN_TOKEN=test-admin-token',
+          'export GATEWAY_SESSION_HMAC_KEYS=test-keyring',
+          'psfn_require_production_launcher_env',
+          'printf ok',
+        ].join('; '),
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    );
+
+    expect(output).toBe('ok');
   });
 });

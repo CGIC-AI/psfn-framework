@@ -30,6 +30,8 @@ if [ "${PSFN_SKIP_DOTENV:-false}" != "true" ]; then
   psfn_source_dotenv_preserving_existing_env "${RESOLVED_DOTENV_FILE}"
 fi
 
+psfn_require_production_launcher_env
+
 psfn_export_default_module_registry_path
 psfn_export_default_vad_lexicon_path
 

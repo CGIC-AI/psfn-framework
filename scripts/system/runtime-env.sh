@@ -55,6 +55,80 @@ psfn_require_node_major() {
   fi
 }
 
+psfn_require_env_var() {
+  local name="$1"
+  local detail="${2:-}"
+
+  if [ -n "${!name:-}" ]; then
+    return 0
+  fi
+
+  if [ -n "${detail}" ]; then
+    echo "[launcher] Production runtime requires ${name}: ${detail}" >&2
+  else
+    echo "[launcher] Production runtime requires ${name}." >&2
+  fi
+  return 1
+}
+
+psfn_is_truthy_env_value() {
+  case "$(psfn_normalize_layout_mode "${1:-}")" in
+    1|true|yes|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+psfn_require_one_env_var() {
+  local left="$1"
+  local right="$2"
+  local detail="${3:-}"
+
+  if [ -n "${!left:-}" ] || [ -n "${!right:-}" ]; then
+    return 0
+  fi
+
+  if [ -n "${detail}" ]; then
+    echo "[launcher] Production runtime requires ${left} or ${right}: ${detail}" >&2
+  else
+    echo "[launcher] Production runtime requires ${left} or ${right}." >&2
+  fi
+  return 1
+}
+
+psfn_require_production_launcher_env() {
+  if ! psfn_is_production_runtime; then
+    return 0
+  fi
+
+  psfn_require_env_var "API_HOST" "explicit API bind host" || return 1
+  psfn_require_env_var "API_PORT" "explicit API bind port" || return 1
+  psfn_require_env_var "API_KEY" "production API must not rely on ALLOW_INSECURE_LOCAL_API" || return 1
+  psfn_require_env_var "ADMIN_HOST" "explicit Garden/admin bind host" || return 1
+  psfn_require_env_var "ADMIN_PORT" "explicit Garden/admin bind port" || return 1
+  psfn_require_env_var "ADMIN_TOKEN" "production admin transport must be authenticated" || return 1
+  psfn_require_one_env_var \
+    "GATEWAY_SESSION_HMAC_KEYS" \
+    "GATEWAY_SESSION_HMAC_KEY" \
+    "production session integrity must not use the dev fallback key" || return 1
+
+  if psfn_is_truthy_env_value "${ALLOW_INSECURE_LOCAL_API:-}"; then
+    echo "[launcher] Production runtime forbids ALLOW_INSECURE_LOCAL_API=true." >&2
+    return 1
+  fi
+  if psfn_is_truthy_env_value "${ADMIN_ALLOW_INSECURE:-}"; then
+    echo "[launcher] Production runtime forbids ADMIN_ALLOW_INSECURE=true." >&2
+    return 1
+  fi
+  if [ "${GATEWAY_SESSION_HMAC_KEY:-}" = "psfn-dev-session-hmac" ]; then
+    echo "[launcher] Production runtime forbids the default dev GATEWAY_SESSION_HMAC_KEY." >&2
+    return 1
+  fi
+}
+
 psfn_can_use_socket_dir() {
   local socket_dir="$1"
   local probe_path=""

@@ -324,6 +324,7 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
             'export PSFN_RUNTIME_LAYOUT_MODE=production',
             'export API_HOST=0.0.0.0 API_PORT=10053 API_KEY=test-api-key',
             'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054 ADMIN_TOKEN=test-admin-token',
+            'export WORKSPACE_PATH=/srv/psfn/purrsephone',
             'export GATEWAY_SESSION_HMAC_KEYS=test-keyring',
             'export ALLOW_INSECURE_LOCAL_API=true',
             'psfn_require_production_launcher_env',
@@ -341,6 +342,34 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
     );
   });
 
+  it('requires an explicit production workspace path', () => {
+    let error: unknown;
+    try {
+      execFileSync(
+        'bash',
+        [
+          '-lc',
+          [
+            `source ${JSON.stringify(runtimeEnvPath)}`,
+            'export PSFN_RUNTIME_LAYOUT_MODE=production',
+            'export API_HOST=0.0.0.0 API_PORT=10053 API_KEY=test-api-key',
+            'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054 ADMIN_TOKEN=test-admin-token',
+            'export GATEWAY_SESSION_HMAC_KEYS=test-keyring',
+            'psfn_require_production_launcher_env',
+          ].join('; '),
+        ],
+        { cwd: repoRoot, encoding: 'utf8', stdio: 'pipe' },
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeDefined();
+    expect(String((error as { stderr?: Buffer }).stderr)).toContain(
+      'Production runtime requires WORKSPACE_PATH',
+    );
+  });
+
   it('rejects the default dev session HMAC key in production', () => {
     let error: unknown;
     try {
@@ -353,6 +382,7 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
             'export PSFN_RUNTIME_LAYOUT_MODE=production',
             'export API_HOST=0.0.0.0 API_PORT=10053 API_KEY=test-api-key',
             'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054 ADMIN_TOKEN=test-admin-token',
+            'export WORKSPACE_PATH=/srv/psfn/purrsephone',
             'export GATEWAY_SESSION_HMAC_KEY=psfn-dev-session-hmac',
             'psfn_require_production_launcher_env',
           ].join('; '),
@@ -379,6 +409,7 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
           'export PSFN_RUNTIME_LAYOUT_MODE=production',
           'export API_HOST=0.0.0.0 API_PORT=10053 API_KEY=test-api-key',
           'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054 ADMIN_TOKEN=test-admin-token',
+          'export WORKSPACE_PATH=/srv/psfn/purrsephone',
           'export GATEWAY_SESSION_HMAC_KEYS=test-keyring',
           'psfn_require_production_launcher_env',
           'printf ok',

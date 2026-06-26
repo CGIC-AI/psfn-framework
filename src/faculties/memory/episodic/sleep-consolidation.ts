@@ -106,6 +106,14 @@ function sameEpisodeScope(left: Episode, right: Episode): boolean {
     === [...right.participantContactIds].sort().join(',');
 }
 
+function episodeScopeKey(episode: Episode): string {
+  return [
+    episode.channelId ?? '',
+    episode.threadId ?? '',
+    [...episode.participantContactIds].sort().join(','),
+  ].join('\u0000');
+}
+
 function sameSitting(chain: readonly Episode[], next: Episode, adjacencyGapMs: number): boolean {
   if (chain.length === 0) return false;
   const anchor = chain[0];
@@ -120,17 +128,30 @@ export function buildMergeChains(episodes: readonly Episode[], adjacencyGapMs: n
   const ordered = [...episodes].sort((left, right) => (
     left.startedAt.localeCompare(right.startedAt) || left.id.localeCompare(right.id)
   ));
-  const chains: Episode[][] = [];
-  let currentChain: Episode[] = [];
+  const byScope = new Map<string, Episode[]>();
   for (const episode of ordered) {
-    if (sameSitting(currentChain, episode, adjacencyGapMs)) {
-      currentChain.push(episode);
-    } else {
-      currentChain = [episode];
-      chains.push(currentChain);
+    const key = episodeScopeKey(episode);
+    const group = byScope.get(key) ?? [];
+    group.push(episode);
+    byScope.set(key, group);
+  }
+
+  const chains: Episode[][] = [];
+  for (const scopedEpisodes of byScope.values()) {
+    let currentChain: Episode[] = [];
+    for (const episode of scopedEpisodes) {
+      if (sameSitting(currentChain, episode, adjacencyGapMs)) {
+        currentChain.push(episode);
+      } else {
+        currentChain = [episode];
+        chains.push(currentChain);
+      }
     }
   }
-  return chains;
+  return chains.sort((left, right) => (
+    left[0]!.startedAt.localeCompare(right[0]!.startedAt)
+    || left[0]!.id.localeCompare(right[0]!.id)
+  ));
 }
 
 function mergeChainIntoHead(chain: readonly Episode[]): EpisodeUpdateInput {

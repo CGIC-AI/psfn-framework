@@ -339,4 +339,41 @@ describe('buildMergeChains', () => {
       'tail-overlap',
     ]]);
   });
+
+  it('keeps same-scope chains intact when another scope interleaves by timestamp', () => {
+    const make = (
+      id: string,
+      startedAt: string,
+      endedAt: string,
+      participantContactIds: string[],
+    ) => ({
+      schemaVersion: 1,
+      id,
+      title: id,
+      landmark: id,
+      startedAt,
+      endedAt,
+      threadId: 't',
+      channelId: 'c',
+      participantContactIds,
+      salience: { score: 0.5 },
+      affect: { labels: [] },
+      themes: [],
+      spanRefs: [],
+      artifactRefs: [],
+      provenanceRefs: [],
+      createdAt: NOW.toISOString(),
+      updatedAt: NOW.toISOString(),
+    });
+    const chains = buildMergeChains([
+      make('wide', '2026-06-10T00:00:00.000Z', '2026-06-10T02:00:00.000Z', ['p']),
+      make('interleaved-other-scope', '2026-06-10T00:15:00.000Z', '2026-06-10T00:20:00.000Z', []),
+      make('tail-overlap', '2026-06-10T01:45:00.000Z', '2026-06-10T02:10:00.000Z', ['p']),
+    ] as never, 10 * 60_000);
+
+    expect(chains.map(chain => chain.map(episode => episode.id))).toEqual([
+      ['wide', 'tail-overlap'],
+      ['interleaved-other-scope'],
+    ]);
+  });
 });

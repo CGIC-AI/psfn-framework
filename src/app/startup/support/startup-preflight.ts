@@ -12,6 +12,7 @@ import {
   type StartupConfigHydrationOptions,
   type StartupConfigHydrationResult,
 } from './bootstrap-helpers.js';
+import { RUNTIME_LAYOUT_MODE } from '../../../persistence/layout.js';
 
 export interface StartupPreflightLogger {
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -66,13 +67,24 @@ export function resolveStartupPreflightBundle(
       { keys: ignoredMutableEnvKeys },
     );
   }
+  const startupHydration = hydrateCanonicalStartupConfig(config, {
+    env,
+    secretAuthority: options.secretAuthority,
+  });
+
+  if (
+    startupHydration.pathSnapshot.runtimePathLayout.mode === RUNTIME_LAYOUT_MODE.PRODUCTION
+    && !env.WORKSPACE_PATH?.trim()
+  ) {
+    throw new Error(
+      'WORKSPACE_PATH is required for production runtime startup. ' +
+      'Set WORKSPACE_PATH to the explicit personal files root.',
+    );
+  }
 
   return {
     ignoredMutableEnvKeys,
-    startupHydration: hydrateCanonicalStartupConfig(config, {
-      env,
-      secretAuthority: options.secretAuthority,
-    }),
+    startupHydration,
     ...resolveStartupLifecycleBundle({
       entrypoint: options.entrypoint,
       env,

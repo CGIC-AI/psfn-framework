@@ -13,10 +13,23 @@ const PROMPT_GENERATION_FAILURE_SENDER: NotificationSenderMetadata = Object.free
 export function createPromptGenerationFailureAlertHandler(
   notifier: NotificationPort,
   companionName = 'PSFN',
+  options: { enabled?: boolean } = {},
 ): (event: StreamTerminalFailureEvent) => Promise<void> {
   const resolvedCompanionName = companionName.trim() || 'PSFN';
+  const enabled = options.enabled !== false;
 
   return async (event: StreamTerminalFailureEvent): Promise<void> => {
+    if (!enabled) {
+      log.warn('Prompt generation failure alert skipped: ntfy is not configured', {
+        companionName: resolvedCompanionName,
+        purpose: event.purpose,
+        attempts: event.attempts,
+        process: event.process,
+        service: event.service,
+        channelId: event.correlation?.channelId,
+      });
+      return;
+    }
     try {
       await notifier.notify({
         sender: PROMPT_GENERATION_FAILURE_SENDER,
@@ -60,4 +73,10 @@ export function formatPromptGenerationFailureAlert(
     `Last tried: ${lastTried}`,
     `Error: ${event.error.message}`,
   ].join('\n');
+}
+
+export function isPromptGenerationFailureAlertConfigured(
+  env: Pick<NodeJS.ProcessEnv, 'NTFY_BASE_URL' | 'NTFY_TOPIC'> = process.env,
+): boolean {
+  return Boolean(env.NTFY_BASE_URL?.trim() && env.NTFY_TOPIC?.trim());
 }

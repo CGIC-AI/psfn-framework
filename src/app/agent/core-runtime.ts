@@ -55,7 +55,10 @@ import {
 } from '../../core/identity/prompt-state-port.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
-import { createPromptGenerationFailureAlertHandler } from '../startup/support/operator-alerts.js';
+import {
+  createPromptGenerationFailureAlertHandler,
+  isPromptGenerationFailureAlertConfigured,
+} from '../startup/support/operator-alerts.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
 import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/observer-sidecar/config.js';
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
@@ -173,7 +176,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       stream: gateway.stream.bind(gateway),
     },
     streamRuntimeOptions: {
-      onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name),
+      onTerminalFailure: createPromptGenerationFailureAlertHandler(operatorNotifier, card.data.name, {
+        enabled: isPromptGenerationFailureAlertConfigured(process.env),
+      }),
     },
     emotionRuntime,
     observerEvalSidecar,

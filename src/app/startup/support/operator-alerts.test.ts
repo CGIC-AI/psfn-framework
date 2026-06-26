@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   createPromptGenerationFailureAlertHandler,
   formatPromptGenerationFailureAlert,
+  isPromptGenerationFailureAlertConfigured,
 } from './operator-alerts.js';
 import type { StreamTerminalFailureEvent } from '../../../core/agent/stream-adapter.js';
 import type { NotificationPort } from '../../../core/tools/ntfy.js';
@@ -70,5 +71,31 @@ describe('operator alerts', () => {
       priority: 5,
       message: expect.stringContaining('Last tried: openrouter/moonshotai/kimi-k2.5'),
     }));
+  });
+
+  it('skips prompt-generation alerts when ntfy is not configured', async () => {
+    const notifier: NotificationPort = {
+      notify: vi.fn().mockRejectedValue(new Error('ntfy is not configured')),
+    };
+    const handler = createPromptGenerationFailureAlertHandler(notifier, 'PSFN', {
+      enabled: false,
+    });
+
+    await handler(makeEvent());
+
+    expect(notifier.notify).not.toHaveBeenCalled();
+  });
+
+  it('requires both ntfy base URL and topic for prompt-generation alerts', () => {
+    expect(isPromptGenerationFailureAlertConfigured({
+      NTFY_BASE_URL: 'https://ntfy.local',
+      NTFY_TOPIC: 'ops',
+    })).toBe(true);
+    expect(isPromptGenerationFailureAlertConfigured({
+      NTFY_BASE_URL: 'https://ntfy.local',
+    })).toBe(false);
+    expect(isPromptGenerationFailureAlertConfigured({
+      NTFY_TOPIC: 'ops',
+    })).toBe(false);
   });
 });

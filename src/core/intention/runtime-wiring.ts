@@ -209,6 +209,12 @@ export function createIntentionAppraisalHooks(
         ...(decision.dueAt ? { dueAt: normalizeFutureIsoTimestamp(decision.dueAt) } : {}),
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         sourceMessageId,
+        ...(decision.followUp?.contextSummary
+          ? { contextSummary: decision.followUp.contextSummary }
+          : {}),
+        ...(decision.followUp?.wakeConditions?.length
+          ? { wakeConditions: decision.followUp.wakeConditions }
+          : {}),
       });
       return followUp.id;
     },

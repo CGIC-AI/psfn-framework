@@ -165,6 +165,8 @@ describe('wireIntentionRuntime', () => {
         followUp: {
           content: 'Check in tomorrow about medication.',
           channelType: 'api',
+          contextSummary: 'Medication follow-up context.',
+          wakeConditions: ['next_user_turn'],
         },
       },
       channelId: 'api:test',
@@ -183,6 +185,8 @@ describe('wireIntentionRuntime', () => {
       timing: 'scheduled',
       contactId: 'contact-a',
       sourceMessageId: 'msg-3',
+      contextSummary: 'Medication follow-up context.',
+      wakeConditions: ['next_user_turn'],
     });
 
     await hooks.onIntentionFollowUpActivated({
@@ -331,19 +335,24 @@ describe('wireIntentionRuntime', () => {
       contactId: 'contact-a',
       sourceMessageId: 'msg-due',
     });
-    const wakeOnUserTurn = await runtime.pendingFollowUpStore.enqueue({
-      content: 'Wake on user turn',
-      priority: 'low',
-      timing: 'soon',
-      createdAt,
+    const wakeOnUserTurnId = await hooks.onIntentionFollowUpDecision({
+      decision: {
+        type: 'followUp',
+        priority: 'low',
+        reason: 'Wake once the user returns.',
+        timing: 'soon',
+        followUp: {
+          content: 'Wake on user turn',
+          channelType: 'discord',
+          wakeConditions: ['next_user_turn'],
+        },
+      },
       channelId: 'discord:primary',
       channelType: 'discord',
-      authorId: 'system:intention',
-      authorName: 'Whisper',
-      contactId: 'contact-a',
+      canonicalContactKey: 'contact-a',
       sourceMessageId: 'msg-wake-user',
-      wakeConditions: ['next_user_turn'],
     });
+    expect(wakeOnUserTurnId).toBeTruthy();
     await runtime.pendingFollowUpStore.enqueue({
       content: 'Future follow-up',
       priority: 'medium',
@@ -395,7 +404,7 @@ describe('wireIntentionRuntime', () => {
 
     expect(surfaced.map(followUp => followUp.id)).toEqual([
       due.id,
-      wakeOnUserTurn.id,
+      wakeOnUserTurnId,
     ]);
   });
 

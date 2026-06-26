@@ -58,6 +58,12 @@ export interface AdminScheduledTaskView {
   runAt?: number;
   state: string;
   cadence?: AdminTaskCadence;
+  lastRunAt?: number;
+  lastFinishedAt?: number;
+  lastOutcome?: string;
+  lastError?: string;
+  lastErrorAt?: number;
+  lastDeniedReason?: string;
 }
 
 export interface AdminSchedulerApi {

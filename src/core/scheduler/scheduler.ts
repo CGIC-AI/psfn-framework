@@ -21,6 +21,8 @@ import type {
 
 const log = createComponentLogger('Scheduler');
 
+type RuntimeScheduledTask = ScheduledTask & { lastRun: number };
+
 function isWallClockCadence(
   cadence: RecurringCadence | undefined,
 ): cadence is HourlyRecurringCadence | DailyRecurringCadence {
@@ -108,7 +110,7 @@ export class Scheduler {
   private config: SchedulerConfig;
   private eligibilityGate?: EligibilityGate;
   private onEligibilityDecision?: (decision: EligibilityDecision) => void;
-  private tasks = new Map<string, ScheduledTask & { lastRun: number }>();
+  private tasks = new Map<string, RuntimeScheduledTask>();
   private tickTimer: ReturnType<typeof setInterval> | null = null;
   private tickInFlight: Promise<void> | null = null;
   private stopDrainPromise: Promise<void> | null = null;
@@ -304,6 +306,7 @@ export class Scheduler {
 
       const eligibilityDecision = this.evaluateTaskEligibility(id, entry);
       if (eligibilityDecision && !eligibilityDecision.allowed) {
+        const deniedAt = Date.now();
         log.warn('Task blocked by eligibility gate', {
           taskId: id,
           taskName: entry.name,
@@ -314,6 +317,12 @@ export class Scheduler {
           minimumTier: eligibilityDecision.minimumTier,
         });
         entry.lastRun = now;
+        entry.lastRunAt = now;
+        entry.lastFinishedAt = deniedAt;
+        entry.lastOutcome = 'denied';
+        delete entry.lastError;
+        delete entry.lastErrorAt;
+        entry.lastDeniedReason = eligibilityDecision.reasonCode;
         if (entry.type === 'one-shot') {
           entry.state = 'complete';
         }
@@ -334,15 +343,29 @@ export class Scheduler {
 
       entry.state = 'active';
       entry.lastRun = now;
+      entry.lastRunAt = now;
+      delete entry.lastFinishedAt;
+      delete entry.lastOutcome;
+      delete entry.lastError;
+      delete entry.lastErrorAt;
+      delete entry.lastDeniedReason;
       try {
         await entry.handler();
+        entry.lastFinishedAt = Date.now();
+        entry.lastOutcome = 'succeeded';
         await this.eventBus.emit('schedule.task.run', {
           taskId: id,
           taskName: entry.name,
           type: entry.type,
         });
       } catch (err) {
-        log.error(`Task "${entry.name}" error`, { error: String(err) });
+        const errorText = String(err);
+        entry.lastFinishedAt = Date.now();
+        entry.lastOutcome = 'failed';
+        entry.lastError = errorText;
+        entry.lastErrorAt = entry.lastFinishedAt;
+        delete entry.lastDeniedReason;
+        log.error(`Task "${entry.name}" error`, { error: errorText });
       }
 
       if (entry.type === 'one-shot') {

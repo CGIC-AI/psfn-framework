@@ -9,16 +9,23 @@ import { AdminSchedulerService } from './scheduler-service.js';
 import type { HeartbeatPolicy } from '../../../core/scheduler/heartbeat-policy.js';
 
 function makeTask(overrides: Partial<ScheduledTask> & { id: string; name: string }): ScheduledTask {
-  return {
+  const task: ScheduledTask = {
     id: overrides.id,
     name: overrides.name,
     type: overrides.type ?? 'every',
     intervalMs: overrides.intervalMs ?? 3_600_000,
-    runAt: overrides.runAt,
     handler: overrides.handler ?? (() => {}),
     state: overrides.state ?? 'idle',
-    ...(overrides.cadence ? { cadence: overrides.cadence } : {}),
-  } as ScheduledTask;
+  };
+  if (overrides.runAt !== undefined) task.runAt = overrides.runAt;
+  if (overrides.cadence) task.cadence = overrides.cadence;
+  if (overrides.lastRunAt !== undefined) task.lastRunAt = overrides.lastRunAt;
+  if (overrides.lastFinishedAt !== undefined) task.lastFinishedAt = overrides.lastFinishedAt;
+  if (overrides.lastOutcome !== undefined) task.lastOutcome = overrides.lastOutcome;
+  if (overrides.lastError !== undefined) task.lastError = overrides.lastError;
+  if (overrides.lastErrorAt !== undefined) task.lastErrorAt = overrides.lastErrorAt;
+  if (overrides.lastDeniedReason !== undefined) task.lastDeniedReason = overrides.lastDeniedReason;
+  return task;
 }
 
 function createSchedulerStub(initialTasks: ScheduledTask[] = []) {
@@ -134,5 +141,29 @@ describe('AdminSchedulerService', () => {
     expect(metacognitionEntry.templateId).toBe('daily-review');
     expect(metacognitionEntry.mutationBefore?.name).toBe('Daily Reflection');
     expect(metacognitionEntry.mutationAfter?.name).toBe('Updated Daily Reflection');
+  });
+
+  it('includes scheduler runtime outcome metadata in full data', () => {
+    const { scheduler } = createSchedulerStub([
+      makeTask({
+        id: 'runtime-metadata',
+        name: 'Runtime Metadata',
+        lastRunAt: 1_700_000_000_000,
+        lastFinishedAt: 1_700_000_010_000,
+        lastOutcome: 'failed',
+        lastError: 'Task failed during test',
+        lastErrorAt: 1_700_000_010_000,
+      }),
+    ]);
+    const service = new AdminSchedulerService(scheduler, tempDir);
+
+    expect(service.getFullData().tasks.find(task => task.id === 'runtime-metadata')).toMatchObject({
+      id: 'runtime-metadata',
+      lastRunAt: 1_700_000_000_000,
+      lastFinishedAt: 1_700_000_010_000,
+      lastOutcome: 'failed',
+      lastError: 'Task failed during test',
+      lastErrorAt: 1_700_000_010_000,
+    });
   });
 });

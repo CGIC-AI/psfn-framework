@@ -188,6 +188,12 @@ export interface AdminScheduledTask {
   runAt?: number;
   state: string;
   cadence?: AdminTaskCadence;
+  lastRunAt?: number;
+  lastFinishedAt?: number;
+  lastOutcome?: string;
+  lastError?: string;
+  lastErrorAt?: number;
+  lastDeniedReason?: string;
 }
 
 /** Full scheduler + reflections response. */
@@ -213,6 +219,12 @@ function toAdminTask(task: ScheduledTask): AdminScheduledTask {
     runAt: task.runAt,
     state: task.state,
     cadence,
+    lastRunAt: task.lastRunAt,
+    lastFinishedAt: task.lastFinishedAt,
+    lastOutcome: task.lastOutcome,
+    lastError: task.lastError,
+    lastErrorAt: task.lastErrorAt,
+    lastDeniedReason: task.lastDeniedReason,
   };
 }
 

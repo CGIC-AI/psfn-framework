@@ -388,6 +388,104 @@ describe('Scheduler', () => {
         missingTokens: ['memory.write'],
       }]);
     });
+
+    it('exposes runtime outcome metadata for successful task runs', async () => {
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(1_700_000_000_000);
+        scheduler.register({
+          id: 'metadata-success',
+          name: 'Metadata Success',
+          type: 'every',
+          intervalMs: 1,
+          handler: () => {},
+          state: 'idle',
+        });
+
+        await scheduler.tick();
+
+        expect(scheduler.getTask('metadata-success')).toMatchObject({
+          lastRunAt: 1_700_000_000_000,
+          lastFinishedAt: 1_700_000_000_000,
+          lastOutcome: 'succeeded',
+        });
+        expect(scheduler.getTask('metadata-success')?.lastError).toBeUndefined();
+        expect(scheduler.getTask('metadata-success')?.lastDeniedReason).toBeUndefined();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('exposes runtime outcome metadata for failed task runs', async () => {
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(1_700_000_010_000);
+        scheduler.register({
+          id: 'metadata-failure',
+          name: 'Metadata Failure',
+          type: 'every',
+          intervalMs: 1,
+          handler: () => {
+            throw new Error('scheduler test failure');
+          },
+          state: 'idle',
+        });
+
+        await scheduler.tick();
+
+        expect(scheduler.getTask('metadata-failure')).toMatchObject({
+          state: 'idle',
+          lastRunAt: 1_700_000_010_000,
+          lastFinishedAt: 1_700_000_010_000,
+          lastOutcome: 'failed',
+          lastError: 'Error: scheduler test failure',
+          lastErrorAt: 1_700_000_010_000,
+        });
+        expect(scheduler.getTask('metadata-failure')?.lastDeniedReason).toBeUndefined();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
+    it('exposes runtime outcome metadata for eligibility-denied task runs', async () => {
+      const nowSpy = vi.spyOn(Date, 'now');
+      try {
+        nowSpy.mockReturnValue(1_700_000_020_000);
+        const gate = createEligibilityGate(() => ({
+          getTier: () => 'custom',
+          getGrantedTokens: () => new Set(),
+          has: () => false,
+        }));
+        const gatedScheduler = new Scheduler(
+          eventBus,
+          { tickIntervalMs: 100, heartbeatIntervalMs: 500 },
+          { eligibilityGate: gate },
+        );
+
+        gatedScheduler.register({
+          id: 'metadata-denied',
+          name: 'Metadata Denied',
+          type: 'every',
+          intervalMs: 1,
+          handler: vi.fn(),
+          eligibility: { requiredTokens: ['memory.write'] },
+          state: 'idle',
+        });
+
+        await gatedScheduler.tick();
+
+        expect(gatedScheduler.getTask('metadata-denied')).toMatchObject({
+          state: 'idle',
+          lastRunAt: 1_700_000_020_000,
+          lastFinishedAt: 1_700_000_020_000,
+          lastOutcome: 'denied',
+          lastDeniedReason: 'missing_capability_tokens',
+        });
+        expect(gatedScheduler.getTask('metadata-denied')?.lastError).toBeUndefined();
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
   });
 
   describe('updateTask', () => {

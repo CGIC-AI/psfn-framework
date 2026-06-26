@@ -2610,6 +2610,12 @@ export function buildAdminApiRoutes(options: {
             cadence: task.type === 'every'
               ? (task as ScheduledTaskWithCadence).cadence
               : undefined,
+            lastRunAt: task.lastRunAt,
+            lastFinishedAt: task.lastFinishedAt,
+            lastOutcome: task.lastOutcome,
+            lastError: task.lastError,
+            lastErrorAt: task.lastErrorAt,
+            lastDeniedReason: task.lastDeniedReason,
           }));
           sendJson(res, 200, { tasks, reflections: [] });
         }

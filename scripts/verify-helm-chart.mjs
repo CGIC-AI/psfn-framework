@@ -124,6 +124,24 @@ assertIncludes(externalRendered, 'value: "redis://external-redis:6379"', 'extern
 assertNotIncludes(externalRendered, 'name: psfn-postgres\n', 'bundled Postgres resources in external mode');
 assertNotIncludes(externalRendered, 'name: psfn-redis\n', 'bundled Redis resources in external mode');
 
+const hubRendered = render([
+  '--set',
+  'satelliteHub.enabled=true',
+  '--set',
+  'satelliteHub.image.repository=localhost/psfn-satellite-hub',
+  '--set',
+  'satelliteHub.image.tag=0.1.0-kube',
+  '--set',
+  'ingress.satelliteHub.enabled=true',
+]);
+
+assertIncludes(hubRendered, 'kind: Deployment\nmetadata:\n  name: psfn-satellite-hub', 'satellite hub Deployment');
+assertIncludes(hubRendered, 'kind: Service\nmetadata:\n  name: psfn-satellite-hub', 'satellite hub Service');
+assertIncludes(hubRendered, 'kind: Ingress\nmetadata:\n  name: psfn-satellite-hub', 'satellite hub Ingress');
+assertIncludes(hubRendered, 'kind: NetworkPolicy\nmetadata:\n  name: psfn-satellite-hub', 'satellite hub NetworkPolicy');
+assertIncludes(hubRendered, 'name: hub-ws', 'satellite hub websocket port');
+assertIncludes(hubRendered, 'name: GATEWAY_API_URL', 'satellite hub gateway API wiring');
+
 assertRenderFails(
   ['--set', 'certificates.enabled=false'],
   'certificates.enabled must be true',
@@ -135,6 +153,10 @@ assertRenderFails(
 assertRenderFails(
   ['--set', 'redis.mode=external', '--set', 'redis.external.passwordSecret.name=external-redis-secret'],
   'redis.external.url is required when redis.mode=external',
+);
+assertRenderFails(
+  ['--set', 'satelliteHub.enabled=true'],
+  'satelliteHub.image.repository is required when satelliteHub.enabled=true',
 );
 
 console.log('Helm chart verification passed.');

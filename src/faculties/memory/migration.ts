@@ -1,5 +1,13 @@
 import type Database from 'better-sqlite3';
+import type { Pool, PoolClient } from 'pg';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import {
+  createPostgresPool,
+  ensurePostgresSchema,
+  queryRows,
+  withPostgresClient,
+} from '../../persistence/postgres.js';
+import { POSTGRES_MEMORY_MIGRATIONS } from '../../persistence/postgres/migrations.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
 interface MemoryTextRow {
@@ -10,6 +18,11 @@ interface MemoryTextRow {
 interface RetrievalRow {
   memory_id: string;
   distance: number;
+}
+
+interface PostgresMemoryTextRow {
+  id: string;
+  text: string;
 }
 
 export interface RetrievalValidationQuery {
@@ -108,6 +121,10 @@ function toEmbeddingBuffer(embedding: Float32Array): Buffer {
   return Buffer.from(embedding.buffer, embedding.byteOffset, embedding.byteLength);
 }
 
+function toPostgresEmbeddingLiteral(embedding: Float32Array): string {
+  return `[${Array.from(embedding, value => Number(value)).join(',')}]`;
+}
+
 function loadRowsForMigration(
   db: Database.Database,
   includeDeleted: boolean,
@@ -145,6 +162,32 @@ function writeReembeddedBatch(
     }
   });
   tx();
+}
+
+async function loadPostgresRowsForMigration(
+  pool: Pool,
+  includeDeleted: boolean,
+): Promise<PostgresMemoryTextRow[]> {
+  const whereClause = includeDeleted ? '' : 'WHERE deleted_at IS NULL';
+  return await queryRows<PostgresMemoryTextRow>(pool, `
+    SELECT id, text
+    FROM l2_memories
+    ${whereClause}
+    ORDER BY id ASC
+  `);
+}
+
+async function writePostgresReembeddedBatch(
+  client: PoolClient,
+  rows: readonly PostgresMemoryTextRow[],
+  embeddings: readonly Float32Array[],
+): Promise<void> {
+  for (let index = 0; index < rows.length; index += 1) {
+    await client.query(
+      'UPDATE l2_memories SET embedding = $2::vector WHERE id = $1',
+      [rows[index].id, toPostgresEmbeddingLiteral(embeddings[index])],
+    );
+  }
 }
 
 function summarizeValidation(
@@ -429,6 +472,135 @@ export async function migrateMemoryEmbeddings(
         pre: preValidation,
         post: postValidation,
       }
-      : undefined,
+    : undefined,
   };
+}
+
+export async function migratePostgresMemoryEmbeddings(
+  databaseUrl: string,
+  embeddingService: EmbeddingProviderPort,
+  options: EmbeddingMigrationOptions = {},
+): Promise<EmbeddingMigrationResult> {
+  const normalizedDatabaseUrl = databaseUrl.trim();
+  if (!normalizedDatabaseUrl) {
+    throw new Error('PostgreSQL embedding migration requires a database URL');
+  }
+
+  const batchSize = normalizePositiveInt(
+    options.batchSize,
+    DEFAULT_BATCH_SIZE,
+    'batchSize',
+  );
+  const parallelism = normalizePositiveInt(
+    options.parallelism,
+    DEFAULT_PARALLELISM,
+    'parallelism',
+  );
+
+  const includeDeleted = options.includeDeleted ?? false;
+  const continueOnError = options.continueOnError ?? true;
+  const startTime = Date.now();
+  const pool = createPostgresPool(normalizedDatabaseUrl, {
+    applicationName: 'psfn-memory-embedding-migration',
+    allowExitOnIdle: true,
+  });
+
+  try {
+    await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
+    const rows = await loadPostgresRowsForMigration(pool, includeDeleted);
+    const batches = chunk(rows, batchSize);
+
+    let processed = 0;
+    let updated = 0;
+    let failed = 0;
+    const failures: ReembedFailure[] = [];
+
+    if (rows.length > 0) {
+      let nextBatch = 0;
+      const workerCount = Math.min(parallelism, batches.length);
+
+      const runWorker = async (): Promise<void> => {
+        for (;;) {
+          const batchIndex = nextBatch++;
+          if (batchIndex >= batches.length) return;
+
+          const batch = batches[batchIndex];
+
+          try {
+            const embeddings = await embeddingService.embedBatch(batch.map(row => row.text));
+            if (embeddings.length !== batch.length) {
+              throw new Error(
+                `Embedding service returned ${embeddings.length} embeddings for ${batch.length} records`,
+              );
+            }
+
+            if (Number.isFinite(embeddingService.dims) && embeddingService.dims > 0) {
+              for (const embedding of embeddings) {
+                if (embedding.length !== embeddingService.dims) {
+                  throw new Error(
+                    `Embedding dimension ${embedding.length} does not match configured ${embeddingService.dims}`,
+                  );
+                }
+              }
+            }
+
+            await withPostgresClient(pool, async (client) => {
+              await writePostgresReembeddedBatch(client, batch, embeddings);
+            });
+            processed += batch.length;
+            updated += batch.length;
+            options.onProgress?.({
+              total: rows.length,
+              processed,
+              updated,
+              failed,
+              batchIndex: batchIndex + 1,
+              batchCount: batches.length,
+            });
+          } catch (error) {
+            const message = toErrorMessage(error);
+            processed += batch.length;
+            failed += batch.length;
+            for (const row of batch) {
+              failures.push({
+                memoryId: row.id,
+                error: message,
+              });
+            }
+            options.onProgress?.({
+              total: rows.length,
+              processed,
+              updated,
+              failed,
+              batchIndex: batchIndex + 1,
+              batchCount: batches.length,
+            });
+
+            if (!continueOnError) {
+              throw new Error(`Failed PostgreSQL embedding migration batch ${batchIndex + 1}: ${message}`);
+            }
+          }
+        }
+      };
+
+      await Promise.all(
+        Array.from({ length: workerCount }, async () => {
+          await runWorker();
+        }),
+      );
+    }
+
+    return {
+      total: rows.length,
+      processed,
+      updated,
+      failed,
+      batchSize,
+      parallelism,
+      durationMs: Date.now() - startTime,
+      failures,
+    };
+  } finally {
+    await pool.end();
+  }
 }

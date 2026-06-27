@@ -129,7 +129,6 @@ export const POSTGRES_PARITY_REQUIRED_CUTOVER_GAPS = [
   'intention-care-reminders',
   'backup-service',
   'startup-integrity-diagnostics',
-  'cli-e2e-runtime-entrypoints',
   'config-defaults',
   'migration-audit-ledger',
 ] as const satisfies readonly PostgresParitySurfaceId[];
@@ -887,16 +886,16 @@ export const POSTGRES_PARITY_MATRIX = [
     id: 'cli-e2e-runtime-entrypoints',
     category: 'tooling',
     title: 'CLI and e2e runtime entrypoints',
-    status: 'remove_runtime_sqlite',
+    status: 'partial',
     cutoverAction: 'remove_runtime_sqlite',
     sqliteSourceArtifacts: [
-      'src/app/cli/chat-cli.ts opens initDatabase(config.databasePath).',
-      'src/app/e2e/e2e-test.ts opens initDatabase(config.databasePath).',
-      'src/app/e2e/e2e-walkthrough.ts opens initDatabase(config.databasePath).',
-      'src/app/e2e/runtime-harness.ts sets DATABASE_PATH.',
+      'src/app/e2e/runtime-harness.ts still sets DATABASE_PATH as inert legacy fixture env.',
+      'No ordinary CLI/e2e entrypoint imports initDatabase or opens SQLite memory state after psfn-framework-3c2.4.',
     ],
     postgresDestinationArtifacts: [
-      'Required: CLI/e2e should use split runtime or Postgres persistence factory.',
+      'src/app/cli/chat-cli.ts uses composeMemoryStoreAsync and composeSessionRuntimeAsync.',
+      'src/app/e2e/e2e-test.ts uses composeMemoryStoreAsync and composeSessionRuntimeAsync.',
+      'src/app/e2e/e2e-walkthrough.ts uses composeMemoryStoreAsync and composeSessionRuntimeAsync.',
       'Required: isolated e2e fixtures should provision Postgres or explicitly test migration-only SQLite reader paths.',
     ],
     codeReferences: [
@@ -924,9 +923,8 @@ export const POSTGRES_PARITY_MATRIX = [
       ],
     },
     gaps: [
-      'chat-cli still opens SQLite memory state directly.',
-      'e2e-test and e2e-walkthrough still open SQLite memory fixtures directly.',
-      'CLI/e2e session composition now uses composeSessionRuntimeAsync with the Postgres runtime contract.',
+      'e2e runtime harness supplies a Postgres URL but does not provision a scratch Postgres/pgvector database itself.',
+      'DATABASE_PATH remains as an inert e2e fixture env value until full SQLite config cleanup.',
     ],
   },
   {
@@ -936,14 +934,13 @@ export const POSTGRES_PARITY_MATRIX = [
     status: 'partial',
     cutoverAction: 'remove_runtime_sqlite',
     sqliteSourceArtifacts: [
-      'session:repair:transcript-projection supports SQLite and Postgres.',
-      'migrate:embeddings opens SQLite and sqlite-vec.',
-      'force-episodic-synthesis opens BetterSqlite3.',
+      'force-episodic-synthesis opens BetterSqlite3 only for explicitly allowed isolated runtimes.',
+      'migrate:sqlite-to-postgres-memory intentionally opens SQLite as a one-shot migration source.',
       'session repair/import scripts may read filesystem L0 sources.',
     ],
     postgresDestinationArtifacts: [
       'Postgres transcript projection repair already exists.',
-      'Required: Postgres embedding re-embedding/reindex path.',
+      'migrate:embeddings uses migratePostgresMemoryEmbeddings against l2_memories.embedding.',
       'Required: Postgres episodic synthesis command or removal of isolated SQLite-only command.',
     ],
     codeReferences: [
@@ -976,8 +973,7 @@ export const POSTGRES_PARITY_MATRIX = [
       ],
     },
     gaps: [
-      'migrate-embeddings is SQLite/sqlite-vec only.',
-      'force-episodic-synthesis is SQLite-only.',
+      'force-episodic-synthesis remains an isolated-runtime SQLite-only command.',
     ],
   },
   {

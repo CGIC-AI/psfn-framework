@@ -3,7 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { resolveSessionsDir } from '../../../persistence/layout.js';
-import { composeSessionRuntimeAsync } from './composition.js';
+import { composeMemoryStoreAsync, composeSessionRuntimeAsync } from './composition.js';
+
+const postgresStoreMocks = vi.hoisted(() => ({
+  createPostgresMemoryStore: vi.fn(async () => ({})),
+}));
 
 vi.mock('../../../persistence/sessions/postgres-adapters.js', async () => {
   const journalPort = await vi.importActual<typeof import('../../../persistence/journals/journal/port.js')>(
@@ -39,6 +43,10 @@ vi.mock('../../../persistence/sessions/postgres-adapters.js', async () => {
   };
 });
 
+vi.mock('../../../faculties/memory/postgres-store.js', () => ({
+  createPostgresMemoryStore: postgresStoreMocks.createPostgresMemoryStore,
+}));
+
 describe('session runtime composition transcript projection wiring', () => {
   const dirs: string[] = [];
 
@@ -47,6 +55,7 @@ describe('session runtime composition transcript projection wiring', () => {
       rmSync(dir, { recursive: true, force: true });
     }
     dirs.length = 0;
+    postgresStoreMocks.createPostgresMemoryStore.mockClear();
   });
 
   it('does not create the legacy sqlite search projection in postgres composition', async () => {
@@ -93,5 +102,41 @@ describe('session runtime composition transcript projection wiring', () => {
         persistenceBackend: 'postgres',
       } as any,
     })).rejects.toThrow('requires config.postgresDatabaseUrl');
+  });
+
+  it('composes postgres memory store without creating a legacy sqlite database', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-memory-composition-postgres-'));
+    dirs.push(root);
+    const companionDataDir = join(root, 'companion-data');
+    const databaseUrl = 'postgres://postgres:secret@localhost:5432/psfn_test';
+
+    await composeMemoryStoreAsync({
+      companionDataDir,
+      dataDir: companionDataDir,
+      persistenceBackend: 'postgres',
+      postgresDatabaseUrl: databaseUrl,
+    } as any, 1536);
+
+    expect(existsSync(join(companionDataDir, 'state', 'companion.db'))).toBe(false);
+    expect(postgresStoreMocks.createPostgresMemoryStore).toHaveBeenCalledTimes(1);
+    const [actualUrl, actualDims, actualOptions] = postgresStoreMocks.createPostgresMemoryStore.mock.calls[0];
+    expect(actualUrl).toBe(databaseUrl);
+    expect(actualDims).toBe(1536);
+    expect(actualOptions).toMatchObject({
+      notesDir: join(companionDataDir, 'state', 'notes'),
+      scratchpadMirrorPath: join(companionDataDir, 'state', 'notes', 'scratchpad.json'),
+    });
+  });
+
+  it('fails closed for postgres memory composition without postgresDatabaseUrl', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-memory-composition-missing-url-'));
+    dirs.push(root);
+    const companionDataDir = join(root, 'companion-data');
+
+    await expect(composeMemoryStoreAsync({
+      companionDataDir,
+      dataDir: companionDataDir,
+      persistenceBackend: 'postgres',
+    } as any, 1536)).rejects.toThrow('requires config.postgresDatabaseUrl');
   });
 });

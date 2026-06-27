@@ -22,6 +22,8 @@ import {
   createEmbeddingProviderFromEnv as createEmbeddingProviderFromMemoryEnv,
   type EmbeddingRuntimeProvider,
 } from '../../../faculties/memory/embedding.js';
+import { MemoryJournal } from '../../../faculties/memory/journal.js';
+import { createPostgresMemoryStore } from '../../../faculties/memory/postgres-store.js';
 import {
   SubstrateAgent,
   type EmotionRuntimeWiring,
@@ -71,8 +73,11 @@ import {
   resolveCoreMemoryPath,
   resolveContinuityDir,
   resolveLegacyValuesJournalPath,
+  resolveMemoryJournalPath,
+  resolveNotesDir,
   resolveShardFoldReviewStorePath,
   resolveShardSessionMemorySyncAuditPath,
+  resolveScratchpadMirrorPath,
   resolveSessionsDir,
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
@@ -144,6 +149,28 @@ export async function composeSessionRuntimeAsync(
     sessionsDir,
   });
   return createSessionComposition(options, sessionAdapters, sessionsDir);
+}
+
+export async function composeMemoryStoreAsync(
+  config: SubstrateConfig,
+  embeddingDims: number,
+): Promise<MemoryStorePort> {
+  const companionDataDir = resolveConfiguredCompanionDataDir(config);
+  migrateLegacyPersistenceLayout(companionDataDir);
+
+  if (config.persistenceBackend !== 'postgres') {
+    throw new Error('PostgreSQL memory composition requires config.persistenceBackend=postgres');
+  }
+  const databaseUrl = config.postgresDatabaseUrl?.trim();
+  if (!databaseUrl) {
+    throw new Error('PostgreSQL memory composition requires config.postgresDatabaseUrl');
+  }
+
+  return await createPostgresMemoryStore(databaseUrl, embeddingDims, {
+    notesDir: resolveNotesDir(companionDataDir),
+    scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
+    journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
+  });
 }
 
 export function createEmbeddingProviderFromEnv(): EmbeddingRuntimeProvider {

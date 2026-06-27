@@ -153,6 +153,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const memoryStore = options.memoryStore
     ? createMemoryStorePort(options.memoryStore)
     : (() => {
+      if (config.persistenceBackend === 'postgres') {
+        throw new Error('PostgreSQL core runtime requires an injected memory store');
+      }
       if (!db) {
         throw new Error('SQLite memory fallback requires an initialized database handle');
       }
@@ -239,6 +242,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const contactStore = options.contactStore
     ? await registerContactRuntime(agentLoop, options.contactStore, primaryUserId, contactRuntimeOptions)
     : await (() => {
+      if (config.persistenceBackend === 'postgres') {
+        throw new Error('PostgreSQL core runtime requires an injected contact store');
+      }
       if (!db) {
         throw new Error('Contact runtime requires an injected ContactStorePort for non-sqlite backends');
       }
@@ -250,6 +256,9 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       );
     })();
   const intentionRuntime = options.intentionRuntime ?? (() => {
+    if (config.persistenceBackend === 'postgres') {
+      throw new Error('PostgreSQL core runtime requires injected intention persistence stores');
+    }
     if (!db) {
       throw new Error('Intention runtime requires injected persistence stores for non-sqlite backends');
     }

@@ -1,6 +1,10 @@
 import { loadAgentConfig } from '../../system/config/load-config.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from '../../system/security/policy-constants.js';
+import {
+  resolveGatewayRpcEndpointFromEnv,
+  type GatewayRpcEndpoint,
+} from '../../boundary/gateway/transport.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
 import {
   RUNTIME_MODE,
@@ -60,6 +64,7 @@ export interface AgentStartupContext {
   capabilityRuntime: CapabilityRuntime;
   eligibilityGate: EligibilityGate;
   socketPath: string;
+  gatewayRpcEndpoint: GatewayRpcEndpoint;
   moduleRegistryPath: string;
   eventBus: EventBus;
   stopDebugObserver: () => void;
@@ -133,7 +138,10 @@ export function prepareAgentStartupContext(input: {
     () => capabilityRuntime,
     (decision) => emitEligibilityDecisionTelemetry(eventBus, decision, input.log),
   );
-  const socketPath = input.env.GATEWAY_SOCKET ?? DEFAULT_GATEWAY_SOCKET_PATH;
+  const gatewayRpcEndpoint = resolveGatewayRpcEndpointFromEnv(input.env, DEFAULT_GATEWAY_SOCKET_PATH);
+  const socketPath = gatewayRpcEndpoint.kind === 'unix'
+    ? gatewayRpcEndpoint.socketPath
+    : input.env.GATEWAY_SOCKET ?? DEFAULT_GATEWAY_SOCKET_PATH;
   if (!input.env.WORKSPACE_PATH) {
     input.log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
       mode: pathSnapshot.runtimePathLayout.mode,
@@ -163,6 +171,7 @@ export function prepareAgentStartupContext(input: {
     capabilityRuntime,
     eligibilityGate,
     socketPath,
+    gatewayRpcEndpoint,
     moduleRegistryPath,
     eventBus,
     stopDebugObserver,

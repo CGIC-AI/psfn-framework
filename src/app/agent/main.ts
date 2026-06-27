@@ -1,10 +1,11 @@
 // ── Agent Container Entry Point ──
-// Runs inside a --network=none container. Connects to gateway via Unix socket.
+// Runs inside an isolated container. Connects to gateway via the configured RPC endpoint.
 // Run: npx tsx src/app/agent/main.ts
 
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
+import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
 import { EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
@@ -81,7 +82,7 @@ async function main(): Promise<void> {
     backupConfig,
     capabilityRuntime,
     eligibilityGate,
-    socketPath,
+    gatewayRpcEndpoint,
     moduleRegistryPath,
     eventBus,
     stopDebugObserver,
@@ -99,8 +100,8 @@ async function main(): Promise<void> {
   const embeddingDims = config.embeddingDims ?? 1024;
   const primaryUserId = config.voiceTargetUserId?.trim() || process.env.PRIMARY_USER_ID;
 
-  log.info(`Connecting to gateway at ${socketPath}...`);
-  const gateway = await GatewayClient.connect(socketPath, embeddingDims);
+  log.info(`Connecting to gateway at ${formatGatewayRpcEndpoint(gatewayRpcEndpoint)}...`);
+  const gateway = await GatewayClient.connectEndpoint(gatewayRpcEndpoint, embeddingDims);
   const llmProvider = createLLMProviderPort(gateway);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
   log.info('Connected to gateway');

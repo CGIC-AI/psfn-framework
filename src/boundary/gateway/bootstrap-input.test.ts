@@ -101,6 +101,10 @@ describe('resolveGatewayBootstrapInput', () => {
 
     expect(bootstrap.runtimeMode).toBe('gateway-agent');
     expect(bootstrap.socketPath).toBe('/run/psfn/gateway.sock');
+    expect(bootstrap.gatewayRpcEndpoint).toEqual({
+      kind: 'unix',
+      socketPath: '/run/psfn/gateway.sock',
+    });
     expect(bootstrap.workspacePath).toBe('/workspace');
     expect(bootstrap.workspaceRoot).toBe('/workspace');
     expect(bootstrap.gitRepoRoot).toBe(process.cwd());
@@ -171,6 +175,48 @@ describe('resolveGatewayBootstrapInput', () => {
     expect(bootstrap.policyConfig.beads).toEqual({
       enabled: false,
     });
+  });
+
+  it('parses explicit WSS gateway RPC endpoint configuration', () => {
+    const bootstrap = resolveGatewayBootstrapInput({
+      config: createConfig(),
+      env: {
+        PSFN_RUNTIME_MODE: 'split',
+        WORKSPACE_PATH: '/workspace',
+        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        GATEWAY_RPC_ENDPOINT: 'wss://gateway-rpc.local:10054/rpc',
+        GATEWAY_RPC_TLS_CA_PATH: '/certs/ca.pem',
+        GATEWAY_RPC_TLS_CERT_PATH: '/certs/gateway.pem',
+        GATEWAY_RPC_TLS_KEY_PATH: '/certs/gateway-key.pem',
+      },
+      startupHydration: createStartupHydration(),
+    });
+
+    expect(bootstrap.gatewayRpcEndpoint).toEqual({
+      kind: 'wss',
+      url: 'wss://gateway-rpc.local:10054/rpc',
+      host: 'gateway-rpc.local',
+      port: 10054,
+      path: '/rpc',
+      tls: {
+        caPath: '/certs/ca.pem',
+        certPath: '/certs/gateway.pem',
+        keyPath: '/certs/gateway-key.pem',
+      },
+    });
+  });
+
+  it('rejects WSS gateway RPC selection without TLS file configuration', () => {
+    expect(() => resolveGatewayBootstrapInput({
+      config: createConfig(),
+      env: {
+        PSFN_RUNTIME_MODE: 'split',
+        WORKSPACE_PATH: '/workspace',
+        GATEWAY_SESSION_HMAC_KEY: 'v1:test-session-secret',
+        GATEWAY_RPC_ENDPOINT: 'wss://gateway-rpc.local:10054/rpc',
+      },
+      startupHydration: createStartupHydration(),
+    })).toThrow(/GATEWAY_RPC_ENDPOINT=wss requires GATEWAY_RPC_TLS_CA_PATH/);
   });
 
   it('only enables legacy vault tools when explicitly requested', () => {

@@ -196,6 +196,10 @@ describe('prepareAgentStartupContext', () => {
       expect(context.coreConfig.primaryModel).toBe('openrouter/z-ai/glm-5.1');
       expect(context.coreConfig.modelRoster.vision?.model).toBe('openrouter/google/gemini-3.1-flash-lite-preview');
       expect(context.coreConfig.modelRoster.chat?.provider).toBe('litellm');
+      expect(context.gatewayRpcEndpoint).toEqual({
+        kind: 'unix',
+        socketPath: '/run/psfn/gateway.sock',
+      });
     } finally {
       context.stopDebugObserver();
     }

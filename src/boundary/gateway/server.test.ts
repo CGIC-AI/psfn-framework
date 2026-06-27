@@ -10,14 +10,14 @@ import {
   type GatewayServerOptions,
 } from './server.js';
 import { GatewayErrors } from './protocol.js';
-import type { NdjsonConnection } from './transport.js';
+import type { GatewayRpcConnection } from './transport.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import type { GatewayAuditStorePort } from './audit-port.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
   createSocketServer: vi.fn(),
-  NdjsonConnection: class extends EventEmitter {},
+  createWebSocketRpcServer: vi.fn(),
 }));
 
 import { createSocketServer } from './transport.js';
@@ -76,7 +76,7 @@ function createMockConnection(
   };
 
   return {
-    conn: conn as unknown as NdjsonConnection,
+    conn: conn as unknown as GatewayRpcConnection,
     sent,
     _emit: conn._emit,
     _emitClose: conn._emitClose,
@@ -90,7 +90,7 @@ async function setupServerConnection(
   onSend?: (message: any, emit: (response: unknown) => void) => void,
 ): Promise<{ server: GatewayServer; conn: ReturnType<typeof createMockConnection> }> {
   const server = new GatewayServer(options);
-  let onConnectionCb: ((conn: NdjsonConnection) => void) | null = null;
+  let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
   mockedCreateSocketServer.mockImplementation((_path, cb) => {
     onConnectionCb = cb;
     return { close: vi.fn(), listen: vi.fn() } as any;
@@ -239,7 +239,7 @@ describe('GatewayServer', () => {
       const server = new GatewayServer(options);
 
       // Capture the connection callback
-      let onConnectionCb: ((conn: NdjsonConnection) => void) | null = null;
+      let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
         return { close: vi.fn(), listen: vi.fn() } as any;
@@ -286,7 +286,7 @@ describe('GatewayServer', () => {
       const options = createMinimalOptions();
       const server = new GatewayServer(options);
 
-      let onConnectionCb: ((conn: NdjsonConnection) => void) | null = null;
+      let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
         return { close: vi.fn(), listen: vi.fn() } as any;
@@ -1094,7 +1094,7 @@ describe('GatewayServer', () => {
     it('removes disconnected agents from rpcClients', async () => {
       const server = new GatewayServer(createMinimalOptions());
 
-      let onConnectionCb: ((conn: NdjsonConnection) => void) | null = null;
+      let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
         return { close: vi.fn(), listen: vi.fn() } as any;
@@ -1120,7 +1120,7 @@ describe('GatewayServer', () => {
     it('fails closed when connected agents are present but none are ready', async () => {
       const server = new GatewayServer(createMinimalOptions());
 
-      let onConnectionCb: ((conn: NdjsonConnection) => void) | null = null;
+      let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
         return { close: vi.fn(), listen: vi.fn() } as any;
@@ -1132,7 +1132,7 @@ describe('GatewayServer', () => {
       onConnectionCb!(mockConn.conn);
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      const statuses = (server as any).connectionStatuses as Map<NdjsonConnection, any>;
+      const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
       const status = statuses.get(mockConn.conn);
       expect(status).toBeDefined();
       status.state = 'degraded';
@@ -1145,7 +1145,7 @@ describe('GatewayServer', () => {
     it('marks stale connections degraded and blocks routing until healthy', async () => {
       const server = new GatewayServer(createMinimalOptions());
 
-      let onConnectionCb: ((conn: NdjsonConnection) => void) | null = null;
+      let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
         return { close: vi.fn(), listen: vi.fn() } as any;
@@ -1157,7 +1157,7 @@ describe('GatewayServer', () => {
       onConnectionCb!(mockConn.conn);
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      const statuses = (server as any).connectionStatuses as Map<NdjsonConnection, any>;
+      const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
       const status = statuses.get(mockConn.conn);
       expect(status).toBeDefined();
       status.lastHealthcheckAt = Date.now() - status.healthcheckStaleAfterMs - 5;
@@ -1171,7 +1171,7 @@ describe('GatewayServer', () => {
     it('excludes identified session-integrity clients from agent routing and stale health', async () => {
       const server = new GatewayServer(createMinimalOptions());
 
-      let onConnectionCb: ((conn: NdjsonConnection) => void) | null = null;
+      let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
         return { close: vi.fn(), listen: vi.fn() } as any;
@@ -1193,7 +1193,7 @@ describe('GatewayServer', () => {
       onConnectionCb!(agentConn.conn);
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      const statuses = (server as any).connectionStatuses as Map<NdjsonConnection, any>;
+      const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
       const internalStatus = statuses.get(internalConn.conn);
       expect(internalStatus.role).toBe('internal_session_integrity');
       internalStatus.lastHealthcheckAt = Date.now() - internalStatus.healthcheckStaleAfterMs - 5;
@@ -1248,7 +1248,7 @@ describe('GatewayServer', () => {
 
       const server = new GatewayServer(options);
 
-      let onConnectionCb: ((conn: NdjsonConnection) => void) | null = null;
+      let onConnectionCb: ((conn: GatewayRpcConnection) => void) | null = null;
       mockedCreateSocketServer.mockImplementation((_path, cb) => {
         onConnectionCb = cb;
         return { close: vi.fn(), listen: vi.fn() } as any;
@@ -1260,7 +1260,7 @@ describe('GatewayServer', () => {
       onConnectionCb!(mockConn.conn);
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      const statuses = (server as any).connectionStatuses as Map<NdjsonConnection, any>;
+      const statuses = (server as any).connectionStatuses as Map<GatewayRpcConnection, any>;
       const status = statuses.get(mockConn.conn);
       expect(status).toBeDefined();
 

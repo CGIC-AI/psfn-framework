@@ -34,6 +34,10 @@ import { DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS,
   DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS,
   DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS,
 } from './discord-startup.js';
+import {
+  resolveGatewayRpcEndpointFromEnv,
+  type GatewayRpcEndpoint,
+} from './transport.js';
 
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
@@ -70,6 +74,7 @@ export interface GatewayBootstrapInput {
   diagnostics: GatewayBootstrapDiagnostics;
   runtimeMode: GatewayRuntimeMode;
   socketPath: string;
+  gatewayRpcEndpoint: GatewayRpcEndpoint;
   workspacePath: string;
   workspaceRoot: string;
   codebaseRoot: string;
@@ -333,6 +338,7 @@ export function resolveGatewayBootstrapInput(
   const wyomingShardRouting = config.wyomingShardRouting ?? { enabled: false };
   const auditDbPath = env.AUDIT_DB_PATH ?? resolve(systemDataDir, 'gateway-audit.db');
   const providerEnv = buildProviderCredentialEnv(config, env);
+  const gatewayRpcEndpoint = resolveGatewayRpcEndpointFromEnv(env, DEFAULT_SOCKET_PATH);
   const channelsConfig = loadRuntimeChannelsConfig(
     systemDataDir,
     env,
@@ -352,7 +358,10 @@ export function resolveGatewayBootstrapInput(
       ntfyConfigIncomplete,
     },
     runtimeMode,
-    socketPath: env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH,
+    socketPath: gatewayRpcEndpoint.kind === 'unix'
+      ? gatewayRpcEndpoint.socketPath
+      : env.GATEWAY_SOCKET ?? DEFAULT_SOCKET_PATH,
+    gatewayRpcEndpoint,
     workspacePath,
     workspaceRoot,
     codebaseRoot,

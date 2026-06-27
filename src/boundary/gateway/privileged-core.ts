@@ -87,6 +87,7 @@ export async function buildGatewayPrivilegedCore(
     auditDb: null,
     createGatewayServer: ({ discordAdapter }) => new GatewayServer({
       socketPath: input.bootstrap.socketPath,
+      gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,
       llmProvider: privilegedServices.llmClient,
       embeddingService: privilegedServices.embeddingProvider,
       modelDiscovery: privilegedServices.modelDiscovery,

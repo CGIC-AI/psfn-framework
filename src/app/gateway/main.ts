@@ -18,6 +18,7 @@ import type { StartupConfigHydrationDiagnostics } from '../startup/support/boots
 import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
 import { RUNTIME_MODE } from '../../system/lifecycle/runtime-mode.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
+import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { buildGatewayPrivilegedCore } from '../../boundary/gateway/privileged-core.js';
 import {
   initGatewayChannelSurfaces,
@@ -121,8 +122,9 @@ async function main(): Promise<void> {
     });
   }
 
-  // Ensure gateway socket directory exists
-  mkdirSync(dirname(bootstrap.socketPath), { recursive: true });
+  if (bootstrap.gatewayRpcEndpoint.kind === 'unix') {
+    mkdirSync(dirname(bootstrap.gatewayRpcEndpoint.socketPath), { recursive: true });
+  }
   ensurePersonalFilesLayout(bootstrap.workspaceRoot);
   if (bootstrap.workspaceRoot !== bootstrap.gitRepoRoot) {
     log.info('Gateway workspace and git roots diverge', {
@@ -212,7 +214,7 @@ async function main(): Promise<void> {
   await voiceSurfaces.start();
   await startGatewayChannelSurfaces(channelSurfaces, bootstrap, log);
 
-  log.info(`Ready — listening on ${bootstrap.socketPath}`);
+  log.info(`Ready — gateway RPC listening on ${formatGatewayRpcEndpoint(bootstrap.gatewayRpcEndpoint)}`);
   log.info(`Workspace: ${bootstrap.workspaceRoot}`);
 
   // ── Graceful shutdown ──

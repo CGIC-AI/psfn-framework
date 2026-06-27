@@ -1,0 +1,21 @@
+PSFN rendered for namespace {{ .Release.Namespace }}.
+
+Public/operator entrypoints:
+- Gateway API Service: {{ include "psfn.gatewayApiServiceName" . }}:{{ .Values.ports.gatewayApi }}
+- Garden Service: {{ include "psfn.gardenServiceName" . }}:{{ .Values.ports.garden }}
+{{- if .Values.satelliteHub.enabled }}
+- Satellite Hub Service: {{ include "psfn.satelliteHubServiceName" . }}:{{ .Values.ports.satelliteHub }}
+{{- end }}
+
+Internal mTLS transports:
+- Gateway RPC: {{ include "psfn.gatewayRpcUrlForClient" . }}
+- Agent admin transport: {{ include "psfn.agentAdminUrl" . }}
+
+Before using this install, replace CHANGE_ME_* values in Kubernetes Secrets or
+set secrets.existingSecret to an operator-managed Secret. Secret values are not
+printed here.
+
+Required cluster prerequisites:
+- cert-manager CRDs/controllers
+- StorageClass for PVCs
+- NetworkPolicy-capable CNI if policy enforcement is required

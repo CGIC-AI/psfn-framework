@@ -1,0 +1,107 @@
+{{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "psfn.fullname" . }}-postgres-init
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+data:
+  00-pgvector.sql: |
+    CREATE EXTENSION IF NOT EXISTS vector;
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.postgresServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgres
+      port: {{ .Values.ports.postgres }}
+      targetPort: postgres
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "postgres") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "psfn.fullname" . }}-postgres
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "psfn.postgresServiceName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "postgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "postgres") | nindent 8 }}
+    spec:
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: postgres
+          image: {{ include "psfn.postgresImage" . | quote }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: {{ .Values.ports.postgres }}
+          env:
+            - name: POSTGRES_DB
+              value: {{ .Values.postgres.auth.database | quote }}
+            - name: POSTGRES_USER
+              value: {{ .Values.postgres.auth.username | quote }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.postgresSecretName" . }}
+                  key: {{ .Values.postgres.auth.keys.password }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.postgres.primary.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init-sql
+              mountPath: /docker-entrypoint-initdb.d/00-pgvector.sql
+              subPath: 00-pgvector.sql
+      volumes:
+        - name: init-sql
+          configMap:
+            name: {{ include "psfn.fullname" . }}-postgres-init
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "psfn.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.accessModes | nindent 10 }}
+        {{- with .Values.persistence.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgres.primary.persistence.size | quote }}
+{{- end }}

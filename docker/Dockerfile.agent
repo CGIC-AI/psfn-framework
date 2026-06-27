@@ -45,6 +45,7 @@ RUN npm ci --omit=dev \
 COPY --from=postgres-client /opt/postgresql-client/ /opt/postgresql-client/
 COPY --from=build /app/dist/ ./dist/
 COPY --from=build /app/admin-ui/build/ ./admin-ui/build/
+COPY config/*.seed.json ./config/
 COPY scripts/ops/ ./scripts/ops/
 
 # Non-root user for defense in depth

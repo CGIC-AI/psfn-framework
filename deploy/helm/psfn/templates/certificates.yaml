@@ -1,0 +1,124 @@
+{{- if .Values.certificates.enabled }}
+{{- if .Values.certificates.issuer.create }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "psfn.fullname" . }}-selfsigned
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-ca
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: {{ include "psfn.fullname" . }}-ca
+  secretName: {{ include "psfn.caSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ include "psfn.fullname" . }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: {{ .Values.certificates.issuer.kind }}
+metadata:
+  name: {{ include "psfn.certIssuerName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ include "psfn.caSecretName" . }}
+---
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-gateway-rpc
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.gatewayRpcCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - {{ include "psfn.gatewayRpcServiceName" . | quote }}
+    - {{ printf "%s.%s" (include "psfn.gatewayRpcServiceName" .) .Release.Namespace | quote }}
+    - {{ include "psfn.gatewayRpcServerName" . | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "psfn.gatewayRpcServiceName" .) .Release.Namespace | quote }}
+  uris:
+    - {{ include "psfn.spiffeGateway" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-agent-rpc-client
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.agentRpcClientCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  uris:
+    - {{ include "psfn.spiffeAgent" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-agent-admin
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.agentAdminCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - {{ include "psfn.agentAdminServiceName" . | quote }}
+    - {{ printf "%s.%s" (include "psfn.agentAdminServiceName" .) .Release.Namespace | quote }}
+    - {{ include "psfn.agentAdminServerName" . | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "psfn.agentAdminServiceName" .) .Release.Namespace | quote }}
+  uris:
+    - {{ include "psfn.spiffeAgent" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-garden-admin-client
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.gardenAdminClientCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  uris:
+    - {{ include "psfn.spiffeGarden" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+{{- end }}

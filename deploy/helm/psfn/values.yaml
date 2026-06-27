@@ -1,25 +1,66 @@
-# Minimal image contract for the PSFN Kubernetes preparation chart.
-# No templates live in this worktree yet; chart beads should consume this shape.
+nameOverride: ""
+fullnameOverride: ""
 
 imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+
+podSecurityContext:
+  fsGroup: 999
+  fsGroupChangePolicy: OnRootMismatch
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  capabilities:
+    drop:
+      - ALL
 
 psfnAppImage:
   # One shared image contains dist/ plus admin-ui/build/.
-  # Gateway, agent, and Garden select different commands below.
   repository: localhost/psfn-framework
   tag: 0.1.0-kube
   digest: ""
   pullPolicy: IfNotPresent
 
+runtime:
+  companionId: companion
+  companionName: Companion
+  mode: split
+  layoutMode: production
+  nodeEnv: production
+  systemDataDir: /app/system-data
+  companionDataDir: /app/companion-data
+  workspacePath: /app/workspace
+  logsDir: /app/logs
+  tempDir: /app/tmp
+  backupsDir: /app/backups
+  configDir: /app/config
+  characterCardPath: /app/companion-data/companion.json
+  modelCacheDir: /app/models/transformers
+
+ports:
+  gatewayApi: 10053
+  gatewayRpc: 10054
+  garden: 10054
+  agentAdmin: 10055
+  satelliteHub: 8787
+  postgres: 5432
+  redis: 6379
+
 workloads:
-  # Empty workload image fields inherit psfnAppImage; set them only when a
-  # workload intentionally diverges from the shared PSFN app image.
   gateway:
+    replicaCount: 1
     image:
       repository: ""
       tag: ""
       digest: ""
     command: ["node", "dist/gateway-main.js"]
+    resources: {}
     writableMounts:
       - /app/system-data
       - /app/logs
@@ -27,11 +68,13 @@ workloads:
       - /app/workspace
       - /run/psfn
   agent:
+    replicaCount: 1
     image:
       repository: ""
       tag: ""
       digest: ""
     command: ["node", "dist/agent-main.js"]
+    resources: {}
     writableMounts:
       - /app/system-data
       - /app/companion-data
@@ -41,16 +84,212 @@ workloads:
       - /app/backups
       - /run/psfn
   garden:
+    replicaCount: 1
     image:
       repository: ""
       tag: ""
       digest: ""
     command: ["node", "dist/operator-main.js"]
+    resources: {}
     writableMounts:
       - /app/system-data
       - /app/tmp
 
+identity:
+  seedStarterCard: true
+  starterCard:
+    spec: chara_card_v2
+    spec_version: "2.0"
+    data:
+      name: Companion
+      description: Companion is a newly bootstrapped PSFN companion awaiting onboarding and identity tuning.
+      personality: Warm, attentive, honest about uncertainty, and ready to be personalized through onboarding.
+      scenario: The operator is bringing this companion online in a fresh Kubernetes environment.
+      first_mes: "Hi, I'm Companion."
+      mes_example: ""
+      system_prompt: ""
+      post_history_instructions: ""
+      tags:
+        - bootstrap
+      creator: system
+      creator_notes: Auto-seeded starter identity for first-run bootstrap.
+
+persistence:
+  storageClassName: ""
+  accessModes:
+    - ReadWriteOnce
+  systemData:
+    size: 2Gi
+  companionData:
+    size: 10Gi
+  workspace:
+    size: 10Gi
+  runtime:
+    size: 10Gi
+  modelCache:
+    enabled: true
+    size: 8Gi
+
+secrets:
+  create: true
+  existingSecret: ""
+  # Keep true for helm lint/template with placeholder or externally supplied
+  # secrets. Set false in install values to fail rendering when required keys
+  # are missing.
+  allowMissingRequired: true
+  values:
+    apiKey: CHANGE_ME_API_KEY
+    adminToken: CHANGE_ME_ADMIN_TOKEN
+    gatewaySessionHmacKey: CHANGE_ME_GATEWAY_SESSION_HMAC_KEY
+    openRouterApiKey: ""
+    openAiApiKey: ""
+    liteLlmApiKey: ""
+    embeddingApiKey: ""
+    hfToken: ""
+    discordToken: ""
+    discordBotId: ""
+    deepgramApiKey: ""
+    elevenLabsApiKey: ""
+    falApiKey: ""
+    ntfyToken: ""
+  keys:
+    apiKey: API_KEY
+    adminToken: ADMIN_TOKEN
+    gatewaySessionHmacKey: GATEWAY_SESSION_HMAC_KEY
+    openRouterApiKey: OPENROUTER_API_KEY
+    openAiApiKey: OPENAI_API_KEY
+    liteLlmApiKey: LITELLM_API_KEY
+    embeddingApiKey: EMBEDDING_API_KEY
+    hfToken: HF_TOKEN
+    discordToken: DISCORD_TOKEN
+    discordBotId: DISCORD_BOT_ID
+    deepgramApiKey: DEEPGRAM_API_KEY
+    elevenLabsApiKey: ELEVENLABS_API_KEY
+    falApiKey: FAL_API_KEY
+    ntfyToken: NTFY_TOKEN
+
+postgres:
+  enabled: true
+  image:
+    repository: docker.io/pgvector/pgvector
+    tag: 0.8.1-pg17
+    digest: sha256:3e8b3adfd27b5707128f60956f62a793c3c9326ea8cfaf0eab7adccb5d700b21
+    pullPolicy: IfNotPresent
+  auth:
+    database: psfn
+    username: psfn
+    password: CHANGE_ME_POSTGRES_PASSWORD
+    existingSecret: ""
+    keys:
+      password: postgres-password
+      databaseUrl: postgres-database-url
+  primary:
+    resources: {}
+    persistence:
+      size: 20Gi
+  external:
+    enabled: false
+    databaseUrlSecret:
+      name: ""
+      key: postgres-database-url
+
+redis:
+  enabled: true
+  mode: internal
+  image:
+    repository: docker.io/library/redis
+    tag: 8.4.0-bookworm
+    digest: sha256:c22af04bb576503bf16b3e34a1fd2fd82de0f765afd866d2e380145e0af30d78
+    pullPolicy: IfNotPresent
+  auth:
+    password: CHANGE_ME_REDIS_PASSWORD
+    existingSecret: ""
+    key: redis-password
+  persistence:
+    size: 5Gi
+  resources: {}
+  external:
+    url: ""
+    passwordSecret:
+      name: ""
+      key: redis-password
+    tls:
+      enabled: false
+      rejectUnauthorized: true
+      caSecret:
+        name: ""
+        key: ca.crt
+
+embeddings:
+  provider: transformers
+  transformers:
+    model: Xenova/all-MiniLM-L6-v2
+    dims: 384
+    cacheDir: /app/models/transformers
+    prefetch:
+      enabled: false
+  api:
+    url: ""
+    model: snowflake-arctic-embed2
+    dims: 1024
+    apiKeySecret:
+      name: ""
+      key: EMBEDDING_API_KEY
+
+certificates:
+  enabled: true
+  issuer:
+    create: true
+    kind: Issuer
+    name: ""
+    existingIssuerRef:
+      name: ""
+      kind: Issuer
+      group: cert-manager.io
+  trustDomain: cluster.local
+  duration: 2160h
+  renewBefore: 360h
+  mountBasePath: /run/psfn/tls
+
+networkPolicy:
+  enabled: true
+  ingressController:
+    namespaceSelector:
+      kubernetes.io/metadata.name: kube-system
+    podSelector:
+      app.kubernetes.io/name: traefik
+  dns:
+    namespaceSelector:
+      kubernetes.io/metadata.name: kube-system
+    podSelector:
+      k8s-app: kube-dns
+  gateway:
+    allowExternalEgress: true
+  agent:
+    allowExternalEgress: false
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations: {}
+  gateway:
+    enabled: true
+    host: psfn-gateway.local
+    path: /
+    pathType: Prefix
+  garden:
+    enabled: true
+    host: psfn-garden.local
+    path: /
+    pathType: Prefix
+  satelliteHub:
+    enabled: false
+    host: psfn-hub.local
+    path: /
+    pathType: Prefix
+
 satelliteHub:
+  enabled: false
   image:
     # External prerequisite until PSFN-Satellite-Hub grows its own pinned Dockerfile.
     repository: ""
@@ -59,10 +298,9 @@ satelliteHub:
     pullPolicy: IfNotPresent
     requiredOverride: true
   command: []
-  port: 8787
+  resources: {}
 
 backupTools:
-  # Restore verification jobs or sidecars should use the same pinned PG17 client source.
   image:
     repository: docker.io/library/postgres
     tag: 17.6-bookworm

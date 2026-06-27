@@ -1,0 +1,18 @@
+{{- if not .Values.certificates.enabled -}}
+{{- fail "certificates.enabled must be true because PSFN Kubernetes network transports require mTLS certificates" -}}
+{{- end -}}
+{{- if and .Values.certificates.enabled (not .Values.certificates.issuer.create) (not .Values.certificates.issuer.existingIssuerRef.name) (not .Values.certificates.issuer.name) -}}
+{{- fail "certificates.issuer.existingIssuerRef.name or certificates.issuer.name is required when certificates.issuer.create=false" -}}
+{{- end -}}
+{{- if and .Values.certificates.issuer.create .Values.certificates.issuer.existingIssuerRef.name -}}
+{{- fail "certificates.issuer.existingIssuerRef.name must be empty when certificates.issuer.create=true" -}}
+{{- end -}}
+{{- if and (not .Values.postgres.enabled) (not .Values.postgres.external.enabled) -}}
+{{- fail "postgres.enabled=false requires postgres.external.enabled=true with an existing database URL Secret" -}}
+{{- end -}}
+{{- if and .Values.redis.enabled (not (or (eq .Values.redis.mode "internal") (eq .Values.redis.mode "external"))) -}}
+{{- fail "redis.mode must be internal or external when redis.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.redis.enabled (eq .Values.redis.mode "external") (not .Values.redis.external.url) -}}
+{{- fail "redis.external.url is required when redis.mode=external" -}}
+{{- end -}}

@@ -116,6 +116,60 @@ Rules:
 - If the live service must change, change the repo-owned file in this directory and restart the service if needed. A required restart is acceptable; hidden off-repo config is not.
 - If the supervisor requires a registration artifact outside the repo, it must only be a thin pointer to a repo-owned file, never the authoritative config itself, unless the user explicitly approves otherwise.
 
+## Live Pi Storage Layout
+
+The live Raspberry Pi host is `psfn-shard`. On 2026-06-27, the Crucial NVMe drive was formatted as ext4 and mounted at `/mnt/psfn-nvme` to move PSFN's write-heavy live paths off the microSD card. The root filesystem still boots from the SD card; this is a live-data migration, not a full root-disk migration.
+
+Current NVMe filesystem:
+
+```text
+device: /dev/nvme0n1
+model: CT500P3SSD8
+label: PSFN_NVME
+uuid: d1f3c5fc-c352-418f-8fbd-bf72d84935a2
+mount: /mnt/psfn-nvme
+```
+
+Current Pi boot configuration includes:
+
+```text
+/boot/firmware/config.txt: dtparam=pciex1=on
+/boot/firmware/cmdline.txt: nvme_core.default_ps_max_latency_us=0 pcie_aspm=off pcie_port_pm=off
+```
+
+These live paths are bind-mounted from `/mnt/psfn-nvme`:
+
+```text
+/home/psfn/psfn-framework-source
+/home/psfn/psfn-satellite-hub
+/home/psfn/.cache
+/home/psfn/.npm
+/var/lib/psfn/runtime
+/var/lib/postgresql/17/main
+/var/log/postgresql
+```
+
+Operational rules:
+
+- Before debugging live storage issues, check `findmnt` first; the path existing is not enough. It must resolve to `/dev/nvme0n1`.
+- Do not remove the old SD-backed backups until the operator explicitly approves cleanup. They were preserved with suffix `.sd-pre-nvme-20260627184124`.
+- Cleanup is tracked in bead `psfn-framework-wgff`.
+- `psfn-satellite-hub.service` and `psfn-companion-ui.service` must be loadable by systemd before `/home/psfn/psfn-framework-source` is bind-mounted. Their current stable registrations are regular files in `/etc/systemd/system`, copied from repo-owned files under `deployment/systemd/`. Treat the repo files as the source, and if they change, update the `/etc/systemd/system` registrations intentionally and record why.
+- The old `/etc/systemd/system/*.symlink-pre-nvme-20260627184737` files are preserved only as rollback evidence for the broken early-boot symlink registrations.
+- If services fail after reboot, run `systemctl --failed --no-pager`, `systemctl cat psfn-satellite-hub.service psfn-companion-ui.service`, and verify the `multi-user.target.wants` links before changing app code.
+
+Useful validation:
+
+```bash
+findmnt -T /home/psfn/psfn-framework-source
+findmnt -T /var/lib/psfn/runtime
+findmnt -T /var/lib/postgresql/17/main
+systemctl is-active postgresql@17-main.service postgresql.service litellm.service psfn.service psfn-satellite-hub.service psfn-companion-ui.service
+pg_isready -h 127.0.0.1 -p 5432
+ss -ltnp | grep -E ':(5432|4000|10053|10054|5173|8787|8790)'
+cd /home/psfn/psfn-framework-source && set -a && . deployment/systemd/psfn.env && set +a && node scripts/chat-cockpit-smoke.mjs --admin-url http://127.0.0.1:${ADMIN_PORT}
+```
+
 ## Runtime Entry Points
 
 Use the right entrypoint for the task:

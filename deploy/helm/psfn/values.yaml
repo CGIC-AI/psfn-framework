@@ -1,0 +1,70 @@
+# Minimal image contract for the PSFN Kubernetes preparation chart.
+# No templates live in this worktree yet; chart beads should consume this shape.
+
+imagePullPolicy: IfNotPresent
+
+psfnAppImage:
+  # One shared image contains dist/ plus admin-ui/build/.
+  # Gateway, agent, and Garden select different commands below.
+  repository: localhost/psfn-framework
+  tag: 0.1.0-kube
+  digest: ""
+  pullPolicy: IfNotPresent
+
+workloads:
+  # Empty workload image fields inherit psfnAppImage; set them only when a
+  # workload intentionally diverges from the shared PSFN app image.
+  gateway:
+    image:
+      repository: ""
+      tag: ""
+      digest: ""
+    command: ["node", "dist/gateway-main.js"]
+    writableMounts:
+      - /app/system-data
+      - /app/logs
+      - /app/tmp
+      - /app/workspace
+      - /run/psfn
+  agent:
+    image:
+      repository: ""
+      tag: ""
+      digest: ""
+    command: ["node", "dist/agent-main.js"]
+    writableMounts:
+      - /app/system-data
+      - /app/companion-data
+      - /app/workspace
+      - /app/logs
+      - /app/tmp
+      - /app/backups
+      - /run/psfn
+  garden:
+    image:
+      repository: ""
+      tag: ""
+      digest: ""
+    command: ["node", "dist/operator-main.js"]
+    writableMounts:
+      - /app/system-data
+      - /app/tmp
+
+satelliteHub:
+  image:
+    # External prerequisite until PSFN-Satellite-Hub grows its own pinned Dockerfile.
+    repository: ""
+    tag: ""
+    digest: ""
+    pullPolicy: IfNotPresent
+    requiredOverride: true
+  command: []
+  port: 8787
+
+backupTools:
+  # Restore verification jobs or sidecars should use the same pinned PG17 client source.
+  image:
+    repository: docker.io/library/postgres
+    tag: 17.6-bookworm
+    digest: sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3
+    pullPolicy: IfNotPresent

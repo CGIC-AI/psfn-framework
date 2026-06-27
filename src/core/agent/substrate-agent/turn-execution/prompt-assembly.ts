@@ -278,7 +278,7 @@ export async function assembleTurnPrompt(input: {
       authorContext.subjectIdentityKey,
     );
     const staticSettingsHash = runtime.buildStaticPromptSettingsHash(templateVariables);
-    renderedStaticPrefix = runtime.resolveStaticPromptPrefix({
+    renderedStaticPrefix = await runtime.resolveStaticPromptPrefix({
       cacheKey: staticCacheKey,
       staticPrefixTemplate: turnSnapshot.prompt?.staticPrefixTemplate ?? runtime.systemPrompt,
       staticHash: turnSnapshot.prompt?.staticHash ?? runtime.hashPromptText(runtime.systemPrompt),

@@ -14,6 +14,14 @@ export function getCachedPromptRuntimeLayoutStore(
   return created;
 }
 
+export function invalidateCachedPromptRuntimeLayoutStore(filePath?: string): void {
+  if (filePath) {
+    promptRuntimeLayoutStoreCache.delete(filePath);
+    return;
+  }
+  promptRuntimeLayoutStoreCache.clear();
+}
+
 export function resolveCachedPromptRuntimeLayoutStore(
   config: ConfiguredPersistenceDirs,
 ): PromptRuntimeLayoutStore {

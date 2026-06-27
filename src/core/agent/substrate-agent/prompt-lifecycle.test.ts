@@ -3,10 +3,55 @@ import {
   buildPromptContextSectionCacheability,
   buildStaticPromptSettingsHash,
   captureTurnPromptSnapshot,
+  resolveStaticPromptPrefixFromAppCache,
 } from './prompt-lifecycle.js';
+import { createMemoryAppCache } from '../../../shared/cache/memory-cache.js';
 import type { PromptComposer } from '../../identity/prompt-composer.js';
 
 describe('prompt-lifecycle cacheability', () => {
+  it('caches only rendered static prompt prefixes through the app cache', async () => {
+    const cache = createMemoryAppCache();
+    const events: unknown[] = [];
+    const first = await resolveStaticPromptPrefixFromAppCache({
+      cache,
+      cacheKey: 'channel::api::contact-1',
+      staticPrefixTemplate: 'BASE {{user}}',
+      staticHash: 'static-hash',
+      settingsHash: 'settings-hash',
+      now: new Date('2026-04-04T10:00:00.000-04:00'),
+      variables: {
+        user: 'Operator',
+      },
+      onCacheEvent: event => events.push(event),
+    });
+    const second = await resolveStaticPromptPrefixFromAppCache({
+      cache,
+      cacheKey: 'channel::api::contact-1',
+      staticPrefixTemplate: 'BASE {{user}}',
+      staticHash: 'static-hash',
+      settingsHash: 'settings-hash',
+      now: new Date('2026-04-04T10:30:00.000-04:00'),
+      variables: {
+        user: 'Different user should not render on hit',
+      },
+      onCacheEvent: event => events.push(event),
+    });
+
+    expect(first).toBe('BASE Operator');
+    expect(second).toBe('BASE Operator');
+    expect(cache.getStats()).toMatchObject({
+      hits: 1,
+      misses: 1,
+      sets: 1,
+    });
+    expect(events).toEqual([
+      expect.objectContaining({ event: 'miss', cacheKeyHash: expect.any(String) }),
+      expect.objectContaining({ event: 'stored', cacheKeyHash: expect.any(String) }),
+      expect.objectContaining({ event: 'hit', cacheKeyHash: expect.any(String) }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain('Operator');
+  });
+
   it('builds a stable settings hash regardless of variable order or now_iso churn', () => {
     const baseline = buildStaticPromptSettingsHash({
       user: 'Operator',

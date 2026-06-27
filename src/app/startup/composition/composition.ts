@@ -7,6 +7,7 @@
 
 import type { CoreSubstrateConfig, SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../../shared/event-bus.js';
+import type { AppCache } from '../../../shared/cache/types.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { SessionStore, type SessionIntegrityProvider } from '../../../persistence/sessions/store.js';
 import { SessionManager } from '../../../core/session/manager.js';
@@ -210,6 +211,7 @@ export interface SubstrateAgentCompositionOptions {
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   streamRuntimeOptions?: SubstrateAgentOptions['streamRuntimeOptions'];
   streamTransport?: SubstrateAgentOptions['streamTransport'];
+  appCache?: AppCache;
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -230,6 +232,7 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.observerEvalSidecar ? { observerEvalSidecar: options.observerEvalSidecar } : {}),
       ...(options.streamRuntimeOptions ? { streamRuntimeOptions: options.streamRuntimeOptions } : {}),
       ...(options.streamTransport ? { streamTransport: options.streamTransport } : {}),
+      ...(options.appCache ? { appCache: options.appCache } : {}),
     },
   );
 }

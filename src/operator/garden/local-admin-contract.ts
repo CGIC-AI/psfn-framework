@@ -11,6 +11,7 @@ import {
   PromptRuntimeLayoutStore,
   resolvePromptRuntimeLayoutPath,
 } from '../../core/identity/prompt-runtime.js';
+import { invalidateCachedPromptRuntimeLayoutStore } from '../../core/identity/prompt-runtime-store-cache.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { SessionManager } from '../../core/session/manager.js';
@@ -140,8 +141,15 @@ export function createInProcessGardenAdminContract(
     },
     resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
   });
+  const promptRuntimeLayoutPath = resolvePromptRuntimeLayoutPath(companionDataDir);
   const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
-    resolvePromptRuntimeLayoutPath(companionDataDir),
+    promptRuntimeLayoutPath,
+    {
+      onMutation: (reason) => {
+        invalidateCachedPromptRuntimeLayoutStore(promptRuntimeLayoutPath);
+        options.config.runtimeHooks?.invalidatePromptPrefixCache?.(reason);
+      },
+    },
   );
   const adaptiveTools = new AdminAdaptiveToolsDataService({
     eventBus: options.eventBus,

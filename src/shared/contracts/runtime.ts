@@ -728,7 +728,7 @@ export interface ObserverEvalSidecarSettings {
 export interface RuntimeConfigHooks {
   refreshModels?: () => void;
   refreshCapabilities?: () => void;
-  invalidatePromptPrefixCache?: () => void;
+  invalidatePromptPrefixCache?: (reason?: string) => void;
   persistPromotedExtendedTools?: (toolNames: readonly string[]) => void;
 }
 

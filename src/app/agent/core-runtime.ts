@@ -59,6 +59,7 @@ import {
   createPromptGenerationFailureAlertHandler,
   isPromptGenerationFailureAlertConfigured,
 } from '../startup/support/operator-alerts.js';
+import { createAppCacheFromEnv } from '../../shared/cache/runtime.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
 import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/observer-sidecar/config.js';
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
@@ -135,8 +136,14 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     }
     return db ? new EpisodicStore(db) : null;
   })();
+  const invalidatePromptCache = (reason: string): void => {
+    config.runtimeHooks?.invalidatePromptPrefixCache?.(reason);
+  };
 
-  const promptRegistry = wireStaticPromptRegistry(pathSnapshot.companionDataDir);
+  const promptRegistry = wireStaticPromptRegistry(pathSnapshot.companionDataDir, {
+    invalidatePromptCache,
+  });
+  const appCache = await createAppCacheFromEnv();
   const llmProvider = createLLMProviderPort(gateway);
   const gatewayOps = createGatewayOpsPortFromClient(gateway);
   const observerEvalSidecar = createObserverEvalSidecarRuntimeFromConfig(config);
@@ -185,6 +192,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     },
     emotionRuntime,
     observerEvalSidecar,
+    appCache,
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
@@ -219,6 +227,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       confirmationQueue: cardProposalQueue,
       identityCoolingOff,
       getCapabilityTier: () => capabilityRuntime.getTier(),
+      invalidatePromptCache,
     },
   );
   wireCharacterCardRuntime(agentLoop, cardVersionStore, {

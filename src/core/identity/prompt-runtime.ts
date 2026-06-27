@@ -846,15 +846,21 @@ export function validatePromptRuntimeEditableBlockContents(
 
 const PROMPT_RUNTIME_RELOAD_INTERVAL_MS = 30000;
 
+export interface PromptRuntimeLayoutStoreOptions {
+  onMutation?: (reason: string) => void;
+}
+
 export class PromptRuntimeLayoutStore {
   private readonly filePath: string;
   private layout: PromptRuntimeLayout;
   private lastLoadedMtimeMs: number;
   private lastReloadCheckAtMs: number;
   private fileExists = false;
+  private readonly onMutation: ((reason: string) => void) | undefined;
 
-  constructor(filePath: string) {
+  constructor(filePath: string, options: PromptRuntimeLayoutStoreOptions = {}) {
     this.filePath = filePath;
+    this.onMutation = options.onMutation;
     this.layout = buildDefaultPromptRuntimeLayout();
     this.lastLoadedMtimeMs = 0;
     this.lastReloadCheckAtMs = 0;
@@ -911,6 +917,7 @@ export class PromptRuntimeLayoutStore {
       updatedBy: normalizePromptRuntimeUpdatedBy(updatedBy),
     };
     this.save();
+    this.notifyMutation('prompt-runtime-layout-editable-blocks');
     return this.getLayout();
   }
 
@@ -931,6 +938,7 @@ export class PromptRuntimeLayoutStore {
       updatedBy: normalizePromptRuntimeUpdatedBy(updatedBy),
     };
     this.save();
+    this.notifyMutation('prompt-runtime-layout-system-order');
     return this.getLayout();
   }
 
@@ -972,6 +980,10 @@ export class PromptRuntimeLayoutStore {
       this.fileExists = true;
       this.lastLoadedMtimeMs = statSync(this.filePath).mtimeMs;
     }
+  }
+
+  private notifyMutation(reason: string): void {
+    this.onMutation?.(reason);
   }
 }
 

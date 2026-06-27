@@ -108,6 +108,17 @@ function refreshCapabilities(config: SubstrateConfig): AdminSettingsDivergence |
   }
 }
 
+function invalidatePromptCacheAfterOwnerMutation(config: SubstrateConfig, reason: string): void {
+  try {
+    config.runtimeHooks?.invalidatePromptPrefixCache?.(reason);
+  } catch (error) {
+    log.warn('Prompt cache invalidation hook failed after settings mutation', {
+      reason,
+      error: toErrorMessage(error),
+    });
+  }
+}
+
 export function applyAdminModelsConfigMutation(options: {
   config: SubstrateConfig;
   configStore: ConfigStorePort;
@@ -118,6 +129,7 @@ export function applyAdminModelsConfigMutation(options: {
     const saved = configStore.saveModels(payload);
     applySettings(config, saved);
     const divergence = refreshModels(config);
+    invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:models');
     return {
       ok: true,
       refreshedKeys: ['models'],
@@ -141,6 +153,7 @@ export function applyAdminCapabilityTierMutation(options: {
     const saved = configStore.saveCapabilityTier(payload);
     config.capabilityTier = saved.tier;
     const divergence = refreshCapabilities(config);
+    invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:capability-tier');
     return {
       ok: true,
       refreshedKeys: ['capabilities'],
@@ -174,6 +187,7 @@ export function applyAdminSettingsMutation(options: {
 
   configStore.saveRuntimeSettings(mergedRuntimeSettings);
   applySettings(config, mergedRuntimeSettings);
+  invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:settings');
 
   if (Object.hasOwn(domainSplit.runtime, 'openRouterModelsApiUrl')) {
     try {
@@ -185,6 +199,7 @@ export function applyAdminSettingsMutation(options: {
         openrouterProvider.modelsApiUrl = nextUrl;
         const savedProviders = configStore.saveProviders(nextRegistry);
         applyProvidersRuntimeConfig(config, savedProviders);
+        invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:providers');
       }
     } catch (error) {
       return {
@@ -925,19 +940,23 @@ export class AdminSettingsDataService implements AdminSettingsService {
           const saved = this.deps.configStore.saveProviders(parsed);
           applyProvidersRuntimeConfig(this.deps.config, saved);
           const refreshDivergence = refreshModels(this.deps.config);
+          invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:providers');
           const status = this.updateDivergences(['models'], refreshDivergence ? [refreshDivergence] : []);
           return this.buildSuccessfulSaveResult('providers.json saved', status);
         }
         case 'channels': {
           this.deps.configStore.saveChannelsOwnerFile(parsed);
+          invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:channels');
           return { ok: true, message: 'channels.json saved' };
         }
         case 'skills': {
           this.deps.configStore.saveSkills(parsed);
+          invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:skills');
           return { ok: true, message: 'skills.json saved' };
         }
         case 'trust-policy': {
           this.deps.configStore.saveTrustPolicy(parsed);
+          invalidatePromptCacheAfterOwnerMutation(this.deps.config, 'owner-file:trust-policy');
           return { ok: true, message: 'trust-policy.json saved' };
         }
         default:

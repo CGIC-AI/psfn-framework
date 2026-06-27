@@ -172,6 +172,10 @@ export interface PromptRegistryHistoryEntry {
   version: number;
 }
 
+export interface PromptRegistryStoreOptions {
+  onMutation?: (reason: string) => void;
+}
+
 export function getDefaultPromptText(key: PromptRegistryKey): string {
   const seed = PROMPT_SEEDS.find(item => item.key === key);
   if (!seed) throw new Error(`No default prompt seed for key: ${key}`);
@@ -197,13 +201,15 @@ export class PromptRegistryStore {
   private seedByKey: Map<PromptRegistryKey, PromptSeed>;
   private entries: Map<string, PromptRegistryEntry>;
   private lastLoadedMtimeMs: number;
+  private readonly onMutation: ((reason: string) => void) | undefined;
 
-  constructor(filePath: string, historyPath: string) {
+  constructor(filePath: string, historyPath: string, options: PromptRegistryStoreOptions = {}) {
     this.filePath = filePath;
     this.historyPath = historyPath;
     this.seedByKey = new Map(PROMPT_SEEDS.map(seed => [seed.key, seed]));
     this.entries = new Map();
     this.lastLoadedMtimeMs = 0;
+    this.onMutation = options.onMutation;
     if (!existsSync(this.filePath)) {
       writeJsonAtomic(this.filePath, buildSeedEntries(new Date().toISOString()));
     }
@@ -260,6 +266,7 @@ export class PromptRegistryStore {
 
     this.entries.set(key, updated);
     this.save();
+    this.notifyMutation(`prompt-registry-update:${key}`);
     return cloneEntry(updated);
   }
 
@@ -387,6 +394,10 @@ export class PromptRegistryStore {
       log.error('Failed to write prompt registry history', { error: String(err) });
       throw new Error(`Failed to write prompt registry history: ${String(err)}`);
     }
+  }
+
+  private notifyMutation(reason: string): void {
+    this.onMutation?.(reason);
   }
 
   private validatePromptText(key: string, text: string): string | null {

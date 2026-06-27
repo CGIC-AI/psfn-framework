@@ -14,6 +14,8 @@ import type { UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createEventBusCostTelemetryPort } from '../../shared/telemetry/cost-telemetry-port.js';
 import { getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
+import { createMemoryAppCache } from '../../shared/cache/memory-cache.js';
+import type { AppCache } from '../../shared/cache/types.js';
 import type { SessionManager } from '../session/manager.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
@@ -98,8 +100,9 @@ import {
   buildStaticPromptSettingsHash as buildStaticPromptSettingsHashForTurn,
   captureTurnPromptSnapshot as captureTurnPromptSnapshotForTurn,
   hashPromptText as hashPromptTextForTurn,
-  resolveStaticPromptPrefix as resolveStaticPromptPrefixForTurn,
-  type FrozenPromptPrefix,
+  resolveStaticPromptPrefixFromAppCache as resolveStaticPromptPrefixForTurn,
+  STATIC_PROMPT_PREFIX_CACHE_KEY_PREFIX,
+  type StaticPromptPrefixCacheEvent,
 } from './substrate-agent/prompt-lifecycle.js';
 import {
   type IntentionPostTurnHook,
@@ -210,6 +213,7 @@ export interface SubstrateAgentOptions {
   selfModelRuntime?: SelfModelRuntimeWiring;
   observerEvalSidecar?: ObserverEvalSidecarRuntime;
   streamTransport?: SubstrateStreamTransport;
+  appCache?: AppCache;
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
 
@@ -230,7 +234,7 @@ export class SubstrateAgent {
   private channelRegistry: ChannelPromptRegistryPort = new Map();
   private capabilityRuntime: CapabilityRuntime | null = null;
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
-  private frozenPromptPrefixCache = new Map<string, FrozenPromptPrefix>();
+  private readonly appCache: AppCache;
   private reflectionNudge = new ReflectionNudgeTracker();
   private readonly turnSupportRuntime: TurnSupportRuntime;
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
@@ -308,6 +312,7 @@ export class SubstrateAgent {
       ?? (() => fallbackPromptVariables);
     this.config = config;
     this.runtimeMode = options?.runtimeMode ?? 'gateway';
+    this.appCache = options?.appCache ?? createMemoryAppCache({ name: 'substrate-agent-prompt-cache' });
     this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
     this.observerEvalSidecar = options?.observerEvalSidecar ?? null;
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
@@ -430,10 +435,11 @@ export class SubstrateAgent {
       refreshCapabilities: () => {
         priorRefreshCapabilities?.();
         this.refreshCapabilityRuntime();
+        this.invalidatePromptPrefixCache('runtime.refreshCapabilities');
       },
-      invalidatePromptPrefixCache: () => {
-        priorInvalidatePromptPrefixCache?.();
-        this.invalidatePromptPrefixCache('runtime.invalidatePromptPrefixCache');
+      invalidatePromptPrefixCache: (reason = 'runtime.invalidatePromptPrefixCache') => {
+        priorInvalidatePromptPrefixCache?.(reason);
+        this.invalidatePromptPrefixCache(reason);
       },
     };
   }
@@ -1060,30 +1066,57 @@ export class SubstrateAgent {
     return buildStaticPromptSettingsHashForTurn(templateVariables);
   }
 
-  private resolveStaticPromptPrefix(params: {
+  private async resolveStaticPromptPrefix(params: {
     cacheKey: string;
     staticPrefixTemplate: string;
     staticHash: string;
     settingsHash: string;
     now: Date;
     variables: Record<string, string>;
-  }): string {
+  }): Promise<string> {
     return resolveStaticPromptPrefixForTurn({
-      cache: this.frozenPromptPrefixCache,
+      cache: this.appCache,
       cacheKey: params.cacheKey,
       staticPrefixTemplate: params.staticPrefixTemplate,
       staticHash: params.staticHash,
       settingsHash: params.settingsHash,
       now: params.now,
       variables: params.variables,
+      onCacheEvent: event => this.logPromptCacheEvent(event),
     });
   }
 
   private invalidatePromptPrefixCache(reason: string): void {
-    if (this.frozenPromptPrefixCache.size === 0) return;
-    this.frozenPromptPrefixCache.clear();
-    log.info('Invalidated static prompt-prefix cache', {
-      reason,
+    this.appCache.invalidatePrefix(STATIC_PROMPT_PREFIX_CACHE_KEY_PREFIX)
+      .then((deleted) => {
+        const stats = this.appCache.getStats();
+        log.info('Invalidated static prompt-prefix cache', {
+          reason,
+          backend: this.appCache.backend,
+          deleted,
+          invalidations: stats.invalidations,
+        });
+      })
+      .catch((error: unknown) => {
+        log.error('Failed to invalidate static prompt-prefix cache', {
+          reason,
+          backend: this.appCache.backend,
+          error: toErrorMessage(error),
+        });
+      });
+  }
+
+  private logPromptCacheEvent(event: StaticPromptPrefixCacheEvent): void {
+    const stats = this.appCache.getStats();
+    log.debug('Static prompt-prefix cache event', {
+      event: event.event,
+      backend: event.backend,
+      cacheKeyHash: event.cacheKeyHash,
+      staticHash: event.staticHash,
+      settingsHash: event.settingsHash,
+      hits: stats.hits,
+      misses: stats.misses,
+      invalidations: stats.invalidations,
     });
   }
 

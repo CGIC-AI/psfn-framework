@@ -193,6 +193,7 @@ export interface PromptLayerUpdatePatch {
 
 export interface PromptLayerStoreOptions {
   throwOnLoadError?: boolean;
+  onMutation?: (reason: string) => void;
 }
 
 export class PromptLayerStore {
@@ -200,11 +201,13 @@ export class PromptLayerStore {
   private historyPath: string;
   private layers: PromptLayer[] = [];
   private readonly throwOnLoadError: boolean;
+  private readonly onMutation: ((reason: string) => void) | undefined;
 
   constructor(filePath: string, historyPath: string, options: PromptLayerStoreOptions = {}) {
     this.filePath = filePath;
     this.historyPath = historyPath;
     this.throwOnLoadError = options.throwOnLoadError !== false;
+    this.onMutation = options.onMutation;
     this.load();
   }
 
@@ -229,6 +232,10 @@ export class PromptLayerStore {
 
   private save(): void {
     writeJsonAtomic(this.filePath, this.layers, { trailingNewline: false });
+  }
+
+  private notifyMutation(reason: string): void {
+    this.onMutation?.(reason);
   }
 
   private appendHistory(entry: PromptHistoryEntry): void {
@@ -437,6 +444,7 @@ export class PromptLayerStore {
     };
     this.layers.push(layer);
     this.save();
+    this.notifyMutation(`prompt-layer-create:${layer.type}`);
     log.info(`Created prompt layer: ${layer.name} (${layer.type})`);
     return layer;
   }
@@ -546,6 +554,7 @@ export class PromptLayerStore {
     layer.updatedAt = new Date().toISOString();
     layer.updatedBy = updatedBy;
     this.save();
+    this.notifyMutation(`prompt-layer-update:${layer.type}`);
     log.info(`Updated prompt layer: ${layer.name} v${layer.version}`);
     return layer;
   }
@@ -625,6 +634,7 @@ export class PromptLayerStore {
     if (touched.length > 0 || orderChanged) {
       this.layers = [...targetOrder];
       this.save();
+      this.notifyMutation('prompt-layer-reorder');
       log.info(`Reordered prompt layers (${touched.length} touched)`);
     }
 
@@ -644,6 +654,7 @@ export class PromptLayerStore {
     layer.enabled = !layer.enabled;
     layer.updatedAt = new Date().toISOString();
     this.save();
+    this.notifyMutation(`prompt-layer-toggle:${layer.type}`);
     log.info(`Toggled prompt layer: ${layer.name} -> ${layer.enabled ? 'enabled' : 'disabled'}`);
     return layer;
   }
@@ -661,6 +672,7 @@ export class PromptLayerStore {
     }
     this.layers.splice(idx, 1);
     this.save();
+    this.notifyMutation(`prompt-layer-delete:${layer.type}`);
     log.info(`Deleted prompt layer: ${layer.name}`);
   }
 
@@ -759,6 +771,7 @@ export class PromptLayerStore {
       .filter(layer => layer.id !== legacy.id)
       .concat(replacementLayers);
     this.save();
+    this.notifyMutation('prompt-layer-migrate-foundation');
     log.info('Migrated legacy Character Foundation into per-section base layers');
     return true;
   }
@@ -779,6 +792,7 @@ export class PromptLayerStore {
         );
         this.layers.push(...layers);
         this.save();
+        this.notifyMutation('prompt-layer-seed-foundation');
         log.info('Seeded prompt store from character card');
         return true;
       }
@@ -888,6 +902,7 @@ export class PromptLayerStore {
 
     if (touched) {
       this.save();
+      this.notifyMutation('prompt-layer-seed-sync');
     }
     return touched;
   }

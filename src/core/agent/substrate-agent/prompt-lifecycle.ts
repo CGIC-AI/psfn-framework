@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type { AppCache } from '../../../shared/cache/types.js';
 import type { PromptComposer } from '../../identity/prompt-composer.js';
 import type { ComposeContext, ComposeSplitResult } from '../../identity/prompt-types.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
@@ -24,6 +25,19 @@ export interface FrozenPromptPrefix {
   settingsHash: string;
 }
 
+export interface StaticPromptPrefixCacheEvent {
+  event: 'hit' | 'miss' | 'stored' | 'invalid_record';
+  backend: AppCache['backend'];
+  cacheKeyHash: string;
+  staticHash: string;
+  settingsHash: string;
+}
+
+interface FrozenPromptPrefixCacheRecord extends FrozenPromptPrefix {
+  schemaVersion: 1;
+}
+
+export const STATIC_PROMPT_PREFIX_CACHE_KEY_PREFIX = 'prompt:static-prefix:v1:';
 const PROMPT_HASH_LENGTH = 16;
 const PROMPT_MACRO_PATTERN = /\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g;
 const VOLATILE_MACRO_TOKENS = new Set([
@@ -344,5 +358,92 @@ export function resolveStaticPromptPrefix(input: {
     staticHash: input.staticHash,
     settingsHash: input.settingsHash,
   });
+  return renderedPrefix;
+}
+
+function buildStaticPromptPrefixCacheKey(input: {
+  cacheKey: string;
+  staticHash: string;
+  settingsHash: string;
+}): { key: string; cacheKeyHash: string } {
+  const cacheKeyHash = hashPromptText(input.cacheKey);
+  return {
+    cacheKeyHash,
+    key: [
+      STATIC_PROMPT_PREFIX_CACHE_KEY_PREFIX,
+      cacheKeyHash,
+      ':',
+      input.staticHash,
+      ':',
+      input.settingsHash,
+    ].join(''),
+  };
+}
+
+function parseFrozenPromptPrefixCacheRecord(raw: string): FrozenPromptPrefixCacheRecord | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<FrozenPromptPrefixCacheRecord>;
+    if (parsed.schemaVersion !== 1) return null;
+    if (typeof parsed.renderedPrefix !== 'string') return null;
+    if (typeof parsed.staticHash !== 'string') return null;
+    if (typeof parsed.settingsHash !== 'string') return null;
+    return {
+      schemaVersion: 1,
+      renderedPrefix: parsed.renderedPrefix,
+      staticHash: parsed.staticHash,
+      settingsHash: parsed.settingsHash,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function resolveStaticPromptPrefixFromAppCache(input: {
+  cache: AppCache;
+  cacheKey: string;
+  staticPrefixTemplate: string;
+  staticHash: string;
+  settingsHash: string;
+  now: Date;
+  variables: Record<string, string>;
+  onCacheEvent?: (event: StaticPromptPrefixCacheEvent) => void;
+}): Promise<string> {
+  const { key, cacheKeyHash } = buildStaticPromptPrefixCacheKey(input);
+  const eventBase = {
+    backend: input.cache.backend,
+    cacheKeyHash,
+    staticHash: input.staticHash,
+    settingsHash: input.settingsHash,
+  } satisfies Omit<StaticPromptPrefixCacheEvent, 'event'>;
+
+  const cached = await input.cache.get(key);
+  if (cached !== null) {
+    const parsed = parseFrozenPromptPrefixCacheRecord(cached);
+    if (
+      parsed
+      && parsed.staticHash === input.staticHash
+      && parsed.settingsHash === input.settingsHash
+    ) {
+      input.onCacheEvent?.({ ...eventBase, event: 'hit' });
+      return parsed.renderedPrefix;
+    }
+    await input.cache.delete(key);
+    input.onCacheEvent?.({ ...eventBase, event: 'invalid_record' });
+  } else {
+    input.onCacheEvent?.({ ...eventBase, event: 'miss' });
+  }
+
+  const renderedPrefix = injectPromptRuntimeTokens(input.staticPrefixTemplate, {
+    now: input.now,
+    variables: input.variables,
+  });
+  const record: FrozenPromptPrefixCacheRecord = {
+    schemaVersion: 1,
+    renderedPrefix,
+    staticHash: input.staticHash,
+    settingsHash: input.settingsHash,
+  };
+  await input.cache.set(key, JSON.stringify(record));
+  input.onCacheEvent?.({ ...eventBase, event: 'stored' });
   return renderedPrefix;
 }

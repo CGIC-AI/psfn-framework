@@ -81,6 +81,10 @@ export interface PromptRuntimeTarget extends ToolRegistrarTarget {
   promptComposer: PromptComposer | null;
 }
 
+export interface PromptCacheInvalidationOptions {
+  invalidatePromptCache?: (reason: string) => void;
+}
+
 export type CharacterCardRuntimeTarget = ToolRegistrarTarget;
 
 export function buildCharacterPromptVariablesProvider(
@@ -110,11 +114,14 @@ export function wirePromptRuntime(
   target: PromptRuntimeTarget,
   dataDir: string,
   baseSystemPrompt: string,
-  options: IdentityToolOptions = {},
+  options: IdentityToolOptions & PromptCacheInvalidationOptions = {},
 ): PromptLayerStore {
   const promptStore = new PromptLayerStore(
     resolvePromptLayersPath(dataDir),
     resolvePromptHistoryPath(dataDir),
+    {
+      ...(options.invalidatePromptCache ? { onMutation: options.invalidatePromptCache } : {}),
+    },
   );
   const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(dataDir), {
     legacyFilePaths: [resolveLegacyValuesJournalPath(dataDir)],
@@ -154,10 +161,16 @@ export function wireCharacterCardRuntime(
  * Wire static prompt registry used by runtime LLM call-sites
  * (extraction, compaction summary, and other keyed prompts).
  */
-export function wireStaticPromptRegistry(dataDir: string): PromptRegistryStore {
+export function wireStaticPromptRegistry(
+  dataDir: string,
+  options: PromptCacheInvalidationOptions = {},
+): PromptRegistryStore {
   const promptRegistry = new PromptRegistryStore(
     resolvePromptRegistryPath(dataDir),
     resolvePromptRegistryHistoryPath(dataDir),
+    {
+      ...(options.invalidatePromptCache ? { onMutation: options.invalidatePromptCache } : {}),
+    },
   );
   log.info(`Static prompt registry enabled (${promptRegistry.list().length} prompts)`);
   return promptRegistry;

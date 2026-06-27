@@ -419,7 +419,7 @@ function createRuntime(params: {
     buildRuntimeContext: vi.fn(() => ''),
     buildPromptPrefixCacheKey: vi.fn(() => 'prompt-prefix'),
     buildStaticPromptSettingsHash: vi.fn(() => 'settings-hash'),
-    resolveStaticPromptPrefix: vi.fn(() => 'System prompt'),
+    resolveStaticPromptPrefix: vi.fn(async () => 'System prompt'),
     hashPromptText: vi.fn(() => 'prompt-hash'),
     getPersonaAdaptation: vi.fn(() => null),
     resolveContextWindow: vi.fn(() => 4096),
@@ -1053,7 +1053,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       '<rule>Treat runtime.current_datetime as the canonical source for the current date and time.</rule>',
       '</temporal_rules>',
     ].join('\n');
-    runtime.resolveStaticPromptPrefix = vi.fn(() => [
+    runtime.resolveStaticPromptPrefix = vi.fn(async () => [
       'Rendered static prefix',
       temporalRulesBlock,
     ].join('\n\n'));
@@ -1209,7 +1209,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       staticHash: 'static-hash',
       versionPointer: 'prompt-v1',
     }));
-    runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    runtime.resolveStaticPromptPrefix = vi.fn(async () => 'Rendered static prefix');
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => '');
     runtime.getPersonaAdaptation = vi.fn(() => null);
@@ -1283,7 +1283,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       '<rule>Treat runtime.current_datetime as the canonical source for the current date and time.</rule>',
       '</temporal_rules>',
     ].join('\n');
-    runtime.resolveStaticPromptPrefix = vi.fn(() => [
+    runtime.resolveStaticPromptPrefix = vi.fn(async () => [
       'Rendered static prefix',
       temporalRulesBlock,
     ].join('\n\n'));
@@ -1443,7 +1443,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       staticHash: 'static-hash',
       versionPointer: 'prompt-v1',
     }));
-    runtime.resolveStaticPromptPrefix = vi.fn(() => 'Rendered static prefix');
+    runtime.resolveStaticPromptPrefix = vi.fn(async () => 'Rendered static prefix');
     runtime.getPersonaAdaptation = vi.fn(() => 'Persona hint');
     runtime.buildRuntimeContext = vi.fn(() => 'Runtime context block');
     runtime.buildScratchpadContextBlock = vi.fn(() => 'Scratchpad block');

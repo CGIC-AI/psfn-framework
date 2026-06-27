@@ -1,8 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
+import {
+  COMPACTION_SUMMARY_PROMPT_KEY,
+  PromptRegistryStore,
+} from '../../../core/identity/prompt-registry.js';
 import { IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER } from '../../../core/identity/prompt-composer.js';
 import { composeDefaultFoundationTemplate } from '../../../core/identity/foundation-sections.js';
 import { createPromptStatePort } from '../../../core/identity/prompt-state-port.js';
@@ -44,6 +48,74 @@ afterEach(() => {
 });
 
 describe('AdminPromptsDataService', () => {
+  it('invalidates prompt cache on Garden prompt layer and registry edits', () => {
+    const root = makeTempDir();
+    const invalidatePromptCache = vi.fn();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+      { onMutation: invalidatePromptCache },
+    );
+    const promptRegistry = new PromptRegistryStore(
+      join(root, 'prompt-registry.json'),
+      join(root, 'prompt-registry-history.jsonl'),
+      { onMutation: invalidatePromptCache },
+    );
+    promptStore.seedFromCharacterCard('seeded foundation');
+    invalidatePromptCache.mockClear();
+
+    const service = new AdminPromptsDataService({ promptStore, promptRegistry });
+    const foundation = promptStore.getByType('base')[0];
+    const layerResult = service.updatePromptLayer(JSON.stringify({
+      layerId: foundation.id,
+      content: 'Garden-edited stable prompt layer',
+    }));
+    const registryResult = service.updatePromptRegistry(JSON.stringify({
+      key: COMPACTION_SUMMARY_PROMPT_KEY,
+      content: 'Summarize this excerpt in 3 bullet points and preserve action items.',
+    }));
+
+    expect(layerResult.ok).toBe(true);
+    expect(registryResult.ok).toBe(true);
+    expect(invalidatePromptCache).toHaveBeenCalledWith('prompt-layer-update:base');
+    expect(invalidatePromptCache).toHaveBeenCalledWith(`prompt-registry-update:${COMPACTION_SUMMARY_PROMPT_KEY}`);
+  });
+
+  it('invalidates prompt cache on Garden runtime prompt block edits', () => {
+    const root = makeTempDir();
+    const invalidatePromptCache = vi.fn();
+    const promptStore = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    const promptRuntimeLayoutStore = new PromptRuntimeLayoutStore(
+      join(root, 'prompt-runtime-layout.json'),
+      { onMutation: invalidatePromptCache },
+    );
+    promptRuntimeLayoutStore.setEditableBlockContent(
+      'runtime.persona_adaptation',
+      'Required persona guidance.',
+      'admin',
+    );
+    invalidatePromptCache.mockClear();
+    const service = new AdminPromptsDataService({
+      promptStore,
+      promptRuntimeLayoutStore,
+    });
+
+    const result = service.saveRuntimePromptBlocks(JSON.stringify({
+      blocks: [
+        {
+          id: 'runtime.context',
+          content: 'Stable extra context guidance.',
+        },
+      ],
+    }));
+
+    expect(result.ok).toBe(true);
+    expect(invalidatePromptCache).toHaveBeenCalledWith('prompt-runtime-layout-editable-blocks');
+  });
+
   it('allows human Character Foundation mutations through the Garden API service', () => {
     const root = makeTempDir();
     const promptStore = new PromptLayerStore(

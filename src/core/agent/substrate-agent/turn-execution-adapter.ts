@@ -100,7 +100,7 @@ interface TurnExecutionAdapterCallbacks {
     settingsHash: string;
     now: Date;
     variables: Record<string, string>;
-  }) => string;
+  }) => Promise<string>;
   hashPromptText: (text: string) => string;
   getPersonaAdaptation: (
     trustLevel: TrustLevel,

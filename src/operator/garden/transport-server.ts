@@ -1,11 +1,16 @@
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
-import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
+import { createServer as createHttpsServer, type Server as HttpsServer, type ServerOptions as HttpsServerOptions } from 'node:https';
 import { dirname } from 'node:path';
 import type { Duplex } from 'node:stream';
+import type { TLSSocket } from 'node:tls';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  requireMtlsPeerFileConfig,
+  verifyPeerCertificateSpiffeUri,
+} from '../../shared/net/mtls.js';
 import { readBodyWithLimit, sendJson, sendText } from '../../channels/backplane/http/primitives.js';
 import type { AdminApiRoute } from './api-routes.js';
 import { buildAdminApiRoutes } from './api-routes.js';
@@ -106,12 +111,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       () => true,
     );
     const requestHandler = (req: IncomingMessage, res: ServerResponse) => this.handleRequest(req, res);
-    this.server = config.endpoint.mode === 'network' && config.endpoint.tls
-      ? createHttpsServer({
-          cert: readFileSync(config.endpoint.tls.certPath),
-          key: readFileSync(config.endpoint.tls.keyPath),
-        }, requestHandler)
-      : createHttpServer(requestHandler);
+    this.server = this.createHttpServer(requestHandler);
     this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
   }
 
@@ -222,7 +222,70 @@ export class GardenAdminTransportServer implements Lifecycle {
     rmSync(socketPath, { force: true });
   }
 
+  private createHttpServer(
+    requestHandler: (req: IncomingMessage, res: ServerResponse) => void,
+  ): HttpServer | HttpsServer {
+    if (this.config.endpoint.mode === 'socket') {
+      return createHttpServer(requestHandler);
+    }
+    const peerAuthMode: string = this.config.endpoint.peerAuthMode;
+    const scheme: string = this.config.endpoint.scheme;
+    if (peerAuthMode !== 'mtls-spiffe' || scheme !== 'https') {
+      throw new Error('Garden admin network transport requires HTTPS mTLS with SPIFFE peer authorization');
+    }
+    return createHttpsServer(
+      this.loadNetworkTlsOptions(),
+      requestHandler,
+    );
+  }
+
+  private loadNetworkTlsOptions(): HttpsServerOptions {
+    if (this.config.endpoint.mode !== 'network') {
+      throw new Error('Garden admin transport TLS options require network mode');
+    }
+    const tlsConfig = requireMtlsPeerFileConfig(
+      this.config.endpoint.tls,
+      'Garden admin transport server TLS',
+    );
+    return {
+      ca: readFileSync(tlsConfig.caPath),
+      cert: readFileSync(tlsConfig.certPath),
+      key: readFileSync(tlsConfig.keyPath),
+      requestCert: true,
+      rejectUnauthorized: true,
+      minVersion: 'TLSv1.3',
+    };
+  }
+
+  private authorizePeer(req: IncomingMessage): string | null {
+    if (this.config.endpoint.mode !== 'network') {
+      return null;
+    }
+    const tlsSocket = req.socket as TLSSocket;
+    if (!tlsSocket.authorized) {
+      const authorizationError = tlsSocket.authorizationError;
+      return authorizationError instanceof Error
+        ? `peer TLS certificate is not authorized: ${authorizationError.message}`
+        : 'peer TLS certificate is not authorized';
+    }
+    const peerCertificate = tlsSocket.getPeerCertificate();
+    if (Object.keys(peerCertificate).length === 0) {
+      return 'peer TLS certificate is missing';
+    }
+    return verifyPeerCertificateSpiffeUri(
+      peerCertificate,
+      this.config.endpoint.tls.expectedPeerSpiffeUri,
+    );
+  }
+
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
+    const rejectionReason = this.authorizePeer(req);
+    if (rejectionReason) {
+      log.warn('Rejected Garden admin transport peer', { reason: rejectionReason });
+      sendText(res, 403, 'Forbidden');
+      return;
+    }
+
     const requestPath = new URL(req.url ?? '/', 'http://localhost').pathname;
 
     if ((req.method ?? 'GET') === 'GET' && requestPath === HEALTH_PROBE_PATH) {
@@ -254,6 +317,14 @@ export class GardenAdminTransportServer implements Lifecycle {
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    const rejectionReason = this.authorizePeer(req);
+    if (rejectionReason) {
+      log.warn('Rejected Garden admin transport websocket peer', { reason: rejectionReason });
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+
     this.telemetryTransport.handleUpgrade(req, socket, head);
   }
 

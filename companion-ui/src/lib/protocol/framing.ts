@@ -1,3 +1,4 @@
+import { isObjectRecord as isRecord } from '../../../../src/shared/utils/types.js';
 /**
  * Wire framing for the Companion Cockpit <-> PSFN-Satellite-Hub transport.
  *
@@ -64,9 +65,6 @@ const CLIENT_TO_HUB_TYPES: ReadonlySet<ClientToHubMessage['type']> = new Set([
   'turn.end',
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
 
 function readType(payload: unknown): unknown {
   if (!isRecord(payload)) {

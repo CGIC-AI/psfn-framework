@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import { createHash } from 'node:crypto';
 import type {
   MemoryMaintenanceRecommendedAction,
@@ -179,9 +180,6 @@ function parseStoredStringArray(value: string | null): string[] {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function isReviewKind(value: unknown): value is MemoryMaintenanceReviewKind {
   return typeof value === 'string' && VALID_REVIEW_KINDS.has(value as MemoryMaintenanceReviewKind);

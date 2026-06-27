@@ -1,3 +1,4 @@
+import { isObjectRecord as isRecord } from '../../../shared/utils/types.js';
 import type { IncomingMessage } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import type {
@@ -232,9 +233,6 @@ export function buildSubstrateMessage(params: {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object';
-}
 
 function contentPartToImageAttachment(part: Record<string, unknown>, index: number): Attachment | null {
   if (part.type === 'image') {

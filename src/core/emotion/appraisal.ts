@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { CompletionPurpose, ContextMessage, LLMResponse } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -73,9 +74,6 @@ interface SessionAppraisalState {
   lastAppraisedVad: VADVector | null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function normalizeTurnCadence(value: number | undefined): number {
   const normalized = value ?? DEFAULT_TURN_CADENCE;

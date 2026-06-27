@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
@@ -15,9 +16,6 @@ import type {
 const log = createComponentLogger('ImageGeneratedMedia');
 const IMAGE_TOOL_NAMES = new Set(['media', 'image_create', 'selfie_create', 'image_edit']);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function isToolResultMessage(message: AgentMessage): message is AgentMessage & {
   role: 'toolResult';

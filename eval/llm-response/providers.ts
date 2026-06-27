@@ -1,3 +1,4 @@
+import { isRecord } from '../../src/shared/utils/types.js';
 import type {
   LlmProviderResult,
   LlmProviderSuccess,
@@ -282,9 +283,6 @@ function parseJsonObject(rawText: string): Record<string, unknown> | undefined {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
 
 function requireEnvSecret(env: NodeJS.ProcessEnv, key: string): string {
   const value = env[key]?.trim();

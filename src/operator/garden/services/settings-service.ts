@@ -1,3 +1,4 @@
+import { isRecord } from '../../../shared/utils/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import {
   applySettings,
@@ -420,9 +421,6 @@ export class AdminSettingsDataService implements AdminSettingsService {
     };
   }
 
-  private isRecord(value: unknown): value is Record<string, unknown> {
-    return value !== null && typeof value === 'object' && !Array.isArray(value);
-  }
 
   private buildValidationResult(errors: SettingsValidationError[]): ConfigUpdateResult {
     return {
@@ -626,12 +624,12 @@ export class AdminSettingsDataService implements AdminSettingsService {
     errors: SettingsValidationError[],
   ): void {
     if (!('modelCatalog' in payload)) return;
-    if (!this.isRecord(payload.modelCatalog)) return;
+    if (!isRecord(payload.modelCatalog)) return;
 
     for (const [slotKey, rawEntry] of Object.entries(payload.modelCatalog)) {
-      if (!this.isRecord(rawEntry) || !('routing' in rawEntry)) continue;
+      if (!isRecord(rawEntry) || !('routing' in rawEntry)) continue;
       const fieldPrefix = `modelCatalog.${slotKey}.routing`;
-      if (!this.isRecord(rawEntry.routing)) {
+      if (!isRecord(rawEntry.routing)) {
         this.pushFieldError(errors, fieldPrefix, `${fieldPrefix} must be an object`, 'invalid_type');
         continue;
       }
@@ -801,7 +799,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
       };
     }
 
-    if (!this.isRecord(parsed)) {
+    if (!isRecord(parsed)) {
       return {
         ok: false,
         message: 'Settings payload must be a JSON object',

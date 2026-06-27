@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { SensitivityLevel, MemoryType, MemoryProvenance } from '../memory/types.js';
@@ -116,9 +117,6 @@ function clampSigned(value: unknown): number | undefined {
   return Math.max(-1, Math.min(1, value));
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
 
 function cloneTaggedOutput(output: ShardTaggedOutput): ShardTaggedOutput {
   return {

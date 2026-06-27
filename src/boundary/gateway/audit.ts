@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 // ── Persistent audit log ──
 // Every gateway RPC call is logged to SQLite for review.
 
@@ -315,9 +316,6 @@ function summarizeParams(params: Record<string, unknown>): string {
   return JSON.stringify(summary);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function summarizeSyncEnvelope(envelope: Record<string, unknown>): Record<string, unknown> {
   const summarized: Record<string, unknown> = {};

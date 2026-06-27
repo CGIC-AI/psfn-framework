@@ -1,3 +1,4 @@
+import { isRecord } from '../../../../src/shared/utils/types.js';
 import type {
   CanonicalProviderRegistry,
   CanonicalProviderType,
@@ -28,9 +29,6 @@ export const PROVIDER_TYPE_LABELS: Record<CanonicalProviderType, string> = {
 const PROVIDER_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
 const ENV_NAME_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function toOptionalString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;

@@ -1,3 +1,4 @@
+import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
 import { EmotionState, type EmotionObservation, type EmotionStateSnapshot, type VADVector } from './state.js';
 import {
   toAudioEmotionSignal,
@@ -519,8 +520,4 @@ function clampSigned(value: number): number {
 function clampUnit(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.min(1, value));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }

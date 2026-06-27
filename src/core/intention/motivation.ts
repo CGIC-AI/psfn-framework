@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 
@@ -82,9 +83,6 @@ interface SessionMotivationState {
 
 const EPSILON = 1e-6;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function normalizeSessionId(value: unknown): string {
   if (typeof value !== 'string') {

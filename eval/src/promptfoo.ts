@@ -1,3 +1,4 @@
+import { isRecord } from '../../src/shared/utils/types.js';
 import promptfooBaseConfigJson from '../promptfooconfig.base.json' with { type: 'json' };
 
 type PromptfooPrimitive = boolean | number | string | null;
@@ -77,9 +78,6 @@ export function assertPromptfooConfig(
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function isStringArray(
   value: unknown,

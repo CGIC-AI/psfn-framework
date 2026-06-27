@@ -1,3 +1,4 @@
+import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
 import type {
   AssistantMessage,
   ImageContent,
@@ -43,9 +44,6 @@ interface GenericBlock {
   arguments?: unknown;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object';
-}
 
 function createInternalAssistantMessage(
   content: string,

@@ -1,3 +1,4 @@
+import { isRecord } from '../../../shared/utils/types.js';
 import type { CharacterCardVersionStore } from '../../../core/identity/card-versioning.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -42,9 +43,6 @@ const ONBOARDING_EDITABLE_FIELDS: ReadonlySet<OnboardingEditableField> = new Set
   'post_history_instructions',
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
 
 function normalizeTags(tags: unknown): string[] {
   if (!Array.isArray(tags)) return [];

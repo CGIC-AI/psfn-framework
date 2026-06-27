@@ -1,3 +1,4 @@
+import { isRecord } from '../../../../src/shared/utils/types.js';
 export interface GardenEventCorrelation {
   turnId?: string;
   requestId?: string;
@@ -30,9 +31,6 @@ function normalizeString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 export function normalizeGardenEventCorrelation(value: unknown): GardenEventCorrelation {
   if (!isRecord(value)) {

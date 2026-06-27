@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { appendJsonLine } from '../jsonl.js';
@@ -31,9 +32,6 @@ const VALID_RETRIEVAL_SOURCES = new Set<NonNullable<TurnRetrievalTelemetryRecord
   'lexical_fallback',
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function parseRequiredString(value: unknown, fieldName: string): string {
   if (typeof value !== 'string') {

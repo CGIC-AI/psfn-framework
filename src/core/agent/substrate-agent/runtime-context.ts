@@ -1,3 +1,4 @@
+import { isRecord } from '../../../shared/utils/types.js';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import type {
   GeneratedMessageProvenanceMetadata,
@@ -120,9 +121,6 @@ const CHARGE_SURFACE_PROMPT_LABELS: Record<ChargePolicySurface, string> = {
 
 const ANALYSIS_WORKBENCH_EXTENSION_SURFACE: ChargePolicySurface = 'analysisWorkbenchExtensionBand';
 
-function isRecordValue(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function trimNonEmptyString(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
@@ -133,7 +131,7 @@ function trimNonEmptyString(value: unknown): string | undefined {
 function normalizeGeneratedMessageProvenance(
   value: unknown,
 ): GeneratedMessageProvenanceMetadata | null {
-  if (!isRecordValue(value)) return null;
+  if (!isRecord(value)) return null;
   if (value.kind !== 'deferred_tool_handoff') return null;
   const sourceMessageId = trimNonEmptyString(value.sourceMessageId);
   const sourceChannelId = trimNonEmptyString(value.sourceChannelId);
@@ -156,13 +154,13 @@ function isChargePolicyRuntimeLane(value: string): value is ChargePolicyRuntimeL
 }
 
 function isChargePolicyConfig(value: unknown): value is ChargePolicyConfig {
-  if (!isRecordValue(value)) return false;
+  if (!isRecord(value)) return false;
   if (value.schemaVersion !== 1) return false;
   return (
-    isRecordValue(value.runChargeQuotaByLane)
-    && isRecordValue(value.surfaceCosts)
-    && isRecordValue(value.moa)
-    && isRecordValue(value.referenceModelClassPricing)
+    isRecord(value.runChargeQuotaByLane)
+    && isRecord(value.surfaceCosts)
+    && isRecord(value.moa)
+    && isRecord(value.referenceModelClassPricing)
   );
 }
 

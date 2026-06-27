@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 // ── Gateway Server ──
 // Host-side process that holds secrets and proxies all external interactions.
 
@@ -718,8 +719,4 @@ function truncateFramePreview(value: string): string {
     return value;
   }
   return `${value.slice(0, FRAME_PREVIEW_LIMIT)}... (${value.length} chars)`;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

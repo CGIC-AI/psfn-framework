@@ -1,3 +1,4 @@
+import { isRecord } from '../../../../src/shared/utils/types.js';
 export interface DiscoveryPricingRecord {
   [key: string]: string | number | undefined;
 }
@@ -49,9 +50,6 @@ function normalizeString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function normalizeLookupKey(value: unknown): string | undefined {
   return normalizeString(value)?.toLowerCase();

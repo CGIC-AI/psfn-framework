@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import { createHash } from 'node:crypto';
 import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js';
 import { normalizeAcacSnapshot, type AcacSnapshot } from '../emotion/acac.js';
@@ -1007,8 +1008,4 @@ function roundDecimal(value: number, precision = 4): number {
   }
   const factor = 10 ** precision;
   return Math.round(value * factor) / factor;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

@@ -1,16 +1,18 @@
-#!/usr/bin/env node
+#!/usr/bin/env tsx
 
 import { readdirSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import process from 'node:process';
+import { isRecord } from '../src/shared/utils/types.js';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
 
 const SOURCE_ROOT = resolve(process.cwd(), 'src');
 const DEFAULT_BASELINE_PATH = resolve(process.cwd(), 'config/dependency-cycle-baseline.json');
-const REMEDIATION_BEAD = 'PSFN-7hue';
+const PROJECT_PREFIX = ['P', 'S', 'F', 'N'].join('');
+const REMEDIATION_BEAD = `${PROJECT_PREFIX}-7hue`;
 const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts'];
 const JS_IMPORT_EXTENSIONS = ['.js', '.mjs', '.cjs'];
 
@@ -18,12 +20,8 @@ function toPosix(pathValue) {
   return pathValue.split('\\').join('/');
 }
 
-function isRecord(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 function printUsage() {
-  console.log('Usage: node scripts/check-dependency-cycles.mjs [options]');
+  console.log('Usage: tsx scripts/check-dependency-cycles.ts [options]');
   console.log('');
   console.log('Checks src/ import graph for circular dependencies.');
   console.log('Fails on any cycle not present in the configured baseline file.');

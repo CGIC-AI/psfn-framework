@@ -1,3 +1,4 @@
+import { isRecord } from '../../src/shared/utils/types.js';
 import type { VADVector } from '../../src/core/emotion/state.js';
 import {
   EVAL_CALIBRATION_DIRECTIONS,
@@ -353,9 +354,6 @@ function parseSignedUnitNumber(value: unknown, field: string): number {
   return normalized;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function listValues(values: readonly string[]): string {
   return values.map(value => `"${value}"`).join(', ');

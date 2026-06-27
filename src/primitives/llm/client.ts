@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import {
   streamSimple,
   completeSimple,
@@ -1394,9 +1395,6 @@ function isAbortError(error: Error): boolean {
   return error.name === 'AbortError' || /aborted|abort|cancelled|canceled/i.test(error.message);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function normalizeUsageCount(value: unknown): number {
   const numeric = toFiniteNumber(value);

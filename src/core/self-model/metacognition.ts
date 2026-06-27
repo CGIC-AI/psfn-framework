@@ -1,3 +1,4 @@
+import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
 import { cloneInternalState, type InternalState } from './state.js';
 import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
 
@@ -597,8 +598,4 @@ function clampUnit(value: number): number {
 
 function roundDecimal(value: number): number {
   return Math.round(value * 1000) / 1000;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }

@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import type { Pool } from 'pg';
 import { createPostgresPool, ensurePostgresSchema, executeQuery, queryOne, queryRows } from '../../persistence/postgres.js';
 import { POSTGRES_AUDIT_MIGRATIONS } from '../../persistence/postgres/migrations.js';
@@ -79,9 +80,6 @@ function summarizeParams(params: Record<string, unknown>): string {
   return JSON.stringify(summary);
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function summarizeSyncEnvelope(envelope: Record<string, unknown>): Record<string, unknown> {
   const summarized: Record<string, unknown> = {};

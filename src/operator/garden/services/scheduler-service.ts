@@ -1,3 +1,4 @@
+import { isRecord } from '../../../shared/utils/types.js';
 // ── Admin Scheduler Service ──
 // Wraps Scheduler + HeartbeatPolicyStore for the admin JSON API.
 // Provides task CRUD and reflection template management.
@@ -35,9 +36,6 @@ type CadenceValidationResult =
   | { ok: true; cadence: AdminTaskCadence }
   | { ok: false; message: string };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
 
 function isRecurringCadenceTimezone(value: unknown): value is RecurringCadenceTimezone {
   return value === 'local' || value === 'utc';

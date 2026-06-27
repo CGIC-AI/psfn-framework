@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 
@@ -60,9 +61,6 @@ const DEFAULT_BLOCKS: Record<CoreMemoryLabel, Omit<CoreMemoryBlock, 'content'>> 
   },
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 export function isCoreMemoryLabel(value: string): value is CoreMemoryLabel {
   return (CORE_MEMORY_LABELS as readonly string[]).includes(value);

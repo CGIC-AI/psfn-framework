@@ -1,3 +1,4 @@
+import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
 export interface TextEmotionClassification {
   label: string;
   score: number;
@@ -232,8 +233,4 @@ function normalizeInputText(text: string): string {
   }
 
   return normalized;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }

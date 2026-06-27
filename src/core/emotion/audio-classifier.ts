@@ -1,3 +1,4 @@
+import { isObjectRecord as isRecord } from '../../shared/utils/types.js';
 import { createRequire } from 'node:module';
 import type { EmotionObservation, VADVector } from './state.js';
 
@@ -493,9 +494,6 @@ function trimOptionalString(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
 
 function isSherpaModuleMissing(error: unknown): boolean {
   if (!isRecord(error)) return false;

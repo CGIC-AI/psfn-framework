@@ -1,3 +1,4 @@
+import { isRecord } from '../utils/types.js';
 export const EPISODIC_CONTRACT_VERSION = 1 as const;
 
 export const EPISODE_ARC_KINDS = [
@@ -160,9 +161,6 @@ const PROVENANCE_KINDS = new Set([
   'operator_note',
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function assertKnownKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>, label: string): void {
   for (const key of Object.keys(value)) {

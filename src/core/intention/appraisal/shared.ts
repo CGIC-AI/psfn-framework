@@ -1,8 +1,5 @@
 import { createHash } from 'node:crypto';
-
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
+export { isRecord } from '../../../shared/utils/types.js';
 
 export function normalizePositiveInteger(
   value: number | undefined,

@@ -1,3 +1,4 @@
+import { isRecord } from '../../shared/utils/types.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import type { SessionRoleEnvelopePreview } from '../internal-role-envelopes/projections.js';
 import {
@@ -28,9 +29,6 @@ export interface SessionEntryTurnContext {
   sourceMessageId?: string;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
 
 function parseMetadataEnvelope(metadata: string | undefined): SessionMetadataEnvelope {
   if (!metadata) return {};

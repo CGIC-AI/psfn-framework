@@ -1,3 +1,4 @@
+import { isObjectRecord as isRecord } from '../../../../src/shared/utils/types.js';
 import type {
   ClientToHubMessage,
   HelloAckMessage,
@@ -527,8 +528,4 @@ async function decodeRawSocketText(raw: unknown): Promise<string | null> {
     return data.text();
   }
   return null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }

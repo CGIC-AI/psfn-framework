@@ -9,19 +9,18 @@ import 'dotenv/config';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
-import { MemoryStore } from '../../faculties/memory/store.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
 import { createIsolatedE2ERuntime } from './runtime-harness.js';
 import {
   composeIdentity,
+  composeMemoryStoreAsync,
   composeSessionRuntimeAsync,
   createEmbeddingProviderFromEnv,
   composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
-import { initDatabase } from '../../persistence/sqlite-utils.js';
 import { createScriptedE2ELLMProvider } from './test-llm-provider.js';
 
 const CHANNEL = 'walkthrough:orientation';
@@ -59,7 +58,6 @@ async function main(): Promise<void> {
   const runtime = createIsolatedE2ERuntime({ prefix: 'companion-walkthrough-' });
   const { config } = runtime;
   const eventBus = new EventBus();
-  const db = initDatabase(config.databasePath);
 
   try {
     // Identity
@@ -75,7 +73,7 @@ async function main(): Promise<void> {
     // Embeddings
     const embeddingProvider = createEmbeddingProviderFromEnv();
 
-    const memoryStore = new MemoryStore(db, embeddingProvider.dims);
+    const memoryStore = await composeMemoryStoreAsync(config, embeddingProvider.dims);
 
     // Agent loop with all features
     const agentLoop = composeSubstrateAgent({
@@ -220,7 +218,6 @@ async function main(): Promise<void> {
     await memoryExtractor.stop({ timeoutMs: 10_000 });
     salienceDecay.stop();
   } finally {
-    db.close();
     runtime.cleanup();
   }
 

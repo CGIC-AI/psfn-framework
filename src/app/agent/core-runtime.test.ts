@@ -36,4 +36,11 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('PostgreSQL core runtime requires an injected episodic store');
     expect(coreRuntimeSource).not.toContain('episodicStore: db ? new EpisodicStore(db) : null');
   });
+
+  it('fails closed instead of using sqlite fallbacks for postgres-owned runtime stores', () => {
+    const coreRuntimeSource = readSource('core-runtime.ts');
+    expect(coreRuntimeSource).toContain('PostgreSQL core runtime requires an injected memory store');
+    expect(coreRuntimeSource).toContain('PostgreSQL core runtime requires an injected contact store');
+    expect(coreRuntimeSource).toContain('PostgreSQL core runtime requires injected intention persistence stores');
+  });
 });

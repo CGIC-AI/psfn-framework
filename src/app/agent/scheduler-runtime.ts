@@ -99,6 +99,11 @@ export function buildAgentSchedulerRuntime(
   });
 
   const postgresDatabaseUrl = options.config.postgresDatabaseUrl?.trim() || '';
+  if (options.config.persistenceBackend === 'postgres' && !postgresDatabaseUrl) {
+    throw new Error(
+      'PostgreSQL scheduled backups require config.postgresDatabaseUrl — refusing to use a SQLite handle as a Postgres fallback',
+    );
+  }
   if (!options.db && !postgresDatabaseUrl) {
     throw new Error(
       'Scheduled backups require a SQLite handle or config.postgresDatabaseUrl — refusing to run without a database backup source',

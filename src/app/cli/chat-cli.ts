@@ -10,10 +10,8 @@ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromCard } from '../../core/identity/companion-runtime.js';
 import { LLMClient } from '../../primitives/llm/client.js';
-import { MemoryStore } from '../../faculties/memory/store.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
-import { initDatabase } from '../../persistence/sqlite-utils.js';
 import {
   hydrateCanonicalStartupConfig,
   hydrateSecretBearingConfig,
@@ -21,6 +19,7 @@ import {
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import {
   composeIdentity,
+  composeMemoryStoreAsync,
   composeSessionRuntimeAsync,
   createEmbeddingProviderFromConfig,
   composeSubstrateAgent,
@@ -42,9 +41,6 @@ async function main(): Promise<void> {
 
   console.log('[CLI] Initializing companion runtime...');
 
-  // Database for memory (L2)
-  const db = initDatabase(config.databasePath);
-
   // Identity
   const { card, systemPrompt } = composeIdentity(config);
   const companionName = resolveCompanionNameFromCard(card);
@@ -58,7 +54,7 @@ async function main(): Promise<void> {
   // Embeddings
   const embeddingProvider = createEmbeddingProviderFromConfig(config);
 
-  const memoryStore = new MemoryStore(db, embeddingProvider.dims);
+  const memoryStore = await composeMemoryStoreAsync(config, embeddingProvider.dims);
 
   // Agent loop
   const agentLoop = composeSubstrateAgent({
@@ -130,7 +126,6 @@ async function main(): Promise<void> {
     if (input === '/quit' || input === '/exit') {
       console.log('[CLI] Shutting down...');
       salienceDecay.stop();
-      db.close();
       rl.close();
       process.exit(0);
     }
@@ -189,7 +184,6 @@ async function main(): Promise<void> {
 
   rl.on('close', () => {
     salienceDecay.stop();
-    db.close();
     process.exit(0);
   });
 }

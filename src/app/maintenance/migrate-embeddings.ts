@@ -6,10 +6,8 @@
 // Usage: npm run migrate:embeddings [-- --batch-size 64 --parallelism 4]
 
 import 'dotenv/config';
-import { initDatabase } from '../../persistence/sqlite-utils.js';
-import * as sqliteVec from 'sqlite-vec';
 import { createEmbeddingProviderFromConfig } from '../../faculties/memory/embedding.js';
-import { migrateMemoryEmbeddings } from '../../faculties/memory/migration.js';
+import { migratePostgresMemoryEmbeddings } from '../../faculties/memory/migration.js';
 import type { ReembedMigrationProgress } from '../../faculties/memory/migration.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -94,48 +92,49 @@ async function main(): Promise<void> {
     rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
   });
   await hydrateSecretBearingConfig(config, { env: process.env });
-  const db = initDatabase(config.databasePath);
-  sqliteVec.load(db);
+  if (config.persistenceBackend !== 'postgres') {
+    throw new Error('Embedding migration requires config.persistenceBackend=postgres');
+  }
+  const databaseUrl = config.postgresDatabaseUrl?.trim();
+  if (!databaseUrl) {
+    throw new Error('Embedding migration requires config.postgresDatabaseUrl');
+  }
 
-  try {
-    console.log(`Database: ${config.databasePath}`);
+  console.log(`Persistence backend: ${config.persistenceBackend}`);
 
-    const embeddingProvider = createEmbeddingProviderFromConfig(config);
-    console.log(`Embedding provider: ${embeddingProvider.kind} (dims=${embeddingProvider.dims})`);
+  const embeddingProvider = createEmbeddingProviderFromConfig(config);
+  console.log(`Embedding provider: ${embeddingProvider.kind} (dims=${embeddingProvider.dims})`);
+  console.log('');
+
+  const result = await migratePostgresMemoryEmbeddings(databaseUrl, embeddingProvider, {
+    batchSize: options.batchSize,
+    parallelism: options.parallelism,
+    includeDeleted: options.includeDeleted,
+    onProgress: (progress) => {
+      process.stdout.write(`\r${formatProgress(progress)}`);
+    },
+  });
+
+  if (result.total > 0) {
+    process.stdout.write('\n');
+  }
+
+  console.log('');
+  console.log(`Migration complete in ${result.durationMs}ms`);
+  console.log(`  Total:     ${result.total}`);
+  console.log(`  Updated:   ${result.updated}`);
+  console.log(`  Failed:    ${result.failed}`);
+
+  if (result.failures.length > 0) {
     console.log('');
-
-    const result = await migrateMemoryEmbeddings(db, embeddingProvider, {
-      batchSize: options.batchSize,
-      parallelism: options.parallelism,
-      includeDeleted: options.includeDeleted,
-      onProgress: (progress) => {
-        process.stdout.write(`\r${formatProgress(progress)}`);
-      },
-    });
-
-    if (result.total > 0) {
-      process.stdout.write('\n');
+    console.log('Failures:');
+    for (const failure of result.failures.slice(0, 20)) {
+      console.log(`  ${failure.memoryId}: ${failure.error}`);
     }
-
-    console.log('');
-    console.log(`Migration complete in ${result.durationMs}ms`);
-    console.log(`  Total:     ${result.total}`);
-    console.log(`  Updated:   ${result.updated}`);
-    console.log(`  Failed:    ${result.failed}`);
-
-    if (result.failures.length > 0) {
-      console.log('');
-      console.log('Failures:');
-      for (const failure of result.failures.slice(0, 20)) {
-        console.log(`  ${failure.memoryId}: ${failure.error}`);
-      }
-      if (result.failures.length > 20) {
-        console.log(`  ... and ${result.failures.length - 20} more`);
-      }
-      process.exitCode = 1;
+    if (result.failures.length > 20) {
+      console.log(`  ... and ${result.failures.length - 20} more`);
     }
-  } finally {
-    db.close();
+    process.exitCode = 1;
   }
 }
 

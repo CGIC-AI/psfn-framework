@@ -13,13 +13,12 @@ import { mkdirSync } from 'node:fs';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
-import { MemoryStore } from '../../faculties/memory/store.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
 import { runRLMLoop } from '../../core/tools/analysis-workbench/loop.js';
-import { initDatabase } from '../../persistence/sqlite-utils.js';
 import { createIsolatedE2ERuntime } from './runtime-harness.js';
 import {
   composeIdentity,
+  composeMemoryStoreAsync,
   composeSessionRuntimeAsync,
   createEmbeddingProviderFromEnv,
   composeSubstrateAgent,
@@ -72,11 +71,6 @@ async function main(): Promise<void> {
   const sessionsDir = join(rootDir, 'sessions');
   mkdirSync(sessionsDir, { recursive: true });
 
-  // Use isolated database by default so extraction assertions are deterministic.
-  // Override with E2E_DATABASE_PATH when you intentionally want to test against a shared DB.
-  const databasePath = config.databasePath;
-  const db = initDatabase(databasePath);
-
   try {
     const eventBus = new EventBus();
 
@@ -102,7 +96,7 @@ async function main(): Promise<void> {
     // Embeddings
     const embeddingProvider = createEmbeddingProviderFromEnv();
 
-    const memoryStore = new MemoryStore(db, embeddingProvider.dims);
+    const memoryStore = await composeMemoryStoreAsync(config, embeddingProvider.dims);
 
     // Agent loop
     const agentLoop = composeSubstrateAgent({
@@ -141,7 +135,7 @@ async function main(): Promise<void> {
     console.log(`System data dir: ${runtime.systemDataDir}`);
     console.log(`Companion data dir: ${runtime.companionDataDir}`);
     console.log(`Sessions dir: ${sessionsDir}`);
-    console.log(`Database: ${databasePath}`);
+    console.log(`Persistence backend: ${config.persistenceBackend}`);
     console.log(`Primary model: ${config.primaryModel}`);
     console.log(`Extraction model: ${config.extractionModel}`);
 
@@ -458,7 +452,6 @@ async function main(): Promise<void> {
       process.exit(0);
     }
   } finally {
-    db.close();
     runtime.cleanup();
   }
 }

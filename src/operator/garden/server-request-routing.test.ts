@@ -112,6 +112,47 @@ describe('handleAdminRequest', () => {
     expect(sendNotFound).not.toHaveBeenCalled();
   });
 
+  it('allows health probes without admin auth while keeping API routes protected', () => {
+    const healthReq = makeRequest('GET', '/health');
+    const healthRes = makeResponse();
+    const checkAuth = vi.fn(() => false);
+    const route = vi.fn(() => true);
+
+    handleAdminRequest(healthReq, healthRes, {
+      token: 'secret-token',
+      checkAuth,
+      tryServeStaticAsset: vi.fn(() => false),
+      isGardenUiEnabled: vi.fn(() => true),
+      serveGardenBuildAsset: vi.fn(),
+      serveGardenPage: vi.fn(),
+      route,
+      sendNotFound: vi.fn(),
+      onRequestError: vi.fn(),
+    });
+
+    expect(checkAuth).not.toHaveBeenCalled();
+    expect(route).toHaveBeenCalledWith('GET', '/health', healthReq, healthRes);
+
+    const apiReq = makeRequest('GET', '/api/admin/dashboard');
+    const apiRes = makeResponse();
+    const protectedRoute = vi.fn(() => true);
+
+    handleAdminRequest(apiReq, apiRes, {
+      token: 'secret-token',
+      checkAuth,
+      tryServeStaticAsset: vi.fn(() => false),
+      isGardenUiEnabled: vi.fn(() => true),
+      serveGardenBuildAsset: vi.fn(),
+      serveGardenPage: vi.fn(),
+      route: protectedRoute,
+      sendNotFound: vi.fn(),
+      onRequestError: vi.fn(),
+    });
+
+    expect(checkAuth).toHaveBeenCalledWith(apiReq, apiRes);
+    expect(protectedRoute).not.toHaveBeenCalled();
+  });
+
   it('keeps non-canonical paths out of the Garden SPA fallback', () => {
     for (const path of ['/api/admin/missing', '/health', '/missing', '/missing/memory']) {
       const req = makeRequest('GET', path);

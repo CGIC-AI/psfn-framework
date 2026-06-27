@@ -90,6 +90,8 @@ export function handleAdminRequest(
   const skipAuth = req.method === 'OPTIONS'
     || requestPath.startsWith('/static/')
     || requestPath.startsWith('/_app/')
+    || requestPath === '/health'
+    || requestPath.startsWith('/health/')
     || requestPath === '/login';
 
   if (!skipAuth && deps.token && !deps.checkAuth(req, res)) return;

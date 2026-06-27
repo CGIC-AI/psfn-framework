@@ -16,6 +16,8 @@ securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: false
   runAsNonRoot: true
+  runAsUser: 999
+  runAsGroup: 999
   capabilities:
     drop:
       - ALL

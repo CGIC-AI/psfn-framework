@@ -37,6 +37,10 @@ FROM node:22.22.2-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git=1:2.39.5-0+deb12u3 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY package*.json ./
 COPY admin-ui/package*.json ./admin-ui/
 RUN npm ci --omit=dev \
@@ -48,8 +52,17 @@ COPY --from=build /app/admin-ui/build/ ./admin-ui/build/
 COPY config/*.seed.json ./config/
 COPY scripts/ops/ ./scripts/ops/
 
-# Non-root user for defense in depth
-RUN groupadd -r psfn && useradd -r -g psfn -d /app psfn
+RUN git init /app \
+    && git config user.name "PSFN Runtime Image" \
+    && git config user.email "runtime-image@psfn.local" \
+    && git config --system --add safe.directory /app \
+    && printf 'node_modules/\nadmin-ui/node_modules/\n' > .gitignore \
+    && git add .gitignore package*.json admin-ui/package*.json dist admin-ui/build config scripts/ops \
+    && git commit -m "Runtime image snapshot"
+
+# Non-root user for defense in depth. Keep the numeric ID aligned with the
+# Kubernetes securityContext so runAsNonRoot can be verified at admission time.
+RUN groupadd -r -g 999 psfn && useradd -r -u 999 -g psfn -d /app psfn
 RUN mkdir -p \
       /app/backups \
       /app/companion-data \
@@ -61,6 +74,7 @@ RUN mkdir -p \
       /app/workspace \
       /run/psfn \
     && chown -R psfn:psfn \
+      /app/.git \
       /app/backups \
       /app/companion-data \
       /app/data \
@@ -70,7 +84,7 @@ RUN mkdir -p \
       /app/tmp \
       /app/workspace \
       /run/psfn
-USER psfn
+USER 999:999
 
 ENV NODE_ENV=production
 ENV PATH=/opt/postgresql-client/wrappers:$PATH

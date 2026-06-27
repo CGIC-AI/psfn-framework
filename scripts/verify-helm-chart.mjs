@@ -83,6 +83,8 @@ assertIncludes(rendered, 'mountPath: /app/system-data', 'system-data PVC mount')
 assertIncludes(rendered, 'mountPath: /app/companion-data', 'companion-data PVC mount');
 assertIncludes(rendered, 'mountPath: /app/workspace', 'workspace PVC mount');
 assertIncludes(rendered, 'mountPath: /app/models/transformers', 'model cache PVC mount');
+assertIncludes(rendered, 'runAsUser: 999', 'numeric non-root user');
+assertIncludes(rendered, 'runAsGroup: 999', 'numeric non-root group');
 assertIncludes(rendered, 'CREATE EXTENSION IF NOT EXISTS vector;', 'pgvector init SQL');
 assertIncludes(rendered, 'kind: NetworkPolicy', 'network policy render');
 assertNotIncludes(rendered, 'ALLOW_AGENT_OUTBOUND_NETWORK', 'agent network isolation');
@@ -103,6 +105,21 @@ assertNotIncludes(agentPolicy, '0.0.0.0/0', 'agent policy broad egress');
 assertIncludes(agentPolicy, 'component: gateway', 'agent policy gateway flow');
 assertIncludes(agentPolicy, 'component: postgres', 'agent policy postgres flow');
 assertIncludes(agentPolicy, 'component: redis', 'agent policy redis flow');
+
+const strictSecretRendered = render([
+  '--set',
+  'secrets.allowMissingRequired=false',
+  '--set-string',
+  'secrets.values.apiKey=verify-api-key',
+  '--set-string',
+  'secrets.values.adminToken=verify-admin-token',
+  '--set-string',
+  'secrets.values.gatewaySessionHmacKey=verify-hmac-key',
+]);
+
+assertIncludes(strictSecretRendered, 'API_KEY: "verify-api-key"', 'strict app secret API key');
+assertIncludes(strictSecretRendered, 'ADMIN_TOKEN: "verify-admin-token"', 'strict app secret admin token');
+assertIncludes(strictSecretRendered, 'GATEWAY_SESSION_HMAC_KEY: "verify-hmac-key"', 'strict app secret HMAC key');
 
 const externalRendered = render([
   '--set',
@@ -145,6 +162,19 @@ assertIncludes(hubRendered, 'name: GATEWAY_API_URL', 'satellite hub gateway API 
 assertRenderFails(
   ['--set', 'certificates.enabled=false'],
   'certificates.enabled must be true',
+);
+assertRenderFails(
+  [
+    '--set',
+    'secrets.allowMissingRequired=false',
+    '--set-string',
+    'secrets.values.apiKey=',
+    '--set-string',
+    'secrets.values.adminToken=verify-admin-token',
+    '--set-string',
+    'secrets.values.gatewaySessionHmacKey=verify-hmac-key',
+  ],
+  'secrets.values.apiKey is required when secrets.allowMissingRequired=false',
 );
 assertRenderFails(
   ['--set', 'postgres.enabled=false'],

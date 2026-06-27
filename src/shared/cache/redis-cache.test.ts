@@ -21,8 +21,7 @@ function createFakeRedisClient(initial: Record<string, string> = {}) {
       if (args[0] !== 'SET') throw new Error(`unsupported command: ${args[0]}`);
       store.set(args[1], args[2]);
     }),
-    del: vi.fn(async (key: string | string[]) => {
-      const keys = Array.isArray(key) ? key : [key];
+    del: vi.fn(async (...keys: string[]) => {
       let deleted = 0;
       for (const entry of keys) {
         if (store.delete(entry)) deleted += 1;

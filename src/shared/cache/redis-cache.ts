@@ -22,7 +22,7 @@ export interface RedisClientLike {
   get(key: string): Promise<string | null>;
   set?(key: string, value: string, options?: unknown): Promise<unknown>;
   sendCommand?(args: string[]): Promise<unknown>;
-  del(key: string | string[]): Promise<number>;
+  del(...keys: string[]): Promise<number>;
   scanIterator(options: { MATCH: string; COUNT: number }): AsyncIterable<string>;
   quit?(): Promise<unknown>;
 }
@@ -280,11 +280,11 @@ export class RedisAppCache implements AppCache {
       for await (const key of this.client.scanIterator({ MATCH: match, COUNT: 100 })) {
         batch.push(key);
         if (batch.length < 100) continue;
-        removed += await this.client.del([...batch]);
+        removed += await this.client.del(...batch);
         batch.length = 0;
       }
       if (batch.length > 0) {
-        removed += await this.client.del([...batch]);
+        removed += await this.client.del(...batch);
       }
       this.stats.invalidations += 1;
       this.stats.deletes += removed;

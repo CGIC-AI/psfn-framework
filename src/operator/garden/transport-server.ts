@@ -1,5 +1,6 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, rmSync } from 'node:fs';
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { createServer as createHttpServer, type IncomingMessage, type Server as HttpServer, type ServerResponse } from 'node:http';
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import { dirname } from 'node:path';
 import type { Duplex } from 'node:stream';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
@@ -13,6 +14,7 @@ import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { HEALTH_PROBE_PATH } from './transport-client.js';
+import type { GardenAdminTransportServerEndpoint } from './transport-paths.js';
 import type {
   AdminAuditActionType,
   AdminAuditActor,
@@ -23,7 +25,7 @@ const log = createComponentLogger('GardenAdminTransport');
 const ADMIN_MAX_BODY_SIZE = 65_536;
 
 export interface GardenAdminTransportServerConfig {
-  socketPath: string;
+  endpoint: GardenAdminTransportServerEndpoint;
   eventBus: EventBus;
   config: SubstrateConfig;
   services: GardenAdminDomainServices;
@@ -47,7 +49,7 @@ function dispatchAdminApiRoute(
 }
 
 export class GardenAdminTransportServer implements Lifecycle {
-  private readonly server: Server;
+  private readonly server: HttpServer | HttpsServer;
   private readonly routes: AdminApiRoute[];
   private readonly telemetryTransport: AdminServerTelemetryTransport;
 
@@ -103,19 +105,27 @@ export class GardenAdminTransportServer implements Lifecycle {
       config.eventBus,
       () => true,
     );
-    this.server = createServer((req, res) => this.handleRequest(req, res));
+    const requestHandler = (req: IncomingMessage, res: ServerResponse) => this.handleRequest(req, res);
+    this.server = config.endpoint.mode === 'network' && config.endpoint.tls
+      ? createHttpsServer({
+          cert: readFileSync(config.endpoint.tls.certPath),
+          key: readFileSync(config.endpoint.tls.keyPath),
+        }, requestHandler)
+      : createHttpServer(requestHandler);
     this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
   }
 
   async init(): Promise<void> {
-    this.prepareSocketPath();
+    if (this.config.endpoint.mode === 'socket') {
+      this.prepareSocketPath(this.config.endpoint.socketPath);
+    }
   }
 
   async start(): Promise<void> {
     return await new Promise((resolve, reject) => {
       const onError = (error: NodeJS.ErrnoException) => {
         log.error('Garden admin transport failed to start', {
-          socketPath: this.config.socketPath,
+          endpoint: this.describeEndpoint(),
           code: error.code,
           errno: error.errno,
           syscall: error.syscall,
@@ -125,14 +135,23 @@ export class GardenAdminTransportServer implements Lifecycle {
       };
 
       this.server.once('error', onError);
-      this.server.listen(this.config.socketPath, () => {
+      const onListening = () => {
         this.server.off('error', onError);
-        chmodSync(this.config.socketPath, 0o600);
+        if (this.config.endpoint.mode === 'socket') {
+          chmodSync(this.config.endpoint.socketPath, 0o600);
+        }
         log.info('Garden admin transport listening', {
-          socketPath: this.config.socketPath,
+          endpoint: this.describeEndpoint(),
         });
         resolve();
-      });
+      };
+
+      if (this.config.endpoint.mode === 'socket') {
+        this.server.listen(this.config.endpoint.socketPath, onListening);
+        return;
+      }
+
+      this.server.listen(this.config.endpoint.port, this.config.endpoint.host, onListening);
     });
   }
 
@@ -142,7 +161,9 @@ export class GardenAdminTransportServer implements Lifecycle {
       this.telemetryTransport.close(() => {
         this.server.close((error) => {
           try {
-            this.cleanupSocketPath();
+            if (this.config.endpoint.mode === 'socket') {
+              this.cleanupSocketPath(this.config.endpoint.socketPath);
+            }
           } catch (cleanupError) {
             reject(cleanupError);
             return;
@@ -159,37 +180,53 @@ export class GardenAdminTransportServer implements Lifecycle {
     });
   }
 
-  private prepareSocketPath(): void {
-    mkdirSync(dirname(this.config.socketPath), { recursive: true });
-    if (!existsSync(this.config.socketPath)) {
-      return;
+  describeEndpoint(): Record<string, string | number> {
+    if (this.config.endpoint.mode === 'socket') {
+      return {
+        mode: 'socket',
+        socketPath: this.config.endpoint.socketPath,
+      };
     }
 
-    const stats = lstatSync(this.config.socketPath);
-    if (!stats.isSocket()) {
-      throw new Error(
-        `Refusing to replace non-socket admin transport path: ${this.config.socketPath}`,
-      );
-    }
-    rmSync(this.config.socketPath, { force: true });
+    return {
+      mode: 'network',
+      scheme: this.config.endpoint.scheme,
+      host: this.config.endpoint.host,
+      port: this.config.endpoint.port,
+    };
   }
 
-  private cleanupSocketPath(): void {
-    if (!existsSync(this.config.socketPath)) {
+  private prepareSocketPath(socketPath: string): void {
+    mkdirSync(dirname(socketPath), { recursive: true });
+    if (!existsSync(socketPath)) {
       return;
     }
-    const stats = lstatSync(this.config.socketPath);
+
+    const stats = lstatSync(socketPath);
+    if (!stats.isSocket()) {
+      throw new Error(
+        `Refusing to replace non-socket admin transport path: ${socketPath}`,
+      );
+    }
+    rmSync(socketPath, { force: true });
+  }
+
+  private cleanupSocketPath(socketPath: string): void {
+    if (!existsSync(socketPath)) {
+      return;
+    }
+    const stats = lstatSync(socketPath);
     if (!stats.isSocket()) {
       return;
     }
-    rmSync(this.config.socketPath, { force: true });
+    rmSync(socketPath, { force: true });
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const requestPath = new URL(req.url ?? '/', 'http://localhost').pathname;
 
     if ((req.method ?? 'GET') === 'GET' && requestPath === HEALTH_PROBE_PATH) {
-      sendJson(res, 200, { status: 'ok' });
+      sendJson(res, 200, { status: 'ok', mode: this.config.endpoint.mode });
       return;
     }
 

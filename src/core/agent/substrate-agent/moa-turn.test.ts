@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runMoaTurn, type ResolvedMoaSettings } from './moa-turn.js';
 import { runDeliberation } from '../../../primitives/llm/deliberation.js';
 import type { LLMContext, ObservabilityCallType, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
+import { resetRunChargeRollingWindowForTests } from '../../../shared/telemetry/run-charge.js';
 
 vi.mock('../../../primitives/llm/deliberation.js', () => ({
   runDeliberation: vi.fn(),
@@ -13,6 +14,10 @@ const mockedRunDeliberation = vi.mocked(runDeliberation);
 
 beforeEach(() => {
   mockedRunDeliberation.mockReset();
+});
+
+afterEach(() => {
+  resetRunChargeRollingWindowForTests();
 });
 
 function makeChargePolicy(): ChargePolicyConfig {

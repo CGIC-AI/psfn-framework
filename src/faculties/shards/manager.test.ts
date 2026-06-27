@@ -7,7 +7,11 @@ import { Type } from '@sinclair/typebox';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
-import { getRunChargeSnapshot, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
+import {
+  getRunChargeSnapshot,
+  resetRunChargeRollingWindowForTests,
+  runWithChargeContext,
+} from '../../shared/telemetry/run-charge.js';
 import { buildSessionMetadataWithTurn } from '../../core/session/turn-provenance.js';
 import { buildFocusMemoryScopeQuery } from '../../core/session/focus-knowledge.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
@@ -200,6 +204,7 @@ describe('ShardManager', () => {
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+    resetRunChargeRollingWindowForTests();
   });
 
   it('spawns a shard and returns result', async () => {
@@ -2066,6 +2071,7 @@ describe('createBoundedSubagentLaunchTool', () => {
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+    resetRunChargeRollingWindowForTests();
   });
 
   it('returns a valid AgentTool', () => {

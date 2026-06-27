@@ -7,6 +7,7 @@ import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
 } from '../contracts/charge-policy.js';
+import { hydrateRunChargeRollingWindowFromEvents } from './run-charge.js';
 
 export interface RunChargeLedgerMetadata {
   provider?: string;
@@ -458,8 +459,9 @@ export class RunChargeLedger {
     eventBus?: Pick<EventBus, 'on'> | null,
     options: RunChargeLedgerOptions = {},
   ) {
-    this.entries = readLedgerEntries(path);
     this.now = options.now ?? (() => Date.now());
+    this.entries = readLedgerEntries(path);
+    hydrateRunChargeRollingWindowFromEvents(this.entries.map(entry => entry.event), this.now());
     if (eventBus) {
       this.unsubscribe = eventBus.on('agent.charge', (event) => {
         this.recordChargeEvent(event);

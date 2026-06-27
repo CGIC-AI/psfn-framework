@@ -42,6 +42,12 @@ export interface RunChargeSnapshot {
   quotaSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
 }
 
+export interface RunChargeRollingWindowSnapshot {
+  windowMs: number;
+  spentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+  entryCount: number;
+}
+
 interface RunChargeContextState {
   chargePolicy: ChargePolicyConfig;
   eventBus?: Pick<EventBus, 'emit'> | null;
@@ -85,10 +91,24 @@ export interface ChargeSurfaceInspection {
   remainingAfter: number;
   quotaSpentBefore: number;
   quotaSpentAfter: number;
+  rollingWindowSpentBefore: number;
+  rollingWindowSpentAfter: number;
+  rollingWindowRemainingBefore: number;
+  rollingWindowRemainingAfter: number;
   allowed: boolean;
 }
 
 const runChargeStorage = new AsyncLocalStorage<RunChargeContextState>();
+export const RUN_CHARGE_ROLLING_WINDOW_MS = 24 * 60 * 60_000;
+
+interface RollingChargeWindowEntry {
+  sourceKey: string;
+  timestampMs: number;
+  lane: ChargePolicyRuntimeLane;
+  amount: number;
+}
+
+let rollingChargeWindowEntries: RollingChargeWindowEntry[] = [];
 
 function normalizePositiveNumber(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
@@ -126,6 +146,91 @@ function cloneSpentByLane(
   source: Partial<Record<ChargePolicyRuntimeLane, number>>,
 ): Partial<Record<ChargePolicyRuntimeLane, number>> {
   return { ...source };
+}
+
+function createRollingWindowEventKey(event: RunChargeEvent): string {
+  return JSON.stringify([
+    event.timestampMs,
+    event.lane,
+    event.surface,
+    event.amount,
+    event.lineage.runId,
+    event.lineage.rootRunId,
+    event.lineage.parentRunId ?? '',
+    event.requestId ?? '',
+    event.turnId ?? '',
+    event.toolCallId ?? '',
+    event.callType ?? '',
+    event.purpose ?? '',
+  ]);
+}
+
+function pruneRollingChargeWindow(nowMs: number): void {
+  const cutoffMs = nowMs - RUN_CHARGE_ROLLING_WINDOW_MS;
+  rollingChargeWindowEntries = rollingChargeWindowEntries.filter(entry => entry.timestampMs >= cutoffMs);
+}
+
+function getRollingWindowSpentForLane(lane: ChargePolicyRuntimeLane, nowMs: number): number {
+  pruneRollingChargeWindow(nowMs);
+  return rollingChargeWindowEntries.reduce((total, entry) => {
+    if (entry.timestampMs > nowMs || entry.lane !== lane) {
+      return total;
+    }
+    return total + entry.amount;
+  }, 0);
+}
+
+function recordRollingChargeEvent(event: RunChargeEvent): void {
+  if (event.amount <= 0) {
+    return;
+  }
+  pruneRollingChargeWindow(event.timestampMs);
+  const sourceKey = createRollingWindowEventKey(event);
+  if (rollingChargeWindowEntries.some(entry => entry.sourceKey === sourceKey)) {
+    return;
+  }
+  rollingChargeWindowEntries.push({
+    sourceKey,
+    timestampMs: event.timestampMs,
+    lane: event.lane,
+    amount: event.amount,
+  });
+}
+
+export function hydrateRunChargeRollingWindowFromEvents(
+  events: readonly RunChargeEvent[],
+  nowMs = Date.now(),
+): void {
+  pruneRollingChargeWindow(nowMs);
+  for (const event of events) {
+    if (event.amount <= 0 || event.timestampMs > nowMs) {
+      continue;
+    }
+    recordRollingChargeEvent(event);
+  }
+  pruneRollingChargeWindow(nowMs);
+}
+
+export function getRunChargeRollingWindowSnapshot(nowMs = Date.now()): RunChargeRollingWindowSnapshot {
+  pruneRollingChargeWindow(nowMs);
+  const spentByLane: Partial<Record<ChargePolicyRuntimeLane, number>> = {};
+  let entryCount = 0;
+  for (const entry of rollingChargeWindowEntries) {
+    if (entry.timestampMs > nowMs) {
+      continue;
+    }
+    entryCount += 1;
+    addSpentByLane(spentByLane, entry.lane, entry.amount);
+  }
+  return {
+    windowMs: RUN_CHARGE_ROLLING_WINDOW_MS,
+    spentByLane,
+    entryCount,
+  };
+}
+
+export function resetRunChargeRollingWindowForTests(): void {
+  rollingChargeWindowEntries = [];
 }
 
 function cloneLineageProvenance(record: RunChargeLineageProvenance): RunChargeLineageProvenance {
@@ -244,10 +349,11 @@ function createChargeEvent(input: {
   lineage: RunChargeLineage;
   surface: ChargePolicySurface;
   spentAfter: number;
+  timestampMs: number;
   quota: number;
 }): RunChargeEvent {
   return {
-    timestampMs: Date.now(),
+    timestampMs: input.timestampMs,
     lane: input.lane,
     surface: input.surface,
     amount: input.amount,
@@ -285,6 +391,9 @@ export function inspectChargeSurface(
   const spentAfter = spentBefore + amount;
   const quotaSpentBefore = context?.quotaAccount.spentByLane[lane] ?? spentBefore;
   const quotaSpentAfter = quotaSpentBefore + amount;
+  const nowMs = Date.now();
+  const rollingWindowSpentBefore = getRollingWindowSpentForLane(lane, nowMs);
+  const rollingWindowSpentAfter = rollingWindowSpentBefore + amount;
   return {
     lane,
     surface,
@@ -292,11 +401,15 @@ export function inspectChargeSurface(
     quota,
     spentBefore,
     spentAfter,
-    remainingBefore: Math.max(0, quota - spentBefore),
-    remainingAfter: Math.max(0, quota - spentAfter),
+    remainingBefore: Math.max(0, quota - quotaSpentBefore),
+    remainingAfter: Math.max(0, quota - quotaSpentAfter),
     quotaSpentBefore,
     quotaSpentAfter,
-    allowed: quotaSpentAfter <= quota,
+    rollingWindowSpentBefore,
+    rollingWindowSpentAfter,
+    rollingWindowRemainingBefore: Math.max(0, quota - rollingWindowSpentBefore),
+    rollingWindowRemainingAfter: Math.max(0, quota - rollingWindowSpentAfter),
+    allowed: quotaSpentAfter <= quota && rollingWindowSpentAfter <= quota,
   };
 }
 
@@ -368,8 +481,10 @@ export function chargeSurface(
   }
 
   if (!inspection.allowed) {
+    const scope = inspection.quotaSpentAfter > inspection.quota ? 'run' : 'rolling 24-hour';
+    const spentAfter = scope === 'run' ? inspection.quotaSpentAfter : inspection.rollingWindowSpentAfter;
     throw new Error(
-      `Charge quota exceeded for lane "${inspection.lane}" while charging "${surface}" (${inspection.spentAfter}/${inspection.quota}).`,
+      `Charge quota exceeded for lane "${inspection.lane}" while charging "${surface}" (${spentAfter}/${inspection.quota}; ${scope} budget).`,
     );
   }
 
@@ -399,10 +514,12 @@ export function chargeSurface(
     lane: inspection.lane,
     lineage,
     surface,
-    spentAfter: inspection.spentAfter,
+    spentAfter: inspection.rollingWindowSpentAfter,
+    timestampMs: Date.now(),
     quota: inspection.quota,
   });
 
+  recordRollingChargeEvent(event);
   void eventBus?.emit('agent.charge', event);
   return event;
 }

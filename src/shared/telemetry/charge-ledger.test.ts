@@ -1,10 +1,16 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../event-bus.js';
 import type { RunChargeEvent } from '../contracts/runtime.js';
+import type { ChargePolicyConfig } from '../contracts/charge-policy.js';
 import { RunChargeLedger } from './charge-ledger.js';
+import {
+  chargeSurface,
+  resetRunChargeRollingWindowForTests,
+  runWithChargeContext,
+} from './run-charge.js';
 
 const tempDirs: string[] = [];
 
@@ -40,11 +46,55 @@ function makeEvent(overrides: Partial<RunChargeEvent> = {}): RunChargeEvent {
   };
 }
 
+function makeChargePolicy(): ChargePolicyConfig {
+  return {
+    schemaVersion: 1,
+    runChargeQuotaByLane: {
+      interactive: 3,
+      background: 3,
+      maintenance: 0,
+      subagent: 3,
+      shard: 12,
+    },
+    surfaceCosts: {
+      ownerFileInspection: 0,
+      localFilesystem: 0,
+      memoryRead: 0,
+      memoryWrite: 0,
+      localEmbedding: 0,
+      externalEmbedding: 0,
+      localImageGeneration: 0,
+      paidImageGeneration: 3,
+      analysisWorkbenchExtensionBand: 1,
+      subagentLaunch: 1,
+      shardLaunch: 8,
+      externalModelConsult: 1,
+      moaRoundBase: 1,
+    },
+    moa: {
+      perRoundMultiplierByReferenceModelClass: {
+        local: 1,
+        subscription: 1,
+        cheap_cloud: 1,
+        premium_cloud: 2,
+      },
+    },
+    referenceModelClassPricing: {
+      local: 0,
+      subscription: 0,
+      cheap_cloud: 1,
+      premium_cloud: 4,
+    },
+  };
+}
+
 describe('RunChargeLedger', () => {
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
+    resetRunChargeRollingWindowForTests();
+    vi.useRealTimers();
   });
 
   it('persists charge events to append-only JSONL and reloads history after restart', () => {
@@ -110,6 +160,33 @@ describe('RunChargeLedger', () => {
     expect(data.events[0].event.spentAfter).toBe(12);
     expect(data.events[0].event.quota).toBe(10);
   });
+
+  it('hydrates rolling charge enforcement from persisted ledger events after restart', async () => {
+    const nowMs = 1_800_000_000_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    const ledgerPath = join(makeTempDir(), 'charge-ledger.jsonl');
+    const firstLedger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    firstLedger.recordChargeEvent(makeEvent({
+      timestampMs: nowMs - 60_000,
+      amount: 2,
+      quota: 3,
+      spentAfter: 2,
+      remainingAfter: 1,
+    }));
+    firstLedger.close();
+    resetRunChargeRollingWindowForTests();
+
+    const rebootedLedger = new RunChargeLedger(ledgerPath, null, { now: () => nowMs });
+    await expect(runWithChargeContext({
+      chargePolicy: makeChargePolicy(),
+      lane: 'interactive',
+      runId: 'root-after-restart',
+    }, async () => {
+      chargeSurface('externalModelConsult', { amount: 2 });
+    })).rejects.toThrow('rolling 24-hour budget');
+    rebootedLedger.close();
+  });
 });
 
 describe('RunChargeLedger calendar accrual', () => {
@@ -117,6 +194,8 @@ describe('RunChargeLedger calendar accrual', () => {
     for (const dir of tempDirs.splice(0)) {
       rmSync(dir, { recursive: true, force: true });
     }
+    resetRunChargeRollingWindowForTests();
+    vi.useRealTimers();
   });
 
   // 1_800_000_000_000 = 2027-01-15T08:53:20Z

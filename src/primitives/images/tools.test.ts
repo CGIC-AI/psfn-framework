@@ -1,11 +1,18 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { runWithVisionToolRequestContext } from './request-context.js';
 import { createImageAnalyzeTool, createImageCreateTool, createImageEditTool, createMediaTool, createSelfieTool } from './tools.js';
 import { IMAGE_ASPECT_RATIO_VALUES, type ImageToolResultDetails, type ImageVisionReviewer, type MediaToolResultDetails } from './types.js';
-import { runWithChargeContext } from '../../shared/telemetry/run-charge.js';
+import {
+  resetRunChargeRollingWindowForTests,
+  runWithChargeContext,
+} from '../../shared/telemetry/run-charge.js';
 import type { ChargePolicyConfig } from '../../system/config/charge-policy-config.js';
+
+afterEach(() => {
+  resetRunChargeRollingWindowForTests();
+});
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content

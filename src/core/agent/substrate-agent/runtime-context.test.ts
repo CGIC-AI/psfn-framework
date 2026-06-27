@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
@@ -14,6 +14,11 @@ import {
   resolveAuthorContext,
   resolveIdentityChannel,
 } from './runtime-context.js';
+import { resetRunChargeRollingWindowForTests } from '../../../shared/telemetry/run-charge.js';
+
+afterEach(() => {
+  resetRunChargeRollingWindowForTests();
+});
 
 function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessage {
   return {
@@ -497,13 +502,14 @@ describe('runtime subject identity', () => {
     });
 
     expect(runtimeContext).toContain('<runtime_charge_budget>');
-    expect(runtimeContext).toContain('current-turn spend 0; remaining 24 of 24 run-charge units');
-    expect(runtimeContext).toContain('This prompt quota is a fresh current-turn allowance');
+    expect(runtimeContext).toContain('current-run spend 0; remaining 24 of 24 run-charge units');
+    expect(runtimeContext).toContain('Shared rolling 24h lane spend: 0; remaining 24 of 24 run-charge units across all callers.');
+    expect(runtimeContext).toContain('shared rolling 24-hour deployment budget');
     expect(runtimeContext).toContain('visible in Garden Charge / Budget');
     expect(runtimeContext).toContain('paid image/video generation: 6');
     expect(runtimeContext).toContain('analysis_workbench extension pass after the first iteration: 4');
     expect(runtimeContext).toContain('analysis_workbench first pass: 0 charge units');
-    expect(runtimeContext).toContain('each extension pass after the first iteration costs 4 current-turn units');
+    expect(runtimeContext).toContain('each extension pass after the first iteration costs 4 run-charge units');
     expect(runtimeContext).toContain('Do not use it for routine orient actions, concern maintenance, scheduler work, tool discovery, schema confusion, simple lookup, or ordinary replies.');
     expect(runtimeContext).not.toContain('think');
   });

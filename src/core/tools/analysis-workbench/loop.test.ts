@@ -6,6 +6,7 @@ import { DEFAULT_REPL_CONFIG } from './types.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import { withChildProcessSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
+import { resetRunChargeRollingWindowForTests } from '../../../shared/telemetry/run-charge.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
 
@@ -19,6 +20,7 @@ afterEach(() => {
   } else {
     process.env.MODULE_REGISTRY_PATH = ORIGINAL_MODULE_REGISTRY_PATH;
   }
+  resetRunChargeRollingWindowForTests();
 });
 
 function mockResponse(content: string, inputTokens = 10, outputTokens = 20): LLMResponse {

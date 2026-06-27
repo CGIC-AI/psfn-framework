@@ -266,8 +266,11 @@ export interface RunChargeEvent extends Partial<CorrelationMetadata> {
   lane: ChargePolicyRuntimeLane;
   surface: ChargePolicySurface;
   amount: number;
+  /** Lane quota from charge-policy.json; enforced per run and over the shared rolling 24h window. */
   quota: number;
+  /** Rolling 24h lane spend after this event, shared across root runs and nested children. */
   spentAfter: number;
+  /** Rolling 24h lane quota remaining after this event. */
   remainingAfter: number;
   lineage: RunChargeLineage;
   details?: Record<string, unknown>;

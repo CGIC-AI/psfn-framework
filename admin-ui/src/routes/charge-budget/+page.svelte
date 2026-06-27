@@ -64,6 +64,7 @@
   let activeRun = $derived(charges?.activeRun ?? null);
   let recentRuns = $derived(charges?.recentRuns ?? []);
   let recentEvents = $derived(charges?.events ?? []);
+  let rollingWindow = $derived(historicalWindows.find(window => window.id === 'day')?.data ?? null);
   let recentModelUsageEvents = $derived(modelUsage?.recentEvents ?? []);
   let expensiveModelUsageEvents = $derived(modelUsage?.expensiveEvents ?? []);
 
@@ -176,9 +177,13 @@
     return labels.join(' | ');
   }
 
+  function rollingWindowLaneSpend(lane: ChargePolicyRuntimeLane): number {
+    return rollingWindow?.aggregates.byLane.find(item => item.key === lane)?.amount ?? 0;
+  }
+
   function quotaPercent(lane: ChargePolicyRuntimeLane): number {
-    const quota = activeRun?.lastQuotaByLane[lane] ?? policy?.runChargeQuotaByLane[lane] ?? 0;
-    const remaining = activeRun?.lastRemainingAfterByLane[lane] ?? quota;
+    const quota = policy?.runChargeQuotaByLane[lane] ?? 0;
+    const remaining = Math.max(0, quota - rollingWindowLaneSpend(lane));
     if (quota <= 0) return 0;
     return Math.max(0, Math.min(100, (remaining / quota) * 100));
   }
@@ -319,7 +324,7 @@
       <p class="text-xs uppercase tracking-[0.2em] text-shadow-500">Runtime & Tools</p>
       <h1 class="mt-1 text-2xl font-serif font-bold text-shadow-900">Charge / Budget</h1>
       <p class="mt-1 max-w-3xl text-sm text-shadow-600">
-        Live run-charge ledger, remaining lane quota, historical spend windows, and canonical charge-policy controls.
+        Live run-charge ledger, rolling 24h lane quota, historical spend windows, and canonical charge-policy controls.
       </p>
     </div>
     <button
@@ -405,14 +410,14 @@
     <section class="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]" aria-label="Charge quota and history">
       <div class="card-garden overflow-hidden">
         <div class="border-b border-bark-300 px-5 py-4">
-          <h2 class="font-serif text-lg font-semibold text-shadow-900">Remaining quota by lane</h2>
-          <p class="mt-1 text-sm text-shadow-600">Uses the active run's last observed quota state, falling back to charge-policy lane quotas.</p>
+          <h2 class="font-serif text-lg font-semibold text-shadow-900">Rolling 24h quota by lane</h2>
+          <p class="mt-1 text-sm text-shadow-600">Uses Last 24h ledger spend against charge-policy lane quotas; each run also uses the same quota as a runaway guard.</p>
         </div>
         <div class="divide-y divide-bark-200">
           {#each LANE_VALUES as lane}
-            {@const quota = activeRun?.lastQuotaByLane[lane] ?? policy?.runChargeQuotaByLane[lane] ?? 0}
-            {@const spent = activeRun?.lastSpentAfterByLane[lane] ?? 0}
-            {@const remaining = activeRun?.lastRemainingAfterByLane[lane] ?? quota}
+            {@const quota = policy?.runChargeQuotaByLane[lane] ?? 0}
+            {@const spent = rollingWindowLaneSpend(lane)}
+            {@const remaining = Math.max(0, quota - spent)}
             <div class="px-5 py-4">
               <div class="flex items-center justify-between gap-3">
                 <div>
@@ -608,7 +613,7 @@
         {:else}
           <div class="space-y-6 p-5">
             <div>
-              <h3 class="font-serif text-base font-semibold text-shadow-900">Run charge quota by lane</h3>
+              <h3 class="font-serif text-base font-semibold text-shadow-900">Run and rolling quota by lane</h3>
               <div class="mt-3 grid gap-3 md:grid-cols-5">
                 {#each LANE_VALUES as lane}
                   <label class="block rounded-xl border border-bark-300 bg-bark-50 p-3">

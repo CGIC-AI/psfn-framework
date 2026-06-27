@@ -68,7 +68,10 @@ import {
   SELF_IMAGE_TOOL_GUIDANCE_BODY_TEMPLATE,
   TRUST_GUIDANCE_BODY_TEMPLATE,
 } from './runtime-prompt-templates.js';
-import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
+import {
+  getRunChargeRollingWindowSnapshot,
+  getRunChargeSnapshot,
+} from '../../../shared/telemetry/run-charge.js';
 
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
@@ -179,12 +182,15 @@ function buildChargeBudgetContextBlock(input: {
   if (!chargePolicy) return '';
 
   const snapshot = getRunChargeSnapshot();
+  const rollingSnapshot = getRunChargeRollingWindowSnapshot();
   const lane = snapshot?.lane && isChargePolicyRuntimeLane(snapshot.lane)
     ? snapshot.lane
     : 'interactive';
   const quota = chargePolicy.runChargeQuotaByLane[lane];
   const spent = snapshot?.quotaSpentByLane[lane] ?? 0;
   const remaining = Math.max(0, quota - spent);
+  const rollingSpent = rollingSnapshot.spentByLane[lane] ?? 0;
+  const rollingRemaining = Math.max(0, quota - rollingSpent);
   const analysisWorkbenchExtensionCost = chargePolicy.surfaceCosts[ANALYSIS_WORKBENCH_EXTENSION_SURFACE];
   const costedSurfaces = CHARGE_POLICY_SURFACE_VALUES
     .map(surface => ({
@@ -196,11 +202,12 @@ function buildChargeBudgetContextBlock(input: {
 
   const lines = [
     '[Charge budget]',
-    `Active lane: ${lane}; current-turn spend ${formatChargeAmount(spent)}; remaining ${formatChargeAmount(remaining)} of ${formatChargeAmount(quota)} run-charge units before this turn's optional escalations.`,
-    'This prompt quota is a fresh current-turn allowance, not the long-running monthly/session budget. Historical spend is recorded in the charge ledger and visible in Garden Charge / Budget for planning and allocation.',
+    `Active lane: ${lane}; current-run spend ${formatChargeAmount(spent)}; remaining ${formatChargeAmount(remaining)} of ${formatChargeAmount(quota)} run-charge units before this turn's optional escalations.`,
+    `Shared rolling 24h lane spend: ${formatChargeAmount(rollingSpent)}; remaining ${formatChargeAmount(rollingRemaining)} of ${formatChargeAmount(quota)} run-charge units across all callers.`,
+    'The same lane quota is enforced as a per-run runaway guard and as a shared rolling 24-hour deployment budget. Historical spend is recorded in the charge ledger and visible in Garden Charge / Budget for planning and allocation.',
     'Costed escalations:',
     ...costedSurfaces.map(entry => `- ${CHARGE_SURFACE_PROMPT_LABELS[entry.surface]}: ${formatChargeAmount(entry.amount)}`),
-    `analysis_workbench first pass: 0 charge units but still high-latency; each extension pass after the first iteration costs ${formatChargeAmount(analysisWorkbenchExtensionCost)} current-turn units and still has a safety wall-time cap.`,
+    `analysis_workbench first pass: 0 charge units but still high-latency; each extension pass after the first iteration costs ${formatChargeAmount(analysisWorkbenchExtensionCost)} run-charge units and still has a safety wall-time cap.`,
     'Zero-cost default path: use direct semantic tools for routine reads, memory/session lookup, schedule work, repo inspection, and state changes.',
     'Use analysis_workbench only for bounded multi-stage analysis of large files, codebases, logs, transcripts, datasets, or evidence sets. Do not use it for routine orient actions, concern maintenance, scheduler work, tool discovery, schema confusion, simple lookup, or ordinary replies.',
   ];

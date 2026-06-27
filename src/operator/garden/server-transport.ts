@@ -201,20 +201,43 @@ export class AdminServerTransport {
   }
 
   private initializeGardenUi(): void {
-    // Resolve admin-ui/build relative to project root (3 dirs up from src/operator/garden/)
-    const projectRoot = resolve(import.meta.dirname, '..', '..', '..');
-    const buildDir = join(projectRoot, 'admin-ui', 'build');
-    if (!existsSync(buildDir)) {
-      this.log.warn('admin-ui/build not found; Garden UI route disabled. Run "cd admin-ui && npm run build" to enable.');
+    const buildDir = this.resolveGardenBuildDir();
+    if (!buildDir) {
       return;
     }
-    const indexPath = join(buildDir, 'index.html');
-    if (!existsSync(indexPath)) {
-      this.log.warn('admin-ui/build/index.html not found; Garden UI route disabled');
-      return;
-    }
-    this.gardenBuildDir = buildDir;
+
+    this.gardenBuildDir = realpathSync(buildDir);
     this.log.info('Garden SvelteKit UI enabled at /*');
+  }
+
+  private resolveGardenBuildDir(): string | null {
+    const candidateBuildDirs = [
+      join(process.cwd(), 'admin-ui', 'build'),
+      join(resolve(import.meta.dirname, '..', '..', '..'), 'admin-ui', 'build'),
+    ];
+    const checkedBuildDirs: string[] = [];
+
+    for (const candidate of candidateBuildDirs) {
+      const buildDir = resolve(candidate);
+      if (checkedBuildDirs.includes(buildDir)) continue;
+      checkedBuildDirs.push(buildDir);
+
+      if (!existsSync(buildDir)) continue;
+
+      const indexPath = join(buildDir, 'index.html');
+      if (existsSync(indexPath)) {
+        return buildDir;
+      }
+
+      this.log.warn('admin-ui/build/index.html not found; Garden UI route disabled', {
+        buildDir,
+      });
+    }
+
+    this.log.warn('admin-ui/build not found; Garden UI route disabled. Run "cd admin-ui && npm run build" to enable.', {
+      checkedBuildDirs,
+    });
+    return null;
   }
 
   private registerModuleAssetRoute(routePath: string, filePath: string, contentType?: string): string {

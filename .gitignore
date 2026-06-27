@@ -3,6 +3,8 @@ dist/
 data/
 data-phase45/
 psfn/
+!deploy/helm/psfn/
+!deploy/helm/psfn/**
 companion/
 .env
 proxy/.env

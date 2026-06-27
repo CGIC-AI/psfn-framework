@@ -1,24 +1,78 @@
-FROM node:22.22.2-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e
+FROM postgres:17.6-bookworm@sha256:f3bd19c606e442c3d7bdfa8002e03fe260a1023351e0ea4598032022b68dd6e3 AS postgres-client
+
+RUN set -eux; \
+    mkdir -p /opt/postgresql-client/bin /opt/postgresql-client/lib /opt/postgresql-client/wrappers; \
+    for binary in pg_dump pg_restore psql pg_isready; do \
+      cp "/usr/lib/postgresql/17/bin/${binary}" "/opt/postgresql-client/bin/${binary}"; \
+    done; \
+    ldd /opt/postgresql-client/bin/pg_dump \
+      /opt/postgresql-client/bin/pg_restore \
+      /opt/postgresql-client/bin/psql \
+      /opt/postgresql-client/bin/pg_isready \
+      | awk '$2 == "=>" && $3 ~ /^\// { print $3 }' \
+      | sort -u \
+      | while read -r library; do cp -L "${library}" /opt/postgresql-client/lib/; done; \
+    for binary in pg_dump pg_restore psql pg_isready; do \
+      printf '#!/bin/sh\nLD_LIBRARY_PATH=/opt/postgresql-client/lib exec /opt/postgresql-client/bin/%s "$@"\n' "${binary}" > "/opt/postgresql-client/wrappers/${binary}"; \
+      chmod 0755 "/opt/postgresql-client/wrappers/${binary}"; \
+    done
+
+FROM node:22.22.2-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS build
 
 WORKDIR /app
 
-# Install dependencies
 COPY package*.json ./
 COPY admin-ui/package*.json ./admin-ui/
-RUN npm ci --omit=dev
+RUN npm ci
 
-# Copy compiled output
-COPY dist/ ./dist/
+COPY tsconfig.json tsup.config.ts ./
+COPY src/ ./src/
+COPY satellites/ ./satellites/
+COPY admin-ui/ ./admin-ui/
 
-# Agent data directories
-RUN mkdir -p /app/data /app/workspace
+RUN npm run build
+RUN npm run garden:build
+
+FROM node:22.22.2-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS runtime
+
+WORKDIR /app
+
+COPY package*.json ./
+COPY admin-ui/package*.json ./admin-ui/
+RUN npm ci --omit=dev \
+    && rm -rf /root/.npm /app/admin-ui/node_modules
+
+COPY --from=postgres-client /opt/postgresql-client/ /opt/postgresql-client/
+COPY --from=build /app/dist/ ./dist/
+COPY --from=build /app/admin-ui/build/ ./admin-ui/build/
+COPY scripts/ops/ ./scripts/ops/
 
 # Non-root user for defense in depth
 RUN groupadd -r psfn && useradd -r -g psfn -d /app psfn
-RUN chown -R psfn:psfn /app
+RUN mkdir -p \
+      /app/backups \
+      /app/companion-data \
+      /app/data \
+      /app/logs \
+      /app/runtime-root \
+      /app/system-data \
+      /app/tmp \
+      /app/workspace \
+      /run/psfn \
+    && chown -R psfn:psfn \
+      /app/backups \
+      /app/companion-data \
+      /app/data \
+      /app/logs \
+      /app/runtime-root \
+      /app/system-data \
+      /app/tmp \
+      /app/workspace \
+      /run/psfn
 USER psfn
 
 ENV NODE_ENV=production
+ENV PATH=/opt/postgresql-client/wrappers:$PATH
 ENV GATEWAY_SOCKET=/run/psfn/gateway.sock
 ENV DATABASE_PATH=/app/data/psfn.db
 ENV DATA_DIR=/app/data

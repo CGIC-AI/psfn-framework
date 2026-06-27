@@ -74,7 +74,12 @@ USER psfn
 ENV NODE_ENV=production
 ENV PATH=/opt/postgresql-client/wrappers:$PATH
 ENV GATEWAY_SOCKET=/run/psfn/gateway.sock
-ENV DATABASE_PATH=/app/data/psfn.db
-ENV DATA_DIR=/app/data
+ENV PSFN_RUNTIME_ROOT=/app/runtime-root
+ENV SYSTEM_DATA_DIR=/app/system-data
+ENV COMPANION_DATA_DIR=/app/companion-data
+ENV WORKSPACE_PATH=/app/workspace
+ENV PSFN_LOGS_DIR=/app/logs
+ENV PSFN_TEMP_DIR=/app/tmp
+ENV BACKUP_ROOT_DIR=/app/backups
 
 CMD ["node", "dist/agent-main.js"]

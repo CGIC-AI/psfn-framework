@@ -332,15 +332,138 @@ function connectUnixSocket(socketPath, key) {
 
 }
 
-function loadWebSocketTlsOptions(tls) {
-  if (!tls || !tls.caPath || !tls.certPath || !tls.keyPath) {
-    throw new Error('Session integrity WSS endpoint requires TLS caPath, certPath, and keyPath');
+function requireNonEmptyString(value, fieldName) {
+  if (typeof value !== 'string') {
+    throw new Error(fieldName + ' is required');
   }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(fieldName + ' is required');
+  }
+  return trimmed;
+}
+
+function normalizeSpiffeUri(value, fieldName) {
+  const trimmed = requireNonEmptyString(value, fieldName);
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error(fieldName + ' must be a valid spiffe:// URI');
+  }
+  if (
+    parsed.protocol !== 'spiffe:'
+    || !parsed.hostname
+    || parsed.username
+    || parsed.password
+    || parsed.search
+    || parsed.hash
+  ) {
+    throw new Error(fieldName + ' must be a spiffe:// URI without credentials, query, or fragment');
+  }
+  return trimmed;
+}
+
+function splitSubjectAltName(subjectAltName) {
+  const entries = [];
+  let current = '';
+  let inQuotes = false;
+  let escaped = false;
+  for (const char of subjectAltName) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === '\\\\') {
+      current += char;
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      current += char;
+      inQuotes = !inQuotes;
+      continue;
+    }
+    if (char === ',' && !inQuotes) {
+      const trimmed = current.trim();
+      if (trimmed) entries.push(trimmed);
+      current = '';
+      continue;
+    }
+    current += char;
+  }
+  const trimmed = current.trim();
+  if (trimmed) entries.push(trimmed);
+  return entries;
+}
+
+function decodeSubjectAltNameValue(value) {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    try {
+      const decoded = JSON.parse(trimmed);
+      if (typeof decoded === 'string') {
+        return decoded;
+      }
+    } catch {
+      return trimmed;
+    }
+  }
+  return trimmed;
+}
+
+function isSpiffeUri(value) {
+  try {
+    normalizeSpiffeUri(value, 'certificate URI SAN');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function extractSpiffeUriSans(subjectAltName) {
+  if (!subjectAltName) return [];
+  const values = [];
+  for (const entry of splitSubjectAltName(subjectAltName)) {
+    const separator = entry.indexOf(':');
+    if (separator < 0) continue;
+    const kind = entry.slice(0, separator).trim().toLowerCase();
+    if (kind !== 'uri') continue;
+    const uri = decodeSubjectAltNameValue(entry.slice(separator + 1));
+    if (isSpiffeUri(uri)) {
+      values.push(uri);
+    }
+  }
+  return values;
+}
+
+function verifyPeerCertificateSpiffeUri(certificate, expectedPeerSpiffeUri) {
+  const expected = normalizeSpiffeUri(expectedPeerSpiffeUri, 'expected peer SPIFFE URI');
+  const spiffeUris = extractSpiffeUriSans(certificate && certificate.subjectaltname);
+  if (spiffeUris.length === 0) {
+    return 'peer TLS certificate is missing SPIFFE URI SAN';
+  }
+  if (!spiffeUris.includes(expected)) {
+    return 'peer TLS certificate SPIFFE URI SAN did not match expected peer identity';
+  }
+  return null;
+}
+
+function loadWebSocketTlsOptions(tls) {
+  if (!tls || !tls.caPath || !tls.certPath || !tls.keyPath || !tls.expectedPeerSpiffeUri) {
+    throw new Error('Session integrity WSS endpoint requires TLS caPath, certPath, keyPath, and expectedPeerSpiffeUri');
+  }
+  const expectedPeerSpiffeUri = normalizeSpiffeUri(tls.expectedPeerSpiffeUri, 'expected peer SPIFFE URI');
   return {
     ca: fs.readFileSync(tls.caPath),
     cert: fs.readFileSync(tls.certPath),
     key: fs.readFileSync(tls.keyPath),
     rejectUnauthorized: true,
+    checkServerIdentity: (_hostname, certificate) => {
+      const rejectionReason = verifyPeerCertificateSpiffeUri(certificate, expectedPeerSpiffeUri);
+      return rejectionReason ? new Error(rejectionReason) : undefined;
+    },
     ...(tls.serverName ? { servername: tls.serverName } : {}),
   };
 }

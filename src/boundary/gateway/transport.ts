@@ -11,6 +11,12 @@ import type { ServerOptions as HttpsServerOptions } from 'node:https';
 import type { TLSSocket } from 'node:tls';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createComponentLogger } from '../../shared/logger.js';
+import {
+  createSpiffeCheckServerIdentity,
+  normalizeSpiffeUri,
+  requireMtlsPeerFileConfig,
+  verifyPeerCertificateSpiffeUri,
+} from '../../shared/net/mtls.js';
 
 const log = createComponentLogger('Transport');
 const FRAME_PREVIEW_LIMIT = 200;
@@ -20,6 +26,7 @@ export const GATEWAY_RPC_ENDPOINT_ENV = 'GATEWAY_RPC_ENDPOINT';
 export const GATEWAY_RPC_TLS_CA_PATH_ENV = 'GATEWAY_RPC_TLS_CA_PATH';
 export const GATEWAY_RPC_TLS_CERT_PATH_ENV = 'GATEWAY_RPC_TLS_CERT_PATH';
 export const GATEWAY_RPC_TLS_KEY_PATH_ENV = 'GATEWAY_RPC_TLS_KEY_PATH';
+export const GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI_ENV = 'GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI';
 export const GATEWAY_RPC_TLS_SERVER_NAME_ENV = 'GATEWAY_RPC_TLS_SERVER_NAME';
 
 export interface TransportOptions {
@@ -43,6 +50,7 @@ export interface GatewayRpcTlsFileConfig {
   caPath: string;
   certPath: string;
   keyPath: string;
+  expectedPeerSpiffeUri: string;
   serverName?: string;
 }
 
@@ -68,6 +76,7 @@ export interface GatewayRpcEndpointEnv {
   GATEWAY_RPC_TLS_CA_PATH?: string;
   GATEWAY_RPC_TLS_CERT_PATH?: string;
   GATEWAY_RPC_TLS_KEY_PATH?: string;
+  GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI?: string;
   GATEWAY_RPC_TLS_SERVER_NAME?: string;
 }
 
@@ -409,8 +418,10 @@ export function createWebSocketRpcServer(
   onConnection: (conn: GatewayRpcConnection) => void,
 ): https.Server {
   const path = normalizeRpcWebSocketPath(options.path);
-  const tlsOptions = loadGatewayRpcServerTlsOptions(options.tls);
-  const authorizePeer = options.authorizePeer ?? authorizeMutualTlsPeer;
+  const tlsConfig = requireMtlsPeerFileConfig(options.tls, 'Gateway RPC WSS TLS');
+  const tlsOptions = loadGatewayRpcServerTlsOptions(tlsConfig);
+  const authorizePeer = options.authorizePeer
+    ?? ((input) => authorizeMutualTlsPeer(input, tlsConfig.expectedPeerSpiffeUri));
   const webSocketServer = new WebSocketServer({
     noServer: true,
     handleProtocols: (protocols) => (
@@ -666,10 +677,12 @@ function resolveGatewayRpcTlsConfigFromEnv(env: GatewayRpcEndpointEnv): GatewayR
   const caPath = parseOptionalEnvString(env.GATEWAY_RPC_TLS_CA_PATH);
   const certPath = parseOptionalEnvString(env.GATEWAY_RPC_TLS_CERT_PATH);
   const keyPath = parseOptionalEnvString(env.GATEWAY_RPC_TLS_KEY_PATH);
-  if (!caPath || !certPath || !keyPath) {
+  const expectedPeerSpiffeUri = parseOptionalEnvString(env.GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI);
+  if (!caPath || !certPath || !keyPath || !expectedPeerSpiffeUri) {
     throw new Error(
       `${GATEWAY_RPC_ENDPOINT_ENV}=wss requires ${GATEWAY_RPC_TLS_CA_PATH_ENV}, `
-        + `${GATEWAY_RPC_TLS_CERT_PATH_ENV}, and ${GATEWAY_RPC_TLS_KEY_PATH_ENV}.`,
+        + `${GATEWAY_RPC_TLS_CERT_PATH_ENV}, ${GATEWAY_RPC_TLS_KEY_PATH_ENV}, `
+        + `and ${GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI_ENV}.`,
     );
   }
   const serverName = parseOptionalEnvString(env.GATEWAY_RPC_TLS_SERVER_NAME);
@@ -677,15 +690,20 @@ function resolveGatewayRpcTlsConfigFromEnv(env: GatewayRpcEndpointEnv): GatewayR
     caPath,
     certPath,
     keyPath,
+    expectedPeerSpiffeUri: normalizeSpiffeUri(
+      expectedPeerSpiffeUri,
+      GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI_ENV,
+    ),
     ...(serverName ? { serverName } : {}),
   };
 }
 
 function loadGatewayRpcServerTlsOptions(config: GatewayRpcTlsFileConfig): HttpsServerOptions {
+  const tlsConfig = requireMtlsPeerFileConfig(config, 'Gateway RPC WSS TLS');
   return {
-    ca: readFileSync(config.caPath),
-    cert: readFileSync(config.certPath),
-    key: readFileSync(config.keyPath),
+    ca: readFileSync(tlsConfig.caPath),
+    cert: readFileSync(tlsConfig.certPath),
+    key: readFileSync(tlsConfig.keyPath),
     requestCert: true,
     rejectUnauthorized: true,
     minVersion: 'TLSv1.3',
@@ -693,28 +711,34 @@ function loadGatewayRpcServerTlsOptions(config: GatewayRpcTlsFileConfig): HttpsS
 }
 
 function loadGatewayRpcClientTlsOptions(config: GatewayRpcTlsFileConfig): WebSocket.ClientOptions {
+  const tlsConfig = requireMtlsPeerFileConfig(config, 'Gateway RPC WSS TLS');
   return {
-    ca: readFileSync(config.caPath),
-    cert: readFileSync(config.certPath),
-    key: readFileSync(config.keyPath),
+    ca: readFileSync(tlsConfig.caPath),
+    cert: readFileSync(tlsConfig.certPath),
+    key: readFileSync(tlsConfig.keyPath),
     rejectUnauthorized: true,
-    ...(config.serverName ? { servername: config.serverName } : {}),
+    checkServerIdentity: createSpiffeCheckServerIdentity(tlsConfig.expectedPeerSpiffeUri),
+    ...(tlsConfig.serverName ? { servername: tlsConfig.serverName } : {}),
   };
 }
 
-function authorizeMutualTlsPeer(input: { request: IncomingMessage }): string | null {
+function authorizeMutualTlsPeer(
+  input: { request: IncomingMessage },
+  expectedPeerSpiffeUri: string,
+): string | null {
   const req = input.request;
   const tlsSocket = req.socket as TLSSocket;
   if (!tlsSocket.authorized) {
-    return tlsSocket.authorizationError instanceof Error
-      ? tlsSocket.authorizationError.message
+    const authorizationError = tlsSocket.authorizationError;
+    return authorizationError instanceof Error
+      ? `peer TLS certificate is not authorized: ${authorizationError.message}`
       : 'peer TLS certificate is not authorized';
   }
   const peerCertificate = tlsSocket.getPeerCertificate();
   if (Object.keys(peerCertificate).length === 0) {
     return 'peer TLS certificate is missing';
   }
-  return null;
+  return verifyPeerCertificateSpiffeUri(peerCertificate, expectedPeerSpiffeUri);
 }
 
 function upgradeRequestIncludesProtocol(req: IncomingMessage): boolean {

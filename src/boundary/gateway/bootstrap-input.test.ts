@@ -188,6 +188,7 @@ describe('resolveGatewayBootstrapInput', () => {
         GATEWAY_RPC_TLS_CA_PATH: '/certs/ca.pem',
         GATEWAY_RPC_TLS_CERT_PATH: '/certs/gateway.pem',
         GATEWAY_RPC_TLS_KEY_PATH: '/certs/gateway-key.pem',
+        GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI: 'spiffe://cluster.local/psfn/agent/test-companion',
       },
       startupHydration: createStartupHydration(),
     });
@@ -202,6 +203,7 @@ describe('resolveGatewayBootstrapInput', () => {
         caPath: '/certs/ca.pem',
         certPath: '/certs/gateway.pem',
         keyPath: '/certs/gateway-key.pem',
+        expectedPeerSpiffeUri: 'spiffe://cluster.local/psfn/agent/test-companion',
       },
     });
   });

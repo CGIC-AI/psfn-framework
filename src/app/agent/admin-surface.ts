@@ -15,7 +15,10 @@ import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-r
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
 import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';
-import { resolveAdminTransportSocketPath } from '../../operator/garden/transport-paths.js';
+import {
+  resolveAdminTransportMode,
+  resolveAdminTransportServerEndpoint,
+} from '../../operator/garden/transport-paths.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -49,11 +52,12 @@ export interface StartOptionalAdminTransportServerOptions {
 export async function startOptionalAdminTransportServer(
   options: StartOptionalAdminTransportServerOptions,
 ): Promise<GardenAdminTransportServer | undefined> {
-  if (!options.adminPort) {
+  const env = options.env ?? process.env;
+  const transportMode = resolveAdminTransportMode(env);
+  if (!options.adminPort && transportMode === 'socket') {
     return undefined;
   }
 
-  const env = options.env ?? process.env;
   const modelDiscovery = new GatewayModelDiscovery(options.gateway);
   const adminConfig: SubstrateConfig = {
     ...options.config,
@@ -88,7 +92,7 @@ export async function startOptionalAdminTransportServer(
     toolHealthProvider: createGatewayAdminToolHealthProvider(options.gateway),
   });
   const adminTransport = new GardenAdminTransportServer({
-    socketPath: resolveAdminTransportSocketPath(env),
+    endpoint: resolveAdminTransportServerEndpoint(env),
     eventBus: options.eventBus,
     config: adminConfig,
     services,

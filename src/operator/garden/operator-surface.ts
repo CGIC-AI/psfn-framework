@@ -18,6 +18,7 @@ import {
   GardenAdminTransportProxy,
   type GardenAdminTransportHealth,
 } from './transport-client.js';
+import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -28,7 +29,7 @@ export interface GardenOperatorSurfaceConfig {
   token?: string;
   allowInsecureWithoutToken?: boolean;
   config: SubstrateConfig;
-  transportSocketPath: string;
+  transportEndpoint: GardenAdminTransportClientEndpoint;
 }
 
 interface GardenOperatorHealthPayload {
@@ -46,7 +47,7 @@ export class GardenOperatorSurface implements Lifecycle {
 
   constructor(private readonly config: GardenOperatorSurfaceConfig) {
     this.transport = new AdminServerTransport(log);
-    this.proxy = new GardenAdminTransportProxy(config.transportSocketPath);
+    this.proxy = new GardenAdminTransportProxy(config.transportEndpoint);
     this.server = createServer((req, res) => this.handleRequest(req, res));
     this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
   }
@@ -85,7 +86,7 @@ export class GardenOperatorSurface implements Lifecycle {
         log.info('Garden operator surface listening', {
           host: this.config.host ?? '127.0.0.1',
           port: this.config.port,
-          transportSocketPath: this.config.transportSocketPath,
+          transportMode: this.config.transportEndpoint.mode,
         });
         resolve();
       });

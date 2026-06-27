@@ -371,7 +371,7 @@ async function main(): Promise<void> {
   });
   if (adminTransport) {
     log.info('Garden admin transport listening', {
-      adminPort,
+      endpoint: adminTransport.describeEndpoint(),
     });
   }
 

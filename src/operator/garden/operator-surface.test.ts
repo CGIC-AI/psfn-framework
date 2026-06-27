@@ -11,6 +11,62 @@ import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import { GardenAdminTransportServer } from './transport-server.js';
 import { GardenOperatorSurface } from './operator-surface.js';
 import type { GardenAdminDomainServices } from './admin-contract.js';
+import type {
+  GardenAdminTransportClientEndpoint,
+  GardenAdminTransportServerEndpoint,
+  GardenAdminTransportSocketEndpoint,
+} from './transport-paths.js';
+
+const TEST_TLS_CERT = `-----BEGIN CERTIFICATE-----
+MIIDJTCCAg2gAwIBAgIUV4P61n3XtlIkzexqJrv+jmw/zYwwDQYJKoZIhvcNAQEL
+BQAwFDESMBAGA1UEAwwJMTI3LjAuMC4xMB4XDTI2MDYyNzIwMTUxMVoXDTM2MDYy
+NDIwMTUxMVowFDESMBAGA1UEAwwJMTI3LjAuMC4xMIIBIjANBgkqhkiG9w0BAQEF
+AAOCAQ8AMIIBCgKCAQEAzlCaIOWBPItCY+dDK50SmzNtSry94SW5LSBxUup968X9
+gkHpt1nLWXjtNgwtwF+THkhxyMZiYIM2TsQHpSPuZZMDx4y+IHb3003Qb9tIf3m9
+7zeBDJiVlrVs4yBfpNy4afgOM6EffQSNNtWQ9WMrKuT5EP6N/xDcfSowaHFynrju
+gfRQGHVR2pbWJLvjP41l+RGGBYbD/Xv5zF1MO6d3XY+MM1cfAoCXLKEksYKDRLjO
+mgNuvL6bYp1jqnrE6okbpbTWKGwoaevI08b6eQJVAvC1MwOyxjSCMp8/DjdIUY9Z
+x9W7hmUJd0eJ8opBboq5mxA3vwMdIIPemMEucm3UoQIDAQABo28wbTAdBgNVHQ4E
+FgQUKmsPeINxemVthC+5VR990KscVuIwHwYDVR0jBBgwFoAUKmsPeINxemVthC+5
+VR990KscVuIwDwYDVR0TAQH/BAUwAwEB/zAaBgNVHREEEzARhwR/AAABgglsb2Nh
+bGhvc3QwDQYJKoZIhvcNAQELBQADggEBACKfLwqWxVOZWDZJGZVqBRqj2Y/z+3AH
+a2hVwQdhYf8Q2L81Pt3adUFSql4X/mNaBBVeylRhco8/PGdB1gL5rvywJZAn++uh
+8Bmw7+WOINX07gpGFq2dqUBUHbJQkq0TywwyuoNJdg4IKsavONWU3nix/IIdA3E+
+3Ew1XUjBBUYr/ewzy/ItALX/j2EhlfrNtiA5Iwgq6MpbvlHXO7LY9dzvVxl2bIEJ
+lxL7AqS1q4m/HZ5CGobk9dT63T1miug7LE/gwMxuvBLJCWNs7xn17QA+D1DcFQCi
+VWehGKtekAcSEvEpDRuUANJAet498Zs/IGa06nPhc+jxy3ifjU71kXQ=
+-----END CERTIFICATE-----
+`;
+
+const TEST_TLS_KEY = `-----BEGIN PRIVATE KEY-----
+MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDOUJog5YE8i0Jj
+50MrnRKbM21KvL3hJbktIHFS6n3rxf2CQem3WctZeO02DC3AX5MeSHHIxmJggzZO
+xAelI+5lkwPHjL4gdvfTTdBv20h/eb3vN4EMmJWWtWzjIF+k3Lhp+A4zoR99BI02
+1ZD1Yysq5PkQ/o3/ENx9KjBocXKeuO6B9FAYdVHaltYku+M/jWX5EYYFhsP9e/nM
+XUw7p3ddj4wzVx8CgJcsoSSxgoNEuM6aA268vptinWOqesTqiRultNYobChp68jT
+xvp5AlUC8LUzA7LGNIIynz8ON0hRj1nH1buGZQl3R4nyikFuirmbEDe/Ax0gg96Y
+wS5ybdShAgMBAAECggEAErqZGJ4ST/9e/4K27kv2rHAhXm9+go8ncu6cWv0+gRtw
+GqsGdHE1AeJLEQ+kokS1g5eVUgya/E1CWNQi0t2i0/Bh9MjUrvhzIZN8IIC04XLu
+cxDZfjM7y8/xxTc4d4GHRtdl3U9QdHY9UNpXq8Rc3tVPvDiKMLrEc/hTJ1K6fP39
+gKUe6lFJE7Rzp5yXf3IraAcJViLdadngymJWbJIen/on5P8CcogAejT5qMQtehS7
+8tzEPIVbz8OlhzHk3WgikhfxcqkU21bxrKGiTKI4WIbR2e103YBqXbpyiBgv1lV3
+jaICOdqWzKD2HvrZbg/TkHg3n5iHqIHuumdz/mrroQKBgQD8Qx63XSRG1oVS44w2
+RrzaHGhF3PuTqhVyhdD1xi0V1VeMxkjLvbKe/2qI7ccRbOwMf3fDD9pOFG82To1z
+Xl5pFEwNUIsU9p0an70dcTSkD4r2XOKXAD+kfTtpL/bcZG1KPd7xOhR0F51kTsx5
+YC45J68VQqy4LTHNfb2+a5v8ZwKBgQDRXzHfNduC04Wp+ps7UEtunyqgUrRYSMJx
+D5CMb9UCFls7BBwea0ELtAkd/A0a8JrQPCK3Uvn5jKA8ukYSlObiF44KIwtS1HL0
+RkFyY/rqqjmUk9Xi9gmkEiCyiBMZfK63ZRAnw+c3xiTOx2LFCJHnXaTyL3NXtb90
+D2M0kJABtwKBgQCSb/Q4xVz1sjoa7/TI3S9r/emaBLoV8joZDQ1MXwp1Di+QjNpd
+S3WRTvvtGPriZrRwXN6M4Xr8sGgOwnLicfmkTiAH6qWSOcbhWbFSkhDY3Bzy/uCa
+f45yUjBW030eWz4GRvxQVELjUYIQZJ3WJ7stepfsY5QYJkQu4btv+s/GKQJ/GivM
+EBqrVa8bBiRNQxzGUQ2URnYQFPkDVR6c8vEHrzscLERXP3Yoq03V1emrubJZp63c
+qQ22MXtijDS8jZYPRjOrjZjT0Ya818vwYlwdAThF+kyAb95RVjDt5WMdABKVxFbd
+rhrOzCn4b+B8eCSaGFGcTKmhwVT2mYtS2z82wQKBgQD3W6oYbUXSisL4B9xYNACH
+QN/XgtMFSj7uVLhCHagscZjK9wgG35DIW0f4azpDCwz2avn+OUjasAERL2LWtIGm
+iPdmg4zsX9ZM7WfCz3pp8e05pQwAGyIDYU346C2v+AHsVAylNsObNsYvy+u0aR4Z
+Zfv7C28c5whNXHsQcMX2tQ==
+-----END PRIVATE KEY-----
+`;
 
 function requestPort(
   port: number,
@@ -85,6 +141,37 @@ function openWebSocket(
   });
 }
 
+function openWebSocketExpectStatus(
+  port: number,
+  path: string,
+  headers?: Record<string, string>,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}${path}`, { headers });
+    const cleanup = () => {
+      ws.removeAllListeners('open');
+      ws.removeAllListeners('error');
+      ws.removeAllListeners('unexpected-response');
+    };
+
+    ws.once('open', () => {
+      cleanup();
+      ws.close();
+      reject(new Error('Expected websocket handshake to fail'));
+    });
+    ws.once('unexpected-response', (_request, response) => {
+      cleanup();
+      const status = response.statusCode ?? 0;
+      response.resume();
+      resolve(status);
+    });
+    ws.once('error', (error) => {
+      cleanup();
+      reject(error);
+    });
+  });
+}
+
 function readWebSocketMessage<T>(ws: WebSocket): Promise<T> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Timed out waiting for websocket message')), 2000);
@@ -137,8 +224,20 @@ function listenSocketServer(socketPath: string, handler: http.RequestListener): 
   });
 }
 
+function listenPortServer(port: number, handler: http.RequestListener): Promise<http.Server> {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer(handler);
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve(server);
+    });
+  });
+}
+
 function closeServer(server: http.Server): Promise<void> {
   return new Promise((resolve, reject) => {
+    server.closeAllConnections();
     server.close((error) => {
       if (error) reject(error);
       else resolve();
@@ -151,18 +250,29 @@ interface Harness {
   socketPath: string;
   port: number;
   eventBus: EventBus;
+  services: GardenAdminDomainServices;
   transportServer: GardenAdminTransportServer;
   operatorSurface: GardenOperatorSurface;
   transportStopped: boolean;
 }
 
-async function createHarness(): Promise<Harness> {
-  const tempDir = mkdtempSync(join(tmpdir(), 'garden-operator-surface-test-'));
+interface OperatorOnlyHarness {
+  tempDir: string;
+  port: number;
+  operatorSurface: GardenOperatorSurface;
+}
+
+interface CreateHarnessOptions {
+  transportMode?: 'socket' | 'network-http' | 'network-https';
+  timeoutMs?: number;
+}
+
+function createTestConfig(tempDir: string): SubstrateConfig {
   const characterCardPath = join(tempDir, 'character.json');
   mkdirSync(join(tempDir, 'sessions'), { recursive: true });
   writeFileSync(characterCardPath, '{}\n', 'utf-8');
 
-  const config: SubstrateConfig = {
+  return {
     primaryModel: 'test-model',
     primaryProvider: 'test',
     extractionModel: 'test-extract',
@@ -200,9 +310,10 @@ async function createHarness(): Promise<Harness> {
       chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
     },
   };
+}
 
-  const eventBus = new EventBus();
-  const services = {
+function createTestServices(): GardenAdminDomainServices {
+  return {
     dashboard: {
       getDashboardData: vi.fn(async () => ({
         stats: {
@@ -326,10 +437,118 @@ async function createHarness(): Promise<Harness> {
       buildModelRoomBootstrap: vi.fn(async () => ({ defaultRoomId: 'garden-model-room' })),
     },
   } as GardenAdminDomainServices;
+}
+
+function createSocketEndpoint(socketPath: string, timeoutMs: number): GardenAdminTransportSocketEndpoint {
+  return {
+    mode: 'socket',
+    socketPath,
+    timeoutMs,
+  };
+}
+
+function createNetworkEndpoints(
+  tempDir: string,
+  port: number,
+  scheme: 'http' | 'https',
+  timeoutMs: number,
+): {
+  serverEndpoint: GardenAdminTransportServerEndpoint;
+  clientEndpoint: GardenAdminTransportClientEndpoint;
+} {
+  const httpUrl = new URL(`${scheme}://127.0.0.1:${port}`);
+  const wsUrl = new URL(`${scheme === 'https' ? 'wss' : 'ws'}://127.0.0.1:${port}`);
+  if (scheme === 'http') {
+    return {
+      serverEndpoint: {
+        mode: 'network',
+        host: '127.0.0.1',
+        port,
+        scheme,
+        timeoutMs,
+        peerAuthMode: 'none',
+      },
+      clientEndpoint: {
+        mode: 'network',
+        httpUrl,
+        wsUrl,
+        timeoutMs,
+        peerAuthMode: 'none',
+      },
+    };
+  }
+
+  const certPath = join(tempDir, 'admin-transport-cert.pem');
+  const keyPath = join(tempDir, 'admin-transport-key.pem');
+  writeFileSync(certPath, TEST_TLS_CERT, 'utf-8');
+  writeFileSync(keyPath, TEST_TLS_KEY, 'utf-8');
+  return {
+    serverEndpoint: {
+      mode: 'network',
+      host: '127.0.0.1',
+      port,
+      scheme,
+      timeoutMs,
+      peerAuthMode: 'none',
+      tls: { certPath, keyPath },
+    },
+    clientEndpoint: {
+      mode: 'network',
+      httpUrl,
+      wsUrl,
+      timeoutMs,
+      peerAuthMode: 'none',
+      tls: { caPath: certPath },
+    },
+  };
+}
+
+async function createOperatorOnlyHarness(
+  transportEndpoint: GardenAdminTransportClientEndpoint,
+): Promise<OperatorOnlyHarness> {
+  const tempDir = mkdtempSync(join(tmpdir(), 'garden-operator-surface-test-'));
+  const config = createTestConfig(tempDir);
+  const port = await allocatePort();
+  const operatorSurface = new GardenOperatorSurface({
+    port,
+    host: '127.0.0.1',
+    allowInsecureWithoutToken: true,
+    config,
+    transportEndpoint,
+  });
+  await operatorSurface.init();
+  await operatorSurface.start();
+
+  return {
+    tempDir,
+    port,
+    operatorSurface,
+  };
+}
+
+async function createHarness(options: CreateHarnessOptions = {}): Promise<Harness> {
+  const tempDir = mkdtempSync(join(tmpdir(), 'garden-operator-surface-test-'));
+  const config = createTestConfig(tempDir);
+  const eventBus = new EventBus();
+  const services = createTestServices();
+  const timeoutMs = options.timeoutMs ?? 15_000;
 
   const socketPath = join(tempDir, 'garden-admin.sock');
+  const transportMode = options.transportMode ?? 'socket';
+  const transportEndpoint = transportMode === 'socket'
+    ? {
+        serverEndpoint: createSocketEndpoint(socketPath, timeoutMs),
+        clientEndpoint: createSocketEndpoint(socketPath, timeoutMs),
+      }
+    : createNetworkEndpoints(
+        tempDir,
+        await allocatePort(),
+        transportMode === 'network-https' ? 'https' : 'http',
+        timeoutMs,
+      );
+
   const transportServer = new GardenAdminTransportServer({
-    socketPath,
+    endpoint: transportEndpoint.serverEndpoint,
     eventBus,
     config,
     services,
@@ -343,7 +562,7 @@ async function createHarness(): Promise<Harness> {
     host: '127.0.0.1',
     allowInsecureWithoutToken: true,
     config,
-    transportSocketPath: socketPath,
+    transportEndpoint: transportEndpoint.clientEndpoint,
   });
   await operatorSurface.init();
   await operatorSurface.start();
@@ -353,6 +572,7 @@ async function createHarness(): Promise<Harness> {
     socketPath,
     port,
     eventBus,
+    services,
     transportServer,
     operatorSurface,
     transportStopped: false,
@@ -364,6 +584,12 @@ async function destroyHarness(harness: Harness): Promise<void> {
   if (!harness.transportStopped) {
     await harness.transportServer.stop();
   }
+  rmSync(harness.tempDir, { recursive: true, force: true });
+  resetRuntimeTrustPolicy();
+}
+
+async function destroyOperatorOnlyHarness(harness: OperatorOnlyHarness): Promise<void> {
+  await harness.operatorSurface.stop();
   rmSync(harness.tempDir, { recursive: true, force: true });
   resetRuntimeTrustPolicy();
 }
@@ -394,6 +620,106 @@ describe('Garden operator surface', () => {
     expect(res.status).toBe(200);
     const payload = JSON.parse(res.body) as { stats: { sessionCount: number } };
     expect(payload.stats.sessionCount).toBeTypeOf('number');
+  });
+
+  it('proxies GET, POST, health, and telemetry over an explicit HTTPS/WSS admin transport', async () => {
+    let networkHarness: Harness | undefined;
+    try {
+      networkHarness = await createHarness({ transportMode: 'network-https' });
+
+      const healthRes = await requestPort(networkHarness.port, 'GET', '/health');
+      expect(healthRes.status).toBe(200);
+      expect(JSON.parse(healthRes.body)).toEqual({
+        status: 'ok',
+        uptime: expect.any(Number),
+        dependencies: {
+          adminTransport: {
+            mode: 'network',
+            reachable: true,
+            status: 'ok',
+            httpStatus: 200,
+          },
+        },
+      });
+
+      const getRes = await requestPort(networkHarness.port, 'GET', '/api/admin/dashboard');
+      expect(getRes.status).toBe(200);
+      expect(JSON.parse(getRes.body)).toMatchObject({ stats: { sessionCount: 1 } });
+
+      const providersJson = JSON.stringify({ schemaVersion: 1, providers: [] });
+      const postRes = await requestPort(
+        networkHarness.port,
+        'POST',
+        '/api/admin/settings/providers',
+        new URLSearchParams({ configJson: providersJson }).toString(),
+        { 'content-type': 'application/x-www-form-urlencoded' },
+      );
+      expect(postRes.status).toBe(200);
+      expect(postRes.body).toBe('providers.json saved');
+      expect(networkHarness.services.settings.saveSubConfigJson).toHaveBeenCalledWith(
+        'providers',
+        providersJson,
+      );
+
+      const ws = await openWebSocket(networkHarness.port, '/api/admin/events');
+      const messagePromise = readWebSocketMessage<{ type: string }>(ws);
+      await networkHarness.eventBus.emit('agent.turn.usage', {
+        message: {
+          id: 'msg-network-usage-1',
+          channelId: 'test-channel',
+          channelType: 'terminal',
+          authorId: 'user-1',
+          authorName: 'Tester',
+          content: 'hello',
+          timestamp: new Date(),
+        },
+        usage: {
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          llmCalls: 1,
+          toolCalls: 0,
+          contextUtilization: 5,
+          estimatedCostUsd: 0.001,
+        },
+      });
+
+      expect(await messagePromise).toMatchObject({ type: 'agent.turn.usage' });
+      ws.close();
+    } finally {
+      if (networkHarness) {
+        await destroyHarness(networkHarness);
+      }
+    }
+  });
+
+  it('proxies admin API routes over an explicit HTTP admin transport', async () => {
+    let networkHarness: Harness | undefined;
+    try {
+      networkHarness = await createHarness({ transportMode: 'network-http' });
+
+      const healthRes = await requestPort(networkHarness.port, 'GET', '/health');
+      expect(healthRes.status).toBe(200);
+      expect(JSON.parse(healthRes.body)).toMatchObject({
+        status: 'ok',
+        dependencies: {
+          adminTransport: {
+            mode: 'network',
+            reachable: true,
+            status: 'ok',
+            httpStatus: 200,
+          },
+        },
+      });
+
+      const res = await requestPort(networkHarness.port, 'GET', '/api/admin/dashboard');
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body)).toMatchObject({ stats: { sessionCount: 1 } });
+    } finally {
+      if (networkHarness) {
+        await destroyHarness(networkHarness);
+      }
+    }
   });
 
   it('proxies persisted model usage routes through the operator surface', async () => {
@@ -443,12 +769,138 @@ describe('Garden operator surface', () => {
       uptime: expect.any(Number),
       dependencies: {
         adminTransport: expect.objectContaining({
+          mode: 'socket',
           reachable: false,
-          status: 'error',
+          status: 'degraded',
           error: expect.any(String),
         }),
       },
     });
+  });
+
+  it('returns clear 404 or 502 responses for wrong paths and closed network upstreams', async () => {
+    const missingRes = await requestPort(harness.port, 'GET', '/api/admin/not-a-route');
+    expect(missingRes.status).toBe(404);
+    expect(missingRes.body).toContain('Not found: /api/admin/not-a-route');
+
+    await expect(openWebSocketExpectStatus(harness.port, '/api/admin/events/not-a-route'))
+      .resolves.toBe(404);
+
+    let networkHarness: Harness | undefined;
+    try {
+      networkHarness = await createHarness({ transportMode: 'network-http', timeoutMs: 250 });
+      await networkHarness.transportServer.stop();
+      networkHarness.transportStopped = true;
+
+      const proxyRes = await requestPort(networkHarness.port, 'GET', '/api/admin/dashboard');
+      expect(proxyRes.status).toBe(502);
+      expect(proxyRes.body).toContain('admin transport unavailable');
+
+      const healthRes = await requestPort(networkHarness.port, 'GET', '/health');
+      expect(healthRes.status).toBe(503);
+      expect(JSON.parse(healthRes.body)).toMatchObject({
+        status: 'degraded',
+        dependencies: {
+          adminTransport: {
+            mode: 'network',
+            reachable: false,
+            status: 'degraded',
+          },
+        },
+      });
+    } finally {
+      if (networkHarness) {
+        await destroyHarness(networkHarness);
+      }
+    }
+  });
+
+  it('reports degraded health and returns 502 when the upstream network endpoint serves the wrong path', async () => {
+    const upstreamPort = await allocatePort();
+    let wrongPathServer: http.Server | undefined;
+    let operatorHarness: OperatorOnlyHarness | undefined;
+    try {
+      wrongPathServer = await listenPortServer(upstreamPort, (_req, res) => {
+        res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+        res.end('wrong admin transport path');
+      });
+      wrongPathServer.on('upgrade', (_req, socket) => {
+        socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
+        socket.destroy();
+      });
+      operatorHarness = await createOperatorOnlyHarness({
+        mode: 'network',
+        httpUrl: new URL(`http://127.0.0.1:${upstreamPort}`),
+        wsUrl: new URL(`ws://127.0.0.1:${upstreamPort}`),
+        timeoutMs: 250,
+        peerAuthMode: 'none',
+      });
+
+      const healthRes = await requestPort(operatorHarness.port, 'GET', '/health');
+      expect(healthRes.status).toBe(503);
+      expect(JSON.parse(healthRes.body)).toMatchObject({
+        status: 'degraded',
+        dependencies: {
+          adminTransport: {
+            mode: 'network',
+            reachable: true,
+            status: 'degraded',
+            httpStatus: 404,
+          },
+        },
+      });
+
+      await expect(openWebSocketExpectStatus(operatorHarness.port, '/api/admin/events'))
+        .resolves.toBe(502);
+    } finally {
+      if (operatorHarness) {
+        await destroyOperatorOnlyHarness(operatorHarness);
+      }
+      if (wrongPathServer) {
+        await closeServer(wrongPathServer);
+      }
+    }
+  });
+
+  it('returns 502 and degraded health when the network upstream times out', async () => {
+    const slowPort = await allocatePort();
+    let slowServer: http.Server | undefined;
+    let operatorHarness: OperatorOnlyHarness | undefined;
+    try {
+      slowServer = await listenPortServer(slowPort, () => undefined);
+      operatorHarness = await createOperatorOnlyHarness({
+        mode: 'network',
+        httpUrl: new URL(`http://127.0.0.1:${slowPort}`),
+        wsUrl: new URL(`ws://127.0.0.1:${slowPort}`),
+        timeoutMs: 100,
+        peerAuthMode: 'none',
+      });
+
+      const proxyRes = await requestPort(operatorHarness.port, 'GET', '/api/admin/dashboard');
+      expect(proxyRes.status).toBe(502);
+      expect(proxyRes.body).toContain('admin transport timed out');
+
+      const healthRes = await requestPort(operatorHarness.port, 'GET', '/health');
+      expect(healthRes.status).toBe(503);
+      expect(JSON.parse(healthRes.body)).toMatchObject({
+        status: 'degraded',
+        dependencies: {
+          adminTransport: {
+            mode: 'network',
+            reachable: false,
+            status: 'degraded',
+            error: expect.stringContaining('timed out'),
+          },
+        },
+      });
+    } finally {
+      if (operatorHarness) {
+        await destroyOperatorOnlyHarness(operatorHarness);
+      }
+      if (slowServer) {
+        await closeServer(slowServer);
+      }
+    }
   });
 
   it('reports degraded health when the admin transport probe reports an error', async () => {
@@ -468,8 +920,9 @@ describe('Garden operator surface', () => {
         uptime: expect.any(Number),
         dependencies: {
           adminTransport: {
+            mode: 'socket',
             reachable: true,
-            status: 'error',
+            status: 'degraded',
             httpStatus: 503,
             error: 'transport unavailable',
           },
@@ -489,6 +942,7 @@ describe('Garden operator surface', () => {
       uptime: expect.any(Number),
       dependencies: {
         adminTransport: {
+          mode: 'socket',
           reachable: true,
           status: 'ok',
           httpStatus: 200,

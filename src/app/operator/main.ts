@@ -8,7 +8,7 @@ import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { isExplicitTrue } from '../startup/support/env-parsing.js';
 import {
-  resolveAdminTransportSocketPath,
+  resolveAdminTransportClientEndpoint,
 } from '../../operator/garden/transport-paths.js';
 import { GardenOperatorSurface } from '../../operator/garden/operator-surface.js';
 
@@ -30,7 +30,7 @@ async function main(): Promise<void> {
     token: process.env.ADMIN_TOKEN || undefined,
     allowInsecureWithoutToken: isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE),
     config,
-    transportSocketPath: resolveAdminTransportSocketPath(process.env),
+    transportEndpoint: resolveAdminTransportClientEndpoint(process.env),
   });
   await surface.init();
   await surface.start();

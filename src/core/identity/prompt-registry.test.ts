@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -85,6 +85,21 @@ describe('PromptRegistryStore', () => {
     expect(history[0].version).toBe(1);
     expect(history[0].previousText).toContain('Summarize this conversation excerpt');
     expect(history[0].newText).toContain('3 bullet points');
+  });
+
+  it('fails closed when prompt history cannot be written', () => {
+    mkdirSync(historyPath);
+
+    expect(() => {
+      store.update(
+        COMPACTION_SUMMARY_PROMPT_KEY,
+        'Summarize this excerpt in 3 bullet points and preserve action items.',
+        'admin',
+      );
+    }).toThrow('Failed to write prompt registry history');
+
+    expect(store.getByKey(COMPACTION_SUMMARY_PROMPT_KEY)?.version).toBe(1);
+    expect(store.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)).toBe(getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY));
   });
 
   it('rejects extraction prompt updates that remove required placeholders', () => {

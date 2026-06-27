@@ -323,7 +323,7 @@
   let backupMaxRotating = $state(9);
   let backupMaxWeekly = $state(2);
   let backupMaxMonthly = $state(1);
-  let backupMirrorDir = $state('/mnt/ai/psfn-bak');
+  let backupMirrorDir = $state('');
   let backupVerifyRestore = $state(true);
   let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
   let validationErrorsByField = $state<Record<string, string[]>>({});
@@ -1369,7 +1369,7 @@
       backupMaxRotating = Number(parsed.maxRotatingBackups ?? 9);
       backupMaxWeekly = Number(parsed.maxWeeklyBackups ?? 2);
       backupMaxMonthly = Number(parsed.maxMonthlyBackups ?? 1);
-      backupMirrorDir = String(parsed.mirrorDir ?? '/mnt/ai/psfn-bak');
+      backupMirrorDir = String(parsed.mirrorDir ?? '');
       backupVerifyRestore = parsed.verifyRestore !== false;
     } catch {
       // leave defaults
@@ -2469,7 +2469,7 @@
               </div>
               <div class="md:col-span-2">
                 <SettingFieldLabel label="Mirror directory" keys="mirrorDir" forId={settingControlId('mirrorDir')} class={LABEL_CLS} />
-                <input id={settingControlId('mirrorDir')} type="text" bind:value={backupMirrorDir} class={INPUT_CLS} placeholder="/mnt/ai/psfn-bak" />
+                <input id={settingControlId('mirrorDir')} type="text" bind:value={backupMirrorDir} class={INPUT_CLS} placeholder="/path/to/backup-mirror" />
                 <p class="text-sm text-shadow-500 mt-1">Secondary backup mirror path (leave blank to disable)</p>
               </div>
               <div class="md:col-span-2 flex items-center gap-3">

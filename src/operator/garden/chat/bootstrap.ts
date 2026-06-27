@@ -625,13 +625,6 @@ export class AdminChatBootstrapService {
       return selectedTarget.userId;
     }
 
-    const fallbackIdentity = selectedContact.linkedChannels.find(target => (
-      target.targetKind === 'identity' && typeof target.userId === 'string' && target.userId.trim().length > 0
-    ));
-    if (fallbackIdentity?.userId) {
-      return fallbackIdentity.userId;
-    }
-
     return selectedTarget.channelId ?? selectedContact.canonicalContactId;
   }
 
@@ -754,8 +747,9 @@ export class AdminChatBootstrapService {
     if (!path) return null;
     try {
       return loadCharacterCard(path);
-    } catch {
-      return null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throwBootstrapSetupError(`character card could not be loaded: ${message}`);
     }
   }
 

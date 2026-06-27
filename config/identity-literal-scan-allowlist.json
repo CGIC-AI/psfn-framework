@@ -61,12 +61,6 @@
       "pattern": "identity-proper-name"
     },
     {
-      "path": "admin-ui/src/routes/settings/+page.svelte",
-      "contains": "/mnt/ai/psfn-bak",
-      "reason": "Project-owned backup mirror placeholder path in settings UI.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "scripts/check-dependency-cycles.mjs",
       "contains": "PSFN-",
       "reason": "Project bead IDs use the PSFN prefix in remediation guidance.",
@@ -355,12 +349,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/persistence/backups/config.ts",
-      "contains": "/mnt/ai/psfn-bak",
-      "reason": "Backup config retains the project-owned default mirror directory.",
-      "pattern": "identity-legacy-slug"
-    },
-    {
       "path": "src/persistence/backups/service.ts",
       "contains": "psfn-backup-restore-",
       "reason": "Backup restore scratch directories use the project slug in their prefix.",
@@ -448,6 +436,138 @@
       "path": "src/test-support/postgres-test-harness.ts",
       "contains": "applicationName: 'psfn-memory-test-admin'",
       "reason": "PostgreSQL test harness uses project-scoped application_name labels for connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "admin-ui/src/routes/evals/emotion-sidecar/+page.svelte",
+      "contains": "PSFN",
+      "reason": "Observer eval UI compares the framework emotion-state schema against EmoSim by its established project label.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "admin-ui/src/routes/evals/emotion-sidecar/+page.svelte",
+      "contains": "psfn",
+      "reason": "Observer eval UI reads persisted metric fields named for the framework-side emotion snapshot.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "admin-ui/src/routes/model-room/+page.svelte",
+      "contains": "psfn:model-room:",
+      "reason": "Model Room localStorage keys keep the project namespace to preserve operator browser state.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/e2e/runtime-harness.ts",
+      "contains": "postgresql://psfn:psfn-local@127.0.0.1:5432/psfn_e2e",
+      "reason": "E2E runtime harness default database URL uses a project-scoped local test database identity.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/maintenance/sqlite-to-postgres-memory-migration.ts",
+      "contains": "applicationName: 'psfn-sqlite-memory-migration'",
+      "reason": "SQLite-to-Postgres migration uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/llm-cost-capture.ts",
+      "contains": "psfn.gatewayLlmCostCapture.originalFetch",
+      "reason": "Gateway fetch wrapper symbol uses a stable project-scoped namespace to avoid global symbol collisions.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server.ts",
+      "contains": "object: 'psfn.identity'",
+      "reason": "The identity endpoint response object keeps its existing project-scoped API schema marker.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server/request.ts",
+      "contains": "x-psfn-",
+      "reason": "API request sizing recognizes PSFN-scoped satellite transport headers.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/backplane/satellite-registry.ts",
+      "contains": "x-psfn-",
+      "reason": "Satellite registry preserves PSFN-scoped transport header names as part of the external protocol.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/backplane/satellite-registry.ts",
+      "contains": "X-PSFN-",
+      "reason": "Satellite registry errors name PSFN-scoped transport headers that callers must send.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/core/eval/observer-sidecar/config.ts",
+      "contains": "psfn: rawInput.emotion.snapshot",
+      "reason": "Observer sidecar config maps the framework-side emotion snapshot into the persisted comparison shape.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/eval/observer-sidecar/crosswalk.ts",
+      "contains": "PSFN",
+      "reason": "Observer sidecar crosswalk documents mappings between the framework emotion-state schema and EmoSim.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/core/eval/observer-sidecar/crosswalk.ts",
+      "contains": "psfn",
+      "reason": "Observer sidecar crosswalk persists framework-side metric fields under the established comparison schema.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/eval/observer-sidecar/emosim-adapter.ts",
+      "contains": "psfn.observer-sidecar.emosim-adapter.v1",
+      "reason": "Observer sidecar adapter version uses a stable project-scoped schema namespace.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/eval/observer-sidecar/metrics.ts",
+      "contains": "PSFN",
+      "reason": "Observer sidecar metric findings compare the framework emotion-state schema against EmoSim.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/core/eval/observer-sidecar/metrics.ts",
+      "contains": "psfn",
+      "reason": "Observer sidecar metrics persist framework-side comparison fields under the established schema.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/eval/observer-sidecar/persistence.ts",
+      "contains": "applicationName: 'psfn-observer-eval-sidecar'",
+      "reason": "Observer sidecar persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/eval/observer-sidecar/projection.ts",
+      "contains": "psfn.observer-sidecar.appraisal-projection.v1",
+      "reason": "Observer sidecar projection version uses a stable project-scoped schema namespace.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/memory/episodic/postgres-store.ts",
+      "contains": "applicationName: 'psfn-episodic-memory'",
+      "reason": "Episodic memory persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/internal-state-store.ts",
+      "contains": "applicationName: 'psfn-internal-state'",
+      "reason": "Internal-state persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/model-usage-store.ts",
+      "contains": "applicationName: 'psfn-model-usage'",
+      "reason": "Model-usage persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/parity-matrix.ts",
+      "contains": "scripts/system/install-psfn-service.sh",
+      "reason": "Postgres parity matrix references the existing repo-owned service installer path.",
       "pattern": "identity-legacy-slug"
     }
   ]

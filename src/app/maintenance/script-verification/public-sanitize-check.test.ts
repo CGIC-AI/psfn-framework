@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  parseTrackedFilesFromGitLsStage,
   scanPublicSanitizeTrackedFiles,
   shouldScanTextContent,
 } from '../../../../scripts/public-sanitize-check.mjs';
@@ -63,6 +64,20 @@ describe('public-sanitize check', () => {
 
     expect(result.violations).toHaveLength(0);
     expect(reads).toHaveLength(0);
+  });
+
+  it('drops gitlink submodule entries from tracked-file scanning', () => {
+    const trackedFiles = parseTrackedFilesFromGitLsStage([
+      '100644 1111111111111111111111111111111111111111 0\tsrc/app/main.ts',
+      '160000 2222222222222222222222222222222222222222 0\tvendor/emosim',
+      '100644 3333333333333333333333333333333333333333 0\tdocs/setup.md',
+      '',
+    ].join('\0'));
+
+    expect(trackedFiles).toEqual([
+      'src/app/main.ts',
+      'docs/setup.md',
+    ]);
   });
 
   it('fails closed when an in-scope file cannot be read', () => {

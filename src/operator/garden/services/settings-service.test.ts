@@ -618,7 +618,7 @@ describe('AdminSettingsDataService', () => {
       maxRotatingBackups: 12,
       maxWeeklyBackups: 4,
       maxMonthlyBackups: 3,
-      mirrorDir: '/mnt/ai/psfn-bak',
+      mirrorDir: '/srv/backup-mirror',
       verifyRestore: false,
     };
 

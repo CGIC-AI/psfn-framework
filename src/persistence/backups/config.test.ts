@@ -40,6 +40,21 @@ describe('resolveBackupRuntimeConfig', () => {
     })).toThrow('Missing required JSON owner file');
   });
 
+  it('fails closed when backup.json is malformed', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-backup-config-invalid-'));
+    const dataDir = join(root, 'system-data');
+    mkdirSync(dataDir, { recursive: true });
+    writeFileSync(join(dataDir, 'backup.json'), '{"broken":', 'utf8');
+    try {
+      expect(() => resolveBackupRuntimeConfig({
+        dataDir,
+        env: {},
+      })).toThrow('Invalid JSON owner file');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('uses owner-file values when env values are absent', () => {
     withBackupOwnerFile((dataDir) => {
       const config = resolveBackupRuntimeConfig({

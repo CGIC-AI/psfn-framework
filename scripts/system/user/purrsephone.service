@@ -1,5 +1,5 @@
 [Unit]
-Description=Purrsephone Substrate Runtime (yolo mode)
+Description=PSFN Substrate Runtime (user yolo mode)
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=300
@@ -7,21 +7,17 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-WorkingDirectory=/mnt/samesung/ai/psfn-live
-Environment=PATH=%h/.local/bin:%h/.nvm/versions/node/v22.21.1/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=PSFN_DOTENV_FILE=/mnt/samesung/ai/psfn-live/.env
-Environment=DATA_DIR=/mnt/samesung/ai/psfn-live/data
-Environment=DATABASE_PATH=/mnt/samesung/ai/psfn-live/data/purrsephone.db
-Environment=WORKSPACE_PATH=/mnt/samesung/ai/psfn-live/purrsephone
-Environment=CHARACTER_CARD_PATH=/mnt/samesung/ai/psfn-live/data/companion.json
-ExecStart=/bin/bash /mnt/samesung/ai/psfn-live/scripts/start-gateway-agent.sh --yolo
+WorkingDirectory=%h/psfn-framework
+Environment=PATH=%h/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PSFN_DOTENV_FILE=.env
+ExecStart=/bin/bash %h/psfn-framework/scripts/start-gateway-agent.sh --yolo
 Restart=on-failure
 RestartSec=10
 KillMode=mixed
 TimeoutStopSec=30
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=purrsephone
+SyslogIdentifier=psfn
 
 [Install]
 WantedBy=default.target

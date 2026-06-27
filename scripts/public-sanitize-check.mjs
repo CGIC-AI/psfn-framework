@@ -132,11 +132,29 @@ function collectTextViolations(file, text, rules) {
 }
 
 /** @returns {string[]} */
-function listTrackedFiles() {
-  return execSync('git ls-files -z', { encoding: 'utf8' })
+export function parseTrackedFilesFromGitLsStage(raw) {
+  return raw
     .split('\0')
     .filter(Boolean)
-    .map((file) => toPosixRelativePath(file));
+    .map((entry) => {
+      const pathSeparatorIndex = entry.indexOf('\t');
+      if (pathSeparatorIndex === -1) {
+        throw new Error(`Malformed git ls-files --stage entry: ${entry}`);
+      }
+      const [mode] = entry.slice(0, pathSeparatorIndex).split(' ');
+      if (mode === '160000') {
+        return null;
+      }
+      return toPosixRelativePath(entry.slice(pathSeparatorIndex + 1));
+    })
+    .filter((file) => file !== null);
+}
+
+/** @returns {string[]} */
+function listTrackedFiles() {
+  return parseTrackedFilesFromGitLsStage(
+    execSync('git ls-files --stage -z', { encoding: 'utf8' }),
+  );
 }
 
 /**

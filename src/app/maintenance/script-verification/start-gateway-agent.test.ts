@@ -157,24 +157,29 @@ describe('start-gateway-agent launcher supervision', () => {
     }
   });
 
-  it('keeps the live user unit pointed at the launcher instead of npm', () => {
+  it('keeps the user unit pointed at the launcher instead of npm', () => {
     const unit = readFileSync(join(repoRoot, 'scripts/system/user/purrsephone.service'), 'utf8');
-    expect(unit).toContain('ExecStart=/bin/bash /mnt/samesung/ai/psfn-live/scripts/start-gateway-agent.sh --yolo');
+    expect(unit).toContain('ExecStart=/bin/bash %h/psfn-framework/scripts/start-gateway-agent.sh --yolo');
     expect(unit).not.toContain('ExecStart=%h/.nvm/versions/node/v22.21.1/bin/npm run yolo');
   });
 
-  it('keeps user-local tools visible to the live user unit', () => {
+  it('keeps user-local tools visible without pinning a host-local Node install', () => {
     const unit = readFileSync(join(repoRoot, 'scripts/system/user/purrsephone.service'), 'utf8');
-    expect(unit).toMatch(/^Environment=PATH=%h\/\.local\/bin:%h\/\.nvm\/versions\/node\/v22\.21\.1\/bin:/m);
+    expect(unit).toMatch(/^Environment=PATH=%h\/\.local\/bin:/m);
+    expect(unit).not.toContain('%h/.nvm/versions/node/');
   });
 
-  it('points the live user unit at separate personal and runtime roots', () => {
+  it('keeps host-specific runtime paths out of the repo-owned user unit', () => {
     const unit = readFileSync(join(repoRoot, 'scripts/system/user/purrsephone.service'), 'utf8');
-    expect(unit).toContain('Environment=DATA_DIR=/mnt/samesung/ai/psfn-live/data');
-    expect(unit).toContain('Environment=WORKSPACE_PATH=/mnt/samesung/ai/psfn-live/purrsephone');
-    expect(unit).toContain('Environment=CHARACTER_CARD_PATH=/mnt/samesung/ai/psfn-live/data/companion.json');
-    expect(unit).not.toContain('Environment=WORKSPACE_PATH=/mnt/samesung/ai/psfn-live/workspace');
-    expect(unit).not.toContain('Environment=CHARACTER_CARD_PATH=/mnt/samesung/ai/psfn-live/purrsephone/purrsephone.json');
+    expect(unit).toContain('WorkingDirectory=%h/psfn-framework');
+    expect(unit).toContain('Environment=PSFN_DOTENV_FILE=.env');
+    expect(unit).not.toContain('/mnt/samesung/ai/psfn-live');
+    expect(unit).not.toContain('Environment=DATA_DIR=');
+    expect(unit).not.toContain('Environment=DATABASE_PATH=');
+    expect(unit).not.toContain('Environment=WORKSPACE_PATH=');
+    expect(unit).not.toContain('Environment=CHARACTER_CARD_PATH=');
+    expect(unit).not.toContain('purrsephone.db');
+    expect(unit).not.toContain('purrsephone.json');
   });
 
   it('does not ambiently opt the agent into outbound network access', () => {

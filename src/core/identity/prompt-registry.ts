@@ -385,6 +385,7 @@ export class PromptRegistryStore {
       appendJsonLine(this.historyPath, entry);
     } catch (err) {
       log.error('Failed to write prompt registry history', { error: String(err) });
+      throw new Error(`Failed to write prompt registry history: ${String(err)}`);
     }
   }
 

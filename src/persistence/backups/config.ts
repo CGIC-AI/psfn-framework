@@ -5,7 +5,6 @@ export const DEFAULT_BACKUP_INTERVAL_HOURS = 12;
 export const DEFAULT_BACKUP_ROTATING_COUNT = 9;
 export const DEFAULT_BACKUP_WEEKLY_COUNT = 2;
 export const DEFAULT_BACKUP_MONTHLY_COUNT = 1;
-export const DEFAULT_BACKUP_MIRROR_DIR = '/mnt/ai/psfn-bak';
 export const DEFAULT_BACKUP_VERIFY_RESTORE = true;
 
 /** @deprecated Use DEFAULT_BACKUP_INTERVAL_HOURS instead */

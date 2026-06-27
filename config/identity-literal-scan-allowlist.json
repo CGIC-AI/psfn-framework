@@ -103,6 +103,18 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "scripts/verify-helm-chart.mjs",
+      "contains": "psfn",
+      "reason": "Helm chart verification asserts project-owned Kubernetes resource names and labels.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-helm-chart.mjs",
+      "contains": "PSFN",
+      "reason": "Helm chart verification asserts PSFN-specific Kubernetes environment contracts.",
+      "pattern": "identity-proper-name"
+    },
+    {
       "path": "src/app/e2e/e2e-test.ts",
       "contains": "PSFN",
       "reason": "E2E banner text identifies the project under test.",
@@ -160,6 +172,18 @@
       "path": "src/boundary/gateway/bootstrap-input.ts",
       "contains": "/run/psfn/gateway.sock",
       "reason": "Gateway bootstrap keeps the project-owned default socket path.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/client.ts",
+      "contains": "psfn-rpc-v1",
+      "reason": "Gateway client preserves the project-scoped RPC websocket subprotocol.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/transport.ts",
+      "contains": "psfn-rpc-v1",
+      "reason": "Gateway transport preserves the project-scoped RPC websocket subprotocol.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -346,6 +370,12 @@
       "path": "src/faculties/memory/postgres-store.ts",
       "contains": "applicationName: 'psfn-memory'",
       "reason": "Memory persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/memory/migration.ts",
+      "contains": "psfn-memory-embedding-migration",
+      "reason": "Memory migration uses a project-scoped PostgreSQL application_name label.",
       "pattern": "identity-legacy-slug"
     },
     {
@@ -568,6 +598,18 @@
       "path": "src/persistence/postgres/parity-matrix.ts",
       "contains": "scripts/system/install-psfn-service.sh",
       "reason": "Postgres parity matrix references the existing repo-owned service installer path.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/parity-matrix.ts",
+      "contains": "psfn-framework-3c2.4",
+      "reason": "Postgres parity matrix references a project bead ID in migration evidence.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/cache/redis-cache.ts",
+      "contains": "psfn:app-cache:",
+      "reason": "Redis app cache uses a project-scoped key namespace prefix.",
       "pattern": "identity-legacy-slug"
     }
   ]

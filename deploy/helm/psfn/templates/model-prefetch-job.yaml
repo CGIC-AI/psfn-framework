@@ -1,0 +1,82 @@
+{{- if and .Values.modelPrefetch.enabled .Values.modelPrefetch.textEmotion.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "psfn.fullname" . }}-model-prefetch
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+    app.kubernetes.io/component: model-prefetch
+spec:
+  backoffLimit: {{ .Values.modelPrefetch.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.modelPrefetch.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.modelPrefetch.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "model-prefetch") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: text-emotion
+          image: {{ include "psfn.image" (dict "root" . "image" .Values.modelPrefetch.image) | quote }}
+          imagePullPolicy: {{ default .Values.psfnAppImage.pullPolicy .Values.modelPrefetch.image.pullPolicy }}
+          command:
+            - node
+            - --input-type=module
+            - -e
+            - |
+              import { mkdirSync } from 'node:fs';
+
+              const model = process.env.PSFN_PREFETCH_TEXT_EMOTION_MODEL?.trim();
+              if (!model) {
+                throw new Error('PSFN_PREFETCH_TEXT_EMOTION_MODEL is required');
+              }
+
+              const cacheDir = process.env.TRANSFORMERS_CACHE_DIR?.trim() || {{ .Values.runtime.modelCacheDir | quote }};
+              const dtype = process.env.PSFN_PREFETCH_TEXT_EMOTION_DTYPE?.trim() || {{ .Values.modelPrefetch.textEmotion.dtype | quote }};
+              mkdirSync(cacheDir, { recursive: true });
+
+              const { pipeline, env } = await import('@huggingface/transformers');
+              env.cacheDir = cacheDir;
+
+              const classifier = await pipeline('text-classification', model, { dtype });
+              await classifier('prefetch emotion model', { top_k: 28 });
+              console.log(`[model-prefetch] text emotion model prefetched: ${model}`);
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          env:
+            - name: NODE_ENV
+              value: {{ .Values.runtime.nodeEnv | quote }}
+            - name: HOME
+              value: /app
+            - name: TRANSFORMERS_CACHE_DIR
+              value: {{ .Values.runtime.modelCacheDir | quote }}
+            - name: TRANSFORMERS_CACHE
+              value: {{ .Values.runtime.modelCacheDir | quote }}
+            - name: PSFN_PREFETCH_TEXT_EMOTION_MODEL
+              value: {{ .Values.modelPrefetch.textEmotion.model | quote }}
+            - name: PSFN_PREFETCH_TEXT_EMOTION_DTYPE
+              value: {{ .Values.modelPrefetch.textEmotion.dtype | quote }}
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.hfToken }}
+                  optional: true
+          resources:
+            {{- toYaml .Values.modelPrefetch.resources | nindent 12 }}
+          volumeMounts:
+            - name: model-cache
+              mountPath: {{ .Values.runtime.modelCacheDir }}
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: {{ include "psfn.fullname" . }}-model-cache
+{{- end }}

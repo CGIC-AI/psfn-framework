@@ -57,6 +57,36 @@ function findDocument(rendered, name) {
   return documents(rendered).find(doc => doc.includes(`\n  name: ${name}\n`)) ?? '';
 }
 
+function findDocumentsByKind(rendered, kind) {
+  return documents(rendered).filter(doc => doc.includes(`kind: ${kind}\n`));
+}
+
+function assertDocumentDoesNotSelectComponent(document, component, label) {
+  assertNotIncludes(
+    document,
+    `app.kubernetes.io/component: ${component}`,
+    `${label} component selector`,
+  );
+  assertNotIncludes(
+    document,
+    `component: ${component}`,
+    `${label} short component selector`,
+  );
+}
+
+function assertServiceSelectorsDoNotSelectPrefetch(rendered, label) {
+  const serviceDocuments = findDocumentsByKind(rendered, 'Service');
+  for (const serviceDocument of serviceDocuments) {
+    assertIncludes(serviceDocument, 'selector:', `${label} Service selector`);
+    assertIncludes(
+      serviceDocument,
+      'app.kubernetes.io/component:',
+      `${label} Service component selector`,
+    );
+    assertDocumentDoesNotSelectComponent(serviceDocument, 'model-prefetch', label);
+  }
+}
+
 const rendered = render();
 
 for (const spiffe of [
@@ -88,6 +118,7 @@ assertIncludes(rendered, 'runAsGroup: 999', 'numeric non-root group');
 assertIncludes(rendered, 'CREATE EXTENSION IF NOT EXISTS vector;', 'pgvector init SQL');
 assertIncludes(rendered, 'kind: NetworkPolicy', 'network policy render');
 assertNotIncludes(rendered, 'ALLOW_AGENT_OUTBOUND_NETWORK', 'agent network isolation');
+assertNotIncludes(rendered, 'name: psfn-model-prefetch', 'disabled model prefetch Job');
 
 const appSecret = findDocument(rendered, 'psfn-app');
 assertIncludes(appSecret, 'kind: Secret', 'app secret kind');
@@ -159,6 +190,53 @@ assertIncludes(hubRendered, 'kind: NetworkPolicy\nmetadata:\n  name: psfn-satell
 assertIncludes(hubRendered, 'name: hub-ws', 'satellite hub websocket port');
 assertIncludes(hubRendered, 'name: GATEWAY_API_URL', 'satellite hub gateway API wiring');
 
+const prefetchRendered = render([
+  '--set',
+  'modelPrefetch.enabled=true',
+]);
+
+const prefetchJob = findDocument(prefetchRendered, 'psfn-model-prefetch');
+assertIncludes(prefetchJob, 'kind: Job', 'model prefetch Job kind');
+assertIncludes(prefetchJob, 'app.kubernetes.io/component: model-prefetch', 'model prefetch Job component label');
+assertIncludes(prefetchJob, 'image: "localhost/psfn-framework:0.1.0-kube"', 'model prefetch Job image');
+assertIncludes(prefetchJob, '- node', 'model prefetch Job command node');
+assertIncludes(prefetchJob, '- --input-type=module', 'model prefetch Job command module mode');
+assertIncludes(prefetchJob, "pipeline('text-classification', model, { dtype })", 'model prefetch text emotion command');
+assertIncludes(prefetchJob, 'name: TRANSFORMERS_CACHE_DIR', 'model prefetch cache env');
+assertIncludes(prefetchJob, 'value: "/app/models/transformers"', 'model prefetch cache env value');
+assertIncludes(prefetchJob, 'name: PSFN_PREFETCH_TEXT_EMOTION_MODEL', 'model prefetch model env');
+assertIncludes(prefetchJob, 'value: "SamLowe/roberta-base-go_emotions-onnx"', 'model prefetch model value');
+assertIncludes(prefetchJob, 'mountPath: /app/models/transformers', 'model prefetch model-cache mount');
+assertIncludes(prefetchJob, 'claimName: psfn-model-cache', 'model prefetch model-cache PVC');
+assertIncludes(prefetchJob, 'runAsUser: 999', 'model prefetch numeric user');
+assertIncludes(prefetchJob, 'runAsGroup: 999', 'model prefetch numeric group');
+assertIncludes(prefetchJob, 'fsGroup: 999', 'model prefetch fsGroup');
+for (const component of ['gateway', 'agent', 'garden', 'satellite-hub']) {
+  assertDocumentDoesNotSelectComponent(prefetchJob, component, 'model prefetch Job labels');
+}
+assertServiceSelectorsDoNotSelectPrefetch(prefetchRendered, 'prefetch render');
+
+const prefetchPolicy = findDocument(prefetchRendered, 'psfn-model-prefetch-egress');
+assertIncludes(prefetchPolicy, 'kind: NetworkPolicy', 'model prefetch NetworkPolicy kind');
+assertIncludes(prefetchPolicy, 'component: model-prefetch', 'model prefetch NetworkPolicy selector');
+assertIncludes(prefetchPolicy, 'port: 443', 'model prefetch external HTTPS egress');
+
+const prefetchAgentPolicy = findDocument(prefetchRendered, 'psfn-agent');
+assertNotIncludes(prefetchAgentPolicy, '0.0.0.0/0', 'agent policy broad egress with prefetch enabled');
+assertNotIncludes(prefetchAgentPolicy, 'component: model-prefetch', 'agent policy model prefetch label');
+
+const prefetchHubRendered = render([
+  '--set',
+  'modelPrefetch.enabled=true',
+  '--set',
+  'satelliteHub.enabled=true',
+  '--set',
+  'satelliteHub.image.repository=localhost/psfn-satellite-hub',
+  '--set',
+  'satelliteHub.image.tag=0.1.0-kube',
+]);
+assertServiceSelectorsDoNotSelectPrefetch(prefetchHubRendered, 'prefetch plus satellite hub render');
+
 assertRenderFails(
   ['--set', 'certificates.enabled=false'],
   'certificates.enabled must be true',
@@ -187,6 +265,10 @@ assertRenderFails(
 assertRenderFails(
   ['--set', 'satelliteHub.enabled=true'],
   'satelliteHub.image.repository is required when satelliteHub.enabled=true',
+);
+assertRenderFails(
+  ['--set', 'modelPrefetch.enabled=true', '--set', 'persistence.modelCache.enabled=false'],
+  'modelPrefetch.enabled=true requires persistence.modelCache.enabled=true',
 );
 
 console.log('Helm chart verification passed.');

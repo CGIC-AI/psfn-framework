@@ -178,7 +178,40 @@ model cache=/app/models/transformers
 ```
 
 The model-cache PVC is mounted at `/app/models/transformers`. Models download
-on first use unless you pre-populate the PVC or add a future prefetch job.
+on first use unless you pre-populate the PVC or enable `modelPrefetch`.
+
+## Model Prefetch
+
+`modelPrefetch.enabled=false` by default. Set it to `true` to render a
+one-shot `model-prefetch` Job that uses the PSFN app image, mounts the
+model-cache PVC at `/app/models/transformers`, and downloads the text-emotion
+model `SamLowe/roberta-base-go_emotions-onnx` before restricted-egress agent
+startup relies on the cache.
+
+Kubernetes NetworkPolicy cannot portably restrict egress by provider hostname.
+When NetworkPolicies are enabled, the chart gives only the `model-prefetch` Job
+DNS and external TCP/443 egress; the agent policy remains restricted and does
+not inherit that access. If your cluster requires domain allowlisting, allow the
+model provider endpoints, including Hugging Face model download endpoints, in
+the CNI, firewall, proxy, or egress gateway.
+
+Helm does not safely hard-order a normal Job before Deployment startup while
+also creating the PVC it mounts. For a first boot with restricted agent egress,
+install or upgrade once with the agent scaled down, wait for the Job, then
+enable the agent:
+
+```bash
+helm upgrade --install psfn deploy/helm/psfn \
+  --namespace psfn \
+  --create-namespace \
+  --set modelPrefetch.enabled=true \
+  --set workloads.agent.replicaCount=0
+kubectl -n psfn wait --for=condition=complete job/psfn-model-prefetch --timeout=30m
+helm upgrade --install psfn deploy/helm/psfn \
+  --namespace psfn \
+  --set modelPrefetch.enabled=false \
+  --set workloads.agent.replicaCount=1
+```
 
 API-backed embeddings remain supported by setting owner-file values and the
 `EMBEDDING_API_KEY` Secret. The chart does not add a new embedding subsystem.

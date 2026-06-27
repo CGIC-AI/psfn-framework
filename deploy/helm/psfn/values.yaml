@@ -238,6 +238,22 @@ embeddings:
       name: ""
       key: EMBEDDING_API_KEY
 
+modelPrefetch:
+  enabled: false
+  image:
+    repository: ""
+    tag: ""
+    digest: ""
+    pullPolicy: ""
+  backoffLimit: 2
+  activeDeadlineSeconds: 1800
+  ttlSecondsAfterFinished: 86400
+  resources: {}
+  textEmotion:
+    enabled: true
+    model: SamLowe/roberta-base-go_emotions-onnx
+    dtype: fp32
+
 certificates:
   enabled: true
   issuer:
@@ -269,6 +285,8 @@ networkPolicy:
     allowExternalEgress: true
   agent:
     allowExternalEgress: false
+  modelPrefetch:
+    allowExternalHttpsEgress: true
 
 ingress:
   enabled: true

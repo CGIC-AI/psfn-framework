@@ -19,3 +19,13 @@ Required cluster prerequisites:
 - cert-manager CRDs/controllers
 - StorageClass for PVCs
 - NetworkPolicy-capable CNI if policy enforcement is required
+{{- if .Values.modelPrefetch.enabled }}
+- model prefetch external egress to model provider endpoints; NetworkPolicy can
+  allow TCP/443 for the Job, but hostname allowlisting must be enforced by your
+  CNI, firewall, proxy, or egress gateway
+
+Model prefetch:
+- Job: {{ include "psfn.fullname" . }}-model-prefetch
+- Wait before starting restricted-egress agent pods:
+  kubectl -n {{ .Release.Namespace }} wait --for=condition=complete job/{{ include "psfn.fullname" . }}-model-prefetch --timeout=30m
+{{- end }}

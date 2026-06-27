@@ -185,6 +185,7 @@ async function main(): Promise<void> {
     intentionBehavioralHooks,
     memoryExtractor,
     observerEvalSidecar,
+    appCache,
   } = coreRuntime;
 
   sessionManager.characterName = card.data.name;
@@ -416,6 +417,7 @@ async function main(): Promise<void> {
     await controlPlane.stopFn();
   };
   shutdownTargets.adminTransport = adminTransport;
+  shutdownTargets.appCache = appCache;
   const gatewaySender = {
     send: (channelId: string, content: string) => gateway.discordSend(channelId, content),
   };

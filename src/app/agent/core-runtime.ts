@@ -60,6 +60,7 @@ import {
   isPromptGenerationFailureAlertConfigured,
 } from '../startup/support/operator-alerts.js';
 import { createAppCacheFromEnv } from '../../shared/cache/runtime.js';
+import type { AppCache } from '../../shared/cache/types.js';
 import type { NotificationPort } from '../../core/tools/ntfy.js';
 import { createObserverEvalSidecarRuntimeFromConfig } from '../../core/eval/observer-sidecar/config.js';
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
@@ -109,6 +110,7 @@ export interface AgentCoreRuntime {
   observerEvalSidecar: ObserverEvalSidecarRuntime;
   memoryExtractor: MemoryExtractor;
   imageVisionReviewer: DefaultImageVisionReviewer;
+  appCache: AppCache;
 }
 
 export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): Promise<AgentCoreRuntime> {
@@ -327,5 +329,6 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     observerEvalSidecar,
     memoryExtractor,
     imageVisionReviewer,
+    appCache,
   };
 }

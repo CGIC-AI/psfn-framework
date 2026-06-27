@@ -69,6 +69,29 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s:%s@%s" $image.repository $image.tag $image.digest -}}
 {{- end -}}
 
+{{- define "psfn.satelliteHubImage" -}}
+{{- $image := .Values.satelliteHub.image -}}
+{{- $repository := required "satelliteHub.image.repository is required when satelliteHub.enabled=true" $image.repository -}}
+{{- $tag := default "" $image.tag -}}
+{{- $digest := default "" $image.digest -}}
+{{- if and (not $tag) (not $digest) -}}
+{{- fail "satelliteHub.image.tag or satelliteHub.image.digest is required when satelliteHub.enabled=true" -}}
+{{- end -}}
+{{- if and $tag (or (eq $tag "latest") (eq $tag "main") (eq $tag "main-latest")) -}}
+{{- fail "satelliteHub.image.tag must be pinned and must not be latest/main/main-latest" -}}
+{{- end -}}
+{{- if and $digest (not (hasPrefix "sha256:" $digest)) -}}
+{{- fail "satelliteHub.image.digest must start with sha256:" -}}
+{{- end -}}
+{{- if and $tag $digest -}}
+{{- printf "%s:%s@%s" $repository $tag $digest -}}
+{{- else if $digest -}}
+{{- printf "%s@%s" $repository $digest -}}
+{{- else -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "psfn.appSecretName" -}}
 {{- default (printf "%s-app" (include "psfn.fullname" .)) .Values.secrets.existingSecret -}}
 {{- end -}}

@@ -414,30 +414,75 @@ spec:
         {{- include "psfn.componentLabels" (dict "root" . "component" "satellite-hub") | nindent 8 }}
     spec:
       serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       containers:
         - name: satellite-hub
-          image: {{ printf "%s:%s%s" (required "satelliteHub.image.repository is required when satelliteHub.enabled=true" .Values.satelliteHub.image.repository) (required "satelliteHub.image.tag is required when satelliteHub.enabled=true" .Values.satelliteHub.image.tag) (ternary (printf "@%s" .Values.satelliteHub.image.digest) "" (ne .Values.satelliteHub.image.digest "")) | quote }}
+          image: {{ include "psfn.satelliteHubImage" . | quote }}
           imagePullPolicy: {{ .Values.satelliteHub.image.pullPolicy }}
           {{- with .Values.satelliteHub.command }}
           command:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
           ports:
             - name: hub-ws
               containerPort: {{ .Values.ports.satelliteHub }}
           env:
-            - name: GATEWAY_API_URL
-              value: {{ printf "http://%s:%v" (include "psfn.gatewayApiServiceName" .) .Values.ports.gatewayApi | quote }}
-            - name: API_KEY
+            - name: AGENT_RUNTIME
+              value: {{ .Values.satelliteHub.agentRuntime | quote }}
+            - name: REALTIME_VOICE_BIND_HOST
+              value: "0.0.0.0"
+            - name: REALTIME_VOICE_PORT
+              value: {{ .Values.ports.satelliteHub | quote }}
+            - name: PSFN_API_BASE_URL
+              value: {{ printf "http://%s:%v/v1" (include "psfn.gatewayApiServiceName" .) .Values.ports.gatewayApi | quote }}
+            - name: PSFN_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.apiKey }}
-                  optional: true
+            - name: PSFN_MODEL
+              value: {{ .Values.satelliteHub.psfnModel | quote }}
+            - name: DEEPGRAM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.deepgramApiKey }}
+            - name: ELEVENLABS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.elevenLabsApiKey }}
+            - name: ELEVENLABS_VOICE_ID
+              value: {{ required "satelliteHub.elevenLabsVoiceId is required when satelliteHub.enabled=true" .Values.satelliteHub.elevenLabsVoiceId | quote }}
+            - name: ARTIFACT_ROOT
+              value: {{ .Values.satelliteHub.artifactRoot | quote }}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: hub-ws
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: hub-ws
+            initialDelaySeconds: 20
+            periodSeconds: 20
           resources:
             {{- toYaml .Values.satelliteHub.resources | nindent 12 }}
+          volumeMounts:
+            - name: runtime
+              mountPath: /app/.artifacts
+              subPath: satellite-hub-artifacts
+      volumes:
+        - name: runtime
+          persistentVolumeClaim:
+            claimName: {{ include "psfn.fullname" . }}-runtime
 {{- end }}

@@ -30,3 +30,10 @@
 {{- fail "modelPrefetch.textEmotion.dtype must be one of: auto, fp32, fp16, q8, int8, uint8, q4, bnb4, q4f16" -}}
 {{- end -}}
 {{- end -}}
+{{- if and .Values.satelliteHub.enabled (ne .Values.satelliteHub.agentRuntime "psfn") -}}
+{{- fail "satelliteHub.agentRuntime must be psfn so the hub uses the in-cluster Gateway Service" -}}
+{{- end -}}
+{{- if and .Values.satelliteHub.enabled .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
+{{- $_ := required "secrets.values.deepgramApiKey is required for satelliteHub.enabled=true when secrets.allowMissingRequired=false" .Values.secrets.values.deepgramApiKey -}}
+{{- $_ := required "secrets.values.elevenLabsApiKey is required for satelliteHub.enabled=true when secrets.allowMissingRequired=false" .Values.secrets.values.elevenLabsApiKey -}}
+{{- end -}}

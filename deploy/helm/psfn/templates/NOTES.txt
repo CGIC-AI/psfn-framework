@@ -5,6 +5,8 @@ Public/operator entrypoints:
 - Garden Service: {{ include "psfn.gardenServiceName" . }}:{{ .Values.ports.garden }}
 {{- if .Values.satelliteHub.enabled }}
 - Satellite Hub Service: {{ include "psfn.satelliteHubServiceName" . }}:{{ .Values.ports.satelliteHub }}
+  Websocket ingress path: {{ .Values.ingress.satelliteHub.path }}
+  Gateway API URL used by the hub: {{ printf "http://%s:%v/v1" (include "psfn.gatewayApiServiceName" .) .Values.ports.gatewayApi }}
 {{- end }}
 
 Internal mTLS transports:

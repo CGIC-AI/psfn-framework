@@ -287,6 +287,8 @@ networkPolicy:
     allowExternalEgress: false
   modelPrefetch:
     allowExternalHttpsEgress: true
+  satelliteHub:
+    allowExternalEgress: true
 
 ingress:
   enabled: true
@@ -311,13 +313,18 @@ ingress:
 satelliteHub:
   enabled: false
   image:
-    # External prerequisite until PSFN-Satellite-Hub grows its own pinned Dockerfile.
+    # Build from the external PSFN-Satellite-Hub source with
+    # docker/satellite-hub/Dockerfile, then set repository plus a pinned tag
+    # or digest. Floating tags such as latest/main are rejected when enabled.
     repository: ""
     tag: ""
     digest: ""
     pullPolicy: IfNotPresent
-    requiredOverride: true
-  command: []
+  command: ["node", "dist/ts/hub/main.js"]
+  agentRuntime: psfn
+  psfnModel: psfn
+  elevenLabsVoiceId: ""
+  artifactRoot: /app/.artifacts/runtime-ts
   resources: {}
 
 backupTools:

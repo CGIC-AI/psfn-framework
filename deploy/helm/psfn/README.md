@@ -49,6 +49,7 @@ Default values render with `CHANGE_ME_*` placeholders so `helm lint` and
 - provider/channel secrets as needed: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`,
   `LITELLM_API_KEY`, `DISCORD_TOKEN`, `DISCORD_BOT_ID`, `DEEPGRAM_API_KEY`,
   `ELEVENLABS_API_KEY`, `FAL_API_KEY`, `NTFY_TOKEN`
+- `satelliteHub.elevenLabsVoiceId` when `satelliteHub.enabled=true`
 - optional embedding/Hugging Face secrets: `EMBEDDING_API_KEY`, `HF_TOKEN`
 - bundled Postgres placeholder: `postgres.auth.password`
 - bundled Redis placeholder: `redis.auth.password`
@@ -218,10 +219,62 @@ API-backed embeddings remain supported by setting owner-file values and the
 
 ## Satellite Hub
 
-`satelliteHub.enabled` defaults to `false` because PSFN-Satellite-Hub does not
-yet have a pinned Dockerfile in this repo. If enabled, set
-`satelliteHub.image.repository`, `satelliteHub.image.tag`, and preferably
-`satelliteHub.image.digest`.
+`satelliteHub.enabled` defaults to `false`. The chart can run the external
+PSFN-Satellite-Hub TypeScript runtime when you build a pinned image from a clean
+hub source checkout. This repo owns the Kubernetes contract and a Dockerfile for
+that external source; the hub source tree still owns the hub application code.
+
+Build the image with the repo-owned Dockerfile and the hub checkout as the
+Docker context:
+
+```bash
+SATELLITE_HUB_SOURCE=/home/ada/psfn-framework/PSFN-Satellite-Hub \
+SATELLITE_HUB_SOURCE_REF=<full hub git commit> \
+SATELLITE_HUB_IMAGE_REPOSITORY=localhost/psfn-satellite-hub \
+SATELLITE_HUB_PLATFORM=linux/amd64 \
+docker/satellite-hub/build-image.sh
+```
+
+The script refuses dirty hub source by default, refuses floating tags, and tags
+the image as `0.1.0-kube-<source-sha12>` unless
+`SATELLITE_HUB_IMAGE_TAG` is set. The Dockerfile uses the pinned
+`node:22.22.2-slim` image digest and `npm ci` against the hub checkout's
+`package-lock.json`.
+
+For a local k3d/k3s shakedown, import the built image into the test cluster and
+enable the hub with a concrete tag or digest:
+
+```bash
+k3d image import localhost/psfn-satellite-hub:0.1.0-kube-<source-sha12> -c <cluster>
+
+helm upgrade --install psfn deploy/helm/psfn \
+  --namespace psfn-test \
+  --create-namespace \
+  --set satelliteHub.enabled=true \
+  --set satelliteHub.image.repository=localhost/psfn-satellite-hub \
+  --set satelliteHub.image.tag=0.1.0-kube-<source-sha12> \
+  --set satelliteHub.elevenLabsVoiceId=<elevenlabs-voice-id> \
+  --set-string secrets.values.deepgramApiKey=<deepgram-key> \
+  --set-string secrets.values.elevenLabsApiKey=<elevenlabs-key> \
+  --set ingress.satelliteHub.enabled=true
+
+kubectl -n psfn-test rollout status deploy/psfn-satellite-hub
+kubectl -n psfn-test port-forward svc/psfn-satellite-hub 8787:8787
+curl http://127.0.0.1:8787/
+```
+
+The rendered hub container runs `node dist/ts/hub/main.js`, listens on
+`REALTIME_VOICE_PORT=<ports.satelliteHub>`, and points
+`PSFN_API_BASE_URL` at the in-cluster Gateway Service:
+
+```text
+http://<release>-psfn-gateway:<ports.gatewayApi>/v1
+```
+
+The hub NetworkPolicy allows ingress only from the configured ingress
+controller selector, egress to kube-dns, egress to the Gateway API Service, and
+optional external HTTPS egress for Deepgram/ElevenLabs provider calls. The agent
+NetworkPolicy remains separate and still has no broad outbound egress.
 
 ## Validation
 

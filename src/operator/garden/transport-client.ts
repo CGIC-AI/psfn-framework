@@ -13,9 +13,14 @@ import {
 import { createConnection } from 'node:net';
 import type { ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
+import type { ConnectionOptions } from 'node:tls';
 import { WebSocket, WebSocketServer, type ClientOptions } from 'ws';
 import { createComponentLogger } from '../../shared/logger.js';
 import { sendText } from '../../channels/backplane/http/primitives.js';
+import {
+  createSpiffeCheckServerIdentity,
+  requireMtlsPeerFileConfig,
+} from '../../shared/net/mtls.js';
 import type {
   GardenAdminTransportClientEndpoint,
   GardenAdminTransportNetworkClientEndpoint,
@@ -39,7 +44,11 @@ interface TransportProbePayload {
 }
 
 interface TlsRequestOptions {
-  ca?: Buffer;
+  ca: Buffer;
+  cert: Buffer;
+  key: Buffer;
+  rejectUnauthorized: true;
+  checkServerIdentity: NonNullable<ConnectionOptions['checkServerIdentity']>;
 }
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
@@ -112,12 +121,25 @@ function buildNetworkRequestOptions(
 function buildTlsRequestOptions(
   endpoint: GardenAdminTransportClientEndpoint,
 ): TlsRequestOptions | undefined {
-  if (endpoint.mode !== 'network' || !endpoint.tls?.caPath) {
+  if (endpoint.mode !== 'network') {
     return undefined;
   }
+  const peerAuthMode: string = endpoint.peerAuthMode;
+  if (
+    peerAuthMode !== 'mtls-spiffe'
+    || endpoint.httpUrl.protocol !== 'https:'
+    || endpoint.wsUrl.protocol !== 'wss:'
+  ) {
+    throw new Error('Garden admin network transport requires HTTPS/WSS mTLS with SPIFFE peer authorization');
+  }
 
+  const tlsConfig = requireMtlsPeerFileConfig(endpoint.tls, 'Garden admin transport client TLS');
   return {
-    ca: readFileSync(endpoint.tls.caPath),
+    ca: readFileSync(tlsConfig.caPath),
+    cert: readFileSync(tlsConfig.certPath),
+    key: readFileSync(tlsConfig.keyPath),
+    rejectUnauthorized: true,
+    checkServerIdentity: createSpiffeCheckServerIdentity(tlsConfig.expectedPeerSpiffeUri),
   };
 }
 

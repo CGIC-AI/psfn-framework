@@ -1,12 +1,17 @@
 import { dirname, join } from 'node:path';
 import { DEFAULT_GATEWAY_SOCKET_PATH } from '../../system/security/policy-constants.js';
 import { parseOptionalPositiveIntEnv, parseOptionalStringEnv } from '../../shared/utils/env.js';
+import { normalizeSpiffeUri } from '../../shared/net/mtls.js';
 
 export const DEFAULT_ADMIN_TRANSPORT_SOCKET_BASENAME = 'garden-admin.sock';
 export const DEFAULT_ADMIN_TRANSPORT_TIMEOUT_MS = 15_000;
+export const ADMIN_TRANSPORT_TLS_CA_PATH_ENV = 'ADMIN_TRANSPORT_TLS_CA_PATH';
+export const ADMIN_TRANSPORT_TLS_CERT_PATH_ENV = 'ADMIN_TRANSPORT_TLS_CERT_PATH';
+export const ADMIN_TRANSPORT_TLS_KEY_PATH_ENV = 'ADMIN_TRANSPORT_TLS_KEY_PATH';
+export const ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI_ENV = 'ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI';
 
 export type GardenAdminTransportMode = 'socket' | 'network';
-export type GardenAdminTransportPeerAuthMode = 'none';
+export type GardenAdminTransportPeerAuthMode = 'mtls-spiffe';
 
 export interface GardenAdminTransportSocketEndpoint {
   mode: 'socket';
@@ -14,8 +19,11 @@ export interface GardenAdminTransportSocketEndpoint {
   timeoutMs: number;
 }
 
-export interface GardenAdminTransportTlsClientConfig {
-  caPath?: string;
+export interface GardenAdminTransportTlsConfig {
+  caPath: string;
+  certPath: string;
+  keyPath: string;
+  expectedPeerSpiffeUri: string;
 }
 
 export interface GardenAdminTransportNetworkClientEndpoint {
@@ -24,26 +32,23 @@ export interface GardenAdminTransportNetworkClientEndpoint {
   wsUrl: URL;
   timeoutMs: number;
   peerAuthMode: GardenAdminTransportPeerAuthMode;
-  tls?: GardenAdminTransportTlsClientConfig;
+  tls: GardenAdminTransportTlsConfig;
 }
 
 export type GardenAdminTransportClientEndpoint =
   | GardenAdminTransportSocketEndpoint
   | GardenAdminTransportNetworkClientEndpoint;
 
-export interface GardenAdminTransportTlsServerConfig {
-  certPath: string;
-  keyPath: string;
-}
+export type GardenAdminTransportTlsServerConfig = GardenAdminTransportTlsConfig;
 
 export interface GardenAdminTransportNetworkServerEndpoint {
   mode: 'network';
   host: string;
   port: number;
-  scheme: 'http' | 'https';
+  scheme: 'https';
   timeoutMs: number;
   peerAuthMode: GardenAdminTransportPeerAuthMode;
-  tls?: GardenAdminTransportTlsServerConfig;
+  tls: GardenAdminTransportTlsServerConfig;
 }
 
 export type GardenAdminTransportServerEndpoint =
@@ -93,14 +98,13 @@ export function resolveAdminTransportClientEndpoint(
     parseOptionalStringEnv(env.ADMIN_TRANSPORT_URL),
     'ADMIN_TRANSPORT_URL',
   );
-  const caPath = parseOptionalStringEnv(env.ADMIN_TRANSPORT_TLS_CA_PATH);
   return {
     mode: 'network',
     httpUrl,
     wsUrl: toAdminTransportWebSocketUrl(httpUrl),
     timeoutMs: resolveAdminTransportTimeoutMs(env),
     peerAuthMode: resolveAdminTransportPeerAuthMode(env),
-    ...(caPath ? { tls: { caPath } } : {}),
+    tls: resolveAdminTransportTlsConfig(env),
   };
 }
 
@@ -127,22 +131,14 @@ export function resolveAdminTransportServerEndpoint(
     throw new Error('ADMIN_TRANSPORT_LISTEN_PORT is required when ADMIN_TRANSPORT_MODE=network');
   }
 
-  const certPath = parseOptionalStringEnv(env.ADMIN_TRANSPORT_TLS_CERT_PATH);
-  const keyPath = parseOptionalStringEnv(env.ADMIN_TRANSPORT_TLS_KEY_PATH);
-  if ((certPath && !keyPath) || (!certPath && keyPath)) {
-    throw new Error(
-      'ADMIN_TRANSPORT_TLS_CERT_PATH and ADMIN_TRANSPORT_TLS_KEY_PATH must be set together',
-    );
-  }
-
   return {
     mode: 'network',
     host,
     port,
-    scheme: certPath && keyPath ? 'https' : 'http',
+    scheme: 'https',
     timeoutMs: resolveAdminTransportTimeoutMs(env),
     peerAuthMode: resolveAdminTransportPeerAuthMode(env),
-    ...(certPath && keyPath ? { tls: { certPath, keyPath } } : {}),
+    tls: resolveAdminTransportTlsConfig(env),
   };
 }
 
@@ -153,11 +149,14 @@ function resolveAdminTransportTimeoutMs(env: NodeJS.ProcessEnv): number {
 
 function rejectNetworkOnlyClientEnv(env: NodeJS.ProcessEnv): void {
   const url = parseOptionalStringEnv(env.ADMIN_TRANSPORT_URL);
-  const caPath = parseOptionalStringEnv(env.ADMIN_TRANSPORT_TLS_CA_PATH);
+  const caPath = parseOptionalStringEnv(env[ADMIN_TRANSPORT_TLS_CA_PATH_ENV]);
+  const certPath = parseOptionalStringEnv(env[ADMIN_TRANSPORT_TLS_CERT_PATH_ENV]);
+  const keyPath = parseOptionalStringEnv(env[ADMIN_TRANSPORT_TLS_KEY_PATH_ENV]);
+  const expectedPeerSpiffeUri = parseOptionalStringEnv(env[ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI_ENV]);
   const peerAuthMode = parseOptionalStringEnv(env.ADMIN_TRANSPORT_PEER_AUTH_MODE);
-  if (url || caPath || peerAuthMode) {
+  if (url || caPath || certPath || keyPath || expectedPeerSpiffeUri || peerAuthMode) {
     throw new Error(
-      'ADMIN_TRANSPORT_URL, ADMIN_TRANSPORT_TLS_CA_PATH, and ADMIN_TRANSPORT_PEER_AUTH_MODE require ADMIN_TRANSPORT_MODE=network',
+      'ADMIN_TRANSPORT_URL, ADMIN_TRANSPORT_TLS_*, and ADMIN_TRANSPORT_PEER_AUTH_MODE require ADMIN_TRANSPORT_MODE=network',
     );
   }
 }
@@ -165,10 +164,12 @@ function rejectNetworkOnlyClientEnv(env: NodeJS.ProcessEnv): void {
 function rejectNetworkOnlyServerEnv(env: NodeJS.ProcessEnv): void {
   const listenHost = parseOptionalStringEnv(env.ADMIN_TRANSPORT_LISTEN_HOST);
   const listenPort = parseOptionalStringEnv(env.ADMIN_TRANSPORT_LISTEN_PORT);
-  const certPath = parseOptionalStringEnv(env.ADMIN_TRANSPORT_TLS_CERT_PATH);
-  const keyPath = parseOptionalStringEnv(env.ADMIN_TRANSPORT_TLS_KEY_PATH);
+  const caPath = parseOptionalStringEnv(env[ADMIN_TRANSPORT_TLS_CA_PATH_ENV]);
+  const certPath = parseOptionalStringEnv(env[ADMIN_TRANSPORT_TLS_CERT_PATH_ENV]);
+  const keyPath = parseOptionalStringEnv(env[ADMIN_TRANSPORT_TLS_KEY_PATH_ENV]);
+  const expectedPeerSpiffeUri = parseOptionalStringEnv(env[ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI_ENV]);
   const peerAuthMode = parseOptionalStringEnv(env.ADMIN_TRANSPORT_PEER_AUTH_MODE);
-  if (listenHost || listenPort || certPath || keyPath || peerAuthMode) {
+  if (listenHost || listenPort || caPath || certPath || keyPath || expectedPeerSpiffeUri || peerAuthMode) {
     throw new Error(
       'ADMIN_TRANSPORT_LISTEN_*, ADMIN_TRANSPORT_TLS_*, and ADMIN_TRANSPORT_PEER_AUTH_MODE require ADMIN_TRANSPORT_MODE=network',
     );
@@ -184,11 +185,11 @@ function parseAdminTransportHttpUrl(rawUrl: string | undefined, envName: string)
   try {
     parsed = new URL(rawUrl);
   } catch {
-    throw new Error(`${envName} must be a valid http or https URL`);
+    throw new Error(`${envName} must be a valid https URL`);
   }
 
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`${envName} must use http or https`);
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`${envName} must use https`);
   }
   if (!parsed.hostname) {
     throw new Error(`${envName} must include a host`);
@@ -210,10 +211,36 @@ function resolveAdminTransportPeerAuthMode(
   env: NodeJS.ProcessEnv,
 ): GardenAdminTransportPeerAuthMode {
   const rawMode = parseOptionalStringEnv(env.ADMIN_TRANSPORT_PEER_AUTH_MODE);
-  if (!rawMode) return 'none';
+  if (!rawMode) return 'mtls-spiffe';
   const normalized = rawMode.toLowerCase();
-  if (normalized === 'none') return 'none';
+  if (normalized === 'mtls-spiffe') return 'mtls-spiffe';
   throw new Error(
-    `Unsupported ADMIN_TRANSPORT_PEER_AUTH_MODE=${rawMode}; psfn-framework-z49b owns mTLS/SPIFFE peer authorization`,
+    `Unsupported ADMIN_TRANSPORT_PEER_AUTH_MODE=${rawMode}; expected mtls-spiffe`,
   );
+}
+
+function resolveAdminTransportTlsConfig(
+  env: NodeJS.ProcessEnv,
+): GardenAdminTransportTlsConfig {
+  const caPath = parseOptionalStringEnv(env[ADMIN_TRANSPORT_TLS_CA_PATH_ENV]);
+  const certPath = parseOptionalStringEnv(env[ADMIN_TRANSPORT_TLS_CERT_PATH_ENV]);
+  const keyPath = parseOptionalStringEnv(env[ADMIN_TRANSPORT_TLS_KEY_PATH_ENV]);
+  const expectedPeerSpiffeUri = parseOptionalStringEnv(env[ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI_ENV]);
+  if (!caPath || !certPath || !keyPath || !expectedPeerSpiffeUri) {
+    throw new Error(
+      `ADMIN_TRANSPORT_MODE=network requires ${ADMIN_TRANSPORT_TLS_CA_PATH_ENV}, `
+        + `${ADMIN_TRANSPORT_TLS_CERT_PATH_ENV}, ${ADMIN_TRANSPORT_TLS_KEY_PATH_ENV}, `
+        + `and ${ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI_ENV}`,
+    );
+  }
+
+  return {
+    caPath,
+    certPath,
+    keyPath,
+    expectedPeerSpiffeUri: normalizeSpiffeUri(
+      expectedPeerSpiffeUri,
+      ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI_ENV,
+    ),
+  };
 }

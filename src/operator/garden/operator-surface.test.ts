@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
 import { EventBus } from '../../shared/event-bus.js';
+import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import { GardenAdminTransportServer } from './transport-server.js';
@@ -15,58 +18,12 @@ import type {
   GardenAdminTransportClientEndpoint,
   GardenAdminTransportServerEndpoint,
   GardenAdminTransportSocketEndpoint,
+  GardenAdminTransportTlsConfig,
 } from './transport-paths.js';
 
-const TEST_TLS_CERT = `-----BEGIN CERTIFICATE-----
-MIIDJTCCAg2gAwIBAgIUV4P61n3XtlIkzexqJrv+jmw/zYwwDQYJKoZIhvcNAQEL
-BQAwFDESMBAGA1UEAwwJMTI3LjAuMC4xMB4XDTI2MDYyNzIwMTUxMVoXDTM2MDYy
-NDIwMTUxMVowFDESMBAGA1UEAwwJMTI3LjAuMC4xMIIBIjANBgkqhkiG9w0BAQEF
-AAOCAQ8AMIIBCgKCAQEAzlCaIOWBPItCY+dDK50SmzNtSry94SW5LSBxUup968X9
-gkHpt1nLWXjtNgwtwF+THkhxyMZiYIM2TsQHpSPuZZMDx4y+IHb3003Qb9tIf3m9
-7zeBDJiVlrVs4yBfpNy4afgOM6EffQSNNtWQ9WMrKuT5EP6N/xDcfSowaHFynrju
-gfRQGHVR2pbWJLvjP41l+RGGBYbD/Xv5zF1MO6d3XY+MM1cfAoCXLKEksYKDRLjO
-mgNuvL6bYp1jqnrE6okbpbTWKGwoaevI08b6eQJVAvC1MwOyxjSCMp8/DjdIUY9Z
-x9W7hmUJd0eJ8opBboq5mxA3vwMdIIPemMEucm3UoQIDAQABo28wbTAdBgNVHQ4E
-FgQUKmsPeINxemVthC+5VR990KscVuIwHwYDVR0jBBgwFoAUKmsPeINxemVthC+5
-VR990KscVuIwDwYDVR0TAQH/BAUwAwEB/zAaBgNVHREEEzARhwR/AAABgglsb2Nh
-bGhvc3QwDQYJKoZIhvcNAQELBQADggEBACKfLwqWxVOZWDZJGZVqBRqj2Y/z+3AH
-a2hVwQdhYf8Q2L81Pt3adUFSql4X/mNaBBVeylRhco8/PGdB1gL5rvywJZAn++uh
-8Bmw7+WOINX07gpGFq2dqUBUHbJQkq0TywwyuoNJdg4IKsavONWU3nix/IIdA3E+
-3Ew1XUjBBUYr/ewzy/ItALX/j2EhlfrNtiA5Iwgq6MpbvlHXO7LY9dzvVxl2bIEJ
-lxL7AqS1q4m/HZ5CGobk9dT63T1miug7LE/gwMxuvBLJCWNs7xn17QA+D1DcFQCi
-VWehGKtekAcSEvEpDRuUANJAet498Zs/IGa06nPhc+jxy3ifjU71kXQ=
------END CERTIFICATE-----
-`;
-
-const TEST_TLS_KEY = `-----BEGIN PRIVATE KEY-----
-MIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDOUJog5YE8i0Jj
-50MrnRKbM21KvL3hJbktIHFS6n3rxf2CQem3WctZeO02DC3AX5MeSHHIxmJggzZO
-xAelI+5lkwPHjL4gdvfTTdBv20h/eb3vN4EMmJWWtWzjIF+k3Lhp+A4zoR99BI02
-1ZD1Yysq5PkQ/o3/ENx9KjBocXKeuO6B9FAYdVHaltYku+M/jWX5EYYFhsP9e/nM
-XUw7p3ddj4wzVx8CgJcsoSSxgoNEuM6aA268vptinWOqesTqiRultNYobChp68jT
-xvp5AlUC8LUzA7LGNIIynz8ON0hRj1nH1buGZQl3R4nyikFuirmbEDe/Ax0gg96Y
-wS5ybdShAgMBAAECggEAErqZGJ4ST/9e/4K27kv2rHAhXm9+go8ncu6cWv0+gRtw
-GqsGdHE1AeJLEQ+kokS1g5eVUgya/E1CWNQi0t2i0/Bh9MjUrvhzIZN8IIC04XLu
-cxDZfjM7y8/xxTc4d4GHRtdl3U9QdHY9UNpXq8Rc3tVPvDiKMLrEc/hTJ1K6fP39
-gKUe6lFJE7Rzp5yXf3IraAcJViLdadngymJWbJIen/on5P8CcogAejT5qMQtehS7
-8tzEPIVbz8OlhzHk3WgikhfxcqkU21bxrKGiTKI4WIbR2e103YBqXbpyiBgv1lV3
-jaICOdqWzKD2HvrZbg/TkHg3n5iHqIHuumdz/mrroQKBgQD8Qx63XSRG1oVS44w2
-RrzaHGhF3PuTqhVyhdD1xi0V1VeMxkjLvbKe/2qI7ccRbOwMf3fDD9pOFG82To1z
-Xl5pFEwNUIsU9p0an70dcTSkD4r2XOKXAD+kfTtpL/bcZG1KPd7xOhR0F51kTsx5
-YC45J68VQqy4LTHNfb2+a5v8ZwKBgQDRXzHfNduC04Wp+ps7UEtunyqgUrRYSMJx
-D5CMb9UCFls7BBwea0ELtAkd/A0a8JrQPCK3Uvn5jKA8ukYSlObiF44KIwtS1HL0
-RkFyY/rqqjmUk9Xi9gmkEiCyiBMZfK63ZRAnw+c3xiTOx2LFCJHnXaTyL3NXtb90
-D2M0kJABtwKBgQCSb/Q4xVz1sjoa7/TI3S9r/emaBLoV8joZDQ1MXwp1Di+QjNpd
-S3WRTvvtGPriZrRwXN6M4Xr8sGgOwnLicfmkTiAH6qWSOcbhWbFSkhDY3Bzy/uCa
-f45yUjBW030eWz4GRvxQVELjUYIQZJ3WJ7stepfsY5QYJkQu4btv+s/GKQJ/GivM
-EBqrVa8bBiRNQxzGUQ2URnYQFPkDVR6c8vEHrzscLERXP3Yoq03V1emrubJZp63c
-qQ22MXtijDS8jZYPRjOrjZjT0Ya818vwYlwdAThF+kyAb95RVjDt5WMdABKVxFbd
-rhrOzCn4b+B8eCSaGFGcTKmhwVT2mYtS2z82wQKBgQD3W6oYbUXSisL4B9xYNACH
-QN/XgtMFSj7uVLhCHagscZjK9wgG35DIW0f4azpDCwz2avn+OUjasAERL2LWtIGm
-iPdmg4zsX9ZM7WfCz3pp8e05pQwAGyIDYU346C2v+AHsVAylNsObNsYvy+u0aR4Z
-Zfv7C28c5whNXHsQcMX2tQ==
------END PRIVATE KEY-----
-`;
+const GARDEN_SPIFFE_URI = 'spiffe://cluster.local/psfn/garden';
+const AGENT_SPIFFE_URI = 'spiffe://cluster.local/psfn/agent/test-companion';
+const OTHER_GARDEN_SPIFFE_URI = 'spiffe://cluster.local/psfn/garden-other';
 
 function requestPort(
   port: number,
@@ -108,6 +65,230 @@ function requestSocket(
     );
     req.on('error', reject);
     if (body) req.write(body);
+    req.end();
+  });
+}
+
+interface AdminTransportTlsFixture {
+  serverTls: GardenAdminTransportTlsConfig;
+  serverWithoutSpiffeTls: GardenAdminTransportTlsConfig;
+  clientTls: GardenAdminTransportTlsConfig;
+  clientWithoutSpiffeTls: GardenAdminTransportTlsConfig;
+  clientWrongSpiffeTls: GardenAdminTransportTlsConfig;
+}
+
+function runOpenSsl(args: string[], cwd: string): void {
+  execFileSync('openssl', args, { cwd, stdio: 'ignore' });
+}
+
+function createCertificateAuthority(dir: string, prefix: string, commonName: string): void {
+  runOpenSsl([
+    'req',
+    '-x509',
+    '-newkey',
+    'rsa:2048',
+    '-days',
+    '3650',
+    '-nodes',
+    '-subj',
+    `/CN=${commonName}`,
+    '-keyout',
+    `${prefix}.key`,
+    '-out',
+    `${prefix}.crt`,
+  ], dir);
+}
+
+function createSignedCertificate(input: {
+  dir: string;
+  prefix: string;
+  commonName: string;
+  caPrefix: string;
+  subjectAltName?: string;
+  extendedKeyUsage: 'serverAuth' | 'clientAuth';
+}): void {
+  runOpenSsl([
+    'req',
+    '-newkey',
+    'rsa:2048',
+    '-nodes',
+    '-subj',
+    `/CN=${input.commonName}`,
+    '-keyout',
+    `${input.prefix}.key`,
+    '-out',
+    `${input.prefix}.csr`,
+  ], input.dir);
+  const extLines = [
+    ...(input.subjectAltName ? [`subjectAltName=${input.subjectAltName}`] : []),
+    `extendedKeyUsage=${input.extendedKeyUsage}`,
+  ];
+  writeFileSync(join(input.dir, `${input.prefix}.ext`), `${extLines.join('\n')}\n`, 'utf8');
+  runOpenSsl([
+    'x509',
+    '-req',
+    '-in',
+    `${input.prefix}.csr`,
+    '-CA',
+    `${input.caPrefix}.crt`,
+    '-CAkey',
+    `${input.caPrefix}.key`,
+    '-CAcreateserial',
+    '-days',
+    '3650',
+    '-out',
+    `${input.prefix}.crt`,
+    '-extfile',
+    `${input.prefix}.ext`,
+  ], input.dir);
+}
+
+function buildTlsConfig(input: {
+  dir: string;
+  certPrefix: string;
+  expectedPeerSpiffeUri: string;
+}): GardenAdminTransportTlsConfig {
+  return {
+    caPath: join(input.dir, 'ca.crt'),
+    certPath: join(input.dir, `${input.certPrefix}.crt`),
+    keyPath: join(input.dir, `${input.certPrefix}.key`),
+    expectedPeerSpiffeUri: input.expectedPeerSpiffeUri,
+  };
+}
+
+function createAdminTransportTlsFixture(dir: string): AdminTransportTlsFixture {
+  createCertificateAuthority(dir, 'ca', 'PSFN Garden Admin Transport Test CA');
+  createSignedCertificate({
+    dir,
+    prefix: 'agent-server',
+    commonName: 'agent-admin.local',
+    caPrefix: 'ca',
+    subjectAltName: `DNS:localhost,IP:127.0.0.1,URI:${AGENT_SPIFFE_URI}`,
+    extendedKeyUsage: 'serverAuth',
+  });
+  createSignedCertificate({
+    dir,
+    prefix: 'agent-server-no-spiffe',
+    commonName: 'agent-admin.local',
+    caPrefix: 'ca',
+    subjectAltName: 'DNS:localhost,IP:127.0.0.1',
+    extendedKeyUsage: 'serverAuth',
+  });
+  createSignedCertificate({
+    dir,
+    prefix: 'garden-client',
+    commonName: 'garden',
+    caPrefix: 'ca',
+    subjectAltName: `URI:${GARDEN_SPIFFE_URI}`,
+    extendedKeyUsage: 'clientAuth',
+  });
+  createSignedCertificate({
+    dir,
+    prefix: 'garden-client-no-spiffe',
+    commonName: 'garden',
+    caPrefix: 'ca',
+    extendedKeyUsage: 'clientAuth',
+  });
+  createSignedCertificate({
+    dir,
+    prefix: 'garden-client-wrong-spiffe',
+    commonName: 'garden',
+    caPrefix: 'ca',
+    subjectAltName: `URI:${OTHER_GARDEN_SPIFFE_URI}`,
+    extendedKeyUsage: 'clientAuth',
+  });
+
+  return {
+    serverTls: buildTlsConfig({
+      dir,
+      certPrefix: 'agent-server',
+      expectedPeerSpiffeUri: GARDEN_SPIFFE_URI,
+    }),
+    serverWithoutSpiffeTls: buildTlsConfig({
+      dir,
+      certPrefix: 'agent-server-no-spiffe',
+      expectedPeerSpiffeUri: GARDEN_SPIFFE_URI,
+    }),
+    clientTls: buildTlsConfig({
+      dir,
+      certPrefix: 'garden-client',
+      expectedPeerSpiffeUri: AGENT_SPIFFE_URI,
+    }),
+    clientWithoutSpiffeTls: buildTlsConfig({
+      dir,
+      certPrefix: 'garden-client-no-spiffe',
+      expectedPeerSpiffeUri: AGENT_SPIFFE_URI,
+    }),
+    clientWrongSpiffeTls: buildTlsConfig({
+      dir,
+      certPrefix: 'garden-client-wrong-spiffe',
+      expectedPeerSpiffeUri: AGENT_SPIFFE_URI,
+    }),
+  };
+}
+
+function buildHttpsClientTlsOptions(tls: GardenAdminTransportTlsConfig): https.RequestOptions {
+  return {
+    ca: readFileSync(tls.caPath),
+    cert: readFileSync(tls.certPath),
+    key: readFileSync(tls.keyPath),
+    rejectUnauthorized: true,
+    checkServerIdentity: createSpiffeCheckServerIdentity(tls.expectedPeerSpiffeUri),
+  };
+}
+
+function requestTransportPort(
+  port: number,
+  method: string,
+  path: string,
+  tls: GardenAdminTransportTlsConfig,
+  body?: string,
+  headers?: Record<string, string>,
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: 'localhost',
+        port,
+        method,
+        path,
+        headers,
+        ...buildHttpsClientTlsOptions(tls),
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: data }));
+      },
+    );
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+function requestTransportPortWithoutClientCertificate(
+  port: number,
+  clientTlsConfig: GardenAdminTransportTlsConfig,
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: 'localhost',
+        port,
+        method: 'GET',
+        path: '/api/admin/dashboard',
+        ca: readFileSync(clientTlsConfig.caPath),
+        rejectUnauthorized: true,
+        checkServerIdentity: createSpiffeCheckServerIdentity(clientTlsConfig.expectedPeerSpiffeUri),
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: data }));
+      },
+    );
+    req.on('error', reject);
     req.end();
   });
 }
@@ -224,9 +405,20 @@ function listenSocketServer(socketPath: string, handler: http.RequestListener): 
   });
 }
 
-function listenPortServer(port: number, handler: http.RequestListener): Promise<http.Server> {
+function listenHttpsPortServer(
+  port: number,
+  tls: GardenAdminTransportTlsConfig,
+  handler: http.RequestListener,
+): Promise<https.Server> {
   return new Promise((resolve, reject) => {
-    const server = http.createServer(handler);
+    const server = https.createServer({
+      ca: readFileSync(tls.caPath),
+      cert: readFileSync(tls.certPath),
+      key: readFileSync(tls.keyPath),
+      requestCert: true,
+      rejectUnauthorized: true,
+      minVersion: 'TLSv1.3',
+    }, handler);
     server.once('error', reject);
     server.listen(port, '127.0.0.1', () => {
       server.off('error', reject);
@@ -235,7 +427,7 @@ function listenPortServer(port: number, handler: http.RequestListener): Promise<
   });
 }
 
-function closeServer(server: http.Server): Promise<void> {
+function closeServer(server: http.Server | https.Server): Promise<void> {
   return new Promise((resolve, reject) => {
     server.closeAllConnections();
     server.close((error) => {
@@ -249,6 +441,8 @@ interface Harness {
   tempDir: string;
   socketPath: string;
   port: number;
+  transportPort?: number;
+  tlsFixture?: AdminTransportTlsFixture;
   eventBus: EventBus;
   services: GardenAdminDomainServices;
   transportServer: GardenAdminTransportServer;
@@ -263,7 +457,8 @@ interface OperatorOnlyHarness {
 }
 
 interface CreateHarnessOptions {
-  transportMode?: 'socket' | 'network-http' | 'network-https';
+  transportMode?: 'socket' | 'network-mtls';
+  serverIdentity?: 'valid' | 'missing-spiffe';
   timeoutMs?: number;
 }
 
@@ -447,59 +642,46 @@ function createSocketEndpoint(socketPath: string, timeoutMs: number): GardenAdmi
   };
 }
 
+function createNetworkClientEndpoint(
+  port: number,
+  timeoutMs: number,
+  tls: GardenAdminTransportTlsConfig,
+): GardenAdminTransportClientEndpoint {
+  return {
+    mode: 'network',
+    httpUrl: new URL(`https://localhost:${port}`),
+    wsUrl: new URL(`wss://localhost:${port}`),
+    timeoutMs,
+    peerAuthMode: 'mtls-spiffe',
+    tls,
+  };
+}
+
 function createNetworkEndpoints(
   tempDir: string,
   port: number,
-  scheme: 'http' | 'https',
   timeoutMs: number,
+  serverIdentity: 'valid' | 'missing-spiffe',
 ): {
   serverEndpoint: GardenAdminTransportServerEndpoint;
   clientEndpoint: GardenAdminTransportClientEndpoint;
+  tlsFixture: AdminTransportTlsFixture;
 } {
-  const httpUrl = new URL(`${scheme}://127.0.0.1:${port}`);
-  const wsUrl = new URL(`${scheme === 'https' ? 'wss' : 'ws'}://127.0.0.1:${port}`);
-  if (scheme === 'http') {
-    return {
-      serverEndpoint: {
-        mode: 'network',
-        host: '127.0.0.1',
-        port,
-        scheme,
-        timeoutMs,
-        peerAuthMode: 'none',
-      },
-      clientEndpoint: {
-        mode: 'network',
-        httpUrl,
-        wsUrl,
-        timeoutMs,
-        peerAuthMode: 'none',
-      },
-    };
-  }
-
-  const certPath = join(tempDir, 'admin-transport-cert.pem');
-  const keyPath = join(tempDir, 'admin-transport-key.pem');
-  writeFileSync(certPath, TEST_TLS_CERT, 'utf-8');
-  writeFileSync(keyPath, TEST_TLS_KEY, 'utf-8');
+  const tlsFixture = createAdminTransportTlsFixture(tempDir);
   return {
     serverEndpoint: {
       mode: 'network',
       host: '127.0.0.1',
       port,
-      scheme,
+      scheme: 'https',
       timeoutMs,
-      peerAuthMode: 'none',
-      tls: { certPath, keyPath },
+      peerAuthMode: 'mtls-spiffe',
+      tls: serverIdentity === 'missing-spiffe'
+        ? tlsFixture.serverWithoutSpiffeTls
+        : tlsFixture.serverTls,
     },
-    clientEndpoint: {
-      mode: 'network',
-      httpUrl,
-      wsUrl,
-      timeoutMs,
-      peerAuthMode: 'none',
-      tls: { caPath: certPath },
-    },
+    clientEndpoint: createNetworkClientEndpoint(port, timeoutMs, tlsFixture.clientTls),
+    tlsFixture,
   };
 }
 
@@ -543,8 +725,8 @@ async function createHarness(options: CreateHarnessOptions = {}): Promise<Harnes
     : createNetworkEndpoints(
         tempDir,
         await allocatePort(),
-        transportMode === 'network-https' ? 'https' : 'http',
         timeoutMs,
+        options.serverIdentity ?? 'valid',
       );
 
   const transportServer = new GardenAdminTransportServer({
@@ -571,6 +753,12 @@ async function createHarness(options: CreateHarnessOptions = {}): Promise<Harnes
     tempDir,
     socketPath,
     port,
+    ...(transportEndpoint.serverEndpoint.mode === 'network'
+      ? { transportPort: transportEndpoint.serverEndpoint.port }
+      : {}),
+    ...('tlsFixture' in transportEndpoint
+      ? { tlsFixture: transportEndpoint.tlsFixture }
+      : {}),
     eventBus,
     services,
     transportServer,
@@ -622,10 +810,10 @@ describe('Garden operator surface', () => {
     expect(payload.stats.sessionCount).toBeTypeOf('number');
   });
 
-  it('proxies GET, POST, health, and telemetry over an explicit HTTPS/WSS admin transport', async () => {
+  it('proxies GET, POST, health, and telemetry over an explicit mTLS HTTPS/WSS admin transport', async () => {
     let networkHarness: Harness | undefined;
     try {
-      networkHarness = await createHarness({ transportMode: 'network-https' });
+      networkHarness = await createHarness({ transportMode: 'network-mtls' });
 
       const healthRes = await requestPort(networkHarness.port, 'GET', '/health');
       expect(healthRes.status).toBe(200);
@@ -693,28 +881,73 @@ describe('Garden operator surface', () => {
     }
   });
 
-  it('proxies admin API routes over an explicit HTTP admin transport', async () => {
+  it('requires a Garden client certificate with the expected SPIFFE URI before route handling', async () => {
     let networkHarness: Harness | undefined;
     try {
-      networkHarness = await createHarness({ transportMode: 'network-http' });
+      networkHarness = await createHarness({ transportMode: 'network-mtls' });
+      if (!networkHarness.transportPort || !networkHarness.tlsFixture) {
+        throw new Error('Expected network transport fixture');
+      }
+
+      const getDashboardData = vi.mocked(networkHarness.services.dashboard.getDashboardData);
+      getDashboardData.mockClear();
+
+      await expect(requestTransportPortWithoutClientCertificate(
+        networkHarness.transportPort,
+        networkHarness.tlsFixture.clientTls,
+      )).rejects.toThrow();
+      expect(getDashboardData).not.toHaveBeenCalled();
+
+      const missingSpiffeRes = await requestTransportPort(
+        networkHarness.transportPort,
+        'GET',
+        '/api/admin/dashboard',
+        networkHarness.tlsFixture.clientWithoutSpiffeTls,
+      );
+      expect(missingSpiffeRes.status).toBe(403);
+      expect(getDashboardData).not.toHaveBeenCalled();
+
+      const wrongSpiffeRes = await requestTransportPort(
+        networkHarness.transportPort,
+        'GET',
+        '/api/admin/dashboard',
+        networkHarness.tlsFixture.clientWrongSpiffeTls,
+      );
+      expect(wrongSpiffeRes.status).toBe(403);
+      expect(getDashboardData).not.toHaveBeenCalled();
+    } finally {
+      if (networkHarness) {
+        await destroyHarness(networkHarness);
+      }
+    }
+  });
+
+  it('rejects agent server certificates missing the expected SPIFFE URI SAN', async () => {
+    let networkHarness: Harness | undefined;
+    try {
+      networkHarness = await createHarness({
+        transportMode: 'network-mtls',
+        serverIdentity: 'missing-spiffe',
+        timeoutMs: 250,
+      });
 
       const healthRes = await requestPort(networkHarness.port, 'GET', '/health');
-      expect(healthRes.status).toBe(200);
+      expect(healthRes.status).toBe(503);
       expect(JSON.parse(healthRes.body)).toMatchObject({
-        status: 'ok',
+        status: 'degraded',
         dependencies: {
           adminTransport: {
             mode: 'network',
-            reachable: true,
-            status: 'ok',
-            httpStatus: 200,
+            reachable: false,
+            status: 'degraded',
+            error: expect.stringContaining('missing SPIFFE URI SAN'),
           },
         },
       });
 
-      const res = await requestPort(networkHarness.port, 'GET', '/api/admin/dashboard');
-      expect(res.status).toBe(200);
-      expect(JSON.parse(res.body)).toMatchObject({ stats: { sessionCount: 1 } });
+      const proxyRes = await requestPort(networkHarness.port, 'GET', '/api/admin/dashboard');
+      expect(proxyRes.status).toBe(502);
+      expect(proxyRes.body).toContain('admin transport unavailable');
     } finally {
       if (networkHarness) {
         await destroyHarness(networkHarness);
@@ -788,7 +1021,7 @@ describe('Garden operator surface', () => {
 
     let networkHarness: Harness | undefined;
     try {
-      networkHarness = await createHarness({ transportMode: 'network-http', timeoutMs: 250 });
+      networkHarness = await createHarness({ transportMode: 'network-mtls', timeoutMs: 250 });
       await networkHarness.transportServer.stop();
       networkHarness.transportStopped = true;
 
@@ -817,10 +1050,12 @@ describe('Garden operator surface', () => {
 
   it('reports degraded health and returns 502 when the upstream network endpoint serves the wrong path', async () => {
     const upstreamPort = await allocatePort();
-    let wrongPathServer: http.Server | undefined;
+    const upstreamTempDir = mkdtempSync(join(tmpdir(), 'garden-operator-upstream-test-'));
+    const tlsFixture = createAdminTransportTlsFixture(upstreamTempDir);
+    let wrongPathServer: https.Server | undefined;
     let operatorHarness: OperatorOnlyHarness | undefined;
     try {
-      wrongPathServer = await listenPortServer(upstreamPort, (_req, res) => {
+      wrongPathServer = await listenHttpsPortServer(upstreamPort, tlsFixture.serverTls, (_req, res) => {
         res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
         res.end('wrong admin transport path');
       });
@@ -828,13 +1063,9 @@ describe('Garden operator surface', () => {
         socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
         socket.destroy();
       });
-      operatorHarness = await createOperatorOnlyHarness({
-        mode: 'network',
-        httpUrl: new URL(`http://127.0.0.1:${upstreamPort}`),
-        wsUrl: new URL(`ws://127.0.0.1:${upstreamPort}`),
-        timeoutMs: 250,
-        peerAuthMode: 'none',
-      });
+      operatorHarness = await createOperatorOnlyHarness(
+        createNetworkClientEndpoint(upstreamPort, 250, tlsFixture.clientTls),
+      );
 
       const healthRes = await requestPort(operatorHarness.port, 'GET', '/health');
       expect(healthRes.status).toBe(503);
@@ -859,22 +1090,21 @@ describe('Garden operator surface', () => {
       if (wrongPathServer) {
         await closeServer(wrongPathServer);
       }
+      rmSync(upstreamTempDir, { recursive: true, force: true });
     }
   });
 
   it('returns 502 and degraded health when the network upstream times out', async () => {
     const slowPort = await allocatePort();
-    let slowServer: http.Server | undefined;
+    const upstreamTempDir = mkdtempSync(join(tmpdir(), 'garden-operator-upstream-test-'));
+    const tlsFixture = createAdminTransportTlsFixture(upstreamTempDir);
+    let slowServer: https.Server | undefined;
     let operatorHarness: OperatorOnlyHarness | undefined;
     try {
-      slowServer = await listenPortServer(slowPort, () => undefined);
-      operatorHarness = await createOperatorOnlyHarness({
-        mode: 'network',
-        httpUrl: new URL(`http://127.0.0.1:${slowPort}`),
-        wsUrl: new URL(`ws://127.0.0.1:${slowPort}`),
-        timeoutMs: 100,
-        peerAuthMode: 'none',
-      });
+      slowServer = await listenHttpsPortServer(slowPort, tlsFixture.serverTls, () => undefined);
+      operatorHarness = await createOperatorOnlyHarness(
+        createNetworkClientEndpoint(slowPort, 100, tlsFixture.clientTls),
+      );
 
       const proxyRes = await requestPort(operatorHarness.port, 'GET', '/api/admin/dashboard');
       expect(proxyRes.status).toBe(502);
@@ -900,6 +1130,7 @@ describe('Garden operator surface', () => {
       if (slowServer) {
         await closeServer(slowServer);
       }
+      rmSync(upstreamTempDir, { recursive: true, force: true });
     }
   });
 

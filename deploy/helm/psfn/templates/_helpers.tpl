@@ -69,6 +69,29 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s:%s@%s" $image.repository $image.tag $image.digest -}}
 {{- end -}}
 
+{{- define "psfn.liteLlmImage" -}}
+{{- $image := .Values.liteLlm.image -}}
+{{- $repository := required "liteLlm.image.repository is required when liteLlm.enabled=true and liteLlm.mode=internal" $image.repository -}}
+{{- $tag := default "" $image.tag -}}
+{{- $digest := default "" $image.digest -}}
+{{- if and (not $tag) (not $digest) -}}
+{{- fail "liteLlm.image.tag or liteLlm.image.digest is required when liteLlm.enabled=true and liteLlm.mode=internal" -}}
+{{- end -}}
+{{- if and $tag (or (eq $tag "latest") (eq $tag "main") (eq $tag "main-latest")) -}}
+{{- fail "liteLlm.image.tag must be pinned and must not be latest/main/main-latest" -}}
+{{- end -}}
+{{- if and $digest (not (hasPrefix "sha256:" $digest)) -}}
+{{- fail "liteLlm.image.digest must start with sha256:" -}}
+{{- end -}}
+{{- if and $tag $digest -}}
+{{- printf "%s:%s@%s" $repository $tag $digest -}}
+{{- else if $digest -}}
+{{- printf "%s@%s" $repository $digest -}}
+{{- else -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "psfn.satelliteHubImage" -}}
 {{- $image := .Values.satelliteHub.image -}}
 {{- $repository := required "satelliteHub.image.repository is required when satelliteHub.enabled=true" $image.repository -}}
@@ -136,8 +159,28 @@ app.kubernetes.io/component: {{ .component }}
 {{- printf "%s-redis" (include "psfn.fullname" .) -}}
 {{- end -}}
 
+{{- define "psfn.liteLlmServiceName" -}}
+{{- printf "%s-litellm" (include "psfn.fullname" .) -}}
+{{- end -}}
+
+{{- define "psfn.liteLlmConfigMapName" -}}
+{{- if .Values.liteLlm.config.existingConfigMap -}}
+{{- .Values.liteLlm.config.existingConfigMap -}}
+{{- else -}}
+{{- printf "%s-litellm-config" (include "psfn.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "psfn.satelliteHubServiceName" -}}
 {{- printf "%s-satellite-hub" (include "psfn.fullname" .) -}}
+{{- end -}}
+
+{{- define "psfn.liteLlmBaseUrl" -}}
+{{- if and .Values.liteLlm.enabled (eq .Values.liteLlm.mode "internal") -}}
+{{- printf "http://%s.%s.svc:%v/v1" (include "psfn.liteLlmServiceName" .) .Release.Namespace .Values.ports.liteLlm -}}
+{{- else if and .Values.liteLlm.enabled (eq .Values.liteLlm.mode "external") -}}
+{{- required "liteLlm.external.baseUrl is required when liteLlm.mode=external" .Values.liteLlm.external.baseUrl -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "psfn.gatewayRpcUrlForServer" -}}

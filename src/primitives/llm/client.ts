@@ -868,6 +868,7 @@ export class LLMClient {
       ttftMs?: number;
       attempt: number;
       stopReason?: string;
+      providerObservability?: LLMProviderObservability;
       metadata?: Record<string, unknown>;
     },
   ): void {
@@ -888,6 +889,17 @@ export class LLMClient {
     const logicalCallId = this.createUsageLogicalCallId(callKind, purpose, candidate, correlation, options.attempt);
     const metadata = {
       ...(options.metadata ?? {}),
+      ...(options.providerObservability
+        ? {
+            routeKind: options.providerObservability.routeKind,
+            backendProvider: options.providerObservability.backendProvider,
+            backendModel: options.providerObservability.backendModel,
+            backendApi: options.providerObservability.backendApi,
+            ...(options.providerObservability.backendBaseUrl
+              ? { backendBaseUrl: options.providerObservability.backendBaseUrl }
+              : {}),
+          }
+        : {}),
       ...(usageDetails?.raw ? { rawUsage: usageDetails.raw } : {}),
       ...(usageDetails?.cost ? { providerCost: usageDetails.cost } : {}),
     };
@@ -1101,6 +1113,10 @@ export class LLMClient {
       log.info('LLM stream completed', {
         model: candidate.model,
         provider: candidate.provider,
+        routeKind: finalResponse.providerObservability?.routeKind ?? 'unknown',
+        backendProvider: finalResponse.providerObservability?.backendProvider,
+        backendModel: finalResponse.providerObservability?.backendModel,
+        backendApi: finalResponse.providerObservability?.backendApi,
         attempts,
         ...correlation,
         purpose: 'chat',
@@ -1120,6 +1136,7 @@ export class LLMClient {
           ...(firstTokenAtMs !== undefined ? { ttftMs: Math.max(0, firstTokenAtMs - startedAtMs) } : {}),
           attempt: attempts,
           stopReason: finalResponse.stopReason,
+          providerObservability: finalResponse.providerObservability,
           metadata: {
             fallbackAttempts: attempts,
             toolCallCount: finalResponse.toolCalls.length,
@@ -1212,16 +1229,6 @@ export class LLMClient {
         },
       );
 
-    log.info('LLM complete finished', {
-      model: candidate.model,
-      provider: candidate.provider,
-      attempts,
-      requestedModelHint: modelHint?.model,
-      ...correlation,
-      purpose,
-      routingPurpose,
-    });
-
     const completionResponse = (
       'response' in response
         ? response.response
@@ -1237,6 +1244,26 @@ export class LLMClient {
       stopReason?: string;
       providerObservability?: LLMProviderObservability;
     };
+    const providerObservability = (
+      ('providerObservability' in response && response.providerObservability)
+        ? response.providerObservability
+        : completionResponse.providerObservability
+    );
+
+    log.info('LLM complete finished', {
+      model: candidate.model,
+      provider: candidate.provider,
+      routeKind: providerObservability?.routeKind ?? 'unknown',
+      backendProvider: providerObservability?.backendProvider,
+      backendModel: providerObservability?.backendModel,
+      backendApi: providerObservability?.backendApi,
+      attempts,
+      requestedModelHint: modelHint?.model,
+      ...correlation,
+      purpose,
+      routingPurpose,
+    });
+
     const responseContent = completionResponse.content as unknown;
     const contentBlocks = Array.isArray(responseContent) ? responseContent : undefined;
     const content = typeof responseContent === 'string'
@@ -1266,6 +1293,7 @@ export class LLMClient {
         completedAtMs: Date.now(),
         attempt: attempts,
         stopReason: completionResponse.stopReason ?? 'unknown',
+        providerObservability,
         metadata: {
           completionPurpose: purpose,
           routingPurpose,
@@ -1278,11 +1306,9 @@ export class LLMClient {
       content: normalizeContent(content),
       ...(reasoning ? { reasoning } : {}),
       ...(
-        ('providerObservability' in response && response.providerObservability)
-          ? { providerObservability: response.providerObservability }
-          : (completionResponse.providerObservability
-            ? { providerObservability: completionResponse.providerObservability }
-            : {})
+        providerObservability
+          ? { providerObservability }
+          : {}
       ),
       toolCalls: Array.isArray(completionResponse.toolCalls) ? completionResponse.toolCalls : [],
       model: completionResponse.model,

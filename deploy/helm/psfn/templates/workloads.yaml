@@ -70,6 +70,10 @@ spec:
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
             {{- include "psfn.providerSecretEnv" . | nindent 12 }}
+            {{- if .Values.liteLlm.enabled }}
+            - name: LITELLM_BASE_URL
+              value: {{ include "psfn.liteLlmBaseUrl" . | quote }}
+            {{- end }}
             - name: API_HOST
               value: 0.0.0.0
             - name: API_PORT
@@ -371,6 +375,8 @@ spec:
             - name: companion-data
               mountPath: {{ .Values.runtime.companionDataDir }}
               readOnly: true
+            - name: workspace
+              mountPath: {{ .Values.runtime.workspacePath }}
             - name: runtime
               mountPath: {{ .Values.runtime.tempDir }}
               subPath: tmp

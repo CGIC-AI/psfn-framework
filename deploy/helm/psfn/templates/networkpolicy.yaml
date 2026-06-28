@@ -69,6 +69,15 @@ spec:
         - port: {{ .Values.ports.postgres }}
           protocol: TCP
     {{- end }}
+    {{- if and .Values.liteLlm.enabled (eq .Values.liteLlm.mode "internal") }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "litellm") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.liteLlm }}
+          protocol: TCP
+    {{- end }}
     {{- if .Values.networkPolicy.gateway.allowExternalEgress }}
     - to:
         - ipBlock:
@@ -239,6 +248,57 @@ spec:
       ports:
         - port: {{ .Values.ports.redis }}
           protocol: TCP
+{{- end }}
+{{- if and .Values.liteLlm.enabled (eq .Values.liteLlm.mode "internal") }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "psfn.fullname" . }}-litellm
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "litellm") | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.liteLlm }}
+          protocol: TCP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.dns.podSelector | nindent 14 }}
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    {{- if .Values.networkPolicy.liteLlm.allowExternalEgress }}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 80
+          protocol: TCP
+    {{- end }}
 {{- end }}
 {{- if and .Values.modelPrefetch.enabled .Values.modelPrefetch.textEmotion.enabled }}
 ---

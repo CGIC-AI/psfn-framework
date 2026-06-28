@@ -1893,6 +1893,10 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect(response).toMatchObject({
       inputTokens: 194,
       outputTokens: 2,
+      providerObservability: {
+        routeKind: 'configured_litellm_proxy',
+        backendBaseUrl: 'http://litellm.test/v1',
+      },
       usageDetails: {
         input: 194,
         output: 2,
@@ -1911,6 +1915,9 @@ describe('LLMClient model budget gates and usage metering', () => {
       providerCostUsd: 0.95,
       costSource: 'provider',
       metadata: expect.objectContaining({
+        routeKind: 'configured_litellm_proxy',
+        backendProvider: 'litellm',
+        backendBaseUrl: 'http://litellm.test/v1',
         providerCost: { total: 0.95 },
         rawUsage: expect.objectContaining({
           cost: 0.95,
@@ -1969,6 +1976,11 @@ describe('LLMClient model budget gates and usage metering', () => {
       totalTokens: 30,
       providerCostUsd: 0.123,
       costSource: 'provider',
+      metadata: expect.objectContaining({
+        routeKind: 'configured_litellm_proxy',
+        backendProvider: 'litellm',
+        backendBaseUrl: 'http://litellm.test/v1',
+      }),
     }));
   });
 

@@ -16,6 +16,15 @@
 {{- if and .Values.redis.enabled (eq .Values.redis.mode "external") (not .Values.redis.external.url) -}}
 {{- fail "redis.external.url is required when redis.mode=external" -}}
 {{- end -}}
+{{- if and .Values.liteLlm.enabled (not (or (eq .Values.liteLlm.mode "internal") (eq .Values.liteLlm.mode "external"))) -}}
+{{- fail "liteLlm.mode must be internal or external when liteLlm.enabled=true" -}}
+{{- end -}}
+{{- if and .Values.liteLlm.enabled (eq .Values.liteLlm.mode "external") (not .Values.liteLlm.external.baseUrl) -}}
+{{- fail "liteLlm.external.baseUrl is required when liteLlm.mode=external" -}}
+{{- end -}}
+{{- if and .Values.liteLlm.enabled .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
+{{- $_ := required "secrets.values.liteLlmApiKey is required for liteLlm.enabled=true when secrets.allowMissingRequired=false" .Values.secrets.values.liteLlmApiKey -}}
+{{- end -}}
 {{- if .Values.modelPrefetch.enabled -}}
 {{- if not .Values.persistence.modelCache.enabled -}}
 {{- fail "modelPrefetch.enabled=true requires persistence.modelCache.enabled=true" -}}

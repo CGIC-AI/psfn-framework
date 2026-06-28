@@ -53,6 +53,7 @@ ports:
   satelliteHub: 8787
   postgres: 5432
   redis: 6379
+  liteLlm: 4000
 
 workloads:
   gateway:
@@ -145,7 +146,7 @@ secrets:
     gatewaySessionHmacKey: CHANGE_ME_GATEWAY_SESSION_HMAC_KEY
     openRouterApiKey: ""
     openAiApiKey: ""
-    liteLlmApiKey: ""
+    liteLlmApiKey: CHANGE_ME_LITELLM_API_KEY
     embeddingApiKey: ""
     hfToken: ""
     discordToken: ""
@@ -222,6 +223,36 @@ redis:
         name: ""
         key: ca.crt
 
+liteLlm:
+  enabled: true
+  mode: internal
+  replicaCount: 1
+  image:
+    repository: ghcr.io/berriai/litellm
+    tag: v1.74.9-stable
+    digest: sha256:f78c763d6f2289305a3acc3a003c6170f797bdda70c56e75776fbab670e663cc
+    pullPolicy: IfNotPresent
+  command: ["litellm"]
+  resources: {}
+  config:
+    existingConfigMap: ""
+    key: config.yaml
+    path: /etc/litellm/config.yaml
+    yaml: |-
+      model_list:
+        - model_name: "openrouter/*"
+          litellm_params:
+            model: "openrouter/*"
+            api_key: "os.environ/OPENROUTER_API_KEY"
+      litellm_settings:
+        drop_params: true
+      general_settings:
+        master_key: "os.environ/LITELLM_MASTER_KEY"
+  external:
+    baseUrl: ""
+  extraEnv: []
+  extraEnvFrom: []
+
 embeddings:
   provider: transformers
   transformers:
@@ -288,6 +319,8 @@ networkPolicy:
   modelPrefetch:
     allowExternalHttpsEgress: true
   satelliteHub:
+    allowExternalEgress: true
+  liteLlm:
     allowExternalEgress: true
 
 ingress:

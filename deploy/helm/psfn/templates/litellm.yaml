@@ -1,0 +1,121 @@
+{{- if and .Values.liteLlm.enabled (eq .Values.liteLlm.mode "internal") }}
+{{- if not .Values.liteLlm.config.existingConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "psfn.liteLlmConfigMapName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+data:
+  {{ .Values.liteLlm.config.key }}: |
+{{ tpl .Values.liteLlm.config.yaml . | nindent 4 }}
+---
+{{- end }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.liteLlmServiceName" . }}
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: http-proxy
+      port: {{ .Values.ports.liteLlm }}
+      targetPort: http-proxy
+  selector:
+    {{- include "psfn.componentLabels" (dict "root" . "component" "litellm") | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fullname" . }}-litellm
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.liteLlm.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "psfn.componentLabels" (dict "root" . "component" "litellm") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.componentLabels" (dict "root" . "component" "litellm") | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: litellm
+          image: {{ include "psfn.liteLlmImage" . | quote }}
+          imagePullPolicy: {{ .Values.liteLlm.image.pullPolicy }}
+          command:
+            {{- toYaml .Values.liteLlm.command | nindent 12 }}
+          args:
+            - --config
+            - {{ .Values.liteLlm.config.path | quote }}
+            - --host
+            - 0.0.0.0
+            - --port
+            - {{ .Values.ports.liteLlm | quote }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http-proxy
+              containerPort: {{ .Values.ports.liteLlm }}
+          env:
+            - name: HOME
+              value: /tmp/litellm
+            - name: LITELLM_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.liteLlmApiKey }}
+                  optional: true
+            - name: OPENROUTER_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.openRouterApiKey }}
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.appSecretName" . }}
+                  key: {{ .Values.secrets.keys.openAiApiKey }}
+                  optional: true
+            {{- with .Values.liteLlm.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          {{- with .Values.liteLlm.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: http-proxy
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: http-proxy
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            {{- toYaml .Values.liteLlm.resources | nindent 12 }}
+          volumeMounts:
+            - name: litellm-config
+              mountPath: /etc/litellm
+              readOnly: true
+      volumes:
+        - name: litellm-config
+          configMap:
+            name: {{ include "psfn.liteLlmConfigMapName" . }}
+            items:
+              - key: {{ .Values.liteLlm.config.key }}
+                path: config.yaml
+{{- end }}

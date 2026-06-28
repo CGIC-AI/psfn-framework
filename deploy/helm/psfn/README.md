@@ -7,9 +7,10 @@ This chart renders the first PSFN Kubernetes/k3s topology for one companion:
 - Garden Deployment and browser UI Service/Ingress
 - bundled Postgres + pgvector StatefulSet, or external Postgres Secret reference
 - bundled Redis StatefulSet for app cache, or external Redis Secret reference
+- bundled LiteLLM Deployment/Service for provider routing, or external LiteLLM URL
 - PVC-backed system-data, companion-data, workspace, runtime, and model-cache roots
 - cert-manager Issuer/Certificate resources for internal SPIFFE mTLS
-- default-deny NetworkPolicies for gateway/agent/garden/Postgres/Redis flows
+- default-deny NetworkPolicies for gateway/agent/garden/Postgres/Redis/LiteLLM flows
 
 The chart is in `deploy/helm/psfn`. Runtime app behavior still comes from the
 repo-owned entrypoints: `dist/gateway-main.js`, `dist/agent-main.js`, and
@@ -113,6 +114,39 @@ The external Secret must contain `postgres-database-url` unless you override
 Backup/restore validation still requires PG17 client tools and pgvector present
 in the scratch restore database.
 
+## LiteLLM
+
+`liteLlm.enabled=true` and `liteLlm.mode=internal` render a dedicated LiteLLM
+Deployment and ClusterIP Service at:
+
+```text
+http://<release>-litellm.<namespace>.svc:4000/v1
+```
+
+Only the gateway receives `LITELLM_BASE_URL` and provider credential env. The
+agent keeps talking to the gateway over the existing mTLS RPC transport and does
+not receive direct LiteLLM endpoint or API-key wiring. With NetworkPolicy
+enforcement, gateway egress to LiteLLM is allowed and agent egress to LiteLLM is
+not.
+
+External LiteLLM mode keeps the same gateway-owned route while omitting the
+bundled pod:
+
+```bash
+helm template psfn deploy/helm/psfn \
+  --set liteLlm.mode=external \
+  --set liteLlm.external.baseUrl=https://litellm.example/v1
+```
+
+Set `liteLlm.enabled=false` for direct-provider-only deployments. Model routing
+still follows `providers.json` and `models.json`; OpenRouter-sourced model
+entries can intentionally bypass LiteLLM through their direct source route.
+
+The bundled LiteLLM config is a replaceable ConfigMap. The default config
+contains an OpenRouter wildcard route and reads secrets from environment
+variables, not ConfigMaps. Use `liteLlm.config.existingConfigMap` when you need a
+custom LiteLLM config.
+
 ## Redis Prompt Cache
 
 Default Redis mode renders `redis:8.4.0-bookworm` pinned to:
@@ -162,10 +196,12 @@ The chart renders default deny plus workload policies for:
 - Garden -> agent admin transport
 - gateway and agent -> Postgres
 - agent -> Redis
+- gateway -> LiteLLM, when internal LiteLLM is enabled
 - optional satellite hub -> gateway API
 
 The agent policy does not contain broad `0.0.0.0/0` egress and the chart does
-not set `ALLOW_AGENT_OUTBOUND_NETWORK=true`.
+not set `ALLOW_AGENT_OUTBOUND_NETWORK=true`. The agent policy also has no
+LiteLLM egress rule; provider routing remains a gateway responsibility.
 
 ## Embeddings
 

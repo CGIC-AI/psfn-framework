@@ -39,6 +39,26 @@ describe('seed defaults', () => {
     });
   });
 
+  it('keeps the explicit nano chat fallback in models.seed.json', () => {
+    const seed = JSON.parse(readFileSync('config/models.seed.json', 'utf-8')) as {
+      models: Array<{
+        id: string;
+        identity: { provider: string; model: string; source?: { type?: string } };
+        purposes?: Array<{ purpose: string; primary?: boolean }>;
+      }>;
+    };
+    const fallback = seed.models.find(entry => entry.id === 'gpt-5.4-nano');
+
+    expect(fallback).toMatchObject({
+      identity: {
+        provider: 'openrouter',
+        model: 'openai/gpt-5.4-nano',
+        source: { type: 'openrouter' },
+      },
+    });
+    expect(fallback?.purposes).toContainEqual({ purpose: 'chat', primary: false });
+  });
+
   it('loads runtime defaults from settings.seed.json', () => {
     const defaults = loadRuntimeSettingsSeedDefaults();
     expect(defaults.analysisWorkbenchMaxTokens).toBe(76_000);

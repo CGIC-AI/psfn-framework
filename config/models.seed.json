@@ -176,6 +176,18 @@
       "purposes": [{ "purpose": "chat", "primary": false }],
       "capabilities": { "maxOutputTokens": 8192, "contextWindow": 128000 },
       "tuning": { "maxOutputTokens": 8192 }
+    },
+    {
+      "id": "gpt-5.4-nano",
+      "rank": 92,
+      "identity": {
+        "provider": "openrouter",
+        "model": "openai/gpt-5.4-nano",
+        "source": { "type": "openrouter" }
+      },
+      "purposes": [{ "purpose": "chat", "primary": false }],
+      "capabilities": { "maxOutputTokens": 8192, "contextWindow": 128000 },
+      "tuning": { "maxOutputTokens": 8192 }
     }
   ]
 }

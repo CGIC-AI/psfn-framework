@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import { join, resolve } from 'node:path';
 import { loadConfig } from '../../system/config/load-config.js';
 import { createSessionHmacBoundaryService } from '../../persistence/journals/hmac-boundary.js';

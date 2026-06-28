@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { config as loadDotenv } from 'dotenv';
+import '../../src/shared/utils/load-dotenv.js';
 import type {
   InvokeProviderOptions,
   OpenAiCompatibleResponseFormat,
@@ -137,7 +137,6 @@ export async function runQaoJudgeCli(
     invokeProviderFn?: (options: InvokeProviderOptions) => Promise<LlmProviderResult>;
   } = {},
 ): Promise<QaoJudgeRunResult> {
-  loadDotenv();
   const options = parseQaoJudgeCliOptions(args);
   const result = await runQaoJudge({
     ...options,

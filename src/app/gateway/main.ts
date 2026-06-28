@@ -2,7 +2,7 @@
 // Host-side process that holds secrets and proxies all external interactions.
 // Run: npx tsx src/app/gateway/main.ts
 
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';

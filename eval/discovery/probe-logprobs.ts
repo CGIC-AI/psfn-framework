@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { config as loadDotenv } from 'dotenv';
+import '../../src/shared/utils/load-dotenv.js';
 import {
   DEFAULT_OPENROUTER_API_BASE_URL,
   TARGET_MODELS,
@@ -148,7 +148,6 @@ function parseCliOptions(args: string[]): CliOptions {
 }
 
 async function main(): Promise<void> {
-  loadDotenv();
   const options = parseCliOptions(process.argv.slice(2));
   const apiKey = normalizeOptionalString(process.env.OPENROUTER_API_KEY);
 

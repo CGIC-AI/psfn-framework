@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import {
   buildPersistenceCutoverOptionsFromConfig,

@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { loadConfig } from '../../system/config/load-config.js';

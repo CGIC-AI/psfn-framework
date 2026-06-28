@@ -8,7 +8,7 @@
 //
 // Run: npx tsx src/app/e2e/e2e-voice-roundtrip.ts
 
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import type { IncomingMessage } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';

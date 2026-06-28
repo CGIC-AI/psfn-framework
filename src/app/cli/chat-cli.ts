@@ -3,7 +3,7 @@
 // Run: npx tsx src/app/cli/chat-cli.ts
 // Or:  npm run chat
 
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import { createInterface } from 'node:readline';
 import { loadConfig } from '../../system/config/load-config.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';

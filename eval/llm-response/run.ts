@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { config as loadDotenv } from 'dotenv';
+import '../../src/shared/utils/load-dotenv.js';
 import { selectCases } from './cases.js';
 import { collectLlmResponses, projectCompanionShapeResponseSet, writeLlmResponseArtifact } from './harness.js';
 import { parseTargets } from './targets.js';
@@ -104,7 +104,6 @@ function resolvePath(filePath: string): string {
 }
 
 export async function runLlmResponseCli(args: string[]): Promise<void> {
-  loadDotenv();
   const options = parseCliOptions(args);
   const artifact = await collectLlmResponses({
     runId: options.runId,

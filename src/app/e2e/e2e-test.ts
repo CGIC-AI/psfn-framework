@@ -7,7 +7,7 @@
 //   - Embedding provider configured via EMBEDDING_PROVIDER (defaults to Ollama)
 //   - .env configured
 
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';

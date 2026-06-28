@@ -5,7 +5,7 @@
 //
 // Run: npx tsx src/app/e2e/e2e-walkthrough.ts
 
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { sleep } from '../../shared/utils/timing.js';

@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import '../src/shared/utils/load-dotenv.js';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createIsolatedE2ERuntime } from '../src/app/e2e/runtime-harness.js';

@@ -2,7 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
-import { config as loadDotenv } from 'dotenv';
+import '../../src/shared/utils/load-dotenv.js';
 import {
   collectLlmResponses,
   projectCompanionShapeResponseSet,
@@ -406,7 +406,6 @@ function printUsage(): void {
 }
 
 export async function runQaoCollectionCli(args: string[]): Promise<void> {
-  loadDotenv();
   const options = parseCliOptions(args);
   const scenarioRegistry = loadQaoScenarioRegistry({
     scenariosPath: options.scenariosPath,

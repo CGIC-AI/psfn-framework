@@ -5,7 +5,7 @@
 //
 // Usage: npm run migrate:embeddings [-- --batch-size 64 --parallelism 4]
 
-import 'dotenv/config';
+import '../../shared/utils/load-dotenv.js';
 import { createEmbeddingProviderFromConfig } from '../../faculties/memory/embedding.js';
 import { migratePostgresMemoryEmbeddings } from '../../faculties/memory/migration.js';
 import type { ReembedMigrationProgress } from '../../faculties/memory/migration.js';

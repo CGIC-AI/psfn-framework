@@ -1,0 +1,40 @@
+{
+  "name": "psfn-eval-toolkit",
+  "version": "0.1.0",
+  "description": "Offline evaluation, validation, and experimentation toolkit for PSFN.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p eval/tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "eval:discover:logprobs": "tsx eval/discovery/probe-logprobs.ts",
+    "eval:local:validate": "bash eval/local/scripts/validate-profiles.sh",
+    "eval:local:vllm": "bash eval/local/scripts/launch-vllm.sh",
+    "eval:local:llamacpp": "bash eval/local/scripts/launch-llamacpp.sh",
+    "eval:local:probe:logprobs": "bash eval/local/scripts/probe-logprobs.sh",
+    "eval:local:probe:hidden": "bash eval/local/scripts/probe-hidden-states.sh",
+    "eval:memory": "tsx eval/memory/run.ts",
+    "eval:repeng:validate": "python3 eval/repeng/validate_dataset.py --dataset eval/repeng/datasets/core-emotion-contrasts.json --dataset eval/repeng/datasets/acac-axis-contrasts.json --require-core-emotion-coverage --require-acac-coverage",
+    "eval:repeng:smoke": "python3 eval/repeng/train_control_vectors.py --dataset eval/repeng/fixtures/smoke-contrasts.json --output-dir eval/repeng/artifacts/smoke --backend fixture --model-id fixture-hash-v1 --layers 0,1 --vector-dim 8 --seed 13 --run-id psfn-repeng-smoke --force && python3 eval/repeng/sanity_check.py --artifact-dir eval/repeng/artifacts/smoke",
+    "eval:companion-shape:report": "tsx eval/companion-shape/report.ts",
+    "eval:regression": "tsx eval/companion-shape/regression.ts",
+    "eval:qao:judge": "tsx eval/companion-shape/qao-judge-run.ts",
+    "eval:qao:report": "tsx eval/companion-shape/qao-report.ts",
+    "eval:llm-response": "tsx eval/llm-response/run.ts",
+    "eval:logprob:collect": "tsx eval/logprob-harness/collect.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.11",
+    "@typescript-eslint/eslint-plugin": "8.56.0",
+    "@typescript-eslint/parser": "8.56.0",
+    "eslint": "10.0.0",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "vitest": "4.0.18"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

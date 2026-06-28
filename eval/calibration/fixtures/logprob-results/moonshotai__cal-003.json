@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-01-01T00:00:00.000Z",
+  "modelId": "moonshotai/kimi-k2.5",
+  "providerId": "deepinfra",
+  "scenarioId": "cal-003",
+  "scenarioDescription": "Fixture anger scenario",
+  "measurementLayer": "model_output",
+  "expectedLabels": [
+    "anger"
+  ],
+  "observedLabels": [
+    "anger"
+  ],
+  "baselineObservedLabels": [
+    "neutral"
+  ],
+  "averageSelfReportEntropy": 0.8,
+  "averageBaselineEntropy": 0.4,
+  "deltaEntropy": 0.4,
+  "suppressionSignals": [
+    {
+      "token": "neutral",
+      "alternativeLabel": "anger",
+      "alternativeProbability": 0.6,
+      "reason": "expected_label_alternative"
+    }
+  ],
+  "rawOutput": "{}",
+  "baselineRawOutput": "{}",
+  "tokenSummaries": [],
+  "baselineTokenSummaries": []
+}

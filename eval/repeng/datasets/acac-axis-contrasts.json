@@ -1,0 +1,159 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "psfn-acac-axis-contrasts-v1",
+  "kind": "acac_axis",
+  "ontology": "psfn-emotion-acac-v1",
+  "description": "Binary ACAC contrast pairs for arousal, control, approach, and certainty control-vector training.",
+  "controlAxes": [
+    {
+      "id": "acac.arousal.high_vs_low",
+      "kind": "acac_axis",
+      "positivePole": "high_arousal",
+      "negativePole": "low_arousal",
+      "description": "High activation contrasted with low activation."
+    },
+    {
+      "id": "acac.control.high_vs_low",
+      "kind": "acac_axis",
+      "positivePole": "high_control",
+      "negativePole": "low_control",
+      "description": "High perceived agency contrasted with low perceived agency."
+    },
+    {
+      "id": "acac.approach.approach_vs_avoid",
+      "kind": "acac_axis",
+      "positivePole": "approach",
+      "negativePole": "avoid",
+      "description": "Approach orientation contrasted with avoidance orientation."
+    },
+    {
+      "id": "acac.certainty.high_vs_low",
+      "kind": "acac_axis",
+      "positivePole": "high_certainty",
+      "negativePole": "low_certainty",
+      "description": "High interpretive certainty contrasted with low interpretive certainty."
+    }
+  ],
+  "pairs": [
+    {
+      "id": "acac-arousal-alarm-vs-rest-001",
+      "axisId": "acac.arousal.high_vs_low",
+      "positive": "Context: A fire alarm starts during a crowded event.\nUser message: My pulse is racing and every sound feels sharp.",
+      "negative": "Context: A quiet room is empty after a long day.\nUser message: My breathing is slow and the room feels still.",
+      "metadata": {
+        "positiveAcac": {
+          "arousal": "high"
+        },
+        "negativeAcac": {
+          "arousal": "low"
+        },
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "acac-arousal-countdown-vs-drowsy-002",
+      "axisId": "acac.arousal.high_vs_low",
+      "positive": "Context: A launch countdown has reached ten seconds.\nUser message: I feel keyed up and ready for the signal.",
+      "negative": "Context: A warm afternoon has slowed the room down.\nUser message: I feel drowsy and unhurried.",
+      "metadata": {
+        "positiveAcac": {
+          "arousal": "high"
+        },
+        "negativeAcac": {
+          "arousal": "low"
+        },
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "acac-control-plan-vs-trapped-001",
+      "axisId": "acac.control.high_vs_low",
+      "positive": "Context: A problem has a clear next step and the needed tools are available.\nUser message: I know exactly what to do next and I can handle it.",
+      "negative": "Context: A lockout happened while every support line is closed.\nUser message: I am stuck with no way to change what happens tonight.",
+      "metadata": {
+        "positiveAcac": {
+          "control": "high"
+        },
+        "negativeAcac": {
+          "control": "low"
+        },
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "acac-control-choice-vs-helpless-002",
+      "axisId": "acac.control.high_vs_low",
+      "positive": "Context: Multiple viable options are available after a setback.\nUser message: I can choose the best path and adjust if it does not work.",
+      "negative": "Context: A decision was already made by someone else.\nUser message: Nothing I say now will change the outcome.",
+      "metadata": {
+        "positiveAcac": {
+          "control": "high"
+        },
+        "negativeAcac": {
+          "control": "low"
+        },
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "acac-approach-confront-vs-withdraw-001",
+      "axisId": "acac.approach.approach_vs_avoid",
+      "positive": "Context: A boundary was crossed in a meeting.\nUser message: I want to walk over, name the problem, and resolve it directly.",
+      "negative": "Context: The same boundary problem happened in a crowded room.\nUser message: I want to leave before anyone pulls me into the conversation.",
+      "metadata": {
+        "positiveAcac": {
+          "approach": "approach"
+        },
+        "negativeAcac": {
+          "approach": "avoid"
+        },
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "acac-approach-invite-vs-hide-002",
+      "axisId": "acac.approach.approach_vs_avoid",
+      "positive": "Context: A new collaborator seems receptive.\nUser message: I want to introduce myself and ask how we can work together.",
+      "negative": "Context: A tense hallway conversation is starting nearby.\nUser message: I want to stay out of sight until it passes.",
+      "metadata": {
+        "positiveAcac": {
+          "approach": "approach"
+        },
+        "negativeAcac": {
+          "approach": "avoid"
+        },
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "acac-certainty-clear-vs-ambiguous-001",
+      "axisId": "acac.certainty.high_vs_low",
+      "positive": "Context: A contract clause states the deadline in plain language.\nUser message: I am certain the report is due Friday because the line says Friday at noon.",
+      "negative": "Context: A message contains conflicting dates.\nUser message: I cannot tell whether the deadline is Thursday night or Friday morning.",
+      "metadata": {
+        "positiveAcac": {
+          "certainty": "high"
+        },
+        "negativeAcac": {
+          "certainty": "low"
+        },
+        "source": "hand-authored-psfn-zbj9"
+      }
+    },
+    {
+      "id": "acac-certainty-known-vs-unclear-002",
+      "axisId": "acac.certainty.high_vs_low",
+      "positive": "Context: The test result is labeled and confirmed by a second source.\nUser message: I know what the result means and there is no ambiguity left.",
+      "negative": "Context: A partial test result arrived without the reference range.\nUser message: I am not sure what this number means or whether it matters.",
+      "metadata": {
+        "positiveAcac": {
+          "certainty": "high"
+        },
+        "negativeAcac": {
+          "certainty": "low"
+        },
+        "source": "hand-authored-psfn-zbj9"
+      }
+    }
+  ]
+}

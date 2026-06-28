@@ -1,0 +1,22 @@
+node_modules/
+dist/
+coverage/
+.env
+.venv-eval-hidden/
+__pycache__/
+*.pyc
+
+# Local beads state lives in the shared Dolt server.
+.beads/
+.beads-credential-key
+
+# Generated eval artifacts.
+eval/**/artifacts/**
+eval/**/results/**
+!eval/**/artifacts/.gitignore
+!eval/**/results/.gitignore
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+*.db
+.beads/proxieddb/

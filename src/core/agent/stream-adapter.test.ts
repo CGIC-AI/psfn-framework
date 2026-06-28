@@ -662,6 +662,106 @@ describe('createSubstrateStreamFn', () => {
     expect((streamAdapterMocks.transportStream.mock.calls[1]?.[0] as LLMContext).modelHint?.model).toBe('moonshotai/kimi-k2.5');
   });
 
+  it('falls back to the next configured chat candidate when the primary response has no text', async () => {
+    process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
+    const config = makeConfig({
+      primaryModel: 'ChatGPTN',
+      primaryProvider: 'litellm',
+      modelRoster: {
+        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chatgptn-primary',
+            rank: 10,
+            identity: {
+              provider: 'litellm',
+              model: 'ChatGPTN',
+              source: { type: 'litellm' },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+            },
+          },
+          {
+            id: 'openai-nano-fallback',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'openai/gpt-5.4-nano',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 2048,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 2048,
+            },
+          },
+        ],
+      },
+    });
+
+    streamAdapterMocks.transportStream.mockImplementation((context: LLMContext) => {
+      if (context.modelHint?.model === 'ChatGPTN') {
+        return Promise.resolve({
+          content: '',
+          toolCalls: [],
+          model: 'ChatGPTN',
+          inputTokens: 11,
+          outputTokens: 0,
+          stopReason: 'stop',
+        });
+      }
+
+      return Promise.resolve({
+        content: 'Recovered on nano.',
+        toolCalls: [],
+        model: 'openrouter/openai/gpt-5.4-nano',
+        inputTokens: 7,
+        outputTokens: 4,
+        stopReason: 'stop',
+      });
+    });
+
+    const streamFn = makeStreamFn(config);
+    const model = resolveModel(config, 'chat');
+    const events = await runWithRequestContext(
+      {
+        turnId: 'turn-empty-primary-1',
+        requestId: 'req-empty-primary-1',
+        channelId: 'channel-empty-primary-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+        purpose: 'agent.turn.prompt',
+      },
+      async () => {
+        const stream = await streamFn(model, {
+          systemPrompt: 'System',
+          messages: [{ role: 'user', content: 'hello' }],
+        } as any, {});
+        return await collectStreamEvents(stream as AsyncIterable<unknown>);
+      },
+    );
+
+    expect((events.at(-1) as { type: string; message: { model: string } }).type).toBe('done');
+    expect((events.at(-1) as { message: { model: string } }).message.model).toBe('openrouter/openai/gpt-5.4-nano');
+    expect(streamAdapterMocks.transportStream).toHaveBeenCalledTimes(2);
+    expect((streamAdapterMocks.transportStream.mock.calls[0]?.[0] as LLMContext).modelHint?.model).toBe('ChatGPTN');
+    expect((streamAdapterMocks.transportStream.mock.calls[1]?.[0] as LLMContext).modelHint?.model).toBe('openai/gpt-5.4-nano');
+  });
+
   it('routes tool-side reasoning streams through the reasoning candidate instead of the mounted chat model', async () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({

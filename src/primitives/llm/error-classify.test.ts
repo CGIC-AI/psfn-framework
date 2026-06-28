@@ -54,6 +54,15 @@ describe('classifyLLMError', () => {
     expect(result.statusCode).toBe(401);
   });
 
+  it('classifies empty provider responses as retryable', () => {
+    const result = classifyLLMError(
+      new Error('LLM response from litellm/ChatGPTN contained no text or tool calls'),
+    );
+
+    expect(result.category).toBe('empty_response');
+    expect(result.retryable).toBe(true);
+  });
+
   it('defaults to unknown for unmatched errors', () => {
     const result = classifyLLMError(new Error('something odd happened'));
     expect(result.category).toBe('unknown');

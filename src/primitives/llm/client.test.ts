@@ -2092,6 +2092,105 @@ describe('LLMClient model budget gates and usage metering', () => {
     expect((blockedEvents[0].estimatedRequestCostUsd as number)).toBeGreaterThan(0);
   });
 
+  it('falls back to a secondary chat candidate when the primary stream returns no text', async () => {
+    const config = makeConfig({
+      primaryModel: 'ChatGPTN',
+      primaryProvider: 'litellm',
+      modelRoster: {
+        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chatgptn-primary',
+            rank: 10,
+            identity: {
+              provider: 'litellm',
+              model: 'ChatGPTN',
+              source: { type: 'litellm' },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+            },
+          },
+          {
+            id: 'openai-nano-fallback',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'openai/gpt-5.4-nano',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 2048,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 2048,
+            },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+    });
+
+    mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
+      if (model.id === 'ChatGPTN') {
+        yield {
+          type: 'done',
+          message: {
+            model: 'ChatGPTN',
+            usage: { input: 10, output: 0 },
+            content: [],
+          },
+          reason: 'stop',
+        };
+        return;
+      }
+
+      yield {
+        type: 'done',
+        message: {
+          model: model.id,
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: 'Recovered on nano.' }],
+        },
+        reason: 'stop',
+      };
+    })());
+
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello there' }],
+      correlation: {
+        turnId: 'turn-empty-primary-1',
+        requestId: 'req-empty-primary-1',
+        channelId: 'channel-empty-primary-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    });
+
+    expect(response.content).toBe('Recovered on nano.');
+    expect(response.model).toBe('openrouter/openai/gpt-5.4-nano');
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect(mocks.streamSimple.mock.calls.map(call => (call[0] as { id: string }).id)).toEqual([
+      'ChatGPTN',
+      'openrouter/openai/gpt-5.4-nano',
+    ]);
+  });
+
   it('persists usage ledger records after successful completion call', async () => {
     const config = makeConfig();
     const client = new LLMClient(config, 'http://litellm.test/v1');

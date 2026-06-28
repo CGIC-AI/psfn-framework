@@ -4,6 +4,7 @@ export type LLMErrorCategory =
   | 'rate_limit'
   | 'timeout'
   | 'auth'
+  | 'empty_response'
   | 'unknown';
 
 export interface LLMErrorClassification {
@@ -71,6 +72,14 @@ const AUTH_PATTERNS = [
   'permission denied',
 ] as const;
 
+const EMPTY_RESPONSE_PATTERNS = [
+  'contained no text',
+  'contained no text or tool calls',
+  'empty response',
+  'empty assistant',
+  'no text content',
+] as const;
+
 function getStatusCode(error: ErrorLike): number | undefined {
   const fromError = typeof error.status === 'number' ? error.status : undefined;
   if (fromError !== undefined && Number.isFinite(fromError)) return fromError;
@@ -134,6 +143,10 @@ export function classifyLLMError(error: unknown): LLMErrorClassification {
 
   if (statusCode === 401 || statusCode === 403 || includesAny(text, AUTH_PATTERNS)) {
     return { category: 'auth', retryable: true, ...(statusCode !== undefined ? { statusCode } : {}) };
+  }
+
+  if (includesAny(text, EMPTY_RESPONSE_PATTERNS)) {
+    return { category: 'empty_response', retryable: true, ...(statusCode !== undefined ? { statusCode } : {}) };
   }
 
   return { category: 'unknown', retryable: true, ...(statusCode !== undefined ? { statusCode } : {}) };

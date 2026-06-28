@@ -140,6 +140,10 @@ export class FallbackRunner {
       log.error('All fallback candidates exhausted', {
         purpose,
         attempts: attempt,
+        candidateCount: orderedCandidates.length,
+        fallbackAvailable: orderedCandidates.length > 1,
+        failedModel: candidate.model,
+        failedProvider: candidate.provider,
         lastCategory: classification.category,
         lastError: err.message,
         ...correlationFields,

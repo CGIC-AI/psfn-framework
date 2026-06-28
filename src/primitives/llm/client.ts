@@ -1073,11 +1073,12 @@ export class LLMClient {
             }
 
             if (response) {
+              assertUsableProviderResponse(response, candidateTarget);
               return response;
             }
 
             log.warn('Stream completed without done event', { model: String(model.id), hasContent: !!content });
-            return {
+            const incompleteResponse = {
               content,
               ...(reasoning ? { reasoning } : {}),
               providerObservability,
@@ -1088,6 +1089,8 @@ export class LLMClient {
               usageDetails: normalizeLLMUsageDetails(undefined, 0, 0),
               stopReason: 'unknown',
             };
+            assertUsableProviderResponse(incompleteResponse, candidateTarget);
+            return incompleteResponse;
           }, llmRetryConfig(this.config), {
             onRetry: ({ attempt, maxRetries, delayMs, error }) => {
               log.warn('LLM stream failed, retrying', {
@@ -1169,10 +1172,12 @@ export class LLMClient {
       routingPurpose,
       async (candidateTarget) => {
         if (this.transport) {
-          return await this.transport.complete(
+          const response = await this.transport.complete(
             this.buildTransportContext(context, candidateTarget, correlation),
             purpose,
           );
+          assertUsableProviderResponse(response, candidateTarget);
+          return response;
         }
         const { model, apiKey } = this.getModelAndKey(candidateTarget);
         const requestOptions = this.buildRequestOptions(candidateTarget, apiKey, {
@@ -1198,8 +1203,10 @@ export class LLMClient {
         };
 
         if (options.disableRetry) {
+          const response = await request();
+          assertUsableProviderResponse(response, candidateTarget);
           return {
-            response: await request(),
+            response,
             providerObservability,
           };
         }
@@ -1219,6 +1226,7 @@ export class LLMClient {
             });
           },
         });
+        assertUsableProviderResponse(response, candidateTarget);
         return { response, providerObservability };
       },
         {
@@ -1573,6 +1581,28 @@ function extractToolCallsFromContentBlocks(blocks?: unknown[]): ToolCall[] {
         : {},
     }];
   });
+}
+
+function assertUsableProviderResponse(
+  response: {
+    content?: unknown;
+    toolCalls?: unknown;
+  },
+  candidate: RoutingCandidate,
+): void {
+  const contentBlocks = Array.isArray(response.content) ? response.content : undefined;
+  const content = typeof response.content === 'string'
+    ? response.content
+    : extractTextContent(contentBlocks);
+  const normalizedContent = normalizeContent(content);
+  const directToolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : [];
+  const blockToolCalls = extractToolCallsFromContentBlocks(contentBlocks);
+
+  if (normalizedContent.trim().length > 0 || directToolCalls.length > 0 || blockToolCalls.length > 0) {
+    return;
+  }
+
+  throw new Error(`LLM response from ${candidate.provider}/${candidate.model} contained no text or tool calls`);
 }
 
 function normalizeProxyModelId(provider: string, modelId: string): string {

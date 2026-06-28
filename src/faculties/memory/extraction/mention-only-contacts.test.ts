@@ -216,3 +216,83 @@ describe('MemoryExtractor mention-only contacts', () => {
     expect(memoryStore.getMemoriesByContact(primary.id, 10)).toHaveLength(1);
   });
 });
+
+describe('MemoryExtractor group-room speaker ownership', () => {
+  let db: Database.Database;
+  let memoryStore: MemoryStore;
+  let contactStore: ContactStore;
+
+  beforeEach(() => {
+    db = new Database(':memory:');
+    sqliteVec.load(db);
+    memoryStore = new MemoryStore(db);
+    contactStore = new ContactStore(db, PRIMARY_USER_ID);
+  });
+
+  it('writes clear mixed-speaker facts under the source speaker contact', async () => {
+    const mrDragonFox = contactStore.upsert({
+      displayName: 'MrDragonFox',
+      discordUserId: 'discord-mrdragonfox',
+    });
+    const vega = contactStore.upsert({
+      displayName: 'Vega',
+      discordUserId: 'discord-vega',
+    });
+    const entries = [
+      {
+        id: 1,
+        channelId: 'discord:kube',
+        role: 'user',
+        authorId: 'discord-mrdragonfox',
+        authorName: 'MrDragonFox',
+        content: 'ya i mean if we put her on twitch or yt live or ticktok we need also guardrails',
+        timestamp: 1,
+      },
+      {
+        id: 2,
+        channelId: 'discord:kube',
+        role: 'user',
+        authorId: 'discord-vega',
+        authorName: 'Vega',
+        content: 'I can collect the notes after we finish this pass.',
+        timestamp: 2,
+      },
+    ];
+    const extractor = new MemoryExtractor(
+      {
+        complete: vi.fn().mockResolvedValue({
+          content: `<response>
+<fact>
+<text>MrDragonFox believes that if Carlini is put on Twitch, YouTube, or TikTok live, guardrails are needed.</text>
+<type>semantic</type>
+<importance>0.92</importance>
+<confidence>0.95</confidence>
+</fact>
+</response>`,
+        }),
+      } as any,
+      {
+        characterName: 'Carlini',
+        getRecentMessages: vi.fn().mockReturnValue(entries),
+      } as any,
+      memoryStore,
+      {
+        embed: vi.fn().mockResolvedValue(makeEmbedding()),
+        embedBatch: vi.fn(),
+        dims: EMBEDDING_DIMS,
+      } as any,
+      { emit: vi.fn().mockResolvedValue(undefined) } as any,
+      { extractionInterval: 5 },
+      null,
+      null,
+      contactStore,
+    );
+
+    await extractor.extract('discord:kube', vega.id);
+
+    expect(memoryStore.getMemoriesByContact(mrDragonFox.id, 10).map(memory => memory.text)).toContain(
+      'MrDragonFox believes that if Carlini is put on Twitch, YouTube, or TikTok live, guardrails are needed.',
+    );
+    expect(memoryStore.getMemoriesByContact(vega.id, 10)).toHaveLength(0);
+  });
+});

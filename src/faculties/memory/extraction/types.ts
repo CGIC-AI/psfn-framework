@@ -28,6 +28,7 @@ export type ExtractionRejectionReason =
   | 'low_confidence'
   | 'low_novelty'
   | 'low_signal'
+  | 'ambiguous_speaker'
   | 'write_cap';
 
 export type ExtractionPreLlmGateReason =
@@ -53,6 +54,9 @@ export interface ExtractionEndTelemetry {
   count: number;
   turnId?: TurnID;
   triggerReason: ExtractionTriggerReason;
+  triggerContactId?: string;
+  routedContactIds?: string[];
+  sourceSpeakerNames?: string[];
   coveredUpToMessageId?: number;
   parsedCount: number;
   acceptedCount: number;
@@ -61,6 +65,8 @@ export interface ExtractionEndTelemetry {
   deduplicatedCount: number;
   supersededCount: number;
   rejectionBreakdown: Record<ExtractionRejectionReason, number>;
+  routedFactCount?: number;
+  ambiguousSpeakerSkippedCount?: number;
   compositionalMode: 'legacy' | 'chunk_compose';
   chunkCount: number;
   mergedFactCount: number;
@@ -88,6 +94,9 @@ export interface AcceptedFactWrite {
   memoryId: string;
   importance: number;
   confidence: number;
+  contactId?: string;
+  triggerContactId?: string;
+  sourceSpeakerName?: string;
 }
 
 export interface AcceptedFactCandidate {

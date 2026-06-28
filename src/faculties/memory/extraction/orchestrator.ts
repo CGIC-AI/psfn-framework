@@ -28,6 +28,13 @@ import {
   type ExtractionParticipantNames,
 } from './naming.js';
 import {
+  buildSpeakerRoutingContext,
+  resolveFactRouting,
+  type ExtractionFactRouting,
+  type ExtractionSourceSpeaker,
+  type FactRoutingDecision,
+} from './speaker-routing.js';
+import {
   applyChannelImportanceCaps,
   buildExtractionSourceRef,
   compareAcceptedFactCandidates,
@@ -49,6 +56,9 @@ import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './types.js';
 const log = createComponentLogger('Extraction');
 
 type ExtractionIntegrityErrorStage = 'orchestration' | 'fact_processing';
+type RoutedAcceptedFactCandidate = AcceptedFactCandidate & {
+  routing: Extract<FactRoutingDecision, { status: 'route' }>;
+};
 
 export interface ExtractionIntegrityErrorContext {
   stage: ExtractionIntegrityErrorStage;
@@ -80,6 +90,17 @@ function extractionRejectionReasonForWritePolicy(
     : 'low_importance';
 }
 
+function createEmptyRejectionBreakdown(): Record<ExtractionRejectionReason, number> {
+  return {
+    low_importance: 0,
+    low_confidence: 0,
+    low_novelty: 0,
+    low_signal: 0,
+    ambiguous_speaker: 0,
+    write_cap: 0,
+  };
+}
+
 export interface ExtractionRunOptions {
   channelId: string;
   triggerReason: ExtractionTriggerReason;
@@ -90,6 +111,7 @@ export interface ExtractionRunOptions {
     recentEntries: readonly SessionEntry[],
     canonicalContactId?: string,
   ) => ExtractionParticipantNames;
+  resolveSourceSpeakerContactId?: (speaker: ExtractionSourceSpeaker) => Promise<string | undefined>;
   llmClient: LLMProviderPort;
   sessionManager: SessionManager;
   memoryStore: MemoryStorePort;
@@ -100,7 +122,12 @@ export interface ExtractionRunOptions {
   useCompositionalExtraction: boolean;
   isAcceptingExtractions: () => boolean;
   adjustFactForWrite?: (fact: ExtractedFact) => ExtractedFact;
-  processFact: (fact: ExtractedFact, sourceRef: string, canonicalContactId?: string) => Promise<WriteResult>;
+  processFact: (
+    fact: ExtractedFact,
+    sourceRef: string,
+    canonicalContactId?: string,
+    routing?: ExtractionFactRouting,
+  ) => Promise<WriteResult>;
   emitExtractionStart: (
     channelId: string,
     triggerReason: ExtractionTriggerReason,
@@ -164,13 +191,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
           writeCount: 0,
           deduplicatedCount: 0,
           supersededCount: 0,
-          rejectionBreakdown: {
-            low_importance: 0,
-            low_confidence: 0,
-            low_novelty: 0,
-            low_signal: 0,
-            write_cap: 0,
-          },
+          rejectionBreakdown: createEmptyRejectionBreakdown(),
           compositionalMode: options.useCompositionalExtraction ? 'chunk_compose' : 'legacy',
           chunkCount: 0,
           mergedFactCount: 0,
@@ -194,6 +215,10 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     );
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
     const participantNames = options.resolveParticipantNames?.(recentEntries, options.canonicalContactId) ?? {};
+    const speakerRouting = await buildSpeakerRoutingContext(
+      recentEntries,
+      options.resolveSourceSpeakerContactId,
+    );
 
     const existing = await options.memoryStore.getMemoriesByChannel(options.channelId, 30);
     const noveltyCorpus = existing.map(m => m.text);
@@ -296,11 +321,8 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         deduplicatedCount: 0,
         supersededCount: 0,
         rejectionBreakdown: {
-          low_importance: 0,
-          low_confidence: 0,
-          low_novelty: 0,
+          ...createEmptyRejectionBreakdown(),
           low_signal: participantNameHygieneRejectedCount,
-          write_cap: 0,
         },
         compositionalMode,
         chunkCount: entryChunks.length,
@@ -311,15 +333,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       return;
     }
 
-    const rejectionBreakdown: Record<ExtractionRejectionReason, number> = {
-      low_importance: 0,
-      low_confidence: 0,
-      low_novelty: 0,
-      low_signal: participantNameHygieneRejectedCount,
-      write_cap: 0,
-    };
+    const rejectionBreakdown: Record<ExtractionRejectionReason, number> = createEmptyRejectionBreakdown();
+    rejectionBreakdown.low_signal = participantNameHygieneRejectedCount;
 
-    const acceptedCandidates: AcceptedFactCandidate[] = [];
+    let ambiguousSpeakerSkippedCount = 0;
+    const acceptedCandidates: RoutedAcceptedFactCandidate[] = [];
     for (const [index, fact] of facts.entries()) {
       const decision = evaluateFactAcceptance(fact, noveltyCorpus, options.gateConfig);
       if (!decision.accepted) {
@@ -340,8 +358,28 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         continue;
       }
 
+      const routing = resolveFactRouting(fact, speakerRouting, options.canonicalContactId);
+      if (routing.status === 'skip') {
+        ambiguousSpeakerSkippedCount++;
+        rejectionBreakdown.ambiguous_speaker++;
+        if (options.telemetryEnabled) {
+          log.debug('Skipped extracted fact due to ambiguous group-room speaker ownership', {
+            channelId: options.channelId,
+            triggerReason: options.triggerReason,
+            factIndex: index,
+            factType: fact.type,
+            routingReason: routing.reason,
+            triggerContactId: options.canonicalContactId,
+            sourceSpeakerName: routing.sourceSpeakerName,
+            speakerCount: speakerRouting.speakers.length,
+          });
+        }
+        continue;
+      }
+
       acceptedCandidates.push({
         fact,
+        routing,
         novelty: decision.novelty,
         valueScore: computeFactValueScore(fact, decision.novelty),
         index,
@@ -370,13 +408,35 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     let writeCount = 0;
     let deduplicatedCount = 0;
     let supersededCount = 0;
+    let routedFactCount = 0;
     const acceptedWrites: AcceptedFactWrite[] = [];
+    const acceptedFactsByContact = new Map<string | undefined, ExtractedFact[]>();
+    const routedContactIds = new Set<string>();
+    const sourceSpeakerNames = new Set<string>();
 
     for (const candidate of selectedCandidates) {
       const { fact } = candidate;
+      const { routing } = candidate;
+
+      const routingTelemetry: ExtractionFactRouting = {
+        ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
+        ...(routing.contactId ? { routedContactId: routing.contactId } : {}),
+        ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
+        routingReason: routing.reason,
+      };
+
       try {
-        const result = await options.processFact(fact, sourceRef, options.canonicalContactId);
+        const result = await options.processFact(fact, sourceRef, routing.contactId, routingTelemetry);
         acceptedCount++;
+        const routedToDifferentContact = Boolean(
+          routing.contactId
+            && options.canonicalContactId
+            && routing.contactId !== options.canonicalContactId,
+        );
+        if (routedToDifferentContact) routedFactCount++;
+        if (routing.contactId) routedContactIds.add(routing.contactId);
+        if (routing.sourceSpeakerName) sourceSpeakerNames.add(routing.sourceSpeakerName);
+        appendAcceptedFactForContact(acceptedFactsByContact, routing.contactId, fact);
 
         switch (result.action) {
           case 'created':
@@ -388,6 +448,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
               memoryId: result.memory.id,
               importance: fact.importance,
               confidence: fact.confidence,
+              ...(routing.contactId ? { contactId: routing.contactId } : {}),
+              ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
+              ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
             });
             break;
           case 'superseded':
@@ -397,6 +460,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
               memoryId: result.memory.id,
               importance: fact.importance,
               confidence: fact.confidence,
+              ...(routing.contactId ? { contactId: routing.contactId } : {}),
+              ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
+              ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
             });
             break;
           case 'deduplicated':
@@ -445,6 +511,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       count: acceptedCount,
       ...(turnId ? { turnId } : {}),
       triggerReason: options.triggerReason,
+      ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
+      ...(routedContactIds.size > 0 ? { routedContactIds: [...routedContactIds].sort() } : {}),
+      ...(sourceSpeakerNames.size > 0 ? { sourceSpeakerNames: [...sourceSpeakerNames].sort() } : {}),
       coveredUpToMessageId: coveredUpToMessageId ?? undefined,
       parsedCount: facts.length + participantNameHygieneRejectedCount,
       acceptedCount,
@@ -453,6 +522,8 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       deduplicatedCount,
       supersededCount,
       rejectionBreakdown,
+      routedFactCount,
+      ambiguousSpeakerSkippedCount,
       compositionalMode,
       chunkCount: entryChunks.length,
       mergedFactCount: mergedParsedFacts.length,
@@ -465,17 +536,26 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     }
     options.recordExtractionMarker(options.channelId, coveredUpToMessageId);
     await options.emitExtractionEnd(telemetry);
-    options.maybePersistEmotionalState(
-      options.canonicalContactId,
-      acceptedCandidates.map(candidate => candidate.fact),
-      recentEntries,
-    );
-    options.maybeRefreshContactProfile(
-      options.channelId,
-      options.triggerReason,
-      options.canonicalContactId,
-      acceptedWrites,
-    );
+    const emotionalFactGroups = acceptedFactsByContact.size > 0
+      ? acceptedFactsByContact
+      : new Map<string | undefined, ExtractedFact[]>([[options.canonicalContactId, []]]);
+    for (const [contactId, acceptedFacts] of emotionalFactGroups.entries()) {
+      options.maybePersistEmotionalState(
+        contactId,
+        acceptedFacts,
+        recentEntries,
+      );
+    }
+
+    const refreshGroups = groupAcceptedWritesByContact(acceptedWrites, options.canonicalContactId);
+    for (const [contactId, writes] of refreshGroups.entries()) {
+      options.maybeRefreshContactProfile(
+        options.channelId,
+        options.triggerReason,
+        contactId,
+        writes,
+      );
+    }
   } catch (error) {
     const wrapped = error instanceof ExtractionIntegrityError
       ? error
@@ -500,4 +580,39 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function appendAcceptedFactForContact(
+  groups: Map<string | undefined, ExtractedFact[]>,
+  contactId: string | undefined,
+  fact: ExtractedFact,
+): void {
+  const existing = groups.get(contactId);
+  if (existing) {
+    existing.push(fact);
+    return;
+  }
+  groups.set(contactId, [fact]);
+}
+
+function groupAcceptedWritesByContact(
+  writes: readonly AcceptedFactWrite[],
+  fallbackContactId: string | undefined,
+): Map<string | undefined, AcceptedFactWrite[]> {
+  const groups = new Map<string | undefined, AcceptedFactWrite[]>();
+  if (writes.length === 0) {
+    groups.set(fallbackContactId, []);
+    return groups;
+  }
+
+  for (const write of writes) {
+    const contactId = write.contactId ?? fallbackContactId;
+    const existing = groups.get(contactId);
+    if (existing) {
+      existing.push(write);
+      continue;
+    }
+    groups.set(contactId, [write]);
+  }
+  return groups;
 }

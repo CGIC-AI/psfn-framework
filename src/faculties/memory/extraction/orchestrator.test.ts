@@ -4,6 +4,7 @@ import {
   runExtractionOrchestration,
   type ExtractionRunOptions,
 } from './orchestrator.js';
+import type { ExtractionSourceSpeaker } from './speaker-routing.js';
 import { MemoryWritePolicyError } from '../writer.js';
 
 function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): ExtractionRunOptions {
@@ -207,7 +208,10 @@ describe('runExtractionOrchestration naming fidelity', () => {
     }), 'extraction');
     expect(processFact).toHaveBeenCalledWith(expect.objectContaining({
       text: "Alex appreciates Lyra's patience.",
-    }), expect.any(String), undefined);
+    }), expect.any(String), undefined, expect.objectContaining({
+      routingReason: 'single_speaker_transcript',
+      sourceSpeakerName: 'Alex',
+    }));
   });
 
   it('normalizes resolved raw macros before writes', async () => {
@@ -401,6 +405,164 @@ describe('runExtractionOrchestration naming fidelity', () => {
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining('assistant: I will keep it simple.'),
     }), 'extraction');
+  });
+});
+
+describe('runExtractionOrchestration group-room speaker routing', () => {
+  it('routes a clear mixed-speaker fact to the source speaker contact instead of the trigger contact', async () => {
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-mrdragonfox' },
+    });
+    const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
+    const maybePersistEmotionalState = vi.fn();
+    const maybeRefreshContactProfile = vi.fn();
+    const resolveSourceSpeakerContactId = vi.fn(async (speaker: ExtractionSourceSpeaker) => {
+      if (speaker.authorId === 'discord-mrdragonfox') return 'contact-mrdragonfox';
+      if (speaker.authorId === 'discord-vega') return 'contact-vega';
+      return undefined;
+    });
+    const options = buildOptions({
+      channelId: 'discord:kube',
+      canonicalContactId: 'contact-vega',
+      recoveredEntries: [
+        {
+          id: 1,
+          channelId: 'discord:kube',
+          role: 'user',
+          authorId: 'discord-mrdragonfox',
+          authorName: 'MrDragonFox',
+          content: 'ya i mean if we put her on twitch or yt live or ticktok we need also guardrails',
+          timestamp: 1,
+        },
+        {
+          id: 2,
+          channelId: 'discord:kube',
+          role: 'user',
+          authorId: 'discord-vega',
+          authorName: 'Vega',
+          content: 'I can collect the notes after we finish this pass.',
+          timestamp: 2,
+        },
+      ] as ExtractionRunOptions['recoveredEntries'],
+      llmClient: {
+        complete: vi.fn().mockResolvedValue({
+          content: `<response>
+<fact>
+<text>MrDragonFox believes that if Carlini is put on Twitch, YouTube, or TikTok live, guardrails are needed.</text>
+<type>semantic</type>
+<importance>0.92</importance>
+<confidence>0.95</confidence>
+</fact>
+</response>`,
+        }),
+      } as ExtractionRunOptions['llmClient'],
+      processFact,
+      emitExtractionEnd,
+      maybePersistEmotionalState,
+      maybeRefreshContactProfile,
+      resolveSourceSpeakerContactId,
+      resolveCoveredUpToMessageId: vi.fn().mockReturnValue(2),
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(processFact).toHaveBeenCalledTimes(1);
+    expect(processFact).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringContaining('MrDragonFox believes'),
+    }), expect.any(String), 'contact-mrdragonfox', expect.objectContaining({
+      triggerContactId: 'contact-vega',
+      routedContactId: 'contact-mrdragonfox',
+      sourceSpeakerName: 'MrDragonFox',
+      routingReason: 'speaker_name_prefix',
+    }));
+    expect(maybePersistEmotionalState).toHaveBeenCalledWith(
+      'contact-mrdragonfox',
+      [expect.objectContaining({ text: expect.stringContaining('MrDragonFox believes') })],
+      expect.any(Array),
+    );
+    expect(maybeRefreshContactProfile).toHaveBeenCalledWith(
+      'discord:kube',
+      'manual',
+      'contact-mrdragonfox',
+      [expect.objectContaining({
+        contactId: 'contact-mrdragonfox',
+        triggerContactId: 'contact-vega',
+        sourceSpeakerName: 'MrDragonFox',
+      })],
+    );
+    expect(maybeRefreshContactProfile.mock.calls.map(call => call[2])).not.toContain('contact-vega');
+    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+      triggerContactId: 'contact-vega',
+      routedContactIds: ['contact-mrdragonfox'],
+      sourceSpeakerNames: ['MrDragonFox'],
+      routedFactCount: 1,
+      ambiguousSpeakerSkippedCount: 0,
+      rejectionBreakdown: expect.objectContaining({
+        ambiguous_speaker: 0,
+      }),
+    }));
+  });
+
+  it('skips ambiguous mixed-speaker facts instead of defaulting them to the trigger contact', async () => {
+    const processFact = vi.fn();
+    const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
+    const options = buildOptions({
+      channelId: 'discord:kube',
+      canonicalContactId: 'contact-vega',
+      recoveredEntries: [
+        {
+          id: 1,
+          channelId: 'discord:kube',
+          role: 'user',
+          authorId: 'discord-mrdragonfox',
+          authorName: 'MrDragonFox',
+          content: 'Guardrails matter before any streams happen.',
+          timestamp: 1,
+        },
+        {
+          id: 2,
+          channelId: 'discord:kube',
+          role: 'user',
+          authorId: 'discord-vega',
+          authorName: 'Vega',
+          content: 'I can help with notes later.',
+          timestamp: 2,
+        },
+      ] as ExtractionRunOptions['recoveredEntries'],
+      llmClient: {
+        complete: vi.fn().mockResolvedValue({
+          content: `<response>
+<fact>
+<text>Carlini needs stronger launch planning.</text>
+<type>semantic</type>
+<importance>0.9</importance>
+<confidence>0.9</confidence>
+</fact>
+</response>`,
+        }),
+      } as ExtractionRunOptions['llmClient'],
+      processFact,
+      emitExtractionEnd,
+      resolveSourceSpeakerContactId: vi.fn(async (speaker: ExtractionSourceSpeaker) => {
+        if (speaker.authorId === 'discord-mrdragonfox') return 'contact-mrdragonfox';
+        if (speaker.authorId === 'discord-vega') return 'contact-vega';
+        return undefined;
+      }),
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(processFact).not.toHaveBeenCalled();
+    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+      acceptedCount: 0,
+      rejectedCount: 1,
+      writeCount: 0,
+      ambiguousSpeakerSkippedCount: 1,
+      rejectionBreakdown: expect.objectContaining({
+        ambiguous_speaker: 1,
+      }),
+    }));
   });
 });
 

@@ -1156,6 +1156,10 @@ describe('MemoryExtractor refusal boundary extraction', () => {
       undefined,
       'manual',
       undefined,
+      expect.objectContaining({
+        routingReason: 'single_speaker_transcript',
+        sourceSpeakerName: 'user',
+      }),
     );
     expect(processFact.mock.calls[0][0].text.toLowerCase()).toContain('paywall');
 

@@ -234,6 +234,9 @@ export interface EventMap {
     channelId: string;
     count: number;
     triggerReason?: string;
+    triggerContactId?: string;
+    routedContactIds?: string[];
+    sourceSpeakerNames?: string[];
     coveredUpToMessageId?: number;
     parsedCount?: number;
     acceptedCount?: number;
@@ -242,6 +245,8 @@ export interface EventMap {
     deduplicatedCount?: number;
     supersededCount?: number;
     rejectionBreakdown?: Record<string, number>;
+    routedFactCount?: number;
+    ambiguousSpeakerSkippedCount?: number;
     compositionalMode?: 'legacy' | 'chunk_compose';
     chunkCount?: number;
     mergedFactCount?: number;

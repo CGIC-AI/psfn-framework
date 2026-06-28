@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { v7 as uuidv7 } from 'uuid';
 import type Database from 'better-sqlite3';
 import type {
   Contact,
@@ -153,7 +153,7 @@ export function upsertContact(
     || (legacyDiscordUserId ? isPrimaryIdentity({ channel: LEGACY_DISCORD_CHANNEL, userId: legacyDiscordUserId }, context.primaryUserId) : false);
 
   const contact: Contact = {
-    id: partial.id ?? uuidv4(),
+    id: partial.id ?? uuidv7(),
     discordUserId: legacyDiscordUserId,
     displayName: partial.displayName,
     nickname: normalizeNicknameValue(partial.nickname) ?? undefined,

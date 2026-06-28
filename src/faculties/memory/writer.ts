@@ -1,7 +1,7 @@
 // ── Memory Writer ──
 // Shared write/dedup/contradiction logic used by both MemoryExtractor and tools.
 
-import { v4 as uuidv4 } from 'uuid';
+import { v7 as uuidv7 } from 'uuid';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import type {
   MemoryEvolutionLink,
@@ -920,7 +920,7 @@ export class MemoryWriter {
     // 3. Insert new memory
     const now = Number.isFinite(extractedAt) ? Number(extractedAt) : Date.now();
     const memory: PurrMemory = {
-      id: uuidv4(),
+      id: uuidv7(),
       text,
       type,
       importance,
@@ -1103,7 +1103,7 @@ export class MemoryWriter {
     // Always insert the new memory
     const now = Number.isFinite(extractedAt) ? Number(extractedAt) : Date.now();
     const memory: PurrMemory = {
-      id: uuidv4(),
+      id: uuidv7(),
       text,
       type,
       importance,
@@ -1306,7 +1306,7 @@ export class MemoryWriter {
         : existing.formationVAD,
       tags: updates.tags ?? existing.tags,
     };
-    const patchEventId = uuidv4();
+    const patchEventId = uuidv7();
 
     this.memoryStore.runInTransaction(() => {
       this.memoryStore.updateMemory(memoryId, updates);
@@ -1359,7 +1359,7 @@ export class MemoryWriter {
     const reason = opts.reason?.trim() || undefined;
     const reviewReferencePath = opts.referencePath?.trim() || undefined;
     const referenceRef = reviewReferencePath ? `reference:${reviewReferencePath}` : undefined;
-    const replacementId = uuidv4();
+    const replacementId = uuidv7();
     const now = Date.now();
     const embedding = await this.embeddingService.embed(nextText);
     this.validateEmbedding(embedding, 'patch');
@@ -1469,7 +1469,7 @@ export class MemoryWriter {
     }
 
     const abstraction = abstractMemoryText(source.text);
-    const externalRef = `abstraction:${uuidv4()}`;
+    const externalRef = `abstraction:${uuidv7()}`;
     const abstractionSourceRef = normalizeSourceRef(opts.sourceRef, 'tool:memory_redact');
     const abstractionImportance = clampUnit(Math.max(source.importance, 0.55), 0.55);
     const abstractionConfidence = clampUnit(Math.max(source.confidence, 0.6), 0.6);

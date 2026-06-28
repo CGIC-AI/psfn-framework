@@ -1,4 +1,4 @@
-import { v4 as uuidv4 } from 'uuid';
+import { v7 as uuidv7 } from 'uuid';
 import type {
   ChannelPrivacyLevel,
   Contact,
@@ -80,7 +80,7 @@ export function normalizeVerificationTtlMs(ttlMs: number | undefined): number {
 }
 
 export function createVerificationToken(): string {
-  return uuidv4().replace(/-/g, '');
+  return uuidv7().replace(/-/g, '');
 }
 
 export function normalizeVerificationState(value: string): ContactIdentityLinkVerificationState {

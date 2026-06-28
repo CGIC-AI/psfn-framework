@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { v4 as uuidv4 } from 'uuid';
+import { v7 as uuidv7 } from 'uuid';
 import type {
   ChannelPrivacyLevel,
   Contact,
@@ -171,7 +171,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const shouldForcePrimary = identities.some(identity => isPrimaryIdentity(identity, this.primaryUserId))
       || (legacyDiscordUserId ? isPrimaryIdentity({ channel: 'discord', userId: legacyDiscordUserId }, this.primaryUserId) : false);
     const contact: Contact = {
-      id: partial.id?.trim() || uuidv4(),
+      id: partial.id?.trim() || uuidv7(),
       ...(legacyDiscordUserId ? { discordUserId: legacyDiscordUserId } : {}),
       displayName: partial.displayName.trim(),
       ...(normalizeNicknameValue(partial.nickname) !== undefined ? { nickname: normalizeNicknameValue(partial.nickname) ?? undefined } : {}),
@@ -844,7 +844,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const createdAt = now.toISOString();
     const expiresAt = new Date(now.getTime() + Math.min(Math.max(Math.floor(input.ttlMs ?? 5 * 60_000), 1), 60 * 60_000)).toISOString();
     const verification: ContactIdentityLinkVerification = {
-      id: uuidv4(),
+      id: uuidv7(),
       contactId: contact.id,
       sourceChannel: sourceIdentity.channel,
       sourceUserId: sourceIdentity.userId,

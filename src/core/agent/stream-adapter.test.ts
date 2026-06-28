@@ -949,6 +949,45 @@ describe('resolveModel', () => {
     expect(model.id).toBe('long-context-model');
   });
 
+  it('resolves OpenRouter-sourced entries through direct OpenRouter endpoint config', () => {
+    const config = makeConfig({
+      openRouterApiBaseUrl: 'https://openrouter.ai/api/v1',
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'pi-live-chat',
+            rank: 1,
+            identity: {
+              provider: 'litellm',
+              model: 'z-ai/glm-5.2',
+              source: {
+                type: 'openrouter',
+                baseUrl: 'https://openrouter.ai/api/v1',
+              },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: {
+              maxOutputTokens: 16384,
+              contextWindow: 202_752,
+            },
+            tuning: {
+              maxOutputTokens: 16384,
+              contextWindow: 202_752,
+            },
+          },
+        ],
+      },
+    });
+
+    const model = resolveModel(config, 'chat');
+    expect(model.id).toBe('z-ai/glm-5.2');
+    expect(model.provider).toBe('openrouter');
+    expect(model.baseUrl).toBe('https://openrouter.ai/api/v1');
+    expect(model.maxTokens).toBe(16384);
+    expect(model.contextWindow).toBe(202_752);
+  });
+
   it('fails closed when a configured vision slot targets a text-only model', () => {
     process.env.LITELLM_BASE_URL = 'http://localhost:4000/v1';
     const config = makeConfig({

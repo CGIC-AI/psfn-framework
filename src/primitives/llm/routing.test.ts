@@ -8,6 +8,7 @@ interface RegistryModelInput {
   rank: number;
   provider: string;
   model: string;
+  source?: ModelRegistryEntry['identity']['source'];
   maxOutputTokens: number;
   contextWindow: number;
   purposes: Array<{ purpose: CanonicalModelPurpose; primary: boolean }>;
@@ -23,7 +24,7 @@ function makeRegistry(models: RegistryModelInput[]): CanonicalModelRegistry {
       identity: {
         provider: model.provider,
         model: model.model,
-        source: { type: model.provider },
+        source: model.source ?? { type: model.provider },
       },
       purposes: model.purposes,
       capabilities: {
@@ -233,10 +234,90 @@ describe('resolveRoutingCandidates(background)', () => {
   it('attaches global OpenRouter provider preference ordering to OpenRouter candidates', () => {
     const candidates = resolveRoutingCandidates(makeConfig({
       openRouterProviderOrder: ['parasail', 'openai'],
+      openRouterApiBaseUrl: 'https://openrouter.ai/api/v1',
     }), 'background');
 
     expect(candidates[0]?.openRouterProviderOrder).toEqual(['parasail', 'openai']);
     expect(candidates.every(candidate => candidate.provider === 'openrouter')).toBe(true);
+  });
+
+  it('routes OpenRouter-sourced models through the configured OpenRouter endpoint without local registry coupling', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      openRouterApiBaseUrl: 'https://openrouter.ai/api/v1',
+      modelRegistry: makeRegistry([
+        {
+          id: 'pi-live-chat',
+          rank: 10,
+          provider: 'openrouter',
+          model: 'z-ai/glm-5.2',
+          maxOutputTokens: 16384,
+          contextWindow: 202752,
+          purposes: [{ purpose: 'chat', primary: true }],
+        },
+      ]),
+    }), 'chat');
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        provider: 'openrouter',
+        model: 'z-ai/glm-5.2',
+        requestBaseUrl: 'https://openrouter.ai/api/v1',
+        requestApiKeyEnv: 'OPENROUTER_API_KEY',
+      }),
+    ]);
+  });
+
+  it('normalizes Pi LiteLLM-labeled entries with OpenRouter source metadata to direct OpenRouter candidates', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      modelRegistry: makeRegistry([
+        {
+          id: 'pi-live-openrouter-source',
+          rank: 10,
+          provider: 'litellm',
+          model: 'moonshotai/kimi-k2.6',
+          source: {
+            type: 'openrouter',
+            baseUrl: 'https://openrouter.ai/api/v1',
+          },
+          maxOutputTokens: 8192,
+          contextWindow: 262144,
+          purposes: [{ purpose: 'chat', primary: true }],
+        },
+      ]),
+    }), 'chat');
+
+    expect(candidates).toEqual([
+      expect.objectContaining({
+        provider: 'openrouter',
+        model: 'moonshotai/kimi-k2.6',
+        requestBaseUrl: 'https://openrouter.ai/api/v1',
+        requestApiKeyEnv: 'OPENROUTER_API_KEY',
+      }),
+    ]);
+  });
+
+  it('uses the configured OpenRouter API key reference for direct OpenRouter endpoint routes', () => {
+    const candidates = resolveRoutingCandidates(makeConfig({
+      openRouterApiBaseUrl: 'https://openrouter.ai/api/v1',
+      openRouterApiKeyRef: { kind: 'env', envName: 'CUSTOM_OPENROUTER_KEY' },
+      modelRegistry: makeRegistry([
+        {
+          id: 'pi-live-custom-key',
+          rank: 10,
+          provider: 'openrouter',
+          model: 'z-ai/glm-5.2',
+          maxOutputTokens: 16384,
+          contextWindow: 202752,
+          purposes: [{ purpose: 'chat', primary: true }],
+        },
+      ]),
+    }), 'chat');
+
+    expect(candidates[0]).toEqual(expect.objectContaining({
+      provider: 'openrouter',
+      model: 'z-ai/glm-5.2',
+      requestApiKeyEnv: 'CUSTOM_OPENROUTER_KEY',
+    }));
   });
 });
 

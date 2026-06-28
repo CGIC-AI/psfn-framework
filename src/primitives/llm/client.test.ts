@@ -1066,6 +1066,64 @@ describe('LLMClient completion model hints', () => {
     expect(model.id).toBe('openrouter/z-ai/glm-5');
   });
 
+  it('preserves OpenRouter model ids for direct OpenRouter endpoint routing', async () => {
+    const client = new LLMClient(makeConfig({
+      openRouterApiBaseUrl: 'https://openrouter.ai/api/v1',
+      credentialVault: createEnvCredentialVault({
+        OPENROUTER_API_KEY: 'vault-openrouter-key',
+      }),
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chat-direct-openrouter',
+            rank: 10,
+            identity: {
+              provider: 'litellm',
+              model: 'moonshotai/kimi-k2.6',
+              source: {
+                type: 'openrouter',
+                baseUrl: 'https://openrouter.ai/api/v1',
+              },
+            },
+            purposes: [{ purpose: 'summary', primary: true }],
+            capabilities: {
+              maxOutputTokens: 8192,
+              contextWindow: 262_144,
+            },
+            tuning: {
+              maxOutputTokens: 8192,
+              contextWindow: 262_144,
+            },
+          },
+        ],
+      },
+    }));
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'direct openrouter response' }],
+      model: 'moonshotai/kimi-k2.6',
+      usage: { input: 12, output: 6 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Reply' }],
+      },
+      'summary',
+      { disableRetry: true },
+    );
+
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+    const model = mocks.completeSimple.mock.calls[0][0] as { id: string; baseUrl: string; provider: string };
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as { apiKey: string };
+    expect(model.id).toBe('moonshotai/kimi-k2.6');
+    expect(model.provider).toBe('openrouter');
+    expect(model.baseUrl).toBe('https://openrouter.ai/api/v1');
+    expect(requestOptions.apiKey).toBe('vault-openrouter-key');
+  });
+
   it('pins explicit model hints to a single candidate when requested', () => {
     const baseConfig = makeConfig();
     const baseRegistry = baseConfig.modelRegistry!;
@@ -1207,6 +1265,7 @@ describe('LLMClient model knob plumbing', () => {
               ...entry.identity,
               provider: 'anthropic',
               model: 'claude-sonnet-4-5',
+              source: { type: 'anthropic' },
             },
             tuning: {
               ...(entry.tuning ?? {}),

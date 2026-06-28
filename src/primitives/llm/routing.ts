@@ -291,6 +291,31 @@ function estimateCost(cost: ModelRegistryCostMetadata | undefined): number | nul
   return normalizedInput + normalizedOutput;
 }
 
+function resolveOpenRouterEndpointRoute(
+  config: SubstrateConfig,
+  entry: ModelRegistryEntry,
+  provider: string,
+): Pick<RoutingCandidate, 'provider' | 'requestBaseUrl' | 'requestApiKeyEnv'> {
+  const sourceType = entry.identity.source.type.trim().toLowerCase();
+  if (provider !== 'openrouter' && sourceType !== 'openrouter') {
+    return { provider };
+  }
+
+  const requestBaseUrl = entry.identity.source.baseUrl?.trim()
+    || config.openRouterApiBaseUrl?.trim();
+  if (!requestBaseUrl) {
+    return {
+      provider: sourceType === 'openrouter' ? 'openrouter' : provider,
+    };
+  }
+
+  return {
+    provider: 'openrouter',
+    requestBaseUrl,
+    requestApiKeyEnv: config.openRouterApiKeyRef?.envName ?? 'OPENROUTER_API_KEY',
+  };
+}
+
 function candidateFromRegistryEntry(
   config: SubstrateConfig,
   entry: ModelRegistryEntry,
@@ -314,15 +339,18 @@ function candidateFromRegistryEntry(
     ? entry.capabilities.supportsReasoning
     : undefined;
   const tuning = resolveCandidateTuning(entry);
+  const endpointRoute = resolveOpenRouterEndpointRoute(config, entry, provider);
   return {
     candidate: withOpenRouterPreferences({
       slotKey: entry.id,
-      provider,
+      provider: endpointRoute.provider,
       model,
       maxTokens,
       ...(contextWindow > 0 ? { contextWindow } : {}),
       ...(supportsVision !== undefined ? { supportsVision } : {}),
       ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),
+      ...(endpointRoute.requestBaseUrl ? { requestBaseUrl: endpointRoute.requestBaseUrl } : {}),
+      ...(endpointRoute.requestApiKeyEnv ? { requestApiKeyEnv: endpointRoute.requestApiKeyEnv } : {}),
       ...tuning,
     }, config),
     primary: purposeTag.primary === true,

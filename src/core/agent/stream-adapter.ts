@@ -7,7 +7,7 @@ import type { AssistantMessage, AssistantMessageEvent, Model, ThinkingLevel } fr
 import type { StreamFn } from '@mariozechner/pi-agent-core';
 import type { LLMContext, LLMResponse, ModelBudgetBlockedEvent, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall } from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { createModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
+import { createModel, createOpenAICompatibleEndpointModel, resolveRegisteredModel } from '../../primitives/llm/models.js';
 import { resolveRoutingCandidates, type RoutingCandidate, type RoutingPurpose } from '../../primitives/llm/routing.js';
 import {
   DEFAULT_BASE_DELAY_MS,
@@ -1000,6 +1000,22 @@ export function resolveModel(
   if (litellmBaseUrl) {
     const modelId = normalizeLiteLLMModelId(selection.provider, selection.model);
     const model = createModel(litellmBaseUrl, modelId, selection.maxTokens, selection.contextWindow);
+    return ensurePurposeInputCapabilities(model, purpose, {
+      supportsVision: selection.supportsVision,
+    });
+  }
+
+  if (selection.requestBaseUrl) {
+    const model = createOpenAICompatibleEndpointModel({
+      baseUrl: selection.requestBaseUrl,
+      modelId: selection.model,
+      provider: selection.provider,
+      routeLabel: selection.provider.replace(/_/g, ' '),
+      maxTokens: selection.maxTokens,
+      contextWindow: selection.contextWindow,
+      reasoning: selection.supportsReasoning ?? selection.thinkingEnabled ?? false,
+      supportsVision: selection.supportsVision ?? false,
+    });
     return ensurePurposeInputCapabilities(model, purpose, {
       supportsVision: selection.supportsVision,
     });

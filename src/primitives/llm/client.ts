@@ -305,7 +305,7 @@ export class LLMClient {
   }
 
   private shouldNormalizeProxyModelId(candidate: RoutingCandidate): boolean {
-    return !!candidate.requestBaseUrl || this.litellmBaseUrl !== null;
+    return !candidate.requestBaseUrl && this.litellmBaseUrl !== null;
   }
 
   private resolveReasoningLevel(candidate: RoutingCandidate): ThinkingLevel | undefined {

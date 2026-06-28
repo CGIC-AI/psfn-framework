@@ -139,6 +139,22 @@ describe('createMemoryTool', () => {
     }));
   });
 
+  it('normalizes JSON-array tag strings for unified writes', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    await tool.execute('memory-call-json-tags', {
+      action: 'write',
+      text: 'V likes clean tag metadata',
+      type: 'semantic',
+      tags: '["Identity", "Preference", 42, "  Hobby  "]',
+    });
+
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      tags: ['identity', 'preference', 'hobby'],
+    }));
+  });
+
   it('accepts action=memory_write as a legacy alias on the unified memory tool', async () => {
     const store = mockUnifiedStore();
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
@@ -592,6 +608,20 @@ describe('createMemoryWriteTool', () => {
     }));
   });
 
+  it('normalizes JSON-array tag strings for legacy memory_write', async () => {
+    const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
+
+    await tool.execute('call-json-tags', {
+      text: 'Tagged memory',
+      type: 'semantic',
+      tags: '["Identity", "Preference", false, "HOBBY"]',
+    });
+
+    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
+      tags: ['identity', 'preference', 'hobby'],
+    }));
+  });
+
   it('trims text before writing', async () => {
     const tool = createMemoryWriteTool(writer as unknown as MemoryWriter);
 
@@ -864,6 +894,19 @@ describe('createMemoryImportTool', () => {
     expect(importedRecords[0].tags).toEqual(['identity', 'preference']);
   });
 
+  it('normalizes JSON-array tag strings in imported records', async () => {
+    const tool = createMemoryImportTool(writer as unknown as MemoryWriter);
+
+    await tool.execute('call-json-import-tags', {
+      records: [
+        { text: 'Tagged import', type: 'semantic', tags: '["Identity", "PREFERENCE", null]' },
+      ],
+    });
+
+    const importedRecords = writer.importBatch.mock.calls[0][0];
+    expect(importedRecords[0].tags).toEqual(['identity', 'preference']);
+  });
+
   it('handles errors gracefully and returns isError in details', async () => {
     writer.importBatch.mockRejectedValueOnce(new Error('Storage full'));
 
@@ -946,6 +989,21 @@ describe('createMemoryPatchTool', () => {
       reason: 'corrected source',
       sourceRef: 'source:tool:memory_patch|invocation:call-patch-1',
       sourceType: 'tool_write',
+    }));
+  });
+
+  it('normalizes JSON-array tag strings when patching tags', async () => {
+    const tool = createMemoryPatchTool(writer as unknown as MemoryWriter);
+    await tool.execute('call-patch-json-tags', {
+      memory_id: 'mem-1',
+      tags: '["Belief-Corrected", "Source-Retracted", 7]',
+      reason: 'corrected tags',
+    });
+
+    expect(writer.patchMemory).toHaveBeenCalledWith(expect.objectContaining({
+      memoryId: 'mem-1',
+      tags: ['belief-corrected', 'source-retracted'],
+      reason: 'corrected tags',
     }));
   });
 

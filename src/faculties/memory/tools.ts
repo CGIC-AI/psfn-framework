@@ -166,10 +166,28 @@ function formatMemorySearchResults(
   return lines.join('\n');
 }
 
-function parseTags(tags: string | undefined): string[] | undefined {
-  return tags
-    ? tags.split(',').map(tag => tag.trim().toLowerCase()).filter(Boolean)
-    : undefined;
+function normalizeTagEntries(entries: readonly unknown[]): string[] | undefined {
+  const normalized = entries
+    .flatMap(entry => (typeof entry === 'string' ? [entry.trim().toLowerCase()] : []))
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function parseTags(tags: unknown): string[] | undefined {
+  if (tags === undefined || tags === null) return undefined;
+  if (Array.isArray(tags)) return normalizeTagEntries(tags);
+  if (typeof tags !== 'string') return undefined;
+  const trimmed = tags.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      if (Array.isArray(parsed)) return normalizeTagEntries(parsed);
+    } catch {
+      // Fall through to comma-splitting below for malformed legacy input.
+    }
+  }
+  return normalizeTagEntries(trimmed.split(','));
 }
 
 export interface MemoryWriteToolOptions {
@@ -282,9 +300,7 @@ export function createMemoryWriteTool(
         const emotionalValence = normalizedParams.emotional_valence !== undefined ? clamp(Number(normalizedParams.emotional_valence), -1, 1) : undefined;
         const confidence = normalizedParams.confidence !== undefined ? clamp(Number(normalizedParams.confidence), 0, 1) : undefined;
 
-        const tags = normalizedParams.tags
-          ? normalizedParams.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
-          : undefined;
+        const tags = parseTags(normalizedParams.tags);
         const formationVAD = options.getFormationVAD?.();
         const sourceContext = buildToolSourceContext('memory_write', toolCallId, internalSource);
 
@@ -395,7 +411,7 @@ export function createMemoryImportTool(writer: MemoryWriter): AgentTool<any> {
             importance: r.importance !== undefined ? clamp(Number(r.importance), 0, 1) : undefined,
             emotionalValence: r.emotional_valence !== undefined ? clamp(Number(r.emotional_valence), -1, 1) : undefined,
             confidence: r.confidence !== undefined ? clamp(Number(r.confidence), 0, 1) : undefined,
-            tags: r.tags ? r.tags.split(',').map(t => t.trim().toLowerCase()).filter(Boolean) : undefined,
+            tags: parseTags(r.tags),
             sourceRef: sourceContext.sourceRef,
             sourceType: sourceContext.sourceType,
             provenance: sourceContext.provenance,
@@ -465,6 +481,8 @@ export function createMemoryPatchTool(writer: MemoryWriter): AgentTool<any> {
         if (params.tags && params.append_tags) {
           return textResultWithError('Error: provide either tags or append_tags, not both', true);
         }
+        const replacementTags = params.tags ? parseTags(params.tags) ?? [] : undefined;
+        const appendTags = params.append_tags ? parseTags(params.append_tags) ?? [] : undefined;
 
         const sourceContext = buildToolSourceContext('memory_patch', toolCallId, internalSource);
         const result = await writer.patchMemory({
@@ -477,10 +495,8 @@ export function createMemoryPatchTool(writer: MemoryWriter): AgentTool<any> {
             : {}),
           ...(params.formation_vad !== undefined ? { formationVAD: params.formation_vad } : {}),
           ...(params.clear_formation_vad !== undefined ? { clearFormationVAD: params.clear_formation_vad } : {}),
-          ...(params.tags ? { tags: params.tags.split(',').map(tag => tag.trim().toLowerCase()).filter(Boolean) } : {}),
-          ...(params.append_tags
-            ? { appendTags: params.append_tags.split(',').map(tag => tag.trim().toLowerCase()).filter(Boolean) }
-            : {}),
+          ...(params.tags ? { tags: replacementTags } : {}),
+          ...(params.append_tags ? { appendTags } : {}),
           ...(params.reason ? { reason: params.reason.trim() } : {}),
           sourceRef: sourceContext.sourceRef,
           sourceType: sourceContext.sourceType,

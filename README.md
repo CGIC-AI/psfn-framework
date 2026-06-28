@@ -362,8 +362,10 @@ npm run verify:backup-restore
 npm run smoke:chat    # Chat cockpit smoke test
 npm run e2e           # End-to-end integration tests
 npm run e2e:voice     # Voice pipeline round-trip test
-npm run eval:companion-shape:report # Offline companion-shape report from captured model outputs
 ```
+
+Offline eval, validation, and model-experimentation commands live in the
+sibling `../psfn-eval-toolkit` repository.
 
 ## Tech Stack
 

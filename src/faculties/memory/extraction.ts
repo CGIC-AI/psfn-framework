@@ -605,11 +605,29 @@ function normalizeContactNameKey(value: string | undefined): string {
 }
 
 export { parseFactsXml };
+export {
+  classifyGroupMemoryChannel,
+  resolveGroupMemorySettingsForChannel,
+} from './extraction/group-classifier.js';
 
 export type {
   MemoryExtractorConfig,
   MemoryExtractorDrainOptions,
 } from './extraction/types.js';
+export type {
+  GroupMemoryChannelTopology,
+  GroupMemoryClassification,
+  GroupMemoryClassificationMode,
+  GroupMemoryClassificationReason,
+  GroupMemoryModeSource,
+  GroupMemoryParticipantWindow,
+  GroupMemoryRecentParticipant,
+  GroupMemoryResolvedSettings,
+  GroupMemorySessionReader,
+  GroupMemoryTopologyKind,
+  GroupMemoryTopologyResolution,
+  GroupMemoryTopologySource,
+} from './extraction/group-classifier.js';
 
 export const __test = {
   evaluateFactAcceptance,

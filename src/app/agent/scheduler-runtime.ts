@@ -135,6 +135,7 @@ export function buildAgentSchedulerRuntime(
       }
       : {}),
     companionDataDir: options.pathSnapshot.companionDataDir,
+    systemDataDir: options.pathSnapshot.systemDataDir,
     workspacePath: options.pathSnapshot.workspacePath,
     workspaceProtectedPaths: [
       options.pathSnapshot.systemDataDir,
@@ -167,6 +168,7 @@ export function buildAgentSchedulerRuntime(
     backupRootDir: options.backupConfig.rootDir,
     mirrorDir: options.backupConfig.mirrorDir || '(none)',
     verifyRestore: options.backupConfig.verifyRestore,
+    encryption: options.backupConfig.encryption.mode,
     workspacePath: options.pathSnapshot.workspacePath,
   });
 

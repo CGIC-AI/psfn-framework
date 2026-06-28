@@ -180,6 +180,7 @@ describe('prepareAgentStartupContext', () => {
     process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
     process.env.LITELLM_API_KEY = 'test-litellm-key';
     process.env.OPENROUTER_API_KEY = 'test-openrouter-key';
+    process.env.PSFN_BACKUP_ENCRYPTION_KEY = 'test-backup-secret';
 
     const context = prepareAgentStartupContext({
       env: process.env,

@@ -69,6 +69,7 @@ Startup requires these files to exist. Distributed `config/*.seed.json` files ar
    WORKSPACE_PATH=./purrsephone
    CHARACTER_CARD_PATH=./data/companion.json
    DATABASE_PATH=./data/companion.db
+   PSFN_BACKUP_ENCRYPTION_KEY=<long random secret>
    ```
 
 2. Intentionally copy the example owner files into the system data directory and edit them for this deployment:
@@ -87,7 +88,9 @@ Startup requires these files to exist. Distributed `config/*.seed.json` files ar
 
 3. Provide the explicit character card at `CHARACTER_CARD_PATH`. Startup fails if the configured identity file is missing. Keep this active identity file under runtime data, not under the personal writable workspace.
 
-4. Start the split runtime (gateway + agent + operator):
+4. Keep the backup encryption key secret in `.env` or your deployment secret manager. `backup.json` should contain only the env key reference. Generate a local key with `openssl rand -base64 48`.
+
+5. Start the split runtime (gateway + agent + operator):
 
    ```bash
    npm run split

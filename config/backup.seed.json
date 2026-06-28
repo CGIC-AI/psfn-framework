@@ -4,5 +4,12 @@
   "maxWeeklyBackups": 2,
   "maxMonthlyBackups": 1,
   "mirrorDir": "",
-  "verifyRestore": true
+  "verifyRestore": true,
+  "encryption": {
+    "mode": "required",
+    "keyRef": {
+      "kind": "env",
+      "envName": "PSFN_BACKUP_ENCRYPTION_KEY"
+    }
+  }
 }

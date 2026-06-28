@@ -268,7 +268,7 @@ export function captureWorkspaceTree(
   });
 }
 
-function verifyTreeSnapshot(
+export function verifyTreeSnapshot(
   backupDir: string,
   treeDirName: string,
   manifestName: string,

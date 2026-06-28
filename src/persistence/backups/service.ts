@@ -28,9 +28,21 @@ import {
   type WorkspaceTreeVerificationResult,
 } from './companion-tree.js';
 import {
+  assertEncryptedBackupPackage,
+  encryptBackupDirectory,
+  type BackupEncryptionRuntimeConfig,
+  type EncryptedBackupPackageResult,
+} from './encryption.js';
+import {
   verifyPostgresDumpRestore,
   type PostgresRestoreVerificationResult,
 } from './postgres-restore.js';
+import {
+  captureSystemConfigSnapshot,
+  verifySystemConfigSnapshot,
+  type SystemConfigSnapshotCaptureResult,
+  type SystemConfigSnapshotVerificationResult,
+} from './system-config-tree.js';
 import type { BackupRuntimeConfig } from './config.js';
 import { runDatabaseIntegrityCheck } from './startup-checks.js';
 import { applyTieredRetention, type TieredRetentionResult } from './retention.js';
@@ -79,6 +91,8 @@ export interface BackupRunOptions {
   workspaceExcludePaths?: string[];
   /** Runtime roots that must not overlap workspacePath. */
   workspaceProtectedPaths?: string[];
+  /** System-data root containing JSON owner files such as settings.json and models.json. */
+  systemDataDir?: string;
   sessionsDir: string;
   backupRootDir: string;
   /** @deprecated Use maxRotatingBackups */
@@ -95,6 +109,7 @@ export interface BackupRunOptions {
   /** When non-empty, mirror the completed backup to this directory. */
   mirrorDir?: string;
   verifyRestore?: boolean;
+  encryption?: BackupEncryptionRuntimeConfig;
   now?: () => number;
 }
 
@@ -126,6 +141,8 @@ export interface BackupRunResult {
   databaseBackupPath?: string;
   /** Present when a Postgres pg_dump archive was captured. */
   postgresDumpPath?: string;
+  sqliteCaptured: boolean;
+  postgresDumpCaptured: boolean;
   sessionSnapshotDir: string;
   copiedSessionFiles: string[];
   prunedBackupDirs: string[];
@@ -136,7 +153,10 @@ export interface BackupRunResult {
   companionTreeVerification?: CompanionTreeVerificationResult;
   workspaceTree?: WorkspaceTreeCaptureResult;
   workspaceTreeVerification?: WorkspaceTreeVerificationResult;
+  systemConfig?: SystemConfigSnapshotCaptureResult;
+  systemConfigVerification?: SystemConfigSnapshotVerificationResult;
   l0JournalVerification?: { lineCount: number };
+  encryptedBackup?: EncryptedBackupPackageResult;
   tieredRetention?: TieredRetentionResult;
   mirrorDir?: string;
 }
@@ -150,6 +170,7 @@ export interface RegisterScheduledBackupTaskOptions {
   workspacePath?: string;
   workspaceExcludePaths?: string[];
   workspaceProtectedPaths?: string[];
+  systemDataDir?: string;
   sessionsDir: string;
   memoriesJournalPath?: string;
   characterCardPath?: string;
@@ -395,7 +416,11 @@ export async function runBackupCycle(
 
   const now = options.now ?? (() => Date.now());
   const timestamp = formatTimestamp(now());
-  const backupDir = join(options.backupRootDir, timestamp);
+  const finalBackupDir = join(options.backupRootDir, timestamp);
+  const stagingRootDir = options.encryption
+    ? mkdtempSync(join(tmpdir(), 'psfn-backup-stage-'))
+    : undefined;
+  const backupDir = stagingRootDir ? join(stagingRootDir, timestamp) : finalBackupDir;
   const databaseDir = join(backupDir, 'database');
   const sessionSnapshotDir = join(backupDir, 'sessions');
   const workspacePath = options.workspacePath?.trim();
@@ -411,164 +436,199 @@ export async function runBackupCycle(
     ]);
   }
 
-  mkdirSync(databaseDir, { recursive: true });
+  try {
+    mkdirSync(databaseDir, { recursive: true });
 
-  let databaseBackupPath: string | undefined;
-  if (sqliteDb) {
-    databaseBackupPath = join(databaseDir, basename(options.databasePath!.trim()));
-    await sqliteDb.backup(databaseBackupPath);
-  }
+    let databaseBackupPath: string | undefined;
+    if (sqliteDb) {
+      databaseBackupPath = join(databaseDir, basename(options.databasePath!.trim()));
+      await sqliteDb.backup(databaseBackupPath);
+    }
 
-  let postgresDumpPath: string | undefined;
-  if (options.postgres) {
-    postgresDumpPath = await dumpPostgresDatabase(options.postgres, databaseDir);
-  }
+    let postgresDumpPath: string | undefined;
+    if (options.postgres) {
+      postgresDumpPath = await dumpPostgresDatabase(options.postgres, databaseDir);
+    }
 
-  const copiedSessionFiles = copySessionSnapshotFiles(
-    options.sessionsDir,
-    sessionSnapshotDir,
-  );
+    const copiedSessionFiles = copySessionSnapshotFiles(
+      options.sessionsDir,
+      sessionSnapshotDir,
+    );
 
-  // Back up the L0 memories journal (notes/memories.jsonl) if available.
-  const { memoriesJournalPath } = options;
-  let memoriesJournalBackupPath: string | undefined;
-  if (memoriesJournalPath && existsSync(memoriesJournalPath)) {
-    const notesDir = join(backupDir, 'notes');
-    mkdirSync(notesDir, { recursive: true });
-    memoriesJournalBackupPath = join(notesDir, basename(memoriesJournalPath));
-    copyFileSync(memoriesJournalPath, memoriesJournalBackupPath);
-  }
+    // Back up the L0 memories journal (notes/memories.jsonl) if available.
+    const { memoriesJournalPath } = options;
+    let memoriesJournalBackupPath: string | undefined;
+    if (memoriesJournalPath && existsSync(memoriesJournalPath)) {
+      const notesDir = join(backupDir, 'notes');
+      mkdirSync(notesDir, { recursive: true });
+      memoriesJournalBackupPath = join(notesDir, basename(memoriesJournalPath));
+      copyFileSync(memoriesJournalPath, memoriesJournalBackupPath);
+    }
 
-  const companionDir = join(backupDir, 'companion');
-  copyOptionalBackupFile(options.characterCardPath, companionDir);
-  copyOptionalBackupFile(options.characterCardHistoryPath, companionDir);
+    const companionDir = join(backupDir, 'companion');
+    copyOptionalBackupFile(options.characterCardPath, companionDir);
+    copyOptionalBackupFile(options.characterCardHistoryPath, companionDir);
 
-  let companionTree: CompanionTreeCaptureResult | undefined;
-  const companionDataDir = options.companionDataDir?.trim();
-  if (companionDataDir) {
-    companionTree = captureCompanionTree({
-      companionDataDir,
-      backupDir,
-      excludePaths: [
-        // Sessions get a dedicated first-class snapshot above.
-        options.sessionsDir,
-        // Never recurse into backup targets.
-        options.backupRootDir,
-        ...(options.mirrorDir?.trim() ? [options.mirrorDir.trim()] : []),
-        'backups',
-        // Runtime repair snapshots are recovery artifacts, not companion-authored state.
-        'state/repair-backups',
-      ],
-      now,
-    });
-  }
-
-  let workspaceTree: WorkspaceTreeCaptureResult | undefined;
-  if (workspacePath) {
-    workspaceTree = captureWorkspaceTree({
-      workspacePath,
-      backupDir,
-      excludePaths: [
-        options.backupRootDir,
-        ...(options.mirrorDir?.trim() ? [options.mirrorDir.trim()] : []),
-        ...(options.workspaceExcludePaths ?? []),
-        ...(options.workspaceProtectedPaths ?? []),
-      ],
-      now,
-    });
-  }
-
-  // Apply tiered GFS retention (or fall back to flat count if tiering not configured).
-  const maxRotating = options.maxRotatingBackups
-    ?? options.retentionCount
-    ?? 9;
-  const maxWeekly = options.maxWeeklyBackups ?? 2;
-  const maxMonthly = options.maxMonthlyBackups ?? 1;
-
-  const tieredRetention = applyTieredRetention(options.backupRootDir, {
-    maxRotatingBackups: maxRotating,
-    maxWeeklyBackups: maxWeekly,
-    maxMonthlyBackups: maxMonthly,
-  });
-
-  // Mirror to secondary location if configured.
-  const effectiveMirrorDir = options.mirrorDir?.trim();
-  let mirrorDir: string | undefined;
-  if (effectiveMirrorDir && existsSync(backupDir)) {
-    try {
-      mkdirSync(effectiveMirrorDir, { recursive: true });
-      mirrorBackupToDir(backupDir, effectiveMirrorDir);
-      // Also sync pruned dirs: remove from mirror if they no longer exist locally.
-      for (const pruned of tieredRetention.prunedBackupDirs) {
-        const mirrorPruned = join(effectiveMirrorDir, basename(pruned));
-        if (existsSync(mirrorPruned)) {
-          rmSync(mirrorPruned, { recursive: true, force: true });
-        }
-      }
-      mirrorDir = effectiveMirrorDir;
-    } catch (mirrorErr) {
-      log.warn('Backup mirror failed — local backup is intact', {
-        mirrorDir: effectiveMirrorDir,
-        error: String(mirrorErr),
+    let companionTree: CompanionTreeCaptureResult | undefined;
+    const companionDataDir = options.companionDataDir?.trim();
+    if (companionDataDir) {
+      companionTree = captureCompanionTree({
+        companionDataDir,
+        backupDir,
+        excludePaths: [
+          // Sessions get a dedicated first-class snapshot above.
+          options.sessionsDir,
+          // Never recurse into backup targets.
+          options.backupRootDir,
+          ...(options.mirrorDir?.trim() ? [options.mirrorDir.trim()] : []),
+          'backups',
+          // Runtime repair snapshots are recovery artifacts, not companion-authored state.
+          'state/repair-backups',
+        ],
+        now,
       });
     }
+
+    let workspaceTree: WorkspaceTreeCaptureResult | undefined;
+    if (workspacePath) {
+      workspaceTree = captureWorkspaceTree({
+        workspacePath,
+        backupDir,
+        excludePaths: [
+          options.backupRootDir,
+          ...(options.mirrorDir?.trim() ? [options.mirrorDir.trim()] : []),
+          ...(options.workspaceExcludePaths ?? []),
+          ...(options.workspaceProtectedPaths ?? []),
+        ],
+        now,
+      });
+    }
+
+    let systemConfig: SystemConfigSnapshotCaptureResult | undefined;
+    const systemDataDir = options.systemDataDir?.trim();
+    if (systemDataDir) {
+      systemConfig = captureSystemConfigSnapshot({
+        systemDataDir,
+        backupDir,
+        now,
+      });
+    }
+
+    const restoreVerification = options.verifyRestore && databaseBackupPath
+      ? verifyBackupRestore({
+        databaseBackupPath,
+        sessionSnapshotDir,
+        expectedSessionFiles: copiedSessionFiles,
+        cleanupRestoreDir: true,
+      })
+      : undefined;
+
+    const postgresDumpVerification = options.verifyRestore && postgresDumpPath
+      ? await verifyPostgresDumpArchive(postgresDumpPath, options.postgres?.pgRestoreBinary)
+      : undefined;
+
+    const postgresRestoreVerification = options.verifyRestore
+      && postgresDumpPath
+      && options.postgres?.restoreVerifyDatabaseUrl
+      ? await verifyPostgresDumpRestore({
+        dumpPath: postgresDumpPath,
+        scratchDatabaseUrl: options.postgres.restoreVerifyDatabaseUrl,
+        sourceDatabaseUrl: options.postgres.databaseUrl,
+        psqlBinary: options.postgres.psqlBinary,
+        pgRestoreBinary: options.postgres.pgRestoreBinary,
+      })
+      : undefined;
+
+    const companionTreeVerification = options.verifyRestore && companionTree
+      ? verifyCompanionTreeSnapshot(backupDir)
+      : undefined;
+
+    const workspaceTreeVerification = options.verifyRestore && workspaceTree
+      ? verifyWorkspaceTreeSnapshot(backupDir)
+      : undefined;
+
+    const systemConfigVerification = options.verifyRestore && systemConfig
+      ? verifySystemConfigSnapshot(backupDir)
+      : undefined;
+
+    const l0JournalVerification = options.verifyRestore && memoriesJournalBackupPath
+      ? verifyJsonlSnapshot(memoriesJournalBackupPath)
+      : undefined;
+
+    let encryptedBackup: EncryptedBackupPackageResult | undefined;
+    if (options.encryption) {
+      encryptedBackup = await encryptBackupDirectory({
+        sourceDir: backupDir,
+        outputDir: finalBackupDir,
+        encryption: options.encryption,
+        now,
+      });
+      assertEncryptedBackupPackage(finalBackupDir);
+    }
+
+    // Apply tiered GFS retention (or fall back to flat count if tiering not configured).
+    const maxRotating = options.maxRotatingBackups
+      ?? options.retentionCount
+      ?? 9;
+    const maxWeekly = options.maxWeeklyBackups ?? 2;
+    const maxMonthly = options.maxMonthlyBackups ?? 1;
+
+    const tieredRetention = applyTieredRetention(options.backupRootDir, {
+      maxRotatingBackups: maxRotating,
+      maxWeeklyBackups: maxWeekly,
+      maxMonthlyBackups: maxMonthly,
+    });
+
+    // Mirror to secondary location if configured.
+    const effectiveMirrorDir = options.mirrorDir?.trim();
+    let mirrorDir: string | undefined;
+    if (effectiveMirrorDir && existsSync(finalBackupDir)) {
+      try {
+        mkdirSync(effectiveMirrorDir, { recursive: true });
+        mirrorBackupToDir(finalBackupDir, effectiveMirrorDir);
+        // Also sync pruned dirs: remove from mirror if they no longer exist locally.
+        for (const pruned of tieredRetention.prunedBackupDirs) {
+          const mirrorPruned = join(effectiveMirrorDir, basename(pruned));
+          if (existsSync(mirrorPruned)) {
+            rmSync(mirrorPruned, { recursive: true, force: true });
+          }
+        }
+        mirrorDir = effectiveMirrorDir;
+      } catch (mirrorErr) {
+        log.warn('Backup mirror failed — local backup is intact', {
+          mirrorDir: effectiveMirrorDir,
+          error: String(mirrorErr),
+        });
+      }
+    }
+
+    return {
+      backupDir: finalBackupDir,
+      ...(options.encryption ? {} : { databaseBackupPath, postgresDumpPath }),
+      sqliteCaptured: Boolean(databaseBackupPath),
+      postgresDumpCaptured: Boolean(postgresDumpPath),
+      sessionSnapshotDir: options.encryption ? finalBackupDir : sessionSnapshotDir,
+      copiedSessionFiles,
+      prunedBackupDirs: tieredRetention.prunedBackupDirs,
+      restoreVerification,
+      postgresDumpVerification,
+      postgresRestoreVerification,
+      companionTree,
+      companionTreeVerification,
+      workspaceTree,
+      workspaceTreeVerification,
+      systemConfig,
+      systemConfigVerification,
+      l0JournalVerification,
+      encryptedBackup,
+      tieredRetention,
+      mirrorDir,
+    };
+  } finally {
+    if (stagingRootDir && existsSync(stagingRootDir)) {
+      rmSync(stagingRootDir, { recursive: true, force: true });
+    }
   }
-
-  const restoreVerification = options.verifyRestore && databaseBackupPath
-    ? verifyBackupRestore({
-      databaseBackupPath,
-      sessionSnapshotDir,
-      expectedSessionFiles: copiedSessionFiles,
-      cleanupRestoreDir: true,
-    })
-    : undefined;
-
-  const postgresDumpVerification = options.verifyRestore && postgresDumpPath
-    ? await verifyPostgresDumpArchive(postgresDumpPath, options.postgres?.pgRestoreBinary)
-    : undefined;
-
-  const postgresRestoreVerification = options.verifyRestore
-    && postgresDumpPath
-    && options.postgres?.restoreVerifyDatabaseUrl
-    ? await verifyPostgresDumpRestore({
-      dumpPath: postgresDumpPath,
-      scratchDatabaseUrl: options.postgres.restoreVerifyDatabaseUrl,
-      sourceDatabaseUrl: options.postgres.databaseUrl,
-      psqlBinary: options.postgres.psqlBinary,
-      pgRestoreBinary: options.postgres.pgRestoreBinary,
-    })
-    : undefined;
-
-  const companionTreeVerification = options.verifyRestore && companionTree
-    ? verifyCompanionTreeSnapshot(backupDir)
-    : undefined;
-
-  const workspaceTreeVerification = options.verifyRestore && workspaceTree
-    ? verifyWorkspaceTreeSnapshot(backupDir)
-    : undefined;
-
-  const l0JournalVerification = options.verifyRestore && memoriesJournalBackupPath
-    ? verifyJsonlSnapshot(memoriesJournalBackupPath)
-    : undefined;
-
-  return {
-    backupDir,
-    databaseBackupPath,
-    postgresDumpPath,
-    sessionSnapshotDir,
-    copiedSessionFiles,
-    prunedBackupDirs: tieredRetention.prunedBackupDirs,
-    restoreVerification,
-    postgresDumpVerification,
-    postgresRestoreVerification,
-    companionTree,
-    companionTreeVerification,
-    workspaceTree,
-    workspaceTreeVerification,
-    l0JournalVerification,
-    tieredRetention,
-    mirrorDir,
-  };
 }
 
 export function registerScheduledBackupTask(
@@ -595,6 +655,7 @@ export function registerScheduledBackupTask(
             workspacePath: options.workspacePath,
             workspaceExcludePaths: options.workspaceExcludePaths,
             workspaceProtectedPaths: options.workspaceProtectedPaths,
+            systemDataDir: options.systemDataDir,
             sessionsDir: options.sessionsDir,
             memoriesJournalPath: options.memoriesJournalPath,
             characterCardPath: options.characterCardPath,
@@ -605,6 +666,7 @@ export function registerScheduledBackupTask(
             maxMonthlyBackups: options.config.maxMonthlyBackups,
             mirrorDir: options.config.mirrorDir,
             verifyRestore: options.config.verifyRestore,
+            encryption: options.config.encryption,
           });
         } catch (error) {
           log.error('Scheduled backup failed', {
@@ -616,8 +678,8 @@ export function registerScheduledBackupTask(
 
         log.info('Scheduled backup completed', {
           backupDir: result.backupDir,
-          sqliteCaptured: Boolean(result.databaseBackupPath),
-          postgresDumpCaptured: Boolean(result.postgresDumpPath),
+          sqliteCaptured: result.sqliteCaptured,
+          postgresDumpCaptured: result.postgresDumpCaptured,
           copiedSessionFiles: result.copiedSessionFiles.length,
           prunedBackupDirs: result.prunedBackupDirs.length,
           weeklySlots: result.tieredRetention?.weeklyCount,
@@ -634,7 +696,11 @@ export function registerScheduledBackupTask(
           workspaceTreeFiles: result.workspaceTree?.fileCount,
           workspaceTreeBytes: result.workspaceTree?.totalBytes,
           workspaceTreeVerifiedFiles: result.workspaceTreeVerification?.verifiedFileCount,
+          systemConfigFiles: result.systemConfig?.fileCount,
+          systemConfigVerifiedFiles: result.systemConfigVerification?.verifiedFileCount,
           l0JournalLines: result.l0JournalVerification?.lineCount,
+          encrypted: Boolean(result.encryptedBackup),
+          encryptedBackupBytes: result.encryptedBackup?.encryptedSizeBytes,
         });
       },
       state: 'idle',

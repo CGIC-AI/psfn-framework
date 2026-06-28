@@ -1,7 +1,8 @@
 // ── Memory Journal ──
 // Append-only JSONL mirror of every memory mutation (insert / soft-delete / restore).
-// Provides a human-readable, version-controllable L0 record that survives SQLite
-// corruption and can be used to replay the full memory history.
+// This is an audit/export aid, not the authoritative L2 restore primitive:
+// embeddings, evolution links, and Postgres-only memory tables are restored
+// from encrypted database backups.
 
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';

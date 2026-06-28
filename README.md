@@ -94,6 +94,7 @@ DATA_DIR=./data
 WORKSPACE_PATH=./purrsephone
 CHARACTER_CARD_PATH=./data/companion.json
 POSTGRES_DATABASE_URL=postgresql://psfn:password@127.0.0.1:5432/psfn
+PSFN_BACKUP_ENCRYPTION_KEY=<long random secret>
 
 # Production split-root layout (set both or neither)
 # PSFN_RUNTIME_LAYOUT_MODE=production
@@ -133,6 +134,8 @@ cp config/skills.seed.json ./data/skills.json
 `channels.json` is created and managed as channel settings are saved. Edit owner files directly or through Garden / the admin API.
 
 Do not put JSON-owned settings such as `EMBEDDING_PROVIDER`, `TRANSFORMERS_MODEL`, `OLLAMA_URL`, `CAPABILITY_TIER`, `MAINTENANCE_INTERVAL_MS`, or `OBSIDIAN_*` in `.env`. The runtime ignores those env values; the authoritative values live in the JSON owner files above.
+
+`backup.json` requires encrypted backups. Keep only the key reference in `backup.json`; keep the actual `PSFN_BACKUP_ENCRYPTION_KEY` secret in `.env` or the deployment secret manager. Generate it with a command such as `openssl rand -base64 48`.
 
 In production, set both `SYSTEM_DATA_DIR` and `COMPANION_DATA_DIR`; startup rejects overlap or only-one-set configurations.
 

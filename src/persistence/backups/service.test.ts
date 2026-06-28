@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -12,6 +13,17 @@ import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
+import {
+  ENCRYPTED_BACKUP_MANIFEST_NAME,
+  ENCRYPTED_BACKUP_PAYLOAD_NAME,
+  decryptEncryptedBackupPackage,
+  type BackupEncryptionRuntimeConfig,
+} from './encryption.js';
+import {
+  SYSTEM_CONFIG_DIR_NAME,
+  SYSTEM_CONFIG_MANIFEST_NAME,
+  verifySystemConfigSnapshot,
+} from './system-config-tree.js';
 import {
   registerScheduledBackupTask,
   runBackupCycle,
@@ -25,6 +37,28 @@ interface BackupDbLike {
 
 function asDb(value: BackupDbLike): Database.Database {
   return value as unknown as Database.Database;
+}
+
+const TEST_BACKUP_ENCRYPTION: BackupEncryptionRuntimeConfig = {
+  mode: 'required',
+  keyRef: {
+    kind: 'env',
+    envName: 'PSFN_BACKUP_TEST_KEY',
+  },
+  passphrase: 'test-backup-secret',
+};
+
+function makeBackupRuntimeConfig(rootDir: string, verifyRestore = false) {
+  return {
+    intervalMs: 60_000,
+    maxRotatingBackups: 7,
+    maxWeeklyBackups: 0,
+    maxMonthlyBackups: 0,
+    rootDir,
+    mirrorDir: '',
+    verifyRestore,
+    encryption: TEST_BACKUP_ENCRYPTION,
+  };
 }
 
 function writeStubPgDump(root: string): string {
@@ -55,6 +89,33 @@ function writeStubPgRestore(root: string): string {
     { mode: 0o755 },
   );
   return stubPath;
+}
+
+function writeSystemOwnerFiles(systemDataDir: string): void {
+  mkdirSync(systemDataDir, { recursive: true });
+  writeFileSync(join(systemDataDir, 'settings.json'), JSON.stringify({ sessionHistoryBudgetPct: 50 }), 'utf-8');
+  writeFileSync(join(systemDataDir, 'models.json'), JSON.stringify({ schemaVersion: 1, models: [] }), 'utf-8');
+  writeFileSync(join(systemDataDir, 'backup.json'), JSON.stringify({
+    intervalHours: 12,
+    maxRotatingBackups: 9,
+    maxWeeklyBackups: 2,
+    maxMonthlyBackups: 1,
+    mirrorDir: '',
+    verifyRestore: true,
+    encryption: {
+      mode: 'required',
+      keyRef: {
+        kind: 'env',
+        envName: 'PSFN_BACKUP_TEST_KEY',
+      },
+    },
+  }), 'utf-8');
+  writeFileSync(join(systemDataDir, 'channels.json'), JSON.stringify({
+    discord: {
+      heartbeatChannelId: 'heartbeat',
+    },
+  }), 'utf-8');
+  writeFileSync(join(systemDataDir, '.env'), 'OPENROUTER_API_KEY=super-secret-env\n', 'utf-8');
 }
 
 describe('runBackupCycle', () => {
@@ -349,6 +410,111 @@ describe('runBackupCycle', () => {
     expect(result.workspaceTreeVerification?.verifiedFileCount).toBe(9);
   });
 
+  it('captures and verifies system-data owner JSON files without broad env capture', async () => {
+    const root = join(tmpdir(), `psfn-backup-system-config-${Date.now()}`);
+    roots.push(root);
+    const systemDataDir = join(root, 'system-data');
+    const sessionsDir = join(root, 'sessions');
+    const backupRootDir = join(root, 'backups');
+    writeSystemOwnerFiles(systemDataDir);
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
+
+    const result = await runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeStubPgDump(root),
+        pgRestoreBinary: writeStubPgRestore(root),
+      },
+      systemDataDir,
+      sessionsDir,
+      backupRootDir,
+      verifyRestore: true,
+      now: () => Date.UTC(2026, 5, 28, 11, 12, 13, 123),
+    });
+
+    expect(result.systemConfig).toBeDefined();
+    expect(result.systemConfig?.fileCount).toBe(4);
+    expect(result.systemConfigVerification?.verifiedFileCount).toBe(4);
+    expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_MANIFEST_NAME))).toBe(true);
+    expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, 'settings.json'))).toBe(true);
+    expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_DIR_NAME, '.env'))).toBe(false);
+    expect(verifySystemConfigSnapshot(result.backupDir).verifiedFileCount).toBe(4);
+  });
+
+  it('fails closed when a system-data owner file is malformed', async () => {
+    const root = join(tmpdir(), `psfn-backup-system-config-invalid-${Date.now()}`);
+    roots.push(root);
+    const systemDataDir = join(root, 'system-data');
+    const sessionsDir = join(root, 'sessions');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(sessionsDir, { recursive: true });
+    writeFileSync(join(systemDataDir, 'settings.json'), '{"broken":', 'utf-8');
+    writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
+
+    await expect(runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeStubPgDump(root),
+      },
+      systemDataDir,
+      sessionsDir,
+      backupRootDir: join(root, 'backups'),
+      now: () => Date.UTC(2026, 5, 28, 11, 12, 13, 123),
+    })).rejects.toThrow('System config owner file settings.json is not valid JSON');
+  });
+
+  it('stores sensitive backup snapshots as encrypted packages when encryption is configured', async () => {
+    const root = join(tmpdir(), `psfn-backup-encrypted-${Date.now()}`);
+    roots.push(root);
+    const systemDataDir = join(root, 'system-data');
+    const companionDataDir = join(root, 'companion-data');
+    const sessionsDir = join(companionDataDir, 'state', 'sessions');
+    const backupRootDir = join(root, 'backups');
+    const decryptDir = join(root, 'decrypted');
+    writeSystemOwnerFiles(systemDataDir);
+    mkdirSync(sessionsDir, { recursive: true });
+    mkdirSync(join(companionDataDir, 'journal'), { recursive: true });
+    writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
+    writeFileSync(join(companionDataDir, 'journal', 'private.md'), 'memory and chat are sensitive\n', 'utf-8');
+
+    const result = await runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeStubPgDump(root),
+        pgRestoreBinary: writeStubPgRestore(root),
+      },
+      systemDataDir,
+      companionDataDir,
+      sessionsDir,
+      backupRootDir,
+      verifyRestore: true,
+      encryption: TEST_BACKUP_ENCRYPTION,
+      now: () => Date.UTC(2026, 5, 28, 12, 13, 14, 123),
+    });
+
+    expect(result.encryptedBackup).toBeDefined();
+    expect(result.postgresDumpVerification?.tocEntryCount).toBe(2);
+    expect(result.systemConfigVerification?.verifiedFileCount).toBe(4);
+    expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_MANIFEST_NAME))).toBe(true);
+    expect(existsSync(join(result.backupDir, ENCRYPTED_BACKUP_PAYLOAD_NAME))).toBe(true);
+    expect(existsSync(join(result.backupDir, 'database'))).toBe(false);
+    expect(existsSync(join(result.backupDir, 'sessions'))).toBe(false);
+    expect(existsSync(join(result.backupDir, SYSTEM_CONFIG_DIR_NAME))).toBe(false);
+
+    await decryptEncryptedBackupPackage({
+      encryptedBackupDir: result.backupDir,
+      outputDir: decryptDir,
+      encryption: TEST_BACKUP_ENCRYPTION,
+    });
+    expect(existsSync(join(decryptDir, 'database', 'psfn.dump'))).toBe(true);
+    expect(existsSync(join(decryptDir, 'sessions', 'channel.jsonl'))).toBe(true);
+    expect(existsSync(join(decryptDir, SYSTEM_CONFIG_DIR_NAME, 'settings.json'))).toBe(true);
+    expect(existsSync(join(decryptDir, SYSTEM_CONFIG_DIR_NAME, '.env'))).toBe(false);
+    expect(readFileSync(join(decryptDir, 'companion-tree', 'journal', 'private.md'), 'utf-8'))
+      .toBe('memory and chat are sensitive\n');
+  });
+
   it('fails closed when workspace backup root overlaps protected runtime or backup paths', async () => {
     const root = join(tmpdir(), `psfn-backup-workspace-overlap-${Date.now()}`);
     roots.push(root);
@@ -440,15 +606,7 @@ describe('registerScheduledBackupTask', () => {
       db: asDb({ backup }),
       databasePath,
       sessionsDir,
-      config: {
-        intervalMs: 60_000,
-        maxRotatingBackups: 7,
-        maxWeeklyBackups: 0,
-        maxMonthlyBackups: 0,
-        rootDir: backupRootDir,
-        mirrorDir: '',
-        verifyRestore: false,
-      },
+      config: makeBackupRuntimeConfig(backupRootDir),
       skipFirstRun: false,
     });
 
@@ -469,15 +627,7 @@ describe('registerScheduledBackupTask', () => {
     expect(() => registerScheduledBackupTask({
       scheduler,
       sessionsDir: '/tmp/nowhere',
-      config: {
-        intervalMs: 60_000,
-        maxRotatingBackups: 7,
-        maxWeeklyBackups: 0,
-        maxMonthlyBackups: 0,
-        rootDir: '/tmp/nowhere-backups',
-        mirrorDir: '',
-        verifyRestore: false,
-      },
+      config: makeBackupRuntimeConfig('/tmp/nowhere-backups'),
     })).toThrow('Scheduled backups require');
   });
 
@@ -500,15 +650,7 @@ describe('registerScheduledBackupTask', () => {
         pgDumpBinary: writeFailingStubPgDump(root),
       },
       sessionsDir,
-      config: {
-        intervalMs: 60_000,
-        maxRotatingBackups: 7,
-        maxWeeklyBackups: 0,
-        maxMonthlyBackups: 0,
-        rootDir: join(root, 'backups'),
-        mirrorDir: '',
-        verifyRestore: false,
-      },
+      config: makeBackupRuntimeConfig(join(root, 'backups')),
       skipFirstRun: false,
       onBackupFailure,
     });

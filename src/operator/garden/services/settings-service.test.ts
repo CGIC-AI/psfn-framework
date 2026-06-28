@@ -636,6 +636,13 @@ describe('AdminSettingsDataService', () => {
       maxMonthlyBackups: 3,
       mirrorDir: '/srv/backup-mirror',
       verifyRestore: false,
+      encryption: {
+        mode: 'required',
+        keyRef: {
+          kind: 'env',
+          envName: 'PSFN_BACKUP_ENCRYPTION_KEY',
+        },
+      },
     };
 
     const result = service.saveSubConfigJson('backup', JSON.stringify(payload));

@@ -11,7 +11,17 @@ import {
   verifyCompanionTreeSnapshot,
   verifyWorkspaceTreeSnapshot,
 } from '../src/persistence/backups/companion-tree.js';
+import {
+  ENCRYPTED_BACKUP_MANIFEST_NAME,
+  decryptEncryptedBackupToTemp,
+  readEncryptedBackupManifest,
+  resolveBackupEncryptionFromManifest,
+} from '../src/persistence/backups/encryption.js';
 import { verifyPostgresDumpRestore } from '../src/persistence/backups/postgres-restore.js';
+import {
+  SYSTEM_CONFIG_MANIFEST_NAME,
+  verifySystemConfigSnapshot,
+} from '../src/persistence/backups/system-config-tree.js';
 
 interface CliArgs {
   backupRootDir?: string;
@@ -164,83 +174,113 @@ function listSessionSnapshotFiles(sessionSnapshotDir: string): string[] {
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const backupRootDir = args.backupDir ? undefined : resolveDefaultBackupRootDir(args);
-  const backupDir = resolve(args.backupDir ?? resolveLatestBackupDir(backupRootDir!));
-  const { sqlitePath, postgresDumpPath } = resolveDatabaseSnapshotPaths(backupDir);
-  const sessionSnapshotDir = join(backupDir, 'sessions');
-  const expectedSessionFiles = listSessionSnapshotFiles(sessionSnapshotDir);
-
-  const sqliteVerification = sqlitePath
-    ? verifyBackupRestore({
-      databaseBackupPath: sqlitePath,
-      sessionSnapshotDir,
-      expectedSessionFiles,
-      restoreScratchRootDir: args.restoreScratchRootDir ? resolve(args.restoreScratchRootDir) : undefined,
-      cleanupRestoreDir: !args.keepRestoreDir,
-    })
+  const requestedBackupDir = resolve(args.backupDir ?? resolveLatestBackupDir(backupRootDir!));
+  const encryptedManifestPath = join(requestedBackupDir, ENCRYPTED_BACKUP_MANIFEST_NAME);
+  const encryptedManifest = existsSync(encryptedManifestPath)
+    ? readEncryptedBackupManifest(requestedBackupDir)
     : undefined;
-
-  const postgresDumpVerification = postgresDumpPath
-    ? await verifyPostgresDumpArchive(postgresDumpPath)
+  const decrypted = encryptedManifest
+    ? await decryptEncryptedBackupToTemp(
+      requestedBackupDir,
+      resolveBackupEncryptionFromManifest(encryptedManifest),
+    )
     : undefined;
+  const backupDir = decrypted?.decryptedBackupDir ?? requestedBackupDir;
+  try {
+    const { sqlitePath, postgresDumpPath } = resolveDatabaseSnapshotPaths(backupDir);
+    const sessionSnapshotDir = join(backupDir, 'sessions');
+    const expectedSessionFiles = listSessionSnapshotFiles(sessionSnapshotDir);
 
-  if (args.postgresRestoreUrl && !postgresDumpPath) {
-    throw new Error('--postgres-restore-url was provided but the backup contains no Postgres dump');
-  }
-  const postgresRestoreVerification = postgresDumpPath && args.postgresRestoreUrl
-    ? await verifyPostgresDumpRestore({
-      dumpPath: postgresDumpPath,
-      scratchDatabaseUrl: args.postgresRestoreUrl,
-      sourceDatabaseUrl: args.postgresSourceUrl,
-    })
-    : undefined;
-
-  const companionTreeVerification = existsSync(join(backupDir, COMPANION_TREE_MANIFEST_NAME))
-    ? verifyCompanionTreeSnapshot(backupDir)
-    : undefined;
-  const workspaceTreeVerification = existsSync(join(backupDir, WORKSPACE_TREE_MANIFEST_NAME))
-    ? verifyWorkspaceTreeSnapshot(backupDir)
-    : undefined;
-
-  console.log(JSON.stringify({
-    backupDir,
-    sessionSnapshotDir,
-    expectedSessionFiles: expectedSessionFiles.length,
-    verified: true,
-    ...(sqlitePath
-      ? {
+    const sqliteVerification = sqlitePath
+      ? verifyBackupRestore({
         databaseBackupPath: sqlitePath,
-        integrityDetails: sqliteVerification?.integrityDetails,
-        restoreDir: sqliteVerification?.restoreDir,
-        cleanupRestoreDir: sqliteVerification?.cleanupRestoreDir,
-      }
-      : {}),
-    ...(postgresDumpPath
-      ? {
-        postgresDumpPath,
-        postgresDumpTocEntries: postgresDumpVerification?.tocEntryCount,
-      }
-      : {}),
-    ...(postgresRestoreVerification
-      ? {
-        postgresRestoredTables: postgresRestoreVerification.restoredTableCount,
-        postgresVectorExtension: postgresRestoreVerification.vectorExtensionPresent,
-        postgresVectorColumnChecked: postgresRestoreVerification.vectorColumnChecked,
-        postgresTableCounts: postgresRestoreVerification.tableCounts,
-      }
-      : {}),
-    ...(companionTreeVerification
-      ? {
-        companionTreeVerifiedFiles: companionTreeVerification.verifiedFileCount,
-        companionTreeBytes: companionTreeVerification.totalBytes,
-      }
-      : {}),
-    ...(workspaceTreeVerification
-      ? {
-        workspaceTreeVerifiedFiles: workspaceTreeVerification.verifiedFileCount,
-        workspaceTreeBytes: workspaceTreeVerification.totalBytes,
-      }
-      : {}),
-  }, null, 2));
+        sessionSnapshotDir,
+        expectedSessionFiles,
+        restoreScratchRootDir: args.restoreScratchRootDir ? resolve(args.restoreScratchRootDir) : undefined,
+        cleanupRestoreDir: !args.keepRestoreDir,
+      })
+      : undefined;
+
+    const postgresDumpVerification = postgresDumpPath
+      ? await verifyPostgresDumpArchive(postgresDumpPath)
+      : undefined;
+
+    if (args.postgresRestoreUrl && !postgresDumpPath) {
+      throw new Error('--postgres-restore-url was provided but the backup contains no Postgres dump');
+    }
+    const postgresRestoreVerification = postgresDumpPath && args.postgresRestoreUrl
+      ? await verifyPostgresDumpRestore({
+        dumpPath: postgresDumpPath,
+        scratchDatabaseUrl: args.postgresRestoreUrl,
+        sourceDatabaseUrl: args.postgresSourceUrl,
+      })
+      : undefined;
+
+    const companionTreeVerification = existsSync(join(backupDir, COMPANION_TREE_MANIFEST_NAME))
+      ? verifyCompanionTreeSnapshot(backupDir)
+      : undefined;
+    const workspaceTreeVerification = existsSync(join(backupDir, WORKSPACE_TREE_MANIFEST_NAME))
+      ? verifyWorkspaceTreeSnapshot(backupDir)
+      : undefined;
+    const systemConfigVerification = existsSync(join(backupDir, SYSTEM_CONFIG_MANIFEST_NAME))
+      ? verifySystemConfigSnapshot(backupDir)
+      : undefined;
+
+    console.log(JSON.stringify({
+      backupDir: requestedBackupDir,
+      ...(encryptedManifest
+        ? {
+          encrypted: true,
+          decryptedBackupDir: backupDir,
+        }
+        : { encrypted: false }),
+      sessionSnapshotDir,
+      expectedSessionFiles: expectedSessionFiles.length,
+      verified: true,
+      ...(sqlitePath
+        ? {
+          databaseBackupPath: sqlitePath,
+          integrityDetails: sqliteVerification?.integrityDetails,
+          restoreDir: sqliteVerification?.restoreDir,
+          cleanupRestoreDir: sqliteVerification?.cleanupRestoreDir,
+        }
+        : {}),
+      ...(postgresDumpPath
+        ? {
+          postgresDumpPath,
+          postgresDumpTocEntries: postgresDumpVerification?.tocEntryCount,
+        }
+        : {}),
+      ...(postgresRestoreVerification
+        ? {
+          postgresRestoredTables: postgresRestoreVerification.restoredTableCount,
+          postgresVectorExtension: postgresRestoreVerification.vectorExtensionPresent,
+          postgresVectorColumnChecked: postgresRestoreVerification.vectorColumnChecked,
+          postgresTableCounts: postgresRestoreVerification.tableCounts,
+        }
+        : {}),
+      ...(companionTreeVerification
+        ? {
+          companionTreeVerifiedFiles: companionTreeVerification.verifiedFileCount,
+          companionTreeBytes: companionTreeVerification.totalBytes,
+        }
+        : {}),
+      ...(workspaceTreeVerification
+        ? {
+          workspaceTreeVerifiedFiles: workspaceTreeVerification.verifiedFileCount,
+          workspaceTreeBytes: workspaceTreeVerification.totalBytes,
+        }
+        : {}),
+      ...(systemConfigVerification
+        ? {
+          systemConfigVerifiedFiles: systemConfigVerification.verifiedFileCount,
+          systemConfigBytes: systemConfigVerification.totalBytes,
+        }
+        : {}),
+    }, null, 2));
+  } finally {
+    decrypted?.cleanup();
+  }
 }
 
 main().catch((error: unknown) => {

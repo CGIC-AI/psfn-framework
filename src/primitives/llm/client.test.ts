@@ -2191,6 +2191,230 @@ describe('LLMClient model budget gates and usage metering', () => {
     ]);
   });
 
+  it('falls back without streaming leading provider template artifacts from the primary model', async () => {
+    const config = makeConfig({
+      primaryModel: 'ChatGPTN',
+      primaryProvider: 'litellm',
+      modelRoster: {
+        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chatgptn-primary',
+            rank: 10,
+            identity: {
+              provider: 'litellm',
+              model: 'ChatGPTN',
+              source: { type: 'litellm' },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+            },
+          },
+          {
+            id: 'openai-nano-fallback',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'openai/gpt-5.4-nano',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 2048,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 2048,
+            },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+    });
+
+    mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
+      if (model.id === 'ChatGPTN') {
+        yield { type: 'text_delta', delta: '<｜begin' };
+        yield { type: 'text_delta', delta: "▁of▁sentence｜># Carlini's Response\n\nYeah, I remember." };
+        return;
+      }
+
+      yield { type: 'text_delta', delta: 'Recovered on nano.' };
+      yield {
+        type: 'done',
+        message: {
+          model: model.id,
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: 'Recovered on nano.' }],
+        },
+        reason: 'stop',
+      };
+    })());
+
+    const streamedText: string[] = [];
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello there' }],
+      correlation: {
+        turnId: 'turn-artifact-primary-1',
+        requestId: 'req-artifact-primary-1',
+        channelId: 'channel-artifact-primary-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    }, {
+      onText: (delta) => streamedText.push(delta),
+    });
+
+    expect(response.content).toBe('Recovered on nano.');
+    expect(response.model).toBe('openrouter/openai/gpt-5.4-nano');
+    expect(streamedText.join('')).toBe('Recovered on nano.');
+    expect(streamedText.join('')).not.toContain('begin▁of▁sentence');
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
+    expect(mocks.streamSimple.mock.calls.map(call => (call[0] as { id: string }).id)).toEqual([
+      'ChatGPTN',
+      'openrouter/openai/gpt-5.4-nano',
+    ]);
+  });
+
+  it('falls back on leading generated response headers even without a BOS token', async () => {
+    const config = makeConfig({
+      primaryModel: 'ChatGPTN',
+      primaryProvider: 'litellm',
+      modelRoster: {
+        chat: { model: 'ChatGPTN', provider: 'litellm', maxTokens: 4096, contextWindow: 128_000 },
+        background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
+      },
+      modelRegistry: {
+        schemaVersion: 1,
+        models: [
+          {
+            id: 'chatgptn-primary',
+            rank: 10,
+            identity: {
+              provider: 'litellm',
+              model: 'ChatGPTN',
+              source: { type: 'litellm' },
+            },
+            purposes: [{ purpose: 'chat', primary: true }],
+            capabilities: {
+              maxOutputTokens: 4096,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 4096,
+            },
+          },
+          {
+            id: 'openai-nano-fallback',
+            rank: 20,
+            identity: {
+              provider: 'openrouter',
+              model: 'openai/gpt-5.4-nano',
+              source: { type: 'openrouter' },
+            },
+            purposes: [{ purpose: 'chat', primary: false }],
+            capabilities: {
+              maxOutputTokens: 2048,
+              contextWindow: 128_000,
+            },
+            tuning: {
+              maxOutputTokens: 2048,
+            },
+          },
+        ],
+      },
+    });
+    const client = new LLMClient(config, {
+      litellmBaseUrl: 'http://litellm.test/v1',
+    });
+
+    mocks.streamSimple.mockImplementation((model: { id: string }) => (async function* streamByModel() {
+      if (model.id === 'ChatGPTN') {
+        yield { type: 'text_delta', delta: '# Carlini' };
+        yield { type: 'text_delta', delta: "'s Response\n\nYeah, I remember." };
+        return;
+      }
+
+      yield { type: 'text_delta', delta: 'Recovered on fallback.' };
+      yield {
+        type: 'done',
+        message: {
+          model: model.id,
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: 'Recovered on fallback.' }],
+        },
+        reason: 'stop',
+      };
+    })());
+
+    const streamedText: string[] = [];
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hello there' }],
+      correlation: {
+        turnId: 'turn-header-artifact-primary-1',
+        requestId: 'req-header-artifact-primary-1',
+        channelId: 'channel-header-artifact-primary-1',
+        callType: 'chat',
+        originType: 'chat',
+        originStage: 'agent.turn.prompt',
+      },
+    }, {
+      onText: (delta) => streamedText.push(delta),
+    });
+
+    expect(response.content).toBe('Recovered on fallback.');
+    expect(streamedText.join('')).toBe('Recovered on fallback.');
+    expect(streamedText.join('')).not.toContain("Carlini's Response");
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(2);
+  });
+
+  it('allows normal Markdown headings once they are not response-header artifacts', async () => {
+    const client = new LLMClient(makeConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+    });
+    const content = '# Garden plan\nBring snacks.';
+
+    mocks.streamSimple.mockImplementation(async function* streamHeading() {
+      yield { type: 'text_delta', delta: '# Garden' };
+      yield { type: 'text_delta', delta: ' plan\n' };
+      yield { type: 'text_delta', delta: 'Bring snacks.' };
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 8, output: 4 },
+          content: [{ type: 'text', text: content }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    const streamedText: string[] = [];
+    const response = await client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Make a quick plan' }],
+    }, {
+      onText: (delta) => streamedText.push(delta),
+    });
+
+    expect(response.content).toBe(content);
+    expect(streamedText.join('')).toBe(content);
+  });
+
   it('persists usage ledger records after successful completion call', async () => {
     const config = makeConfig();
     const client = new LLMClient(config, 'http://litellm.test/v1');

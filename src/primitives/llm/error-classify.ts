@@ -78,6 +78,7 @@ const EMPTY_RESPONSE_PATTERNS = [
   'empty response',
   'empty assistant',
   'no text content',
+  'provider template artifact',
 ] as const;
 
 function getStatusCode(error: ErrorLike): number | undefined {

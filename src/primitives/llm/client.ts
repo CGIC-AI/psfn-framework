@@ -75,6 +75,14 @@ import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
 
 const log = createComponentLogger('LLMClient');
+const PROVIDER_RESPONSE_PREFIX_ARTIFACTS = [
+  '<｜begin▁of▁sentence｜>',
+  '<｜begin_of_sentence｜>',
+  '<|begin▁of▁sentence|>',
+  '<|begin_of_sentence|>',
+] as const;
+const PROVIDER_RESPONSE_HEADER_ARTIFACT_PATTERN = /^#{1,6}\s+(?:(?:assistant|model|bot|character|companion|[^#\r\n]{1,80}'s)\s+)?response\s*:?(?:\r?\n|$)/iu;
+const PROVIDER_RESPONSE_HEADER_POTENTIAL_MAX_CHARS = 120;
 
 interface LLMRequestOptions extends SimpleStreamOptions {
   zdr?: boolean;
@@ -994,15 +1002,28 @@ export class LLMClient {
             const toolCalls: ToolCall[] = [];
             let response: LLMResponse | null = null;
             let emittedData = false;
+            let emittedTextLength = 0;
+            let sawTextDelta = false;
 
             try {
               for await (const event of eventStream) {
                 switch (event.type) {
                   case 'text_delta':
                     if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
-                    emittedData = true;
+                    sawTextDelta = true;
                     content += event.delta;
-                    callbacks?.onText?.(event.delta);
+                    assertNoProviderResponsePrefixArtifact(content, candidateTarget);
+                    if (isPotentialProviderResponsePrefixArtifact(content)) {
+                      break;
+                    }
+                    {
+                      const unEmitted = content.slice(emittedTextLength);
+                      emittedTextLength = content.length;
+                      if (unEmitted) {
+                        emittedData = true;
+                        callbacks?.onText?.(unEmitted);
+                      }
+                    }
                     break;
 
                   case 'thinking_delta':
@@ -1025,9 +1046,10 @@ export class LLMClient {
                   case 'done': {
                     if (firstTokenAtMs === undefined) firstTokenAtMs = Date.now();
                     const contentBlocks = event.message.content as unknown[];
+                    const finalTextContent = extractTextContent(contentBlocks);
                     // If text_delta events didn't fire, extract text from content blocks
-                    if (!content) {
-                      content = extractTextContent(contentBlocks);
+                    if (!content || (isPotentialProviderResponsePrefixArtifact(content) && finalTextContent)) {
+                      content = finalTextContent;
                     }
                     // Extract reasoning from content blocks if thinking_delta didn't fire
                     if (!reasoning) {
@@ -1036,6 +1058,15 @@ export class LLMClient {
                     const finalToolCalls = extractToolCallsFromContentBlocks(contentBlocks);
                     // Normalize away stringified content block arrays from streaming
                     content = normalizeContent(content);
+                    assertNoProviderResponsePrefixArtifact(content, candidateTarget);
+                    if (sawTextDelta && content.length > emittedTextLength) {
+                      const unEmitted = content.slice(emittedTextLength);
+                      emittedTextLength = content.length;
+                      if (unEmitted) {
+                        emittedData = true;
+                        callbacks?.onText?.(unEmitted);
+                      }
+                    }
                     const usageDetails = normalizeLLMUsageDetails(
                       event.message.usage,
                       event.message.usage.input,
@@ -1595,6 +1626,7 @@ function assertUsableProviderResponse(
     ? response.content
     : extractTextContent(contentBlocks);
   const normalizedContent = normalizeContent(content);
+  assertNoProviderResponsePrefixArtifact(normalizedContent, candidate);
   const directToolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : [];
   const blockToolCalls = extractToolCallsFromContentBlocks(contentBlocks);
 
@@ -1603,6 +1635,37 @@ function assertUsableProviderResponse(
   }
 
   throw new Error(`LLM response from ${candidate.provider}/${candidate.model} contained no text or tool calls`);
+}
+
+function detectProviderResponsePrefixArtifact(content: string): string | null {
+  const normalized = content.trimStart();
+  if (!normalized) return null;
+  const specialToken = PROVIDER_RESPONSE_PREFIX_ARTIFACTS.find((artifact) => normalized.startsWith(artifact));
+  if (specialToken) return specialToken;
+  const responseHeader = normalized.match(PROVIDER_RESPONSE_HEADER_ARTIFACT_PATTERN)?.[0]?.trim();
+  return responseHeader || null;
+}
+
+function isPotentialProviderResponsePrefixArtifact(content: string): boolean {
+  const normalized = content.trimStart();
+  if (!normalized) return true;
+  if (detectProviderResponsePrefixArtifact(content)) return true;
+  if (PROVIDER_RESPONSE_PREFIX_ARTIFACTS.some((artifact) => artifact.startsWith(normalized))) return true;
+  return isPotentialProviderResponseHeaderArtifact(normalized);
+}
+
+function assertNoProviderResponsePrefixArtifact(content: string, candidate: RoutingCandidate): void {
+  const artifact = detectProviderResponsePrefixArtifact(content);
+  if (!artifact) return;
+  throw new Error(
+    `LLM response from ${candidate.provider}/${candidate.model} began with provider template artifact ${artifact}`,
+  );
+}
+
+function isPotentialProviderResponseHeaderArtifact(normalizedContent: string): boolean {
+  if (!normalizedContent.startsWith('#')) return false;
+  if (/\r?\n/u.test(normalizedContent)) return false;
+  return normalizedContent.length <= PROVIDER_RESPONSE_HEADER_POTENTIAL_MAX_CHARS;
 }
 
 function normalizeProxyModelId(provider: string, modelId: string): string {

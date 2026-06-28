@@ -63,6 +63,15 @@ describe('classifyLLMError', () => {
     expect(result.retryable).toBe(true);
   });
 
+  it('classifies provider template artifacts as retryable empty responses', () => {
+    const result = classifyLLMError(
+      new Error('LLM response from litellm/ChatGPTN began with provider template artifact <｜begin▁of▁sentence｜>'),
+    );
+
+    expect(result.category).toBe('empty_response');
+    expect(result.retryable).toBe(true);
+  });
+
   it('defaults to unknown for unmatched errors', () => {
     const result = classifyLLMError(new Error('something odd happened'));
     expect(result.category).toBe('unknown');

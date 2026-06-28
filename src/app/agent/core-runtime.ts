@@ -204,6 +204,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
         enabled: isPromptGenerationFailureAlertConfigured(process.env),
       }),
     },
+    fatigueBudget: fatigueRuntime.fatigueBudget,
     emotionRuntime,
     observerEvalSidecar,
     appCache,

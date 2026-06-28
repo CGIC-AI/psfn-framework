@@ -25,8 +25,15 @@ import type { ChargePolicyConfig } from '../../../system/config/charge-policy-co
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { createActiveEmanationSatellitePresencePort } from '../satellite-adapter-port.js';
+import type { FatigueBudgetEvent } from '../../../shared/contracts/runtime.js';
+import {
+  DeterministicFatigueBudgetPort,
+  type FatigueBudgetHistoryPort,
+  type FatigueBudgetPort,
+} from '../fatigue/fatigue-budget.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
+import type { ResolvedAuthorContext } from './runtime-context.js';
 import { runMoaTurn } from './moa-turn.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 
@@ -121,6 +128,99 @@ function makeChargePolicy(): ChargePolicyConfig {
       premium_cloud: 4,
     },
     fatigue: makeTestFatiguePolicyConfig(),
+  };
+}
+
+class InMemoryFatigueBudgetHistory implements FatigueBudgetHistoryPort {
+  readonly events: FatigueBudgetEvent[] = [];
+
+  listFatigueEvents(query: NonNullable<Parameters<FatigueBudgetHistoryPort['listFatigueEvents']>[0]> = {}): FatigueBudgetEvent[] {
+    return this.events.filter(event => (
+      (query.localCompanionId === undefined || event.localCompanionId === query.localCompanionId)
+      && (query.peerContactId === undefined || event.peerContactId === query.peerContactId)
+      && (query.channelId === undefined || event.channelId === query.channelId)
+      && (query.dayKey === undefined || event.dayKey === query.dayKey)
+      && (query.decision === undefined || event.decision === query.decision)
+    )).slice(0, query.limit);
+  }
+
+  recordFatigueEvent(event: FatigueBudgetEvent): void {
+    this.events.push({
+      ...event,
+      triggeringAuthor: { ...event.triggeringAuthor },
+      peer: { ...event.peer },
+      ...(event.details ? { details: { ...event.details } } : {}),
+      ...(event.lineage ? { lineage: { ...event.lineage } } : {}),
+    });
+  }
+}
+
+function createFatigueBudgetHarness() {
+  const history = new InMemoryFatigueBudgetHistory();
+  const fatigueBudget = new DeterministicFatigueBudgetPort(history, {
+    now: () => Date.parse('2026-03-08T12:00:00Z'),
+  });
+  return { fatigueBudget, history };
+}
+
+function seedMachineIntelligenceFatigueSpend(input: {
+  fatigueBudget: FatigueBudgetPort;
+  count: number;
+  channelId?: string;
+  peerContactId?: string;
+}): void {
+  for (let index = 0; index < input.count; index += 1) {
+    const evaluation = input.fatigueBudget.evaluate({
+      localCompanionId: DEFAULT_COMPANION_ID,
+      channelId: input.channelId ?? 'ch1',
+      peer: {
+        contactId: input.peerContactId ?? 'contact-mi',
+        channelAuthorId: 'mi-user',
+        displayName: 'Peer MI',
+        isMachineIntelligence: true,
+      },
+      triggeringAuthor: {
+        role: 'machine_intelligence',
+        contactId: input.peerContactId ?? 'contact-mi',
+        channelAuthorId: 'mi-user',
+        displayName: 'Peer MI',
+        isMachineIntelligence: true,
+      },
+      limits: {
+        softLimit: 2,
+        hardLimit: 5,
+      },
+      timestampMs: Date.now() + index,
+    });
+    input.fatigueBudget.recordFinalDecision(evaluation);
+  }
+}
+
+function machineIntelligenceAuthorContext(
+  overrides: Partial<ResolvedAuthorContext> = {},
+): ResolvedAuthorContext {
+  return {
+    trustLevel: 'regular',
+    speakerRole: 'user',
+    resolvedUserName: 'Peer MI',
+    speakingWithIsMachineIntelligence: true,
+    relationshipType: 'acquaintance',
+    canonicalContactKey: 'contact-mi',
+    continuityFallbackKeys: [],
+    ...overrides,
+  };
+}
+
+function humanAuthorContext(
+  overrides: Partial<ResolvedAuthorContext> = {},
+): ResolvedAuthorContext {
+  return {
+    trustLevel: 'regular',
+    speakerRole: 'user',
+    resolvedUserName: 'Human',
+    canonicalContactKey: 'contact-human',
+    continuityFallbackKeys: [],
+    ...overrides,
   };
 }
 
@@ -304,6 +404,7 @@ function createRuntime(params: {
   imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
   emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
+  fatigueBudget?: FatigueBudgetPort | null;
   configOverrides?: Partial<SubstrateConfig>;
 }) {
   const agentState = {
@@ -323,6 +424,7 @@ function createRuntime(params: {
   const runtime = {
     eventBus: params.eventBus,
     costTelemetry: createEventBusCostTelemetryPort(params.eventBus),
+    fatigueBudget: params.fatigueBudget ?? null,
     satellitePresence: createActiveEmanationSatellitePresencePort(),
     llmClient: {
       stream: vi.fn(),
@@ -344,6 +446,12 @@ function createRuntime(params: {
       modelRoster: {
         chat: { model: 'test-model', provider: 'test', maxTokens: 1024, contextWindow: 4096 },
       },
+      ...(params.fatigueBudget
+        ? {
+            companionId: DEFAULT_COMPANION_ID,
+            chargePolicy: makeChargePolicy(),
+          }
+        : {}),
       ...params.configOverrides,
     } as unknown as SubstrateConfig,
     runtimeMode: 'default',
@@ -478,6 +586,187 @@ function createRuntime(params: {
 
   return runtime;
 }
+
+describe('handleMessageForTurn fatigue enforcement', () => {
+  function createFatigueRuntime(params: {
+    fatigueBudget: FatigueBudgetPort;
+    eventBus?: EventBus;
+    buildContext?: ReturnType<typeof vi.fn>;
+    resolveAuthorContext?: ReturnType<typeof vi.fn>;
+  }) {
+    const buildContext = params.buildContext ?? vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus: params.eventBus ?? new EventBus(),
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      fatigueBudget: params.fatigueBudget,
+      resolveAuthorContext: params.resolveAuthorContext ?? vi.fn(() => machineIntelligenceAuthorContext()),
+    });
+    return { runtime, buildContext };
+  }
+
+  it('calls the model for a normal MI turn and records one spend after the assistant response', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    const { runtime } = createFatigueRuntime({ fatigueBudget });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-normal', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.content).toBe('assistant reply');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'allowed_charged',
+      shouldRecordSpend: true,
+      recordedEvent: {
+        amount: 1,
+        spentAfter: 1,
+      },
+    });
+    expect(history.events).toHaveLength(1);
+    expect(history.events[0]).toMatchObject({
+      amount: 1,
+      decision: 'charged',
+      peerContactId: 'contact-mi',
+      channelId: 'ch1',
+    });
+  });
+
+  it('injects an internal fatigue alert for soft exhaustion and returns model-authored text', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 2 });
+    const buildContext = vi.fn(async (_channelId: string, fullPrompt: string) => ({
+      systemPrompt: fullPrompt,
+      messages: [],
+      manifest: undefined,
+    }));
+    const { runtime } = createFatigueRuntime({ fatigueBudget, buildContext });
+    const modelAuthoredText = 'I can wrap this thought up from here.';
+    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: modelAuthoredText });
+    });
+    runtime.extractResponseText = vi.fn(() => modelAuthoredText);
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-soft', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.content).toBe(modelAuthoredText);
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'wrap_up_charged',
+      alertInjected: true,
+      recordedEvent: {
+        amount: 1,
+        spentAfter: 3,
+      },
+    });
+    expect(buildContext.mock.calls[0]?.[1]).toContain('<runtime_fatigue_alert');
+    expect(buildContext.mock.calls[0]?.[1]).toContain('author the outward response yourself');
+    expect(history.events).toHaveLength(3);
+  });
+
+  it('suppresses hard-exhausted MI turns before model invocation', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const { runtime } = createFatigueRuntime({ fatigueBudget, buildContext });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-hard', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(response.content).toBe('');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'suppressed_hard_exhausted',
+      modelDisposition: 'suppressed',
+      shouldRecordSpend: false,
+    });
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
+    expect(buildContext).not.toHaveBeenCalled();
+    expect(history.events).toHaveLength(5);
+    expect(runtime.recordAssistantMessage).not.toHaveBeenCalled();
+  });
+
+  it('allows human-authored turns without spending even when an MI budget is exhausted in the same channel', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      resolveAuthorContext: vi.fn(() => humanAuthorContext()),
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-human', {
+      authorId: 'human-user',
+      authorName: 'Human',
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.content).toBe('assistant reply');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'allowed_free',
+      shouldRecordSpend: false,
+    });
+    expect(history.events).toHaveLength(5);
+    expect(history.events.every(event => event.peerContactId === 'contact-mi')).toBe(true);
+  });
+
+  it('keeps MI budgets isolated by channel', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5, channelId: 'ch1' });
+    const { runtime } = createFatigueRuntime({ fatigueBudget });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-channel-isolation', {
+      channelId: 'ch2',
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'allowed_charged',
+      scope: {
+        channelId: 'ch2',
+      },
+      recordedEvent: {
+        amount: 1,
+        spentAfter: 1,
+      },
+    });
+    expect(history.events.filter(event => event.channelId === 'ch1')).toHaveLength(5);
+    expect(history.events.filter(event => event.channelId === 'ch2')).toHaveLength(1);
+  });
+
+  it('does not record fatigue spend when model generation fails', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    const { runtime } = createFatigueRuntime({ fatigueBudget });
+    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('generation failed'));
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-fatigue-failure', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }))).rejects.toThrow('generation failed');
+
+    expect(history.events).toHaveLength(0);
+    expect(runtime.recordAssistantMessage).not.toHaveBeenCalled();
+  });
+});
 
 const OBSERVER_TEST_MESSAGE_CONTENT = 'Observer seam probe';
 const TEST_EMOTION_SNAPSHOT: EmotionStateSnapshot = {

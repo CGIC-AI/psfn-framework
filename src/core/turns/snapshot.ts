@@ -12,6 +12,7 @@ import type { EpisodicRetrievalChain } from '../../faculties/memory/retrieval/ep
 import type { SessionEntry } from '../session/types.js';
 import type {
   ContextMessage,
+  FatigueEnforcementMetadata,
   LLMProviderObservability,
   PromptSectionTelemetry,
   ToolSchema,
@@ -149,6 +150,7 @@ export interface TurnSnapshot {
   toolContext?: TurnToolContextSnapshot;
   sessionContext?: TurnSessionContextSnapshot;
   memory?: TurnMemorySnapshot;
+  fatigue?: FatigueEnforcementMetadata;
 }
 
 export function buildSnapshotVersionPointer(parts: ReadonlyArray<string | number | null | undefined>): string {

@@ -152,6 +152,7 @@ import {
 } from './substrate-agent/tool-runtime-facade.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import type { ObserverEvalSidecarRuntime } from '../eval/observer-sidecar/types.js';
+import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -212,6 +213,7 @@ export interface SubstrateAgentOptions {
   emotionRuntime?: EmotionRuntimeWiring;
   selfModelRuntime?: SelfModelRuntimeWiring;
   observerEvalSidecar?: ObserverEvalSidecarRuntime;
+  fatigueBudget?: FatigueBudgetPort | null;
   streamTransport?: SubstrateStreamTransport;
   appCache?: AppCache;
 }
@@ -241,6 +243,7 @@ export class SubstrateAgent {
   private readonly satellitePresencePort = createActiveEmanationSatellitePresencePort();
   private selfModelRuntimeRequired = false;
   private readonly emotionSelfModelRuntime: EmotionSelfModelRuntime;
+  private readonly fatigueBudget: FatigueBudgetPort | null;
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
   private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
@@ -315,6 +318,7 @@ export class SubstrateAgent {
     this.appCache = options?.appCache ?? createMemoryAppCache({ name: 'substrate-agent-prompt-cache' });
     this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
     this.observerEvalSidecar = options?.observerEvalSidecar ?? null;
+    this.fatigueBudget = options?.fatigueBudget ?? null;
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
       sessionManager: this.sessionManager,
       llmProvider: this.llmClient,
@@ -865,6 +869,7 @@ export class SubstrateAgent {
     const run = async (): Promise<AgentResponse> => handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
       costTelemetry: createEventBusCostTelemetryPort(this.eventBus),
+      fatigueBudget: this.fatigueBudget,
       satellitePresence: this.satellitePresencePort,
       llmClient: this.llmClient,
       imageVisionReviewer: this.imageVisionReviewer,

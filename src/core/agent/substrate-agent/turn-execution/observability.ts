@@ -22,7 +22,14 @@ import { toErrorMessage } from '../../../../shared/utils/errors.js';
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 
-export type TurnExecutionStageName = 'trust' | 'memory' | 'context' | 'first-token' | 'prompt' | 'end';
+export type TurnExecutionStageName =
+  | 'trust'
+  | 'memory'
+  | 'fatigue'
+  | 'context'
+  | 'first-token'
+  | 'prompt'
+  | 'end';
 
 export interface TurnExecutionObservability {
   emitObservedTurnStage: (

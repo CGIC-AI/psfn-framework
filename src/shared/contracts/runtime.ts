@@ -7,6 +7,10 @@ import type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
+  FatiguePolicyChannelSetting,
+  FatiguePolicyIntent,
+  FatiguePolicyRelationshipClass,
+  FatiguePolicyState,
 } from './charge-policy.js';
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 
@@ -329,6 +333,64 @@ export interface FatigueBudgetEvent extends Partial<CorrelationMetadata> {
   details?: Record<string, unknown>;
 }
 
+export type FatigueEnforcementDecision =
+  | 'allowed_free'
+  | 'allowed_charged'
+  | 'wrap_up_charged'
+  | 'suppressed_hard_exhausted';
+
+export interface FatigueEnforcementBudgetMetadata {
+  spentBefore: number;
+  remainingBefore: number;
+  allowance: number;
+  softLimit: number;
+  hardLimit: number;
+  amount: number;
+  spentAfterProjected: number;
+  remainingAfterProjected: number;
+}
+
+export interface FatigueRecordedEventMetadata {
+  timestampMs: number;
+  amount: number;
+  decision: FatigueBudgetDecision;
+  reason: FatigueBudgetReason;
+  spentAfter: number;
+  remainingAllowance: number;
+  softState: FatigueBudgetSoftState;
+  hardState: FatigueBudgetHardState;
+}
+
+export interface FatigueEnforcementMetadata {
+  schemaVersion: 1;
+  decision: FatigueEnforcementDecision;
+  modelDisposition: 'allowed' | 'suppressed';
+  alertInjected: boolean;
+  shouldRecordSpend: boolean;
+  spendDecision: FatigueBudgetDecision;
+  spendReason: FatigueBudgetReason;
+  policyState: FatiguePolicyState;
+  policyBaseState: Exclude<FatiguePolicyState, 'overcharge_eligible'>;
+  intent: FatiguePolicyIntent;
+  relationshipClass: FatiguePolicyRelationshipClass;
+  channelSetting: FatiguePolicyChannelSetting;
+  overchargeEligible: boolean;
+  overchargePermitted: boolean;
+  overchargeBlockedReasons: string[];
+  scope: FatigueBudgetScopeSnapshot;
+  peer: FatigueBudgetPeerSnapshot;
+  triggeringAuthor: FatigueBudgetActorSnapshot;
+  budget: FatigueEnforcementBudgetMetadata;
+  recordedEvent?: FatigueRecordedEventMetadata;
+}
+
+export interface FatigueBudgetScopeSnapshot {
+  localCompanionId: string;
+  peerContactId: string;
+  channelId: string;
+  dayKey: string;
+}
+
 export interface ResponseMetadata {
   model: string;
   inputTokens: number;
@@ -366,6 +428,7 @@ export interface ResponseMetadata {
     approvalRequired: boolean;
     provenanceRefs: string[];
   };
+  fatigue?: FatigueEnforcementMetadata;
 }
 
 export interface TurnUsage {

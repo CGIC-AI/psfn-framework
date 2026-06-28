@@ -10,6 +10,7 @@ import {
 } from '../../faculties/memory/retrieval/episodic.js';
 import type { SessionEntry } from '../session/types.js';
 import type {
+  FatigueEnforcementMetadata,
   TurnToolContextSnapshot,
   TurnPromptContextSnapshot,
   TurnPromptSnapshot,
@@ -79,6 +80,7 @@ export interface TurnSnapshotRecord {
   toolContext?: TurnToolContextSnapshot;
   sessionContext?: TurnSessionContextSnapshotRecord;
   memory?: TurnMemorySnapshotRecord;
+  fatigue?: FatigueEnforcementMetadata;
 }
 
 export interface TurnStageTelemetryRecord {
@@ -300,6 +302,7 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         },
       }
       : {}),
+    ...(snapshot.fatigue ? { fatigue: cloneUnknownValue(snapshot.fatigue) } : {}),
   };
 }
 
@@ -393,6 +396,7 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
         },
       }
       : {}),
+    ...(snapshot.fatigue ? { fatigue: cloneUnknownValue(snapshot.fatigue) } : {}),
   };
 }
 

@@ -5,6 +5,7 @@ import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
+import { resolveCompanionIdFromConfig } from '../../identity/companion-runtime.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { SessionManager } from '../../session/manager.js';
 import {
@@ -21,7 +22,7 @@ import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
-import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, CorrelationMetadata, FatigueEnforcementMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
 import { isTemporalContextBudgetTurn } from '../../../shared/context-budget.js';
@@ -39,6 +40,12 @@ import {
 import type { EventBridge } from '../event-bridge.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { LLMProviderPort, MemoryExtractor, MemoryProvider } from '../contracts.js';
+import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
+import {
+  attachRecordedFatigueEvent,
+  evaluateFatigueForTurn,
+  type FatigueTurnDecision,
+} from '../fatigue/runtime-enforcement.js';
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import type { ResolvedAuthorContext } from './runtime-context.js';
@@ -65,6 +72,7 @@ const log = createComponentLogger('SubstrateAgent');
 export interface TurnExecutionRuntime {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
+  fatigueBudget?: FatigueBudgetPort | null;
   satellitePresence: SatellitePresencePort;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
@@ -109,7 +117,7 @@ export interface TurnExecutionRuntime {
     turnStartMs: number,
     turnId: TurnID,
     requestId: string,
-    stage: 'trust' | 'memory' | 'context' | 'first-token' | 'prompt' | 'end',
+    stage: 'trust' | 'memory' | 'fatigue' | 'context' | 'first-token' | 'prompt' | 'end',
     callType: ObservabilityCallType,
     payload: Record<string, unknown>,
   ) => EventMap['agent.turn.stage'];
@@ -307,6 +315,97 @@ export interface TurnExecutionRuntime {
   }) => Promise<void>;
 }
 
+function summarizeFatigue(metadata: FatigueEnforcementMetadata): Record<string, unknown> {
+  return {
+    decision: metadata.decision,
+    modelDisposition: metadata.modelDisposition,
+    alertInjected: metadata.alertInjected,
+    shouldRecordSpend: metadata.shouldRecordSpend,
+    policyState: metadata.policyState,
+    policyBaseState: metadata.policyBaseState,
+    spendDecision: metadata.spendDecision,
+    spendReason: metadata.spendReason,
+    overchargeEligible: metadata.overchargeEligible,
+    overchargePermitted: metadata.overchargePermitted,
+    scope: metadata.scope,
+    budget: metadata.budget,
+  };
+}
+
+function evaluateRuntimeFatigue(input: {
+  runtime: TurnExecutionRuntime;
+  message: SubstrateMessage;
+  authorContext: ResolvedAuthorContext;
+  channelType: string | undefined;
+  channelMeta: ChannelMeta;
+  taskKind: string | undefined;
+  turnCorrelationBase: CorrelationMetadata;
+  timestampMs: number;
+}): FatigueTurnDecision | null {
+  if (!input.runtime.fatigueBudget) {
+    return null;
+  }
+  const fatiguePolicy = input.runtime.config.chargePolicy?.fatigue;
+  if (!fatiguePolicy) {
+    throw new Error('Fatigue enforcement requires chargePolicy.fatigue when fatigueBudget is wired');
+  }
+  return evaluateFatigueForTurn({
+    fatigueBudget: input.runtime.fatigueBudget,
+    fatiguePolicy,
+    localCompanionId: resolveCompanionIdFromConfig(input.runtime.config),
+    message: input.message,
+    authorContext: input.authorContext,
+    channelId: input.runtime.resolveSessionChannelId(input.message.channelId),
+    channelType: input.channelType,
+    channelMeta: input.channelMeta,
+    taskKind: input.taskKind,
+    timestampMs: input.timestampMs,
+    correlation: input.runtime.withCorrelationPurpose(input.turnCorrelationBase, 'agent.fatigue.evaluate'),
+  });
+}
+
+function emitFatigueDecision(input: {
+  runtime: TurnExecutionRuntime;
+  message: SubstrateMessage;
+  turnCorrelationBase: CorrelationMetadata;
+  fatigueDecision: FatigueTurnDecision;
+  observability: Pick<ReturnType<typeof createTurnExecutionObservability>, 'emitObservedTurnStage'>;
+}): void {
+  const telemetry = summarizeFatigue(input.fatigueDecision.metadata);
+  input.observability.emitObservedTurnStage('fatigue', telemetry);
+  input.runtime.emitTelemetry('agent.fatigue.decision', {
+    channelId: input.message.channelId,
+    ...telemetry,
+    ...input.runtime.withCorrelationPurpose(input.turnCorrelationBase, 'agent.fatigue.decision'),
+  });
+  if (input.fatigueDecision.suppressModel) {
+    log.info('Suppressed machine-intelligence turn at fatigue hard cap', {
+      channelId: input.message.channelId,
+      ...telemetry,
+    });
+  }
+}
+
+function buildSuppressedFatigueResponse(input: {
+  message: SubstrateMessage;
+  startTime: number;
+  completedAt: number;
+  model: string;
+  fatigue: FatigueEnforcementMetadata;
+}): AgentResponse {
+  return {
+    content: '',
+    channelId: input.message.channelId,
+    metadata: {
+      model: input.model,
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: input.completedAt - input.startTime,
+      fatigue: input.fatigue,
+    },
+  };
+}
+
 export async function handleMessageForTurn(
   runtime: TurnExecutionRuntime,
   message: SubstrateMessage,
@@ -382,6 +481,7 @@ export async function handleMessageForTurn(
   let assistantSessionEntryId: number | null = null;
   let internalStateSnapshotRef: string | undefined;
   let persistedUserMessageContent: string | undefined;
+  let fatigueDecision: FatigueTurnDecision | null = null;
   const invocationState: AgentInvocationMutableState = {
     turnMessages,
     turnStartMessageIndex: null,
@@ -408,6 +508,74 @@ export async function handleMessageForTurn(
 
   try {
     const channelType = runtime.resolveChannelType(message);
+    fatigueDecision = evaluateRuntimeFatigue({
+      runtime,
+      message,
+      authorContext,
+      channelType,
+      channelMeta,
+      taskKind,
+      turnCorrelationBase,
+      timestampMs: startTime,
+    });
+    if (fatigueDecision) {
+      emitFatigueDecision({
+        runtime,
+        message,
+        turnCorrelationBase,
+        fatigueDecision,
+        observability,
+      });
+    }
+    if (fatigueDecision?.suppressModel) {
+      const completedAt = Date.now();
+      const suppressedResponse = buildSuppressedFatigueResponse({
+        message,
+        startTime,
+        completedAt,
+        model: responseModel,
+        fatigue: fatigueDecision.metadata,
+      });
+      observability.emitObservedTurnStage('end', {
+        durationMs: completedAt - startTime,
+        ttftMs: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        fatigue: summarizeFatigue(fatigueDecision.metadata),
+      });
+      runtime.sessionManager.recordTurn(
+        runtime.buildTurnRecord({
+          message,
+          turnId,
+          requestId,
+          startedAt: startTime,
+          completedAt,
+          userSessionEntryId,
+          assistantSessionEntryId,
+          response: suppressedResponse,
+          turnMessages: [],
+          promptMode,
+          promptText: fullPrompt,
+          contextMessageCount,
+          memoryContextChars,
+          trustLevel,
+          speakerRole,
+          canonicalContactKey,
+          retrievalProvenanceRefs: [],
+          turnObservability: {
+            stages: observability.getObservedTurnStages(),
+            retrievals: observability.getObservedTurnRetrievals(),
+            ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
+          },
+        }),
+      );
+      await runtime.eventBus.emit('agent.turn.end', {
+        message,
+        response: suppressedResponse,
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.end'),
+      });
+      return suppressedResponse;
+    }
     runtime.ensureModel(message);
     responseModel = runtime.agent.state.model.id;
     const preTurnState = await computePreTurnState({
@@ -431,6 +599,9 @@ export async function handleMessageForTurn(
       observability,
     });
     turnSnapshot = preTurnState.turnSnapshot;
+    if (fatigueDecision) {
+      turnSnapshot.fatigue = fatigueDecision.metadata;
+    }
     memoryContextBlock = preTurnState.memoryContextBlock;
     memoryContextChars = preTurnState.memoryContextChars;
     const autoloadOutcome = runtime.preloadExtendedToolsForTurn(message, taskKind, turnCorrelationBase);
@@ -464,6 +635,7 @@ export async function handleMessageForTurn(
       turnCallType,
       turnSnapshot,
       memoryManifestSeed: preTurnState.memoryManifestSeed ?? observability.getMemoryManifestSeed(),
+      ...(fatigueDecision ? { fatigue: fatigueDecision.metadata } : {}),
       getRetrievalProvenanceRefs: observability.getRetrievalProvenanceRefs,
       getObservedTurnRetrievals: observability.getObservedTurnRetrievals,
       observability,
@@ -630,6 +802,39 @@ export async function handleMessageForTurn(
     if (runtimeContradictionDiagnostics?.runtimeContradiction) {
       responseDiagnostics.runtimeContradiction = runtimeContradictionDiagnostics.runtimeContradiction;
     }
+    let responseFatigueMetadata = fatigueDecision?.metadata;
+    if (fatigueDecision?.shouldRecordSpend) {
+      if (!runtime.fatigueBudget) {
+        throw new Error('Fatigue spend recording requires fatigueBudget');
+      }
+      const fatigueEvent = runtime.fatigueBudget.recordFinalDecision(
+        fatigueDecision.evaluation,
+        {
+          correlation: runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.fatigue.record'),
+          details: {
+            enforcementDecision: fatigueDecision.metadata.decision,
+            policyState: fatigueDecision.metadata.policyState,
+            policyBaseState: fatigueDecision.metadata.policyBaseState,
+            responseChars: responseText.length,
+            model: responseModel,
+          },
+        },
+      );
+      responseFatigueMetadata = attachRecordedFatigueEvent(fatigueDecision.metadata, fatigueEvent);
+      fatigueDecision = {
+        ...fatigueDecision,
+        metadata: responseFatigueMetadata,
+      };
+      turnSnapshot.fatigue = responseFatigueMetadata;
+      runtime.emitTelemetry('agent.fatigue.recorded', {
+        channelId: message.channelId,
+        amount: fatigueEvent.amount,
+        spentAfter: fatigueEvent.spentAfter,
+        remainingAllowance: fatigueEvent.remainingAllowance,
+        decision: responseFatigueMetadata.decision,
+        ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.fatigue.recorded'),
+      });
+    }
     const agentResponse: AgentResponse = {
       content: safeResponseText,
       channelId: message.channelId,
@@ -645,6 +850,7 @@ export async function handleMessageForTurn(
         ...(retrievalProvenanceRefs.length > 0 ? { retrievalProvenanceRefs } : {}),
         ...(Object.keys(responseDiagnostics).length > 0 ? { diagnostics: responseDiagnostics } : {}),
         ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
+        ...(responseFatigueMetadata ? { fatigue: responseFatigueMetadata } : {}),
       },
     };
     await schedulePostTurnWork({

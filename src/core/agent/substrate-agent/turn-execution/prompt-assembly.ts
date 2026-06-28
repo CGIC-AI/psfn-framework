@@ -16,6 +16,7 @@ import { resolveSystemRoleCapabilityMetadata } from '../../../../primitives/llm/
 import type { ContextBudgetTurnCharacteristics } from '../../../../shared/context-budget.js';
 import type {
   CorrelationMetadata,
+  FatigueEnforcementMetadata,
   MessagePromptOverrideMode,
   ObservabilityCallType,
   SubstrateMessage,
@@ -32,6 +33,7 @@ import type { EmotionAppraisalEntry } from '../../../emotion/appraisal.js';
 import type { TurnRetrievalTelemetryRecord } from '../../../turns/observability.js';
 import { detectTurnObservabilityWarnings } from '../../../turns/observability-warnings.js';
 import type { TurnSnapshot } from '../../../turns/snapshot.js';
+import { buildFatiguePromptAlert } from '../../fatigue/runtime-enforcement.js';
 import type { ResolvedAuthorContext } from '../runtime-context.js';
 import type { TurnExecutionObservability } from './observability.js';
 
@@ -147,6 +149,7 @@ export async function assembleTurnPrompt(input: {
   turnCallType: ObservabilityCallType;
   turnSnapshot: TurnSnapshot;
   memoryManifestSeed: ContextManifestMemorySeed | undefined;
+  fatigue?: FatigueEnforcementMetadata;
   getRetrievalProvenanceRefs: () => string[];
   getObservedTurnRetrievals: () => TurnRetrievalTelemetryRecord[];
   observability: Pick<TurnExecutionObservability, 'emitObservedTurnStage' | 'emitTurnSnapshotInBackground'>;
@@ -173,6 +176,7 @@ export async function assembleTurnPrompt(input: {
     turnCallType,
     turnSnapshot,
     memoryManifestSeed,
+    fatigue,
     getRetrievalProvenanceRefs,
     getObservedTurnRetrievals,
     observability,
@@ -240,6 +244,10 @@ export async function assembleTurnPrompt(input: {
     preTurnMetacognitiveFlags,
     emotionAppraisalChain,
   );
+  const runtimeContextWithFatigue = [
+    runtimeContext,
+    buildFatiguePromptAlert(fatigue),
+  ].map(section => section.trim()).filter(Boolean).join('\n\n');
   const dynamicSuffixTemplate = turnSnapshot.prompt?.dynamicSuffixTemplate
     || DEFAULT_RUNTIME_PROMPT_TEMPLATE;
   const renderedDynamicSuffix = stripCurrentDatetimePromptBlocks(injectPromptRuntimeTokens(dynamicSuffixTemplate, {
@@ -260,7 +268,7 @@ export async function assembleTurnPrompt(input: {
     },
     {
       id: 'runtime.context' as PromptRuntimeSystemPromptBlockId,
-      content: runtimeContext,
+      content: runtimeContextWithFatigue,
     },
     {
       id: 'runtime.scratchpad' as PromptRuntimeSystemPromptBlockId,
@@ -355,7 +363,7 @@ export async function assembleTurnPrompt(input: {
   turnSnapshot.promptContext = {
     renderedStaticPrefix,
     renderedDynamicSuffix,
-    runtimeContext,
+    runtimeContext: runtimeContextWithFatigue,
     memoryContextBlock,
     scratchpadContext: scratchpadBlock,
     assembledPrompt: fullPrompt,
@@ -380,7 +388,7 @@ export async function assembleTurnPrompt(input: {
       {
         id: 'runtime_context',
         title: 'Runtime Context',
-        content: runtimeContext,
+        content: runtimeContextWithFatigue,
       },
       {
         id: 'memory_context',
@@ -393,7 +401,7 @@ export async function assembleTurnPrompt(input: {
         content: scratchpadBlock,
       },
     ]),
-    runtimeContextSections: extractWrappedPromptSections(runtimeContext),
+    runtimeContextSections: extractWrappedPromptSections(runtimeContextWithFatigue),
     finalSystemSections: context.systemPromptSections
       ? [
         ...context.systemPromptSections,

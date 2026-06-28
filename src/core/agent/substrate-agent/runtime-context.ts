@@ -274,6 +274,7 @@ export interface ResolvedAuthorContext {
   resolvedUserName: string;
   /** True when the resolved contact is another machine intelligence (peer companion/agent). */
   speakingWithIsMachineIntelligence?: boolean;
+  relationshipType?: Contact['relationshipType'];
   canonicalContactKey?: string;
   subjectIdentityKey?: string;
   continuitySubjectKey?: string;
@@ -1257,6 +1258,7 @@ async function resolveGeneratedMessageSourceContext(input: {
     return {
       trustLevel: contact?.trustLevel ?? 'regular',
       ...(contact?.isMachineIntelligence ? { speakingWithIsMachineIntelligence: true } : {}),
+      ...(contact?.relationshipType ? { relationshipType: contact.relationshipType } : {}),
       ...(canonicalContactKey ? { canonicalContactKey } : {}),
       continuitySubjectKey: resolveContinuitySubjectKey({
         canonicalContactKey,
@@ -1341,6 +1343,8 @@ export async function resolveAuthorContext(input: {
       trustLevel: generatedSourceContext?.trustLevel ?? 'regular',
       speakerRole: 'system',
       resolvedUserName: resolvePromptUserName(input.message),
+      ...(generatedSourceContext?.speakingWithIsMachineIntelligence ? { speakingWithIsMachineIntelligence: true } : {}),
+      ...(generatedSourceContext?.relationshipType ? { relationshipType: generatedSourceContext.relationshipType } : {}),
       ...(canonicalContactKey ? { canonicalContactKey } : {}),
       continuitySubjectKey: generatedSourceContext?.continuitySubjectKey ?? input.message.authorId,
       ...(generatedSourceContext?.channelPrivacyLevel ? { channelPrivacyLevel: generatedSourceContext.channelPrivacyLevel } : {}),
@@ -1409,6 +1413,7 @@ export async function resolveAuthorContext(input: {
       speakerRole: 'user',
       resolvedUserName: resolvePromptUserName(input.message, contact),
       ...(contact.isMachineIntelligence ? { speakingWithIsMachineIntelligence: true } : {}),
+      relationshipType: contact.relationshipType,
       canonicalContactKey,
       continuitySubjectKey: resolveContinuitySubjectKey({
         canonicalContactKey,

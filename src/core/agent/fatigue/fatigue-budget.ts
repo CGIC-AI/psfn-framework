@@ -204,6 +204,14 @@ function cloneScope(scope: FatigueBudgetScope): FatigueBudgetScope {
   return { ...scope };
 }
 
+function sanitizeCorrelationMetadata(
+  correlation: Partial<CorrelationMetadata>,
+): Partial<CorrelationMetadata> {
+  const safeCorrelation = { ...correlation };
+  delete safeCorrelation.channelId;
+  return safeCorrelation;
+}
+
 export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
   constructor(
     private readonly history: FatigueBudgetHistoryPort,
@@ -294,10 +302,10 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       },
       lastEvent: currentState.lastEvent,
     });
-    const correlation = {
+    const correlation = sanitizeCorrelationMetadata({
       ...(evaluation.correlation ?? {}),
       ...(input.correlation ?? {}),
-    };
+    });
     const details = {
       ...(evaluation.details ?? {}),
       ...(input.details ?? {}),

@@ -24,6 +24,7 @@ import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
+import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
 
 interface TurnExecutionAdapterCallbacks {
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
@@ -116,6 +117,7 @@ interface TurnExecutionAdapterCallbacks {
 export interface TurnExecutionAdapterOptions {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
+  fatigueBudget?: FatigueBudgetPort | null;
   satellitePresence: SatellitePresencePort;
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
@@ -142,6 +144,7 @@ export function createTurnExecutionRuntimeAdapter(
   return {
     eventBus: options.eventBus,
     costTelemetry: options.costTelemetry,
+    fatigueBudget: options.fatigueBudget ?? null,
     satellitePresence: options.satellitePresence,
     llmClient: options.llmClient,
     imageVisionReviewer: options.imageVisionReviewer,

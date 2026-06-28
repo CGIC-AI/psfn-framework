@@ -213,6 +213,7 @@ export interface SubstrateAgentCompositionOptions {
   config: CoreSubstrateConfig;
   runtimeMode?: RuntimeMode;
   emotionRuntime?: EmotionRuntimeWiring;
+  fatigueBudget?: FatigueBudgetPort | null;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   streamRuntimeOptions?: SubstrateAgentOptions['streamRuntimeOptions'];
   streamTransport?: SubstrateAgentOptions['streamTransport'];
@@ -234,6 +235,7 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
         : {}),
       ...(options.runtimeMode ? { runtimeMode: options.runtimeMode } : {}),
       ...(options.emotionRuntime ? { emotionRuntime: options.emotionRuntime } : {}),
+      ...(options.fatigueBudget ? { fatigueBudget: options.fatigueBudget } : {}),
       ...(options.observerEvalSidecar ? { observerEvalSidecar: options.observerEvalSidecar } : {}),
       ...(options.streamRuntimeOptions ? { streamRuntimeOptions: options.streamRuntimeOptions } : {}),
       ...(options.streamTransport ? { streamTransport: options.streamTransport } : {}),

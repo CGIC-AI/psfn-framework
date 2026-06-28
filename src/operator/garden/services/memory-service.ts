@@ -88,6 +88,10 @@ function memoryTimestamp(memory: { extractedAt?: number; createdAt?: number }): 
   return memory.extractedAt ?? memory.createdAt ?? 0;
 }
 
+function isActiveMemoryView(memory: { supersededBy?: unknown; deletedAt?: unknown }): boolean {
+  return memory.supersededBy == null && memory.deletedAt == null;
+}
+
 function parsePositiveInteger(
   value: string | null | undefined,
   fallback: number,
@@ -177,6 +181,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
 
   private async listManagedScopeMemories() {
     return (await this.deps.memoryStore.getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
+      .filter(isActiveMemoryView)
       .filter(memory => !isInternalMemoryArtifact(memory));
   }
 
@@ -214,6 +219,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
 
     const activeMemories = (await this.deps.memoryStore
       .getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
+      .filter(isActiveMemoryView)
       .filter(memory => !isInternalMemoryArtifact(memory));
 
     const filtered = activeMemories
@@ -350,6 +356,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
 
   async searchMemories(query: string): Promise<AdminMemorySearchResult> {
     const activeMemories = (await this.deps.memoryStore.getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
+      .filter(isActiveMemoryView)
       .filter(memory => !isInternalMemoryArtifact(memory));
     const embeddingService = this.deps.embeddingService;
     if (!embeddingService) {
@@ -363,6 +370,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const embedding = await embeddingService.embed(query);
     const results = (await this.deps.memoryStore
       .searchByEmbedding(embedding, 0.1, 50))
+      .filter(isActiveMemoryView)
       .filter(memory => !isInternalMemoryArtifact(memory));
     return {
       query,

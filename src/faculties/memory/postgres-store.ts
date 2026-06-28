@@ -61,19 +61,21 @@ const SCRATCHPAD_TTL_MS = 24 * 60 * 60 * 1000;
 const SCRATCHPAD_MAX_ENTRIES = 64;
 const log = createComponentLogger('PostgresMemoryStore');
 
+type PgNumeric = number | string;
+
 interface MemoryRow {
   id: string;
   text: string;
   type: PurrMemory['type'];
-  importance: number;
-  confidence: number;
-  emotional_valence: number;
+  importance: PgNumeric;
+  confidence: PgNumeric;
+  emotional_valence: PgNumeric;
   formation_vad: unknown;
-  salience: number;
+  salience: PgNumeric;
   source_ref: string;
-  extracted_at: number;
-  last_accessed: number;
-  access_count: number;
+  extracted_at: PgNumeric;
+  last_accessed: PgNumeric;
+  access_count: PgNumeric;
   superseded_by: string | null;
   tags: unknown;
   scope_ref_kind: string | null;
@@ -85,7 +87,7 @@ interface MemoryRow {
   sensitivity: PurrMemory['sensitivity'];
   consent_flags: unknown;
   contact_id: string | null;
-  deleted_at: number | null;
+  deleted_at: PgNumeric | null;
   deleted_by: string | null;
   delete_reason: string | null;
   embedding: string | null;
@@ -102,17 +104,17 @@ interface MemorySchemaColumnRow {
 }
 
 interface MemoryEmbeddingSearchRow extends MemoryRow {
-  similarity: number;
+  similarity: PgNumeric;
 }
 
 interface MemoryDeleteVersionRow {
   delete_id: string;
   memory_id: string;
   snapshot_json: unknown;
-  deleted_at: number;
+  deleted_at: PgNumeric;
   deleted_by: string | null;
   delete_reason: string | null;
-  restored_at: number | null;
+  restored_at: PgNumeric | null;
   restored_by: string | null;
 }
 
@@ -204,6 +206,26 @@ function decodeJsonRecord(value: unknown): Record<string, unknown> {
 
 function decodeStringArray(value: unknown): string[] {
   return decodeJsonArray(value).map(item => item.trim()).filter(Boolean);
+}
+
+function parsePgNumber(value: unknown, field: string): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  throw new Error(`Invalid PostgreSQL memory row ${field}: expected a finite number`);
+}
+
+function parseOptionalPgNumber(value: unknown, field: string): number | undefined {
+  if (value === null || value === undefined) {
+    return undefined;
+  }
+  return parsePgNumber(value, field);
 }
 
 function serializeJsonValue(value: unknown): string | null {
@@ -316,19 +338,20 @@ function fromMemoryRow(row: MemoryRow): PurrMemory {
       ...(row.scope_ref_label ? { label: row.scope_ref_label } : {}),
     })
     : undefined;
+  const deletedAt = parseOptionalPgNumber(row.deleted_at, 'deleted_at');
   return {
     id: row.id,
     text: row.text,
     type: row.type,
-    importance: row.importance,
-    confidence: row.confidence,
-    emotionalValence: row.emotional_valence,
+    importance: parsePgNumber(row.importance, 'importance'),
+    confidence: parsePgNumber(row.confidence, 'confidence'),
+    emotionalValence: parsePgNumber(row.emotional_valence, 'emotional_valence'),
     formationVAD: decodeFormationVAD(row.formation_vad),
-    salience: row.salience,
+    salience: parsePgNumber(row.salience, 'salience'),
     sourceRef: row.source_ref,
-    extractedAt: row.extracted_at,
-    lastAccessed: row.last_accessed,
-    accessCount: row.access_count,
+    extractedAt: parsePgNumber(row.extracted_at, 'extracted_at'),
+    lastAccessed: parsePgNumber(row.last_accessed, 'last_accessed'),
+    accessCount: parsePgNumber(row.access_count, 'access_count'),
     ...(row.superseded_by ? { supersededBy: row.superseded_by } : {}),
     tags: decodeStringArray(row.tags),
     ...(scopeRef ? { scopeRef } : {}),
@@ -338,7 +361,7 @@ function fromMemoryRow(row: MemoryRow): PurrMemory {
     sensitivity: row.sensitivity,
     consentFlags: normalizeConsentFlags(decodeJsonObject(row.consent_flags)),
     ...(row.contact_id ? { contactId: row.contact_id } : {}),
-    ...(row.deleted_at !== null ? { deletedAt: row.deleted_at } : {}),
+    ...(deletedAt !== undefined ? { deletedAt } : {}),
     ...(row.deleted_by ? { deletedBy: row.deleted_by } : {}),
     ...(row.delete_reason ? { deleteReason: row.delete_reason } : {}),
   };
@@ -583,10 +606,10 @@ class PostgresMemoryStore implements MemoryStorePort {
         snapshot: typeof row.snapshot_json === 'object' && row.snapshot_json !== null
           ? (row.snapshot_json as PurrMemory)
           : JSON.parse(String(row.snapshot_json)) as PurrMemory,
-        deletedAt: row.deleted_at,
+        deletedAt: parsePgNumber(row.deleted_at, 'deleted_at'),
         deletedBy: row.deleted_by ?? 'unknown',
         deleteReason: row.delete_reason ?? undefined,
-        restoredAt: row.restored_at ?? undefined,
+        restoredAt: parseOptionalPgNumber(row.restored_at, 'restored_at'),
         restoredBy: row.restored_by ?? undefined,
       });
     }
@@ -889,7 +912,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     `, [encodeEmbeddingLiteral(embedding), threshold]);
 
     return rows
-      .map((row) => ({ ...fromMemoryRow(row), similarity: row.similarity }))
+      .map((row) => ({ ...fromMemoryRow(row), similarity: parsePgNumber(row.similarity, 'similarity') }))
       .filter((memory) => {
         if (!normalizedScopeQuery) return true;
         const refs = normalizedScopeQuery.refs ?? [];

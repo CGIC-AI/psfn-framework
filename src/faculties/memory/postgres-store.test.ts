@@ -374,6 +374,38 @@ function makeMemory(id: string, text: string, overrides: Partial<PurrMemory> = {
   };
 }
 
+function makeMemoryRow(memory: PurrMemory, embedding: string | null = null): MemoryRow {
+  return {
+    id: memory.id,
+    text: memory.text,
+    type: memory.type,
+    importance: memory.importance,
+    confidence: memory.confidence,
+    emotional_valence: memory.emotionalValence,
+    formation_vad: memory.formationVAD ?? null,
+    salience: memory.salience,
+    source_ref: memory.sourceRef,
+    extracted_at: memory.extractedAt,
+    last_accessed: memory.lastAccessed,
+    access_count: memory.accessCount,
+    superseded_by: memory.supersededBy ?? null,
+    tags: memory.tags,
+    scope_ref_kind: memory.scopeRef?.kind ?? null,
+    scope_ref_id: memory.scopeRef?.id ?? null,
+    scope_ref_label: memory.scopeRef?.label ?? null,
+    scope_tags: memory.scopeTags ?? [],
+    provenance_refs: memory.provenanceRefs ?? [],
+    retention_class: memory.retentionClass ?? null,
+    sensitivity: memory.sensitivity,
+    consent_flags: memory.consentFlags ?? {},
+    contact_id: memory.contactId ?? null,
+    deleted_at: memory.deletedAt ?? null,
+    deleted_by: memory.deletedBy ?? null,
+    delete_reason: memory.deleteReason ?? null,
+    embedding,
+  };
+}
+
 afterEach(() => {
   postgresMocks.createPostgresPool.mockClear();
   postgresMocks.ensurePostgresSchema.mockClear();
@@ -510,6 +542,48 @@ describe('postgres memory store unit coverage', () => {
       allowExitOnIdle: true,
     });
     expect(postgresMocks.ensurePostgresSchema).toHaveBeenCalled();
+  });
+
+  it('hydrates pg BIGINT memory fields as numbers and excludes soft-deleted rows', async () => {
+    const pool = new FakeMemoryPool();
+    const active = makeMemory('pg-string-active', 'Active memory from pg strings', {
+      extractedAt: 1_782_655_869_792,
+      lastAccessed: 1_782_655_870_111,
+      accessCount: 7,
+    });
+    const deleted = makeMemory('pg-string-deleted', 'Deleted memory from pg strings', {
+      extractedAt: 1_782_655_860_000,
+      lastAccessed: 1_782_655_860_100,
+      deletedAt: 1_782_655_871_000,
+      deletedBy: 'operator:test',
+      deleteReason: 'contaminated attribution',
+    });
+    const activeRow = makeMemoryRow(active);
+    const deletedRow = makeMemoryRow(deleted);
+    (activeRow as any).extracted_at = String(active.extractedAt);
+    (activeRow as any).last_accessed = String(active.lastAccessed);
+    (activeRow as any).access_count = String(active.accessCount);
+    (deletedRow as any).extracted_at = String(deleted.extractedAt);
+    (deletedRow as any).last_accessed = String(deleted.lastAccessed);
+    (deletedRow as any).access_count = String(deleted.accessCount);
+    (deletedRow as any).deleted_at = String(deleted.deletedAt);
+    pool.memories.set(active.id, activeRow);
+    pool.memories.set(deleted.id, deletedRow);
+    postgresMocks.activePool = pool;
+
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    const activeMemories = await store.getAllActiveMemories();
+    const hydratedActive = await store.getById(active.id);
+    const hydratedDeleted = await store.getById(deleted.id);
+
+    expect(activeMemories.map(memory => memory.id)).toEqual([active.id]);
+    expect(hydratedActive?.extractedAt).toBe(active.extractedAt);
+    expect(hydratedActive?.lastAccessed).toBe(active.lastAccessed);
+    expect(hydratedActive?.accessCount).toBe(active.accessCount);
+    expect(typeof hydratedActive?.extractedAt).toBe('number');
+    expect(hydratedDeleted?.deletedAt).toBe(deleted.deletedAt);
+    expect(typeof hydratedDeleted?.deletedAt).toBe('number');
+    expect(await store.countActiveMemories()).toBe(1);
   });
 
   it('expires Postgres scratchpad entries older than 24 hours during hydration', async () => {

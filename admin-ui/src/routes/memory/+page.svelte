@@ -437,9 +437,24 @@
     return `${level}: ${privacySummary?.sensitivityCounts?.[level] ?? 0}`;
   }
 
-  function formatDate(ts: number | undefined): string {
-    if (ts === undefined || ts === null) return 'unknown';
-    return new Date(ts).toLocaleDateString(undefined, {
+  type TimestampLike = number | string | null | undefined;
+
+  function normalizeTimestamp(ts: TimestampLike): number | undefined {
+    if (ts === undefined || ts === null) return undefined;
+    if (typeof ts === 'number' && Number.isFinite(ts)) return ts;
+    if (typeof ts === 'string' && ts.trim().length > 0) {
+      const parsed = Number(ts);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+    return undefined;
+  }
+
+  function formatDate(ts: TimestampLike): string {
+    const normalized = normalizeTimestamp(ts);
+    if (normalized === undefined) return 'unknown';
+    const date = new Date(normalized);
+    if (Number.isNaN(date.getTime())) return 'unknown';
+    return date.toLocaleDateString(undefined, {
       year: 'numeric', month: 'short', day: 'numeric',
       hour: '2-digit', minute: '2-digit',
     });
@@ -460,12 +475,12 @@
   }
 
   // Backend uses `extractedAt`, old frontend used `createdAt`
-  function memCreated(m: AdminUiPurrMemory): number | undefined {
+  function memCreated(m: AdminUiPurrMemory): TimestampLike {
     return m.extractedAt ?? m.createdAt;
   }
 
   // Backend uses `lastAccessed`, old frontend used `updatedAt`
-  function memUpdated(m: AdminUiPurrMemory): number | undefined {
+  function memUpdated(m: AdminUiPurrMemory): TimestampLike {
     return m.lastAccessed ?? m.updatedAt;
   }
 
@@ -475,7 +490,7 @@
   }
 
   // Backend uses `deletedAt` for superseded, old frontend used `supersededAt`
-  function memSuperseded(m: AdminUiPurrMemory): number | undefined {
+  function memSuperseded(m: AdminUiPurrMemory): TimestampLike {
     return m.deletedAt ?? m.supersededAt;
   }
 

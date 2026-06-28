@@ -539,6 +539,9 @@ export class MemoryExtractor {
     acceptedWrites: AcceptedFactWrite[],
     config: ProfileSynthesisConfig,
   ): Promise<void> {
+    const targetContact = this.contactStore && typeof this.contactStore.getById === 'function'
+      ? await this.contactStore.getById(canonicalContactId)
+      : undefined;
     await runProfileRefresh({
       llmClient: this.llmClient,
       promptRegistry: this.promptRegistry,
@@ -546,6 +549,7 @@ export class MemoryExtractor {
       channelId,
       triggerReason,
       canonicalContactId,
+      targetContact,
       acceptedWrites,
       config,
       telemetryEnabled: this.isTelemetryEnabled(),

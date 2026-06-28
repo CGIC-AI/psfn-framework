@@ -84,6 +84,15 @@ describe('PromptRegistryStore', () => {
     expect(prompt).not.toMatch(/the primary user/i);
   });
 
+  it('seeds the profile synthesis prompt with target-aware attribution rules', () => {
+    const prompt = getDefaultPromptText(PROFILE_SYNTHESIS_PROMPT_KEY);
+
+    expect(prompt).toContain('Target contact:');
+    expect(prompt).toContain('{target_contact}');
+    expect(prompt).toContain('Do not infer aliases for the target from names merely mentioned');
+    expect(prompt).toContain('If the target mentioned or discussed another person');
+  });
+
   it('updates prompt text and writes history entry', () => {
     const updated = store.update(
       COMPACTION_SUMMARY_PROMPT_KEY,

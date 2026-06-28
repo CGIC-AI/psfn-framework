@@ -102,6 +102,9 @@ If there are no new facts worth extracting, respond with an empty response block
     consumers: ['src/faculties/memory/extraction.ts'],
     text: `Synthesize a stable contact profile for canonical contact: {contact_id}.
 
+Target contact:
+{target_contact}
+
 Existing profile (if any):
 {existing_profile}
 
@@ -109,6 +112,12 @@ Source memories (most relevant first):
 {memory_facts}
 
 Write a concise profile in 1-2 short paragraphs. Keep durable identity/relationship facts, communication style, and emotionally important anchors. Exclude trivial chatter and transient logistics.
+
+Attribution rules:
+- The target contact is the person described in the Target contact block.
+- Do not infer aliases for the target from names merely mentioned in source memories.
+- If the target mentioned or discussed another person, write that as a mentioned/discussed person; do not make that person an alias or identity of the target.
+- If the source memories are too ambiguous to keep the target separate from mentioned people, return an empty summary.
 
 Return XML only:
 <profile>

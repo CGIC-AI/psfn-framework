@@ -1499,6 +1499,81 @@ describe('MemoryExtractor provenance and trust caps', () => {
 });
 
 describe('MemoryExtractor canonical profile synthesis', () => {
+  function makeProfileHarness(options: {
+    targetContact?: Record<string, unknown>;
+    sourceMemories: Record<string, unknown>[];
+    profileResponse: string | ((context: { systemPrompt: string }) => string);
+  }) {
+    const llmClient = {
+      complete: vi
+        .fn()
+        .mockResolvedValueOnce({ content: '<response></response>' })
+        .mockImplementationOnce(async (context: { systemPrompt: string }) => ({
+          content: typeof options.profileResponse === 'function'
+            ? options.profileResponse(context)
+            : options.profileResponse,
+        })),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(6),
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getMemoriesByContact: vi.fn().mockReturnValue(options.sourceMemories),
+      upsertContactProfile: vi.fn(),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const contactStore = options.targetContact
+      ? {
+        getById: vi.fn().mockResolvedValue(options.targetContact),
+        getByChannelIdentity: vi.fn().mockResolvedValue(undefined),
+        getByDiscordUserId: vi.fn().mockResolvedValue(undefined),
+        listAll: vi.fn().mockResolvedValue([options.targetContact]),
+      } as any
+      : null;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        extractionInterval: 5,
+        minImportance: 0.45,
+        minConfidence: 0.6,
+        minNovelty: 0.35,
+        telemetryEnabled: true,
+      },
+      undefined,
+      undefined,
+      contactStore,
+    );
+
+    return {
+      extractor,
+      llmClient,
+      memoryStore,
+      contactStore,
+    };
+  }
+
   it('refreshes canonical profile on interval when source memories are sufficient', async () => {
     const llmClient = {
       complete: vi
@@ -1726,6 +1801,107 @@ describe('MemoryExtractor canonical profile synthesis', () => {
 
     expect(llmClient.complete).toHaveBeenCalledTimes(2);
     expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+  });
+
+  it('passes target contact context and skips aliasing the target to mentioned people', async () => {
+    let profilePrompt = '';
+    const { extractor, memoryStore } = makeProfileHarness({
+      targetContact: {
+        id: 'contact-iki',
+        displayName: 'Iki',
+        trustLevel: 'regular',
+        relationshipType: 'friend',
+        firstSeen: '2026-06-28T00:00:00.000Z',
+        lastSeen: '2026-06-28T00:00:00.000Z',
+      },
+      sourceMemories: [
+        {
+          id: 'm1',
+          type: 'semantic',
+          text: 'MrDragonFox stated that Carlini needs streaming guardrails.',
+          importance: 0.92,
+          confidence: 0.95,
+          salience: 0.9,
+          contactId: 'contact-iki',
+          sourceType: 'turn',
+        },
+        {
+          id: 'm2',
+          type: 'relational',
+          text: 'Iki asked about Carlini in the group room.',
+          importance: 0.82,
+          confidence: 0.88,
+          salience: 0.82,
+          contactId: 'contact-iki',
+          sourceType: 'turn',
+        },
+      ],
+      profileResponse: (context) => {
+        profilePrompt = context.systemPrompt;
+        return '<profile><summary>This contact, known as MrDragonFox and also by the name Carlini, cares about streaming guardrails.</summary></profile>';
+      },
+    });
+
+    await extractor.maybeExtract('api:profile-iki-test', 'contact-iki');
+    await extractor.drain({ timeoutMs: 2_000 });
+
+    expect(profilePrompt).toContain('Target contact display name: Iki');
+    expect(profilePrompt).toContain('Target contact trust level: regular');
+    expect(profilePrompt).toContain('Do not infer aliases for the target from names merely mentioned');
+    expect(profilePrompt).toContain('target_contact_id=contact-iki');
+    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+  });
+
+  it('allows scoped summaries that the target discussed another named person', async () => {
+    let profilePrompt = '';
+    const { extractor, memoryStore } = makeProfileHarness({
+      targetContact: {
+        id: 'contact-vega',
+        displayName: 'Vega',
+        nickname: 'V',
+        trustLevel: 'regular',
+        relationshipType: 'friend',
+        firstSeen: '2026-06-28T00:00:00.000Z',
+        lastSeen: '2026-06-28T00:00:00.000Z',
+      },
+      sourceMemories: [
+        {
+          id: 'm1',
+          type: 'semantic',
+          text: 'Vega discussed Carlini streaming guardrails in the group room.',
+          importance: 0.9,
+          confidence: 0.93,
+          salience: 0.88,
+          contactId: 'contact-vega',
+          sourceType: 'turn',
+        },
+        {
+          id: 'm2',
+          type: 'procedural',
+          text: 'Vega prefers concise launch notes after group planning.',
+          importance: 0.8,
+          confidence: 0.88,
+          salience: 0.8,
+          contactId: 'contact-vega',
+          sourceType: 'turn',
+        },
+      ],
+      profileResponse: (context) => {
+        profilePrompt = context.systemPrompt;
+        return '<profile><summary>Vega discussed Carlini streaming guardrails and prefers concise launch notes.</summary></profile>';
+      },
+    });
+
+    await extractor.maybeExtract('api:profile-vega-test', 'contact-vega');
+    await extractor.drain({ timeoutMs: 2_000 });
+
+    expect(profilePrompt).toContain('Target contact display name: Vega');
+    expect(profilePrompt).toContain('Target contact nickname: V');
+    expect(memoryStore.upsertContactProfile).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: 'contact-vega',
+      summary: 'Vega discussed Carlini streaming guardrails and prefers concise launch notes.',
+      sourceMemoryIds: ['m1', 'm2'],
+    }));
   });
 
   it('skips profile refresh when synthesized summary novelty is too low', async () => {

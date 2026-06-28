@@ -47,6 +47,7 @@ Default values render with `CHANGE_ME_*` placeholders so `helm lint` and
 - `secrets.values.apiKey` -> `API_KEY`, consumed by gateway and satellite hub
 - `secrets.values.adminToken` -> `ADMIN_TOKEN`, consumed by gateway/Garden
 - `secrets.values.gatewaySessionHmacKey` -> `GATEWAY_SESSION_HMAC_KEY`, consumed by gateway
+- `secrets.values.backupEncryptionKey` -> `PSFN_BACKUP_ENCRYPTION_KEY`, consumed by app workloads
 - provider/channel secrets as needed: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`,
   `LITELLM_API_KEY`, `DISCORD_TOKEN`, `DISCORD_BOT_ID`, `DEEPGRAM_API_KEY`,
   `ELEVENLABS_API_KEY`, `FAL_API_KEY`, `NTFY_TOKEN`

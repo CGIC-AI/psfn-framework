@@ -309,6 +309,11 @@ group: cert-manager.io
   value: {{ .Values.runtime.tempDir | quote }}
 - name: BACKUP_ROOT_DIR
   value: {{ .Values.runtime.backupsDir | quote }}
+- name: PSFN_BACKUP_ENCRYPTION_KEY
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "psfn.appSecretName" . }}
+      key: {{ .Values.secrets.keys.backupEncryptionKey }}
 - name: CONFIG_DIR
   value: {{ .Values.runtime.configDir | quote }}
 - name: CHARACTER_CARD_PATH

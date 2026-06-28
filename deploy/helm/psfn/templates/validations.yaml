@@ -25,6 +25,9 @@
 {{- if and .Values.liteLlm.enabled .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
 {{- $_ := required "secrets.values.liteLlmApiKey is required for liteLlm.enabled=true when secrets.allowMissingRequired=false" .Values.secrets.values.liteLlmApiKey -}}
 {{- end -}}
+{{- if and .Values.secrets.create (not .Values.secrets.existingSecret) (not .Values.secrets.allowMissingRequired) -}}
+{{- $_ := required "secrets.values.backupEncryptionKey is required when secrets.allowMissingRequired=false" .Values.secrets.values.backupEncryptionKey -}}
+{{- end -}}
 {{- if .Values.modelPrefetch.enabled -}}
 {{- if not .Values.persistence.modelCache.enabled -}}
 {{- fail "modelPrefetch.enabled=true requires persistence.modelCache.enabled=true" -}}

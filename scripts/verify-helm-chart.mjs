@@ -219,11 +219,18 @@ const strictSecretRendered = render([
   'secrets.values.adminToken=verify-admin-token',
   '--set-string',
   'secrets.values.gatewaySessionHmacKey=verify-hmac-key',
+  '--set-string',
+  'secrets.values.backupEncryptionKey=verify-backup-key',
 ]);
 
 assertIncludes(strictSecretRendered, 'API_KEY: "verify-api-key"', 'strict app secret API key');
 assertIncludes(strictSecretRendered, 'ADMIN_TOKEN: "verify-admin-token"', 'strict app secret admin token');
 assertIncludes(strictSecretRendered, 'GATEWAY_SESSION_HMAC_KEY: "verify-hmac-key"', 'strict app secret HMAC key');
+assertIncludes(strictSecretRendered, 'PSFN_BACKUP_ENCRYPTION_KEY: "verify-backup-key"', 'strict app secret backup encryption key');
+
+const strictAgent = findDocumentByKindName(strictSecretRendered, 'Deployment', 'psfn-agent');
+assertIncludes(strictAgent, 'name: PSFN_BACKUP_ENCRYPTION_KEY', 'agent backup encryption env');
+assertIncludes(strictAgent, 'key: PSFN_BACKUP_ENCRYPTION_KEY', 'agent backup encryption secret key');
 
 const externalLiteLlmRendered = render([
   '--set',
@@ -412,8 +419,25 @@ assertRenderFails(
     'secrets.values.adminToken=verify-admin-token',
     '--set-string',
     'secrets.values.gatewaySessionHmacKey=verify-hmac-key',
+    '--set-string',
+    'secrets.values.backupEncryptionKey=verify-backup-key',
   ],
   'secrets.values.apiKey is required when secrets.allowMissingRequired=false',
+);
+assertRenderFails(
+  [
+    '--set',
+    'secrets.allowMissingRequired=false',
+    '--set-string',
+    'secrets.values.apiKey=verify-api-key',
+    '--set-string',
+    'secrets.values.adminToken=verify-admin-token',
+    '--set-string',
+    'secrets.values.gatewaySessionHmacKey=verify-hmac-key',
+    '--set-string',
+    'secrets.values.backupEncryptionKey=',
+  ],
+  'secrets.values.backupEncryptionKey is required when secrets.allowMissingRequired=false',
 );
 assertRenderFails(
   ['--set', 'postgres.enabled=false'],
@@ -449,6 +473,8 @@ assertRenderFails(
     'secrets.values.adminToken=verify-admin-token',
     '--set-string',
     'secrets.values.gatewaySessionHmacKey=verify-hmac-key',
+    '--set-string',
+    'secrets.values.backupEncryptionKey=verify-backup-key',
     '--set-string',
     'secrets.values.liteLlmApiKey=',
   ],

@@ -147,6 +147,7 @@ secrets:
     openRouterApiKey: ""
     openAiApiKey: ""
     liteLlmApiKey: CHANGE_ME_LITELLM_API_KEY
+    backupEncryptionKey: CHANGE_ME_BACKUP_ENCRYPTION_KEY
     embeddingApiKey: ""
     hfToken: ""
     discordToken: ""
@@ -162,6 +163,7 @@ secrets:
     openRouterApiKey: OPENROUTER_API_KEY
     openAiApiKey: OPENAI_API_KEY
     liteLlmApiKey: LITELLM_API_KEY
+    backupEncryptionKey: PSFN_BACKUP_ENCRYPTION_KEY
     embeddingApiKey: EMBEDDING_API_KEY
     hfToken: HF_TOKEN
     discordToken: DISCORD_TOKEN

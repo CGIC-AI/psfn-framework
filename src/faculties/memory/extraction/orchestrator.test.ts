@@ -745,6 +745,108 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
     );
   });
 
+  it('schedules profile refreshes for each routed group contact', async () => {
+    const processFact = vi.fn()
+      .mockResolvedValueOnce({
+        action: 'created',
+        memory: { id: 'mem-aster' },
+      })
+      .mockResolvedValueOnce({
+        action: 'created',
+        memory: { id: 'mem-briar' },
+      });
+    const maybeRefreshContactProfile = vi.fn();
+    const resolveSourceSpeakerContactId = vi.fn(async (speaker: ExtractionSourceSpeaker) => {
+      if (speaker.authorId === 'discord-aster') return 'contact-aster';
+      if (speaker.authorId === 'discord-briar') return 'contact-briar';
+      return undefined;
+    });
+    const options = buildOptions({
+      channelId: 'discord:kube',
+      canonicalContactId: 'contact-trigger',
+      recoveredEntries: [
+        {
+          id: 1,
+          channelId: 'discord:kube',
+          role: 'user',
+          authorId: 'discord-aster',
+          authorName: 'Aster',
+          content: 'I prefer quiet launch notes.',
+          timestamp: 1,
+        },
+        {
+          id: 2,
+          channelId: 'discord:kube',
+          role: 'user',
+          authorId: 'discord-briar',
+          authorName: 'Briar',
+          content: 'I prefer short summaries.',
+          timestamp: 2,
+        },
+      ] as ExtractionRunOptions['recoveredEntries'],
+      sessionManager: {
+        getRecentMessages: vi.fn(),
+        characterName: 'Carlini',
+      } as ExtractionRunOptions['sessionManager'],
+      llmClient: {
+        complete: vi.fn().mockResolvedValue({
+          content: `<response>
+<fact>
+<text>Aster prefers quiet launch notes.</text>
+<type>semantic</type>
+<importance>0.9</importance>
+<confidence>0.95</confidence>
+<source_message_ids>1</source_message_ids>
+<source_speaker_name>Aster</source_speaker_name>
+</fact>
+<fact>
+<text>Briar prefers short summaries.</text>
+<type>semantic</type>
+<importance>0.88</importance>
+<confidence>0.95</confidence>
+<source_message_ids>2</source_message_ids>
+<source_speaker_name>Briar</source_speaker_name>
+</fact>
+</response>`,
+        }),
+      } as ExtractionRunOptions['llmClient'],
+      processFact,
+      maybeRefreshContactProfile,
+      resolveSourceSpeakerContactId,
+      resolveCoveredUpToMessageId: vi.fn().mockReturnValue(2),
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(maybeRefreshContactProfile.mock.calls.map(call => call[2]).sort()).toEqual([
+      'contact-aster',
+      'contact-briar',
+    ]);
+    expect(maybeRefreshContactProfile.mock.calls.map(call => call[2])).not.toContain(
+      'contact-trigger',
+    );
+    expect(maybeRefreshContactProfile).toHaveBeenCalledWith(
+      'discord:kube',
+      'manual',
+      'contact-aster',
+      [expect.objectContaining({
+        memoryId: 'mem-aster',
+        contactId: 'contact-aster',
+        sourceContactId: 'contact-aster',
+      })],
+    );
+    expect(maybeRefreshContactProfile).toHaveBeenCalledWith(
+      'discord:kube',
+      'manual',
+      'contact-briar',
+      [expect.objectContaining({
+        memoryId: 'mem-briar',
+        contactId: 'contact-briar',
+        sourceContactId: 'contact-briar',
+      })],
+    );
+  });
+
   it('passes room-context scope routing to fact processing without a contact fallback', async () => {
     const processFact = vi.fn().mockResolvedValue({
       action: 'created',

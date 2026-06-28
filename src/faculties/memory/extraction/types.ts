@@ -116,6 +116,8 @@ export interface AcceptedFactWrite {
   importance: number;
   confidence: number;
   contactId?: string;
+  sourceContactId?: string;
+  subjectContactId?: string;
   triggerContactId?: string;
   sourceSpeakerName?: string;
   scopeRef?: MemoryScopeRef;

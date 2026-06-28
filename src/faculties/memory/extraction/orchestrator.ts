@@ -519,6 +519,8 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
               importance: fact.importance,
               confidence: fact.confidence,
               ...(routing.contactId ? { contactId: routing.contactId } : {}),
+              ...(routing.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
+              ...(routing.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
               ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
               ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
               ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
@@ -532,6 +534,8 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
               importance: fact.importance,
               confidence: fact.confidence,
               ...(routing.contactId ? { contactId: routing.contactId } : {}),
+              ...(routing.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
+              ...(routing.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
               ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
               ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
               ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
@@ -682,14 +686,31 @@ function groupAcceptedWritesByContact(
   }
 
   for (const write of writes) {
-    if (write.scopeRef && !write.contactId) continue;
-    const contactId = write.contactId ?? fallbackContactId;
-    const existing = groups.get(contactId);
-    if (existing) {
-      existing.push(write);
-      continue;
+    const contactIds = resolveProfileRefreshContactIds(write, fallbackContactId);
+    for (const contactId of contactIds) {
+      const profileWrite = write.contactId === contactId
+        ? write
+        : { ...write, contactId };
+      const existing = groups.get(contactId);
+      if (existing) {
+        existing.push(profileWrite);
+        continue;
+      }
+      groups.set(contactId, [profileWrite]);
     }
-    groups.set(contactId, [write]);
   }
   return groups;
+}
+
+function resolveProfileRefreshContactIds(
+  write: AcceptedFactWrite,
+  fallbackContactId: string | undefined,
+): string[] {
+  const contactIds = new Set<string>();
+  if (write.contactId) contactIds.add(write.contactId);
+  if (write.subjectContactId) contactIds.add(write.subjectContactId);
+  if (contactIds.size === 0 && !write.scopeRef && fallbackContactId) {
+    contactIds.add(fallbackContactId);
+  }
+  return [...contactIds];
 }

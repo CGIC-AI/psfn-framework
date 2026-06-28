@@ -41,9 +41,34 @@ export interface RefreshContactProfileOptions {
   telemetryEnabled: boolean;
 }
 
+export type ProfileRefreshSkipReason =
+  | 'no_meaningful_update'
+  | 'cooldown'
+  | 'insufficient_source_memories'
+  | 'low_source_confidence'
+  | 'empty_summary_output'
+  | 'profile_text_hygiene'
+  | 'target_alias_attribution_risk'
+  | 'low_novelty';
+
+export type ProfileRefreshResult =
+  | {
+    status: 'refreshed';
+    reason: ProfileRefreshReason;
+    sourceMemoryCount: number;
+    averageSourceConfidence: number;
+    noveltyScore: number;
+  }
+  | {
+    status: 'skipped';
+    reason: ProfileRefreshSkipReason;
+    writeCount?: number;
+    sourceMemoryCount?: number;
+  };
+
 export async function refreshContactProfile(
   options: RefreshContactProfileOptions,
-): Promise<void> {
+): Promise<ProfileRefreshResult> {
   const now = Date.now();
   const existingProfile = await options.memoryStore.getContactProfile(options.canonicalContactId);
   const intervalElapsed = !existingProfile
@@ -75,7 +100,11 @@ export async function refreshContactProfile(
         avgWriteConfidence,
       });
     }
-    return;
+    return {
+      status: 'skipped',
+      reason: 'no_meaningful_update',
+      writeCount,
+    };
   }
 
   if (withinCooldown && !intervalElapsed) {
@@ -87,13 +116,27 @@ export async function refreshContactProfile(
         cooldownMs: options.config.cooldownMs,
       });
     }
-    return;
+    return {
+      status: 'skipped',
+      reason: 'cooldown',
+      writeCount,
+    };
   }
 
-  const sourceMemories = await options.memoryStore.getMemoriesByContact(
+  const rawSourceMemories = await options.memoryStore.getMemoriesByContact(
     options.canonicalContactId,
     options.config.sourceMemoryLimit,
   );
+  const sourceMemories = rawSourceMemories.filter(memory => (
+    !memory.contactId || memory.contactId === options.canonicalContactId
+  ));
+  if (rawSourceMemories.length !== sourceMemories.length && options.telemetryEnabled) {
+    log.debug('Excluded non-target memories from profile synthesis source set', {
+      channelId: options.channelId,
+      canonicalContactId: options.canonicalContactId,
+      excludedCount: rawSourceMemories.length - sourceMemories.length,
+    });
+  }
   if (sourceMemories.length < options.config.minSourceMemories) {
     if (options.telemetryEnabled) {
       log.debug('Skipped profile refresh due to insufficient source memories', {
@@ -103,7 +146,11 @@ export async function refreshContactProfile(
         minSourceMemories: options.config.minSourceMemories,
       });
     }
-    return;
+    return {
+      status: 'skipped',
+      reason: 'insufficient_source_memories',
+      sourceMemoryCount: sourceMemories.length,
+    };
   }
 
   const averageSourceConfidence = sourceMemories.reduce((sum, memory) => sum + memory.confidence, 0)
@@ -117,7 +164,11 @@ export async function refreshContactProfile(
         minConfidence: options.config.minConfidence,
       });
     }
-    return;
+    return {
+      status: 'skipped',
+      reason: 'low_source_confidence',
+      sourceMemoryCount: sourceMemories.length,
+    };
   }
 
   const targetContext = buildTargetContactContext(options.canonicalContactId, options.targetContact);
@@ -161,7 +212,11 @@ export async function refreshContactProfile(
         canonicalContactId: options.canonicalContactId,
       });
     }
-    return;
+    return {
+      status: 'skipped',
+      reason: 'empty_summary_output',
+      sourceMemoryCount: sourceMemories.length,
+    };
   }
 
   const summaryHygiene = normalizeDurableMemoryText(parsedSummary, {});
@@ -173,7 +228,11 @@ export async function refreshContactProfile(
         reason: summaryHygiene.reason,
       });
     }
-    return;
+    return {
+      status: 'skipped',
+      reason: 'profile_text_hygiene',
+      sourceMemoryCount: sourceMemories.length,
+    };
   }
   const summary = summaryHygiene.text;
 
@@ -186,7 +245,11 @@ export async function refreshContactProfile(
         nickname: targetContext.nickname,
       });
     }
-    return;
+    return {
+      status: 'skipped',
+      reason: 'target_alias_attribution_risk',
+      sourceMemoryCount: sourceMemories.length,
+    };
   }
 
   const noveltyScore = existingProfile
@@ -201,7 +264,11 @@ export async function refreshContactProfile(
         minNovelty: options.config.minNovelty,
       });
     }
-    return;
+    return {
+      status: 'skipped',
+      reason: 'low_novelty',
+      sourceMemoryCount: sourceMemories.length,
+    };
   }
 
   const refreshReason: ProfileRefreshReason = meaningfulUpdate && intervalElapsed
@@ -230,6 +297,14 @@ export async function refreshContactProfile(
       noveltyScore,
     });
   }
+
+  return {
+    status: 'refreshed',
+    reason: refreshReason,
+    sourceMemoryCount: sourceMemories.length,
+    averageSourceConfidence,
+    noveltyScore,
+  };
 }
 
 function parseProfileSummary(response: string): string {

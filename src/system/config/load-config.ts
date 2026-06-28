@@ -27,6 +27,7 @@ import {
   type SubstrateConfig,
   sanitizeCoreSubstrateConfig,
 } from './runtime-config-contracts.js';
+import { createDefaultGroupMemorySettings } from './group-memory-config.js';
 import {
   DEFAULT_COMPANION_CARD_FILE_NAME,
 } from '../../core/identity/companion-naming.js';
@@ -290,6 +291,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     memoryExtractionMaxWrites: DEFAULT_MEMORY_EXTRACTION_MAX_WRITES,
     memoryExtractionTelemetryEnabled: true,
     memoryRetrievalTelemetryEnabled: true,
+    groupMemory: createDefaultGroupMemorySettings(),
     profileSynthesisEnabled: true,
     profileSynthesisRefreshIntervalMs: DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS,
     profileSynthesisCooldownMs: DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS,

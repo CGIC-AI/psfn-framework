@@ -18,6 +18,7 @@ import {
   createDefaultObserverEvalSidecarSettings,
   type SubstrateConfig,
 } from './config/runtime-config-contracts.js';
+import { createDefaultGroupMemorySettings } from './config/group-memory-config.js';
 import type { CanonicalModelRegistry } from '../shared/contracts/runtime.js';
 import { registerStreamingSttProvider } from '../primitives/voice/connectors/stt/index.js';
 import { registerStreamingTtsProvider } from '../primitives/voice/connectors/tts/index.js';
@@ -519,6 +520,129 @@ describe('settings', () => {
       });
     });
 
+    it('normalizes group memory settings as a JSON-owned structured object', () => {
+      const defaults = createDefaultGroupMemorySettings();
+      const normalized = normalizeEditableSettings({
+        groupMemory: {
+          memoryMode: 'group',
+          autoDetection: {
+            recentParticipantWindowMessages: '60',
+            recentParticipantWindowMs: 3_600_000,
+            minDistinctHumanContacts: 3,
+            groupCapableChannelTypes: ['discord', 'discord'],
+            fallbackModeWhenOneHuman: 'direct',
+            includeAiCompanions: true,
+          },
+          onlineExtraction: {
+            observedMessageTriggerCount: 40,
+            observedTimeTriggerMs: 300_000,
+            maxMessagesPerChunk: 60,
+            maxEstimatedTokensPerChunk: 10_000,
+            chunkOverlapMessages: 4,
+            cooldownMs: 90_000,
+            backlogLagTriggerMessages: 90,
+            maxBacklogChunksPerRun: 3,
+          },
+          salience: {
+            minImportance: 0.6,
+            minConfidence: 0.7,
+            minNovelty: 0.4,
+          },
+          writeCaps: {
+            maxWritesPerRun: 6,
+            maxWritesPerChunk: 3,
+            maxWritesPerContact: 2,
+          },
+          profileRefresh: {
+            enabled: false,
+            minSourceMemories: 4,
+          },
+          telemetry: {
+            enabled: true,
+            exposeGardenDiagnostics: false,
+          },
+          backfill: {
+            maxMessagesPerRun: 200,
+            maxChunksPerRun: 3,
+            maxLlmCallsPerRun: 2,
+            cooldownMs: 900_000,
+          },
+        } as any,
+      });
+
+      expect(normalized.groupMemory).toEqual({
+        ...defaults,
+        memoryMode: 'group',
+        autoDetection: {
+          ...defaults.autoDetection,
+          recentParticipantWindowMessages: 60,
+          recentParticipantWindowMs: 3_600_000,
+          minDistinctHumanContacts: 3,
+          groupCapableChannelTypes: ['discord'],
+          includeAiCompanions: true,
+        },
+        onlineExtraction: {
+          observedMessageTriggerCount: 40,
+          observedTimeTriggerMs: 300_000,
+          maxMessagesPerChunk: 60,
+          maxEstimatedTokensPerChunk: 10_000,
+          chunkOverlapMessages: 4,
+          cooldownMs: 90_000,
+          backlogLagTriggerMessages: 90,
+          maxBacklogChunksPerRun: 3,
+        },
+        salience: {
+          ...defaults.salience,
+          minImportance: 0.6,
+          minConfidence: 0.7,
+          minNovelty: 0.4,
+        },
+        writeCaps: {
+          ...defaults.writeCaps,
+          maxWritesPerRun: 6,
+          maxWritesPerChunk: 3,
+          maxWritesPerContact: 2,
+        },
+        profileRefresh: {
+          ...defaults.profileRefresh,
+          enabled: false,
+          minSourceMemories: 4,
+        },
+        telemetry: {
+          enabled: true,
+          exposeGardenDiagnostics: false,
+        },
+        backfill: {
+          maxMessagesPerRun: 200,
+          maxChunksPerRun: 3,
+          maxLlmCallsPerRun: 2,
+          cooldownMs: 900_000,
+        },
+      });
+    });
+
+    it('fails closed for malformed group memory settings', () => {
+      expect(() => normalizeEditableSettings({
+        groupMemory: {
+          memoryMode: 'guild',
+        } as any,
+      })).toThrow('groupMemory.memoryMode');
+
+      expect(() => normalizeEditableSettings({
+        groupMemory: {
+          onlineExtraction: {
+            maxMessagesPerChunk: 0,
+          },
+        } as any,
+      })).toThrow('groupMemory.onlineExtraction.maxMessagesPerChunk');
+
+      expect(() => normalizeEditableSettings({
+        groupMemory: {
+          mysteryKnob: true,
+        } as any,
+      })).toThrow('unknown field mysteryKnob');
+    });
+
     it('fails closed for partial observer eval sidecar settings', () => {
       expect(() => normalizeEditableSettings({
         observerEvalSidecar: {
@@ -934,6 +1058,24 @@ describe('settings', () => {
 
       expect(config.observerEvalSidecar).toEqual(sidecar);
       expect(config.observerEvalSidecar).not.toBe(sidecar);
+    });
+
+    it('applies group memory settings by value', () => {
+      const config = makeConfig();
+      const groupMemory = {
+        ...createDefaultGroupMemorySettings(),
+        memoryMode: 'group' as const,
+        onlineExtraction: {
+          ...createDefaultGroupMemorySettings().onlineExtraction,
+          maxMessagesPerChunk: 60,
+        },
+      };
+
+      applySettings(config, { groupMemory });
+      groupMemory.onlineExtraction.maxMessagesPerChunk = 90;
+
+      expect(config.groupMemory?.memoryMode).toBe('group');
+      expect(config.groupMemory?.onlineExtraction.maxMessagesPerChunk).toBe(60);
     });
 
     it('applies import-processing routing controls', () => {
@@ -1710,6 +1852,7 @@ describe('settings', () => {
       expect(snapshot.analysisWorkbenchMaxWallTimeMs).toBeNull();
       expect(snapshot.analysisWorkbenchMaxSubQueries).toBeNull();
       expect(snapshot.observerEvalSidecar).toEqual(createDefaultObserverEvalSidecarSettings());
+      expect(snapshot.groupMemory).toEqual(createDefaultGroupMemorySettings());
       expect(snapshot.sessionRestartBehavior).toBe('reuse_latest_session');
       expect(snapshot.observationMaskingWindow).toBe(1);
       expect(snapshot.compactionEmotionalSalienceThresholdPct).toBe(75);
@@ -1756,6 +1899,7 @@ describe('settings', () => {
     it('validates setting key membership', () => {
       expect(isRuntimeSettingKey('analysisWorkbenchMaxSubQueries')).toBe(true);
       expect(isRuntimeSettingKey('observerEvalSidecar')).toBe(true);
+      expect(isRuntimeSettingKey('groupMemory')).toBe(true);
       expect(isRuntimeSettingKey('sessionRestartBehavior')).toBe(true);
       expect(isRuntimeSettingKey('compositionalPolicy')).toBe(true);
       expect(isRuntimeSettingKey('promotedExtendedTools')).toBe(true);
@@ -1800,6 +1944,22 @@ describe('settings', () => {
       const snapshot = getRuntimeSettingsSnapshot(config);
       expect(snapshot.observerEvalSidecar).toEqual(config.observerEvalSidecar);
       expect(snapshot.observerEvalSidecar).not.toBe(config.observerEvalSidecar);
+    });
+
+    it('includes group memory settings in snapshot when configured', () => {
+      const config = makeConfig();
+      config.groupMemory = {
+        ...createDefaultGroupMemorySettings(),
+        memoryMode: 'group',
+        onlineExtraction: {
+          ...createDefaultGroupMemorySettings().onlineExtraction,
+          maxMessagesPerChunk: 60,
+        },
+      };
+
+      const snapshot = getRuntimeSettingsSnapshot(config);
+      expect(snapshot.groupMemory).toEqual(config.groupMemory);
+      expect(snapshot.groupMemory).not.toBe(config.groupMemory);
     });
 
     it('honors explicit sttProvider selection and defaults to disabled when unset in snapshot', () => {

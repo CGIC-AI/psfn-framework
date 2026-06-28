@@ -130,6 +130,22 @@ The current write pipeline is:
 
 Extraction can also run in crash recovery and pre-compaction paths, not only after a normal turn.
 
+## Direct And Group Memory Modes
+
+Long-term extraction has an explicit memory-mode contract:
+
+- `direct` uses the normal lightweight 1:1 extraction cadence and caps.
+- `group` uses group-room windowing, attribution, salience gates, write caps, profile refresh coverage, telemetry, and backfill limits.
+- `auto` chooses between direct and group behavior from channel topology plus recent canonical human participants.
+
+The canonical runtime owner for group-memory defaults is `settings.json` under `groupMemory`. The canonical channel owner for manual provider or channel overrides is `channels.json` under `discord.groupMemory`. The same knob names are used in both places: mode, participant window, trigger thresholds, chunk sizes, overlap, cooldowns, backlog limits, salience thresholds, write caps, per-contact caps, profile refresh thresholds, telemetry visibility, and backfill limits.
+
+Manual `memoryMode` overrides auto detection. A per-channel override can force a Discord channel to `direct` or `group` even when topology is ambiguous. Auto mode treats Discord guild channels and threads as group-capable and Discord private 1:1 conversations as direct. A group-capable channel with only one recent canonical human speaker falls back according to `groupMemory.autoDetection.fallbackModeWhenOneHuman`, which defaults to `direct`.
+
+Recent participant detection must use a rolling window from `groupMemory.autoDetection.recentParticipantWindowMessages` and `groupMemory.autoDetection.recentParticipantWindowMs`. Historical channel activity can inform that a room is group-capable, but it must not force all future extraction into high-volume group processing forever. Companion, system, API-principal, and bot contacts are excluded from the human participant count unless explicitly configured as human-relevant or AI-companion participants.
+
+Group mode changes memory extraction only. It must never cause an observed message to receive a reply and must not relax retrieval privacy or cross-contact memory boundaries.
+
 ## Compaction And Carry-Forward
 
 Compaction is context-window maintenance, not a replacement memory layer.

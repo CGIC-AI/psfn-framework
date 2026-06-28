@@ -20,6 +20,62 @@
   "memoryExtractionMaxWrites": 2,
   "memoryExtractionTelemetryEnabled": true,
   "memoryRetrievalTelemetryEnabled": true,
+  "groupMemory": {
+    "enabled": true,
+    "memoryMode": "auto",
+    "autoDetection": {
+      "recentParticipantWindowMessages": 75,
+      "recentParticipantWindowMs": 21600000,
+      "minDistinctHumanContacts": 2,
+      "groupCapableChannelTypes": ["discord"],
+      "fallbackModeWhenOneHuman": "direct",
+      "excludeCompanionContact": true,
+      "excludeSystemContacts": true,
+      "excludeApiPrincipals": true,
+      "excludeBotContacts": true,
+      "includeAiCompanions": false
+    },
+    "onlineExtraction": {
+      "observedMessageTriggerCount": 50,
+      "observedTimeTriggerMs": 600000,
+      "maxMessagesPerChunk": 75,
+      "maxEstimatedTokensPerChunk": 12000,
+      "chunkOverlapMessages": 5,
+      "cooldownMs": 120000,
+      "backlogLagTriggerMessages": 100,
+      "maxBacklogChunksPerRun": 2
+    },
+    "salience": {
+      "minImportance": 0.55,
+      "minConfidence": 0.65,
+      "minNovelty": 0.35,
+      "companionMentionBonus": 0.1,
+      "directAddressBonus": 0.1,
+      "relationshipFactBonus": 0.1
+    },
+    "writeCaps": {
+      "maxWritesPerRun": 8,
+      "maxWritesPerChunk": 4,
+      "maxWritesPerContact": 2,
+      "maxLowSalienceWritesPerRun": 1
+    },
+    "profileRefresh": {
+      "enabled": true,
+      "minAcceptedWritesPerContact": 1,
+      "minSourceMemories": 2,
+      "cooldownMs": 600000
+    },
+    "telemetry": {
+      "enabled": true,
+      "exposeGardenDiagnostics": true
+    },
+    "backfill": {
+      "maxMessagesPerRun": 250,
+      "maxChunksPerRun": 4,
+      "maxLlmCallsPerRun": 4,
+      "cooldownMs": 1800000
+    }
+  },
   "profileSynthesisEnabled": true,
   "profileSynthesisRefreshIntervalMs": 21600000,
   "profileSynthesisCooldownMs": 300000,

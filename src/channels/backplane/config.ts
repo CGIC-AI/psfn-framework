@@ -17,6 +17,11 @@ import {
   type ChannelVisibility,
 } from '../../system/trust/types.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
+import {
+  createDefaultChannelGroupMemoryConfig,
+  normalizeChannelGroupMemoryConfig,
+  type ChannelGroupMemoryConfig,
+} from '../../system/config/group-memory-config.js';
 
 const log = createComponentLogger('ChannelConfig');
 
@@ -49,6 +54,7 @@ export interface TelegramChannelConfig {
 export interface DiscordChannelConfig {
   heartbeatChannelId: string;
   allowedBotUserIds: string[];
+  groupMemory: ChannelGroupMemoryConfig;
 }
 
 export interface ExternalChannelProfileConfig {
@@ -94,6 +100,7 @@ const DEFAULT_TELEGRAM_CHANNEL_CONFIG: TelegramChannelConfig = {
 const DEFAULT_DISCORD_CHANNEL_CONFIG: DiscordChannelConfig = {
   heartbeatChannelId: '',
   allowedBotUserIds: [],
+  groupMemory: createDefaultChannelGroupMemoryConfig(),
 };
 
 const DEFAULT_PSFN_AMICA_CHANNEL_CONFIG: PsfnAmicaChannelConfig = {
@@ -456,6 +463,10 @@ export function loadRuntimeChannelsConfig(
         ?? DEFAULT_DISCORD_CHANNEL_CONFIG.heartbeatChannelId,
       allowedBotUserIds: parseConfiguredStringArray(discordConfig.allowedBotUserIds, 'channels.json.discord.allowedBotUserIds')
         ?? DEFAULT_DISCORD_CHANNEL_CONFIG.allowedBotUserIds,
+      groupMemory: normalizeChannelGroupMemoryConfig(
+        discordConfig.groupMemory,
+        'channels.json.discord.groupMemory',
+      ) ?? createDefaultChannelGroupMemoryConfig(),
     },
     psfnAmica: {
       enabled: psfnAmicaEnabled,

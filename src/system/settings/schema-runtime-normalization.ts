@@ -3,6 +3,7 @@ import {
   createDefaultObserverEvalSidecarSettings,
   PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
 } from '../config/runtime-config-contracts.js';
+import { normalizeGroupMemorySettings } from '../config/group-memory-config.js';
 import { normalizeImageWorkflowSettings } from '../../primitives/images/types.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
@@ -476,6 +477,12 @@ function normalizeEndpointAndGardenSettings(
     normalized.observerEvalSidecar = normalizeObserverEvalSidecarSettings(
       settings.observerEvalSidecar,
       'observerEvalSidecar',
+    );
+  }
+  if ('groupMemory' in settings) {
+    normalized.groupMemory = normalizeGroupMemorySettings(
+      settings.groupMemory,
+      'groupMemory',
     );
   }
 }

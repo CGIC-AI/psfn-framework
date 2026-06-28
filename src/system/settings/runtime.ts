@@ -5,6 +5,10 @@ import {
   type SubstrateConfig,
 } from '../config/runtime-config-contracts.js';
 import {
+  cloneGroupMemorySettings,
+  createDefaultGroupMemorySettings,
+} from '../config/group-memory-config.js';
+import {
   cloneImageWorkflowSettings,
   normalizeImageWorkflowSettings,
 } from '../../primitives/images/types.js';
@@ -82,6 +86,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'memoryExtractionMaxWrites',
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
+  'groupMemory',
   'profileSynthesisEnabled',
   'profileSynthesisRefreshIntervalMs',
   'profileSynthesisCooldownMs',
@@ -176,6 +181,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
       config.memoryExtractionTelemetryEnabled ?? true,
     memoryRetrievalTelemetryEnabled:
       config.memoryRetrievalTelemetryEnabled ?? true,
+    groupMemory: cloneGroupMemorySettings(
+      config.groupMemory ?? createDefaultGroupMemorySettings(),
+    ),
     profileSynthesisEnabled: config.profileSynthesisEnabled ?? true,
     profileSynthesisRefreshIntervalMs:
       config.profileSynthesisRefreshIntervalMs ?? null,
@@ -204,6 +212,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'memoryExtractionMaxWrites'
     | 'memoryExtractionTelemetryEnabled'
     | 'memoryRetrievalTelemetryEnabled'
+    | 'groupMemory'
     | 'profileSynthesisEnabled'
     | 'profileSynthesisRefreshIntervalMs'
     | 'profileSynthesisCooldownMs'
@@ -490,6 +499,11 @@ function applyCoreSettings(
   if ('sessionMirrorChannelOverrides' in settings) {
     config.sessionMirrorChannelOverrides = structuredClone(
       settings.sessionMirrorChannelOverrides ?? {},
+    );
+  }
+  if ('groupMemory' in settings) {
+    config.groupMemory = cloneGroupMemorySettings(
+      settings.groupMemory ?? createDefaultGroupMemorySettings(),
     );
   }
   if ('sessionRestartBehavior' in settings) {

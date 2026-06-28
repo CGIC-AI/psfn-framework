@@ -9,6 +9,7 @@ import { loadModelsConfig } from '../../../system/config/models-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
 import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
 import { createOwnerFileConfigStore } from '../../../system/config/config-store.js';
+import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 import { loadSettings } from '../../../system/settings.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
@@ -110,6 +111,19 @@ describe('AdminSettingsDataService', () => {
     const root = makeTempDir();
     const config = buildConfig(root);
     const service = buildService(config);
+    const groupMemory = {
+      ...createDefaultGroupMemorySettings(),
+      memoryMode: 'group' as const,
+      onlineExtraction: {
+        ...createDefaultGroupMemorySettings().onlineExtraction,
+        observedMessageTriggerCount: 40,
+        maxMessagesPerChunk: 60,
+      },
+      writeCaps: {
+        ...createDefaultGroupMemorySettings().writeCaps,
+        maxWritesPerRun: 6,
+      },
+    };
     const payload = {
       sessionRestartBehavior: 'new_session',
       sessionHistoryBudgetPct: 11,
@@ -127,6 +141,7 @@ describe('AdminSettingsDataService', () => {
       memoryExtractionMaxWrites: 14,
       memoryExtractionTelemetryEnabled: false,
       memoryRetrievalTelemetryEnabled: false,
+      groupMemory,
       embeddingProvider: 'api',
       embeddingModel: 'nomic-embed-text',
       embeddingDims: 768,

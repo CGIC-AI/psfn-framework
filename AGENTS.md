@@ -251,6 +251,9 @@ Every bead must be self-contained enough that an agent can execute it correctly 
 - **Explicit scope and non-goals.** State what is in and what is deliberately out, so the worker does not expand scope and so reviewers can tell whether a PR over- or under-shoots.
 - **Acceptance criteria are mandatory.** Use `--acceptance`. "Done" must be checkable, not vibes. Without it an agent can implement the wrong thing and honestly call it closed.
 - **Title must match priority.** A title prefixed `P0:` that sits at bead priority P1 is invisible in triage. If the title says `P0:`, the priority is 0; otherwise drop the prefix.
+- **Close epics when their work is done.** An epic with all children closed, or whose scope is fully delivered, must be closed. Do not leave empty epic shells tracking nothing — they inflate the backlog and hide the real open work. Before leaving an epic open, confirm it still has live children or genuinely pending scope.
+- **Close work that is already shipped.** If the code the bead describes already exists (verify in the repo, not by guessing), close the bead as done with the verification recorded in the close reason. Stale open beads describing implemented features are as bad as missing ones — they make the backlog look bottomless and trigger duplicate re-beads.
+- **Retire dead planning concepts.** When the project changes how it plans (for example, the move from numbered phases to named sprints), the old planning artifacts are obsolete. Close them rather than letting them rot; reopen and re-scope under the current model only if the specific work is still wanted.
 
 Before creating a bead, search for existing work first (`bd search`, scan the open list by normalized title). If the work already exists under a different phrasing, extend that bead's description instead of creating a duplicate. Duplicates are debt: they hide dependencies, split effort, and make the backlog look twice as large as it is.
 

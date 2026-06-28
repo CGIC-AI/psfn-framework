@@ -521,6 +521,20 @@ describe('DiscordAdapter DM routing', () => {
     voiceMock.stop.mockResolvedValue(undefined);
   });
 
+  it('does not register duplicate Discord listeners when initialized twice', async () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+
+    await adapter.init();
+    await adapter.init();
+
+    const client = discordMock.createdClients.at(-1);
+    expect(client).toBeDefined();
+    expect(client.on.mock.calls.filter((call: unknown[]) => call[0] === 'messageCreate')).toHaveLength(1);
+    expect(client.on.mock.calls.filter((call: unknown[]) => call[0] === 'messageReactionAdd')).toHaveLength(1);
+    expect(client.once.mock.calls.filter((call: unknown[]) => call[0] === 'ready')).toHaveLength(1);
+    expect(voiceMock.init).toHaveBeenCalledTimes(1);
+  });
+
   it('routes DMs without requiring a bot mention', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);

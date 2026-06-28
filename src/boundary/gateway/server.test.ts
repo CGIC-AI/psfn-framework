@@ -1202,6 +1202,14 @@ describe('GatewayServer', () => {
       expect(internalStatus.state).toBe('ready');
       expect(internalStatus.health).toBe('healthy');
 
+      server.notifyAll('discord.message', { message: { id: 'msg-1', channelId: 'ch1' } });
+      expect(internalConn.sent).not.toContainEqual(expect.objectContaining({
+        method: 'discord.message',
+      }));
+      expect(agentConn.sent).toContainEqual(expect.objectContaining({
+        method: 'discord.message',
+      }));
+
       const requestPromise = server.requestAgent('voice.handleMessage', {
         message: makeVoiceMessage('hello'),
       });

@@ -335,6 +335,10 @@ export class GatewayServer {
       params,
     };
     for (const conn of this.connections) {
+      const status = this.connectionStatuses.get(conn);
+      if (status?.role !== 'agent' || status.state !== 'ready' || status.health !== 'healthy') {
+        continue;
+      }
       conn.send(notification);
     }
   }

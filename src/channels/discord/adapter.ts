@@ -184,6 +184,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private longRunningTools = new Map<string, LongRunningToolState>();
   private allowedBotUserIds: Set<string>;
   private personalFilesDir: string | null;
+  private initialized = false;
 
   constructor(config: SubstrateConfig, eventBus: EventBus, options: DiscordAdapterOptions = {}) {
     this.runtimeConfig = config;
@@ -277,6 +278,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
   }
 
   async init(): Promise<void> {
+    if (this.initialized) return;
+    this.initialized = true;
+
     this.client.on(Events.MessageCreate, (msg) => {
       this.onDiscordMessage(msg).catch(err => {
         log.error('Message handling error', { error: String(err) });

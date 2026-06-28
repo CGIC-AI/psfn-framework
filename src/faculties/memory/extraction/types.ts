@@ -1,4 +1,4 @@
-import type { ExtractedFact, MemoryType } from '../types.js';
+import type { ExtractedFact, MemoryScopeRef, MemoryType } from '../types.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
 
 export interface MemoryExtractorConfig {
@@ -67,6 +67,7 @@ export interface ExtractionEndTelemetry {
   rejectionBreakdown: Record<ExtractionRejectionReason, number>;
   routedFactCount?: number;
   ambiguousSpeakerSkippedCount?: number;
+  ambiguousSpeakerSkipReasons?: Record<string, number>;
   compositionalMode: 'legacy' | 'chunk_compose';
   chunkCount: number;
   mergedFactCount: number;
@@ -97,6 +98,7 @@ export interface AcceptedFactWrite {
   contactId?: string;
   triggerContactId?: string;
   sourceSpeakerName?: string;
+  scopeRef?: MemoryScopeRef;
 }
 
 export interface AcceptedFactCandidate {

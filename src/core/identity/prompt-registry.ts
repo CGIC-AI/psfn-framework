@@ -64,6 +64,7 @@ When the transcript contains message IDs or line IDs, include structured attribu
 - source_span_start_message_id/source_span_end_message_id: inclusive supporting message span when a span is clearer than individual IDs
 - source_speaker_name: speaker who provided the evidence
 - subject_name: participant the fact is about when different from the source speaker
+- Use subject_name "room", "channel", "group", or "conversation" when the fact is about the group context rather than a single participant.
 - subject_contact_id: known canonical subject contact ID only when explicitly available
 - address_mode: direct_to_companion|mention_of_companion|reply_to_user|overheard_room_context|system_api
 Never output raw character-card macros such as "{{user}}", "{{char}}", "{{character}}", or "{{assistant}}". Use the actual human participant or companion name when known. If a macro or generic role cannot be resolved to a real participant, skip the fact.

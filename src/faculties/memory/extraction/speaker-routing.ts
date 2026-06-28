@@ -3,6 +3,7 @@ import type {
   ExtractedFact,
   ExtractedFactAttribution,
   GroupMemoryAddressMode,
+  MemoryScopeRef,
 } from '../types.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { isExtractionTranscriptEntry } from './chunk-compose.js';
@@ -12,7 +13,8 @@ type ExtractionFactRoutingReason =
   | 'speaker_name_prefix'
   | 'transcript_content_match'
   | 'structured_source_metadata'
-  | 'structured_subject_metadata';
+  | 'structured_subject_metadata'
+  | 'structured_room_context';
 
 export interface ExtractionSourceSpeaker {
   name: string;
@@ -28,6 +30,8 @@ export interface ExtractionFactRouting {
   subjectContactId?: string;
   subjectName?: string;
   addressMode?: GroupMemoryAddressMode;
+  scopeRef?: MemoryScopeRef;
+  scopeTags?: string[];
   sourceMessageIds?: number[];
   sourceSpanStartMessageId?: number;
   sourceSpanEndMessageId?: number;
@@ -64,6 +68,8 @@ export type FactRoutingDecision =
     subjectContactId?: string;
     subjectName?: string;
     addressMode?: GroupMemoryAddressMode;
+    scopeRef?: MemoryScopeRef;
+    scopeTags?: string[];
     sourceMessageIds?: number[];
     sourceSpanStartMessageId?: number;
     sourceSpanEndMessageId?: number;
@@ -185,7 +191,20 @@ function resolveStructuredFactRouting(
   }
 
   const subject = resolveSubjectSpeaker(attribution, context.speakers);
+  const roomContextScope = resolveRoomContextScope(attribution, context.entries);
   if (attribution.subjectName && !subject && !attribution.subjectContactId) {
+    if (roomContextScope) {
+      return buildStructuredRoute({
+        attribution,
+        sourceSpeaker,
+        sourceEntries,
+        addressMode: attribution.addressMode ?? inferAddressMode(sourceEntries, options),
+        reason: 'structured_room_context',
+        subjectName: attribution.subjectName,
+        scopeRef: roomContextScope,
+        scopeTags: ['group_memory', 'room_context'],
+      });
+    }
     return {
       status: 'skip',
       reason: 'unresolved_subject_contact',
@@ -196,31 +215,88 @@ function resolveStructuredFactRouting(
   const subjectContactId = attribution.subjectContactId ?? subject?.contactId;
   const routedContactId = subjectContactId ?? sourceSpeaker.contactId;
 
-  const sourceMessageIds = sourceEntries
-    .map(entry => entry.id)
-    .sort((left, right) => left - right);
-  const sourceSpanStartMessageId =
-    attribution.sourceSpanStartMessageId ?? sourceMessageIds[0];
-  const sourceSpanEndMessageId =
-    attribution.sourceSpanEndMessageId ?? sourceMessageIds.at(-1);
-
-  return {
-    status: 'route',
+  return buildStructuredRoute({
+    attribution,
+    sourceSpeaker,
+    sourceEntries,
+    addressMode: attribution.addressMode ?? inferAddressMode(sourceEntries, options),
+    reason: subjectContactId && subjectContactId !== sourceSpeaker.contactId
+      ? 'structured_subject_metadata'
+      : 'structured_source_metadata',
     contactId: routedContactId,
-    sourceContactId: sourceSpeaker.contactId,
-    ...(sourceSpeaker.authorId ? { sourceAuthorId: sourceSpeaker.authorId } : {}),
-    sourceSpeakerName: sourceSpeaker.name,
     ...(subjectContactId ? { subjectContactId } : {}),
     ...(attribution.subjectName ?? subject?.name
       ? { subjectName: attribution.subjectName ?? subject?.name }
       : {}),
-    addressMode: attribution.addressMode ?? inferAddressMode(sourceEntries, options),
+  });
+}
+
+function buildStructuredRoute(params: {
+  attribution: ExtractedFactAttribution;
+  sourceSpeaker: TranscriptSpeaker;
+  sourceEntries: readonly SessionEntry[];
+  addressMode: GroupMemoryAddressMode;
+  reason: ExtractionFactRoutingReason;
+  contactId?: string;
+  subjectContactId?: string;
+  subjectName?: string;
+  scopeRef?: MemoryScopeRef;
+  scopeTags?: string[];
+}): Extract<FactRoutingDecision, { status: 'route' }> {
+  const sourceMessageIds = params.sourceEntries
+    .map(entry => entry.id)
+    .sort((left, right) => left - right);
+  const sourceSpanStartMessageId =
+    params.attribution.sourceSpanStartMessageId ?? sourceMessageIds[0];
+  const sourceSpanEndMessageId =
+    params.attribution.sourceSpanEndMessageId ?? sourceMessageIds.at(-1);
+
+  return {
+    status: 'route',
+    ...(params.contactId ? { contactId: params.contactId } : {}),
+    ...(params.sourceSpeaker.contactId
+      ? { sourceContactId: params.sourceSpeaker.contactId }
+      : {}),
+    ...(params.sourceSpeaker.authorId ? { sourceAuthorId: params.sourceSpeaker.authorId } : {}),
+    sourceSpeakerName: params.sourceSpeaker.name,
+    ...(params.subjectContactId ? { subjectContactId: params.subjectContactId } : {}),
+    ...(params.subjectName ? { subjectName: params.subjectName } : {}),
+    addressMode: params.addressMode,
+    ...(params.scopeRef ? { scopeRef: params.scopeRef } : {}),
+    ...(params.scopeTags ? { scopeTags: params.scopeTags } : {}),
     sourceMessageIds,
     ...(sourceSpanStartMessageId ? { sourceSpanStartMessageId } : {}),
     ...(sourceSpanEndMessageId ? { sourceSpanEndMessageId } : {}),
-    reason: subjectContactId && subjectContactId !== sourceSpeaker.contactId
-      ? 'structured_subject_metadata'
-      : 'structured_source_metadata',
+    reason: params.reason,
+  };
+}
+
+const ROOM_CONTEXT_SUBJECTS = new Set([
+  'room',
+  'channel',
+  'group',
+  'group chat',
+  'chat',
+  'conversation',
+  'thread',
+  'server',
+  'community',
+  'social context',
+  'room context',
+]);
+
+function resolveRoomContextScope(
+  attribution: ExtractedFactAttribution,
+  entries: readonly SessionEntry[],
+): MemoryScopeRef | undefined {
+  const normalizedSubject = normalizeSpeakerPhrase(attribution.subjectName ?? '');
+  if (!ROOM_CONTEXT_SUBJECTS.has(normalizedSubject)) return undefined;
+  const channelId = entries.at(0)?.channelId.trim();
+  if (!channelId) return undefined;
+  return {
+    kind: 'conversation',
+    id: channelId,
+    label: `Group room ${channelId}`,
   };
 }
 

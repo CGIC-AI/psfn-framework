@@ -443,6 +443,8 @@ export class MemoryExtractor {
         subjectContactId: routing.subjectContactId,
         subjectName: routing.subjectName,
         addressMode: routing.addressMode,
+        scopeRef: routing.scopeRef,
+        scopeTags: routing.scopeTags,
         sourceMessageIds: routing.sourceMessageIds,
         sourceSpanStartMessageId: routing.sourceSpanStartMessageId,
         sourceSpanEndMessageId: routing.sourceSpanEndMessageId,
@@ -460,6 +462,8 @@ export class MemoryExtractor {
       tags: fact.tags,
       sourceRef,
       sourceType: triggerReason === 'pre_compaction' ? 'compaction_summary' : undefined,
+      ...(routing?.scopeRef ? { scopeRef: routing.scopeRef } : {}),
+      ...(routing?.scopeTags ? { scopeTags: routing.scopeTags } : {}),
       provenance: channelId
         ? {
           channelId,

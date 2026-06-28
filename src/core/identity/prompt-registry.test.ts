@@ -78,6 +78,7 @@ describe('PromptRegistryStore', () => {
     expect(prompt).toContain('Preserve the named speaker/contact when known');
     expect(prompt).toContain('source_message_ids');
     expect(prompt).toContain('subject_name');
+    expect(prompt).toContain('Use subject_name "room", "channel", "group", or "conversation"');
     expect(prompt).toContain('address_mode');
     expect(prompt).toContain('direct_to_companion|mention_of_companion|reply_to_user|overheard_room_context|system_api');
     expect(prompt).toContain('Never output raw character-card macros');

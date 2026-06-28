@@ -110,6 +110,41 @@ describe('structured group fact routing', () => {
     });
   });
 
+  it('routes room-level facts to a conversation scope instead of a contact', async () => {
+    const routingContext = await context([
+      entry(1, 'dragon', 'MrDragonFox', 'The room gets noisy whenever launch planning starts.'),
+      entry(2, 'vega', 'Vega', 'That is true.'),
+    ]);
+
+    const decision = resolveFactRouting(
+      fact({
+        text: 'The room gets noisy whenever launch planning starts.',
+        attribution: {
+          sourceMessageIds: [1],
+          subjectName: 'room',
+        },
+      }),
+      routingContext,
+      undefined,
+      { companionNames: ['Carlini'] },
+    );
+
+    expect(decision).toMatchObject({
+      status: 'route',
+      sourceContactId: 'contact-dragon',
+      sourceSpeakerName: 'MrDragonFox',
+      subjectName: 'room',
+      scopeRef: {
+        kind: 'conversation',
+        id: 'discord-room',
+        label: 'Group room discord-room',
+      },
+      scopeTags: ['group_memory', 'room_context'],
+      reason: 'structured_room_context',
+    });
+    expect(decision).not.toHaveProperty('contactId');
+  });
+
   it('rejects conflicting LLM speaker attribution instead of trusting prose', async () => {
     const routingContext = await context([
       entry(1, 'dragon', 'MrDragonFox', 'I hate blue cheese.'),

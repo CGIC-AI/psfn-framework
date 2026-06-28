@@ -337,6 +337,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     rejectionBreakdown.low_signal = participantNameHygieneRejectedCount;
 
     let ambiguousSpeakerSkippedCount = 0;
+    const ambiguousSpeakerSkipReasons: Record<string, number> = {};
     const acceptedCandidates: RoutedAcceptedFactCandidate[] = [];
     for (const [index, fact] of facts.entries()) {
       const decision = evaluateFactAcceptance(fact, noveltyCorpus, options.gateConfig);
@@ -373,6 +374,8 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       );
       if (routing.status === 'skip') {
         ambiguousSpeakerSkippedCount++;
+        ambiguousSpeakerSkipReasons[routing.reason] =
+          (ambiguousSpeakerSkipReasons[routing.reason] ?? 0) + 1;
         rejectionBreakdown.ambiguous_speaker++;
         if (options.telemetryEnabled) {
           log.debug('Skipped extracted fact due to ambiguous group-room speaker ownership', {
@@ -439,6 +442,8 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         ...(routing.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
         ...(routing.subjectName ? { subjectName: routing.subjectName } : {}),
         ...(routing.addressMode ? { addressMode: routing.addressMode } : {}),
+        ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
+        ...(routing.scopeTags ? { scopeTags: routing.scopeTags } : {}),
         ...(routing.sourceMessageIds ? { sourceMessageIds: routing.sourceMessageIds } : {}),
         ...(routing.sourceSpanStartMessageId
           ? { sourceSpanStartMessageId: routing.sourceSpanStartMessageId }
@@ -475,6 +480,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
               ...(routing.contactId ? { contactId: routing.contactId } : {}),
               ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
               ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
+              ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
             });
             break;
           case 'superseded':
@@ -487,6 +493,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
               ...(routing.contactId ? { contactId: routing.contactId } : {}),
               ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
               ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
+              ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
             });
             break;
           case 'deduplicated':
@@ -548,6 +555,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       rejectionBreakdown,
       routedFactCount,
       ambiguousSpeakerSkippedCount,
+      ...(Object.keys(ambiguousSpeakerSkipReasons).length > 0
+        ? { ambiguousSpeakerSkipReasons }
+        : {}),
       compositionalMode,
       chunkCount: entryChunks.length,
       mergedFactCount: mergedParsedFacts.length,
@@ -630,6 +640,7 @@ function groupAcceptedWritesByContact(
   }
 
   for (const write of writes) {
+    if (write.scopeRef && !write.contactId) continue;
     const contactId = write.contactId ?? fallbackContactId;
     const existing = groups.get(contactId);
     if (existing) {

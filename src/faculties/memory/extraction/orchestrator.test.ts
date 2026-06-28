@@ -591,6 +591,83 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
     );
   });
 
+  it('passes room-context scope routing to fact processing without a contact fallback', async () => {
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-room' },
+    });
+    const maybeRefreshContactProfile = vi.fn();
+    const options = buildOptions({
+      channelId: 'discord:kube',
+      canonicalContactId: 'contact-vega',
+      recoveredEntries: [
+        {
+          id: 1,
+          channelId: 'discord:kube',
+          role: 'user',
+          authorId: 'discord-mrdragonfox',
+          authorName: 'MrDragonFox',
+          content: 'The room gets noisy whenever launch planning starts.',
+          timestamp: 1,
+        },
+        {
+          id: 2,
+          channelId: 'discord:kube',
+          role: 'user',
+          authorId: 'discord-vega',
+          authorName: 'Vega',
+          content: 'That is true.',
+          timestamp: 2,
+        },
+      ] as ExtractionRunOptions['recoveredEntries'],
+      llmClient: {
+        complete: vi.fn().mockResolvedValue({
+          content: `<response>
+<fact>
+<text>The room gets noisy whenever launch planning starts.</text>
+<type>relational</type>
+<importance>0.9</importance>
+<confidence>0.95</confidence>
+<source_message_ids>1</source_message_ids>
+<source_speaker_name>MrDragonFox</source_speaker_name>
+<subject_name>room</subject_name>
+</fact>
+</response>`,
+        }),
+      } as ExtractionRunOptions['llmClient'],
+      processFact,
+      maybeRefreshContactProfile,
+      resolveSourceSpeakerContactId: vi.fn(async (speaker: ExtractionSourceSpeaker) => {
+        if (speaker.authorId === 'discord-mrdragonfox') return 'contact-mrdragonfox';
+        if (speaker.authorId === 'discord-vega') return 'contact-vega';
+        return undefined;
+      }),
+      resolveCoveredUpToMessageId: vi.fn().mockReturnValue(2),
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(processFact).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'The room gets noisy whenever launch planning starts.' }),
+      expect.any(String),
+      undefined,
+      expect.objectContaining({
+        triggerContactId: 'contact-vega',
+        sourceContactId: 'contact-mrdragonfox',
+        sourceSpeakerName: 'MrDragonFox',
+        subjectName: 'room',
+        scopeRef: {
+          kind: 'conversation',
+          id: 'discord:kube',
+          label: 'Group room discord:kube',
+        },
+        scopeTags: ['group_memory', 'room_context'],
+        routingReason: 'structured_room_context',
+      }),
+    );
+    expect(maybeRefreshContactProfile).not.toHaveBeenCalled();
+  });
+
   it('skips ambiguous mixed-speaker facts instead of defaulting them to the trigger contact', async () => {
     const processFact = vi.fn();
     const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
@@ -646,6 +723,9 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
       rejectedCount: 1,
       writeCount: 0,
       ambiguousSpeakerSkippedCount: 1,
+      ambiguousSpeakerSkipReasons: {
+        ambiguous_group_speaker: 1,
+      },
       rejectionBreakdown: expect.objectContaining({
         ambiguous_speaker: 1,
       }),

@@ -20,6 +20,7 @@ import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-s
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
@@ -37,6 +38,7 @@ import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { FatigueLedger } from '../../shared/telemetry/fatigue-ledger.js';
+import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
 import { createPostgresModelUsageStoreFromConfig } from '../../persistence/postgres/model-usage-store.js';
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
@@ -63,6 +65,7 @@ import { AdminChargeLedgerDataService } from './services/charge-ledger-service.j
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
 import { AdminEpisodicMemoryDataService } from './services/episodic-memory-service.js';
+import { AdminGroupMemoryDataService } from './services/group-memory-diagnostics-service.js';
 import { AdminIdentityDataService } from './services/identity-service.js';
 import { AdminImagesDataService } from './services/images-service.js';
 import { AdminMemoryDataService } from './services/memory-service.js';
@@ -103,6 +106,8 @@ export interface InProcessGardenAdminContractOptions {
   toolHealthProvider?: AdminToolHealthProvider | null;
   postTurnActions?: PostTurnActionRuntime | null;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
+  channelGroupMemory?: ChannelGroupMemoryConfig;
+  companionAuthorIds?: readonly string[];
 }
 
 export function createInProcessGardenAdminContract(
@@ -194,6 +199,17 @@ export function createInProcessGardenAdminContract(
     episodicMemory: options.episodicStore
       ? new AdminEpisodicMemoryDataService(options.episodicStore)
       : null,
+    groupMemory: new AdminGroupMemoryDataService({
+      ...(options.config.groupMemory ? { groupMemory: options.config.groupMemory } : {}),
+      ...(options.channelGroupMemory ? { channelGroupMemory: options.channelGroupMemory } : {}),
+      sessionStore: options.sessionStore,
+      memoryStore: options.memoryStore,
+      ...(options.contactStore ? { contactStore: options.contactStore } : {}),
+      watermarkStore: new JsonGroupMemoryWatermarkStore(join(companionDataDir, 'group-memory-watermarks.json')),
+      eventBus: options.eventBus,
+      companionNames: [resolveCompanionNameFromConfig(options.config)],
+      companionAuthorIds: options.companionAuthorIds ?? [],
+    }),
     memory: new AdminMemoryDataService({
       memoryStore: options.memoryStore,
       contactStore: options.contactStore,

@@ -92,6 +92,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       adaptiveToolsService: config.services.adaptiveTools,
       wikiService: config.services.wiki,
       episodicMemoryService: config.services.episodicMemory,
+      groupMemoryService: config.services.groupMemory,
       memoryService: config.services.memory,
       sessionService: config.services.sessions,
       contactsService: config.services.contacts,

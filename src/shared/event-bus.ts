@@ -249,6 +249,20 @@ export interface EventMap {
     rejectionBreakdown?: Record<string, number>;
     routedFactCount?: number;
     ambiguousSpeakerSkippedCount?: number;
+    ambiguousSpeakerSkipReasons?: Record<string, number>;
+    writeCapSkips?: Array<{
+      reason: string;
+      skippedCount: number;
+      configuredLimit: number;
+      affectedContactIds?: string[];
+      affectedSubjectContactIds?: string[];
+      affectedClasses?: string[];
+      affectedScopeRefs?: Array<{
+        kind: string;
+        id: string;
+        label?: string;
+      }>;
+    }>;
     compositionalMode?: 'legacy' | 'chunk_compose';
     chunkCount?: number;
     mergedFactCount?: number;

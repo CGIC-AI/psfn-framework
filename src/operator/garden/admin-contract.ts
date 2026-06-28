@@ -25,6 +25,7 @@ import type {
   AdminContactsService,
   AdminDashboardService,
   AdminEpisodicMemoryService,
+  AdminGroupMemoryService,
   AdminImagesService,
   AdminIdentityService,
   AdminMemoryService,
@@ -140,6 +141,7 @@ export interface GardenAdminDomainServices {
   adaptiveTools?: AdminAdaptiveToolsService | null;
   wiki?: AdminWikiService | null;
   episodicMemory?: AdminEpisodicMemoryService | null;
+  groupMemory?: AdminGroupMemoryService | null;
   memory: AdminMemoryService;
   sessions: AdminSessionService;
   contacts: AdminContactsService;

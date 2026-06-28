@@ -584,6 +584,7 @@ describe('settings', () => {
           telemetry: {
             enabled: true,
             exposeGardenDiagnostics: false,
+            maxDiagnosticMemoryScan: 700,
           },
           backfill: {
             maxMessagesPerRun: 200,
@@ -663,6 +664,7 @@ describe('settings', () => {
         telemetry: {
           enabled: true,
           exposeGardenDiagnostics: false,
+          maxDiagnosticMemoryScan: 700,
         },
         backfill: {
           maxMessagesPerRun: 200,

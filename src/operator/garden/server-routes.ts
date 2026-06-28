@@ -134,6 +134,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       adaptiveToolsService: deps.services.adaptiveTools,
       wikiService: deps.services.wiki,
       episodicMemoryService: deps.services.episodicMemory,
+      groupMemoryService: deps.services.groupMemory,
       memoryService: deps.services.memory,
       sessionService: deps.services.sessions,
       contactsService: deps.services.contacts,

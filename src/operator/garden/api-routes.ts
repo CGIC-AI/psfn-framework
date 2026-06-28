@@ -21,6 +21,7 @@ import type {
   AdminContactsService,
   AdminDashboardService,
   AdminEpisodicMemoryService,
+  AdminGroupMemoryService,
   AdminImagesService,
   AdminIdentityService,
   AdminMemoryService,
@@ -151,6 +152,7 @@ const OBSERVER_EVAL_SIDECAR_UNAVAILABLE_ERROR = 'Observer eval sidecar backend u
 const ACTION_PIPE_UNAVAILABLE_ERROR = 'Action pipe backend unavailable';
 const AUDIT_HISTORY_UNAVAILABLE_ERROR = 'Audit history backend unavailable';
 const WIKI_UNAVAILABLE_ERROR = 'Wiki backend unavailable';
+const GROUP_MEMORY_UNAVAILABLE_ERROR = 'Group memory diagnostics backend unavailable';
 const ADMIN_AUDIT_HISTORY_SOURCES = ['garden', 'gateway', 'charge'] as const;
 const OBSERVER_EVAL_PRIVACY_CLASSES = ['public', 'private', 'restricted', 'closed', 'fail_closed'] as const;
 const OBSERVER_EVAL_OBSERVATION_STATUSES = ['ok', 'degraded', 'error'] as const;
@@ -309,6 +311,7 @@ export function buildAdminApiRoutes(options: {
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
   wikiService?: AdminWikiService | null;
   episodicMemoryService?: AdminEpisodicMemoryService | null;
+  groupMemoryService?: AdminGroupMemoryService | null;
   memoryService: AdminMemoryService;
   sessionService: AdminSessionService;
   contactsService: AdminContactsService;
@@ -343,6 +346,7 @@ export function buildAdminApiRoutes(options: {
     adaptiveToolsService,
     wikiService,
     episodicMemoryService,
+    groupMemoryService,
     memoryService,
     sessionService,
     contactsService,
@@ -1651,6 +1655,40 @@ export function buildAdminApiRoutes(options: {
       },
     },
     ...buildAdminEpisodicMemoryRoutes({ episodicMemoryService }),
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/group-memory'),
+      handle: (_req, res) => {
+        if (!groupMemoryService) {
+          sendJson(res, 503, { error: GROUP_MEMORY_UNAVAILABLE_ERROR });
+          return;
+        }
+        groupMemoryService.listGroupMemoryDiagnostics().then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load group memory diagnostics') }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: prefixedParamPath('/api/admin/group-memory/', 'channelId'),
+      handle: (_req, res, { channelId }) => {
+        if (!groupMemoryService) {
+          sendJson(res, 503, { error: GROUP_MEMORY_UNAVAILABLE_ERROR });
+          return;
+        }
+        groupMemoryService.getGroupMemoryChannelDiagnostics(channelId).then(
+          (diagnostics) => {
+            if (!diagnostics) {
+              sendJson(res, 404, { error: 'Group memory channel diagnostics not found' });
+              return;
+            }
+            sendJson(res, 200, diagnostics, ADMIN_DYNAMIC_JSON_HEADERS);
+          },
+          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load group memory channel diagnostics') }),
+        );
+      },
+    },
     {
       method: 'GET',
       match: exactPath('/api/admin/wiki'),

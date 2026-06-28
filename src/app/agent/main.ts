@@ -354,6 +354,7 @@ async function main(): Promise<void> {
     env: process.env,
     config,
     satelliteRegistryConfig,
+    channelGroupMemory: channelsConfig.discord.groupMemory,
     gateway,
     eventBus,
     scheduler,

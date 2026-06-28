@@ -133,6 +133,7 @@ export interface GroupMemoryProfileRefreshSettings {
 export interface GroupMemoryTelemetrySettings {
   enabled: boolean;
   exposeGardenDiagnostics: boolean;
+  maxDiagnosticMemoryScan: number;
 }
 
 export interface GroupMemoryBackfillSettings {
@@ -277,7 +278,11 @@ const PROFILE_REFRESH_KEYS = new Set<string>([
   'minSourceMemories',
   'cooldownMs',
 ]);
-const TELEMETRY_KEYS = new Set<string>(['enabled', 'exposeGardenDiagnostics']);
+const TELEMETRY_KEYS = new Set<string>([
+  'enabled',
+  'exposeGardenDiagnostics',
+  'maxDiagnosticMemoryScan',
+]);
 const BACKFILL_KEYS = new Set<string>([
   'maxMessagesPerRun',
   'maxChunksPerRun',
@@ -373,6 +378,7 @@ export function createDefaultGroupMemorySettings(): GroupMemorySettings {
     telemetry: {
       enabled: true,
       exposeGardenDiagnostics: true,
+      maxDiagnosticMemoryScan: 10_000,
     },
     backfill: {
       maxMessagesPerRun: 250,
@@ -624,6 +630,9 @@ export function mergeGroupMemorySettingsPatch(
       exposeGardenDiagnostics:
         telemetry.exposeGardenDiagnostics
         ?? base.telemetry.exposeGardenDiagnostics,
+      maxDiagnosticMemoryScan:
+        telemetry.maxDiagnosticMemoryScan
+        ?? base.telemetry.maxDiagnosticMemoryScan,
     },
     backfill: {
       maxMessagesPerRun:
@@ -881,6 +890,7 @@ function normalizeTelemetryPatch(
   const patch: Partial<GroupMemoryTelemetrySettings> = {};
   setBooleanIfPresent(patch, root, 'enabled', fieldPath);
   setBooleanIfPresent(patch, root, 'exposeGardenDiagnostics', fieldPath);
+  setIntegerIfPresent(patch, root, 'maxDiagnosticMemoryScan', fieldPath, 1, 1_000_000);
   return patch;
 }
 

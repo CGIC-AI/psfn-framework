@@ -275,6 +275,9 @@ describe('loadRuntimeChannelsConfig', () => {
                     overheardRoomContext: 0.25,
                   },
                 },
+                telemetry: {
+                  maxDiagnosticMemoryScan: 700,
+                },
               },
               'dm-channel': {
                 memoryMode: 'direct',
@@ -323,6 +326,9 @@ describe('loadRuntimeChannelsConfig', () => {
               addressModeWeights: {
                 overheardRoomContext: 0.25,
               },
+            },
+            telemetry: {
+              maxDiagnosticMemoryScan: 700,
             },
           },
           'dm-channel': {

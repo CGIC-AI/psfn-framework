@@ -12,6 +12,7 @@ import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
+import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
 import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
 import { createGatewayConfirmationQueueAdminApi } from '../startup/support/confirmation-queue-admin-api.js';
@@ -27,6 +28,7 @@ export interface StartOptionalAdminTransportServerOptions {
   env?: NodeJS.ProcessEnv;
   config: SubstrateConfig;
   satelliteRegistryConfig: SatelliteRegistryConfig;
+  channelGroupMemory?: ChannelGroupMemoryConfig;
   gateway: GatewayClient;
   eventBus: EventBus;
   scheduler: Scheduler;
@@ -83,6 +85,8 @@ export async function startOptionalAdminTransportServer(
     promptState: options.coreRuntime.promptState,
     skillsRuntime: options.coreRuntime.skillsRuntime,
     observerEvalSidecar: options.coreRuntime.observerEvalSidecar,
+    ...(options.channelGroupMemory ? { channelGroupMemory: options.channelGroupMemory } : {}),
+    companionAuthorIds: options.config.discordBotId ? [options.config.discordBotId] : [],
     confirmationQueueApi: createGatewayConfirmationQueueAdminApi(
       options.gateway,
       options.cardProposalQueue,

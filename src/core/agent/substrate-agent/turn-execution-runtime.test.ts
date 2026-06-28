@@ -28,6 +28,7 @@ import { createActiveEmanationSatellitePresencePort } from '../satellite-adapter
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
 import { runMoaTurn } from './moa-turn.js';
+import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -119,6 +120,7 @@ function makeChargePolicy(): ChargePolicyConfig {
       cheap_cloud: 1,
       premium_cloud: 4,
     },
+    fatigue: makeTestFatiguePolicyConfig(),
   };
 }
 

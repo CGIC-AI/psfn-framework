@@ -11,6 +11,7 @@ import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js'
 import { createOwnerFileConfigStore } from '../../../system/config/config-store.js';
 import { loadSettings } from '../../../system/settings.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 import { AdminSettingsDataService } from './settings-service.js';
 
 let tempDir: string | null = null;
@@ -766,6 +767,7 @@ describe('AdminSettingsDataService', () => {
         cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
         premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
       },
+      fatigue: makeTestFatiguePolicyConfig(),
     };
 
     const result = service.saveSubConfigJson('charge-policy', JSON.stringify(payload));

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { loadConfig } from './load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from './runtime-config.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 
 const ORIGINAL_ENV = { ...process.env };
 const TEMP_DIRS: string[] = [];
@@ -156,6 +157,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
         cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
         premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
       },
+      fatigue: makeTestFatiguePolicyConfig(),
     }), 'utf8');
 
     process.env.DATA_DIR = dataDir;

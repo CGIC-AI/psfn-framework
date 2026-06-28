@@ -22,6 +22,7 @@ import {
   loadSchedulerSeedDefaults,
   saveSchedulerConfig,
 } from '../../../system/config/scheduler-config.js';
+import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
@@ -1218,6 +1219,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
         premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
       },
+      fatigue: makeTestFatiguePolicyConfig(),
     });
 
     const result = hydrateCanonicalStartupConfig(config, {

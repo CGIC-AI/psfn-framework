@@ -9,6 +9,7 @@ import { loadTrustPolicyConfig, saveTrustPolicyConfig } from './trust-policy-con
 import { saveSchedulerConfig } from './scheduler-config.js';
 import { loadCapabilityTierConfig, saveCapabilityTierConfig } from './capability-tier-config.js';
 import { saveChargePolicyConfig } from './charge-policy-config.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 import {
   loadStartupCapabilityTierOwnerFile,
   loadStartupChargePolicyOwnerFile,
@@ -158,6 +159,7 @@ describe('startup owner-file loaders', () => {
         cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
         premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
       },
+      fatigue: makeTestFatiguePolicyConfig(),
     });
 
     const runtimeSettings = loadStartupRuntimeSettingsOwnerFile({

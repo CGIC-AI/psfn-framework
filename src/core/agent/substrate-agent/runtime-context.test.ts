@@ -15,6 +15,7 @@ import {
   resolveIdentityChannel,
 } from './runtime-context.js';
 import { resetRunChargeRollingWindowForTests } from '../../../shared/telemetry/run-charge.js';
+import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 
 afterEach(() => {
   resetRunChargeRollingWindowForTests();
@@ -137,6 +138,7 @@ const TEST_CHARGE_POLICY = {
     cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
     premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
   },
+  fatigue: makeTestFatiguePolicyConfig(),
 };
 
 function buildRuntimePromptOutputs(

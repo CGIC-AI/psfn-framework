@@ -25,6 +25,7 @@ import type { ChargePolicyConfig } from '../../system/config/charge-policy-confi
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { LLMResponse } from '../../shared/contracts/runtime.js';
 import { createTurnId } from '../../core/turns/id.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
@@ -153,6 +154,7 @@ function makeChargePolicy(): ChargePolicyConfig {
       cheap_cloud: 1,
       premium_cloud: 4,
     },
+    fatigue: makeTestFatiguePolicyConfig(),
   };
 }
 

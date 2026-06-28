@@ -10,6 +10,7 @@ import {
   loadChargePolicySeedDefaults,
   saveChargePolicyConfig,
 } from './charge-policy-config.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
@@ -70,6 +71,7 @@ function getDefaultSeedPolicy() {
       cheap_cloud: 'Cheap cloud models are lightly priced to keep them available for routine use.',
       premium_cloud: 'Premium cloud models are intentionally more expensive to reserve for high-value calls.',
     },
+    fatigue: makeTestFatiguePolicyConfig(),
   };
 }
 
@@ -194,6 +196,17 @@ describe('charge policy config', () => {
         const rationale = referenceRationales[modelClass as keyof typeof referenceRationales];
         return typeof rationale === 'string' && rationale.trim().length > 0;
       })).toBe(true);
+      expect(seed.fatigue.relationshipBudgets.weak_mi).toEqual({
+        softTarget: 2,
+        hardCap: 5,
+      });
+      expect(seed.fatigue.channelSettingLimits.busy_human_group).toEqual({
+        maxSoftTarget: 2,
+        maxHardCap: 5,
+      });
+      expect(seed.fatigue.channelSettingLimits.dm.maxHardCap).toBeGreaterThan(
+        seed.fatigue.channelSettingLimits.busy_human_group.maxHardCap,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -287,6 +300,68 @@ describe('charge policy config', () => {
           shardLaunch: 'Launching a shard consumes worker coordination overhead.',
         },
       })).toThrow(/surfaceRationales must include non-empty entries for nonzero .*paidImageGeneration/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed on malformed fatigue policy values', () => {
+    const root = mkdtempSync(join(tmpdir(), 'charge-policy-invalid-fatigue-'));
+    const dataDir = join(root, 'data');
+    mkdirSync(dataDir, { recursive: true });
+
+    try {
+      const defaultSeed = getDefaultSeedPolicy();
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          relationshipBudgets: {
+            ...defaultSeed.fatigue.relationshipBudgets,
+            weak_mi: {
+              softTarget: -1,
+              hardCap: 5,
+            },
+          },
+        },
+      })).toThrow('fatigue.relationshipBudgets.weak_mi.softTarget must be a finite integer >= 0');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          relationshipBudgets: {
+            ...defaultSeed.fatigue.relationshipBudgets,
+            weak_mi: {
+              softTarget: 6,
+              hardCap: 5,
+            },
+          },
+        },
+      })).toThrow('fatigue.relationshipBudgets.weak_mi.hardCap must be >=');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          intentMultipliers: {
+            ...defaultSeed.fatigue.intentMultipliers,
+            banter: {
+              softTargetMultiplier: 1,
+              hardCapMultiplier: 1,
+            },
+          },
+        },
+      })).toThrow('fatigue.intentMultipliers contains unknown keys: banter');
+
+      const { weak_mi: _weakMi, ...missingRelationshipBudgets } = defaultSeed.fatigue.relationshipBudgets;
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          relationshipBudgets: missingRelationshipBudgets,
+        },
+      })).toThrow('fatigue.relationshipBudgets.weak_mi must be an object');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

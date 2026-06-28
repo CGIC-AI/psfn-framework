@@ -11,6 +11,7 @@ import {
   resetRunChargeRollingWindowForTests,
   runWithChargeContext,
 } from './run-charge.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 
 const tempDirs: string[] = [];
 
@@ -85,6 +86,7 @@ function makeChargePolicy(): ChargePolicyConfig {
       cheap_cloud: 1,
       premium_cloud: 4,
     },
+    fatigue: makeTestFatiguePolicyConfig(),
   };
 }
 

@@ -9,6 +9,7 @@ import {
   runWithChargeContext,
 } from '../../shared/telemetry/run-charge.js';
 import type { ChargePolicyConfig } from '../../system/config/charge-policy-config.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 
 afterEach(() => {
   resetRunChargeRollingWindowForTests();
@@ -78,6 +79,7 @@ function makeChargePolicy(): ChargePolicyConfig {
       cheap_cloud: 1,
       premium_cloud: 4,
     },
+    fatigue: makeTestFatiguePolicyConfig(),
   };
 }
 

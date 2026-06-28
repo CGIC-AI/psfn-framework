@@ -8,6 +8,7 @@ import {
   RUN_CHARGE_ROLLING_WINDOW_MS,
   runWithChargeContext,
 } from './run-charge.js';
+import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 
 const NOW_MS = 1_800_000_000_000;
 
@@ -50,6 +51,7 @@ function makeChargePolicy(): ChargePolicyConfig {
       cheap_cloud: 1,
       premium_cloud: 4,
     },
+    fatigue: makeTestFatiguePolicyConfig(),
   };
 }
 

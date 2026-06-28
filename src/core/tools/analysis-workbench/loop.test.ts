@@ -7,6 +7,7 @@ import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import { withChildProcessSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
 import { resetRunChargeRollingWindowForTests } from '../../../shared/telemetry/run-charge.js';
+import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
 
@@ -104,6 +105,7 @@ function makeChargePolicy(): ChargePolicyConfig {
       cheap_cloud: 1,
       premium_cloud: 4,
     },
+    fatigue: makeTestFatiguePolicyConfig(),
   };
 }
 

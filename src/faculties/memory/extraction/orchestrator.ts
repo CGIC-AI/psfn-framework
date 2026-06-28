@@ -243,9 +243,28 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     }
     const rawParsedFactCount = parsedFactGroups
       .reduce((total, group) => total + group.length, 0);
-    const parsedFacts = mergeExtractedFactGroups(parsedFactGroups)
-      .map(fact => normalizeExtractedFactParticipantNames(fact, participantNames));
-    const crossChunkDeduplicatedCount = Math.max(0, rawParsedFactCount - parsedFacts.length);
+    const mergedParsedFacts = mergeExtractedFactGroups(parsedFactGroups);
+    const crossChunkDeduplicatedCount = Math.max(0, rawParsedFactCount - mergedParsedFacts.length);
+    const parsedFacts: ExtractedFact[] = [];
+    let participantNameHygieneRejectedCount = 0;
+    for (const [index, fact] of mergedParsedFacts.entries()) {
+      const normalized = normalizeExtractedFactParticipantNames(fact, participantNames);
+      if (!normalized.accepted) {
+        participantNameHygieneRejectedCount++;
+        if (options.telemetryEnabled) {
+          log.debug('Rejected extracted fact due to participant name hygiene', {
+            channelId: options.channelId,
+            triggerReason: options.triggerReason,
+            factIndex: index,
+            factType: fact.type,
+            reason: normalized.reason,
+            textPreview: fact.text.slice(0, 120),
+          });
+        }
+        continue;
+      }
+      parsedFacts.push(normalized.fact);
+    }
     const inferredBoundaryFacts = extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
     const adjustFactForWrite = options.adjustFactForWrite ?? ((fact: ExtractedFact) => fact);
     const facts = mergeExtractedFactGroups([parsedFacts, inferredBoundaryFacts])
@@ -270,9 +289,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         count: 0,
         ...(turnId ? { turnId } : {}),
         triggerReason: options.triggerReason,
-        parsedCount: facts.length,
+        parsedCount: facts.length + participantNameHygieneRejectedCount,
         acceptedCount: 0,
-        rejectedCount: 0,
+        rejectedCount: participantNameHygieneRejectedCount,
         writeCount: 0,
         deduplicatedCount: 0,
         supersededCount: 0,
@@ -280,12 +299,12 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
           low_importance: 0,
           low_confidence: 0,
           low_novelty: 0,
-          low_signal: 0,
+          low_signal: participantNameHygieneRejectedCount,
           write_cap: 0,
         },
         compositionalMode,
         chunkCount: entryChunks.length,
-        mergedFactCount: parsedFacts.length,
+        mergedFactCount: mergedParsedFacts.length,
         crossChunkDeduplicatedCount,
         boundaryFactCount: inferredBoundaryFacts.length,
       });
@@ -296,7 +315,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       low_importance: 0,
       low_confidence: 0,
       low_novelty: 0,
-      low_signal: 0,
+      low_signal: participantNameHygieneRejectedCount,
       write_cap: 0,
     };
 
@@ -420,14 +439,14 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       }
     }
 
-    const rejectedCount = facts.length - acceptedCount;
+    const rejectedCount = facts.length - acceptedCount + participantNameHygieneRejectedCount;
     const telemetry: ExtractionEndTelemetry = {
       channelId: options.channelId,
       count: acceptedCount,
       ...(turnId ? { turnId } : {}),
       triggerReason: options.triggerReason,
       coveredUpToMessageId: coveredUpToMessageId ?? undefined,
-      parsedCount: facts.length,
+      parsedCount: facts.length + participantNameHygieneRejectedCount,
       acceptedCount,
       rejectedCount,
       writeCount,
@@ -436,7 +455,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       rejectionBreakdown,
       compositionalMode,
       chunkCount: entryChunks.length,
-      mergedFactCount: parsedFacts.length,
+      mergedFactCount: mergedParsedFacts.length,
       crossChunkDeduplicatedCount,
       boundaryFactCount: inferredBoundaryFacts.length,
     };

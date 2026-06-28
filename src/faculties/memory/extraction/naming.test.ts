@@ -1,9 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildExtractionNamingGuidance,
+  normalizeDurableMemoryText,
   normalizeExtractedFactParticipantNames,
   resolveExtractionParticipantNames,
 } from './naming.js';
+import type { ExtractedFact } from '../types.js';
+
+function factWithText(text: string): ExtractedFact {
+  return {
+    text,
+    type: 'relational',
+    importance: 0.9,
+    emotionalValence: 0.6,
+    confidence: 0.95,
+    tags: ['trust'],
+  };
+}
 
 describe('resolveExtractionParticipantNames', () => {
   it('prefers canonical contact name and configured companion names over generic labels', () => {
@@ -69,24 +82,77 @@ describe('resolveExtractionParticipantNames', () => {
 
 describe('normalizeExtractedFactParticipantNames', () => {
   it('rewrites generic user and companion labels to real names', () => {
-    const fact = normalizeExtractedFactParticipantNames({
-      text: "The user trusts the companion's patience and the assistant's warmth.",
-      type: 'relational',
-      importance: 0.9,
-      emotionalValence: 0.6,
-      confidence: 0.95,
-      tags: ['trust'],
-    }, {
+    const result = normalizeExtractedFactParticipantNames(factWithText(
+      "The user trusts the companion's patience and the assistant's warmth.",
+    ), {
       userName: 'Alex',
       companionName: 'Lyra',
     });
 
-    expect(fact.text).toBe("Alex trusts Lyra's patience and Lyra's warmth.");
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error('expected fact to pass participant name hygiene');
+    expect(result.fact.text).toBe("Alex trusts Lyra's patience and Lyra's warmth.");
+  });
+
+  it('rewrites raw character-card macros to resolved participant names', () => {
+    const result = normalizeExtractedFactParticipantNames(factWithText(
+      "{{user}} trusts {{char}}'s patience and {{assistant}}'s warmth.",
+    ), {
+      userName: 'Alex',
+      companionName: 'Lyra',
+    });
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error('expected macros to resolve');
+    expect(result.fact.text).toBe("Alex trusts Lyra's patience and Lyra's warmth.");
+  });
+
+  it('collapses duplicate companion names from repeated macros', () => {
+    const result = normalizeExtractedFactParticipantNames(factWithText(
+      '{{char}} {{char}} keeps clear guardrails.',
+    ), {
+      companionName: 'Carlini',
+    });
+
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error('expected duplicate macros to resolve');
+    expect(result.fact.text).toBe('Carlini keeps clear guardrails.');
+  });
+
+  it('collapses adjacent duplicate participant names and possessive forms', () => {
+    const plain = normalizeExtractedFactParticipantNames(factWithText(
+      'Carlini Carlini needs livestream guardrails.',
+    ), {
+      companionName: 'Carlini',
+    });
+    const possessive = normalizeExtractedFactParticipantNames(factWithText(
+      "Carlini Carlini's livestream needs guardrails.",
+    ), {
+      companionName: 'Carlini',
+    });
+
+    expect(plain.accepted).toBe(true);
+    expect(possessive.accepted).toBe(true);
+    if (!plain.accepted || !possessive.accepted) throw new Error('expected duplicate names to normalize');
+    expect(plain.fact.text).toBe('Carlini needs livestream guardrails.');
+    expect(possessive.fact.text).toBe("Carlini's livestream needs guardrails.");
+  });
+
+  it('rejects unresolved raw participant macros', () => {
+    const result = normalizeExtractedFactParticipantNames(factWithText(
+      '{{user}} wants {{char}} to remember the project.',
+    ), {});
+
+    expect(result).toEqual({
+      accepted: false,
+      fact: factWithText('{{user}} wants {{char}} to remember the project.'),
+      reason: 'unresolved_participant_macro',
+    });
   });
 
   it('leaves unrelated words intact', () => {
-    const fact = normalizeExtractedFactParticipantNames({
-      text: 'The user-centric interface reduced friction.',
+    const result = normalizeExtractedFactParticipantNames({
+      ...factWithText('The user-centric interface reduced friction.'),
       type: 'semantic',
       importance: 0.6,
       emotionalValence: 0,
@@ -96,7 +162,24 @@ describe('normalizeExtractedFactParticipantNames', () => {
       userName: 'Alex',
     });
 
-    expect(fact.text).toBe('The user-centric interface reduced friction.');
+    expect(result.accepted).toBe(true);
+    if (!result.accepted) throw new Error('expected unrelated words to pass');
+    expect(result.fact.text).toBe('The user-centric interface reduced friction.');
+  });
+});
+
+describe('normalizeDurableMemoryText', () => {
+  it('applies generic adjacent proper-name hygiene for profile summaries', () => {
+    const result = normalizeDurableMemoryText(
+      "Carlini Carlini's profile should not preserve duplicated names.",
+      {},
+    );
+
+    expect(result).toEqual({
+      accepted: true,
+      text: "Carlini's profile should not preserve duplicated names.",
+      changed: true,
+    });
   });
 });
 
@@ -110,5 +193,6 @@ describe('buildExtractionNamingGuidance', () => {
     expect(guidance).toContain('Human participant name: Alex');
     expect(guidance).toContain('Companion participant name: Lyra');
     expect(guidance).toContain('Do not write generic placeholders');
+    expect(guidance).toContain('Never write raw character-card macros');
   });
 });

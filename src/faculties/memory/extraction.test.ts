@@ -1575,6 +1575,155 @@ describe('MemoryExtractor canonical profile synthesis', () => {
     }));
   });
 
+  it('normalizes duplicate names in synthesized contact profile summaries', async () => {
+    const llmClient = {
+      complete: vi
+        .fn()
+        .mockResolvedValueOnce({ content: '<response></response>' })
+        .mockResolvedValueOnce({
+          content: '<profile><summary>Carlini Carlini keeps livestream guardrails explicit.</summary></profile>',
+        }),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(6),
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getMemoriesByContact: vi.fn().mockReturnValue([
+        {
+          id: 'm1',
+          type: 'relational',
+          text: 'Carlini Carlini keeps livestream guardrails explicit.',
+          importance: 0.95,
+          confidence: 0.95,
+          salience: 0.92,
+        },
+        {
+          id: 'm2',
+          type: 'semantic',
+          text: 'Carlini prefers careful public-channel moderation.',
+          importance: 0.82,
+          confidence: 0.88,
+          salience: 0.8,
+        },
+      ]),
+      upsertContactProfile: vi.fn(),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        extractionInterval: 5,
+        minImportance: 0.45,
+        minConfidence: 0.6,
+        minNovelty: 0.35,
+        telemetryEnabled: true,
+      },
+    );
+
+    await extractor.maybeExtract('api:profile-duplicate-test', 'contact-canonical-1');
+    await extractor.drain({ timeoutMs: 2_000 });
+
+    expect(memoryStore.upsertContactProfile).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: 'contact-canonical-1',
+      summary: 'Carlini keeps livestream guardrails explicit.',
+      sourceMemoryIds: ['m1', 'm2'],
+    }));
+  });
+
+  it('skips profile refresh when synthesized summary contains unresolved macros', async () => {
+    const llmClient = {
+      complete: vi
+        .fn()
+        .mockResolvedValueOnce({ content: '<response></response>' })
+        .mockResolvedValueOnce({
+          content: '<profile><summary>{{char}} keeps livestream guardrails explicit.</summary></profile>',
+        }),
+    } as any;
+
+    const sessionManager = {
+      getMessageCount: vi.fn().mockReturnValue(6),
+      getRecentMessages: vi.fn().mockReturnValue([
+        { role: 'user', content: 'Hey', authorName: 'PrimaryUser' },
+      ]),
+    } as any;
+
+    const memoryStore = {
+      getMemoriesByChannel: vi.fn().mockReturnValue([]),
+      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getMemoriesByContact: vi.fn().mockReturnValue([
+        {
+          id: 'm1',
+          type: 'relational',
+          text: 'Carlini keeps livestream guardrails explicit.',
+          importance: 0.95,
+          confidence: 0.95,
+          salience: 0.92,
+        },
+        {
+          id: 'm2',
+          type: 'semantic',
+          text: 'Carlini prefers careful public-channel moderation.',
+          importance: 0.82,
+          confidence: 0.88,
+          salience: 0.8,
+        },
+      ]),
+      upsertContactProfile: vi.fn(),
+    } as any;
+
+    const embeddingService = {
+      embed: vi.fn().mockResolvedValue(new Float32Array(8)),
+      embedBatch: vi.fn(),
+      dims: 8,
+    } as any;
+
+    const eventBus = {
+      emit: vi.fn().mockResolvedValue(undefined),
+    } as any;
+
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore,
+      embeddingService,
+      eventBus,
+      {
+        extractionInterval: 5,
+        minImportance: 0.45,
+        minConfidence: 0.6,
+        minNovelty: 0.35,
+        telemetryEnabled: true,
+      },
+    );
+
+    await extractor.maybeExtract('api:profile-macro-test', 'contact-canonical-1');
+    await extractor.drain({ timeoutMs: 2_000 });
+
+    expect(llmClient.complete).toHaveBeenCalledTimes(2);
+    expect(memoryStore.upsertContactProfile).not.toHaveBeenCalled();
+  });
+
   it('skips profile refresh when synthesized summary novelty is too low', async () => {
     const llmClient = {
       complete: vi

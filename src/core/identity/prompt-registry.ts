@@ -36,34 +36,35 @@ const PROMPT_SEEDS: PromptSeed[] = [
     description:
       'Memory extraction system prompt. Must include {existing_facts} and {recent_messages}.',
     consumers: ['src/faculties/memory/extraction.ts'],
-    text: `You are analyzing a conversation to extract important facts about the user. Extract atomic, specific facts - each should be a single piece of information.
+    text: `You are analyzing a conversation to extract durable facts about human participant(s), named speakers, and relevant relationships. Extract atomic, specific facts - each should be a single piece of information.
 
 For each fact, provide:
 - text: A single clear sentence stating the fact
 - type: One of: episodic, semantic, emotional, procedural, boundary, reflection, relational
-  - episodic: Specific events ("User went hiking last weekend")
-  - semantic: Stable facts ("User is a software engineer", "User has a cat named Luna")
-  - emotional: Feelings and reactions ("User felt stressed about the deadline")
-  - procedural: Behavioral patterns ("User prefers code examples over explanations")
+  - episodic: Specific events ("Alex went hiking last weekend")
+  - semantic: Stable facts ("Riley is a software engineer", "Sam has a cat named Luna")
+  - emotional: Feelings and reactions ("Jordan felt stressed about the deadline")
+  - procedural: Behavioral patterns ("Morgan prefers code examples over explanations")
   - boundary: Prior refusals and safety boundaries that should persist across sessions ("I declined helping bypass a paywall")
-  - reflection: Meta-observations ("User has been sharing more personal details lately")
-  - relational: Facts about people and relationships (who someone is, their role, preferences, relationship dynamics). Examples: "the primary user's sister is named Alex", "Bob likes jazz music", "the primary user and Sam work together on the framework"
-- importance: 0-1 how significant this is for understanding the user (0.8+ for core identity facts, 0.3-0.5 for casual mentions)
+  - reflection: Meta-observations ("Alex has been sharing more personal details lately")
+  - relational: Facts about people and relationships (who someone is, their role, preferences, relationship dynamics). Examples: "Alex's sister is named Priya", "Bob likes jazz music", "Alex and Sam work together on the framework"
+- importance: 0-1 how significant this is for understanding a participant, contact, or relationship (0.8+ for core identity facts, 0.3-0.5 for casual mentions)
 - emotional_valence: -1 to 1 (-1 very negative, 0 neutral, 1 very positive)
 - confidence: 0-1 how confident you are this fact is correct
 - tags: comma-separated relevant tags
 - sensitivity: public|personal|intimate|confidential (default personal)
-  - public: Safe to share anywhere ("User likes hiking")
-  - personal: Only share with trusted contacts ("User has a dog named Rex")
-  - intimate: Only share with primary user ("User feels anxious about job")
-  - confidential: Never share outside primary 1:1 context ("User shared trauma details")
+  - public: Safe to share anywhere ("Alex likes hiking")
+  - personal: Only share with trusted contacts ("Jordan has a dog named Rex")
+  - intimate: Only share with that participant in an appropriate private context ("Riley feels anxious about work")
+  - confidential: Never share outside primary 1:1 context ("Morgan shared trauma details")
 
-Only extract durable, user-centric facts likely to matter in future conversations.
+Only extract durable participant-centric or relationship-centric facts likely to matter in future conversations. Preserve the named speaker/contact when known; do not collapse group-room facts into a singular generic person.
+Never output raw character-card macros such as "{{user}}", "{{char}}", "{{character}}", or "{{assistant}}". Use the actual human participant or companion name when known. If a macro or generic role cannot be resolved to a real participant, skip the fact.
 Do NOT extract:
 - Small talk or social filler ("thanks", "good morning", "lol", "see you")
 - Conversation logistics or transient status ("brb", "typing from phone", "on my way")
-- Facts about the assistant/system/tools/platform rather than the user
-- Meta conversation mechanics ("user asked to remember this", "we are chatting now")
+- Facts about the assistant/system/tools/platform rather than a durable participant/contact/relationship
+- Meta conversation mechanics ("someone asked to remember this", "we are chatting now")
 - Generic low-value chatter that does not reveal stable preferences, identity, relationships, or meaningful emotional patterns
 
 Already known facts (avoid duplicates, note contradictions):

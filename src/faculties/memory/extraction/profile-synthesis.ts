@@ -8,6 +8,7 @@ import {
 import { injectPromptRuntimeTokens } from '../../../core/identity/prompt-runtime.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import { computeProfileNovelty } from './signals.js';
+import { normalizeDurableMemoryText } from './naming.js';
 import type {
   AcceptedFactWrite,
   ProfileRefreshReason,
@@ -136,8 +137,8 @@ export async function refreshContactProfile(
     'memory',
   );
 
-  const summary = normalizeProfileSummary(parseProfileSummary(response.content));
-  if (!summary) {
+  const parsedSummary = normalizeProfileSummary(parseProfileSummary(response.content));
+  if (!parsedSummary) {
     if (options.telemetryEnabled) {
       log.debug('Skipped profile refresh due to empty summary output', {
         channelId: options.channelId,
@@ -146,6 +147,19 @@ export async function refreshContactProfile(
     }
     return;
   }
+
+  const summaryHygiene = normalizeDurableMemoryText(parsedSummary, {});
+  if (!summaryHygiene.accepted) {
+    if (options.telemetryEnabled) {
+      log.debug('Skipped profile refresh due to profile text hygiene rejection', {
+        channelId: options.channelId,
+        canonicalContactId: options.canonicalContactId,
+        reason: summaryHygiene.reason,
+      });
+    }
+    return;
+  }
+  const summary = summaryHygiene.text;
 
   const noveltyScore = existingProfile
     ? computeProfileNovelty(summary, existingProfile.summary)

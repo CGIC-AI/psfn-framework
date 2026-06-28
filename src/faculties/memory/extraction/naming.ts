@@ -6,6 +6,34 @@ export interface ExtractionParticipantNames {
   companionName?: string;
 }
 
+export type DurableMemoryTextHygieneRejectionReason =
+  | 'empty_text'
+  | 'unresolved_participant_macro';
+
+export type DurableMemoryTextHygieneResult =
+  | {
+    accepted: true;
+    text: string;
+    changed: boolean;
+  }
+  | {
+    accepted: false;
+    text: string;
+    reason: DurableMemoryTextHygieneRejectionReason;
+  };
+
+export type ExtractedFactParticipantNameNormalizationResult =
+  | {
+    accepted: true;
+    fact: ExtractedFact;
+    changed: boolean;
+  }
+  | {
+    accepted: false;
+    fact: ExtractedFact;
+    reason: DurableMemoryTextHygieneRejectionReason;
+  };
+
 export interface ResolveExtractionParticipantNamesParams {
   entries: readonly SessionEntry[];
   canonicalContactName?: string;
@@ -48,9 +76,17 @@ const COMPANION_REPLACEMENTS: ReadonlyArray<[RegExp, boolean]> = [
   [/(?<!-)\bassistant\b(?!-)/gi, false],
 ];
 
+const PARTICIPANT_MACRO_PATTERN = /\{\{\s*(user|char|character|assistant)\s*\}\}/gi;
+const CAPITALIZED_DUPLICATE_NAME_PATTERN =
+  /(?<![A-Za-z0-9_])([A-Z][A-Za-z0-9_-]*[a-z][A-Za-z0-9_-]*)(['\u2019]s)?(?:\s+\1(['\u2019]s)?)+(?![A-Za-z0-9_])/g;
+
 function normalizeTrimmed(value: string | undefined | null): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function isGenericLabel(value: string | undefined, genericLabels: ReadonlySet<string>): boolean {
@@ -87,6 +123,105 @@ function applyParticipantReplacement(
     ));
   }
   return nextText;
+}
+
+function applyParticipantMacroReplacement(text: string, names: ExtractionParticipantNames): string {
+  return text.replace(PARTICIPANT_MACRO_PATTERN, (match, macroName: string) => {
+    const normalizedMacroName = macroName.toLowerCase();
+    const replacement = normalizedMacroName === 'user'
+      ? names.userName
+      : names.companionName;
+    return replacement ?? match;
+  });
+}
+
+function containsParticipantMacro(text: string): boolean {
+  PARTICIPANT_MACRO_PATTERN.lastIndex = 0;
+  return PARTICIPANT_MACRO_PATTERN.test(text);
+}
+
+function buildFlexibleNamePattern(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .map(escapeRegExp)
+    .join('\\s+');
+}
+
+function collapseDuplicateKnownName(text: string, name: string): string {
+  const normalizedName = normalizeTrimmed(name);
+  if (!normalizedName) return text;
+
+  const namePattern = buildFlexibleNamePattern(normalizedName);
+  const possessivePattern = "['\\u2019]s";
+  const occurrencePattern = `${namePattern}(?:${possessivePattern})?`;
+  const duplicatePattern = new RegExp(
+    `(?<![A-Za-z0-9_])(?:${occurrencePattern})(?:\\s+(?:${occurrencePattern}))+(?![A-Za-z0-9_])`,
+    'gi',
+  );
+  const possessiveDuplicatePattern = new RegExp(`${namePattern}${possessivePattern}`, 'i');
+
+  return text.replace(duplicatePattern, duplicate => (
+    possessiveDuplicatePattern.test(duplicate) ? `${normalizedName}'s` : normalizedName
+  ));
+}
+
+function collapseDuplicateKnownNames(text: string, names: ExtractionParticipantNames): string {
+  const seen = new Set<string>();
+  let nextText = text;
+  for (const name of [names.userName, names.companionName]) {
+    const normalizedName = normalizeTrimmed(name);
+    if (!normalizedName) continue;
+    const key = normalizedName.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    nextText = collapseDuplicateKnownName(nextText, normalizedName);
+  }
+  return nextText;
+}
+
+function collapseDuplicateCapitalizedNames(text: string): string {
+  return text.replace(
+    CAPITALIZED_DUPLICATE_NAME_PATTERN,
+    (_duplicate, name: string, firstPossessive: string | undefined, laterPossessive: string | undefined) => (
+      firstPossessive || laterPossessive ? `${name}'s` : name
+    ),
+  );
+}
+
+export function normalizeDurableMemoryText(
+  text: string,
+  names: ExtractionParticipantNames,
+): DurableMemoryTextHygieneResult {
+  let nextText = applyParticipantMacroReplacement(text, names);
+  nextText = applyParticipantReplacement(nextText, names.userName, USER_REPLACEMENTS);
+  nextText = applyParticipantReplacement(nextText, names.companionName, COMPANION_REPLACEMENTS);
+  nextText = collapseDuplicateKnownNames(nextText, names);
+  nextText = collapseDuplicateCapitalizedNames(nextText)
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+
+  if (!nextText) {
+    return {
+      accepted: false,
+      text: nextText,
+      reason: 'empty_text',
+    };
+  }
+
+  if (containsParticipantMacro(nextText)) {
+    return {
+      accepted: false,
+      text: nextText,
+      reason: 'unresolved_participant_macro',
+    };
+  }
+
+  return {
+    accepted: true,
+    text: nextText,
+    changed: nextText !== text,
+  };
 }
 
 export function resolveExtractionParticipantNames(
@@ -126,25 +261,33 @@ export function buildExtractionNamingGuidance(names: ExtractionParticipantNames)
     ...lines,
     '- In each <text> fact, use the actual participant names above when identity matters.',
     '- Do not write generic placeholders such as "user", "the user", "assistant", or "companion" when a real name is known.',
+    '- Never write raw character-card macros such as "{{user}}", "{{char}}", "{{character}}", or "{{assistant}}"; skip the fact if the real participant name is unclear.',
   ].join('\n');
 }
 
 export function normalizeExtractedFactParticipantNames(
   fact: ExtractedFact,
   names: ExtractionParticipantNames,
-): ExtractedFact {
-  const nextText = applyParticipantReplacement(
-    applyParticipantReplacement(fact.text, names.userName, USER_REPLACEMENTS),
-    names.companionName,
-    COMPANION_REPLACEMENTS,
-  );
-
-  if (nextText === fact.text) {
-    return fact;
+): ExtractedFactParticipantNameNormalizationResult {
+  const result = normalizeDurableMemoryText(fact.text, names);
+  if (!result.accepted) {
+    return {
+      accepted: false,
+      fact,
+      reason: result.reason,
+    };
   }
 
+  const nextFact = result.changed
+    ? {
+      ...fact,
+      text: result.text,
+    }
+    : fact;
+
   return {
-    ...fact,
-    text: nextText,
+    accepted: true,
+    fact: nextFact,
+    changed: result.changed,
   };
 }

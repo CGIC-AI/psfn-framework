@@ -71,6 +71,19 @@ describe('PromptRegistryStore', () => {
     expect(seeded.getPrompt(EXTRACTION_PROMPT_KEY)).toBe(getDefaultPromptText(EXTRACTION_PROMPT_KEY));
   });
 
+  it('seeds the extraction prompt with group-room name and macro hygiene guidance', () => {
+    const prompt = getDefaultPromptText(EXTRACTION_PROMPT_KEY);
+
+    expect(prompt).toContain('human participant(s), named speakers, and relevant relationships');
+    expect(prompt).toContain('Preserve the named speaker/contact when known');
+    expect(prompt).toContain('Never output raw character-card macros');
+    expect(prompt).toContain('{{user}}');
+    expect(prompt).toContain('{{char}}');
+    expect(prompt).not.toContain('extract important facts about the user');
+    expect(prompt).not.toContain('Only extract durable, user-centric facts');
+    expect(prompt).not.toMatch(/the primary user/i);
+  });
+
   it('updates prompt text and writes history entry', () => {
     const updated = store.update(
       COMPACTION_SUMMARY_PROMPT_KEY,

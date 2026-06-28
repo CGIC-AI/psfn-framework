@@ -210,6 +210,74 @@ describe('runExtractionOrchestration naming fidelity', () => {
     }), expect.any(String), undefined);
   });
 
+  it('normalizes resolved raw macros before writes', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>{{user}} appreciates {{char}} {{char}}'s patience.</text>
+<type>relational</type>
+<importance>0.85</importance>
+<confidence>0.95</confidence>
+</fact>
+</response>`,
+      }),
+    } as ExtractionRunOptions['llmClient'];
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-1' },
+    });
+    const options = buildOptions({
+      llmClient,
+      processFact,
+      resolveParticipantNames: () => ({
+        userName: 'Alex',
+        companionName: 'Carlini',
+      }),
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(processFact).toHaveBeenCalledWith(expect.objectContaining({
+      text: "Alex appreciates Carlini's patience.",
+    }), expect.any(String), undefined);
+  });
+
+  it('skips unresolved raw macros before L2 writes', async () => {
+    const llmClient = {
+      complete: vi.fn().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>{{user}} wants {{char}} to remember livestream guardrails.</text>
+<type>relational</type>
+<importance>0.85</importance>
+<confidence>0.95</confidence>
+</fact>
+</response>`,
+      }),
+    } as ExtractionRunOptions['llmClient'];
+    const processFact = vi.fn();
+    const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
+    const options = buildOptions({
+      llmClient,
+      processFact,
+      emitExtractionEnd,
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(processFact).not.toHaveBeenCalled();
+    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+      parsedCount: 1,
+      acceptedCount: 0,
+      rejectedCount: 1,
+      writeCount: 0,
+      rejectionBreakdown: expect.objectContaining({
+        low_signal: 1,
+      }),
+    }));
+  });
+
   it('omits internal-lane system notes from extraction prompts', async () => {
     const llmClient = {
       complete: vi.fn().mockResolvedValue({

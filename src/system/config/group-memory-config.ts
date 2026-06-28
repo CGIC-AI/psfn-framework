@@ -748,7 +748,7 @@ function normalizeSaliencePatch(
 ): GroupMemorySalienceSettingsPatch {
   const root = expectRecord(value, fieldPath);
   rejectUnknownKeys(root, SALIENCE_KEYS, fieldPath);
-  const patch: Partial<GroupMemorySalienceSettings> = {};
+  const patch: GroupMemorySalienceSettingsPatch = {};
   setNumberIfPresent(patch, root, 'minImportance', fieldPath, 0, 1);
   setNumberIfPresent(patch, root, 'minConfidence', fieldPath, 0, 1);
   setNumberIfPresent(patch, root, 'minNovelty', fieldPath, 0, 1);
@@ -1055,49 +1055,49 @@ function parseFallbackMode(
   return normalized as GroupMemoryFallbackMode;
 }
 
-function setBooleanIfPresent<T extends Record<string, unknown>>(
+function setBooleanIfPresent<T extends object, K extends keyof T & string>(
   patch: T,
   root: Record<string, unknown>,
-  key: keyof T & string,
+  key: K,
   fieldPath: string,
 ): void {
   if (Object.hasOwn(root, key)) {
-    patch[key] = parseBoolean(root[key], `${fieldPath}.${key}`) as T[typeof key];
+    (patch as Record<K, boolean>)[key] = parseBoolean(root[key], `${fieldPath}.${key}`);
   }
 }
 
-function setIntegerIfPresent<T extends Record<string, unknown>>(
+function setIntegerIfPresent<T extends object, K extends keyof T & string>(
   patch: T,
   root: Record<string, unknown>,
-  key: keyof T & string,
+  key: K,
   fieldPath: string,
   min: number,
   max: number,
 ): void {
   if (Object.hasOwn(root, key)) {
-    patch[key] = parseInteger(
+    (patch as Record<K, number>)[key] = parseInteger(
       root[key],
       `${fieldPath}.${key}`,
       min,
       max,
-    ) as T[typeof key];
+    );
   }
 }
 
-function setNumberIfPresent<T extends Record<string, unknown>>(
+function setNumberIfPresent<T extends object, K extends keyof T & string>(
   patch: T,
   root: Record<string, unknown>,
-  key: keyof T & string,
+  key: K,
   fieldPath: string,
   min: number,
   max: number,
 ): void {
   if (Object.hasOwn(root, key)) {
-    patch[key] = parseNumber(
+    (patch as Record<K, number>)[key] = parseNumber(
       root[key],
       `${fieldPath}.${key}`,
       min,
       max,
-    ) as T[typeof key];
+    );
   }
 }

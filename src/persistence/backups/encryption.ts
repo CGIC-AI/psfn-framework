@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
 import {
   createCipheriv,
   createDecipheriv,
@@ -18,6 +18,7 @@ import {
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import type { Readable, Writable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
@@ -73,6 +74,10 @@ const SCRYPT_PARAMS = {
   parallelization: 1,
 } as const;
 
+type TarProcess =
+  | ChildProcessByStdio<null, Readable, Readable>
+  | ChildProcessByStdio<Writable, null, Readable>;
+
 function assertUsablePassphrase(encryption: BackupEncryptionRuntimeConfig): string {
   const passphrase = encryption.passphrase.trim();
   if (!passphrase) {
@@ -93,13 +98,37 @@ function hashFile(path: string): { sha256: string; sizeBytes: number } {
   };
 }
 
+function readManifestString(
+  root: Record<string, unknown>,
+  key: string,
+  manifestPath: string,
+): string {
+  const value = root[key];
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`Invalid encrypted backup manifest at ${manifestPath}`);
+  }
+  return value;
+}
+
+function readManifestNumber(
+  root: Record<string, unknown>,
+  key: string,
+  manifestPath: string,
+): number {
+  const value = root[key];
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error(`Invalid encrypted backup manifest at ${manifestPath}`);
+  }
+  return value;
+}
+
 function describeProcessError(binary: string, code: number | null, signal: NodeJS.Signals | null, stderr: string): string {
   const status = signal ? `signal ${signal}` : `exit code ${code ?? 'unknown'}`;
   const detail = stderr.trim();
   return detail ? `${binary} failed with ${status}: ${detail}` : `${binary} failed with ${status}`;
 }
 
-function waitForProcess(child: ChildProcessWithoutNullStreams, binary: string): Promise<void> {
+function waitForProcess(child: TarProcess, binary: string): Promise<void> {
   let stderr = '';
   child.stderr.on('data', (chunk: Buffer) => {
     stderr += chunk.toString('utf-8');
@@ -128,7 +157,47 @@ export function readEncryptedBackupManifest(encryptedBackupDir: string): Encrypt
   if (parsed.cipher !== 'aes-256-gcm' || parsed.kdf !== 'scrypt' || parsed.archiveFormat !== 'tar.gz') {
     throw new Error(`Unsupported encrypted backup manifest at ${manifestPath}`);
   }
-  return parsed as EncryptedBackupManifest;
+  const kdfParams = parsed.kdfParams;
+  if (!isRecord(kdfParams)) {
+    throw new Error(`Invalid encrypted backup manifest at ${manifestPath}`);
+  }
+  const keyRef = parsed.keyRef;
+  if (
+    !isRecord(keyRef)
+    || keyRef.kind !== 'env'
+    || typeof keyRef.envName !== 'string'
+    || keyRef.envName.trim() === ''
+  ) {
+    throw new Error(`Invalid encrypted backup manifest at ${manifestPath}`);
+  }
+  const keyLengthBytes = readManifestNumber(kdfParams, 'keyLengthBytes', manifestPath);
+  if (keyLengthBytes !== 32) {
+    throw new Error(`Unsupported encrypted backup manifest at ${manifestPath}`);
+  }
+  return {
+    schemaVersion: 1,
+    encryptedAt: readManifestString(parsed, 'encryptedAt', manifestPath),
+    sourceDirName: readManifestString(parsed, 'sourceDirName', manifestPath),
+    payloadFile: readManifestString(parsed, 'payloadFile', manifestPath),
+    archiveFormat: 'tar.gz',
+    cipher: 'aes-256-gcm',
+    kdf: 'scrypt',
+    kdfParams: {
+      saltBase64: readManifestString(kdfParams, 'saltBase64', manifestPath),
+      keyLengthBytes: 32,
+      cost: readManifestNumber(kdfParams, 'cost', manifestPath),
+      blockSize: readManifestNumber(kdfParams, 'blockSize', manifestPath),
+      parallelization: readManifestNumber(kdfParams, 'parallelization', manifestPath),
+    },
+    ivBase64: readManifestString(parsed, 'ivBase64', manifestPath),
+    authTagBase64: readManifestString(parsed, 'authTagBase64', manifestPath),
+    encryptedSha256: readManifestString(parsed, 'encryptedSha256', manifestPath),
+    encryptedSizeBytes: readManifestNumber(parsed, 'encryptedSizeBytes', manifestPath),
+    keyRef: {
+      kind: 'env',
+      envName: keyRef.envName,
+    },
+  };
 }
 
 export function resolveBackupEncryptionFromManifest(

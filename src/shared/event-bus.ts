@@ -339,7 +339,7 @@ export interface EventMap {
   } & EventCorrelationFields;
   'channel.queue.telemetry': {
     channelId: string;
-    phase: 'acquired' | 'contended' | 'released';
+    phase: 'acquired' | 'contended' | 'coalesced' | 'released';
     policy?: 'drop' | 'defer-latest' | 'queue' | 'steer';
     source?: string;
     queueDepth: number;

@@ -615,6 +615,11 @@ export {
   GROUP_MEMORY_POLICY_VERSION,
   JsonGroupMemoryWatermarkStore,
 } from './extraction/group-ranges.js';
+export {
+  GROUP_MEMORY_SALIENCE_REASON_CODES,
+  GROUP_MEMORY_SALIENCE_SKIP_REASONS,
+  selectGroupMemorySalienceCandidates,
+} from './extraction/group-salience.js';
 
 export type {
   MemoryExtractorConfig,
@@ -647,6 +652,14 @@ export type {
   GroupMemoryWatermarkStatus,
   GroupMemoryWatermarkStorePort,
 } from './extraction/group-ranges.js';
+export type {
+  GroupMemorySalienceCandidateSpan,
+  GroupMemorySalienceReason,
+  GroupMemorySalienceSelection,
+  GroupMemorySalienceSelectionOptions,
+  GroupMemorySalienceSkipReason,
+  GroupMemorySalienceTelemetry,
+} from './extraction/group-salience.js';
 
 export const __test = {
   evaluateFactAcceptance,

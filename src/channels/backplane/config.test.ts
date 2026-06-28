@@ -251,6 +251,16 @@ describe('loadRuntimeChannelsConfig', () => {
                   maxMessagesPerChunk: 60,
                   chunkOverlapMessages: 4,
                 },
+                salience: {
+                  maxCandidateSpansPerChunk: 10,
+                  neighboringContextMessages: 3,
+                  reasonWeights: {
+                    companionMention: 0.9,
+                  },
+                  lowSignalRules: {
+                    shortMessageMaxChars: 12,
+                  },
+                },
                 writeCaps: {
                   maxWritesPerRun: 6,
                   maxWritesPerContact: 2,
@@ -279,6 +289,16 @@ describe('loadRuntimeChannelsConfig', () => {
               observedMessageTriggerCount: 40,
               maxMessagesPerChunk: 60,
               chunkOverlapMessages: 4,
+            },
+            salience: {
+              maxCandidateSpansPerChunk: 10,
+              neighboringContextMessages: 3,
+              reasonWeights: {
+                companionMention: 0.9,
+              },
+              lowSignalRules: {
+                shortMessageMaxChars: 12,
+              },
             },
             writeCaps: {
               maxWritesPerRun: 6,

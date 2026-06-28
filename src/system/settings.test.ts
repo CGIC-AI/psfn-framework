@@ -547,6 +547,17 @@ describe('settings', () => {
             minImportance: 0.6,
             minConfidence: 0.7,
             minNovelty: 0.4,
+            minCandidateScore: 0.8,
+            maxCandidateSpansPerChunk: 10,
+            neighboringContextMessages: 3,
+            reasonWeights: {
+              companionMention: 0.9,
+              explicitPreference: 0.8,
+            },
+            lowSignalRules: {
+              shortMessageMaxChars: 12,
+              repeatThreshold: 4,
+            },
           },
           writeCaps: {
             maxWritesPerRun: 6,
@@ -596,6 +607,19 @@ describe('settings', () => {
           minImportance: 0.6,
           minConfidence: 0.7,
           minNovelty: 0.4,
+          minCandidateScore: 0.8,
+          maxCandidateSpansPerChunk: 10,
+          neighboringContextMessages: 3,
+          reasonWeights: {
+            ...defaults.salience.reasonWeights,
+            companionMention: 0.9,
+            explicitPreference: 0.8,
+          },
+          lowSignalRules: {
+            ...defaults.salience.lowSignalRules,
+            shortMessageMaxChars: 12,
+            repeatThreshold: 4,
+          },
         },
         writeCaps: {
           ...defaults.writeCaps,

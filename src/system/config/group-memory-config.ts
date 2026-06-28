@@ -39,9 +39,42 @@ export interface GroupMemorySalienceSettings {
   minImportance: number;
   minConfidence: number;
   minNovelty: number;
-  companionMentionBonus: number;
-  directAddressBonus: number;
-  relationshipFactBonus: number;
+  minCandidateScore: number;
+  maxCandidateSpansPerChunk: number;
+  neighboringContextMessages: number;
+  reasonWeights: GroupMemorySalienceReasonWeights;
+  lowSignalRules: GroupMemorySalienceLowSignalRules;
+}
+
+export interface GroupMemorySalienceReasonWeights {
+  companionMention: number;
+  directAddress: number;
+  participantFact: number;
+  explicitPreference: number;
+  relationshipClaim: number;
+  boundarySafety: number;
+  commitment: number;
+  emotionalEvent: number;
+  durablePlan: number;
+}
+
+export interface GroupMemorySalienceLowSignalRules {
+  enabled: boolean;
+  shortMessageMaxChars: number;
+  repeatWindowMessages: number;
+  repeatThreshold: number;
+  lowInformationPenalty: number;
+}
+
+export interface GroupMemorySalienceSettingsPatch {
+  minImportance?: number;
+  minConfidence?: number;
+  minNovelty?: number;
+  minCandidateScore?: number;
+  maxCandidateSpansPerChunk?: number;
+  neighboringContextMessages?: number;
+  reasonWeights?: Partial<GroupMemorySalienceReasonWeights>;
+  lowSignalRules?: Partial<GroupMemorySalienceLowSignalRules>;
 }
 
 export interface GroupMemoryWriteCapSettings {
@@ -87,7 +120,7 @@ export interface GroupMemorySettingsPatch {
   memoryMode?: GroupMemoryMode;
   autoDetection?: Partial<GroupMemoryAutoDetectionSettings>;
   onlineExtraction?: Partial<GroupMemoryOnlineExtractionSettings>;
-  salience?: Partial<GroupMemorySalienceSettings>;
+  salience?: GroupMemorySalienceSettingsPatch;
   writeCaps?: Partial<GroupMemoryWriteCapSettings>;
   profileRefresh?: Partial<GroupMemoryProfileRefreshSettings>;
   telemetry?: Partial<GroupMemoryTelemetrySettings>;
@@ -146,9 +179,29 @@ const SALIENCE_KEYS = new Set<string>([
   'minImportance',
   'minConfidence',
   'minNovelty',
-  'companionMentionBonus',
-  'directAddressBonus',
-  'relationshipFactBonus',
+  'minCandidateScore',
+  'maxCandidateSpansPerChunk',
+  'neighboringContextMessages',
+  'reasonWeights',
+  'lowSignalRules',
+]);
+const SALIENCE_REASON_WEIGHT_KEYS = new Set<string>([
+  'companionMention',
+  'directAddress',
+  'participantFact',
+  'explicitPreference',
+  'relationshipClaim',
+  'boundarySafety',
+  'commitment',
+  'emotionalEvent',
+  'durablePlan',
+]);
+const SALIENCE_LOW_SIGNAL_RULE_KEYS = new Set<string>([
+  'enabled',
+  'shortMessageMaxChars',
+  'repeatWindowMessages',
+  'repeatThreshold',
+  'lowInformationPenalty',
 ]);
 const WRITE_CAP_KEYS = new Set<string>([
   'maxWritesPerRun',
@@ -200,9 +253,27 @@ export function createDefaultGroupMemorySettings(): GroupMemorySettings {
       minImportance: 0.55,
       minConfidence: 0.65,
       minNovelty: 0.35,
-      companionMentionBonus: 0.1,
-      directAddressBonus: 0.1,
-      relationshipFactBonus: 0.1,
+      minCandidateScore: 0.7,
+      maxCandidateSpansPerChunk: 12,
+      neighboringContextMessages: 2,
+      reasonWeights: {
+        companionMention: 0.8,
+        directAddress: 1,
+        participantFact: 0.45,
+        explicitPreference: 0.75,
+        relationshipClaim: 0.8,
+        boundarySafety: 0.9,
+        commitment: 0.75,
+        emotionalEvent: 0.7,
+        durablePlan: 0.65,
+      },
+      lowSignalRules: {
+        enabled: true,
+        shortMessageMaxChars: 16,
+        repeatWindowMessages: 12,
+        repeatThreshold: 3,
+        lowInformationPenalty: 0.45,
+      },
     },
     writeCaps: {
       maxWritesPerRun: 8,
@@ -408,12 +479,22 @@ export function mergeGroupMemorySettingsPatch(
       minImportance: salience.minImportance ?? base.salience.minImportance,
       minConfidence: salience.minConfidence ?? base.salience.minConfidence,
       minNovelty: salience.minNovelty ?? base.salience.minNovelty,
-      companionMentionBonus:
-        salience.companionMentionBonus ?? base.salience.companionMentionBonus,
-      directAddressBonus:
-        salience.directAddressBonus ?? base.salience.directAddressBonus,
-      relationshipFactBonus:
-        salience.relationshipFactBonus ?? base.salience.relationshipFactBonus,
+      minCandidateScore:
+        salience.minCandidateScore ?? base.salience.minCandidateScore,
+      maxCandidateSpansPerChunk:
+        salience.maxCandidateSpansPerChunk
+        ?? base.salience.maxCandidateSpansPerChunk,
+      neighboringContextMessages:
+        salience.neighboringContextMessages
+        ?? base.salience.neighboringContextMessages,
+      reasonWeights: {
+        ...base.salience.reasonWeights,
+        ...(salience.reasonWeights ?? {}),
+      },
+      lowSignalRules: {
+        ...base.salience.lowSignalRules,
+        ...(salience.lowSignalRules ?? {}),
+      },
     },
     writeCaps: {
       maxWritesPerRun:
@@ -553,16 +634,62 @@ function normalizeOnlineExtractionPatch(
 function normalizeSaliencePatch(
   value: unknown,
   fieldPath: string,
-): Partial<GroupMemorySalienceSettings> {
+): GroupMemorySalienceSettingsPatch {
   const root = expectRecord(value, fieldPath);
   rejectUnknownKeys(root, SALIENCE_KEYS, fieldPath);
   const patch: Partial<GroupMemorySalienceSettings> = {};
   setNumberIfPresent(patch, root, 'minImportance', fieldPath, 0, 1);
   setNumberIfPresent(patch, root, 'minConfidence', fieldPath, 0, 1);
   setNumberIfPresent(patch, root, 'minNovelty', fieldPath, 0, 1);
-  setNumberIfPresent(patch, root, 'companionMentionBonus', fieldPath, 0, 1);
-  setNumberIfPresent(patch, root, 'directAddressBonus', fieldPath, 0, 1);
-  setNumberIfPresent(patch, root, 'relationshipFactBonus', fieldPath, 0, 1);
+  setNumberIfPresent(patch, root, 'minCandidateScore', fieldPath, 0, 10);
+  setIntegerIfPresent(patch, root, 'maxCandidateSpansPerChunk', fieldPath, 1, 10_000);
+  setIntegerIfPresent(patch, root, 'neighboringContextMessages', fieldPath, 0, 1_000);
+  if (Object.hasOwn(root, 'reasonWeights')) {
+    patch.reasonWeights = normalizeSalienceReasonWeightsPatch(
+      root.reasonWeights,
+      `${fieldPath}.reasonWeights`,
+    );
+  }
+  if (Object.hasOwn(root, 'lowSignalRules')) {
+    patch.lowSignalRules = normalizeSalienceLowSignalRulesPatch(
+      root.lowSignalRules,
+      `${fieldPath}.lowSignalRules`,
+    );
+  }
+  return patch;
+}
+
+function normalizeSalienceReasonWeightsPatch(
+  value: unknown,
+  fieldPath: string,
+): Partial<GroupMemorySalienceReasonWeights> {
+  const root = expectRecord(value, fieldPath);
+  rejectUnknownKeys(root, SALIENCE_REASON_WEIGHT_KEYS, fieldPath);
+  const patch: Partial<GroupMemorySalienceReasonWeights> = {};
+  setNumberIfPresent(patch, root, 'companionMention', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'directAddress', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'participantFact', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'explicitPreference', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'relationshipClaim', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'boundarySafety', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'commitment', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'emotionalEvent', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'durablePlan', fieldPath, 0, 10);
+  return patch;
+}
+
+function normalizeSalienceLowSignalRulesPatch(
+  value: unknown,
+  fieldPath: string,
+): Partial<GroupMemorySalienceLowSignalRules> {
+  const root = expectRecord(value, fieldPath);
+  rejectUnknownKeys(root, SALIENCE_LOW_SIGNAL_RULE_KEYS, fieldPath);
+  const patch: Partial<GroupMemorySalienceLowSignalRules> = {};
+  setBooleanIfPresent(patch, root, 'enabled', fieldPath);
+  setIntegerIfPresent(patch, root, 'shortMessageMaxChars', fieldPath, 0, 10_000);
+  setIntegerIfPresent(patch, root, 'repeatWindowMessages', fieldPath, 1, 10_000);
+  setIntegerIfPresent(patch, root, 'repeatThreshold', fieldPath, 1, 10_000);
+  setNumberIfPresent(patch, root, 'lowInformationPenalty', fieldPath, 0, 10);
   return patch;
 }
 

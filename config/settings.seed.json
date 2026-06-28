@@ -49,9 +49,27 @@
       "minImportance": 0.55,
       "minConfidence": 0.65,
       "minNovelty": 0.35,
-      "companionMentionBonus": 0.1,
-      "directAddressBonus": 0.1,
-      "relationshipFactBonus": 0.1
+      "minCandidateScore": 0.7,
+      "maxCandidateSpansPerChunk": 12,
+      "neighboringContextMessages": 2,
+      "reasonWeights": {
+        "companionMention": 0.8,
+        "directAddress": 1,
+        "participantFact": 0.45,
+        "explicitPreference": 0.75,
+        "relationshipClaim": 0.8,
+        "boundarySafety": 0.9,
+        "commitment": 0.75,
+        "emotionalEvent": 0.7,
+        "durablePlan": 0.65
+      },
+      "lowSignalRules": {
+        "enabled": true,
+        "shortMessageMaxChars": 16,
+        "repeatWindowMessages": 12,
+        "repeatThreshold": 3,
+        "lowInformationPenalty": 0.45
+      }
     },
     "writeCaps": {
       "maxWritesPerRun": 8,

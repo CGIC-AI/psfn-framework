@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createSignalShutdownHandler } from './signal-shutdown.js';
+import { createSignalShutdownHandler, registerProcessErrorHandlers } from './signal-shutdown.js';
 import type { ShutdownLogger } from './shutdown-helpers.js';
 
 function createLogger(): ShutdownLogger {
@@ -119,5 +119,40 @@ describe('createSignalShutdownHandler', () => {
       exit: () => undefined,
       forceExitTimeoutMs: 0,
     })).toThrow('forceExitTimeoutMs must be a positive integer');
+  });
+});
+
+describe('registerProcessErrorHandlers', () => {
+  afterEach(() => {
+    process.removeAllListeners('unhandledRejection');
+    process.removeAllListeners('uncaughtException');
+  });
+
+  it('logs unhandled rejections and keeps the process alive', () => {
+    const logger = createLogger();
+    const requestShutdown = vi.fn();
+    registerProcessErrorHandlers({ logger, requestShutdown });
+
+    process.emit('unhandledRejection', new Error('async boom'), Promise.resolve());
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Unhandled promise rejection',
+      expect.objectContaining({ reason: expect.stringContaining('async boom') }),
+    );
+    expect(requestShutdown).not.toHaveBeenCalled();
+  });
+
+  it('logs uncaught exceptions and requests graceful shutdown', () => {
+    const logger = createLogger();
+    const requestShutdown = vi.fn();
+    registerProcessErrorHandlers({ logger, requestShutdown });
+
+    process.emit('uncaughtException', new Error('sync boom'));
+
+    expect(logger.error).toHaveBeenCalledWith(
+      'Uncaught exception',
+      expect.objectContaining({ error: expect.stringContaining('sync boom') }),
+    );
+    expect(requestShutdown).toHaveBeenCalledTimes(1);
   });
 });

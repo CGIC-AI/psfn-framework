@@ -4,7 +4,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
-import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
+import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { isExplicitTrue } from '../startup/support/env-parsing.js';
 import {
@@ -60,6 +60,13 @@ async function main(): Promise<void> {
       log.error('Unhandled SIGTERM shutdown error', { error: String(error) });
       process.exit(1);
     });
+  });
+
+  registerProcessErrorHandlers({
+    logger: log,
+    requestShutdown: () => {
+      void shutdown('uncaughtException').catch(() => process.exit(1));
+    },
   });
 }
 

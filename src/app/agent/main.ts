@@ -37,7 +37,7 @@ import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
 import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import { createWyomingSatelliteRoutingPort } from '../../../satellites/wyoming/host/routing.js';
-import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
+import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
 import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createSandboxBrokerExecutionPort } from '../../boundary/sandbox/sandbox-execution-broker.js';
@@ -547,6 +547,13 @@ async function main(): Promise<void> {
       log.error('Unhandled SIGTERM shutdown error', { error: String(error) });
       process.exit(1);
     });
+  });
+
+  registerProcessErrorHandlers({
+    logger: log,
+    requestShutdown: () => {
+      void shutdown('uncaughtException').catch(() => process.exit(1));
+    },
   });
 }
 

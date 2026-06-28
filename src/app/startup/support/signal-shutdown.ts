@@ -9,6 +9,38 @@ export interface SignalShutdownHandlerOptions {
 
 export type SignalShutdownHandler = (signal: string) => Promise<void>;
 
+export interface ProcessErrorHandlerOptions {
+  logger: ShutdownLogger;
+  /** Best-effort graceful shutdown trigger for uncaught exceptions. */
+  requestShutdown?: () => void;
+}
+
+/**
+ * Register top-level process error handlers exactly once per entrypoint.
+ *
+ * - unhandledRejection: log and continue. Fire-and-forget background paths
+ *   (extraction, compaction, post-turn actions) must not crash the companion.
+ * - uncaughtException: log and attempt graceful shutdown. After an uncaught
+ *   exception the process state is undefined; the signal handler's force-exit
+ *   timer guarantees termination even if graceful shutdown hangs.
+ */
+export function registerProcessErrorHandlers(options: ProcessErrorHandlerOptions): void {
+  process.on('unhandledRejection', (reason) => {
+    options.logger.error('Unhandled promise rejection', { reason: String(reason) });
+  });
+  process.on('uncaughtException', (error) => {
+    options.logger.error('Uncaught exception', {
+      error: String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+    if (options.requestShutdown) {
+      options.requestShutdown();
+    } else {
+      process.exit(1);
+    }
+  });
+}
+
 export function createSignalShutdownHandler(
   options: SignalShutdownHandlerOptions,
 ): SignalShutdownHandler {

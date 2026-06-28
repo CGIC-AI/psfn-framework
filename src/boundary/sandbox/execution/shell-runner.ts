@@ -12,12 +12,16 @@ const DEFAULT_MAX_OUTPUT_CHARS_CAP = 100_000;
 const MAX_COMMAND_LENGTH = 256;
 const MAX_ARGS = 64;
 const MAX_ARG_LENGTH = 4_096;
+// ponytail: the sandbox child must not inherit the parent PATH. A poisoned PATH
+// could shadow an allowlisted command name (e.g. a hostile `cat` earlier on
+// PATH). Resolve commands AND run the child against this curated, system-safe
+// PATH unless an operator override (SHELL_EXEC_PATH) is set.
+const DEFAULT_SANDBOX_PATH = ['/usr/local/bin', '/usr/bin', '/bin'].join(delimiter);
 const SANDBOX_CHILD_ENV_ALLOWLIST = [
   'LANG',
   'LC_ALL',
   'LC_CTYPE',
   'LOGNAME',
-  'PATH',
   'PWD',
   'SHELL',
   'TERM',
@@ -79,8 +83,7 @@ function resolveCanonicalExecutablePath(command: string): string | null {
   }
 }
 
-function resolveExecutableFromPath(command: string): string | null {
-  const pathValue = process.env.PATH ?? '';
+function resolveExecutableFromPath(command: string, pathValue: string): string | null {
   const candidates = pathValue.split(delimiter).filter(Boolean);
   for (const candidateDir of candidates) {
     const candidate = join(candidateDir, command);
@@ -97,6 +100,7 @@ function resolveExecutableFromPath(command: string): string | null {
 function buildSandboxChildEnv(
   requestedEnvVars: readonly string[],
   envAllowlist: readonly string[],
+  sandboxPath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const nextEnv: NodeJS.ProcessEnv = {};
@@ -106,6 +110,8 @@ function buildSandboxChildEnv(
       nextEnv[key] = value;
     }
   }
+  // PATH is deliberately not inherited; use the curated sandbox PATH.
+  nextEnv.PATH = sandboxPath;
 
   const allowedEnvNames = new Set(envAllowlist.map((value) => value.trim()).filter(Boolean));
   for (const envVar of requestedEnvVars) {
@@ -296,7 +302,7 @@ function resolveBoundedExecutionPolicy(
   return { timeoutMs, maxOutputChars };
 }
 
-function assertCommandAllowed(command: string, allowlist: readonly string[]): void {
+function assertCommandAllowed(command: string, allowlist: readonly string[], sandboxPath: string): void {
   if (!command) {
     throw new ShellExecPolicyError('shell.exec command is required');
   }
@@ -313,7 +319,7 @@ function assertCommandAllowed(command: string, allowlist: readonly string[]): vo
   const commandIsPath = includesPathSeparator(command) || isAbsolute(command);
   const canonicalCommand = commandIsPath
     ? resolveCanonicalExecutablePath(command)
-    : resolveExecutableFromPath(command);
+    : resolveExecutableFromPath(command, sandboxPath);
   const commandLower = command.toLowerCase();
 
   if (!commandIsPath) {
@@ -336,7 +342,7 @@ function assertCommandAllowed(command: string, allowlist: readonly string[]): vo
 
   const canonicalBase = basename(canonicalCommand).toLowerCase();
   if (normalizedAllowlist.names.has(canonicalBase)) {
-    const expectedCanonical = resolveExecutableFromPath(canonicalBase);
+    const expectedCanonical = resolveExecutableFromPath(canonicalBase, sandboxPath);
     if (expectedCanonical && expectedCanonical === canonicalCommand) {
       return;
     }
@@ -428,14 +434,15 @@ export async function executeShellCommandWithPolicy(
     throw new ShellExecPolicyError('shell.exec policy is disabled');
   }
 
+  const sandboxPath = policy.pathOverride ?? DEFAULT_SANDBOX_PATH;
   const command = resolveCommand(params.command);
-  assertCommandAllowed(command, policy.allowlist ?? []);
+  assertCommandAllowed(command, policy.allowlist ?? [], sandboxPath);
   const args = resolveArgs(params.args);
   const allowedRoots = resolveAllowedShellRoots(workspacePath, policy);
   const cwd = resolveWorkingDirectory(params.cwd, workspacePath, allowedRoots);
   assertArgumentPathsAllowed(args, cwd, allowedRoots);
   const limits = resolveBoundedExecutionPolicy(params, policy);
   const requestedEnvVars = resolveRequestedEnvVars((params as { envVars?: unknown }).envVars);
-  const childEnv = buildSandboxChildEnv(requestedEnvVars, policy.envAllowlist ?? []);
+  const childEnv = buildSandboxChildEnv(requestedEnvVars, policy.envAllowlist ?? [], sandboxPath);
   return await runCommandBounded(command, args, cwd, limits, childEnv);
 }

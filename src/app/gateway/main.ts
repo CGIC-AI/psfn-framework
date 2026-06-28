@@ -30,7 +30,7 @@ import {
 import { createGatewayVoiceSurfaces } from '../../boundary/gateway/voice-surfaces.js';
 import { resolveStartupPreflightBundle } from '../startup/support/startup-preflight.js';
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
-import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
+import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
 import { ensurePersonalFilesLayout } from '../../persistence/layout.js';
@@ -258,6 +258,13 @@ async function main(): Promise<void> {
       log.error('Unhandled SIGTERM shutdown error', { error: String(error) });
       process.exit(1);
     });
+  });
+
+  registerProcessErrorHandlers({
+    logger: log,
+    requestShutdown: () => {
+      void shutdown('uncaughtException').catch(() => process.exit(1));
+    },
   });
 }
 

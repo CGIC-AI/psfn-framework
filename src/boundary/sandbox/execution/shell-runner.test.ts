@@ -95,4 +95,46 @@ describe('executeShellCommandWithPolicy', () => {
       },
     )).rejects.toThrow('argument path not allowlisted');
   });
+
+  it('runs the child against a curated PATH that ignores a poisoned parent PATH', async () => {
+    const { workspace } = makeWorkspaceFixture();
+    const previousPath = process.env.PATH;
+    // ponytail: poison parent PATH with a hostile dir first on the list
+    process.env.PATH = `${join(workspace, 'hostile')}:${previousPath ?? ''}`;
+    try {
+      const result = await executeShellCommandWithPolicy(
+        { command: 'printenv', args: ['PATH'], cwd: workspace },
+        {
+          workspacePath: workspace,
+          policy: { enabled: true, allowlist: ['printenv'], allowedCwd: [workspace] },
+        },
+      );
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe(['/usr/local/bin', '/usr/bin', '/bin'].join(':'));
+      expect(result.stdout).not.toContain('hostile');
+    } finally {
+      if (previousPath === undefined) delete process.env.PATH;
+      else process.env.PATH = previousPath;
+    }
+  });
+
+  it('honors an operator PATH override for the sandbox child', async () => {
+    const { workspace } = makeWorkspaceFixture();
+    const result = await executeShellCommandWithPolicy(
+      { command: 'printenv', args: ['PATH'], cwd: workspace },
+      {
+        workspacePath: workspace,
+        policy: {
+          enabled: true,
+          allowlist: ['printenv'],
+          allowedCwd: [workspace],
+          pathOverride: '/usr/bin',
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('/usr/bin');
+  });
 });

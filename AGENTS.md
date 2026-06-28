@@ -239,6 +239,23 @@ Guardrails:
 - Verify new runtime code is wired to a real entrypoint or registry path.
 - Before closing work, confirm there are no unreachable production modules or unwired settings.
 
+## Bead Quality
+
+Do not be stingy with beads. This is the single biggest source of backlog rot: a one- or two-sentence description cannot carry enough context to survive a later review, so the same work gets re-beaded under a slightly different name and nobody notices until an audit surfaces the duplicate.
+
+Every bead must be self-contained enough that an agent can execute it correctly from the bead alone:
+
+- **Full description, not a summary.** If the user rambles for two minutes with five concrete details, all five go in the description. Capturing the gist is not enough. Capture the detail.
+- **Concrete file paths and line numbers** where known. Do not write `"fix the memory store"`; write `"src/faculties/memory/store/trust-filters.ts:20"`.
+- **The why, not just the what.** A fix without the reason it matters breeds misimplementation and follow-up beads filling gaps that a clear bead would have prevented.
+- **Explicit scope and non-goals.** State what is in and what is deliberately out, so the worker does not expand scope and so reviewers can tell whether a PR over- or under-shoots.
+- **Acceptance criteria are mandatory.** Use `--acceptance`. "Done" must be checkable, not vibes. Without it an agent can implement the wrong thing and honestly call it closed.
+- **Title must match priority.** A title prefixed `P0:` that sits at bead priority P1 is invisible in triage. If the title says `P0:`, the priority is 0; otherwise drop the prefix.
+
+Before creating a bead, search for existing work first (`bd search`, scan the open list by normalized title). If the work already exists under a different phrasing, extend that bead's description instead of creating a duplicate. Duplicates are debt: they hide dependencies, split effort, and make the backlog look twice as large as it is.
+
+Break large work into small, quickly-completable parts — but each part still carries the full context above. Small is about scope and verifiability, not about thinness of description.
+
 ## Validation Expectations
 
 If your change touches code, run the smallest set of quality gates that proves it.

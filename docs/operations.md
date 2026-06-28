@@ -86,6 +86,64 @@ Operational rules:
 - Use `npm run session:repair:transcript-projection` to rebuild the searchable transcript projection from authoritative JSONL L0 after drift, backend migration, or recovery work.
 - The repair utility accepts `--data-dir` and `--sessions-dir` overrides and targets the configured PostgreSQL session projection backend through the port layer.
 
+## Group-Room Memory Operations
+
+Group-room memory exists to make multi-human Discord-style rooms produce useful, attributable memories without changing the direct/1:1 extraction path. Direct conversations keep the lightweight response-turn cadence and the normal two-write default. Group rooms use JSON-owned windows, observed-message triggers, salience selection, per-contact caps, watermarks, and profile-coverage refresh because high-volume rooms need bounded range processing instead of a tiny conversational tail.
+
+Configuration owners:
+
+- Global defaults live in `settings.json` under `groupMemory`.
+- Discord/channel overrides live in `channels.json` under `discord.groupMemory`.
+- `memoryMode` may be `direct`, `group`, or `auto`. Use `direct` for ambiguous 1:1 channels, `group` for known group rooms, and `auto` when provider topology plus recent participant count is reliable.
+
+Live group windows should be tuned to channel velocity. The expected default shape is 50-100 recent messages, not one fixed large live batch. Increase or decrease `onlineExtraction.observedMessageTriggerCount`, `onlineExtraction.maxMessagesPerChunk`, `onlineExtraction.backlogLagTriggerMessages`, cooldowns, and write caps in JSON when a room is unusually fast or slow. Use bounded backfill for old history.
+
+Garden diagnostics:
+
+- `GET /api/admin/group-memory` lists group-memory health across channels.
+- `GET /api/admin/group-memory/<url-encoded-channel-id>` shows one channel.
+- Diagnostics include channel classification, manual override source, resolved config, head message ID, group-memory watermark, lag, last processed/skipped/failed span, salience candidate counts, parsed facts, accepted writes, rejection breakdown, write-cap skips, ambiguous attribution skips, and per-contact memory/profile coverage.
+- Diagnostic payloads are redacted: they expose IDs, counts, reasons, config, and coverage, not raw transcript text or memory text.
+
+Low-yield triage:
+
+1. Confirm the channel class is `group` or group-capable. If auto mode is wrong, add a channel override.
+2. Check the resolved `groupMemory` config in diagnostics. Make sure the participant window, trigger count, chunk size, cooldown, salience threshold, and caps match the room's velocity.
+3. Check watermark lag. Lag with no extraction usually means thresholds/cooldowns are too conservative or a prior in-flight extraction is blocking.
+4. Check salience telemetry. High `low_signal`, `duplicate_repetition`, or `below_threshold` counts mean the room is mostly chatter or the threshold is too strict.
+5. Check `rejectionBreakdown`, `writeCapSkips`, and `ambiguousSpeakerSkippedCount`. Cap skips mean writes are being intentionally throttled; ambiguous skips mean the LLM output did not provide enough structured source/subject attribution.
+6. Check per-contact profile coverage. A contact with activity but no profile usually lacks enough accepted source memories or is inside profile cooldown.
+
+Safe group-history backfill:
+
+1. Inspect diagnostics first and choose an explicit message or time range. URL-encode channel IDs in API paths.
+2. Dry-run before writing:
+
+```bash
+curl -X POST "$ADMIN_URL/api/admin/group-memory/$CHANNEL_ID/backfill" \
+  -H "content-type: application/json" \
+  --data '{"mode":"dry_run","startMessageId":1,"endMessageId":500}'
+```
+
+3. Review planned chunks, candidate source message IDs, estimated LLM calls, deferred backlog, and privacy flags. Dry-run must not include raw transcript text or memory text.
+4. Run live with limits at or below the JSON policy ceilings:
+
+```bash
+curl -X POST "$ADMIN_URL/api/admin/group-memory/$CHANNEL_ID/backfill" \
+  -H "content-type: application/json" \
+  --data '{"mode":"live","startMessageId":1,"endMessageId":500,"maxMessagesPerRun":120,"maxChunksPerRun":3,"maxLlmCallsPerRun":3}'
+```
+
+5. Stop behavior is fail-closed. A failed extractor call does not advance the watermark. A no-salience chunk is marked skipped so normal resume can keep moving. Rerun with `resume:true` to continue from the watermark; use `resume:false` only for an explicit bounded repair of a known span.
+6. Backfill preserves existing memories and writes through the same dedupe, attribution, salience, write-cap, and profile-refresh path as online group extraction. There is no destructive bulk rollback path in backfill. If a bad memory is written, remove or supersede that memory through the normal memory repair/deletion workflow using its provenance.
+
+Privacy boundaries:
+
+- Observed group extraction schedules memory work only; it must never send a Discord response.
+- Group memories retain source speaker, source contact, subject contact when known, trigger contact when applicable, address mode, source message IDs, and source spans.
+- Structured source metadata is required for safe cross-contact facts. Ambiguous or conflicting mixed-speaker attribution fails closed.
+- Retrieval privacy remains contact/trust scoped. A person sharing a group room with the companion does not gain access to another person's private memories.
+
 ## Backups And Integrity
 
 - Backup cadence and retention live in `backup.json` and `scheduler.json`.

@@ -146,6 +146,64 @@ Recent participant detection must use a rolling window from `groupMemory.autoDet
 
 Group mode changes memory extraction only. It must never cause an observed message to receive a reply and must not relax retrieval privacy or cross-contact memory boundaries.
 
+### Group-Memory Settings
+
+All group-memory knobs are JSON-owned. Defaults live in `settings.json` under `groupMemory`; channel overrides live in `channels.json` under `discord.groupMemory`. Operators should tune those owner files, not code, and then use Garden diagnostics to confirm the resolved per-channel values.
+
+Top-level settings:
+
+- `enabled`: enables the group-memory subsystem.
+- `memoryMode`: default mode, one of `direct`, `group`, or `auto`.
+
+Auto-detection settings:
+
+- `autoDetection.recentParticipantWindowMessages`: how many recent messages to scan for participant classification.
+- `autoDetection.recentParticipantWindowMs`: time window for the same participant scan.
+- `autoDetection.minDistinctHumanContacts`: human participant count required for `auto` group classification.
+- `autoDetection.groupCapableChannelTypes`: provider channel types that may be group rooms.
+- `autoDetection.fallbackModeWhenOneHuman`: direct or group behavior when a group-capable room has one recent human.
+- `autoDetection.excludeCompanionContact`, `excludeSystemContacts`, `excludeApiPrincipals`, `excludeBotContacts`, `includeAiCompanions`: participant filters for the classification window.
+
+Online extraction settings:
+
+- `onlineExtraction.observedMessageTriggerCount`: unread observed-message count that can trigger group extraction.
+- `onlineExtraction.observedTimeTriggerMs`: max wait before a time-triggered extraction may run.
+- `onlineExtraction.maxMessagesPerChunk`: live chunk size for one extraction range.
+- `onlineExtraction.maxEstimatedTokensPerChunk`: token ceiling for a chunk.
+- `onlineExtraction.chunkOverlapMessages`: context overlap between chunks.
+- `onlineExtraction.cooldownMs`: per-channel cooldown after scheduling extraction.
+- `onlineExtraction.backlogLagTriggerMessages`: unread lag that can force backlog catch-up.
+- `onlineExtraction.maxBacklogChunksPerRun`: max online chunks per run.
+
+Normal live group windows should be tuned to room velocity. The default shape is deliberately in the 50-100 message range (`observedMessageTriggerCount` defaults to 50, `maxMessagesPerChunk` to 75, and backlog lag to 100). Large historical rooms must be handled by bounded backfill, not by making the live hot path consume one fixed giant batch.
+
+Salience settings:
+
+- `salience.minImportance`, `minConfidence`, `minNovelty`: write gates applied after extraction.
+- `salience.minCandidateScore`: pre-LLM candidate threshold for group ranges.
+- `salience.maxCandidateSpansPerChunk`: max candidate spans selected per chunk.
+- `salience.neighboringContextMessages`: neighboring messages included around selected candidates.
+- `salience.reasonWeights.companionMention`, `directAddress`, `participantFact`, `explicitPreference`, `relationshipClaim`, `boundarySafety`, `commitment`, `emotionalEvent`, `durablePlan`: score weights for durable group signals.
+- `salience.lowSignalRules.enabled`, `shortMessageMaxChars`, `repeatWindowMessages`, `repeatThreshold`, `lowInformationPenalty`: filters for chatter and repeated low-information messages.
+
+Write-cap settings:
+
+- `writeCaps.maxWritesPerRun`, `maxWritesPerChunk`, `maxWritesPerContact`, `maxWritesPerSubject`: group write ceilings.
+- `writeCaps.maxLowSalienceWritesPerRun`: cap for lower-salience accepted facts.
+- `writeCaps.maxWritesPerBackfillRun`: separate catch-up/backfill write ceiling.
+- `writeCaps.maxWritesPerTimeWindow` and `timeWindowMs`: rolling write ceiling.
+- `writeCaps.lowSalienceThreshold`: threshold used by the low-salience cap.
+- `writeCaps.rankingWeights.importance`, `novelty`, `confidence`, `addressMode`, `relationshipRelevance`, `emotionalIntensity`, `perContactCoverage`: candidate ranking weights.
+- `writeCaps.addressModeWeights.directToCompanion`, `mentionOfCompanion`, `replyToUser`, `overheardRoomContext`, `systemApi`: ranking weights for how the message reached the companion.
+
+Profile, telemetry, and backfill settings:
+
+- `profileRefresh.enabled`, `minAcceptedWritesPerContact`, `minSourceMemories`, `cooldownMs`: profile refresh coverage and throttling.
+- `telemetry.enabled`, `exposeGardenDiagnostics`, `maxDiagnosticMemoryScan`: group-memory telemetry and Garden diagnostic exposure.
+- `backfill.maxMessagesPerRun`, `maxChunksPerRun`, `maxLlmCallsPerRun`, `cooldownMs`: operator backfill ceilings.
+
+Group extraction preserves attribution separately from ownership. Accepted group memories can carry source speaker/contact, subject contact, trigger contact, address mode, source message IDs, source span, and conversation scope. Ambiguous mixed-speaker facts fail closed. A participant being in the same room does not grant them access to another participant's private memories during retrieval.
+
 ## Compaction And Carry-Forward
 
 Compaction is context-window maintenance, not a replacement memory layer.

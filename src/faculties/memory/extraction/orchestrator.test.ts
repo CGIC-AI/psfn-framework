@@ -244,7 +244,10 @@ describe('runExtractionOrchestration naming fidelity', () => {
 
     expect(processFact).toHaveBeenCalledWith(expect.objectContaining({
       text: "Alex appreciates Carlini's patience.",
-    }), expect.any(String), undefined);
+    }), expect.any(String), undefined, expect.objectContaining({
+      routingReason: 'single_speaker_transcript',
+      sourceSpeakerName: 'Alex',
+    }));
   });
 
   it('skips unresolved raw macros before L2 writes', async () => {

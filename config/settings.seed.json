@@ -75,7 +75,28 @@
       "maxWritesPerRun": 8,
       "maxWritesPerChunk": 4,
       "maxWritesPerContact": 2,
-      "maxLowSalienceWritesPerRun": 1
+      "maxWritesPerSubject": 2,
+      "maxLowSalienceWritesPerRun": 1,
+      "maxWritesPerBackfillRun": 12,
+      "maxWritesPerTimeWindow": 24,
+      "timeWindowMs": 3600000,
+      "lowSalienceThreshold": 0.55,
+      "rankingWeights": {
+        "importance": 1,
+        "novelty": 0.7,
+        "confidence": 0.7,
+        "addressMode": 0.4,
+        "relationshipRelevance": 0.4,
+        "emotionalIntensity": 0.3,
+        "perContactCoverage": 0.5
+      },
+      "addressModeWeights": {
+        "directToCompanion": 1,
+        "mentionOfCompanion": 0.8,
+        "replyToUser": 0.7,
+        "overheardRoomContext": 0.45,
+        "systemApi": 0.2
+      }
     },
     "profileRefresh": {
       "enabled": true,

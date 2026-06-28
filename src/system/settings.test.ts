@@ -563,6 +563,19 @@ describe('settings', () => {
             maxWritesPerRun: 6,
             maxWritesPerChunk: 3,
             maxWritesPerContact: 2,
+            maxWritesPerSubject: 1,
+            maxLowSalienceWritesPerRun: 1,
+            maxWritesPerBackfillRun: 10,
+            maxWritesPerTimeWindow: 18,
+            timeWindowMs: 1_800_000,
+            lowSalienceThreshold: 0.5,
+            rankingWeights: {
+              addressMode: 0.6,
+              perContactCoverage: 0.9,
+            },
+            addressModeWeights: {
+              overheardRoomContext: 0.25,
+            },
           },
           profileRefresh: {
             enabled: false,
@@ -626,6 +639,21 @@ describe('settings', () => {
           maxWritesPerRun: 6,
           maxWritesPerChunk: 3,
           maxWritesPerContact: 2,
+          maxWritesPerSubject: 1,
+          maxLowSalienceWritesPerRun: 1,
+          maxWritesPerBackfillRun: 10,
+          maxWritesPerTimeWindow: 18,
+          timeWindowMs: 1_800_000,
+          lowSalienceThreshold: 0.5,
+          rankingWeights: {
+            ...defaults.writeCaps.rankingWeights,
+            addressMode: 0.6,
+            perContactCoverage: 0.9,
+          },
+          addressModeWeights: {
+            ...defaults.writeCaps.addressModeWeights,
+            overheardRoomContext: 0.25,
+          },
         },
         profileRefresh: {
           ...defaults.profileRefresh,

@@ -6,6 +6,7 @@ import {
 } from './orchestrator.js';
 import type { ExtractionSourceSpeaker } from './speaker-routing.js';
 import { MemoryWritePolicyError } from '../writer.js';
+import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 
 function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): ExtractionRunOptions {
   const recoveredEntries = [
@@ -165,6 +166,159 @@ describe('runExtractionOrchestration fail-closed errors', () => {
       cause: llmFailure,
     });
     expect(options.emitExtractionEnd).not.toHaveBeenCalled();
+  });
+});
+
+describe('runExtractionOrchestration write caps', () => {
+  it('keeps direct extraction on the legacy maxWrites cap when group caps are absent', async () => {
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-direct' },
+    });
+    const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
+    const options = buildOptions({
+      maxWrites: 2,
+      processFact,
+      emitExtractionEnd,
+      llmClient: {
+        complete: vi.fn().mockResolvedValue({
+          content: `<response>
+<fact>
+<text>User enjoys board games.</text>
+<type>semantic</type>
+<importance>0.9</importance>
+<confidence>0.95</confidence>
+</fact>
+<fact>
+<text>User enjoys chess.</text>
+<type>semantic</type>
+<importance>0.85</importance>
+<confidence>0.95</confidence>
+</fact>
+<fact>
+<text>User enjoys card games.</text>
+<type>semantic</type>
+<importance>0.8</importance>
+<confidence>0.95</confidence>
+</fact>
+</response>`,
+        }),
+      } as ExtractionRunOptions['llmClient'],
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(processFact).toHaveBeenCalledTimes(2);
+    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+      acceptedCount: 2,
+      rejectionBreakdown: expect.objectContaining({
+        write_cap: 1,
+      }),
+    }));
+    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.not.objectContaining({
+      writeCapSkips: expect.anything(),
+    }));
+  });
+
+  it('uses group write caps and emits structured skip telemetry when supplied', async () => {
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-group' },
+    });
+    const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
+    const defaults = createDefaultGroupMemorySettings();
+    const resolveSourceSpeakerContactId = vi.fn(async (speaker: ExtractionSourceSpeaker) => {
+      if (speaker.authorId === 'discord-a') return 'contact-a';
+      if (speaker.authorId === 'discord-b') return 'contact-b';
+      return undefined;
+    });
+    const options = buildOptions({
+      channelId: 'discord:kube',
+      canonicalContactId: 'contact-trigger',
+      recoveredEntries: [
+        {
+          id: 1,
+          channelId: 'discord:kube',
+          role: 'user',
+          authorId: 'discord-a',
+          authorName: 'Aster',
+          content: 'I prefer quiet launch notes.',
+          timestamp: 1,
+        },
+        {
+          id: 2,
+          channelId: 'discord:kube',
+          role: 'user',
+          authorId: 'discord-b',
+          authorName: 'Briar',
+          content: 'I prefer short summaries.',
+          timestamp: 2,
+        },
+      ] as ExtractionRunOptions['recoveredEntries'],
+      resolveSourceSpeakerContactId,
+      processFact,
+      emitExtractionEnd,
+      groupWriteCaps: {
+        ...defaults.writeCaps,
+        maxWritesPerRun: 3,
+        maxWritesPerChunk: 3,
+        maxWritesPerContact: 1,
+        maxWritesPerSubject: 3,
+        maxLowSalienceWritesPerRun: 3,
+      },
+      llmClient: {
+        complete: vi.fn().mockResolvedValue({
+          content: `<response>
+<fact>
+<text>Aster prefers quiet launch notes.</text>
+<type>semantic</type>
+<importance>0.9</importance>
+<confidence>0.95</confidence>
+<source_message_ids>1</source_message_ids>
+<source_speaker_name>Aster</source_speaker_name>
+</fact>
+<fact>
+<text>Aster cares about release-plan wording.</text>
+<type>semantic</type>
+<importance>0.89</importance>
+<confidence>0.95</confidence>
+<source_message_ids>1</source_message_ids>
+<source_speaker_name>Aster</source_speaker_name>
+</fact>
+<fact>
+<text>Briar prefers short summaries.</text>
+<type>semantic</type>
+<importance>0.8</importance>
+<confidence>0.95</confidence>
+<source_message_ids>2</source_message_ids>
+<source_speaker_name>Briar</source_speaker_name>
+</fact>
+</response>`,
+        }),
+      } as ExtractionRunOptions['llmClient'],
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(processFact).toHaveBeenCalledTimes(2);
+    expect(processFact.mock.calls.map(call => call[2]).sort()).toEqual([
+      'contact-a',
+      'contact-b',
+    ]);
+    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+      acceptedCount: 2,
+      rejectionBreakdown: expect.objectContaining({
+        write_cap: 1,
+      }),
+      writeCapSkips: [
+        expect.objectContaining({
+          reason: 'contact_cap',
+          skippedCount: 1,
+          configuredLimit: 1,
+          affectedContactIds: ['contact-a'],
+        }),
+      ],
+    }));
   });
 });
 

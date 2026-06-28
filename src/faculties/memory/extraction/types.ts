@@ -68,6 +68,7 @@ export interface ExtractionEndTelemetry {
   routedFactCount?: number;
   ambiguousSpeakerSkippedCount?: number;
   ambiguousSpeakerSkipReasons?: Record<string, number>;
+  writeCapSkips?: GroupMemoryWriteCapSkip[];
   compositionalMode: 'legacy' | 'chunk_compose';
   chunkCount: number;
   mergedFactCount: number;
@@ -77,6 +78,25 @@ export interface ExtractionEndTelemetry {
   preLlmGateReason?: ExtractionPreLlmGateReason;
   preLlmGateSignalScore?: number;
   preLlmGateSignalCount?: number;
+}
+
+export type GroupMemoryWriteCapSkipReason =
+  | 'run_cap'
+  | 'chunk_cap'
+  | 'contact_cap'
+  | 'subject_cap'
+  | 'low_salience_cap'
+  | 'backfill_cap'
+  | 'time_window_cap';
+
+export interface GroupMemoryWriteCapSkip {
+  reason: GroupMemoryWriteCapSkipReason;
+  skippedCount: number;
+  configuredLimit: number;
+  affectedContactIds?: string[];
+  affectedSubjectContactIds?: string[];
+  affectedClasses?: string[];
+  affectedScopeRefs?: MemoryScopeRef[];
 }
 
 export interface ProfileSynthesisConfig {

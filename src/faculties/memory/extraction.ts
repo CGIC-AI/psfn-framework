@@ -648,8 +648,14 @@ export {
   GROUP_MEMORY_SALIENCE_SKIP_REASONS,
   selectGroupMemorySalienceCandidates,
 } from './extraction/group-salience.js';
+export {
+  computeGroupMemoryWriteCandidateScore,
+  selectGroupMemoryWriteCandidates,
+} from './extraction/group-write-caps.js';
 
 export type {
+  GroupMemoryWriteCapSkip,
+  GroupMemoryWriteCapSkipReason,
   MemoryExtractorConfig,
   MemoryExtractorDrainOptions,
 } from './extraction/types.js';
@@ -688,6 +694,13 @@ export type {
   GroupMemorySalienceSkipReason,
   GroupMemorySalienceTelemetry,
 } from './extraction/group-salience.js';
+export type {
+  GroupMemoryWriteCandidate,
+  GroupMemoryWriteCandidateRouting,
+  GroupMemoryWriteSelection,
+  GroupMemoryWriteSelectionOptions,
+  GroupMemoryWriteSelectionTelemetry,
+} from './extraction/group-write-caps.js';
 
 export const __test = {
   evaluateFactAcceptance,

@@ -34,6 +34,10 @@ import {
   type ExtractionSourceSpeaker,
   type FactRoutingDecision,
 } from './speaker-routing.js';
+import type { GroupMemoryWriteCapSettings } from '../../../system/config/group-memory-config.js';
+import {
+  selectGroupMemoryWriteCandidates,
+} from './group-write-caps.js';
 import {
   applyChannelImportanceCaps,
   buildExtractionSourceRef,
@@ -50,6 +54,7 @@ import type {
   ExtractionGateConfig,
   ExtractionRejectionReason,
   ExtractionTriggerReason,
+  GroupMemoryWriteCapSkip,
 } from './types.js';
 import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './types.js';
 
@@ -118,6 +123,11 @@ export interface ExtractionRunOptions {
   promptRegistry: PromptRegistryStatePort | null;
   gateConfig: ExtractionGateConfig;
   maxWrites: number;
+  groupWriteCaps?: GroupMemoryWriteCapSettings;
+  groupWriteCapContext?: {
+    backfill?: boolean;
+    recentTimeWindowWriteCount?: number;
+  };
   telemetryEnabled: boolean;
   useCompositionalExtraction: boolean;
   isAcceptingExtractions: () => boolean;
@@ -402,20 +412,51 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       noveltyCorpus.push(fact.text);
     }
 
-    const rankedCandidates = acceptedCandidates
-      .slice()
-      .sort(compareAcceptedFactCandidates);
-    const selectedCandidates = rankedCandidates.slice(0, options.maxWrites);
-    const skippedByCap = rankedCandidates.length - selectedCandidates.length;
-    if (skippedByCap > 0) {
-      rejectionBreakdown.write_cap += skippedByCap;
-      if (options.telemetryEnabled) {
-        log.debug('Skipped extracted facts due to write cap', {
+    let selectedCandidates: RoutedAcceptedFactCandidate[];
+    let writeCapSkips: GroupMemoryWriteCapSkip[] = [];
+    if (options.groupWriteCaps) {
+      const selection = selectGroupMemoryWriteCandidates({
+        candidates: acceptedCandidates,
+        settings: options.groupWriteCaps,
+        ...(options.groupWriteCapContext?.backfill !== undefined
+          ? { backfill: options.groupWriteCapContext.backfill }
+          : {}),
+        ...(options.groupWriteCapContext?.recentTimeWindowWriteCount !== undefined
+          ? {
+            recentTimeWindowWriteCount:
+              options.groupWriteCapContext.recentTimeWindowWriteCount,
+          }
+          : {}),
+      });
+      selectedCandidates = selection.selectedCandidates;
+      writeCapSkips = selection.telemetry.skips;
+      rejectionBreakdown.write_cap += selection.telemetry.skippedCount;
+      if (selection.telemetry.skippedCount > 0 && options.telemetryEnabled) {
+        log.debug('Skipped extracted facts due to group write caps', {
           channelId: options.channelId,
-          maxWrites: options.maxWrites,
-          skippedByCap,
-          acceptedBeforeCap: rankedCandidates.length,
+          skippedByCap: selection.telemetry.skippedCount,
+          acceptedBeforeCap: selection.telemetry.candidateCount,
+          selectedAfterCap: selection.telemetry.selectedCount,
+          effectiveMaxWrites: selection.telemetry.effectiveMaxWrites,
+          writeCapSkips,
         });
+      }
+    } else {
+      const rankedCandidates = acceptedCandidates
+        .slice()
+        .sort(compareAcceptedFactCandidates);
+      selectedCandidates = rankedCandidates.slice(0, options.maxWrites);
+      const skippedByCap = rankedCandidates.length - selectedCandidates.length;
+      if (skippedByCap > 0) {
+        rejectionBreakdown.write_cap += skippedByCap;
+        if (options.telemetryEnabled) {
+          log.debug('Skipped extracted facts due to write cap', {
+            channelId: options.channelId,
+            maxWrites: options.maxWrites,
+            skippedByCap,
+            acceptedBeforeCap: rankedCandidates.length,
+          });
+        }
       }
     }
 
@@ -558,6 +599,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       ...(Object.keys(ambiguousSpeakerSkipReasons).length > 0
         ? { ambiguousSpeakerSkipReasons }
         : {}),
+      ...(writeCapSkips.length > 0 ? { writeCapSkips } : {}),
       compositionalMode,
       chunkCount: entryChunks.length,
       mergedFactCount: mergedParsedFacts.length,

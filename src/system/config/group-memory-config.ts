@@ -81,7 +81,46 @@ export interface GroupMemoryWriteCapSettings {
   maxWritesPerRun: number;
   maxWritesPerChunk: number;
   maxWritesPerContact: number;
+  maxWritesPerSubject: number;
   maxLowSalienceWritesPerRun: number;
+  maxWritesPerBackfillRun: number;
+  maxWritesPerTimeWindow: number;
+  timeWindowMs: number;
+  lowSalienceThreshold: number;
+  rankingWeights: GroupMemoryWriteRankingWeights;
+  addressModeWeights: GroupMemoryWriteAddressModeWeights;
+}
+
+export interface GroupMemoryWriteRankingWeights {
+  importance: number;
+  novelty: number;
+  confidence: number;
+  addressMode: number;
+  relationshipRelevance: number;
+  emotionalIntensity: number;
+  perContactCoverage: number;
+}
+
+export interface GroupMemoryWriteAddressModeWeights {
+  directToCompanion: number;
+  mentionOfCompanion: number;
+  replyToUser: number;
+  overheardRoomContext: number;
+  systemApi: number;
+}
+
+export interface GroupMemoryWriteCapSettingsPatch {
+  maxWritesPerRun?: number;
+  maxWritesPerChunk?: number;
+  maxWritesPerContact?: number;
+  maxWritesPerSubject?: number;
+  maxLowSalienceWritesPerRun?: number;
+  maxWritesPerBackfillRun?: number;
+  maxWritesPerTimeWindow?: number;
+  timeWindowMs?: number;
+  lowSalienceThreshold?: number;
+  rankingWeights?: Partial<GroupMemoryWriteRankingWeights>;
+  addressModeWeights?: Partial<GroupMemoryWriteAddressModeWeights>;
 }
 
 export interface GroupMemoryProfileRefreshSettings {
@@ -121,7 +160,7 @@ export interface GroupMemorySettingsPatch {
   autoDetection?: Partial<GroupMemoryAutoDetectionSettings>;
   onlineExtraction?: Partial<GroupMemoryOnlineExtractionSettings>;
   salience?: GroupMemorySalienceSettingsPatch;
-  writeCaps?: Partial<GroupMemoryWriteCapSettings>;
+  writeCaps?: GroupMemoryWriteCapSettingsPatch;
   profileRefresh?: Partial<GroupMemoryProfileRefreshSettings>;
   telemetry?: Partial<GroupMemoryTelemetrySettings>;
   backfill?: Partial<GroupMemoryBackfillSettings>;
@@ -207,7 +246,30 @@ const WRITE_CAP_KEYS = new Set<string>([
   'maxWritesPerRun',
   'maxWritesPerChunk',
   'maxWritesPerContact',
+  'maxWritesPerSubject',
   'maxLowSalienceWritesPerRun',
+  'maxWritesPerBackfillRun',
+  'maxWritesPerTimeWindow',
+  'timeWindowMs',
+  'lowSalienceThreshold',
+  'rankingWeights',
+  'addressModeWeights',
+]);
+const WRITE_RANKING_WEIGHT_KEYS = new Set<string>([
+  'importance',
+  'novelty',
+  'confidence',
+  'addressMode',
+  'relationshipRelevance',
+  'emotionalIntensity',
+  'perContactCoverage',
+]);
+const WRITE_ADDRESS_MODE_WEIGHT_KEYS = new Set<string>([
+  'directToCompanion',
+  'mentionOfCompanion',
+  'replyToUser',
+  'overheardRoomContext',
+  'systemApi',
 ]);
 const PROFILE_REFRESH_KEYS = new Set<string>([
   'enabled',
@@ -279,7 +341,28 @@ export function createDefaultGroupMemorySettings(): GroupMemorySettings {
       maxWritesPerRun: 8,
       maxWritesPerChunk: 4,
       maxWritesPerContact: 2,
+      maxWritesPerSubject: 2,
       maxLowSalienceWritesPerRun: 1,
+      maxWritesPerBackfillRun: 12,
+      maxWritesPerTimeWindow: 24,
+      timeWindowMs: 60 * 60 * 1000,
+      lowSalienceThreshold: 0.55,
+      rankingWeights: {
+        importance: 1,
+        novelty: 0.7,
+        confidence: 0.7,
+        addressMode: 0.4,
+        relationshipRelevance: 0.4,
+        emotionalIntensity: 0.3,
+        perContactCoverage: 0.5,
+      },
+      addressModeWeights: {
+        directToCompanion: 1,
+        mentionOfCompanion: 0.8,
+        replyToUser: 0.7,
+        overheardRoomContext: 0.45,
+        systemApi: 0.2,
+      },
     },
     profileRefresh: {
       enabled: true,
@@ -503,9 +586,28 @@ export function mergeGroupMemorySettingsPatch(
         writeCaps.maxWritesPerChunk ?? base.writeCaps.maxWritesPerChunk,
       maxWritesPerContact:
         writeCaps.maxWritesPerContact ?? base.writeCaps.maxWritesPerContact,
+      maxWritesPerSubject:
+        writeCaps.maxWritesPerSubject ?? base.writeCaps.maxWritesPerSubject,
       maxLowSalienceWritesPerRun:
         writeCaps.maxLowSalienceWritesPerRun
         ?? base.writeCaps.maxLowSalienceWritesPerRun,
+      maxWritesPerBackfillRun:
+        writeCaps.maxWritesPerBackfillRun
+        ?? base.writeCaps.maxWritesPerBackfillRun,
+      maxWritesPerTimeWindow:
+        writeCaps.maxWritesPerTimeWindow
+        ?? base.writeCaps.maxWritesPerTimeWindow,
+      timeWindowMs: writeCaps.timeWindowMs ?? base.writeCaps.timeWindowMs,
+      lowSalienceThreshold:
+        writeCaps.lowSalienceThreshold ?? base.writeCaps.lowSalienceThreshold,
+      rankingWeights: {
+        ...base.writeCaps.rankingWeights,
+        ...(writeCaps.rankingWeights ?? {}),
+      },
+      addressModeWeights: {
+        ...base.writeCaps.addressModeWeights,
+        ...(writeCaps.addressModeWeights ?? {}),
+      },
     },
     profileRefresh: {
       enabled: profileRefresh.enabled ?? base.profileRefresh.enabled,
@@ -696,14 +798,63 @@ function normalizeSalienceLowSignalRulesPatch(
 function normalizeWriteCapsPatch(
   value: unknown,
   fieldPath: string,
-): Partial<GroupMemoryWriteCapSettings> {
+): GroupMemoryWriteCapSettingsPatch {
   const root = expectRecord(value, fieldPath);
   rejectUnknownKeys(root, WRITE_CAP_KEYS, fieldPath);
-  const patch: Partial<GroupMemoryWriteCapSettings> = {};
+  const patch: GroupMemoryWriteCapSettingsPatch = {};
   setIntegerIfPresent(patch, root, 'maxWritesPerRun', fieldPath, 0, 10_000);
   setIntegerIfPresent(patch, root, 'maxWritesPerChunk', fieldPath, 0, 10_000);
   setIntegerIfPresent(patch, root, 'maxWritesPerContact', fieldPath, 0, 10_000);
+  setIntegerIfPresent(patch, root, 'maxWritesPerSubject', fieldPath, 0, 10_000);
   setIntegerIfPresent(patch, root, 'maxLowSalienceWritesPerRun', fieldPath, 0, 10_000);
+  setIntegerIfPresent(patch, root, 'maxWritesPerBackfillRun', fieldPath, 0, 10_000);
+  setIntegerIfPresent(patch, root, 'maxWritesPerTimeWindow', fieldPath, 0, 10_000);
+  setIntegerIfPresent(patch, root, 'timeWindowMs', fieldPath, 1_000, 30 * 24 * 60 * 60 * 1000);
+  setNumberIfPresent(patch, root, 'lowSalienceThreshold', fieldPath, 0, 1);
+  if (Object.hasOwn(root, 'rankingWeights')) {
+    patch.rankingWeights = normalizeWriteRankingWeightsPatch(
+      root.rankingWeights,
+      `${fieldPath}.rankingWeights`,
+    );
+  }
+  if (Object.hasOwn(root, 'addressModeWeights')) {
+    patch.addressModeWeights = normalizeWriteAddressModeWeightsPatch(
+      root.addressModeWeights,
+      `${fieldPath}.addressModeWeights`,
+    );
+  }
+  return patch;
+}
+
+function normalizeWriteRankingWeightsPatch(
+  value: unknown,
+  fieldPath: string,
+): Partial<GroupMemoryWriteRankingWeights> {
+  const root = expectRecord(value, fieldPath);
+  rejectUnknownKeys(root, WRITE_RANKING_WEIGHT_KEYS, fieldPath);
+  const patch: Partial<GroupMemoryWriteRankingWeights> = {};
+  setNumberIfPresent(patch, root, 'importance', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'novelty', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'confidence', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'addressMode', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'relationshipRelevance', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'emotionalIntensity', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'perContactCoverage', fieldPath, 0, 10);
+  return patch;
+}
+
+function normalizeWriteAddressModeWeightsPatch(
+  value: unknown,
+  fieldPath: string,
+): Partial<GroupMemoryWriteAddressModeWeights> {
+  const root = expectRecord(value, fieldPath);
+  rejectUnknownKeys(root, WRITE_ADDRESS_MODE_WEIGHT_KEYS, fieldPath);
+  const patch: Partial<GroupMemoryWriteAddressModeWeights> = {};
+  setNumberIfPresent(patch, root, 'directToCompanion', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'mentionOfCompanion', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'replyToUser', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'overheardRoomContext', fieldPath, 0, 10);
+  setNumberIfPresent(patch, root, 'systemApi', fieldPath, 0, 10);
   return patch;
 }
 

@@ -264,6 +264,16 @@ describe('loadRuntimeChannelsConfig', () => {
                 writeCaps: {
                   maxWritesPerRun: 6,
                   maxWritesPerContact: 2,
+                  maxWritesPerSubject: 1,
+                  maxWritesPerTimeWindow: 18,
+                  timeWindowMs: 1_800_000,
+                  rankingWeights: {
+                    addressMode: 0.6,
+                    perContactCoverage: 0.9,
+                  },
+                  addressModeWeights: {
+                    overheardRoomContext: 0.25,
+                  },
                 },
               },
               'dm-channel': {
@@ -303,6 +313,16 @@ describe('loadRuntimeChannelsConfig', () => {
             writeCaps: {
               maxWritesPerRun: 6,
               maxWritesPerContact: 2,
+              maxWritesPerSubject: 1,
+              maxWritesPerTimeWindow: 18,
+              timeWindowMs: 1_800_000,
+              rankingWeights: {
+                addressMode: 0.6,
+                perContactCoverage: 0.9,
+              },
+              addressModeWeights: {
+                overheardRoomContext: 0.25,
+              },
             },
           },
           'dm-channel': {

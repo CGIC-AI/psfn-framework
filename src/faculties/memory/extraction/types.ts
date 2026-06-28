@@ -17,9 +17,15 @@ export interface MemoryExtractorDrainOptions {
 
 export type ExtractionTriggerReason =
   | 'manual'
+  | 'response_turn'
   | 'interval'
   | 'context_threshold'
   | 'interval_and_threshold'
+  | 'observed_count'
+  | 'observed_time'
+  | 'direct_mention'
+  | 'high_salience'
+  | 'backlog_lag'
   | 'pre_compaction'
   | 'crash_recovery';
 

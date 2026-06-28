@@ -2,6 +2,7 @@
 // Runs inside an isolated container. Connects to gateway via the configured RPC endpoint.
 // Run: npx tsx src/app/agent/main.ts
 
+import { join } from 'node:path';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
@@ -33,6 +34,8 @@ import { rehydratePersistedInternalState } from '../../core/self-model/internal-
 import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
 import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
+import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
+import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import { createWyomingSatelliteRoutingPort } from '../../../satellites/wyoming/host/routing.js';
 import { createSignalShutdownHandler } from '../startup/support/signal-shutdown.js';
 import { buildAgentControlPlane } from './control-plane.js';
@@ -482,6 +485,18 @@ async function main(): Promise<void> {
     sessionManager,
     pathSnapshot.companionDataDir,
   );
+  const observedGroupMemoryScheduler = new ObservedGroupMemoryScheduler({
+    channelGroupMemory: channelsConfig.discord.groupMemory,
+    sessionReader: sessionStore,
+    watermarkStore: new JsonGroupMemoryWatermarkStore(
+      join(pathSnapshot.companionDataDir, 'group-memory-watermarks.json'),
+    ),
+    memoryExtractor,
+    contactStore,
+    companionNames: [card.data.name],
+    companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],
+    ...(config.groupMemory ? { groupMemory: config.groupMemory } : {}),
+  });
 
   // ── Register gateway inbound message handlers ──
   // Handles generic voice.handleMessage / voice.stream.* with legacy discord.* aliases.
@@ -494,6 +509,7 @@ async function main(): Promise<void> {
     config,
     log,
     trackSessionActivity,
+    observedGroupMemoryScheduler,
   });
 
   await eventBus.emit('system.init', {});

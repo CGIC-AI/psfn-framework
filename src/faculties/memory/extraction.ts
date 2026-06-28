@@ -6,6 +6,7 @@ import type { SessionManager } from '../../core/session/manager.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { GroupMemoryWriteCapSettings } from '../../system/config/group-memory-config.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import {
@@ -42,7 +43,10 @@ import {
   resolveProfileConfig,
   resolveTelemetryEnabled,
 } from './extraction/config.js';
-import { runExtractionOrchestration } from './extraction/orchestrator.js';
+import {
+  runExtractionOrchestration,
+  type ExtractionRunOptions,
+} from './extraction/orchestrator.js';
 import { refreshContactProfile as runProfileRefresh } from './extraction/profile-synthesis.js';
 import { persistEmotionalStateFromExtraction } from './extraction/emotional.js';
 import { resolveMentionOnlyContactForFact } from './extraction/mention-only-contacts.js';
@@ -70,6 +74,17 @@ const log = createComponentLogger('Extraction');
 
 export interface MemoryExtractorFormationOptions {
   getFormationVAD?: () => MemoryFormationVAD | undefined;
+}
+
+export interface ObservedGroupExtractionOptions {
+  channelId: string;
+  triggerReason: Extract<
+    ExtractionTriggerReason,
+    'observed_count' | 'observed_time' | 'direct_mention' | 'high_salience' | 'backlog_lag'
+  >;
+  recoveredEntries: SessionEntry[];
+  groupWriteCaps: GroupMemoryWriteCapSettings;
+  backfill?: boolean;
 }
 
 export class MemoryExtractor {
@@ -216,6 +231,34 @@ export class MemoryExtractor {
     await this.trackExtraction(channelId, 'manual', canonicalContactId, undefined, turnId);
   }
 
+  async extractObservedGroupRange(options: ObservedGroupExtractionOptions): Promise<boolean> {
+    if (options.recoveredEntries.length === 0) return false;
+    if (!this.acceptingExtractions) {
+      log.debug('Skipping observed group extraction while extractor is draining', {
+        channelId: options.channelId,
+        triggerReason: options.triggerReason,
+      });
+      return false;
+    }
+
+    const orderedEntries = [...options.recoveredEntries]
+      .sort((left, right) => left.id - right.id);
+    await this.trackExtraction(
+      options.channelId,
+      options.triggerReason,
+      undefined,
+      orderedEntries,
+      undefined,
+      {
+        groupWriteCaps: options.groupWriteCaps,
+        groupWriteCapContext: {
+          backfill: options.backfill ?? false,
+        },
+      },
+    );
+    return true;
+  }
+
   async stop(options?: MemoryExtractorDrainOptions): Promise<boolean> {
     this.acceptingExtractions = false;
     return this.drain(options);
@@ -271,6 +314,7 @@ export class MemoryExtractor {
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
     turnId?: TurnID,
+    groupOptions?: Pick<ExtractionRunOptions, 'groupWriteCaps' | 'groupWriteCapContext'>,
   ): Promise<void> {
     const existing = this.inFlightByChannel.get(channelId);
     if (existing) {
@@ -278,7 +322,14 @@ export class MemoryExtractor {
       return existing;
     }
 
-    const promise = this.runExtraction(channelId, triggerReason, canonicalContactId, recoveredEntries, turnId);
+    const promise = this.runExtraction(
+      channelId,
+      triggerReason,
+      canonicalContactId,
+      recoveredEntries,
+      turnId,
+      groupOptions,
+    );
     this.inFlightExtractions.add(promise);
     this.inFlightByChannel.set(channelId, promise);
     void promise
@@ -305,6 +356,7 @@ export class MemoryExtractor {
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
     turnId?: TurnID,
+    groupOptions?: Pick<ExtractionRunOptions, 'groupWriteCaps' | 'groupWriteCapContext'>,
   ): Promise<void> {
     let cachedFormationVAD: MemoryFormationVAD | undefined;
     let didResolveFormationVAD = false;
@@ -347,6 +399,12 @@ export class MemoryExtractor {
         minNovelty: this.minNovelty,
       }),
       maxWrites: resolveMaxWrites(this.runtimeConfig, this.maxWrites),
+      ...(groupOptions?.groupWriteCaps
+        ? { groupWriteCaps: groupOptions.groupWriteCaps }
+        : {}),
+      ...(groupOptions?.groupWriteCapContext
+        ? { groupWriteCapContext: groupOptions.groupWriteCapContext }
+        : {}),
       telemetryEnabled: this.isTelemetryEnabled(),
       useCompositionalExtraction: this.shouldUseCompositionalExtraction(channelId),
       isAcceptingExtractions: () => this.acceptingExtractions,

@@ -2,6 +2,7 @@ import type { AgentResponse, Attachment, SubstrateMessage } from '../../shared/c
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
+import type { ObservedGroupMemoryScheduleDecision } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 
@@ -44,6 +45,10 @@ export interface GatewayMessageAuditTrail {
   append(event: string, details?: Record<string, unknown>): unknown;
 }
 
+export interface ObservedGroupMemorySchedulerPort {
+  observeMessage(message: SubstrateMessage): Promise<ObservedGroupMemoryScheduleDecision>;
+}
+
 export interface GatewayMessageLogger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -59,6 +64,7 @@ export interface GatewayMessageHandlersDeps {
   config: SubstrateConfig;
   log: GatewayMessageLogger;
   trackSessionActivity: (message: SubstrateMessage) => void;
+  observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
 }
 
 export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps): void {
@@ -71,6 +77,7 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
     config,
     log,
     trackSessionActivity,
+    observedGroupMemoryScheduler,
   } = deps;
 
   const inFlightHandleMessages = new Map<string, Promise<AgentResponse>>();
@@ -403,6 +410,48 @@ export function registerGatewayMessageHandlers(deps: GatewayMessageHandlersDeps)
           messageId: message.id,
           authorId: message.authorId,
         });
+        if (observedGroupMemoryScheduler) {
+          try {
+            const decision = await observedGroupMemoryScheduler.observeMessage(message);
+            if (decision.status === 'scheduled') {
+              safeguardAuditTrail.append('memory.group_observed.scheduled', {
+                channelId: decision.channelId,
+                messageId: message.id,
+                triggerReason: decision.triggerReason,
+                spanStartMessageId: decision.spanStartMessageId,
+                spanEndMessageId: decision.spanEndMessageId,
+                newEntryCount: decision.newEntryCount,
+                watermarkLagMessageIds: decision.watermarkLagMessageIds,
+                hasDeferredBacklog: decision.hasDeferredBacklog,
+              });
+            } else if (decision.reason === 'extraction_failed') {
+              log.warn('Observed group memory extraction failed', {
+                channelId: decision.channelId,
+                messageId: message.id,
+                watermarkLagMessageIds: decision.watermarkLagMessageIds,
+                error: decision.error,
+              });
+              safeguardAuditTrail.append('memory.group_observed.error', {
+                channelId: decision.channelId,
+                messageId: message.id,
+                reason: decision.reason,
+                error: decision.error,
+              });
+            }
+          } catch (schedulerError) {
+            const errorText = toErrorMessage(schedulerError);
+            log.warn('Observed group memory scheduling failed', {
+              channelId: message.channelId,
+              messageId: message.id,
+              error: errorText,
+            });
+            safeguardAuditTrail.append('memory.group_observed.error', {
+              channelId: message.channelId,
+              messageId: message.id,
+              error: errorText,
+            });
+          }
+        }
       } catch (err) {
         const errorText = toErrorMessage(err);
         log.error('Error handling message', {

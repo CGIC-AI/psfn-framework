@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
+import {
+  registerGatewayMessageHandlers,
+  type ObservedGroupMemorySchedulerPort,
+} from './gateway-message-handlers.js';
 import { createWyomingSatelliteRoutingPort } from '../../../satellites/wyoming/host/routing.js';
 
 function makeMessage(overrides?: Record<string, unknown>): SubstrateMessage {
@@ -70,6 +73,7 @@ function createHarness(overrides?: {
   handleMessage?: (message: SubstrateMessage) => Promise<AgentResponse>;
   observeMessage?: (message: SubstrateMessage) => Promise<void>;
   waitForIdle?: () => Promise<void>;
+  observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
 }) {
   let onHandleMessage:
     | ((message: SubstrateMessage) => Promise<AgentResponse>)
@@ -130,6 +134,9 @@ function createHarness(overrides?: {
     config,
     log,
     trackSessionActivity,
+    ...(overrides?.observedGroupMemoryScheduler
+      ? { observedGroupMemoryScheduler: overrides.observedGroupMemoryScheduler }
+      : {}),
   });
 
   if (!onHandleMessage || !onDiscordMessage) {
@@ -143,6 +150,7 @@ function createHarness(overrides?: {
     safeguardAuditTrail,
     log,
     trackSessionActivity,
+    observedGroupMemoryScheduler: overrides?.observedGroupMemoryScheduler,
     onHandleMessage,
     onDiscordMessage,
   };
@@ -333,6 +341,94 @@ describe('registerGatewayMessageHandlers', () => {
       messageId: 'discord-observe-1',
       authorId: 'user-1',
     });
+  });
+
+  it('can schedule observed group memory from passive discord observations without replying', async () => {
+    const observedGroupMemoryScheduler: ObservedGroupMemorySchedulerPort = {
+      observeMessage: vi.fn(async () => ({
+        status: 'scheduled',
+        channelId: 'discord:general',
+        triggerReason: 'observed_count',
+        spanStartMessageId: 10,
+        spanEndMessageId: 60,
+        newEntryCount: 50,
+        watermarkLagMessageIds: 50,
+        hasDeferredBacklog: false,
+      })),
+    };
+    const harness = createHarness({ observedGroupMemoryScheduler });
+    const message = makeMessage({
+      id: 'discord-observe-memory-1',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      timestamp: '2026-03-02T02:00:00.000Z',
+      routing: {
+        source: 'discord',
+        responseMode: 'observe',
+      },
+    });
+
+    await harness.onDiscordMessage(message);
+
+    expect(observedGroupMemoryScheduler.observeMessage).toHaveBeenCalledWith(message);
+    expect(harness.agentLoop.observeMessage).toHaveBeenCalledWith(message);
+    expect(harness.agentLoop.handleMessage).not.toHaveBeenCalled();
+    expect(harness.gateway.discordSend).not.toHaveBeenCalled();
+    expect(harness.gateway.discordSendMedia).not.toHaveBeenCalled();
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith(
+      'memory.group_observed.scheduled',
+      {
+        channelId: 'discord:general',
+        messageId: 'discord-observe-memory-1',
+        triggerReason: 'observed_count',
+        spanStartMessageId: 10,
+        spanEndMessageId: 60,
+        newEntryCount: 50,
+        watermarkLagMessageIds: 50,
+        hasDeferredBacklog: false,
+      },
+    );
+  });
+
+  it('does not schedule duplicate observed group memory jobs for duplicate passive notifications', async () => {
+    const deferredSchedule = createDeferred<Awaited<ReturnType<ObservedGroupMemorySchedulerPort['observeMessage']>>>();
+    const observedGroupMemoryScheduler: ObservedGroupMemorySchedulerPort = {
+      observeMessage: vi.fn(async () => deferredSchedule.promise),
+    };
+    const harness = createHarness({ observedGroupMemoryScheduler });
+    const message = makeMessage({
+      id: 'discord-observe-memory-dup',
+      channelId: 'discord:general',
+      channelType: 'discord',
+      timestamp: '2026-03-02T02:00:00.000Z',
+      routing: {
+        source: 'discord',
+        responseMode: 'observe',
+      },
+    });
+
+    const firstReceipt = harness.onDiscordMessage(message);
+    await vi.waitFor(() => {
+      expect(observedGroupMemoryScheduler.observeMessage).toHaveBeenCalledTimes(1);
+    });
+    await harness.onDiscordMessage(message);
+
+    expect(observedGroupMemoryScheduler.observeMessage).toHaveBeenCalledTimes(1);
+    expect(harness.agentLoop.observeMessage).toHaveBeenCalledTimes(1);
+    expect(harness.safeguardAuditTrail.append).toHaveBeenCalledWith('gateway.message.duplicate', {
+      route: 'discord',
+      channelId: 'discord:general',
+      messageId: 'discord-observe-memory-dup',
+      disposition: 'in_flight',
+    });
+
+    deferredSchedule.resolve({
+      status: 'skipped',
+      channelId: 'discord:general',
+      reason: 'threshold_not_met',
+      watermarkLagMessageIds: 12,
+    });
+    await firstReceipt;
   });
 
   it('sends generated media attachments back through the gateway discord egress', async () => {

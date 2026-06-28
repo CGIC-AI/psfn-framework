@@ -37,6 +37,14 @@ export type MemorySourceType =
   | 'shard'
   | 'tool_write'
   | 'autonomous_action';
+export const GROUP_MEMORY_ADDRESS_MODES = [
+  'direct_to_companion',
+  'mention_of_companion',
+  'reply_to_user',
+  'overheard_room_context',
+  'system_api',
+] as const;
+export type GroupMemoryAddressMode = typeof GROUP_MEMORY_ADDRESS_MODES[number];
 export type MemoryScopeKind =
   | 'conversation'
   | 'contact'
@@ -66,6 +74,18 @@ export interface MemoryProvenance {
   shardId?: string;
   actor?: 'companion' | 'operator' | 'system' | 'shard' | 'repl';
   reason?: string;
+  triggerContactId?: string;
+  routedContactId?: string;
+  sourceContactId?: string;
+  sourceAuthorId?: string;
+  sourceSpeakerName?: string;
+  subjectContactId?: string;
+  subjectName?: string;
+  addressMode?: GroupMemoryAddressMode;
+  routingReason?: string;
+  sourceMessageIds?: number[];
+  sourceSpanStartMessageId?: number;
+  sourceSpanEndMessageId?: number;
 }
 export interface MemoryScopeRef {
   kind: MemoryScopeKind;
@@ -202,6 +222,17 @@ export interface ExtractedFact {
   retentionClass?: MemoryRetentionClass;
   sensitivity?: SensitivityLevel;
   consentFlags?: ConsentFlags;
+  attribution?: ExtractedFactAttribution;
+}
+
+export interface ExtractedFactAttribution {
+  sourceMessageIds?: number[];
+  sourceSpanStartMessageId?: number;
+  sourceSpanEndMessageId?: number;
+  sourceSpeakerName?: string;
+  subjectName?: string;
+  subjectContactId?: string;
+  addressMode?: GroupMemoryAddressMode;
 }
 
 export interface MemoryDecayProfile {
@@ -308,6 +339,23 @@ function normalizeOptionalString(value: unknown): string | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeOptionalPositiveInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0
+    ? value
+    : undefined;
+}
+
+function normalizePositiveIntegerArray(value: unknown): number[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value)]
+    .filter((item): item is number => (
+      typeof item === 'number'
+      && Number.isInteger(item)
+      && item > 0
+    ))
+    .sort((left, right) => left - right);
+}
+
 export function normalizeMemorySourceType(
   value: unknown,
   fallback: MemorySourceType = 'unknown',
@@ -348,7 +396,31 @@ export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | un
     ...(normalizeOptionalString(record.mode) ? { mode: normalizeOptionalString(record.mode) } : {}),
     ...(normalizeOptionalString(record.shardId) ? { shardId: normalizeOptionalString(record.shardId) } : {}),
     ...(normalizeOptionalString(record.reason) ? { reason: normalizeOptionalString(record.reason) } : {}),
+    ...(normalizeOptionalString(record.triggerContactId) ? { triggerContactId: normalizeOptionalString(record.triggerContactId) } : {}),
+    ...(normalizeOptionalString(record.routedContactId) ? { routedContactId: normalizeOptionalString(record.routedContactId) } : {}),
+    ...(normalizeOptionalString(record.sourceContactId) ? { sourceContactId: normalizeOptionalString(record.sourceContactId) } : {}),
+    ...(normalizeOptionalString(record.sourceAuthorId) ? { sourceAuthorId: normalizeOptionalString(record.sourceAuthorId) } : {}),
+    ...(normalizeOptionalString(record.sourceSpeakerName) ? { sourceSpeakerName: normalizeOptionalString(record.sourceSpeakerName) } : {}),
+    ...(normalizeOptionalString(record.subjectContactId) ? { subjectContactId: normalizeOptionalString(record.subjectContactId) } : {}),
+    ...(normalizeOptionalString(record.subjectName) ? { subjectName: normalizeOptionalString(record.subjectName) } : {}),
+    ...(normalizeOptionalString(record.routingReason) ? { routingReason: normalizeOptionalString(record.routingReason) } : {}),
   };
+  const addressMode = normalizeOptionalString(record.addressMode);
+  if (addressMode && GROUP_MEMORY_ADDRESS_MODES.includes(addressMode as GroupMemoryAddressMode)) {
+    provenance.addressMode = addressMode as GroupMemoryAddressMode;
+  }
+  const sourceMessageIds = normalizePositiveIntegerArray(record.sourceMessageIds);
+  if (sourceMessageIds.length > 0) {
+    provenance.sourceMessageIds = sourceMessageIds;
+  }
+  const sourceSpanStartMessageId = normalizeOptionalPositiveInteger(record.sourceSpanStartMessageId);
+  if (sourceSpanStartMessageId !== undefined) {
+    provenance.sourceSpanStartMessageId = sourceSpanStartMessageId;
+  }
+  const sourceSpanEndMessageId = normalizeOptionalPositiveInteger(record.sourceSpanEndMessageId);
+  if (sourceSpanEndMessageId !== undefined) {
+    provenance.sourceSpanEndMessageId = sourceSpanEndMessageId;
+  }
   const actor = normalizeOptionalString(record.actor);
   if (actor && ['companion', 'operator', 'system', 'shard', 'repl'].includes(actor)) {
     provenance.actor = actor as MemoryProvenance['actor'];

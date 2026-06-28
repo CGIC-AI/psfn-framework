@@ -15,7 +15,10 @@ describe('chunk-compose extraction transcript filtering', () => {
     ] as const;
 
     expect(entries.filter(isExtractionTranscriptEntry).map(entry => entry.id)).toEqual([3, 4]);
-    expect(formatExtractionTranscript(entries)).toBe(['V: User said a real thing', 'Purr: Assistant replied'].join('\n'));
+    expect(formatExtractionTranscript(entries)).toBe([
+      '[message_id:3] V: User said a real thing',
+      '[message_id:4] Purr: Assistant replied',
+    ].join('\n'));
   });
 
   it('chunks only extraction-eligible entries after filtering', () => {

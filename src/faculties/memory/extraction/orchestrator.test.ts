@@ -198,10 +198,10 @@ describe('runExtractionOrchestration naming fidelity', () => {
     await runExtractionOrchestration(options);
 
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: expect.stringContaining('Alex: I really enjoy board games.'),
+      systemPrompt: expect.stringContaining('[message_id:1] Alex: I really enjoy board games.'),
     }), 'extraction');
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: expect.stringContaining('Lyra: I love hearing that.'),
+      systemPrompt: expect.stringContaining('[message_id:2] Lyra: I love hearing that.'),
     }), 'extraction');
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining('Human participant name: Alex'),
@@ -403,10 +403,10 @@ describe('runExtractionOrchestration naming fidelity', () => {
     await runExtractionOrchestration(options);
 
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: expect.stringContaining('user: Please keep it simple.'),
+      systemPrompt: expect.stringContaining('[message_id:1] user: Please keep it simple.'),
     }), 'extraction');
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
-      systemPrompt: expect.stringContaining('assistant: I will keep it simple.'),
+      systemPrompt: expect.stringContaining('[message_id:2] assistant: I will keep it simple.'),
     }), 'extraction');
   });
 });
@@ -448,6 +448,10 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
           timestamp: 2,
         },
       ] as ExtractionRunOptions['recoveredEntries'],
+      sessionManager: {
+        getRecentMessages: vi.fn(),
+        characterName: 'Carlini',
+      } as ExtractionRunOptions['sessionManager'],
       llmClient: {
         complete: vi.fn().mockResolvedValue({
           content: `<response>
@@ -505,6 +509,86 @@ describe('runExtractionOrchestration group-room speaker routing', () => {
         ambiguous_speaker: 0,
       }),
     }));
+  });
+
+  it('passes structured group attribution metadata to fact processing', async () => {
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-structured' },
+    });
+    const resolveStructuredSourceContactId = vi.fn(async (speaker: ExtractionSourceSpeaker) => {
+      if (speaker.authorId === 'discord-mrdragonfox') return 'contact-mrdragonfox';
+      if (speaker.authorId === 'discord-vega') return 'contact-vega';
+      return undefined;
+    });
+    const options = buildOptions({
+      channelId: 'discord:kube',
+      canonicalContactId: 'contact-vega',
+      recoveredEntries: [
+        {
+          id: 1,
+          channelId: 'discord:kube',
+          role: 'user',
+          authorId: 'discord-mrdragonfox',
+          authorName: 'MrDragonFox',
+          content: 'Carlini, Vega is helping run moderation tonight.',
+          timestamp: 1,
+        },
+        {
+          id: 2,
+          channelId: 'discord:kube',
+          role: 'user',
+          authorId: 'discord-vega',
+          authorName: 'Vega',
+          content: 'I can do it after dinner.',
+          timestamp: 2,
+        },
+      ] as ExtractionRunOptions['recoveredEntries'],
+      sessionManager: {
+        getRecentMessages: vi.fn(),
+        characterName: 'Carlini',
+      } as ExtractionRunOptions['sessionManager'],
+      llmClient: {
+        complete: vi.fn().mockResolvedValue({
+          content: `<response>
+<fact>
+<text>Vega is helping run moderation tonight.</text>
+<type>semantic</type>
+<importance>0.92</importance>
+<confidence>0.95</confidence>
+<source_message_ids>1</source_message_ids>
+<source_speaker_name>MrDragonFox</source_speaker_name>
+<subject_name>Vega</subject_name>
+</fact>
+</response>`,
+        }),
+      } as ExtractionRunOptions['llmClient'],
+      processFact,
+      resolveSourceSpeakerContactId: resolveStructuredSourceContactId,
+      resolveCoveredUpToMessageId: vi.fn().mockReturnValue(2),
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(processFact).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Vega is helping run moderation tonight.' }),
+      expect.any(String),
+      'contact-vega',
+      expect.objectContaining({
+        triggerContactId: 'contact-vega',
+        routedContactId: 'contact-vega',
+        sourceContactId: 'contact-mrdragonfox',
+        sourceAuthorId: 'discord-mrdragonfox',
+        sourceSpeakerName: 'MrDragonFox',
+        subjectContactId: 'contact-vega',
+        subjectName: 'Vega',
+        addressMode: 'direct_to_companion',
+        sourceMessageIds: [1],
+        sourceSpanStartMessageId: 1,
+        sourceSpanEndMessageId: 1,
+        routingReason: 'structured_subject_metadata',
+      }),
+    );
   });
 
   it('skips ambiguous mixed-speaker facts instead of defaulting them to the trigger contact', async () => {

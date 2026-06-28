@@ -1,11 +1,18 @@
 import type { SessionEntry } from '../../../core/session/types.js';
-import type { ExtractedFact } from '../types.js';
+import type {
+  ExtractedFact,
+  ExtractedFactAttribution,
+  GroupMemoryAddressMode,
+} from '../types.js';
+import { isRecord } from '../../../shared/utils/types.js';
 import { isExtractionTranscriptEntry } from './chunk-compose.js';
 
 type ExtractionFactRoutingReason =
   | 'single_speaker_transcript'
   | 'speaker_name_prefix'
-  | 'transcript_content_match';
+  | 'transcript_content_match'
+  | 'structured_source_metadata'
+  | 'structured_subject_metadata';
 
 export interface ExtractionSourceSpeaker {
   name: string;
@@ -15,7 +22,15 @@ export interface ExtractionSourceSpeaker {
 export interface ExtractionFactRouting {
   triggerContactId?: string;
   routedContactId?: string;
+  sourceContactId?: string;
+  sourceAuthorId?: string;
   sourceSpeakerName?: string;
+  subjectContactId?: string;
+  subjectName?: string;
+  addressMode?: GroupMemoryAddressMode;
+  sourceMessageIds?: number[];
+  sourceSpanStartMessageId?: number;
+  sourceSpanEndMessageId?: number;
   routingReason: ExtractionFactRoutingReason;
 }
 
@@ -31,18 +46,38 @@ interface TranscriptSpeaker {
 export interface SpeakerRoutingContext {
   speakers: TranscriptSpeaker[];
   mixedHumanSpeakers: boolean;
+  entries: SessionEntry[];
+}
+
+export interface FactRoutingOptions {
+  companionNames?: readonly string[];
+  companionAuthorIds?: readonly string[];
 }
 
 export type FactRoutingDecision =
   | {
     status: 'route';
     contactId?: string;
+    sourceContactId?: string;
+    sourceAuthorId?: string;
     sourceSpeakerName?: string;
+    subjectContactId?: string;
+    subjectName?: string;
+    addressMode?: GroupMemoryAddressMode;
+    sourceMessageIds?: number[];
+    sourceSpanStartMessageId?: number;
+    sourceSpanEndMessageId?: number;
     reason: ExtractionFactRoutingReason;
   }
   | {
     status: 'skip';
-    reason: 'ambiguous_group_speaker' | 'unresolved_speaker_contact';
+    reason:
+      | 'ambiguous_group_speaker'
+      | 'unresolved_speaker_contact'
+      | 'missing_source_message_ids'
+      | 'ambiguous_source_message_ids'
+      | 'conflicting_source_attribution'
+      | 'unresolved_subject_contact';
     sourceSpeakerName?: string;
   };
 
@@ -64,6 +99,7 @@ export async function buildSpeakerRoutingContext(
   return {
     speakers,
     mixedHumanSpeakers: speakers.length > 1,
+    entries: entries.filter(isExtractionTranscriptEntry),
   };
 }
 
@@ -71,7 +107,15 @@ export function resolveFactRouting(
   fact: ExtractedFact,
   context: SpeakerRoutingContext,
   triggerContactId: string | undefined,
+  options: FactRoutingOptions = {},
 ): FactRoutingDecision {
+  const structuredRouting = resolveStructuredFactRouting(
+    fact,
+    context,
+    options,
+  );
+  if (structuredRouting) return structuredRouting;
+
   if (!context.mixedHumanSpeakers) {
     const speakerName = context.speakers.at(0)?.name;
     return {
@@ -102,6 +146,209 @@ export function resolveFactRouting(
   };
 }
 
+function resolveStructuredFactRouting(
+  fact: ExtractedFact,
+  context: SpeakerRoutingContext,
+  options: FactRoutingOptions,
+): FactRoutingDecision | undefined {
+  const attribution = fact.attribution;
+  if (!attribution) return undefined;
+
+  const sourceEntries = resolveAttributionSourceEntries(attribution, context.entries);
+  if (sourceEntries === null) return undefined;
+  if (sourceEntries.length === 0) {
+    return { status: 'skip', reason: 'missing_source_message_ids' };
+  }
+
+  const sourceSpeakers = resolveSourceSpeakers(sourceEntries, context.speakers);
+  if (sourceSpeakers.length !== 1) {
+    return { status: 'skip', reason: 'ambiguous_source_message_ids' };
+  }
+
+  const sourceSpeaker = sourceSpeakers[0];
+  if (
+    attribution.sourceSpeakerName
+    && normalizeSpeakerPhrase(attribution.sourceSpeakerName) !== sourceSpeaker.normalizedName
+  ) {
+    return {
+      status: 'skip',
+      reason: 'conflicting_source_attribution',
+      sourceSpeakerName: sourceSpeaker.name,
+    };
+  }
+  if (!sourceSpeaker.contactId) {
+    return {
+      status: 'skip',
+      reason: 'unresolved_speaker_contact',
+      sourceSpeakerName: sourceSpeaker.name,
+    };
+  }
+
+  const subject = resolveSubjectSpeaker(attribution, context.speakers);
+  if (attribution.subjectName && !subject && !attribution.subjectContactId) {
+    return {
+      status: 'skip',
+      reason: 'unresolved_subject_contact',
+      sourceSpeakerName: sourceSpeaker.name,
+    };
+  }
+
+  const subjectContactId = attribution.subjectContactId ?? subject?.contactId;
+  const routedContactId = subjectContactId ?? sourceSpeaker.contactId;
+
+  const sourceMessageIds = sourceEntries
+    .map(entry => entry.id)
+    .sort((left, right) => left - right);
+  const sourceSpanStartMessageId =
+    attribution.sourceSpanStartMessageId ?? sourceMessageIds[0];
+  const sourceSpanEndMessageId =
+    attribution.sourceSpanEndMessageId ?? sourceMessageIds.at(-1);
+
+  return {
+    status: 'route',
+    contactId: routedContactId,
+    sourceContactId: sourceSpeaker.contactId,
+    ...(sourceSpeaker.authorId ? { sourceAuthorId: sourceSpeaker.authorId } : {}),
+    sourceSpeakerName: sourceSpeaker.name,
+    ...(subjectContactId ? { subjectContactId } : {}),
+    ...(attribution.subjectName ?? subject?.name
+      ? { subjectName: attribution.subjectName ?? subject?.name }
+      : {}),
+    addressMode: attribution.addressMode ?? inferAddressMode(sourceEntries, options),
+    sourceMessageIds,
+    ...(sourceSpanStartMessageId ? { sourceSpanStartMessageId } : {}),
+    ...(sourceSpanEndMessageId ? { sourceSpanEndMessageId } : {}),
+    reason: subjectContactId && subjectContactId !== sourceSpeaker.contactId
+      ? 'structured_subject_metadata'
+      : 'structured_source_metadata',
+  };
+}
+
+function resolveAttributionSourceEntries(
+  attribution: ExtractedFactAttribution,
+  entries: readonly SessionEntry[],
+): SessionEntry[] | null {
+  const byId = new Map(entries.map(entry => [entry.id, entry]));
+  if (attribution.sourceMessageIds && attribution.sourceMessageIds.length > 0) {
+    return attribution.sourceMessageIds
+      .map(id => byId.get(id))
+      .filter((entry): entry is SessionEntry => Boolean(entry));
+  }
+  const spanStart = attribution.sourceSpanStartMessageId;
+  const spanEnd = attribution.sourceSpanEndMessageId;
+  if (spanStart !== undefined && spanEnd !== undefined) {
+    return entries.filter(entry => (
+      entry.id >= spanStart
+      && entry.id <= spanEnd
+    ));
+  }
+  return null;
+}
+
+function resolveSourceSpeakers(
+  sourceEntries: readonly SessionEntry[],
+  speakers: readonly TranscriptSpeaker[],
+): TranscriptSpeaker[] {
+  const speakersByKey = new Map(speakers.map(speaker => [speaker.key, speaker]));
+  const sourceKeys = new Set<string>();
+  for (const entry of sourceEntries) {
+    if (entry.role !== 'user') continue;
+    const key = speakerKeyForEntry(entry);
+    if (key) sourceKeys.add(key);
+  }
+  return [...sourceKeys]
+    .map(key => speakersByKey.get(key))
+    .filter((speaker): speaker is TranscriptSpeaker => Boolean(speaker));
+}
+
+function resolveSubjectSpeaker(
+  attribution: ExtractedFactAttribution,
+  speakers: readonly TranscriptSpeaker[],
+): TranscriptSpeaker | undefined {
+  if (attribution.subjectContactId) {
+    return speakers.find(speaker => speaker.contactId === attribution.subjectContactId);
+  }
+  if (!attribution.subjectName) return undefined;
+  const normalizedSubject = normalizeSpeakerPhrase(attribution.subjectName);
+  if (!normalizedSubject) return undefined;
+  const matches = speakers.filter(speaker => speaker.normalizedName === normalizedSubject);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function inferAddressMode(
+  sourceEntries: readonly SessionEntry[],
+  options: FactRoutingOptions,
+): GroupMemoryAddressMode {
+  if (sourceEntries.some(entry => entry.role === 'system' || entry.role === 'tool')) {
+    return 'system_api';
+  }
+  if (sourceEntries.some(entry => isReplyToUser(entry))) {
+    return 'reply_to_user';
+  }
+  if (sourceEntries.some(entry => isDirectCompanionAddress(entry, options))) {
+    return 'direct_to_companion';
+  }
+  if (sourceEntries.some(entry => containsCompanionMention(entry, options))) {
+    return 'mention_of_companion';
+  }
+  return 'overheard_room_context';
+}
+
+function isReplyToUser(entry: SessionEntry): boolean {
+  const metadata = parseEntryMetadata(entry);
+  return Boolean(
+    normalizeOptionalMetadataString(metadata?.replyToAuthorId)
+    || normalizeOptionalMetadataString(metadata?.referencedMessageAuthorId)
+    || normalizeOptionalMetadataString(metadata?.replyToMessageId)
+    || normalizeOptionalMetadataString(metadata?.referencedMessageId),
+  );
+}
+
+function isDirectCompanionAddress(entry: SessionEntry, options: FactRoutingOptions): boolean {
+  const content = entry.content.trim();
+  if (options.companionAuthorIds?.some(authorId => content.startsWith(`<@${authorId}>`))) {
+    return true;
+  }
+  const normalized = normalizeSpeakerPhrase(content);
+  return buildCompanionAliases(options.companionNames).some(alias => (
+    normalized === alias || normalized.startsWith(`${alias} `)
+  ));
+}
+
+function containsCompanionMention(entry: SessionEntry, options: FactRoutingOptions): boolean {
+  const content = entry.content;
+  if (options.companionAuthorIds?.some(authorId => content.includes(`<@${authorId}>`))) {
+    return true;
+  }
+  const normalized = normalizeSpeakerPhrase(content);
+  return buildCompanionAliases(options.companionNames)
+    .some(alias => hasSpeakerWord(normalized, alias));
+}
+
+function buildCompanionAliases(names: readonly string[] | undefined): string[] {
+  return [...new Set((names ?? [])
+    .map(name => normalizeSpeakerPhrase(name))
+    .filter(Boolean))];
+}
+
+function hasSpeakerWord(normalized: string, word: string): boolean {
+  return new RegExp(`(^|\\s)${escapeRegExp(word)}(\\s|$)`).test(normalized);
+}
+
+function parseEntryMetadata(entry: SessionEntry): Record<string, unknown> | undefined {
+  if (!entry.metadata) return undefined;
+  try {
+    const parsed = JSON.parse(entry.metadata) as unknown;
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeOptionalMetadataString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
 function collectTranscriptSpeakers(entries: readonly SessionEntry[]): TranscriptSpeaker[] {
   const speakersByKey = new Map<string, TranscriptSpeaker>();
 
@@ -110,7 +357,8 @@ function collectTranscriptSpeakers(entries: readonly SessionEntry[]): Transcript
     const authorId = entry.authorId?.trim();
     const name = entry.authorName?.trim() || authorId || 'user';
     const normalizedName = normalizeSpeakerPhrase(name);
-    const key = authorId ? `author:${authorId}` : `name:${normalizedName}`;
+    const key = speakerKeyForEntry(entry);
+    if (!key) continue;
     const existing = speakersByKey.get(key);
     if (existing) {
       existing.entries.push(entry);
@@ -127,6 +375,13 @@ function collectTranscriptSpeakers(entries: readonly SessionEntry[]): Transcript
   }
 
   return [...speakersByKey.values()];
+}
+
+function speakerKeyForEntry(entry: SessionEntry): string | undefined {
+  const authorId = entry.authorId?.trim();
+  if (authorId) return `author:${authorId}`;
+  const normalizedName = normalizeSpeakerPhrase(entry.authorName?.trim() || 'user');
+  return normalizedName ? `name:${normalizedName}` : undefined;
 }
 
 function resolveClearSourceSpeaker(
@@ -368,4 +623,8 @@ function normalizeSpeakerPhrase(value: string): string {
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

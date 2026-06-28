@@ -358,7 +358,19 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         continue;
       }
 
-      const routing = resolveFactRouting(fact, speakerRouting, options.canonicalContactId);
+      const routing = resolveFactRouting(
+        fact,
+        speakerRouting,
+        options.canonicalContactId,
+        {
+          companionNames: [
+            ...new Set([
+              participantNames.companionName,
+              options.sessionManager.characterName,
+            ].filter((name): name is string => Boolean(name))),
+          ],
+        },
+      );
       if (routing.status === 'skip') {
         ambiguousSpeakerSkippedCount++;
         rejectionBreakdown.ambiguous_speaker++;
@@ -421,7 +433,19 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       const routingTelemetry: ExtractionFactRouting = {
         ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
         ...(routing.contactId ? { routedContactId: routing.contactId } : {}),
+        ...(routing.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
+        ...(routing.sourceAuthorId ? { sourceAuthorId: routing.sourceAuthorId } : {}),
         ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
+        ...(routing.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
+        ...(routing.subjectName ? { subjectName: routing.subjectName } : {}),
+        ...(routing.addressMode ? { addressMode: routing.addressMode } : {}),
+        ...(routing.sourceMessageIds ? { sourceMessageIds: routing.sourceMessageIds } : {}),
+        ...(routing.sourceSpanStartMessageId
+          ? { sourceSpanStartMessageId: routing.sourceSpanStartMessageId }
+          : {}),
+        ...(routing.sourceSpanEndMessageId
+          ? { sourceSpanEndMessageId: routing.sourceSpanEndMessageId }
+          : {}),
         routingReason: routing.reason,
       };
 

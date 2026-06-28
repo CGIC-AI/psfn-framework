@@ -437,7 +437,15 @@ export class MemoryExtractor {
         turnId,
         triggerContactId: routing.triggerContactId,
         routedContactId: routing.routedContactId,
+        sourceContactId: routing.sourceContactId,
+        sourceAuthorId: routing.sourceAuthorId,
         sourceSpeakerName: routing.sourceSpeakerName,
+        subjectContactId: routing.subjectContactId,
+        subjectName: routing.subjectName,
+        addressMode: routing.addressMode,
+        sourceMessageIds: routing.sourceMessageIds,
+        sourceSpanStartMessageId: routing.sourceSpanStartMessageId,
+        sourceSpanEndMessageId: routing.sourceSpanEndMessageId,
         routingReason: routing.routingReason,
       });
     }
@@ -457,6 +465,22 @@ export class MemoryExtractor {
           channelId,
           ...(turnId ? { turnId } : {}),
           ...(triggerReason ? { reason: triggerReason } : {}),
+          ...(routing?.triggerContactId ? { triggerContactId: routing.triggerContactId } : {}),
+          ...(routing?.routedContactId ? { routedContactId: routing.routedContactId } : {}),
+          ...(routing?.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
+          ...(routing?.sourceAuthorId ? { sourceAuthorId: routing.sourceAuthorId } : {}),
+          ...(routing?.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
+          ...(routing?.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
+          ...(routing?.subjectName ? { subjectName: routing.subjectName } : {}),
+          ...(routing?.addressMode ? { addressMode: routing.addressMode } : {}),
+          ...(routing?.routingReason ? { routingReason: routing.routingReason } : {}),
+          ...(routing?.sourceMessageIds ? { sourceMessageIds: routing.sourceMessageIds } : {}),
+          ...(routing?.sourceSpanStartMessageId
+            ? { sourceSpanStartMessageId: routing.sourceSpanStartMessageId }
+            : {}),
+          ...(routing?.sourceSpanEndMessageId
+            ? { sourceSpanEndMessageId: routing.sourceSpanEndMessageId }
+            : {}),
         }
         : undefined,
       sensitivity: fact.sensitivity,

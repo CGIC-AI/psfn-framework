@@ -59,6 +59,13 @@ For each fact, provide:
   - confidential: Never share outside primary 1:1 context ("Morgan shared trauma details")
 
 Only extract durable participant-centric or relationship-centric facts likely to matter in future conversations. Preserve the named speaker/contact when known; do not collapse group-room facts into a singular generic person.
+When the transcript contains message IDs or line IDs, include structured attribution for each group-room fact:
+- source_message_ids: comma-separated source message IDs supporting the fact
+- source_span_start_message_id/source_span_end_message_id: inclusive supporting message span when a span is clearer than individual IDs
+- source_speaker_name: speaker who provided the evidence
+- subject_name: participant the fact is about when different from the source speaker
+- subject_contact_id: known canonical subject contact ID only when explicitly available
+- address_mode: direct_to_companion|mention_of_companion|reply_to_user|overheard_room_context|system_api
 Never output raw character-card macros such as "{{user}}", "{{char}}", "{{character}}", or "{{assistant}}". Use the actual human participant or companion name when known. If a macro or generic role cannot be resolved to a real participant, skip the fact.
 Do NOT extract:
 - Small talk or social filler ("thanks", "good morning", "lol", "see you")
@@ -83,6 +90,10 @@ Respond with facts inside a <response> block. Each fact as a <fact> block:
 <confidence>0.9</confidence>
 <tags>identity, profession</tags>
 <sensitivity>personal</sensitivity>
+<source_message_ids>12</source_message_ids>
+<source_speaker_name>Alex</source_speaker_name>
+<subject_name>Alex</subject_name>
+<address_mode>overheard_room_context</address_mode>
 </fact>
 </response>
 

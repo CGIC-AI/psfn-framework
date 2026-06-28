@@ -3,6 +3,7 @@ import {
   buildAutonomousActionMemoryContext,
   inferImportedMemoryType,
   initializeImportedMemorySalience,
+  normalizeMemoryProvenance,
 } from './types.js';
 
 describe('memory import normalization policy', () => {
@@ -70,5 +71,37 @@ describe('memory import normalization policy', () => {
       'heartbeat_update_policy',
       'update',
     ]));
+  });
+
+  it('normalizes structured group attribution provenance', () => {
+    expect(normalizeMemoryProvenance({
+      channelId: 'discord-room',
+      triggerContactId: 'contact-trigger',
+      routedContactId: 'contact-vega',
+      sourceContactId: 'contact-dragon',
+      sourceAuthorId: 'dragon',
+      sourceSpeakerName: 'MrDragonFox',
+      subjectContactId: 'contact-vega',
+      subjectName: 'Vega',
+      addressMode: 'mention_of_companion',
+      routingReason: 'structured_subject_metadata',
+      sourceMessageIds: [14, 12, 12, 0, -1, 'bad'],
+      sourceSpanStartMessageId: 12,
+      sourceSpanEndMessageId: 14,
+    })).toEqual({
+      channelId: 'discord-room',
+      triggerContactId: 'contact-trigger',
+      routedContactId: 'contact-vega',
+      sourceContactId: 'contact-dragon',
+      sourceAuthorId: 'dragon',
+      sourceSpeakerName: 'MrDragonFox',
+      subjectContactId: 'contact-vega',
+      subjectName: 'Vega',
+      addressMode: 'mention_of_companion',
+      routingReason: 'structured_subject_metadata',
+      sourceMessageIds: [12, 14],
+      sourceSpanStartMessageId: 12,
+      sourceSpanEndMessageId: 14,
+    });
   });
 });

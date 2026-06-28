@@ -177,7 +177,7 @@ export function createInProcessGardenAdminContract(
       companionDataDir,
     }),
     auditHistory,
-    charges: new AdminChargeLedgerDataService(chargeLedger, fatigueLedger),
+    charges: new AdminChargeLedgerDataService(chargeLedger, fatigueLedger, options.config.chargePolicy?.fatigue ?? null),
     modelUsage: modelUsageStore ? new AdminModelUsageDataService(modelUsageStore, options.modelDiscovery) : null,
     observerEvalSidecar: createObserverEvalSidecarAdminService({
       config: options.config,

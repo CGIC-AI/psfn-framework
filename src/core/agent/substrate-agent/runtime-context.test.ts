@@ -688,7 +688,7 @@ describe('runtime subject identity', () => {
     expect(renderedRuntimeLayers).toContain('<visibility>broadcast</visibility>');
   });
 
-  it('keeps appearance context available for chat when generic image tools are active', () => {
+  it('keeps appearance context available for chat when generic media tools are active', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord',
@@ -735,8 +735,8 @@ describe('runtime subject identity', () => {
       },
       extendedTools: [],
       loadedExtended: new Map([
-        ['image_create', {
-          toolName: 'image_create',
+        ['media', {
+          toolName: 'media',
           source: 'autoload',
           activatedAt: 1,
           lastActivatedAt: 1,

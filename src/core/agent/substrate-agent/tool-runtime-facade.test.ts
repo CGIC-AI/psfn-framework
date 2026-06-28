@@ -57,6 +57,14 @@ function createFacade(taskKind: string | null = null) {
 }
 
 describe('ToolRuntimeFacade maintenance core tool policy', () => {
+  it('rejects high-risk retired first-party aliases at the model-facing registration boundary', () => {
+    const { facade } = createFacade(null);
+    expect(() => facade.registerTool(makeTool('session_new'), 'core')).toThrow(
+      'core tool registration includes retired first-party tool aliases: session_new->session',
+    );
+    expect(() => facade.registerTool(makeTool('selfie_create'), 'extended')).not.toThrow();
+  });
+
   it('keeps only the reflection allowlist of core tools active for maintenance turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade('reflection');
     facade.registerTool(makeTool('identity'), 'core');
@@ -193,7 +201,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
   it('removes visual tools from audio-only satellite turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade(null);
     facade.registerTool(makeTool('session'), 'core');
-    facade.registerTool(makeTool('image_analyze'), 'core');
+    facade.registerTool(makeTool('media'), 'core');
     facade.registerTool(makeTool('selfie_create'), 'core');
 
     facade.applyActiveToolsToAgentForTurn({
@@ -237,7 +245,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     expect(emitTelemetry).toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
       expect.objectContaining({
-        toolName: 'image_analyze',
+        toolName: 'media',
         satelliteId: 'pi-voice',
         reason: 'satellite_capability_denied',
       }),

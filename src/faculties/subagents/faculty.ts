@@ -62,9 +62,23 @@ const DEFAULT_SUBAGENT_TOOLSETS_BY_TIER: Readonly<Record<CapabilityTier, readonl
   autonomous: [SUBAGENT_TOOLSET_ALL],
   custom: [SUBAGENT_TOOLSET_ALL],
 };
-const APPRENTICE_SUBAGENT_TOOL_EXTRAS = ['contact_list'] as const;
+const APPRENTICE_SUBAGENT_TOOL_EXTRAS = [] as const;
 
-const BLOCKED_SUBAGENT_TOOL_NAMES = new Set(['subagent', 'spawn_subagent', 'spawn_shard', 'shard', 'load_tools', 'toolset']);
+const BLOCKED_SUBAGENT_TOOL_NAMES = new Set([
+  'subagent',
+  'spawn_subagent',
+  'spawn_shard',
+  'shard',
+  'load_tools',
+  'toolset',
+  'contact_list',
+  'contact_lookup',
+  'contact_note',
+  'contact_set_trust',
+  'contact_link_identity',
+  'contact_set_channel_privacy',
+  'contact_set_machine_intelligence',
+]);
 const SUBAGENT_TASK_AUTHOR_ID = 'system:subagent-task';
 const SUBAGENT_TASK_AUTHOR_NAME = 'SubagentTask';
 const SUBAGENT_CONTROL_AUTHOR_ID = 'system:subagent-control';

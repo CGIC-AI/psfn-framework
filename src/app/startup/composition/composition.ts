@@ -47,7 +47,6 @@ import {
   createShardExecutionPort,
   type ShardExecutionPort,
 } from '../../../faculties/shards/port.js';
-import { createBoundedSubagentLaunchTool } from '../../../faculties/shards/tools.js';
 import { SubagentFaculty } from '../../../faculties/subagents/faculty.js';
 import { createSubagentTool } from '../../../faculties/subagents/tools.js';
 import { createAnalysisWorkbenchTool } from '../../../core/tools/analysis-workbench/tools.js';
@@ -399,7 +398,6 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
   });
   const shardExecutionPort = createShardExecutionPort(shardManager);
   options.agentLoop.registerTool(createSubagentTool(subagentFaculty), 'core');
-  options.agentLoop.registerTool(createBoundedSubagentLaunchTool(shardManager), 'extended');
 
   options.agentLoop.registerTool(createAnalysisWorkbenchTool({
     llmProvider: options.llmProvider,

@@ -270,6 +270,71 @@ describe('orient tool', () => {
     expect(payload.entries[0]?.version).toBe(2);
   });
 
+  it('routes values_add and values_update through orient when values support is wired', async () => {
+    const valuesJournal = new ValuesJournalStore(join(tempDir, 'notes', 'values.jsonl'));
+    const tool = createOrientTool({
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    }, {
+      valuesJournal,
+    });
+
+    const added = await tool.execute('call-values-add', {
+      action: 'values_add',
+      value: 'Protect trust continuity across sessions.',
+      context: 'Manual correction after an off-tone response.',
+    });
+    const addedPayload = JSON.parse(resultText(added)) as {
+      action: string;
+      entry: { version: number; templateId: string; reflection: string; provenance?: { source?: string } };
+    };
+    expect(addedPayload.action).toBe('added');
+    expect(addedPayload.entry.version).toBe(1);
+    expect(addedPayload.entry.templateId).toBe('values-tool');
+    expect(addedPayload.entry.reflection).toBe('Protect trust continuity across sessions.');
+    expect(addedPayload.entry.provenance?.source).toBe('values_add_tool');
+
+    const updated = await tool.execute('call-values-update', {
+      action: 'values_update',
+      version: 1,
+      value: 'Protect trust continuity and cite uncertainty explicitly.',
+      context: 'Append-only revision after reflection.',
+    });
+    const updatedPayload = JSON.parse(resultText(updated)) as {
+      action: string;
+      source: { version: number };
+      entry: { version: number; templateId: string; reflection: string; provenance?: { source?: string } };
+    };
+    expect(updatedPayload.action).toBe('updated');
+    expect(updatedPayload.source.version).toBe(1);
+    expect(updatedPayload.entry.version).toBe(2);
+    expect(updatedPayload.entry.templateId).toBe('values-tool-update');
+    expect(updatedPayload.entry.reflection).toBe('Protect trust continuity and cite uncertainty explicitly.');
+    expect(updatedPayload.entry.provenance?.source).toBe('values_update_tool');
+  });
+
+  it('fails closed for unknown orient values_update source versions', async () => {
+    const valuesJournal = new ValuesJournalStore(join(tempDir, 'notes', 'values.jsonl'));
+    const tool = createOrientTool({
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    }, {
+      valuesJournal,
+    });
+
+    const result = await tool.execute('call-values-update-missing', {
+      action: 'values_update',
+      version: 99,
+      value: 'Should not persist.',
+    });
+
+    expect(result.details?.isError).toBe(true);
+    expect(resultText(result)).toContain('version 99 not found');
+    expect(valuesJournal.list()).toHaveLength(0);
+  });
+
   it('routes concern lifecycle actions through orient when concern support is wired', async () => {
     const concernStore = createFakeConcernStore();
     const tool = createOrientTool({

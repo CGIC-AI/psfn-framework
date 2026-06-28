@@ -31,6 +31,11 @@ import {
   type ExtendedToolAutoloadPolicy,
   type ExtendedToolTurnClass,
 } from '../extended-tool-autoload-policy.js';
+import {
+  buildRuntimeToolCatalogEntry,
+  type RuntimeToolCatalogEntry,
+} from '../tool-catalog.js';
+import { isRetiredFirstPartyToolAlias } from '../tool-surface/registry.js';
 import type {
   AutoloadTurnOutcome,
   PromotedToolMutationResult,
@@ -153,6 +158,14 @@ function buildToolSearchActivationHint(
   return 'Use toolset with action="activate" to activate this tool when you need it.';
 }
 
+function filterCanonicalDiscoverableTools(tools: readonly AgentTool<any>[]): AgentTool<any>[] {
+  return tools.filter(tool => !isRetiredFirstPartyToolAlias(tool.name));
+}
+
+function filterCanonicalToolNames(toolNames: readonly string[]): string[] {
+  return toolNames.filter(toolName => !isRetiredFirstPartyToolAlias(toolName));
+}
+
 export function resolveToolHealthMarker(
   status: RuntimeServiceHealthStatus | undefined,
 ): 'o' | '!' | 'x' | null {
@@ -186,8 +199,9 @@ function formatToolSearchLine(entry: ToolSearchResultEntry): string {
 }
 
 export function activateExtendedToolsForTurn(params: ActivateExtendedToolsParams): ExtendedToolActivationResult {
-  const requestedTools = normalizeToolNameList(params.toolNames);
-  const byName = new Set(params.extendedTools.map(tool => tool.name));
+  const requestedTools = filterCanonicalToolNames(normalizeToolNameList(params.toolNames));
+  const discoverableExtendedTools = filterCanonicalDiscoverableTools(params.extendedTools);
+  const byName = new Set(discoverableExtendedTools.map(tool => tool.name));
   const activatedTools: string[] = [];
   const alreadyActiveTools: string[] = [];
   const missingTools: string[] = [];
@@ -239,9 +253,10 @@ export function activateExtendedToolsForTurn(params: ActivateExtendedToolsParams
   };
 }
 
-type ToolsetAction = 'list' | 'activate' | 'pin' | 'unpin';
+type ToolsetAction = 'list' | 'activate' | 'pin' | 'unpin' | 'describe';
 
 interface ToolsetToolRuntime {
+  getCoreTools?: () => readonly AgentTool<any>[];
   getExtendedTools: () => readonly AgentTool<any>[];
   getExtendedToolAutoloadPolicy: () => ExtendedToolAutoloadPolicy | null;
   getAdaptiveToolRuntimeState: () => AdaptiveToolRuntimeState;
@@ -343,7 +358,13 @@ async function recordToolsetPinMutationMemory(input: {
 function normalizeToolsetAction(action: unknown): ToolsetAction | null {
   if (typeof action !== 'string') return null;
   const normalized = action.trim().toLowerCase();
-  if (normalized === 'list' || normalized === 'activate' || normalized === 'pin' || normalized === 'unpin') {
+  if (
+    normalized === 'list'
+    || normalized === 'activate'
+    || normalized === 'pin'
+    || normalized === 'unpin'
+    || normalized === 'describe'
+  ) {
     return normalized;
   }
   return null;
@@ -351,7 +372,7 @@ function normalizeToolsetAction(action: unknown): ToolsetAction | null {
 
 function toolsetCapabilityRequirement(params: Record<string, unknown>): CapabilityToken | null {
   const action = normalizeToolsetAction(params.action);
-  if (action === 'list') return 'identity.read';
+  if (action === 'list' || action === 'describe') return 'identity.read';
   if (action === 'pin' || action === 'unpin') return 'identity.write.runtime';
   return null;
 }
@@ -387,15 +408,55 @@ async function maybeRecordToolsetMutationMemory(input: {
 
 function createToolsetListPayload(runtime: ToolsetToolRuntime): Record<string, unknown> {
   const state = runtime.getAdaptiveToolRuntimeState();
+  const activeTools = state.activeTools
+    .filter(entry => !isRetiredFirstPartyToolAlias(entry.toolName))
+    .map(entry => ({ ...entry }));
+  const loadedTools = state.loadedExtendedTools
+    .filter(entry => !isRetiredFirstPartyToolAlias(entry.toolName))
+    .map(entry => ({ ...entry }));
   return {
     action: 'list',
     maxPinnedTools: runtime.getPromotedExtendedToolsLimit(),
-    pinnedTools: [...state.promotedToolsConfigured],
-    activePinnedTools: [...state.promotedToolsActive],
-    activeTools: state.activeTools.map(entry => ({ ...entry })),
-    loadedTools: state.loadedExtendedTools.map(entry => ({ ...entry })),
-    availableExtendedTools: [...state.extendedTools],
-    nextStep: 'Use tool_search to discover non-default tools, then use toolset action="activate" for this runtime or action="pin"/"unpin" across turns.',
+    pinnedTools: filterCanonicalToolNames(state.promotedToolsConfigured),
+    activePinnedTools: filterCanonicalToolNames(state.promotedToolsActive),
+    activeTools,
+    loadedTools,
+    availableExtendedTools: filterCanonicalToolNames(state.extendedTools),
+    nextStep: 'Use tool_search to discover non-default tools, toolset action="describe" for schemas, then toolset action="activate" for this runtime or action="pin"/"unpin" across turns.',
+  };
+}
+
+function createToolsetDescribePayload(
+  runtime: ToolsetToolRuntime,
+  toolName?: string,
+): Record<string, unknown> {
+  const normalizedToolName = typeof toolName === 'string' ? toolName.trim() : '';
+  if (normalizedToolName && isRetiredFirstPartyToolAlias(normalizedToolName)) {
+    return {
+      action: 'describe',
+      total: 0,
+      tools: [],
+      message: 'Retired first-party aliases are not describable. Use canonical tool names from toolset action="list".',
+    };
+  }
+
+  const coreTools = runtime.getCoreTools?.() ?? [];
+  const extendedTools = filterCanonicalDiscoverableTools(runtime.getExtendedTools());
+  const catalog: RuntimeToolCatalogEntry[] = [
+    ...coreTools.map(tool => buildRuntimeToolCatalogEntry(tool, 'core')),
+    ...extendedTools.map(tool => buildRuntimeToolCatalogEntry(tool, 'extended')),
+  ]
+    .filter(entry => !normalizedToolName || entry.name === normalizedToolName)
+    .sort((left, right) => {
+      if (left.scope !== right.scope) return left.scope.localeCompare(right.scope);
+      return left.name.localeCompare(right.name);
+    });
+
+  return {
+    action: 'describe',
+    total: catalog.length,
+    tools: catalog,
+    nextStep: 'Call canonical tool names only. For multi-action tools, pass the desired schema action inside the canonical tool call.',
   };
 }
 
@@ -558,14 +619,15 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal('list'),
+        Type.Literal('describe'),
         Type.Literal('activate'),
         Type.Literal('pin'),
         Type.Literal('unpin'),
       ], {
-        description: 'Control action: list, activate, pin, or unpin.',
+        description: 'Control action: list, describe, activate, pin, or unpin.',
       }),
       tool: Type.Optional(Type.String({
-        description: 'Single tool name for pin or unpin actions.',
+        description: 'Single canonical tool name for describe, pin, or unpin actions.',
       })),
       tools: Type.Optional(Type.Array(Type.Union([
         Type.String(),
@@ -622,6 +684,10 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
         return toolsetResult(createToolsetListPayload(runtime));
       }
 
+      if (action === 'describe') {
+        return toolsetResult(createToolsetDescribePayload(runtime, executeParams.tool));
+      }
+
       if (action === 'activate') {
         return executeToolsetActivateAction(runtime, executeParams);
       }
@@ -631,6 +697,14 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
         return toolsetResult({
           action,
           message: `Provide a non-empty "tool" for toolset action "${action}".`,
+        }, { isError: true });
+      }
+      if (isRetiredFirstPartyToolAlias(toolName)) {
+        return toolsetResult({
+          action,
+          ok: false,
+          changed: false,
+          message: 'Retired first-party aliases cannot be pinned or unpinned. Use canonical tool names from toolset action="list".',
         }, { isError: true });
       }
 
@@ -717,7 +791,7 @@ export function createToolSearchTool(runtime: SearchToolsToolRuntime): AgentTool
       const runtimeState = runtime.getAdaptiveToolRuntimeState();
       const toolHealthStatusByName = runtime.getToolHealthStatusByName();
       const access = runtime.resolveCapabilityAccess();
-      const extendedTools = [...runtime.getExtendedTools()];
+      const extendedTools = filterCanonicalDiscoverableTools(runtime.getExtendedTools());
       const rankedMatches = extendedTools
         .map((tool) => {
           const turnClass = runtime.classifyExtendedToolForTurn(tool.name);

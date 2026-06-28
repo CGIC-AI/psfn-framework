@@ -4,10 +4,6 @@ import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import type { Scheduler } from './scheduler.js';
 import { createScheduleTool } from './schedule-tool.js';
 import {
-  createValuesAddTool,
-  createValuesUpdateTool,
-} from '../../faculties/values/tools.js';
-import {
   createHeartbeatTemplateRuntime,
   type HeartbeatTemplateRuntime,
 } from './heartbeat-template-runtime.js';
@@ -64,8 +60,6 @@ export function wireHeartbeatRuntime(
     pendingFollowUpStore: runtimeOptions.pendingFollowUpStore ?? null,
     careReminderStore: runtimeOptions.careReminderStore ?? null,
   }), 'core');
-  target.registerTool(createValuesAddTool(templateRuntime.valuesJournal), 'extended');
-  target.registerTool(createValuesUpdateTool(templateRuntime.valuesJournal), 'extended');
 
   const activeCount = templateRuntime.initialPolicy.templates.filter(t => t.enabled).length;
   log.info(`Heartbeat runtime wired (${templateRuntime.initialPolicy.templates.length} templates, ${activeCount} active)`);

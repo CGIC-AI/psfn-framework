@@ -298,9 +298,10 @@ describe('createSubstrateStreamFn', () => {
           },
           {
             id: 'call-image-analyze',
-            name: 'image_analyze',
+            name: 'media',
             input: {
-              image_urls: '["https://images.example.test/source.png"]',
+              action: 'analyze',
+              input_urls: '["https://images.example.test/source.png"]',
               question: 'What is visible?',
             },
           },
@@ -320,10 +321,11 @@ describe('createSubstrateStreamFn', () => {
       }),
     };
     const imageAnalyzeTool = {
-      name: 'image_analyze',
-      description: 'Analyze images.',
+      name: 'media',
+      description: 'Generate, edit, or analyze media.',
       parameters: Type.Object({
-        image_urls: Type.Array(Type.String()),
+        action: Type.Literal('analyze'),
+        input_urls: Type.Array(Type.String()),
         question: Type.Optional(Type.String()),
       }),
     };
@@ -341,8 +343,9 @@ describe('createSubstrateStreamFn', () => {
       action: 'activate',
       tools: ['north_star'],
     });
-    expect(toolCalls.find((entry) => entry.name === 'image_analyze')?.arguments).toEqual({
-      image_urls: ['https://images.example.test/source.png'],
+    expect(toolCalls.find((entry) => entry.name === 'media')?.arguments).toEqual({
+      action: 'analyze',
+      input_urls: ['https://images.example.test/source.png'],
       question: 'What is visible?',
     });
     expect(validateToolArguments(toolsetTool as any, toolCalls[0] as any)).toEqual({
@@ -350,7 +353,8 @@ describe('createSubstrateStreamFn', () => {
       tools: ['north_star'],
     });
     expect(validateToolArguments(imageAnalyzeTool as any, toolCalls[1] as any)).toEqual({
-      image_urls: ['https://images.example.test/source.png'],
+      action: 'analyze',
+      input_urls: ['https://images.example.test/source.png'],
       question: 'What is visible?',
     });
   });

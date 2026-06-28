@@ -28,16 +28,16 @@ const MEMORY_SEARCH_DEFAULT_LIMIT = 5;
 const MEMORY_SEARCH_MAX_LIMIT = 20;
 const MEMORY_TOOL_ACTIONS = [
   'write',
-  'memory_write',
   'search',
   'import',
+  'patch',
   'redact',
   'delete',
   'restore',
 ] as const;
 type MemoryToolAction = (typeof MEMORY_TOOL_ACTIONS)[number];
-type ScratchpadToolAction = 'list' | 'scratchpad_read' | 'add' | 'replace' | 'append' | 'remove';
-const SCRATCHPAD_TOOL_ACTIONS: ScratchpadToolAction[] = ['list', 'scratchpad_read', 'add', 'replace', 'append', 'remove'];
+type ScratchpadToolAction = 'list' | 'add' | 'replace' | 'append' | 'remove';
+const SCRATCHPAD_TOOL_ACTIONS: ScratchpadToolAction[] = ['list', 'add', 'replace', 'append', 'remove'];
 
 function errorMessage(error: unknown): string {
   return toErrorMessage(error);
@@ -219,6 +219,9 @@ interface MemoryToolParams {
   operation?: MemoryRedactionOperation;
   reason?: string;
   delete_id?: string;
+  formation_vad?: MemoryFormationVAD;
+  clear_formation_vad?: boolean;
+  append_tags?: string;
 }
 
 export function createMemoryWriteTool(
@@ -683,13 +686,13 @@ export function createMemoryTool(
     name: 'memory',
     description:
       'Unified long-term memory tool. '
-      + 'Use action=write|search|import|redact|delete|restore to manage durable memory explicitly.',
+      + 'Use action=write|search|import|patch|redact|delete|restore to manage durable memory explicitly.',
     label: 'memory',
     parameters: Type.Object({
       action: Type.Unsafe<MemoryToolAction>({
         type: 'string',
         enum: [...MEMORY_TOOL_ACTIONS],
-        description: 'One of: write, search, import, redact, delete, restore.',
+        description: 'One of: write, search, import, patch, redact, delete, restore.',
       }),
       text: Type.Optional(
         Type.String({ description: 'Required for action=write. The memory text to store.' }),
@@ -704,7 +707,8 @@ export function createMemoryTool(
       importance: Type.Optional(Type.Number({ description: 'Optional 0-1 significance for action=write.' })),
       emotional_valence: Type.Optional(Type.Number({ description: 'Optional -1 to 1 emotional valence for action=write.' })),
       confidence: Type.Optional(Type.Number({ description: 'Optional 0-1 confidence for action=write.' })),
-      tags: Type.Optional(Type.String({ description: 'Optional comma-separated tags for action=write or action=import records.' })),
+      tags: Type.Optional(Type.String({ description: 'Optional comma-separated tags for action=write/import, or full replacement tags for action=patch.' })),
+      append_tags: Type.Optional(Type.String({ description: 'Optional comma-separated tags to append for action=patch. Mutually exclusive with tags.' })),
       sensitivity: Type.Optional(
         Type.Unsafe<SensitivityLevel>({
           type: 'string',
@@ -740,7 +744,7 @@ export function createMemoryTool(
         Type.String({ description: 'Optional import source label for action=import. Default: "import".' }),
       ),
       memory_id: Type.Optional(
-        Type.String({ description: 'Required for action=redact or action=delete. Memory ID to mutate.' }),
+        Type.String({ description: 'Required for action=patch, action=redact, or action=delete. Memory ID to mutate.' }),
       ),
       operation: Type.Optional(
         Type.Unsafe<MemoryRedactionOperation>({
@@ -750,11 +754,17 @@ export function createMemoryTool(
         }),
       ),
       reason: Type.Optional(
-        Type.String({ description: 'Optional reason logged for redact/delete operations.' }),
+        Type.String({ description: 'Optional reason logged for patch/redact/delete operations.' }),
       ),
       delete_id: Type.Optional(
         Type.String({ description: 'Required for action=restore. Delete checkpoint ID to restore.' }),
       ),
+      formation_vad: Type.Optional(Type.Object({
+        valence: Type.Number(),
+        arousal: Type.Number(),
+        dominance: Type.Number(),
+      })),
+      clear_formation_vad: Type.Optional(Type.Boolean({ description: 'Clear existing formation VAD metadata for action=patch.' })),
     }),
     execute: async (
       toolCallId: string,
@@ -774,7 +784,6 @@ export function createMemoryTool(
         }
 
         switch (action) {
-          case 'memory_write':
           case 'write': {
             const text = normalizedParams.text?.trim();
             const type = normalizedParams.type;
@@ -890,6 +899,45 @@ export function createMemoryTool(
             return textResult(
               `Import complete: ${result.written} written, ${result.deduplicated} deduplicated, `
               + `${result.superseded} superseded, ${result.errors} errors (${records.length} total)`,
+            );
+          }
+
+          case 'patch': {
+            const memoryId = normalizedParams.memory_id?.trim();
+            if (!memoryId) {
+              return textResultWithError('Error: memory_id is required for action=patch', true);
+            }
+            if (normalizedParams.tags && normalizedParams.append_tags) {
+              return textResultWithError('Error: provide either tags or append_tags for action=patch, not both', true);
+            }
+
+            const replacementTags = normalizedParams.tags ? parseTags(normalizedParams.tags) ?? [] : undefined;
+            const appendTags = normalizedParams.append_tags ? parseTags(normalizedParams.append_tags) ?? [] : undefined;
+            const sourceContext = buildUnifiedMemorySourceContext('patch', toolCallId, internalSource);
+            const result = await writer.patchMemory({
+              memoryId,
+              ...(normalizedParams.text !== undefined ? { text: normalizedParams.text } : {}),
+              ...(normalizedParams.importance !== undefined ? { importance: clamp(Number(normalizedParams.importance), 0, 1) } : {}),
+              ...(normalizedParams.confidence !== undefined ? { confidence: clamp(Number(normalizedParams.confidence), 0, 1) } : {}),
+              ...(normalizedParams.emotional_valence !== undefined
+                ? { emotionalValence: clamp(Number(normalizedParams.emotional_valence), -1, 1) }
+                : {}),
+              ...(normalizedParams.formation_vad !== undefined ? { formationVAD: normalizedParams.formation_vad } : {}),
+              ...(normalizedParams.clear_formation_vad !== undefined ? { clearFormationVAD: normalizedParams.clear_formation_vad } : {}),
+              ...(normalizedParams.tags ? { tags: replacementTags } : {}),
+              ...(normalizedParams.append_tags ? { appendTags } : {}),
+              ...(normalizedParams.reason ? { reason: normalizedParams.reason.trim() } : {}),
+              sourceRef: sourceContext.sourceRef,
+              sourceType: sourceContext.sourceType,
+              provenance: sourceContext.provenance,
+            });
+
+            if (!result) {
+              return textResultWithError(`Memory not found or already deleted: ${memoryId}`, true);
+            }
+
+            return textResult(
+              `Memory patched (id: ${result.memory.id}, event: ${result.patchEventId}, fields: ${result.updatedFields.join(', ')}).`,
             );
           }
 
@@ -1015,7 +1063,6 @@ export function createScratchpadTool(memoryStore: MemoryStorePort): AgentTool<an
         }
 
         switch (action) {
-          case 'scratchpad_read':
           case 'list': {
             const limit = params.limit === undefined
               ? SCRATCHPAD_DEFAULT_LIMIT

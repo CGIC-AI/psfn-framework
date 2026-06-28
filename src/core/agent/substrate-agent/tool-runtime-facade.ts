@@ -60,8 +60,12 @@ import {
   type ValidateToolsOptions,
   type WirableTool,
 } from '../tool-wiring-validator.js';
+import { assertNoModelFacingDriftGuardToolAliases } from '../tool-surface/registry.js';
 import type { RuntimeServiceHealthStatus } from '../../../operator/tool-health/types.js';
-import type { RuntimeToolCatalogSnapshot } from '../tool-catalog.js';
+import {
+  buildRuntimeToolCatalogEntry,
+  type RuntimeToolCatalogSnapshot,
+} from '../tool-catalog.js';
 
 interface ToolRuntimeFacadeOptions {
   config: SubstrateConfig;
@@ -112,10 +116,7 @@ const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy
 
 const SATELLITE_VISUAL_TOOL_NAMES = new Set([
   'media',
-  'image_create',
   'selfie_create',
-  'image_edit',
-  'image_analyze',
 ]);
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
@@ -189,25 +190,18 @@ function resolveMaintenanceSessionAction(params: Record<string, unknown>): strin
   }
   switch (rawAction) {
     case 'list':
-    case 'session_list':
       return 'list';
     case 'new':
-    case 'session_new':
       return 'new';
     case 'resume':
-    case 'session_resume':
       return 'resume';
     case 'search':
-    case 'session_search':
       return 'search';
     case 'grep':
-    case 'session_grep':
       return 'grep';
     case 'start_focus':
-    case 'focus_start':
       return 'start_focus';
     case 'complete_focus':
-    case 'focus_complete':
       return 'complete_focus';
     default:
       return null;
@@ -230,22 +224,16 @@ function resolveMaintenanceContactAction(params: Record<string, unknown>): strin
   }
   switch (rawAction) {
     case 'list':
-    case 'contact_list':
       return 'list';
     case 'lookup':
-    case 'contact_lookup':
       return 'lookup';
     case 'note':
-    case 'contact_note':
       return 'note';
     case 'set_trust':
-    case 'contact_set_trust':
       return 'set_trust';
     case 'link_identity':
-    case 'contact_link_identity':
       return 'link_identity';
     case 'set_channel_privacy':
-    case 'contact_set_channel_privacy':
       return 'set_channel_privacy';
     default:
       return null;
@@ -298,6 +286,7 @@ export class ToolRuntimeFacade {
   }
 
   registerTool(tool: AgentTool<any>, category: ToolCategory = 'core'): void {
+    assertNoModelFacingDriftGuardToolAliases([tool.name], `${category} tool registration`);
     const taggedTool = this.withToolConcurrencyMetadata(tagToolWithReversibility(tool), category);
     if (category === 'core') {
       this.coreTools.push(taggedTool);
@@ -364,12 +353,7 @@ export class ToolRuntimeFacade {
   getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot {
     const toSnapshotEntry = (tool: AgentTool<any>, scope: 'core' | 'extended') => {
       const wiringMeta = cloneToolWiringMeta((tool as WirableTool).wiringMeta);
-      return {
-        name: tool.name,
-        description: tool.description,
-        scope,
-        ...(wiringMeta ? { wiringMeta } : {}),
-      };
+      return buildRuntimeToolCatalogEntry(tool, scope, wiringMeta);
     };
 
     return {
@@ -429,6 +413,7 @@ export class ToolRuntimeFacade {
 
   createToolsetTool(): AgentTool<any> {
     return createToolsetTool({
+      getCoreTools: () => this.coreTools,
       getExtendedTools: () => this.extendedTools,
       getExtendedToolAutoloadPolicy: () => this.extendedToolAutoloadPolicy,
       getAdaptiveToolRuntimeState: () => this.getAdaptiveToolRuntimeState(),

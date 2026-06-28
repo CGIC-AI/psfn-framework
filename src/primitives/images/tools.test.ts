@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { runWithVisionToolRequestContext } from './request-context.js';
-import { createImageAnalyzeTool, createImageCreateTool, createImageEditTool, createMediaTool, createSelfieTool } from './tools.js';
+import { createMediaTool, createSelfieTool } from './tools.js';
 import { IMAGE_ASPECT_RATIO_VALUES, type ImageToolResultDetails, type ImageVisionReviewer, type MediaToolResultDetails } from './types.js';
 import {
   resetRunChargeRollingWindowForTests,
@@ -21,7 +21,7 @@ function resultText(result: AgentToolResult<any>): string {
     .join('\n');
 }
 
-function readAspectRatios(tool: ReturnType<typeof createImageCreateTool> | ReturnType<typeof createImageEditTool>): string[] {
+function readAspectRatios(tool: { parameters: unknown }): string[] {
   const schema = (tool.parameters as {
     properties?: Record<string, { anyOf?: Array<{ const?: string }> }>;
   }).properties?.aspect_ratio;
@@ -224,18 +224,18 @@ describe('image tools', () => {
     expect(emitted).toHaveLength(0);
   });
 
-  it('constrains aspect_ratio to the supported preset list for create and edit', () => {
-    const createTool = createImageCreateTool({
+  it('constrains aspect_ratio to the supported preset list for media and selfie tools', () => {
+    const mediaTool = createMediaTool({
       create: vi.fn(),
       edit: vi.fn(),
     });
-    const editTool = createImageEditTool({
+    const selfieTool = createSelfieTool({
       create: vi.fn(),
       edit: vi.fn(),
     });
 
-    expect(readAspectRatios(createTool)).toEqual([...IMAGE_ASPECT_RATIO_VALUES]);
-    expect(readAspectRatios(editTool)).toEqual([...IMAGE_ASPECT_RATIO_VALUES]);
+    expect(readAspectRatios(mediaTool)).toEqual([...IMAGE_ASPECT_RATIO_VALUES]);
+    expect(readAspectRatios(selfieTool)).toEqual([...IMAGE_ASPECT_RATIO_VALUES]);
   });
 
   it('returns generated image results plus an in-turn vision review', async () => {
@@ -264,11 +264,12 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createImageCreateTool(ops, reviewer);
+    const tool = createMediaTool(ops, reviewer);
     const result = await tool.execute('tool-call-1', {
+      action: 'generate',
       prompt: 'a cute mirror selfie of me in warm morning light',
       aspect_ratio: '3:4',
-    }) as AgentToolResult<ImageToolResultDetails>;
+    }) as AgentToolResult<MediaToolResultDetails>;
 
     expect(ops.create).toHaveBeenCalledWith(expect.objectContaining({
       prompt: 'a cute mirror selfie of me in warm morning light',
@@ -280,7 +281,7 @@ describe('image tools', () => {
       prompt: 'a cute mirror selfie of me in warm morning light',
       mode: 'create',
     });
-    expect(result.details.imageResult?.requestId).toBe('req-vision-1');
+    expect(result.details.mediaResult?.requestId).toBe('req-vision-1');
     expect(result.details.visionReview?.summary).toContain('matches the companion look');
     expect(resultText(result)).toContain('"requestId": "req-vision-1"');
     expect(resultText(result)).toContain('Vision review:');
@@ -665,7 +666,7 @@ describe('image tools', () => {
     expect(resultText(result)).toContain('stop tool attempts');
   });
 
-  it('lets image_edit append a selected reference photo to the edit inputs', async () => {
+  it('lets media edit append a selected reference photo to the edit inputs', async () => {
     const ops = {
       create: vi.fn(),
       edit: vi.fn(async () => ({
@@ -690,12 +691,13 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createImageEditTool(ops, undefined, { referenceResolver });
+    const tool = createMediaTool(ops, undefined, { referenceResolver });
     const result = await tool.execute('tool-call-edit-ref', {
+      action: 'edit',
       prompt: 'keep the pose, update the hairstyle to match the reference',
-      image_urls: ['https://images.example.test/source.png'],
+      input_urls: ['https://images.example.test/source.png'],
       reference_image_tags: ['short-hair'],
-    }) as AgentToolResult<ImageToolResultDetails>;
+    }) as AgentToolResult<MediaToolResultDetails>;
 
     expect(referenceResolver.resolveForTool).toHaveBeenCalledWith({
       referenceImageTags: ['short-hair'],
@@ -706,13 +708,13 @@ describe('image tools', () => {
         'https://images.example.test/source.png',
         'data:image/png;base64,c2hvcnQ=',
       ],
-      sourceToolName: 'image_edit',
+      sourceToolName: 'media',
       referenceImageIds: ['ref-short-hair'],
     }));
-    expect(result.details.imageResult?.requestId).toBe('req-edit-ref-1');
+    expect(result.details.mediaResult?.requestId).toBe('req-edit-ref-1');
   });
 
-  it('exposes image_analyze as a callable vision tool', async () => {
+  it('exposes media action=analyze as the callable vision path', async () => {
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({
         question: 'Does this still look like me?',
@@ -722,11 +724,15 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createImageAnalyzeTool(reviewer);
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
     const result = await tool.execute('tool-call-2', {
-      image_urls: ['https://images.example.test/review.png'],
+      action: 'analyze',
+      input_urls: ['https://images.example.test/review.png'],
       question: 'Does this still look like me?',
-    }) as AgentToolResult<ImageToolResultDetails>;
+    }) as AgentToolResult<MediaToolResultDetails>;
 
     expect(reviewer.analyze).toHaveBeenCalledWith({
       imageUrls: ['https://images.example.test/review.png'],
@@ -737,7 +743,7 @@ describe('image tools', () => {
     expect(resultText(result)).toContain('appearance is consistent');
   });
 
-  it('reuses the current-turn vision review when image_analyze is called with a mismatched stale url', async () => {
+  it('reuses the current-turn vision review when media analyze is called with a mismatched stale url', async () => {
     const reviewer: ImageVisionReviewer = {
       analyze: vi.fn(async () => ({
         question: 'Does this still look like me?',
@@ -747,7 +753,10 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createImageAnalyzeTool(reviewer);
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
     const result = await runWithVisionToolRequestContext(
       {
         userMessageText: 'did you not see the image?',
@@ -761,11 +770,12 @@ describe('image tools', () => {
         },
       },
       async () => tool.execute('tool-call-3', {
-        image_urls: [
+        action: 'analyze',
+        input_urls: [
           'https://files.example.test/uploads/other-image.png?token=stale',
         ],
         question: 'Does this still look like me?',
-      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+      }) as Promise<AgentToolResult<MediaToolResultDetails>>,
     );
 
     expect(reviewer.analyze).not.toHaveBeenCalled();
@@ -785,7 +795,10 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createImageAnalyzeTool(reviewer);
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
     const result = await runWithVisionToolRequestContext(
       {
         userMessageText: 'did you not see the image?',
@@ -794,11 +807,12 @@ describe('image tools', () => {
         ],
       },
       async () => tool.execute('tool-call-3b', {
-        image_urls: [
+        action: 'analyze',
+        input_urls: [
           'https://files.example.test/uploads/other-image.png?token=stale',
         ],
         question: 'Does this still look like me?',
-      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+      }) as Promise<AgentToolResult<MediaToolResultDetails>>,
     );
 
     expect(reviewer.analyze).not.toHaveBeenCalled();
@@ -817,16 +831,20 @@ describe('image tools', () => {
       })),
     };
 
-    const tool = createImageAnalyzeTool(reviewer);
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
     const result = await runWithVisionToolRequestContext(
       {
         userMessageText: 'can you see this now?',
         imageAttachmentUrls: ['inline:image:0'],
       },
       async () => tool.execute('tool-call-inline', {
-        image_urls: ['attachment:current-turn-image-1'],
+        action: 'analyze',
+        input_urls: ['attachment:current-turn-image-1'],
         question: 'What is visible?',
-      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+      }) as Promise<AgentToolResult<MediaToolResultDetails>>,
     );
 
     expect(reviewer.analyze).not.toHaveBeenCalled();
@@ -846,7 +864,10 @@ describe('image tools', () => {
     };
     const explicitUrl = 'https://images.example.test/review/explicit-image.png?token=current';
 
-    const tool = createImageAnalyzeTool(reviewer);
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
     const result = await runWithVisionToolRequestContext(
       {
         userMessageText: explicitUrl,
@@ -855,9 +876,10 @@ describe('image tools', () => {
         ],
       },
       async () => tool.execute('tool-call-4', {
-        image_urls: [explicitUrl],
+        action: 'analyze',
+        input_urls: [explicitUrl],
         question: 'What is in this image?',
-      }) as Promise<AgentToolResult<ImageToolResultDetails>>,
+      }) as Promise<AgentToolResult<MediaToolResultDetails>>,
     );
 
     expect(reviewer.analyze).toHaveBeenCalledWith({

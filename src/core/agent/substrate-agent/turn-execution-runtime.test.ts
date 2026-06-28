@@ -1063,27 +1063,28 @@ describe('handleMessageForTurn compaction scheduling', () => {
     (runtime.applyActiveToolsToAgentForTurn as ReturnType<typeof vi.fn>).mockImplementation(() => {
       runtime.agent.setTools([
         {
-          name: 'contact_lookup',
-          description: 'Look up a contact.',
+          name: 'contact',
+          description: 'Manage contacts.',
           inputSchema: {
             type: 'object',
             properties: {
-              query: { type: 'string' },
+              action: { type: 'string' },
+              contactId: { type: 'string' },
             },
-            required: ['query'],
+            required: ['action'],
           },
         },
       ]);
     });
     (runtime.getAdaptiveToolRuntimeState as ReturnType<typeof vi.fn>).mockReturnValue({
       generatedAt: 1_700_000_000_000,
-      coreTools: ['contact_lookup'],
+      coreTools: ['contact'],
       extendedTools: ['notify'],
       promotedToolsConfigured: [],
       promotedToolsActive: [],
       promotedToolsSkipped: [],
       loadedExtendedTools: [],
-      activeTools: [{ toolName: 'contact_lookup', source: 'core' }],
+      activeTools: [{ toolName: 'contact', source: 'core' }],
       lastSnapshot: {
         timestamp: 1_700_000_000_001,
         turnId: 'turn-1',
@@ -1091,7 +1092,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         channelId: 'ch1',
         callType: 'chat',
         purpose: 'agent.tools.adaptive.snapshot',
-        tools: [{ toolName: 'contact_lookup', source: 'core' }],
+        tools: [{ toolName: 'contact', source: 'core' }],
         skipped: [{ toolName: 'notify', source: 'autoload', reason: 'not_needed_for_turn' }],
         counts: {
           core: 1,
@@ -1150,12 +1151,12 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(toolContext).toMatchObject({
       activeTools: [
         {
-          name: 'contact_lookup',
-          description: 'Look up a contact.',
+          name: 'contact',
+          description: 'Manage contacts.',
         },
       ],
       adaptiveSnapshot: {
-        tools: [{ toolName: 'contact_lookup', source: 'core' }],
+        tools: [{ toolName: 'contact', source: 'core' }],
         skipped: [{ toolName: 'notify', reason: 'not_needed_for_turn' }],
       },
     });
@@ -1174,7 +1175,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       },
     });
     expect(emittedSnapshots.at(-1)?.toolContext).toMatchObject({
-      activeTools: [{ name: 'contact_lookup' }],
+      activeTools: [{ name: 'contact' }],
     });
   });
 

@@ -189,7 +189,10 @@ function normalizeLifecycleArguments(args: Record<string, unknown>): Record<stri
 
 function normalizeUnifiedMemoryArguments(args: Record<string, unknown>): Record<string, unknown> {
   const action = normalizeOptionalString(args.action).toLowerCase();
-  if (action === 'delete' || action === 'redact') {
+  if (action === 'write') {
+    return normalizeMemoryWriteArguments(args);
+  }
+  if (action === 'delete' || action === 'patch' || action === 'redact') {
     return normalizeAliasedStringArgument(args, 'memory_id', ['id', 'memoryId']);
   }
   if (action === 'restore') {
@@ -214,14 +217,6 @@ export function normalizeToolArguments(
 
   if (toolName === 'memory') {
     return normalizeUnifiedMemoryArguments(args);
-  }
-
-  if (toolName === 'memory_patch' || toolName === 'memory_delete' || toolName === 'memory_redact') {
-    return normalizeAliasedStringArgument(args, 'memory_id', ['id', 'memoryId']);
-  }
-
-  if (toolName === 'undo_memory_delete') {
-    return normalizeAliasedStringArgument(args, 'delete_id', ['id', 'deleteId']);
   }
 
   if (toolName === 'self_restart' || toolName === 'self_rebuild') {

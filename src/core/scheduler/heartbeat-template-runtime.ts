@@ -482,7 +482,8 @@ function resolveCompanionNameFromCharacterVariables(
   if (!provider) return undefined;
   const variables = provider();
   for (const key of ['char', 'character_name', 'name', 'character', 'character.name']) {
-    const candidate = variables[key].trim();
+    const raw = variables[key];
+    const candidate = typeof raw === 'string' ? raw.trim() : '';
     if (candidate) return candidate;
   }
   return undefined;

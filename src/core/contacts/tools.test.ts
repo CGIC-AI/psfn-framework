@@ -70,7 +70,20 @@ describe('contact tools', () => {
       expect(store.getById(contact.id)!.trustLevel).toBe('public');
     });
 
-    it('accepts legacy action aliases inside the unified tool', async () => {
+    it('declares action-aware capability requirements for reads and mutations', () => {
+      const tool = createContactTool(store) as ReturnType<typeof createContactTool> & {
+        requiredCapability?: (params: Record<string, unknown>) => unknown;
+      };
+
+      expect(tool.requiredCapability?.({ action: 'list' })).toBe('identity.read');
+      expect(tool.requiredCapability?.({ action: 'lookup', contactId: 'contact-1' })).toBe('identity.read');
+      expect(tool.requiredCapability?.({ action: 'note', contactId: 'contact-1', notes: 'x' })).toBe('identity.write.runtime');
+      expect(tool.requiredCapability?.({ action: 'set_trust', contactId: 'contact-1', trustLevel: 'public' })).toBe('identity.write.runtime');
+      expect(tool.requiredCapability?.({ action: 'link_identity', contactId: 'contact-1' })).toBe('identity.write.runtime');
+      expect(tool.requiredCapability?.({ action: 'set_channel_privacy', contactId: 'contact-1' })).toBe('identity.write.runtime');
+    });
+
+    it('rejects retired lookup action aliases inside the unified tool', async () => {
       const contact = store.upsert({ displayName: 'Alias User', notes: 'Alias works' });
       const tool = createContactTool(store);
 
@@ -79,11 +92,11 @@ describe('contact tools', () => {
         contactId: contact.id,
       });
 
-      expect(resultText(result)).toContain(`Canonical ID: ${contact.id}`);
-      expect(resultText(result)).toContain('Alias works');
+      expect(resultText(result)).toContain('action must be one of');
+      expect(result.details?.isError).toBe(true);
     });
 
-    it('keeps legacy list aliases working through the unified tool', async () => {
+    it('rejects retired list action aliases inside the unified tool', async () => {
       store.upsert({ displayName: 'Grace', trustLevel: 'trusted', relationshipType: 'friend' });
       const tool = createContactTool(store);
 
@@ -91,8 +104,8 @@ describe('contact tools', () => {
         action: 'contact_list',
       });
 
-      expect(resultText(result)).toContain('Contacts (1)');
-      expect(resultText(result)).toContain('Grace [trusted/friend]');
+      expect(resultText(result)).toContain('action must be one of');
+      expect(result.details?.isError).toBe(true);
     });
 
     it('fails closed when mutation-shaped params are supplied without an action', async () => {

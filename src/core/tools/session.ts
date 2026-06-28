@@ -24,19 +24,12 @@ const DEFAULT_SESSION_LIST_LIMIT = 20;
 const MAX_SESSION_LIST_LIMIT = 100;
 const SESSION_TOOL_ACTION_NAMES = [
   'list',
-  'session_list',
   'new',
-  'session_new',
   'resume',
-  'session_resume',
   'search',
-  'session_search',
   'grep',
-  'session_grep',
   'start_focus',
-  'focus_start',
   'complete_focus',
-  'focus_complete',
 ] as const;
 const SESSION_TOOL_ACTION_HELP = [
   'list',
@@ -108,7 +101,7 @@ interface SessionToolParams extends SessionNewParams {
 }
 
 interface SessionNewDetails {
-  action: 'session_new';
+  action: 'new';
   switched: true;
   previousSessionId: string | null;
   previousChannelType: string | null;
@@ -210,9 +203,9 @@ function isBackgroundContinuationContext(): boolean {
   return purpose.includes('deferred_tool_handoff');
 }
 
-function rejectBackgroundSessionMutation(action: 'session_new' | 'session_resume') {
+function rejectBackgroundSessionMutation(action: 'new' | 'resume') {
   return textResultWithError(
-    `${action} is unavailable during background continuation execution. Start a foreground turn to switch sessions.`,
+    `session action="${action}" is unavailable during background continuation execution. Start a foreground turn to switch sessions.`,
     true,
   );
 }
@@ -233,25 +226,18 @@ function normalizeSessionAction(params: SessionToolParams): SessionToolAction {
 
   switch (rawAction) {
     case 'list':
-    case 'session_list':
       return 'list';
     case 'new':
-    case 'session_new':
       return 'new';
     case 'resume':
-    case 'session_resume':
       return 'resume';
     case 'search':
-    case 'session_search':
       return 'search';
     case 'grep':
-    case 'session_grep':
       return 'grep';
     case 'start_focus':
-    case 'focus_start':
       return 'start_focus';
     case 'complete_focus':
-    case 'focus_complete':
       return 'complete_focus';
     default:
       throw new Error(`action must be one of: ${SESSION_TOOL_ACTION_HELP}`);
@@ -285,7 +271,7 @@ export function createSessionNewTool(options: SessionNewToolOptions): AgentTool<
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<SessionNewDetails | { isError?: boolean }>> => {
       if (isBackgroundContinuationContext()) {
-        return rejectBackgroundSessionMutation('session_new');
+        return rejectBackgroundSessionMutation('new');
       }
       const metadata = toMetadata(params.metadata);
       const previous = resolvePreviousSession(options.dataDir, metadata);
@@ -294,7 +280,7 @@ export function createSessionNewTool(options: SessionNewToolOptions): AgentTool<
         options.idFactory?.(timestamp) ?? buildSessionId(timestamp),
       );
       if (!newSessionId) {
-        return textResultWithError('session_new failed: generated session ID is invalid.', true);
+        return textResultWithError('session action="new" failed: generated session ID is invalid.', true);
       }
 
       const newChannelType = inferSessionChannelType(newSessionId) ?? 'api';
@@ -307,11 +293,11 @@ export function createSessionNewTool(options: SessionNewToolOptions): AgentTool<
           timestamp,
         });
       } catch (error) {
-        return textResultWithError(`session_new failed: ${toErrorMessage(error)}.`, true);
+        return textResultWithError(`session action="new" failed: ${toErrorMessage(error)}.`, true);
       }
 
       const details: SessionNewDetails = {
-        action: 'session_new',
+        action: 'new',
         switched: true,
         previousSessionId: previous.sessionId,
         previousChannelType: previous.channelType,
@@ -324,7 +310,7 @@ export function createSessionNewTool(options: SessionNewToolOptions): AgentTool<
         content: [{
           type: 'text',
           text:
-            `session_new: active context switched to "${newSessionId}"`
+            `session action="new": active context switched to "${newSessionId}"`
             + `${previous.sessionId ? ` (previous "${previous.sessionId}")` : ''}.`,
         }] satisfies TextContent[],
         details,
@@ -382,11 +368,11 @@ export function createSessionResumeTool(
       _signal?: AbortSignal,
     ): Promise<AgentToolResult<{ isError?: boolean }>> => {
       if (isBackgroundContinuationContext()) {
-        return rejectBackgroundSessionMutation('session_resume');
+        return rejectBackgroundSessionMutation('resume');
       }
       const requestedSessionId = params.sessionId.trim();
       if (!requestedSessionId) {
-        return textResultWithError('session_resume requires a non-empty sessionId.', true);
+        return textResultWithError('session action="resume" requires a non-empty sessionId.', true);
       }
 
       const target = manager.getSessionActivity(requestedSessionId);
@@ -438,7 +424,7 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
     label: 'session',
     description:
       'Unified session continuity surface for list/search/grep/new/resume and focus workflow actions. '
-      + `Use action=${SESSION_TOOL_ACTION_HELP}. Legacy action aliases remain available during migration.`,
+      + `Use action=${SESSION_TOOL_ACTION_HELP}.`,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(SESSION_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {
         description:

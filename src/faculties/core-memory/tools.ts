@@ -10,7 +10,12 @@ import {
   createCreateConcernTool,
   createListConcernsTool,
 } from '../../core/intention/tools.js';
-import { createValuesListTool, type ValuesListParams } from '../values/tools.js';
+import {
+  createValuesAddTool,
+  createValuesListTool,
+  createValuesUpdateTool,
+  type ValuesListParams,
+} from '../values/tools.js';
 import type { ValuesJournalStore } from '../values/store.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
@@ -29,6 +34,8 @@ const ORIENT_ACTIONS = [
   'replace',
   'reorient',
   'values_list',
+  'values_add',
+  'values_update',
   'create_concern',
   'list_concerns',
   'resolve_concern',
@@ -54,6 +61,9 @@ interface OrientToolParams extends ValuesListParams {
   action: OrientAction;
   block?: CoreMemoryLabel;
   text?: string;
+  value?: string;
+  context?: string;
+  version?: number;
   separator?: string;
   persona?: string;
   human?: string;
@@ -123,7 +133,8 @@ export function createOrientTool(
       'Manage active orientation across persona, human, and goals blocks. '
       + 'Use action=append for incremental updates, action=replace to rewrite one block, '
       + 'action=reorient for a holistic refresh of all three blocks, '
-      + 'action=values_list to inspect recent values reflections, and '
+      + 'action=values_list to inspect recent values reflections, '
+      + 'action=values_add|values_update to append values journal entries or append-only revisions, and '
       + 'action=create_concern|list_concerns|resolve_concern to manage active open threads, reminders, checkups, and proactive communication items. '
       + 'When you decide "I should check this later", "I will follow up", "ask about this tomorrow", or similar, call orient action=create_concern in the same turn instead of only saying it in chat or journal prose. '
       + 'Open threads are not necessarily problems. Put follow-ups such as "reach out tonight" here, not in scratchpad. '
@@ -161,6 +172,18 @@ export function createOrientTool(
         minimum: 1,
         maximum: 200,
         description: 'Optional bounded limit for action=values_list or action=list_concerns.',
+      })),
+      value: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Values statement for action=values_add or action=values_update.',
+      })),
+      context: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Optional values prompt/context for action=values_add or action=values_update.',
+      })),
+      version: Type.Optional(Type.Integer({
+        minimum: 1,
+        description: 'Existing values journal version for action=values_update.',
       })),
       priority: Type.Optional(Type.Unsafe<ActiveConcernPriority>({
         type: 'string',
@@ -218,6 +241,27 @@ export function createOrientTool(
           return createValuesListTool(requireValuesJournal(options.valuesJournal)).execute(
             toolCallId,
             { limit: params.limit },
+          );
+        }
+
+        if (action === 'values_add') {
+          return createValuesAddTool(requireValuesJournal(options.valuesJournal)).execute(
+            toolCallId,
+            {
+              value: params.value ?? '',
+              ...(params.context !== undefined ? { context: params.context } : {}),
+            },
+          );
+        }
+
+        if (action === 'values_update') {
+          return createValuesUpdateTool(requireValuesJournal(options.valuesJournal)).execute(
+            toolCallId,
+            {
+              version: params.version ?? 0,
+              value: params.value ?? '',
+              ...(params.context !== undefined ? { context: params.context } : {}),
+            },
           );
         }
 

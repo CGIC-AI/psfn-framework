@@ -81,14 +81,31 @@ const SHARD_TOOLSET_ALL = '*';
 const SHARD_SYNC_POLICY_VERSION = 1;
 const SHARD_SYNC_MEMORY_TARGET = 'memory:index';
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
-const BLOCKED_SHARD_TOOL_NAMES = new Set(['subagent', 'spawn_subagent', 'load_tools']);
-const APPRENTICE_SHARD_TOOL_EXTRAS = [
-  'contact_list',
+const BLOCKED_SHARD_TOOL_NAMES = new Set([
+  'subagent',
+  'spawn_subagent',
+  'load_tools',
+  'memory_write',
   'memory_import_batch',
+  'memory_patch',
+  'memory_redact',
+  'memory_delete',
+  'undo_memory_delete',
+  'scratchpad_read',
+  'scratchpad_write',
+  'contact_list',
+  'contact_lookup',
+  'contact_note',
+  'contact_set_trust',
+  'contact_link_identity',
+  'contact_set_channel_privacy',
+  'contact_set_machine_intelligence',
+]);
+const APPRENTICE_SHARD_TOOL_EXTRAS = [
 ] as const;
 export const DEFAULT_SHARD_TOOLSET = [
-  'memory_write',
-  'contact_lookup',
+  'memory',
+  'contact',
   'repo_status',
   'repo_diff',
 ] as const;
@@ -1250,7 +1267,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         if (this.isShardMemoryImportTool(tool.name, params)) {
           return this.quarantineShardMemoryImport(tool.name, toolCallId, params, memoryReviewContext);
         }
-        this.enforceShardToolSyncPolicy(tool.name, shardId, toolCallId);
+        this.enforceShardToolSyncPolicy(tool.name, params, shardId, toolCallId);
         const scopedParams = this.applyShardSourceParams(tool.name, params, shardId);
         // scopedParams has extra shard-source fields; tool.execute expects Static<TSchema>
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1384,8 +1401,13 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     return decision;
   }
 
-  private enforceShardToolSyncPolicy(toolName: string, shardId: string, toolCallId: string): void {
-    const operation = this.resolveShardToolSyncOperation(toolName);
+  private enforceShardToolSyncPolicy(
+    toolName: string,
+    params: unknown,
+    shardId: string,
+    toolCallId: string,
+  ): void {
+    const operation = this.resolveShardToolSyncOperation(toolName, params);
     if (!operation) {
       return;
     }
@@ -1417,7 +1439,27 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
 
   private resolveShardToolSyncOperation(
     toolName: string,
+    params: unknown,
   ): ShardSessionMemorySyncEnvelope['operation'] | null {
+    if (toolName === 'memory') {
+      if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+        return null;
+      }
+      const action = typeof (params as Record<string, unknown>).action === 'string'
+        ? (params as Record<string, unknown>).action.trim().toLowerCase()
+        : '';
+      if (action === 'write') return 'memory_write';
+      if (action === 'import') return 'memory_import_batch';
+      if (
+        action === 'patch'
+        || action === 'redact'
+        || action === 'delete'
+        || action === 'restore'
+      ) {
+        return 'memory_redact';
+      }
+      return null;
+    }
     if (
       toolName !== 'memory_write'
       && toolName !== 'memory_import_batch'
@@ -1433,6 +1475,21 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     params: unknown,
     shardId: string,
   ): unknown {
+    if (toolName === 'memory') {
+      if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+        return params;
+      }
+      const action = typeof (params as Record<string, unknown>).action === 'string'
+        ? (params as Record<string, unknown>).action.trim().toLowerCase()
+        : '';
+      if (action !== 'write') {
+        return params;
+      }
+      return {
+        ...(params as Record<string, unknown>),
+        [INTERNAL_SHARD_SOURCE_PARAM]: `shard:${shardId}`,
+      };
+    }
     if (
       toolName !== 'memory_write'
       && toolName !== 'memory_import_batch'

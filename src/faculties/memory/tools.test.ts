@@ -155,24 +155,46 @@ describe('createMemoryTool', () => {
     }));
   });
 
-  it('accepts action=memory_write as a legacy alias on the unified memory tool', async () => {
+  it('patches through action=patch with unified provenance', async () => {
     const store = mockUnifiedStore();
     const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
 
-    await tool.execute('memory-call-alias', {
+    const result = await tool.execute('memory-call-patch', {
+      action: 'patch',
+      memory_id: 'mem-patch',
+      confidence: 0.92,
+      append_tags: ' corrected, preference ',
+      reason: 'operator correction',
+    });
+
+    expect(writer.patchMemory).toHaveBeenCalledWith(expect.objectContaining({
+      memoryId: 'mem-patch',
+      confidence: 0.92,
+      appendTags: ['corrected', 'preference'],
+      reason: 'operator correction',
+      sourceRef: 'source:tool:memory|action:patch|invocation:memory-call-patch',
+      sourceType: 'tool_write',
+      provenance: {
+        toolName: 'memory',
+        toolCallId: 'memory-call-patch',
+      },
+    }));
+    expect(resultText(result as any)).toContain('Memory patched');
+  });
+
+  it('rejects retired helper action names on canonical memory', async () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-retired-alias', {
       action: 'memory_write',
       text: 'Alias write',
       type: 'semantic',
     } as any);
 
-    expect(writer.write).toHaveBeenCalledWith(expect.objectContaining({
-      text: 'Alias write',
-      sourceRef: 'source:tool:memory|action:write|invocation:memory-call-alias',
-      provenance: {
-        toolName: 'memory',
-        toolCallId: 'memory-call-alias',
-      },
-    }));
+    expect(writer.write).not.toHaveBeenCalled();
+    expect(resultText(result as any)).toContain('invalid action');
+    expect((result.details as any).isError).toBe(true);
   });
 
   it('searches through action=search and formats results', async () => {
@@ -1270,7 +1292,7 @@ describe('scratchpad tools', () => {
     expect((missingAppendId.details as any).isError).toBe(true);
   });
 
-  it('accepts action=scratchpad_read as a legacy alias on the unified scratchpad tool', async () => {
+  it('rejects retired read helper action names on canonical scratchpad', async () => {
     const store = mockScratchpadStore();
     store.listScratchpadEntries.mockReturnValue([]);
     const tool = createScratchpadTool(store as unknown as MemoryStorePort);
@@ -1280,8 +1302,9 @@ describe('scratchpad tools', () => {
       limit: 4,
     } as any);
 
-    expect(resultText(result as any)).toContain('Scratchpad is empty');
-    expect(store.listScratchpadEntries).toHaveBeenCalledWith(4);
+    expect(resultText(result as any)).toContain('invalid action');
+    expect((result.details as any).isError).toBe(true);
+    expect(store.listScratchpadEntries).not.toHaveBeenCalled();
   });
 
   it('scratchpad_read returns empty-state message', async () => {

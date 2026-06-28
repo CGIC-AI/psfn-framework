@@ -12,22 +12,12 @@ import {
 import { DEFAULT_REPL_CONFIG, type REPLConfig } from '../../../core/tools/analysis-workbench/types.js';
 import type { MessageSender } from '../../../system/lifecycle/notifications.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
-import {
-  createPromotedToolsAddTool,
-  createPromotedToolsListTool,
-  createPromotedToolsRemoveTool,
-  createPromotedToolsSwapTool,
-  type PromotedExtendedToolsManager,
-} from '../../../system/settings-tools.js';
 import { wireFilesystemRuntime, type FilesystemRuntimeTarget } from '../../../boundary/integrations/filesystem/runtime-wiring.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import {
-  createSessionNewTool,
-  createSessionResumeTool,
   createSessionTool,
 } from '../../../core/tools/session.js';
 import { resolveSessionsDir } from '../../../persistence/layout.js';
-import { createCompleteFocusTool, createStartFocusTool } from '../../../core/tools/focus.js';
 import { PromptLayerStore } from '../../../core/identity/prompt-store.js';
 import { PromptComposer } from '../../../core/identity/prompt-composer.js';
 import { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
@@ -64,18 +54,6 @@ import {
 } from '../../../core/scheduler/heartbeat-runtime.js';
 
 const log = createComponentLogger('SharedWiring');
-
-function hasPromotedToolsManager(
-  target: ToolRegistrarTarget,
-): target is ToolRegistrarTarget & PromotedExtendedToolsManager {
-  return (
-    typeof (target as Partial<PromotedExtendedToolsManager>).getPromotedExtendedToolsLimit === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).getPromotedExtendedTools === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).addPromotedExtendedTool === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).removePromotedExtendedTool === 'function'
-    && typeof (target as Partial<PromotedExtendedToolsManager>).swapPromotedExtendedTools === 'function'
-  );
-}
 
 export interface PromptRuntimeTarget extends ToolRegistrarTarget {
   promptComposer: PromptComposer | null;
@@ -205,13 +183,6 @@ export function wireSettingsRuntime(
   if (options.registerSystemTool !== false) {
     target.registerTool(createSystemTool(config), 'core');
   }
-  if (!hasPromotedToolsManager(target)) {
-    return;
-  }
-  target.registerTool(createPromotedToolsListTool(target), 'extended');
-  target.registerTool(createPromotedToolsAddTool(target), 'extended');
-  target.registerTool(createPromotedToolsRemoveTool(target), 'extended');
-  target.registerTool(createPromotedToolsSwapTool(target), 'extended');
 }
 
 export function wireSessionToolsRuntime(
@@ -229,23 +200,10 @@ export function wireSessionToolsRuntime(
     seedSession: (sessionId) => {
       sessionManager.appendSystemNote(
         sessionId,
-        'Session initialized via session_new.',
+        'Session initialized via session action=new.',
       );
     },
   }), 'core');
-  target.registerTool(createSessionNewTool({
-    dataDir,
-    setActiveSession: (sessionId) => sessionManager.setActiveContextSession(sessionId),
-    seedSession: (sessionId) => {
-      sessionManager.appendSystemNote(
-        sessionId,
-        'Session initialized via session_new.',
-      );
-    },
-  }), 'extended');
-  target.registerTool(createSessionResumeTool(sessionManager, { dataDir }), 'extended');
-  target.registerTool(createStartFocusTool(sessionManager), 'extended');
-  target.registerTool(createCompleteFocusTool(sessionManager, llmProvider), 'extended');
 }
 
 export function wireFilesystemToolsRuntime(

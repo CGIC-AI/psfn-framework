@@ -602,15 +602,22 @@ describe('SubstrateAgent.registerTool', () => {
     },
   };
 
-  function makeAssistantToolCallMessage(toolNames: string[]): any {
+  function makeAssistantToolCallMessage(toolCalls: Array<string | {
+    name: string;
+    arguments?: Record<string, unknown>;
+  }>): any {
     return {
       role: 'assistant',
-      content: toolNames.map((name, index) => ({
-        type: 'toolCall',
-        id: `call-${index + 1}`,
-        name,
-        arguments: {},
-      })),
+      content: toolCalls.map((entry, index) => {
+        const name = typeof entry === 'string' ? entry : entry.name;
+        const args = typeof entry === 'string' ? {} : entry.arguments ?? {};
+        return {
+          type: 'toolCall',
+          id: `call-${index + 1}`,
+          name,
+          arguments: args,
+        };
+      }),
       api: 'chat',
       provider: 'test',
       model: 'test-model',
@@ -701,14 +708,6 @@ describe('SubstrateAgent.registerTool', () => {
     } as any, 'extended');
 
     agent.registerTool({
-      name: 'spawn_subagent',
-      label: 'spawn_subagent',
-      description: 'parallel bounded subagent fan-out',
-      parameters: { type: 'object' as const, properties: {} },
-      execute: vi.fn<any>().mockResolvedValue({ content: [{ type: 'text', text: 'ok' }], details: {} }),
-    } as any, 'extended');
-
-    agent.registerTool({
       name: 'subagent',
       label: 'subagent',
       description: 'unified bounded subagent control surface',
@@ -734,7 +733,6 @@ describe('SubstrateAgent.registerTool', () => {
 
     const catalog = agent.getToolCatalog();
     const repoStatus = [...catalog.extended].find(tool => tool.name === 'repo_status') as any;
-    const spawnSubagent = [...catalog.extended].find(tool => tool.name === 'spawn_subagent') as any;
     const subagent = [...catalog.core].find(tool => tool.name === 'subagent') as any;
     const memoryWrite = [...catalog.core].find(tool => tool.name === 'memory_write') as any;
     const scheduleTask = [...catalog.extended].find(tool => tool.name === 'schedule_task') as any;
@@ -744,16 +742,6 @@ describe('SubstrateAgent.registerTool', () => {
       exclusivityKeyPolicy: 'none',
       maxParallel: 3,
       interruptibility: 'cooperative',
-      eligibility: {
-        foreground: true,
-        background: true,
-      },
-    });
-    expect(spawnSubagent?.wiringMeta?.concurrency).toMatchObject({
-      class: 'spawn_subagent',
-      exclusivityKeyPolicy: 'none',
-      maxParallel: 5,
-      interruptibility: 'non_interruptible',
       eligibility: {
         foreground: true,
         background: true,
@@ -797,13 +785,13 @@ describe('SubstrateAgent.registerTool', () => {
     expect((agent as any).agent.__psfnToolSchedulerPatched).toBe(true);
   });
 
-  it('runs sibling spawn_subagent tool calls with overlap in one parent-loop assistant turn', async () => {
+  it('runs sibling subagent tool calls with overlap in one parent-loop assistant turn', async () => {
     const starts = new Map<string, number>();
     const ends = new Map<string, number>();
-    const spawnSubagent = {
-      name: 'spawn_subagent',
-      label: 'spawn_subagent',
-      description: 'spawn subagents',
+    const subagent = {
+      name: 'subagent',
+      label: 'subagent',
+      description: 'spawn subagents through the canonical subagent surface',
       parameters: { type: 'object', properties: {} },
       execute: vi.fn<any>(async (toolCallId: string) => {
         starts.set(toolCallId, Date.now());
@@ -829,7 +817,11 @@ describe('SubstrateAgent.registerTool', () => {
     } as any;
 
     const streamFn = makeLoopStreamFn([
-      makeAssistantToolCallMessage(['spawn_subagent', 'spawn_subagent', 'spawn_subagent']),
+      makeAssistantToolCallMessage([
+        { name: 'subagent', arguments: { action: 'spawn', name: 'one', task: 'one' } },
+        { name: 'subagent', arguments: { action: 'spawn', name: 'two', task: 'two' } },
+        { name: 'subagent', arguments: { action: 'spawn', name: 'three', task: 'three' } },
+      ]),
       makeAssistantTextMessage('all shards complete'),
     ]);
     const events: any[] = [];
@@ -839,7 +831,7 @@ describe('SubstrateAgent.registerTool', () => {
       {
         systemPrompt: 'test system',
         messages: [],
-        tools: [spawnSubagent],
+        tools: [subagent],
       } as any,
       makeLoopConfig(),
       new AbortController().signal,
@@ -860,10 +852,10 @@ describe('SubstrateAgent.registerTool', () => {
   it('keeps non-shard tools sequential in the same parent-loop scheduling path', async () => {
     const starts: number[] = [];
     const ends: number[] = [];
-    const repoStatus = {
-      name: 'repo_status',
-      label: 'repo_status',
-      description: 'repo read',
+    const makeStatusProbe = (name: string) => ({
+      name,
+      label: name,
+      description: 'status read',
       parameters: { type: 'object', properties: {} },
       execute: vi.fn<any>(async () => {
         starts.push(Date.now());
@@ -886,19 +878,21 @@ describe('SubstrateAgent.registerTool', () => {
           },
         },
       },
-    } as any;
+    } as any);
+    const statusProbeA = makeStatusProbe('status_probe_a');
+    const statusProbeB = makeStatusProbe('status_probe_b');
 
     const stream = agentLoopWithScheduler(
       [{ role: 'user', content: [{ type: 'text', text: 'status twice' }] } as any],
       {
         systemPrompt: 'test system',
         messages: [],
-        tools: [repoStatus],
+        tools: [statusProbeA, statusProbeB],
       } as any,
       makeLoopConfig(),
       new AbortController().signal,
       makeLoopStreamFn([
-        makeAssistantToolCallMessage(['repo_status', 'repo_status']),
+        makeAssistantToolCallMessage(['status_probe_a', 'status_probe_b']),
         makeAssistantTextMessage('done'),
       ]),
       { maxParallelToolCalls: 8 },
@@ -913,11 +907,11 @@ describe('SubstrateAgent.registerTool', () => {
     expect(starts[1]).toBeGreaterThanOrEqual(ends[0] as number);
   });
 
-  it('fails closed when spawn_subagent rejects due to shard limit or health guard', async () => {
-    const spawnSubagent = {
-      name: 'spawn_subagent',
-      label: 'spawn_subagent',
-      description: 'spawn subagents',
+  it('fails closed when subagent rejects due to shard limit or health guard', async () => {
+    const subagent = {
+      name: 'subagent',
+      label: 'subagent',
+      description: 'spawn subagents through the canonical subagent surface',
       parameters: { type: 'object', properties: {} },
       execute: vi.fn<any>(async (toolCallId: string) => {
         if (toolCallId === 'call-2') {
@@ -949,12 +943,15 @@ describe('SubstrateAgent.registerTool', () => {
       {
         systemPrompt: 'test system',
         messages: [],
-        tools: [spawnSubagent],
+        tools: [subagent],
       } as any,
       makeLoopConfig(),
       new AbortController().signal,
       makeLoopStreamFn([
-        makeAssistantToolCallMessage(['spawn_subagent', 'spawn_subagent']),
+        makeAssistantToolCallMessage([
+          { name: 'subagent', arguments: { action: 'spawn', name: 'one', task: 'one' } },
+          { name: 'subagent', arguments: { action: 'spawn', name: 'two', task: 'two' } },
+        ]),
         makeAssistantTextMessage('done'),
       ]),
       { maxParallelToolCalls: 3 },
@@ -1302,7 +1299,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const promptCallsBefore = promptSpy.mock.calls.length;
     mockAssistantResponse('Deferred continuation output');
     await agent.handleMessage(buildDeferredToolHandoffMessage('action-42', {
-      toolNames: ['image_edit'],
+      toolNames: ['media'],
       intendedAction: 'continue with deferred tools',
       turn: {
         turnId: 'source-turn-42',
@@ -3928,7 +3925,7 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
-  it('activates schedule tools through toolset now that no extended tools default to background-only', async () => {
+  it('activates canonical extended tools through toolset now that no extended tools default to background-only', async () => {
     const eventBus = new EventBus();
     const agent = new SubstrateAgent(
       eventBus,
@@ -3938,8 +3935,8 @@ describe('SubstrateAgent.handleMessage', () => {
       makeConfig(),
     );
 
-    agent.registerTool(makeExtendedProbeTool('repo_status'), 'extended');
-    agent.registerTool(makeExtendedProbeTool('schedule_task'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('beads'), 'extended');
+    agent.registerTool(makeExtendedProbeTool('media'), 'extended');
 
     const sameTurnEvents: any[] = [];
     const adaptiveDecisions: any[] = [];
@@ -3960,7 +3957,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(toolset).toBeDefined();
     const result = await (toolset as any).execute('load-background-skip', {
       action: 'activate',
-      tools: ['schedule_task', 'repo_status'],
+      tools: ['beads', 'media'],
     });
 
     const payload = JSON.parse(result.content[0]?.text as string) as {
@@ -3968,23 +3965,23 @@ describe('SubstrateAgent.handleMessage', () => {
       activatedTools?: string[];
     };
     expect(payload.backgroundOnlyTools ?? []).toEqual([]);
-    expect(payload.activatedTools).toEqual(['schedule_task', 'repo_status']);
+    expect(payload.activatedTools).toEqual(['beads', 'media']);
     const runtimeState = agent.getAdaptiveToolRuntimeState();
     const activeToolNames = runtimeState.activeTools.map(tool => tool.toolName);
-    expect(activeToolNames).toContain('repo_status');
-    expect(activeToolNames).toContain('schedule_task');
+    expect(activeToolNames).toContain('beads');
+    expect(activeToolNames).toContain('media');
 
     expect(sameTurnEvents.at(-1)).toMatchObject({
-      requestedTools: ['schedule_task', 'repo_status'],
-      overlayEligible: ['schedule_task', 'repo_status'],
-      activatedTools: ['schedule_task', 'repo_status'],
+      requestedTools: ['beads', 'media'],
+      overlayEligible: ['beads', 'media'],
+      activatedTools: ['beads', 'media'],
       skippedBackgroundOnly: [],
       intent: 'ops',
       taskKind: 'chat',
     });
     expect(adaptiveDecisions).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        toolName: 'schedule_task',
+        toolName: 'beads',
         source: 'extended_loaded',
         decision: 'activated',
       }),

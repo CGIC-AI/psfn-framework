@@ -870,7 +870,7 @@ describe('settings', () => {
           'repo_status',
           'prompt_layer_list',
           'settings_get',
-          'contact_lookup',
+          'media',
         ],
       });
 
@@ -2136,7 +2136,7 @@ describe('settings', () => {
 
     it('parseSettingsForm bounds promotedExtendedTools to four slots', () => {
       const params = new URLSearchParams({
-        promotedExtendedTools: 'repo_status, session_list, prompt_layer_list, settings_get, contact_lookup',
+        promotedExtendedTools: 'repo_status, session_list, prompt_layer_list, settings_get, media',
       });
 
       const [settings, errors] = parseSettingsForm(params);

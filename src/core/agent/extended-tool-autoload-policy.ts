@@ -64,10 +64,7 @@ export const DEFAULT_EXTENDED_TOOL_AUTOLOAD_CANDIDATES: Readonly<Record<TurnInte
   ],
   reflection: [],
   social: [
-    'selfie_create',
-    'image_create',
-    'image_edit',
-    'image_analyze',
+    'media',
     'vault',
   ],
 };

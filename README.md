@@ -39,7 +39,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Layered Prompt Stack**: 5-layer editable prompt system (base to operator to runtime to channel to task) with versioning, rollback, and admin UI
 - **Repository Surface**: unified `repo` inspection in the parent runtime, with mutation actions guarded by tier, runtime policy, path allowlists, branch checks, and audit trail when explicitly enabled
 - **Analysis Workbench**: Bounded RLM+REPL analysis for large files, codebases, logs, transcripts, datasets, or evidence sets that should not be stuffed into the main conversation context
-- **Bounded Subagents**: Parallel `spawn_subagent` workers for short-horizon concurrent tasks, distinct from the longer-horizon shard fold-back model
+- **Bounded Subagents**: Parallel `subagent action=spawn` workers for short-horizon concurrent tasks, distinct from the longer-horizon shard fold-back model
 - **Obsidian Vault**: unified `vault` tool (`action=read|write|search|daily`) for reading and writing Obsidian notes, with auto-publish for consolidated reflections
 
 ### Channels
@@ -297,7 +297,7 @@ Operator / Garden (localhost)
 
 ### Agent Tools
 
-Your companion has access to a mostly unified direct-tool surface during conversation. `tool_search` and `toolset` are the canonical always-on discovery/control path for non-default overlays. Legacy split names remain only as migration aliases or compatibility shims where the runtime still accepts them. The parent-agent repo surface is intentionally `read_only` here, so repository mutation must come back through a guarded gateway path, bounded worker artifact, or another explicitly enabled flow. See [`docs/tool-surface.md`](./docs/tool-surface.md) for the target stack and the current-to-target mapping.
+Your companion's model-facing tool surface is governed by Charter Law 33: one semantic tool per domain, with domain operations exposed as actions on that tool. `tool_search` and `toolset` are the canonical always-on discovery/control path for non-default overlays, but discovery describes canonical tools and schemas rather than reintroducing split callable aliases. The parent-agent repo surface is intentionally `read_only` here, so repository mutation must come back through a guarded gateway path, bounded worker artifact, or another explicitly enabled flow. See [`docs/tool-surface.md`](./docs/tool-surface.md) for the canonical stack and retired-name mapping.
 
 Skills are reusable workflow guidance, not world-execution tools. The runtime manages them through the unified `skill` surface while execution stays on the tool families below.
 
@@ -308,15 +308,15 @@ Skills are reusable workflow guidance, not world-execution tools. The runtime ma
 | **Companion state** | `memory`, `scratchpad`, `contact`, `session`, `identity`, `orient`, `north_star`, `schedule`, `system`, `skill`, `subagent` |
 | **Repository** | `repo action=inspect` in parent read-only mode; mutation actions remain gated and are not the default parent-agent path |
 | **Vault** | `vault action=read|write|search|daily` |
-| **Values** | `orient`, `values_add`, `values_update` |
+| **Values** | `orient action=values_list|values_add|values_update` |
 | **North Star** | `north_star` for charter/identity anchor review and updates |
 | **Scheduler** | `schedule` with `action=list_templates|update_template|run_template|create_reminder|create_follow_up` |
 | **Beads and lifecycle** | `beads action=ready|show|create|update|close|sync`, `system action=read|restart|rebuild`, `notify action=brief|send|approval_request` |
-| **Media** | `media action=generate|edit|analyze`; dedicated `selfie_create` and legacy image aliases may still be exposed during migration |
-| **Bounded workers** | `spawn_subagent` for short-horizon parallel work; `subagent` for bounded worker control |
+| **Media** | `media action=generate|edit|analyze`; `selfie_create` is the first-class self-expression image tool |
+| **Bounded workers** | `subagent action=spawn|message|wait|cancel|status` |
 
 Tool surface split:
-- **Direct agent tools**: `tool_search` and `toolset` stay core; the rest are registered as `core` or `extended`, with overlay activation controlled by `toolset`, promotion, and bounded autoload rules
+- **Direct agent tools**: `tool_search` and `toolset` stay core; the rest are registered as `core` or `extended`, with overlay activation controlled by `toolset`, pinning, and bounded autoload rules. `toolset action=describe` and the Garden Tools page expose the same canonical action schemas, capability requirements, reversibility, interruptibility/concurrency metadata, and bundle membership.
 - **REPL-only helpers**: `analysis_workbench` exposes bounded read-oriented helper functions for large-context inspection, memory/session lookup, and sparse sub-LM checks. Those helper names are separate from the direct-tool catalog and are never promotable direct tools.
 - Some capabilities exist on both surfaces, but the direct tool catalog is the source of truth for what the agent can call outside `analysis_workbench`
 

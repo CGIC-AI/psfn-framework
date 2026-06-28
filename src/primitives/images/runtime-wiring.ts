@@ -7,9 +7,6 @@ import { ImageReferenceStore } from './reference-store.js';
 import type { ImageOperations } from './ops.js';
 import { ImageService } from './service.js';
 import {
-  createImageAnalyzeTool,
-  createImageCreateTool,
-  createImageEditTool,
   createMediaTool,
   createSelfieTool,
   type ImageReferenceResolver,
@@ -37,20 +34,10 @@ function resolveRequiredGatewayMethods(
   switch (toolName) {
     case 'media':
       return ['image.create', 'image.edit', 'web.fetch_binary'];
-    case 'image_create':
-      return includeVisionReview
-        ? ['image.create', 'web.fetch_binary']
-        : ['image.create'];
     case 'selfie_create':
       return includeVisionReview
         ? ['image.create', 'image.edit', 'web.fetch_binary']
         : ['image.create', 'image.edit'];
-    case 'image_edit':
-      return includeVisionReview
-        ? ['image.edit', 'web.fetch_binary']
-        : ['image.edit'];
-    case 'image_analyze':
-      return ['web.fetch_binary'];
     default:
       return [];
   }
@@ -69,10 +56,7 @@ export function registerImageTools(
 ): void {
   const tools: AgentTool<any>[] = [
     createMediaTool(ops, options?.reviewer, { referenceResolver: options?.referenceResolver }),
-    createImageCreateTool(ops, options?.reviewer),
     createSelfieTool(ops, options?.reviewer, { referenceResolver: options?.referenceResolver }),
-    createImageEditTool(ops, options?.reviewer, { referenceResolver: options?.referenceResolver }),
-    ...(options?.reviewer ? [createImageAnalyzeTool(options.reviewer)] : []),
   ];
 
   for (const tool of tools) {

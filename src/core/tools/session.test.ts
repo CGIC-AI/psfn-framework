@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { Value } from '@sinclair/typebox/value';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
   readLastActiveSession,
@@ -83,13 +84,15 @@ describe('session_new tool', () => {
 
       const result = await tool.execute('call-1', {});
       const details = result.details as {
+        action: string;
         previousSessionId: string | null;
         newSessionId: string;
         newChannelType: string;
         switched: boolean;
       };
 
-      expect(toolText(result as any)).toContain('session_new: active context switched');
+      expect(toolText(result as any)).toContain('session action="new": active context switched');
+      expect(details.action).toBe('new');
       expect(details.previousSessionId).toBe('discord:old-session');
       expect(details.newSessionId).toBe('api:session-test-01');
       expect(details.newChannelType).toBe('api');
@@ -157,7 +160,7 @@ describe('session_new tool', () => {
         () => tool.execute('call-bg-1', {}),
       );
 
-      expect(toolText(result as any)).toContain('session_new is unavailable during background continuation execution');
+      expect(toolText(result as any)).toContain('session action="new" is unavailable during background continuation execution');
       expect((result.details as { isError?: boolean }).isError).toBe(true);
       expect(setActiveSession).not.toHaveBeenCalled();
     } finally {
@@ -305,7 +308,7 @@ describe('session list/resume tools', () => {
       () => tool.execute('resume-bg-1', { sessionId: 'api:session-two' }),
     );
 
-    expect(toolText(result)).toContain('session_resume is unavailable during background continuation execution');
+    expect(toolText(result)).toContain('session action="resume" is unavailable during background continuation execution');
     expect((result.details as { isError?: boolean }).isError).toBe(true);
     expect(manager.getActiveContextSession()).toBe('api:session-one');
   });
@@ -415,12 +418,14 @@ class InMemoryTranscriptSearch {
       idFactory: () => 'api:session-unified-new',
       setActiveSession: (sessionId) => manager.setActiveContextSession(sessionId),
       seedSession: (sessionId) => {
-        manager.appendSystemNote(sessionId, 'Session initialized via session_new.');
+        manager.appendSystemNote(sessionId, 'Session initialized via session action=new.');
       },
     });
 
     expect(tool.name).toBe('session');
     expect(tool.label).toBe('session');
+    expect(Value.Check((tool as any).parameters, { action: 'session_resume', sessionId: 'api:session-two' })).toBe(false);
+    expect(Value.Check((tool as any).parameters, { action: 'focus_start', scope: 'diagnose' })).toBe(false);
 
     const listed = await tool.execute('session-list', {});
     const listedPayload = JSON.parse(toolText(listed)) as {
@@ -440,10 +445,10 @@ class InMemoryTranscriptSearch {
     };
     expect(createdDetails.previousSessionId).toBe('api:session-one');
     expect(createdDetails.newSessionId).toBe('api:session-unified-new');
-    expect(store.getLastEntry('api:session-unified-new')?.content).toBe('Session initialized via session_new.');
+    expect(store.getLastEntry('api:session-unified-new')?.content).toBe('Session initialized via session action=new.');
 
     const resumed = await tool.execute('session-resume', {
-      action: 'session_resume',
+      action: 'resume',
       sessionId: 'api:session-two',
     });
     const resumedPayload = JSON.parse(toolText(resumed)) as {
@@ -457,7 +462,7 @@ class InMemoryTranscriptSearch {
     expect(manager.getActiveContextSession()).toBe('api:session-two');
   });
 
-  it('dispatches transcript lookup actions, including legacy aliases, through the unified tool', async () => {
+  it('dispatches transcript lookup actions through the unified tool', async () => {
     store.append({
       channelId: 'api:public-session',
       role: 'assistant',
@@ -542,7 +547,7 @@ class InMemoryTranscriptSearch {
         viewerChannelVisibility: 'public',
       },
       () => tool.execute('session-grep', {
-        action: 'session_grep',
+        action: 'grep',
         pattern: 'Orion launch date',
       }),
     );
@@ -585,7 +590,7 @@ class InMemoryTranscriptSearch {
     const started = await runWithRequestContext(
       { callType: 'tool', purpose: 'agent.turn', channelId: 'api:focus-context' },
       () => tool.execute('focus-start', {
-        action: 'focus_start',
+        action: 'start_focus',
         scope: 'Diagnose context compaction behavior',
       }),
     );

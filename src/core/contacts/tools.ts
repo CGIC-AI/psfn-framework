@@ -1,5 +1,5 @@
 // ── Contact Management Tools ──
-// Unified model-facing contact surface plus compatibility wrappers for legacy tool names.
+// Unified model-facing contact surface plus internal helper factories for domain operations.
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
@@ -16,19 +16,12 @@ import { tagToolWithReversibility } from '../../system/capabilities/safeguards.j
 
 const CONTACT_ACTION_NAMES = [
   'list',
-  'contact_list',
   'lookup',
-  'contact_lookup',
   'note',
-  'contact_note',
   'set_trust',
-  'contact_set_trust',
   'link_identity',
-  'contact_link_identity',
   'set_channel_privacy',
-  'contact_set_channel_privacy',
   'set_machine_intelligence',
-  'contact_set_machine_intelligence',
 ] as const;
 const CONTACT_ACTION_HELP = [
   'list',
@@ -96,25 +89,18 @@ function normalizeContactAction(params: ContactToolParams): ContactAction {
 
   switch (rawAction) {
     case 'list':
-    case 'contact_list':
       return 'list';
     case 'lookup':
-    case 'contact_lookup':
       return 'lookup';
     case 'note':
-    case 'contact_note':
       return 'note';
     case 'set_trust':
-    case 'contact_set_trust':
       return 'set_trust';
     case 'link_identity':
-    case 'contact_link_identity':
       return 'link_identity';
     case 'set_channel_privacy':
-    case 'contact_set_channel_privacy':
       return 'set_channel_privacy';
     case 'set_machine_intelligence':
-    case 'contact_set_machine_intelligence':
       return 'set_machine_intelligence';
     default:
       throw new Error(`action must be one of: ${CONTACT_ACTION_HELP}`);
@@ -460,7 +446,7 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
     description:
       'Unified contact surface for listing, lookup, notes, trust, identity linking, and channel privacy. '
       + `Use action=${CONTACT_ACTION_HELP}. `
-      + 'Trust and disclosure boundaries remain enforced, and legacy contact_* action aliases are accepted.',
+      + 'Trust and disclosure boundaries remain enforced.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union(CONTACT_ACTION_NAMES.map((action) => Type.Literal(action)), {
         description:
@@ -534,20 +520,13 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
             ? 'identity.read'
             : ['identity.read', 'identity.write.runtime'] as const;
         case 'list':
-        case 'contact_list':
         case 'lookup':
-        case 'contact_lookup':
           return 'identity.read';
         case 'note':
-        case 'contact_note':
         case 'set_trust':
-        case 'contact_set_trust':
         case 'link_identity':
-        case 'contact_link_identity':
         case 'set_channel_privacy':
-        case 'contact_set_channel_privacy':
         case 'set_machine_intelligence':
-        case 'contact_set_machine_intelligence':
           return 'identity.write.runtime';
         default:
           return ['identity.read', 'identity.write.runtime'] as const;

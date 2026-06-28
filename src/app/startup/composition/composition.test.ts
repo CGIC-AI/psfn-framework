@@ -214,7 +214,7 @@ function makeExecutionPort(
 }
 
 describe('wireShardAndThinkRuntime split-mode module wiring', () => {
-  it('registers subagent as the canonical core surface and keeps spawn_subagent as extended compatibility', () => {
+  it('registers subagent as the only canonical bounded-worker surface', () => {
     const llm: GatewayLLMProvider = {
       stream: vi.fn(),
       complete: vi.fn(async () => mockResponse('FINAL("noop")')),
@@ -228,7 +228,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
     });
 
     expect(target.registrations.find((entry) => entry.tool.name === 'subagent')?.category).toBe('core');
-    expect(target.registrations.find((entry) => entry.tool.name === 'spawn_subagent')?.category).toBe('extended');
+    expect(target.registrations.some((entry) => entry.tool.name === 'spawn_subagent')).toBe(false);
   });
 
   it('does not expose module mutation helpers for nursery tier', async () => {

@@ -193,7 +193,7 @@ function resolveMismatchedCurrentTurnUrlNotice(imageUrls: readonly string[]): st
 
     return [
       'Current turn already includes live image attachment bytes.',
-      'The URL passed to image_analyze does not match a current-turn attachment and may be stale or refer to a different image.',
+      'The URL passed to media action="analyze" does not match a current-turn attachment and may be stale or refer to a different image.',
       'Do not use a mismatched prior-turn URL for this turn.',
       'Inspect the current attached image already in context, or ask the user to resend or paste the specific URL if they want a different image checked.',
     ].join(' ');
@@ -228,14 +228,14 @@ function buildImageCreateDescription(selfImage: boolean): string {
   if (selfImage) {
     return 'Generate a dedicated selfie or self-portrait of the companion; the result does not have to be a literal selfie angle - any portrait of her works. Use this explicit path when the request is specifically about her own representation; the always-on appearance context is the identity anchor, and this tool adds the self-image reference workflow. When a default reference photo is configured, this tool always works through the image-edit pipeline so the reference anchors her likeness, unless use_reference_image=false; choose reference_image_id or reference_image_tags for a different saved reference. Edit models run as a tiered fallback chain (gpt-image-2 -> nano-banana-2 -> grok-imagine quality), advancing automatically on content-policy blocks or timeouts; use edit_model to start at a more permissive tier for casual filter-sensitive looks like swimwear or tank tops. If the whole chain blocks the request for content policy, do not retry minor prompt variants in the same turn; report the block and ask for a safer non-explicit direction. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
   }
-  return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits, use the dedicated selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
+  return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits, use the first-class selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
 }
 
 function buildImageCreatePromptDescription(selfImage: boolean): string {
   if (selfImage) {
     return 'Full generation prompt for a selfie or self-portrait. Combine the always-on appearance context with the desired pose, camera angle, lighting, background, and style.';
   }
-  return 'Full generation prompt. For selfies or self-portraits, use the dedicated selfie_create tool instead of this generic path.';
+  return 'Full generation prompt. For selfies or self-portraits, use the first-class selfie_create tool instead of this generic path.';
 }
 
 function referenceSelectionSchema() {
@@ -582,7 +582,7 @@ async function executeMediaAnalyze(
       };
     }
 
-    chargeVisionConsult('image_analyze', {
+    chargeVisionConsult('media_analyze', {
       imageCount: inputUrls.length,
       ...(params.question ? { question: params.question } : {}),
     });
@@ -610,7 +610,7 @@ export function createMediaTool(
     name: 'media',
     label: 'media',
     description:
-      'Unified media surface for generate, edit, and analyze actions. Use action="generate" for new image outputs, action="edit" to transform existing inputs, and action="analyze" to inspect visible contents. For selfies or self-portraits, use the dedicated selfie_create tool so the self-image reference workflow is active. Current implementation is image-backed.',
+      'Unified media surface for generate, edit, and analyze actions. Use action="generate" for new image outputs, action="edit" to transform existing inputs, and action="analyze" to inspect visible contents. For selfies, portraits, or self-representation, use the first-class selfie_create tool so the self-expression reference workflow is active. Current implementation is image-backed.',
     parameters: Type.Object({
       action: Type.Union(
         MEDIA_ACTION_VALUES.map((value) => Type.Literal(value)),
@@ -676,7 +676,7 @@ export function createMediaTool(
   return tagToolWithReversibility(withCapabilityRequirement(tool, 'external.web'), 'irreversible');
 }
 
-export function createImageCreateTool(
+function createImageGenerationTool(
   ops: ImageOperations,
   reviewer?: ImageVisionReviewer,
   options?: {
@@ -686,7 +686,7 @@ export function createImageCreateTool(
   },
 ): AgentTool<any> {
   const selfImage = options?.selfImage ?? false;
-  const toolName = options?.toolName ?? 'image_create';
+  const toolName = options?.toolName ?? 'selfie_create';
   const parameterShape = {
     prompt: Type.String({
       description: buildImageCreatePromptDescription(selfImage),
@@ -912,179 +912,9 @@ export function createSelfieTool(
     referenceResolver?: ImageReferenceResolver;
   },
 ): AgentTool<any> {
-  return createImageCreateTool(ops, reviewer, {
+  return createImageGenerationTool(ops, reviewer, {
     selfImage: true,
     toolName: 'selfie_create',
     referenceResolver: options?.referenceResolver,
   });
-}
-
-export function createImageEditTool(
-  ops: ImageOperations,
-  reviewer?: ImageVisionReviewer,
-  options?: {
-    referenceResolver?: ImageReferenceResolver;
-  },
-): AgentTool<any> {
-  return {
-    name: 'image_edit',
-    label: 'image_edit',
-    description:
-      'Edit one or more existing images. Write the prompt as the exact transformation you want, including what should change and what must stay the same. For self-image work, use the dedicated selfie_create tool for a fresh companion representation and reference anchoring. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful edits also return a vision review of the produced image, so use that instead of asking the user to check whether it still looks like you unless you need their aesthetic preference.',
-    parameters: Type.Object({
-      prompt: Type.String({
-        description:
-          'Full edit instruction. State the target result clearly and mention any identity details that must remain unchanged; for self-image work, use the dedicated selfie_create tool for reference anchoring.',
-      }),
-      image_urls: Type.Array(Type.String(), { minItems: 1, maxItems: 4 }),
-      ...referenceSelectionSchema(),
-      use_default_reference: Type.Optional(Type.Boolean({
-        description: 'Include the configured default reference photo as an additional edit input.',
-      })),
-      provider: providerPreferenceSchema(),
-      model: Type.Optional(Type.Union(FAL_EDIT_MODELS.map((value) => Type.Literal(value)))),
-      num_images: Type.Optional(Type.Integer({ minimum: 1, maximum: 4 })),
-      width: Type.Optional(Type.Integer({ minimum: 64, maximum: 4096 })),
-      height: Type.Optional(Type.Integer({ minimum: 64, maximum: 4096 })),
-      aspect_ratio: aspectRatioSchema(),
-      resolution: Type.Optional(Type.String()),
-      image_size: Type.Optional(Type.String()),
-      background: Type.Optional(Type.String()),
-      output_format: Type.Optional(Type.String()),
-      mask_image_url: Type.Optional(Type.String()),
-      input_fidelity: Type.Optional(Type.String()),
-      seed: Type.Optional(Type.Integer({ minimum: 0 })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: {
-        prompt: string;
-        image_urls: string[];
-        provider?: 'auto' | 'fal' | 'comfyui';
-        model?: typeof FAL_EDIT_MODELS[number];
-        num_images?: number;
-        width?: number;
-        height?: number;
-        aspect_ratio?: ImageAspectRatio;
-        resolution?: string;
-        image_size?: string;
-        background?: string;
-        output_format?: string;
-        mask_image_url?: string;
-        input_fidelity?: string;
-        seed?: number;
-        reference_image_id?: string;
-        reference_image_tags?: string[];
-        use_default_reference?: boolean;
-      },
-    ): Promise<AgentToolResult<ImageToolResultDetails>> => {
-      try {
-        const reference = await resolveReferenceImage(options?.referenceResolver, params, {
-          defaultToSavedReference: false,
-        });
-        const imageUrls = appendReferenceImageUrl([...params.image_urls], reference);
-        const result = await ops.edit({
-          prompt: params.prompt,
-          imageUrls,
-          provider: params.provider,
-          model: params.model,
-          numImages: params.num_images,
-          width: params.width,
-          height: params.height,
-          aspectRatio: params.aspect_ratio,
-          resolution: params.resolution,
-          imageSize: params.image_size,
-          background: params.background,
-          outputFormat: params.output_format,
-          maskImageUrl: params.mask_image_url,
-          inputFidelity: params.input_fidelity,
-          seed: params.seed,
-          sourceToolName: 'image_edit',
-          ...(reference ? { referenceImageIds: [reference.id] } : {}),
-        });
-        chargePaidImageGeneration(result, 'edit');
-        const review = await reviewGeneratedImages(reviewer, {
-          imageUrls: result.images.map((image) => image.url),
-          imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
-          prompt: params.prompt,
-          mode: 'edit',
-        });
-        return {
-          content: buildToolContent(result, review.visionReview, review.visionReviewError),
-          details: {
-            imageResult: result,
-            ...(review.visionReview ? { visionReview: review.visionReview } : {}),
-            ...(review.visionReviewError ? { visionReviewError: review.visionReviewError } : {}),
-          },
-        };
-      } catch (error) {
-        if (isProviderContentPolicyError(error)) {
-          return contentPolicyBlockedResult<ImageToolResultDetails>('image_edit', error);
-        }
-        return textResultWithError(`image_edit failed: ${toErrorMessage(error)}`, true);
-      }
-    },
-  };
-}
-
-export function createImageAnalyzeTool(reviewer: ImageVisionReviewer): AgentTool<any> {
-  return {
-    name: 'image_analyze',
-    label: 'image_analyze',
-    description:
-      'Inspect one or more images with the vision pipeline. Use this to see what was actually generated or sent, including checking whether a selfie/edit still matches your appearance, instead of asking the user to go inspect it for you. When the current turn already includes live attachment bytes, do not pass a mismatched prior-turn URL unless the user explicitly pasted that URL in the current message.',
-    parameters: Type.Object({
-      image_urls: Type.Array(Type.String(), { minItems: 1, maxItems: 4 }),
-      question: Type.Optional(Type.String({
-        description:
-          'Optional review question. If omitted, the tool defaults to a concise appearance-consistency review.',
-      })),
-    }),
-    execute: async (
-      _toolCallId: string,
-      params: {
-        image_urls: string[];
-        question?: string;
-      },
-    ): Promise<AgentToolResult<ImageToolResultDetails>> => {
-      try {
-        const currentTurnVisionReviewFallback = resolveCurrentTurnVisionReviewFallback(
-          params.image_urls,
-          params.question,
-        );
-        if (currentTurnVisionReviewFallback) {
-          return {
-            content: [{
-              type: 'text',
-              text: formatVisionReview(currentTurnVisionReviewFallback),
-            }] satisfies TextContent[],
-            details: { visionReview: currentTurnVisionReviewFallback },
-          };
-        }
-
-        const mismatchedCurrentTurnUrlNotice = resolveMismatchedCurrentTurnUrlNotice(params.image_urls);
-        if (mismatchedCurrentTurnUrlNotice) {
-          return {
-            content: [{ type: 'text', text: mismatchedCurrentTurnUrlNotice }] satisfies TextContent[],
-            details: { visionReviewError: mismatchedCurrentTurnUrlNotice },
-          };
-        }
-
-        chargeVisionConsult('image_analyze', {
-          imageCount: params.image_urls.length,
-          ...(params.question ? { question: params.question } : {}),
-        });
-        const visionReview = await reviewer.analyze({
-          imageUrls: [...params.image_urls],
-          question: params.question,
-        });
-        return {
-          content: [{ type: 'text', text: formatVisionReview(visionReview) }] satisfies TextContent[],
-          details: { visionReview },
-        };
-      } catch (error) {
-        return textResultWithError(`image_analyze failed: ${toErrorMessage(error)}`, true);
-      }
-    },
-  };
 }

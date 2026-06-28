@@ -22,6 +22,7 @@ interface DerivedToolDefinition {
   scope: 'core' | 'extended' | 'conditional';
   registered: boolean;
   wiringMeta?: RuntimeToolCatalogEntry['wiringMeta'];
+  schema?: RuntimeToolCatalogEntry['schema'];
 }
 
 const CONDITIONAL_SERVICE_TOOL_DEFINITIONS = new Map<
@@ -74,6 +75,7 @@ export function cloneToolCatalogSnapshot(
     tools: snapshot.tools.map(tool => ({
       ...tool,
       ...(tool.wiringMeta ? { wiringMeta: cloneToolWiringMeta(tool.wiringMeta) } : {}),
+      ...(tool.schema ? { schema: cloneRuntimeToolSchema(tool.schema) } : {}),
     })),
   };
 }
@@ -123,9 +125,34 @@ export function deriveToolHealthViews(params: {
           'internalHeartbeat',
         ),
       },
+      ...(definition.schema ? { schema: cloneRuntimeToolSchema(definition.schema) } : {}),
       ...(lastFailure ? { lastFailure: { ...lastFailure } } : {}),
     };
   });
+}
+
+function cloneRuntimeToolSchema(
+  schema: NonNullable<RuntimeToolCatalogEntry['schema']>,
+): NonNullable<RuntimeToolCatalogEntry['schema']> {
+  return {
+    ...schema,
+    actions: schema.actions.map(action => ({
+      ...action,
+      requiredCapabilities: [...action.requiredCapabilities],
+    })),
+    requiredParameters: [...schema.requiredParameters],
+    requiredCapabilities: [...schema.requiredCapabilities],
+    bundleMembership: [...schema.bundleMembership],
+    ...(schema.concurrency
+      ? {
+        concurrency: {
+          ...schema.concurrency,
+          eligibility: { ...schema.concurrency.eligibility },
+        },
+      }
+      : {}),
+    ...(schema.canonical ? { canonical: { ...schema.canonical } } : {}),
+  };
 }
 
 export function deriveToolInventoryGroups(toolHealth: AdminToolHealthView[]): AdminToolInventoryGroup[] {
@@ -191,6 +218,7 @@ function resolveToolDefinitions(
       scope: tool.scope,
       registered: true,
       ...(tool.wiringMeta ? { wiringMeta: cloneToolWiringMeta(tool.wiringMeta) } : {}),
+      ...(tool.schema ? { schema: cloneRuntimeToolSchema(tool.schema) } : {}),
     });
   }
 
@@ -201,6 +229,7 @@ function resolveToolDefinitions(
       ...conditionalDefinition,
       registered: true,
       ...(conditionalDefinition.wiringMeta ? { wiringMeta: cloneToolWiringMeta(conditionalDefinition.wiringMeta) } : {}),
+      ...(conditionalDefinition.schema ? { schema: cloneRuntimeToolSchema(conditionalDefinition.schema) } : {}),
     });
   }
 

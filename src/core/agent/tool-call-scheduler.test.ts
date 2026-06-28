@@ -100,11 +100,11 @@ describe('tool-call-scheduler', () => {
     );
   });
 
-  it('runs sibling spawn_subagent calls concurrently when bounded parallelism allows it', async () => {
+  it('runs sibling subagent calls concurrently when bounded parallelism allows it', async () => {
     const starts = new Map<string, number>();
     const ends = new Map<string, number>();
-    const spawnSubagent = makeTool(
-      'spawn_subagent',
+    const subagent = makeTool(
+      'subagent',
       async (toolCallId) => {
         starts.set(toolCallId, Date.now());
         await new Promise((resolve) => setTimeout(resolve, 25));
@@ -120,8 +120,8 @@ describe('tool-call-scheduler', () => {
     const streamEvents: any[] = [];
     const telemetry = vi.fn();
     const result = await executeToolCallsWithScheduler(
-      [spawnSubagent],
-      makeAssistantMessage(['spawn_subagent', 'spawn_subagent', 'spawn_subagent']),
+      [subagent],
+      makeAssistantMessage(['subagent', 'subagent', 'subagent']),
       undefined,
       { stream: { push: (event) => { streamEvents.push(event); } } },
       { maxParallelToolCalls: 3, onTelemetry: telemetry },
@@ -187,11 +187,11 @@ describe('tool-call-scheduler', () => {
     );
   });
 
-  it('respects maxParallelToolCalls bound for spawn_subagent batches', async () => {
+  it('respects maxParallelToolCalls bound for subagent batches', async () => {
     let active = 0;
     let peak = 0;
-    const spawnSubagent = makeTool(
-      'spawn_subagent',
+    const subagent = makeTool(
+      'subagent',
       async () => {
         active += 1;
         peak = Math.max(peak, active);
@@ -206,8 +206,8 @@ describe('tool-call-scheduler', () => {
     );
 
     await executeToolCallsWithScheduler(
-      [spawnSubagent],
-      makeAssistantMessage(['spawn_subagent', 'spawn_subagent', 'spawn_subagent']),
+      [subagent],
+      makeAssistantMessage(['subagent', 'subagent', 'subagent']),
       undefined,
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 2 },
@@ -244,12 +244,12 @@ describe('tool-call-scheduler', () => {
     expect(starts[1]).toBeGreaterThanOrEqual(ends[0] as number);
   });
 
-  it('fails closed to sequential when spawn_subagent metadata carries exclusivity wiring', async () => {
+  it('fails closed to sequential when subagent metadata carries exclusivity wiring', async () => {
     const starts: number[] = [];
     const ends: number[] = [];
     const telemetry = vi.fn();
-    const spawnSubagent = makeTool(
-      'spawn_subagent',
+    const subagent = makeTool(
+      'subagent',
       async () => {
         starts.push(Date.now());
         await new Promise((resolve) => setTimeout(resolve, 20));
@@ -266,8 +266,8 @@ describe('tool-call-scheduler', () => {
     );
 
     await executeToolCallsWithScheduler(
-      [spawnSubagent],
-      makeAssistantMessage(['spawn_subagent', 'spawn_subagent']),
+      [subagent],
+      makeAssistantMessage(['subagent', 'subagent']),
       undefined,
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 4, onTelemetry: telemetry },
@@ -284,9 +284,9 @@ describe('tool-call-scheduler', () => {
     );
   });
 
-  it('fails closed when one sibling spawn_subagent call errors in a parallel batch', async () => {
-    const spawnSubagent = makeTool(
-      'spawn_subagent',
+  it('fails closed when one sibling subagent call errors in a parallel batch', async () => {
+    const subagent = makeTool(
+      'subagent',
       async (toolCallId) => {
         await new Promise((resolve) => setTimeout(resolve, 15));
         if (toolCallId === 'call-2') {
@@ -301,8 +301,8 @@ describe('tool-call-scheduler', () => {
     );
 
     const result = await executeToolCallsWithScheduler(
-      [spawnSubagent],
-      makeAssistantMessage(['spawn_subagent', 'spawn_subagent', 'spawn_subagent']),
+      [subagent],
+      makeAssistantMessage(['subagent', 'subagent', 'subagent']),
       undefined,
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 3 },
@@ -316,7 +316,7 @@ describe('tool-call-scheduler', () => {
 
   it('skips remaining sequential calls after a tool error so dependent chains can retry after seeing results', async () => {
     const tool = makeTool(
-      'memory_patch',
+      'memory',
       async (toolCallId) => {
         if (toolCallId === 'call-2') {
           throw new Error('memory_id is required');
@@ -329,7 +329,7 @@ describe('tool-call-scheduler', () => {
       {
         concurrency: makeConcurrencyMeta('exclusive', {
           exclusivityKeyPolicy: 'category_tool_name',
-          exclusivityKey: 'extended:memory_patch',
+          exclusivityKey: 'extended:memory',
         }),
       },
     );
@@ -337,7 +337,7 @@ describe('tool-call-scheduler', () => {
 
     const result = await executeToolCallsWithScheduler(
       [tool],
-      makeAssistantMessage(['memory_patch', 'memory_patch', 'memory_patch']),
+      makeAssistantMessage(['memory', 'memory', 'memory']),
       undefined,
       { stream: { push: () => undefined } },
       { maxParallelToolCalls: 1, onTelemetry: telemetry },

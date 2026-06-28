@@ -281,6 +281,7 @@ export interface AdminToolHealthView {
   name: string;
   description: string;
   scope: 'core' | 'extended' | 'conditional';
+  schema?: RuntimeToolCatalogSnapshot['tools'][number]['schema'];
   health: {
     status: RuntimeServiceHealthStatus;
     detail: string;

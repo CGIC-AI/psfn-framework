@@ -14,6 +14,7 @@ import type {
 } from './types.js';
 
 const log = createComponentLogger('ImageGeneratedMedia');
+// Retired names stay here only so old turn records can still attach generated files.
 const IMAGE_TOOL_NAMES = new Set(['media', 'image_create', 'selfie_create', 'image_edit']);
 
 

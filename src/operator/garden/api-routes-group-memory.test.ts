@@ -36,12 +36,13 @@ class CapturingResponse {
   }
 }
 
-function makeRequest(url: string): IncomingMessage {
+function makeRequest(url: string, body = ''): IncomingMessage {
   return {
     url,
     headers: {
       host: 'localhost',
     },
+    body,
   } as IncomingMessage;
 }
 
@@ -59,17 +60,18 @@ function makeRoutes(groupMemoryService?: AdminGroupMemoryService | null): AdminA
     identityService: {} as AdminIdentityService,
     promptsService: {} as AdminPromptsService,
     chatBootstrapService: {} as AdminChatBootstrapApi,
-    withBody: () => {},
+    withBody: (req, _res, cb) => cb((req as IncomingMessage & { body?: string }).body ?? ''),
   });
 }
 
 async function invokeRoute(
   route: AdminApiRoute,
   url: string,
+  body = '',
 ): Promise<CapturingResponse> {
   const response = new CapturingResponse();
   const params = route.match(new URL(url, 'http://localhost').pathname);
-  route.handle(makeRequest(url), response as unknown as ServerResponse, params ?? {});
+  route.handle(makeRequest(url, body), response as unknown as ServerResponse, params ?? {});
   await new Promise(resolve => setImmediate(resolve));
   return response;
 }
@@ -180,6 +182,37 @@ describe('group memory admin API routes', () => {
           memoryTextIncluded: false,
         },
       })),
+      runGroupMemoryBackfill: vi.fn(async () => ({
+        status: 'planned',
+        channelId: 'discord:general',
+        target: {
+          channelId: 'discord:general',
+          channelType: 'discord',
+          mode: 'dry_run',
+          resume: true,
+          startMessageId: 1,
+          endMessageId: 100,
+        },
+        resolvedConfig: {} as never,
+        classification: {} as never,
+        watermarkBefore: {} as never,
+        watermarkAfter: {} as never,
+        headMessageId: 100,
+        watermarkLagMessageIds: 100,
+        hasDeferredBacklog: false,
+        plannedChunkCount: 1,
+        plannedLlmCalls: 1,
+        executedLlmCalls: 0,
+        processedChunkCount: 0,
+        skippedChunkCount: 0,
+        failedChunkCount: 0,
+        candidateSpanCount: 1,
+        chunks: [],
+        privacy: {
+          rawTranscriptTextIncluded: false,
+          memoryTextIncluded: false,
+        },
+      })),
     };
     const routes = makeRoutes(groupMemoryService);
     const listRoute = routes.find(candidate => candidate.match('/api/admin/group-memory'));
@@ -202,6 +235,76 @@ describe('group memory admin API routes', () => {
       },
     }));
     expect(groupMemoryService.getGroupMemoryChannelDiagnostics).toHaveBeenCalledWith('discord:general');
+  });
+
+  it('runs group memory backfill through the admin route', async () => {
+    const groupMemoryService: AdminGroupMemoryService = {
+      listGroupMemoryDiagnostics: vi.fn(async () => ({ channels: [], reasonCounts: {} })),
+      getGroupMemoryChannelDiagnostics: vi.fn(async () => null),
+      runGroupMemoryBackfill: vi.fn(async (channelId, input) => ({
+        status: 'planned',
+        channelId,
+        target: {
+          channelId,
+          channelType: 'discord',
+          mode: input.mode ?? 'dry_run',
+          resume: input.resume ?? true,
+          startMessageId: input.startMessageId ?? 1,
+          endMessageId: input.endMessageId ?? null,
+        },
+        resolvedConfig: {} as never,
+        classification: {} as never,
+        watermarkBefore: {} as never,
+        watermarkAfter: {} as never,
+        headMessageId: input.endMessageId ?? null,
+        watermarkLagMessageIds: 50,
+        hasDeferredBacklog: false,
+        plannedChunkCount: 1,
+        plannedLlmCalls: 1,
+        executedLlmCalls: 0,
+        processedChunkCount: 0,
+        skippedChunkCount: 0,
+        failedChunkCount: 0,
+        candidateSpanCount: 1,
+        chunks: [],
+        privacy: {
+          rawTranscriptTextIncluded: false,
+          memoryTextIncluded: false,
+        },
+      })),
+    };
+    const routes = makeRoutes(groupMemoryService);
+    const route = routes.find(candidate => (
+      candidate.method === 'POST'
+      && candidate.match('/api/admin/group-memory/discord%3Ageneral/backfill')
+    ));
+    expect(route).toBeDefined();
+
+    const response = await invokeRoute(
+      route!,
+      '/api/admin/group-memory/discord%3Ageneral/backfill',
+      JSON.stringify({
+        mode: 'dry_run',
+        startMessageId: 1,
+        endMessageId: 100,
+        maxMessagesPerRun: 50,
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(JSON.parse(response.body)).toEqual(expect.objectContaining({
+      status: 'planned',
+      privacy: {
+        rawTranscriptTextIncluded: false,
+        memoryTextIncluded: false,
+      },
+    }));
+    expect(groupMemoryService.runGroupMemoryBackfill).toHaveBeenCalledWith('discord:general', {
+      mode: 'dry_run',
+      startMessageId: 1,
+      endMessageId: 100,
+      maxMessagesPerRun: 50,
+    });
   });
 
   it('fails closed when the group-memory diagnostics service is unavailable', async () => {

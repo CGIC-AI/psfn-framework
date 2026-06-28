@@ -373,6 +373,7 @@ async function main(): Promise<void> {
       skillsRuntime,
       agentLoop,
       observerEvalSidecar,
+      memoryExtractor,
     },
   });
   if (adminTransport) {

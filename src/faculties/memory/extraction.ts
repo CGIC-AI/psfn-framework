@@ -87,6 +87,16 @@ export interface ObservedGroupExtractionOptions {
   backfill?: boolean;
 }
 
+export interface GroupBackfillExtractionOptions {
+  channelId: string;
+  recoveredEntries: SessionEntry[];
+  groupWriteCaps: GroupMemoryWriteCapSettings;
+}
+
+type MemoryExtractorGroupOptions =
+  Pick<ExtractionRunOptions, 'groupWriteCaps' | 'groupWriteCapContext'>
+  & { forceLegacyExtraction?: boolean };
+
 export class MemoryExtractor {
   private llmClient: LLMProviderPort;
   private sessionManager: SessionManager;
@@ -259,6 +269,34 @@ export class MemoryExtractor {
     return true;
   }
 
+  async extractGroupBackfillRange(options: GroupBackfillExtractionOptions): Promise<boolean> {
+    if (options.recoveredEntries.length === 0) return false;
+    if (!this.acceptingExtractions) {
+      log.debug('Skipping operator group backfill while extractor is draining', {
+        channelId: options.channelId,
+      });
+      return false;
+    }
+
+    const orderedEntries = [...options.recoveredEntries]
+      .sort((left, right) => left.id - right.id);
+    await this.trackExtraction(
+      options.channelId,
+      'operator_backfill',
+      undefined,
+      orderedEntries,
+      undefined,
+      {
+        groupWriteCaps: options.groupWriteCaps,
+        groupWriteCapContext: {
+          backfill: true,
+        },
+        forceLegacyExtraction: true,
+      },
+    );
+    return true;
+  }
+
   async stop(options?: MemoryExtractorDrainOptions): Promise<boolean> {
     this.acceptingExtractions = false;
     return this.drain(options);
@@ -314,7 +352,7 @@ export class MemoryExtractor {
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
     turnId?: TurnID,
-    groupOptions?: Pick<ExtractionRunOptions, 'groupWriteCaps' | 'groupWriteCapContext'>,
+    groupOptions?: MemoryExtractorGroupOptions,
   ): Promise<void> {
     const existing = this.inFlightByChannel.get(channelId);
     if (existing) {
@@ -356,7 +394,7 @@ export class MemoryExtractor {
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
     turnId?: TurnID,
-    groupOptions?: Pick<ExtractionRunOptions, 'groupWriteCaps' | 'groupWriteCapContext'>,
+    groupOptions?: MemoryExtractorGroupOptions,
   ): Promise<void> {
     let cachedFormationVAD: MemoryFormationVAD | undefined;
     let didResolveFormationVAD = false;
@@ -406,7 +444,9 @@ export class MemoryExtractor {
         ? { groupWriteCapContext: groupOptions.groupWriteCapContext }
         : {}),
       telemetryEnabled: this.isTelemetryEnabled(),
-      useCompositionalExtraction: this.shouldUseCompositionalExtraction(channelId),
+      useCompositionalExtraction: groupOptions?.forceLegacyExtraction
+        ? false
+        : this.shouldUseCompositionalExtraction(channelId),
       isAcceptingExtractions: () => this.acceptingExtractions,
       adjustFactForWrite: fact => (
         this.adjustFactImportanceByEmotion(fact, resolveFormationVAD(), intensityWeight)

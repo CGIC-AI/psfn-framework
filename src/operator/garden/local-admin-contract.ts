@@ -21,6 +21,7 @@ import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sideca
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
+import type { GroupMemoryBackfillExtractorPort } from '../../faculties/memory/extraction/group-backfill.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
@@ -107,6 +108,7 @@ export interface InProcessGardenAdminContractOptions {
   postTurnActions?: PostTurnActionRuntime | null;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   channelGroupMemory?: ChannelGroupMemoryConfig;
+  memoryExtractor?: GroupMemoryBackfillExtractorPort | null;
   companionAuthorIds?: readonly string[];
 }
 
@@ -206,6 +208,7 @@ export function createInProcessGardenAdminContract(
       memoryStore: options.memoryStore,
       ...(options.contactStore ? { contactStore: options.contactStore } : {}),
       watermarkStore: new JsonGroupMemoryWatermarkStore(join(companionDataDir, 'group-memory-watermarks.json')),
+      ...(options.memoryExtractor ? { memoryExtractor: options.memoryExtractor } : {}),
       eventBus: options.eventBus,
       companionNames: [resolveCompanionNameFromConfig(options.config)],
       companionAuthorIds: options.companionAuthorIds ?? [],

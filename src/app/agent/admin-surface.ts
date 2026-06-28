@@ -48,6 +48,7 @@ export interface StartOptionalAdminTransportServerOptions {
     | 'skillsRuntime'
     | 'observerEvalSidecar'
     | 'agentLoop'
+    | 'memoryExtractor'
   >;
 }
 
@@ -85,6 +86,7 @@ export async function startOptionalAdminTransportServer(
     promptState: options.coreRuntime.promptState,
     skillsRuntime: options.coreRuntime.skillsRuntime,
     observerEvalSidecar: options.coreRuntime.observerEvalSidecar,
+    memoryExtractor: options.coreRuntime.memoryExtractor,
     ...(options.channelGroupMemory ? { channelGroupMemory: options.channelGroupMemory } : {}),
     companionAuthorIds: options.config.discordBotId ? [options.config.discordBotId] : [],
     confirmationQueueApi: createGatewayConfirmationQueueAdminApi(

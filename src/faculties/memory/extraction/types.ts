@@ -26,6 +26,7 @@ export type ExtractionTriggerReason =
   | 'direct_mention'
   | 'high_salience'
   | 'backlog_lag'
+  | 'operator_backfill'
   | 'pre_compaction'
   | 'crash_recovery';
 

@@ -111,6 +111,10 @@ import type {
   GroupMemorySalienceTelemetry,
 } from '../../../faculties/memory/extraction/group-salience.js';
 import type {
+  GroupMemoryBackfillInput,
+  GroupMemoryBackfillResult,
+} from '../../../faculties/memory/extraction/group-backfill.js';
+import type {
   ObservedMemory,
   ObservedScoredMemory,
   TurnMemorySnapshotRecord,
@@ -578,6 +582,10 @@ export interface AdminGroupMemoryDiagnosticsListData {
 export interface AdminGroupMemoryService {
   listGroupMemoryDiagnostics(): Promise<AdminGroupMemoryDiagnosticsListData>;
   getGroupMemoryChannelDiagnostics(channelId: string): Promise<AdminGroupMemoryChannelDiagnostics | null>;
+  runGroupMemoryBackfill(
+    channelId: string,
+    input: GroupMemoryBackfillInput,
+  ): Promise<GroupMemoryBackfillResult>;
 }
 
 export interface AdminEpisodicEpisodeListData {

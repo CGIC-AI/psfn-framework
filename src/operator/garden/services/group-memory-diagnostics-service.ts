@@ -21,6 +21,12 @@ import {
   resolveGroupMemorySettingsForChannel,
 } from '../../../faculties/memory/extraction/group-classifier.js';
 import { selectGroupMemorySalienceCandidates } from '../../../faculties/memory/extraction/group-salience.js';
+import {
+  GroupMemoryBackfillRunner,
+  type GroupMemoryBackfillExtractorPort,
+  type GroupMemoryBackfillInput,
+  type GroupMemoryBackfillResult,
+} from '../../../faculties/memory/extraction/group-backfill.js';
 import type {
   AdminGroupMemoryCandidateSpanView,
   AdminGroupMemoryChannelDiagnostics,
@@ -37,6 +43,7 @@ const GROUP_MEMORY_EXTRACTION_TRIGGERS = new Set<string>([
   'direct_mention',
   'high_salience',
   'backlog_lag',
+  'operator_backfill',
   'manual',
   'response_turn',
 ]);
@@ -48,6 +55,7 @@ export interface AdminGroupMemoryDataServiceOptions {
   memoryStore: MemoryStorePort;
   contactStore?: ContactStorePort | null;
   watermarkStore: GroupMemoryWatermarkStorePort;
+  memoryExtractor?: GroupMemoryBackfillExtractorPort | null;
   eventBus?: Pick<EventBus, 'on'> | null;
   companionNames?: readonly string[];
   companionAuthorIds?: readonly string[];
@@ -55,8 +63,19 @@ export interface AdminGroupMemoryDataServiceOptions {
 
 export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
   private readonly lastExtractionByChannel = new Map<string, AdminGroupMemoryExtractionTelemetry>();
+  private readonly backfillRunner: GroupMemoryBackfillRunner;
 
   constructor(private readonly deps: AdminGroupMemoryDataServiceOptions) {
+    this.backfillRunner = new GroupMemoryBackfillRunner({
+      ...(deps.groupMemory ? { groupMemory: deps.groupMemory } : {}),
+      ...(deps.channelGroupMemory ? { channelGroupMemory: deps.channelGroupMemory } : {}),
+      sessionReader: deps.sessionStore,
+      watermarkStore: deps.watermarkStore,
+      ...(deps.memoryExtractor ? { memoryExtractor: deps.memoryExtractor } : {}),
+      ...(deps.contactStore ? { contactStore: deps.contactStore } : {}),
+      companionNames: deps.companionNames ?? [],
+      companionAuthorIds: deps.companionAuthorIds ?? [],
+    });
     deps.eventBus?.on('memory.extraction.end', (event) => {
       if (!isGroupExtractionTelemetry(event)) return;
       this.lastExtractionByChannel.set(event.channelId, event);
@@ -101,6 +120,13 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
       channel?.sessionId,
       channel?.messageCount,
     );
+  }
+
+  async runGroupMemoryBackfill(
+    channelId: string,
+    input: GroupMemoryBackfillInput,
+  ): Promise<GroupMemoryBackfillResult> {
+    return this.backfillRunner.run(channelId, input);
   }
 
   private async buildChannelDiagnostics(

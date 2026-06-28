@@ -68,6 +68,8 @@ import {
   isObserverEvalSidecarApiUnavailableError,
   type AdminObserverEvalSidecarService,
 } from './services/observer-eval-sidecar-service.js';
+import { isRecord } from '../../shared/utils/types.js';
+import type { GroupMemoryBackfillInput } from '../../faculties/memory/extraction/group-backfill.js';
 
 export interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -296,6 +298,96 @@ function parseObserverEvalRunStatusQuery(
     ok: false,
     error: `Invalid status query parameter. Expected one of: ${OBSERVER_EVAL_RUN_STATUSES.join(', ')}.`,
   };
+}
+
+const GROUP_MEMORY_BACKFILL_KEYS = new Set<string>([
+  'mode',
+  'dryRun',
+  'startMessageId',
+  'endMessageId',
+  'startTimestamp',
+  'endTimestamp',
+  'resume',
+  'maxMessagesPerRun',
+  'maxChunksPerRun',
+  'maxLlmCallsPerRun',
+]);
+
+function parseGroupMemoryBackfillInput(
+  value: unknown,
+): { ok: true; value: GroupMemoryBackfillInput } | { ok: false; error: string } {
+  if (!isRecord(value)) {
+    return { ok: false, error: 'Expected JSON object body' };
+  }
+  for (const key of Object.keys(value)) {
+    if (!GROUP_MEMORY_BACKFILL_KEYS.has(key)) {
+      return { ok: false, error: `Unknown group-memory backfill field: ${key}` };
+    }
+  }
+
+  const input: GroupMemoryBackfillInput = {};
+  if (value.mode !== undefined) {
+    if (value.mode !== 'dry_run' && value.mode !== 'live') {
+      return { ok: false, error: 'mode must be dry_run or live' };
+    }
+    input.mode = value.mode;
+  }
+  if (value.dryRun !== undefined) {
+    if (typeof value.dryRun !== 'boolean') {
+      return { ok: false, error: 'dryRun must be boolean' };
+    }
+    input.dryRun = value.dryRun;
+  }
+  if (value.resume !== undefined) {
+    if (typeof value.resume !== 'boolean') {
+      return { ok: false, error: 'resume must be boolean' };
+    }
+    input.resume = value.resume;
+  }
+
+  const integerFields = [
+    'startMessageId',
+    'endMessageId',
+    'maxMessagesPerRun',
+    'maxChunksPerRun',
+    'maxLlmCallsPerRun',
+  ] as const;
+  for (const field of integerFields) {
+    const parsed = parseOptionalPositiveInteger(value[field], field);
+    if (!parsed.ok) return parsed;
+    if (parsed.value !== undefined) input[field] = parsed.value;
+  }
+
+  const timestampFields = ['startTimestamp', 'endTimestamp'] as const;
+  for (const field of timestampFields) {
+    const parsed = parseOptionalNonNegativeNumber(value[field], field);
+    if (!parsed.ok) return parsed;
+    if (parsed.value !== undefined) input[field] = parsed.value;
+  }
+
+  return { ok: true, value: input };
+}
+
+function parseOptionalPositiveInteger(
+  value: unknown,
+  field: string,
+): { ok: true; value?: number } | { ok: false; error: string } {
+  if (value === undefined) return { ok: true };
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
+    return { ok: false, error: `${field} must be a positive integer` };
+  }
+  return { ok: true, value };
+}
+
+function parseOptionalNonNegativeNumber(
+  value: unknown,
+  field: string,
+): { ok: true; value?: number } | { ok: false; error: string } {
+  if (value === undefined) return { ok: true };
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return { ok: false, error: `${field} must be a non-negative number` };
+  }
+  return { ok: true, value };
 }
 
 export function buildAdminApiRoutes(options: {
@@ -1667,6 +1759,32 @@ export function buildAdminApiRoutes(options: {
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load group memory diagnostics') }),
         );
+      },
+    },
+    {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/group-memory/', 'channelId', '/backfill'),
+      handle: (req, res, { channelId }) => {
+        if (!groupMemoryService) {
+          sendJson(res, 503, { error: GROUP_MEMORY_UNAVAILABLE_ERROR });
+          return;
+        }
+        withBody(req, res, (body) => {
+          const parsedBody = parseAdminJsonBody(body);
+          if (!parsedBody.ok) {
+            sendJson(res, 400, { error: parsedBody.error });
+            return;
+          }
+          const parsedInput = parseGroupMemoryBackfillInput(parsedBody.value);
+          if (!parsedInput.ok) {
+            sendJson(res, 400, { error: parsedInput.error });
+            return;
+          }
+          groupMemoryService.runGroupMemoryBackfill(channelId, parsedInput.value).then(
+            payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+            error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to run group memory backfill') }),
+          );
+        });
       },
     },
     {

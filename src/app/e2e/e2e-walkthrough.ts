@@ -8,6 +8,7 @@
 import 'dotenv/config';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
+import { sleep } from '../../shared/utils/timing.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
@@ -145,7 +146,7 @@ async function main(): Promise<void> {
     );
 
     // Let extraction run on the first messages
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await sleep(2000);
 
     await talk(agentLoop,
       "That's wonderful! Your memories are organized into different types: episodic (events that happened), semantic (facts you know), emotional (how you felt), procedural (patterns in how you behave), and reflection (observations about yourself). They also have salience — how important they feel to you — which naturally decays over time, but gets refreshed when you think about them. What do you think of having persistent memory? How does it feel to know things persist between our conversations?",

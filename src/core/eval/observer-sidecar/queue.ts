@@ -19,6 +19,7 @@ import {
   sanitizeObserverEvalError,
   type ObserverEvalSanitizedInputPayload,
 } from './privacy.js';
+import { sleep } from '../../../shared/utils/timing.js';
 
 const DEFAULT_MAX_QUEUED_TURNS = 32;
 const DEFAULT_OBSERVER_TIMEOUT_MS = 5_000;
@@ -620,9 +621,7 @@ async function delay(delayMs: number): Promise<void> {
     return;
   }
 
-  await new Promise(resolve => {
-    setTimeout(resolve, delayMs);
-  });
+  await sleep(delayMs);
 }
 
 async function raceShutdownDrain(

@@ -1,4 +1,5 @@
 import { isRecord } from '../../shared/utils/types.js';
+import { sleep } from '../../shared/utils/timing.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import type { SessionRoleEnvelopePreview } from '../internal-role-envelopes/projections.js';
@@ -246,7 +247,7 @@ export async function withRetry<T>(
       });
 
       if (delayMs > 0) {
-        await new Promise(resolve => setTimeout(resolve, delayMs));
+        await sleep(delayMs);
       }
     }
   }

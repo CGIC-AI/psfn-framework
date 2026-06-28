@@ -16,6 +16,7 @@ import {
 } from '../../primitives/llm/retry.js';
 import { llmRetryConfig } from '../../primitives/llm/retry-config.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { sleep } from '../../shared/utils/timing.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { toCorrelationLogFields } from '../../primitives/llm/correlation.js';
 import {
@@ -971,10 +972,6 @@ function toUsageCost(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? value
     : 0;
-}
-
-function sleep(delayMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function resolveModelProvider(model: Model<any>): string | undefined {

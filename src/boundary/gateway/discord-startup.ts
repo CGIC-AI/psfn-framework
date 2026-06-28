@@ -1,3 +1,5 @@
+import { sleep as defaultSleep } from '../../shared/utils/timing.js';
+
 export const DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS = 2_000;
 export const DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS = 30_000;
 export const DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS = 0;
@@ -83,10 +85,6 @@ function backoffDelayMs(baseDelayMs: number, maxDelayMs: number, attempt: number
   const rawDelay = baseDelayMs * (2 ** Math.max(0, attempt - 1));
   if (!Number.isFinite(rawDelay)) return maxDelayMs;
   return Math.min(maxDelayMs, rawDelay);
-}
-
-function defaultSleep(delayMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 export function isRetryableDiscordStartError(error: Error): boolean {

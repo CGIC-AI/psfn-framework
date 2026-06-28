@@ -3,6 +3,7 @@
 
 import { isIP } from 'node:net';
 import { lookup } from 'node:dns/promises';
+import { sleep } from '../../shared/utils/timing.js';
 
 const PRIVATE_RANGES = [
   // IPv4
@@ -347,7 +348,7 @@ async function resolveWithTransientRetry(
     } catch (error) {
       lastError = error;
       if (attempt < DNS_RESOLUTION_ATTEMPTS) {
-        await new Promise((resolve) => setTimeout(resolve, DNS_RESOLUTION_RETRY_DELAY_MS));
+        await sleep(DNS_RESOLUTION_RETRY_DELAY_MS);
       }
     }
   }

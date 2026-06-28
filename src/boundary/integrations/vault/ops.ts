@@ -5,6 +5,7 @@
 import { execSync } from 'node:child_process';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { sleep } from '../../../shared/utils/timing.js';
 
 const OBSIDIAN_SERVICES = [
   'obsidian-xvfb',
@@ -223,7 +224,7 @@ export class VaultOps implements VaultOperations {
         services: OBSIDIAN_SERVICES,
         waitMs: OBSIDIAN_RESTART_WAIT_MS,
       });
-      await new Promise(resolve => setTimeout(resolve, OBSIDIAN_RESTART_WAIT_MS));
+      await sleep(OBSIDIAN_RESTART_WAIT_MS);
       return true;
     } catch (err) {
       log.warn('Failed to restart Obsidian services', { error: toErrorMessage(err) });

@@ -9,6 +9,7 @@ import {
   type ImageMode,
   type ImageResultAsset,
 } from './types.js';
+import { sleep } from '../../shared/utils/timing.js';
 
 const FAL_QUEUE_BASE_URL = 'https://queue.fal.run';
 const DEFAULT_FAL_POLL_INTERVAL_MS = 1_500;
@@ -45,10 +46,6 @@ const IMAGE_SIZE_FROM_ASPECT_RATIO: Readonly<Record<string, string>> = {
   '16:9': 'landscape_16_9',
   '9:16': 'portrait_16_9',
 };
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function isNanoBananaModel(model: string): boolean {
   return model.startsWith('fal-ai/nano-banana-');

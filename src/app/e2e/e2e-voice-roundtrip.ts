@@ -32,6 +32,7 @@ import {
 } from '../../primitives/voice/transports/websocket/types.js';
 import { INSECURE_LOCAL_API_PRINCIPAL } from '../../channels/backplane/http/auth.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { sleep } from '../../shared/utils/timing.js';
 import { createIsolatedE2ERuntime } from './runtime-harness.js';
 import type {
   VoiceWebSocketRuntime,
@@ -174,7 +175,7 @@ async function waitFor(
     if (Date.now() - start > timeoutMs) {
       throw new Error(`Timed out waiting after ${timeoutMs}ms`);
     }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    await sleep(intervalMs);
   }
 }
 

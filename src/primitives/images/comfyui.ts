@@ -1,5 +1,6 @@
 import { basename } from 'node:path';
 import { fetchRemoteImageBinary } from './remote-fetch.js';
+import { sleep } from '../../shared/utils/timing.js';
 import {
   cloneImageWorkflowSettings,
   type ComfyWorkflowTemplate,
@@ -30,10 +31,6 @@ interface ComfyHistoryResponse {
     completed?: boolean;
     messages?: unknown[];
   };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function inferExtension(contentType: string | null | undefined): string {

@@ -1,5 +1,6 @@
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { sleep } from '../../shared/utils/timing.js';
 import type {
   VoiceConnectionRecoveryTrigger,
   VoiceRecoveryRuntimeContext,
@@ -324,9 +325,7 @@ export async function startVoiceDecryptRecovery(
     });
 
     await runtime.leaveChannel(trigger === 'stream-degraded' ? 'stream-recovery' : 'decrypt-recovery');
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, DECRYPT_RECOVERY_COOLDOWN_MS);
-    });
+    await sleep(DECRYPT_RECOVERY_COOLDOWN_MS);
 
     if (runtime.activeChannel) {
       log.info('Skipping recovery rejoin because another channel is already active', {

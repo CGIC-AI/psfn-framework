@@ -40,6 +40,7 @@ import {
 } from '../../primitives/voice/policy/security.js';
 import type { MessageHandler } from '../backplane/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { sleep } from '../../shared/utils/timing.js';
 import {
   createRuntimeVoiceSttConnector,
   createRuntimeVoiceTtsConnector,
@@ -1672,9 +1673,7 @@ export class DiscordVoiceRuntime {
   }
 
   private async wait(ms: number): Promise<void> {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, ms);
-    });
+    await sleep(ms);
   }
 
   private classifyTurnStatus(error: unknown): 'completed' | 'cancelled' | 'timeout' | 'error' {

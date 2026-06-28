@@ -1,3 +1,5 @@
+import { sleep as defaultSleep } from '../../shared/utils/timing.js';
+
 export interface RetryConfig {
   maxRetries?: number;
   baseDelayMs?: number;
@@ -51,10 +53,6 @@ interface ResolvedRetryConfig {
   maxRetries: number;
   baseDelayMs: number;
   retryableErrors: string[];
-}
-
-function defaultSleep(delayMs: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 function toError(value: unknown): Error {

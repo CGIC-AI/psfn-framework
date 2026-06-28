@@ -276,6 +276,59 @@ export interface RunChargeEvent extends Partial<CorrelationMetadata> {
   details?: Record<string, unknown>;
 }
 
+export type FatigueBudgetDecision = 'charged' | 'free';
+
+export type FatigueBudgetReason =
+  | 'machine_intelligence_response'
+  | 'peer_not_machine_intelligence'
+  | 'triggering_author_not_machine_intelligence';
+
+export type FatigueBudgetSoftState = 'clear' | 'soft_limit_reached';
+
+export type FatigueBudgetHardState = 'available' | 'exhausted';
+
+export type FatigueTriggeringAuthorRole =
+  | 'human'
+  | 'machine_intelligence'
+  | 'system'
+  | 'unknown';
+
+export interface FatigueBudgetActorSnapshot {
+  role: FatigueTriggeringAuthorRole;
+  contactId?: string;
+  channelAuthorId?: string;
+  displayName?: string;
+  isMachineIntelligence?: boolean;
+}
+
+export interface FatigueBudgetPeerSnapshot {
+  contactId: string;
+  displayName?: string;
+  channelAuthorId?: string;
+  isMachineIntelligence?: boolean;
+}
+
+export interface FatigueBudgetEvent extends Partial<CorrelationMetadata> {
+  timestampMs: number;
+  dayKey: string;
+  localCompanionId: string;
+  peerContactId: string;
+  channelId: string;
+  triggeringAuthor: FatigueBudgetActorSnapshot;
+  peer: FatigueBudgetPeerSnapshot;
+  amount: number;
+  decision: FatigueBudgetDecision;
+  reason: FatigueBudgetReason;
+  spentAfter: number;
+  remainingAllowance: number;
+  allowance: number;
+  softLimit: number;
+  softState: FatigueBudgetSoftState;
+  hardState: FatigueBudgetHardState;
+  lineage?: RunChargeLineage;
+  details?: Record<string, unknown>;
+}
+
 export interface ResponseMetadata {
   model: string;
   inputTokens: number;

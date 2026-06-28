@@ -30,6 +30,10 @@ import {
   type EmotionRuntimeWiring,
   type SubstrateAgentOptions,
 } from '../../../core/agent/substrate-agent.js';
+import {
+  DeterministicFatigueBudgetPort,
+  type FatigueBudgetPort,
+} from '../../../core/agent/fatigue/fatigue-budget.js';
 import type { ObserverEvalSidecarRuntime } from '../../../core/eval/observer-sidecar/types.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import type { EpisodicRetrievalStore } from '../../../faculties/memory/retrieval/episodic.js';
@@ -72,6 +76,7 @@ import {
   resolveConfiguredCompanionDataDir,
   resolveCoreMemoryPath,
   resolveContinuityDir,
+  resolveFatigueLedgerPath,
   resolveLegacyValuesJournalPath,
   resolveMemoryJournalPath,
   resolveNotesDir,
@@ -82,6 +87,7 @@ import {
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
+import { FatigueLedger } from '../../../shared/telemetry/fatigue-ledger.js';
 
 export interface SessionComposition {
   sessionStore: SessionStore;
@@ -234,6 +240,34 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.appCache ? { appCache: options.appCache } : {}),
     },
   );
+}
+
+export interface FatigueBudgetComposition {
+  fatigueLedger: FatigueLedger;
+  fatigueBudget: FatigueBudgetPort;
+}
+
+export interface FatigueBudgetCompositionOptions {
+  config: SubstrateConfig;
+  eventBus?: EventBus;
+  now?: () => number;
+}
+
+export function composeFatigueBudgetRuntime(
+  options: FatigueBudgetCompositionOptions,
+): FatigueBudgetComposition {
+  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
+  migrateLegacyPersistenceLayout(companionDataDir);
+  const sharedOptions = options.now ? { now: options.now } : {};
+  const fatigueLedger = new FatigueLedger(
+    resolveFatigueLedgerPath(companionDataDir),
+    options.eventBus ?? null,
+    sharedOptions,
+  );
+  return {
+    fatigueLedger,
+    fatigueBudget: new DeterministicFatigueBudgetPort(fatigueLedger, sharedOptions),
+  };
 }
 
 export interface SelfModelRuntimeTarget {

@@ -6,6 +6,7 @@ import type {
   InferredPostTurnAction,
   CorrelationMetadata,
   RunChargeEvent,
+  FatigueBudgetEvent,
 } from './contracts/runtime.js';
 import type { TurnSnapshot } from '../core/turns/snapshot.js';
 import type {
@@ -145,6 +146,7 @@ export interface EventMap {
   };
   'agent.turn.usage': { message: SubstrateMessage; usage: TurnUsage } & EventCorrelationFields;
   'agent.charge': RunChargeEvent;
+  'agent.fatigue': FatigueBudgetEvent;
   'agent.stream.delta': { channelId: string; text: string } & EventCorrelationFields;
   'agent.stream.thinking': { channelId: string; text: string } & EventCorrelationFields;
   'agent.toolcall.start': {

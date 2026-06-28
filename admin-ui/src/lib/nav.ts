@@ -34,6 +34,7 @@ export const navGroups: NavGroup[] = [
   navGroup('memory', 'Memory & Identity', [
     { id: 'memory', path: '/memory', defaultLabel: 'Memory', icon: '\u{1F33F}' },
     { id: 'episodic-memory', path: '/episodic-memory', defaultLabel: 'L0.1 Episodes', icon: '\u{1F9F6}' },
+    { id: 'wiki', path: '/wiki', defaultLabel: 'Wiki', icon: '\u{1F4D8}' },
     { id: 'contacts', path: '/contacts', defaultLabel: 'Contacts', icon: '\u{1F6AA}' },
     { id: 'identity', path: '/identity', defaultLabel: 'Identity', icon: '\u{1F331}' },
     { id: 'images', path: '/images', defaultLabel: 'Images', icon: '\u{1F5BC}\u{FE0F}' },

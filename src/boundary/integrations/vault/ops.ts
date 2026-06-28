@@ -1,5 +1,5 @@
-// ── Obsidian Vault Operations ──
-// Core operations for reading/writing notes in an Obsidian vault via the CLI.
+// ── External Obsidian Vault Operations ──
+// Core operations for bounded external Obsidian vault access via the CLI.
 // All operations use the Obsidian CLI which communicates with the running desktop app via IPC.
 
 import { execSync } from 'node:child_process';
@@ -194,7 +194,7 @@ export class VaultOps implements VaultOperations {
         throw new Error(`obsidian command not found — ensure CLI is installed and on PATH`);
       }
       if (msg.includes('vault') && msg.includes('not found')) {
-        throw new Error(`Vault '${this.config.vaultName}' not found — check the canonical Obsidian settings in settings.json`);
+        throw new Error(`External vault '${this.config.vaultName}' not found — check the Obsidian bridge settings in settings.json`);
       }
       if (msg.includes('IPC') || msg.includes('connect')) {
         if (!isRetry) {

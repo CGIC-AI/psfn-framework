@@ -13,15 +13,19 @@ import {
   statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import {
   captureCompanionTree,
+  captureWorkspaceTree,
   verifyCompanionTreeSnapshot,
+  verifyWorkspaceTreeSnapshot,
   type CompanionTreeCaptureResult,
   type CompanionTreeVerificationResult,
+  type WorkspaceTreeCaptureResult,
+  type WorkspaceTreeVerificationResult,
 } from './companion-tree.js';
 import {
   verifyPostgresDumpRestore,
@@ -65,6 +69,16 @@ export interface BackupRunOptions {
    * captured separately).
    */
   companionDataDir?: string;
+  /**
+   * Personal workspace root captured as a dedicated workspace-tree snapshot.
+   * This is separate from DATA_DIR/systemDataDir/companionDataDir and includes
+   * durable wiki/reference documents when configured.
+   */
+  workspacePath?: string;
+  /** Additional paths excluded from the workspace-tree capture. */
+  workspaceExcludePaths?: string[];
+  /** Runtime roots that must not overlap workspacePath. */
+  workspaceProtectedPaths?: string[];
   sessionsDir: string;
   backupRootDir: string;
   /** @deprecated Use maxRotatingBackups */
@@ -120,6 +134,8 @@ export interface BackupRunResult {
   postgresRestoreVerification?: PostgresRestoreVerificationResult;
   companionTree?: CompanionTreeCaptureResult;
   companionTreeVerification?: CompanionTreeVerificationResult;
+  workspaceTree?: WorkspaceTreeCaptureResult;
+  workspaceTreeVerification?: WorkspaceTreeVerificationResult;
   l0JournalVerification?: { lineCount: number };
   tieredRetention?: TieredRetentionResult;
   mirrorDir?: string;
@@ -131,6 +147,9 @@ export interface RegisterScheduledBackupTaskOptions {
   databasePath?: string;
   postgres?: BackupPostgresOptions;
   companionDataDir?: string;
+  workspacePath?: string;
+  workspaceExcludePaths?: string[];
+  workspaceProtectedPaths?: string[];
   sessionsDir: string;
   memoriesJournalPath?: string;
   characterCardPath?: string;
@@ -175,6 +194,26 @@ function copyOptionalBackupFile(
   if (!normalizedPath || !existsSync(normalizedPath)) return;
   mkdirSync(destinationDir, { recursive: true });
   copyFileSync(normalizedPath, join(destinationDir, basename(normalizedPath)));
+}
+
+function isSameOrSubpath(path: string, root: string): boolean {
+  const relativePath = relative(resolve(root), resolve(path));
+  return relativePath.length === 0 || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
+}
+
+function assertWorkspaceBackupRootsDoNotOverlap(
+  workspacePath: string,
+  protectedPaths: readonly string[],
+): void {
+  for (const protectedPath of protectedPaths) {
+    const trimmed = protectedPath.trim();
+    if (!trimmed) continue;
+    if (isSameOrSubpath(workspacePath, trimmed) || isSameOrSubpath(trimmed, workspacePath)) {
+      throw new Error(
+        `Workspace backup root (${workspacePath}) must not overlap protected runtime/backup path (${trimmed})`,
+      );
+    }
+  }
 }
 
 /**
@@ -359,6 +398,18 @@ export async function runBackupCycle(
   const backupDir = join(options.backupRootDir, timestamp);
   const databaseDir = join(backupDir, 'database');
   const sessionSnapshotDir = join(backupDir, 'sessions');
+  const workspacePath = options.workspacePath?.trim();
+
+  if (workspacePath) {
+    assertWorkspaceBackupRootsDoNotOverlap(workspacePath, [
+      options.backupRootDir,
+      ...(options.mirrorDir?.trim() ? [options.mirrorDir.trim()] : []),
+      options.sessionsDir,
+      ...(options.databasePath?.trim() ? [options.databasePath.trim()] : []),
+      ...(options.companionDataDir?.trim() ? [options.companionDataDir.trim()] : []),
+      ...(options.workspaceProtectedPaths ?? []),
+    ]);
+  }
 
   mkdirSync(databaseDir, { recursive: true });
 
@@ -407,6 +458,21 @@ export async function runBackupCycle(
         'backups',
         // Runtime repair snapshots are recovery artifacts, not companion-authored state.
         'state/repair-backups',
+      ],
+      now,
+    });
+  }
+
+  let workspaceTree: WorkspaceTreeCaptureResult | undefined;
+  if (workspacePath) {
+    workspaceTree = captureWorkspaceTree({
+      workspacePath,
+      backupDir,
+      excludePaths: [
+        options.backupRootDir,
+        ...(options.mirrorDir?.trim() ? [options.mirrorDir.trim()] : []),
+        ...(options.workspaceExcludePaths ?? []),
+        ...(options.workspaceProtectedPaths ?? []),
       ],
       now,
     });
@@ -477,6 +543,10 @@ export async function runBackupCycle(
     ? verifyCompanionTreeSnapshot(backupDir)
     : undefined;
 
+  const workspaceTreeVerification = options.verifyRestore && workspaceTree
+    ? verifyWorkspaceTreeSnapshot(backupDir)
+    : undefined;
+
   const l0JournalVerification = options.verifyRestore && memoriesJournalBackupPath
     ? verifyJsonlSnapshot(memoriesJournalBackupPath)
     : undefined;
@@ -493,6 +563,8 @@ export async function runBackupCycle(
     postgresRestoreVerification,
     companionTree,
     companionTreeVerification,
+    workspaceTree,
+    workspaceTreeVerification,
     l0JournalVerification,
     tieredRetention,
     mirrorDir,
@@ -520,6 +592,9 @@ export function registerScheduledBackupTask(
             databasePath: options.databasePath,
             postgres: options.postgres,
             companionDataDir: options.companionDataDir,
+            workspacePath: options.workspacePath,
+            workspaceExcludePaths: options.workspaceExcludePaths,
+            workspaceProtectedPaths: options.workspaceProtectedPaths,
             sessionsDir: options.sessionsDir,
             memoriesJournalPath: options.memoriesJournalPath,
             characterCardPath: options.characterCardPath,
@@ -556,6 +631,9 @@ export function registerScheduledBackupTask(
           companionTreeFiles: result.companionTree?.fileCount,
           companionTreeBytes: result.companionTree?.totalBytes,
           companionTreeVerifiedFiles: result.companionTreeVerification?.verifiedFileCount,
+          workspaceTreeFiles: result.workspaceTree?.fileCount,
+          workspaceTreeBytes: result.workspaceTree?.totalBytes,
+          workspaceTreeVerifiedFiles: result.workspaceTreeVerification?.verifiedFileCount,
           l0JournalLines: result.l0JournalVerification?.lineCount,
         });
       },

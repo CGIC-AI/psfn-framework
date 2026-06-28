@@ -7,7 +7,9 @@ import {
 } from '../src/persistence/backups/service.js';
 import {
   COMPANION_TREE_MANIFEST_NAME,
+  WORKSPACE_TREE_MANIFEST_NAME,
   verifyCompanionTreeSnapshot,
+  verifyWorkspaceTreeSnapshot,
 } from '../src/persistence/backups/companion-tree.js';
 import { verifyPostgresDumpRestore } from '../src/persistence/backups/postgres-restore.js';
 
@@ -195,6 +197,9 @@ async function main(): Promise<void> {
   const companionTreeVerification = existsSync(join(backupDir, COMPANION_TREE_MANIFEST_NAME))
     ? verifyCompanionTreeSnapshot(backupDir)
     : undefined;
+  const workspaceTreeVerification = existsSync(join(backupDir, WORKSPACE_TREE_MANIFEST_NAME))
+    ? verifyWorkspaceTreeSnapshot(backupDir)
+    : undefined;
 
   console.log(JSON.stringify({
     backupDir,
@@ -227,6 +232,12 @@ async function main(): Promise<void> {
       ? {
         companionTreeVerifiedFiles: companionTreeVerification.verifiedFileCount,
         companionTreeBytes: companionTreeVerification.totalBytes,
+      }
+      : {}),
+    ...(workspaceTreeVerification
+      ? {
+        workspaceTreeVerifiedFiles: workspaceTreeVerification.verifiedFileCount,
+        workspaceTreeBytes: workspaceTreeVerification.totalBytes,
       }
       : {}),
   }, null, 2));

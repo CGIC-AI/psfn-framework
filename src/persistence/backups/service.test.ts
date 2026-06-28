@@ -283,6 +283,91 @@ describe('runBackupCycle', () => {
     expect(result.companionTreeVerification?.verifiedFileCount).toBe(3);
   });
 
+  it('captures and verifies a separate workspace tree with wiki knowledge files', async () => {
+    const root = join(tmpdir(), `psfn-backup-workspace-tree-${Date.now()}`);
+    roots.push(root);
+    const systemDataDir = join(root, 'system-data');
+    const companionDataDir = join(root, 'companion-data');
+    const workspacePath = join(root, 'workspace');
+    const sessionsDir = join(companionDataDir, 'state', 'sessions');
+    const backupRootDir = join(root, 'backups');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(sessionsDir, { recursive: true });
+    mkdirSync(join(workspacePath, 'knowledge', 'wiki', 'documents'), { recursive: true });
+    mkdirSync(join(workspacePath, 'docs'), { recursive: true });
+    mkdirSync(join(workspacePath, 'downloads'), { recursive: true });
+    mkdirSync(join(workspacePath, 'images'), { recursive: true });
+    mkdirSync(join(workspacePath, 'journal'), { recursive: true });
+    mkdirSync(join(workspacePath, 'scratchpad'), { recursive: true });
+    mkdirSync(join(workspacePath, 'skills'), { recursive: true });
+    mkdirSync(join(workspacePath, 'modules'), { recursive: true });
+    mkdirSync(join(workspacePath, 'experiments'), { recursive: true });
+    mkdirSync(join(workspacePath, '.git'), { recursive: true });
+    mkdirSync(join(workspacePath, 'node_modules'), { recursive: true });
+    mkdirSync(join(workspacePath, 'tmp'), { recursive: true });
+    writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'knowledge', 'wiki', 'documents', 'reference.md'), 'wiki reference\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'docs', 'personal.md'), 'doc\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'downloads', 'article.txt'), 'download\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'images', 'saved.png'), 'image\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'journal', 'entry.md'), 'journal\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'scratchpad', 'scratch.md'), 'scratch\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'skills', 'skill.md'), 'skill\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'modules', 'module.ts'), 'module\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'experiments', 'trial.md'), 'experiment\n', 'utf-8');
+    writeFileSync(join(workspacePath, '.git', 'config'), 'git\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'node_modules', 'dependency.js'), 'dependency\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'tmp', 'temp.txt'), 'temp\n', 'utf-8');
+
+    const result = await runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeStubPgDump(root),
+        pgRestoreBinary: writeStubPgRestore(root),
+      },
+      companionDataDir,
+      workspacePath,
+      workspaceProtectedPaths: [systemDataDir, companionDataDir, backupRootDir],
+      sessionsDir,
+      backupRootDir,
+      verifyRestore: true,
+      now: () => Date.UTC(2026, 5, 28, 10, 11, 12, 123),
+    });
+
+    expect(result.workspaceTree).toBeDefined();
+    expect(result.workspaceTree?.fileCount).toBe(9);
+    expect(existsSync(join(result.workspaceTree!.treeDir, 'knowledge', 'wiki', 'documents', 'reference.md'))).toBe(true);
+    expect(existsSync(join(result.workspaceTree!.treeDir, 'docs', 'personal.md'))).toBe(true);
+    expect(existsSync(join(result.workspaceTree!.treeDir, '.git'))).toBe(false);
+    expect(existsSync(join(result.workspaceTree!.treeDir, 'node_modules'))).toBe(false);
+    expect(existsSync(join(result.workspaceTree!.treeDir, 'tmp'))).toBe(false);
+    expect(result.workspaceTree?.excludedPaths).toEqual(expect.arrayContaining([
+      '.git',
+      'node_modules',
+      'tmp',
+    ]));
+    expect(result.workspaceTreeVerification?.verifiedFileCount).toBe(9);
+  });
+
+  it('fails closed when workspace backup root overlaps protected runtime or backup paths', async () => {
+    const root = join(tmpdir(), `psfn-backup-workspace-overlap-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'companion-data', 'state', 'sessions');
+    mkdirSync(sessionsDir, { recursive: true });
+
+    await expect(runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeStubPgDump(root),
+      },
+      workspacePath: root,
+      workspaceProtectedPaths: [join(root, 'system-data'), join(root, 'companion-data')],
+      sessionsDir,
+      backupRootDir: join(root, 'backups'),
+      now: () => Date.UTC(2026, 5, 28, 10, 11, 12, 123),
+    })).rejects.toThrow('Workspace backup root');
+  });
+
   it('refuses to run without any database backup source', async () => {
     const root = join(tmpdir(), `psfn-backup-no-source-${Date.now()}`);
     roots.push(root);

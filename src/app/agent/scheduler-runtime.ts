@@ -135,6 +135,14 @@ export function buildAgentSchedulerRuntime(
       }
       : {}),
     companionDataDir: options.pathSnapshot.companionDataDir,
+    workspacePath: options.pathSnapshot.workspacePath,
+    workspaceProtectedPaths: [
+      options.pathSnapshot.systemDataDir,
+      options.pathSnapshot.companionDataDir,
+      options.pathSnapshot.runtimePathLayout.logsDir,
+      options.pathSnapshot.runtimePathLayout.tempDir,
+      options.pathSnapshot.runtimePathLayout.backupsDir,
+    ],
     sessionsDir: resolveSessionsDir(options.pathSnapshot.companionDataDir),
     memoriesJournalPath: resolveMemoryJournalPath(options.pathSnapshot.companionDataDir),
     characterCardPath: options.config.characterCardPath,
@@ -159,6 +167,7 @@ export function buildAgentSchedulerRuntime(
     backupRootDir: options.backupConfig.rootDir,
     mirrorDir: options.backupConfig.mirrorDir || '(none)',
     verifyRestore: options.backupConfig.verifyRestore,
+    workspacePath: options.pathSnapshot.workspacePath,
   });
 
   scheduler.registerHeartbeat(async () => {

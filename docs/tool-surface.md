@@ -28,6 +28,7 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - `identity`
 - `subagent`
 - `shard`
+- `wiki`
 - `vault`
 - `beads`
 - `skill`
@@ -61,6 +62,7 @@ Unified top-level direct tools in the current runtime:
 - `schedule`
 - `system`
 - `subagent`
+- `wiki`
 - `vault`
 - `beads`
 - `notify`
@@ -82,7 +84,7 @@ Important current-state notes:
 - `fs_list`, `fs_read`, `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr`, `vault_*`, `issue_*`, `settings_get`, `self_restart`, `self_rebuild`, and `notify_operator` are historical or action-alias names, not the preferred model-facing control path.
 - Transcript lookup now stays on the direct `session` tool; the split `session_search`, `session_grep`, and `session_list` registrations are no longer live.
 - Unified `memory`, `scratchpad`, `contact`, `session`, and `orient` are live direct tools on this branch, while only selected write/mutation helpers stay split during migration.
-- Unified `identity`, `north_star`, `schedule`, `system`, `vault`, `beads`, `notify`, and `media` are live direct tools on this branch. Legacy prompt-layer, lifecycle, operator-notification, vault, beads, and heartbeat/scheduling aliases are not the model-facing control path.
+- Unified `identity`, `north_star`, `schedule`, `system`, `wiki`, `vault`, `beads`, `notify`, and `media` are live direct tools on this branch. Legacy prompt-layer, lifecycle, operator-notification, vault, beads, and heartbeat/scheduling aliases are not the model-facing control path.
 
 ## Target Identity Surface
 
@@ -224,9 +226,21 @@ The target model-facing `web` surface collapses outward web work while keeping g
 
 This keeps ordinary page retrieval, crawler-style browsing, and small-scope web research under one semantic tool family instead of exposing multiple near-duplicate web micro-tools to the model.
 
-## Target Vault Surface
+## Target Wiki Surface
 
-The target model-facing `vault` surface collapses durable notes, Obsidian search, and daily journaling into one tool.
+The target model-facing `wiki` surface is the canonical PSFN-owned knowledge-base for durable reference documents and personal knowledge notes.
+
+- Actions: `list`, `read`, `search`, `write`, `import`
+- Authored documents live under `WORKSPACE_PATH/knowledge/wiki/`
+- Imported/source-derived documents require source class and provenance references
+- Wiki results must be labeled as authored/imported/reference knowledge, not transcript memory or lived relationship memory
+- Wiki storage stays distinct from L0 session history, L0.1 episodic landmarks, L2 typed memory, scratchpad, journal files, and active orientation
+
+This keeps durable reference creation, retrieval, search, and import on one semantic surface. Stable facts or relational knowledge still belong in `memory`; temporary working context stays in `scratchpad`; active operational state stays in `orient`.
+
+## Legacy External Vault Surface
+
+The legacy model-facing `vault` surface is an optional external Obsidian bridge for bounded source read/search/write compatibility. It is not the canonical durable companion note store.
 
 - Actions: `read`, `write`, `search`, `daily`
 - Legacy migration aliases remain available inside the same tool:
@@ -235,7 +249,7 @@ The target model-facing `vault` surface collapses durable notes, Obsidian search
   `vault_search` -> `search`
   `vault_daily` -> `daily`
 
-This keeps durable note creation, retrieval, search, and daily-note workflows on one semantic surface instead of scattering them across vault micro-tools. `vault` stays distinct from `scratchpad` and `memory`: scratchpad is temporary working context, memory is structured recall, and vault is for durable notes and artifacts.
+External vault notes that become PSFN-owned reference knowledge should be imported into `wiki` with source class `imported_partner_vault_note` and provenance references. Direct vault access must not silently copy Obsidian content into L0/L0.1/L2 memory.
 
 ## Target System Surface
 
@@ -289,7 +303,7 @@ The companion-facing runtime prompt should describe the active stack for the tur
 - Keep `scratchpad` as the ephemeral long-context workspace for large temporary material such as PDFs, articles, working notes, and rolling source summaries.
 - Keep scratchpad distinct from `orient` and `memory`: it is for temporary working context, not active canon or durable recall.
 - Scratchpad entries now age under an explicit lifecycle policy from `scheduler.json`; stale temporary notes are eligible for cleanup unless they are promoted first.
-- Promote scratchpad content only when it hardens into stable facts (`memory`), durable notes/artifacts (`vault` or repo docs), or orientation state (`orient`).
+- Promote scratchpad content only when it hardens into stable facts (`memory`), durable notes/artifacts (`wiki` or repo docs), or orientation state (`orient`).
 - Temporary file cleanup only touches generated media plus the managed workspace temp subtree at `workspace/.psfn/temp-artifacts`; ordinary workspace files are never swept implicitly.
 - Use `analysis_workbench` only for bounded multi-stage analysis of large files, codebases, logs, transcripts, datasets, or evidence sets that would overload normal context.
 - Keep `web` distinct from `session`: transcript lookup and continuity resume belong to `session`, while remote-page discovery/retrieval belongs to `web`.
@@ -306,6 +320,7 @@ The table below maps current first-party tool names to the target surface. It is
 | --- | --- | --- | --- |
 | `memory` | `memory` | always-on | Unified long-term memory surface with `action=write|search|import|redact|delete|restore`; capability gating still distinguishes read/write/delete-sensitive paths. |
 | `scratchpad` | `scratchpad` | always-on | Unified ephemeral workspace with `action=list|add|replace|append|remove`; short-lived working notes stay explicit and non-canonical. |
+| `wiki` | `wiki` | always-on | Internal PSFN-owned durable reference knowledge with `action=list|read|search|write|import`; separate from memory, scratchpad, journals, orientation, and Obsidian/Vault. |
 | `core_memory_append` | `orient` | always-on | Now maps to `orient action="append"` for incremental orientation updates. |
 | `core_memory_replace` | `orient` | always-on | Now maps to `orient action="replace"` for single-block rewrites. |
 | `memory_rethink` | `orient` | background-only | Now maps to `orient action="reorient"` for holistic orientation refresh. |
@@ -362,10 +377,11 @@ The table below maps current first-party tool names to the target surface. It is
 | `spawn_shard` | `shard` | hidden | Historical name from the pre-consolidation surface. Do not use it in active prompts or checklists; future long-horizon shard work should converge on `shard action="spawn"`. |
 | `analysis_workbench` | `analysis_workbench` | always-on | Bounded RLM+REPL analysis for large files, codebases, logs, transcripts, datasets, or evidence sets. Not for routine reasoning, tool discovery, schema confusion, simple lookup, or state changes. |
 | `skill` | `skill` | always-on | Unified surface with `action=list|view|create|update`; skills stay discoverable and managed-skill mutation remains explicit on the same semantic tool. |
-| `vault_write` | `vault` | hidden | Historical top-level name; use `vault action="write"`. |
-| `vault_read` | `vault` | hidden | Historical top-level name; use `vault action="read"`. |
-| `vault_search` | `vault` | hidden | Historical top-level name; use `vault action="search"`. |
-| `vault_daily` | `vault` | hidden | Historical top-level name; use `vault action="daily"`. |
+| `vault` | `vault` | extended | Legacy external Obsidian bridge for bounded source read/search/write compatibility; canonical durable reference knowledge belongs in `wiki`. |
+| `vault_write` | `vault` | hidden | Historical top-level name; use `vault action="write"` only for the external Obsidian bridge. |
+| `vault_read` | `vault` | hidden | Historical top-level name; use `vault action="read"` only for the external Obsidian bridge. |
+| `vault_search` | `vault` | hidden | Historical top-level name; use `vault action="search"` only for the external Obsidian bridge. |
+| `vault_daily` | `vault` | hidden | Historical top-level name; use `vault action="daily"` only for the external Obsidian bridge. |
 | `image_create` | `media` | extended | Collapsed into `media action="generate"`; detailed prompt craft belongs in creator skills, not runtime context. |
 | `image_edit` | `media` | extended | Collapsed into `media action="edit"` on the same surface. |
 | `image_analyze` | `media` | extended | Collapsed into `media action="analyze"` on the same surface. |

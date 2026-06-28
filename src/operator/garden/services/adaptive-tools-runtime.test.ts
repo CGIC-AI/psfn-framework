@@ -173,14 +173,14 @@ describe('deriveToolHealthViews', () => {
     ]);
   });
 
-  it('shows unified vault health and degrades when gateway action coverage is partial', () => {
+  it('shows external vault bridge health and degrades when gateway action coverage is partial', () => {
     const views = deriveToolHealthViews({
       catalog: {
         generatedAt: 1,
         tools: [
           {
             name: 'vault',
-            description: 'Unified durable vault surface for Obsidian notes, search, and daily journaling.',
+            description: 'Legacy external Obsidian/Vault bridge for bounded read, write, search, and daily-note compatibility.',
             scope: 'extended',
             wiringMeta: {
               requiredServices: ['vault'],
@@ -223,7 +223,7 @@ describe('deriveToolHealthViews', () => {
         name: 'vault',
         health: {
           status: 'degraded',
-          detail: 'Vault is missing actions required by the unified tool: write, daily.',
+          detail: 'External vault bridge is missing actions required by the tool: write, daily.',
         },
         contexts: {
           chat: {
@@ -239,7 +239,7 @@ describe('deriveToolHealthViews', () => {
     ]);
   });
 
-  it('adds a conditional unified vault tool when vault service health is unavailable', () => {
+  it('adds a conditional external vault bridge tool when vault service health is unavailable', () => {
     const views = deriveToolHealthViews({
       catalog: {
         generatedAt: 1,

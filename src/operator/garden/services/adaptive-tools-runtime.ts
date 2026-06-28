@@ -24,6 +24,20 @@ interface DerivedToolDefinition {
   wiringMeta?: RuntimeToolCatalogEntry['wiringMeta'];
 }
 
+const CONDITIONAL_SERVICE_TOOL_DEFINITIONS = new Map<
+  RuntimeServiceHealth['serviceId'],
+  Omit<DerivedToolDefinition, 'registered'>
+>([
+  ['vault', {
+    name: 'vault',
+    description: 'Legacy external Obsidian/Vault bridge for bounded read, write, search, and daily-note compatibility.',
+    scope: 'conditional',
+    wiringMeta: {
+      requiredServices: ['vault'],
+    },
+  }],
+]);
+
 export function cloneRuntimeState(state: AdaptiveToolRuntimeState): AdaptiveToolRuntimeState {
   return {
     ...state,
@@ -81,7 +95,7 @@ export function deriveToolHealthViews(params: {
   serviceHealth: RuntimeServiceHealth[];
   recentFailures: readonly AdminToolFailureEvent[];
 }): AdminToolHealthView[] {
-  const definitions = resolveToolDefinitions(params.catalog);
+  const definitions = resolveToolDefinitions(params.catalog, params.serviceHealth);
   const serviceById = new Map(params.serviceHealth.map(service => [service.serviceId, service]));
   const activeSources = new Map(params.state?.activeTools.map(tool => [tool.toolName, tool.source]) ?? []);
   const failureByTool = new Map<string, AdminToolFailureEvent>();
@@ -165,7 +179,10 @@ export function deriveToolInventoryGroups(toolHealth: AdminToolHealthView[]): Ad
   return groups;
 }
 
-function resolveToolDefinitions(catalog: RuntimeToolCatalogSnapshot | null): DerivedToolDefinition[] {
+function resolveToolDefinitions(
+  catalog: RuntimeToolCatalogSnapshot | null,
+  serviceHealth: RuntimeServiceHealth[],
+): DerivedToolDefinition[] {
   const definitions = new Map<string, DerivedToolDefinition>();
   for (const tool of catalog?.tools ?? []) {
     definitions.set(tool.name, {
@@ -174,6 +191,16 @@ function resolveToolDefinitions(catalog: RuntimeToolCatalogSnapshot | null): Der
       scope: tool.scope,
       registered: true,
       ...(tool.wiringMeta ? { wiringMeta: cloneToolWiringMeta(tool.wiringMeta) } : {}),
+    });
+  }
+
+  for (const service of serviceHealth) {
+    const conditionalDefinition = CONDITIONAL_SERVICE_TOOL_DEFINITIONS.get(service.serviceId);
+    if (!conditionalDefinition || definitions.has(conditionalDefinition.name)) continue;
+    definitions.set(conditionalDefinition.name, {
+      ...conditionalDefinition,
+      registered: true,
+      ...(conditionalDefinition.wiringMeta ? { wiringMeta: cloneToolWiringMeta(conditionalDefinition.wiringMeta) } : {}),
     });
   }
 
@@ -225,6 +252,13 @@ function resolveToolHealth(
   }
 
   const baseStatus = foldStatuses(statuses);
+  const missingActions = resolveMissingRequiredActions(definition, serviceById);
+  if (missingActions.length > 0 && baseStatus.status !== 'unavailable' && baseStatus.status !== 'not_applicable') {
+    return {
+      status: 'degraded',
+      detail: `${describeToolForHealth(definition.name)} is missing actions required by the tool: ${missingActions.join(', ')}.`,
+    };
+  }
   if (lastFailure && baseStatus.status !== 'unavailable' && baseStatus.status !== 'not_applicable') {
     return {
       status: 'degraded',
@@ -232,6 +266,45 @@ function resolveToolHealth(
     };
   }
   return baseStatus;
+}
+
+function resolveMissingRequiredActions(
+  definition: DerivedToolDefinition,
+  serviceById: Map<string, RuntimeServiceHealth>,
+): string[] {
+  const requiredGatewayMethods = definition.wiringMeta?.requiredGatewayMethods ?? [];
+  if (requiredGatewayMethods.length === 0) return [];
+
+  const requiredByService = new Map<string, Set<string>>();
+  for (const method of requiredGatewayMethods) {
+    const [serviceId, action] = method.split('.', 2);
+    if (!serviceId || !action) continue;
+    const actions = requiredByService.get(serviceId) ?? new Set<string>();
+    actions.add(action);
+    requiredByService.set(serviceId, actions);
+  }
+
+  const missing: string[] = [];
+  for (const [serviceId, requiredActions] of requiredByService) {
+    const availableActions = serviceById.get(serviceId)?.availableActions;
+    if (!availableActions) continue;
+    const available = new Set(availableActions);
+    for (const action of requiredActions) {
+      if (!available.has(action)) {
+        missing.push(action);
+      }
+    }
+  }
+  return missing;
+}
+
+function describeToolForHealth(toolName: string): string {
+  switch (toolName) {
+    case 'vault':
+      return 'External vault bridge';
+    default:
+      return `Tool ${toolName}`;
+  }
 }
 
 function foldStatuses(statuses: Array<{ status: RuntimeServiceHealthStatus; detail: string }>): AdminToolHealthView['health'] {

@@ -29,6 +29,7 @@ import type {
   AdminShardFoldReviewService,
   AdminSessionService,
   AdminSettingsService,
+  AdminWikiService,
 } from './services/types.js';
 import {
   isDashboardCostWindow,
@@ -149,6 +150,7 @@ const MODEL_USAGE_UNAVAILABLE_ERROR = 'Model usage telemetry backend unavailable
 const OBSERVER_EVAL_SIDECAR_UNAVAILABLE_ERROR = 'Observer eval sidecar backend unavailable';
 const ACTION_PIPE_UNAVAILABLE_ERROR = 'Action pipe backend unavailable';
 const AUDIT_HISTORY_UNAVAILABLE_ERROR = 'Audit history backend unavailable';
+const WIKI_UNAVAILABLE_ERROR = 'Wiki backend unavailable';
 const ADMIN_AUDIT_HISTORY_SOURCES = ['garden', 'gateway', 'charge'] as const;
 const OBSERVER_EVAL_PRIVACY_CLASSES = ['public', 'private', 'restricted', 'closed', 'fail_closed'] as const;
 const OBSERVER_EVAL_OBSERVATION_STATUSES = ['ok', 'degraded', 'error'] as const;
@@ -305,6 +307,7 @@ export function buildAdminApiRoutes(options: {
   actionPipeService?: AdminActionPipeService | null;
   shardFoldReviewService: AdminShardFoldReviewService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
+  wikiService?: AdminWikiService | null;
   episodicMemoryService?: AdminEpisodicMemoryService | null;
   memoryService: AdminMemoryService;
   sessionService: AdminSessionService;
@@ -338,6 +341,7 @@ export function buildAdminApiRoutes(options: {
     actionPipeService,
     shardFoldReviewService,
     adaptiveToolsService,
+    wikiService,
     episodicMemoryService,
     memoryService,
     sessionService,
@@ -1647,6 +1651,68 @@ export function buildAdminApiRoutes(options: {
       },
     },
     ...buildAdminEpisodicMemoryRoutes({ episodicMemoryService }),
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/wiki'),
+      handle: (_req, res) => {
+        if (!wikiService) {
+          sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR });
+          return;
+        }
+        wikiService.listWikiDocuments().then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list wiki documents') }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/wiki/search'),
+      handle: (req, res) => {
+        if (!wikiService) {
+          sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR });
+          return;
+        }
+        const url = parseRequestUrl(req, '/api/admin/wiki/search');
+        const query = url.searchParams.get('query')?.trim() ?? '';
+        if (!query) {
+          sendJson(res, 400, { error: 'query is required' });
+          return;
+        }
+        const limit = toPositiveIntegerQueryNumber(url.searchParams.get('limit'), 'limit');
+        if (!limit.ok) {
+          sendJson(res, 400, { error: limit.error });
+          return;
+        }
+        wikiService.searchWikiDocuments({
+          query,
+          ...(limit.value !== undefined ? { limit: limit.value } : {}),
+        }).then(
+          payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to search wiki documents') }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: prefixedParamPath('/api/admin/wiki/', 'id'),
+      handle: (_req, res, { id }) => {
+        if (!wikiService) {
+          sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR });
+          return;
+        }
+        wikiService.getWikiDocument(id).then(
+          (document) => {
+            if (!document) {
+              sendJson(res, 404, { error: 'Wiki document not found' });
+              return;
+            }
+            sendJson(res, 200, document, ADMIN_DYNAMIC_JSON_HEADERS);
+          },
+          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load wiki document') }),
+        );
+      },
+    },
     {
       method: 'GET',
       match: exactPath('/api/admin/sessions'),

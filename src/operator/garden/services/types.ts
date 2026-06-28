@@ -114,6 +114,11 @@ import type {
   ImageReferenceUpdateInput,
   ImageReferenceUploadInput,
 } from '../../../primitives/images/reference-store.js';
+import type {
+  WikiDocument,
+  WikiDocumentListEntry,
+  WikiSearchResult,
+} from '../../../faculties/wiki/types.js';
 export type {
   AdminAuditHistoryQuery,
   AdminAuditHistoryService,
@@ -171,6 +176,23 @@ export interface AdminImagesService {
   deleteReferencePhoto(id: string): Promise<void>;
   setDefaultReferencePhoto(id: string): Promise<ImageReferencePhoto>;
   getReferencePhotoBlob(id: string): Promise<ImageReferenceBlob | null>;
+}
+
+export interface AdminWikiListData {
+  roots: {
+    workspaceRoot: string;
+    wikiRoot: string;
+    documentsDir: string;
+    metadataDir: string;
+  };
+  documents: WikiDocumentListEntry[];
+  boundary: string;
+}
+
+export interface AdminWikiService {
+  listWikiDocuments(): Promise<AdminWikiListData>;
+  getWikiDocument(id: string): Promise<WikiDocument | null>;
+  searchWikiDocuments(query: { query: string; limit?: number }): Promise<WikiSearchResult>;
 }
 
 export interface AdminChargeLedgerService {

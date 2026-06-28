@@ -29,6 +29,8 @@
   } from '$lib/types/tools';
 
   const MEMORY_WORKFLOW_TOOL_NAMES = [
+    'wiki',
+    'fs',
     'memory_write',
     'start_focus',
     'complete_focus',
@@ -43,6 +45,11 @@
   ] as const;
 
   const MEMORY_ADMIN_LINKS = [
+    {
+      title: 'Wiki',
+      detail: 'Inspect workspace-backed reference knowledge and provenance.',
+      href: `${base}/wiki`,
+    },
     {
       title: 'Memory Browser',
       detail: 'Inspect scoped memories, repair scope tags, and manage links.',
@@ -520,7 +527,7 @@
         Memory and social operations
       </h2>
       <p class="mt-1 text-sm text-shadow-600">
-        Focused checks for tools and admin surfaces operators use when memory, focus, or contacts are involved.
+        Focused checks for tools and admin surfaces operators use when wiki knowledge, memory, focus, or contacts are involved.
       </p>
     </div>
 
@@ -528,9 +535,9 @@
       <div class="card-garden p-5">
         <div class="flex items-baseline justify-between gap-3 flex-wrap">
           <div>
-            <h3 class="text-base font-serif font-semibold text-shadow-900">Memory / Social Workflow</h3>
+            <h3 class="text-base font-serif font-semibold text-shadow-900">Knowledge / Memory Workflow</h3>
             <p class="mt-1 text-sm text-shadow-600">
-              Spotlight on runtime tools that affect memory, focus, and contacts.
+              Spotlight on runtime tools that affect workspace knowledge, memory, focus, and contacts.
             </p>
           </div>
           <span class="rounded-full border border-bark-300 bg-bark-100 px-3 py-1 text-xs font-medium text-shadow-700">

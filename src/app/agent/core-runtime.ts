@@ -32,6 +32,7 @@ import { wirePromptRuntime, wireCharacterCardRuntime, wireStaticPromptRegistry, 
 import { registerContactRuntime, wireContactRuntime } from '../../core/contacts/runtime-wiring.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { wireSkillsRuntime } from '../../faculties/skills/runtime-wiring.js';
+import { wireWikiRuntime } from '../../faculties/wiki/runtime-wiring.js';
 import { registerFilesystemTools } from '../../boundary/integrations/filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from '../../boundary/integrations/filesystem/gateway-ops.js';
 import { registerImageTools } from '../../primitives/images/runtime-wiring.js';
@@ -210,6 +211,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     searchQueryJson: createWebSearchQueryJson(llmProvider),
   });
   registerFilesystemTools(agentLoop, new GatewayFilesystemOps(gatewayOps), { gatewayMode: true });
+  wireWikiRuntime(agentLoop, pathSnapshot.workspaceRoot);
   const imageVisionReviewer = new DefaultImageVisionReviewer(config, {
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
     llmProvider,

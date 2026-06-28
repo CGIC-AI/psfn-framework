@@ -11,9 +11,13 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   COMPANION_TREE_MANIFEST_NAME,
+  WORKSPACE_TREE_MANIFEST_NAME,
   captureCompanionTree,
+  captureWorkspaceTree,
   verifyCompanionTreeSnapshot,
+  verifyWorkspaceTreeSnapshot,
   type CompanionTreeManifest,
+  type WorkspaceTreeManifest,
 } from './companion-tree.js';
 
 describe('companion tree capture', () => {
@@ -140,5 +144,77 @@ describe('companion tree capture', () => {
       companionDataDir: join(root, 'nope'),
       backupDir: join(root, 'backup-snapshot'),
     })).toThrow('Companion data directory missing');
+  });
+
+  it('captures workspace wiki and personal files while excluding dependency, VCS, cache, and temp directories', () => {
+    const root = makeRoot('psfn-workspace-tree');
+    const workspacePath = join(root, 'workspace');
+    const backupDir = join(root, 'backup-snapshot');
+    mkdirSync(join(workspacePath, 'knowledge', 'wiki', 'documents'), { recursive: true });
+    mkdirSync(join(workspacePath, 'docs'), { recursive: true });
+    mkdirSync(join(workspacePath, 'downloads'), { recursive: true });
+    mkdirSync(join(workspacePath, 'images'), { recursive: true });
+    mkdirSync(join(workspacePath, 'journal'), { recursive: true });
+    mkdirSync(join(workspacePath, 'scratchpad'), { recursive: true });
+    mkdirSync(join(workspacePath, 'skills'), { recursive: true });
+    mkdirSync(join(workspacePath, 'modules'), { recursive: true });
+    mkdirSync(join(workspacePath, 'experiments'), { recursive: true });
+    mkdirSync(join(workspacePath, '.git'), { recursive: true });
+    mkdirSync(join(workspacePath, 'project', 'node_modules', 'pkg'), { recursive: true });
+    mkdirSync(join(workspacePath, '.cache'), { recursive: true });
+    mkdirSync(join(workspacePath, 'tmp'), { recursive: true });
+    mkdirSync(join(workspacePath, '.psfn', 'temp-artifacts'), { recursive: true });
+    mkdirSync(backupDir, { recursive: true });
+    writeFileSync(join(workspacePath, 'knowledge', 'wiki', 'documents', 'internal.md'), 'wiki\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'docs', 'note.md'), 'doc\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'downloads', 'source.pdf'), 'pdf\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'images', 'saved.png'), 'png\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'journal', 'entry.md'), 'journal\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'scratchpad', 'scratch.md'), 'scratch\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'skills', 'personal.md'), 'skill\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'modules', 'module.ts'), 'module\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'experiments', 'exp.md'), 'experiment\n', 'utf-8');
+    writeFileSync(join(workspacePath, '.git', 'config'), 'git\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'project', 'node_modules', 'pkg', 'index.js'), 'dependency\n', 'utf-8');
+    writeFileSync(join(workspacePath, '.cache', 'cached'), 'cache\n', 'utf-8');
+    writeFileSync(join(workspacePath, 'tmp', 'temp.txt'), 'temp\n', 'utf-8');
+    writeFileSync(join(workspacePath, '.psfn', 'temp-artifacts', 'generated.tmp'), 'temp\n', 'utf-8');
+
+    const result = captureWorkspaceTree({
+      workspacePath,
+      backupDir,
+      now: () => Date.UTC(2026, 5, 28, 1, 2, 3),
+    });
+
+    expect(existsSync(join(result.treeDir, 'knowledge', 'wiki', 'documents', 'internal.md'))).toBe(true);
+    expect(existsSync(join(result.treeDir, 'docs', 'note.md'))).toBe(true);
+    expect(existsSync(join(result.treeDir, '.git'))).toBe(false);
+    expect(existsSync(join(result.treeDir, 'project', 'node_modules'))).toBe(false);
+    expect(existsSync(join(result.treeDir, '.cache'))).toBe(false);
+    expect(existsSync(join(result.treeDir, 'tmp'))).toBe(false);
+    expect(existsSync(join(result.treeDir, '.psfn', 'temp-artifacts'))).toBe(false);
+
+    const manifest = JSON.parse(
+      readFileSync(join(backupDir, WORKSPACE_TREE_MANIFEST_NAME), 'utf-8'),
+    ) as WorkspaceTreeManifest;
+    expect(manifest.files.map(entry => entry.path)).toEqual([
+      'docs/note.md',
+      'downloads/source.pdf',
+      'experiments/exp.md',
+      'images/saved.png',
+      'journal/entry.md',
+      'knowledge/wiki/documents/internal.md',
+      'modules/module.ts',
+      'scratchpad/scratch.md',
+      'skills/personal.md',
+    ]);
+    expect(manifest.excludedPaths).toEqual([
+      '.cache',
+      '.git',
+      '.psfn/temp-artifacts',
+      'project/node_modules',
+      'tmp',
+    ]);
+    expect(verifyWorkspaceTreeSnapshot(backupDir).verifiedFileCount).toBe(9);
   });
 });

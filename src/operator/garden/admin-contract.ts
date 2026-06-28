@@ -33,6 +33,7 @@ import type {
   AdminShardFoldReviewService,
   AdminSessionService,
   AdminSettingsService,
+  AdminWikiService,
 } from './services/types.js';
 import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
 
@@ -137,6 +138,7 @@ export interface GardenAdminDomainServices {
   actionPipe?: AdminActionPipeService | null;
   shards: AdminShardFoldReviewService;
   adaptiveTools?: AdminAdaptiveToolsService | null;
+  wiki?: AdminWikiService | null;
   episodicMemory?: AdminEpisodicMemoryService | null;
   memory: AdminMemoryService;
   sessions: AdminSessionService;

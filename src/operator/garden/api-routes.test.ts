@@ -645,7 +645,7 @@ describe('AdminServer JSON API routes', () => {
           {
             serviceId: 'vault',
             status: 'not_applicable',
-            detail: 'Vault is disabled in this runtime.',
+            detail: 'External Obsidian vault bridge is disabled in this runtime.',
             checkedAt: 1_701_234_567_999,
           },
           {

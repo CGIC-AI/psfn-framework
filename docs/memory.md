@@ -55,6 +55,7 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 - Orientation storage intentionally remains on legacy `core_memory.json` paths for now; the runtime rename is model-facing rather than a persistence migration.
 - Long-term memory lives in the typed `memory` store and is retrieved selectively; it is not the same thing as active orientation.
 - `scratchpad` remains an explicit ephemeral workspace for bulky temporary material and working notes, not canonical memory.
+- `wiki` is the workspace-backed durable reference surface for authored notes, imported documents, curated references, and personal knowledge-base material.
 - Ephemeral scratchpad notes and managed temp artifacts now follow an explicit retention policy from `scheduler.json`. Durable artifacts promoted into the research library are exempt from lifecycle cleanup.
 
 ### Scratchpad
@@ -67,8 +68,21 @@ Scratchpad is a separate semantic surface, not a subtype of long-term memory.
 - Must stay distinct from `orient`, which is active canon, and from typed long-term `memory`, which is durable retrieval state
 - Should be promoted only when the content stabilizes:
   - stable facts or relational knowledge go to `memory`
-  - durable operator-authored notes or artifacts go to repo docs or `vault`
+  - durable operator-authored notes, imported documents, and artifacts go to `wiki` or repo docs
   - active self-orientation belongs in `orient`
+
+### Wiki / Knowledge Base
+
+Wiki documents are stable reference knowledge, not lived memory.
+
+- Live under `WORKSPACE_PATH/knowledge/wiki/` with document bodies and metadata stored in deterministic subtrees
+- Hold durable authored notes, imported partner-vault notes, parsed documents, generated syntheses, external references, and system seeds
+- Carry source class, provenance references, sensitivity, timestamps, and revision metadata
+- Stay distinct from L0 transcript history, L0.1 episodic landmarks, L2 typed memory, scratchpad, journal files, and current orientation
+- May link to memory/session records by provenance reference, but the wiki body does not become L0/L0.1/L2 memory by default
+- Imports from Obsidian/Vault or other external sources require explicit source class and provenance and fail closed when those fields are missing
+
+The legacy `vault`/Obsidian surface is an optional external source bridge. It is not the canonical personal long-term storage surface.
 
 ## Memory Types
 

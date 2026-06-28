@@ -74,6 +74,7 @@ import { AdminSchedulerService } from './services/scheduler-service.js';
 import { AdminSessionDataService } from './services/session-service.js';
 import { AdminSettingsDataService } from './services/settings-service.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
+import { AdminWikiDataService } from './services/wiki-service.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 
 export interface InProcessGardenAdminContractOptions {
@@ -184,6 +185,9 @@ export function createInProcessGardenAdminContract(
       : null,
     shards: new AdminShardFoldReviewDataService(options.shardManager),
     adaptiveTools,
+    wiki: options.config.workspacePath
+      ? new AdminWikiDataService(options.config.workspacePath)
+      : null,
     episodicMemory: options.episodicStore
       ? new AdminEpisodicMemoryDataService(options.episodicStore)
       : null,

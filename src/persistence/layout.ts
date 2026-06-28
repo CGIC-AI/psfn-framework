@@ -82,6 +82,7 @@ const PERSONAL_DOWNLOADS_DIRNAME = 'downloads';
 const PERSONAL_IMAGES_DIRNAME = 'images';
 const PERSONAL_JOURNAL_DIRNAME = 'journal';
 const PERSONAL_KNOWLEDGE_DIRNAME = 'knowledge';
+const PERSONAL_WIKI_DIRNAME = 'wiki';
 const PERSONAL_SCRATCHPAD_DIRNAME = 'scratchpad';
 const PERSONAL_SKILLS_DIRNAME = 'skills';
 const PERSONAL_MODULES_DIRNAME = 'modules';
@@ -731,6 +732,10 @@ export function resolvePersonalKnowledgeDir(personalFilesDir: string): string {
   return join(personalFilesDir, PERSONAL_KNOWLEDGE_DIRNAME);
 }
 
+export function resolvePersonalWikiDir(personalFilesDir: string): string {
+  return join(resolvePersonalKnowledgeDir(personalFilesDir), PERSONAL_WIKI_DIRNAME);
+}
+
 export function resolvePersonalScratchpadDir(personalFilesDir: string): string {
   return join(personalFilesDir, PERSONAL_SCRATCHPAD_DIRNAME);
 }
@@ -758,6 +763,7 @@ export function ensurePersonalFilesLayout(personalFilesDir: string): void {
   mkdirSync(resolvePersonalImagesDir(personalFilesDir), { recursive: true });
   mkdirSync(resolvePersonalJournalDir(personalFilesDir), { recursive: true });
   mkdirSync(resolvePersonalKnowledgeDir(personalFilesDir), { recursive: true });
+  mkdirSync(resolvePersonalWikiDir(personalFilesDir), { recursive: true });
   mkdirSync(resolvePersonalScratchpadDir(personalFilesDir), { recursive: true });
   mkdirSync(resolvePersonalSkillsDir(personalFilesDir), { recursive: true });
   mkdirSync(resolvePersonalModulesDir(personalFilesDir), { recursive: true });

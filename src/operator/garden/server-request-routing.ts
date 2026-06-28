@@ -31,6 +31,7 @@ const GARDEN_CLIENT_ROUTES = new Set([
   '/theme',
   '/tools',
   '/values',
+  '/wiki',
 ]);
 
 interface AdminRequestRoutingDependencies {

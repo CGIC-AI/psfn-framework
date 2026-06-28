@@ -1,5 +1,5 @@
-// ── Obsidian Vault Tool ──
-// Unified model-facing vault surface for durable notes and daily journaling.
+// ── External Obsidian Vault Tool ──
+// Legacy external Obsidian bridge for bounded source access and compatibility.
 
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
@@ -147,7 +147,8 @@ export function createVaultTool(ops: VaultOperations): AgentTool<any> {
     name: 'vault',
     label: 'vault',
     description:
-      'Unified durable vault surface for Obsidian notes, search, and daily journaling. '
+      'Legacy external Obsidian/Vault bridge for bounded read, write, search, and daily-note compatibility. '
+      + 'Canonical durable reference knowledge belongs in the internal wiki tool, not vault. '
       + 'Use action=read|write|search|daily. Legacy vault_* aliases remain accepted as action values only.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
@@ -164,14 +165,14 @@ export function createVaultTool(ops: VaultOperations): AgentTool<any> {
       })),
       name: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Used with action=read|write. Note name or path relative to vault root.',
+        description: 'Used with action=read|write. Note name or path relative to the configured external vault root.',
       })),
       content: Type.Optional(Type.String({
         description: 'Used with action=write to write markdown, or action=daily to append to today\'s daily note.',
       })),
       folder: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Used with action=write mode=create. Folder path within the vault root.',
+        description: 'Used with action=write mode=create. Folder path within the configured external vault root.',
       })),
       mode: Type.Optional(Type.Union([
         Type.Literal('create'),

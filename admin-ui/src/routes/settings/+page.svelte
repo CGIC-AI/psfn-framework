@@ -194,7 +194,7 @@
       // Voice / TTS
       ttsProvider, voiceId, echoTtsUrl, echoTtsVoice, echoTtsPreset,
       sttProvider, deepgramModel,
-      // Obsidian Vault
+      // External Obsidian bridge
       obsidianVaultName, obsidianCliPath, obsidianAutoPublish, obsidianTimeoutMs,
       // Channels
       discordTriggerWords, discordTriggerReactions,
@@ -257,7 +257,7 @@
   let sttProvider = $state('disabled');
   let deepgramModel = $state('');
 
-  // ── Obsidian Vault ──
+  // ── External Obsidian Bridge ──
   let obsidianVaultName = $state('');
   let obsidianCliPath = $state('obsidian');
   let obsidianAutoPublish = $state(false);
@@ -460,9 +460,9 @@
       summary: () => `TTS: ${ttsProvider}, STT: ${sttProvider}`,
     },
     {
-      id: 'obsidian', title: 'Obsidian Vault', icon: 'O',
+      id: 'obsidian', title: 'External Obsidian', icon: 'O',
       keys: SETTINGS_GARDEN_SECTION_FIELDS.obsidian,
-      summary: () => obsidianVaultName ? `Vault: ${obsidianVaultName}${obsidianAutoPublish ? ', auto-publish' : ''}` : 'Disabled',
+      summary: () => obsidianVaultName ? `External vault: ${obsidianVaultName}${obsidianAutoPublish ? ', auto-publish' : ''}` : 'Disabled',
     },
     {
       id: 'channels', title: 'Channels', icon: 'C',
@@ -865,7 +865,7 @@
     sttProvider = providerSelection.sttProvider;
     deepgramModel = String(config.deepgramModel ?? '');
 
-    // Obsidian Vault
+    // External Obsidian bridge
     obsidianVaultName = String(config.obsidianVaultName ?? '');
     obsidianCliPath = String(config.obsidianCliPath ?? 'obsidian');
     obsidianAutoPublish = Boolean(config.obsidianAutoPublish);
@@ -1334,7 +1334,7 @@
       echoTtsPreset,
       sttProvider,
       deepgramModel,
-      // Obsidian Vault
+      // External Obsidian bridge
       obsidianVaultName: obsidianVaultName || undefined,
       obsidianCliPath: obsidianCliPath || 'obsidian',
       obsidianAutoPublish,
@@ -2722,7 +2722,7 @@
       </div>
       </section>
 
-      <!-- Obsidian Vault -->
+      <!-- External Obsidian Bridge -->
       <section
         id={settingsSimpleSectionAnchorId('integrations-obsidian')}
         use:simpleSectionAnchor={'integrations-obsidian'}
@@ -2735,11 +2735,11 @@
         >
           <div class="flex items-center gap-3">
             <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">O</span>
-            <h2 class="text-sm font-serif font-semibold text-shadow-800">Obsidian Vault</h2>
+            <h2 class="text-sm font-serif font-semibold text-shadow-800">External Obsidian Bridge</h2>
           </div>
           <div class="flex items-center gap-3">
             {#if !openSections.has('obsidian')}
-              <span class="text-xs text-shadow-600">{obsidianVaultName ? `Vault: ${obsidianVaultName}` : 'Disabled'}</span>
+              <span class="text-xs text-shadow-600">{obsidianVaultName ? `External vault: ${obsidianVaultName}` : 'Disabled'}</span>
             {/if}
             <span class="text-shadow-500">{openSections.has('obsidian') ? '−' : '+'}</span>
           </div>
@@ -2748,13 +2748,13 @@
           <div class="px-5 py-4 space-y-4 border-t border-bark-200">
             <div>
               <SettingFieldLabel
-                label="Vault Name"
+                label="External Vault Name"
                 keys="obsidianVaultName"
                 forId="obsidianVaultName"
                 class="block text-xs font-semibold text-shadow-700 mb-1"
               />
               <input type="text" id="obsidianVaultName" class="input-garden w-full" bind:value={obsidianVaultName} placeholder="e.g. companion" />
-              <p class="text-xs text-shadow-500 mt-0.5">Leave empty to disable vault tools. Must match the name in Obsidian.</p>
+              <p class="text-xs text-shadow-500 mt-0.5">Leave empty to disable the external bridge. Canonical durable notes belong in Wiki.</p>
             </div>
             <div>
               <SettingFieldLabel
@@ -2764,12 +2764,12 @@
                 class="block text-xs font-semibold text-shadow-700 mb-1"
               />
               <input type="text" id="obsidianCliPath" class="input-garden w-full" bind:value={obsidianCliPath} placeholder="obsidian" />
-              <p class="text-xs text-shadow-500 mt-0.5">Path to the Obsidian CLI binary. Default: obsidian</p>
+              <p class="text-xs text-shadow-500 mt-0.5">Path to the Obsidian CLI binary for the external bridge. Default: obsidian</p>
             </div>
             <div class="flex items-center gap-3">
               <input type="checkbox" id="obsidianAutoPublish" class="rounded border-bark-400" bind:checked={obsidianAutoPublish} />
               <label class="text-xs font-semibold text-shadow-700" for="obsidianAutoPublish">
-                Auto-publish reflections to vault
+                Auto-publish reflections to external vault
                 <code class="ml-1.5 rounded-md border border-bark-200 bg-bark-100 px-1.5 py-0.5 font-mono text-[0.7rem] font-semibold text-shadow-600">obsidianAutoPublish</code>
               </label>
             </div>

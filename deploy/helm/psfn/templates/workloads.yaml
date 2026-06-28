@@ -53,6 +53,7 @@ spec:
       {{- end }}
       initContainers:
         {{- include "psfn.seedInitContainer" . | nindent 8 }}
+        {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.gateway.image) | nindent 8 }}
       containers:
         - name: gateway
           image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.gateway.image) | quote }}
@@ -171,6 +172,7 @@ spec:
       {{- end }}
       initContainers:
         {{- include "psfn.seedInitContainer" . | nindent 8 }}
+        {{- include "psfn.waitForPostgresInitContainer" (dict "root" . "image" .Values.workloads.agent.image) | nindent 8 }}
       containers:
         - name: agent
           image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.agent.image) | quote }}

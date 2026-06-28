@@ -145,6 +145,21 @@ assertIncludes(agentPolicy, 'component: postgres', 'agent policy postgres flow')
 assertIncludes(agentPolicy, 'component: redis', 'agent policy redis flow');
 assertNotIncludes(rendered, 'psfn-satellite-hub', 'default disabled satellite hub');
 
+const gatewayDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-gateway');
+assertIncludes(gatewayDeployment, 'name: wait-for-postgres', 'gateway Postgres startup wait init container');
+assertIncludes(gatewayDeployment, 'pg_isready -d "$POSTGRES_DATABASE_URL"', 'gateway Postgres startup wait command');
+assertIncludes(gatewayDeployment, 'name: psfn-postgres', 'gateway Postgres startup wait secret name');
+assertIncludes(gatewayDeployment, 'key: postgres-database-url', 'gateway Postgres startup wait secret key');
+
+const agentDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-agent');
+assertIncludes(agentDeployment, 'name: wait-for-postgres', 'agent Postgres startup wait init container');
+assertIncludes(agentDeployment, 'pg_isready -d "$POSTGRES_DATABASE_URL"', 'agent Postgres startup wait command');
+assertIncludes(agentDeployment, 'name: psfn-postgres', 'agent Postgres startup wait secret name');
+assertIncludes(agentDeployment, 'key: postgres-database-url', 'agent Postgres startup wait secret key');
+
+const gardenDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-garden');
+assertNotIncludes(gardenDeployment, 'name: wait-for-postgres', 'Garden direct Postgres startup wait');
+
 const strictSecretRendered = render([
   '--set',
   'secrets.allowMissingRequired=false',

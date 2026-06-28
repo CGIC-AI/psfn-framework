@@ -69,6 +69,70 @@ describe('RedisAppCache', () => {
     });
   });
 
+  it('supports batched scanIterator results without empty DEL calls', async () => {
+    const client: RedisClientLike = {
+      isOpen: false,
+      connect: vi.fn(async () => {
+        client.isOpen = true;
+      }),
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => {}),
+      del: vi.fn(async (...keys: string[]) => {
+        if (keys.length === 0) throw new Error('DEL called without keys');
+        return keys.length;
+      }),
+      scanIterator: async function* () {
+        yield [];
+        yield ['test:prompt:one', 'test:prompt:two'];
+        yield 'test:prompt:three';
+        yield [];
+      },
+    };
+    const cache = new RedisAppCache({ client, keyPrefix: 'test:' });
+
+    await expect(cache.invalidatePrefix('prompt:')).resolves.toBe(3);
+
+    expect(client.del).toHaveBeenCalledTimes(1);
+    expect(client.del).toHaveBeenCalledWith(
+      'test:prompt:one',
+      'test:prompt:two',
+      'test:prompt:three',
+    );
+    expect(cache.getStats()).toMatchObject({
+      invalidations: 1,
+      deletes: 3,
+      errors: 0,
+    });
+  });
+
+  it('does not send DEL when prefix invalidation finds no keys', async () => {
+    const client: RedisClientLike = {
+      isOpen: false,
+      connect: vi.fn(async () => {
+        client.isOpen = true;
+      }),
+      get: vi.fn(async () => null),
+      set: vi.fn(async () => {}),
+      del: vi.fn(async (...keys: string[]) => {
+        if (keys.length === 0) throw new Error('DEL called without keys');
+        return keys.length;
+      }),
+      scanIterator: async function* () {
+        yield [];
+      },
+    };
+    const cache = new RedisAppCache({ client, keyPrefix: 'test:' });
+
+    await expect(cache.invalidatePrefix('prompt:')).resolves.toBe(0);
+
+    expect(client.del).not.toHaveBeenCalled();
+    expect(cache.getStats()).toMatchObject({
+      invalidations: 1,
+      deletes: 0,
+      errors: 0,
+    });
+  });
+
   it('requires explicit URL and credentials in Redis mode', () => {
     expect(() => resolveAppCacheRuntimeConfigFromEnv({
       PSFN_APP_CACHE_MODE: 'redis',

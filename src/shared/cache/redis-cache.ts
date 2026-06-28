@@ -23,7 +23,7 @@ export interface RedisClientLike {
   set?(key: string, value: string, options?: unknown): Promise<unknown>;
   sendCommand?(args: string[]): Promise<unknown>;
   del(...keys: string[]): Promise<number>;
-  scanIterator(options: { MATCH: string; COUNT: number }): AsyncIterable<string>;
+  scanIterator(options: { MATCH: string; COUNT: number }): AsyncIterable<string | readonly string[]>;
   quit?(): Promise<unknown>;
 }
 
@@ -76,6 +76,16 @@ function parseBooleanEnv(name: string, value: string | undefined, defaultValue: 
 function trimOptionalEnv(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function normalizeScanIteratorKeys(item: string | readonly string[]): string[] {
+  const keys = typeof item === 'string' ? [item] : item;
+  for (const key of keys) {
+    if (typeof key !== 'string') {
+      throw new Error('Redis SCAN returned a non-string key');
+    }
+  }
+  return keys.filter(key => key.length > 0);
 }
 
 function readUrlCredential(
@@ -277,15 +287,20 @@ export class RedisAppCache implements AppCache {
       const match = `${this.buildKey(prefix)}*`;
       let removed = 0;
       const batch: string[] = [];
-      for await (const key of this.client.scanIterator({ MATCH: match, COUNT: 100 })) {
-        batch.push(key);
-        if (batch.length < 100) continue;
+      const flushBatch = async (): Promise<void> => {
+        if (batch.length === 0) return;
         removed += await this.client.del(...batch);
         batch.length = 0;
+      };
+      for await (const item of this.client.scanIterator({ MATCH: match, COUNT: 100 })) {
+        for (const key of normalizeScanIteratorKeys(item)) {
+          batch.push(key);
+          if (batch.length >= 100) {
+            await flushBatch();
+          }
+        }
       }
-      if (batch.length > 0) {
-        removed += await this.client.del(...batch);
-      }
+      await flushBatch();
       this.stats.invalidations += 1;
       this.stats.deletes += removed;
       return removed;

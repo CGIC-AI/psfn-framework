@@ -276,6 +276,137 @@ controller selector, egress to kube-dns, egress to the Gateway API Service, and
 optional external HTTPS egress for Deepgram/ElevenLabs provider calls. The agent
 NetworkPolicy remains separate and still has no broad outbound egress.
 
+## Shakedown Runbook
+
+Use an isolated namespace and test values before any live Pi cutover. For the
+Artie fixture, treat `/mnt/c/Temp/PSFN-TEST/psfn-shakedown` as read-only until
+you intentionally copy data into test PVCs. Never point test values at live
+Purrsephone runtime roots or live database credentials.
+
+Install cert-manager first, with a pinned chart/version selected by the
+operator:
+
+```bash
+helm repo add jetstack https://charts.jetstack.io
+helm repo update jetstack
+helm upgrade --install cert-manager jetstack/cert-manager \
+  --namespace cert-manager \
+  --create-namespace \
+  --version <pinned-cert-manager-version> \
+  --set crds.enabled=true
+```
+
+For a greenfield local shakedown, build/import the PSFN image and install with
+placeholder test secrets. If restricted agent egress is required on first boot,
+run the `modelPrefetch` two-step flow above before enabling the agent.
+
+Core readiness and smoke commands:
+
+```bash
+kubectl -n psfn-test get pods,deploy,sts,pvc,certificates,issuers,services,networkpolicies
+
+kubectl -n psfn-test rollout status deploy/psfn-gateway
+kubectl -n psfn-test rollout status deploy/psfn-agent
+kubectl -n psfn-test rollout status deploy/psfn-garden
+
+PG_PASS="$(kubectl -n psfn-test get secret psfn-postgres -o jsonpath='{.data.postgres-password}' | base64 -d)"
+kubectl -n psfn-test exec psfn-postgres-0 -- \
+  env PGPASSWORD="$PG_PASS" psql -U psfn -d psfn -tAc \
+  "select extname from pg_extension where extname='vector';"
+
+REDIS_PASS="$(kubectl -n psfn-test get secret psfn-redis -o jsonpath='{.data.redis-password}' | base64 -d)"
+kubectl -n psfn-test exec psfn-redis-0 -- redis-cli -a "$REDIS_PASS" ping
+
+kubectl -n psfn-test port-forward svc/psfn-gateway 10053:10053
+API_KEY="$(kubectl -n psfn-test get secret psfn-app -o jsonpath='{.data.API_KEY}' | base64 -d)"
+curl -H "Authorization: Bearer $API_KEY" http://127.0.0.1:10053/v1/models
+
+kubectl -n psfn-test port-forward svc/psfn-garden 10054:10054
+curl http://127.0.0.1:10054/health
+```
+
+If the satellite hub is enabled, also verify:
+
+```bash
+kubectl -n psfn-test rollout status deploy/psfn-satellite-hub
+kubectl -n psfn-test port-forward svc/psfn-satellite-hub 8787:8787
+curl http://127.0.0.1:8787/
+```
+
+NetworkPolicy behavior depends on the CNI. On a policy-enforcing cluster, the
+gateway should be able to reach configured external provider endpoints while the
+agent should not have arbitrary internet egress:
+
+```bash
+GATEWAY_POD="$(kubectl -n psfn-test get pod -l app.kubernetes.io/component=gateway -o jsonpath='{.items[0].metadata.name}')"
+kubectl -n psfn-test exec "$GATEWAY_POD" -- \
+  node -e "fetch('https://example.com').then(r=>console.log(r.status))"
+
+AGENT_POD="$(kubectl -n psfn-test get pod -l app.kubernetes.io/component=agent -o jsonpath='{.items[0].metadata.name}')"
+kubectl -n psfn-test exec "$AGENT_POD" -- \
+  node -e "const c=new AbortController(); setTimeout(()=>c.abort(),8000); fetch('https://example.com',{signal:c.signal}).then(r=>{console.log('UNEXPECTED:'+r.status); process.exit(2)}).catch(e=>console.log(e.name+':'+e.message))"
+```
+
+Agent logs should show the production Postgres path, not SQLite:
+
+```bash
+kubectl -n psfn-test logs deploy/psfn-agent --since=10m | \
+  grep -E 'PostgreSQL persistence backend selected|skipping SQLite startup checks|Ready'
+```
+
+## Backup And Pi Cutover
+
+Live Pi cutover requires explicit operator confirmation and a service freeze
+window. Do not interrupt the live Purrsephone system during chart prep or test
+cluster shakedowns.
+
+Before cutover:
+
+1. Verify the current non-kube backup path: Postgres `pg_dump`, L0/session
+   JSONL, companion-data file tree, companion-tree hash manifest, and scratch
+   restore with pgvector.
+2. Run the restore verifier against a real backup set:
+
+   ```bash
+   npm run verify:backup-restore -- \
+     --backup-dir <snapshot-dir> \
+     --postgres-restore-url <scratch-postgres-url> \
+     --postgres-source-url <source-postgres-url>
+   ```
+
+3. Decide how system-data owner files, workspace/home files, and secret-bearing
+   env/systemd artifacts are restored. Do not silently place provider secrets in
+   broad unencrypted backups.
+4. Capture a fresh pre-cutover backup and record current systemd service state.
+5. On the Pi, verify storage mounts with `findmnt` before copying data. Path
+   existence is not enough; live write-heavy paths should resolve to the intended
+   NVMe-backed mount.
+
+Cutover outline:
+
+1. Install or verify k3s, cert-manager, the StorageClass, ingress controller,
+   and NetworkPolicy-capable CNI if enforcement is required.
+2. Build/import or pull pinned PSFN and satellite-hub images for the Pi
+   architecture.
+3. Prepare Helm values with native Kubernetes Secrets, split production roots,
+   Postgres+pgvector or external Postgres, Redis, certificates, and no
+   off-repo authoritative runtime config.
+4. Restore/copy Postgres, companion-data, system-data owner files, workspace,
+   L0/session files, model cache, and runtime backup directories into PVCs
+   intentionally.
+5. Run model prefetch before relying on restricted agent egress.
+6. Install into an isolated namespace and run the smoke checklist above.
+7. Only after kube smoke is green, stop the existing repo-owned systemd PSFN
+   services intentionally and switch ingress/DNS/ports to kube.
+8. Post-cutover, verify chat/API, Garden health, backup schedule, Redis cache
+   logs, Postgres restore probes, and satellite hub reachability if enabled.
+
+Rollback points are before service freeze, after fresh backup, after PVC
+restore, after Helm install before traffic switch, and immediately after traffic
+switch. Roll back by scaling or uninstalling the Helm release, restoring data
+from the fresh backup if needed, and restarting the repo-owned systemd
+registrations.
+
 ## Validation
 
 ```bash

@@ -417,6 +417,33 @@ group: cert-manager.io
     {{- end }}
 {{- end -}}
 
+{{- define "psfn.waitForPostgresInitContainer" -}}
+{{- $root := .root -}}
+- name: wait-for-postgres
+  image: {{ include "psfn.image" (dict "root" $root "image" .image) | quote }}
+  imagePullPolicy: {{ default $root.Values.psfnAppImage.pullPolicy .image.pullPolicy }}
+  command:
+    - sh
+    - -c
+    - |
+      set -eu
+      for attempt in $(seq 1 60); do
+        if pg_isready -d "$POSTGRES_DATABASE_URL"; then
+          exit 0
+        fi
+        sleep 2
+      done
+      pg_isready -d "$POSTGRES_DATABASE_URL"
+  env:
+    - name: POSTGRES_DATABASE_URL
+      valueFrom:
+        secretKeyRef:
+          name: {{ include "psfn.databaseUrlSecretName" $root }}
+          key: {{ include "psfn.databaseUrlSecretKey" $root }}
+  securityContext:
+    {{- toYaml $root.Values.securityContext | nindent 4 }}
+{{- end -}}
+
 {{- define "psfn.commonVolumes" -}}
 - name: system-data
   persistentVolumeClaim:

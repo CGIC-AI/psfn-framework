@@ -162,12 +162,14 @@ export interface ExtractionRunOptions {
 export async function runExtractionOrchestration(options: ExtractionRunOptions): Promise<void> {
   let resolvedTurnId: TurnID | undefined = options.turnId;
   try {
-    const recentEntries = (options.recoveredEntries && options.recoveredEntries.length > 0
+    const recoveredEntries = (options.recoveredEntries && options.recoveredEntries.length > 0
       ? options.recoveredEntries
       : options.sessionManager.getRecentMessages(options.channelId, 10)
     )
-      .filter(entry => !isNonConversationalSessionEntry(entry))
-      .slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
+      .filter(entry => !isNonConversationalSessionEntry(entry));
+    const recentEntries = options.groupWriteCaps
+      ? recoveredEntries
+      : recoveredEntries.slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
     const latestTurnContext = resolveLatestTurnContext(recentEntries);
     const turnId = options.turnId ?? latestTurnContext?.turnId;
     resolvedTurnId = turnId;

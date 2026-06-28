@@ -466,6 +466,7 @@ function resolveClearSourceSpeaker(
 ): { speaker: TranscriptSpeaker; reason: ExtractionFactRoutingReason } | undefined {
   const prefixMatches = speakers.filter(speaker => factHasSpeakerAttributionPrefix(fact.text, speaker));
   if (prefixMatches.length === 1) {
+    if (factMentionsOtherSpeaker(fact.text, prefixMatches[0], speakers)) return undefined;
     return {
       speaker: prefixMatches[0],
       reason: 'speaker_name_prefix',
@@ -474,9 +475,26 @@ function resolveClearSourceSpeaker(
   if (prefixMatches.length > 1) return undefined;
 
   const contentMatch = resolveTranscriptContentSpeaker(fact.text, speakers);
+  if (contentMatch && factMentionsOtherSpeaker(fact.text, contentMatch, speakers)) {
+    return undefined;
+  }
   return contentMatch
     ? { speaker: contentMatch, reason: 'transcript_content_match' }
     : undefined;
+}
+
+function factMentionsOtherSpeaker(
+  factText: string,
+  sourceSpeaker: TranscriptSpeaker,
+  speakers: readonly TranscriptSpeaker[],
+): boolean {
+  const normalizedFact = normalizeSpeakerPhrase(factText);
+  if (!normalizedFact) return false;
+  return speakers.some(speaker => (
+    speaker.key !== sourceSpeaker.key
+    && speaker.normalizedName
+    && hasSpeakerWord(normalizedFact, speaker.normalizedName)
+  ));
 }
 
 const ATTRIBUTION_START_WORDS = new Set([
@@ -532,7 +550,6 @@ const ATTRIBUTION_START_WORDS = new Set([
   'works',
   'worry',
   'worries',
-  's',
 ]);
 
 function factHasSpeakerAttributionPrefix(factText: string, speaker: TranscriptSpeaker): boolean {

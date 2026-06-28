@@ -28,6 +28,13 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('wireMemoryRuntime(');
   });
 
+  it('wires fatigue accounting into the live agent runtime', () => {
+    const coreRuntimeSource = readSource('core-runtime.ts');
+    expect(coreRuntimeSource).toContain('composeFatigueBudgetRuntime({ config, eventBus })');
+    expect(coreRuntimeSource).toContain('fatigueBudget: fatigueRuntime.fatigueBudget');
+    expect(coreRuntimeSource).toContain('fatigueLedger: fatigueRuntime.fatigueLedger');
+  });
+
   it('threads injected episodic stores instead of disabling L0.1 when sqlite db is absent', () => {
     const agentMainSource = readSource('main.ts');
     const coreRuntimeSource = readSource('core-runtime.ts');

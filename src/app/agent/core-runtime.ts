@@ -27,7 +27,15 @@ import type {
   IntentionBehavioralPatternHooks,
   IntentionRuntimeProviders,
 } from '../../core/intention/runtime-wiring.js';
-import { composeSessionRuntimeAsync, composeSubstrateAgent, wireCoreMemoryRuntime, wireMemoryRuntime, wireSelfModelRuntime } from '../startup/composition/composition.js';
+import {
+  composeFatigueBudgetRuntime,
+  composeSessionRuntimeAsync,
+  composeSubstrateAgent,
+  type FatigueBudgetComposition,
+  wireCoreMemoryRuntime,
+  wireMemoryRuntime,
+  wireSelfModelRuntime,
+} from '../startup/composition/composition.js';
 import { wirePromptRuntime, wireCharacterCardRuntime, wireStaticPromptRegistry, wireSettingsRuntime, wireSessionToolsRuntime, buildCharacterPromptVariablesProvider } from '../startup/composition/parity.js';
 import { registerContactRuntime, wireContactRuntime } from '../../core/contacts/runtime-wiring.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
@@ -112,6 +120,8 @@ export interface AgentCoreRuntime {
   memoryExtractor: MemoryExtractor;
   imageVisionReviewer: DefaultImageVisionReviewer;
   appCache: AppCache;
+  fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
+  fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
 }
 
 export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): Promise<AgentCoreRuntime> {
@@ -157,6 +167,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     promptRegistry,
     sessionIntegrityProvider: gateway.createSessionIntegrityProvider(),
   });
+  const fatigueRuntime = composeFatigueBudgetRuntime({ config, eventBus });
   const { sessionStore, sessionManager } = sessionComposition;
   sessionManager.characterName = card.data.name;
 
@@ -332,5 +343,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     memoryExtractor,
     imageVisionReviewer,
     appCache,
+    fatigueBudget: fatigueRuntime.fatigueBudget,
+    fatigueLedger: fatigueRuntime.fatigueLedger,
   };
 }

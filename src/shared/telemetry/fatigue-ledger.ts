@@ -44,6 +44,7 @@ export interface FatigueLedgerScopeSummary {
   amount: number;
   eventCount: number;
   chargedEventCount: number;
+  overchargeEventCount: number;
   freeEventCount: number;
   lastEvent?: FatigueBudgetEvent;
 }
@@ -75,6 +76,7 @@ interface MutableScopeSummary {
   amount: number;
   eventCount: number;
   chargedEventCount: number;
+  overchargeEventCount: number;
   freeEventCount: number;
   lastEvent?: FatigueBudgetEvent;
 }
@@ -111,7 +113,7 @@ function assertRole(value: unknown, lineNumber: number): asserts value is Fatigu
 }
 
 function assertDecision(value: unknown, lineNumber: number): asserts value is FatigueBudgetDecision {
-  if (value !== 'charged' && value !== 'free') {
+  if (value !== 'charged' && value !== 'free' && value !== 'overcharge') {
     throw new Error(`Invalid fatigue ledger entry at line ${lineNumber}: invalid decision`);
   }
 }
@@ -194,6 +196,8 @@ function assertLedgerEntry(value: unknown, lineNumber: number): asserts value is
   }
   assertDecision(partialEvent.decision, lineNumber);
   if (partialEvent.reason !== 'machine_intelligence_response'
+    && partialEvent.reason !== 'overcharge_recent_human_participation'
+    && partialEvent.reason !== 'overcharge_work_intent_wrapup'
     && partialEvent.reason !== 'peer_not_machine_intelligence'
     && partialEvent.reason !== 'triggering_author_not_machine_intelligence') {
     throw new Error(`Invalid fatigue ledger entry at line ${lineNumber}: invalid reason`);
@@ -300,6 +304,7 @@ function addScopeSummary(
       amount: 0,
       eventCount: 0,
       chargedEventCount: 0,
+      overchargeEventCount: 0,
       freeEventCount: 0,
     };
     target.set(key, summary);
@@ -308,6 +313,8 @@ function addScopeSummary(
   summary.eventCount += 1;
   if (event.decision === 'charged') {
     summary.chargedEventCount += 1;
+  } else if (event.decision === 'overcharge') {
+    summary.overchargeEventCount += 1;
   } else {
     summary.freeEventCount += 1;
   }

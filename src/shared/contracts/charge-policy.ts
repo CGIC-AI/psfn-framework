@@ -107,6 +107,7 @@ export interface FatiguePolicyStateThresholds {
 
 export interface FatiguePolicyOverchargeConfig {
   enabled: boolean;
+  reserveResponses: number;
   recentHumanParticipationWindowMs: number;
   minRecentHumanMessages: number;
   minRecentHumanParticipants: number;

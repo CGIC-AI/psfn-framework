@@ -39,6 +39,10 @@ import type {
   RunChargeLedgerQuery,
 } from '../../../shared/telemetry/charge-ledger.js';
 import type {
+  FatigueLedgerData,
+  FatigueLedgerQuery,
+} from '../../../shared/telemetry/fatigue-ledger.js';
+import type {
   ModelUsageData,
   ModelUsageQuery,
 } from '../../../shared/telemetry/model-usage.js';
@@ -196,7 +200,9 @@ export interface AdminWikiService {
 }
 
 export interface AdminChargeLedgerService {
-  getChargeLedgerData(query?: RunChargeLedgerQuery): Promise<RunChargeLedgerData>;
+  getChargeLedgerData(query?: RunChargeLedgerQuery & FatigueLedgerQuery): Promise<RunChargeLedgerData & {
+    fatigue?: FatigueLedgerData;
+  }>;
 }
 
 export interface AdminModelUsageService {

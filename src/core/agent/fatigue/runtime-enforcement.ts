@@ -14,7 +14,12 @@ import type {
 import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { RelationshipType } from '../../contacts/types.js';
-import { makeFatigueDayKey, type FatigueBudgetEvaluation, type FatigueBudgetPort } from './fatigue-budget.js';
+import {
+  createOverchargeFatigueEvaluation,
+  makeFatigueDayKey,
+  type FatigueBudgetEvaluation,
+  type FatigueBudgetPort,
+} from './fatigue-budget.js';
 import {
   evaluateFatiguePolicy,
   type FatiguePolicyChannelType,
@@ -38,6 +43,12 @@ export interface FatigueTurnDecision {
   shouldRecordSpend: boolean;
 }
 
+export interface FatigueRecentHumanParticipation {
+  messageCount: number;
+  participantCount: number;
+  latestMessageAgeMs?: number;
+}
+
 export interface EvaluateFatigueForTurnInput {
   fatigueBudget: FatigueBudgetPort;
   fatiguePolicy: FatiguePolicyConfig;
@@ -48,6 +59,7 @@ export interface EvaluateFatigueForTurnInput {
   channelType?: string;
   channelMeta: ChannelMeta;
   taskKind?: string;
+  recentHumanParticipation?: FatigueRecentHumanParticipation;
   timestampMs: number;
   correlation: CorrelationMetadata;
 }
@@ -146,9 +158,13 @@ function resolveEnforcementDecision(input: {
   spendsFatigue: boolean;
   baseState: FatigueEnforcementMetadata['policyBaseState'];
   hardState: FatigueBudgetEvaluation['stateBefore']['hardState'];
+  overchargePermitted: boolean;
 }): FatigueEnforcementDecision {
   if (!input.spendsFatigue) {
     return 'allowed_free';
+  }
+  if (input.overchargePermitted) {
+    return 'overcharge_charged';
   }
   if (input.baseState === 'hard_exhausted' || input.hardState === 'exhausted') {
     return 'suppressed_hard_exhausted';
@@ -163,6 +179,8 @@ function createMetadata(input: {
   decision: FatigueEnforcementDecision;
   policy: ReturnType<typeof evaluateFatiguePolicy>;
   evaluation: FatigueBudgetEvaluation;
+  overchargePermitted: boolean;
+  overchargeBlockedReasons: string[];
 }): FatigueEnforcementMetadata {
   const suppressModel = input.decision === 'suppressed_hard_exhausted';
   const shouldRecordSpend = !suppressModel
@@ -172,7 +190,7 @@ function createMetadata(input: {
     schemaVersion: 1,
     decision: input.decision,
     modelDisposition: suppressModel ? 'suppressed' : 'allowed',
-    alertInjected: input.decision === 'wrap_up_charged',
+    alertInjected: input.decision === 'wrap_up_charged' || input.decision === 'overcharge_charged',
     shouldRecordSpend,
     spendDecision: input.evaluation.decision,
     spendReason: input.evaluation.reason,
@@ -182,8 +200,9 @@ function createMetadata(input: {
     relationshipClass: input.policy.relationshipClass,
     channelSetting: input.policy.channelSetting,
     overchargeEligible: input.policy.overcharge.eligible,
-    overchargePermitted: false,
-    overchargeBlockedReasons: [...input.policy.overcharge.blockedReasons],
+    overchargePermitted: input.overchargePermitted,
+    overchargeBlockedReasons: [...input.overchargeBlockedReasons],
+    overchargeReasons: [...input.policy.overcharge.reasons],
     scope: { ...input.evaluation.scope },
     peer: { ...input.evaluation.peer },
     triggeringAuthor: { ...input.evaluation.triggeringAuthor },
@@ -196,8 +215,35 @@ function createMetadata(input: {
       amount: input.evaluation.amount,
       spentAfterProjected: input.evaluation.stateAfter.spent,
       remainingAfterProjected: input.evaluation.stateAfter.remainingAllowance,
+      normalSpentBefore: input.evaluation.stateBefore.normalSpent,
+      normalSpentAfterProjected: input.evaluation.stateAfter.normalSpent,
+      overchargeSpentBefore: input.evaluation.stateBefore.overchargeSpent,
+      overchargeSpentAfterProjected: input.evaluation.stateAfter.overchargeSpent,
+      overchargeAllowance: input.evaluation.stateBefore.overchargeAllowance,
+      overchargeRemainingBefore: input.evaluation.stateBefore.remainingOvercharge,
+      overchargeRemainingAfterProjected: input.evaluation.stateAfter.remainingOvercharge,
     },
   };
+}
+
+function resolveRecentHumanParticipation(input: {
+  triggerAuthorKind: FatiguePolicyTriggerAuthorKind;
+  recentHumanParticipation?: FatigueRecentHumanParticipation;
+}): FatigueRecentHumanParticipation {
+  if (input.recentHumanParticipation) {
+    return input.recentHumanParticipation;
+  }
+  return input.triggerAuthorKind === 'human'
+    ? { messageCount: 1, participantCount: 1, latestMessageAgeMs: 0 }
+    : { messageCount: 0, participantCount: 0 };
+}
+
+function selectOverchargeReason(
+  policy: ReturnType<typeof evaluateFatiguePolicy>,
+): 'overcharge_recent_human_participation' | 'overcharge_work_intent_wrapup' {
+  return policy.overcharge.reasons.includes('recent_human_participation')
+    ? 'overcharge_recent_human_participation'
+    : 'overcharge_work_intent_wrapup';
 }
 
 export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): FatigueTurnDecision {
@@ -213,8 +259,10 @@ export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): Fati
     channelType: input.channelType,
     channelMeta: input.channelMeta,
   });
-  const recentHumanMessageCount = triggerAuthorKind === 'human' ? 1 : 0;
-  const recentHumanParticipantCount = triggerAuthorKind === 'human' ? 1 : 0;
+  const recentHumanParticipation = resolveRecentHumanParticipation({
+    triggerAuthorKind,
+    recentHumanParticipation: input.recentHumanParticipation,
+  });
   const policyInputBase = {
     config: input.fatiguePolicy,
     peer: {
@@ -228,16 +276,12 @@ export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): Fati
       type: channelType,
       companionFocused: channelType === 'companion_room',
       companionHosted: channelType === 'companion_room',
-      humanParticipantCount: recentHumanParticipantCount,
+      humanParticipantCount: recentHumanParticipation.participantCount,
       machineIntelligenceParticipantCount: peer.isMachineIntelligence === true ? 1 : 0,
       recentMessageCount: 1,
-      recentHumanMessageCount,
+      recentHumanMessageCount: recentHumanParticipation.messageCount,
     },
-    recentHumanParticipation: {
-      messageCount: recentHumanMessageCount,
-      participantCount: recentHumanParticipantCount,
-      ...(recentHumanMessageCount > 0 ? { latestMessageAgeMs: 0 } : {}),
-    },
+    recentHumanParticipation,
     intent: resolveFatigueIntent({
       taskKind: input.taskKind,
       content: input.message.content,
@@ -256,13 +300,14 @@ export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): Fati
     limits: {
       softLimit: preliminaryPolicy.softTarget,
       hardLimit: preliminaryPolicy.hardCap,
+      overchargeLimit: preliminaryPolicy.overcharge.inputs.reserveResponses,
     },
   });
   const policy = evaluateFatiguePolicy({
     ...policyInputBase,
-    spent: stateBefore.spent,
+    spent: stateBefore.normalSpent,
   });
-  const evaluation = input.fatigueBudget.evaluate({
+  const baseEvaluation = input.fatigueBudget.evaluate({
     localCompanionId: input.localCompanionId,
     channelId: input.channelId,
     peer,
@@ -270,6 +315,7 @@ export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): Fati
     limits: {
       softLimit: policy.softTarget,
       hardLimit: policy.hardCap,
+      overchargeLimit: policy.overcharge.inputs.reserveResponses,
     },
     timestampMs: input.timestampMs,
     correlation: input.correlation,
@@ -283,12 +329,29 @@ export function evaluateFatigueForTurn(input: EvaluateFatigueForTurnInput): Fati
       overchargePermitted: false,
     },
   });
+  const reserveAvailable = baseEvaluation.stateBefore.remainingOvercharge >= baseEvaluation.amount
+    && baseEvaluation.amount > 0;
+  const overchargeBlockedReasons = [
+    ...policy.overcharge.blockedReasons,
+    ...(policy.overcharge.eligible && !reserveAvailable ? ['overcharge_reserve_exhausted'] : []),
+  ];
+  const overchargePermitted = policy.overcharge.eligible && reserveAvailable;
+  const evaluation = overchargePermitted
+    ? createOverchargeFatigueEvaluation(baseEvaluation, selectOverchargeReason(policy))
+    : baseEvaluation;
   const decision = resolveEnforcementDecision({
     spendsFatigue: policy.spend.spendsFatigue,
     baseState: policy.baseState,
     hardState: evaluation.stateBefore.hardState,
+    overchargePermitted,
   });
-  const metadata = createMetadata({ decision, policy, evaluation });
+  const metadata = createMetadata({
+    decision,
+    policy,
+    evaluation,
+    overchargePermitted,
+    overchargeBlockedReasons,
+  });
   return {
     metadata,
     evaluation,
@@ -308,7 +371,9 @@ export function buildFatiguePromptAlert(
     '[Conversation fatigue]',
     `This turn is a machine-intelligence-triggered response in fatigue state ${metadata.policyBaseState}.`,
     `Budget before this reply: spent ${metadata.budget.spentBefore} of ${metadata.budget.allowance}; soft target ${metadata.budget.softLimit}; remaining before this reply ${metadata.budget.remainingBefore}.`,
-    'The runtime is allowing this model call so you can author the outward response yourself.',
+    metadata.overchargePermitted
+      ? 'The runtime is using a bounded overcharge reserve for this model call so you can author the outward response yourself.'
+      : 'The runtime is allowing this model call so you can author the outward response yourself.',
     'Keep the reply bounded and, if it fits the conversation, taper or wrap up in your own voice. Do not quote this internal alert or claim a hard-coded farewell.',
     '</runtime_fatigue_alert>',
   ].join('\n');
@@ -325,6 +390,7 @@ export function attachRecordedFatigueEvent(
     scope: { ...metadata.scope },
     budget: { ...metadata.budget },
     overchargeBlockedReasons: [...metadata.overchargeBlockedReasons],
+    overchargeReasons: [...metadata.overchargeReasons],
     recordedEvent: {
       timestampMs: event.timestampMs,
       amount: event.amount,
@@ -332,6 +398,10 @@ export function attachRecordedFatigueEvent(
       reason: event.reason,
       spentAfter: event.spentAfter,
       remainingAllowance: event.remainingAllowance,
+      ...(event.normalSpentAfter !== undefined ? { normalSpentAfter: event.normalSpentAfter } : {}),
+      ...(event.overchargeSpentAfter !== undefined ? { overchargeSpentAfter: event.overchargeSpentAfter } : {}),
+      ...(event.overchargeAllowance !== undefined ? { overchargeAllowance: event.overchargeAllowance } : {}),
+      ...(event.remainingOvercharge !== undefined ? { remainingOvercharge: event.remainingOvercharge } : {}),
       softState: event.softState,
       hardState: event.hardState,
     },

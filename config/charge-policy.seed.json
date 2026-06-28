@@ -142,6 +142,7 @@
     },
     "overcharge": {
       "enabled": true,
+      "reserveResponses": 2,
       "recentHumanParticipationWindowMs": 900000,
       "minRecentHumanMessages": 1,
       "minRecentHumanParticipants": 1

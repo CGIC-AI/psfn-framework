@@ -280,10 +280,12 @@ export interface RunChargeEvent extends Partial<CorrelationMetadata> {
   details?: Record<string, unknown>;
 }
 
-export type FatigueBudgetDecision = 'charged' | 'free';
+export type FatigueBudgetDecision = 'charged' | 'free' | 'overcharge';
 
 export type FatigueBudgetReason =
   | 'machine_intelligence_response'
+  | 'overcharge_recent_human_participation'
+  | 'overcharge_work_intent_wrapup'
   | 'peer_not_machine_intelligence'
   | 'triggering_author_not_machine_intelligence';
 
@@ -327,6 +329,10 @@ export interface FatigueBudgetEvent extends Partial<CorrelationMetadata> {
   remainingAllowance: number;
   allowance: number;
   softLimit: number;
+  normalSpentAfter?: number;
+  overchargeSpentAfter?: number;
+  overchargeAllowance?: number;
+  remainingOvercharge?: number;
   softState: FatigueBudgetSoftState;
   hardState: FatigueBudgetHardState;
   lineage?: RunChargeLineage;
@@ -337,6 +343,7 @@ export type FatigueEnforcementDecision =
   | 'allowed_free'
   | 'allowed_charged'
   | 'wrap_up_charged'
+  | 'overcharge_charged'
   | 'suppressed_hard_exhausted';
 
 export interface FatigueEnforcementBudgetMetadata {
@@ -348,6 +355,13 @@ export interface FatigueEnforcementBudgetMetadata {
   amount: number;
   spentAfterProjected: number;
   remainingAfterProjected: number;
+  normalSpentBefore: number;
+  normalSpentAfterProjected: number;
+  overchargeSpentBefore: number;
+  overchargeSpentAfterProjected: number;
+  overchargeAllowance: number;
+  overchargeRemainingBefore: number;
+  overchargeRemainingAfterProjected: number;
 }
 
 export interface FatigueRecordedEventMetadata {
@@ -357,6 +371,10 @@ export interface FatigueRecordedEventMetadata {
   reason: FatigueBudgetReason;
   spentAfter: number;
   remainingAllowance: number;
+  normalSpentAfter?: number;
+  overchargeSpentAfter?: number;
+  overchargeAllowance?: number;
+  remainingOvercharge?: number;
   softState: FatigueBudgetSoftState;
   hardState: FatigueBudgetHardState;
 }
@@ -377,6 +395,7 @@ export interface FatigueEnforcementMetadata {
   overchargeEligible: boolean;
   overchargePermitted: boolean;
   overchargeBlockedReasons: string[];
+  overchargeReasons: string[];
   scope: FatigueBudgetScopeSnapshot;
   peer: FatigueBudgetPeerSnapshot;
   triggeringAuthor: FatigueBudgetActorSnapshot;

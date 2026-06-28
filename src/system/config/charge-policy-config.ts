@@ -50,6 +50,8 @@ interface ChargePolicyLoadOptions {
   seedDir?: string;
 }
 
+const MAX_FATIGUE_OVERCHARGE_RESERVE_RESPONSES = 10;
+
 function resolveSeedDir(seedDir?: string): string {
   const resolved = (seedDir ?? process.env.CONFIG_DIR ?? './config').trim();
   if (!resolved) {
@@ -321,11 +323,27 @@ function parseFatigueOverchargeConfig(
   }
   assertNoUnknownKeys(
     raw,
-    ['enabled', 'recentHumanParticipationWindowMs', 'minRecentHumanMessages', 'minRecentHumanParticipants'],
+    [
+      'enabled',
+      'reserveResponses',
+      'recentHumanParticipationWindowMs',
+      'minRecentHumanMessages',
+      'minRecentHumanParticipants',
+    ],
     fieldPath,
   );
+  const reserveResponses = parsePositiveInteger(
+    raw.reserveResponses,
+    `${fieldPath}.reserveResponses`,
+  );
+  if (reserveResponses > MAX_FATIGUE_OVERCHARGE_RESERVE_RESPONSES) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.reserveResponses must be <= ${MAX_FATIGUE_OVERCHARGE_RESERVE_RESPONSES}`,
+    );
+  }
   return {
     enabled: parseBoolean(raw.enabled, `${fieldPath}.enabled`),
+    reserveResponses,
     recentHumanParticipationWindowMs: parsePositiveInteger(
       raw.recentHumanParticipationWindowMs,
       `${fieldPath}.recentHumanParticipationWindowMs`,

@@ -252,9 +252,9 @@ describe('fatigue state and overcharge policy', () => {
     expect(evaluate({ ...weakGroup, spent: 5 }).state).toBe('hard_exhausted');
   });
 
-  it('makes recent human participation an overcharge eligibility input and reason', () => {
+  it('makes recent human participation an overcharge eligibility input and reason after hard cap', () => {
     const result = evaluate({
-      spent: 10,
+      spent: 20,
       recentHumanParticipation: {
         messageCount: 2,
         participantCount: 1,
@@ -262,7 +262,7 @@ describe('fatigue state and overcharge policy', () => {
       },
     });
 
-    expect(result.baseState).toBe('soft_exhausted');
+    expect(result.baseState).toBe('hard_exhausted');
     expect(result.state).toBe('overcharge_eligible');
     expect(result.overcharge.eligible).toBe(true);
     expect(result.overcharge.inputs).toEqual(expect.objectContaining({
@@ -272,7 +272,19 @@ describe('fatigue state and overcharge policy', () => {
       turnSpendsFatigue: true,
     }));
     expect(result.overcharge.reasons).toContain('recent_human_participation');
-    expect(result.overcharge.reasons).toContain('soft_limit_reached');
+    expect(result.overcharge.inputs.reserveResponses).toBe(2);
+  });
+
+  it('allows work-like wrap-up as a deterministic overcharge trigger after hard cap', () => {
+    const result = evaluate({
+      spent: 20,
+      intent: 'problem_solving',
+    });
+
+    expect(result.baseState).toBe('hard_exhausted');
+    expect(result.state).toBe('overcharge_eligible');
+    expect(result.overcharge.eligible).toBe(true);
+    expect(result.overcharge.reasons).toEqual(['work_intent_wrapup']);
   });
 
   it('does not spend fatigue or grant overcharge for human-authored turns', () => {
@@ -314,23 +326,18 @@ describe('fatigue state and overcharge policy', () => {
     });
 
     expect(stale.state).toBe('soft_exhausted');
-    expect(stale.overcharge.blockedReasons).toContain('no_recent_human_participation');
+    expect(stale.overcharge.blockedReasons).toContain('normal_allowance_not_exhausted');
     expect(missingAge.state).toBe('soft_exhausted');
-    expect(missingAge.overcharge.blockedReasons).toContain('no_recent_human_participation');
+    expect(missingAge.overcharge.blockedReasons).toContain('normal_allowance_not_exhausted');
   });
 
-  it('keeps the hard cap closed even with recent human participation', () => {
+  it('keeps the hard cap closed without a qualifying overcharge trigger', () => {
     const result = evaluate({
       spent: 20,
-      recentHumanParticipation: {
-        messageCount: 2,
-        participantCount: 1,
-        latestMessageAgeMs: 60_000,
-      },
     });
 
     expect(result.state).toBe('hard_exhausted');
     expect(result.overcharge.eligible).toBe(false);
-    expect(result.overcharge.blockedReasons).toContain('hard_cap_reached');
+    expect(result.overcharge.blockedReasons).toContain('no_qualifying_overcharge_trigger');
   });
 });

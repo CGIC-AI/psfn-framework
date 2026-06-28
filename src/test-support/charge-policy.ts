@@ -95,6 +95,7 @@ export function makeTestFatiguePolicyConfig(): FatiguePolicyConfig {
     },
     overcharge: {
       enabled: true,
+      reserveResponses: 2,
       recentHumanParticipationWindowMs: 900_000,
       minRecentHumanMessages: 1,
       minRecentHumanParticipants: 1,

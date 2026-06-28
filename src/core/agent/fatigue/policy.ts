@@ -20,16 +20,14 @@ export type FatiguePolicySpendReason =
 
 export type FatiguePolicyOverchargeReason =
   | 'recent_human_participation'
-  | 'soft_limit_reached'
-  | 'wrap_up_window';
+  | 'work_intent_wrapup';
 
 export type FatiguePolicyOverchargeBlockedReason =
   | 'overcharge_disabled'
   | 'peer_not_machine_intelligence'
   | 'turn_does_not_spend_fatigue'
-  | 'no_recent_human_participation'
-  | 'below_soft_limit'
-  | 'hard_cap_reached';
+  | 'normal_allowance_not_exhausted'
+  | 'no_qualifying_overcharge_trigger';
 
 export interface FatiguePolicyPeerInput {
   contactId: string;
@@ -80,7 +78,10 @@ export interface FatiguePolicyOverchargeInputs {
   recentHumanParticipantCount: number;
   latestHumanMessageAgeMs?: number;
   recentHumanParticipationWindowMs: number;
+  reserveResponses: number;
   hasRecentHumanParticipation: boolean;
+  intent: FatiguePolicyIntent;
+  hasWorkIntentWrapup: boolean;
   baseState: Exclude<FatiguePolicyState, 'overcharge_eligible'>;
 }
 
@@ -272,6 +273,7 @@ function computeOvercharge(input: {
   spend: FatiguePolicySpendResult;
   recentHumanParticipation: FatiguePolicyRecentHumanParticipationInput;
   baseState: Exclude<FatiguePolicyState, 'overcharge_eligible'>;
+  intent: FatiguePolicyIntent;
 }): FatiguePolicyOverchargeResult {
   const latestHumanMessageAgeMs = input.recentHumanParticipation.latestMessageAgeMs;
   const hasKnownRecentHumanMessage = typeof latestHumanMessageAgeMs === 'number'
@@ -281,6 +283,9 @@ function computeOvercharge(input: {
   const hasRecentHumanParticipation = hasKnownRecentHumanMessage
     && input.recentHumanParticipation.messageCount >= input.config.overcharge.minRecentHumanMessages
     && input.recentHumanParticipation.participantCount >= input.config.overcharge.minRecentHumanParticipants;
+  const hasWorkIntentWrapup = input.intent === 'work'
+    || input.intent === 'research'
+    || input.intent === 'problem_solving';
 
   const inputs: FatiguePolicyOverchargeInputs = {
     enabled: input.config.overcharge.enabled,
@@ -290,7 +295,10 @@ function computeOvercharge(input: {
     recentHumanParticipantCount: input.recentHumanParticipation.participantCount,
     ...(latestHumanMessageAgeMs !== undefined ? { latestHumanMessageAgeMs } : {}),
     recentHumanParticipationWindowMs: input.config.overcharge.recentHumanParticipationWindowMs,
+    reserveResponses: input.config.overcharge.reserveResponses,
     hasRecentHumanParticipation,
+    intent: input.intent,
+    hasWorkIntentWrapup,
     baseState: input.baseState,
   };
 
@@ -304,13 +312,11 @@ function computeOvercharge(input: {
   if (!input.spend.spendsFatigue) {
     blockedReasons.push('turn_does_not_spend_fatigue');
   }
-  if (!hasRecentHumanParticipation) {
-    blockedReasons.push('no_recent_human_participation');
+  if (input.baseState !== 'hard_exhausted') {
+    blockedReasons.push('normal_allowance_not_exhausted');
   }
-  if (input.baseState === 'hard_exhausted') {
-    blockedReasons.push('hard_cap_reached');
-  } else if (input.baseState !== 'soft_exhausted' && input.baseState !== 'wrap_up_allowed') {
-    blockedReasons.push('below_soft_limit');
+  if (!hasRecentHumanParticipation && !hasWorkIntentWrapup) {
+    blockedReasons.push('no_qualifying_overcharge_trigger');
   }
 
   if (blockedReasons.length > 0) {
@@ -325,8 +331,8 @@ function computeOvercharge(input: {
   return {
     eligible: true,
     reasons: [
-      'recent_human_participation',
-      input.baseState === 'wrap_up_allowed' ? 'wrap_up_window' : 'soft_limit_reached',
+      ...(hasRecentHumanParticipation ? ['recent_human_participation' as const] : []),
+      ...(hasWorkIntentWrapup ? ['work_intent_wrapup' as const] : []),
     ],
     blockedReasons: [],
     inputs,
@@ -364,6 +370,7 @@ export function evaluateFatiguePolicy(input: EvaluateFatiguePolicyInput): Fatigu
     spend,
     recentHumanParticipation: input.recentHumanParticipation,
     baseState,
+    intent: input.intent,
   });
 
   return {

@@ -163,6 +163,34 @@ describe('FatigueLedger', () => {
         rootRunId: 'run-borealis',
       },
     }));
+    ledger.recordFatigueEvent(makeEvent({
+      timestampMs: Date.parse('2027-01-16T01:05:00.000Z'),
+      dayKey: '2027-01-16',
+      channelId: 'chan-a',
+      peerContactId: 'borealis',
+      peer: {
+        contactId: 'borealis',
+        isMachineIntelligence: true,
+      },
+      triggeringAuthor: {
+        role: 'machine_intelligence',
+        contactId: 'borealis',
+        isMachineIntelligence: true,
+      },
+      amount: 1,
+      decision: 'overcharge',
+      reason: 'overcharge_recent_human_participation',
+      spentAfter: 2,
+      normalSpentAfter: 1,
+      overchargeSpentAfter: 1,
+      overchargeAllowance: 2,
+      remainingOvercharge: 1,
+      requestId: 'req-a4-overcharge',
+      lineage: {
+        runId: 'run-borealis-overcharge',
+        rootRunId: 'run-borealis',
+      },
+    }));
 
     expect(ledger.listFatigueEvents({
       peerContactId: 'artemis',
@@ -176,21 +204,22 @@ describe('FatigueLedger', () => {
     ]);
 
     const data = ledger.getData({ channelId: 'chan-a' });
-    expect(data.aggregates.amount).toBe(2);
-    expect(data.aggregates.eventCount).toBe(3);
+    expect(data.aggregates.amount).toBe(3);
+    expect(data.aggregates.eventCount).toBe(4);
     expect(data.aggregates.byChannel).toEqual([
-      { key: 'chan-a', amount: 2, eventCount: 3 },
+      { key: 'chan-a', amount: 3, eventCount: 4 },
     ]);
     expect(data.aggregates.byPeer).toEqual([
+      { key: 'borealis', amount: 2, eventCount: 2 },
       { key: 'artemis', amount: 1, eventCount: 2 },
-      { key: 'borealis', amount: 1, eventCount: 1 },
     ]);
     expect(data.aggregates.byDay).toEqual([
+      { key: '2027-01-16', amount: 2, eventCount: 2 },
       { key: '2027-01-15', amount: 1, eventCount: 2 },
-      { key: '2027-01-16', amount: 1, eventCount: 1 },
     ]);
     expect(data.aggregates.byDecision).toEqual([
       { key: 'charged', amount: 2, eventCount: 2 },
+      { key: 'overcharge', amount: 1, eventCount: 1 },
       { key: 'free', amount: 0, eventCount: 1 },
     ]);
     expect(data.aggregates.scopes).toEqual([
@@ -199,9 +228,10 @@ describe('FatigueLedger', () => {
         peerContactId: 'borealis',
         channelId: 'chan-a',
         dayKey: '2027-01-16',
-        amount: 1,
-        eventCount: 1,
+        amount: 2,
+        eventCount: 2,
         chargedEventCount: 1,
+        overchargeEventCount: 1,
         freeEventCount: 0,
       }),
       expect.objectContaining({
@@ -212,6 +242,7 @@ describe('FatigueLedger', () => {
         amount: 1,
         eventCount: 2,
         chargedEventCount: 1,
+        overchargeEventCount: 0,
         freeEventCount: 1,
       }),
     ]);

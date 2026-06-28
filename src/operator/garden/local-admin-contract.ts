@@ -27,6 +27,7 @@ import { ValuesJournalStore } from '../../faculties/values/store.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolveChargeLedgerPath,
+  resolveFatigueLedgerPath,
   resolveLegacyValuesJournalPath,
   resolveNorthStarPath,
   resolveValuesJournalPath,
@@ -35,6 +36,7 @@ import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
+import { FatigueLedger } from '../../shared/telemetry/fatigue-ledger.js';
 import { createPostgresModelUsageStoreFromConfig } from '../../persistence/postgres/model-usage-store.js';
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
 import { createOwnerFileConfigStore } from '../../system/config/config-store.js';
@@ -119,6 +121,7 @@ export function createInProcessGardenAdminContract(
   });
   const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
   const chargeLedger = new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
+  const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
   const auditHistory = new AdminAuditHistoryDataService({
     gardenStore: new GardenAuditHistoryJsonlStore(join(options.config.dataDir, 'garden-audit-history.jsonl')),
@@ -174,7 +177,7 @@ export function createInProcessGardenAdminContract(
       companionDataDir,
     }),
     auditHistory,
-    charges: new AdminChargeLedgerDataService(chargeLedger),
+    charges: new AdminChargeLedgerDataService(chargeLedger, fatigueLedger),
     modelUsage: modelUsageStore ? new AdminModelUsageDataService(modelUsageStore, options.modelDiscovery) : null,
     observerEvalSidecar: createObserverEvalSidecarAdminService({
       config: options.config,

@@ -20,14 +20,19 @@ export interface FatigueBudgetScope {
 export interface FatigueBudgetLimits {
   softLimit: number;
   hardLimit: number;
+  overchargeLimit?: number;
 }
 
 export interface FatigueBudgetState {
   scope: FatigueBudgetScope;
   spent: number;
+  normalSpent: number;
+  overchargeSpent: number;
   remainingAllowance: number;
   allowance: number;
   softLimit: number;
+  overchargeAllowance: number;
+  remainingOvercharge: number;
   softState: FatigueBudgetSoftState;
   hardState: FatigueBudgetHardState;
   lastEvent?: FatigueBudgetEvent;
@@ -127,10 +132,11 @@ function normalizeLimit(value: number, label: string): number {
 function normalizeLimits(limits: FatigueBudgetLimits): FatigueBudgetLimits {
   const softLimit = normalizeLimit(limits.softLimit, 'softLimit');
   const hardLimit = normalizeLimit(limits.hardLimit, 'hardLimit');
+  const overchargeLimit = normalizeLimit(limits.overchargeLimit ?? 0, 'overchargeLimit');
   if (softLimit > hardLimit) {
     throw new Error('Fatigue budget softLimit must be less than or equal to hardLimit');
   }
-  return { softLimit, hardLimit };
+  return { softLimit, hardLimit, overchargeLimit };
 }
 
 function cloneActor(actor: FatigueBudgetActorSnapshot): FatigueBudgetActorSnapshot {
@@ -164,23 +170,31 @@ function cloneEvent(event: FatigueBudgetEvent): FatigueBudgetEvent {
 
 function createState(input: {
   scope: FatigueBudgetScope;
-  spent: number;
+  normalSpent: number;
+  overchargeSpent?: number;
   limits: FatigueBudgetLimits;
   lastEvent?: FatigueBudgetEvent;
 }): FatigueBudgetState {
   const allowance = input.limits.hardLimit;
-  const softState: FatigueBudgetSoftState = input.spent >= input.limits.softLimit
+  const overchargeAllowance = input.limits.overchargeLimit ?? 0;
+  const overchargeSpent = input.overchargeSpent ?? 0;
+  const spent = input.normalSpent + overchargeSpent;
+  const softState: FatigueBudgetSoftState = input.normalSpent >= input.limits.softLimit
     ? 'soft_limit_reached'
     : 'clear';
-  const hardState: FatigueBudgetHardState = input.spent >= allowance
+  const hardState: FatigueBudgetHardState = input.normalSpent >= allowance
     ? 'exhausted'
     : 'available';
   return {
     scope: { ...input.scope },
-    spent: input.spent,
-    remainingAllowance: Math.max(0, allowance - input.spent),
+    spent,
+    normalSpent: input.normalSpent,
+    overchargeSpent,
+    remainingAllowance: Math.max(0, allowance - input.normalSpent),
     allowance,
     softLimit: input.limits.softLimit,
+    overchargeAllowance,
+    remainingOvercharge: Math.max(0, overchargeAllowance - overchargeSpent),
     softState,
     hardState,
     ...(input.lastEvent ? { lastEvent: cloneEvent(input.lastEvent) } : {}),
@@ -235,10 +249,15 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       channelId: scope.channelId,
       dayKey: scope.dayKey,
     });
-    const spent = events.reduce((total, event) => total + event.amount, 0);
+    const normalSpent = events
+      .filter(event => event.decision === 'charged')
+      .reduce((total, event) => total + event.amount, 0);
+    const overchargeSpent = events
+      .filter(event => event.decision === 'overcharge')
+      .reduce((total, event) => total + event.amount, 0);
     const lastEvent = events
       .sort((left, right) => right.timestampMs - left.timestampMs)[0];
-    return createState({ scope, spent, limits, lastEvent });
+    return createState({ scope, normalSpent, overchargeSpent, limits, lastEvent });
   }
 
   evaluate(input: FatigueBudgetEvaluationInput): FatigueBudgetEvaluation {
@@ -257,7 +276,8 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
     const decision = resolveDecision({ peer, triggeringAuthor });
     const stateAfter = createState({
       scope: cloneScope(stateBefore.scope),
-      spent: stateBefore.spent + decision.amount,
+      normalSpent: stateBefore.normalSpent + decision.amount,
+      overchargeSpent: stateBefore.overchargeSpent,
       limits,
       lastEvent: stateBefore.lastEvent,
     });
@@ -291,14 +311,17 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       limits: {
         softLimit: evaluation.stateAfter.softLimit,
         hardLimit: evaluation.stateAfter.allowance,
+        overchargeLimit: evaluation.stateAfter.overchargeAllowance,
       },
     });
     const recordedStateAfter = createState({
       scope: cloneScope(currentState.scope),
-      spent: currentState.spent + evaluation.amount,
+      normalSpent: currentState.normalSpent + (evaluation.decision === 'charged' ? evaluation.amount : 0),
+      overchargeSpent: currentState.overchargeSpent + (evaluation.decision === 'overcharge' ? evaluation.amount : 0),
       limits: {
         softLimit: evaluation.stateAfter.softLimit,
         hardLimit: evaluation.stateAfter.allowance,
+        overchargeLimit: evaluation.stateAfter.overchargeAllowance,
       },
       lastEvent: currentState.lastEvent,
     });
@@ -326,6 +349,10 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
       remainingAllowance: recordedStateAfter.remainingAllowance,
       allowance: recordedStateAfter.allowance,
       softLimit: recordedStateAfter.softLimit,
+      normalSpentAfter: recordedStateAfter.normalSpent,
+      overchargeSpentAfter: recordedStateAfter.overchargeSpent,
+      overchargeAllowance: recordedStateAfter.overchargeAllowance,
+      remainingOvercharge: recordedStateAfter.remainingOvercharge,
       softState: recordedStateAfter.softState,
       hardState: recordedStateAfter.hardState,
       ...(Object.keys(correlation).length > 0 ? correlation : {}),
@@ -335,4 +362,44 @@ export class DeterministicFatigueBudgetPort implements FatigueBudgetPort {
     this.history.recordFatigueEvent(event);
     return cloneEvent(event);
   }
+}
+
+export function createOverchargeFatigueEvaluation(
+  evaluation: FatigueBudgetEvaluation,
+  reason: Extract<FatigueBudgetReason, 'overcharge_recent_human_participation' | 'overcharge_work_intent_wrapup'>,
+): FatigueBudgetEvaluation {
+  const amount = evaluation.amount > 0 ? evaluation.amount : 0;
+  return {
+    ...evaluation,
+    decision: 'overcharge',
+    reason,
+    stateBefore: {
+      ...evaluation.stateBefore,
+      scope: { ...evaluation.stateBefore.scope },
+      ...(evaluation.stateBefore.lastEvent ? { lastEvent: cloneEvent(evaluation.stateBefore.lastEvent) } : {}),
+    },
+    stateAfter: createState({
+      scope: cloneScope(evaluation.stateBefore.scope),
+      normalSpent: evaluation.stateBefore.normalSpent,
+      overchargeSpent: evaluation.stateBefore.overchargeSpent + amount,
+      limits: {
+        softLimit: evaluation.stateBefore.softLimit,
+        hardLimit: evaluation.stateBefore.allowance,
+        overchargeLimit: evaluation.stateBefore.overchargeAllowance,
+      },
+      lastEvent: evaluation.stateBefore.lastEvent,
+    }),
+    ...(evaluation.details ? {
+      details: {
+        ...evaluation.details,
+        overchargeReason: reason,
+        overchargePermitted: true,
+      },
+    } : {
+      details: {
+        overchargeReason: reason,
+        overchargePermitted: true,
+      },
+    }),
+  };
 }

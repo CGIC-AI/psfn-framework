@@ -44,6 +44,7 @@ import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
 import {
   attachRecordedFatigueEvent,
   evaluateFatigueForTurn,
+  type FatigueRecentHumanParticipation,
   type FatigueTurnDecision,
 } from '../fatigue/runtime-enforcement.js';
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
@@ -66,6 +67,7 @@ import {
   schedulePostTurnWork,
 } from './turn-execution/post-turn-scheduling.js';
 import { hasVisionTurnInputs } from './vision-attachments.js';
+import type { SessionEntry } from '../../session/types.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -327,6 +329,8 @@ function summarizeFatigue(metadata: FatigueEnforcementMetadata): Record<string, 
     spendReason: metadata.spendReason,
     overchargeEligible: metadata.overchargeEligible,
     overchargePermitted: metadata.overchargePermitted,
+    overchargeReasons: metadata.overchargeReasons,
+    overchargeBlockedReasons: metadata.overchargeBlockedReasons,
     scope: metadata.scope,
     budget: metadata.budget,
   };
@@ -359,9 +363,73 @@ function evaluateRuntimeFatigue(input: {
     channelType: input.channelType,
     channelMeta: input.channelMeta,
     taskKind: input.taskKind,
+    recentHumanParticipation: resolveRecentHumanParticipationForFatigue({
+      runtime: input.runtime,
+      message: input.message,
+      authorContext: input.authorContext,
+      sessionChannelId: input.runtime.resolveSessionChannelId(input.message.channelId),
+      nowMs: input.timestampMs,
+      windowMs: fatiguePolicy.overcharge.recentHumanParticipationWindowMs,
+    }),
     timestampMs: input.timestampMs,
     correlation: input.runtime.withCorrelationPurpose(input.turnCorrelationBase, 'agent.fatigue.evaluate'),
   });
+}
+
+function resolveRecentHumanParticipationForFatigue(input: {
+  runtime: TurnExecutionRuntime;
+  message: SubstrateMessage;
+  authorContext: ResolvedAuthorContext;
+  sessionChannelId: string;
+  nowMs: number;
+  windowMs: number;
+}): FatigueRecentHumanParticipation {
+  const participants = new Set<string>();
+  let messageCount = 0;
+  let latestHumanTimestampMs: number | undefined;
+  const addHumanMessage = (entry: Pick<SessionEntry, 'authorId' | 'authorName' | 'timestamp'>): void => {
+    if (!Number.isFinite(entry.timestamp) || entry.timestamp > input.nowMs) {
+      return;
+    }
+    const ageMs = input.nowMs - entry.timestamp;
+    if (ageMs < 0 || ageMs > input.windowMs) {
+      return;
+    }
+    messageCount += 1;
+    participants.add(entry.authorId?.trim() || entry.authorName?.trim() || 'unknown-human');
+    latestHumanTimestampMs = latestHumanTimestampMs === undefined
+      ? entry.timestamp
+      : Math.max(latestHumanTimestampMs, entry.timestamp);
+  };
+
+  if (
+    input.authorContext.speakingWithIsMachineIntelligence !== true
+    && input.authorContext.speakerRole !== 'system'
+  ) {
+    addHumanMessage({
+      authorId: input.message.authorId,
+      authorName: input.message.authorName,
+      timestamp: input.nowMs,
+    });
+  }
+
+  for (const entry of input.runtime.sessionManager.getRecentMessages(input.sessionChannelId, 32)) {
+    if (entry.role !== 'user') {
+      continue;
+    }
+    if (entry.authorId && entry.authorId === input.message.authorId) {
+      continue;
+    }
+    addHumanMessage(entry);
+  }
+
+  return {
+    messageCount,
+    participantCount: participants.size,
+    ...(latestHumanTimestampMs !== undefined
+      ? { latestMessageAgeMs: input.nowMs - latestHumanTimestampMs }
+      : {}),
+  };
 }
 
 function emitFatigueDecision(input: {
@@ -815,6 +883,8 @@ export async function handleMessageForTurn(
             enforcementDecision: fatigueDecision.metadata.decision,
             policyState: fatigueDecision.metadata.policyState,
             policyBaseState: fatigueDecision.metadata.policyBaseState,
+            overchargePermitted: fatigueDecision.metadata.overchargePermitted,
+            overchargeReasons: fatigueDecision.metadata.overchargeReasons,
             responseChars: responseText.length,
             model: responseModel,
           },

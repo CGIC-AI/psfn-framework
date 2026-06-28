@@ -27,6 +27,7 @@ import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-
 import { createActiveEmanationSatellitePresencePort } from '../satellite-adapter-port.js';
 import type { FatigueBudgetEvent } from '../../../shared/contracts/runtime.js';
 import {
+  createOverchargeFatigueEvaluation,
   DeterministicFatigueBudgetPort,
   type FatigueBudgetHistoryPort,
   type FatigueBudgetPort,
@@ -189,10 +190,47 @@ function seedMachineIntelligenceFatigueSpend(input: {
       limits: {
         softLimit: 2,
         hardLimit: 5,
+        overchargeLimit: 2,
       },
       timestampMs: Date.now() + index,
     });
     input.fatigueBudget.recordFinalDecision(evaluation);
+  }
+}
+
+function seedMachineIntelligenceOverchargeSpend(input: {
+  fatigueBudget: FatigueBudgetPort;
+  count: number;
+  channelId?: string;
+  peerContactId?: string;
+}): void {
+  for (let index = 0; index < input.count; index += 1) {
+    const evaluation = input.fatigueBudget.evaluate({
+      localCompanionId: DEFAULT_COMPANION_ID,
+      channelId: input.channelId ?? 'ch1',
+      peer: {
+        contactId: input.peerContactId ?? 'contact-mi',
+        channelAuthorId: 'mi-user',
+        displayName: 'Peer MI',
+        isMachineIntelligence: true,
+      },
+      triggeringAuthor: {
+        role: 'machine_intelligence',
+        contactId: input.peerContactId ?? 'contact-mi',
+        channelAuthorId: 'mi-user',
+        displayName: 'Peer MI',
+        isMachineIntelligence: true,
+      },
+      limits: {
+        softLimit: 2,
+        hardLimit: 5,
+        overchargeLimit: 2,
+      },
+      timestampMs: Date.now() + 10 + index,
+    });
+    input.fatigueBudget.recordFinalDecision(
+      createOverchargeFatigueEvaluation(evaluation, 'overcharge_recent_human_participation'),
+    );
   }
 }
 
@@ -438,6 +476,7 @@ function createRuntime(params: {
       awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
       scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
       getActiveFocusMemoryScopeQuery: vi.fn(() => null),
+      getRecentMessages: vi.fn(() => []),
       ...(params.sessionManager as Record<string, unknown>),
     } as unknown as SessionManager,
     config: {
@@ -593,6 +632,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     eventBus?: EventBus;
     buildContext?: ReturnType<typeof vi.fn>;
     resolveAuthorContext?: ReturnType<typeof vi.fn>;
+    sessionManager?: Partial<SessionManager>;
   }) {
     const buildContext = params.buildContext ?? vi.fn(async () => ({
       systemPrompt: 'System prompt',
@@ -601,7 +641,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     }));
     const runtime = createRuntime({
       eventBus: params.eventBus ?? new EventBus(),
-      sessionManager: {} as SessionManager,
+      sessionManager: (params.sessionManager ?? {}) as SessionManager,
       buildContext,
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -704,6 +744,105 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     expect(runtime.recordAssistantMessage).not.toHaveBeenCalled();
   });
 
+  it('allows a human-active hard-cap MI turn through bounded overcharge reserve', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
+    const buildContext = vi.fn(async (_channelId: string, fullPrompt: string) => ({
+      systemPrompt: fullPrompt,
+      messages: [],
+      manifest: undefined,
+    }));
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      buildContext,
+      sessionManager: {
+        getRecentMessages: vi.fn(() => [
+          {
+            id: 99,
+            channelId: 'ch1',
+            role: 'user',
+            content: 'Can both of you keep going on this?',
+            authorId: 'human-user',
+            authorName: 'Human',
+            timestamp: Date.now() - 60_000,
+          },
+        ]),
+      },
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-overcharge-human', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.content).toBe('assistant reply');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'overcharge_charged',
+      overchargeEligible: true,
+      overchargePermitted: true,
+      alertInjected: true,
+      spendDecision: 'overcharge',
+      spendReason: 'overcharge_recent_human_participation',
+      recordedEvent: {
+        amount: 1,
+        decision: 'overcharge',
+        overchargeSpentAfter: 1,
+        remainingOvercharge: 1,
+      },
+    });
+    expect(buildContext.mock.calls[0]?.[1]).toContain('bounded overcharge reserve');
+    expect(history.events).toHaveLength(6);
+    expect(history.events.at(-1)).toMatchObject({
+      decision: 'overcharge',
+      reason: 'overcharge_recent_human_participation',
+      details: expect.objectContaining({
+        overchargePermitted: true,
+      }),
+    });
+  });
+
+  it('hard-stops MI continuation after overcharge reserve is depleted', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
+    seedMachineIntelligenceOverchargeSpend({ fatigueBudget, count: 2 });
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      sessionManager: {
+        getRecentMessages: vi.fn(() => [
+          {
+            id: 101,
+            channelId: 'ch1',
+            role: 'user',
+            content: 'I am still here.',
+            authorId: 'human-user',
+            authorName: 'Human',
+            timestamp: Date.now() - 60_000,
+          },
+        ]),
+      },
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-overcharge-depleted', {
+      authorId: 'mi-user',
+      authorName: 'Peer MI',
+    }));
+
+    expect(response.content).toBe('');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'suppressed_hard_exhausted',
+      overchargeEligible: true,
+      overchargePermitted: false,
+      overchargeBlockedReasons: expect.arrayContaining(['overcharge_reserve_exhausted']),
+      budget: expect.objectContaining({
+        overchargeSpentBefore: 2,
+        overchargeRemainingBefore: 0,
+      }),
+    });
+    expect(runtime.agent.prompt).not.toHaveBeenCalled();
+    expect(history.events).toHaveLength(7);
+  });
+
   it('allows human-authored turns without spending even when an MI budget is exhausted in the same channel', async () => {
     const { fatigueBudget, history } = createFatigueBudgetHarness();
     seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
@@ -725,6 +864,30 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     });
     expect(history.events).toHaveLength(5);
     expect(history.events.every(event => event.peerContactId === 'contact-mi')).toBe(true);
+  });
+
+  it('allows human-authored turns without spending even when overcharge reserve is exhausted', async () => {
+    const { fatigueBudget, history } = createFatigueBudgetHarness();
+    seedMachineIntelligenceFatigueSpend({ fatigueBudget, count: 5 });
+    seedMachineIntelligenceOverchargeSpend({ fatigueBudget, count: 2 });
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      resolveAuthorContext: vi.fn(() => humanAuthorContext()),
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-fatigue-human-reserve-exhausted', {
+      authorId: 'human-user',
+      authorName: 'Human',
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledTimes(1);
+    expect(response.content).toBe('assistant reply');
+    expect(response.metadata.fatigue).toMatchObject({
+      decision: 'allowed_free',
+      shouldRecordSpend: false,
+      overchargePermitted: false,
+    });
+    expect(history.events).toHaveLength(7);
   });
 
   it('keeps MI budgets isolated by channel', async () => {

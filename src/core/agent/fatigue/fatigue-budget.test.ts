@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { FatigueLedger } from '../../../shared/telemetry/fatigue-ledger.js';
 import {
+  createOverchargeFatigueEvaluation,
   DeterministicFatigueBudgetPort,
   type FatigueBudgetLimits,
 } from './fatigue-budget.js';
@@ -36,6 +37,11 @@ function makePort(options: {
 const LIMITS = {
   softLimit: 2,
   hardLimit: 3,
+} satisfies FatigueBudgetLimits;
+
+const LIMITS_WITH_OVERCHARGE = {
+  ...LIMITS,
+  overchargeLimit: 2,
 } satisfies FatigueBudgetLimits;
 
 describe('DeterministicFatigueBudgetPort', () => {
@@ -249,6 +255,80 @@ describe('DeterministicFatigueBudgetPort', () => {
     expect(nextDayEvaluation.dayKey).toBe('2027-01-16');
     expect(nextDayEvaluation.stateBefore.spent).toBe(0);
     secondLedger.close();
+  });
+
+  it('tracks overcharge reserve separately from normal fatigue spend', () => {
+    const { ledger, port } = makePort();
+
+    for (let index = 0; index < LIMITS_WITH_OVERCHARGE.hardLimit; index += 1) {
+      const evaluation = port.evaluate({
+        localCompanionId: 'purrsephone',
+        channelId: 'dm-artemis',
+        peer: {
+          contactId: 'artemis',
+          isMachineIntelligence: true,
+        },
+        triggeringAuthor: {
+          role: 'machine_intelligence',
+          contactId: 'artemis',
+          isMachineIntelligence: true,
+        },
+        limits: LIMITS_WITH_OVERCHARGE,
+      });
+      port.recordFinalDecision(evaluation);
+    }
+
+    const baseEvaluation = port.evaluate({
+      localCompanionId: 'purrsephone',
+      channelId: 'dm-artemis',
+      peer: {
+        contactId: 'artemis',
+        isMachineIntelligence: true,
+      },
+      triggeringAuthor: {
+        role: 'machine_intelligence',
+        contactId: 'artemis',
+        isMachineIntelligence: true,
+      },
+      limits: LIMITS_WITH_OVERCHARGE,
+    });
+    expect(baseEvaluation.stateBefore.normalSpent).toBe(3);
+    expect(baseEvaluation.stateBefore.remainingAllowance).toBe(0);
+    expect(baseEvaluation.stateBefore.remainingOvercharge).toBe(2);
+
+    const overchargeEvaluation = createOverchargeFatigueEvaluation(
+      baseEvaluation,
+      'overcharge_recent_human_participation',
+    );
+    expect(overchargeEvaluation.decision).toBe('overcharge');
+    expect(overchargeEvaluation.stateAfter.normalSpent).toBe(3);
+    expect(overchargeEvaluation.stateAfter.overchargeSpent).toBe(1);
+    expect(overchargeEvaluation.stateAfter.remainingOvercharge).toBe(1);
+
+    const event = port.recordFinalDecision(overchargeEvaluation);
+    expect(event).toMatchObject({
+      decision: 'overcharge',
+      reason: 'overcharge_recent_human_participation',
+      amount: 1,
+      normalSpentAfter: 3,
+      overchargeSpentAfter: 1,
+      overchargeAllowance: 2,
+      remainingOvercharge: 1,
+    });
+
+    const state = port.readState({
+      localCompanionId: 'purrsephone',
+      peerContactId: 'artemis',
+      channelId: 'dm-artemis',
+      dayKey: '2027-01-15',
+      limits: LIMITS_WITH_OVERCHARGE,
+    });
+    expect(state.normalSpent).toBe(3);
+    expect(state.overchargeSpent).toBe(1);
+    expect(state.spent).toBe(4);
+    expect(state.remainingAllowance).toBe(0);
+    expect(state.remainingOvercharge).toBe(1);
+    expect(ledger.listFatigueEvents({ decision: 'overcharge' })).toHaveLength(1);
   });
 
   it('treats unknown or unflagged contacts as free', () => {

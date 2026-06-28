@@ -207,6 +207,7 @@ describe('charge policy config', () => {
       expect(seed.fatigue.channelSettingLimits.dm.maxHardCap).toBeGreaterThan(
         seed.fatigue.channelSettingLimits.busy_human_group.maxHardCap,
       );
+      expect(seed.fatigue.overcharge.reserveResponses).toBe(2);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -362,6 +363,28 @@ describe('charge policy config', () => {
           relationshipBudgets: missingRelationshipBudgets,
         },
       })).toThrow('fatigue.relationshipBudgets.weak_mi must be an object');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          overcharge: {
+            ...defaultSeed.fatigue.overcharge,
+            reserveResponses: -1,
+          },
+        },
+      })).toThrow('fatigue.overcharge.reserveResponses must be a finite integer > 0');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          overcharge: {
+            ...defaultSeed.fatigue.overcharge,
+            reserveResponses: 99,
+          },
+        },
+      })).toThrow('fatigue.overcharge.reserveResponses must be <= 10');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

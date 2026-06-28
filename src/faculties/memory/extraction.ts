@@ -609,6 +609,12 @@ export {
   classifyGroupMemoryChannel,
   resolveGroupMemorySettingsForChannel,
 } from './extraction/group-classifier.js';
+export {
+  buildGroupMemoryRangePlan,
+  createEmptyWatermark,
+  GROUP_MEMORY_POLICY_VERSION,
+  JsonGroupMemoryWatermarkStore,
+} from './extraction/group-ranges.js';
 
 export type {
   MemoryExtractorConfig,
@@ -628,6 +634,19 @@ export type {
   GroupMemoryTopologyResolution,
   GroupMemoryTopologySource,
 } from './extraction/group-classifier.js';
+export type {
+  GroupMemoryFailureInput,
+  GroupMemoryFailureRecord,
+  GroupMemoryRangeChunk,
+  GroupMemoryRangePlan,
+  GroupMemoryRangePlanOptions,
+  GroupMemoryRangeSessionReader,
+  GroupMemorySpanRecord,
+  GroupMemoryWatermarkMutationInput,
+  GroupMemoryWatermarkRecord,
+  GroupMemoryWatermarkStatus,
+  GroupMemoryWatermarkStorePort,
+} from './extraction/group-ranges.js';
 
 export const __test = {
   evaluateFactAcceptance,

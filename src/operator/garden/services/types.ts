@@ -981,6 +981,7 @@ export interface AdminContactListData {
   profileMap: Map<string, ContactProfileArtifact>;
   relatedChannelMap: Map<string, ContactConversationChannelView[]>;
   socialGraphMap: Map<string, AdminContactSocialGraphView>;
+  relationshipScoreMap?: Map<string, AdminContactRelationshipScoreView>;
   verifications: ContactIdentityLinkVerification[];
   mutationAudits: ContactMutationAuditEntry[];
   mutationAuditQuery: ContactMutationAuditQuery;
@@ -1048,6 +1049,20 @@ export interface AdminContactSocialGraphView {
   provenanceCount: number;
   mentionOnlyNeighborCount: number;
   connections: AdminContactSocialGraphConnectionView[];
+}
+
+export interface AdminContactRelationshipScoreView {
+  score: number;
+  resolvedTier: string;
+  previousTierThreshold?: number;
+  nextTier?: string;
+  nextTierThreshold?: number;
+  progressToNextTier?: number;
+  updatedAt?: string;
+}
+
+export interface AdminContactRelationshipScoreReader {
+  listContactRelationshipScores(contactIds: readonly string[]): Promise<Map<string, AdminContactRelationshipScoreView>>;
 }
 
 export interface AdminContactsService {

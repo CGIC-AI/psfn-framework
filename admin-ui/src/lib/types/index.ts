@@ -670,11 +670,22 @@ export interface AdminContactSocialGraphView {
   connections: AdminContactSocialGraphConnectionView[];
 }
 
+export interface AdminContactRelationshipScoreView {
+  score: number;
+  resolvedTier: string;
+  previousTierThreshold?: number;
+  nextTier?: string;
+  nextTierThreshold?: number;
+  progressToNextTier?: number;
+  updatedAt?: string;
+}
+
 export interface AdminContactListData {
   contacts: Contact[];
   profileMap: Record<string, ContactProfileArtifact>;
   relatedChannelMap: Record<string, ContactConversationChannelView[]>;
   socialGraphMap: Record<string, AdminContactSocialGraphView>;
+  relationshipScoreMap?: Record<string, AdminContactRelationshipScoreView>;
   verifications: ContactIdentityLinkVerification[];
   mutationAudits: ContactMutationAuditEntry[];
   mutationAuditQuery: unknown;

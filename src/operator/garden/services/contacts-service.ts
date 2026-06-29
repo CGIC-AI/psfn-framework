@@ -27,6 +27,8 @@ import type {
   AdminContactSocialGraphConnectionView,
   AdminContactDetailData,
   AdminContactListData,
+  AdminContactRelationshipScoreReader,
+  AdminContactRelationshipScoreView,
   AdminContactSocialGraphView,
   AdminContactsService,
   ContactUpdateResult,
@@ -73,6 +75,7 @@ export class AdminContactsDataService implements AdminContactsService {
     contactStore?: ContactStorePort | null;
     memoryStore: MemoryStorePort;
     sessionStore: SessionStore;
+    relationshipScoreReader?: AdminContactRelationshipScoreReader | null;
   }) {}
 
   private normalizeContactMutationAuditField(value: string | null): ContactMutationAuditField | undefined {
@@ -243,6 +246,14 @@ export class AdminContactsDataService implements AdminContactsService {
     }));
   }
 
+  private async buildRelationshipScoreMap(
+    contacts: Contact[],
+  ): Promise<Map<string, AdminContactRelationshipScoreView>> {
+    const reader = this.deps.relationshipScoreReader;
+    if (!reader || contacts.length === 0) return new Map();
+    return reader.listContactRelationshipScores(contacts.map(contact => contact.id));
+  }
+
   async listContacts(params?: URLSearchParams): Promise<AdminContactListData> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
@@ -251,6 +262,7 @@ export class AdminContactsDataService implements AdminContactsService {
         profileMap: new Map(),
         relatedChannelMap: new Map(),
         socialGraphMap: new Map(),
+        relationshipScoreMap: new Map(),
         verifications: [],
         mutationAudits: [],
         mutationAuditQuery: this.parseContactMutationAuditQuery(params),
@@ -266,6 +278,7 @@ export class AdminContactsDataService implements AdminContactsService {
       sessionStore: this.deps.sessionStore,
     });
     const socialGraphMap = await this.buildSocialGraphMap(contacts, profileMap);
+    const relationshipScoreMap = await this.buildRelationshipScoreMap(contacts);
 
     const verifications = await contactStore.listIdentityLinkVerifications(20);
     const mutationAuditQuery = this.parseContactMutationAuditQuery(params);
@@ -276,6 +289,7 @@ export class AdminContactsDataService implements AdminContactsService {
       profileMap,
       relatedChannelMap,
       socialGraphMap,
+      relationshipScoreMap,
       verifications,
       mutationAudits,
       mutationAuditQuery,

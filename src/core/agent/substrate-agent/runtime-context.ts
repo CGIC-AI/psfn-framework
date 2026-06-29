@@ -65,6 +65,7 @@ import {
   unwrapSingleWrappedPromptSection,
   wrapPromptSectionXml,
 } from '../../identity/prompt-sections.js';
+import { renderSystemLanguageTemplate } from '../../identity/system-language.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import {
   EXTENDED_TOOLS_BODY_TEMPLATE,
@@ -266,7 +267,7 @@ function buildApiSubsystemHealthLine(input: {
     return {
       label: input.label,
       status: 'unavailable',
-      detail: 'no probe snapshot is available.',
+      detail: renderSystemLanguageTemplate('substrate_health.subsystem_missing_probe'),
     };
   }
 
@@ -281,7 +282,7 @@ function buildApiSubsystemHealthLine(input: {
   return {
     label: input.label,
     status: 'degraded',
-    detail: `${sanitizeHealthDetail(input.subsystem.detail, input.degradedFallback)}${formatHealthLatencySuffix(input.subsystem)}; use simpler paths and avoid optional costly work until it recovers.`,
+    detail: `${sanitizeHealthDetail(input.subsystem.detail, input.degradedFallback)}${formatHealthLatencySuffix(input.subsystem)}${renderSystemLanguageTemplate('substrate_health.subsystem_degraded_suffix')}`,
   };
 }
 
@@ -306,7 +307,7 @@ function buildGatewayHealthLine(apiHealth: ApiHealthResponse | null | undefined)
   return {
     label: 'Gateway responsiveness',
     status: 'degraded',
-    detail: `${sanitizeHealthDetail(gatewayLink.detail, 'gateway-linked model or embedding checks are degraded')}; replies or tool calls that depend on the gateway may be slow or fail.`,
+    detail: `${sanitizeHealthDetail(gatewayLink.detail, 'gateway-linked model or embedding checks are degraded')}${renderSystemLanguageTemplate('substrate_health.gateway_degraded_suffix')}`,
   };
 }
 
@@ -467,13 +468,13 @@ function buildSubstrateHealthContextBlock(input: {
     ? sanitizeHealthDetail(health?.unavailableReason, 'runtime health probes are not connected to this prompt context')
     : '';
   const overallDetail = overall === 'healthy'
-    ? 'Available probes report no substrate degradation.'
+    ? renderSystemLanguageTemplate('substrate_health.overall.healthy')
     : overall === 'degraded'
-      ? 'One or more substrate signals need attention.'
-      : `${unavailableReason}; do not assume the substrate is nominal.`;
+      ? renderSystemLanguageTemplate('substrate_health.overall.degraded')
+      : renderSystemLanguageTemplate('substrate_health.overall.unavailable', { unavailable_reason: unavailableReason });
   const checkedAt = apiHealth ? apiHealth.checkedAt.trim() : '';
   const lines = [
-    '[Substrate health]',
+    renderSystemLanguageTemplate('substrate_health.header'),
     `Overall: ${overall}. ${overallDetail}`,
     ...(checkedAt ? [`Probe snapshot: ${sanitizeHealthDetail(checkedAt, checkedAt)}.`] : []),
     formatHealthLine(gatewayLine),

@@ -19,7 +19,7 @@ export type EpisodicRetrievalStore = Pick<
 
 export type EpisodicTimelineStore = Pick<
   EpisodicStorePort,
-  'searchByTime' | 'getEpisode' | 'listEpisodeArcsForEpisode'
+  'searchByTime' | 'listEpisodes' | 'getEpisode' | 'listEpisodeArcsForEpisode'
 >;
 
 export interface EpisodicRetrievalChain {

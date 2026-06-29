@@ -1,6 +1,10 @@
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
 import { isRecord } from '../../shared/utils/types.js';
+import {
+  renderSystemLanguageTemplate,
+  type SystemLanguageTemplateKey,
+} from '../identity/system-language.js';
 
 export type ToolErrorClass =
   | 'permission_denied'
@@ -80,14 +84,24 @@ const WINDOWS_PATH_PATTERN = /\b[A-Za-z]:\\[^\s"',;)]+/g;
 const HOME_PATH_PATTERN = /(^|[\s"'(=])~\/[^\s"',;)]+/g;
 const URL_PATTERN = /\bhttps?:\/\/[^\s"'<>\\)]+/gi;
 
-const DEFAULT_COMPANION_MESSAGES: Record<ToolErrorClass, string> = {
-  permission_denied: 'Permission or approval is required before this tool can run.',
-  policy_blocked: 'The request was blocked by runtime policy. Try a different target or ask the operator to change policy.',
-  rate_limited: 'The provider is rate limited. Wait before retrying or reduce request volume.',
-  timeout: 'The operation timed out. Retry later or narrow the request.',
-  invalid_input: 'The tool input is invalid. Adjust the arguments and try again.',
-  provider_error: 'The provider returned an error. Retry with backoff or use an alternative if it persists.',
-  unavailable: 'The backing service is unavailable. Retry with backoff or ask the operator if it persists.',
+const TOOL_ERROR_DEFAULT_TEMPLATE_KEYS: Record<ToolErrorClass, SystemLanguageTemplateKey> = {
+  permission_denied: 'tool_error.permission_denied.default',
+  policy_blocked: 'tool_error.policy_blocked.default',
+  rate_limited: 'tool_error.rate_limited.default',
+  timeout: 'tool_error.timeout.default',
+  invalid_input: 'tool_error.invalid_input.default',
+  provider_error: 'tool_error.provider_error.default',
+  unavailable: 'tool_error.unavailable.default',
+};
+
+const TOOL_ERROR_DIAGNOSTIC_TEMPLATE_KEYS: Record<ToolErrorClass, SystemLanguageTemplateKey> = {
+  permission_denied: 'tool_error.permission_denied.diagnostic',
+  policy_blocked: 'tool_error.policy_blocked.diagnostic',
+  rate_limited: 'tool_error.rate_limited.diagnostic',
+  timeout: 'tool_error.timeout.diagnostic',
+  invalid_input: 'tool_error.invalid_input.diagnostic',
+  provider_error: 'tool_error.provider_error.diagnostic',
+  unavailable: 'tool_error.unavailable.diagnostic',
 };
 
 const DEFAULT_RETRY_HINTS: Record<ToolErrorClass, ToolRetryHint> = {
@@ -135,7 +149,13 @@ export function textResultFromError(
     rawDiagnostic: metadata.rawDiagnostic ?? error,
   });
   return {
-    content: [{ type: 'text', text: `${prefix}: ${details.companionMessage}` }] satisfies TextContent[],
+    content: [{
+      type: 'text',
+      text: renderSystemLanguageTemplate('tool_error.result', {
+        prefix,
+        companion_message: details.companionMessage,
+      }),
+    }] satisfies TextContent[],
     details,
   };
 }
@@ -211,24 +231,11 @@ export function sanitizeToolErrorDiagnostic(value: unknown): string | undefined 
 
 function buildDefaultCompanionMessage(errorClass: ToolErrorClass, rawDiagnostic: string | undefined): string {
   if (!rawDiagnostic) {
-    return DEFAULT_COMPANION_MESSAGES[errorClass];
+    return renderSystemLanguageTemplate(TOOL_ERROR_DEFAULT_TEMPLATE_KEYS[errorClass]);
   }
-  switch (errorClass) {
-    case 'invalid_input':
-      return `Invalid input: ${rawDiagnostic}`;
-    case 'policy_blocked':
-      return `Blocked by runtime policy: ${rawDiagnostic}`;
-    case 'permission_denied':
-      return `Permission denied: ${rawDiagnostic}`;
-    case 'rate_limited':
-      return `Rate limited: ${rawDiagnostic}`;
-    case 'timeout':
-      return `Timed out: ${rawDiagnostic}`;
-    case 'unavailable':
-      return `Service unavailable: ${rawDiagnostic}`;
-    case 'provider_error':
-      return `Provider error: ${rawDiagnostic}`;
-  }
+  return renderSystemLanguageTemplate(TOOL_ERROR_DIAGNOSTIC_TEMPLATE_KEYS[errorClass], {
+    diagnostic: rawDiagnostic,
+  });
 }
 
 function sanitizeCompanionMessage(value: string): string {

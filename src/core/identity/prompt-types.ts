@@ -1,16 +1,18 @@
 // ── Prompt Stack Types ──
-// Layered prompt composition: base -> operator -> runtime -> channel -> task
+// Layered prompt ownership: base -> operator -> system_language -> runtime -> channel -> task.
+// system_language layers are owner-backed template sources and are not rendered into prompts.
 
-export type LayerType = 'base' | 'operator' | 'runtime' | 'channel' | 'task';
+export type LayerType = 'base' | 'operator' | 'system_language' | 'runtime' | 'channel' | 'task';
 export const PROMPT_LAYER_ROLES = ['system', 'user', 'assistant'] as const;
 export type PromptLayerRole = (typeof PROMPT_LAYER_ROLES)[number];
 
 export const LAYER_TYPE_ORDER: Record<LayerType, number> = {
   base: 0,
   operator: 1,
-  runtime: 2,
-  channel: 3,
-  task: 4,
+  system_language: 2,
+  runtime: 3,
+  channel: 4,
+  task: 5,
 };
 
 export interface PromptLayer {

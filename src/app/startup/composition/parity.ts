@@ -24,6 +24,10 @@ import { PromptRegistryStore } from '../../../core/identity/prompt-registry.js';
 import { ensureRuntimePromptLayers } from '../../../core/identity/runtime-prompt-layers.js';
 import { ensureTemporalRulesPromptLayer } from '../../../core/identity/temporal-rules-layer.js';
 import {
+  ensureSystemLanguagePromptLayer,
+  installSystemLanguagePromptLayerSource,
+} from '../../../core/identity/system-language.js';
+import {
   type CharacterCardVersionStore,
 } from '../../../core/identity/card-versioning.js';
 import { buildCharacterPromptTemplateVariables } from '../../../core/identity/loader.js';
@@ -108,6 +112,8 @@ export function wirePromptRuntime(
   promptStore.seedFromCharacterCard(baseSystemPrompt);
   ensureTemporalRulesPromptLayer(promptStore);
   ensureRuntimePromptLayers(promptStore);
+  ensureSystemLanguagePromptLayer(promptStore);
+  installSystemLanguagePromptLayerSource(promptStore);
 
   target.promptComposer = new PromptComposer(
     promptStore,

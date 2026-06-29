@@ -18,6 +18,7 @@ import { PromptManager } from './prompt-manager.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { wrapPromptSectionXml } from './prompt-sections.js';
+import { SYSTEM_LANGUAGE_LAYER_TYPE } from './system-language.js';
 
 // Keep only identity/foundation + operator policy in the frozen prompt prefix.
 // Channel/task/runtime overlays remain dynamic so per-turn runtime context stays later.
@@ -384,6 +385,10 @@ export class PromptComposer {
   }
 
   private matchesContext(layer: PromptLayer, ctx?: ComposeContext): boolean {
+    if (layer.type === SYSTEM_LANGUAGE_LAYER_TYPE) {
+      return false;
+    }
+
     if (layer.type === 'base' || layer.type === 'operator' || layer.type === 'runtime') {
       return true;
     }

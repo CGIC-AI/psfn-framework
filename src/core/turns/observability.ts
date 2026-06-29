@@ -8,6 +8,7 @@ import {
   cloneEpisodicRetrievalChain,
   type EpisodicRetrievalChain,
 } from '../../faculties/memory/retrieval/episodic.js';
+import type { SessionContinuityArtifact } from '../session/continuity-artifacts.js';
 import type { SessionEntry } from '../session/types.js';
 import type {
   FatigueEnforcementMetadata,
@@ -50,6 +51,7 @@ export interface TurnSessionContextSnapshotRecord {
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];
+  wakeReturnArtifacts?: SessionContinuityArtifact[];
   orientation?: TurnOrientationSnapshot;
   intentionAppraisalArtifactCount?: number;
   compactionPromptText?: string;

@@ -13,6 +13,7 @@ import {
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { PromptRegistryStatePort } from '../../identity/prompt-state-port.js';
 import { wrapCompactionSummaryAsUntrustedContext } from '../../identity/prompt-composer.js';
+import { renderSystemLanguageTemplate } from '../../identity/system-language.js';
 import {
   orderPromptRuntimeSystemPromptSections,
   type PromptRuntimeSystemPromptBlockId,
@@ -354,7 +355,7 @@ function buildContinuityAnchorLines(params: {
     ?? orientation.continuitySummary
     ?? '';
   const pendingIntent = latestWakeReturn?.nextAnchor
-    ?? 'No urgent follow-up or pending intent found in available continuity context.';
+    ?? renderSystemLanguageTemplate('wake_return.default_pending_intent');
   const pendingState = latestWakeReturn?.nextAnchor ? 'pending_intent_available' : 'no_urgent_context';
   const timeTexture = orientation.timeTexture
     ?? classifyIdleGapTexture({
@@ -495,15 +496,21 @@ export function buildOrientationNoteTelemetry(params: {
     ?.content;
 
   const noteParts = [
-    '[Welcome back]',
-    `It has been about ${formatIdleGap(idleGapMs)} since this channel was last active.`,
+    renderSystemLanguageTemplate('wake_return.header'),
+    renderSystemLanguageTemplate('wake_return.elapsed', {
+      elapsed: formatIdleGap(idleGapMs),
+    }),
     `Time texture: ${timeTexture.label}; reconnection warmth signal is ${timeTexture.reconnectionWarmth}.`,
   ];
   if (sessionSummary) {
-    noteParts.push(`Last time here: ${sessionSummary}.`);
+    noteParts.push(renderSystemLanguageTemplate('wake_return.last_time_here', {
+      summary: sessionSummary,
+    }));
   }
   if (continuitySummary) {
-    noteParts.push(`Recent continuity: ${continuitySummary}.`);
+    noteParts.push(renderSystemLanguageTemplate('wake_return.recent_continuity', {
+      summary: continuitySummary,
+    }));
   }
 
   return {
@@ -689,7 +696,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   let compactionSummarySectionText = '';
   if (compactionSummaryTexts.length > 0) {
     const summaryBlock = compactionSummaryTexts.join('\n\n');
-    compactionSummarySectionText = '[Previous conversation summary]\n' + summaryBlock;
+    compactionSummarySectionText = `${renderSystemLanguageTemplate('compaction.header')}\n${summaryBlock}`;
   }
 
   let focusKnowledgeSectionText = '';

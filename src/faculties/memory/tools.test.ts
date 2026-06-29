@@ -111,6 +111,7 @@ function makeEpisodicTimelineStore(
   arcs: EpisodeArc[] = [],
 ): EpisodicTimelineStore & {
   searchByTime: ReturnType<typeof vi.fn>;
+  listEpisodes: ReturnType<typeof vi.fn>;
   getEpisode: ReturnType<typeof vi.fn>;
   listEpisodeArcsForEpisode: ReturnType<typeof vi.fn>;
 } {
@@ -128,6 +129,15 @@ function makeEpisodicTimelineStore(
       const offset = options.offset ?? 0;
       const limit = options.limit ?? filtered.length;
       return filtered.slice(offset, offset + limit);
+    }),
+    listEpisodes: vi.fn((options: { limit?: number; offset?: number } = {}) => {
+      const sorted = [...episodes].sort((left, right) => (
+        left.startedAt.localeCompare(right.startedAt)
+        || left.id.localeCompare(right.id)
+      ));
+      const offset = options.offset ?? 0;
+      const limit = options.limit ?? sorted.length;
+      return sorted.slice(offset, offset + limit);
     }),
     getEpisode: vi.fn((id: string) => episodes.find(episode => episode.id === id)),
     listEpisodeArcsForEpisode: vi.fn((id: string) => arcs.filter(arc => (

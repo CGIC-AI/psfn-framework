@@ -1,5 +1,6 @@
 import type { EmotionalSnapshot } from '../../../core/contacts/store/emotional-baseline.js';
 import { wrapPromptSectionXml } from '../../../core/identity/prompt-sections.js';
+import { renderSystemLanguageTemplate } from '../../../core/identity/system-language.js';
 import { isBoundaryMemory } from '../boundary-log.js';
 import type {
   ContactProfileArtifact,
@@ -138,11 +139,18 @@ function renderWithheldSummary(summary: MemoryWithheldSummary): string {
   return wrapPromptSectionXml({
     id: 'memory_context_note',
     content: [
-      'Memory context note:',
-      `- ${summary.totalCount} candidate ${plural} kept out of this turn's memory context.`,
-      ...(detailLine ? [`- Broad trust/privacy reasons: ${detailLine}.`] : []),
-      ...(relevanceLine ? [`- Coarse relevance bands: ${relevanceLine}.`] : []),
-      '- Safe next actions: do not infer or disclose missing details; ask for consent, clarification, or a more private/higher-trust channel if needed.',
+      renderSystemLanguageTemplate('memory_context_note.header'),
+      renderSystemLanguageTemplate('memory_context_note.withheld_count', {
+        total_count: summary.totalCount,
+        memory_noun: plural,
+      }),
+      ...(detailLine
+        ? [renderSystemLanguageTemplate('memory_context_note.reasons', { detail_line: detailLine })]
+        : []),
+      ...(relevanceLine
+        ? [renderSystemLanguageTemplate('memory_context_note.relevance', { relevance_line: relevanceLine })]
+        : []),
+      renderSystemLanguageTemplate('memory_context_note.safe_next_actions'),
     ].join('\n'),
   });
 }

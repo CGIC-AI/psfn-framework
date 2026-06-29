@@ -17,6 +17,7 @@ import {
   tagMessageClass,
   type MessageClassMetadata,
 } from './message-classes.js';
+import { renderSystemLanguageTemplate } from '../identity/system-language.js';
 
 // ── Custom message types ──
 
@@ -182,7 +183,7 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
     if (isCompactionMessage(msg)) {
       result.push({
         role: 'user',
-        content: `[Previous conversation summary]\n${msg.summary}`,
+        content: `${renderSystemLanguageTemplate('compaction.header')}\n${msg.summary}`,
         timestamp: msg.timestamp,
         messageClass: MESSAGE_CLASSES.compaction,
       } satisfies ClassifiedUserMessage);

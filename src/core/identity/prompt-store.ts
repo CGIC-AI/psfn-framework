@@ -30,6 +30,10 @@ import {
   CANONICAL_CHARACTER_FOUNDATION_NAME,
   isCanonicalCharacterFoundationLayer,
 } from './canonical-foundation.js';
+import {
+  SYSTEM_LANGUAGE_LAYER_TYPE,
+  validateSystemLanguageLayerContent,
+} from './system-language.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -100,6 +104,15 @@ function validateStoredPromptLayer(layer: unknown, index: number): PromptLayer {
   }
   if (typeof candidate.content !== 'string') {
     throw new Error(`layers[${String(index)}].content must be a string`);
+  }
+  if (candidate.type === SYSTEM_LANGUAGE_LAYER_TYPE) {
+    try {
+      validateSystemLanguageLayerContent(candidate.content);
+    } catch (error) {
+      throw new Error(
+        `layers[${String(index)}].content is invalid for system_language: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
   if (typeof candidate.enabled !== 'boolean') {
     throw new Error(`layers[${String(index)}].enabled must be a boolean`);
@@ -421,6 +434,10 @@ export class PromptLayerStore {
     taskKind?: string;
     updatedBy?: string;
   }): PromptLayer {
+    if (params.type === SYSTEM_LANGUAGE_LAYER_TYPE) {
+      validateSystemLanguageLayerContent(params.content);
+    }
+
     const identifier = normalizePromptIdentifier(params.identifier);
     const role = validatePromptRole(params.role);
     const promptOrder = validatePromptOrder(params.promptOrder);
@@ -526,6 +543,9 @@ export class PromptLayerStore {
     const hasAnyUpdate = hasName || hasContent || hasPriority || hasIdentifier || hasRole || hasPromptOrder;
     if (!hasAnyUpdate) {
       throw new Error('No prompt update fields provided');
+    }
+    if (layer.type === SYSTEM_LANGUAGE_LAYER_TYPE && hasContent) {
+      validateSystemLanguageLayerContent(nextContent);
     }
     const nextChecksum = contentChecksum(nextContent);
 

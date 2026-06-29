@@ -77,6 +77,7 @@
   const LAYER_BADGE: Record<string, { bg: string; text: string; label: string }> = {
     base:     { bg: 'bg-[#8B6914]', text: 'text-white', label: 'BASE' },
     operator: { bg: 'bg-[#4A7C59]', text: 'text-white', label: 'OPERATOR' },
+    system_language: { bg: 'bg-[#6B6F33]', text: 'text-white', label: 'LANGUAGE' },
     runtime:  { bg: 'bg-[#4A5C8B]', text: 'text-white', label: 'RUNTIME' },
     channel:  { bg: 'bg-[#6C5B7B]', text: 'text-white', label: 'CHANNEL' },
     task:     { bg: 'bg-[#C44569]', text: 'text-white', label: 'TASK' },
@@ -84,9 +85,10 @@
   const LAYER_TYPE_ORDER: Record<string, number> = {
     base: 0,
     operator: 1,
-    runtime: 2,
-    channel: 3,
-    task: 4,
+    system_language: 2,
+    runtime: 3,
+    channel: 4,
+    task: 5,
   };
 
   // ── State ──

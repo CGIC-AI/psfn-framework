@@ -12,7 +12,7 @@ import type { ToolWiringMeta } from './tool-wiring-validator.js';
 
 export type RuntimeToolScope = 'core' | 'extended';
 
-export const TOOLSET_CONTROL_TOOL_NAMES = ['tool_search', 'toolset'] as const;
+const TOOLSET_CONTROL_TOOL_NAMES = ['tool_search', 'toolset'] as const;
 
 export function isToolsetControlToolName(name: string): boolean {
   return TOOLSET_CONTROL_TOOL_NAMES.includes(name as typeof TOOLSET_CONTROL_TOOL_NAMES[number]);
@@ -125,7 +125,7 @@ function resolveBundleMembership(
   return uniqueStrings(bundles);
 }
 
-export function buildRuntimeToolSchemaDescription(
+function buildRuntimeToolSchemaDescription(
   tool: AgentTool<any>,
   scope: RuntimeToolScope,
 ): RuntimeToolSchemaDescription {

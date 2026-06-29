@@ -27,7 +27,7 @@ function identityLinkKey(channel: string, userId: string): string {
   return `${channel.trim().toLowerCase()}:${userId.trim().toLowerCase()}`;
 }
 
-export function getContactIdentityLinks(contact: Contact): ContactIdentityLinkView[] {
+function getContactIdentityLinks(contact: Contact): ContactIdentityLinkView[] {
   const links: ContactIdentityLinkView[] = [];
   const seen = new Set<string>();
 
@@ -61,7 +61,7 @@ export function getContactIdentityLinks(contact: Contact): ContactIdentityLinkVi
   return links;
 }
 
-export function getPersistedConversationChannels(contact: Contact): ContactConversationChannelView[] {
+function getPersistedConversationChannels(contact: Contact): ContactConversationChannelView[] {
   if (!Array.isArray(contact.conversationChannels) || contact.conversationChannels.length === 0) {
     return [];
   }
@@ -137,7 +137,7 @@ function toConversationChannelView(options: {
   };
 }
 
-export function splitSessionChannelId(channelId: string): { channel: string; channelId: string } {
+function splitSessionChannelId(channelId: string): { channel: string; channelId: string } {
   const separatorIndex = channelId.indexOf(':');
   if (separatorIndex <= 0 || separatorIndex >= channelId.length - 1) {
     return { channel: 'session', channelId };
@@ -149,14 +149,14 @@ export function splitSessionChannelId(channelId: string): { channel: string; cha
   };
 }
 
-export function normalizeSessionChannelType(channelId: string): string {
+function normalizeSessionChannelType(channelId: string): string {
   const parsed = splitSessionChannelId(channelId);
   if (parsed.channel !== 'session') return parsed.channel;
   if (DISCORD_CHANNEL_ID_PATTERN.test(channelId)) return 'discord';
   return parsed.channel;
 }
 
-export function sessionMatchesConversationChannel(
+function sessionMatchesConversationChannel(
   sessionChannelId: string,
   conversationChannel: ContactConversationChannelView,
 ): boolean {
@@ -168,7 +168,7 @@ export function sessionMatchesConversationChannel(
     || normalizedSession === `${normalizedChannel}:${normalizedChannelId}`;
 }
 
-export function sessionMatchesIdentity(
+function sessionMatchesIdentity(
   sessionChannelId: string,
   identity: ContactIdentityLinkView,
 ): boolean {

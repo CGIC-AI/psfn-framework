@@ -2,8 +2,8 @@ import BetterSqlite3 from 'better-sqlite3'
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
-export const REPOSITORY_BACKUP_RESTORE_FIXTURE_ROOT = resolve('workspace/verify-backup-restore-fixture')
-export const REPOSITORY_BACKUP_RESTORE_FIXTURE_SNAPSHOT = '20260227T101112123Z'
+const REPOSITORY_BACKUP_RESTORE_FIXTURE_ROOT = resolve('workspace/verify-backup-restore-fixture')
+const REPOSITORY_BACKUP_RESTORE_FIXTURE_SNAPSHOT = '20260227T101112123Z'
 
 const FIXTURE_DATABASE_FILE_NAME = 'companion.sqlite'
 const FIXTURE_SESSION_FILE_NAME = 'channel-a.jsonl'

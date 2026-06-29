@@ -28,6 +28,11 @@ import type { TurnExecutionObservability } from './observability.js';
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 
+interface PostTurnBackgroundTask {
+  name: string;
+  promise: Promise<unknown>;
+}
+
 export async function collectTurnResponseAttachments(input: {
   runtime: TurnExecutionRuntime;
   turnMessages: AgentMessage[];
@@ -36,6 +41,26 @@ export async function collectTurnResponseAttachments(input: {
     turnMessages: input.turnMessages,
     companionDataDir: resolveConfiguredCompanionDataDir(input.runtime.config),
   });
+}
+
+function createPostTurnBackgroundTask(input: {
+  name: string;
+  run: () => Promise<unknown> | unknown;
+  onError: (error: unknown) => void;
+}): PostTurnBackgroundTask {
+  let promise: Promise<unknown>;
+  try {
+    promise = Promise.resolve(input.run());
+  } catch (error) {
+    promise = Promise.reject(error);
+  }
+  return {
+    name: input.name,
+    promise: promise.catch((error) => {
+      input.onError(error);
+      throw error;
+    }),
+  };
 }
 
 export async function schedulePostTurnWork(input: {
@@ -242,53 +267,81 @@ export async function schedulePostTurnWork(input: {
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.usage'),
   });
 
-  runtime.memoryExtractor?.maybeExtract(
-    message.channelId,
-    canonicalContactKey,
-    turnId,
-  ).catch(err => {
-    log.error('Memory extraction error', { error: String(err) });
-  });
+  const postTurnBackgroundWork: PostTurnBackgroundTask[] = [];
+  const memoryExtractor = runtime.memoryExtractor;
+  if (memoryExtractor) {
+    postTurnBackgroundWork.push(createPostTurnBackgroundTask({
+      name: 'memory_extraction',
+      run: () => memoryExtractor.maybeExtract(
+        message.channelId,
+        canonicalContactKey,
+        turnId,
+      ),
+      onError: (error) => {
+        log.error('Memory extraction error', { error: String(error) });
+      },
+    }));
+  }
 
-  void runtime.runIntentionPostTurnHooks({
-    message,
-    response,
-    turnMessages,
-    turnId,
-    completedAt,
-    ...(canonicalContactKey ? { canonicalContactKey } : {}),
-  }).catch((error) => {
-    log.error('Intention post-turn hook dispatch error', {
+  postTurnBackgroundWork.push(createPostTurnBackgroundTask({
+    name: 'intention_post_turn_hooks',
+    run: () => runtime.runIntentionPostTurnHooks({
+      message,
+      response,
+      turnMessages,
+      turnId,
+      completedAt,
+      ...(canonicalContactKey ? { canonicalContactKey } : {}),
+    }),
+    onError: (error) => {
+      log.error('Intention post-turn hook dispatch error', {
+        channelId: message.channelId,
+        error: toErrorMessage(error),
+      });
+    },
+  }));
+
+  postTurnBackgroundWork.push(createPostTurnBackgroundTask({
+    name: 'emotion_appraisal',
+    run: () => runtime.emotionSelfModelRuntime.triggerEmotionAppraisal({
+      sessionChannelId: emotionSessionId,
+      turnId,
+      internalState,
+      templateVariables,
+    }),
+    onError: (error) => {
+      log.error('Emotion appraisal error', {
+        channelId: message.channelId,
+        error: toErrorMessage(error),
+      });
+    },
+  }));
+
+  postTurnBackgroundWork.push(createPostTurnBackgroundTask({
+    name: 'auto_compaction',
+    run: () => runtime.sessionManager.scheduleAutoCompactionBetweenTurns({
       channelId: message.channelId,
-      error: toErrorMessage(error),
-    });
-  });
+      systemPrompt: fullPrompt,
+      memoriesBlock: memoryContextBlock,
+      llmProvider: runtime.llmClient,
+      channelMeta,
+      userId: continuitySubjectKey,
+      compactionPromptText: turnSnapshot.sessionContext?.compactionPromptText,
+      turnBudgetCharacteristics,
+    }),
+    onError: (error) => {
+      log.error('Auto-compaction dispatch error', {
+        channelId: message.channelId,
+        error: toErrorMessage(error),
+      });
+    },
+  }));
 
-  void runtime.emotionSelfModelRuntime.triggerEmotionAppraisal({
-    sessionChannelId: emotionSessionId,
-    turnId,
-    internalState,
-    templateVariables,
-  }).catch((error) => {
-    log.error('Emotion appraisal error', {
-      channelId: message.channelId,
-      error: toErrorMessage(error),
-    });
-  });
-
-  void runtime.sessionManager.scheduleAutoCompactionBetweenTurns({
+  runtime.registerPostTurnBackgroundWork({
     channelId: message.channelId,
-    systemPrompt: fullPrompt,
-    memoriesBlock: memoryContextBlock,
-    llmProvider: runtime.llmClient,
-    channelMeta,
-    userId: continuitySubjectKey,
-    compactionPromptText: turnSnapshot.sessionContext?.compactionPromptText,
-    turnBudgetCharacteristics,
-  }).catch((error) => {
-    log.error('Auto-compaction dispatch error', {
-      channelId: message.channelId,
-      error: toErrorMessage(error),
-    });
+    turnId,
+    requestId,
+    work: postTurnBackgroundWork,
+    correlation: turnCorrelationBase,
   });
 }

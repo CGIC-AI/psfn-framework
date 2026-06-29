@@ -77,6 +77,21 @@ export interface EventMap {
     delayMs?: number;
     error?: string;
   };
+  'agent.post_turn.drain': {
+    channelId: string;
+    phase: 'registered' | 'wait_started' | 'drained' | 'timeout';
+    turnId?: string;
+    requestId?: string;
+    previousChannelId?: string;
+    previousTurnId?: string;
+    previousRequestId?: string;
+    workCount: number;
+    taskNames: string[];
+    waitMs?: number;
+    timeoutMs?: number;
+    failureCount?: number;
+    timestamp: number;
+  } & EventCorrelationFields;
   'context.feedback.telemetry': {
     actionId: string;
     turnId: string;

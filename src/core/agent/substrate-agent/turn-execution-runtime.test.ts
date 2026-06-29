@@ -263,8 +263,9 @@ function humanAuthorContext(
 }
 
 async function flushAsyncWork() {
-  await Promise.resolve();
-  await Promise.resolve();
+  for (let index = 0; index < 4; index += 1) {
+    await Promise.resolve();
+  }
 }
 
 describe('handleMessageForTurn presence canonicalization', () => {
@@ -438,6 +439,8 @@ function createRuntime(params: {
   recordAssistantMessage: ReturnType<typeof vi.fn>;
   resolveAuthorContext?: ReturnType<typeof vi.fn>;
   buildTurnBudgetCharacteristics?: ReturnType<typeof vi.fn>;
+  awaitPostTurnDrain?: ReturnType<typeof vi.fn>;
+  registerPostTurnBackgroundWork?: ReturnType<typeof vi.fn>;
   memoryProvider?: TurnExecutionRuntime['memoryProvider'];
   imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
   emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
@@ -525,6 +528,8 @@ function createRuntime(params: {
     emotionSelfModelRuntime,
     observerEvalSidecar: params.observerEvalSidecar ?? null,
     pinDeferredContinuationSessionContext: vi.fn(() => () => undefined),
+    awaitPostTurnDrain: params.awaitPostTurnDrain ?? vi.fn(async () => undefined),
+    registerPostTurnBackgroundWork: params.registerPostTurnBackgroundWork ?? vi.fn(),
     resolveTaskKind: vi.fn(() => undefined),
     buildTurnBudgetCharacteristics: params.buildTurnBudgetCharacteristics ?? vi.fn(() => ({ mode: 'default' })),
     resolveTurnCallType: vi.fn(() => 'chat'),
@@ -1217,6 +1222,54 @@ describe('handleMessageForTurn observer eval sidecar seam', () => {
 });
 
 describe('handleMessageForTurn compaction scheduling', () => {
+  it('awaits the post-turn drain gate before starting pre-turn identity work', async () => {
+    const eventBus = new EventBus();
+    const postTurnDrain = createDeferred<void>();
+    const awaitPostTurnDrain = vi.fn(() => postTurnDrain.promise);
+    const resolveAuthorContext = vi.fn(async () => ({
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      resolvedUserName: 'User',
+      canonicalContactKey: 'contact-1',
+      continuityFallbackKeys: [],
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      awaitPostTurnDrain,
+      resolveAuthorContext,
+    });
+
+    const responsePromise = handleMessageForTurn(runtime, createMessage('msg-post-turn-drain-wait'));
+    await flushAsyncWork();
+
+    expect(awaitPostTurnDrain).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'ch1',
+      requestId: 'msg-post-turn-drain-wait',
+      correlation: expect.objectContaining({
+        channelId: 'ch1',
+        requestId: 'msg-post-turn-drain-wait',
+      }),
+    }));
+    expect(resolveAuthorContext).not.toHaveBeenCalled();
+
+    postTurnDrain.resolve();
+    await expect(responsePromise).resolves.toMatchObject({
+      content: 'assistant reply',
+      channelId: 'ch1',
+    });
+    expect(resolveAuthorContext).toHaveBeenCalledTimes(1);
+  });
+
   it('returns the response without waiting for post-turn compaction and does not pass an llm to buildContext', async () => {
     const eventBus = new EventBus();
     const deferredCompaction = createDeferred<void>();
@@ -1251,6 +1304,16 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(buildContext).toHaveBeenCalledTimes(1);
     expect(buildContext.mock.calls[0][3]).toBeUndefined();
     expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledTimes(1);
+    expect(runtime.registerPostTurnBackgroundWork).toHaveBeenCalledTimes(1);
+    expect(runtime.registerPostTurnBackgroundWork).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'ch1',
+      requestId: 'msg-1',
+      work: expect.arrayContaining([
+        expect.objectContaining({ name: 'intention_post_turn_hooks' }),
+        expect.objectContaining({ name: 'emotion_appraisal' }),
+        expect.objectContaining({ name: 'auto_compaction' }),
+      ]),
+    }));
 
     deferredCompaction.resolve();
     await deferredCompaction.promise;

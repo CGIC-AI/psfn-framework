@@ -94,6 +94,19 @@ export interface TurnExecutionRuntime {
     deferredContinuationId: string | null,
     channelId: string,
   ) => () => void;
+  awaitPostTurnDrain: (input: {
+    channelId: string;
+    turnId: TurnID;
+    requestId: string;
+    correlation: CorrelationMetadata;
+  }) => Promise<void>;
+  registerPostTurnBackgroundWork: (input: {
+    channelId: string;
+    turnId: TurnID;
+    requestId: string;
+    work: readonly Array<{ name: string; promise: Promise<unknown> }>;
+    correlation: CorrelationMetadata;
+  }) => void;
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
   buildTurnBudgetCharacteristics: (
     message: SubstrateMessage,
@@ -478,14 +491,9 @@ export async function handleMessageForTurn(
   runtime: TurnExecutionRuntime,
   message: SubstrateMessage,
 ): Promise<AgentResponse> {
-  const startTime = Date.now();
   const requestId = message.id;
   const turnId = createTurnId();
   const deferredContinuationId = parseDeferredToolHandoffActionId(message.id);
-  const restorePinnedSessionContext = runtime.pinDeferredContinuationSessionContext(
-    deferredContinuationId,
-    message.channelId,
-  );
   const taskKind = runtime.resolveTaskKind(message);
   const turnBudgetCharacteristics = runtime.buildTurnBudgetCharacteristics(message, taskKind);
   const temporalRetrievalMode: 'temporal' | undefined = isTemporalContextBudgetTurn(turnBudgetCharacteristics)
@@ -502,6 +510,17 @@ export async function handleMessageForTurn(
     ...(deferredContinuationId ? { deferredContinuationId } : {}),
   });
   const turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+  await runtime.awaitPostTurnDrain({
+    channelId: message.channelId,
+    turnId,
+    requestId,
+    correlation: turnCorrelationBase,
+  });
+  const startTime = Date.now();
+  const restorePinnedSessionContext = runtime.pinDeferredContinuationSessionContext(
+    deferredContinuationId,
+    message.channelId,
+  );
   const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
   const deferSessionEntryPersistence = hasVisionTurnInputs(message);
   const observability = createTurnExecutionObservability({

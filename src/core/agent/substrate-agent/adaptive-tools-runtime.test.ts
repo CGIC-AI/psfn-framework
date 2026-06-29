@@ -338,20 +338,19 @@ describe('createToolsetTool', () => {
     const grantedTokens = new Set(['identity.read']);
     const runtimeState = createRuntimeState({
       coreTools: ['toolset'],
-      extendedTools: ['media'],
+      extendedTools: ['notify'],
       activeTools: [{ toolName: 'toolset', source: 'core' }],
     });
     const beforeState = JSON.stringify(runtimeState);
     const toolset = createBaseToolset({
       getCoreTools: () => [],
       getExtendedTools: () => [{
-        name: 'media',
-        description: 'Generate, edit, or analyze media and images.',
+        name: 'notify',
+        description: 'Notify the operator through an external channel.',
         parameters: Type.Object({
           action: Type.Union([
-            Type.Literal('generate'),
-            Type.Literal('edit'),
-            Type.Literal('analyze'),
+            Type.Literal('brief'),
+            Type.Literal('send'),
           ]),
         }) as any,
         execute: vi.fn(),
@@ -372,15 +371,14 @@ describe('createToolsetTool', () => {
 
     const result = await (toolset as any).execute('toolset-suggest-gated', {
       action: 'suggest',
-      intent: 'generate an image for the journal',
+      intent: 'notify the operator',
     });
     const payload = JSON.parse(result.content?.[0]?.text as string);
 
     expect(payload.recommendations[0]).toMatchObject({
-      toolName: 'media',
-      action: 'generate',
+      toolName: 'notify',
       availabilityStatus: 'capability_denied',
-      missingTokens: ['external.web'],
+      missingTokens: ['external.web', 'external.discord', 'external.email'],
     });
     expect(payload.recommendations[0].availabilityNote).toContain('missing: external.web');
     expect(activateExtendedTools).not.toHaveBeenCalled();
@@ -449,12 +447,12 @@ describe('createToolsetTool', () => {
       scope: 'extended',
       schema: {
         actions: [
-          { name: 'generate', requiredCapabilities: ['external.web'] },
-          { name: 'edit', requiredCapabilities: ['external.web'] },
-          { name: 'analyze', requiredCapabilities: ['external.web'] },
+          { name: 'generate', requiredCapabilities: [] },
+          { name: 'edit', requiredCapabilities: [] },
+          { name: 'analyze', requiredCapabilities: [] },
         ],
         requiredParameters: ['action'],
-        requiredCapabilities: ['external.web'],
+        requiredCapabilities: [],
         reversibility: 'irreversible',
         bundleMembership: expect.arrayContaining(['extended', 'toolset.managed', 'domain:media']),
       },

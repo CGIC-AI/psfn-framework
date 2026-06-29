@@ -394,8 +394,8 @@ describe('Prompt Layer Tools', () => {
       expect(store.getById(layer.id)?.content).toBe('original');
     });
 
-    it('rejects canonical Character Foundation updates in apprentice and autonomous tiers', async () => {
-      for (const tier of ['apprentice', 'autonomous'] as const) {
+    it('rejects canonical Character Foundation updates in autonomous tier', async () => {
+      for (const tier of ['autonomous'] as const) {
         const layer = createCanonicalFoundationLayer();
         const tool = gateToolWithCapabilities(
           createPromptLayerUpdateTool(store),
@@ -413,8 +413,8 @@ describe('Prompt Layer Tools', () => {
       }
     });
 
-    it('queues non-foundation base layer updates in apprentice and autonomous tiers', async () => {
-      for (const tier of ['apprentice', 'autonomous'] as const) {
+    it('queues non-foundation base layer updates in autonomous tier', async () => {
+      for (const tier of ['autonomous'] as const) {
         const queue = new ConfirmationQueue({ idFactory: () => `base-${tier}-1` });
         const layer = createNonFoundationBaseLayer('Character Foundation', `alternate-${tier}`);
         const tool = gateToolWithCapabilities(
@@ -518,14 +518,14 @@ describe('Prompt Layer Tools', () => {
         previousContent: layer.content,
         nextContent: 'staged-change',
         requestedBy: 'agent',
-        tier: 'apprentice',
+        tier: 'autonomous',
       });
       const tool = gateToolWithCapabilities(
         createPromptLayerUpdateTool(store, {
           identityCoolingOff: manager,
-          getCapabilityTier: () => 'apprentice',
+          getCapabilityTier: () => 'autonomous',
         }),
-        () => accessForTier('apprentice'),
+        () => accessForTier('autonomous'),
       );
 
       now = 6_100;
@@ -551,14 +551,14 @@ describe('Prompt Layer Tools', () => {
         previousContent: layer.content,
         nextContent: 'staged-change',
         requestedBy: 'agent',
-        tier: 'apprentice',
+        tier: 'autonomous',
       });
       const tool = gateToolWithCapabilities(
         createPromptLayerUpdateTool(store, {
           identityCoolingOff: manager,
-          getCapabilityTier: () => 'apprentice',
+          getCapabilityTier: () => 'autonomous',
         }),
-        () => accessForTier('apprentice'),
+        () => accessForTier('autonomous'),
       );
 
       const cancelled = await tool.execute('cancel', {
@@ -584,8 +584,8 @@ describe('Prompt Layer Tools', () => {
       expect(store.getById(layer.id)?.content).toBe('original');
     });
 
-    it('queues operator layer updates in apprentice and autonomous tiers', async () => {
-      for (const tier of ['apprentice', 'autonomous'] as const) {
+    it('queues operator layer updates in autonomous tier', async () => {
+      for (const tier of ['autonomous'] as const) {
         const queue = new ConfirmationQueue({ idFactory: () => `operator-${tier}-1` });
         const layer = store.create({ type: 'operator', name: `Operator-${tier}`, content: 'original' });
         const tool = gateToolWithCapabilities(
@@ -717,16 +717,16 @@ describe('Prompt Layer Tools', () => {
       expect(history.at(-1)?.reason).toBe('Revert runtime prompt to known good');
     });
 
-    it('queues base rollbacks for confirmation in apprentice tier', async () => {
+    it('queues base rollbacks for confirmation in autonomous tier', async () => {
       const queue = new ConfirmationQueue({ idFactory: () => 'rollback-proposal-1' });
-      const layer = createNonFoundationBaseLayer('Character Foundation', 'rollback-apprentice');
+      const layer = createNonFoundationBaseLayer('Character Foundation', 'rollback-autonomous');
       store.update(layer.id, 'base-v2', 'agent', {}, 'base update');
       const tool = gateToolWithCapabilities(
         createPromptLayerRollbackTool(store, {
           confirmationQueue: queue,
-          getCapabilityTier: () => 'apprentice',
+          getCapabilityTier: () => 'autonomous',
         }),
-        () => accessForTier('apprentice'),
+        () => accessForTier('autonomous'),
       );
 
       const queued = await tool.execute('rollback-queue', {
@@ -760,8 +760,8 @@ describe('Prompt Layer Tools', () => {
       expect(store.getById(layer.id)?.enabled).toBe(true);
     });
 
-    it('rejects canonical Character Foundation toggles in apprentice and autonomous tiers', async () => {
-      for (const tier of ['apprentice', 'autonomous'] as const) {
+    it('rejects canonical Character Foundation toggles in autonomous tier', async () => {
+      for (const tier of ['autonomous'] as const) {
         createNonFoundationBaseLayer('Fallback Base', `fallback-${tier}`);
         const layer = createCanonicalFoundationLayer();
         const tool = gateToolWithCapabilities(
@@ -777,8 +777,8 @@ describe('Prompt Layer Tools', () => {
       }
     });
 
-    it('queues non-foundation base toggles in apprentice and autonomous tiers', async () => {
-      for (const tier of ['apprentice', 'autonomous'] as const) {
+    it('queues non-foundation base toggles in autonomous tier', async () => {
+      for (const tier of ['autonomous'] as const) {
         const queue = new ConfirmationQueue({ idFactory: () => `toggle-base-${tier}-1` });
         const baseA = createNonFoundationBaseLayer('Character Foundation', `main-clone-${tier}`);
         createNonFoundationBaseLayer(`Base-B-${tier}`, `support-${tier}`);
@@ -817,8 +817,8 @@ describe('Prompt Layer Tools', () => {
       expect(store.getById(layer.id)?.enabled).toBe(true);
     });
 
-    it('queues operator toggles in apprentice and autonomous tiers', async () => {
-      for (const tier of ['apprentice', 'autonomous'] as const) {
+    it('queues operator toggles in autonomous tier', async () => {
+      for (const tier of ['autonomous'] as const) {
         const queue = new ConfirmationQueue({ idFactory: () => `toggle-operator-${tier}-1` });
         const layer = store.create({ type: 'operator', name: `Operator-${tier}`, content: 'policy' });
         const tool = gateToolWithCapabilities(

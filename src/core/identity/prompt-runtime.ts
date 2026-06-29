@@ -313,7 +313,7 @@ const TOOLING_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   createPromptRuntimeMacroHint('tooling', '{{runtime_extended_tools_activatable_count}}', 'Count of extended tools that can be activated immediately.', '1'),
   createPromptRuntimeMacroHint('tooling', '{{runtime_extended_tools_blocked_count}}', 'Count of extended tools blocked by the current capability tier.', '1'),
   createPromptRuntimeMacroHint('tooling', '{{runtime_extended_tool_names}}', 'Comma-joined extended tool names in registered order.', 'web, notify, background_probe'),
-  createPromptRuntimeMacroHint('tooling', '{{runtime_extended_tool_directory_lines}}', 'Extended tool directory lines without any extra prose preface.', '- web: Fetch a web page (blocked by current tier: external.web)'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_extended_tool_directory_lines}}', 'Extended tool directory lines without any extra prose preface.', '- web: Fetch a web page (use toolset action="activate")'),
 ];
 
 export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [

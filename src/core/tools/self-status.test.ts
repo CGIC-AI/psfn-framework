@@ -341,9 +341,9 @@ describe('createSelfStatusTool', () => {
     expect(catalogEntry.schema).toMatchObject({
       actions: [{
         name: 'snapshot',
-        requiredCapabilities: ['identity.read'],
+        requiredCapabilities: ['internal.read'],
       }],
-      requiredCapabilities: ['identity.read'],
+      requiredCapabilities: ['internal.read'],
       reversibility: 'reversible',
       canonical: {
         domain: 'system',

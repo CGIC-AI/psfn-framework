@@ -19,11 +19,9 @@ const NURSERY_TOKENS: readonly CapabilityToken[] = [
 
 const APPRENTICE_TOKENS: readonly CapabilityToken[] = [
   'identity.read',
+  'internal.read',
   'identity.write.runtime',
-  'identity.write.base',
-  'identity.write.operator',
   'memory.write',
-  'memory.delete',
   'external.discord',
   'external.email',
   'external.web',
@@ -36,6 +34,7 @@ const APPRENTICE_TOKENS: readonly CapabilityToken[] = [
 
 const AUTONOMOUS_TOKENS: readonly CapabilityToken[] = [
   'identity.read',
+  'internal.read',
   'identity.write.runtime',
   'identity.write.base',
   'identity.write.operator',

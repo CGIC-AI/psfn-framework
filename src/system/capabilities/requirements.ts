@@ -25,6 +25,7 @@ type UnifiedToolRequirementResolver = (
 ) => CapabilityRequirement | null;
 
 const IDENTITY_READ_RUNTIME_WRITE = ['identity.read', 'identity.write.runtime'] as const;
+const NO_CAPABILITY_REQUIREMENT = [] as const;
 const IDENTITY_LAYER_WRITE_REQUIREMENTS = [
   'identity.write.runtime',
   'identity.write.base',
@@ -38,7 +39,7 @@ const IDENTITY_LAYER_REQUIREMENTS = [
 ] as const;
 const GIT_READ_WRITE = ['git.read', 'git.write'] as const;
 const ISSUE_REQUIREMENTS = ['issue.read', 'issue.write', 'issue.close'] as const;
-const LIFECYCLE_REQUIREMENTS = ['identity.read', 'lifecycle.restart', 'lifecycle.rebuild'] as const;
+const LIFECYCLE_REQUIREMENTS = ['internal.read', 'lifecycle.restart', 'lifecycle.rebuild'] as const;
 const MEMORY_REQUIREMENTS = ['identity.read', 'memory.write', 'memory.delete'] as const;
 const NOTIFY_REQUIREMENTS = ['external.web', 'external.discord', 'external.email'] as const;
 
@@ -51,7 +52,7 @@ const SYSTEM_RESTART_ACTIONS = new Set(['restart', 'self_restart']);
 const SYSTEM_REBUILD_ACTIONS = new Set(['rebuild', 'self_rebuild']);
 
 function resolveSystemRequirement(action: string | null): CapabilityRequirement {
-  if (action === null || actionIn(action, SYSTEM_READ_ACTIONS)) return 'identity.read';
+  if (action === null || actionIn(action, SYSTEM_READ_ACTIONS)) return 'internal.read';
   if (actionIn(action, SYSTEM_RESTART_ACTIONS)) return 'lifecycle.restart';
   if (actionIn(action, SYSTEM_REBUILD_ACTIONS)) return 'lifecycle.rebuild';
   return LIFECYCLE_REQUIREMENTS;
@@ -246,8 +247,8 @@ const UNIFIED_TOOL_REQUIREMENT_RESOLVERS: Readonly<Partial<Record<string, Unifie
   session: (action) => resolveSessionRequirement(action),
   skill: (action) => resolveSkillRequirement(action),
   subagent: (action) => resolveSubagentRequirement(action),
-  media: () => 'external.web',
-  selfie_create: () => 'external.web',
+  media: () => NO_CAPABILITY_REQUIREMENT,
+  selfie_create: () => NO_CAPABILITY_REQUIREMENT,
   vault: (action) => resolveVaultRequirement(action),
   fs: (action) => resolveFsRequirement(action),
   repo: (action) => resolveRepoRequirement(action),
@@ -291,12 +292,12 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   issue_sync: 'issue.close',
   self_rebuild: 'lifecycle.rebuild',
   self_restart: 'lifecycle.restart',
-  settings_get: 'identity.read',
-  self_status: 'identity.read',
+  settings_get: 'internal.read',
+  self_status: 'internal.read',
   response_control: 'identity.read',
   analysis_workbench: 'repl.execute',
-  web: 'external.web',
-  web_fetch: 'external.web',
+  web: NO_CAPABILITY_REQUIREMENT,
+  web_fetch: NO_CAPABILITY_REQUIREMENT,
   vault_write: 'identity.write.runtime',
   vault_read: 'identity.read',
   vault_search: 'identity.read',

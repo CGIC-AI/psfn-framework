@@ -253,12 +253,12 @@ describe('deriveToolHealthViews', () => {
             },
             schema: {
               actions: [
-                { name: 'generate', requiredCapabilities: ['external.web'] },
-                { name: 'edit', requiredCapabilities: ['external.web'] },
-                { name: 'analyze', requiredCapabilities: ['external.web'] },
+                { name: 'generate', requiredCapabilities: [] },
+                { name: 'edit', requiredCapabilities: [] },
+                { name: 'analyze', requiredCapabilities: [] },
               ],
               requiredParameters: ['action'],
-              requiredCapabilities: ['external.web'],
+              requiredCapabilities: [],
               reversibility: 'irreversible',
               bundleMembership: ['extended', 'toolset.managed', 'domain:media'],
               canonical: {

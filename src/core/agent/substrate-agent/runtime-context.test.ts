@@ -1506,11 +1506,11 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_behavioral_notes_count).toBe('2');
     expect(variables.runtime_skills_count).toBe('2');
     expect(variables.runtime_extended_tools_total).toBe('3');
-    expect(variables.runtime_extended_tools_activatable_count).toBe('0');
-    expect(variables.runtime_extended_tools_blocked_count).toBe('2');
+    expect(variables.runtime_extended_tools_activatable_count).toBe('1');
+    expect(variables.runtime_extended_tools_blocked_count).toBe('1');
     expect(variables.runtime_extended_tool_names).toBe('web, notify, background_probe');
     expect(variables.runtime_extended_tool_directory_lines).toContain(
-      '- web: Fetch a web page (blocked by current tier: external.web)',
+      '- web: Fetch a web page (use toolset action="activate")',
     );
     expect(variables.runtime_extended_tool_directory_lines).toContain(
       '- notify: Notify the operator (blocked by current tier: external.web, external.discord, external.email)',

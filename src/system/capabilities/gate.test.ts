@@ -88,7 +88,7 @@ describe('capability tool gating', () => {
     expect((denied.content[0] as any).text).toContain('lifecycle.restart');
   });
 
-  it('gates unified system read actions by identity.read', async () => {
+  it('gates unified system read actions by internal.read', async () => {
     const system = createTool('system');
     const deniedGated = gateToolWithCapabilities(
       system.tool,
@@ -97,11 +97,11 @@ describe('capability tool gating', () => {
     const denied = await deniedGated.execute('call-system-read-denied', { action: 'read', list: true });
 
     expect(system.executeSpy).not.toHaveBeenCalled();
-    expect((denied.content[0] as any).text).toContain('identity.read');
+    expect((denied.content[0] as any).text).toContain('internal.read');
 
     const allowedGated = gateToolWithCapabilities(
       system.tool,
-      () => accessForTier('custom', ['identity.read']),
+      () => accessForTier('custom', ['internal.read']),
     );
     await allowedGated.execute('call-system-read-allowed', { action: 'read', list: true });
     expect(system.executeSpy).toHaveBeenCalledTimes(1);
@@ -121,7 +121,15 @@ describe('capability tool gating', () => {
       memoryDelete.tool,
       () => accessForTier('apprentice'),
     );
-    await apprenticeGated.execute('call-2', { action: 'restore' });
+    const apprenticeDenied = await apprenticeGated.execute('call-2', { action: 'restore' });
+    expect(memoryDelete.executeSpy).not.toHaveBeenCalled();
+    expect((apprenticeDenied.content[0] as any).text).toContain('memory.delete');
+
+    const autonomousGated = gateToolWithCapabilities(
+      memoryDelete.tool,
+      () => accessForTier('autonomous'),
+    );
+    await autonomousGated.execute('call-3', { action: 'restore' });
     expect(memoryDelete.executeSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -139,7 +147,15 @@ describe('capability tool gating', () => {
       memory.tool,
       () => accessForTier('apprentice'),
     );
-    await apprenticeGated.execute('call-2b', { action: 'redact' });
+    const apprenticeDenied = await apprenticeGated.execute('call-2b', { action: 'redact' });
+    expect(memory.executeSpy).not.toHaveBeenCalled();
+    expect((apprenticeDenied.content[0] as any).text).toContain('memory.delete');
+
+    const autonomousGated = gateToolWithCapabilities(
+      memory.tool,
+      () => accessForTier('autonomous'),
+    );
+    await autonomousGated.execute('call-3b', { action: 'redact' });
     expect(memory.executeSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -197,9 +213,13 @@ describe('capability tool gating', () => {
     expect(resolveToolRequiredCapabilities(createTool('contact').tool, { action: 'lookup', contactId: 'contact-1' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('memory').tool, { action: 'timeline' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('contact').tool, { action: 'note', contactId: 'contact-1' })).toEqual(['identity.write.runtime']);
-    expect(resolveToolRequiredCapabilities(createTool('media').tool, { action: 'generate' })).toEqual(['external.web']);
-    expect(resolveToolRequiredCapabilities(createTool('media').tool, { action: 'analyze' })).toEqual(['external.web']);
-    expect(resolveToolRequiredCapabilities(createTool('selfie_create').tool, {})).toEqual(['external.web']);
+    expect(resolveToolRequiredCapabilities(createTool('media').tool, { action: 'generate' })).toEqual([]);
+    expect(resolveToolRequiredCapabilities(createTool('media').tool, { action: 'analyze' })).toEqual([]);
+    expect(resolveToolRequiredCapabilities(createTool('selfie_create').tool, {})).toEqual([]);
+    expect(resolveToolRequiredCapabilities(createTool('web').tool, { action: 'search' })).toEqual([]);
+    expect(resolveToolRequiredCapabilities(createTool('web_fetch').tool, {})).toEqual([]);
+    expect(resolveToolRequiredCapabilities(createTool('settings_get').tool, {})).toEqual(['internal.read']);
+    expect(resolveToolRequiredCapabilities(createTool('self_status').tool, {})).toEqual(['internal.read']);
     expect(resolveToolRequiredCapabilities(createTool('response_control').tool, { action: 'no_reply' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('subagent').tool, { action: 'status' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('subagent').tool, { action: 'spawn' })).toEqual(['shard.spawn']);
@@ -306,6 +326,45 @@ describe('capability tool gating', () => {
     expect(repoCommit.executeSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('leaves benign media and web tools ungated across tiers', async () => {
+    for (const toolName of ['media', 'selfie_create', 'web', 'web_fetch']) {
+      const tool = createTool(toolName);
+      const gated = gateToolWithCapabilities(
+        tool.tool,
+        () => accessForTier('custom', []),
+      );
+      await gated.execute(`call-${toolName}`, { action: 'generate' });
+      expect(tool.executeSpy, toolName).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('keeps read-only internal state at apprentice tier', async () => {
+    const settings = createTool('settings_get');
+    const nurserySettings = gateToolWithCapabilities(
+      settings.tool,
+      () => accessForTier('nursery'),
+    );
+    const settingsDenied = await nurserySettings.execute('settings-nursery', {});
+    expect(settings.executeSpy).not.toHaveBeenCalled();
+    expect((settingsDenied.content[0] as any).text).toContain('internal.read');
+
+    const apprenticeSettings = gateToolWithCapabilities(
+      settings.tool,
+      () => accessForTier('apprentice'),
+    );
+    await apprenticeSettings.execute('settings-apprentice', {});
+    expect(settings.executeSpy).toHaveBeenCalledTimes(1);
+
+    const selfStatus = createTool('self_status');
+    const nurseryStatus = gateToolWithCapabilities(
+      selfStatus.tool,
+      () => accessForTier('nursery'),
+    );
+    const statusDenied = await nurseryStatus.execute('status-nursery', {});
+    expect(selfStatus.executeSpy).not.toHaveBeenCalled();
+    expect((statusDenied.content[0] as any).text).toContain('internal.read');
+  });
+
   it('enforces custom tier cherry-picked tokens', async () => {
     const promptList = createTool('prompt_layer_list');
     const promptGated = gateToolWithCapabilities(
@@ -346,7 +405,15 @@ describe('capability tool gating', () => {
       annotated,
       () => accessForTier('apprentice'),
     );
-    await apprentice.execute('call-3', { layer: 'base' });
+    const apprenticeDenied = await apprentice.execute('call-3', { layer: 'base' });
+    expect((apprenticeDenied.content[0] as any).text).toContain('identity.write.base');
+    expect(dynamic.executeSpy).toHaveBeenCalledTimes(1);
+
+    const autonomous = gateToolWithCapabilities(
+      annotated,
+      () => accessForTier('autonomous'),
+    );
+    await autonomous.execute('call-4', { layer: 'base' });
     expect(dynamic.executeSpy).toHaveBeenCalledTimes(2);
   });
 

@@ -8,6 +8,7 @@ import {
   resetRunChargeRollingWindowForTests,
   runWithChargeContext,
 } from '../../shared/telemetry/run-charge.js';
+import { resolveToolRequiredCapabilities } from '../../system/capabilities/requirements.js';
 import type { ChargePolicyConfig } from '../../system/config/charge-policy-config.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 
@@ -91,6 +92,22 @@ describe('image tools', () => {
     });
 
     expect(readActions(tool)).toEqual(['generate', 'edit', 'analyze']);
+  });
+
+  it('does not capability-gate benign media and selfie actions', () => {
+    const mediaTool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    });
+    const selfieTool = createSelfieTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    });
+
+    expect(resolveToolRequiredCapabilities(mediaTool, { action: 'generate' })).toEqual([]);
+    expect(resolveToolRequiredCapabilities(mediaTool, { action: 'edit' })).toEqual([]);
+    expect(resolveToolRequiredCapabilities(mediaTool, { action: 'analyze' })).toEqual([]);
+    expect(resolveToolRequiredCapabilities(selfieTool, {})).toEqual([]);
   });
 
   it('returns generated media results plus an in-turn vision review from the unified media tool', async () => {

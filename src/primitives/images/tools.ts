@@ -11,7 +11,6 @@ import { getVisionToolRequestContext } from './request-context.js';
 import { textResultWithError } from '../../core/tools/results.js';
 import { chargeSurface } from '../../shared/telemetry/run-charge.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
-import { withCapabilityRequirement } from '../../system/capabilities/requirements.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import {
   FAL_CREATE_MODELS,
@@ -673,7 +672,7 @@ export function createMediaTool(
     },
   };
 
-  return tagToolWithReversibility(withCapabilityRequirement(tool, 'external.web'), 'irreversible');
+  return tagToolWithReversibility(tool, 'irreversible');
 }
 
 function createImageGenerationTool(

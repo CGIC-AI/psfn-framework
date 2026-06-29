@@ -707,7 +707,7 @@ Rules:
 - reference material belongs in the wiki, not in the emotional memory layer
 - the wiki should be searchable independently of L0-L2
 - the wiki may link to L0/L2 provenance where relevant, but it is architecturally separate
-- Obsidian CLI should be used to read the partner's vault; the companion's own vault is deprecated in favor of this wikiion is not the canonical source of truth.
+- Obsidian CLI should be used to read the partner's vault; the companion's own vault is deprecated in favor of this wiki.
 
 Mirrors and projections must be rebuildable from canonical archive truth.
 

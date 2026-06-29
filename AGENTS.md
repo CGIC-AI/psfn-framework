@@ -259,6 +259,21 @@ Before creating a bead, search for existing work first (`bd search`, scan the op
 
 Break large work into small, quickly-completable parts — but each part still carries the full context above. Small is about scope and verifiability, not about thinness of description.
 
+### Verifying done before closing (read the code, one at a time)
+
+The fastest way to wreck a backlog audit is to close beads by guessing. A grep that returns empty is not evidence the work is unbuilt; a folder that exists is not evidence the feature shipped. Both directions produce false verdicts, and false verdicts cost hours of re-checking.
+
+When deciding whether an open bead is done:
+
+1. **Check commit history first.** `git log --oneline -i --grep="<keyword>"` is the single highest-signal source of truth. If a commit titles the work, it almost certainly landed. Read the commit's `--stat` to see which files it touched.
+2. **Then read the actual source the bead cites.** Open the file, read the cited lines, confirm the feature is implemented — not just that the file exists or that a related symbol appears. A partial implementation is not done.
+3. **One bead at a time.** Do not batch-grep a list of beads and stamp verdicts from the grep output. Batch-grepping is what produces the overcalls and undercalls this project has already paid for. Read each bead's description against the code before closing it or leaving it open.
+4. **Record the evidence in the close reason or notes.** Name the commit hash and the file:line that proves the work shipped. A close without evidence is a guess that someone else has to re-verify.
+5. **When the premise is dead, say so explicitly.** If a bead describes SQLite work on a runtime that is now Postgres-only, do not silently close it as done. Close it as obsolete with the premise named (e.g. "premise dead: SQLite file retired by 3c2.5"), and if a real Postgres-scoped version of the same problem exists, track it as a new bead rather than carrying the stale one.
+6. **Subjective scope cannot be self-verified.** If a bead has no acceptance criteria and asks for a judgement call ("improve discoverability", "revamp IA"), do not close it on your own read. Leave it open and flag it as an operator decision.
+
+The rule is simple: if you have not read the commit and the code for a specific bead, you have not verified it. Do not close it.
+
 ## Validation Expectations
 
 If your change touches code, run the smallest set of quality gates that proves it.

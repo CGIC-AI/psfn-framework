@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { ChannelType } from '../../shared/contracts/runtime.js';
+import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRecord } from '../../shared/utils/types.js';
 
@@ -64,11 +64,7 @@ function normalizePositiveNumber(value: unknown): number | undefined {
 }
 
 function isChannelType(value: unknown): value is ChannelType {
-  return value === 'discord'
-    || value === 'terminal'
-    || value === 'api'
-    || value === 'telegram'
-    || value === 'psfn-amica';
+  return typeof value === 'string' && CHANNEL_TYPES.includes(value as ChannelType);
 }
 
 function normalizeRecord(value: unknown): OutreachOutboxRecord | null {

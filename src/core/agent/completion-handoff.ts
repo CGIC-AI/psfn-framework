@@ -1,116 +1,39 @@
 import { createHash } from 'node:crypto';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
+import {
+  COMPLETION_HANDOFF_METADATA_TYPE,
+  COMPLETION_HANDOFF_SCHEMA_VERSION,
+  type CompletionHandoffBlocker,
+  type CompletionHandoffEmission,
+  type CompletionHandoffInput,
+  type CompletionHandoffRecord,
+  type CompletionHandoffRef,
+} from '../../shared/contracts/completion-handoff.js';
 import type { SessionEntry } from '../session/types.js';
 import type { SessionManager } from '../session/manager.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
-export const COMPLETION_HANDOFF_SCHEMA_VERSION = 1;
-export const COMPLETION_HANDOFF_METADATA_TYPE = 'completion_handoff';
+export {
+  COMPLETION_HANDOFF_METADATA_TYPE,
+  COMPLETION_HANDOFF_SCHEMA_VERSION,
+} from '../../shared/contracts/completion-handoff.js';
+
+export type {
+  CompletionHandoffBlocker,
+  CompletionHandoffEmission,
+  CompletionHandoffInput,
+  CompletionHandoffOrigin,
+  CompletionHandoffRecord,
+  CompletionHandoffRef,
+  CompletionHandoffSource,
+  CompletionHandoffStatus,
+} from '../../shared/contracts/completion-handoff.js';
 
 const COMPLETION_HANDOFF_AUTHOR_ID = 'system:completion-handoff';
 const COMPLETION_HANDOFF_AUTHOR_NAME = 'CompletionHandoff';
 const MAX_SUMMARY_CHARS = 700;
 const RECENT_HANDOFF_SCAN_LIMIT = 100;
-
-export type CompletionHandoffSource =
-  | 'subagent'
-  | 'shard'
-  | 'post_turn_action'
-  | 'background_continuation'
-  | 'scheduled_loop';
-
-export type CompletionHandoffStatus =
-  | 'completed'
-  | 'blocked'
-  | 'failed'
-  | 'cancelled'
-  | 'partial'
-  | 'interrupted';
-
-export interface CompletionHandoffRef {
-  kind: string;
-  ref: string;
-  label?: string;
-  policy?: string;
-}
-
-export interface CompletionHandoffBlocker {
-  reason: string;
-  error?: string;
-  details?: Record<string, unknown>;
-}
-
-export interface CompletionHandoffOrigin {
-  originatingTaskId?: string;
-  originatingBeadId?: string;
-  sourceChannelId?: string;
-  sourceMessageId?: string;
-  requestId?: string;
-  turnId?: string;
-}
-
-export interface CompletionHandoffInput {
-  source: CompletionHandoffSource;
-  taskId: string;
-  taskLabel?: string;
-  subagentId?: string;
-  shardId?: string;
-  status: CompletionHandoffStatus;
-  resultSummary?: string;
-  artifactRefs?: readonly CompletionHandoffRef[];
-  outputRefs?: readonly CompletionHandoffRef[];
-  validationPerformed?: readonly string[];
-  blocker?: CompletionHandoffBlocker;
-  partialResult: boolean;
-  recommendedNextAction: string;
-  origin?: CompletionHandoffOrigin;
-  dedupeKey?: string;
-  createdAt?: number;
-}
-
-export interface CompletionHandoffRecord {
-  schemaVersion: typeof COMPLETION_HANDOFF_SCHEMA_VERSION;
-  handoffId: string;
-  dedupeKey: string;
-  source: CompletionHandoffSource;
-  task: {
-    id: string;
-    label?: string;
-    subagentId?: string;
-    shardId?: string;
-  };
-  origin: CompletionHandoffOrigin;
-  status: CompletionHandoffStatus;
-  result: {
-    summary: string;
-    partial: boolean;
-  };
-  refs: {
-    artifacts: CompletionHandoffRef[];
-    outputs: CompletionHandoffRef[];
-  };
-  validation: {
-    performed: string[];
-  };
-  blocker?: CompletionHandoffBlocker;
-  recommendedNextAction: string;
-  privacy: {
-    visibility: 'internal_companion_context';
-    partnerNotification: 'policy_gated_companion_authored';
-    rawWorkerCompletionForPartner: 'not_allowed';
-  };
-  createdAt: number;
-}
-
-export interface CompletionHandoffEmission {
-  emitted: boolean;
-  handoff: CompletionHandoffRecord;
-  targetChannelId?: string;
-  sessionEntryId?: number | null;
-  duplicate?: boolean;
-  error?: string;
-}
 
 interface SessionStoreHandoffSink {
   getRecent(channelId: string, limit: number): SessionEntry[];

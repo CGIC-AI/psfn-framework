@@ -14,7 +14,7 @@ import type {
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolSnapshotTelemetry,
 } from '../core/agent/adaptive-tools-telemetry.js';
-import type { CompletionHandoffRecord } from '../core/agent/completion-handoff.js';
+import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');

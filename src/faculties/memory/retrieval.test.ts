@@ -2787,7 +2787,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     tokenTestUtils.resetTokenizerState();
   });
 
-  it('uses batch-evaluate-and-compose reranking when compositional retrieval policy allows it', async () => {
+  it('uses deterministic metadata reranking when compositional retrieval policy allows it', async () => {
     const memories = [
       makeMemory({ id: 'mem-alpha', text: 'Alpha baseline memory', similarity: 0.92, importance: 0.8 }),
       makeMemory({ id: 'mem-bravo', text: 'Bravo directly answers the question', similarity: 0.86, importance: 0.8 }),
@@ -2798,32 +2798,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
     const eventBus = makeMockEventBus();
-    const llmProvider = makeMockLLMProvider([
-      {
-        content: `<response>
-<candidate><id>mem-alpha</id><relevance>0.2</relevance></candidate>
-<candidate><id>mem-bravo</id><relevance>0.95</relevance></candidate>
-<candidate><id>mem-charlie</id><relevance>0.05</relevance></candidate>
-<candidate><id>mem-delta</id><relevance>0.7</relevance></candidate>
-</response>`,
-      },
-      {
-        content: `<response>
-<candidate><id>mem-echo</id><relevance>0.1</relevance></candidate>
-</response>`,
-      },
-      {
-        content: `<response>
-<ranking>
-<id>mem-delta</id>
-<id>mem-bravo</id>
-<id>mem-alpha</id>
-<id>mem-charlie</id>
-<id>mem-echo</id>
-</ranking>
-</response>`,
-      },
-    ]);
+    const llmProvider = makeMockLLMProvider([]);
     const runtimeConfig = makeRuntimeConfig({
       capabilityTier: 'autonomous',
       compositionalPolicy: {
@@ -2842,7 +2817,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
       llmProvider,
     );
 
-    const result = await retriever.retrieve('which memory best answers the question?', 'api:test', 'primary');
+    const result = await retriever.retrieve('which continuity anchor answers the question?', 'api:test', 'primary');
 
     expect(result.indexOf('Delta best continuity anchor')).toBeLessThan(
       result.indexOf('Alpha baseline memory'),
@@ -2850,11 +2825,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     expect(result.indexOf('Bravo directly answers the question')).toBeLessThan(
       result.indexOf('Alpha baseline memory'),
     );
-    expect(llmProvider.complete).toHaveBeenCalledTimes(3);
-    const llmCalls = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls;
-    expect(llmCalls.every((call) => call[1] === 'memory')).toBe(true);
-    expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[0][0].systemPrompt).toContain('Alpha baseline memory');
-    expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls[2][0].systemPrompt).toContain('Delta best continuity anchor');
+    expect(llmProvider.complete).not.toHaveBeenCalled();
     const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls).toHaveLength(1);
     expect(calls[0][1]).toMatchObject({
@@ -2912,7 +2883,7 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     });
   });
 
-  it('fails closed to deterministic retrieval when compositional rerank responses are malformed', async () => {
+  it('does not spend a memory model call when deterministic rerank is available', async () => {
     const memories = [
       makeMemory({ id: 'mem-alpha', text: 'Alpha baseline memory', similarity: 0.98, importance: 0.95 }),
       makeMemory({ id: 'mem-bravo', text: 'Bravo directly answers the question', similarity: 0.86, importance: 0.8 }),
@@ -2950,12 +2921,12 @@ describe('MemoryRetriever compositional retrieval rerank', () => {
     expect(result.indexOf('Bravo directly answers the question')).toBeLessThan(
       result.indexOf('Delta best continuity anchor'),
     );
-    expect(llmProvider.complete).toHaveBeenCalledTimes(1);
+    expect(llmProvider.complete).not.toHaveBeenCalled();
     const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
     expect(calls).toHaveLength(1);
     expect(calls[0][1]).toMatchObject({
       reason: 'ok',
-      compositionalMode: 'malformed_or_failed',
+      compositionalMode: 'applied',
       compositionalCandidateCount: 3,
       compositionalEvaluationBatchCount: 1,
       compositionalFinalistCount: 3,

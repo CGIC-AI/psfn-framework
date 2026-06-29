@@ -90,6 +90,43 @@ describe('entriesToMessages', () => {
     });
   });
 
+  it('renders group user history with speaker labels before consecutive user messages are merged', () => {
+    const messages = entriesToMessages([
+      makeEntry({
+        channelId: 'discord:kube',
+        channelVisibility: 'semi_private',
+        role: 'user',
+        content: 'first group message',
+        authorId: 'vega-id',
+        authorName: 'Vega',
+      }),
+      makeEntry({
+        id: 2,
+        channelId: 'discord:kube',
+        channelVisibility: 'semi_private',
+        role: 'user',
+        content: 'second group message',
+        authorId: 'iku-id',
+        authorName: 'Iku',
+        timestamp: 1_700_000_000_100,
+      }),
+    ], 'semi_private');
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: 'user',
+      content: [
+        'Vega (discord:vega-id): first group message',
+        'Iku (discord:iku-id): second group message',
+      ].join('\n'),
+      provenance: {
+        kind: 'user_direct',
+        sourceSpanCount: 2,
+        sourceEntryIds: [1, 2],
+      },
+    });
+  });
+
   it('reclassifies scheduled heartbeat prompts as system context', () => {
     const messages = entriesToMessages([
       makeEntry({

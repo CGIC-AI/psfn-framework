@@ -35,6 +35,7 @@
     "session:repair:integrity": "tsx src/app/maintenance/session-integrity-repair.ts",
     "migrate:embeddings": "tsx src/app/maintenance/migrate-embeddings.ts",
     "migrate:sqlite-to-postgres-memory": "tsx src/app/maintenance/sqlite-to-postgres-memory-migration.ts",
+    "memory:repair:participant-names": "tsx src/app/maintenance/backfill-memory-participant-names.ts",
     "prefetch:hf-models": "tsx scripts/prefetch-hf-models.ts",
     "migrate:persistence-layout": "tsx src/app/maintenance/migrate-persistence-layout.ts",
     "import-character": "tsx src/app/maintenance/import-character.ts",

@@ -34,6 +34,14 @@ export type ExtractedFactParticipantNameNormalizationResult =
     reason: DurableMemoryTextHygieneRejectionReason;
   };
 
+export interface DurableMemoryParticipantPlaceholderDetection {
+  user: boolean;
+  companion: boolean;
+  userMacros: string[];
+  companionMacros: string[];
+  hasAny: boolean;
+}
+
 export interface ResolveExtractionParticipantNamesParams {
   entries: readonly SessionEntry[];
   canonicalContactName?: string;
@@ -138,6 +146,42 @@ function applyParticipantMacroReplacement(text: string, names: ExtractionPartici
 function containsParticipantMacro(text: string): boolean {
   PARTICIPANT_MACRO_PATTERN.lastIndex = 0;
   return PARTICIPANT_MACRO_PATTERN.test(text);
+}
+
+function patternMatches(text: string, pattern: RegExp): boolean {
+  pattern.lastIndex = 0;
+  return pattern.test(text);
+}
+
+export function detectDurableMemoryParticipantPlaceholders(
+  text: string,
+): DurableMemoryParticipantPlaceholderDetection {
+  const userMacros: string[] = [];
+  const companionMacros: string[] = [];
+
+  PARTICIPANT_MACRO_PATTERN.lastIndex = 0;
+  for (const match of text.matchAll(PARTICIPANT_MACRO_PATTERN)) {
+    const macroName = match[1].toLowerCase();
+    if (macroName === 'user') {
+      userMacros.push(match[0]);
+    } else if (macroName) {
+      companionMacros.push(match[0]);
+    }
+  }
+  PARTICIPANT_MACRO_PATTERN.lastIndex = 0;
+
+  const user = userMacros.length > 0
+    || USER_REPLACEMENTS.some(([pattern]) => patternMatches(text, pattern));
+  const companion = companionMacros.length > 0
+    || COMPANION_REPLACEMENTS.some(([pattern]) => patternMatches(text, pattern));
+
+  return {
+    user,
+    companion,
+    userMacros,
+    companionMacros,
+    hasAny: user || companion,
+  };
 }
 
 function buildFlexibleNamePattern(name: string): string {

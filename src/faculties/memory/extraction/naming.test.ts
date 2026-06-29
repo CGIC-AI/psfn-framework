@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildExtractionNamingGuidance,
+  detectDurableMemoryParticipantPlaceholders,
   normalizeDurableMemoryText,
   normalizeExtractedFactParticipantNames,
   resolveExtractionParticipantNames,
@@ -76,6 +77,30 @@ describe('resolveExtractionParticipantNames', () => {
     expect(names).toEqual({
       userName: 'Alex',
       companionName: 'Lyra',
+    });
+  });
+});
+
+describe('detectDurableMemoryParticipantPlaceholders', () => {
+  it('detects generic labels and raw participant macros without matching hyphenated words', () => {
+    expect(detectDurableMemoryParticipantPlaceholders(
+      "The user trusts {{char}} and companion's patience.",
+    )).toEqual({
+      user: true,
+      companion: true,
+      userMacros: [],
+      companionMacros: ['{{char}}'],
+      hasAny: true,
+    });
+
+    expect(detectDurableMemoryParticipantPlaceholders(
+      'The user-centric interface reduced friction.',
+    )).toEqual({
+      user: false,
+      companion: false,
+      userMacros: [],
+      companionMacros: [],
+      hasAny: false,
     });
   });
 });

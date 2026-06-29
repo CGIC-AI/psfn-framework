@@ -1,7 +1,12 @@
 export interface RuntimeDatetimePromptContextLike {
   assembledPrompt?: string;
   runtimeContext?: string;
+  finalSystemPrompt?: string;
   runtimeContextSections?: ReadonlyArray<{
+    id: string;
+    content?: string;
+  }>;
+  finalSystemSections?: ReadonlyArray<{
     id: string;
     content?: string;
   }>;
@@ -54,6 +59,8 @@ function hasRuntimeDatetimeAnchor(promptContext: RuntimeDatetimePromptContextLik
   if (
     promptContext.assembledPrompt?.includes('<runtime.current_datetime')
     || promptContext.assembledPrompt?.includes('<current_datetime>')
+    || promptContext.finalSystemPrompt?.includes('<runtime.current_datetime')
+    || promptContext.finalSystemPrompt?.includes('<current_datetime>')
   ) {
     return true;
   }
@@ -65,13 +72,19 @@ function hasRuntimeDatetimeAnchor(promptContext: RuntimeDatetimePromptContextLik
     return true;
   }
 
-  return promptContext.runtimeContextSections?.some(section => (
+  return (promptContext.runtimeContextSections?.some(section => (
     section.id === 'current_datetime'
     || section.id === 'runtime_current_datetime'
     || section.id === 'runtime.current_datetime'
     || section.content?.includes('<runtime.current_datetime')
     || section.content?.includes('<current_datetime>')
-  )) ?? false;
+  )) ?? false) || (promptContext.finalSystemSections?.some(section => (
+    section.id === 'current_datetime'
+    || section.id === 'runtime_current_datetime'
+    || section.id === 'runtime.current_datetime'
+    || section.content?.includes('<runtime.current_datetime')
+    || section.content?.includes('<current_datetime>')
+  )) ?? false);
 }
 
 export function detectRuntimeDatetimeContradiction(

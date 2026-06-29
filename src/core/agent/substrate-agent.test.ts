@@ -448,6 +448,35 @@ function makeExtendedProbeTool(name: string): any {
   };
 }
 
+function makeActiveMemorySnapshot(overrides: Record<string, unknown> = {}): any {
+  const contextBlock = typeof overrides.contextBlock === 'string'
+    ? overrides.contextBlock
+    : 'Relevant memories here';
+  const snapshot = {
+    key: 'active-memory:key',
+    subjectKey: 'contact:user-1',
+    channelId: 'test-channel',
+    trustLevel: 'regular',
+    channelVisibility: 'private',
+    visibilityScope: 'non_broadcast',
+    contextBlock,
+    contextChars: contextBlock.length,
+    selectedMemoryIds: ['memory:active-1'],
+    generatedAt: 1_700_000_000_000,
+    lastRefreshStartedAt: 1_700_000_000_000,
+    refreshStatus: 'ready',
+    versionPointer: 'active-memory-v1',
+    ...overrides,
+  };
+
+  return {
+    ...snapshot,
+    contextChars: typeof snapshot.contextChars === 'number'
+      ? snapshot.contextChars
+      : String(snapshot.contextBlock).length,
+  };
+}
+
 // ── Tests ──
 
 describe('SubstrateAgent construction', () => {
@@ -2233,18 +2262,16 @@ describe('SubstrateAgent.handleMessage', () => {
       versionPointer: 'session-snapshot-v1',
     });
 
-    const memorySnapshot = {
-      channelId: 'test-channel',
-      contactEmotionalMemories: [],
-      semanticCandidates: [],
-      lexicalCandidates: [],
-      proactiveCandidates: [],
-      versionPointer: 'memory-snapshot-v1',
-    };
     const mockMemory = {
-      captureTurnMemorySnapshot: vi.fn().mockResolvedValue(memorySnapshot),
-      retrieve: vi.fn().mockResolvedValue(''),
-      retrieveProactiveRecall: vi.fn().mockResolvedValue(''),
+      getActiveMemoryContext: vi.fn().mockReturnValue(makeActiveMemorySnapshot({
+        contextBlock: 'Active memory block',
+        manifestSeed: {
+          reason: 'active_projection',
+          returnedCount: 1,
+          selectedTypes: { semantic: 1 },
+        },
+      })),
+      refreshActiveMemoryContext: vi.fn().mockResolvedValue(null),
     };
 
     const agent = new SubstrateAgent(
@@ -2260,15 +2287,21 @@ describe('SubstrateAgent.handleMessage', () => {
       versionPointer: 'session-snapshot-v1',
       compactionPromptText: 'Compaction prompt snapshot',
     });
-    expect(mockMemory.captureTurnMemorySnapshot).toHaveBeenCalledTimes(1);
+    expect(buildCall[2]).toBe('Active memory block');
+    expect(buildCall[8]).toMatchObject({
+      reason: 'active_projection',
+      returnedCount: 1,
+      selectedTypes: { semantic: 1 },
+    });
+    expect(mockMemory.getActiveMemoryContext).toHaveBeenCalledTimes(1);
+    expect(mockMemory.refreshActiveMemoryContext).toHaveBeenCalledTimes(1);
 
     const record = (sessionManager.recordTurn as any).mock.calls[0][0];
     expect(record.versionPointers).toMatchObject({
       promptStack: expect.any(String),
-      memoryState: 'memory-snapshot-v1',
       sessionState: 'session-snapshot-v1',
     });
-    expect(record.internalStateSnapshotRef).toContain('memory:memory-snapshot-v1');
+    expect(record.internalStateSnapshotRef).toContain('memory:none');
     expect(record.internalStateSnapshotRef).toContain('session:session-snapshot-v1');
     expect(snapshotPayload).toMatchObject({
       turnId: record.turnId,
@@ -2279,9 +2312,6 @@ describe('SubstrateAgent.handleMessage', () => {
         turnId: record.turnId,
         requestId: 'msg-snapshot-record',
         channelId: 'test-channel',
-        memory: {
-          versionPointer: 'memory-snapshot-v1',
-        },
         sessionContext: {
           versionPointer: 'session-snapshot-v1',
           compactionPromptText: 'Compaction prompt snapshot',
@@ -2363,43 +2393,44 @@ describe('SubstrateAgent.handleMessage', () => {
     );
   });
 
-  it('retrieves memories when memoryProvider is set', async () => {
+  it('uses active memory context when memoryProvider is set', async () => {
     const config = makeConfig();
-    const mockMemory: MemoryProvider = {
-      retrieve: vi.fn<any>().mockResolvedValue('Relevant memories here'),
+    const mockMemory = {
+      getActiveMemoryContext: vi.fn().mockReturnValue(makeActiveMemorySnapshot({
+        contextBlock: 'Relevant memories here',
+      })),
+      refreshActiveMemoryContext: vi.fn().mockResolvedValue(null),
     };
 
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
     );
-    agent.memoryProvider = mockMemory;
+    agent.memoryProvider = mockMemory as unknown as MemoryProvider;
 
     await agent.handleMessage(makeMessage());
 
-    expect(mockMemory.retrieve).toHaveBeenCalledWith(
-      TEST_USER_GREETING,
-      'test-channel',
-      'regular',
-      {},
-      undefined,
-      undefined,
-      expect.objectContaining({
+    expect(mockMemory.getActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+      contextText: TEST_USER_GREETING,
+      channelId: 'test-channel',
+      trustLevel: 'regular',
+      channelMeta: {},
+      turnBudgetCharacteristics: expect.objectContaining({
         channelId: 'test-channel',
         channelType: 'terminal',
-        isDirectMessage: undefined,
         messageText: TEST_USER_GREETING,
         modelSelection: {
           purpose: 'chat',
         },
       }),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-    );
+    }));
+    expect(mockMemory.refreshActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+      contextText: TEST_USER_GREETING,
+      channelId: 'test-channel',
+      trustLevel: 'regular',
+    }));
   });
 
-  it('enriches memory retrieval with recent same-session context', async () => {
+  it('enriches active memory refresh with recent same-session context', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager() as any;
     sessionManager.captureTurnContextSnapshot = vi.fn().mockReturnValue({
@@ -2457,18 +2488,11 @@ describe('SubstrateAgent.handleMessage', () => {
       compactionPromptText: 'Compaction prompt snapshot',
       versionPointer: 'session-context-enriched',
     });
-    const memorySnapshot = {
-      channelId: 'test-channel',
-      contactEmotionalMemories: [],
-      semanticCandidates: [],
-      lexicalCandidates: [],
-      proactiveCandidates: [],
-      versionPointer: 'memory-context-enriched',
-    };
     const mockMemory = {
-      captureTurnMemorySnapshot: vi.fn().mockResolvedValue(memorySnapshot),
-      retrieve: vi.fn().mockResolvedValue('Relevant memories here'),
-      retrieveProactiveRecall: vi.fn().mockResolvedValue(''),
+      getActiveMemoryContext: vi.fn().mockReturnValue(makeActiveMemorySnapshot({
+        contextBlock: 'Relevant memories here',
+      })),
+      refreshActiveMemoryContext: vi.fn().mockResolvedValue(null),
     };
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), sessionManager, 'test', config,
@@ -2477,7 +2501,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     await agent.handleMessage(makeMessage({ id: 'msg-context-enriched' }));
 
-    const retrievalQuery = mockMemory.captureTurnMemorySnapshot.mock.calls[0]?.[0];
+    const retrievalQuery = mockMemory.getActiveMemoryContext.mock.calls[0]?.[0]?.contextText;
     expect(retrievalQuery).toContain(TEST_USER_GREETING);
     expect(retrievalQuery).toContain('Earlier same-session marker alpha');
     expect(retrievalQuery).toContain('```json {"ack":true} ```');
@@ -2485,17 +2509,21 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(retrievalQuery.indexOf('Earlier same-session marker alpha')).toBeLessThan(
       retrievalQuery.indexOf(TEST_USER_GREETING),
     );
-    expect(mockMemory.retrieve.mock.calls[0]?.[0]).toBe(retrievalQuery);
+    expect(mockMemory.refreshActiveMemoryContext.mock.calls[0]?.[0]?.contextText).toBe(retrievalQuery);
   });
 
-  it('appends spontaneous recall when memory provider supports proactive retrieval', async () => {
+  it('does not invoke legacy proactive recall on foreground response path', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
+    const retrieveProactiveRecall = vi.fn<any>().mockResolvedValue(
+      'Spontaneous recall:\n- [emotional] User felt proud after the release (+)',
+    );
     const mockMemory = {
-      retrieve: vi.fn<any>().mockResolvedValue('Relevant memories here'),
-      retrieveProactiveRecall: vi.fn<any>().mockResolvedValue(
-        'Spontaneous recall:\n- [emotional] User felt proud after the release (+)',
-      ),
+      getActiveMemoryContext: vi.fn().mockReturnValue(makeActiveMemorySnapshot({
+        contextBlock: 'Active memory context block',
+      })),
+      refreshActiveMemoryContext: vi.fn().mockResolvedValue(null),
+      retrieveProactiveRecall,
     };
 
     const agent = new SubstrateAgent(
@@ -2505,39 +2533,27 @@ describe('SubstrateAgent.handleMessage', () => {
 
     await agent.handleMessage(makeMessage());
 
-    expect(mockMemory.retrieveProactiveRecall).toHaveBeenCalledWith(
-      'test-channel',
-      'regular',
-      {},
-      undefined,
-      undefined,
-      expect.objectContaining({
-        channelId: 'test-channel',
-        channelType: 'terminal',
-        isDirectMessage: undefined,
-        messageText: TEST_USER_GREETING,
-        modelSelection: {
-          purpose: 'chat',
-        },
-      }),
-      undefined,
-    );
+    expect(retrieveProactiveRecall).not.toHaveBeenCalled();
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
-    expect(buildCall[2]).toContain('Relevant memories here');
-    expect(buildCall[2]).toContain('Spontaneous recall:');
-    expect(buildCall[2]).toContain('User felt proud after the release');
+    expect(buildCall[2]).toContain('Active memory context block');
   });
 
   it('uses primary trust and leaves self-directed heartbeat memory unscoped by scheduler identity', async () => {
     const config = makeConfig();
-    const mockMemory: MemoryProvider = {
-      retrieve: vi.fn<any>().mockResolvedValue('Internal memories'),
+    const mockMemory = {
+      getActiveMemoryContext: vi.fn().mockReturnValue(makeActiveMemorySnapshot({
+        channelId: 'internal:heartbeat',
+        subjectKey: 'channel:internal:heartbeat',
+        trustLevel: 'primary',
+        contextBlock: 'Internal memories',
+      })),
+      refreshActiveMemoryContext: vi.fn().mockResolvedValue(null),
     };
 
     const agent = new SubstrateAgent(
       new EventBus(), makeMockLLMProvider(), makeMockSessionManager(), 'test', config,
     );
-    agent.memoryProvider = mockMemory;
+    agent.memoryProvider = mockMemory as unknown as MemoryProvider;
 
     await agent.handleMessage(makeMessage({
       channelId: 'internal:heartbeat',
@@ -2546,28 +2562,21 @@ describe('SubstrateAgent.handleMessage', () => {
       content: 'heartbeat check',
     }));
 
-    expect(mockMemory.retrieve).toHaveBeenCalledWith(
-      'heartbeat check',
-      'internal:heartbeat',
-      'primary',
-      {},
-      undefined,
-      undefined,
-      expect.objectContaining({
+    expect(mockMemory.getActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+      contextText: 'heartbeat check',
+      channelId: 'internal:heartbeat',
+      trustLevel: 'primary',
+      channelMeta: {},
+      turnBudgetCharacteristics: expect.objectContaining({
         channelId: 'internal:heartbeat',
         channelType: 'terminal',
-        isDirectMessage: undefined,
         messageText: 'heartbeat check',
         modelSelection: {
           purpose: 'memory',
         },
         taskKind: 'heartbeat',
       }),
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-    );
+    }));
   });
 
   it.each([
@@ -4075,7 +4084,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     const configuredTools = setToolsSpy.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     const toolNames = configuredTools.map(tool => tool.name);
-    expect(toolNames).toEqual(['tool_search', 'toolset']);
+    expect(toolNames).toEqual(['response_control', 'tool_search', 'toolset']);
 
     expect(autoloadSummaries).toEqual([]);
   });
@@ -4178,6 +4187,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(snapshot?.tools).toEqual(expect.arrayContaining([
       expect.objectContaining({ toolName: 'tool_search', source: 'core' }),
       expect.objectContaining({ toolName: 'toolset', source: 'core' }),
+      expect.objectContaining({ toolName: 'response_control', source: 'core' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted' }),
       expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded' }),
       expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred' }),
@@ -4187,18 +4197,19 @@ describe('SubstrateAgent.handleMessage', () => {
       expect.objectContaining({ toolName: 'ghost_tool', source: 'promoted', reason: 'not_registered' }),
     ]));
     expect(snapshot?.counts).toMatchObject({
-      core: 2,
+      core: 3,
       promoted: 1,
       autoload: 0,
       extendedLoaded: 1,
       deferred: 1,
-      total: 5,
+      total: 6,
     });
 
     expect(adaptiveDecisions).toEqual(expect.arrayContaining([
       expect.objectContaining({ toolName: 'manual_probe', source: 'extended_loaded', decision: 'activated' }),
       expect.objectContaining({ toolName: 'deferred_probe', source: 'deferred', decision: 'activated' }),
       expect.objectContaining({ toolName: 'repo_commit', source: 'promoted', decision: 'skipped', reason: 'capability_denied' }),
+      expect.objectContaining({ toolName: 'response_control', source: 'core', decision: 'active', reason: 'turn_active_set' }),
       expect.objectContaining({ toolName: 'tool_search', source: 'core', decision: 'active', reason: 'turn_active_set' }),
       expect.objectContaining({ toolName: 'toolset', source: 'core', decision: 'active', reason: 'turn_active_set' }),
       expect.objectContaining({ toolName: 'repo_status', source: 'promoted', decision: 'active', reason: 'turn_active_set' }),
@@ -5172,7 +5183,7 @@ describe('SubstrateAgent.handleMessage', () => {
     ]);
   });
 
-  it('applies routed channel privacy to retrieval, context building, and outbound broadcast safety', async () => {
+  it('applies routed channel privacy to active memory, context building, and outbound broadcast safety', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();
     const sessionManager = makeMockSessionManager();
@@ -5183,10 +5194,15 @@ describe('SubstrateAgent.handleMessage', () => {
       'test',
       config,
     );
-    const retrieve = vi.fn().mockResolvedValue('');
+    const getActiveMemoryContext = vi.fn().mockReturnValue(makeActiveMemorySnapshot({
+      channelId: 'api:admin-broadcast',
+      visibilityScope: 'public_only',
+      contextBlock: '',
+    }));
     agent.memoryProvider = {
-      retrieve,
-    };
+      getActiveMemoryContext,
+      refreshActiveMemoryContext: vi.fn().mockResolvedValue(null),
+    } as unknown as MemoryProvider;
     mockAssistantResponse('My private number is +1 (555) 123-4567.');
 
     const response = await agent.handleMessage(makeMessage({
@@ -5199,8 +5215,10 @@ describe('SubstrateAgent.handleMessage', () => {
       },
     }));
 
-    expect(retrieve).toHaveBeenCalled();
-    expect(retrieve.mock.calls[0][3]).toEqual({ privacyLevel: 'broadcast' });
+    expect(getActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'api:admin-broadcast',
+      channelMeta: { privacyLevel: 'broadcast' },
+    }));
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[5]).toEqual({ privacyLevel: 'broadcast' });
     expect(response.content).toBe('');
@@ -5281,15 +5299,21 @@ describe('SubstrateAgent.handleMessage', () => {
     );
 
     agent.memoryProvider = {
-      retrieve: vi.fn(async () => {
-        await eventBus.emit('memory.retrieval', {
+      getActiveMemoryContext: vi.fn(() => {
+        void eventBus.emit('memory.retrieval', {
           channelId: 'twitter:timeline',
+          requestId: 'msg-1',
           count: 1,
           provenanceRefs: ['memory:alpha', 'memory:beta'],
         });
-        return 'Public context block';
+        return makeActiveMemorySnapshot({
+          channelId: 'twitter:timeline',
+          visibilityScope: 'public_only',
+          contextBlock: 'Public context block',
+        });
       }),
-    };
+      refreshActiveMemoryContext: vi.fn().mockResolvedValue(null),
+    } as unknown as MemoryProvider;
 
     let provenanceEvent: any = null;
     eventBus.on('broadcast.provenance', (event) => { provenanceEvent = event; });
@@ -5310,7 +5334,7 @@ describe('SubstrateAgent.handleMessage', () => {
     ]);
   });
 
-  it('passes request-scoped memory retrieval details into buildContext manifest seed', async () => {
+  it('passes active memory manifest details into buildContext manifest seed', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();
     const sessionManager = makeMockSessionManager();
@@ -5323,19 +5347,11 @@ describe('SubstrateAgent.handleMessage', () => {
     );
 
     agent.memoryProvider = {
-      retrieve: vi.fn(async () => {
-        await eventBus.emit('memory.retrieval', {
-          channelId: 'twitter:timeline',
-          requestId: 'other-request',
-          count: 9,
-          reason: 'error',
-          candidateCount: 9,
-          returnedCount: 9,
-        });
-        await eventBus.emit('memory.retrieval', {
-          channelId: 'twitter:timeline',
-          requestId: 'msg-1',
-          count: 1,
+      getActiveMemoryContext: vi.fn(() => makeActiveMemorySnapshot({
+        channelId: 'twitter:timeline',
+        visibilityScope: 'public_only',
+        contextBlock: 'Memory block',
+        manifestSeed: {
           reason: 'ok',
           retrievalSource: 'embedding',
           candidateCount: 3,
@@ -5362,10 +5378,10 @@ describe('SubstrateAgent.handleMessage', () => {
           budgetCappedCount: 1,
           selectedTypes: { semantic: 1 },
           compositionalMode: 'disabled_policy',
-        });
-        return 'Memory block';
-      }),
-    };
+        },
+      })),
+      refreshActiveMemoryContext: vi.fn().mockResolvedValue(null),
+    } as unknown as MemoryProvider;
 
     await agent.handleMessage(makeMessage({
       channelId: 'twitter:timeline',

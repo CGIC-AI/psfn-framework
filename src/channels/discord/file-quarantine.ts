@@ -1,4 +1,11 @@
 import { extname } from 'node:path';
+import {
+  inferOfficeExpectedContentTypeFromName,
+  inspectOfficeOpenXmlDocument,
+  OFFICE_MACRO_OR_LEGACY_CONTENT_TYPES,
+  OFFICE_MACRO_OR_LEGACY_EXTENSION_CONTENT_TYPES,
+} from './office-document.js';
+import { listZipEntryNames } from './zip-container.js';
 
 const QUARANTINE_STATUS = 'quarantined_pending_review';
 export const DISCORD_ATTACHMENT_QUARANTINE_STATUS = QUARANTINE_STATUS;
@@ -107,7 +114,7 @@ const CODE_OR_SCRIPT_CONTENT_TYPES = new Set([
   'text/x-typescript',
   'text/tsx',
 ]);
-const EXPECTED_EXTENSION_CONTENT_TYPES: Readonly<Record<string, string>> = Object.freeze({
+const EXPECTED_EXTENSION_CONTENT_TYPES: Readonly<Partial<Record<string, string>>> = Object.freeze({
   '.avif': 'image/avif',
   '.bmp': 'image/bmp',
   '.gif': 'image/gif',
@@ -170,7 +177,9 @@ function extensionOf(name: string): string {
 
 function inferExpectedContentTypeFromName(name: string): string | null {
   const extension = extensionOf(name);
-  return EXPECTED_EXTENSION_CONTENT_TYPES[extension] ?? null;
+  return EXPECTED_EXTENSION_CONTENT_TYPES[extension]
+    ?? inferOfficeExpectedContentTypeFromName(name)
+    ?? null;
 }
 
 function isArchiveExtension(name: string): boolean {
@@ -181,6 +190,9 @@ function appendNameQuarantineReasons(name: string, reasons: Set<string>): void {
   const extension = extensionOf(name);
   if (RISKY_CODE_OR_SCRIPT_EXTENSIONS.has(extension)) {
     addReason(reasons, `risky_extension:${extension}`);
+  }
+  if (OFFICE_MACRO_OR_LEGACY_EXTENSION_CONTENT_TYPES.has(extension)) {
+    addReason(reasons, `office_macro_or_legacy_extension:${extension}`);
   }
   if (isArchiveExtension(name)) {
     addReason(reasons, `archive_extension:${extension}`);
@@ -203,6 +215,9 @@ function appendContentTypeQuarantineReasons(contentType: string, reasons: Set<st
   }
   if (CODE_OR_SCRIPT_CONTENT_TYPES.has(contentType)) {
     addReason(reasons, `code_mime:${contentType}`);
+  }
+  if (OFFICE_MACRO_OR_LEGACY_CONTENT_TYPES.has(contentType)) {
+    addReason(reasons, `office_macro_or_legacy_mime:${contentType}`);
   }
 }
 
@@ -264,11 +279,13 @@ interface SniffedAttachmentContent {
     | 'binary'
     | 'executable'
     | 'image'
+    | 'office'
     | 'json'
     | 'pdf'
     | 'script'
     | 'tar'
     | 'text';
+  officeQuarantineReasons?: string[];
 }
 
 function sniffDiscordAttachmentContent(bytes: Uint8Array): SniffedAttachmentContent {
@@ -279,6 +296,14 @@ function sniffDiscordAttachmentContent(bytes: Uint8Array): SniffedAttachmentCont
   if (startsWithBytes(bytes, [0x50, 0x4b, 0x03, 0x04])
     || startsWithBytes(bytes, [0x50, 0x4b, 0x05, 0x06])
     || startsWithBytes(bytes, [0x50, 0x4b, 0x07, 0x08])) {
+    const office = inspectOfficeOpenXmlDocument(bytes);
+    if (office.kind === 'docx') {
+      return {
+        kind: 'office',
+        contentType: office.contentType,
+        officeQuarantineReasons: office.quarantineReasons,
+      };
+    }
     return { kind: 'archive', contentType: 'application/zip' };
   }
   if (startsWithBytes(bytes, [0x1f, 0x8b])) return { kind: 'archive', contentType: 'application/gzip' };
@@ -423,41 +448,11 @@ function listTarEntries(bytes: Uint8Array): string[] {
 }
 
 function listZipLocalEntries(bytes: Uint8Array): string[] {
-  const entries: string[] = [];
-  let offset = 0;
-  while (offset + 30 <= bytes.byteLength && entries.length < MAX_ARCHIVE_ENTRIES_TO_REPORT * 4) {
-    if (bytes[offset] !== 0x50 || bytes[offset + 1] !== 0x4b || bytes[offset + 2] !== 0x03 || bytes[offset + 3] !== 0x04) {
-      offset += 1;
-      continue;
-    }
-    const compressedSize = readUInt32Le(bytes, offset + 18);
-    const nameLength = readUInt16Le(bytes, offset + 26);
-    const extraLength = readUInt16Le(bytes, offset + 28);
-    const nameStart = offset + 30;
-    const nameEnd = nameStart + nameLength;
-    if (nameEnd > bytes.byteLength) break;
-    const name = new TextDecoder('utf-8', { fatal: false }).decode(bytes.slice(nameStart, nameEnd)).trim();
-    if (name) entries.push(name);
-    const nextOffset = nameEnd + extraLength + compressedSize;
-    if (nextOffset <= offset || nextOffset > bytes.byteLength) break;
-    offset = nextOffset;
+  try {
+    return listZipEntryNames(bytes).slice(0, MAX_ARCHIVE_ENTRIES_TO_REPORT * 4);
+  } catch {
+    return [];
   }
-  return entries;
-}
-
-function readUInt16Le(bytes: Uint8Array, offset: number): number {
-  if (offset + 2 > bytes.byteLength) return 0;
-  return bytes[offset] | (bytes[offset + 1] << 8);
-}
-
-function readUInt32Le(bytes: Uint8Array, offset: number): number {
-  if (offset + 4 > bytes.byteLength) return 0;
-  return (
-    bytes[offset]
-    | (bytes[offset + 1] << 8)
-    | (bytes[offset + 2] << 16)
-    | (bytes[offset + 3] << 24)
-  ) >>> 0;
 }
 
 function listArchiveEntries(bytes: Uint8Array, sniffedContentType: string): string[] {
@@ -509,6 +504,12 @@ export function classifyDiscordAttachmentQuarantineRisk(input: {
     if (sniffed.kind === 'archive' || sniffed.kind === 'tar') {
       addReason(reasons, `archive_signature:${sniffed.contentType}`);
       appendArchiveEntryReasons(input.bytes, sniffed.contentType, reasons);
+    }
+    if (sniffed.kind === 'office') {
+      for (const reason of sniffed.officeQuarantineReasons ?? []) {
+        addReason(reasons, reason);
+      }
+      appendArchiveEntryReasons(input.bytes, 'application/zip', reasons);
     }
     if (sniffed.kind === 'executable') {
       addReason(reasons, `executable_signature:${sniffed.contentType}`);

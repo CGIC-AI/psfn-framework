@@ -12,6 +12,11 @@ import {
   type DiscordAttachmentQuarantineDecision,
   type DiscordAttachmentQuarantineStatus,
 } from './file-quarantine.js';
+import {
+  inferSupportedOfficeContentTypeFromName,
+  isSupportedOfficeDocumentContentType,
+  parseDocxDocument,
+} from './office-document.js';
 
 const DISCORD_DOCUMENT_MAX_BYTES = 16 * 1024 * 1024;
 const DISCORD_TEXT_DOCUMENT_MAX_BYTES = 4 * 1024 * 1024;
@@ -146,12 +151,15 @@ function inferNameFromUrl(url: string): string | null {
 function inferSupportedContentType(name: string, url: string, contentType: string): string | null {
   const normalized = normalizeContentType(contentType);
   if (normalized === 'application/pdf') return normalized;
+  if (isSupportedOfficeDocumentContentType(normalized)) return normalized;
   if (SUPPORTED_TEXT_CONTENT_TYPES.has(normalized)) return normalized;
 
   const candidates = [name, inferNameFromUrl(url) ?? ''];
   for (const candidate of candidates) {
     const extension = extname(candidate).toLowerCase();
     if (extension === '.pdf') return 'application/pdf';
+    const officeContentType = inferSupportedOfficeContentTypeFromName(candidate);
+    if (officeContentType) return officeContentType;
     if (SUPPORTED_TEXT_EXTENSIONS.has(extension)) {
       return extension === '.md' || extension === '.markdown'
         ? 'text/markdown'
@@ -388,6 +396,9 @@ export async function parseDiscordDocumentBytes(bytes: Uint8Array, contentType: 
   if (normalized === 'application/pdf') {
     return parsePdfDocument(bytes);
   }
+  if (isSupportedOfficeDocumentContentType(normalized)) {
+    return parseDocxDocument(bytes);
+  }
   if (isTextDocument(normalized)) {
     return new TextDecoder('utf-8', { fatal: false }).decode(bytes).replace(/^\uFEFF/, '');
   }
@@ -401,7 +412,9 @@ function isTextDocument(contentType: string): boolean {
 
 function isSupportedDocumentContentType(contentType: string): boolean {
   const normalized = normalizeContentType(contentType);
-  return normalized === 'application/pdf' || isTextDocument(normalized);
+  return normalized === 'application/pdf'
+    || isSupportedOfficeDocumentContentType(normalized)
+    || isTextDocument(normalized);
 }
 
 async function parsePdfDocument(bytes: Uint8Array): Promise<string> {

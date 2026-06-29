@@ -1,0 +1,51 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: psfn
+
+resources:
+  - ../../base
+
+patches:
+  - target:
+      kind: ConfigMap
+      name: psfn-config
+    patch: |
+      - op: replace
+        path: /data/PERSISTENCE_BACKEND
+        value: "postgres"
+      - op: add
+        path: /data/DB_MAX_CONNECTIONS
+        value: "20"
+      - op: replace
+        path: /data/LOG_LEVEL
+        value: "warn"
+
+  - target:
+      kind: PersistentVolumeClaim
+      name: psfn-companion-data
+    patch: |
+      - op: replace
+        path: /spec/resources/requests/storage
+        value: 50Gi
+
+# ── External Postgres ──
+# To use an external database (RDS, Cloud SQL, Neon, etc.):
+# 1. Uncomment the patchesStrategicMerge and the StatefulSet delete patch below
+# 2. Set POSTGRES_DATABASE_URL in psfn-secrets to your external connection string
+# 3. Set externalName in external-postgres.yaml to your DB hostname
+#
+# patchesStrategicMerge:
+#   - external-postgres.yaml
+#
+# To remove the in-cluster StatefulSet entirely, add:
+# patches:
+#   - target:
+#       kind: StatefulSet
+#       name: postgres
+#     patch: |
+#       $patch: delete
+#       apiVersion: apps/v1
+#       kind: StatefulSet
+#       metadata:
+#         name: postgres

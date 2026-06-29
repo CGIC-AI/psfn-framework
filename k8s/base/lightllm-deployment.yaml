@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm
+  namespace: psfn
+  labels:
+    app.kubernetes.io/name: litellm
+    app.kubernetes.io/part-of: psfn
+    app.kubernetes.io/component: llm-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: litellm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: litellm
+        app.kubernetes.io/part-of: psfn
+        app.kubernetes.io/component: llm-gateway
+    spec:
+      terminationGracePeriodSeconds: 15
+
+      volumes:
+        - name: config
+          configMap:
+            name: litellm-config
+            items:
+              - key: litellm_config.yaml
+                path: config.yaml
+
+      containers:
+        - name: litellm
+          image: ghcr.io/berriai/litellm:v1.72.6-stable@sha256:dbf61a5a93ddc876a512e25915139b7e792f0d8f1da78d980e35a9f8abe85dd5
+          args: ["--config", "/app/config.yaml", "--port", "4000"]
+          ports:
+            - name: http
+              containerPort: 4000
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: litellm-secrets
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+              readOnly: true
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: 4000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 3
+            timeoutSeconds: 5

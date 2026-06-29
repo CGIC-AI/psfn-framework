@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { accessSync, constants, realpathSync } from 'node:fs';
-import { basename, delimiter, dirname, isAbsolute, join, normalize, resolve } from 'node:path';
+import { basename, delimiter, isAbsolute, join, normalize, resolve } from 'node:path';
 import type { ShellExecParams, ShellExecResult } from '../../gateway/protocol.js';
+import { resolveCanonicalPath } from '../../gateway/filesystem-paths.js';
 import { isInsideAllowedPaths } from '../../gateway/policy.js';
 import type { ShellExecPolicyConfig } from './shell-policy-config.js';
 
@@ -17,6 +18,10 @@ const MAX_ARG_LENGTH = 4_096;
 // PATH). Resolve commands AND run the child against this curated, system-safe
 // PATH unless an operator override (SHELL_EXEC_PATH) is set.
 const DEFAULT_SANDBOX_PATH = ['/usr/local/bin', '/usr/bin', '/bin'].join(delimiter);
+const SHELL_CANONICAL_PATH_OPTIONS = {
+  missingPathBehavior: 'resolveParent',
+  errorBehavior: 'returnNormalized',
+} as const;
 const SANDBOX_CHILD_ENV_ALLOWLIST = [
   'LANG',
   'LC_ALL',
@@ -53,24 +58,6 @@ function normalizePositiveInt(value: unknown): number | undefined {
 
 function includesPathSeparator(value: string): boolean {
   return value.includes('/') || value.includes('\\');
-}
-
-function resolveCanonicalPath(pathValue: string): string {
-  const normalized = resolve(normalize(pathValue));
-  try {
-    return realpathSync(normalized);
-  } catch (err: unknown) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') {
-      try {
-        const parent = realpathSync(dirname(normalized));
-        return resolve(parent, basename(normalized));
-      } catch {
-        return normalized;
-      }
-    }
-    return normalized;
-  }
 }
 
 function resolveCanonicalExecutablePath(command: string): string | null {
@@ -208,7 +195,7 @@ function resolveAllowedShellRoots(
     ? policy.allowedCwd
     : [workspacePath];
   const logical = allowedRootsRaw.map(path => resolve(normalize(path)));
-  const canonical = logical.map(path => resolveCanonicalPath(path));
+  const canonical = logical.map(path => resolveCanonicalPath(path, SHELL_CANONICAL_PATH_OPTIONS));
   return { logical, canonical };
 }
 
@@ -221,7 +208,7 @@ function resolveWorkingDirectory(
     ? rawCwd.trim()
     : workspacePath;
   const resolvedCwd = resolve(normalize(requestedCwd));
-  const canonicalCwd = resolveCanonicalPath(resolvedCwd);
+  const canonicalCwd = resolveCanonicalPath(resolvedCwd, SHELL_CANONICAL_PATH_OPTIONS);
   if (!isInsideAllowedPaths(resolvedCwd, allowedRoots.logical)) {
     throw new ShellExecPolicyError(`shell.exec cwd not allowlisted: ${resolvedCwd}`);
   }
@@ -274,7 +261,7 @@ function assertArgumentPathsAllowed(
   for (const arg of args) {
     for (const candidate of collectArgumentPathCandidates(arg)) {
       const resolvedPath = resolveArgumentPathCandidate(candidate, cwd);
-      const canonicalPath = resolveCanonicalPath(resolvedPath);
+      const canonicalPath = resolveCanonicalPath(resolvedPath, SHELL_CANONICAL_PATH_OPTIONS);
       if (!isInsideAllowedPaths(resolvedPath, allowedRoots.logical)) {
         throw new ShellExecPolicyError(`shell.exec argument path not allowlisted: ${resolvedPath}`);
       }

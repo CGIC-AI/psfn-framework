@@ -857,6 +857,22 @@ describe('evaluatePolicy symlink traversal', () => {
     )).toBe('DENY');
   });
 
+  it('allows fs.read for missing paths under symlinked parents', () => {
+    const missingPathViaSymlink = join(symlinkDirToOutside, 'missing.txt');
+    expect(evaluatePolicy(
+      { method: 'fs.read', params: { path: missingPathViaSymlink } },
+      realPolicyConfig,
+    )).toBe('ALLOW');
+  });
+
+  it('denies fs.write for missing paths under symlinked parents', () => {
+    const missingPathViaSymlink = join(symlinkDirToOutside, 'missing.txt');
+    expect(evaluatePolicy(
+      { method: 'fs.write', params: { path: missingPathViaSymlink } },
+      realPolicyConfig,
+    )).toBe('DENY');
+  });
+
   it('allows fs.read on a normal file inside workspace', () => {
     expect(evaluatePolicy(
       { method: 'fs.read', params: { path: normalFile } },

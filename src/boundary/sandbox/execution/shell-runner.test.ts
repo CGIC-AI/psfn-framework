@@ -96,6 +96,75 @@ describe('executeShellCommandWithPolicy', () => {
     )).rejects.toThrow('argument path not allowlisted');
   });
 
+  it('allows missing relative path arguments inside the workspace', async () => {
+    const { workspace } = makeWorkspaceFixture();
+
+    const result = await executeShellCommandWithPolicy(
+      {
+        command: 'test',
+        args: ['-e', 'missing.txt'],
+        cwd: workspace,
+      },
+      {
+        workspacePath: workspace,
+        policy: {
+          enabled: true,
+          allowlist: ['test'],
+          allowedCwd: [workspace],
+        },
+      },
+    );
+
+    expect(result.exitCode).toBe(1);
+  });
+
+  it('denies missing argument paths when their parent symlink resolves outside', async () => {
+    const { workspace, outside } = makeWorkspaceFixture();
+    symlinkSync(outside, join(workspace, 'outside-link'));
+
+    await expect(executeShellCommandWithPolicy(
+      {
+        command: 'cat',
+        args: ['outside-link/missing.txt'],
+        cwd: workspace,
+      },
+      {
+        workspacePath: workspace,
+        policy: {
+          enabled: true,
+          allowlist: ['cat'],
+          allowedCwd: [workspace],
+        },
+      },
+    )).rejects.toThrow('argument path not allowlisted');
+  });
+
+  it('falls back to normalized argument paths on symlink loops', async () => {
+    const { workspace } = makeWorkspaceFixture();
+    const loopA = join(workspace, 'loop-a');
+    const loopB = join(workspace, 'loop-b');
+    symlinkSync(loopB, loopA);
+    symlinkSync(loopA, loopB);
+
+    const result = await executeShellCommandWithPolicy(
+      {
+        command: 'test',
+        args: ['-e', 'loop-a'],
+        cwd: workspace,
+      },
+      {
+        workspacePath: workspace,
+        policy: {
+          enabled: true,
+          allowlist: ['test'],
+          allowedCwd: [workspace],
+        },
+      },
+    );
+
+    expect(result.exitCode).not.toBe(0);
+  });
+
   it('runs the child against a curated PATH that ignores a poisoned parent PATH', async () => {
     const { workspace } = makeWorkspaceFixture();
     const previousPath = process.env.PATH;

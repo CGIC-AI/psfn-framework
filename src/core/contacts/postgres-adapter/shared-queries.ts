@@ -31,13 +31,18 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
       this.pool,
       `
         SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-               emotional_baseline, first_seen, last_seen, notes
+               emotional_baseline, first_seen, last_seen, notes, timezone
         FROM contacts
         WHERE id = $1
         LIMIT 1
       `,
       [id],
     );
+  },
+
+  async loadContactById(id: string): Promise<Contact | undefined> {
+    const row = await this.loadContactRow(id);
+    return row ? await this.loadContactByRow(row) : undefined;
   },
 
   async loadContactEmotionalTimeSeries(
@@ -63,7 +68,7 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
       this.pool,
       `
         SELECT c.id, c.discord_user_id, c.display_name, c.nickname, c.trust_level, c.relationship_type, c.is_machine_intelligence,
-               c.emotional_baseline, c.first_seen, c.last_seen, c.notes
+               c.emotional_baseline, c.first_seen, c.last_seen, c.notes, c.timezone
         FROM contacts c
         INNER JOIN contact_channel_ids i ON i.contact_id = c.id
         WHERE i.channel = $1 AND i.channel_user_id = $2

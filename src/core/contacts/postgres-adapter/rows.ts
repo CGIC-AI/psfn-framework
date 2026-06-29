@@ -11,6 +11,7 @@ export interface ContactRow {
   first_seen: string;
   last_seen: string;
   notes: string | null;
+  timezone: string | null;
 }
 
 export interface ContactIdentityRow {
@@ -84,4 +85,3 @@ export interface SocialRelationshipEdgeRow {
   created_at: string;
   updated_at: string;
 }
-

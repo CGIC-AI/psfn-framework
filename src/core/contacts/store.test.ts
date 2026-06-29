@@ -66,6 +66,7 @@ describe('ContactStore', () => {
       const columns = legacyDb.prepare('PRAGMA table_info(contacts)')
         .all() as Array<{ name: string }>;
       expect(columns.some(column => column.name === 'nickname')).toBe(true);
+      expect(columns.some(column => column.name === 'timezone')).toBe(true);
       expect(migratedStore.updateIdentityProfile('legacy-contact', 'Legacy Updated', 'Leg')).toBe(true);
       expect(migratedStore.getById('legacy-contact')?.nickname).toBe('Leg');
     });
@@ -224,6 +225,56 @@ describe('ContactStore', () => {
       });
       expect(updated.notes).toBe('Old notes');
       expect(updated.emotionalBaseline).toEqual({ warmth: 0.5 });
+    });
+
+    it('persists, hydrates, preserves, updates, and clears optional timezone', () => {
+      const created = store.upsert({
+        displayName: 'Timezone Contact',
+        discordUserId: 'timezone-contact',
+        timezone: '  America/Los_Angeles  ',
+      });
+      expect(created.timezone).toBe('America/Los_Angeles');
+      expect(store.getById(created.id)?.timezone).toBe('America/Los_Angeles');
+
+      const unrelatedUpdate = store.upsert({
+        displayName: 'Timezone Contact Renamed',
+        discordUserId: 'timezone-contact',
+      });
+      expect(unrelatedUpdate.timezone).toBe('America/Los_Angeles');
+
+      const changed = store.upsert({
+        displayName: 'Timezone Contact Renamed',
+        discordUserId: 'timezone-contact',
+        timezone: 'Europe/London',
+      }, { actor: 'admin:api' });
+      expect(changed.timezone).toBe('Europe/London');
+
+      const cleared = store.upsert({
+        displayName: 'Timezone Contact Renamed',
+        discordUserId: 'timezone-contact',
+        timezone: undefined,
+      }, { actor: 'admin:api' });
+      expect(cleared.timezone).toBeUndefined();
+
+      const entries = store.listMutationAuditEntries({
+        contactId: created.id,
+        field: 'timezone',
+        limit: 10,
+      });
+      expect(entries).toEqual([
+        expect.objectContaining({
+          actor: 'admin:api',
+          field: 'timezone',
+          oldValue: 'Europe/London',
+          newValue: null,
+        }),
+        expect.objectContaining({
+          actor: 'admin:api',
+          field: 'timezone',
+          oldValue: 'America/Los_Angeles',
+          newValue: 'Europe/London',
+        }),
+      ]);
     });
 
     it('exports contact snapshots to configured contacts directory', () => {

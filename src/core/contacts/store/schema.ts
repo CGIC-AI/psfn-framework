@@ -36,6 +36,12 @@ function ensureNicknameColumn(db: Database.Database): void {
   }
 }
 
+function ensureTimezoneColumn(db: Database.Database): void {
+  if (!hasColumn(db, 'contacts', 'timezone')) {
+    db.exec('ALTER TABLE contacts ADD COLUMN timezone TEXT');
+  }
+}
+
 function ensureEmotionalTimeSeriesColumn(db: Database.Database): void {
   if (!hasColumn(db, 'contacts', 'emotional_time_series')) {
     db.exec("ALTER TABLE contacts ADD COLUMN emotional_time_series TEXT NOT NULL DEFAULT '[]'");
@@ -67,6 +73,7 @@ export function initializeContactStoreSchema(db: Database.Database): void {
       first_seen TEXT NOT NULL,
       last_seen TEXT NOT NULL,
       notes TEXT,
+      timezone TEXT,
       is_machine_intelligence INTEGER NOT NULL DEFAULT 0
     );
 
@@ -190,6 +197,7 @@ export function initializeContactStoreSchema(db: Database.Database): void {
   `);
 
   ensureNicknameColumn(db);
+  ensureTimezoneColumn(db);
   ensureMachineIntelligenceColumn(db);
   ensureEmotionalTimeSeriesColumn(db);
   ensureChannelPrivacyColumn(db);

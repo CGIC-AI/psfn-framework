@@ -92,6 +92,57 @@ describe('AdminContactsDataService', () => {
     }
   });
 
+  it('rejects invalid contact timezone updates without mutating the contact', async () => {
+    const { db, contactStore, service } = createServiceHarness();
+    try {
+      const contact = contactStore.upsert({
+        displayName: 'Timezone User',
+        timezone: 'America/New_York',
+      });
+
+      const result = await service.updateContact(contact.id, JSON.stringify({
+        timezone: 'Mars/Olympus',
+      }));
+
+      expect(result).toEqual({
+        ok: false,
+        message: 'Invalid timezone: Mars/Olympus. timezone must be a valid IANA timezone name',
+      });
+      expect(contactStore.getById(contact.id)?.timezone).toBe('America/New_York');
+    } finally {
+      db.close();
+    }
+  });
+
+  it('accepts valid contact timezone updates and clears null timezone', async () => {
+    const { db, contactStore, service } = createServiceHarness();
+    try {
+      const contact = contactStore.upsert({ displayName: 'Timezone User' });
+
+      const updated = await service.updateContact(contact.id, JSON.stringify({
+        timezone: 'America/Los_Angeles',
+      }));
+
+      expect(updated.ok).toBe(true);
+      expect(updated.contact?.timezone).toBe('America/Los_Angeles');
+      await expect(service.getContactDetail(contact.id)).resolves.toMatchObject({
+        contact: expect.objectContaining({
+          timezone: 'America/Los_Angeles',
+        }),
+      });
+
+      const cleared = await service.updateContact(contact.id, JSON.stringify({
+        timezone: null,
+      }));
+
+      expect(cleared.ok).toBe(true);
+      expect(cleared.contact?.timezone).toBeUndefined();
+      expect(contactStore.getById(contact.id)?.timezone).toBeUndefined();
+    } finally {
+      db.close();
+    }
+  });
+
   it('includes social graph inspector data for linked and mention-only contacts', async () => {
     const { db, contactStore, service, profiles } = createServiceHarness();
     try {

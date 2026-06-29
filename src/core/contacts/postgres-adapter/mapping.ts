@@ -181,6 +181,7 @@ export function rowToContact(row: ContactRow, identities: ContactIdentityRow[], 
     ...(row.discord_user_id ? { discordUserId: row.discord_user_id } : {}),
     displayName: row.display_name,
     ...(row.nickname ? { nickname: row.nickname } : {}),
+    ...(normalizeTrimmed(row.timezone ?? undefined) ? { timezone: normalizeTrimmed(row.timezone ?? undefined) } : {}),
     trustLevel: normalizeTrustLevel(row.trust_level),
     relationshipType: normalizeRelationshipType(row.relationship_type),
     ...(row.is_machine_intelligence ? { isMachineIntelligence: true } : {}),
@@ -278,5 +279,3 @@ export function socialGraphEdgeRowToEdge(row: SocialRelationshipEdgeRow): Social
     updatedAt: row.updated_at,
   };
 }
-
-

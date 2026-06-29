@@ -33,6 +33,7 @@ export function rowToContact(row: ContactRow): Contact {
     discordUserId: row.discord_user_id ?? undefined,
     displayName: row.display_name,
     nickname: row.nickname ?? undefined,
+    timezone: row.timezone ?? undefined,
     trustLevel: row.trust_level as TrustLevel,
     relationshipType: row.relationship_type as RelationshipType,
     ...(row.is_machine_intelligence ? { isMachineIntelligence: true } : {}),

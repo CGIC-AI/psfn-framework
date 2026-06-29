@@ -5,16 +5,13 @@ import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.
 import { isInternalMemoryArtifact } from '../../../faculties/memory/internal-artifacts.js';
 import type {
   MemoryAdminPrivacySummary as StoreMemoryAdminPrivacySummary,
+  MemoryBulkUpdatePatch,
   MemoryLink,
   MemoryStorePort,
 } from '../../../faculties/memory/memory-store-port.js';
 import {
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
-  normalizeMemoryTags,
-  isPreferenceMemory,
-  DURABLE_PREFERENCE_MEMORY_TAG,
-  DURABLE_RETENTION_TAG,
   VALID_MEMORY_TYPES,
   type MemoryRetentionClass,
   type MemoryType,
@@ -553,7 +550,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       return { ok: false, count: 0, message: 'Bulk update limited to 500 items' };
     }
 
-    const storeFields: Partial<Pick<import('../../../faculties/memory/types.js').PurrMemory, 'type' | 'sensitivity'>> = {};
+    const storeFields: MemoryBulkUpdatePatch = {};
     let retentionClass: MemoryRetentionClass | undefined;
 
     if (fields.memoryType !== undefined) {
@@ -584,9 +581,11 @@ export class AdminMemoryDataService implements AdminMemoryService {
       return { ok: false, count: 0, message: 'No valid fields to update' };
     }
 
-    const count = retentionClass === undefined
-      ? await this.deps.memoryStore.bulkUpdate(ids, storeFields)
-      : await this.bulkUpdateWithRetentionClass(ids, storeFields, retentionClass);
+    if (retentionClass !== undefined) {
+      storeFields.retentionClass = retentionClass;
+    }
+
+    const count = await this.deps.memoryStore.bulkUpdate(ids, storeFields);
     this.deps.appendAuditTimelineEntry?.(
       'memory_mutation',
       'allowed',
@@ -596,37 +595,5 @@ export class AdminMemoryDataService implements AdminMemoryService {
       ].join(', ')}).`,
     );
     return { ok: true, count };
-  }
-
-  private async bulkUpdateWithRetentionClass(
-    ids: string[],
-    storeFields: Partial<Pick<import('../../../faculties/memory/types.js').PurrMemory, 'type' | 'sensitivity'>>,
-    retentionClass: MemoryRetentionClass,
-  ): Promise<number> {
-    let count = 0;
-    for (const rawId of ids) {
-      const id = rawId.trim();
-      if (!id) continue;
-      const memory = await this.deps.memoryStore.getById(id);
-      if (!memory || memory.deletedAt !== undefined) continue;
-      const tags = retentionClass === 'durable'
-        ? normalizeMemoryTags([
-          ...memory.tags,
-          DURABLE_RETENTION_TAG,
-          ...(isPreferenceMemory(memory) ? [DURABLE_PREFERENCE_MEMORY_TAG] : []),
-        ])
-        : normalizeMemoryTags(memory.tags.filter((tag) => {
-          const normalizedTag = tag.trim().toLowerCase();
-          return normalizedTag !== DURABLE_RETENTION_TAG
-            && normalizedTag !== DURABLE_PREFERENCE_MEMORY_TAG;
-        }));
-      await this.deps.memoryStore.updateMemory(id, {
-        ...storeFields,
-        retentionClass,
-        tags,
-      });
-      count += 1;
-    }
-    return count;
   }
 }

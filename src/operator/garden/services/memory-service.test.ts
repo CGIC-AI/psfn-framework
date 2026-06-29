@@ -133,4 +133,32 @@ describe('AdminMemoryDataService', () => {
       pageMemoryCount: 1,
     });
   });
+
+  it('delegates retention-class bulk updates to the memory store bulk path', async () => {
+    const memoryStore = {
+      bulkUpdate: vi.fn(async () => 2),
+      getById: vi.fn(async () => {
+        throw new Error('Garden retention bulk update should not read memories one by one');
+      }),
+      updateMemory: vi.fn(async () => {
+        throw new Error('Garden retention bulk update should not update memories one by one');
+      }),
+    } as unknown as MemoryStorePort;
+    const service = new AdminMemoryDataService({ memoryStore });
+
+    const result = await service.bulkUpdate(['m1', 'missing', 'm2'], {
+      memoryType: 'Relational',
+      sensitivity: 'Confidential',
+      retentionClass: 'Durable',
+    });
+
+    expect(result).toEqual({ ok: true, count: 2 });
+    expect(memoryStore.bulkUpdate).toHaveBeenCalledWith(['m1', 'missing', 'm2'], {
+      type: 'relational',
+      sensitivity: 'confidential',
+      retentionClass: 'durable',
+    });
+    expect(memoryStore.getById).not.toHaveBeenCalled();
+    expect(memoryStore.updateMemory).not.toHaveBeenCalled();
+  });
 });

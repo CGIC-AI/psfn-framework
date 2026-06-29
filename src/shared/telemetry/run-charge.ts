@@ -413,6 +413,28 @@ export function inspectChargeSurface(
   };
 }
 
+function createChargeQuotaExceededError(inspection: ChargeSurfaceInspection): Error {
+  const scope = inspection.quotaSpentAfter > inspection.quota ? 'run' : 'rolling 24-hour';
+  const spentAfter = scope === 'run' ? inspection.quotaSpentAfter : inspection.rollingWindowSpentAfter;
+  return new Error(
+    `Charge quota exceeded for lane "${inspection.lane}" while charging "${inspection.surface}" (${spentAfter}/${inspection.quota}; ${scope} budget).`,
+  );
+}
+
+export function assertChargeSurfaceAvailable(
+  surface: ChargePolicySurface,
+  input: RunChargeChargeInput = {},
+): ChargeSurfaceInspection | null {
+  const inspection = inspectChargeSurface(surface, input);
+  if (!inspection) {
+    return null;
+  }
+  if (!inspection.allowed) {
+    throw createChargeQuotaExceededError(inspection);
+  }
+  return inspection;
+}
+
 export function getRunChargeContext(): RunChargeContextState | undefined {
   return runChargeStorage.getStore();
 }
@@ -475,17 +497,9 @@ export function chargeSurface(
 ): RunChargeEvent | null {
   const context = getRunChargeContext();
   const eventBus = input.eventBus ?? context?.eventBus;
-  const inspection = inspectChargeSurface(surface, input);
+  const inspection = assertChargeSurfaceAvailable(surface, input);
   if (!inspection) {
     return null;
-  }
-
-  if (!inspection.allowed) {
-    const scope = inspection.quotaSpentAfter > inspection.quota ? 'run' : 'rolling 24-hour';
-    const spentAfter = scope === 'run' ? inspection.quotaSpentAfter : inspection.rollingWindowSpentAfter;
-    throw new Error(
-      `Charge quota exceeded for lane "${inspection.lane}" while charging "${surface}" (${spentAfter}/${inspection.quota}; ${scope} budget).`,
-    );
   }
 
   if (context) {

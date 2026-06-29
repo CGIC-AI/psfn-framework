@@ -9,7 +9,10 @@ import type {
 } from './reference-store.js';
 import { getVisionToolRequestContext } from './request-context.js';
 import { textResultWithError } from '../../core/tools/results.js';
-import { chargeSurface } from '../../shared/telemetry/run-charge.js';
+import {
+  assertChargeSurfaceAvailable,
+  chargeSurface,
+} from '../../shared/telemetry/run-charge.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import {
@@ -346,6 +349,27 @@ function buildMediaResultDetails(
   };
 }
 
+function preflightPaidImageGeneration(input: {
+  action: 'generate' | 'edit';
+  provider?: 'auto' | 'fal' | 'comfyui';
+  model?: string;
+  imageCount?: number;
+  inputImageCount?: number;
+}): void {
+  if (input.provider === 'comfyui') {
+    return;
+  }
+  assertChargeSurfaceAvailable('paidImageGeneration', {
+    details: {
+      action: input.action,
+      provider: input.provider ?? 'auto',
+      ...(input.model ? { model: input.model } : {}),
+      imageCount: input.imageCount ?? 1,
+      ...(input.inputImageCount !== undefined ? { inputImageCount: input.inputImageCount } : {}),
+    },
+  });
+}
+
 function chargePaidImageGeneration(result: ImageGenerationResult, action: 'generate' | 'edit'): void {
   if (result.provider !== 'fal') {
     return;
@@ -445,6 +469,12 @@ async function executeMediaGenerate(
   }
 
   try {
+    preflightPaidImageGeneration({
+      action: 'generate',
+      provider: params.provider,
+      model: params.model,
+      imageCount: params.num_images,
+    });
     const result = await ops.create({
       prompt,
       provider: params.provider,
@@ -507,6 +537,13 @@ async function executeMediaEdit(
       defaultToSavedReference: false,
     });
     const imageUrls = appendReferenceImageUrl(inputUrls, reference);
+    preflightPaidImageGeneration({
+      action: 'edit',
+      provider: params.provider,
+      model: params.model,
+      imageCount: params.num_images,
+      inputImageCount: imageUrls.length,
+    });
     const result = await ops.edit({
       prompt,
       imageUrls,
@@ -765,6 +802,13 @@ function createImageGenerationTool(
         let notice: string | undefined;
         let result: ImageGenerationResult;
         if (reference) {
+          preflightPaidImageGeneration({
+            action: 'edit',
+            provider: params.provider,
+            model: params.edit_model,
+            imageCount: params.num_images,
+            inputImageCount: 1,
+          });
           const runReferenceEdit = async (
             editModel: typeof FAL_EDIT_MODELS[number],
             editPrompt: string,
@@ -856,6 +900,12 @@ function createImageGenerationTool(
             result = chainResult;
           }
         } else {
+          preflightPaidImageGeneration({
+            action: 'generate',
+            provider: params.provider,
+            model: params.model,
+            imageCount: params.num_images,
+          });
           result = await ops.create({
               prompt: params.prompt,
               provider: params.provider,

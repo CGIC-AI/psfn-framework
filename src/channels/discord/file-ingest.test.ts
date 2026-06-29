@@ -1,8 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  appendDiscordDocumentIngestToContent,
+  ingestDiscordDocumentAttachments,
   parseDiscordDocumentBytes,
   toDiscordDocumentAttachmentCandidate,
 } from './file-ingest.js';
+import { classifyDiscordAttachmentQuarantineRisk } from './file-quarantine.js';
 
 function buildSimplePdf(text: string): Buffer {
   const escaped = text.replace(/[\\()]/g, match => `\\${match}`);
@@ -31,6 +37,28 @@ function buildSimplePdf(text: string): Buffer {
   return Buffer.from(body);
 }
 
+function buildLocalHeaderZip(entries: Record<string, string>): Buffer {
+  const chunks: Buffer[] = [];
+  for (const [name, content] of Object.entries(entries)) {
+    const nameBytes = Buffer.from(name, 'utf8');
+    const data = Buffer.from(content, 'utf8');
+    const header = Buffer.alloc(30);
+    header.writeUInt32LE(0x04034b50, 0);
+    header.writeUInt16LE(20, 4);
+    header.writeUInt16LE(0, 6);
+    header.writeUInt16LE(0, 8);
+    header.writeUInt16LE(0, 10);
+    header.writeUInt16LE(0, 12);
+    header.writeUInt32LE(0, 14);
+    header.writeUInt32LE(data.byteLength, 18);
+    header.writeUInt32LE(data.byteLength, 22);
+    header.writeUInt16LE(nameBytes.byteLength, 26);
+    header.writeUInt16LE(0, 28);
+    chunks.push(header, nameBytes, data);
+  }
+  return Buffer.concat(chunks);
+}
+
 describe('Discord document file ingest', () => {
   it('parses UTF-8 text and markdown attachment bytes', async () => {
     await expect(
@@ -56,5 +84,134 @@ describe('Discord document file ingest', () => {
       name: 'briefing.md',
       contentType: 'text/markdown',
     }));
+  });
+
+  it('quarantines shebang scripts and withholds the body from prompt context', async () => {
+    const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-discord-quarantine-'));
+    const originalFetch = globalThis.fetch;
+    const script = '#!/bin/sh\necho SHOULD_NOT_ENTER_PROMPT\n';
+    const fetchMock = vi.fn(async () => new Response(script, {
+      headers: { 'content-type': 'text/plain' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const summary = await ingestDiscordDocumentAttachments([{
+        id: 'att-script',
+        name: 'notes.txt',
+        url: 'https://cdn.discordapp.com/attachments/a/b/notes.txt',
+        contentType: 'text/plain',
+        declaredContentType: 'text/plain',
+        sizeBytes: script.length,
+      }], {
+        personalFilesDir,
+        channelId: 'discord-channel',
+        messageId: 'message-1',
+        authorId: 'user-1',
+        createdAt: new Date('2026-06-29T12:00:00.000Z'),
+      });
+
+      expect(summary.results).toHaveLength(0);
+      expect(summary.failures).toHaveLength(0);
+      expect(summary.quarantined).toHaveLength(1);
+      const quarantined = summary.quarantined[0]!;
+      expect(quarantined.status).toBe('quarantined_pending_review');
+      expect(quarantined.reasons).toEqual(expect.arrayContaining([
+        'shebang',
+        'mime_sniff_mismatch:declared=text/plain;sniffed=text/x-shellscript',
+      ]));
+      expect(quarantined.quarantinePath).toContain(join(personalFilesDir, 'downloads', 'quarantine', 'discord'));
+      expect(existsSync(quarantined.quarantinePath)).toBe(true);
+      expect(readFileSync(quarantined.quarantinePath, 'utf8')).toBe(script);
+
+      const metadata = JSON.parse(readFileSync(quarantined.metadataPath, 'utf8')) as {
+        status: string;
+        review: { status: string };
+        reasons: string[];
+      };
+      expect(metadata.status).toBe('quarantined_pending_review');
+      expect(metadata.review.status).toBe('quarantined_pending_review');
+      expect(metadata.reasons).toContain('shebang');
+
+      const promptText = appendDiscordDocumentIngestToContent('please inspect this', summary);
+      expect(promptText).toContain('[Attached file quarantined: notes.txt]');
+      expect(promptText).toContain(`SHA-256: ${quarantined.sha256}`);
+      expect(promptText).toContain('Quarantine reasons:');
+      expect(promptText).not.toContain('SHOULD_NOT_ENTER_PROMPT');
+      expect(promptText).not.toContain(quarantined.quarantinePath);
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+      rmSync(personalFilesDir, { recursive: true, force: true });
+    }
+  });
+
+  it('detects extension spoofing and MIME/sniff mismatch before parsing', () => {
+    const decision = classifyDiscordAttachmentQuarantineRisk({
+      name: 'release-notes.md',
+      contentType: 'text/markdown',
+      declaredContentType: 'text/markdown',
+      bytes: buildLocalHeaderZip({
+        'scripts/install.sh': '#!/bin/sh\nexit 0\n',
+      }),
+    });
+
+    expect(decision.quarantined).toBe(true);
+    expect(decision.sniffedContentType).toBe('application/zip');
+    expect(decision.reasons).toEqual(expect.arrayContaining([
+      'archive_signature:application/zip',
+      'extension_sniff_mismatch:expected=text/markdown;sniffed=application/zip',
+      'mime_sniff_mismatch:declared=text/markdown;sniffed=application/zip',
+    ]));
+    expect(decision.reasons.some(reason => reason.includes('archive_contains_risky_entry:scripts/install.sh'))).toBe(true);
+  });
+
+  it('detects archives containing skill and plugin manifests', () => {
+    const decision = classifyDiscordAttachmentQuarantineRisk({
+      name: 'bundle.zip',
+      contentType: 'application/zip',
+      declaredContentType: 'application/zip',
+      bytes: buildLocalHeaderZip({
+        'skills/ops/SKILL.md': '# Ops skill\n',
+        '.codex-plugin/plugin.json': '{"name":"demo","version":"0.1.0"}\n',
+      }),
+    });
+
+    expect(decision.quarantined).toBe(true);
+    expect(decision.reasons).toEqual(expect.arrayContaining([
+      'archive_extension:.zip',
+      'archive_mime:application/zip',
+      'archive_signature:application/zip',
+    ]));
+    expect(decision.reasons.some(reason => reason.includes('skills/ops/SKILL.md(skill_manifest_name)'))).toBe(true);
+    expect(decision.reasons.some(reason => reason.includes('.codex-plugin/plugin.json(plugin_manifest_name)'))).toBe(true);
+  });
+
+  it('detects plugin manifest content and executable mode bits', () => {
+    const pluginDecision = classifyDiscordAttachmentQuarantineRisk({
+      name: 'plugin.json',
+      contentType: 'application/json',
+      declaredContentType: 'application/json',
+      bytes: Buffer.from(JSON.stringify({
+        name: 'demo-plugin',
+        version: '0.1.0',
+        skills: './skills',
+        interface: { displayName: 'Demo' },
+      })),
+    });
+    expect(pluginDecision.quarantined).toBe(true);
+    expect(pluginDecision.reasons).toEqual(expect.arrayContaining([
+      'plugin_manifest_name',
+      'plugin_manifest_content',
+    ]));
+
+    const executableDecision = classifyDiscordAttachmentQuarantineRisk({
+      name: 'README.txt',
+      contentType: 'text/plain',
+      declaredContentType: 'text/plain',
+      bytes: Buffer.from('plain text\n'),
+      mode: 0o755,
+    });
+    expect(executableDecision.quarantined).toBe(true);
+    expect(executableDecision.reasons).toContain('executable_mode_bits');
   });
 });

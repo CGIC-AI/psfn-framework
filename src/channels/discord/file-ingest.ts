@@ -1,10 +1,17 @@
 import { createRequire } from 'node:module';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Attachment } from '../../shared/contracts/runtime.js';
 import { resolvePersonalDownloadsDir } from '../../persistence/layout.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  classifyDiscordAttachmentQuarantineRisk,
+  DISCORD_ATTACHMENT_QUARANTINE_STATUS,
+  normalizeDiscordAttachmentContentType,
+  type DiscordAttachmentQuarantineDecision,
+  type DiscordAttachmentQuarantineStatus,
+} from './file-quarantine.js';
 
 const DISCORD_DOCUMENT_MAX_BYTES = 16 * 1024 * 1024;
 const DISCORD_TEXT_DOCUMENT_MAX_BYTES = 4 * 1024 * 1024;
@@ -56,7 +63,9 @@ export interface DiscordDocumentAttachmentCandidate {
   url: string;
   proxyURL?: string;
   contentType: string;
+  declaredContentType: string;
   sizeBytes: number;
+  mode?: number;
 }
 
 export interface DiscordDocumentIngestContext {
@@ -81,16 +90,29 @@ export interface DiscordDocumentIngestFailure {
   reason: string;
 }
 
+export interface DiscordQuarantinedAttachment {
+  attachmentId: string;
+  name: string;
+  contentType: string;
+  declaredContentType: string;
+  sizeBytes: number;
+  downloadedBytes: number;
+  sha256: string;
+  quarantinePath: string;
+  metadataPath: string;
+  status: DiscordAttachmentQuarantineStatus;
+  reasons: string[];
+  sniffedContentType?: string;
+}
+
 export interface DiscordDocumentIngestSummary {
   results: DiscordDocumentIngestResult[];
+  quarantined: DiscordQuarantinedAttachment[];
   failures: DiscordDocumentIngestFailure[];
 }
 
 function normalizeContentType(value: string | null | undefined): string {
-  return (value ?? '')
-    .split(';')[0]
-    .trim()
-    .toLowerCase();
+  return normalizeDiscordAttachmentContentType(value);
 }
 
 function safeFileName(value: string, fallback: string): string {
@@ -147,13 +169,22 @@ export function toDiscordDocumentAttachmentCandidate(raw: {
   proxyURL?: string | null;
   contentType?: string | null;
   size?: number | null;
+  mode?: number | null;
 }): DiscordDocumentAttachmentCandidate | null {
   const url = (raw.url ?? raw.proxyURL ?? '').trim();
   if (!url) return null;
 
   const name = raw.name?.trim() || inferNameFromUrl(url) || `attachment-${raw.id ?? randomUUID()}`;
-  const contentType = inferSupportedContentType(name, url, raw.contentType ?? '');
-  if (!contentType) return null;
+  const declaredContentType = normalizeContentType(raw.contentType ?? '') || 'application/octet-stream';
+  const contentType = inferSupportedContentType(name, url, raw.contentType ?? '') ?? declaredContentType;
+  const hasSupportedDocumentType = inferSupportedContentType(name, url, raw.contentType ?? '') !== null;
+  const hasMetadataQuarantineRisk = classifyDiscordAttachmentQuarantineRisk({
+    name,
+    contentType,
+    declaredContentType,
+    ...(typeof raw.mode === 'number' ? { mode: raw.mode } : {}),
+  }).quarantined;
+  if (!hasSupportedDocumentType && !hasMetadataQuarantineRisk) return null;
 
   const sizeBytes = typeof raw.size === 'number' && Number.isFinite(raw.size)
     ? Math.max(0, Math.trunc(raw.size))
@@ -165,7 +196,9 @@ export function toDiscordDocumentAttachmentCandidate(raw: {
     url,
     ...(raw.proxyURL?.trim() ? { proxyURL: raw.proxyURL.trim() } : {}),
     contentType,
+    declaredContentType,
     sizeBytes,
+    ...(typeof raw.mode === 'number' ? { mode: raw.mode } : {}),
   };
 }
 
@@ -174,12 +207,17 @@ export async function ingestDiscordDocumentAttachments(
   context: DiscordDocumentIngestContext,
 ): Promise<DiscordDocumentIngestSummary> {
   const results: DiscordDocumentIngestResult[] = [];
+  const quarantined: DiscordQuarantinedAttachment[] = [];
   const failures: DiscordDocumentIngestFailure[] = [];
 
   for (const candidate of candidates) {
     try {
       const result = await ingestDiscordDocumentAttachment(candidate, context);
-      results.push(result);
+      if ('quarantinePath' in result) {
+        quarantined.push(result);
+      } else {
+        results.push(result);
+      }
     } catch (error) {
       failures.push({
         name: candidate.name,
@@ -189,13 +227,13 @@ export async function ingestDiscordDocumentAttachments(
     }
   }
 
-  return { results, failures };
+  return { results, quarantined, failures };
 }
 
 async function ingestDiscordDocumentAttachment(
   candidate: DiscordDocumentAttachmentCandidate,
   context: DiscordDocumentIngestContext,
-): Promise<DiscordDocumentIngestResult> {
+): Promise<DiscordDocumentIngestResult | DiscordQuarantinedAttachment> {
   if (candidate.sizeBytes > DISCORD_DOCUMENT_MAX_BYTES) {
     throw new Error(`attachment is too large (${candidate.sizeBytes} bytes; max ${DISCORD_DOCUMENT_MAX_BYTES})`);
   }
@@ -215,6 +253,26 @@ async function ingestDiscordDocumentAttachment(
   }
   if (isTextDocument(candidate.contentType) && bytes.byteLength > DISCORD_TEXT_DOCUMENT_MAX_BYTES) {
     throw new Error(`downloaded text attachment is too large (${bytes.byteLength} bytes; max ${DISCORD_TEXT_DOCUMENT_MAX_BYTES})`);
+  }
+
+  const quarantineDecision = classifyDiscordAttachmentQuarantineRisk({
+    name: candidate.name,
+    contentType: candidate.contentType,
+    declaredContentType: candidate.declaredContentType,
+    bytes,
+    ...(candidate.mode !== undefined ? { mode: candidate.mode } : {}),
+  });
+  if (quarantineDecision.quarantined) {
+    return quarantineDiscordAttachment({
+      candidate,
+      context,
+      bytes,
+      decision: quarantineDecision,
+    });
+  }
+
+  if (!isSupportedDocumentContentType(candidate.contentType)) {
+    throw new Error(`unsupported attachment content type ${candidate.contentType}`);
   }
 
   const directory = join(
@@ -253,6 +311,78 @@ async function ingestDiscordDocumentAttachment(
   };
 }
 
+async function quarantineDiscordAttachment(input: {
+  candidate: DiscordDocumentAttachmentCandidate;
+  context: DiscordDocumentIngestContext;
+  bytes: Buffer;
+  decision: DiscordAttachmentQuarantineDecision;
+}): Promise<DiscordQuarantinedAttachment> {
+  const directory = join(
+    resolvePersonalDownloadsDir(input.context.personalFilesDir),
+    'quarantine',
+    'discord',
+    yyyyMmDd(input.context.createdAt),
+  );
+  await mkdir(directory, { recursive: true });
+
+  const filename = safeFileName(input.candidate.name, `attachment-${input.candidate.id}`);
+  const quarantinePath = join(directory, `${input.context.messageId}-${input.candidate.id}-${filename}`);
+  await writeFile(quarantinePath, input.bytes, { mode: 0o600 });
+
+  const sha256 = createHash('sha256').update(input.bytes).digest('hex');
+  const metadataPath = `${quarantinePath}.quarantine.json`;
+  const metadata = {
+    schemaVersion: 1,
+    status: DISCORD_ATTACHMENT_QUARANTINE_STATUS,
+    source: {
+      channel: 'discord',
+      channelId: input.context.channelId,
+      messageId: input.context.messageId,
+      attachmentId: input.candidate.id,
+      authorId: input.context.authorId,
+      createdAt: input.context.createdAt.toISOString(),
+    },
+    file: {
+      originalName: input.candidate.name,
+      safeName: filename,
+      declaredContentType: input.candidate.declaredContentType,
+      effectiveContentType: input.candidate.contentType,
+      ...(input.decision.sniffedContentType ? { sniffedContentType: input.decision.sniffedContentType } : {}),
+      declaredSizeBytes: input.candidate.sizeBytes,
+      downloadedBytes: input.bytes.byteLength,
+      sha256,
+      ...(input.candidate.mode !== undefined ? { mode: input.candidate.mode } : {}),
+    },
+    quarantine: {
+      path: quarantinePath,
+      metadataPath,
+    },
+    review: {
+      status: DISCORD_ATTACHMENT_QUARANTINE_STATUS,
+      reviewedAt: null,
+      reviewer: null,
+      notes: null,
+    },
+    reasons: input.decision.reasons,
+  };
+  await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, { mode: 0o600 });
+
+  return {
+    attachmentId: input.candidate.id,
+    name: input.candidate.name,
+    contentType: input.candidate.contentType,
+    declaredContentType: input.candidate.declaredContentType,
+    sizeBytes: input.candidate.sizeBytes,
+    downloadedBytes: input.bytes.byteLength,
+    sha256,
+    quarantinePath,
+    metadataPath,
+    status: DISCORD_ATTACHMENT_QUARANTINE_STATUS,
+    reasons: input.decision.reasons,
+    ...(input.decision.sniffedContentType ? { sniffedContentType: input.decision.sniffedContentType } : {}),
+  };
+}
+
 export async function parseDiscordDocumentBytes(bytes: Uint8Array, contentType: string): Promise<string> {
   const normalized = normalizeContentType(contentType);
   if (normalized === 'application/pdf') {
@@ -267,6 +397,11 @@ export async function parseDiscordDocumentBytes(bytes: Uint8Array, contentType: 
 function isTextDocument(contentType: string): boolean {
   const normalized = normalizeContentType(contentType);
   return SUPPORTED_TEXT_CONTENT_TYPES.has(normalized);
+}
+
+function isSupportedDocumentContentType(contentType: string): boolean {
+  const normalized = normalizeContentType(contentType);
+  return normalized === 'application/pdf' || isTextDocument(normalized);
 }
 
 async function parsePdfDocument(bytes: Uint8Array): Promise<string> {
@@ -335,12 +470,14 @@ export function appendDiscordDocumentIngestToContent(
   content: string,
   summary: DiscordDocumentIngestSummary,
 ): string {
-  if (summary.results.length === 0 && summary.failures.length === 0) return content;
+  if (summary.results.length === 0 && summary.quarantined.length === 0 && summary.failures.length === 0) return content;
 
   const base = content.trim() === '(empty message)' ? '' : content.trim();
   const sections: string[] = [];
   if (base) sections.push(base);
-  sections.push(DISCORD_DOCUMENT_PROMPT_HEADER);
+  if (summary.results.length > 0) {
+    sections.push(DISCORD_DOCUMENT_PROMPT_HEADER);
+  }
 
   for (const result of summary.results) {
     sections.push([
@@ -352,6 +489,21 @@ export function appendDiscordDocumentIngestToContent(
       '<parsed_attachment_text>',
       result.promptText || '[No extractable text found.]',
       '</parsed_attachment_text>',
+    ].join('\n'));
+  }
+
+  for (const quarantined of summary.quarantined) {
+    sections.push([
+      `[Attached file quarantined: ${quarantined.name}]`,
+      `Status: ${quarantined.status}`,
+      `Declared content type: ${quarantined.declaredContentType}`,
+      `Effective content type: ${quarantined.contentType}`,
+      ...(quarantined.sniffedContentType ? [`Detected content type: ${quarantined.sniffedContentType}`] : []),
+      `Declared size: ${quarantined.sizeBytes} bytes`,
+      `Downloaded size: ${quarantined.downloadedBytes} bytes`,
+      `SHA-256: ${quarantined.sha256}`,
+      `Quarantine reasons: ${quarantined.reasons.join(', ')}`,
+      'Attachment content withheld pending operator review.',
     ].join('\n'));
   }
 

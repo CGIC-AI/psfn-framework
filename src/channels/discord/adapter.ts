@@ -47,6 +47,7 @@ import {
   toDiscordDocumentAttachmentCandidate,
   type DiscordDocumentAttachmentCandidate,
 } from './file-ingest.js';
+import { hasDiscordAttachmentMetadataQuarantineRisk } from './file-quarantine.js';
 
 const log = createComponentLogger('Discord');
 const rateLimitedDebugLog = createRateLimitedLogEmitter({ windowMs: 60_000 });
@@ -733,6 +734,17 @@ export class DiscordAdapter implements ChannelAdapterPort {
           failures: documentSummary.failures,
         });
       }
+      if (documentSummary.quarantined.length > 0) {
+        log.warn('Discord attachments quarantined pending operator review', {
+          channelId: msg.channelId,
+          messageId: msg.id,
+          quarantined: documentSummary.quarantined.map(attachment => ({
+            name: attachment.name,
+            sha256: attachment.sha256,
+            reasons: attachment.reasons,
+          })),
+        });
+      }
     } else if (documentCandidates.length > 0 && !this.personalFilesDir) {
       log.warn('Discord document attachments skipped because personal files root is not configured', {
         channelId: msg.channelId,
@@ -766,6 +778,15 @@ export class DiscordAdapter implements ChannelAdapterPort {
     const attachments: NonNullable<SubstrateMessage['attachments']> = [];
     for (const raw of rawAttachments) {
       if (attachments.length >= DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE) break;
+      if (hasDiscordAttachmentMetadataQuarantineRisk(raw)) {
+        log.debug('Skipping metadata-risky Discord image attachment until quarantine review', {
+          channelId: msg.channelId,
+          messageId: msg.id,
+          name: raw.name,
+          contentType: raw.contentType,
+        });
+        continue;
+      }
 
       const contentType = this.resolveDiscordImageContentType(raw);
       if (!contentType) continue;

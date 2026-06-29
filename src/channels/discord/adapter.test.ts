@@ -760,6 +760,65 @@ describe('DiscordAdapter DM routing', () => {
     }
   });
 
+  it('quarantines spoofed image-looking scripts before image attachment context', async () => {
+    const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-discord-quarantine-adapter-'));
+    const originalFetch = globalThis.fetch;
+    const script = '#!/bin/sh\necho DO_NOT_PROMPT\n';
+    const fetchMock = vi.fn(async () => new Response(script, {
+      headers: { 'content-type': 'text/plain' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const eventBus = new EventBus();
+      const adapter = new DiscordAdapter(makeConfig(), eventBus, { personalFilesDir });
+      await adapter.init();
+
+      const channelId = 'dm-channel-quarantine-spoof';
+      const interactive = makeInteractiveTextChannel();
+      discordMock.channelsById.set(channelId, interactive.channel);
+
+      const handler = vi.fn(async () => {
+        return {
+          content: 'quarantine noted',
+          channelId,
+          metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+        };
+      });
+      adapter.onMessage(handler);
+
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'dm-spoof-1',
+          content: 'this is probably an image?',
+          attachments: [
+            {
+              id: 'att-spoof-image-script',
+              name: 'photo.png',
+              url: 'https://cdn.discordapp.com/attachments/a/b/photo.png',
+              contentType: 'text/plain',
+              size: script.length,
+            },
+          ],
+        }),
+      );
+
+      expect(fetchMock).toHaveBeenCalledWith('https://cdn.discordapp.com/attachments/a/b/photo.png');
+      expect(handler).toHaveBeenCalledTimes(1);
+      const message = handler.mock.calls[0][0] as SubstrateMessage;
+      expect(message.attachments).toBeUndefined();
+      expect(message.content).toContain('[Attached file quarantined: photo.png]');
+      expect(message.content).toContain('declared_extension_mismatch:declared=text/plain;expected=image/png');
+      expect(message.content).toContain('shebang');
+      expect(message.content).not.toContain('DO_NOT_PROMPT');
+      const quarantineRoot = join(personalFilesDir, 'downloads', 'quarantine', 'discord');
+      expect(message.content).not.toContain(quarantineRoot);
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+      rmSync(personalFilesDir, { recursive: true, force: true });
+    }
+  });
+
   it('prefers canonical Discord attachment URLs over proxy URLs for image attachments', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);

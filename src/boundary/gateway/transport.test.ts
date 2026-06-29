@@ -656,6 +656,54 @@ describe('WebSocket RPC transport', () => {
 });
 
 describe('NdjsonConnection framing', () => {
+  it('releases connection, readline, and socket listeners when destroyed', async () => {
+    const socketPath = join(tmpdir(), `psfn-transport-${randomUUID()}.sock`);
+    let serverConn: NdjsonConnection | null = null;
+    const closeEvents: string[] = [];
+
+    const server = createSocketServer(socketPath, (conn) => {
+      serverConn = conn;
+    });
+
+    const client = net.createConnection(socketPath);
+    client.on('error', () => undefined);
+
+    try {
+      await waitFor(() => serverConn !== null);
+      const conn = serverConn;
+      const internals = conn as unknown as {
+        rl: { listenerCount(eventName: string): number };
+        socket: net.Socket;
+      };
+
+      conn.onMessage(() => undefined);
+      conn.on('close', () => {
+        closeEvents.push('close');
+      });
+      conn.on('error', () => undefined);
+
+      expect(conn.listenerCount('message')).toBe(1);
+      expect(internals.rl.listenerCount('line')).toBeGreaterThan(0);
+      expect(internals.socket.listenerCount('close')).toBeGreaterThan(0);
+
+      conn.destroy();
+
+      await waitFor(() => conn.destroyed);
+
+      expect(closeEvents).toEqual(['close']);
+      expect(conn.listenerCount('message')).toBe(0);
+      expect(conn.listenerCount('close')).toBe(0);
+      expect(conn.listenerCount('error')).toBe(0);
+      expect(internals.rl.listenerCount('line')).toBe(0);
+      expect(internals.rl.listenerCount('error')).toBe(0);
+      expect(internals.socket.listenerCount('close')).toBe(0);
+      expect(internals.socket.listenerCount('error')).toBe(0);
+    } finally {
+      client.destroy();
+      await closeServer(server);
+    }
+  });
+
   it('forwards readline socket errors instead of crashing the process', async () => {
     const socketPath = join(tmpdir(), `psfn-transport-${randomUUID()}.sock`);
     let serverConn: NdjsonConnection | null = null;

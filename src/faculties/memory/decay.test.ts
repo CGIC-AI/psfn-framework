@@ -5,6 +5,7 @@ import { MemoryStore } from './store.js';
 import { SalienceDecay } from './decay.js';
 import { MEMORY_CONFIG } from './types.js';
 import type { PurrMemory } from './types.js';
+import type { MemoryStorePort } from './memory-store-port.js';
 import { DEFAULT_EMBEDDING_CONFIG } from './embedding.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
@@ -31,6 +32,14 @@ function makeEmbedding(): Float32Array {
   const arr = new Float32Array(EMBEDDING_DIMS);
   for (let i = 0; i < EMBEDDING_DIMS; i++) arr[i] = Math.random() - 0.5;
   return arr;
+}
+
+function createDeferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }
 
 describe('SalienceDecay', () => {
@@ -298,6 +307,46 @@ describe('SalienceDecay', () => {
     decay.start();
 
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MEMORY_CONFIG.maintenanceIntervalMs);
+  });
+
+  it('stops an in-flight run before reading the next batch', async () => {
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const firstBatchWriteStarted = createDeferred();
+    const firstBatchWriteRelease = createDeferred();
+    const firstBatch = makeMemory({
+      id: 'cancel-page-0',
+      type: 'episodic',
+      salience: 1.0,
+      lastAccessed: oneWeekAgo,
+    });
+    const secondBatch = makeMemory({
+      id: 'cancel-page-1',
+      type: 'episodic',
+      salience: 1.0,
+      lastAccessed: oneWeekAgo,
+    });
+    const listActiveMemories = vi.fn(async (options?: { limit?: number; offset?: number }) => (
+      options?.offset === 0 ? [firstBatch] : [secondBatch]
+    ));
+    const bulkUpdateSalience = vi.fn(async () => {
+      firstBatchWriteStarted.resolve();
+      await firstBatchWriteRelease.promise;
+    });
+    const cancellableDecay = new SalienceDecay({
+      listActiveMemories,
+      bulkUpdateSalience,
+    } as unknown as MemoryStorePort, { batchSize: 1 });
+
+    const runPromise = cancellableDecay.run();
+    await firstBatchWriteStarted.promise;
+
+    cancellableDecay.stop();
+    firstBatchWriteRelease.resolve();
+    await runPromise;
+
+    expect(listActiveMemories).toHaveBeenCalledTimes(1);
+    expect(listActiveMemories).toHaveBeenCalledWith({ limit: 1, offset: 0 });
+    expect(bulkUpdateSalience).toHaveBeenCalledTimes(1);
   });
 
   it('processes salience decay across multiple pages of active memories', async () => {

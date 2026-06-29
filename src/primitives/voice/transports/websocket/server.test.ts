@@ -191,6 +191,46 @@ describe('WebSocketVoiceServer', () => {
     await flushPromises();
   });
 
+  it('drops queued frames when the client disconnects during frame processing', async () => {
+    const connection = new FakeConnection('conn-close-race');
+    const firstFrameGate = createDeferred();
+    const onFrame = vi.fn(async () => {
+      await firstFrameGate.promise;
+    });
+    const onSessionClose = vi.fn();
+    const server = new WebSocketVoiceServer(
+      { sessionTimeoutMs: 5_000, maxFrameBytes: 1024, maxPendingFrames: 4 },
+      { onFrame, onSessionClose },
+    );
+
+    server.attach(connection);
+    connection.emitMessage(serializeVoiceWireFrame({
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.start',
+      sessionId: 'conn-close-race',
+    }));
+    connection.emitMessage(serializeVoiceWireFrame({
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'ping',
+      sessionId: 'conn-close-race',
+    }));
+
+    await flushPromises();
+    expect(onFrame).toHaveBeenCalledTimes(1);
+
+    connection.emitClose();
+    await waitForCondition(() => onSessionClose.mock.calls.length === 1);
+
+    firstFrameGate.resolve();
+    await flushPromises();
+
+    expect(onFrame).toHaveBeenCalledTimes(1);
+    expect(onSessionClose).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'conn-close-race', connectionId: 'conn-close-race' }),
+      'client_disconnect',
+    );
+  });
+
   it('applies backpressure when pending frame queue overflows', async () => {
     const connection = new FakeConnection('conn-backpressure');
     const holdFirstFrame = createDeferred();

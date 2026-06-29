@@ -170,6 +170,7 @@ function summarizeFramePreview(line: string): string {
 export class NdjsonConnection extends EventEmitter implements GatewayRpcConnection {
   private socket: net.Socket;
   private rl: readline.Interface;
+  private closed = false;
 
   constructor(socket: net.Socket) {
     super();
@@ -195,7 +196,7 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
       this.destroy();
     });
 
-    socket.on('close', () => this.emit('close'));
+    socket.on('close', () => this.finishClose());
     socket.on('error', (err) => this.emitConnectionError(err));
   }
 
@@ -209,8 +210,10 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
   }
 
   destroy(): void {
+    if (this.closed) return;
     this.rl.close();
     this.socket.destroy();
+    this.finishClose();
   }
 
   get destroyed(): boolean {
@@ -225,6 +228,15 @@ export class NdjsonConnection extends EventEmitter implements GatewayRpcConnecti
     log.warn('Socket connection error without listener', {
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+
+  private finishClose(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.emit('close');
+    this.rl.removeAllListeners();
+    this.socket.removeAllListeners();
+    this.removeAllListeners();
   }
 }
 

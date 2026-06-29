@@ -4,8 +4,11 @@ import { ContactStore } from '../../../core/contacts/store.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import { AdminContactsDataService } from './contacts-service.js';
+import type { AdminContactRelationshipScoreReader } from './types.js';
 
-function createServiceHarness() {
+function createServiceHarness(options?: {
+  relationshipScoreReader?: AdminContactRelationshipScoreReader;
+}) {
   const db = new Database(':memory:');
   const contactStore = new ContactStore(db);
   const sessionStore = {
@@ -28,6 +31,7 @@ function createServiceHarness() {
     contactStore,
     memoryStore,
     sessionStore,
+    relationshipScoreReader: options?.relationshipScoreReader,
   });
   return { db, contactStore, service, profiles };
 }
@@ -165,6 +169,44 @@ describe('AdminContactsDataService', () => {
           }),
         }),
       ]));
+    } finally {
+      db.close();
+    }
+  });
+
+  it('includes dynamic relationship score display data when a reader is available', async () => {
+    let requestedContactIds: readonly string[] = [];
+    const { db, contactStore, service } = createServiceHarness({
+      relationshipScoreReader: {
+        async listContactRelationshipScores(contactIds) {
+          requestedContactIds = contactIds;
+          return new Map(contactIds.map(contactId => [contactId, {
+            score: 42.5,
+            resolvedTier: 'acquaintance',
+            previousTierThreshold: 20,
+            nextTier: 'friend',
+            nextTierThreshold: 60,
+            progressToNextTier: 0.5625,
+            updatedAt: '2026-06-29T16:45:00.000Z',
+          }]));
+        },
+      },
+    });
+    try {
+      const contact = contactStore.upsert({ displayName: 'Score Contact', relationshipType: 'acquaintance' });
+
+      const result = await service.listContacts();
+
+      expect(requestedContactIds).toEqual([contact.id]);
+      expect(result.relationshipScoreMap?.get(contact.id)).toEqual({
+        score: 42.5,
+        resolvedTier: 'acquaintance',
+        previousTierThreshold: 20,
+        nextTier: 'friend',
+        nextTierThreshold: 60,
+        progressToNextTier: 0.5625,
+        updatedAt: '2026-06-29T16:45:00.000Z',
+      });
     } finally {
       db.close();
     }

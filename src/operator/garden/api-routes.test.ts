@@ -3040,6 +3040,7 @@ describe('AdminServer JSON API routes', () => {
     expect(listRes.headers['cache-control']).toBe('no-store');
     const listPayload = JSON.parse(listRes.body) as {
       contacts: Array<{ id: string }>;
+      relationshipScoreMap: Record<string, unknown>;
       socialGraphMap: Record<string, {
         edgeCount: number;
         mentionOnlyNeighborCount: number;
@@ -3051,6 +3052,7 @@ describe('AdminServer JSON API routes', () => {
       }>;
     };
     expect(listPayload.contacts.some(entry => entry.id === contact.id)).toBe(true);
+    expect(listPayload.relationshipScoreMap).toEqual({});
     expect(listPayload.socialGraphMap[contact.id]).toMatchObject({
       edgeCount: 1,
       mentionOnlyNeighborCount: 1,

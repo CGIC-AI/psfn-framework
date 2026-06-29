@@ -166,7 +166,7 @@ describe('AdminSettingsDataService', () => {
       uiThemeId: 'generic-dark',
       analysisWorkbenchMaxTokens: 76_000,
       analysisWorkbenchMaxWallTimeMs: 300_000,
-      analysisWorkbenchMaxSubQueries: 12,
+      analysisWorkbenchMaxSubQueries: 24,
       retryMaxAttempts: 4,
       retryBaseDelayMs: 2_500,
       importProcessingRouteMode: 'local_endpoint',

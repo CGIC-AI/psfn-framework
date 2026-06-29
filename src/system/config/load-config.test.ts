@@ -278,7 +278,7 @@ describe('loadConfig path defaults', () => {
     expect(config.sessionMirrorChannelOverrides).toEqual({});
     expect(config.analysisWorkbenchMaxTokens).toBe(76_000);
     expect(config.analysisWorkbenchMaxWallTimeMs).toBe(300_000);
-    expect(config.analysisWorkbenchMaxSubQueries).toBe(12);
+    expect(config.analysisWorkbenchMaxSubQueries).toBe(24);
     expect(config.observerEvalSidecar).toEqual(createDefaultObserverEvalSidecarSettings());
     expect(config.deepgramModel).toBeUndefined();
     expect(config.deepgramSttEndpoint).toBeUndefined();

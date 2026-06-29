@@ -63,7 +63,7 @@ describe('seed defaults', () => {
     const defaults = loadRuntimeSettingsSeedDefaults();
     expect(defaults.analysisWorkbenchMaxTokens).toBe(76_000);
     expect(defaults.analysisWorkbenchMaxWallTimeMs).toBe(300_000);
-    expect(defaults.analysisWorkbenchMaxSubQueries).toBe(12);
+    expect(defaults.analysisWorkbenchMaxSubQueries).toBe(24);
     expect(defaults.deepgramModel).toBe('nova-3');
     expect(defaults.openRouterModelsApiUrl).toBe('https://openrouter.ai/api/v1/models');
     expect(defaults.embeddingProvider).toBe('transformers');

@@ -66,6 +66,14 @@ function makeConfig(overrides: Partial<REPLConfig['budget']> = {}): REPLConfig {
   };
 }
 
+function makeSubQueryProgram(count: number): string {
+  return [
+    '```repl',
+    ...Array.from({ length: count }, (_, index) => `await llm_query("q${index + 1}");`),
+    '```',
+  ].join('\n');
+}
+
 function makeChargePolicy(): ChargePolicyConfig {
   return {
     schemaVersion: 1,
@@ -817,6 +825,39 @@ describe('runRLMLoop', () => {
     expect(nursery.iterations).toBe(5);
     expect(apprentice.iterations).toBe(10);
     expect(autonomous.iterations).toBe(15);
+  });
+
+  it('clamps configured sub-query budget to active tier ceilings with finite stop reasons', async () => {
+    const scenarios: Array<{
+      tier: 'nursery' | 'apprentice' | 'autonomous';
+      expectedMaxSubQueries: number;
+    }> = [
+      { tier: 'nursery', expectedMaxSubQueries: 10 },
+      { tier: 'apprentice', expectedMaxSubQueries: 15 },
+      { tier: 'autonomous', expectedMaxSubQueries: 24 },
+    ];
+
+    for (const { tier, expectedMaxSubQueries } of scenarios) {
+      const llm = sequentialLLM([
+        makeSubQueryProgram(expectedMaxSubQueries + 1),
+        ...Array.from({ length: expectedMaxSubQueries }, (_, index) => `sub-result-${index + 1}`),
+        'FINAL("not reached")',
+      ]);
+      const result = await runRLMLoop('tier sub-query clamp', makeDeps(llm, {
+        getCapabilityTier: () => tier,
+        config: makeConfig({
+          maxIterations: 50,
+          maxWallTimeMs: 500_000,
+          maxSubQueries: 100,
+        }),
+      }));
+
+      expect(result.truncated).toBe(true);
+      expect(result.budgetStatus.subQueries).toBe(expectedMaxSubQueries);
+      expect(result.budgetStatus.exceeded).toBe('sub-query limit');
+      expect(result.answer).toBe('[Analysis workbench loop stopped: sub-query limit]');
+      expect((llm.complete as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(expectedMaxSubQueries + 1);
+    }
   });
 
   it('clamps configured wall-time budget to active tier wall-time ceiling', async () => {

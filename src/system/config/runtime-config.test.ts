@@ -54,7 +54,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({
       analysisWorkbenchMaxTokens: 180000,
       analysisWorkbenchMaxWallTimeMs: 180000,
-      analysisWorkbenchMaxSubQueries: 12,
+      analysisWorkbenchMaxSubQueries: 24,
     }), 'utf8');
     writeFileSync(join(dataDir, 'models.json'), JSON.stringify({
       schemaVersion: 1,
@@ -176,7 +176,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     expect(config.primaryMaxTokens).toBe(12288);
     expect(config.analysisWorkbenchMaxTokens).toBe(180000);
     expect(config.analysisWorkbenchMaxWallTimeMs).toBe(180000);
-    expect(config.analysisWorkbenchMaxSubQueries).toBe(12);
+    expect(config.analysisWorkbenchMaxSubQueries).toBe(24);
     expect(config.chargePolicy?.surfaceCosts.shardLaunch).toBe(7);
   });
 });

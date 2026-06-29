@@ -79,7 +79,7 @@ const DEFAULT_SESSION_MIRROR_MAX_CHARS = 220;
 const DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS = 1_800_000;
 const DEFAULT_THINK_MAX_TOKENS = 76_000;
 const DEFAULT_THINK_MAX_WALL_TIME_MS = 300_000;
-const DEFAULT_THINK_MAX_SUB_QUERIES = 12;
+const DEFAULT_THINK_MAX_SUB_QUERIES = 24;
 type LoadConfigMode = 'gateway' | 'agent';
 
 function isNodeTlsVerificationGloballyDisabled(value: string | undefined): boolean {

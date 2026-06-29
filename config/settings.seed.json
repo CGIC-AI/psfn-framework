@@ -126,7 +126,7 @@
   "profileSynthesisMinSourceMemories": 2,
   "analysisWorkbenchMaxTokens": 76000,
   "analysisWorkbenchMaxWallTimeMs": 300000,
-  "analysisWorkbenchMaxSubQueries": 12,
+  "analysisWorkbenchMaxSubQueries": 24,
   "observerEvalSidecar": {
     "enabled": false,
     "sidecarId": "observer-eval-sidecar",

@@ -36,6 +36,25 @@ function makeEmbeddingProvider(): EmbeddingProviderPort {
   };
 }
 
+function makePortMemory(id: string, overrides: Partial<PurrMemory> = {}): PurrMemory {
+  return {
+    id,
+    text: `Memory ${id}`,
+    type: 'semantic',
+    importance: 0.5,
+    confidence: 0.8,
+    emotionalValence: 0,
+    salience: 0.5,
+    sourceRef: 'test:memory-store-port',
+    extractedAt: Date.now(),
+    lastAccessed: Date.now(),
+    accessCount: 0,
+    tags: [],
+    sensitivity: 'personal',
+    ...overrides,
+  };
+}
+
 class InMemoryMemoryStorePort implements MemoryStorePort {
   private readonly memories = new Map<string, PurrMemory>();
   private readonly deleteVersions = new Map<string, MemoryDeleteVersion>();
@@ -100,6 +119,20 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
       .filter(memory => !memory.supersededBy && !memory.deletedAt)
       .slice(0, limit)
       .map(memory => ({ ...memory }));
+  }
+
+  listMemories(options: { limit?: number; offset?: number } = {}): PurrMemory[] {
+    const offset = options.offset ?? 0;
+    const memories = [...this.memories.values()]
+      .sort((left, right) => {
+        const leftArchived = left.supersededBy || left.deletedAt ? 1 : 0;
+        const rightArchived = right.supersededBy || right.deletedAt ? 1 : 0;
+        return leftArchived - rightArchived || right.extractedAt - left.extractedAt;
+      });
+    const limited = options.limit === undefined
+      ? memories.slice(offset)
+      : memories.slice(offset, offset + options.limit);
+    return limited.map(memory => ({ ...memory }));
   }
 
   listActiveMemories(options: { limit?: number; offset?: number } = {}): PurrMemory[] {
@@ -395,6 +428,19 @@ describe('MemoryStorePort', () => {
     expect(retrieved).toContain('V prefers oolong tea in the morning');
   });
 
+  it('lists archived memories separately from active memory reads', () => {
+    const store = new InMemoryMemoryStorePort();
+    store.insertMemory(makePortMemory('active-memory', { extractedAt: 2 }));
+    store.insertMemory(makePortMemory('archived-memory', {
+      extractedAt: 1,
+      deletedAt: 3,
+      deletedBy: 'test',
+    }));
+
+    expect(store.getAllActiveMemories().map(memory => memory.id)).toEqual(['active-memory']);
+    expect(store.listMemories().map(memory => memory.id)).toEqual(['active-memory', 'archived-memory']);
+  });
+
   it('delegates transaction, patch event, and evolution link APIs through createMemoryStorePort', async () => {
     const backend = new InMemoryMemoryStorePort();
     const port = createMemoryStorePort(backend);
@@ -432,5 +478,6 @@ describe('MemoryStorePort', () => {
     expect(evolutionLink.relation).toBe('updates');
     await expect(port.getEvolutionLinksForSourceMemory('memory-2')).resolves.toEqual([evolutionLink]);
     await expect(port.getEvolutionLinksForTargetMemory('memory-1', 'updates')).resolves.toEqual([evolutionLink]);
+    await expect(port.listMemories()).resolves.toEqual([]);
   });
 });

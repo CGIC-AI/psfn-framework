@@ -174,6 +174,23 @@ describe('capability tool gating', () => {
     const timelineDenied = await timelineGated.execute('call-timeline', { action: 'timeline' });
     expect(memoryTimeline.executeSpy).not.toHaveBeenCalled();
     expect((timelineDenied.content[0] as any).text).toContain('identity.read');
+
+    const memoryCensus = createTool('memory');
+    const censusGated = gateToolWithCapabilities(
+      memoryCensus.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const censusDenied = await censusGated.execute('call-census', { action: 'census' });
+    expect(memoryCensus.executeSpy).not.toHaveBeenCalled();
+    expect((censusDenied.content[0] as any).text).toContain('identity.read');
+
+    const memoryExists = createTool('memory');
+    const existsGated = gateToolWithCapabilities(
+      memoryExists.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    await existsGated.execute('call-exists', { action: 'exists', query: 'topic' });
+    expect(memoryExists.executeSpy).toHaveBeenCalledTimes(1);
   });
 
   it('resolves canonical action-aware requirements for consolidated tool domains', () => {

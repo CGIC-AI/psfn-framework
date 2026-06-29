@@ -29,6 +29,39 @@ export function getAllActiveMemories(db: Database.Database, limit: number = 10_0
   return rows.map(mapMemoryRow);
 }
 
+export function listMemories(
+  db: Database.Database,
+  options: MemoryListOptions = {},
+): PurrMemory[] {
+  const offset = normalizeListOffset(options.offset ?? 0);
+  const order = `
+    ORDER BY
+      CASE WHEN deleted_at IS NULL AND superseded_by IS NULL THEN 0 ELSE 1 END,
+      extracted_at DESC,
+      id DESC
+  `;
+  if (options.limit === undefined) {
+    const rows = db.prepare(`
+      SELECT *
+      FROM l2_memories
+      ${order}
+      LIMIT -1
+      OFFSET ?
+    `).all(offset) as MemoryRow[];
+    return rows.map(mapMemoryRow);
+  }
+
+  const limit = normalizeListLimit(options.limit, 50, 1, 500);
+  const rows = db.prepare(`
+    SELECT *
+    FROM l2_memories
+    ${order}
+    LIMIT ?
+    OFFSET ?
+  `).all(limit, offset) as MemoryRow[];
+  return rows.map(mapMemoryRow);
+}
+
 export function listActiveMemories(
   db: Database.Database,
   options: MemoryListOptions = {},

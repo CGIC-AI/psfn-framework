@@ -53,6 +53,7 @@ import {
 } from './store/read-write-operations.js';
 import {
   getAllActiveMemories,
+  listMemories,
   listActiveMemories,
   countActiveMemories,
   getById,
@@ -151,6 +152,10 @@ export class MemoryStore {
 
   getAllActiveMemories(limit: number = 10_000): PurrMemory[] {
     return getAllActiveMemories(this.db, limit);
+  }
+
+  listMemories(options: MemoryListOptions = {}): PurrMemory[] {
+    return listMemories(this.db, options);
   }
 
   listActiveMemories(options: MemoryListOptions = {}): PurrMemory[] {

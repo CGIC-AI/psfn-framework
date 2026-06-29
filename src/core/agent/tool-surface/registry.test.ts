@@ -89,6 +89,12 @@ describe('first-party tool surface registry', () => {
     }
   });
 
+  it('declares memory visibility actions on the canonical memory surface', () => {
+    expect(getCanonicalToolSurface('memory')?.actions).toEqual(
+      expect.arrayContaining(['census', 'exists']),
+    );
+  });
+
   it('throws when a model-facing list contains retired aliases without an explicit exception', () => {
     expect(() => assertNoRetiredFirstPartyToolAliases([
       'tool_search',

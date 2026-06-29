@@ -175,13 +175,20 @@ describe('createMemoryTool', () => {
     };
   }
 
-  function mockUnifiedStore(): {
+  function mockUnifiedStore(memories: PurrMemory[] = []): {
     searchByText: ReturnType<typeof vi.fn>;
+    listMemories: ReturnType<typeof vi.fn>;
+    listActiveMemories: ReturnType<typeof vi.fn>;
+    getAllActiveMemories: ReturnType<typeof vi.fn>;
     softDeleteMemory: ReturnType<typeof vi.fn>;
     undoSoftDelete: ReturnType<typeof vi.fn>;
   } {
+    const cloneMemories = (items: PurrMemory[]) => items.map(memory => ({ ...memory }));
     return {
       searchByText: vi.fn(),
+      listMemories: vi.fn(async () => cloneMemories(memories)),
+      listActiveMemories: vi.fn(async () => cloneMemories(memories.filter(memory => !memory.deletedAt && !memory.supersededBy))),
+      getAllActiveMemories: vi.fn(async () => cloneMemories(memories.filter(memory => !memory.deletedAt && !memory.supersededBy))),
       softDeleteMemory: vi.fn(),
       undoSoftDelete: vi.fn(),
     };
@@ -301,6 +308,154 @@ describe('createMemoryTool', () => {
     expect(resultText(result as any)).toContain('Memory search results (1)');
     expect(resultText(result as any)).toContain('mem-search-1');
     expect(resultText(result as any)).toContain('similarity=0.82');
+  });
+
+  it('census reports public-channel visible counts and companion-readable withheld context without protected text', async () => {
+    const store = mockUnifiedStore([
+      makeMemory({
+        id: 'mem-public-active',
+        text: 'Public deploy plan is safe to mention',
+        type: 'semantic',
+        sensitivity: 'public',
+        sourceType: 'turn',
+        contactId: 'contact:primary',
+      }),
+      makeMemory({
+        id: 'mem-public-archived',
+        text: 'Archived public deploy note',
+        type: 'episodic',
+        sensitivity: 'public',
+        sourceType: 'tool_write',
+        deletedAt: 1_700_000_000_000,
+        deletedBy: 'test',
+      }),
+      makeMemory({
+        id: 'mem-secret',
+        text: 'secret launch phrase must not leak',
+        type: 'semantic',
+        sensitivity: 'confidential',
+        sourceType: 'turn',
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-census-public', {
+      action: 'census',
+      channel_id: 'api:public',
+      trust_level: 'regular',
+      channel_visibility: 'public',
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Memory census:');
+    expect(text).toContain('Visible memories: 2');
+    expect(text).toContain('By type: episodic: 1, semantic: 1.');
+    expect(text).toContain('By sensitivity: public: 2.');
+    expect(text).toContain('By state: active: 1, archived: 1.');
+    expect(text).toContain('Withheld context: 1 candidate memory was present');
+    expect(text).toContain('Withheld trust/privacy reasons: 1 trust ceiling.');
+    expect(text).toContain('Withheld categories: semantic: 1.');
+    expect(text).toContain('Withheld provenance classes: turn: 1.');
+    expect(text).toContain('No memory text returned.');
+    expect(text).not.toContain('secret launch phrase');
+    expect(text).not.toContain('mem-secret');
+  });
+
+  it('exists answers contact-scoped topic checks without returning memory text', async () => {
+    const store = mockUnifiedStore([
+      makeMemory({
+        id: 'mem-primary',
+        text: 'Primary contact deployment plan prefers concise rollout summaries',
+        type: 'semantic',
+        sensitivity: 'personal',
+        contactId: 'contact:primary',
+        scopeRef: { kind: 'contact', id: 'contact:primary' },
+        scopeTags: ['relationship'],
+      }),
+      makeMemory({
+        id: 'mem-other',
+        text: 'Other contact deployment plan has a different cadence',
+        type: 'semantic',
+        sensitivity: 'public',
+        contactId: 'contact:other',
+        scopeRef: { kind: 'contact', id: 'contact:other' },
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-exists-contact', {
+      action: 'exists',
+      query: 'deployment plan',
+      contact_id: 'contact:primary',
+      channel_id: 'api:private',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+      canonical_contact_id: 'contact:primary',
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Result: yes, 1 visible matching memory found.');
+    expect(text).toContain('By contact scope: contact:primary: 1.');
+    expect(text).toContain('By scope ref: contact:contact:primary: 1.');
+    expect(text).toContain('No memory text returned.');
+    expect(text).not.toContain('concise rollout summaries');
+    expect(text).not.toContain('different cadence');
+    expect(text).not.toContain('mem-primary');
+  });
+
+  it('exists reports withheld-only confidential matches on public channels without leaking text', async () => {
+    const store = mockUnifiedStore([
+      makeMemory({
+        id: 'mem-hidden-topic',
+        text: 'confidential garden protocol phrase',
+        type: 'procedural',
+        sensitivity: 'confidential',
+        sourceType: 'tool_write',
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-exists-withheld', {
+      action: 'exists',
+      query: 'garden protocol',
+      channel_id: 'api:public',
+      trust_level: 'public',
+      channel_visibility: 'public',
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Result: yes, matching memory exists, but none is visible in this channel.');
+    expect(text).toContain('Withheld context: 1 candidate memory was present');
+    expect(text).toContain('Withheld categories: procedural: 1.');
+    expect(text).toContain('Withheld provenance classes: tool_write: 1.');
+    expect(text).toContain('Withheld relevance bands: 1 high-match.');
+    expect(text).not.toContain('confidential garden protocol phrase');
+    expect(text).not.toContain('mem-hidden-topic');
+  });
+
+  it('exists returns a clear no-result answer without memory text', async () => {
+    const store = mockUnifiedStore([
+      makeMemory({
+        id: 'mem-unrelated',
+        text: 'Visible unrelated memory',
+        type: 'semantic',
+        sensitivity: 'public',
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    const result = await tool.execute('memory-call-exists-empty', {
+      action: 'exists',
+      query: 'nonexistent lattice topic',
+      channel_id: 'api:public',
+      trust_level: 'public',
+      channel_visibility: 'public',
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Result: no matching memories found for the requested topic and filters.');
+    expect(text).toContain('No memory text returned.');
+    expect(text).not.toContain('Visible unrelated memory');
   });
 
   it('returns date timeline episodes using inclusive range boundaries', async () => {

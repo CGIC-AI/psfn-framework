@@ -112,6 +112,7 @@ function createCompatibleMemoryStore(memoryStore: MemoryStorePort | null): Memor
 
   const store = memoryStore as MemoryStorePort & {
     countActiveMemories?: MemoryStorePort['countActiveMemories'];
+    listMemories?: MemoryStorePort['listMemories'];
     persistMemoryWrite?: MemoryStorePort['persistMemoryWrite'];
   };
 
@@ -130,6 +131,23 @@ function createCompatibleMemoryStore(memoryStore: MemoryStorePort | null): Memor
             return target.countActiveMemories();
           }
           return (await target.getAllActiveMemories()).length;
+        };
+      }
+
+      if (prop === 'listMemories') {
+        return async (
+          options?: Parameters<MemoryStorePort['listMemories']>[0],
+        ): Promise<Awaited<ReturnType<MemoryStorePort['listMemories']>>> => {
+          if (typeof target.listMemories === 'function') {
+            return target.listMemories(options);
+          }
+          const memories = await target.getAllActiveMemories();
+          const offset = Math.max(0, Math.floor(options?.offset ?? 0));
+          if (options?.limit === undefined) {
+            return memories.slice(offset);
+          }
+          const limit = Math.max(1, Math.floor(options.limit));
+          return memories.slice(offset, offset + limit);
         };
       }
 

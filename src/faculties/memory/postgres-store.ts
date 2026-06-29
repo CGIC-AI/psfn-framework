@@ -986,6 +986,23 @@ class PostgresMemoryStore implements MemoryStorePort {
       .slice(0, limit);
   }
 
+  async listMemories(options: MemoryListOptions = {}): Promise<PurrMemory[]> {
+    const offset = clampLimit(options.offset, 0, 0, 100_000);
+    const memories = Array.from(this.memories.values())
+      .sort((left, right) => {
+        const leftArchived = left.supersededBy || left.deletedAt ? 1 : 0;
+        const rightArchived = right.supersededBy || right.deletedAt ? 1 : 0;
+        return leftArchived - rightArchived
+          || right.extractedAt - left.extractedAt
+          || right.id.localeCompare(left.id);
+      });
+    if (options.limit === undefined) {
+      return memories.slice(offset);
+    }
+    const limit = clampLimit(options.limit, 50, 1, 500);
+    return memories.slice(offset, offset + limit);
+  }
+
   async listActiveMemories(options: MemoryListOptions = {}): Promise<PurrMemory[]> {
     const limit = clampLimit(options.limit, 50, 1, 500);
     const offset = clampLimit(options.offset, 0, 0, 100_000);

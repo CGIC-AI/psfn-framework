@@ -330,6 +330,7 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   updateMemory(id: string, updates: MemoryStoreUpdatePatch): Awaitable<void>;
   recordPatchEvent(event: MemoryPatchEvent): Awaitable<void>;
   getAllActiveMemories(limit?: number): Awaitable<PurrMemory[]>;
+  listMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
   listActiveMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
   countActiveMemories(): Awaitable<number>;
   getById(id: string): Awaitable<PurrMemory | undefined>;
@@ -410,6 +411,7 @@ export interface MemoryStorePort extends ScratchpadProvider {
   updateMemory(id: string, updates: MemoryStoreUpdatePatch): Promise<void>;
   recordPatchEvent(event: MemoryPatchEvent): Promise<void>;
   getAllActiveMemories(limit?: number): Promise<PurrMemory[]>;
+  listMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
   listActiveMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
   countActiveMemories(): Promise<number>;
   getById(id: string): Promise<PurrMemory | undefined>;
@@ -498,6 +500,7 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
       await store.recordPatchEvent(event);
     },
     getAllActiveMemories: async (limit) => await store.getAllActiveMemories(limit),
+    listMemories: async (options) => await store.listMemories(options),
     listActiveMemories: async (options) => await store.listActiveMemories(options),
     countActiveMemories: async () => await store.countActiveMemories(),
     getById: async (id) => await store.getById(id),

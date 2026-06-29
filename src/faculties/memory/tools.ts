@@ -7,13 +7,19 @@ import type { MemoryWriter, MemoryWriteOptions } from './writer.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import type {
   MemoryType,
+  MemoryScopeKind,
+  MemoryScopeQuery,
   SensitivityLevel,
   MemoryRedactionOperation,
   MemoryFormationVAD,
   MemorySourceType,
+  PurrMemory,
 } from './types.js';
 import {
+  memoryMatchesScopeQuery,
+  normalizeMemoryScopeQuery,
   VALID_MEMORY_TYPES,
+  VALID_MEMORY_SCOPE_KINDS,
   VALID_SENSITIVITY_LEVELS,
   VALID_MEMORY_REDACTION_OPERATIONS,
 } from './types.js';
@@ -32,6 +38,23 @@ import {
   type EpisodicTimelineEntry,
   type EpisodicTimelineStore,
 } from './retrieval/episodic.js';
+import {
+  evaluateRetrievalAccessDecision,
+  summarizeWithheldMemories,
+} from './retrieval/access.js';
+import {
+  formatMemoryWithheldReasonLabel,
+  formatMemoryWithheldRelevanceBandLabel,
+  listMemoryWithheldReasonEntries,
+  listMemoryWithheldRelevanceBandEntries,
+  type MemoryWithheldSummary,
+} from './withheld-summary.js';
+import {
+  lexicalMemoryScoreToSimilarity,
+  normalizeLexicalMemoryQuery,
+  scoreLexicalMemoryMatch,
+  tokenizeLexicalMemoryQuery,
+} from './lexical-match.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const SCRATCHPAD_DEFAULT_LIMIT = 20;
@@ -45,6 +68,8 @@ const ISO_INSTANT_WITH_ZONE_PATTERN = /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:?\d{2
 const MEMORY_TOOL_ACTIONS = [
   'write',
   'search',
+  'census',
+  'exists',
   'timeline',
   'import',
   'patch',
@@ -275,6 +300,16 @@ interface MemoryToolParams {
   sensitivity?: SensitivityLevel;
   query?: string;
   limit?: number;
+  contact_id?: string;
+  contactId?: string;
+  scope_kind?: MemoryScopeKind;
+  scopeKind?: MemoryScopeKind;
+  scope_id?: string;
+  scopeId?: string;
+  scope_tag?: string;
+  scopeTag?: string;
+  include_archived?: boolean;
+  includeArchived?: boolean;
   records?: Array<{
     text: string;
     type: MemoryType;
@@ -318,6 +353,34 @@ type TimelineVisibilityResult =
     canonicalContactId?: string;
   }
   | { ok: false; error: string };
+
+type MemoryVisibilityAction = 'timeline' | 'census' | 'exists';
+
+type MemoryScopeFilterResult =
+  | {
+    ok: true;
+    contactId?: string;
+    scopeQuery?: MemoryScopeQuery;
+  }
+  | { ok: false; error: string };
+
+interface MemoryVisibilityFilter {
+  contactId?: string;
+  scopeQuery?: MemoryScopeQuery;
+  includeArchived: boolean;
+}
+
+interface MemoryAccessOptions {
+  trustLevel: TrustLevel;
+  channelVisibility: ChannelVisibility;
+  canonicalContactId?: string;
+}
+
+interface MemoryAccessPartition {
+  visible: PurrMemory[];
+  withheld: Array<PurrMemory & { similarity?: number }>;
+  withheldSummary?: MemoryWithheldSummary;
+}
 
 function resolveTimelineRange(params: MemoryToolParams): TimelineRangeResult {
   const date = normalizeOptionalToolString(params.date);
@@ -372,22 +435,27 @@ function resolveTimelineRange(params: MemoryToolParams): TimelineRangeResult {
   };
 }
 
-function resolveTimelineVisibility(params: MemoryToolParams): TimelineVisibilityResult {
+function resolveMemoryVisibility(
+  params: MemoryToolParams,
+  action: MemoryVisibilityAction,
+): TimelineVisibilityResult {
   const requestContext = getRequestContext();
   const channelId = normalizeOptionalToolString(params.channel_id)
     ?? normalizeOptionalToolString(params.channelId)
     ?? normalizeOptionalToolString(requestContext?.channelId);
   const trustLevelResult = normalizeTimelineTrustLevel(
     params.trust_level ?? params.trustLevel ?? requestContext?.viewerTrustLevel,
+    action,
   );
   const visibilityResult = normalizeTimelineChannelVisibility(
     params.channel_visibility ?? params.channelVisibility ?? requestContext?.viewerChannelVisibility,
+    action,
   );
   const canonicalContactId = normalizeOptionalToolString(params.canonical_contact_id)
     ?? normalizeOptionalToolString(params.canonicalContactId);
 
   if (!channelId) {
-    return { ok: false, error: 'Error: channel_id is required for action=timeline when no request context channel is available' };
+    return { ok: false, error: `Error: channel_id is required for action=${action} when no request context channel is available` };
   }
   if (!trustLevelResult.ok) {
     return { ok: false, error: trustLevelResult.error };
@@ -411,28 +479,32 @@ function normalizeOptionalToolString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeTimelineTrustLevel(value: unknown): { ok: true; value: TrustLevel } | { ok: false; error: string } {
+function normalizeTimelineTrustLevel(
+  value: unknown,
+  action: MemoryVisibilityAction,
+): { ok: true; value: TrustLevel } | { ok: false; error: string } {
   const normalized = normalizeOptionalToolString(value);
   if (!normalized) {
-    return { ok: false, error: 'Error: trust_level is required for action=timeline when no request context trust is available' };
+    return { ok: false, error: `Error: trust_level is required for action=${action} when no request context trust is available` };
   }
   if ((TRUST_LEVELS as readonly string[]).includes(normalized)) {
     return { ok: true, value: normalized as TrustLevel };
   }
   return {
     ok: false,
-    error: `Error: invalid trust_level "${normalized}" for action=timeline. Must be one of: ${TRUST_LEVELS.join(', ')}`,
+    error: `Error: invalid trust_level "${normalized}" for action=${action}. Must be one of: ${TRUST_LEVELS.join(', ')}`,
   };
 }
 
 function normalizeTimelineChannelVisibility(
   value: unknown,
+  action: MemoryVisibilityAction,
 ): { ok: true; value: ChannelVisibility } | { ok: false; error: string } {
   const normalized = normalizeOptionalToolString(value);
   if (!normalized) {
     return {
       ok: false,
-      error: 'Error: channel_visibility is required for action=timeline when no request context visibility is available',
+      error: `Error: channel_visibility is required for action=${action} when no request context visibility is available`,
     };
   }
   if ((CHANNEL_VISIBILITIES as readonly string[]).includes(normalized)) {
@@ -440,7 +512,7 @@ function normalizeTimelineChannelVisibility(
   }
   return {
     ok: false,
-    error: `Error: invalid channel_visibility "${normalized}" for action=timeline. Must be one of: ${CHANNEL_VISIBILITIES.join(', ')}`,
+    error: `Error: invalid channel_visibility "${normalized}" for action=${action}. Must be one of: ${CHANNEL_VISIBILITIES.join(', ')}`,
   };
 }
 
@@ -491,6 +563,249 @@ function parseDateOnlyParts(value: string): { year: number; month: number; day: 
     return null;
   }
   return { year, month, day };
+}
+
+function normalizeOptionalBoolean(value: unknown, fallback: boolean): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true' || normalized === '1' || normalized === 'yes') return true;
+    if (normalized === 'false' || normalized === '0' || normalized === 'no') return false;
+  }
+  return fallback;
+}
+
+function resolveMemoryVisibilityFilter(
+  params: MemoryToolParams,
+  defaultIncludeArchived: boolean,
+): MemoryScopeFilterResult & { includeArchived?: boolean } {
+  const contactId = normalizeOptionalToolString(params.contact_id)
+    ?? normalizeOptionalToolString(params.contactId);
+  const rawScopeKind = normalizeOptionalToolString(params.scope_kind)
+    ?? normalizeOptionalToolString(params.scopeKind);
+  const scopeId = normalizeOptionalToolString(params.scope_id)
+    ?? normalizeOptionalToolString(params.scopeId);
+  const scopeTag = normalizeOptionalToolString(params.scope_tag)
+    ?? normalizeOptionalToolString(params.scopeTag);
+  const includeArchived = normalizeOptionalBoolean(
+    params.include_archived ?? params.includeArchived,
+    defaultIncludeArchived,
+  );
+
+  let scopeKind: MemoryScopeKind | undefined;
+  if (rawScopeKind) {
+    if (!(VALID_MEMORY_SCOPE_KINDS as readonly string[]).includes(rawScopeKind)) {
+      return {
+        ok: false,
+        error: `Error: invalid scope_kind "${rawScopeKind}". Must be one of: ${VALID_MEMORY_SCOPE_KINDS.join(', ')}`,
+      };
+    }
+    scopeKind = rawScopeKind as MemoryScopeKind;
+  }
+  if ((scopeKind && !scopeId) || (!scopeKind && scopeId)) {
+    return { ok: false, error: 'Error: scope_kind and scope_id must be provided together' };
+  }
+
+  const scopeQuery = normalizeMemoryScopeQuery({
+    ...(scopeKind && scopeId ? { refs: [{ kind: scopeKind, id: scopeId }] } : {}),
+    ...(scopeTag ? { tags: [scopeTag] } : {}),
+    mode: 'only',
+  });
+  return {
+    ok: true,
+    ...(contactId ? { contactId } : {}),
+    ...(scopeQuery ? { scopeQuery } : {}),
+    includeArchived,
+  };
+}
+
+function memoryState(memory: Pick<PurrMemory, 'deletedAt' | 'supersededBy'>): 'active' | 'archived' {
+  return memory.deletedAt || memory.supersededBy ? 'archived' : 'active';
+}
+
+function memoryMatchesVisibilityFilter(memory: PurrMemory, filter: MemoryVisibilityFilter): boolean {
+  if (!filter.includeArchived && memoryState(memory) === 'archived') return false;
+  if (filter.contactId && memory.contactId !== filter.contactId) return false;
+  if (filter.scopeQuery && !memoryMatchesScopeQuery(memory, filter.scopeQuery)) return false;
+  return true;
+}
+
+async function listFilteredMemories(
+  memoryStore: MemoryStorePort,
+  filter: MemoryVisibilityFilter,
+): Promise<PurrMemory[]> {
+  const memories = await memoryStore.listMemories();
+  return memories.filter(memory => memoryMatchesVisibilityFilter(memory, filter));
+}
+
+function partitionVisibleMemories<T extends PurrMemory & { similarity?: number }>(
+  memories: readonly T[],
+  access: MemoryAccessOptions,
+): MemoryAccessPartition {
+  const visible: PurrMemory[] = [];
+  const withheld: Array<PurrMemory & { similarity?: number }> = [];
+  for (const memory of memories) {
+    const decision = evaluateRetrievalAccessDecision(memory, access);
+    if (decision.allowed) {
+      visible.push(memory);
+    } else {
+      withheld.push(memory);
+    }
+  }
+  const { summary } = summarizeWithheldMemories(memories, access);
+  return {
+    visible,
+    withheld,
+    ...(summary ? { withheldSummary: summary } : {}),
+  };
+}
+
+function incrementCount(counts: Record<string, number>, key: string): void {
+  const normalized = key.trim();
+  if (!normalized) return;
+  counts[normalized] = (counts[normalized] ?? 0) + 1;
+}
+
+function countBy<T>(items: readonly T[], keyForItem: (item: T) => string | undefined): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    incrementCount(counts, keyForItem(item) ?? 'none');
+  }
+  return counts;
+}
+
+function formatCounts(counts: Record<string, number>, maxEntries = 8): string {
+  const entries = Object.entries(counts)
+    .filter(([, count]) => count > 0)
+    .sort(([leftKey, leftCount], [rightKey, rightCount]) => rightCount - leftCount || leftKey.localeCompare(rightKey));
+  if (entries.length === 0) return 'none';
+  const visible = entries.slice(0, maxEntries).map(([key, count]) => `${key}: ${count}`);
+  const hiddenCount = entries.length - visible.length;
+  if (hiddenCount > 0) visible.push(`${hiddenCount} more`);
+  return visible.join(', ');
+}
+
+function scopeRefLabel(memory: PurrMemory): string | undefined {
+  if (!memory.scopeRef) return undefined;
+  return `${memory.scopeRef.kind}:${memory.scopeRef.id}`;
+}
+
+function provenanceBucket(memory: PurrMemory): string {
+  if (memory.sourceType && memory.sourceType !== 'unknown') return memory.sourceType;
+  const normalized = memory.sourceRef.toLowerCase();
+  if (normalized.includes('shard:')) return 'shard';
+  if (normalized.includes('tool:') || normalized.includes('source:tool')) return 'tool_write';
+  if (normalized.includes('heartbeat')) return 'heartbeat';
+  if (normalized.includes('reflection')) return 'reflection';
+  if (normalized.includes('session') || normalized.includes('turn') || normalized.includes('conversation')) return 'turn';
+  return 'unspecified_source';
+}
+
+function formatWithheldContext(
+  summary: MemoryWithheldSummary | undefined,
+  withheld: readonly PurrMemory[],
+): string[] {
+  if (!summary || summary.totalCount <= 0) return [];
+  const plural = summary.totalCount === 1 ? 'memory was' : 'memories were';
+  const lines = [
+    `- Withheld context: ${summary.totalCount} candidate ${plural} present but not included in visible detail because trust/privacy gates withheld it.`,
+  ];
+  const reasonLine = listMemoryWithheldReasonEntries(summary.reasonCounts)
+    .map(({ reason, count }) => `${count} ${formatMemoryWithheldReasonLabel(reason)}`)
+    .join(', ');
+  if (reasonLine) {
+    lines.push(`- Withheld trust/privacy reasons: ${reasonLine}.`);
+  }
+  const relevanceLine = listMemoryWithheldRelevanceBandEntries(summary.relevanceBands ?? {})
+    .map(({ band, count }) => `${count} ${formatMemoryWithheldRelevanceBandLabel(band)}`)
+    .join(', ');
+  if (relevanceLine) {
+    lines.push(`- Withheld relevance bands: ${relevanceLine}.`);
+  }
+  lines.push(`- Withheld categories: ${formatCounts(countBy(withheld, memory => memory.type))}.`);
+  lines.push(`- Withheld states: ${formatCounts(countBy(withheld, memoryState))}.`);
+  lines.push(`- Withheld provenance classes: ${formatCounts(countBy(withheld, provenanceBucket))}.`);
+  lines.push('- Protected withheld memory text, memory IDs, contact IDs, and scope labels are not included.');
+  return lines;
+}
+
+function formatVisibleMemoryBreakdown(visible: readonly PurrMemory[]): string[] {
+  if (visible.length === 0) return [];
+  const lines = [
+    `- By type: ${formatCounts(countBy(visible, memory => memory.type))}.`,
+    `- By sensitivity: ${formatCounts(countBy(visible, memory => memory.sensitivity))}.`,
+    `- By state: ${formatCounts(countBy(visible, memoryState))}.`,
+  ];
+  const contactCounts = countBy(visible, memory => memory.contactId ?? 'not contact-scoped');
+  lines.push(`- By contact scope: ${formatCounts(contactCounts)}.`);
+  const scopeRefCounts = countBy(visible, memory => scopeRefLabel(memory) ?? 'not scope-ref-scoped');
+  lines.push(`- By scope ref: ${formatCounts(scopeRefCounts)}.`);
+  const scopeTagCounts = countBy(
+    visible.flatMap(memory => memory.scopeTags?.length ? memory.scopeTags : ['not scope-tag-scoped']),
+    tag => tag,
+  );
+  lines.push(`- By scope tag: ${formatCounts(scopeTagCounts)}.`);
+  return lines;
+}
+
+function formatMemoryCensusResult(partition: MemoryAccessPartition): string {
+  const lines = ['Memory census:'];
+  const visibleCount = partition.visible.length;
+  const withheldCount = partition.withheldSummary?.totalCount ?? 0;
+  if (visibleCount === 0 && withheldCount === 0) {
+    lines.push('- No memories matched the requested filters.');
+    lines.push('No memory text returned.');
+    return lines.join('\n');
+  }
+
+  lines.push(`- Visible memories: ${visibleCount}.`);
+  lines.push(...formatVisibleMemoryBreakdown(partition.visible));
+  lines.push(...formatWithheldContext(partition.withheldSummary, partition.withheld));
+  lines.push('No memory text returned.');
+  return lines.join('\n');
+}
+
+function formatMemoryExistsResult(partition: MemoryAccessPartition): string {
+  const visibleCount = partition.visible.length;
+  const withheldCount = partition.withheldSummary?.totalCount ?? 0;
+  const totalCount = visibleCount + withheldCount;
+  const lines = ['Memory exists check:'];
+  if (totalCount === 0) {
+    lines.push('- Result: no matching memories found for the requested topic and filters.');
+    lines.push('No memory text returned.');
+    return lines.join('\n');
+  }
+
+  if (visibleCount > 0) {
+    lines.push(`- Result: yes, ${visibleCount} visible matching ${visibleCount === 1 ? 'memory' : 'memories'} found.`);
+  } else {
+    lines.push('- Result: yes, matching memory exists, but none is visible in this channel.');
+  }
+  lines.push(...formatVisibleMemoryBreakdown(partition.visible));
+  lines.push(...formatWithheldContext(partition.withheldSummary, partition.withheld));
+  lines.push('No memory text returned.');
+  return lines.join('\n');
+}
+
+function filterTopicMatches(memories: readonly PurrMemory[], query: string): Array<PurrMemory & { similarity: number }> {
+  const normalizedQuery = normalizeLexicalMemoryQuery(query);
+  const tokens = tokenizeLexicalMemoryQuery(normalizedQuery);
+  if (tokens.length === 0) return [];
+  return memories
+    .map((memory) => {
+      const score = scoreLexicalMemoryMatch(memory, tokens, normalizedQuery);
+      if (score <= 0) return null;
+      return {
+        ...memory,
+        similarity: lexicalMemoryScoreToSimilarity(score),
+      };
+    })
+    .filter((memory): memory is PurrMemory & { similarity: number } => memory !== null)
+    .sort((left, right) => (
+      right.similarity - left.similarity
+      || right.salience - left.salience
+      || right.extractedAt - left.extractedAt
+    ));
 }
 
 export function createMemoryWriteTool(
@@ -955,13 +1270,13 @@ export function createMemoryTool(
     name: 'memory',
     description:
       'Unified long-term memory tool. '
-      + 'Use action=write|search|timeline|import|patch|redact|delete|restore to manage durable memory explicitly.',
+      + 'Use action=write|search|census|exists|timeline|import|patch|redact|delete|restore to manage durable memory explicitly.',
     label: 'memory',
     parameters: Type.Object({
       action: Type.Unsafe<MemoryToolAction>({
         type: 'string',
         enum: [...MEMORY_TOOL_ACTIONS],
-        description: 'One of: write, search, timeline, import, patch, redact, delete, restore.',
+        description: 'One of: write, search, census, exists, timeline, import, patch, redact, delete, restore.',
       }),
       text: Type.Optional(
         Type.String({ description: 'Required for action=write. The memory text to store.' }),
@@ -986,12 +1301,31 @@ export function createMemoryTool(
         }),
       ),
       query: Type.Optional(
-        Type.String({ description: 'Required for action=search. Lexical memory search query.' }),
+        Type.String({ description: 'Required for action=search or action=exists. Lexical memory topic query.' }),
       ),
       limit: Type.Optional(
         Type.Number({
           description: `Optional result limit for action=search or action=timeline. Search: ${MEMORY_SEARCH_DEFAULT_LIMIT}-${MEMORY_SEARCH_MAX_LIMIT}; timeline: ${MEMORY_TIMELINE_DEFAULT_LIMIT}-${MEMORY_TIMELINE_MAX_LIMIT}.`,
         }),
+      ),
+      contact_id: Type.Optional(
+        Type.String({ description: 'For action=census or action=exists, restrict aggregate checks to one contact id.' }),
+      ),
+      scope_kind: Type.Optional(
+        Type.Unsafe<MemoryScopeKind>({
+          type: 'string',
+          enum: [...VALID_MEMORY_SCOPE_KINDS],
+          description: 'For action=census or action=exists with scope_id, restrict aggregate checks to this scope kind.',
+        }),
+      ),
+      scope_id: Type.Optional(
+        Type.String({ description: 'For action=census or action=exists with scope_kind, restrict aggregate checks to this scope id.' }),
+      ),
+      scope_tag: Type.Optional(
+        Type.String({ description: 'For action=census or action=exists, restrict aggregate checks to memories carrying this scope tag.' }),
+      ),
+      include_archived: Type.Optional(
+        Type.Boolean({ description: 'For action=census or action=exists, include soft-deleted or superseded memories in aggregate counts.' }),
       ),
       date: Type.Optional(
         Type.String({ description: 'For action=timeline, UTC day to navigate as YYYY-MM-DD.' }),
@@ -1003,24 +1337,24 @@ export function createMemoryTool(
         Type.String({ description: 'For action=timeline, inclusive range end as YYYY-MM-DD or ISO-8601 timestamp with timezone.' }),
       ),
       channel_id: Type.Optional(
-        Type.String({ description: 'For action=timeline, current channel id. Usually supplied by runtime context.' }),
+        Type.String({ description: 'For action=census, action=exists, or action=timeline, current channel id. Usually supplied by runtime context.' }),
       ),
       trust_level: Type.Optional(
         Type.Unsafe<TrustLevel>({
           type: 'string',
           enum: [...TRUST_LEVELS],
-          description: 'For action=timeline, current viewer trust level. Usually supplied by runtime context.',
+          description: 'For action=census, action=exists, or action=timeline, current viewer trust level. Usually supplied by runtime context.',
         }),
       ),
       channel_visibility: Type.Optional(
         Type.Unsafe<ChannelVisibility>({
           type: 'string',
           enum: [...CHANNEL_VISIBILITIES],
-          description: 'For action=timeline, current channel visibility. Usually supplied by runtime context.',
+          description: 'For action=census, action=exists, or action=timeline, current channel visibility. Usually supplied by runtime context.',
         }),
       ),
       canonical_contact_id: Type.Optional(
-        Type.String({ description: 'For action=timeline, optional canonical contact id for trusted cross-channel continuity.' }),
+        Type.String({ description: 'For action=census, action=exists, or action=timeline, optional canonical contact id for trusted cross-channel continuity.' }),
       ),
       records: Type.Optional(
         Type.Array(
@@ -1151,6 +1485,57 @@ export function createMemoryTool(
             }))));
           }
 
+          case 'census': {
+            const visibility = resolveMemoryVisibility(normalizedParams, 'census');
+            if (!visibility.ok) {
+              return textResultWithError(visibility.error, true);
+            }
+            const filterResult = resolveMemoryVisibilityFilter(normalizedParams, true);
+            if (!filterResult.ok) {
+              return textResultWithError(filterResult.error, true);
+            }
+            const filter: MemoryVisibilityFilter = {
+              ...(filterResult.contactId ? { contactId: filterResult.contactId } : {}),
+              ...(filterResult.scopeQuery ? { scopeQuery: filterResult.scopeQuery } : {}),
+              includeArchived: filterResult.includeArchived ?? true,
+            };
+            const memories = await listFilteredMemories(memoryStore, filter);
+            const partition = partitionVisibleMemories(memories, {
+              trustLevel: visibility.trustLevel,
+              channelVisibility: visibility.channelVisibility,
+              ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
+            });
+            return textResult(formatMemoryCensusResult(partition));
+          }
+
+          case 'exists': {
+            const query = normalizedParams.query?.trim();
+            if (!query) {
+              return textResultWithError('Error: query is required for action=exists', true);
+            }
+            const visibility = resolveMemoryVisibility(normalizedParams, 'exists');
+            if (!visibility.ok) {
+              return textResultWithError(visibility.error, true);
+            }
+            const filterResult = resolveMemoryVisibilityFilter(normalizedParams, false);
+            if (!filterResult.ok) {
+              return textResultWithError(filterResult.error, true);
+            }
+            const filter: MemoryVisibilityFilter = {
+              ...(filterResult.contactId ? { contactId: filterResult.contactId } : {}),
+              ...(filterResult.scopeQuery ? { scopeQuery: filterResult.scopeQuery } : {}),
+              includeArchived: filterResult.includeArchived ?? false,
+            };
+            const memories = await listFilteredMemories(memoryStore, filter);
+            const matchingMemories = filterTopicMatches(memories, query);
+            const partition = partitionVisibleMemories(matchingMemories, {
+              trustLevel: visibility.trustLevel,
+              channelVisibility: visibility.channelVisibility,
+              ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
+            });
+            return textResult(formatMemoryExistsResult(partition));
+          }
+
           case 'timeline': {
             if (!options.episodicStore) {
               return textResultWithError('Error: episodic timeline store is not configured for action=timeline', true);
@@ -1160,7 +1545,7 @@ export function createMemoryTool(
             if (!range.ok) {
               return textResultWithError(range.error, true);
             }
-            const visibility = resolveTimelineVisibility(normalizedParams);
+            const visibility = resolveMemoryVisibility(normalizedParams, 'timeline');
             if (!visibility.ok) {
               return textResultWithError(visibility.error, true);
             }

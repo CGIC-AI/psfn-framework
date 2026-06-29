@@ -350,7 +350,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'wiki',
     domain: 'knowledge',
     exposure: 'core',
-    description: 'Canonical internal PSFN-owned durable reference knowledge surface.',
+    description: 'Canonical runtime-owned durable reference knowledge surface.',
     actions: ['list', 'read', 'search', 'write', 'import'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],

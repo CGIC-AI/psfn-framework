@@ -607,6 +607,24 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "src/persistence/backups/companion-tree.ts",
+      "contains": ".psfn/temp-artifacts",
+      "reason": "Workspace backup capture excludes the established project-owned hidden temp-artifacts directory.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/backups/encryption.ts",
+      "contains": "psfn-backup-decrypted-",
+      "reason": "Backup decryption uses an established project-scoped temp directory prefix.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/backups/service.ts",
+      "contains": "psfn-backup-stage-",
+      "reason": "Backup encryption staging uses an established project-scoped temp directory prefix.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/shared/cache/redis-cache.ts",
       "contains": "psfn:app-cache:",
       "reason": "Redis app cache uses a project-scoped key namespace prefix.",

@@ -99,7 +99,7 @@ export function createWikiTool(store: WikiStorePort): AgentTool<any> {
     name: 'wiki',
     label: 'wiki',
     description:
-      'Internal PSFN-owned knowledge-base for durable reference documents and personal knowledge notes. '
+      'Internal runtime-owned knowledge-base for durable reference documents and personal knowledge notes. '
       + 'Use action=list|read|search|write|import. This is separate from L0/L0.1/L2 memory, scratchpad, journal, and Obsidian/Vault. '
       + 'Imports require source_class and provenance_refs so external notes never masquerade as lived memory.',
     parameters: Type.Object({

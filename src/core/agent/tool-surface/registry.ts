@@ -115,8 +115,8 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     name: 'toolset',
     domain: 'adaptive_tooling',
     exposure: 'core',
-    description: 'Canonical control surface for listing, activating, pinning, and unpinning non-default tools.',
-    actions: ['list', 'describe', 'activate', 'pin', 'unpin'],
+    description: 'Canonical control surface for listing, suggesting, activating, pinning, and unpinning non-default tools.',
+    actions: ['list', 'suggest', 'describe', 'activate', 'pin', 'unpin'],
     capabilityMetadata: { kind: 'action_aware', source: TOOLSET_RUNTIME },
     retiredAliases: [
       retiredAlias('load_tools', 'toolset', 'hidden', 'activate', 'Discovery-driven activation belongs on toolset.'),

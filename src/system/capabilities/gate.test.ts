@@ -558,6 +558,7 @@ describe('capability tool gating', () => {
         ],
         lastSnapshot: null,
       }),
+      resolveCapabilityAccess: () => accessForTier('custom', ['identity.read']),
       getActiveTurnCorrelation: () => null,
       getActiveTurnTaskKind: () => null,
       getActiveTurnIntent: () => null,

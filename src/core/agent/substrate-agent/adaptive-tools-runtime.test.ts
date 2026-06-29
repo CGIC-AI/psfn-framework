@@ -180,6 +180,11 @@ describe('createToolsetTool', () => {
         activeTools: [],
         lastSnapshot: null,
       }),
+      resolveCapabilityAccess: () => ({
+        getTier: () => 'autonomous',
+        getGrantedTokens: () => new Set(['identity.read', 'identity.write.runtime', 'external.web']),
+        has: () => true,
+      }),
       getActiveTurnCorrelation: () => null,
       getActiveTurnTaskKind: () => null,
       getActiveTurnIntent: () => null,
@@ -213,6 +218,221 @@ describe('createToolsetTool', () => {
       ...overrides,
     } as any);
   }
+
+  function createActionTool(name: string, description: string, actions: readonly string[]) {
+    return {
+      name,
+      description,
+      parameters: Type.Object({
+        action: Type.Union(actions.map(action => Type.Literal(action))),
+      }) as any,
+      execute: vi.fn(),
+    };
+  }
+
+  function createRuntimeState(input: {
+    coreTools: readonly string[];
+    extendedTools?: readonly string[];
+    activeTools: Array<{ toolName: string; source: 'core' | 'extended_loaded' }>;
+  }) {
+    return {
+      generatedAt: 1,
+      coreTools: [...input.coreTools],
+      extendedTools: [...(input.extendedTools ?? [])],
+      promotedToolsConfigured: [],
+      promotedToolsActive: [],
+      promotedToolsSkipped: [],
+      loadedExtendedTools: [],
+      activeTools: [...input.activeTools],
+      lastSnapshot: null,
+    };
+  }
+
+  it('suggests distinct session, web, and filesystem actions for confusing search/read intents', async () => {
+    const coreTools = [
+      createActionTool(
+        'session',
+        'Unified session continuity surface for list/search/grep/new/resume and focus workflow actions.',
+        ['list', 'new', 'resume', 'search', 'grep', 'start_focus', 'complete_focus'],
+      ),
+      createActionTool(
+        'web',
+        'Unified web primitive for direct remote page work and lightweight web research discovery.',
+        ['fetch', 'browse', 'search'],
+      ),
+      createActionTool(
+        'fs',
+        'Unified filesystem primitive for personal-file inspection and safe mutation.',
+        ['list', 'read', 'search', 'write', 'edit'],
+      ),
+    ];
+    const toolset = createBaseToolset({
+      getCoreTools: () => coreTools as any,
+      getExtendedTools: () => [],
+      getAdaptiveToolRuntimeState: () => createRuntimeState({
+        coreTools: ['toolset', 'session', 'web', 'fs'],
+        activeTools: [
+          { toolName: 'toolset', source: 'core' },
+          { toolName: 'session', source: 'core' },
+          { toolName: 'web', source: 'core' },
+          { toolName: 'fs', source: 'core' },
+        ],
+      }) as any,
+    });
+    const suggest = async (intent: string) => {
+      const result = await (toolset as any).execute('toolset-suggest', {
+        action: 'suggest',
+        intent,
+        limit: 3,
+      });
+      return JSON.parse(result.content?.[0]?.text as string);
+    };
+
+    expect((await suggest('search our previous conversation transcript about backups')).recommendations[0])
+      .toMatchObject({ toolName: 'session', action: 'search', availabilityStatus: 'active' });
+    expect((await suggest('search the web for latest NVMe kernel notes')).recommendations[0])
+      .toMatchObject({ toolName: 'web', action: 'search', availabilityStatus: 'active' });
+    expect((await suggest('read the local file purrsephone/notes.md from the workspace')).recommendations[0])
+      .toMatchObject({ toolName: 'fs', action: 'read', availabilityStatus: 'active' });
+  });
+
+  it('returns no confident suggestion for unrelated intents', async () => {
+    const toolset = createBaseToolset({
+      getCoreTools: () => [
+        createActionTool('session', 'Session transcript surface.', ['search']),
+        createActionTool('web', 'Web retrieval surface.', ['search']),
+      ] as any,
+      getExtendedTools: () => [],
+      getAdaptiveToolRuntimeState: () => createRuntimeState({
+        coreTools: ['toolset', 'session', 'web'],
+        activeTools: [
+          { toolName: 'toolset', source: 'core' },
+          { toolName: 'session', source: 'core' },
+          { toolName: 'web', source: 'core' },
+        ],
+      }) as any,
+    });
+
+    const result = await (toolset as any).execute('toolset-suggest-none', {
+      action: 'suggest',
+      intent: 'make the mood less uneven without choosing an operation',
+    });
+    const payload = JSON.parse(result.content?.[0]?.text as string);
+
+    expect(payload).toMatchObject({
+      action: 'suggest',
+      total: 0,
+      recommendations: [],
+      advisoryOnly: true,
+    });
+    expect(payload.message).toContain('No confident tool suggestion');
+  });
+
+  it('marks capability-gated suggestions without activating or granting tools', async () => {
+    const activateExtendedTools = vi.fn();
+    const applyActiveToolsToAgent = vi.fn();
+    const addPromotedExtendedTool = vi.fn();
+    const removePromotedExtendedTool = vi.fn();
+    const setPromotedExtendedTools = vi.fn();
+    const persistPromotedExtendedTools = vi.fn();
+    const grantedTokens = new Set(['identity.read']);
+    const runtimeState = createRuntimeState({
+      coreTools: ['toolset'],
+      extendedTools: ['media'],
+      activeTools: [{ toolName: 'toolset', source: 'core' }],
+    });
+    const beforeState = JSON.stringify(runtimeState);
+    const toolset = createBaseToolset({
+      getCoreTools: () => [],
+      getExtendedTools: () => [{
+        name: 'media',
+        description: 'Generate, edit, or analyze media and images.',
+        parameters: Type.Object({
+          action: Type.Union([
+            Type.Literal('generate'),
+            Type.Literal('edit'),
+            Type.Literal('analyze'),
+          ]),
+        }) as any,
+        execute: vi.fn(),
+      }],
+      getAdaptiveToolRuntimeState: () => runtimeState as any,
+      resolveCapabilityAccess: () => ({
+        getTier: () => 'custom',
+        getGrantedTokens: () => grantedTokens,
+        has: (token) => grantedTokens.has(token),
+      }),
+      activateExtendedTools,
+      applyActiveToolsToAgent,
+      addPromotedExtendedTool,
+      removePromotedExtendedTool,
+      setPromotedExtendedTools,
+      persistPromotedExtendedTools,
+    } as any);
+
+    const result = await (toolset as any).execute('toolset-suggest-gated', {
+      action: 'suggest',
+      intent: 'generate an image for the journal',
+    });
+    const payload = JSON.parse(result.content?.[0]?.text as string);
+
+    expect(payload.recommendations[0]).toMatchObject({
+      toolName: 'media',
+      action: 'generate',
+      availabilityStatus: 'capability_denied',
+      missingTokens: ['external.web'],
+    });
+    expect(payload.recommendations[0].availabilityNote).toContain('missing: external.web');
+    expect(activateExtendedTools).not.toHaveBeenCalled();
+    expect(applyActiveToolsToAgent).not.toHaveBeenCalled();
+    expect(addPromotedExtendedTool).not.toHaveBeenCalled();
+    expect(removePromotedExtendedTool).not.toHaveBeenCalled();
+    expect(setPromotedExtendedTools).not.toHaveBeenCalled();
+    expect(persistPromotedExtendedTools).not.toHaveBeenCalled();
+    expect([...grantedTokens]).toEqual(['identity.read']);
+    expect(JSON.stringify(runtimeState)).toBe(beforeState);
+  });
+
+  it('reports inactive extended tools as advisory activation candidates without mutating active tools', async () => {
+    const activateExtendedTools = vi.fn();
+    const runtimeState = createRuntimeState({
+      coreTools: ['toolset'],
+      extendedTools: ['media'],
+      activeTools: [{ toolName: 'toolset', source: 'core' }],
+    });
+    const toolset = createBaseToolset({
+      getCoreTools: () => [],
+      getExtendedTools: () => [{
+        name: 'media',
+        description: 'Generate, edit, or analyze media and images.',
+        parameters: Type.Object({
+          action: Type.Union([
+            Type.Literal('generate'),
+            Type.Literal('edit'),
+            Type.Literal('analyze'),
+          ]),
+        }) as any,
+        execute: vi.fn(),
+      }],
+      getAdaptiveToolRuntimeState: () => runtimeState as any,
+      activateExtendedTools,
+    });
+
+    const result = await (toolset as any).execute('toolset-suggest-activation-note', {
+      action: 'suggest',
+      intent: 'generate an image',
+    });
+    const payload = JSON.parse(result.content?.[0]?.text as string);
+
+    expect(payload.recommendations[0]).toMatchObject({
+      toolName: 'media',
+      action: 'generate',
+      availabilityStatus: 'requires_activation',
+    });
+    expect(payload.recommendations[0].availabilityNote).toContain('activate it with toolset action="activate"');
+    expect(activateExtendedTools).not.toHaveBeenCalled();
+    expect(runtimeState.activeTools).toEqual([{ toolName: 'toolset', source: 'core' }]);
+  });
 
   it('describes canonical tool actions and runtime metadata without creating extra tool names', async () => {
     const toolset = createBaseToolset();
@@ -323,6 +543,11 @@ describe('createToolsetTool', () => {
         loadedExtendedTools: [],
         activeTools: [],
         lastSnapshot: null,
+      }),
+      resolveCapabilityAccess: () => ({
+        getTier: () => 'autonomous',
+        getGrantedTokens: () => new Set(['identity.read', 'identity.write.runtime', 'external.web']),
+        has: () => true,
       }),
       getActiveTurnCorrelation: () => null,
       getActiveTurnTaskKind: () => null,

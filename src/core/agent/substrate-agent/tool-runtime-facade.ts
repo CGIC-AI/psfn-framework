@@ -429,6 +429,7 @@ export class ToolRuntimeFacade {
       getExtendedTools: () => this.extendedTools,
       getExtendedToolAutoloadPolicy: () => this.extendedToolAutoloadPolicy,
       getAdaptiveToolRuntimeState: () => this.getAdaptiveToolRuntimeState(),
+      resolveCapabilityAccess: () => this.resolveCapabilityAccess(),
       getActiveTurnCorrelation: () => this.getActiveTurnCorrelation(),
       getActiveTurnTaskKind: () => this.getActiveTurnTaskKind(),
       getActiveTurnIntent: () => this.getActiveTurnIntent(),

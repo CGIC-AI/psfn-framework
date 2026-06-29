@@ -27,6 +27,7 @@ import {
 } from '../deferred-tool-handoff.js';
 import {
   DEFAULT_EXTENDED_TOOL_AUTOLOAD_MAX,
+  classifyExtendedToolForTurn as classifyExtendedToolForTurnDefault,
   selectBoundedOverlayCandidates,
   type ExtendedToolAutoloadPolicy,
   type ExtendedToolTurnClass,
@@ -35,6 +36,7 @@ import {
   buildRuntimeToolCatalogEntry,
   type RuntimeToolCatalogEntry,
 } from '../tool-catalog.js';
+import { suggestToolsForIntent } from '../tool-suggestion.js';
 import { isRetiredFirstPartyToolAlias } from '../tool-surface/registry.js';
 import type {
   AutoloadTurnOutcome,
@@ -253,13 +255,14 @@ export function activateExtendedToolsForTurn(params: ActivateExtendedToolsParams
   };
 }
 
-type ToolsetAction = 'list' | 'activate' | 'pin' | 'unpin' | 'describe';
+type ToolsetAction = 'list' | 'activate' | 'pin' | 'unpin' | 'describe' | 'suggest';
 
 interface ToolsetToolRuntime {
   getCoreTools?: () => readonly AgentTool<any>[];
   getExtendedTools: () => readonly AgentTool<any>[];
   getExtendedToolAutoloadPolicy: () => ExtendedToolAutoloadPolicy | null;
   getAdaptiveToolRuntimeState: () => AdaptiveToolRuntimeState;
+  resolveCapabilityAccess: () => CapabilityAccess;
   getActiveTurnCorrelation: () => CorrelationMetadata | null;
   getActiveTurnTaskKind: () => string | null;
   getActiveTurnIntent: () => string | null;
@@ -364,6 +367,7 @@ function normalizeToolsetAction(action: unknown): ToolsetAction | null {
     || normalized === 'pin'
     || normalized === 'unpin'
     || normalized === 'describe'
+    || normalized === 'suggest'
   ) {
     return normalized;
   }
@@ -372,7 +376,7 @@ function normalizeToolsetAction(action: unknown): ToolsetAction | null {
 
 function toolsetCapabilityRequirement(params: Record<string, unknown>): CapabilityToken | null {
   const action = normalizeToolsetAction(params.action);
-  if (action === 'list' || action === 'describe') return 'identity.read';
+  if (action === 'list' || action === 'describe' || action === 'suggest') return 'identity.read';
   if (action === 'pin' || action === 'unpin') return 'identity.write.runtime';
   return null;
 }
@@ -423,6 +427,41 @@ function createToolsetListPayload(runtime: ToolsetToolRuntime): Record<string, u
     loadedTools,
     availableExtendedTools: filterCanonicalToolNames(state.extendedTools),
     nextStep: 'Use tool_search to discover non-default tools, toolset action="describe" for schemas, then toolset action="activate" for this runtime or action="pin"/"unpin" across turns.',
+  };
+}
+
+function createToolsetSuggestPayload(
+  runtime: ToolsetToolRuntime,
+  input: {
+    intent?: string;
+    limit?: number;
+  },
+): Record<string, unknown> {
+  const coreTools = runtime.getCoreTools?.() ?? [];
+  const extendedTools = filterCanonicalDiscoverableTools(runtime.getExtendedTools());
+  const catalog: RuntimeToolCatalogEntry[] = [
+    ...coreTools.map(tool => buildRuntimeToolCatalogEntry(tool, 'core')),
+    ...extendedTools.map(tool => buildRuntimeToolCatalogEntry(tool, 'extended')),
+  ];
+  const policy = runtime.getExtendedToolAutoloadPolicy();
+  const result = suggestToolsForIntent({
+    intent: input.intent ?? '',
+    limit: input.limit,
+    catalog,
+    runtimeState: runtime.getAdaptiveToolRuntimeState(),
+    access: runtime.resolveCapabilityAccess(),
+    autoloadPolicy: policy,
+    classifyExtendedToolForTurn: (toolName) => (
+      policy?.classifyToolForTurn(toolName) ?? classifyExtendedToolForTurnDefault(toolName)
+    ),
+  });
+
+  return {
+    action: 'suggest',
+    ...result,
+    nextStep: result.recommendations.length > 0
+      ? 'Review the advisory availability note before calling a suggested tool; toolset suggest never activates or grants tools.'
+      : 'Use toolset action="describe" to inspect active schemas or tool_search for non-default tool discovery.',
   };
 }
 
@@ -615,17 +654,26 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
     name: 'toolset',
     label: 'toolset',
     description:
-      'List active non-default tools, activate overlay tools for the current runtime, and pin or unpin eligible tools across turns.',
+      'List active non-default tools, suggest a fitting tool/action for an intent, activate overlay tools for the current runtime, and pin or unpin eligible tools across turns.',
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal('list'),
+        Type.Literal('suggest'),
         Type.Literal('describe'),
         Type.Literal('activate'),
         Type.Literal('pin'),
         Type.Literal('unpin'),
       ], {
-        description: 'Control action: list, describe, activate, pin, or unpin.',
+        description: 'Control action: list, suggest, describe, activate, pin, or unpin.',
       }),
+      intent: Type.Optional(Type.String({
+        description: 'Natural-language intent to rank advisory tool/action suggestions for action=suggest.',
+      })),
+      limit: Type.Optional(Type.Number({
+        description: 'Optional maximum number of suggestions to return for action=suggest.',
+        minimum: 1,
+        maximum: 12,
+      })),
       tool: Type.Optional(Type.String({
         description: 'Single canonical tool name for describe, pin, or unpin actions.',
       })),
@@ -664,6 +712,8 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
       _toolCallId: string,
       executeParams: {
         action: ToolsetAction;
+        intent?: string;
+        limit?: number;
         tool?: string;
         tools?: unknown[];
         reason?: string;
@@ -676,12 +726,16 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
       if (!action) {
         return toolsetResult({
           action: executeParams.action,
-          message: 'Unknown toolset action. Use list, activate, pin, or unpin.',
+          message: 'Unknown toolset action. Use list, suggest, describe, activate, pin, or unpin.',
         }, { isError: true });
       }
 
       if (action === 'list') {
         return toolsetResult(createToolsetListPayload(runtime));
+      }
+
+      if (action === 'suggest') {
+        return toolsetResult(createToolsetSuggestPayload(runtime, executeParams));
       }
 
       if (action === 'describe') {

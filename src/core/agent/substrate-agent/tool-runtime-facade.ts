@@ -877,6 +877,8 @@ export class ToolRuntimeFacade {
         const normalizedParams = isPlainRecord(params) ? params : {};
         const requestedAction = policy.resolveAction(normalizedParams);
         if (!requestedAction || !policy.allowedActions.includes(requestedAction)) {
+          const companionMessage = `${tool.name} is limited to read-only introspection during ${taskKind} turns. `
+            + `Allowed actions: ${policy.allowedActions.join(', ')}.`;
           this.emitTelemetry('agent.tools.core_guardrail.denied', {
             ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.denied'),
             toolName: tool.name,
@@ -886,9 +888,19 @@ export class ToolRuntimeFacade {
             reason: 'maintenance_turn_allowlist',
           });
           return textResultWithError(
-            `${tool.name} is limited to read-only introspection during ${taskKind} turns. `
-            + `Allowed actions: ${policy.allowedActions.join(', ')}.`,
+            companionMessage,
             true,
+            {
+              errorClass: 'permission_denied',
+              companionMessage,
+              rawDiagnostic: {
+                toolName: tool.name,
+                taskKind,
+                requestedAction: requestedAction ?? null,
+                allowedActions: [...policy.allowedActions],
+                reason: 'maintenance_turn_allowlist',
+              },
+            },
           );
         }
         return tool.execute(toolCallId, params, signal);

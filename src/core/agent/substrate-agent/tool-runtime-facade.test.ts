@@ -289,7 +289,14 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       content: 'mutate',
     });
     expect(execute).not.toHaveBeenCalled();
-    expect(denied.details).toEqual({ isError: true });
+    expect(denied.details).toMatchObject({
+      isError: true,
+      errorClass: 'permission_denied',
+      retryHint: 'operator_escalation',
+      retryable: false,
+      companionMessage: expect.stringContaining('read-only introspection'),
+    });
+    expect((denied.details as any).rawDiagnostic).toContain('maintenance_turn_allowlist');
     expect(denied.content[0]).toMatchObject({
       type: 'text',
     });

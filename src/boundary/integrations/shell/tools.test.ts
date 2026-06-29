@@ -73,6 +73,36 @@ describe('createShellTool', () => {
 
     expect(ops.exec).not.toHaveBeenCalled();
     expect((result.details as any).isError).toBe(true);
+    expect(result.details).toMatchObject({
+      errorClass: 'invalid_input',
+      retryHint: 'try_alternative_input',
+      retryable: false,
+    });
     expect((result.content[0] as any).text).toContain('Supported actions: exec');
+  });
+
+  it('annotates shell allowlist policy failures with structured metadata', async () => {
+    const ops = {
+      exec: vi.fn(async () => {
+        const error = new Error('shell.exec command not allowlisted: rm') as Error & { code: number };
+        error.code = -32002;
+        throw error;
+      }),
+    };
+
+    const tool = createShellTool(ops);
+    const result = await tool.execute('call-4', {
+      command: 'rm',
+      args: ['-rf', 'tmp'],
+    });
+
+    expect(result.details).toMatchObject({
+      isError: true,
+      errorClass: 'policy_blocked',
+      retryHint: 'try_alternative_input',
+      retryable: false,
+      rawDiagnostic: 'shell.exec command not allowlisted: rm',
+    });
+    expect((result.content[0] as any).text).toContain('shell failed: Blocked by runtime policy');
   });
 });

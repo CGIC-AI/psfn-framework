@@ -2,8 +2,7 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { WebFetchLane } from '../../gateway/protocol.js';
 import type { WebFetchOperations } from './ops.js';
-import { textResult, textResultWithError } from '../../../core/tools/results.js';
-import { toErrorMessage } from '../../../shared/utils/errors.js';
+import { textResult, textResultFromError } from '../../../core/tools/results.js';
 import { planWebSearchUrls, type WebSearchQueryJson } from './search.js';
 
 const WEB_FETCH_LANES = ['default', 'local_crawler', 'discovery'] as const;
@@ -116,7 +115,7 @@ export function createWebTool(
           }
         }
       } catch (error) {
-        return textResultWithError(`web failed: ${toErrorMessage(error)}`, true);
+        return textResultFromError('web failed', error);
       }
     },
   };
@@ -154,7 +153,7 @@ export function createWebFetchTool(ops: WebFetchOperations): AgentTool<any> {
           ...(params.prompt ? { prompt: params.prompt } : {}),
         }));
       } catch (error) {
-        return textResultWithError(`web_fetch failed: ${toErrorMessage(error)}`, true);
+        return textResultFromError('web_fetch failed', error);
       }
     },
   };

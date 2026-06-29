@@ -16,6 +16,9 @@ import type {
   ContactProfileArtifact,
   MemoryAbstractionLink,
   MemoryAbstractionLinkInput,
+  MemoryAdminListOptions,
+  MemoryAdminListResult,
+  MemoryAdminPrivacySummary,
   MemoryBulkUpdatePatch,
   MemoryDeleteVersion,
   MemoryEvolutionLink,
@@ -43,6 +46,10 @@ import type {
 } from './memory-store-port.js';
 import { MEMORY_EVOLUTION_RELATIONS, normalizeMemorySalienceUpdates } from './memory-store-port.js';
 import {
+  applyRetentionClassTags,
+  CORE_DURABLE_MEMORY_TAGS,
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  DURABLE_RETENTION_TAG,
   inferMemorySourceTypeFromSourceRef,
   normalizeConsentFlags,
   normalizeFormationVAD,
@@ -51,6 +58,7 @@ import {
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
   normalizeMemorySourceType,
+  PREFERENCE_MEMORY_TAG,
   type MemoryScopeQuery,
   type PurrMemory,
 } from './types.js';
@@ -62,6 +70,35 @@ import {
 const SCRATCHPAD_TTL_MS = 24 * 60 * 60 * 1000;
 const SCRATCHPAD_MAX_ENTRIES = 64;
 const log = createComponentLogger('PostgresMemoryStore');
+const ADMIN_DURABLE_MEMORY_TAGS = [
+  DURABLE_RETENTION_TAG,
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  ...CORE_DURABLE_MEMORY_TAGS,
+] as const;
+const ADMIN_PREFERENCE_MEMORY_TAGS = [
+  PREFERENCE_MEMORY_TAG,
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  'favorite',
+  'favourite',
+  'like',
+  'likes',
+  'liked',
+  'love',
+  'loves',
+  'loved',
+  'enjoy',
+  'enjoys',
+  'preferred',
+  'prefers',
+  'dislike',
+  'dislikes',
+  'hates',
+  'stable_preference',
+] as const;
+const ADMIN_FAVORITE_TEXT_REGEX =
+  String.raw`(^|[^[:alnum:]_])((my|our|his|her|their|[[:alpha:]][[:alnum:]_-]*'s)[[:space:]]+favou?rite|favou?rite[[:space:]]+[[:alnum:]_-]+[[:space:]]+(is|are|was|were))([^[:alnum:]_]|$)`;
+const ADMIN_PREFERENCE_TEXT_REGEX =
+  String.raw`(^|[^[:alnum:]_])((i|we)[[:space:]]+(really[[:space:]]+)?(prefer|preferred|like|liked|love|loved|enjoy|enjoyed|hate|hated|dislike|disliked|don't[[:space:]]+like|do[[:space:]]+not[[:space:]]+like|can't[[:space:]]+stand|cannot[[:space:]]+stand)|(prefers|preferred|likes|liked|loves|loved|enjoys|enjoyed|hates|hated|dislikes|disliked))([^[:alnum:]_]|$)`;
 
 type PgNumeric = number | string;
 
@@ -177,6 +214,25 @@ interface ScratchpadRow {
   content: string;
   created_at: number;
   updated_at: number;
+}
+
+interface CountRow {
+  count: PgNumeric;
+}
+
+interface AdminMemoryPrivacyAggregateRow {
+  active_memory_count: PgNumeric;
+  high_sensitivity_count: PgNumeric;
+  consent_gated_count: PgNumeric;
+  contact_linked_count: PgNumeric;
+  scoped_count: PgNumeric;
+  preference_count: PgNumeric;
+  durable_preference_count: PgNumeric;
+}
+
+interface SensitivityCountRow {
+  sensitivity: string | null;
+  count: PgNumeric;
 }
 
 export interface PostgresMemoryStoreOptions {
@@ -298,6 +354,126 @@ function increment(counts: Record<string, number>, key: string): void {
 function clampLimit(limit: number | undefined, fallback: number, min: number, max: number): number {
   if (limit === undefined || !Number.isFinite(limit)) return fallback;
   return Math.max(min, Math.min(max, Math.floor(limit)));
+}
+
+function activeAdminMemoryClause(): string {
+  return `
+    superseded_by IS NULL
+    AND deleted_at IS NULL
+    AND NOT (
+      lower(source_ref) LIKE 'source:context_feedback|%'
+      OR (
+        jsonb_typeof(tags) = 'array'
+        AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(tags) AS tag(value)
+          WHERE lower(tag.value) = 'context_feedback'
+        )
+      )
+    )
+  `;
+}
+
+function durableAdminMemoryCondition(tagParam: string): string {
+  return `
+    (
+      retention_class = 'durable'
+      OR (
+        jsonb_typeof(tags) = 'array'
+        AND EXISTS (
+          SELECT 1
+          FROM jsonb_array_elements_text(tags) AS tag(value)
+          WHERE lower(tag.value) = ANY(${tagParam}::text[])
+        )
+      )
+    )
+  `;
+}
+
+function preferenceAdminMemoryCondition(
+  tagParam: string,
+  favoriteRegexParam: string,
+  preferenceRegexParam: string,
+): string {
+  return `
+    (
+      type <> 'boundary'
+      AND (
+        (
+          jsonb_typeof(tags) = 'array'
+          AND EXISTS (
+            SELECT 1
+            FROM jsonb_array_elements_text(tags) AS tag(value)
+            WHERE lower(tag.value) = ANY(${tagParam}::text[])
+              OR lower(tag.value) LIKE 'preference:%'
+          )
+        )
+        OR text ~* ${favoriteRegexParam}
+        OR text ~* ${preferenceRegexParam}
+      )
+    )
+  `;
+}
+
+function addPostgresQueryValue(values: unknown[], value: unknown): string {
+  values.push(value);
+  return `$${values.length}`;
+}
+
+function buildPostgresAdminMemoryWhere(options: MemoryAdminListOptions = {}): {
+  sql: string;
+  values: unknown[];
+} {
+  const values: unknown[] = [];
+  const clauses = [activeAdminMemoryClause()];
+  if (options.type) {
+    clauses.push(`type = ${addPostgresQueryValue(values, options.type)}`);
+  }
+  if (options.sensitivity) {
+    clauses.push(`sensitivity = ${addPostgresQueryValue(values, options.sensitivity)}`);
+  }
+  if (options.retentionClass === 'durable') {
+    clauses.push(durableAdminMemoryCondition(addPostgresQueryValue(values, [...ADMIN_DURABLE_MEMORY_TAGS])));
+  } else if (options.retentionClass === 'standard') {
+    clauses.push(`NOT ${durableAdminMemoryCondition(addPostgresQueryValue(values, [...ADMIN_DURABLE_MEMORY_TAGS]))}`);
+  }
+  if (options.preferenceOnly) {
+    clauses.push(preferenceAdminMemoryCondition(
+      addPostgresQueryValue(values, [...ADMIN_PREFERENCE_MEMORY_TAGS]),
+      addPostgresQueryValue(values, ADMIN_FAVORITE_TEXT_REGEX),
+      addPostgresQueryValue(values, ADMIN_PREFERENCE_TEXT_REGEX),
+    ));
+  }
+  if (options.startDate !== undefined) {
+    clauses.push(`extracted_at >= ${addPostgresQueryValue(values, options.startDate)}`);
+  }
+  if (options.endDate !== undefined) {
+    clauses.push(`extracted_at <= ${addPostgresQueryValue(values, options.endDate)}`);
+  }
+  return {
+    sql: clauses.map(clause => `(${clause})`).join(' AND '),
+    values,
+  };
+}
+
+function mapPostgresAdminPrivacySummary(
+  row: AdminMemoryPrivacyAggregateRow | undefined,
+  sensitivityRows: SensitivityCountRow[],
+): MemoryAdminPrivacySummary {
+  const sensitivityCounts: Record<string, number> = {};
+  for (const sensitivityRow of sensitivityRows) {
+    sensitivityCounts[sensitivityRow.sensitivity ?? 'personal'] = parsePgNumber(sensitivityRow.count, 'count');
+  }
+  return {
+    activeMemoryCount: row ? parsePgNumber(row.active_memory_count, 'active_memory_count') : 0,
+    highSensitivityCount: row ? parsePgNumber(row.high_sensitivity_count, 'high_sensitivity_count') : 0,
+    consentGatedCount: row ? parsePgNumber(row.consent_gated_count, 'consent_gated_count') : 0,
+    contactLinkedCount: row ? parsePgNumber(row.contact_linked_count, 'contact_linked_count') : 0,
+    scopedCount: row ? parsePgNumber(row.scoped_count, 'scoped_count') : 0,
+    preferenceCount: row ? parsePgNumber(row.preference_count, 'preference_count') : 0,
+    durablePreferenceCount: row ? parsePgNumber(row.durable_preference_count, 'durable_preference_count') : 0,
+    sensitivityCounts,
+  };
 }
 
 function toMemoryRow(memory: PurrMemory, embedding?: Float32Array): MemoryRow {
@@ -1038,6 +1214,77 @@ class PostgresMemoryStore implements MemoryStorePort {
       .slice(offset, offset + limit);
   }
 
+  async listAdminMemories(options: MemoryAdminListOptions = {}): Promise<MemoryAdminListResult> {
+    const limit = clampLimit(options.limit, 50, 1, 500);
+    const offset = clampLimit(options.offset, 0, 0, 100_000);
+    const where = buildPostgresAdminMemoryWhere(options);
+    const pageValues = [
+      ...where.values,
+      limit,
+      offset,
+    ];
+    const limitParam = `$${where.values.length + 1}`;
+    const offsetParam = `$${where.values.length + 2}`;
+    const rows = await queryRows<MemoryRow>(this.pool, `
+      SELECT
+        id, text, type, importance, confidence, emotional_valence, formation_vad,
+        salience, source_ref, extracted_at, last_accessed, access_count, superseded_by,
+        tags, scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
+        retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
+        delete_reason, embedding::text AS embedding
+      FROM l2_memories
+      WHERE ${where.sql}
+      ORDER BY extracted_at DESC, id DESC
+      LIMIT ${limitParam}
+      OFFSET ${offsetParam}
+    `, pageValues);
+    const totalRows = await queryRows<CountRow>(this.pool, `
+      SELECT COUNT(*) AS count
+      FROM l2_memories
+      WHERE ${where.sql}
+    `, where.values);
+    return {
+      memories: rows.map(fromMemoryRow),
+      total: totalRows[0] ? parsePgNumber(totalRows[0].count, 'count') : 0,
+      privacySummary: await this.getAdminMemoryPrivacySummary(),
+    };
+  }
+
+  async getAdminMemoryPrivacySummary(): Promise<MemoryAdminPrivacySummary> {
+    const values: unknown[] = [];
+    const durableCondition = durableAdminMemoryCondition(
+      addPostgresQueryValue(values, [...ADMIN_DURABLE_MEMORY_TAGS]),
+    );
+    const preferenceCondition = preferenceAdminMemoryCondition(
+      addPostgresQueryValue(values, [...ADMIN_PREFERENCE_MEMORY_TAGS]),
+      addPostgresQueryValue(values, ADMIN_FAVORITE_TEXT_REGEX),
+      addPostgresQueryValue(values, ADMIN_PREFERENCE_TEXT_REGEX),
+    );
+    const activeWhere = activeAdminMemoryClause();
+    const aggregateRows = await queryRows<AdminMemoryPrivacyAggregateRow>(this.pool, `
+      SELECT
+        COUNT(*) AS active_memory_count,
+        COALESCE(SUM(CASE WHEN sensitivity IN ('intimate', 'confidential') THEN 1 ELSE 0 END), 0) AS high_sensitivity_count,
+        COALESCE(SUM(CASE WHEN consent_flags->>'allowRecall' = 'false' THEN 1 ELSE 0 END), 0) AS consent_gated_count,
+        COALESCE(SUM(CASE WHEN contact_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS contact_linked_count,
+        COALESCE(SUM(CASE
+          WHEN (scope_ref_kind IS NOT NULL AND scope_ref_id IS NOT NULL)
+            OR (jsonb_typeof(scope_tags) = 'array' AND jsonb_array_length(scope_tags) > 0)
+          THEN 1 ELSE 0 END), 0) AS scoped_count,
+        COALESCE(SUM(CASE WHEN ${preferenceCondition} THEN 1 ELSE 0 END), 0) AS preference_count,
+        COALESCE(SUM(CASE WHEN ${preferenceCondition} AND ${durableCondition} THEN 1 ELSE 0 END), 0) AS durable_preference_count
+      FROM l2_memories
+      WHERE ${activeWhere}
+    `, values);
+    const sensitivityRows = await queryRows<SensitivityCountRow>(this.pool, `
+      SELECT COALESCE(sensitivity, 'personal') AS sensitivity, COUNT(*) AS count
+      FROM l2_memories
+      WHERE ${activeWhere}
+      GROUP BY COALESCE(sensitivity, 'personal')
+    `);
+    return mapPostgresAdminPrivacySummary(aggregateRows[0], sensitivityRows);
+  }
+
   async countActiveMemories(): Promise<number> {
     return Array.from(this.memories.values()).filter(memory => !memory.supersededBy && !memory.deletedAt).length;
   }
@@ -1372,19 +1619,87 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   async bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Promise<number> {
-    let count = 0;
+    if (
+      fields.type === undefined
+      && fields.sensitivity === undefined
+      && fields.retentionClass === undefined
+    ) {
+      return 0;
+    }
+
+    const updatesById = new Map<string, PurrMemory>();
     for (const id of ids) {
-      const existing = this.memories.get(id);
+      const normalizedId = id.trim();
+      if (!normalizedId) continue;
+      const existing = this.memories.get(normalizedId);
       if (!existing || existing.deletedAt) continue;
       const next = { ...existing };
       if (fields.type !== undefined) next.type = fields.type;
       if (fields.sensitivity !== undefined) next.sensitivity = fields.sensitivity;
-      if (fields.retentionClass !== undefined) next.retentionClass = fields.retentionClass;
-      await this.persist(() => this.upsertMemoryRow(next, this.embeddings.get(id)));
-      this.memories.set(id, next);
-      count += 1;
+      if (fields.retentionClass !== undefined) {
+        next.retentionClass = fields.retentionClass;
+        next.tags = applyRetentionClassTags(existing, fields.retentionClass);
+      }
+      updatesById.set(normalizedId, next);
     }
-    return count;
+    const updates = [...updatesById.values()];
+    if (updates.length === 0) return 0;
+
+    const values: unknown[] = [];
+    const valueColumns = ['id'];
+    const setClauses: string[] = [];
+    if (fields.type !== undefined) {
+      valueColumns.push('type');
+      setClauses.push('type = updates.type');
+    }
+    if (fields.sensitivity !== undefined) {
+      valueColumns.push('sensitivity');
+      setClauses.push('sensitivity = updates.sensitivity');
+    }
+    if (fields.retentionClass !== undefined) {
+      valueColumns.push('retention_class', 'tags');
+      setClauses.push('retention_class = updates.retention_class', 'tags = updates.tags');
+    }
+
+    const rows = updates.map((update) => {
+      const row: string[] = [];
+      values.push(update.id);
+      row.push(`$${values.length}::text`);
+      if (fields.type !== undefined) {
+        values.push(update.type);
+        row.push(`$${values.length}::text`);
+      }
+      if (fields.sensitivity !== undefined) {
+        values.push(update.sensitivity);
+        row.push(`$${values.length}::text`);
+      }
+      if (fields.retentionClass !== undefined) {
+        values.push(update.retentionClass ?? null);
+        row.push(`$${values.length}::text`);
+        values.push(JSON.stringify(update.tags));
+        row.push(`$${values.length}::jsonb`);
+      }
+      return `(${row.join(', ')})`;
+    });
+
+    const result = await this.persist(() => executeQuery(this.pool, `
+      UPDATE l2_memories AS memory
+      SET ${setClauses.join(', ')}
+      FROM (VALUES ${rows.join(', ')}) AS updates(${valueColumns.join(', ')})
+      WHERE memory.id = updates.id
+        AND memory.deleted_at IS NULL
+      RETURNING memory.id
+    `, values));
+
+    const updatedIds = new Set(result.rows.flatMap(row => (
+      typeof row.id === 'string' ? [row.id] : []
+    )));
+    for (const update of updates) {
+      if (updatedIds.has(update.id)) {
+        this.memories.set(update.id, update);
+      }
+    }
+    return result.rowCount ?? updatedIds.size;
   }
 
   async bulkUpdateSalience(updates: MemorySalienceUpdate[]): Promise<number> {

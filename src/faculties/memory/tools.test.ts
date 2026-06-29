@@ -873,7 +873,15 @@ describe('createMemoryTool', () => {
 
     const missingQuery = await tool.execute('memory-call-10', { action: 'search' } as any);
     expect(resultText(missingQuery as any)).toContain('query is required for action=search');
+    expect(resultText(missingQuery as any)).toContain('Missing required field "query"');
+    expect(resultText(missingQuery as any)).toContain('Minimal valid JSON: {"action":"search","query":"topic"}');
+    expect(resultText(missingQuery as any)).toContain('Do not retry action=search without a non-empty query');
     expect((missingQuery.details as any).isError).toBe(true);
+
+    const blankQuery = await tool.execute('memory-call-10b', { action: 'search', query: '   ' } as any);
+    expect(resultText(blankQuery as any)).toContain('Missing required field "query"');
+    expect((blankQuery.details as any).isError).toBe(true);
+    expect(store.searchByText).not.toHaveBeenCalled();
 
     const badAction = await tool.execute('memory-call-11', { action: 'purge' } as any);
     expect(resultText(badAction as any)).toContain('invalid action');

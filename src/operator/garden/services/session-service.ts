@@ -29,6 +29,8 @@ import { AdminSessionTurnObservabilityStore } from './session-turn-observability
 import type { SessionEntry } from '../../../core/session/types.js';
 
 const DEFAULT_ADMIN_TURN_LIMIT = 50;
+export const DEFAULT_ADMIN_SESSION_MESSAGE_PAGE_LIMIT = 100;
+export const MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT = 200;
 
 function resolveMessageClass(value: unknown): AdminSessionMessageOntologyView['messageClass'] {
   return typeof value === 'string' && Object.values(MESSAGE_CLASSES).includes(value as never)
@@ -84,6 +86,18 @@ function buildMessageOntologyView(entry: AdminSessionMessagesData['messages'][nu
     promptVisibility: 'prompt_visible',
     displayLabel: 'Outward speech',
   };
+}
+
+function normalizePageLimit(value: number | undefined): number {
+  if (value === undefined) return DEFAULT_ADMIN_SESSION_MESSAGE_PAGE_LIMIT;
+  if (!Number.isInteger(value) || value <= 0) return DEFAULT_ADMIN_SESSION_MESSAGE_PAGE_LIMIT;
+  return Math.min(value, MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT);
+}
+
+function normalizeBeforeId(value: number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  if (!Number.isInteger(value) || value <= 0) return null;
+  return value;
 }
 
 export class AdminSessionDataService implements AdminSessionService {
@@ -206,8 +220,23 @@ export class AdminSessionDataService implements AdminSessionService {
     };
   }
 
-  getSessionMessages(sessionId: string): AdminSessionMessagesData {
-    const messages = this.deps.sessionStore.getRecent(sessionId, 100);
+  getSessionMessages(sessionId: string, options: {
+    limit?: number;
+    beforeId?: number | null;
+  } = {}): AdminSessionMessagesData {
+    const limit = normalizePageLimit(options.limit);
+    const beforeId = normalizeBeforeId(options.beforeId);
+    const totalMessages = this.deps.sessionStore.count(sessionId);
+    const olderThanCursor = beforeId === null
+      ? null
+      : this.deps.sessionStore.getEntriesInRange(sessionId, 0, beforeId - 1);
+    const messages = olderThanCursor === null
+      ? this.deps.sessionStore.getRecent(sessionId, limit)
+      : olderThanCursor.slice(-limit);
+    const hasMoreOlder = olderThanCursor === null
+      ? totalMessages > messages.length
+      : olderThanCursor.length > messages.length;
+    const nextBeforeId = hasMoreOlder ? (messages[0]?.id ?? null) : null;
     const messageOntologyViews = messages.map(buildMessageOntologyView);
     const sessionActivity = this.deps.sessionStore.getSessionActivity(sessionId);
     const channelId = messages.length > 0
@@ -243,6 +272,14 @@ export class AdminSessionDataService implements AdminSessionService {
       sessionId,
       channelId,
       messages,
+      pagination: {
+        limit,
+        beforeId,
+        nextBeforeId,
+        hasMoreOlder,
+        totalMessages,
+        returnedMessages: messages.length,
+      },
       messageOntologyViews,
       roleEnvelopePreviews,
       compactionAuditViews,

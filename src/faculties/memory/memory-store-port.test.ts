@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import {
   type ContactProfileArtifact,
+  type MemoryAdminListOptions,
+  type MemoryAdminListResult,
+  type MemoryAdminPrivacySummary,
   type MemoryAbstractionLink,
   type MemoryAbstractionLinkInput,
   type MemoryBulkUpdatePatch,
@@ -24,9 +27,10 @@ import {
   type ScratchpadEntryReplaceOptions,
   createMemoryStorePort,
 } from './memory-store-port.js';
+import { isInternalMemoryArtifact } from './internal-artifacts.js';
 import { MemoryRetriever } from './retrieval.js';
 import { MemoryWriter } from './writer.js';
-import type { PurrMemory } from './types.js';
+import { isDurableMemory, isPreferenceMemory, type PurrMemory } from './types.js';
 
 function makeEmbeddingProvider(): EmbeddingProviderPort {
   return {
@@ -139,6 +143,73 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
     const offset = options.offset ?? 0;
     const limit = options.limit ?? 50;
     return this.getAllActiveMemories().slice(offset, offset + limit);
+  }
+
+  listAdminMemories(options: MemoryAdminListOptions = {}): MemoryAdminListResult {
+    const offset = options.offset ?? 0;
+    const limit = options.limit ?? 50;
+    const active = this.getAllActiveMemories()
+      .filter(memory => !isInternalMemoryArtifact(memory));
+    const filtered = active
+      .filter((memory) => {
+        if (options.type && memory.type !== options.type) return false;
+        if (options.sensitivity && memory.sensitivity !== options.sensitivity) return false;
+        if (options.retentionClass === 'durable' && !isDurableMemory(memory)) return false;
+        if (options.retentionClass === 'standard' && isDurableMemory(memory)) return false;
+        if (options.preferenceOnly && !isPreferenceMemory(memory)) return false;
+        if (options.startDate !== undefined && memory.extractedAt < options.startDate) return false;
+        if (options.endDate !== undefined && memory.extractedAt > options.endDate) return false;
+        return true;
+      })
+      .sort((left, right) => right.extractedAt - left.extractedAt || right.id.localeCompare(left.id));
+    return {
+      memories: filtered.slice(offset, offset + limit).map(memory => ({ ...memory })),
+      total: filtered.length,
+      privacySummary: this.getAdminMemoryPrivacySummary(),
+    };
+  }
+
+  getAdminMemoryPrivacySummary(): MemoryAdminPrivacySummary {
+    const active = this.getAllActiveMemories()
+      .filter(memory => !isInternalMemoryArtifact(memory));
+    const sensitivityCounts: Record<string, number> = {};
+    let highSensitivityCount = 0;
+    let consentGatedCount = 0;
+    let contactLinkedCount = 0;
+    let scopedCount = 0;
+    let preferenceCount = 0;
+    let durablePreferenceCount = 0;
+    for (const memory of active) {
+      sensitivityCounts[memory.sensitivity] = (sensitivityCounts[memory.sensitivity] ?? 0) + 1;
+      if (memory.sensitivity === 'intimate' || memory.sensitivity === 'confidential') {
+        highSensitivityCount += 1;
+      }
+      if (memory.consentFlags?.allowRecall === false) {
+        consentGatedCount += 1;
+      }
+      if (memory.contactId) {
+        contactLinkedCount += 1;
+      }
+      if (memory.scopeRef || (memory.scopeTags?.length ?? 0) > 0) {
+        scopedCount += 1;
+      }
+      if (isPreferenceMemory(memory)) {
+        preferenceCount += 1;
+        if (isDurableMemory(memory)) {
+          durablePreferenceCount += 1;
+        }
+      }
+    }
+    return {
+      activeMemoryCount: active.length,
+      highSensitivityCount,
+      consentGatedCount,
+      contactLinkedCount,
+      scopedCount,
+      preferenceCount,
+      durablePreferenceCount,
+      sensitivityCounts,
+    };
   }
 
   countActiveMemories(): number {

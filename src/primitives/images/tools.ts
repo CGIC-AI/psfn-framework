@@ -9,7 +9,10 @@ import type {
 } from './reference-store.js';
 import { getVisionToolRequestContext } from './request-context.js';
 import { textResultWithError } from '../../core/tools/results.js';
-import { chargeSurface } from '../../shared/telemetry/run-charge.js';
+import {
+  assertChargeSurfaceAvailable,
+  chargeSurface,
+} from '../../shared/telemetry/run-charge.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import {
@@ -225,7 +228,7 @@ function resolveCurrentTurnVisionReviewFallback(
 
 function buildImageCreateDescription(selfImage: boolean): string {
   if (selfImage) {
-    return 'Generate a dedicated selfie or self-portrait of the companion; the result does not have to be a literal selfie angle - any portrait of her works. Use this explicit path when the request is specifically about her own representation; the always-on appearance context is the identity anchor, and this tool adds the self-image reference workflow. When a default reference photo is configured, this tool always works through the image-edit pipeline so the reference anchors her likeness, unless use_reference_image=false; choose reference_image_id or reference_image_tags for a different saved reference. Edit models run as a tiered fallback chain (gpt-image-2 -> nano-banana-2 -> grok-imagine quality), advancing automatically on content-policy blocks or timeouts; use edit_model to start at a more permissive tier for casual filter-sensitive looks like swimwear or tank tops. If the whole chain blocks the request for content policy, do not retry minor prompt variants in the same turn; report the block and ask for a safer non-explicit direction. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
+    return 'Generate a dedicated selfie or self-portrait of the companion; the result does not have to be a literal selfie angle - any portrait of her works. Use this explicit path when the request is specifically about her own representation; the always-on appearance context is the identity anchor, and this tool adds the self-image reference workflow. When a default reference photo is configured, use_reference_image=true anchors her likeness; set use_reference_image=false only when the user explicitly wants no saved reference. Use reference_image_id or reference_image_tags to choose a different saved reference. If the provider blocks the request for content policy, report the block and ask for a safer non-explicit direction instead of retrying minor prompt variants. Successful generations return a vision review of the produced image.';
   }
   return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits, use the first-class selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
 }
@@ -346,6 +349,27 @@ function buildMediaResultDetails(
   };
 }
 
+function preflightPaidImageGeneration(input: {
+  action: 'generate' | 'edit';
+  provider?: 'auto' | 'fal' | 'comfyui';
+  model?: string;
+  imageCount?: number;
+  inputImageCount?: number;
+}): void {
+  if (input.provider === 'comfyui') {
+    return;
+  }
+  assertChargeSurfaceAvailable('paidImageGeneration', {
+    details: {
+      action: input.action,
+      provider: input.provider ?? 'auto',
+      ...(input.model ? { model: input.model } : {}),
+      imageCount: input.imageCount ?? 1,
+      ...(input.inputImageCount !== undefined ? { inputImageCount: input.inputImageCount } : {}),
+    },
+  });
+}
+
 function chargePaidImageGeneration(result: ImageGenerationResult, action: 'generate' | 'edit'): void {
   if (result.provider !== 'fal') {
     return;
@@ -445,6 +469,12 @@ async function executeMediaGenerate(
   }
 
   try {
+    preflightPaidImageGeneration({
+      action: 'generate',
+      provider: params.provider,
+      model: params.model,
+      imageCount: params.num_images,
+    });
     const result = await ops.create({
       prompt,
       provider: params.provider,
@@ -507,6 +537,13 @@ async function executeMediaEdit(
       defaultToSavedReference: false,
     });
     const imageUrls = appendReferenceImageUrl(inputUrls, reference);
+    preflightPaidImageGeneration({
+      action: 'edit',
+      provider: params.provider,
+      model: params.model,
+      imageCount: params.num_images,
+      inputImageCount: imageUrls.length,
+    });
     const result = await ops.edit({
       prompt,
       imageUrls,
@@ -765,6 +802,13 @@ function createImageGenerationTool(
         let notice: string | undefined;
         let result: ImageGenerationResult;
         if (reference) {
+          preflightPaidImageGeneration({
+            action: 'edit',
+            provider: params.provider,
+            model: params.edit_model,
+            imageCount: params.num_images,
+            inputImageCount: 1,
+          });
           const runReferenceEdit = async (
             editModel: typeof FAL_EDIT_MODELS[number],
             editPrompt: string,
@@ -856,6 +900,12 @@ function createImageGenerationTool(
             result = chainResult;
           }
         } else {
+          preflightPaidImageGeneration({
+            action: 'generate',
+            provider: params.provider,
+            model: params.model,
+            imageCount: params.num_images,
+          });
           result = await ops.create({
               prompt: params.prompt,
               provider: params.provider,

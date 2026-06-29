@@ -18,7 +18,13 @@ import type {
 
 export type AdminEpisodicStore = Pick<
   EpisodicStorePort,
-  'getEpisode' | 'listEpisodeArcsForEpisode' | 'listEpisodes' | 'searchByThread' | 'searchByTime'
+  | 'getEpisode'
+  | 'getEpisodesByIds'
+  | 'listEpisodeArcsForEpisode'
+  | 'listEpisodeArcsForEpisodes'
+  | 'listEpisodes'
+  | 'searchByThread'
+  | 'searchByTime'
 >;
 
 const DEFAULT_EPISODE_LIST_LIMIT = 50;
@@ -272,17 +278,29 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
       ...(options.arcKind ? { arcKind: options.arcKind } : {}),
       limit: options.limit ?? DEFAULT_ARC_LIST_LIMIT,
     });
-    return await Promise.all(arcs.map(arc => this.toRelatedArcView(episodeId, arc)));
+    return await this.toRelatedArcViews(episodeId, arcs);
   }
 
-  private async toRelatedArcView(episodeId: string, arc: EpisodeArc): Promise<AdminEpisodicRelatedArcView> {
+  private async toRelatedArcViews(
+    episodeId: string,
+    arcs: readonly EpisodeArc[],
+  ): Promise<AdminEpisodicRelatedArcView[]> {
+    const relatedEpisodeIds = arcs.map(arc => this.getRelatedEpisodeIdForEpisode(episodeId, arc));
+    const relatedEpisodes = await this.getEpisodeMap(relatedEpisodeIds);
+    return arcs.map((arc) => {
+      const direction = arc.sourceEpisodeId === episodeId ? 'outgoing' : 'incoming';
+      const relatedEpisodeId = this.getRelatedEpisodeIdForEpisode(episodeId, arc);
+      return {
+        arc,
+        direction,
+        relatedEpisode: relatedEpisodes.get(relatedEpisodeId) ?? null,
+      };
+    });
+  }
+
+  private getRelatedEpisodeIdForEpisode(episodeId: string, arc: EpisodeArc): string {
     const direction = arc.sourceEpisodeId === episodeId ? 'outgoing' : 'incoming';
-    const relatedEpisodeId = direction === 'outgoing' ? arc.targetEpisodeId : arc.sourceEpisodeId;
-    return {
-      arc,
-      direction,
-      relatedEpisode: (await this.store.getEpisode(relatedEpisodeId)) ?? null,
-    };
+    return direction === 'outgoing' ? arc.targetEpisodeId : arc.sourceEpisodeId;
   }
 
   private async buildThreadSummaries(episodes: readonly Episode[]): Promise<AdminEpisodicThreadSummary[]> {
@@ -294,11 +312,12 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
       byThread.set(episode.threadId, group);
     }
 
-    return await Promise.all([...byThread.entries()].map(async ([threadId, threadEpisodes]) => {
+    const arcsByThread = await this.collectArcsByThread(byThread);
+    return [...byThread.entries()].map(([threadId, threadEpisodes]) => {
       const sorted = [...threadEpisodes].sort(compareEpisodeChronology);
-      const arcs = await this.collectArcsForEpisodes(sorted);
+      const arcs = arcsByThread.get(threadId) ?? [];
       return this.summarizeThread(threadId, sorted, arcs);
-    }));
+    });
   }
 
   private summarizeThread(
@@ -322,14 +341,37 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
   }
 
   private async collectArcsForEpisodes(episodes: readonly Episode[]): Promise<EpisodeArc[]> {
+    if (episodes.length === 0) return [];
+    const episodeIds = episodes.map(episode => episode.id);
+    const arcs = await this.store.listEpisodeArcsForEpisodes(episodeIds, {
+      direction: 'both',
+      limit: MAX_EPISODIC_SCAN_LIMIT,
+    });
+    return this.sortAndDeduplicateArcs(arcs);
+  }
+
+  private async collectArcsByThread(
+    byThread: ReadonlyMap<string, readonly Episode[]>,
+  ): Promise<Map<string, EpisodeArc[]>> {
+    const allThreadEpisodes = [...byThread.values()].flat();
+    const allArcs = await this.collectArcsForEpisodes(allThreadEpisodes);
+    const result = new Map<string, EpisodeArc[]>();
+    for (const [threadId, episodes] of byThread.entries()) {
+      const episodeIds = new Set(episodes.map(episode => episode.id));
+      result.set(
+        threadId,
+        allArcs.filter(arc => (
+          episodeIds.has(arc.sourceEpisodeId) || episodeIds.has(arc.targetEpisodeId)
+        )),
+      );
+    }
+    return result;
+  }
+
+  private sortAndDeduplicateArcs(arcs: readonly EpisodeArc[]): EpisodeArc[] {
     const byId = new Map<string, EpisodeArc>();
-    for (const episode of episodes) {
-      for (const arc of await this.store.listEpisodeArcsForEpisode(episode.id, {
-        direction: 'both',
-        limit: MAX_EPISODIC_SCAN_LIMIT,
-      })) {
-        byId.set(arc.id, arc);
-      }
+    for (const arc of arcs) {
+      byId.set(arc.id, arc);
     }
     return [...byId.values()].sort((left, right) => {
       if (right.updatedAt !== left.updatedAt) return right.updatedAt.localeCompare(left.updatedAt);
@@ -341,15 +383,27 @@ export class AdminEpisodicMemoryDataService implements AdminEpisodicMemoryServic
     threadEpisodeIds: ReadonlySet<string>,
     arcs: readonly EpisodeArc[],
   ): Promise<AdminEpisodicRelatedArcView[]> {
-    return await Promise.all(arcs.map(async (arc) => {
+    const relatedEpisodeIds = arcs.map((arc) => {
+      const sourceInThread = threadEpisodeIds.has(arc.sourceEpisodeId);
+      const direction = sourceInThread ? 'outgoing' : 'incoming';
+      return direction === 'outgoing' ? arc.targetEpisodeId : arc.sourceEpisodeId;
+    });
+    const relatedEpisodes = await this.getEpisodeMap(relatedEpisodeIds);
+    return arcs.map((arc) => {
       const sourceInThread = threadEpisodeIds.has(arc.sourceEpisodeId);
       const direction = sourceInThread ? 'outgoing' : 'incoming';
       const relatedEpisodeId = direction === 'outgoing' ? arc.targetEpisodeId : arc.sourceEpisodeId;
       return {
         arc,
         direction,
-        relatedEpisode: (await this.store.getEpisode(relatedEpisodeId)) ?? null,
+        relatedEpisode: relatedEpisodes.get(relatedEpisodeId) ?? null,
       };
-    }));
+    });
+  }
+
+  private async getEpisodeMap(ids: readonly string[]): Promise<Map<string, Episode>> {
+    if (ids.length === 0) return new Map();
+    const episodes = await this.store.getEpisodesByIds(ids);
+    return new Map(episodes.map(episode => [episode.id, episode]));
   }
 }

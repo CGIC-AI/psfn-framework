@@ -125,6 +125,73 @@ describe('EpisodicStore', () => {
     expect(store.listEpisodeArcsForEpisode('episode-2', { direction: 'incoming' })).toEqual([arc]);
   });
 
+  it('batch-loads episodes and arcs while preserving arc filters, dedupe, and per-episode limits', () => {
+    const store = makeStore();
+    const first = store.createEpisode(baseEpisode({ id: 'episode-1' }));
+    store.createEpisode(baseEpisode({
+      id: 'episode-2',
+      startedAt: '2026-04-02T10:00:00.000Z',
+      endedAt: '2026-04-02T10:10:00.000Z',
+      spanRefs: [{ spanId: 'span-2' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+    }));
+    const third = store.createEpisode(baseEpisode({
+      id: 'episode-3',
+      startedAt: '2026-04-03T10:00:00.000Z',
+      endedAt: '2026-04-03T10:10:00.000Z',
+      spanRefs: [{ spanId: 'span-3' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-3' }],
+    }));
+
+    const older = store.writeEpisodeArc({
+      id: 'arc-older',
+      sourceEpisodeId: 'episode-1',
+      targetEpisodeId: 'episode-2',
+      arcKind: 'continuation',
+      salience: 0.7,
+      confidence: 0.7,
+      themes: ['collaboration'],
+      spanRefs: [{ spanId: 'span-2' }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+      updatedAt: '2026-04-02T00:00:00.000Z',
+    });
+    const newer = store.writeEpisodeArc({
+      id: 'arc-newer',
+      sourceEpisodeId: 'episode-3',
+      targetEpisodeId: 'episode-1',
+      arcKind: 'continuation',
+      salience: 0.8,
+      confidence: 0.8,
+      themes: ['collaboration'],
+      spanRefs: [{ spanId: 'span-3' }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-3' }],
+      updatedAt: '2026-04-03T00:00:00.000Z',
+    });
+    store.writeEpisodeArc({
+      id: 'arc-other-kind',
+      sourceEpisodeId: 'episode-2',
+      targetEpisodeId: 'episode-3',
+      arcKind: 'causal',
+      salience: 0.6,
+      confidence: 0.6,
+      themes: ['collaboration'],
+      spanRefs: [{ spanId: 'span-3' }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-3' }],
+      updatedAt: '2026-04-04T00:00:00.000Z',
+    });
+
+    expect(store.getEpisodesByIds(['episode-3', 'missing', 'episode-1', 'episode-3']))
+      .toEqual([third, first]);
+    expect(store.listEpisodeArcsForEpisodes(['episode-1', 'episode-2'], {
+      direction: 'both',
+      arcKind: 'continuation',
+      limit: 1,
+    })).toEqual([newer, older]);
+  });
+
   it('keeps same-day shared moments distinct while linking month-spanning life arcs', () => {
     const store = makeStore();
     const createSharedMoment = (

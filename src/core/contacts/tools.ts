@@ -67,6 +67,47 @@ function formatConfidence(confidence: number): string {
   return `${Math.round(confidence * 100)}%`;
 }
 
+function contactExampleJson(contactId: string): string {
+  return JSON.stringify({ action: 'lookup', contactId });
+}
+
+function formatContactChannels(contact: Contact): string {
+  const channels = (contact.channels ?? [])
+    .map(channel => `${channel.channel}:${channel.userId}[${channel.privacyLevel}]`);
+  return channels.length > 0 ? channels.join(', ') : '';
+}
+
+function formatContactIdentities(contact: Contact): string {
+  const channelKeys = new Set((contact.channels ?? [])
+    .map(channel => `${channel.channel}:${channel.userId}`));
+  const identities = (contact.channelIdentities ?? [])
+    .map(identity => `${identity.channel}:${identity.userId}`)
+    .filter(identity => !channelKeys.has(identity));
+  return identities.length > 0 ? identities.join(', ') : '';
+}
+
+function formatRelatedChannels(contact: Contact): string {
+  const related = (contact.conversationChannels ?? [])
+    .map(channel => `${channel.channel}:${channel.channelId}${channel.privacyLevel ? `[${channel.privacyLevel}]` : ''}`);
+  return related.length > 0 ? related.join(', ') : '';
+}
+
+async function formatContactIdRecoveryGuidance(contactStore: ContactStorePort): Promise<string> {
+  const contacts = await contactStore.listAll();
+  if (contacts.length === 0) {
+    return 'Run contact with {"action":"list"} first to get valid contactId values. '
+      + 'Minimal valid JSON: {"action":"lookup","contactId":"<contactId from list>"}. '
+      + 'Do not retry lookup with a display name.';
+  }
+
+  const visibleIds = contacts.map(contact => contact.id).slice(0, 8);
+  const remaining = contacts.length - visibleIds.length;
+  const suffix = remaining > 0 ? `, and ${remaining} more` : '';
+  return `Valid contactIds: ${visibleIds.join(', ')}${suffix}. `
+    + `Minimal valid JSON: ${contactExampleJson(visibleIds[0] ?? '<contactId from list>')}. `
+    + 'Use contact action=list when you need names or channels before choosing an ID; do not guess contactId from display names.';
+}
+
 function normalizeContactAction(params: ContactToolParams): ContactAction {
   const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
   if (!rawAction) {
@@ -291,12 +332,14 @@ async function executeContactLookup(
 ): Promise<AgentToolResult<{ isError?: boolean }>> {
   const id = params.contactId?.trim();
   if (!id) {
-    return textResultWithError('Missing contactId', true);
+    const guidance = await formatContactIdRecoveryGuidance(contactStore);
+    return textResultWithError(`Missing required field "contactId" for action=lookup. ${guidance}`, true);
   }
 
   const contact = await lookupContact(contactStore, id);
   if (!contact) {
-    return textResultWithError(`No contact found for: ${id}`, true);
+    const guidance = await formatContactIdRecoveryGuidance(contactStore);
+    return textResultWithError(`No contact found for contactId "${id}". ${guidance}`, true);
   }
 
   const identities = contact.channelIdentities
@@ -381,12 +424,21 @@ async function executeContactList(
     return textResult('No contacts in address book.');
   }
 
-  const lines = contacts.map(c =>
-    `- ${(resolvePreferredContactName(c) ?? c.displayName)} [${c.trustLevel}/${c.relationshipType}]`
-    + ((c.channels?.length ?? 0) > 0 ? ` channels=${c.channels!.length}` : '')
-    + (c.notes ? ` — ${c.notes}` : ''),
+  const lines = contacts.map((contact) => {
+    const channels = formatContactChannels(contact);
+    const identities = formatContactIdentities(contact);
+    const relatedChannels = formatRelatedChannels(contact);
+    return `- ${contact.id}: ${(resolvePreferredContactName(contact) ?? contact.displayName)} `
+      + `[${contact.trustLevel}/${contact.relationshipType}]`
+      + (channels ? ` channels=${channels}` : '')
+      + (identities ? ` identities=${identities}` : '')
+      + (relatedChannels ? ` related_channels=${relatedChannels}` : '')
+      + (contact.notes ? ` — ${contact.notes}` : '');
+  });
+  return textResult(
+    `Contacts (${contacts.length}):\n${lines.join('\n')}\n`
+    + 'Pass contactId from this list to action=lookup, action=set_trust, or action=note; do not guess from display names.',
   );
-  return textResult(`Contacts (${contacts.length}):\n${lines.join('\n')}`);
 }
 
 async function executeUnifiedContactAction(
@@ -445,7 +497,9 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
     label: 'contact',
     description:
       'Unified contact surface for listing, lookup, notes, trust, identity linking, and channel privacy. '
-      + `Use action=${CONTACT_ACTION_HELP}. `
+      + 'Start with action=list to see contactId values and channel identities. '
+      + 'Use action=lookup with contactId; action=note and action=set_trust also require contactId. '
+      + `Other actions: ${CONTACT_ACTION_HELP}. `
       + 'Trust and disclosure boundaries remain enforced.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union(CONTACT_ACTION_NAMES.map((action) => Type.Literal(action)), {

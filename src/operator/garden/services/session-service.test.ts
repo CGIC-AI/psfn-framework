@@ -59,6 +59,69 @@ describe('AdminSessionDataService', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('returns newest message page by default and older pages by beforeId cursor', () => {
+    const channelId = 'api:paginated-session';
+    for (let index = 1; index <= 250; index += 1) {
+      store.append({
+        channelId,
+        role: index % 2 === 0 ? 'assistant' : 'user',
+        content: `Message ${index}`,
+        timestamp: 1_700_000_000_000 + index,
+      });
+    }
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const firstPage = service.getSessionMessages(channelId);
+    expect(firstPage.messages).toHaveLength(100);
+    expect(firstPage.messages[0]?.content).toBe('Message 151');
+    expect(firstPage.messages[99]?.content).toBe('Message 250');
+    expect(firstPage.pagination).toMatchObject({
+      limit: 100,
+      beforeId: null,
+      nextBeforeId: firstPage.messages[0]?.id,
+      hasMoreOlder: true,
+      totalMessages: 250,
+      returnedMessages: 100,
+    });
+
+    const secondPage = service.getSessionMessages(channelId, {
+      limit: 100,
+      beforeId: firstPage.pagination.nextBeforeId,
+    });
+    expect(secondPage.messages).toHaveLength(100);
+    expect(secondPage.messages[0]?.content).toBe('Message 51');
+    expect(secondPage.messages[99]?.content).toBe('Message 150');
+    expect(secondPage.pagination).toMatchObject({
+      limit: 100,
+      beforeId: firstPage.pagination.nextBeforeId,
+      nextBeforeId: secondPage.messages[0]?.id,
+      hasMoreOlder: true,
+      totalMessages: 250,
+      returnedMessages: 100,
+    });
+
+    const terminalPage = service.getSessionMessages(channelId, {
+      limit: 100,
+      beforeId: secondPage.pagination.nextBeforeId,
+    });
+    expect(terminalPage.messages).toHaveLength(50);
+    expect(terminalPage.messages[0]?.content).toBe('Message 1');
+    expect(terminalPage.messages[49]?.content).toBe('Message 50');
+    expect(terminalPage.pagination).toMatchObject({
+      limit: 100,
+      beforeId: secondPage.pagination.nextBeforeId,
+      nextBeforeId: null,
+      hasMoreOlder: false,
+      totalMessages: 250,
+      returnedMessages: 50,
+    });
+  });
+
   it('returns persisted turn observability without requiring live event-bus state', () => {
     const channelId = 'api:observability';
     const requestId = 'persisted-turn-1';

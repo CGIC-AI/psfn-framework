@@ -1270,7 +1270,9 @@ export function createMemoryTool(
     name: 'memory',
     description:
       'Unified long-term memory tool. '
-      + 'Use action=write|search|census|exists|timeline|import|patch|redact|delete|restore to manage durable memory explicitly.',
+      + 'Use action=search with required query for lookup, action=write with required text and type to store memory, '
+      + 'and action=census|exists|timeline for orientation before writing. '
+      + 'Mutation actions require exact IDs: patch/redact/delete use memory_id; restore uses delete_id.',
     label: 'memory',
     parameters: Type.Object({
       action: Type.Unsafe<MemoryToolAction>({
@@ -1469,7 +1471,13 @@ export function createMemoryTool(
           case 'search': {
             const query = normalizedParams.query?.trim();
             if (!query) {
-              return textResultWithError('Error: query is required for action=search', true);
+              return textResultWithError(
+                'Error: query is required for action=search. '
+                + 'Missing required field "query". '
+                + 'Minimal valid JSON: {"action":"search","query":"topic"}. '
+                + 'Do not retry action=search without a non-empty query.',
+                true,
+              );
             }
 
             const limit = normalizedParams.limit === undefined

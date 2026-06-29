@@ -4,7 +4,11 @@ import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import { MemoryRetriever } from './retrieval.js';
 import { createPostgresMemoryStore } from './postgres-store.js';
 import { POSTGRES_MEMORY_MIGRATIONS } from '../../persistence/postgres/migrations.js';
-import type { PurrMemory } from './types.js';
+import {
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  DURABLE_RETENTION_TAG,
+  type PurrMemory,
+} from './types.js';
 import { MemoryWriter } from './writer.js';
 import { buildHighImpactLowConfidenceReviewInput } from './maintenance-review.js';
 
@@ -90,6 +94,15 @@ function decodeEmbeddingLiteral(value: string | null): number[] {
   const inner = trimmed.slice(1, -1).trim();
   if (!inner) return [];
   return inner.split(',').map(entry => Number(entry.trim())).filter(entry => Number.isFinite(entry));
+}
+
+function decodeJsonInput(value: unknown, fallback: unknown): unknown {
+  if (typeof value !== 'string') return value ?? fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
 }
 
 function cosineSimilarity(left: readonly number[], right: readonly number[]): number {
@@ -273,22 +286,22 @@ class FakeMemoryPool {
         importance: Number(values[3] ?? 0),
         confidence: Number(values[4] ?? 0),
         emotional_valence: Number(values[5] ?? 0),
-        formation_vad: values[6] ?? null,
+        formation_vad: decodeJsonInput(values[6], null),
         salience: Number(values[7] ?? 0),
         source_ref: String(values[8] ?? ''),
         extracted_at: Number(values[9] ?? 0),
         last_accessed: Number(values[10] ?? 0),
         access_count: Number(values[11] ?? 0),
         superseded_by: values[12] == null ? null : String(values[12]),
-        tags: values[13] ?? [],
+        tags: decodeJsonInput(values[13], []),
         scope_ref_kind: values[14] == null ? null : String(values[14]),
         scope_ref_id: values[15] == null ? null : String(values[15]),
         scope_ref_label: values[16] == null ? null : String(values[16]),
-        scope_tags: values[17] ?? [],
-        provenance_refs: values[18] ?? [],
+        scope_tags: decodeJsonInput(values[17], []),
+        provenance_refs: decodeJsonInput(values[18], []),
         retention_class: values[19] == null ? null : (values[19] as PurrMemory['retentionClass']),
         sensitivity: values[20] as PurrMemory['sensitivity'],
-        consent_flags: values[21] ?? {},
+        consent_flags: decodeJsonInput(values[21], {}),
         contact_id: values[22] == null ? null : String(values[22]),
         deleted_at: values[23] == null ? null : Number(values[23]),
         deleted_by: values[24] == null ? null : String(values[24]),
@@ -311,6 +324,44 @@ class FakeMemoryPool {
         const row = this.memories.get(id);
         if (!row || row.deleted_at !== null || row.superseded_by !== null) continue;
         row.salience = salience;
+        rowCount += 1;
+        rows.push({ id });
+      }
+      return { rows, rowCount, command: 'UPDATE', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (
+      normalized.startsWith('update l2_memories as memory')
+      && normalized.includes('from (values')
+      && normalized.includes('returning memory.id')
+    ) {
+      const columnsMatch = /as updates\(([^)]+)\)/.exec(normalized);
+      const columns = columnsMatch
+        ? columnsMatch[1].split(',').map(column => column.trim())
+        : [];
+      if (columns.length === 0) {
+        throw new Error(`Unhandled bulk update columns in FakeMemoryPool: ${text}`);
+      }
+      let rowCount = 0;
+      const rows: Array<{ id: string }> = [];
+      for (let index = 0; index < values.length; index += columns.length) {
+        const rowValues = new Map<string, unknown>();
+        for (const [columnIndex, column] of columns.entries()) {
+          rowValues.set(column, values[index + columnIndex]);
+        }
+        const id = String(rowValues.get('id') ?? '');
+        const row = this.memories.get(id);
+        if (!row || row.deleted_at !== null) continue;
+        if (rowValues.has('type')) row.type = rowValues.get('type') as PurrMemory['type'];
+        if (rowValues.has('sensitivity')) {
+          row.sensitivity = rowValues.get('sensitivity') as PurrMemory['sensitivity'];
+        }
+        if (rowValues.has('retention_class')) {
+          row.retention_class = rowValues.get('retention_class') as PurrMemory['retentionClass'];
+        }
+        if (rowValues.has('tags')) {
+          row.tags = decodeJsonInput(rowValues.get('tags'), []);
+        }
         rowCount += 1;
         rows.push({ id });
       }
@@ -868,6 +919,59 @@ describe('postgres memory store unit coverage', () => {
     expect(pool.memories.get('pg-salience-1')?.salience).toBe(0.22);
     expect(pool.memories.get('pg-salience-2')?.salience).toBe(0.44);
     expect(pool.memories.get('pg-salience-deleted')?.salience).toBe(0.8);
+  });
+
+  it('bulk-updates Postgres retention class tags and skips deleted or missing memories', async () => {
+    const pool = new FakeMemoryPool();
+    postgresMocks.activePool = pool;
+
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    await store.insertMemory(makeMemory('pg-retention-pref', 'V prefers oolong tea', {
+      tags: ['preference:tea'],
+    }), new Float32Array([0.1, 0.2, 0.3, 0.4]));
+    await store.insertMemory(makeMemory('pg-retention-standard', 'Standard memory', {
+      tags: [DURABLE_RETENTION_TAG, DURABLE_PREFERENCE_MEMORY_TAG, 'preference'],
+      retentionClass: 'durable',
+    }), new Float32Array([0.2, 0.3, 0.4, 0.5]));
+    await store.insertMemory(makeMemory('pg-retention-deleted', 'Deleted retention memory', {
+      tags: ['preference:music'],
+      deletedAt: 1_700_000_000_100,
+      deletedBy: 'tester',
+    }), new Float32Array([0.3, 0.4, 0.5, 0.6]));
+
+    const durableCount = await store.bulkUpdate(
+      ['pg-retention-pref', 'missing', 'pg-retention-deleted'],
+      { retentionClass: 'durable', sensitivity: 'confidential' },
+    );
+    expect(durableCount).toBe(1);
+    await expect(store.getById('pg-retention-pref')).resolves.toMatchObject({
+      retentionClass: 'durable',
+      sensitivity: 'confidential',
+      tags: ['preference:tea', DURABLE_RETENTION_TAG, DURABLE_PREFERENCE_MEMORY_TAG],
+    });
+    expect(pool.memories.get('pg-retention-pref')).toMatchObject({
+      retention_class: 'durable',
+      sensitivity: 'confidential',
+      tags: ['preference:tea', DURABLE_RETENTION_TAG, DURABLE_PREFERENCE_MEMORY_TAG],
+    });
+    await expect(store.getById('pg-retention-deleted')).resolves.toMatchObject({
+      tags: ['preference:music'],
+      sensitivity: 'personal',
+    });
+
+    const standardCount = await store.bulkUpdate(
+      ['pg-retention-pref', 'pg-retention-standard'],
+      { retentionClass: 'standard' },
+    );
+    expect(standardCount).toBe(2);
+    await expect(store.getById('pg-retention-pref')).resolves.toMatchObject({
+      retentionClass: 'standard',
+      tags: ['preference:tea'],
+    });
+    await expect(store.getById('pg-retention-standard')).resolves.toMatchObject({
+      retentionClass: 'standard',
+      tags: ['preference'],
+    });
   });
 
   it('keeps Postgres salience cache unchanged when the batch write fails', async () => {

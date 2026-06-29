@@ -1,12 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { listSessions, getSessionMessages } from '$lib/api/endpoints/sessions';
+  import { onMount, tick } from 'svelte';
+  import { listSessions, getSessionMessages, SESSION_MESSAGE_PAGE_SIZE } from '$lib/api/endpoints/sessions';
   import type {
     ChannelInfo,
-    AdminSessionMessageOntologyView,
     AdminSessionMessagesData,
     SessionEntry,
   } from '$lib/types';
+
+  type SessionMessageOntologyView = AdminSessionMessagesData['messageOntologyViews'][number];
 
   let channels = $state<ChannelInfo[]>([]);
   let selectedSessionId = $state<string | null>(null);
@@ -16,6 +17,10 @@
   let error = $state('');
   let loadingChannels = $state(true);
   let loadingMessages = $state(false);
+  let loadingOlderMessages = $state(false);
+  let hasMoreOlderMessages = $state(false);
+  let oldestLoadedMessageId = $state<number | null>(null);
+  let messageScrollContainer = $state<HTMLDivElement | null>(null);
 
   let expandedToolCall = $state<number | null>(null);
   let channelLastActivity = $state<Map<string, number>>(new Map());
@@ -86,38 +91,121 @@
     }
   }
 
+  function mergeMessageOntologyViews(
+    olderViews: SessionMessageOntologyView[],
+    newerViews: SessionMessageOntologyView[],
+  ): SessionMessageOntologyView[] {
+    const merged = new Map<number, SessionMessageOntologyView>();
+    for (const view of olderViews) {
+      merged.set(view.sessionEntryId, view);
+    }
+    for (const view of newerViews) {
+      merged.set(view.sessionEntryId, view);
+    }
+    return [...merged.values()];
+  }
+
+  function updatePaginationState(data: AdminSessionMessagesData) {
+    hasMoreOlderMessages = data.pagination.hasMoreOlder;
+    oldestLoadedMessageId = data.pagination.nextBeforeId ?? messages[0]?.id ?? null;
+  }
+
+  function updateLastActivityFromMessages(data: AdminSessionMessagesData) {
+    if (messages.length === 0) return;
+    const lastMsg = messages[messages.length - 1];
+    if (!lastMsg?.timestamp) return;
+    const ts = typeof lastMsg.timestamp === 'number'
+      ? lastMsg.timestamp
+      : Date.parse(lastMsg.timestamp);
+    if (!Number.isFinite(ts)) return;
+    const next = new Map(channelLastActivity);
+    next.set(data.sessionId, ts);
+    channelLastActivity = next;
+  }
+
+  async function scrollMessagesToBottom() {
+    await tick();
+    if (!messageScrollContainer) return;
+    messageScrollContainer.scrollTop = messageScrollContainer.scrollHeight;
+  }
+
   async function selectChannel(sessionId: string) {
     selectedSessionId = sessionId;
+    const requestSessionId = sessionId;
     loadingMessages = true;
+    loadingOlderMessages = false;
+    hasMoreOlderMessages = false;
+    oldestLoadedMessageId = null;
     messages = [];
     messageOntologyViews = [];
     compactionAudits = [];
     expandedToolCall = null;
     try {
-      const data = await getSessionMessages(sessionId);
+      const data = await getSessionMessages(sessionId, { limit: SESSION_MESSAGE_PAGE_SIZE });
+      if (selectedSessionId !== requestSessionId) return;
       messages = data.messages;
       messageOntologyViews = data.messageOntologyViews ?? [];
       compactionAudits = data.compactionAuditViews ?? [];
+      updatePaginationState(data);
+      updateLastActivityFromMessages(data);
+      loadingMessages = false;
+      await scrollMessagesToBottom();
+    } catch (e) {
+      if (selectedSessionId === requestSessionId) {
+        error = e instanceof Error ? e.message : 'Failed to load messages';
+      }
+    } finally {
+      if (selectedSessionId === requestSessionId) {
+        loadingMessages = false;
+      }
+    }
+  }
 
-      // Track last activity from the most recent message timestamp.
-      if (messages.length > 0) {
-        const lastMsg = messages[messages.length - 1];
-        if (lastMsg?.timestamp) {
-          const ts = typeof lastMsg.timestamp === 'number'
-            ? lastMsg.timestamp
-            : Date.parse(lastMsg.timestamp);
-          if (Number.isFinite(ts)) {
-            const next = new Map(channelLastActivity);
-            next.set(data.sessionId, ts);
-            channelLastActivity = next;
-          }
-        }
+  async function loadOlderMessages() {
+    if (
+      !selectedSessionId
+      || loadingMessages
+      || loadingOlderMessages
+      || !hasMoreOlderMessages
+      || oldestLoadedMessageId === null
+    ) {
+      return;
+    }
+
+    const requestSessionId = selectedSessionId;
+    const scrollContainer = messageScrollContainer;
+    const previousScrollHeight = scrollContainer?.scrollHeight ?? 0;
+    loadingOlderMessages = true;
+    try {
+      const data = await getSessionMessages(requestSessionId, {
+        limit: SESSION_MESSAGE_PAGE_SIZE,
+        beforeId: oldestLoadedMessageId,
+      });
+      if (selectedSessionId !== requestSessionId) return;
+
+      const existingIds = new Set(messages.map(message => message.id));
+      const olderMessages = data.messages.filter(message => !existingIds.has(message.id));
+      messages = [...olderMessages, ...messages];
+      messageOntologyViews = mergeMessageOntologyViews(data.messageOntologyViews ?? [], messageOntologyViews);
+      updatePaginationState(data);
+      await tick();
+      if (scrollContainer) {
+        scrollContainer.scrollTop += scrollContainer.scrollHeight - previousScrollHeight;
       }
     } catch (e) {
-      error = e instanceof Error ? e.message : 'Failed to load messages';
+      if (selectedSessionId === requestSessionId) {
+        error = e instanceof Error ? e.message : 'Failed to load older messages';
+      }
     } finally {
-      loadingMessages = false;
+      if (selectedSessionId === requestSessionId) {
+        loadingOlderMessages = false;
+      }
     }
+  }
+
+  function handleMessagesScroll() {
+    if (!messageScrollContainer || messageScrollContainer.scrollTop > 48) return;
+    void loadOlderMessages();
   }
 
   function roleColor(role: string): string {
@@ -163,7 +251,7 @@
     });
   }
 
-  function ontologyTone(ontology: AdminSessionMessageOntologyView | undefined): string {
+  function ontologyTone(ontology: SessionMessageOntologyView | undefined): string {
     if (!ontology) return 'bg-bark-200 text-shadow-700 border-bark-300';
     switch (ontology.semanticType) {
       case 'mirror':
@@ -177,7 +265,7 @@
     }
   }
 
-  function promptVisibilityLabel(ontology: AdminSessionMessageOntologyView | undefined): string {
+  function promptVisibilityLabel(ontology: SessionMessageOntologyView | undefined): string {
     if (!ontology) return '';
     return ontology.promptVisibility === 'operator_only' ? 'Operator-only' : 'Prompt-visible';
   }
@@ -244,7 +332,7 @@
 
   const filteredMessages = $derived.by(() => filterMessages(messages, messageSearch));
   const messageOntologyById = $derived.by(() => {
-    const views = new Map<number, AdminSessionMessageOntologyView>();
+    const views = new Map<number, SessionMessageOntologyView>();
     for (const view of messageOntologyViews) {
       views.set(view.sessionEntryId, view);
     }
@@ -369,7 +457,12 @@
               <p class="text-sm text-shadow-600 font-mono truncate">session: {selectedChannel.sessionId}</p>
             {/if}
           </div>
-          <span class="text-sm text-shadow-600">{filteredMessages.length} of {messages.length} messages</span>
+          <span class="text-sm text-shadow-600">
+            {filteredMessages.length} of {messages.length} loaded
+            {#if selectedChannel?.messageCount}
+              / {selectedChannel.messageCount} total
+            {/if}
+          </span>
         </div>
 
         <div class="p-3 border-b border-bark-300 bg-bark-100">
@@ -401,7 +494,11 @@
           </div>
         {/if}
 
-        <div class="flex-1 overflow-y-auto p-4 space-y-3">
+        <div
+          bind:this={messageScrollContainer}
+          onscroll={handleMessagesScroll}
+          class="flex-1 overflow-y-auto p-4 space-y-3"
+        >
           {#if loadingMessages}
             <div class="space-y-3">
               {#each Array(5) as _}
@@ -409,6 +506,18 @@
               {/each}
             </div>
           {:else}
+            {#if hasMoreOlderMessages || loadingOlderMessages}
+              <div class="flex justify-center">
+                <button
+                  type="button"
+                  onclick={() => void loadOlderMessages()}
+                  disabled={loadingOlderMessages}
+                  class="text-sm text-shadow-600 hover:text-gold-700 disabled:cursor-wait disabled:text-shadow-500"
+                >
+                  {loadingOlderMessages ? 'Loading older messages...' : 'Load older messages'}
+                </button>
+              </div>
+            {/if}
             {#each filteredMessages as msg, i}
               {@const ontology = messageOntologyById.get(msg.id)}
               <div class="rounded-lg border p-3 {roleColor(msg.role)}">

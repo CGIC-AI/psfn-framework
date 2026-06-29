@@ -4,6 +4,7 @@ import net from 'node:net';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { brotliDecompressSync, gunzipSync } from 'node:zlib';
 import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import WebSocket from 'ws';
@@ -89,6 +90,50 @@ function request(
     if (body) req.write(body);
     req.end();
   });
+}
+
+function requestBuffer(
+  port: number,
+  method: string,
+  path: string,
+  headers?: Record<string, string>,
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: Buffer }> {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        method,
+        path,
+        headers: headers ?? {},
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => { chunks.push(Buffer.from(chunk)); });
+        res.on('end', () => resolve({
+          status: res.statusCode!,
+          headers: res.headers,
+          body: Buffer.concat(chunks),
+        }));
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function decodeJsonBody(response: {
+  headers: http.IncomingHttpHeaders;
+  body: Buffer;
+}): unknown {
+  const encoding = response.headers['content-encoding'];
+  if (encoding === 'br') {
+    return JSON.parse(brotliDecompressSync(response.body).toString('utf8'));
+  }
+  if (encoding === 'gzip') {
+    return JSON.parse(gunzipSync(response.body).toString('utf8'));
+  }
+  return JSON.parse(response.body.toString('utf8'));
 }
 
 function buildMultipartBody(
@@ -3007,6 +3052,112 @@ describe('AdminServer JSON API routes', () => {
     });
   });
 
+  it('paginates and compresses admin session message payloads', async () => {
+    const channelId = 'api-page-session';
+    for (let index = 1; index <= 125; index += 1) {
+      sessionStore.append({
+        channelId,
+        role: index % 2 === 0 ? 'assistant' : 'user',
+        content: `Message ${index} ${'payload '.repeat(20)}`,
+        authorId: `author-${index % 3}`,
+        authorName: `Author ${index % 3}`,
+        timestamp: 1_700_000_000_000 + index,
+        channelVisibility: 'direct',
+      });
+    }
+
+    const firstRes = await request(
+      port,
+      'GET',
+      `/api/admin/sessions/${encodeURIComponent(channelId)}?limit=100`,
+      undefined,
+      authHeaders,
+    );
+    expect(firstRes.status).toBe(200);
+    const firstPayload = JSON.parse(firstRes.body) as {
+      messages: Array<{ id: number; content: string }>;
+      pagination: {
+        limit: number;
+        beforeId: number | null;
+        nextBeforeId: number | null;
+        hasMoreOlder: boolean;
+        totalMessages: number;
+        returnedMessages: number;
+      };
+    };
+    expect(firstPayload.messages).toHaveLength(100);
+    expect(firstPayload.messages[0]?.content).toContain('Message 26');
+    expect(firstPayload.messages[99]?.content).toContain('Message 125');
+    expect(firstPayload.pagination).toMatchObject({
+      limit: 100,
+      beforeId: null,
+      nextBeforeId: firstPayload.messages[0]?.id,
+      hasMoreOlder: true,
+      totalMessages: 125,
+      returnedMessages: 100,
+    });
+
+    const olderRes = await request(
+      port,
+      'GET',
+      `/api/admin/sessions/${encodeURIComponent(channelId)}?limit=100&beforeId=${firstPayload.pagination.nextBeforeId}`,
+      undefined,
+      authHeaders,
+    );
+    expect(olderRes.status).toBe(200);
+    const olderPayload = JSON.parse(olderRes.body) as {
+      messages: Array<{ content: string }>;
+      pagination: { hasMoreOlder: boolean; returnedMessages: number; nextBeforeId: number | null };
+    };
+    expect(olderPayload.messages).toHaveLength(25);
+    expect(olderPayload.messages[0]?.content).toContain('Message 1');
+    expect(olderPayload.messages[24]?.content).toContain('Message 25');
+    expect(olderPayload.pagination).toMatchObject({
+      hasMoreOlder: false,
+      returnedMessages: 25,
+      nextBeforeId: null,
+    });
+
+    const invalidRes = await request(
+      port,
+      'GET',
+      `/api/admin/sessions/${encodeURIComponent(channelId)}?limit=10000`,
+      undefined,
+      authHeaders,
+    );
+    expect(invalidRes.status).toBe(400);
+
+    const compressedRes = await requestBuffer(
+      port,
+      'GET',
+      `/api/admin/sessions/${encodeURIComponent(channelId)}?limit=100`,
+      {
+        ...authHeaders,
+        'Accept-Encoding': 'br, gzip',
+      },
+    );
+    expect(compressedRes.status).toBe(200);
+    expect(['br', 'gzip']).toContain(compressedRes.headers['content-encoding']);
+    expect(compressedRes.headers.vary).toContain('Accept-Encoding');
+    const compressedPayload = decodeJsonBody(compressedRes) as {
+      messages: Array<{ content: string }>;
+    };
+    expect(compressedPayload.messages).toHaveLength(100);
+    expect(compressedPayload.messages[0]?.content).toContain('Message 26');
+
+    const gzipOnlyRes = await requestBuffer(
+      port,
+      'GET',
+      `/api/admin/sessions/${encodeURIComponent(channelId)}?limit=100`,
+      {
+        ...authHeaders,
+        'Accept-Encoding': 'br;q=0, gzip',
+      },
+    );
+    expect(gzipOnlyRes.status).toBe(200);
+    expect(gzipOnlyRes.headers['content-encoding']).toBe('gzip');
+  });
+
   it('supports contact list/detail/update endpoints', async () => {
     const contact = contactStore.upsert({
       displayName: 'Api Contact',
@@ -3040,6 +3191,7 @@ describe('AdminServer JSON API routes', () => {
     expect(listRes.headers['cache-control']).toBe('no-store');
     const listPayload = JSON.parse(listRes.body) as {
       contacts: Array<{ id: string }>;
+      relationshipScoreMap: Record<string, unknown>;
       socialGraphMap: Record<string, {
         edgeCount: number;
         mentionOnlyNeighborCount: number;
@@ -3051,6 +3203,7 @@ describe('AdminServer JSON API routes', () => {
       }>;
     };
     expect(listPayload.contacts.some(entry => entry.id === contact.id)).toBe(true);
+    expect(listPayload.relationshipScoreMap).toEqual({});
     expect(listPayload.socialGraphMap[contact.id]).toMatchObject({
       edgeCount: 1,
       mentionOnlyNeighborCount: 1,

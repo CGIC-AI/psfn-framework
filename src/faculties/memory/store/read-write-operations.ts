@@ -19,6 +19,7 @@ import type {
   MemoryWriteCommit,
 } from '../memory-store-port.js';
 import {
+  applyRetentionClassTags,
   inferMemorySourceTypeFromSourceRef,
   normalizeFormationVAD,
   normalizeMemoryProvenance,
@@ -713,6 +714,10 @@ export function bulkUpdate(
 
   if (setClauses.length === 0) return 0;
 
+  if (fields.retentionClass !== undefined) {
+    return bulkUpdateWithRetentionClass(db, ids, fields.retentionClass, setClauses, setValues);
+  }
+
   const stmt = db.prepare(
     `UPDATE l2_memories SET ${setClauses.join(', ')} WHERE id = ? AND deleted_at IS NULL`,
   );
@@ -723,6 +728,41 @@ export function bulkUpdate(
       const normalizedId = id.trim();
       if (!normalizedId) continue;
       const result = stmt.run(...setValues, normalizedId);
+      if (result.changes > 0) count++;
+    }
+  });
+
+  transaction();
+  return count;
+}
+
+function bulkUpdateWithRetentionClass(
+  db: Database.Database,
+  ids: string[],
+  retentionClass: NonNullable<MemoryBulkUpdatePatch['retentionClass']>,
+  baseSetClauses: readonly string[],
+  baseSetValues: readonly unknown[],
+): number {
+  const selectStmt = db.prepare(`
+    SELECT * FROM l2_memories
+    WHERE id = ? AND deleted_at IS NULL
+    LIMIT 1
+  `);
+  const stmt = db.prepare(
+    `UPDATE l2_memories SET ${[...baseSetClauses, 'tags = ?'].join(', ')} WHERE id = ? AND deleted_at IS NULL`,
+  );
+
+  let count = 0;
+  const transaction = db.transaction(() => {
+    for (const id of ids) {
+      const normalizedId = id.trim();
+      if (!normalizedId) continue;
+      const row = selectStmt.get(normalizedId) as MemoryRow | undefined;
+      if (!row) continue;
+
+      const memory = mapMemoryRow(row);
+      const tags = applyRetentionClassTags(memory, retentionClass);
+      const result = stmt.run(...baseSetValues, JSON.stringify(tags), normalizedId);
       if (result.changes > 0) count++;
     }
   });

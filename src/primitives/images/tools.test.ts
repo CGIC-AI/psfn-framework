@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { TextContent } from '@mariozechner/pi-ai';
@@ -5,6 +8,7 @@ import { runWithVisionToolRequestContext } from './request-context.js';
 import { createMediaTool, createSelfieTool } from './tools.js';
 import { IMAGE_ASPECT_RATIO_VALUES, type ImageToolResultDetails, type ImageVisionReviewer, type MediaToolResultDetails } from './types.js';
 import {
+  chargeSurface,
   resetRunChargeRollingWindowForTests,
   runWithChargeContext,
 } from '../../shared/telemetry/run-charge.js';
@@ -12,8 +16,13 @@ import { resolveToolRequiredCapabilities } from '../../system/capabilities/requi
 import type { ChargePolicyConfig } from '../../system/config/charge-policy-config.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 
+const tempDirs: string[] = [];
+
 afterEach(() => {
   resetRunChargeRollingWindowForTests();
+  tempDirs.splice(0).forEach((dir) => {
+    rmSync(dir, { recursive: true, force: true });
+  });
 });
 
 function resultText(result: AgentToolResult<any>): string {
@@ -81,6 +90,17 @@ function makeChargePolicy(): ChargePolicyConfig {
       premium_cloud: 4,
     },
     fatigue: makeTestFatiguePolicyConfig(),
+  };
+}
+
+function makeInteractiveQuotaPolicy(quota: number): ChargePolicyConfig {
+  const policy = makeChargePolicy();
+  return {
+    ...policy,
+    runChargeQuotaByLane: {
+      ...policy.runChargeQuotaByLane,
+      interactive: quota,
+    },
   };
 }
 
@@ -241,6 +261,59 @@ describe('image tools', () => {
     })));
 
     expect(emitted).toHaveLength(0);
+  });
+
+  it('rejects exhausted paid image quota before calling the provider or writing artifacts', async () => {
+    const artifactDir = mkdtempSync(join(tmpdir(), 'psfn-paid-image-quota-'));
+    tempDirs.push(artifactDir);
+    const artifactPath = join(artifactDir, 'should-not-exist.png');
+    const sidecarPath = `${artifactPath}.image-meta.json`;
+    const ops = {
+      create: vi.fn(async () => {
+        writeFileSync(artifactPath, Buffer.from('provider-bytes'));
+        writeFileSync(sidecarPath, '{}');
+        return {
+          provider: 'fal' as const,
+          mode: 'create' as const,
+          model: 'fal-ai/nano-banana-2',
+          fallbackUsed: false,
+          requestId: 'req-should-not-run',
+          images: [{
+            url: 'https://images.example.test/should-not-run.png',
+            contentType: 'image/png',
+            fileName: 'should-not-run.png',
+            localPath: artifactPath,
+          }],
+        };
+      }),
+      edit: vi.fn(),
+    };
+    const chargePolicy = makeInteractiveQuotaPolicy(6);
+
+    await runWithChargeContext({
+      chargePolicy,
+      lane: 'interactive',
+      runId: 'prior-paid-image',
+    }, async () => {
+      chargeSurface('paidImageGeneration');
+    });
+
+    const tool = createMediaTool(ops);
+    const result = await runWithChargeContext({
+      chargePolicy,
+      lane: 'interactive',
+      runId: 'exhausted-paid-image',
+    }, async () => tool.execute('tool-call-media-quota', {
+      action: 'generate',
+      prompt: 'a purring cat on a server rack',
+    }) as Promise<AgentToolResult<MediaToolResultDetails>>);
+
+    expect(ops.create).not.toHaveBeenCalled();
+    expect(result.details.isError).toBe(true);
+    expect(resultText(result)).toContain('media generate failed: Charge quota exceeded');
+    expect(resultText(result)).toContain('rolling 24-hour budget');
+    expect(existsSync(artifactPath)).toBe(false);
+    expect(existsSync(sidecarPath)).toBe(false);
   });
 
   it('constrains aspect_ratio to the supported preset list for media and selfie tools', () => {

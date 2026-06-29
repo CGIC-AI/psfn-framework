@@ -251,6 +251,14 @@ class FakeEpisodicPool {
       return queryResult([], 'INSERT');
     }
 
+    if (normalized.startsWith('select id, episode_json from l01_episodes where id = any')) {
+      const ids = Array.isArray(values[0]) ? values[0].map(String) : [];
+      return queryResult(ids.flatMap((id) => {
+        const row = this.episodes.get(id);
+        return row ? [{ id: row.id, episode_json: row.episode_json }] : [];
+      }));
+    }
+
     if (normalized.startsWith('select id, episode_json from l01_episodes where id =')) {
       const row = this.episodes.get(String(values[0] ?? ''));
       return queryResult(row ? [{ id: row.id, episode_json: row.episode_json }] : []);
@@ -267,6 +275,10 @@ class FakeEpisodicPool {
 
     if (normalized.startsWith('select id, arc_json from l01_episode_arcs')) {
       return queryResult(this.filterArcRows(normalized, values));
+    }
+
+    if (normalized.startsWith('with requested(episode_id) as') && normalized.includes('join l01_episode_arcs arcs')) {
+      return queryResult(this.filterBatchArcRows(normalized, values));
     }
 
     if (normalized.startsWith('select * from l01_processing_watermarks')) {
@@ -336,6 +348,47 @@ class FakeEpisodicPool {
         || left.id.localeCompare(right.id)
       ))
       .slice(0, limit)
+      .map(row => ({ id: row.id, arc_json: row.arc_json }));
+  }
+
+  private filterBatchArcRows(normalized: string, values: readonly unknown[]): Array<Pick<StoredArcRow, 'id' | 'arc_json'>> {
+    const episodeIds = Array.isArray(values[0]) ? values[0].map(String) : [];
+    let cursor = 1;
+    const arcKind = normalized.includes('arc_kind =')
+      ? String(values[cursor++] ?? '')
+      : undefined;
+    const limit = Number(values[cursor++] ?? this.arcs.size);
+    const direction = normalized.includes('arcs.source_episode_id = requested.episode_id or arcs.target_episode_id = requested.episode_id')
+      ? 'both'
+      : normalized.includes('arcs.target_episode_id = requested.episode_id')
+        ? 'incoming'
+        : 'outgoing';
+
+    const byId = new Map<string, StoredArcRow>();
+    for (const episodeId of episodeIds) {
+      const matches = [...this.arcs.values()]
+        .filter(isActiveArc)
+        .filter(row => arcKind === undefined || row.arc_kind === arcKind)
+        .filter((row) => {
+          if (direction === 'incoming') return row.target_episode_id === episodeId;
+          if (direction === 'outgoing') return row.source_episode_id === episodeId;
+          return row.source_episode_id === episodeId || row.target_episode_id === episodeId;
+        })
+        .sort((left, right) => (
+          right.updated_at.localeCompare(left.updated_at)
+          || left.id.localeCompare(right.id)
+        ))
+        .slice(0, limit);
+      for (const row of matches) {
+        byId.set(row.id, row);
+      }
+    }
+
+    return [...byId.values()]
+      .sort((left, right) => (
+        right.updated_at.localeCompare(left.updated_at)
+        || left.id.localeCompare(right.id)
+      ))
       .map(row => ({ id: row.id, arc_json: row.arc_json }));
   }
 
@@ -757,6 +810,59 @@ describe('PostgresEpisodicStore', () => {
     })).resolves.toEqual([arc]);
     expect(pool.arcs.get('arc-1')?.arc_json).toBe(serializeEpisodeArc(arc));
     expect(pool.queries.some(query => query.text.includes('canonical_arc_id'))).toBe(true);
+  });
+
+  it('batch-loads episodes and arcs while preserving arc filters, dedupe, and per-episode limits', async () => {
+    const pool = new FakeEpisodicPool();
+    const store = makeStore(pool);
+    const first = await store.createEpisode(baseEpisode({ id: 'episode-1' }));
+    await store.createEpisode(baseEpisode({
+      id: 'episode-2',
+      startedAt: '2026-03-31T10:00:00.000Z',
+      endedAt: '2026-03-31T10:05:00.000Z',
+      spanRefs: [{ spanId: 'span-2' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+    }));
+    const third = await store.createEpisode(baseEpisode({
+      id: 'episode-3',
+      startedAt: '2026-04-01T10:00:00.000Z',
+      endedAt: '2026-04-01T10:05:00.000Z',
+      spanRefs: [{ spanId: 'span-3' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-3' }],
+    }));
+
+    const older = await store.writeEpisodeArc(baseArc({
+      id: 'arc-older',
+      sourceEpisodeId: 'episode-1',
+      targetEpisodeId: 'episode-2',
+      updatedAt: '2026-04-02T00:00:00.000Z',
+    }));
+    const newer = await store.writeEpisodeArc(baseArc({
+      id: 'arc-newer',
+      sourceEpisodeId: 'episode-3',
+      targetEpisodeId: 'episode-1',
+      spanRefs: [{ spanId: 'span-3' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-3' }],
+      updatedAt: '2026-04-03T00:00:00.000Z',
+    }));
+    await store.writeEpisodeArc(baseArc({
+      id: 'arc-other-kind',
+      sourceEpisodeId: 'episode-2',
+      targetEpisodeId: 'episode-3',
+      arcKind: 'causal',
+      spanRefs: [{ spanId: 'span-3' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-3' }],
+      updatedAt: '2026-04-04T00:00:00.000Z',
+    }));
+
+    await expect(store.getEpisodesByIds(['episode-3', 'missing', 'episode-1', 'episode-3']))
+      .resolves.toEqual([third, first]);
+    await expect(store.listEpisodeArcsForEpisodes(['episode-1', 'episode-2'], {
+      direction: 'both',
+      arcKind: 'continuation',
+      limit: 1,
+    })).resolves.toEqual([newer, older]);
+    expect(pool.queries.some(query => query.text.includes('unnest($1::text[])'))).toBe(true);
   });
 
   it('fails closed when writing arcs to unknown episodes', async () => {

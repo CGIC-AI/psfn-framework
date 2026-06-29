@@ -725,6 +725,25 @@ export function isPreferenceMemory(input: {
   return EXPLICIT_FAVORITE_TEXT_HINT.test(text) || EXPLICIT_PREFERENCE_TEXT_HINT.test(text);
 }
 
+export function applyRetentionClassTags(input: {
+  type: MemoryType;
+  tags?: readonly string[];
+  text?: string;
+}, retentionClass: MemoryRetentionClass): string[] {
+  const tags = normalizeMemoryTags(input.tags ?? []);
+  if (retentionClass === 'durable') {
+    return normalizeMemoryTags([
+      ...tags,
+      DURABLE_RETENTION_TAG,
+      ...(isPreferenceMemory(input) ? [DURABLE_PREFERENCE_MEMORY_TAG] : []),
+    ]);
+  }
+
+  return normalizeMemoryTags(tags.filter((tag) => {
+    return tag !== DURABLE_RETENTION_TAG && tag !== DURABLE_PREFERENCE_MEMORY_TAG;
+  }));
+}
+
 export function inferPreferenceMemoryTags(input: {
   type: MemoryType;
   tags?: readonly string[];

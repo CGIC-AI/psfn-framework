@@ -510,9 +510,19 @@ async function executeToolsetActivateAction(
 ): Promise<AgentToolResult<{ isError?: boolean; deferredToolHandoff?: DeferredToolHandoffIntent }>> {
   const requestedTools = normalizeToolNameList(executeParams.tools ?? []);
   if (requestedTools.length === 0) {
+    const availableToolNames = filterCanonicalDiscoverableTools(runtime.getExtendedTools())
+      .map(tool => tool.name);
+    const exampleTool = availableToolNames[0] ?? '<extended_tool_name>';
     return toolsetResult({
       action: 'activate',
-      message: 'Provide at least one extended tool name in "tools".',
+      requiredField: 'tools',
+      minimalValidJson: { action: 'activate', tools: [exampleTool] },
+      availableTools: availableToolNames,
+      message:
+        'Missing required field "tools" for action="activate". '
+        + 'Provide a non-empty tools array of canonical extended tool names. '
+        + `Minimal valid JSON: {"action":"activate","tools":["${exampleTool}"]}. `
+        + 'Use {"action":"list"} to see valid extended tool names before retrying; do not repeat activate without tools.',
     }, { isError: true });
   }
   const policy = runtime.getExtendedToolAutoloadPolicy();
@@ -654,7 +664,9 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
     name: 'toolset',
     label: 'toolset',
     description:
-      'List active non-default tools, suggest a fitting tool/action for an intent, activate overlay tools for the current runtime, and pin or unpin eligible tools across turns.',
+      'Manage non-default tool availability. Use action=list to see valid extended tool names; '
+      + 'action=suggest with intent to choose a tool; action=describe with tool for schema details; '
+      + 'action=activate requires tools as an array of canonical names; action=pin/unpin requires tool.',
     parameters: Type.Object({
       action: Type.Union([
         Type.Literal('list'),

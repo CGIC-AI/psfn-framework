@@ -3,7 +3,11 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { MemoryStore } from './store.js';
 import { DEFAULT_EMBEDDING_CONFIG } from './embedding.js';
-import type { PurrMemory } from './types.js';
+import {
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  DURABLE_RETENTION_TAG,
+  type PurrMemory,
+} from './types.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
 
@@ -438,6 +442,104 @@ describe('MemoryStore', () => {
       expect(page).toHaveLength(1);
       expect(page[0].id).toBe('m-mid');
       expect(store.countActiveMemories()).toBe(3);
+    });
+
+    it('filters, counts, paginates, and summarizes Garden admin memory lists in the store', () => {
+      const base = Date.UTC(2026, 3, 1, 12, 0, 0);
+      store.insertMemory(
+        makeMemory('admin-standard', 'A standard semantic fact.', {
+          extractedAt: base,
+          lastAccessed: base,
+          sensitivity: 'personal',
+        }),
+        makeEmbedding(1),
+      );
+      store.insertMemory(
+        makeMemory('admin-durable-pref-old', "V's favorite tea is oolong.", {
+          extractedAt: base + 1_000,
+          lastAccessed: base + 1_000,
+          tags: ['favorite', 'preference:drink'],
+          retentionClass: 'durable',
+          sensitivity: 'personal',
+        }),
+        makeEmbedding(2),
+      );
+      store.insertMemory(
+        makeMemory('admin-durable-pref-new', 'V prefers matte stationery.', {
+          extractedAt: base + 2_000,
+          lastAccessed: base + 2_000,
+          tags: ['preference', 'durable_preference'],
+          retentionClass: 'durable',
+          sensitivity: 'confidential',
+          consentFlags: { allowRecall: false },
+          contactId: 'contact-v',
+          scopeTags: ['project:stationery'],
+        }),
+        makeEmbedding(3),
+      );
+      store.insertMemory(
+        makeMemory('admin-internal', 'Context feedback should stay hidden.', {
+          extractedAt: base + 3_000,
+          lastAccessed: base + 3_000,
+          sourceRef: 'source:context_feedback|turn:test|score:0.5',
+          tags: ['context_feedback'],
+          sensitivity: 'confidential',
+        }),
+        makeEmbedding(4),
+      );
+      store.insertMemory(
+        makeMemory('admin-deleted', 'Deleted memory should stay hidden.', {
+          extractedAt: base + 4_000,
+          lastAccessed: base + 4_000,
+          deletedAt: base + 5_000,
+          deletedBy: 'test',
+        }),
+        makeEmbedding(5),
+      );
+      store.insertMemory(
+        makeMemory('admin-superseded', 'Superseded memory should stay hidden.', {
+          extractedAt: base + 6_000,
+          lastAccessed: base + 6_000,
+          supersededBy: 'replacement',
+        }),
+        makeEmbedding(6),
+      );
+
+      const page = store.listAdminMemories({
+        retentionClass: 'durable',
+        preferenceOnly: true,
+        limit: 1,
+        offset: 1,
+      });
+
+      expect(page.total).toBe(2);
+      expect(page.memories.map(memory => memory.id)).toEqual(['admin-durable-pref-old']);
+      expect(page.privacySummary).toEqual({
+        activeMemoryCount: 3,
+        highSensitivityCount: 1,
+        consentGatedCount: 1,
+        contactLinkedCount: 1,
+        scopedCount: 1,
+        preferenceCount: 2,
+        durablePreferenceCount: 2,
+        sensitivityCounts: {
+          confidential: 1,
+          personal: 2,
+        },
+      });
+
+      const filtered = store.listAdminMemories({
+        type: 'semantic',
+        sensitivity: 'confidential',
+        startDate: base + 2_000,
+        endDate: base + 2_000,
+      });
+      expect(filtered.total).toBe(1);
+      expect(filtered.memories.map(memory => memory.id)).toEqual(['admin-durable-pref-new']);
+
+      const unfiltered = store.listAdminMemories({ limit: 10 });
+      expect(unfiltered.total).toBe(3);
+      expect(unfiltered.memories.map(memory => memory.id)).not.toContain('admin-internal');
     });
 
     it('getMemoriesByChannel returns sensitivity', () => {
@@ -999,6 +1101,40 @@ describe('MemoryStore', () => {
       const mem = store.getById('m1');
       expect(mem?.type).toBe('relational');
       expect(mem?.sensitivity).toBe('intimate');
+    });
+
+    it('bulkUpdate applies retention tags and skips deleted or missing memories', () => {
+      store.insertMemory(makeMemory('m1', 'V prefers oolong tea', {
+        tags: ['preference:tea'],
+      }), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'Standard memory', {
+        tags: [DURABLE_RETENTION_TAG, DURABLE_PREFERENCE_MEMORY_TAG, 'preference'],
+        retentionClass: 'durable',
+      }), makeEmbedding(2));
+      store.insertMemory(makeMemory('m-deleted', 'Deleted memory', {
+        tags: ['preference:music'],
+      }), makeEmbedding(3));
+      store.softDeleteMemory('m-deleted', { deletedBy: 'test' });
+
+      const durableCount = store.bulkUpdate(['m1', 'missing', 'm-deleted'], { retentionClass: 'durable' });
+      expect(durableCount).toBe(1);
+      expect(store.getById('m1')).toMatchObject({
+        retentionClass: 'durable',
+        tags: ['preference:tea', DURABLE_RETENTION_TAG, DURABLE_PREFERENCE_MEMORY_TAG],
+      });
+      expect(store.getById('m-deleted')?.retentionClass).toBeUndefined();
+      expect(store.getById('m-deleted')?.tags).toEqual(['preference:music']);
+
+      const standardCount = store.bulkUpdate(['m1', 'm2'], { retentionClass: 'standard' });
+      expect(standardCount).toBe(2);
+      expect(store.getById('m1')).toMatchObject({
+        retentionClass: 'standard',
+        tags: ['preference:tea'],
+      });
+      expect(store.getById('m2')).toMatchObject({
+        retentionClass: 'standard',
+        tags: ['preference'],
+      });
     });
 
     it('bulkUpdateSalience applies distinct salience values per memory', () => {

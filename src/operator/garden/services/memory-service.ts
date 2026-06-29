@@ -4,17 +4,14 @@ import type { ContactStorePort } from '../../../core/contacts/contact-store-port
 import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
 import { isInternalMemoryArtifact } from '../../../faculties/memory/internal-artifacts.js';
 import type {
+  MemoryAdminPrivacySummary as StoreMemoryAdminPrivacySummary,
+  MemoryBulkUpdatePatch,
   MemoryLink,
   MemoryStorePort,
 } from '../../../faculties/memory/memory-store-port.js';
 import {
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
-  normalizeMemoryTags,
-  isDurableMemory,
-  isPreferenceMemory,
-  DURABLE_PREFERENCE_MEMORY_TAG,
-  DURABLE_RETENTION_TAG,
   VALID_MEMORY_TYPES,
   type MemoryRetentionClass,
   type MemoryType,
@@ -45,7 +42,7 @@ import type {
 
 const DEFAULT_MEMORY_LIST_LIMIT = 50;
 const MAX_MEMORY_LIST_LIMIT = 200;
-const MAX_MEMORY_FILTER_SCAN = 100_000;
+const MAX_MANAGED_SCOPE_MEMORY_SCAN = 100_000;
 
 function parseMemoryTypeFilter(value: string | null | undefined): MemoryType | undefined {
   if (!value) return undefined;
@@ -136,51 +133,21 @@ function compareMemoryRecency(
 }
 
 function buildPrivacySummary(
-  activeMemories: readonly AdminMemoryListData['memories'][number][],
-  matchingMemories: readonly AdminMemoryListData['memories'][number][],
+  summary: StoreMemoryAdminPrivacySummary,
+  matchingMemoryCount: number,
   pageMemoryCount: number,
 ): AdminMemoryPrivacySummary {
-  const sensitivityCounts: Record<string, number> = {};
-  let highSensitivityCount = 0;
-  let consentGatedCount = 0;
-  let contactLinkedCount = 0;
-  let scopedCount = 0;
-  let preferenceCount = 0;
-  let durablePreferenceCount = 0;
-
-  for (const memory of activeMemories) {
-    sensitivityCounts[memory.sensitivity] = (sensitivityCounts[memory.sensitivity] ?? 0) + 1;
-    if (memory.sensitivity === 'intimate' || memory.sensitivity === 'confidential') {
-      highSensitivityCount += 1;
-    }
-    if (memory.consentFlags?.allowRecall === false) {
-      consentGatedCount += 1;
-    }
-    if (memory.contactId) {
-      contactLinkedCount += 1;
-    }
-    if (memory.scopeRef || (memory.scopeTags?.length ?? 0) > 0) {
-      scopedCount += 1;
-    }
-    if (isPreferenceMemory(memory)) {
-      preferenceCount += 1;
-      if (isDurableMemory(memory)) {
-        durablePreferenceCount += 1;
-      }
-    }
-  }
-
   return {
-    activeMemoryCount: activeMemories.length,
-    matchingMemoryCount: matchingMemories.length,
+    activeMemoryCount: summary.activeMemoryCount,
+    matchingMemoryCount,
     pageMemoryCount,
-    highSensitivityCount,
-    consentGatedCount,
-    contactLinkedCount,
-    scopedCount,
-    preferenceCount,
-    durablePreferenceCount,
-    sensitivityCounts,
+    highSensitivityCount: summary.highSensitivityCount,
+    consentGatedCount: summary.consentGatedCount,
+    contactLinkedCount: summary.contactLinkedCount,
+    scopedCount: summary.scopedCount,
+    preferenceCount: summary.preferenceCount,
+    durablePreferenceCount: summary.durablePreferenceCount,
+    sensitivityCounts: summary.sensitivityCounts,
   };
 }
 
@@ -213,9 +180,10 @@ export class AdminMemoryDataService implements AdminMemoryService {
   }
 
   private async listManagedScopeMemories() {
-    return (await this.deps.memoryStore.getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
-      .filter(isActiveMemoryView)
-      .filter(memory => !isInternalMemoryArtifact(memory));
+    return (await this.deps.memoryStore.listAdminMemories({
+      limit: MAX_MANAGED_SCOPE_MEMORY_SCAN,
+      offset: 0,
+    })).memories;
   }
 
   private buildScopeAssignments(
@@ -252,33 +220,22 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const startDate = parseDateFilter(params?.get('startDate'), 'start');
     const endDate = parseDateFilter(params?.get('endDate'), 'end');
 
-    const activeMemories = (await this.deps.memoryStore
-      .getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
-      .filter(isActiveMemoryView)
-      .filter(memory => !isInternalMemoryArtifact(memory));
-
-    const filtered = activeMemories
-      .filter((memory) => {
-        if (typeFilter && memory.type !== typeFilter) return false;
-        if (sensitivityFilter && memory.sensitivity !== sensitivityFilter) return false;
-        if (retentionFilter === 'durable' && !isDurableMemory(memory)) return false;
-        if (retentionFilter === 'standard' && isDurableMemory(memory)) return false;
-        if (preferenceOnly && !isPreferenceMemory(memory)) return false;
-        const createdAt = memoryTimestamp(memory);
-        if (startDate !== undefined && createdAt < startDate) return false;
-        if (endDate !== undefined && createdAt > endDate) return false;
-        return true;
-      })
-      .sort((a, b) => {
-        return compareMemoryRecency(a, b);
-      });
-
-    const total = filtered.length;
-    const memories = filtered.slice(offset, offset + limit);
+    const result = await this.deps.memoryStore.listAdminMemories({
+      limit,
+      offset,
+      ...(typeFilter ? { type: typeFilter } : {}),
+      ...(sensitivityFilter ? { sensitivity: sensitivityFilter } : {}),
+      ...(retentionFilter ? { retentionClass: retentionFilter } : {}),
+      ...(preferenceOnly ? { preferenceOnly: true } : {}),
+      ...(startDate !== undefined ? { startDate } : {}),
+      ...(endDate !== undefined ? { endDate } : {}),
+    });
+    const memories = result.memories;
+    const total = result.total;
     return {
       memories,
       contactsById: await this.buildContactSummaryMap(),
-      privacySummary: buildPrivacySummary(activeMemories, filtered, memories.length),
+      privacySummary: buildPrivacySummary(result.privacySummary, total, memories.length),
       pagination: {
         limit,
         offset,
@@ -393,16 +350,14 @@ export class AdminMemoryDataService implements AdminMemoryService {
   }
 
   async searchMemories(query: string): Promise<AdminMemorySearchResult> {
-    const activeMemories = (await this.deps.memoryStore.getAllActiveMemories(MAX_MEMORY_FILTER_SCAN))
-      .filter(isActiveMemoryView)
-      .filter(memory => !isInternalMemoryArtifact(memory));
+    const privacySummary = await this.deps.memoryStore.getAdminMemoryPrivacySummary();
     const embeddingService = this.deps.embeddingService;
     if (!embeddingService) {
       return {
         query,
         results: [],
         contactsById: await this.buildContactSummaryMap(),
-        privacySummary: buildPrivacySummary(activeMemories, [], 0),
+        privacySummary: buildPrivacySummary(privacySummary, 0, 0),
       };
     }
     const embedding = await embeddingService.embed(query);
@@ -414,7 +369,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       query,
       results,
       contactsById: await this.buildContactSummaryMap(),
-      privacySummary: buildPrivacySummary(activeMemories, results, results.length),
+      privacySummary: buildPrivacySummary(privacySummary, results.length, results.length),
     };
   }
 
@@ -595,7 +550,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       return { ok: false, count: 0, message: 'Bulk update limited to 500 items' };
     }
 
-    const storeFields: Partial<Pick<import('../../../faculties/memory/types.js').PurrMemory, 'type' | 'sensitivity'>> = {};
+    const storeFields: MemoryBulkUpdatePatch = {};
     let retentionClass: MemoryRetentionClass | undefined;
 
     if (fields.memoryType !== undefined) {
@@ -626,9 +581,11 @@ export class AdminMemoryDataService implements AdminMemoryService {
       return { ok: false, count: 0, message: 'No valid fields to update' };
     }
 
-    const count = retentionClass === undefined
-      ? await this.deps.memoryStore.bulkUpdate(ids, storeFields)
-      : await this.bulkUpdateWithRetentionClass(ids, storeFields, retentionClass);
+    if (retentionClass !== undefined) {
+      storeFields.retentionClass = retentionClass;
+    }
+
+    const count = await this.deps.memoryStore.bulkUpdate(ids, storeFields);
     this.deps.appendAuditTimelineEntry?.(
       'memory_mutation',
       'allowed',
@@ -638,37 +595,5 @@ export class AdminMemoryDataService implements AdminMemoryService {
       ].join(', ')}).`,
     );
     return { ok: true, count };
-  }
-
-  private async bulkUpdateWithRetentionClass(
-    ids: string[],
-    storeFields: Partial<Pick<import('../../../faculties/memory/types.js').PurrMemory, 'type' | 'sensitivity'>>,
-    retentionClass: MemoryRetentionClass,
-  ): Promise<number> {
-    let count = 0;
-    for (const rawId of ids) {
-      const id = rawId.trim();
-      if (!id) continue;
-      const memory = await this.deps.memoryStore.getById(id);
-      if (!memory || memory.deletedAt !== undefined) continue;
-      const tags = retentionClass === 'durable'
-        ? normalizeMemoryTags([
-          ...memory.tags,
-          DURABLE_RETENTION_TAG,
-          ...(isPreferenceMemory(memory) ? [DURABLE_PREFERENCE_MEMORY_TAG] : []),
-        ])
-        : normalizeMemoryTags(memory.tags.filter((tag) => {
-          const normalizedTag = tag.trim().toLowerCase();
-          return normalizedTag !== DURABLE_RETENTION_TAG
-            && normalizedTag !== DURABLE_PREFERENCE_MEMORY_TAG;
-        }));
-      await this.deps.memoryStore.updateMemory(id, {
-        ...storeFields,
-        retentionClass,
-        tags,
-      });
-      count += 1;
-    }
-    return count;
   }
 }

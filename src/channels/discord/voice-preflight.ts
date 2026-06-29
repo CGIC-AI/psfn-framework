@@ -13,7 +13,7 @@ import type { OpusAvailabilityResult, VoicePreflightResult } from './voice-types
 
 const log = createComponentLogger('DiscordVoice');
 
-function hasTtsProviderConfig(provider: StreamingTtsProvider, config: SubstrateConfig): boolean {
+export function hasTtsProviderConfig(provider: StreamingTtsProvider, config: SubstrateConfig): boolean {
   try {
     return createRuntimeVoiceTtsConnector(config, {
       provider,

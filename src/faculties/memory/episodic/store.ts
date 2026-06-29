@@ -204,12 +204,17 @@ export interface EpisodicStorePort {
   /** Folds an episode into a canonical target: it stops appearing in list/search results but remains retrievable by id. */
   markEpisodeMerged(episodeId: string, mergedIntoEpisodeId: string): EpisodicStoreResult<void>;
   getEpisode(id: string): EpisodicStoreResult<Episode | undefined>;
+  getEpisodesByIds(ids: readonly string[]): EpisodicStoreResult<Episode[]>;
   listEpisodes(options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
   searchByTime(options?: EpisodeTimeSearchOptions): EpisodicStoreResult<Episode[]>;
   searchByThread(threadId: string, options?: EpisodeListOptions): EpisodicStoreResult<Episode[]>;
   writeEpisodeArc(input: EpisodeArcWriteInput): EpisodicStoreResult<EpisodeArc>;
   listEpisodeArcsForEpisode(
     episodeId: string,
+    options?: EpisodeArcListOptions,
+  ): EpisodicStoreResult<EpisodeArc[]>;
+  listEpisodeArcsForEpisodes(
+    episodeIds: readonly string[],
     options?: EpisodeArcListOptions,
   ): EpisodicStoreResult<EpisodeArc[]>;
   getProcessingWatermark(
@@ -575,6 +580,18 @@ function parseOptionalText(value: string | undefined, field: string): string | u
   return parseRequiredText(value, field);
 }
 
+function normalizeRequiredTextList(values: readonly string[], field: string): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const item = parseRequiredText(value, field);
+    if (seen.has(item)) continue;
+    seen.add(item);
+    normalized.push(item);
+  }
+  return normalized;
+}
+
 function normalizeUnit(value: number, field: string): number {
   if (!Number.isFinite(value) || value < 0 || value > 1) {
     throw new Error(`${field} must be a finite number between 0 and 1`);
@@ -841,6 +858,23 @@ export class EpisodicStore implements EpisodicStorePort {
     return row ? mapEpisodeRow(row) : undefined;
   }
 
+  getEpisodesByIds(ids: readonly string[]): Episode[] {
+    const normalizedIds = normalizeRequiredTextList(ids, 'episode id');
+    if (normalizedIds.length === 0) return [];
+
+    const placeholders = normalizedIds.map(() => '?').join(', ');
+    const rows = this.db.prepare(`
+      SELECT id, episode_json
+      FROM l01_episodes
+      WHERE id IN (${placeholders})
+    `).all(...normalizedIds) as EpisodeRow[];
+    const byId = new Map(rows.map(row => [row.id, mapEpisodeRow(row)]));
+    return normalizedIds.flatMap((id) => {
+      const episode = byId.get(id);
+      return episode ? [episode] : [];
+    });
+  }
+
   searchByTime(options: EpisodeTimeSearchOptions = {}): Episode[] {
     const from = normalizeInstant(options.from, 'from');
     const to = normalizeInstant(options.to, 'to');
@@ -978,6 +1012,60 @@ export class EpisodicStore implements EpisodicStorePort {
       ORDER BY updated_at DESC, id ASC
       LIMIT ?
     `).all(...params, normalizeLimit(options.limit)) as EpisodeArcRow[];
+    return rows.map(mapArcRow);
+  }
+
+  listEpisodeArcsForEpisodes(
+    episodeIds: readonly string[],
+    options: EpisodeArcListOptions = {},
+  ): EpisodeArc[] {
+    const normalizedEpisodeIds = normalizeRequiredTextList(episodeIds, 'episodeId');
+    if (normalizedEpisodeIds.length === 0) return [];
+
+    const direction = options.direction ?? 'both';
+    const requestedValues = normalizedEpisodeIds.map(() => '(?)').join(', ');
+    const joinCondition = direction === 'incoming'
+      ? 'arcs.target_episode_id = requested.episode_id'
+      : direction === 'outgoing'
+        ? 'arcs.source_episode_id = requested.episode_id'
+        : '(arcs.source_episode_id = requested.episode_id OR arcs.target_episode_id = requested.episode_id)';
+
+    const where: string[] = [];
+    const params: Array<string | number> = [...normalizedEpisodeIds];
+    if (options.arcKind !== undefined) {
+      where.push('arcs.arc_kind = ?');
+      params.push(options.arcKind);
+    }
+    params.push(normalizeLimit(options.limit));
+
+    const rows = this.db.prepare(`
+      WITH requested(episode_id) AS (
+        VALUES ${requestedValues}
+      ),
+      matched AS (
+        SELECT
+          arcs.id,
+          arcs.arc_json,
+          arcs.updated_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY requested.episode_id
+            ORDER BY arcs.updated_at DESC, arcs.id ASC
+          ) AS episode_rank
+        FROM requested
+        JOIN l01_episode_arcs arcs
+          ON ${joinCondition}
+        ${where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''}
+      ),
+      deduped AS (
+        SELECT id, arc_json, updated_at
+        FROM matched
+        WHERE episode_rank <= ?
+        GROUP BY id, arc_json, updated_at
+      )
+      SELECT id, arc_json
+      FROM deduped
+      ORDER BY updated_at DESC, id ASC
+    `).all(...params) as EpisodeArcRow[];
     return rows.map(mapArcRow);
   }
 

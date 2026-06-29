@@ -317,6 +317,18 @@ function parseOptionalText(value: string | undefined, field: string): string | u
   return parseRequiredText(value, field);
 }
 
+function normalizeRequiredTextList(values: readonly string[], field: string): string[] {
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const item = parseRequiredText(value, field);
+    if (seen.has(item)) continue;
+    seen.add(item);
+    normalized.push(item);
+  }
+  return normalized;
+}
+
 function normalizeUnit(value: number, field: string): number {
   if (!Number.isFinite(value) || value < 0 || value > 1) {
     throw new Error(`${field} must be a finite number between 0 and 1`);
@@ -535,6 +547,22 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     return row ? mapEpisodeRow(row) : undefined;
   }
 
+  async getEpisodesByIds(ids: readonly string[]): Promise<Episode[]> {
+    const normalizedIds = normalizeRequiredTextList(ids, 'episode id');
+    if (normalizedIds.length === 0) return [];
+
+    const rows = await queryRows<PostgresEpisodeRow>(this.pool, `
+      SELECT id, episode_json
+      FROM l01_episodes
+      WHERE id = ANY($1::text[])
+    `, [normalizedIds]);
+    const byId = new Map(rows.map(row => [row.id, mapEpisodeRow(row)]));
+    return normalizedIds.flatMap((id) => {
+      const episode = byId.get(id);
+      return episode ? [episode] : [];
+    });
+  }
+
   async searchByTime(options: EpisodeTimeSearchOptions = {}): Promise<Episode[]> {
     const from = normalizeInstant(options.from, 'from');
     const to = normalizeInstant(options.to, 'to');
@@ -695,6 +723,63 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
       WHERE ${where.join(' AND ')}
       ORDER BY updated_at DESC, id ASC
       LIMIT $${limitIndex}
+    `, params);
+    return rows.map(mapArcRow);
+  }
+
+  async listEpisodeArcsForEpisodes(
+    episodeIds: readonly string[],
+    options: EpisodeArcListOptions = {},
+  ): Promise<EpisodeArc[]> {
+    const normalizedEpisodeIds = normalizeRequiredTextList(episodeIds, 'episodeId');
+    if (normalizedEpisodeIds.length === 0) return [];
+
+    const direction = options.direction ?? 'both';
+    const joinCondition = direction === 'incoming'
+      ? 'arcs.target_episode_id = requested.episode_id'
+      : direction === 'outgoing'
+        ? 'arcs.source_episode_id = requested.episode_id'
+        : '(arcs.source_episode_id = requested.episode_id OR arcs.target_episode_id = requested.episode_id)';
+
+    const where = [ACTIVE_CANONICAL_ARC_FILTER];
+    const params: unknown[] = [normalizedEpisodeIds];
+    if (options.arcKind !== undefined) {
+      params.push(options.arcKind);
+      where.push(`arc_kind = $${params.length}`);
+    }
+    params.push(normalizeLimit(options.limit));
+    const limitIndex = params.length;
+
+    const rows = await queryRows<PostgresEpisodeArcRow>(this.pool, `
+      WITH requested(episode_id) AS (
+        SELECT unnest($1::text[])
+      ),
+      matched AS (
+        SELECT
+          arcs.id,
+          arcs.arc_json,
+          arcs.updated_at,
+          ROW_NUMBER() OVER (
+            PARTITION BY requested.episode_id
+            ORDER BY arcs.updated_at DESC, arcs.id ASC
+          ) AS episode_rank
+        FROM requested
+        JOIN l01_episode_arcs arcs
+          ON ${joinCondition}
+        WHERE ${where.join(' AND ')}
+      ),
+      deduped AS (
+        SELECT DISTINCT ON (id)
+          id,
+          arc_json,
+          updated_at
+        FROM matched
+        WHERE episode_rank <= $${limitIndex}
+        ORDER BY id, updated_at DESC
+      )
+      SELECT id, arc_json
+      FROM deduped
+      ORDER BY updated_at DESC, id ASC
     `, params);
     return rows.map(mapArcRow);
   }

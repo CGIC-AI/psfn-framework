@@ -50,6 +50,7 @@ import type {
   PostTurnActionQueueStatus,
   PostTurnActionStatusRecord,
 } from '../../../core/agent/post-turn-action-runtime.js';
+import type { OutreachOutboxRecord } from '../../../core/intention/outreach-outbox.js';
 import type {
   ActiveConcern,
   ActiveConcernListOptions,
@@ -330,15 +331,21 @@ export interface AdminModelUsageService {
   getModelUsageData(query?: ModelUsageQuery): Promise<ModelUsageData>;
 }
 
+export interface AdminActionPipeStatus extends PostTurnActionQueueStatus {
+  outreachOutbox?: {
+    recentRecords: OutreachOutboxRecord[];
+  };
+}
+
 export interface AdminActionPipeMutationResult {
   ok: boolean;
   message: string;
   action?: PostTurnActionStatusRecord;
-  status: PostTurnActionQueueStatus;
+  status: AdminActionPipeStatus;
 }
 
 export interface AdminActionPipeService {
-  getActionPipeStatus(): Promise<PostTurnActionQueueStatus>;
+  getActionPipeStatus(): Promise<AdminActionPipeStatus>;
   cancelAction(input: { actionRef: string; reason?: string }): Promise<AdminActionPipeMutationResult>;
   acknowledgeAction(input: { actionRef: string; detail?: string }): Promise<AdminActionPipeMutationResult>;
 }

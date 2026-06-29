@@ -13,6 +13,7 @@
   type DropRecord = ActionPipeStatus['backPressure']['recentDrops'][number];
   type TerminalRecord = ActionPipeStatus['terminal']['recentTerminals'][number];
   type CompletionRecord = ActionPipeStatus['completions']['recentCompletions'][number];
+  type OutreachRecord = NonNullable<ActionPipeStatus['outreachOutbox']>['recentRecords'][number];
   type HistoryRecord = FailureRecord | DropRecord | TerminalRecord | CompletionRecord;
 
   const MUTATION_CANCEL_DETAIL = 'Cancelled from Garden action-pipe operator surface.';
@@ -23,7 +24,11 @@
     running: 'border-gold-300 bg-gold-50 text-gold-800',
     scheduled: 'border-petal-300 bg-petal-50 text-petal-800',
     retry_scheduled: 'border-petal-300 bg-petal-50 text-petal-800',
+    queued: 'border-gold-300 bg-gold-50 text-gold-800',
+    sent: 'border-leaf-300 bg-leaf-50 text-leaf-700',
+    blocked: 'border-wilt-300 bg-wilt-50 text-wilt-700',
     failed: 'border-wilt-300 bg-wilt-50 text-wilt-700',
+    skipped: 'border-bark-300 bg-bark-100 text-shadow-700',
     cancelled: 'border-bark-300 bg-bark-100 text-shadow-700',
     acknowledged: 'border-bark-300 bg-bark-100 text-shadow-700',
   };
@@ -48,6 +53,7 @@
   let recentDrops = $derived(status?.backPressure.recentDrops ?? []);
   let recentTerminals = $derived(status?.terminal.recentTerminals ?? []);
   let recentCompletions = $derived(status?.completions.recentCompletions ?? []);
+  let outreachRecords = $derived(status?.outreachOutbox?.recentRecords ?? []);
   let subagentOutcomes = $derived.by(() => recentCompletions.filter((entry) => Boolean(entry.subagentSpawn)));
   let historyPanels = $derived.by(() => [
     { title: 'Failures', records: recentFailures as HistoryRecord[], empty: 'No recent failures.' },
@@ -141,6 +147,13 @@
       ?? stringRecordProperty(record, 'detail')
       ?? stringRecordProperty(record, 'reason')
       ?? 'No detail recorded.';
+  }
+
+  function outreachSummary(record: OutreachRecord): string {
+    return record.error
+      ?? record.reason
+      ?? record.metadata?.skippedReason?.toString()
+      ?? `content ${record.contentLength ?? 0} chars`;
   }
 
   onMount(() => {
@@ -337,6 +350,43 @@
           <p class="mt-4 text-sm text-shadow-600">No quarantined queue entries.</p>
         {/if}
       </article>
+    </section>
+
+    <section class="space-y-4" aria-labelledby="action-pipe-outreach-heading">
+      <div>
+        <p class="text-xs font-semibold uppercase tracking-[0.2em] text-shadow-500">Outreach</p>
+        <h2 id="action-pipe-outreach-heading" class="mt-1 text-lg font-serif font-semibold text-shadow-900">
+          Proactive outbound ledger
+        </h2>
+      </div>
+      {#if outreachRecords.length === 0}
+        <div class="card-garden p-5 text-sm text-shadow-600">No recent outreach outbox records.</div>
+      {:else}
+        <div class="grid gap-4 xl:grid-cols-2">
+          {#each outreachRecords.slice(0, 10) as record}
+            <article class="card-garden p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div>
+                  <h3 class="font-serif font-semibold text-shadow-900">{record.channelType} · {shortRef(record.channelId)}</h3>
+                  <p class="mt-1 font-mono text-xs text-shadow-500">{shortRef(record.actionId)} · {shortRef(record.dedupeKey)}</p>
+                </div>
+                <span class="rounded-full border px-2.5 py-1 text-xs font-semibold {stateClass(record.phase)}">{record.phase}</span>
+              </div>
+              <p class="mt-3 text-sm text-shadow-700">{outreachSummary(record)}</p>
+              <dl class="mt-4 grid grid-cols-2 gap-3 text-sm">
+                <div><dt class="text-shadow-500">Recorded</dt><dd class="font-mono text-shadow-900">{formatTime(record.recordedAt)}</dd></div>
+                <div><dt class="text-shadow-500">Source</dt><dd class="font-mono text-shadow-900">{shortRef(record.sourceMessageId)}</dd></div>
+                {#if record.runAt}
+                  <div><dt class="text-shadow-500">Run at</dt><dd class="font-mono text-shadow-900">{formatTime(record.runAt)}</dd></div>
+                {/if}
+                {#if record.contentHash}
+                  <div><dt class="text-shadow-500">Content hash</dt><dd class="font-mono text-shadow-900">{shortRef(record.contentHash)}</dd></div>
+                {/if}
+              </dl>
+            </article>
+          {/each}
+        </div>
+      {/if}
     </section>
 
     <section class="space-y-4" aria-labelledby="action-pipe-history-heading">

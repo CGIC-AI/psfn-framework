@@ -245,6 +245,50 @@ export function wireHeartbeatPostTurnRuntime(
     }
   };
 
+  const recordOutreachCompanionMessage = (
+    action: { id: string; dedupeKey: string; sourceMessageId: string },
+    payload: IntentionOutboundMessageActionPayload,
+  ): void => {
+    if (!runtimeOptions.sessionManager?.recordAssistantMessage) {
+      return;
+    }
+    try {
+      runtimeOptions.sessionManager.recordAssistantMessage(
+        payload.channelId,
+        payload.content,
+        undefined,
+        payload.channelType === 'discord',
+        undefined,
+        {
+          sourceMessageId: action.sourceMessageId,
+          metadata: JSON.stringify({
+            type: 'proactive_outbound_message',
+            status: 'sent',
+            actionId: action.id,
+            dedupeKey: action.dedupeKey,
+            channelId: payload.channelId,
+            channelType: payload.channelType,
+            ...(payload.reason ? { reason: payload.reason } : {}),
+          }),
+          roleEnvelopePreview: {
+            schemaVersion: 1,
+            envelopeId: `proactive_outbound:${action.id}`,
+            internalRole: 'outreach_candidate',
+            summary: payload.reason ?? 'Companion-authored proactive outbound message.',
+            sourceStage: 'post_turn_appraisal',
+            promotionTarget: 'turn_record_summary',
+            promotedRef: `turn_record_summary:${action.id}`,
+          },
+        },
+      );
+    } catch (error) {
+      log.warn('Outreach companion session write failed', {
+        actionId: action.id,
+        error: String(error),
+      });
+    }
+  };
+
   const emitDeferredToolHandoffTelemetry = (
     payload: {
       actionId: string;
@@ -866,6 +910,9 @@ export function wireHeartbeatPostTurnRuntime(
               phase: dispatchResult.outcome === 'sent' ? 'sent' : 'blocked',
               ...(dispatchResult.outcome === 'blocked' ? { reason: dispatchResult.reason } : {}),
             });
+            if (dispatchResult.outcome === 'sent') {
+              recordOutreachCompanionMessage(action, payload);
+            }
             recordOutreachSessionAudit(
               action,
               payload,

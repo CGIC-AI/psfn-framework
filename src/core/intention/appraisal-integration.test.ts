@@ -123,6 +123,7 @@ function registerOutboundHandlerHarness(options: {
   const outboxRecords: OutreachOutboxAppendInput[] = [];
   const getTerminal = vi.fn().mockReturnValue(options.terminalRecord);
   const sessionAudit = vi.fn();
+  const sessionAssistant = vi.fn();
   const onIntentionFollowUpActivated = vi.fn();
   const pendingFollowUpStore = {
     enqueue: vi.fn(),
@@ -163,6 +164,7 @@ function registerOutboundHandlerHarness(options: {
         resolveSessionChannelId: (channelId: string) => channelId,
         getRecentMessages: vi.fn().mockReturnValue([]),
         recordSystemMessage: sessionAudit,
+        recordAssistantMessage: sessionAssistant,
       } as any,
       pendingFollowUpStore: pendingFollowUpStore as any,
       onIntentionFollowUpActivated,
@@ -185,6 +187,7 @@ function registerOutboundHandlerHarness(options: {
     getTerminal,
     outboxRecords,
     sessionAudit,
+    sessionAssistant,
     onIntentionFollowUpActivated,
     pendingFollowUpStore,
     cleanup: () => rmSync(tempDir, { recursive: true, force: true }),
@@ -208,6 +211,7 @@ describe('intention appraisal runtime integration', () => {
 
       expect(result).toEqual({ detail: 'blocked:stale_concern' });
       expect(harness.dispatch).not.toHaveBeenCalled();
+      expect(harness.sessionAssistant).not.toHaveBeenCalled();
       expect(harness.outboxRecords.map(record => record.phase)).toEqual(['queued', 'blocked']);
       expect(harness.outboxRecords[1]).toMatchObject({
         reason: 'stale_concern',
@@ -255,6 +259,21 @@ describe('intention appraisal runtime integration', () => {
         content: 'Remember to call the doctor.',
       });
       expect(harness.outboxRecords.map(record => record.phase)).toEqual(['queued', 'sent']);
+      expect(harness.sessionAssistant).toHaveBeenCalledWith(
+        'primary-dm',
+        'Remember to call the doctor.',
+        undefined,
+        true,
+        undefined,
+        expect.objectContaining({
+          sourceMessageId: 'source-message-1',
+          metadata: expect.stringContaining('"type":"proactive_outbound_message"'),
+          roleEnvelopePreview: expect.objectContaining({
+            internalRole: 'outreach_candidate',
+            promotionTarget: 'turn_record_summary',
+          }),
+        }),
+      );
       expect(harness.onIntentionFollowUpActivated).not.toHaveBeenCalled();
       expect(harness.pendingFollowUpStore.dequeue).not.toHaveBeenCalled();
     } finally {
@@ -289,6 +308,7 @@ describe('intention appraisal runtime integration', () => {
 
       expect(result).toEqual({ detail: 'skipped:terminal_dedupe:sent' });
       expect(harness.dispatch).not.toHaveBeenCalled();
+      expect(harness.sessionAssistant).not.toHaveBeenCalled();
       expect(harness.outboxRecords).toEqual([
         expect.objectContaining({
           phase: 'skipped',

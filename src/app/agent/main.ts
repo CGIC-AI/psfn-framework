@@ -350,6 +350,10 @@ async function main(): Promise<void> {
 
   // ── Admin transport (optional) ──
 
+  const outreachOutbox = createFileOutreachOutboxStore(
+    resolveOutreachOutboxLedgerPath(pathSnapshot.companionDataDir),
+  );
+
   const adminTransport = await startOptionalAdminTransportServer({
     adminPort,
     apiHost,
@@ -362,6 +366,7 @@ async function main(): Promise<void> {
     eventBus,
     scheduler,
     postTurnActions,
+    outreachOutbox,
     episodicStore,
     card,
     shardManager,
@@ -441,10 +446,6 @@ async function main(): Promise<void> {
       eventBus,
     })
     : null;
-  const outreachOutbox = createFileOutreachOutboxStore(
-    resolveOutreachOutboxLedgerPath(pathSnapshot.companionDataDir),
-  );
-
   // Journal auto-publisher (for heartbeat reflections -> markdown journal)
   const journalAutoPublisher = createOptionalJournalAutoPublisher(pathSnapshot.workspaceRoot, config);
 

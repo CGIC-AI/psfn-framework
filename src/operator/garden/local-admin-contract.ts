@@ -19,6 +19,7 @@ import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-ru
 import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
+import type { OutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
@@ -109,6 +110,7 @@ export interface InProcessGardenAdminContractOptions {
   adaptiveToolsStateProvider?: AdaptiveToolsStateProvider | null;
   toolHealthProvider?: AdminToolHealthProvider | null;
   postTurnActions?: PostTurnActionRuntime | null;
+  outreachOutbox?: OutreachOutboxStore | null;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   channelGroupMemory?: ChannelGroupMemoryConfig;
   memoryExtractor?: GroupMemoryBackfillExtractorPort | null;
@@ -194,7 +196,7 @@ export function createInProcessGardenAdminContract(
       runtime: options.observerEvalSidecar ?? null,
     }),
     actionPipe: options.postTurnActions
-      ? new AdminActionPipeDataService(options.postTurnActions)
+      ? new AdminActionPipeDataService(options.postTurnActions, options.outreachOutbox ?? null)
       : null,
     shards: new AdminShardFoldReviewDataService(options.shardManager),
     adaptiveTools,

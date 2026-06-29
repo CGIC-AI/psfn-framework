@@ -8,16 +8,10 @@ import {
   exactPath,
   paramWithSuffix,
   prefixedParamPath,
-  type RouteMatcher,
-  type RouteParams,
 } from './route-matchers.js';
+import { toSanitizedMessage } from './routes/shared.js';
+import type { AdminApiRoute } from './routes/types.js';
 import type { AdminMemoryService } from './services/types.js';
-
-interface AdminApiRoute {
-  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-  match: RouteMatcher;
-  handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
-}
 
 function toMemoryType(value: string | null): MemoryType | undefined {
   if (!value) return undefined;
@@ -120,7 +114,7 @@ export function buildAdminMemoryRoutes(options: {
             ...data,
             contactsById: Object.fromEntries(data.contactsById.entries()),
           }),
-          (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list memories') }),
         );
       },
     },
@@ -155,7 +149,7 @@ export function buildAdminMemoryRoutes(options: {
         }
         memoryService.listManagedScopes(url.searchParams).then(
           (data) => sendJson(res, 200, data),
-          (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list managed scopes') }),
         );
       },
     },
@@ -175,7 +169,7 @@ export function buildAdminMemoryRoutes(options: {
             sendJson(res, 200, detail);
           },
           (error) => {
-            sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load managed scope detail') });
           },
         );
       },
@@ -221,7 +215,7 @@ export function buildAdminMemoryRoutes(options: {
               }
               sendJson(res, 200, result);
             },
-            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+            (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to update memory scope') }),
           );
         });
       },
@@ -255,7 +249,7 @@ export function buildAdminMemoryRoutes(options: {
               }
               sendJson(res, 201, result);
             },
-            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+            (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to create memory link') }),
           );
         });
       },
@@ -287,7 +281,7 @@ export function buildAdminMemoryRoutes(options: {
               }
               sendJson(res, 200, { ok: true });
             },
-            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+            (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to remove memory link') }),
           );
         });
       },
@@ -321,7 +315,7 @@ export function buildAdminMemoryRoutes(options: {
               }
               sendJson(res, 200, result);
             },
-            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+            (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Bulk delete failed') }),
           );
         });
       },
@@ -366,7 +360,7 @@ export function buildAdminMemoryRoutes(options: {
               }
               sendJson(res, 200, result);
             },
-            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+            (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Bulk update failed') }),
           );
         });
       },
@@ -378,7 +372,7 @@ export function buildAdminMemoryRoutes(options: {
       handle: (_req, res, { id }) => {
         memoryService.getMemoryLinks(id).then(
           (links) => sendJson(res, 200, { links }),
-          (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load memory links') }),
         );
       },
     },
@@ -442,7 +436,7 @@ export function buildAdminMemoryRoutes(options: {
             sendJson(res, 200, detail);
           },
           (error) => {
-            sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
+            sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load memory detail') });
           },
         );
       },
@@ -459,7 +453,7 @@ export function buildAdminMemoryRoutes(options: {
             }
             sendJson(res, 200, { ok: true });
           },
-          (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to supersede memory') }),
         );
       },
     },

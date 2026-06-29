@@ -92,6 +92,15 @@ function decodeEmbeddingLiteral(value: string | null): number[] {
   return inner.split(',').map(entry => Number(entry.trim())).filter(entry => Number.isFinite(entry));
 }
 
+function decodeJsonInput(value: unknown, fallback: unknown): unknown {
+  if (typeof value !== 'string') return value ?? fallback;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return fallback;
+  }
+}
+
 function cosineSimilarity(left: readonly number[], right: readonly number[]): number {
   const length = Math.min(left.length, right.length);
   if (length === 0) return 0;
@@ -273,22 +282,22 @@ class FakeMemoryPool {
         importance: Number(values[3] ?? 0),
         confidence: Number(values[4] ?? 0),
         emotional_valence: Number(values[5] ?? 0),
-        formation_vad: values[6] ?? null,
+        formation_vad: decodeJsonInput(values[6], null),
         salience: Number(values[7] ?? 0),
         source_ref: String(values[8] ?? ''),
         extracted_at: Number(values[9] ?? 0),
         last_accessed: Number(values[10] ?? 0),
         access_count: Number(values[11] ?? 0),
         superseded_by: values[12] == null ? null : String(values[12]),
-        tags: values[13] ?? [],
+        tags: decodeJsonInput(values[13], []),
         scope_ref_kind: values[14] == null ? null : String(values[14]),
         scope_ref_id: values[15] == null ? null : String(values[15]),
         scope_ref_label: values[16] == null ? null : String(values[16]),
-        scope_tags: values[17] ?? [],
-        provenance_refs: values[18] ?? [],
+        scope_tags: decodeJsonInput(values[17], []),
+        provenance_refs: decodeJsonInput(values[18], []),
         retention_class: values[19] == null ? null : (values[19] as PurrMemory['retentionClass']),
         sensitivity: values[20] as PurrMemory['sensitivity'],
-        consent_flags: values[21] ?? {},
+        consent_flags: decodeJsonInput(values[21], {}),
         contact_id: values[22] == null ? null : String(values[22]),
         deleted_at: values[23] == null ? null : Number(values[23]),
         deleted_by: values[24] == null ? null : String(values[24]),

@@ -249,6 +249,32 @@ export interface MemoryListOptions {
   offset?: number;
 }
 
+export interface MemoryAdminListOptions extends MemoryListOptions {
+  type?: PurrMemory['type'];
+  sensitivity?: PurrMemory['sensitivity'];
+  retentionClass?: PurrMemory['retentionClass'];
+  preferenceOnly?: boolean;
+  startDate?: number;
+  endDate?: number;
+}
+
+export interface MemoryAdminPrivacySummary {
+  activeMemoryCount: number;
+  highSensitivityCount: number;
+  consentGatedCount: number;
+  contactLinkedCount: number;
+  scopedCount: number;
+  preferenceCount: number;
+  durablePreferenceCount: number;
+  sensitivityCounts: Record<string, number>;
+}
+
+export interface MemoryAdminListResult {
+  memories: PurrMemory[];
+  total: number;
+  privacySummary: MemoryAdminPrivacySummary;
+}
+
 export interface MemorySoftDeleteOptions {
   deletedBy?: string;
   reason?: string;
@@ -334,6 +360,8 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   getAllActiveMemories(limit?: number): Awaitable<PurrMemory[]>;
   listMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
   listActiveMemories(options?: MemoryListOptions): Awaitable<PurrMemory[]>;
+  listAdminMemories(options?: MemoryAdminListOptions): Awaitable<MemoryAdminListResult>;
+  getAdminMemoryPrivacySummary(): Awaitable<MemoryAdminPrivacySummary>;
   countActiveMemories(): Awaitable<number>;
   getById(id: string): Awaitable<PurrMemory | undefined>;
   softDeleteMemory(
@@ -415,6 +443,8 @@ export interface MemoryStorePort extends ScratchpadProvider {
   getAllActiveMemories(limit?: number): Promise<PurrMemory[]>;
   listMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
   listActiveMemories(options?: MemoryListOptions): Promise<PurrMemory[]>;
+  listAdminMemories(options?: MemoryAdminListOptions): Promise<MemoryAdminListResult>;
+  getAdminMemoryPrivacySummary(): Promise<MemoryAdminPrivacySummary>;
   countActiveMemories(): Promise<number>;
   getById(id: string): Promise<PurrMemory | undefined>;
   softDeleteMemory(id: string, options?: MemorySoftDeleteOptions): Promise<MemoryDeleteVersion | null>;
@@ -504,6 +534,8 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     getAllActiveMemories: async (limit) => await store.getAllActiveMemories(limit),
     listMemories: async (options) => await store.listMemories(options),
     listActiveMemories: async (options) => await store.listActiveMemories(options),
+    listAdminMemories: async (options) => await store.listAdminMemories(options),
+    getAdminMemoryPrivacySummary: async () => await store.getAdminMemoryPrivacySummary(),
     countActiveMemories: async () => await store.countActiveMemories(),
     getById: async (id) => await store.getById(id),
     softDeleteMemory: async (id, options) => await store.softDeleteMemory(id, options),

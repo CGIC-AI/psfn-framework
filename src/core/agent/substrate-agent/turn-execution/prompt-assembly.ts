@@ -75,7 +75,7 @@ function buildCurrentDatetimeProximityAnchor(variables: Record<string, unknown>)
     return '';
   }
   return [
-    '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,wake_orientation,cross_channel_continuity">',
+    '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,continuity_anchor,wake_orientation,cross_channel_continuity">',
     ...renderedFields,
     '</runtime.current_datetime>',
   ].join('\n');

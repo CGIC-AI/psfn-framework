@@ -153,7 +153,7 @@ function resolveOrientRequirement(action: string | null): CapabilityRequirement 
 }
 
 const SESSION_READ_ACTIONS = new Set(['list', 'search', 'read', 'grep']);
-const SESSION_WRITE_ACTIONS = new Set(['new', 'resume', 'start_focus', 'complete_focus']);
+const SESSION_WRITE_ACTIONS = new Set(['new', 'resume', 'wake_return', 'start_focus', 'complete_focus']);
 
 function resolveSessionRequirement(action: string | null): CapabilityRequirement {
   if (actionIn(action, SESSION_READ_ACTIONS)) return 'identity.read';

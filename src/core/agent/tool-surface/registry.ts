@@ -296,7 +296,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'sessions',
     exposure: 'core',
     description: 'Canonical session continuity, transcript search, resume, and focus surface.',
-    actions: ['list', 'new', 'resume', 'search', 'grep', 'start_focus', 'complete_focus'],
+    actions: ['list', 'new', 'resume', 'search', 'grep', 'wake_return', 'start_focus', 'complete_focus'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
       retiredAlias('session_list', 'session', 'hidden', 'list', 'Session listing belongs on session.'),

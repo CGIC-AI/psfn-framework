@@ -79,6 +79,7 @@ import { runAutoCompaction } from './manager/compaction-service.js';
 import type { TurnSessionContextSnapshot } from '../turns/snapshot.js';
 import {
   buildSnapshotVersionPointer,
+  cloneSessionContinuityArtifact,
   cloneSessionEntry,
 } from '../turns/snapshot.js';
 import {
@@ -104,6 +105,7 @@ import {
   resolveCompressionGuidelinePath,
   resolveConfiguredCompanionDataDir,
   resolveFocusKnowledgePath,
+  resolveSessionContinuityArtifactsDir,
 } from '../../persistence/layout.js';
 import {
   CompressionFailureLogStore,
@@ -112,6 +114,12 @@ import {
   type CompressionGuidelineUpdateResult,
 } from './compression-guideline.js';
 import { resolveRoleEnvelopeRef } from '../internal-role-envelopes/projections.js';
+import {
+  SessionContinuityArtifactStore,
+  type SessionContinuityArtifact,
+  type SessionContinuityArtifactInput,
+  type SessionContinuityArtifactListOptions,
+} from './continuity-artifacts.js';
 
 export type {
   ImportedHistoryBootstrapChunk,
@@ -260,6 +268,7 @@ export class SessionManager {
   private eventBus: EventBus | null;
   private promptRegistry: PromptRegistryStatePort | null;
   private focusKnowledgeStore: FocusKnowledgeStore;
+  private continuityArtifactStore: SessionContinuityArtifactStore;
   private compressionGuidelineRuntime: CompressionGuidelineRuntime;
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   private coreMemoryProvider: SessionCoreMemoryProvider | null;
@@ -287,6 +296,9 @@ export class SessionManager {
     this.promptRegistry = promptRegistry ?? null;
     const companionDataDir = resolveConfiguredCompanionDataDir(config);
     this.focusKnowledgeStore = new FocusKnowledgeStore(resolveFocusKnowledgePath(companionDataDir));
+    this.continuityArtifactStore = new SessionContinuityArtifactStore(
+      resolveSessionContinuityArtifactsDir(companionDataDir),
+    );
     this.compressionGuidelineRuntime = new CompressionGuidelineRuntime(
       new CompressionGuidelineStore(resolveCompressionGuidelinePath(companionDataDir)),
       new CompressionFailureLogStore(resolveCompressionFailureLogPath(companionDataDir)),
@@ -359,6 +371,17 @@ export class SessionManager {
 
   getSessionActivity(sessionId: string): SessionActivitySummary | null {
     return this.store.getSessionActivity(sessionId);
+  }
+
+  recordSessionContinuityArtifact(input: SessionContinuityArtifactInput): SessionContinuityArtifact {
+    return this.continuityArtifactStore.append(input);
+  }
+
+  listSessionContinuityArtifacts(
+    sessionId: string,
+    options?: SessionContinuityArtifactListOptions,
+  ): SessionContinuityArtifact[] {
+    return this.continuityArtifactStore.listRecent(sessionId, options);
   }
 
   private toFocusSessionSnapshot(session: ActiveFocusSession): FocusSessionSnapshot {
@@ -1019,6 +1042,12 @@ export class SessionManager {
     const focusCompactionRanges = turnSnapshot
       ? []
       : this.getFocusCompactionRanges(resolvedChannelId);
+    const wakeReturnArtifacts = turnSnapshot?.wakeReturnArtifacts
+      ? turnSnapshot.wakeReturnArtifacts.map(cloneSessionContinuityArtifact)
+      : this.listSessionContinuityArtifacts(resolvedChannelId, {
+        kind: 'wake_return',
+        limit: 2,
+      });
     return buildSessionContext({
       channelId: resolvedChannelId,
       systemPrompt,
@@ -1043,6 +1072,7 @@ export class SessionManager {
         });
       },
       crossChannelContinuity: this.crossChannelContinuity,
+      wakeReturnArtifacts,
       characterName: this.resolveContextCharacterName(),
       turnSnapshot,
       focusKnowledgeTexts,
@@ -1132,6 +1162,10 @@ export class SessionManager {
       focusKnowledgeTexts,
       characterName: this.resolveContextCharacterName(),
     });
+    const wakeReturnArtifacts = this.listSessionContinuityArtifacts(resolvedChannelId, {
+      kind: 'wake_return',
+      limit: 2,
+    });
 
     return {
       channelId: resolvedChannelId,
@@ -1145,6 +1179,7 @@ export class SessionManager {
       compactionSummaryTexts: [...compactionSummaryTexts],
       focusKnowledgeTexts: [...focusKnowledgeTexts],
       continuityEntries: continuityEntries.map(cloneSessionEntry),
+      wakeReturnArtifacts: wakeReturnArtifacts.map(cloneSessionContinuityArtifact),
       orientation,
       intentionAppraisalArtifactCount,
       compactionPromptText,
@@ -1159,6 +1194,10 @@ export class SessionManager {
         focusCompaction.compactedCount,
         continuityEntries.at(-1)?.id,
         continuityEntries.at(-1)?.timestamp,
+        wakeReturnArtifacts.at(0)?.id,
+        wakeReturnArtifacts.at(0)?.createdAt,
+        wakeReturnArtifacts.at(0)?.summary,
+        wakeReturnArtifacts.at(0)?.nextAnchor,
         compactionPromptText,
         orientation.fired ? 'orientation:fired' : `orientation:${orientation.reason}`,
         orientation.idleGapMs,

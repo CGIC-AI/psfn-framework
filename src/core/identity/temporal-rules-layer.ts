@@ -7,10 +7,10 @@ export const TEMPORAL_RULES_LAYER_PRIORITY = 990;
 export const TEMPORAL_RULES_LAYER_CONTENT = [
   '<temporal_rules>',
   '<rule>Treat runtime.current_datetime as the canonical source for the current date and time.</rule>',
-  '<rule>Use wake_orientation as current-channel idle-gap context; it can help with continuity, but it should not change the current date or time.</rule>',
+  '<rule>Use continuity_anchor or wake_orientation as idle-gap context; it can help with continuity, but it should not change the current date or time.</rule>',
   '<rule>Use cross_channel_continuity as retrieved context from other channels; it can add background, but it should not change the current date or time.</rule>',
   '<rule>When words like now, today, tomorrow, yesterday, earlier, later, still, already, just, since, or ago matter, resolve them from runtime.current_datetime or explicit pinned temporal resolutions rather than memory alone.</rule>',
-  '<rule>When making a temporal claim, ground it in runtime.current_datetime, wake_orientation, cross_channel_continuity, or an explicit pinned temporal resolution.</rule>',
+  '<rule>When making a temporal claim, ground it in runtime.current_datetime, continuity_anchor, wake_orientation, cross_channel_continuity, or an explicit pinned temporal resolution.</rule>',
   '</temporal_rules>',
 ].join('\n');
 

@@ -13,8 +13,8 @@ describe('orientation context surface wiring', () => {
 
     expect(builderSource).toContain('buildOrientationNoteTelemetry');
     expect(builderSource).toContain('params.turnSnapshot && !isInternalReflectionChannel(params.channelId)');
-    expect(builderSource).toContain('buildStructuredWakeOrientationBlock(orientationTelemetry)');
-    expect(builderSource).toContain('<wake_orientation authority="idle_gap_context"');
+    expect(builderSource).toContain('buildContinuityAnchorLines({');
+    expect(builderSource).toContain('<continuity_anchor authority="companion_context"');
     expect(builderSource).toContain('<cross_channel_continuity authority="retrieved_context"');
     expect(builderSource).toContain("id: 'session.orientation'");
     expect(builderSource).toContain("id: 'wake_orientation'");

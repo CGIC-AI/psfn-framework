@@ -13,6 +13,12 @@ import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { textResult, textResultWithError } from './results.js';
 import { createCompleteFocusTool, createStartFocusTool } from './focus.js';
 import {
+  SESSION_CONTINUITY_FACETS,
+  SESSION_CONTINUITY_OCCASIONS,
+  type SessionContinuityFacet,
+  type SessionContinuityOccasion,
+} from '../session/continuity-artifacts.js';
+import {
   createSessionGrepTool,
   createSessionSearchTool,
   type SessionGrepToolOptions,
@@ -28,6 +34,7 @@ const SESSION_TOOL_ACTION_NAMES = [
   'resume',
   'search',
   'grep',
+  'wake_return',
   'start_focus',
   'complete_focus',
 ] as const;
@@ -37,6 +44,7 @@ const SESSION_TOOL_ACTION_HELP = [
   'resume',
   'search',
   'grep',
+  'wake_return',
   'start_focus',
   'complete_focus',
 ].join(', ');
@@ -47,6 +55,7 @@ type SessionToolAction =
   | 'resume'
   | 'search'
   | 'grep'
+  | 'wake_return'
   | 'start_focus'
   | 'complete_focus';
 
@@ -75,6 +84,7 @@ SessionManager,
   | 'getSessionActivity'
   | 'setActiveContextSession'
   | 'getActiveContextSession'
+  | 'recordSessionContinuityArtifact'
 >;
 
 interface ResolvedPreviousSession {
@@ -98,6 +108,10 @@ interface SessionToolParams extends SessionNewParams {
   channelId?: string;
   scope?: string;
   conclusion?: string;
+  summary?: string;
+  nextAnchor?: string;
+  facets?: SessionContinuityFacet[];
+  occasion?: SessionContinuityOccasion;
 }
 
 interface SessionNewDetails {
@@ -235,6 +249,8 @@ function normalizeSessionAction(params: SessionToolParams): SessionToolAction {
       return 'search';
     case 'grep':
       return 'grep';
+    case 'wake_return':
+      return 'wake_return';
     case 'start_focus':
       return 'start_focus';
     case 'complete_focus':
@@ -242,6 +258,47 @@ function normalizeSessionAction(params: SessionToolParams): SessionToolAction {
     default:
       throw new Error(`action must be one of: ${SESSION_TOOL_ACTION_HELP}`);
   }
+}
+
+function normalizeWakeReturnOccasion(value: unknown): SessionContinuityOccasion {
+  if (value === undefined || value === null) return 'return';
+  if (typeof value !== 'string') {
+    throw new Error(`occasion must be one of: ${SESSION_CONTINUITY_OCCASIONS.join(', ')}`);
+  }
+  const trimmed = value.trim();
+  if ((SESSION_CONTINUITY_OCCASIONS as readonly string[]).includes(trimmed)) {
+    return trimmed as SessionContinuityOccasion;
+  }
+  throw new Error(`occasion must be one of: ${SESSION_CONTINUITY_OCCASIONS.join(', ')}`);
+}
+
+function normalizeWakeReturnSessionId(
+  manager: SessionToolManager,
+  dataDir: string,
+  rawSessionId: unknown,
+): string {
+  const explicitSessionId = normalizeSessionId(rawSessionId);
+  if (explicitSessionId) return explicitSessionId;
+
+  const activeSessionId = manager.getActiveContextSession()
+    ?? readLastActiveSession(dataDir)?.sessionId
+    ?? null;
+  if (!activeSessionId) {
+    throw new Error('action=wake_return requires sessionId when no active session is available');
+  }
+  return activeSessionId;
+}
+
+function normalizeWakeReturnSummary(value: unknown): string {
+  const normalized = normalizeSessionId(value);
+  if (!normalized) {
+    throw new Error('action=wake_return requires a non-empty summary');
+  }
+  return normalized;
+}
+
+function normalizeWakeReturnNextAnchor(value: unknown): string | undefined {
+  return normalizeSessionId(value) ?? undefined;
 }
 
 export function createSessionNewTool(options: SessionNewToolOptions): AgentTool<any> {
@@ -408,6 +465,7 @@ export function createSessionResumeTool(
 }
 
 export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool<any> {
+  const now = options.now ?? Date.now;
   const sessionSearchTool = createSessionSearchTool(options.manager, options.llmProvider);
   const sessionGrepTool = createSessionGrepTool({
     sessionsDir: options.sessionsDir,
@@ -423,7 +481,7 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
     name: 'session',
     label: 'session',
     description:
-      'Unified session continuity surface for list/search/grep/new/resume and focus workflow actions. '
+      'Unified session continuity surface for list/search/grep/new/resume/wake_return and focus workflow actions. '
       + `Use action=${SESSION_TOOL_ACTION_HELP}.`,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(SESSION_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {
@@ -437,7 +495,7 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
       })),
       sessionId: Type.Optional(Type.String({
         minLength: 1,
-        description: 'Session ID for action=resume.',
+        description: 'Session ID for action=resume or action=wake_return. Defaults to the active session for wake_return.',
       })),
       query: Type.Optional(Type.String({
         minLength: 1,
@@ -478,6 +536,25 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
         minLength: 1,
         description: 'Optional completion notes for action=complete_focus.',
       })),
+      summary: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Wake-return summary for action=wake_return: where this session left off.',
+      })),
+      nextAnchor: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Optional pending intent or concrete next step for action=wake_return.',
+      })),
+      facets: Type.Optional(Type.Array(Type.Union(
+        SESSION_CONTINUITY_FACETS.map((facet) => Type.Literal(facet)),
+      ), {
+        description: 'Optional continuity facets for action=wake_return.',
+      })),
+      occasion: Type.Optional(Type.Union(
+        SESSION_CONTINUITY_OCCASIONS.map((occasion) => Type.Literal(occasion)),
+        {
+          description: 'Wake-return occasion for action=wake_return. Defaults to return.',
+        },
+      )),
     }),
     execute: async (
       toolCallId: string,
@@ -513,6 +590,28 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
               ...(typeof params.limit === 'number' ? { limit: params.limit } : {}),
               ...(typeof params.channelId === 'string' ? { channelId: params.channelId } : {}),
             }, signal);
+          case 'wake_return': {
+            const sessionId = normalizeWakeReturnSessionId(
+              options.manager,
+              options.dataDir,
+              params.sessionId,
+            );
+            const nextAnchor = normalizeWakeReturnNextAnchor(params.nextAnchor);
+            const artifact = options.manager.recordSessionContinuityArtifact({
+              sessionId,
+              kind: 'wake_return',
+              occasion: normalizeWakeReturnOccasion(params.occasion),
+              summary: normalizeWakeReturnSummary(params.summary),
+              createdAt: new Date(now()).toISOString(),
+              ...(nextAnchor ? { nextAnchor } : {}),
+              ...(Array.isArray(params.facets) ? { facets: params.facets } : {}),
+            });
+            return textResult(JSON.stringify({
+              action: 'wake_return',
+              recorded: true,
+              artifact,
+            }, null, 2));
+          }
           case 'start_focus':
             return startFocusTool.execute(toolCallId, {
               scope: typeof params.scope === 'string' ? params.scope : '',

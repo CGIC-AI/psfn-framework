@@ -436,6 +436,14 @@ describe('capability tool gating', () => {
     expect(session.executeSpy).not.toHaveBeenCalled();
     expect((focusDenied.content[0] as any).text).toContain('identity.write.runtime');
 
+    const wakeReturnDenied = await writeGated.execute('session-wake-return', {
+      action: 'wake_return',
+      sessionId: 'api:resume-me',
+      summary: 'Resume the visibility audit.',
+    });
+    expect(session.executeSpy).not.toHaveBeenCalled();
+    expect((wakeReturnDenied.content[0] as any).text).toContain('identity.write.runtime');
+
     const allowedGated = gateToolWithCapabilities(
       session.tool,
       () => accessForTier('nursery'),

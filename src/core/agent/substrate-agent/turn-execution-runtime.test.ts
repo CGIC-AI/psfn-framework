@@ -1879,7 +1879,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
     const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
     const currentDatetimeAnchor = [
-      '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,wake_orientation,cross_channel_continuity">',
+      '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,continuity_anchor,wake_orientation,cross_channel_continuity">',
       '<iso>2026-03-18T09:30:00.000-04:00</iso>',
       '<timezone>America/New_York</timezone>',
       '<weekday>Wednesday</weekday>',

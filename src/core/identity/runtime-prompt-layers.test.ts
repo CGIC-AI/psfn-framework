@@ -150,7 +150,7 @@ const LEGACY_RUNTIME_LAYER_SEEDS = [
     identifier: 'runtime.current_datetime',
     name: 'Current Date & Time',
     priority: 290,
-    content: '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,wake_orientation,cross_channel_continuity">\n<iso>{{runtime_current_datetime_iso}}</iso>\n<timezone>{{active_timezone}}</timezone>\n<weekday>{{runtime_current_weekday}}</weekday>\n<date>{{runtime_current_date_human}}</date>\n<time>{{runtime_current_time_human}}</time>\n<today>{{runtime_current_today}}</today>\n<yesterday>{{runtime_current_yesterday}}</yesterday>\n<tomorrow>{{runtime_current_tomorrow}}</tomorrow>\n<part_of_day>{{runtime_current_part_of_day}}</part_of_day>\n</runtime.current_datetime>',
+    content: '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,continuity_anchor,wake_orientation,cross_channel_continuity">\n<iso>{{runtime_current_datetime_iso}}</iso>\n<timezone>{{active_timezone}}</timezone>\n<weekday>{{runtime_current_weekday}}</weekday>\n<date>{{runtime_current_date_human}}</date>\n<time>{{runtime_current_time_human}}</time>\n<today>{{runtime_current_today}}</today>\n<yesterday>{{runtime_current_yesterday}}</yesterday>\n<tomorrow>{{runtime_current_tomorrow}}</tomorrow>\n<part_of_day>{{runtime_current_part_of_day}}</part_of_day>\n</runtime.current_datetime>',
   },
 ] as const;
 

@@ -21,6 +21,7 @@ import { resolveCachedPromptRuntimeLayoutStore } from '../../identity/prompt-run
 import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';
 import { cloneSessionEntry } from '../../turns/snapshot.js';
 import type { SessionEntry } from '../types.js';
+import type { SessionContinuityArtifact } from '../continuity-artifacts.js';
 import { resolveSessionEntryTurnContext } from '../turn-provenance.js';
 import {
   classifyChannel,
@@ -336,22 +337,39 @@ function xmlElement(tag: string, value: string | undefined): string {
   return trimmed.length > 0 ? `<${tag}>${escapeXmlText(trimmed)}</${tag}>` : '';
 }
 
-function buildStructuredWakeOrientationBlock(orientation: OrientationNoteTelemetry): string {
+function buildContinuityAnchorLines(params: {
+  orientation: OrientationNoteTelemetry;
+  wakeReturnArtifacts: readonly SessionContinuityArtifact[];
+}): string[] {
+  const { orientation } = params;
   if (!orientation.fired || !orientation.lastActivityAt || orientation.idleGapMs === undefined) {
-    return '';
+    return [];
   }
+
+  const latestWakeReturn = params.wakeReturnArtifacts.at(0);
+  const whereWeLeftOff = latestWakeReturn?.summary
+    ?? orientation.sessionSummary
+    ?? orientation.continuitySummary
+    ?? '';
+  const pendingIntent = latestWakeReturn?.nextAnchor
+    ?? 'No urgent follow-up or pending intent found in available continuity context.';
+  const pendingState = latestWakeReturn?.nextAnchor ? 'pending_intent_available' : 'no_urgent_context';
   const lines = [
-    '<wake_orientation authority="idle_gap_context" scope="current_channel_only" may_not_override="runtime.current_datetime">',
+    '<continuity_anchor authority="companion_context" source="wake_return" role="internal_context" scope="current_channel_and_policy_allowed_continuity" may_not_override="runtime.current_datetime">',
     '<idle_threshold_exceeded>true</idle_threshold_exceeded>',
+    xmlElement('pending_state', pendingState),
     xmlElement('last_active_at_iso', formatActiveDateTimeIso(new Date(orientation.lastActivityAt))),
     xmlElement('elapsed_since_last_active_iso', formatIsoDuration(orientation.idleGapMs)),
     xmlElement('elapsed_since_last_active_human', `about ${formatIdleGap(orientation.idleGapMs)}`),
-    xmlElement('last_user_message', orientation.lastUserMessage),
+    xmlElement('where_we_left_off', whereWeLeftOff),
+    xmlElement('pending_intent', pendingIntent),
+    xmlElement('latest_wake_return_recorded_at_iso', latestWakeReturn?.createdAt),
+    xmlElement('current_turn_user_message', orientation.lastUserMessage),
     xmlElement('last_time_here', orientation.sessionSummary),
     xmlElement('recent_continuity', orientation.continuitySummary),
-    '</wake_orientation>',
+    '</continuity_anchor>',
   ].filter(line => line.length > 0);
-  return lines.join('\n');
+  return lines;
 }
 
 function buildStructuredContinuityBlock(
@@ -508,6 +526,7 @@ interface BuildSessionContextParams {
     capturedAt: number;
   }) => void;
   crossChannelContinuity: CrossChannelContinuityPort;
+  wakeReturnArtifacts: readonly SessionContinuityArtifact[];
   /** Character name from identity card (e.g. 'Companion'). Used for display labels. */
   characterName?: string;
   turnSnapshot?: TurnSessionContextSnapshot;
@@ -705,7 +724,10 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     ? (params.turnSnapshot.orientation ?? computedOrientationTelemetry)
     : computedOrientationTelemetry;
 
-  const orientationSectionText = buildStructuredWakeOrientationBlock(orientationTelemetry);
+  const orientationSectionText = buildContinuityAnchorLines({
+    orientation: orientationTelemetry,
+    wakeReturnArtifacts: params.wakeReturnArtifacts,
+  }).join('\n');
   const continuitySectionText = buildStructuredContinuityBlock(
     crossChannel,
     orientationTelemetry.observedAt,

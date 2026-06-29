@@ -767,7 +767,7 @@ describe('SessionManager with continuity', () => {
         DEFAULT_COMPANION_ID,
       );
 
-      expect(ctx.systemPrompt).toContain('<wake_orientation authority="idle_gap_context"');
+      expect(ctx.systemPrompt).toContain('<continuity_anchor authority="companion_context"');
       expect(ctx.systemPrompt).toContain('<last_time_here>');
       expect(ctx.systemPrompt).toContain('Recovery mattered most.');
       expect(ctx.systemPrompt).toContain('<recent_continuity>');

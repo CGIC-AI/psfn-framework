@@ -10,6 +10,7 @@ import type {
 } from '../../faculties/memory/types.js';
 import type { EpisodicRetrievalChain } from '../../faculties/memory/retrieval/episodic.js';
 import type { SessionEntry } from '../session/types.js';
+import type { SessionContinuityArtifact } from '../session/continuity-artifacts.js';
 import type {
   ContextMessage,
   FatigueEnforcementMetadata,
@@ -67,6 +68,7 @@ export interface TurnSessionContextSnapshot {
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];
+  wakeReturnArtifacts?: SessionContinuityArtifact[];
   orientation?: TurnOrientationSnapshot;
   intentionAppraisalArtifactCount?: number;
   compactionPromptText?: string;
@@ -167,6 +169,15 @@ export function buildSnapshotVersionPointer(parts: ReadonlyArray<string | number
 
 export function cloneSessionEntry(entry: SessionEntry): SessionEntry {
   return { ...entry };
+}
+
+export function cloneSessionContinuityArtifact(
+  artifact: SessionContinuityArtifact,
+): SessionContinuityArtifact {
+  return {
+    ...artifact,
+    facets: [...artifact.facets],
+  };
 }
 
 export function cloneOrientationSnapshot(snapshot: TurnOrientationSnapshot): TurnOrientationSnapshot {

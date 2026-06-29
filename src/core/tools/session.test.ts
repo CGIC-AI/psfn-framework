@@ -462,6 +462,74 @@ class InMemoryTranscriptSearch {
     expect(manager.getActiveContextSession()).toBe('api:session-two');
   });
 
+  it('records wake-return continuity artifacts through the unified tool', async () => {
+    store.append({
+      channelId: 'api:session-one',
+      role: 'assistant',
+      content: 'We paused mid-refactor.',
+      timestamp: 1_000,
+    });
+    manager.setActiveContextSession('api:session-one');
+
+    const tool = createSessionTool({
+      manager,
+      llmProvider: {
+        complete: vi.fn(async () => ({
+          content: 'unused',
+          toolCalls: [],
+          model: 'mock',
+          inputTokens: 1,
+          outputTokens: 1,
+          stopReason: 'stop',
+        })),
+      } as any,
+      sessionsDir: join(dir, 'sessions'),
+      dataDir: dir,
+      now: () => Date.parse('2026-04-01T12:00:00.000Z'),
+    });
+
+    expect(Value.Check((tool as any).parameters, {
+      action: 'wake_return',
+      summary: 'Paused mid-refactor with tests still pending.',
+      nextAnchor: 'Resume with the runtime-context test.',
+      facets: ['task'],
+    })).toBe(true);
+
+    const result = await tool.execute('session-wake-return', {
+      action: 'wake_return',
+      summary: 'Paused mid-refactor with tests still pending.',
+      nextAnchor: 'Resume with the runtime-context test.',
+      facets: ['task'],
+    });
+    const payload = JSON.parse(toolText(result)) as {
+      action: string;
+      recorded: boolean;
+      artifact: {
+        sessionId: string;
+        kind: string;
+        occasion: string;
+        summary: string;
+        nextAnchor: string;
+        createdAt: string;
+      };
+    };
+
+    expect(payload).toMatchObject({
+      action: 'wake_return',
+      recorded: true,
+      artifact: {
+        sessionId: 'api:session-one',
+        kind: 'wake_return',
+        occasion: 'return',
+        summary: 'Paused mid-refactor with tests still pending.',
+        nextAnchor: 'Resume with the runtime-context test.',
+        createdAt: '2026-04-01T12:00:00.000Z',
+      },
+    });
+    expect(manager.listSessionContinuityArtifacts('api:session-one', { kind: 'wake_return' })[0])
+      .toMatchObject(payload.artifact);
+  });
+
   it('dispatches transcript lookup actions through the unified tool', async () => {
     store.append({
       channelId: 'api:public-session',

@@ -252,8 +252,8 @@ describe('createToolsetTool', () => {
     const coreTools = [
       createActionTool(
         'session',
-        'Unified session continuity surface for list/search/grep/new/resume and focus workflow actions.',
-        ['list', 'new', 'resume', 'search', 'grep', 'start_focus', 'complete_focus'],
+        'Unified session continuity surface for list/search/grep/new/resume/wake_return and focus workflow actions.',
+        ['list', 'new', 'resume', 'search', 'grep', 'wake_return', 'start_focus', 'complete_focus'],
       ),
       createActionTool(
         'web',

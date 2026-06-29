@@ -270,6 +270,15 @@ describe('SessionManager', () => {
         startedAt: previousAt,
         completedAt: currentAt,
       });
+      mgr.recordSessionContinuityArtifact({
+        sessionId: 'api:main',
+        kind: 'wake_return',
+        occasion: 'return',
+        summary: 'Visibility audit paused with prompt ordering still in progress.',
+        nextAnchor: 'Resume by checking the remaining prompt-order runtime tests.',
+        facets: ['task'],
+        createdAt: new Date(currentAt - 500).toISOString(),
+      });
 
       const snapshot = mgr.captureTurnContextSnapshot('api:main', 'u1');
       expect(snapshot.orientation).toMatchObject({
@@ -288,17 +297,21 @@ describe('SessionManager', () => {
       expect(snapshot.orientation?.lastUserMessage).toBe('Please keep the visibility work focused.');
 
       const ctx = await mgr.buildContext('api:main', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
-      expect(ctx.systemPrompt).toContain('<wake_orientation authority="idle_gap_context"');
+      expect(ctx.systemPrompt).toContain('<continuity_anchor authority="companion_context"');
+      expect(ctx.systemPrompt).toContain('role="internal_context"');
       expect(ctx.systemPrompt).toContain('<elapsed_since_last_active_human>about 4 hours</elapsed_since_last_active_human>');
-      expect(ctx.systemPrompt).toContain('<last_user_message>Please keep the visibility work focused.</last_user_message>');
+      expect(ctx.systemPrompt).toContain('<current_turn_user_message>Please keep the visibility work focused.</current_turn_user_message>');
+      expect(ctx.systemPrompt).toContain('<where_we_left_off>Visibility audit paused with prompt ordering still in progress.</where_we_left_off>');
+      expect(ctx.systemPrompt).toContain('<pending_state>pending_intent_available</pending_state>');
+      expect(ctx.systemPrompt).toContain('<pending_intent>Resume by checking the remaining prompt-order runtime tests.</pending_intent>');
       expect(ctx.systemPrompt).toContain('<recent_continuity>');
       expect(ctx.systemPrompt).toContain('The visibility audit is still open in the side thread.');
       expect(ctx.systemPrompt).not.toContain('Open threads');
-      expect(ctx.systemPrompt.indexOf('<wake_orientation')).toBeLessThan(
+      expect(ctx.systemPrompt.indexOf('<continuity_anchor')).toBeLessThan(
         ctx.systemPrompt.indexOf('<cross_channel_continuity'),
       );
       const orientationSection = ctx.systemPromptSections.find(section => section.id === 'wake_orientation');
-      expect(orientationSection?.content).toContain('<wake_orientation authority="idle_gap_context"');
+      expect(orientationSection?.content).toContain('<continuity_anchor authority="companion_context"');
       expect(orientationSection?.content).toContain('<recent_continuity>');
       expect(orientationSection?.content).toContain('The visibility audit is still open in the side thread.');
       const continuitySection = ctx.systemPromptSections.find(section => section.id === 'cross_channel_continuity');
@@ -381,12 +394,12 @@ describe('SessionManager', () => {
         [],
         snapshot,
       );
-      expect(ctx.systemPrompt).toContain('<wake_orientation authority="idle_gap_context"');
+      expect(ctx.systemPrompt).toContain('<continuity_anchor authority="companion_context"');
       expect(ctx.systemPrompt).toContain('<cross_channel_continuity authority="retrieved_context"');
       expect(ctx.systemPrompt).toContain('Earlier reflection summary');
       expect(ctx.systemPrompt).not.toContain('Heartbeat should stay hidden');
       const orientationSection = ctx.systemPromptSections.find(section => section.id === 'wake_orientation');
-      expect(orientationSection?.content).toContain('<wake_orientation authority="idle_gap_context"');
+      expect(orientationSection?.content).toContain('<continuity_anchor authority="companion_context"');
       expect(orientationSection?.content).toContain('Earlier reflection summary');
       const continuitySection = ctx.systemPromptSections.find(section => section.id === 'cross_channel_continuity');
       expect(continuitySection?.content).toContain('<cross_channel_continuity authority="retrieved_context"');
@@ -431,7 +444,91 @@ describe('SessionManager', () => {
       expect(snapshot.orientation?.noteText).toBeUndefined();
 
       const ctx = await mgr.buildContext('ch1', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
-      expect(ctx.systemPrompt).not.toContain('<wake_orientation');
+      expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('does not fabricate continuity anchor context when there is no prior activity', async () => {
+    const config = makeConfig({ dataDir: dir });
+    const mgr = new SessionManager(store, config);
+    const currentAt = 1_700_000_000_000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
+
+    try {
+      store.append({
+        channelId: 'api:new',
+        role: 'user',
+        content: 'First turn in this session.',
+        authorId: 'u1',
+        authorName: 'User',
+        timestamp: currentAt,
+      });
+
+      const snapshot = mgr.captureTurnContextSnapshot('api:new', 'u1');
+      expect(snapshot.orientation).toMatchObject({
+        fired: false,
+        reason: 'no_previous_activity',
+      });
+
+      const ctx = await mgr.buildContext('api:new', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
+      expect(ctx.systemPrompt).not.toContain('<continuity_anchor');
+      expect(ctx.systemPrompt).not.toContain('<where_we_left_off>');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('omits privacy-filtered continuity from the wake-return anchor in public contexts', async () => {
+    const config = makeConfig({ dataDir: dir });
+    const mgr = new SessionManager(store, config);
+    const continuityStore = new UserContinuityStore(join(dir, 'continuity-public-filter'));
+    mgr.continuityStore = continuityStore;
+    const previousAt = 1_700_000_000_000;
+    const currentAt = previousAt + (4 * 60 * 60 * 1000);
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
+
+    try {
+      store.append({
+        channelId: 'api:public',
+        role: 'assistant',
+        content: 'We were discussing publicly safe release notes.',
+        timestamp: previousAt,
+        channelVisibility: 'public',
+      });
+      store.append({
+        channelId: 'api:public',
+        role: 'user',
+        content: 'Pick this back up.',
+        authorId: 'u1',
+        authorName: 'User',
+        timestamp: currentAt,
+        channelVisibility: 'public',
+      });
+      continuityStore.append('u1', {
+        channelId: 'api:private-side',
+        originChannelId: 'api:private-side',
+        role: 'assistant',
+        content: 'WITHHELD private deployment secret.',
+        timestamp: currentAt - 1_000,
+        channelVisibility: 'private',
+      });
+
+      const publicMeta = { privacyLevel: 'public' as const };
+      const snapshot = mgr.captureTurnContextSnapshot('api:public', 'u1', publicMeta);
+      expect(snapshot.orientation).toMatchObject({
+        fired: true,
+        reason: 'idle_gap_exceeded',
+      });
+
+      const ctx = await mgr.buildContext('api:public', 'System prompt', '', undefined, 'u1', publicMeta, [], snapshot);
+      expect(ctx.systemPrompt).toContain('<continuity_anchor authority="companion_context"');
+      expect(ctx.systemPrompt).toContain('<pending_state>no_urgent_context</pending_state>');
+      expect(ctx.systemPrompt).toContain('No urgent follow-up or pending intent found');
+      expect(ctx.systemPrompt).not.toContain('WITHHELD private deployment secret');
+      expect(ctx.systemPrompt).not.toContain('<recent_continuity>');
+      expect(ctx.systemPrompt).not.toContain('<cross_channel_continuity');
     } finally {
       nowSpy.mockRestore();
     }

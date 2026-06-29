@@ -32,6 +32,7 @@ import type { EventBus } from '../../shared/event-bus.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { createRateLimitedLogEmitter } from '../../shared/log-rate-limit.js';
 import { DiscordVoiceRuntime } from './voice.js';
 import {
   emitTurnContentionTelemetry,
@@ -47,6 +48,7 @@ import {
 } from './file-ingest.js';
 
 const log = createComponentLogger('Discord');
+const rateLimitedDebugLog = createRateLimitedLogEmitter({ windowMs: 60_000 });
 
 const TYPING_INTERVAL_MS = 9_000;
 const MAX_DISCORD_LENGTH = 2000;
@@ -960,14 +962,31 @@ export class DiscordAdapter implements ChannelAdapterPort {
 
   private startTyping(msg: Message): ReturnType<typeof setInterval> {
     const channel = msg.channel;
+    const channelId = msg.channelId;
     if ('sendTyping' in channel) {
-      (channel as TextChannel).sendTyping().catch(() => {});
+      (channel as TextChannel).sendTyping().catch((error: unknown) => {
+        this.logTypingFailure(channelId, 'initial', error);
+      });
     }
     return setInterval(() => {
       if ('sendTyping' in channel) {
-        (channel as TextChannel).sendTyping().catch(() => {});
+        (channel as TextChannel).sendTyping().catch((error: unknown) => {
+          this.logTypingFailure(channelId, 'interval', error);
+        });
       }
     }, TYPING_INTERVAL_MS);
+  }
+
+  private logTypingFailure(channelId: string, phase: 'initial' | 'interval', error: unknown): void {
+    const errorMessage = toErrorMessage(error);
+    rateLimitedDebugLog(
+      `discord.sendTyping.${phase}:${channelId}:${errorMessage}`,
+      () => log.debug('Discord typing indicator failed', {
+        channelId,
+        phase,
+        error: errorMessage,
+      }),
+    );
   }
 
   private emitQueueTelemetry(

@@ -296,6 +296,20 @@ function formatPrintValue(value) {
   }
 }
 
+function sendDebugLog(message, key, details) {
+  if (typeof process.send !== 'function' || process.connected === false) return;
+  process.send({
+    type: 'sandbox_debug_log',
+    protocol: PROTOCOL,
+    message,
+    key,
+    details: sanitizeForIpc(details),
+  }, (error) => {
+    if (!error) return;
+    process.stderr.write('[analysis-workbench-child] failed to emit debug log: ' + toErrorMessage(error) + '\n');
+  });
+}
+
 function createHostHelper(name) {
   return (...args) => {
     if (typeof process.send !== 'function') {
@@ -323,7 +337,18 @@ function createHostHelper(name) {
       () => activeHostCallPromises.delete(promise),
       () => activeHostCallPromises.delete(promise),
     );
-    promise.catch(() => {});
+    promise.catch((error) => {
+      const errorMessage = toErrorMessage(error);
+      sendDebugLog(
+        'Analysis workbench sandbox host helper promise rejected',
+        'analysis_workbench.host_helper_rejection:' + name + ':' + errorMessage,
+        {
+          helperName: name,
+          callId: id,
+          error: errorMessage,
+        },
+      );
+    });
     return promise;
   };
 }

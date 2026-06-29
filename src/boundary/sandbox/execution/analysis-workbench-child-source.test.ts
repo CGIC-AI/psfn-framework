@@ -31,4 +31,15 @@ describe('ANALYSIS_WORKBENCH_CHILD_SOURCE', () => {
     expect(memoryGuardSetup.indexOf('memoryGuard.unref();'))
       .toBeGreaterThan(memoryGuardSetup.indexOf('}, 20);'));
   });
+
+  it('emits debug logs for rejected host helper promises', () => {
+    const helperSource = sourceBetween(
+      'function createHostHelper(name) {',
+      'function isFinalAnswerSignal(error) {',
+    );
+
+    expect(helperSource).toContain('promise.catch((error) => {');
+    expect(helperSource).toContain('sendDebugLog(');
+    expect(helperSource).not.toContain('promise.catch(() => {})');
+  });
 });

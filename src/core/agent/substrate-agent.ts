@@ -121,6 +121,7 @@ import {
   resolveAuthorContext as resolveAuthorContextForTurn,
   type CompanionSubstrateHealthContext,
   type ResolvedAuthorContext,
+  type UserRuntimeProfile,
 } from './substrate-agent/runtime-context.js';
 import {
   type ExtendedToolActivationOptions,
@@ -951,6 +952,7 @@ export class SubstrateAgent {
           internalState,
           metacognitiveFlags,
           emotionAppraisalChain,
+          currentUserRuntimeProfile,
         ) => this.buildDynamicPromptTemplateVariables(
           turnMessage,
           resolvedUserName,
@@ -965,6 +967,7 @@ export class SubstrateAgent {
           internalState,
           metacognitiveFlags,
           emotionAppraisalChain,
+          currentUserRuntimeProfile,
         ),
         setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
           this.currentInternalState = state;
@@ -1195,6 +1198,7 @@ export class SubstrateAgent {
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     emotionAppraisalChain: readonly EmotionAppraisalEntry[],
+    currentUserRuntimeProfile?: UserRuntimeProfile,
   ): Record<string, string> {
     const recentMessages = this.sessionManager.getRecentMessages(message.channelId, 32);
     const latestPriorMessage = [...recentMessages]
@@ -1247,6 +1251,7 @@ export class SubstrateAgent {
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       lastMessageReceivedAtMs: latestPriorMessage?.timestamp ?? null,
       recentChannelEntries: recentMessages,
+      currentUserRuntimeProfile,
       analysisWorkbenchAvailable,
       config: this.config as Record<string, unknown>,
     });

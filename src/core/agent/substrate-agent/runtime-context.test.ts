@@ -1349,6 +1349,9 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_room_id).toBe('discord:dm:alex');
     expect(variables.runtime_current_message_author_name).toBe('Alex');
     expect(variables.runtime_current_message_author_id).toBe('alex');
+    expect(variables.runtime_current_message_author_xml).toBe('<current_message_author name="Alex" id="alex" />');
+    expect(variables.runtime_current_message_author_timezone).toBe('');
+    expect(variables.runtime_current_message_author_local_time).toBe('');
     expect(variables.runtime_recent_active_participants_xml).toBe('');
     expect(variables.runtime_recent_active_participants_count).toBe('0');
     expect(variables.runtime_channel_visibility).toBe('private');
@@ -1397,6 +1400,16 @@ describe('runtime subject identity', () => {
       skillsContext: '',
       activeConcernsBlock: '',
       behavioralNotesBlock: '',
+      currentUserRuntimeProfile: {
+        user_id: 'discord:u-current',
+        display_name: 'Vega',
+        timezone: 'America/Chicago',
+      },
+      recentActiveParticipantRuntimeProfiles: [
+        { user_id: 'discord:u-b', display_name: 'Basil', timezone: 'Europe/London' },
+        { user_id: 'discord:u-g', display_name: 'Gale', timezone: 'Asia/Tokyo' },
+        { user_id: 'discord:u-f', display_name: 'Fenn', timezone: 'Not/AZone' },
+      ],
       recentChannelEntries: [
         makeSessionEntry({ id: 1, authorId: 'discord:u-a', authorName: 'Aster', timestamp: 1000 }),
         makeSessionEntry({ id: 2, authorId: 'discord:u-b', authorName: 'Basil old', timestamp: 2000 }),
@@ -1415,10 +1428,19 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_room_id).toBe('discord:group:ops');
     expect(variables.runtime_current_message_author_name).toBe('Vega "Pilot"');
     expect(variables.runtime_current_message_author_name_xml_attr).toBe('Vega &quot;Pilot&quot;');
+    expect(variables.runtime_current_message_author_timezone).toBe('America/Chicago');
+    expect(variables.runtime_current_message_author_local_time).toBe('8:30 AM');
+    expect(variables.runtime_current_message_author_xml).toBe(
+      '<current_message_author name="Vega &quot;Pilot&quot;" id="discord:u-current" timezone="America/Chicago" local_time="8:30 AM" />',
+    );
     expect(variables.runtime_recent_active_participants_count).toBe('5');
     expect(variables.runtime_recent_active_participants_xml.match(/<participant\b/gu)).toHaveLength(5);
-    expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Basil" id="discord:u-b" />');
-    expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Gale" id="discord:u-g" />');
+    expect(variables.runtime_recent_active_participants_xml).toContain(
+      '<participant name="Basil" id="discord:u-b" timezone="Europe/London" local_time="1:30 PM" />',
+    );
+    expect(variables.runtime_recent_active_participants_xml).toContain(
+      '<participant name="Gale" id="discord:u-g" timezone="Asia/Tokyo" local_time="10:30 PM" />',
+    );
     expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Fenn" id="discord:u-f" />');
     expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Echo" id="discord:u-e" />');
     expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Dax" id="discord:u-d" />');
@@ -1434,7 +1456,7 @@ describe('runtime subject identity', () => {
     expect(rendered).toContain('<conversation_state>');
     expect(rendered).toContain('<chat_type>group</chat_type>');
     expect(rendered).toContain('<channel_id>discord:group:ops</channel_id>');
-    expect(rendered).toContain('<current_message_author name="Vega &quot;Pilot&quot;" id="discord:u-current" />');
+    expect(rendered).toContain('<current_message_author name="Vega &quot;Pilot&quot;" id="discord:u-current" timezone="America/Chicago" local_time="8:30 AM" />');
     expect(rendered).toContain('<recent_active_participants max="5">');
   });
 
@@ -1472,6 +1494,11 @@ describe('runtime subject identity', () => {
       skillsContext: '',
       activeConcernsBlock: '',
       behavioralNotesBlock: '',
+      currentUserRuntimeProfile: {
+        user_id: 'discord:u-alex',
+        display_name: 'Alex',
+        timezone: 'America/Los_Angeles',
+      },
       recentChannelEntries: [
         makeSessionEntry({ channelId: 'discord:dm:alex', id: 1, authorId: 'discord:u-alex', authorName: 'Alex', timestamp: 1000 }),
       ],
@@ -1479,9 +1506,12 @@ describe('runtime subject identity', () => {
     });
 
     expect(variables.runtime_chat_type).toBe('direct_message');
+    expect(variables.runtime_current_message_author_timezone).toBe('America/Los_Angeles');
+    expect(variables.runtime_current_message_author_local_time).toBe('6:30 AM');
     expect(variables.runtime_recent_active_participants_xml).toBe('');
     expect(variables.runtime_recent_active_participants_count).toBe('0');
     expect(rendered).toContain('<chat_type>direct_message</chat_type>');
+    expect(rendered).toContain('<current_message_author name="Alex" id="discord:u-alex" timezone="America/Los_Angeles" local_time="6:30 AM" />');
     expect(rendered).not.toContain('<recent_active_participants');
   });
 

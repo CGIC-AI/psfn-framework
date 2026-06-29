@@ -49,7 +49,7 @@ import {
 } from '../fatigue/runtime-enforcement.js';
 import type { AdaptiveToolRuntimeState } from '../adaptive-tools-telemetry.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
-import type { ResolvedAuthorContext } from './runtime-context.js';
+import type { ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
 import type { AutoloadTurnOutcome } from './adaptive-tools-runtime.js';
 import type {
   BackgroundContinuationCompletionSignal,
@@ -189,6 +189,7 @@ export interface TurnExecutionRuntime {
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
+    currentUserRuntimeProfile?: UserRuntimeProfile,
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,

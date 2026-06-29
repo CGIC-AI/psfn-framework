@@ -601,11 +601,19 @@ export interface ResolvedAuthorContext {
   /** True when the resolved contact is another machine intelligence (peer companion/agent). */
   speakingWithIsMachineIntelligence?: boolean;
   relationshipType?: Contact['relationshipType'];
+  timezone?: string;
   canonicalContactKey?: string;
   subjectIdentityKey?: string;
   continuitySubjectKey?: string;
   channelPrivacyLevel?: ChannelVisibility;
   continuityFallbackKeys: string[];
+}
+
+export interface UserRuntimeProfile {
+  user_id: string;
+  display_name: string;
+  timezone?: string;
+  local_time?: string;
 }
 
 const SELF_IMAGE_TOOL_NAMES = ['selfie_create'] as const;
@@ -686,6 +694,32 @@ function formatPromptRuntimeTime(now: Date): string {
     minute: '2-digit',
     hour12: true,
   }).format(now);
+}
+
+function formatPromptRuntimeTimeForTimezone(now: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  }).format(now);
+}
+
+function normalizeRuntimeTimezone(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  try {
+    void new Intl.DateTimeFormat('en-US', { timeZone: trimmed }).format(new Date());
+    return trimmed;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveContactRuntimeTimezone(contact: Contact | undefined): string | undefined {
+  if (!contact || !isRecord(contact)) return undefined;
+  return normalizeRuntimeTimezone(contact.timezone);
 }
 
 function formatPromptRuntimeRelativeDate(now: Date, dayOffset: number): string {
@@ -861,9 +895,44 @@ function formatXmlEmptyElement(tag: string, attributes: Record<string, string>):
   return renderedAttributes ? `<${tag} ${renderedAttributes} />` : `<${tag} />`;
 }
 
+function normalizeUserRuntimeProfile(
+  profile: UserRuntimeProfile | undefined,
+  now: Date,
+): UserRuntimeProfile | undefined {
+  const userId = trimNonEmptyString(profile?.user_id);
+  if (!userId) return undefined;
+
+  const timezone = normalizeRuntimeTimezone(profile?.timezone);
+  const displayName = trimNonEmptyString(profile?.display_name) ?? userId;
+  return {
+    user_id: userId,
+    display_name: displayName,
+    ...(timezone
+      ? {
+        timezone,
+        local_time: formatPromptRuntimeTimeForTimezone(now, timezone),
+      }
+      : {}),
+  };
+}
+
+function buildRuntimeProfileByUserId(
+  profiles: readonly UserRuntimeProfile[] | undefined,
+  now: Date,
+): Map<string, UserRuntimeProfile> {
+  const map = new Map<string, UserRuntimeProfile>();
+  for (const profile of profiles ?? []) {
+    const normalized = normalizeUserRuntimeProfile(profile, now);
+    if (!normalized) continue;
+    map.set(normalized.user_id, normalized);
+  }
+  return map;
+}
+
 function formatRecentActiveParticipantsXml(input: {
   chatType: 'direct_message' | 'group';
   recentChannelEntries: readonly SessionEntry[];
+  runtimeProfilesByUserId?: ReadonlyMap<string, UserRuntimeProfile>;
 }): string {
   if (input.chatType !== 'group') return '';
 
@@ -885,9 +954,12 @@ function formatRecentActiveParticipantsXml(input: {
     if (!authorId || seenAuthorIds.has(authorId)) continue;
 
     seenAuthorIds.add(authorId);
+    const profile = input.runtimeProfilesByUserId?.get(authorId);
     participantLines.push(formatXmlEmptyElement('participant', {
-      name: trimNonEmptyString(entry.authorName) ?? authorId,
+      name: trimNonEmptyString(entry.authorName) ?? profile?.display_name ?? authorId,
       id: authorId,
+      timezone: profile?.timezone ?? '',
+      local_time: profile?.local_time ?? '',
     }));
     if (participantLines.length >= RECENT_ACTIVE_PARTICIPANT_LIMIT) break;
   }
@@ -903,43 +975,68 @@ function formatRecentActiveParticipantsXml(input: {
 function buildConversationStatePromptVariables(input: {
   message: SubstrateMessage;
   internalTurn: boolean;
+  now: Date;
   recentChannelEntries?: readonly SessionEntry[];
+  currentUserRuntimeProfile?: UserRuntimeProfile;
+  recentActiveParticipantRuntimeProfiles?: readonly UserRuntimeProfile[];
 }): Record<string, string> {
   if (input.internalTurn) {
     return {
       runtime_conversation_state_available: 'false',
       runtime_chat_type: '',
       runtime_room_id: '',
+      runtime_current_message_author_xml: '',
       runtime_current_message_author_name: '',
       runtime_current_message_author_id: '',
       runtime_current_message_author_name_xml_attr: '',
       runtime_current_message_author_id_xml_attr: '',
+      runtime_current_message_author_timezone: '',
+      runtime_current_message_author_local_time: '',
       runtime_recent_active_participants_xml: '',
       runtime_recent_active_participants_count: '0',
     };
   }
 
   const chatType = resolveConversationChatType(input.message);
+  const runtimeProfilesByUserId = buildRuntimeProfileByUserId(
+    input.recentActiveParticipantRuntimeProfiles,
+    input.now,
+  );
+  const currentAuthorId = trimNonEmptyString(input.message.authorId) ?? '';
+  const currentAuthorName = trimNonEmptyString(input.message.authorName) ?? 'Unknown';
+  const normalizedCurrentProfile = normalizeUserRuntimeProfile(input.currentUserRuntimeProfile, input.now);
+  const currentProfile = normalizedCurrentProfile?.user_id === currentAuthorId
+    ? normalizedCurrentProfile
+    : undefined;
+  if (currentProfile) {
+    runtimeProfilesByUserId.set(currentProfile.user_id, currentProfile);
+  }
   const recentActiveParticipantsXml = formatRecentActiveParticipantsXml({
     chatType,
     recentChannelEntries: input.recentChannelEntries ?? [],
+    runtimeProfilesByUserId,
   });
   const participantCount = recentActiveParticipantsXml
     ? String((recentActiveParticipantsXml.match(/<participant\b/gu) ?? []).length)
     : '0';
+  const currentMessageAuthorXml = formatXmlEmptyElement('current_message_author', {
+    name: currentAuthorName,
+    id: currentAuthorId,
+    timezone: currentProfile?.timezone ?? '',
+    local_time: currentProfile?.local_time ?? '',
+  });
 
   return {
     runtime_conversation_state_available: 'true',
     runtime_chat_type: chatType,
     runtime_room_id: input.message.channelId,
-    runtime_current_message_author_name: trimNonEmptyString(input.message.authorName) ?? 'Unknown',
-    runtime_current_message_author_id: trimNonEmptyString(input.message.authorId) ?? '',
-    runtime_current_message_author_name_xml_attr: escapeXmlAttribute(
-      trimNonEmptyString(input.message.authorName) ?? 'Unknown',
-    ),
-    runtime_current_message_author_id_xml_attr: escapeXmlAttribute(
-      trimNonEmptyString(input.message.authorId) ?? '',
-    ),
+    runtime_current_message_author_xml: currentMessageAuthorXml,
+    runtime_current_message_author_name: currentAuthorName,
+    runtime_current_message_author_id: currentAuthorId,
+    runtime_current_message_author_name_xml_attr: escapeXmlAttribute(currentAuthorName),
+    runtime_current_message_author_id_xml_attr: escapeXmlAttribute(currentAuthorId),
+    runtime_current_message_author_timezone: currentProfile?.timezone ?? '',
+    runtime_current_message_author_local_time: currentProfile?.local_time ?? '',
     runtime_recent_active_participants_xml: recentActiveParticipantsXml,
     runtime_recent_active_participants_count: participantCount,
   };
@@ -1243,6 +1340,8 @@ export function buildDynamicPromptTemplateVariables(input: {
   behavioralNotesBlock?: string;
   lastMessageReceivedAtMs?: number | null;
   recentChannelEntries?: readonly SessionEntry[];
+  currentUserRuntimeProfile?: UserRuntimeProfile;
+  recentActiveParticipantRuntimeProfiles?: readonly UserRuntimeProfile[];
   analysisWorkbenchAvailable?: boolean;
   config: Record<string, unknown>;
 }): Record<string, string> {
@@ -1323,7 +1422,10 @@ export function buildDynamicPromptTemplateVariables(input: {
   const conversationStateVariables = buildConversationStatePromptVariables({
     message: input.message,
     internalTurn,
+    now,
     recentChannelEntries: input.recentChannelEntries,
+    currentUserRuntimeProfile: input.currentUserRuntimeProfile,
+    recentActiveParticipantRuntimeProfiles: input.recentActiveParticipantRuntimeProfiles,
   });
   const responseStyleState = buildResponseStylePromptState(responseStyle);
   const trustState = buildTrustPromptState(input.trustLevel);
@@ -1713,6 +1815,7 @@ async function resolveGeneratedMessageSourceContext(input: {
       trustLevel: contact?.trustLevel ?? 'regular',
       ...(contact?.isMachineIntelligence ? { speakingWithIsMachineIntelligence: true } : {}),
       ...(contact?.relationshipType ? { relationshipType: contact.relationshipType } : {}),
+      ...(resolveContactRuntimeTimezone(contact) ? { timezone: resolveContactRuntimeTimezone(contact) } : {}),
       ...(canonicalContactKey ? { canonicalContactKey } : {}),
       continuitySubjectKey: resolveContinuitySubjectKey({
         canonicalContactKey,
@@ -1868,6 +1971,7 @@ export async function resolveAuthorContext(input: {
       resolvedUserName: resolvePromptUserName(input.message, contact),
       ...(contact.isMachineIntelligence ? { speakingWithIsMachineIntelligence: true } : {}),
       relationshipType: contact.relationshipType,
+      ...(resolveContactRuntimeTimezone(contact) ? { timezone: resolveContactRuntimeTimezone(contact) } : {}),
       canonicalContactKey,
       continuitySubjectKey: resolveContinuitySubjectKey({
         canonicalContactKey,

@@ -151,7 +151,7 @@ const CURRENT_DATETIME_LAYER_CONTENT = '<runtime.current_datetime authority="can
 const RUNTIME_STATE_LAYER_SECTIONS = [
   "<last_message_received>\n<weekday>{{runtime_last_message_received_weekday}}</weekday>\n<date>{{runtime_last_message_received_date_human}}</date>\n<time>{{runtime_last_message_received_time_human}}</time>\n<timezone>{{runtime_last_message_received_timezone}}</timezone>\n<elapsed_time_since_last>{{runtime_last_message_received_ago}}</elapsed_time_since_last>\n<status>{{runtime_last_message_received_missing_notice}}</status>\n</last_message_received>",
   "<internal_turn_context>\n<kind>{{runtime_internal_turn_kind}}</kind>\n</internal_turn_context>",
-  "<conversation_state>\n<chat_type>{{runtime_chat_type}}</chat_type>\n<channel_id>{{runtime_room_id}}</channel_id>\n<channel_type>{{runtime_channel_type}}</channel_type>\n<channel_visibility>{{runtime_channel_visibility}}</channel_visibility>\n<current_message_author name=\"{{runtime_current_message_author_name_xml_attr}}\" id=\"{{runtime_current_message_author_id_xml_attr}}\" />\n{{runtime_recent_active_participants_xml}}\n</conversation_state>",
+  "<conversation_state>\n<chat_type>{{runtime_chat_type}}</chat_type>\n<channel_id>{{runtime_room_id}}</channel_id>\n<channel_type>{{runtime_channel_type}}</channel_type>\n<channel_visibility>{{runtime_channel_visibility}}</channel_visibility>\n{{runtime_current_message_author_xml}}\n{{runtime_recent_active_participants_xml}}\n</conversation_state>",
 ] as const;
 
 const LEGACY_RUNTIME_STATE_LAYER_CONTENT_WITH_CURRENT_DATETIME = wrapRuntimeUmbrella('runtime_state', [

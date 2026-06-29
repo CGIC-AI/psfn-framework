@@ -14,7 +14,7 @@ import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
-import type { ResolvedAuthorContext } from './runtime-context.js';
+import type { ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import type { TurnSupportRuntime } from './turn-support-runtime.js';
 import type { ToolRuntimeFacade } from './tool-runtime-facade.js';
@@ -66,6 +66,7 @@ interface TurnExecutionAdapterCallbacks {
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
+    currentUserRuntimeProfile?: UserRuntimeProfile,
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,
@@ -235,6 +236,7 @@ export function createTurnExecutionRuntimeAdapter(
       internalState,
       metacognitiveFlags,
       emotionAppraisalChain,
+      currentUserRuntimeProfile,
     ) => options.callbacks.buildDynamicPromptTemplateVariables(
       message,
       resolvedUserName,
@@ -249,6 +251,7 @@ export function createTurnExecutionRuntimeAdapter(
       internalState,
       metacognitiveFlags,
       emotionAppraisalChain,
+      currentUserRuntimeProfile,
     ),
     setCurrentSelfModelState: (
       state,

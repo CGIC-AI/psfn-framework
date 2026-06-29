@@ -289,7 +289,7 @@ describe('runtime prompt layer schema', () => {
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_internal_turn_kind}}');
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('<conversation_state>');
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_chat_type}}');
-    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_current_message_author_name_xml_attr}}');
+    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_current_message_author_xml}}');
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_recent_active_participants_xml}}');
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_channel_visibility}}');
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).not.toContain('<model_context>');

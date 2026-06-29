@@ -7,7 +7,7 @@ import {
 import { clamp } from './config.js';
 import type { GroupMemoryRangeChunk } from './group-ranges.js';
 
-export const GROUP_MEMORY_SALIENCE_REASON_CODES = [
+const GROUP_MEMORY_SALIENCE_REASON_CODES = [
   'companion_mention',
   'direct_address',
   'participant_fact',
@@ -22,7 +22,7 @@ export const GROUP_MEMORY_SALIENCE_REASON_CODES = [
 export type GroupMemorySalienceReason =
   typeof GROUP_MEMORY_SALIENCE_REASON_CODES[number];
 
-export const GROUP_MEMORY_SALIENCE_SKIP_REASONS = [
+const GROUP_MEMORY_SALIENCE_SKIP_REASONS = [
   'empty_content',
   'non_user_message',
   'low_signal',

@@ -31,7 +31,7 @@ export interface GatewayOpsPort {
   beads: BeadsOperations;
 }
 
-export function createGatewayOpsPort(port: GatewayOpsPort): GatewayOpsPort {
+function createGatewayOpsPort(port: GatewayOpsPort): GatewayOpsPort {
   return {
     git: {
       status: (): GitStatusResult | Promise<GitStatusResult> => port.git.status(),

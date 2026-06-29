@@ -733,6 +733,107 @@ describe('SessionManager', () => {
     )).toEqual(['turn_record_summary:env_refs_1']);
   });
 
+  it('batches sparse role-envelope ref entry reads while preserving requested order', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const firstTurnId = createTurnId();
+    const secondTurnId = createTurnId();
+    const channelId = 'api:role-envelope-batched-refs';
+
+    const userEntryId = mgr.recordUserMessage(
+      channelId,
+      'Remember this thread.',
+      'user-1',
+      'User',
+      undefined,
+      undefined,
+      {
+        turnId: firstTurnId,
+        requestId: 'role-envelope-batched-first',
+      },
+    );
+    const firstEnvelopeEntryId = mgr.recordAssistantMessage(
+      channelId,
+      'Queued the first follow-up.',
+      undefined,
+      undefined,
+      undefined,
+      {
+        turnId: firstTurnId,
+        requestId: 'role-envelope-batched-first',
+        roleEnvelopePreview: {
+          schemaVersion: 1,
+          envelopeId: 'env_refs_first',
+          internalRole: 'concern_candidate',
+          summary: 'Queued the first follow-up.',
+          sourceStage: 'post_turn_appraisal',
+          promotionTarget: 'turn_record_summary',
+          promotedRef: 'turn_record_summary:env_refs_first',
+        },
+      },
+    );
+    mgr.recordUserMessage(
+      channelId,
+      'Add another note later.',
+      'user-1',
+      'User',
+      undefined,
+      undefined,
+      {
+        turnId: secondTurnId,
+        requestId: 'role-envelope-batched-second',
+      },
+    );
+    const secondEnvelopeEntryId = mgr.recordAssistantMessage(
+      channelId,
+      'Queued the second follow-up.',
+      undefined,
+      undefined,
+      undefined,
+      {
+        turnId: secondTurnId,
+        requestId: 'role-envelope-batched-second',
+        roleEnvelopePreview: {
+          schemaVersion: 1,
+          envelopeId: 'env_refs_second',
+          internalRole: 'concern_candidate',
+          summary: 'Queued the second follow-up.',
+          sourceStage: 'post_turn_appraisal',
+          promotionTarget: 'turn_record_summary',
+          promotedRef: 'turn_record_summary:env_refs_second',
+        },
+      },
+    );
+    expect(userEntryId).not.toBeNull();
+    expect(firstEnvelopeEntryId).not.toBeNull();
+    expect(secondEnvelopeEntryId).not.toBeNull();
+
+    const missingEntryId = (secondEnvelopeEntryId ?? 0) + 100;
+    const getEntriesInRange = vi.spyOn(store, 'getEntriesInRange');
+
+    expect(mgr.getRoleEnvelopeRefsForEntries(
+      channelId,
+      [
+        secondEnvelopeEntryId ?? 0,
+        missingEntryId,
+        userEntryId ?? 0,
+        firstEnvelopeEntryId ?? 0,
+        secondEnvelopeEntryId ?? 0,
+        Number.NaN,
+        0,
+      ],
+    )).toEqual([
+      'turn_record_summary:env_refs_second',
+      'turn_record_summary:env_refs_first',
+    ]);
+    expect(getEntriesInRange).toHaveBeenCalledTimes(1);
+    expect(getEntriesInRange).toHaveBeenCalledWith(
+      channelId,
+      userEntryId,
+      missingEntryId,
+    );
+  });
+
   it('delegates transcript search to the injected transcript search port', async () => {
     const transcriptSearch: TranscriptSearchPort = {
       searchByKeywords: vi.fn(() => [

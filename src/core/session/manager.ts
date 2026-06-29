@@ -933,18 +933,34 @@ export class SessionManager {
   getRoleEnvelopeRefsForEntries(channelId: string, sessionEntryIds: readonly number[]): string[] {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     const refs: string[] = [];
+    const requestedEntryIds: number[] = [];
     const seenEntryIds = new Set<number>();
     const seenRefs = new Set<string>();
+    let rangeStartId = Number.POSITIVE_INFINITY;
+    let rangeEndId = 0;
 
     for (const rawEntryId of sessionEntryIds) {
       if (!Number.isFinite(rawEntryId)) continue;
       const entryId = Math.floor(rawEntryId);
       if (entryId <= 0 || seenEntryIds.has(entryId)) continue;
       seenEntryIds.add(entryId);
+      requestedEntryIds.push(entryId);
+      rangeStartId = Math.min(rangeStartId, entryId);
+      rangeEndId = Math.max(rangeEndId, entryId);
+    }
 
-      const entries = this.store.getEntriesInRange(resolvedChannelId, entryId, entryId);
-      if (entries.length === 0) continue;
-      const [entry] = entries;
+    if (requestedEntryIds.length === 0) return refs;
+
+    const entries = this.store.getEntriesInRange(resolvedChannelId, rangeStartId, rangeEndId);
+    const entriesById = new Map<number, (typeof entries)[number]>();
+    for (const entry of entries) {
+      if (!seenEntryIds.has(entry.id) || entriesById.has(entry.id)) continue;
+      entriesById.set(entry.id, entry);
+    }
+
+    for (const entryId of requestedEntryIds) {
+      const entry = entriesById.get(entryId);
+      if (!entry) continue;
 
       const preview = resolveSessionEntryRoleEnvelopePreview(entry);
       if (!preview) continue;

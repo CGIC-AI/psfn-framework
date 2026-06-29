@@ -159,6 +159,81 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     );
   });
 
+  it('marks uncertain emotion telemetry in reflection prompts before affect use', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const capturedPrompts: string[] = [];
+    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policy = policyStore.load();
+    const template = policy.templates.find((candidate) => candidate.id === 'daily-review');
+    expect(template).toBeDefined();
+    if (!template) {
+      throw new Error('daily-review template missing from defaults');
+    }
+    template.internalStateInput = true;
+    template.sendToDiscord = false;
+    policyStore.save(policy);
+
+    const nowMs = Date.parse('2026-03-02T12:00:00.000Z');
+    const internalState = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: -0.8, arousal: 0.6, dominance: -0.4 },
+        mood: { valence: -0.7, arousal: 0.5, dominance: -0.3 },
+        discrete: { sadness: 0.92 },
+        confidence: 0.88,
+      },
+      emotionTelemetry: {
+        source: 'classifier_inferred',
+        observedAtMs: nowMs - 60 * 60_000,
+        nowMs,
+        staleAfterMs: 10 * 60_000,
+        provenance: [{
+          source: 'classifier_inferred',
+          observedAtMs: nowMs - 60 * 60_000,
+          modality: 'text',
+        }],
+      },
+      activeConcerns: [],
+      trustLevel: 'trusted',
+      contactId: 'contact-1',
+      sessionMetrics: {
+        userMessageText: 'Recent conversations matter.',
+        responseText: 'Keep continuity with the primary contact.',
+        toolCallCount: 0,
+        recentTurnCount: 3,
+        lastSeenDeltaSeconds: 120,
+      },
+    });
+    const snapshotRef = buildInternalStateSnapshotRef(internalState);
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage: vi.fn(async (message: { content: string }) => {
+          capturedPrompts.push(message.content);
+          return { content: 'Uncertain telemetry stayed bounded.' };
+        }),
+        getCurrentInternalState: () => internalState,
+        getCurrentInternalStateSnapshotRef: () => snapshotRef,
+        getCurrentMetacognitiveFlags: () => [],
+      } as any,
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+    });
+
+    await runtime.runTemplateNow('daily-review', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    const prompt = capturedPrompts[0] ?? '';
+    const internalStateSection = getPromptSection(prompt, '[Reflection Self Evidence]');
+    expect(internalStateSection).toContain('Emotion telemetry validation: uncertain; source classifier_inferred; reasons stale_signal');
+    expect(internalStateSection).toContain('VAD and mood were downweighted, and discrete classifier labels were withheld before reflection use.');
+    expect(internalStateSection).toContain('Effective affect clue after validation');
+    expect(internalStateSection).not.toContain('Current feel appears');
+    expect(internalStateSection).not.toContain('Discrete emotion clues: sadness');
+  });
+
   it('records manual deliberation runs with provenance and process ids', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
     const reflectionJournalPrototype = ReflectionJournalStore.prototype as ReflectionJournalStore & {

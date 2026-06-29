@@ -257,6 +257,15 @@ function formatInternalStateTopEmotions(state: InternalState): string {
   return entries.length > 0 ? entries.join(', ') : 'no clear discrete emotion labels';
 }
 
+function formatEmotionTelemetryValidationForReflection(state: InternalState): string {
+  const telemetry = state.emotional.telemetry;
+  const reasons = telemetry.reasons.length > 0 ? telemetry.reasons.join(', ') : 'none';
+  const observed = telemetry.observedAtMs === null
+    ? 'unknown observation time'
+    : new Date(telemetry.observedAtMs).toISOString();
+  return `Emotion telemetry validation: ${telemetry.status}; source ${telemetry.source}; reasons ${reasons}; observed ${observed}.`;
+}
+
 function formatAcacCompanionSummary(state: InternalState): string | null {
   const acac = state.emotional.acac;
   if (!acac) {
@@ -700,13 +709,24 @@ export function createHeartbeatTemplateRuntime(
       : '- no recent metacognitive flags are exposed right now.';
 
     const acacSummary = formatAcacCompanionSummary(state);
-    const emotionalClues = [
-      `Current feel appears ${describeSignedValence(state.emotional.vad.valence)}, ${describeArousal(state.emotional.vad.arousal)}, and ${describeDominance(state.emotional.vad.dominance)}.`,
-      `Mood trend appears ${describeSignedValence(state.emotional.mood.valence)} and ${describeArousal(state.emotional.mood.arousal)}.`,
-      `Discrete emotion clues: ${formatInternalStateTopEmotions(state)}.`,
-      `Overall emotion confidence is ${describeUnitBand(state.emotional.confidence, 'strong', 'moderate', 'thin')}; treat it as a clue, not proof.`,
-      ...(acacSummary ? [acacSummary] : []),
-    ];
+    const trustedEmotionTelemetry = state.emotional.telemetry.status === 'trusted';
+    const emotionalClues = trustedEmotionTelemetry
+      ? [
+        `Current feel appears ${describeSignedValence(state.emotional.vad.valence)}, ${describeArousal(state.emotional.vad.arousal)}, and ${describeDominance(state.emotional.vad.dominance)}.`,
+        `Mood trend appears ${describeSignedValence(state.emotional.mood.valence)} and ${describeArousal(state.emotional.mood.arousal)}.`,
+        `Discrete emotion clues: ${formatInternalStateTopEmotions(state)}.`,
+        `Overall emotion confidence is ${describeUnitBand(state.emotional.confidence, 'strong', 'moderate', 'thin')}; treat it as a clue, not proof.`,
+        formatEmotionTelemetryValidationForReflection(state),
+        ...(acacSummary ? [acacSummary] : []),
+      ]
+      : [
+        formatEmotionTelemetryValidationForReflection(state),
+        state.emotional.telemetry.status === 'suppressed'
+          ? 'VAD, mood, and discrete classifier labels were suppressed before reflection use.'
+          : 'VAD and mood were downweighted, and discrete classifier labels were withheld before reflection use.',
+        `Effective affect clue after validation is ${describeSignedValence(state.emotional.vad.valence)} and ${describeArousal(state.emotional.vad.arousal)}.`,
+        ...(acacSummary ? [acacSummary] : []),
+      ];
     const cognitiveClues = [
       `Certainty feels ${describeUnitBand(state.cognitive.certaintyLevel, 'settled', 'partial', 'thin')}.`,
       `Topic engagement feels ${describeUnitBand(state.cognitive.topicEngagement, 'high', 'present', 'low')}.`,

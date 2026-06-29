@@ -13,6 +13,27 @@ import {
   InternalStateComputer,
   serializeInternalState,
 } from './state.js';
+import type { EmotionTelemetryValidationInput } from '../emotion/telemetry-validation.js';
+
+const TELEMETRY_NOW_MS = Date.parse('2026-03-02T12:00:00.000Z');
+
+function classifierTelemetry(
+  overrides: Partial<EmotionTelemetryValidationInput> = {},
+): EmotionTelemetryValidationInput {
+  return {
+    source: 'classifier_inferred',
+    observedAtMs: TELEMETRY_NOW_MS,
+    nowMs: TELEMETRY_NOW_MS,
+    provenance: [{
+      source: 'classifier_inferred',
+      observedAtMs: TELEMETRY_NOW_MS,
+      modality: 'text',
+      classifier: 'test-emotion-classifier',
+      model: 'test-model',
+    }],
+    ...overrides,
+  };
+}
 
 function makeConcern(overrides?: Partial<ActiveConcern>): ActiveConcern {
   return {
@@ -300,6 +321,131 @@ describe('InternalStateComputer', () => {
         recentTurnCount: 0,
       },
     })).toThrow('InternalState acac.axes.curiosity.score');
+  });
+
+  it('suppresses low-confidence classifier telemetry before canonical state use', () => {
+    const state = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: -0.8, arousal: 0.7, dominance: -0.4 },
+        mood: { valence: -0.7, arousal: 0.6, dominance: -0.3 },
+        discrete: { sadness: 0.9 },
+        confidence: 0.12,
+      },
+      emotionTelemetry: classifierTelemetry(),
+      activeConcerns: [],
+      trustLevel: 'regular',
+      sessionMetrics: {
+        userMessageText: 'I am not sure.',
+        responseText: 'I will stay careful.',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+      },
+    });
+
+    expect(state.emotional.vad).toEqual({ valence: 0, arousal: 0, dominance: 0 });
+    expect(state.emotional.mood).toEqual({ valence: 0, arousal: 0, dominance: 0 });
+    expect(state.emotional.discreteEmotions).toEqual({});
+    expect(state.emotional.confidence).toBe(0);
+    expect(state.emotional.telemetry).toMatchObject({
+      status: 'suppressed',
+      source: 'classifier_inferred',
+      reasons: ['low_confidence'],
+      weight: 0,
+    });
+  });
+
+  it('downweights conflicting classifier labels and withholds discrete labels', () => {
+    const state = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: 0.8, arousal: 0.6, dominance: 0.2 },
+        mood: { valence: 0.6, arousal: 0.5, dominance: 0.2 },
+        discrete: { joy: 0.82, sadness: 0.81 },
+        confidence: 0.9,
+      },
+      emotionTelemetry: classifierTelemetry(),
+      activeConcerns: [],
+      trustLevel: 'regular',
+      sessionMetrics: {
+        userMessageText: 'mixed signal',
+        responseText: 'I will preserve the ambiguity.',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+      },
+    });
+
+    expect(state.emotional.vad.valence).toBe(0.2);
+    expect(state.emotional.mood.valence).toBe(0.15);
+    expect(state.emotional.discreteEmotions).toEqual({});
+    expect(state.emotional.confidence).toBe(0.225);
+    expect(state.emotional.telemetry.status).toBe('uncertain');
+    expect(state.emotional.telemetry.reasons).toEqual(['conflicting_signal']);
+    expect(state.emotional.telemetry.rawSignal.topDiscreteLabels).toEqual(['joy', 'sadness']);
+  });
+
+  it('downweights stale classifier telemetry before reflection input', () => {
+    const state = new InternalStateComputer().computeState({
+      emotionState: {
+        vad: { valence: -0.6, arousal: 0.4, dominance: -0.2 },
+        mood: { valence: -0.5, arousal: 0.3, dominance: -0.2 },
+        discrete: { fear: 0.7 },
+        confidence: 0.82,
+      },
+      emotionTelemetry: classifierTelemetry({
+        observedAtMs: TELEMETRY_NOW_MS - 60 * 60_000,
+        nowMs: TELEMETRY_NOW_MS,
+        staleAfterMs: 10 * 60_000,
+        provenance: [{
+          source: 'classifier_inferred',
+          observedAtMs: TELEMETRY_NOW_MS - 60 * 60_000,
+          modality: 'text',
+        }],
+      }),
+      activeConcerns: [],
+      trustLevel: 'regular',
+      sessionMetrics: {
+        userMessageText: 'old context',
+        responseText: 'I should not treat stale affect as current.',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+      },
+    });
+
+    expect(state.emotional.vad.valence).toBe(-0.15);
+    expect(state.emotional.mood.valence).toBe(-0.125);
+    expect(state.emotional.discreteEmotions).toEqual({});
+    expect(state.emotional.telemetry.status).toBe('uncertain');
+    expect(state.emotional.telemetry.reasons).toEqual(['stale_signal']);
+  });
+
+  it('marks missing classifier signals as suppressed telemetry', () => {
+    const state = new InternalStateComputer().computeState({
+      emotionState: null,
+      emotionTelemetry: classifierTelemetry({
+        source: 'missing',
+        observedAtMs: null,
+        provenance: [{
+          source: 'missing',
+          modality: 'unknown',
+        }],
+      }),
+      activeConcerns: [],
+      trustLevel: 'regular',
+      sessionMetrics: {
+        userMessageText: 'no classifier',
+        responseText: 'No affect signal is available.',
+        toolCallCount: 0,
+        recentTurnCount: 1,
+      },
+    });
+
+    expect(state.emotional.vad).toEqual({ valence: 0, arousal: 0, dominance: 0 });
+    expect(state.emotional.discreteEmotions).toEqual({});
+    expect(state.emotional.telemetry).toMatchObject({
+      status: 'suppressed',
+      source: 'missing',
+      reasons: ['missing_signal'],
+      observedAtMs: null,
+    });
   });
 
   it('fails closed for invalid concern timestamps', () => {

@@ -891,6 +891,15 @@ function resolveTopEmotionNames(
     .map(([emotion]) => emotion);
 }
 
+function describeEmotionTelemetryValidation(internalState: InternalState): string {
+  const telemetry = (internalState.emotional as {
+    telemetry?: InternalState['emotional']['telemetry'];
+  }).telemetry;
+  if (!telemetry || telemetry.status === 'trusted') return '';
+  const reasons = telemetry.reasons.length > 0 ? telemetry.reasons.join(', ') : 'uncalibrated';
+  return ` Emotion telemetry is ${telemetry.status} (${reasons}); treat affect as uncertain.`;
+}
+
 function buildInternalStatePromptVariables(internalState?: InternalState): Record<string, string> {
   const emptyInternalStateVariables = {
     runtime_internal_state_present: 'false',
@@ -910,6 +919,7 @@ function buildInternalStatePromptVariables(internalState?: InternalState): Recor
     runtime_internal_state_emotional_prefix: '',
     runtime_internal_state_emotional_secondary_clause: '',
     runtime_internal_state_emotional_secondary_emotions: '',
+    runtime_internal_state_emotional_validation_clause: '',
   } satisfies Record<string, string>;
 
   if (!internalState) {
@@ -940,6 +950,7 @@ function buildInternalStatePromptVariables(internalState?: InternalState): Recor
       ? `, with ${secondaryEmotions.join(' and ')} present`
       : '',
     runtime_internal_state_emotional_secondary_emotions: secondaryEmotions.join(', '),
+    runtime_internal_state_emotional_validation_clause: describeEmotionTelemetryValidation(internalState),
   };
 }
 

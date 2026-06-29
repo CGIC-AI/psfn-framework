@@ -380,7 +380,8 @@ export class EmotionAppraisal {
     state.turnsSinceLast = turnsSinceLast;
 
     const shouldTriggerPeriodic = turnsSinceLast >= this.turnCadence;
-    const shouldTriggerVadShift = delta >= this.vadDeltaThreshold;
+    const telemetryTrusted = !internalState || internalState.emotional.telemetry.status === 'trusted';
+    const shouldTriggerVadShift = telemetryTrusted && delta >= this.vadDeltaThreshold;
     if (!shouldTriggerPeriodic && !shouldTriggerVadShift) {
       return {
         appraised: false,
@@ -481,6 +482,12 @@ export class EmotionAppraisal {
     lines.push(`Top discrete emotions: ${topDiscrete(input.snapshot.discrete, TOP_DISCRETE_COUNT)}`);
     lines.push(`Signal confidence: ${input.snapshot.confidence.toFixed(3)}`);
     if (input.internalState) {
+      const telemetry = input.internalState.emotional.telemetry;
+      lines.push(
+        `Telemetry validation: status=${telemetry.status}; source=${telemetry.source}; `
+        + `reasons=${telemetry.reasons.length > 0 ? telemetry.reasons.join(',') : 'none'}; `
+        + `weight=${telemetry.weight.toFixed(3)}`,
+      );
       lines.push('');
       lines.push('[Internal State Signals]');
       lines.push(

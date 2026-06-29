@@ -1,5 +1,6 @@
 import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
+import { cloneEmotionTelemetryValidation } from '../../emotion/telemetry-validation.js';
 import { cloneInternalState, type InternalState } from '../../self-model/state.js';
 import type {
   ActiveCareReminderSnapshot,
@@ -350,6 +351,9 @@ export function normalizeInput(
     : input.currentEmotion
       ? normalizeEmotionSnapshot(input.currentEmotion)
       : null;
+  const currentEmotionTelemetry = internalState?.emotional.telemetry
+    ? cloneEmotionTelemetryValidation(internalState.emotional.telemetry, 'internalState.emotional.telemetry')
+    : null;
   const recentMessages = normalizeRecentMessages(
     input.recentMessages,
     options.recentMessageCount,
@@ -383,6 +387,7 @@ export function normalizeInput(
     sessionId,
     internalState,
     currentEmotion,
+    currentEmotionTelemetry,
     recentMessages,
     activeConcerns,
     activeCareReminders,

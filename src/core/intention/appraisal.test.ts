@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
+import type { EmotionTelemetryValidationInput } from '../emotion/telemetry-validation.js';
 import { InternalStateComputer } from '../self-model/state.js';
 import {
   IntentionAppraisal,
@@ -115,6 +116,45 @@ function makeInternalState() {
       toolCallCount: 0,
       recentTurnCount: 4,
       lastSeenDeltaSeconds: 120,
+    },
+  });
+}
+
+const TELEMETRY_NOW_MS = Date.parse('2026-03-02T12:00:00.000Z');
+
+function classifierTelemetry(
+  overrides: Partial<EmotionTelemetryValidationInput> = {},
+): EmotionTelemetryValidationInput {
+  return {
+    source: 'classifier_inferred',
+    observedAtMs: TELEMETRY_NOW_MS,
+    nowMs: TELEMETRY_NOW_MS,
+    provenance: [{
+      source: 'classifier_inferred',
+      observedAtMs: TELEMETRY_NOW_MS,
+      modality: 'text',
+      classifier: 'test-emotion-classifier',
+    }],
+    ...overrides,
+  };
+}
+
+function makeTelemetryInternalState(input: {
+  emotionState: EmotionStateSnapshot;
+  emotionTelemetry: EmotionTelemetryValidationInput;
+}) {
+  return new InternalStateComputer().computeState({
+    emotionState: input.emotionState,
+    emotionTelemetry: input.emotionTelemetry,
+    activeConcerns: [],
+    pendingFollowUps: [],
+    careReminders: [],
+    trustLevel: 'regular',
+    sessionMetrics: {
+      userMessageText: 'Emotion telemetry needs calibration.',
+      responseText: 'I will keep uncertainty explicit.',
+      toolCallCount: 0,
+      recentTurnCount: 1,
     },
   });
 }
@@ -493,6 +533,132 @@ describe('IntentionAppraisal', () => {
     };
     expect(promptPayload.internalState).toBeDefined();
     expect(promptPayload.currentEmotion).toBeDefined();
+  });
+
+  it('does not trigger emotional-shift appraisal from uncertain emotion telemetry', async () => {
+    const { provider, complete } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'schedule',
+          priority: 'medium',
+          reason: 'Should not be called for stale telemetry.',
+          timing: 'scheduled',
+          schedule: { templateId: 'daily-review' },
+        }],
+      }),
+    ]);
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 20,
+      emotionalShiftThreshold: 0.2,
+    });
+
+    await appraisal.evaluate({
+      sessionId: 'api:uncertain-emotion',
+      internalState: makeTelemetryInternalState({
+        emotionState: makeEmotionSnapshot({ confidence: 0.9 }),
+        emotionTelemetry: classifierTelemetry(),
+      }),
+      recentMessages: [{ role: 'user', content: 'Baseline.' }],
+    });
+    const second = await appraisal.evaluate({
+      sessionId: 'api:uncertain-emotion',
+      internalState: makeTelemetryInternalState({
+        emotionState: makeEmotionSnapshot({
+          vad: { valence: -0.9, arousal: 0.8, dominance: -0.6 },
+          mood: { valence: -0.8, arousal: 0.7, dominance: -0.5 },
+          discrete: { sadness: 0.9 },
+          confidence: 0.9,
+        }),
+        emotionTelemetry: classifierTelemetry({
+          observedAtMs: TELEMETRY_NOW_MS - 60 * 60_000,
+          nowMs: TELEMETRY_NOW_MS,
+          staleAfterMs: 10 * 60_000,
+          provenance: [{
+            source: 'classifier_inferred',
+            observedAtMs: TELEMETRY_NOW_MS - 60 * 60_000,
+            modality: 'text',
+          }],
+        }),
+      }),
+      recentMessages: [{ role: 'user', content: 'This should not be canonical affect.' }],
+    });
+
+    expect(second).toEqual([{
+      type: 'noop',
+      priority: 'low',
+      reason: 'no appraisal trigger matched',
+      timing: 'none',
+    }]);
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it('preserves uncertain emotion telemetry provenance in appraisal prompts', async () => {
+    const { provider, complete } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'noop',
+          priority: 'low',
+          reason: 'Uncertain emotion telemetry is only context.',
+          timing: 'none',
+        }],
+      }),
+    ]);
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 1,
+      emotionalShiftThreshold: 0.95,
+    });
+
+    await appraisal.evaluate({
+      sessionId: 'api:telemetry-prompt',
+      internalState: makeTelemetryInternalState({
+        emotionState: makeEmotionSnapshot({
+          vad: { valence: 0.8, arousal: 0.6, dominance: 0.2 },
+          mood: { valence: 0.6, arousal: 0.5, dominance: 0.2 },
+          discrete: { joy: 0.82, sadness: 0.81 },
+          confidence: 0.9,
+        }),
+        emotionTelemetry: classifierTelemetry(),
+      }),
+      recentMessages: [{ role: 'user', content: 'I feel two ways about this.' }],
+    });
+
+    const promptPayload = JSON.parse((complete.mock.calls[0]?.[0]?.messages?.[0]?.content ?? '{}') as string) as {
+      internalState?: {
+        emotional?: {
+          vad?: { valence?: number };
+          topDiscrete?: Record<string, number>;
+          telemetry?: {
+            status?: string;
+            source?: string;
+            reasons?: string[];
+            rawSignal?: { topDiscreteLabels?: string[] };
+            provenance?: Array<Record<string, unknown>>;
+          };
+        };
+      };
+      currentEmotion?: {
+        telemetry?: {
+          status?: string;
+          reasons?: string[];
+        };
+      };
+    };
+    expect(promptPayload.internalState?.emotional?.vad?.valence).toBe(0.2);
+    expect(promptPayload.internalState?.emotional?.topDiscrete).toEqual({});
+    expect(promptPayload.internalState?.emotional?.telemetry).toMatchObject({
+      status: 'uncertain',
+      source: 'classifier_inferred',
+      reasons: ['conflicting_signal'],
+      rawSignal: { topDiscreteLabels: ['joy', 'sadness'] },
+    });
+    expect(promptPayload.internalState?.emotional?.telemetry?.provenance?.[0]).toMatchObject({
+      source: 'classifier_inferred',
+      modality: 'text',
+      classifier: 'test-emotion-classifier',
+    });
+    expect(promptPayload.currentEmotion?.telemetry?.status).toBe('uncertain');
   });
 
   it('loads persona context for Whisper notes and renders character macros before appraisal', async () => {

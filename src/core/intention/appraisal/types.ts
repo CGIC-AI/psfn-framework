@@ -1,6 +1,7 @@
 import type { LLMProviderPort } from '../../agent/contracts.js';
 import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
+import type { EmotionTelemetryValidation } from '../../emotion/telemetry-validation.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { PendingFollowUpWakeCondition } from '../pending-follow-ups.js';
 import type { ProactiveQuietHoursConfig } from '../proactive-time-gate.js';
@@ -210,6 +211,7 @@ export interface NormalizedIntentionAppraisalInput {
   sessionId: string;
   internalState: InternalState | null;
   currentEmotion: EmotionStateSnapshot | null;
+  currentEmotionTelemetry: EmotionTelemetryValidation | null;
   recentMessages: IntentionAppraisalMessage[];
   activeConcerns: ActiveConcernSnapshot[];
   activeCareReminders: ActiveCareReminderSnapshot[];

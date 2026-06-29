@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
+import { validateEmotionTelemetry } from '../emotion/telemetry-validation.js';
 import { MotivationBridge } from './motivation.js';
 
 function makeEmotionSnapshot(overrides?: Partial<EmotionStateSnapshot>): EmotionStateSnapshot {
@@ -113,5 +114,60 @@ describe('MotivationBridge', () => {
     expect(firstHighConfidence.metrics.negativeValenceStreak).toBe(1);
     expect(secondHighConfidence.shouldTriggerAppraisal).toBe(true);
     expect(secondHighConfidence.signals.map(signal => signal.kind)).toContain('sustained_negative_valence');
+  });
+
+  it('resets streak counters for non-trusted emotion telemetry', () => {
+    const nowMs = Date.parse('2026-03-02T12:00:00.000Z');
+    const bridge = new MotivationBridge({
+      defaultThresholds: {
+        sustainedNegativeTurns: 2,
+      },
+    });
+    const staleEmotion = makeEmotionSnapshot({
+      mood: { valence: -0.8, arousal: 0, dominance: 0 },
+      confidence: 0.9,
+    });
+    const staleTelemetry = validateEmotionTelemetry(staleEmotion, {
+      source: 'classifier_inferred',
+      observedAtMs: nowMs - 60 * 60_000,
+      nowMs,
+      staleAfterMs: 10 * 60_000,
+      provenance: [{
+        source: 'classifier_inferred',
+        observedAtMs: nowMs - 60 * 60_000,
+        modality: 'text',
+      }],
+    }).validation;
+
+    const first = bridge.assess({
+      sessionId: 'stale-telemetry-session',
+      currentEmotion: staleEmotion,
+      emotionTelemetry: staleTelemetry,
+    });
+    const second = bridge.assess({
+      sessionId: 'stale-telemetry-session',
+      currentEmotion: staleEmotion,
+      emotionTelemetry: staleTelemetry,
+    });
+    const firstTrusted = bridge.assess({
+      sessionId: 'stale-telemetry-session',
+      currentEmotion: makeEmotionSnapshot({
+        mood: { valence: -0.8, arousal: 0, dominance: 0 },
+        confidence: 0.9,
+      }),
+    });
+    const secondTrusted = bridge.assess({
+      sessionId: 'stale-telemetry-session',
+      currentEmotion: makeEmotionSnapshot({
+        mood: { valence: -0.8, arousal: 0, dominance: 0 },
+        confidence: 0.9,
+      }),
+    });
+
+    expect(first.shouldTriggerAppraisal).toBe(false);
+    expect(second.shouldTriggerAppraisal).toBe(false);
+    expect(second.metrics.negativeValenceStreak).toBe(0);
+    expect(firstTrusted.metrics.negativeValenceStreak).toBe(1);
+    expect(secondTrusted.shouldTriggerAppraisal).toBe(true);
   });
 });

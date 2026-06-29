@@ -103,7 +103,11 @@ export class IntentionAppraisal {
     };
 
     const turnsSinceLast = state.turnsSinceLastAppraisal + 1;
-    const emotionalShift = maxEmotionShift(state.lastEmotion, normalized.currentEmotion);
+    const emotionTelemetryTrusted = normalized.currentEmotionTelemetry === null
+      || normalized.currentEmotionTelemetry.status === 'trusted';
+    const emotionalShift = emotionTelemetryTrusted
+      ? maxEmotionShift(state.lastEmotion, normalized.currentEmotion)
+      : 0;
     const concernDueSoon = hasDueSoonConcern(
       normalized.activeConcerns,
       normalized.now,
@@ -118,7 +122,7 @@ export class IntentionAppraisal {
       appraisalFrequency: this.appraisalFrequency,
     });
 
-    state.lastEmotion = normalized.currentEmotion;
+    state.lastEmotion = emotionTelemetryTrusted ? normalized.currentEmotion : null;
     state.turnsSinceLastAppraisal = trigger ? 0 : turnsSinceLast;
     this.sessionState.set(normalized.sessionId, state);
 

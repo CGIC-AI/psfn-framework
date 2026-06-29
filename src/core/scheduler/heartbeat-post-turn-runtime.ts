@@ -356,6 +356,7 @@ export function wireHeartbeatPostTurnRuntime(
         const motivationAssessment = motivationBridge?.assess({
           sessionId: resolvedSessionId,
           currentEmotion,
+          emotionTelemetry: internalState.emotional.telemetry,
           contactEmotionalSnapshot,
           isPrimaryContact,
         });

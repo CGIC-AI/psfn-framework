@@ -172,9 +172,32 @@ export class EmotionSelfModelRuntime {
     ]);
     const recentTurnCount = this.resolveRecentTurnCount(input.sessionChannelId);
     const emotionState = input.emotionSnapshot ?? INTERNAL_STATE_NEUTRAL_EMOTION;
+    const emotionObservedAtMs = input.emotionSnapshot ? this.emotionStateUpdatedAtMs : null;
 
     return this.internalStateComputer.computeState({
       emotionState,
+      emotionTelemetry: input.emotionSnapshot
+        ? {
+          source: 'classifier_inferred',
+          observedAtMs: emotionObservedAtMs,
+          nowMs: Date.now(),
+          provenance: [{
+            source: 'classifier_inferred',
+            ...(emotionObservedAtMs !== null ? { observedAtMs: emotionObservedAtMs } : {}),
+            modality: 'text',
+            provenanceRef: `emotion-state:${input.sessionChannelId}`,
+          }],
+        }
+        : {
+          source: 'missing',
+          observedAtMs: null,
+          nowMs: Date.now(),
+          provenance: [{
+            source: 'missing',
+            modality: 'unknown',
+            provenanceRef: `emotion-state:${input.sessionChannelId}:missing`,
+          }],
+        },
       activeConcerns,
       pendingFollowUps,
       trustLevel: input.trustLevel,

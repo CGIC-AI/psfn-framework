@@ -4,6 +4,12 @@ import type { EmotionalSnapshot } from '../contacts/store/emotional-baseline.js'
 import { normalizeAcacSnapshot, type AcacSnapshot } from '../emotion/acac.js';
 import type { EmotionStateSnapshot, VADVector } from '../emotion/state.js';
 import {
+  cloneEmotionTelemetryValidation,
+  validateEmotionTelemetry,
+  type EmotionTelemetryValidation,
+  type EmotionTelemetryValidationInput,
+} from '../emotion/telemetry-validation.js';
+import {
   ACTIVE_CONCERN_PRIORITIES,
   ACTIVE_CONCERN_SOURCES,
   type ActiveConcern,
@@ -46,6 +52,7 @@ export interface InternalState {
     mood: VADVector;
     discreteEmotions: Record<string, number>;
     confidence: number;
+    telemetry: EmotionTelemetryValidation;
     acac?: AcacSnapshot;
   };
   cognitive: {
@@ -79,7 +86,8 @@ export interface InternalStateSessionMetrics {
 }
 
 export interface InternalStateComputeInput {
-  emotionState: EmotionStateSnapshot;
+  emotionState?: EmotionStateSnapshot | null;
+  emotionTelemetry?: EmotionTelemetryValidationInput;
   acac?: AcacSnapshot;
   activeConcerns: readonly ActiveConcern[];
   pendingFollowUps?: readonly PendingFollowUp[];
@@ -92,6 +100,7 @@ export interface InternalStateComputeInput {
 
 interface NormalizedInternalStateComputeInput {
   emotionState: EmotionStateSnapshot;
+  emotionTelemetry: EmotionTelemetryValidationInput;
   acac?: AcacSnapshot;
   activeConcerns: ActiveConcern[];
   pendingFollowUps: PendingFollowUp[];
@@ -194,13 +203,18 @@ export const INTERNAL_STATE_NEUTRAL_EMOTION: EmotionStateSnapshot = Object.freez
 export class InternalStateComputer {
   computeState(input: InternalStateComputeInput): InternalState {
     const normalized = normalizeComputeInput(input);
-    const certaintyLevel = resolveCertaintyLevel(
+    const emotionTelemetry = validateEmotionTelemetry(
       normalized.emotionState,
+      normalized.emotionTelemetry,
+    );
+    const emotionState = emotionTelemetry.snapshot;
+    const certaintyLevel = resolveCertaintyLevel(
+      emotionState,
       normalized.sessionMetrics.userMessageText,
       normalized.sessionMetrics.responseText,
     );
     const topicEngagement = resolveTopicEngagement(
-      normalized.emotionState.vad.arousal,
+      emotionState.vad.arousal,
       normalized.sessionMetrics.userMessageText,
       normalized.sessionMetrics.responseText,
       normalized.sessionMetrics.toolCallCount,
@@ -208,10 +222,11 @@ export class InternalStateComputer {
 
     return {
       emotional: {
-        vad: { ...normalized.emotionState.vad },
-        mood: { ...normalized.emotionState.mood },
-        discreteEmotions: { ...normalized.emotionState.discrete },
-        confidence: normalized.emotionState.confidence,
+        vad: { ...emotionState.vad },
+        mood: { ...emotionState.mood },
+        discreteEmotions: { ...emotionState.discrete },
+        confidence: emotionState.confidence,
+        telemetry: emotionTelemetry.validation,
         ...(normalized.acac ? { acac: normalized.acac } : {}),
       },
       cognitive: {
@@ -272,6 +287,7 @@ function normalizeComputeInput(input: InternalStateComputeInput): NormalizedInte
   }
   return {
     emotionState: normalizeEmotionStateSnapshot(input.emotionState),
+    emotionTelemetry: resolveEmotionTelemetryInput(input),
     acac: input.acac === undefined
       ? undefined
       : normalizeAcacSnapshot(input.acac, 'InternalState acac'),
@@ -282,6 +298,37 @@ function normalizeComputeInput(input: InternalStateComputeInput): NormalizedInte
     contactId: normalizeOptionalIdentifier(input.contactId, 'contactId'),
     contactEmotionalSnapshot: normalizeOptionalEmotionalSnapshot(input.contactEmotionalSnapshot),
     sessionMetrics: normalizeSessionMetrics(input.sessionMetrics),
+  };
+}
+
+function resolveEmotionTelemetryInput(input: InternalStateComputeInput): EmotionTelemetryValidationInput {
+  if (input.emotionTelemetry !== undefined) {
+    return input.emotionTelemetry;
+  }
+  if (input.emotionState === null || input.emotionState === undefined) {
+    return {
+      source: 'missing',
+      observedAtMs: null,
+      nowMs: 0,
+      provenance: [{
+        source: 'missing',
+        modality: 'unknown',
+        provenanceRef: 'internal-state:emotion:missing',
+      }],
+    };
+  }
+  return {
+    source: 'runtime_state',
+    observedAtMs: 0,
+    nowMs: 0,
+    minConfidence: 0,
+    trustedConfidence: 0,
+    provenance: [{
+      source: 'runtime_state',
+      observedAtMs: 0,
+      modality: 'runtime',
+      provenanceRef: 'internal-state:emotion:runtime-state',
+    }],
   };
 }
 
@@ -306,7 +353,10 @@ function normalizeSessionMetrics(
   };
 }
 
-function normalizeEmotionStateSnapshot(snapshot: EmotionStateSnapshot): EmotionStateSnapshot {
+function normalizeEmotionStateSnapshot(snapshot: EmotionStateSnapshot | null | undefined): EmotionStateSnapshot {
+  if (snapshot === null || snapshot === undefined) {
+    return cloneEmotionSnapshot(INTERNAL_STATE_NEUTRAL_EMOTION);
+  }
   if (!isRecord(snapshot)) {
     throw new Error('InternalState emotionState must be an object');
   }
@@ -342,6 +392,15 @@ function normalizeEmotionStateSnapshot(snapshot: EmotionStateSnapshot): EmotionS
     },
     discrete: Object.fromEntries(discreteEntries),
     confidence: parseUnit(snapshot.confidence, 'emotionState.confidence'),
+  };
+}
+
+function cloneEmotionSnapshot(snapshot: EmotionStateSnapshot): EmotionStateSnapshot {
+  return {
+    vad: { ...snapshot.vad },
+    mood: { ...snapshot.mood },
+    discrete: { ...snapshot.discrete },
+    confidence: snapshot.confidence,
   };
 }
 
@@ -700,6 +759,7 @@ function normalizeInternalState(state: InternalState): InternalState {
   if (!isRecord(state.relational)) {
     throw new Error('InternalState relational field must be an object');
   }
+  const emotionalTelemetry = (state.emotional as { telemetry?: EmotionTelemetryValidation }).telemetry;
 
   return {
     emotional: {
@@ -715,6 +775,9 @@ function normalizeInternalState(state: InternalState): InternalState {
       },
       discreteEmotions: normalizeDiscreteEmotions(state.emotional.discreteEmotions),
       confidence: parseUnit(state.emotional.confidence, 'emotional.confidence'),
+      telemetry: emotionalTelemetry === undefined
+        ? deriveLegacyEmotionTelemetry(state)
+        : cloneEmotionTelemetryValidation(emotionalTelemetry, 'emotional.telemetry'),
       ...(state.emotional.acac === undefined
         ? {}
         : { acac: normalizeAcacSnapshot(state.emotional.acac, 'InternalState emotional.acac') }),
@@ -748,6 +811,35 @@ function normalizeInternalState(state: InternalState): InternalState {
         ),
     },
   };
+}
+
+function deriveLegacyEmotionTelemetry(state: InternalState): EmotionTelemetryValidation {
+  return validateEmotionTelemetry({
+    vad: {
+      valence: parseSigned(state.emotional.vad.valence, 'emotional.vad.valence'),
+      arousal: parseSigned(state.emotional.vad.arousal, 'emotional.vad.arousal'),
+      dominance: parseSigned(state.emotional.vad.dominance, 'emotional.vad.dominance'),
+    },
+    mood: {
+      valence: parseSigned(state.emotional.mood.valence, 'emotional.mood.valence'),
+      arousal: parseSigned(state.emotional.mood.arousal, 'emotional.mood.arousal'),
+      dominance: parseSigned(state.emotional.mood.dominance, 'emotional.mood.dominance'),
+    },
+    discrete: normalizeDiscreteEmotions(state.emotional.discreteEmotions),
+    confidence: parseUnit(state.emotional.confidence, 'emotional.confidence'),
+  }, {
+    source: 'runtime_state',
+    observedAtMs: 0,
+    nowMs: 0,
+    minConfidence: 0,
+    trustedConfidence: 0,
+    provenance: [{
+      source: 'runtime_state',
+      observedAtMs: 0,
+      modality: 'runtime',
+      provenanceRef: 'internal-state:emotion:legacy',
+    }],
+  }).validation;
 }
 
 function normalizeDiscreteEmotions(value: Record<string, number>): Record<string, number> {

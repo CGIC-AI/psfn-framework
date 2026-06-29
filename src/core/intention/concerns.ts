@@ -11,6 +11,52 @@ export type ActiveConcernPriority = typeof ACTIVE_CONCERN_PRIORITIES[number];
 export const ACTIVE_CONCERN_SOURCES = ['appraisal', 'agent', 'heartbeat'] as const;
 export type ActiveConcernSource = typeof ACTIVE_CONCERN_SOURCES[number];
 
+export const ACTIVE_CONCERN_STATUSES = [
+  'candidate',
+  'active',
+  'watching',
+  'deferred',
+  'blocked',
+  'resolved',
+  'dismissed',
+  'suppressed',
+] as const;
+export type ActiveConcernStatus = typeof ACTIVE_CONCERN_STATUSES[number];
+
+export const ACTIVE_CONCERN_TERMINAL_STATUSES = ['resolved', 'dismissed', 'suppressed'] as const;
+export type ActiveConcernTerminalStatus = typeof ACTIVE_CONCERN_TERMINAL_STATUSES[number];
+
+export const ACTIVE_CONCERN_SENSITIVITIES = [
+  'public',
+  'personal',
+  'intimate',
+  'confidential',
+  'redacted',
+] as const;
+export type ActiveConcernSensitivity = typeof ACTIVE_CONCERN_SENSITIVITIES[number];
+
+export const ACTIVE_CONCERN_OWNERS = ['companion', 'operator', 'system'] as const;
+export type ActiveConcernOwner = typeof ACTIVE_CONCERN_OWNERS[number];
+
+export const ACTIVE_CONCERN_EVIDENCE_KINDS = [
+  'message',
+  'turn',
+  'appraisal',
+  'audit_landmark',
+  'operator',
+  'runtime',
+  'redacted',
+] as const;
+export type ActiveConcernEvidenceKind = typeof ACTIVE_CONCERN_EVIDENCE_KINDS[number];
+
+export interface ActiveConcernEvidenceRef {
+  kind: ActiveConcernEvidenceKind;
+  ref: string;
+  sensitivity?: ActiveConcernSensitivity;
+  redacted?: boolean;
+  hash?: string;
+}
+
 export interface ActiveConcernVAD {
   valence: number;
   arousal: number;
@@ -22,20 +68,41 @@ export interface ActiveConcern {
   text: string;
   priority: ActiveConcernPriority;
   source: ActiveConcernSource;
+  status: ActiveConcernStatus;
   createdAt: string;
   expiresAt: string;
+  salience: number;
+  sensitivity: ActiveConcernSensitivity;
+  owner: ActiveConcernOwner;
+  evidenceRefs: ActiveConcernEvidenceRef[];
+  resolutionEvidenceRefs: ActiveConcernEvidenceRef[];
   resolvedAt?: string;
   resolutionOutcome?: string;
   contactId?: string;
   formationVAD?: ActiveConcernVAD;
+  lastReviewedAt?: string;
+  nextReviewAt?: string;
+  mergedFromIds?: string[];
+  splitFromId?: string;
 }
 
 export interface ActiveConcernCreateInput {
   text: string;
   priority?: ActiveConcernPriority;
   source?: ActiveConcernSource;
+  status?: ActiveConcernStatus;
   contactId?: string;
   formationVAD?: ActiveConcernVAD;
+  salience?: number;
+  sensitivity?: ActiveConcernSensitivity;
+  owner?: ActiveConcernOwner;
+  evidenceRefs?: readonly ActiveConcernEvidenceRef[];
+  resolutionEvidenceRefs?: readonly ActiveConcernEvidenceRef[];
+  lastReviewedAt?: string;
+  nextReviewAt?: string;
+  mergedFromIds?: readonly string[];
+  splitFromId?: string;
+  reopenResolved?: boolean;
   createdAt?: string;
   expiresAt?: string;
 }
@@ -43,6 +110,26 @@ export interface ActiveConcernCreateInput {
 export interface ActiveConcernResolveOptions {
   outcome?: string;
   resolvedAt?: string;
+  evidenceRefs?: readonly ActiveConcernEvidenceRef[];
+}
+
+export interface ActiveConcernTransitionOptions {
+  status: ActiveConcernStatus;
+  transitionedAt?: string;
+  outcome?: string;
+  evidenceRefs?: readonly ActiveConcernEvidenceRef[];
+  resolutionEvidenceRefs?: readonly ActiveConcernEvidenceRef[];
+  nextReviewAt?: string;
+  clearNextReview?: boolean;
+  salience?: number;
+}
+
+export interface ActiveConcernStaleResolutionOptions {
+  asOf?: string;
+  outcome?: string;
+  statuses?: readonly ActiveConcernStatus[];
+  limit?: number;
+  evidenceRefs?: readonly ActiveConcernEvidenceRef[];
 }
 
 export interface ActiveConcernRecentResolutionOptions {
@@ -83,12 +170,22 @@ interface ActiveConcernRow {
   text: string;
   priority: string;
   source: string;
+  status: string | null;
   created_at: string;
   expires_at: string;
+  salience: number | null;
+  sensitivity: string | null;
+  owner: string | null;
+  evidence_refs: string | null;
+  resolution_evidence_refs: string | null;
   resolved_at: string | null;
   resolution_outcome: string | null;
   contact_id: string | null;
   formation_vad: string | null;
+  last_reviewed_at: string | null;
+  next_review_at: string | null;
+  merged_from_ids: string | null;
+  split_from_id: string | null;
 }
 
 const MAX_CONCERN_TEXT_CHARS = 500;
@@ -97,9 +194,11 @@ const DEFAULT_LIST_LIMIT = 32;
 const MAX_LIST_LIMIT = 200;
 const DEFAULT_RUNTIME_CONTEXT_LIMIT = 3;
 const MAX_RUNTIME_CONTEXT_TEXT_CHARS = 140;
+const MAX_CONCERN_REF_CHARS = 240;
 const DEFAULT_RECENT_RESOLUTION_WINDOW_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_RECENT_RESOLUTION_LIMIT = 8;
 const CONCERN_DUPLICATE_SIMILARITY_THRESHOLD = 0.72;
+const DEFAULT_CONCERN_SALIENCE = 0.5;
 
 export const DEFAULT_CONCERN_TTL_MS_BY_PRIORITY: Record<ActiveConcernPriority, number> = {
   high: 48 * 60 * 60 * 1000,
@@ -170,6 +269,264 @@ function normalizeSource(value: ActiveConcernSource | undefined): ActiveConcernS
     throw new Error(`Unsupported active concern source: ${String(normalized)}`);
   }
   return normalized;
+}
+
+export function normalizeConcernStatus(
+  value: unknown,
+  fieldName = 'status',
+): ActiveConcernStatus {
+  const normalized = value ?? 'active';
+  if (typeof normalized !== 'string' || !ACTIVE_CONCERN_STATUSES.includes(normalized as ActiveConcernStatus)) {
+    throw new Error(`Unsupported active concern ${fieldName}: ${String(normalized)}`);
+  }
+  return normalized as ActiveConcernStatus;
+}
+
+function normalizeSensitivity(
+  value: ActiveConcernSensitivity | undefined,
+): ActiveConcernSensitivity {
+  const normalized = value ?? 'personal';
+  if (!ACTIVE_CONCERN_SENSITIVITIES.includes(normalized)) {
+    throw new Error(`Unsupported active concern sensitivity: ${String(normalized)}`);
+  }
+  return normalized;
+}
+
+function normalizeOwner(value: ActiveConcernOwner | undefined): ActiveConcernOwner {
+  const normalized = value ?? 'companion';
+  if (!ACTIVE_CONCERN_OWNERS.includes(normalized)) {
+    throw new Error(`Unsupported active concern owner: ${String(normalized)}`);
+  }
+  return normalized;
+}
+
+function normalizeEvidenceKind(value: unknown): ActiveConcernEvidenceKind {
+  if (typeof value !== 'string' || !ACTIVE_CONCERN_EVIDENCE_KINDS.includes(value as ActiveConcernEvidenceKind)) {
+    throw new Error(`Unsupported active concern evidence kind: ${String(value)}`);
+  }
+  return value as ActiveConcernEvidenceKind;
+}
+
+function normalizeSalience(value: number | undefined): number {
+  if (value === undefined) {
+    return DEFAULT_CONCERN_SALIENCE;
+  }
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    throw new Error('Active concern salience must be a finite number');
+  }
+  if (value < 0 || value > 1) {
+    throw new Error('Active concern salience must be between 0 and 1');
+  }
+  return value;
+}
+
+function normalizeOptionalIsoTimestamp(
+  value: string | undefined,
+  fieldName: string,
+): string | undefined {
+  return value === undefined ? undefined : normalizeIsoTimestamp(value, fieldName);
+}
+
+export function isConcernTerminalStatus(status: ActiveConcernStatus): status is ActiveConcernTerminalStatus {
+  return ACTIVE_CONCERN_TERMINAL_STATUSES.includes(status as ActiveConcernTerminalStatus);
+}
+
+export function isConcernAttentionStatus(status: ActiveConcernStatus): boolean {
+  return !isConcernTerminalStatus(status);
+}
+
+function normalizeConcernEvidenceRef(
+  value: unknown,
+  fieldName: string,
+): ActiveConcernEvidenceRef {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`Active concern ${fieldName} must be an object`);
+  }
+  const candidate = value as Partial<ActiveConcernEvidenceRef>;
+  const kind = normalizeEvidenceKind(candidate.kind);
+  if (typeof candidate.ref !== 'string') {
+    throw new Error(`Active concern ${fieldName}.ref must be a string`);
+  }
+  const ref = normalizeRequiredText(candidate.ref, `${fieldName}.ref`, MAX_CONCERN_REF_CHARS);
+  const sensitivity = candidate.sensitivity === undefined
+    ? undefined
+    : normalizeSensitivity(candidate.sensitivity);
+  const hash = normalizeOptionalText(candidate.hash, MAX_CONCERN_REF_CHARS);
+  const redacted = candidate.redacted === true || kind === 'redacted' || sensitivity === 'redacted';
+  return {
+    kind,
+    ref,
+    ...(sensitivity ? { sensitivity } : {}),
+    ...(redacted ? { redacted: true } : {}),
+    ...(hash ? { hash } : {}),
+  };
+}
+
+export function normalizeConcernEvidenceRefs(
+  value: readonly ActiveConcernEvidenceRef[] | undefined,
+  fieldName = 'evidenceRefs',
+): ActiveConcernEvidenceRef[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`Active concern ${fieldName} must be an array`);
+  }
+  const refs = value.map((ref, index) => normalizeConcernEvidenceRef(ref, `${fieldName}[${index}]`));
+  const deduped = new Map<string, ActiveConcernEvidenceRef>();
+  for (const ref of refs) {
+    deduped.set(`${ref.kind}:${ref.ref}:${ref.hash ?? ''}`, ref);
+  }
+  return [...deduped.values()];
+}
+
+function serializeEvidenceRefs(value: readonly ActiveConcernEvidenceRef[] | undefined): string {
+  return JSON.stringify(normalizeConcernEvidenceRefs(value));
+}
+
+function parseEvidenceRefs(raw: string | null, fieldName: string): ActiveConcernEvidenceRef[] {
+  if (raw === null) {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Invalid active concern ${fieldName} JSON: ${String(error)}`);
+  }
+  return normalizeConcernEvidenceRefs(parsed as ActiveConcernEvidenceRef[], fieldName);
+}
+
+function normalizeStringList(
+  value: readonly string[] | undefined,
+  fieldName: string,
+): string[] {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`Active concern ${fieldName} must be an array`);
+  }
+  const normalized = value
+    .map((item, index) => normalizeRequiredText(item, `${fieldName}[${index}]`, 128));
+  return [...new Set(normalized)];
+}
+
+function serializeStringList(value: readonly string[] | undefined): string {
+  return JSON.stringify(normalizeStringList(value, 'ids'));
+}
+
+function parseStringList(raw: string | null, fieldName: string): string[] {
+  if (raw === null) {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Invalid active concern ${fieldName} JSON: ${String(error)}`);
+  }
+  return normalizeStringList(parsed as string[], fieldName);
+}
+
+export function mergeConcernEvidenceRefs(
+  left: readonly ActiveConcernEvidenceRef[],
+  right: readonly ActiveConcernEvidenceRef[],
+): ActiveConcernEvidenceRef[] {
+  return normalizeConcernEvidenceRefs([...left, ...right]);
+}
+
+export function mergeConcernStringLists(left: readonly string[], right: readonly string[]): string[] {
+  return normalizeStringList([...left, ...right], 'mergedFromIds');
+}
+
+const STATUS_MERGE_RANK: Record<ActiveConcernStatus, number> = {
+  blocked: 0,
+  active: 1,
+  watching: 2,
+  deferred: 3,
+  candidate: 4,
+  resolved: 5,
+  dismissed: 6,
+  suppressed: 7,
+};
+
+export function mergeConcernStatus(
+  left: ActiveConcernStatus,
+  right: ActiveConcernStatus,
+): ActiveConcernStatus {
+  return STATUS_MERGE_RANK[right] < STATUS_MERGE_RANK[left] ? right : left;
+}
+
+const SENSITIVITY_RANK: Record<ActiveConcernSensitivity, number> = {
+  public: 0,
+  personal: 1,
+  intimate: 2,
+  confidential: 3,
+  redacted: 4,
+};
+
+export function mergeConcernSensitivity(
+  left: ActiveConcernSensitivity,
+  right: ActiveConcernSensitivity,
+): ActiveConcernSensitivity {
+  return SENSITIVITY_RANK[right] > SENSITIVITY_RANK[left] ? right : left;
+}
+
+export function chooseHigherConcernPriority(
+  left: ActiveConcernPriority,
+  right: ActiveConcernPriority,
+): ActiveConcernPriority {
+  const priorityRank: Record<ActiveConcernPriority, number> = {
+    high: 0,
+    medium: 1,
+    low: 2,
+  };
+  return priorityRank[right] < priorityRank[left] ? right : left;
+}
+
+export function chooseLaterConcernTimestamp(left: string, right: string): string {
+  return Date.parse(right) > Date.parse(left) ? right : left;
+}
+
+export function chooseEarlierOptionalConcernTimestamp(
+  left: string | undefined,
+  right: string | undefined,
+): string | undefined {
+  if (!left) return right;
+  if (!right) return left;
+  return Date.parse(right) < Date.parse(left) ? right : left;
+}
+
+const ALLOWED_CONCERN_STATUS_TRANSITIONS: Record<ActiveConcernStatus, readonly ActiveConcernStatus[]> = {
+  candidate: ['active', 'watching', 'deferred', 'blocked', 'resolved', 'dismissed', 'suppressed'],
+  active: ['candidate', 'watching', 'deferred', 'blocked', 'resolved', 'dismissed', 'suppressed'],
+  watching: ['active', 'deferred', 'blocked', 'resolved', 'dismissed', 'suppressed'],
+  deferred: ['active', 'watching', 'blocked', 'resolved', 'dismissed', 'suppressed'],
+  blocked: ['active', 'deferred', 'watching', 'resolved', 'dismissed', 'suppressed'],
+  resolved: ['candidate', 'active', 'watching'],
+  dismissed: ['candidate', 'active'],
+  suppressed: [],
+};
+
+export function validateConcernStatusTransition(input: {
+  from: ActiveConcernStatus;
+  to: ActiveConcernStatus;
+  evidenceRefs?: readonly ActiveConcernEvidenceRef[];
+}): void {
+  if (input.from === input.to) {
+    return;
+  }
+  const allowed = ALLOWED_CONCERN_STATUS_TRANSITIONS[input.from];
+  if (!allowed.includes(input.to)) {
+    throw new Error(`Invalid active concern transition: ${input.from} -> ${input.to}`);
+  }
+  if (isConcernTerminalStatus(input.from) && isConcernAttentionStatus(input.to)) {
+    const evidenceRefs = normalizeConcernEvidenceRefs(input.evidenceRefs);
+    if (evidenceRefs.length === 0) {
+      throw new Error(`Reopening ${input.from} concern requires new safe evidence refs`);
+    }
+  }
 }
 
 function normalizeSignedUnit(value: number, fieldName: string): number {
@@ -325,6 +682,22 @@ function mapSource(source: string): ActiveConcernSource {
   return source as ActiveConcernSource;
 }
 
+function mapStatus(status: string | null): ActiveConcernStatus {
+  return normalizeConcernStatus(status ?? 'active');
+}
+
+function mapSensitivity(sensitivity: string | null): ActiveConcernSensitivity {
+  return normalizeSensitivity((sensitivity ?? 'personal') as ActiveConcernSensitivity);
+}
+
+function mapOwner(owner: string | null): ActiveConcernOwner {
+  return normalizeOwner((owner ?? 'companion') as ActiveConcernOwner);
+}
+
+function mapSalience(salience: number | null): number {
+  return normalizeSalience(salience ?? DEFAULT_CONCERN_SALIENCE);
+}
+
 function mapRow(row: ActiveConcernRow): ActiveConcern {
   const createdAt = normalizeIsoTimestamp(row.created_at, 'created_at');
   const expiresAt = normalizeIsoTimestamp(row.expires_at, 'expires_at');
@@ -334,18 +707,36 @@ function mapRow(row: ActiveConcernRow): ActiveConcern {
     : normalizeOptionalText(row.resolution_outcome, MAX_CONCERN_RESOLUTION_CHARS);
   const contactId = row.contact_id === null ? undefined : normalizeOptionalId(row.contact_id);
   const formationVAD = parseFormationVAD(row.formation_vad);
+  const lastReviewedAt = row.last_reviewed_at === null
+    ? undefined
+    : normalizeIsoTimestamp(row.last_reviewed_at, 'last_reviewed_at');
+  const nextReviewAt = row.next_review_at === null
+    ? undefined
+    : normalizeIsoTimestamp(row.next_review_at, 'next_review_at');
+  const mergedFromIds = parseStringList(row.merged_from_ids, 'merged_from_ids');
+  const splitFromId = row.split_from_id === null ? undefined : normalizeOptionalId(row.split_from_id);
 
   return {
     id: row.id,
     text: row.text,
     priority: mapPriority(row.priority),
     source: mapSource(row.source),
+    status: mapStatus(row.status),
     createdAt,
     expiresAt,
+    salience: mapSalience(row.salience),
+    sensitivity: mapSensitivity(row.sensitivity),
+    owner: mapOwner(row.owner),
+    evidenceRefs: parseEvidenceRefs(row.evidence_refs, 'evidence_refs'),
+    resolutionEvidenceRefs: parseEvidenceRefs(row.resolution_evidence_refs, 'resolution_evidence_refs'),
     ...(resolvedAt ? { resolvedAt } : {}),
     ...(resolutionOutcome ? { resolutionOutcome } : {}),
     ...(contactId ? { contactId } : {}),
     ...(formationVAD ? { formationVAD } : {}),
+    ...(lastReviewedAt ? { lastReviewedAt } : {}),
+    ...(nextReviewAt ? { nextReviewAt } : {}),
+    ...(mergedFromIds.length > 0 ? { mergedFromIds } : {}),
+    ...(splitFromId ? { splitFromId } : {}),
   };
 }
 
@@ -445,6 +836,7 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
     const text = normalizeRequiredText(input.text, 'text', MAX_CONCERN_TEXT_CHARS);
     const priority = normalizePriority(input.priority);
     const source = normalizeSource(input.source);
+    const status = normalizeConcernStatus(input.status);
     const createdAt = input.createdAt
       ? normalizeIsoTimestamp(input.createdAt, 'createdAt')
       : this.now().toISOString();
@@ -458,7 +850,75 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
 
     const contactId = normalizeOptionalId(input.contactId);
     const formationVAD = normalizeFormationVAD(input.formationVAD);
+    const salience = normalizeSalience(input.salience);
+    const sensitivity = normalizeSensitivity(input.sensitivity);
+    const owner = normalizeOwner(input.owner);
+    const evidenceRefs = normalizeConcernEvidenceRefs(input.evidenceRefs);
+    const resolutionEvidenceRefs = normalizeConcernEvidenceRefs(input.resolutionEvidenceRefs, 'resolutionEvidenceRefs');
+    const lastReviewedAt = normalizeOptionalIsoTimestamp(input.lastReviewedAt, 'lastReviewedAt') ?? createdAt;
+    const nextReviewAt = normalizeOptionalIsoTimestamp(input.nextReviewAt, 'nextReviewAt');
+    const mergedFromIds = normalizeStringList(input.mergedFromIds, 'mergedFromIds');
+    const splitFromId = normalizeOptionalId(input.splitFromId);
+
+    if (isConcernAttentionStatus(status)) {
+      const activeDuplicate = this.findActiveSimilarConcern({
+        text,
+        contactId,
+        asOf: createdAt,
+      });
+      if (activeDuplicate) {
+        return this.mergeConcern(activeDuplicate, {
+          priority,
+          status,
+          expiresAt,
+          salience,
+          sensitivity,
+          owner,
+          evidenceRefs,
+          lastReviewedAt,
+          nextReviewAt,
+          mergedFromIds,
+          splitFromId,
+        });
+      }
+
+      const recentlyResolved = this.findRecentlyResolvedSimilarConcern({
+        text,
+        ...(contactId ? { contactId } : {}),
+        asOf: createdAt,
+      });
+      if (recentlyResolved) {
+        if (input.reopenResolved === true) {
+          const reopened = this.transitionConcernStatus(recentlyResolved.id, {
+            status,
+            transitionedAt: createdAt,
+            evidenceRefs,
+            ...(nextReviewAt ? { nextReviewAt } : {}),
+            salience,
+          });
+          if (!reopened) {
+            throw new Error(`Failed to reopen active concern "${recentlyResolved.id}"`);
+          }
+          return this.mergeConcern(reopened, {
+            priority,
+            status,
+            expiresAt,
+            salience,
+            sensitivity,
+            owner,
+            evidenceRefs,
+            lastReviewedAt,
+            nextReviewAt,
+            mergedFromIds,
+            splitFromId,
+          });
+        }
+        return recentlyResolved;
+      }
+    }
+
     const id = normalizeRequiredText(this.idFactory(), 'id', 128);
+    const terminalAt = isConcernTerminalStatus(status) ? createdAt : null;
 
     this.db.prepare(`
       INSERT INTO active_concerns (
@@ -466,29 +926,62 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
         text,
         priority,
         source,
+        status,
         created_at,
         expires_at,
+        salience,
+        sensitivity,
+        owner,
+        evidence_refs,
+        resolution_evidence_refs,
+        resolved_at,
         contact_id,
-        formation_vad
+        formation_vad,
+        last_reviewed_at,
+        next_review_at,
+        merged_from_ids,
+        split_from_id
       ) VALUES (
         @id,
         @text,
         @priority,
         @source,
+        @status,
         @created_at,
         @expires_at,
+        @salience,
+        @sensitivity,
+        @owner,
+        @evidence_refs,
+        @resolution_evidence_refs,
+        @resolved_at,
         @contact_id,
-        @formation_vad
+        @formation_vad,
+        @last_reviewed_at,
+        @next_review_at,
+        @merged_from_ids,
+        @split_from_id
       )
     `).run({
       id,
       text,
       priority,
       source,
+      status,
       created_at: createdAt,
       expires_at: expiresAt,
+      salience,
+      sensitivity,
+      owner,
+      evidence_refs: serializeEvidenceRefs(evidenceRefs),
+      resolution_evidence_refs: serializeEvidenceRefs(resolutionEvidenceRefs),
+      resolved_at: terminalAt,
       contact_id: contactId ?? null,
       formation_vad: serializeFormationVAD(formationVAD),
+      last_reviewed_at: lastReviewedAt,
+      next_review_at: nextReviewAt ?? null,
+      merged_from_ids: serializeStringList(mergedFromIds),
+      split_from_id: splitFromId ?? null,
     });
 
     return this.requireById(id);
@@ -502,12 +995,22 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
         text,
         priority,
         source,
+        status,
         created_at,
         expires_at,
+        salience,
+        sensitivity,
+        owner,
+        evidence_refs,
+        resolution_evidence_refs,
         resolved_at,
         resolution_outcome,
         contact_id,
-        formation_vad
+        formation_vad,
+        last_reviewed_at,
+        next_review_at,
+        merged_from_ids,
+        split_from_id
       FROM active_concerns
       WHERE id = @id
     `).get({ id: normalizedId }) as ActiveConcernRow | undefined;
@@ -535,7 +1038,8 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
 
     const whereClauses: string[] = [];
     if (!includeResolved) {
-      whereClauses.push('resolved_at IS NULL');
+      whereClauses.push("resolved_at IS NULL");
+      whereClauses.push("COALESCE(status, 'active') NOT IN ('resolved', 'dismissed', 'suppressed')");
     }
     if (!includeExpired) {
       whereClauses.push('expires_at > @asOf');
@@ -554,12 +1058,22 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
         text,
         priority,
         source,
+        status,
         created_at,
         expires_at,
+        salience,
+        sensitivity,
+        owner,
+        evidence_refs,
+        resolution_evidence_refs,
         resolved_at,
         resolution_outcome,
         contact_id,
-        formation_vad
+        formation_vad,
+        last_reviewed_at,
+        next_review_at,
+        merged_from_ids,
+        split_from_id
       FROM active_concerns
       ${whereSql}
       ORDER BY
@@ -607,12 +1121,22 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
         text,
         priority,
         source,
+        status,
         created_at,
         expires_at,
+        salience,
+        sensitivity,
+        owner,
+        evidence_refs,
+        resolution_evidence_refs,
         resolved_at,
         resolution_outcome,
         contact_id,
-        formation_vad
+        formation_vad,
+        last_reviewed_at,
+        next_review_at,
+        merged_from_ids,
+        split_from_id
       FROM active_concerns
       WHERE ${whereClauses.join(' AND ')}
       ORDER BY resolved_at DESC, created_at DESC, id DESC
@@ -653,31 +1177,119 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
     return bestMatch;
   }
 
-  resolveConcern(id: string, options: ActiveConcernResolveOptions = {}): ActiveConcern | null {
+  transitionConcernStatus(id: string, options: ActiveConcernTransitionOptions): ActiveConcern | null {
     const normalizedId = normalizeRequiredText(id, 'id', 128);
-    const outcome = normalizeOptionalText(options.outcome, MAX_CONCERN_RESOLUTION_CHARS);
-    const resolvedAt = options.resolvedAt
-      ? normalizeIsoTimestamp(options.resolvedAt, 'resolvedAt')
+    const current = this.getById(normalizedId);
+    if (!current) {
+      return null;
+    }
+    const status = normalizeConcernStatus(options.status);
+    const transitionedAt = options.transitionedAt
+      ? normalizeIsoTimestamp(options.transitionedAt, 'transitionedAt')
       : this.now().toISOString();
+    const evidenceRefs = normalizeConcernEvidenceRefs(options.evidenceRefs);
+    const resolutionEvidenceRefs = normalizeConcernEvidenceRefs(
+      options.resolutionEvidenceRefs,
+      'resolutionEvidenceRefs',
+    );
+    validateConcernStatusTransition({
+      from: current.status,
+      to: status,
+      evidenceRefs,
+    });
+
+    const outcome = normalizeOptionalText(options.outcome, MAX_CONCERN_RESOLUTION_CHARS);
+    const nextReviewAt = options.clearNextReview || isConcernTerminalStatus(status)
+      ? undefined
+      : normalizeOptionalIsoTimestamp(options.nextReviewAt, 'nextReviewAt') ?? current.nextReviewAt;
+    const salience = options.salience === undefined
+      ? current.salience
+      : normalizeSalience(options.salience);
+    const updatedEvidenceRefs = mergeConcernEvidenceRefs(current.evidenceRefs, evidenceRefs);
+    const terminal = isConcernTerminalStatus(status);
+    const updatedResolutionEvidenceRefs = terminal
+      ? mergeConcernEvidenceRefs(
+        current.resolutionEvidenceRefs,
+        resolutionEvidenceRefs.length > 0 ? resolutionEvidenceRefs : evidenceRefs,
+      )
+      : current.resolutionEvidenceRefs;
 
     const result = this.db.prepare(`
       UPDATE active_concerns
       SET
+        status = @status,
         resolved_at = @resolved_at,
-        resolution_outcome = @resolution_outcome
-      WHERE
-        id = @id
-        AND resolved_at IS NULL
+        resolution_outcome = @resolution_outcome,
+        last_reviewed_at = @last_reviewed_at,
+        next_review_at = @next_review_at,
+        salience = @salience,
+        evidence_refs = @evidence_refs,
+        resolution_evidence_refs = @resolution_evidence_refs
+      WHERE id = @id
     `).run({
       id: normalizedId,
-      resolved_at: resolvedAt,
-      resolution_outcome: outcome ?? null,
+      status,
+      resolved_at: terminal ? transitionedAt : null,
+      resolution_outcome: terminal ? outcome ?? null : null,
+      last_reviewed_at: transitionedAt,
+      next_review_at: nextReviewAt ?? null,
+      salience,
+      evidence_refs: serializeEvidenceRefs(updatedEvidenceRefs),
+      resolution_evidence_refs: serializeEvidenceRefs(updatedResolutionEvidenceRefs),
     });
 
     if (result.changes === 0) {
       return null;
     }
     return this.requireById(normalizedId);
+  }
+
+  resolveConcern(id: string, options: ActiveConcernResolveOptions = {}): ActiveConcern | null {
+    const normalizedId = normalizeRequiredText(id, 'id', 128);
+    const current = this.getById(normalizedId);
+    if (!current || isConcernTerminalStatus(current.status) || current.resolvedAt) {
+      return null;
+    }
+    return this.transitionConcernStatus(normalizedId, {
+      status: 'resolved',
+      ...(options.outcome ? { outcome: options.outcome } : {}),
+      ...(options.resolvedAt ? { transitionedAt: options.resolvedAt } : {}),
+      ...(options.evidenceRefs ? { evidenceRefs: options.evidenceRefs, resolutionEvidenceRefs: options.evidenceRefs } : {}),
+    });
+  }
+
+  resolveStaleConcerns(options: ActiveConcernStaleResolutionOptions = {}): ActiveConcern[] {
+    const asOf = options.asOf
+      ? normalizeIsoTimestamp(options.asOf, 'asOf')
+      : this.now().toISOString();
+    const limit = clampListLimit(options.limit);
+    const statuses = options.statuses === undefined
+      ? ACTIVE_CONCERN_STATUSES.filter(isConcernAttentionStatus)
+      : options.statuses.map(status => normalizeConcernStatus(status));
+    const statusSet = new Set(statuses);
+    const candidates = this.list({
+      includeResolved: false,
+      includeExpired: true,
+      asOf,
+      limit: MAX_LIST_LIMIT,
+    }).filter(concern => (
+      statusSet.has(concern.status)
+      && Date.parse(concern.expiresAt) <= Date.parse(asOf)
+    )).slice(0, limit);
+
+    const resolved: ActiveConcern[] = [];
+    for (const concern of candidates) {
+      const next = this.transitionConcernStatus(concern.id, {
+        status: 'resolved',
+        transitionedAt: asOf,
+        outcome: options.outcome ?? 'Resolved as stale after review window elapsed.',
+        ...(options.evidenceRefs ? { evidenceRefs: options.evidenceRefs, resolutionEvidenceRefs: options.evidenceRefs } : {}),
+      });
+      if (next) {
+        resolved.push(next);
+      }
+    }
+    return resolved;
   }
 
   private requireById(id: string): ActiveConcern {
@@ -688,6 +1300,89 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
     return concern;
   }
 
+  private findActiveSimilarConcern(input: {
+    text: string;
+    contactId?: string;
+    asOf: string;
+  }): ActiveConcern | null {
+    const activeConcerns = this.list({
+      contactId: input.contactId,
+      includeResolved: false,
+      includeExpired: false,
+      asOf: input.asOf,
+      limit: MAX_LIST_LIMIT,
+    });
+    let bestMatch: ActiveConcern | null = null;
+    let bestScore = 0;
+    for (const concern of activeConcerns) {
+      const score = scoreConcernTextSimilarity(input.text, concern.text);
+      if (score < CONCERN_DUPLICATE_SIMILARITY_THRESHOLD || score <= bestScore) {
+        continue;
+      }
+      bestMatch = concern;
+      bestScore = score;
+    }
+    return bestMatch;
+  }
+
+  private mergeConcern(
+    existing: ActiveConcern,
+    input: {
+      priority: ActiveConcernPriority;
+      status: ActiveConcernStatus;
+      expiresAt: string;
+      salience: number;
+      sensitivity: ActiveConcernSensitivity;
+      owner: ActiveConcernOwner;
+      evidenceRefs: readonly ActiveConcernEvidenceRef[];
+      lastReviewedAt: string;
+      nextReviewAt?: string;
+      mergedFromIds: readonly string[];
+      splitFromId?: string;
+    },
+  ): ActiveConcern {
+    if (isConcernTerminalStatus(existing.status)) {
+      throw new Error(`Cannot merge into terminal concern "${existing.id}"`);
+    }
+    const status = mergeConcernStatus(existing.status, input.status);
+    validateConcernStatusTransition({
+      from: existing.status,
+      to: status,
+      evidenceRefs: input.evidenceRefs,
+    });
+    const nextReviewAt = chooseEarlierOptionalConcernTimestamp(existing.nextReviewAt, input.nextReviewAt);
+    this.db.prepare(`
+      UPDATE active_concerns
+      SET
+        priority = @priority,
+        status = @status,
+        expires_at = @expires_at,
+        salience = @salience,
+        sensitivity = @sensitivity,
+        owner = @owner,
+        evidence_refs = @evidence_refs,
+        last_reviewed_at = @last_reviewed_at,
+        next_review_at = @next_review_at,
+        merged_from_ids = @merged_from_ids,
+        split_from_id = @split_from_id
+      WHERE id = @id
+    `).run({
+      id: existing.id,
+      priority: chooseHigherConcernPriority(existing.priority, input.priority),
+      status,
+      expires_at: chooseLaterConcernTimestamp(existing.expiresAt, input.expiresAt),
+      salience: Math.max(existing.salience, input.salience),
+      sensitivity: mergeConcernSensitivity(existing.sensitivity, input.sensitivity),
+      owner: input.owner,
+      evidence_refs: serializeEvidenceRefs(mergeConcernEvidenceRefs(existing.evidenceRefs, input.evidenceRefs)),
+      last_reviewed_at: input.lastReviewedAt,
+      next_review_at: nextReviewAt ?? null,
+      merged_from_ids: serializeStringList(mergeConcernStringLists(existing.mergedFromIds ?? [], input.mergedFromIds)),
+      split_from_id: input.splitFromId ?? existing.splitFromId ?? null,
+    });
+    return this.requireById(existing.id);
+  }
+
   private initializeSchema(): void {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS active_concerns (
@@ -695,14 +1390,28 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
         text TEXT NOT NULL,
         priority TEXT NOT NULL,
         source TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
         created_at TEXT NOT NULL,
         expires_at TEXT NOT NULL,
+        salience REAL NOT NULL DEFAULT 0.5,
+        sensitivity TEXT NOT NULL DEFAULT 'personal',
+        owner TEXT NOT NULL DEFAULT 'companion',
+        evidence_refs TEXT NOT NULL DEFAULT '[]',
+        resolution_evidence_refs TEXT NOT NULL DEFAULT '[]',
         resolved_at TEXT,
         resolution_outcome TEXT,
         contact_id TEXT,
         formation_vad TEXT,
+        last_reviewed_at TEXT,
+        next_review_at TEXT,
+        merged_from_ids TEXT NOT NULL DEFAULT '[]',
+        split_from_id TEXT,
         CHECK (priority IN ('high', 'medium', 'low')),
-        CHECK (source IN ('appraisal', 'agent', 'heartbeat'))
+        CHECK (source IN ('appraisal', 'agent', 'heartbeat')),
+        CHECK (status IN ('candidate', 'active', 'watching', 'deferred', 'blocked', 'resolved', 'dismissed', 'suppressed')),
+        CHECK (sensitivity IN ('public', 'personal', 'intimate', 'confidential', 'redacted')),
+        CHECK (owner IN ('companion', 'operator', 'system')),
+        CHECK (salience >= 0 AND salience <= 1)
       );
 
       CREATE INDEX IF NOT EXISTS idx_active_concerns_active
@@ -710,13 +1419,52 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
 
       CREATE INDEX IF NOT EXISTS idx_active_concerns_contact
       ON active_concerns (contact_id, resolved_at, expires_at, created_at, id);
+
+      CREATE INDEX IF NOT EXISTS idx_active_concerns_lifecycle
+      ON active_concerns (status, next_review_at, expires_at, last_reviewed_at, id);
     `);
 
     const columns = this.db.prepare('PRAGMA table_info(active_concerns)')
       .all() as Array<{ name: string }>;
-    const hasResolutionOutcome = columns.some(column => column.name === 'resolution_outcome');
-    if (!hasResolutionOutcome) {
-      this.db.exec('ALTER TABLE active_concerns ADD COLUMN resolution_outcome TEXT');
+    const columnNames = new Set(columns.map(column => column.name));
+    const addColumn = (name: string, sql: string): void => {
+      if (!columnNames.has(name)) {
+        this.db.exec(sql);
+        columnNames.add(name);
+      }
+    };
+    addColumn('status', "ALTER TABLE active_concerns ADD COLUMN status TEXT NOT NULL DEFAULT 'active'");
+    addColumn('salience', 'ALTER TABLE active_concerns ADD COLUMN salience REAL NOT NULL DEFAULT 0.5');
+    addColumn('sensitivity', "ALTER TABLE active_concerns ADD COLUMN sensitivity TEXT NOT NULL DEFAULT 'personal'");
+    addColumn('owner', "ALTER TABLE active_concerns ADD COLUMN owner TEXT NOT NULL DEFAULT 'companion'");
+    addColumn('evidence_refs', "ALTER TABLE active_concerns ADD COLUMN evidence_refs TEXT NOT NULL DEFAULT '[]'");
+    addColumn(
+      'resolution_evidence_refs',
+      "ALTER TABLE active_concerns ADD COLUMN resolution_evidence_refs TEXT NOT NULL DEFAULT '[]'",
+    );
+    addColumn('resolution_outcome', 'ALTER TABLE active_concerns ADD COLUMN resolution_outcome TEXT');
+    addColumn('last_reviewed_at', 'ALTER TABLE active_concerns ADD COLUMN last_reviewed_at TEXT');
+    addColumn('next_review_at', 'ALTER TABLE active_concerns ADD COLUMN next_review_at TEXT');
+    addColumn('merged_from_ids', "ALTER TABLE active_concerns ADD COLUMN merged_from_ids TEXT NOT NULL DEFAULT '[]'");
+    addColumn('split_from_id', 'ALTER TABLE active_concerns ADD COLUMN split_from_id TEXT');
+
+    this.db.exec(`
+      UPDATE active_concerns
+      SET status = 'resolved'
+      WHERE resolved_at IS NOT NULL AND COALESCE(status, 'active') = 'active';
+
+      UPDATE active_concerns
+      SET last_reviewed_at = created_at
+      WHERE last_reviewed_at IS NULL;
+    `);
+
+    try {
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_active_concerns_lifecycle
+        ON active_concerns (status, next_review_at, expires_at, last_reviewed_at, id);
+      `);
+    } catch (error) {
+      throw new Error(`Failed to initialize active concern lifecycle index: ${String(error)}`);
     }
   }
 }

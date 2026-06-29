@@ -168,6 +168,7 @@ export function createIntentionAppraisalHooks(
     onIntentionConcernDecision: async ({
       decision,
       canonicalContactKey,
+      sourceMessageId,
       formationVAD,
     }) => {
       if (decision.type !== 'concern') {
@@ -182,6 +183,7 @@ export function createIntentionAppraisalHooks(
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         ...(expiresAt ? { expiresAt } : {}),
         ...(formationVAD ? { formationVAD } : {}),
+        sourceMessageId,
       });
     },
     onIntentionFollowUpDecision: async ({

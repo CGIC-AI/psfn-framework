@@ -571,18 +571,53 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     text TEXT NOT NULL,
     priority TEXT NOT NULL,
     source TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL,
+    salience DOUBLE PRECISION NOT NULL DEFAULT 0.5,
+    sensitivity TEXT NOT NULL DEFAULT 'personal',
+    owner TEXT NOT NULL DEFAULT 'companion',
+    evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
+    resolution_evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb,
     resolved_at TEXT,
     resolution_outcome TEXT,
     contact_id TEXT,
     formation_vad JSONB,
+    last_reviewed_at TEXT,
+    next_review_at TEXT,
+    merged_from_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    split_from_id TEXT,
     CHECK (priority IN ('high', 'medium', 'low')),
-    CHECK (source IN ('appraisal', 'agent', 'heartbeat'))
+    CHECK (source IN ('appraisal', 'agent', 'heartbeat')),
+    CHECK (status IN ('candidate', 'active', 'watching', 'deferred', 'blocked', 'resolved', 'dismissed', 'suppressed')),
+    CHECK (sensitivity IN ('public', 'personal', 'intimate', 'confidential', 'redacted')),
+    CHECK (owner IN ('companion', 'operator', 'system')),
+    CHECK (salience >= 0 AND salience <= 1)
   );
+  `,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';`,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS salience DOUBLE PRECISION NOT NULL DEFAULT 0.5;`,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS sensitivity TEXT NOT NULL DEFAULT 'personal';`,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS owner TEXT NOT NULL DEFAULT 'companion';`,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS resolution_evidence_refs JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS last_reviewed_at TEXT;`,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS next_review_at TEXT;`,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS merged_from_ids JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS split_from_id TEXT;`,
+  `
+  UPDATE active_concerns
+  SET status = 'resolved'
+  WHERE resolved_at IS NOT NULL AND COALESCE(status, 'active') = 'active';
+  `,
+  `
+  UPDATE active_concerns
+  SET last_reviewed_at = created_at
+  WHERE last_reviewed_at IS NULL;
   `,
   `CREATE INDEX IF NOT EXISTS idx_active_concerns_active ON active_concerns (resolved_at, expires_at, priority, created_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_active_concerns_contact ON active_concerns (contact_id, resolved_at, expires_at, created_at, id);`,
+  `CREATE INDEX IF NOT EXISTS idx_active_concerns_lifecycle ON active_concerns (status, next_review_at, expires_at, last_reviewed_at, id);`,
   `
   CREATE TABLE IF NOT EXISTS intention_pending_follow_ups (
     id TEXT PRIMARY KEY,

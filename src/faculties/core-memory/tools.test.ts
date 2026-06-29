@@ -55,10 +55,17 @@ function createFakeConcernStore(): ConcernStorePort {
         text: input.text,
         priority: input.priority ?? 'medium',
         source: input.source ?? 'agent',
+        status: input.status ?? 'active',
         createdAt: input.createdAt ?? now,
         expiresAt: input.expiresAt ?? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        salience: input.salience ?? 0.5,
+        sensitivity: input.sensitivity ?? 'personal',
+        owner: input.owner ?? 'companion',
+        evidenceRefs: [...(input.evidenceRefs ?? [])],
+        resolutionEvidenceRefs: [...(input.resolutionEvidenceRefs ?? [])],
         ...(input.contactId ? { contactId: input.contactId } : {}),
         ...(input.formationVAD ? { formationVAD: input.formationVAD } : {}),
+        ...(input.nextReviewAt ? { nextReviewAt: input.nextReviewAt } : {}),
       };
       concerns.set(concern.id, concern);
       return { ...concern };
@@ -69,14 +76,14 @@ function createFakeConcernStore(): ConcernStorePort {
     }),
     getActiveConcerns: vi.fn(async (contactId) => (
       [...concerns.values()]
-        .filter(concern => !concern.resolvedAt && (!contactId || concern.contactId === contactId))
+        .filter(concern => !concern.resolvedAt && concern.status !== 'resolved' && concern.status !== 'dismissed' && concern.status !== 'suppressed' && (!contactId || concern.contactId === contactId))
         .map(concern => ({ ...concern }))
     )),
     list: vi.fn(async (options = {}) => (
       [...concerns.values()]
         .filter((concern) => {
           if (options.contactId && concern.contactId !== options.contactId) return false;
-          if (!options.includeResolved && concern.resolvedAt) return false;
+          if (!options.includeResolved && (concern.resolvedAt || concern.status === 'resolved' || concern.status === 'dismissed' || concern.status === 'suppressed')) return false;
           return true;
         })
         .slice(0, options.limit ?? 32)
@@ -89,12 +96,35 @@ function createFakeConcernStore(): ConcernStorePort {
       if (!concern || concern.resolvedAt) return null;
       const resolved: ActiveConcern = {
         ...concern,
+        status: 'resolved',
         resolvedAt: options.resolvedAt ?? new Date().toISOString(),
         ...(options.outcome ? { resolutionOutcome: options.outcome } : {}),
+        resolutionEvidenceRefs: [...(options.evidenceRefs ?? [])],
       };
       concerns.set(id, resolved);
       return { ...resolved };
     }),
+    transitionConcernStatus: vi.fn(async (id, options) => {
+      const concern = concerns.get(id);
+      if (!concern) return null;
+      const transitioned: ActiveConcern = {
+        ...concern,
+        status: options.status,
+        salience: options.salience ?? concern.salience,
+        lastReviewedAt: options.transitionedAt ?? new Date().toISOString(),
+        nextReviewAt: options.clearNextReview ? undefined : options.nextReviewAt ?? concern.nextReviewAt,
+        evidenceRefs: [...concern.evidenceRefs, ...(options.evidenceRefs ?? [])],
+        resolutionEvidenceRefs: options.status === 'resolved' || options.status === 'dismissed' || options.status === 'suppressed'
+          ? [...concern.resolutionEvidenceRefs, ...(options.resolutionEvidenceRefs ?? options.evidenceRefs ?? [])]
+          : concern.resolutionEvidenceRefs,
+        ...((options.status === 'resolved' || options.status === 'dismissed' || options.status === 'suppressed')
+          ? { resolvedAt: options.transitionedAt ?? new Date().toISOString(), ...(options.outcome ? { resolutionOutcome: options.outcome } : {}) }
+          : { resolvedAt: undefined, resolutionOutcome: undefined }),
+      };
+      concerns.set(id, transitioned);
+      return { ...transitioned };
+    }),
+    resolveStaleConcerns: vi.fn(async () => []),
   };
 }
 
@@ -350,13 +380,24 @@ describe('orient tool', () => {
       text: 'Follow up tomorrow.',
       priority: 'high',
       contactId: 'contact-a',
+      status: 'watching',
+      evidenceRefs: [{ kind: 'message', ref: 'msg-orient-1' }],
     });
     const createdPayload = JSON.parse(resultText(createdResult)) as {
       created: boolean;
-      concern: { id: string; text: string; priority: string; contactId?: string };
+      concern: {
+        id: string;
+        text: string;
+        priority: string;
+        status: string;
+        contactId?: string;
+        evidenceRefs: Array<{ kind: string; ref: string }>;
+      };
     };
     expect(createdPayload.created).toBe(true);
     expect(createdPayload.concern.text).toBe('Follow up tomorrow.');
+    expect(createdPayload.concern.status).toBe('watching');
+    expect(createdPayload.concern.evidenceRefs).toEqual([{ kind: 'message', ref: 'msg-orient-1' }]);
 
     const listedResult = await tool.execute('call-concern-list', {
       action: 'list_concerns',
@@ -382,6 +423,43 @@ describe('orient tool', () => {
     expect(resolvedPayload.resolved).toBe(1);
     expect(resolvedPayload.missing).toEqual([]);
     expect(resolvedPayload.concerns[0]?.resolutionOutcome).toBe('Handled in orient.');
+  });
+
+  it('routes concern status transitions through orient', async () => {
+    const concernStore = createFakeConcernStore();
+    const tool = createOrientTool({
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    }, {
+      concernStore,
+    });
+
+    const createdResult = await tool.execute('call-transition-create', {
+      action: 'create_concern',
+      text: 'Blocked until the operator reviews it.',
+    });
+    const createdPayload = JSON.parse(resultText(createdResult)) as { concern: { id: string } };
+
+    const transitionedResult = await tool.execute('call-transition', {
+      action: 'transition_concern',
+      concernId: createdPayload.concern.id,
+      status: 'blocked',
+      outcome: 'Waiting on operator context.',
+      evidenceRefs: [{ kind: 'runtime', ref: 'operator-gate:1' }],
+    });
+    const transitionedPayload = JSON.parse(resultText(transitionedResult)) as {
+      transitioned: number;
+      missing: string[];
+      concerns: Array<{ status: string; evidenceRefs: Array<{ kind: string; ref: string }> }>;
+    };
+
+    expect(transitionedPayload.transitioned).toBe(1);
+    expect(transitionedPayload.missing).toEqual([]);
+    expect(transitionedPayload.concerns[0]?.status).toBe('blocked');
+    expect(transitionedPayload.concerns[0]?.evidenceRefs).toEqual([
+      { kind: 'runtime', ref: 'operator-gate:1' },
+    ]);
   });
 
   it('resolves multiple concerns in one orient action', async () => {

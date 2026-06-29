@@ -1,4 +1,5 @@
 import type { PendingFollowUpWakeCondition } from '../pending-follow-ups.js';
+import { normalizeConcernStatus } from '../concerns.js';
 import type {
   IntentionActionDecision,
   IntentionConcernDecision,
@@ -147,9 +148,9 @@ function parseConcernPayload(value: unknown): IntentionConcernDecision | undefin
   const title = typeof value.title === 'string' ? value.title.trim() : '';
   const summary = typeof value.summary === 'string' ? value.summary.trim() : '';
   if (!title && !summary) return undefined;
-  const status = value.status === 'open' || value.status === 'pending' || value.status === 'resolved'
-    ? value.status
-    : undefined;
+  const status = value.status === undefined
+    ? undefined
+    : normalizeConcernStatus(value.status);
   const priority = normalizeConcernPriority(value.priority);
   return {
     ...(title ? { title } : {}),

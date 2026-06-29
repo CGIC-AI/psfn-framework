@@ -10,10 +10,16 @@ import {
   type EmotionTelemetryValidationInput,
 } from '../emotion/telemetry-validation.js';
 import {
+  ACTIVE_CONCERN_OWNERS,
   ACTIVE_CONCERN_PRIORITIES,
+  ACTIVE_CONCERN_SENSITIVITIES,
   ACTIVE_CONCERN_SOURCES,
+  normalizeConcernEvidenceRefs,
+  normalizeConcernStatus,
   type ActiveConcern,
+  type ActiveConcernOwner,
   type ActiveConcernPriority,
+  type ActiveConcernSensitivity,
 } from '../intention/concerns.js';
 import {
   PENDING_FOLLOW_UP_PRIORITIES,
@@ -436,10 +442,25 @@ function normalizeConcern(concern: ActiveConcern, index: number): ActiveConcern 
     throw new Error(`InternalState activeConcern[${String(index)}] must be an object`);
   }
   const prefix = `activeConcern[${String(index)}]`;
+  const candidate = concern as Partial<ActiveConcern>;
   const priority = normalizeConcernPriority(concern.priority, `${prefix}.priority`);
   const source = normalizeConcernSource(concern.source, `${prefix}.source`);
+  const status = normalizeConcernStatus(candidate.status, `${prefix}.status`);
   const createdAt = normalizeIsoTimestamp(concern.createdAt, `${prefix}.createdAt`);
   const expiresAt = normalizeIsoTimestamp(concern.expiresAt, `${prefix}.expiresAt`);
+  const salience = candidate.salience === undefined
+    ? 0.5
+    : parseUnit(candidate.salience, `${prefix}.salience`);
+  const sensitivity = normalizeConcernSensitivity(
+    candidate.sensitivity ?? 'personal',
+    `${prefix}.sensitivity`,
+  );
+  const owner = normalizeConcernOwner(candidate.owner ?? 'companion', `${prefix}.owner`);
+  const evidenceRefs = normalizeConcernEvidenceRefs(candidate.evidenceRefs, `${prefix}.evidenceRefs`);
+  const resolutionEvidenceRefs = normalizeConcernEvidenceRefs(
+    candidate.resolutionEvidenceRefs,
+    `${prefix}.resolutionEvidenceRefs`,
+  );
   const resolvedAt = concern.resolvedAt === undefined
     ? undefined
     : normalizeIsoTimestamp(concern.resolvedAt, `${prefix}.resolvedAt`);
@@ -452,18 +473,40 @@ function normalizeConcern(concern: ActiveConcern, index: number): ActiveConcern 
   const formationVAD = concern.formationVAD === undefined
     ? undefined
     : normalizeFormationVAD(concern.formationVAD, `${prefix}.formationVAD`);
+  const lastReviewedAt = concern.lastReviewedAt === undefined
+    ? undefined
+    : normalizeIsoTimestamp(concern.lastReviewedAt, `${prefix}.lastReviewedAt`);
+  const nextReviewAt = concern.nextReviewAt === undefined
+    ? undefined
+    : normalizeIsoTimestamp(concern.nextReviewAt, `${prefix}.nextReviewAt`);
+  const mergedFromIds = concern.mergedFromIds === undefined
+    ? undefined
+    : normalizeIdentifierList(concern.mergedFromIds, `${prefix}.mergedFromIds`);
+  const splitFromId = concern.splitFromId === undefined
+    ? undefined
+    : normalizeOptionalIdentifier(concern.splitFromId, `${prefix}.splitFromId`) ?? undefined;
 
   return {
     id: normalizeIdentifier(concern.id, `${prefix}.id`),
     text: normalizeText(concern.text, `${prefix}.text`),
     priority,
     source,
+    status,
     createdAt,
     expiresAt,
+    salience,
+    sensitivity,
+    owner,
+    evidenceRefs,
+    resolutionEvidenceRefs,
     ...(resolvedAt ? { resolvedAt } : {}),
     ...(resolutionOutcome ? { resolutionOutcome } : {}),
     ...(contactId ? { contactId } : {}),
     ...(formationVAD ? { formationVAD } : {}),
+    ...(lastReviewedAt ? { lastReviewedAt } : {}),
+    ...(nextReviewAt ? { nextReviewAt } : {}),
+    ...(mergedFromIds && mergedFromIds.length > 0 ? { mergedFromIds } : {}),
+    ...(splitFromId ? { splitFromId } : {}),
   };
 }
 
@@ -588,6 +631,27 @@ function normalizeConcernSource(value: string, fieldName: string): ActiveConcern
     throw new Error(`InternalState field "${fieldName}" has unsupported source "${String(value)}"`);
   }
   return value as ActiveConcern['source'];
+}
+
+function normalizeConcernSensitivity(value: string, fieldName: string): ActiveConcernSensitivity {
+  if (!ACTIVE_CONCERN_SENSITIVITIES.includes(value as ActiveConcernSensitivity)) {
+    throw new Error(`InternalState field "${fieldName}" has unsupported sensitivity "${String(value)}"`);
+  }
+  return value as ActiveConcernSensitivity;
+}
+
+function normalizeConcernOwner(value: string, fieldName: string): ActiveConcernOwner {
+  if (!ACTIVE_CONCERN_OWNERS.includes(value as ActiveConcernOwner)) {
+    throw new Error(`InternalState field "${fieldName}" has unsupported owner "${String(value)}"`);
+  }
+  return value as ActiveConcernOwner;
+}
+
+function normalizeIdentifierList(value: readonly string[], fieldName: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`InternalState field "${fieldName}" must be an array`);
+  }
+  return [...new Set(value.map((item, index) => normalizeIdentifier(item, `${fieldName}[${String(index)}]`)))];
 }
 
 function normalizePendingFollowUpPriority(value: string, fieldName: string): PendingFollowUpPriority {

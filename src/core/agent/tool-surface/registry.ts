@@ -210,6 +210,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
       'create_concern',
       'list_concerns',
       'resolve_concern',
+      'transition_concern',
     ],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [

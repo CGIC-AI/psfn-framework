@@ -90,7 +90,7 @@ function makePendingFollowUp() {
     priority: 'high' as const,
     timing: 'scheduled' as const,
     createdAt: '2026-06-16T12:00:00.000Z',
-    dueAt: '2026-06-17T12:00:00.000Z',
+    dueAt: '2026-07-17T12:00:00.000Z',
     channelId: 'primary-dm',
     channelType: 'discord' as const,
     authorId: 'system:intention',
@@ -282,7 +282,7 @@ describe('intention appraisal runtime integration', () => {
           getActiveConcerns: () => [{
             title: 'Follow up soon',
             dueAt: Date.now() + 1_000,
-            status: 'open',
+            status: 'active',
           }],
           emotionState: {
             getState: () => ({
@@ -407,7 +407,7 @@ describe('intention appraisal runtime integration', () => {
           getActiveConcerns: () => [{
             title: 'Follow up soon',
             dueAt: Date.now() + 1_000,
-            status: 'open',
+            status: 'active',
           }],
           emotionState: {
             getState: () => ({
@@ -524,7 +524,7 @@ describe('intention appraisal runtime integration', () => {
           getActiveConcerns: () => [{
             title: 'Follow up soon',
             dueAt: Date.now() + 1_000,
-            status: 'open',
+            status: 'active',
           }],
           emotionState: {
             getState: () => ({

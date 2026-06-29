@@ -2,6 +2,7 @@ import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import { cloneEmotionTelemetryValidation } from '../../emotion/telemetry-validation.js';
 import { cloneInternalState, type InternalState } from '../../self-model/state.js';
+import { normalizeConcernStatus } from '../concerns.js';
 import type {
   ActiveCareReminderSnapshot,
   ActiveConcernSnapshot,
@@ -78,7 +79,7 @@ function activeConcernsFromInternalState(state: InternalState): ActiveConcernSna
     return {
       id: concern.id,
       title: concern.text,
-      status: 'open',
+      status: concern.status,
       ...(Number.isFinite(dueAtRaw) ? { dueAt: Math.floor(dueAtRaw) } : {}),
       priority: concern.priority,
     };
@@ -183,7 +184,7 @@ function normalizeActiveConcerns(
     const title = typeof concern.title === 'string' ? concern.title.trim() : undefined;
     const summary = typeof concern.summary === 'string' ? concern.summary.trim() : undefined;
     if (!title && !summary) continue;
-    const status = typeof concern.status === 'string' ? concern.status.trim().toLowerCase() : undefined;
+    const status = concern.status === undefined ? undefined : normalizeConcernStatus(concern.status);
     const dueAt = (typeof concern.dueAt === 'number' && Number.isFinite(concern.dueAt) && concern.dueAt > 0)
       ? Math.floor(concern.dueAt)
       : undefined;

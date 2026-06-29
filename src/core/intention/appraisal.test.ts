@@ -500,6 +500,44 @@ describe('IntentionAppraisal', () => {
     expect(onEvaluationError).toHaveBeenCalledTimes(1);
   });
 
+  it('fails closed when model emits an unsupported concern lifecycle status', async () => {
+    const { provider } = makeProvider([
+      JSON.stringify({
+        decisions: [{
+          type: 'concern',
+          priority: 'medium',
+          reason: 'Bad lifecycle state should fail closed.',
+          timing: 'soon',
+          concern: {
+            title: 'Invalid status concern',
+            status: 'open',
+          },
+        }],
+      }),
+    ]);
+    const onEvaluationError = vi.fn();
+    const appraisal = new IntentionAppraisal({
+      llmProvider: provider,
+      appraisalFrequency: 1,
+      emotionalShiftThreshold: 1.5,
+      onEvaluationError,
+    });
+
+    const decisions = await appraisal.evaluate({
+      sessionId: 'api:fail-closed-status',
+      currentEmotion: makeEmotionSnapshot(),
+      recentMessages: [{ role: 'user', content: 'Track this maybe.' }],
+    });
+
+    expect(decisions).toEqual([{
+      type: 'noop',
+      priority: 'low',
+      reason: 'appraisal failed closed',
+      timing: 'none',
+    }]);
+    expect(onEvaluationError).toHaveBeenCalledTimes(1);
+  });
+
   it('uses InternalState as primary appraisal input when provided', async () => {
     const { provider, complete } = makeProvider([
       JSON.stringify({

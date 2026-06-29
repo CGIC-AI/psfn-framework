@@ -4,6 +4,8 @@ type ActiveConcernCreateInput = import('./concerns.js').ActiveConcernCreateInput
 type ActiveConcernListOptions = import('./concerns.js').ActiveConcernListOptions;
 type ActiveConcernRecentResolutionOptions = import('./concerns.js').ActiveConcernRecentResolutionOptions;
 type ActiveConcernResolveOptions = import('./concerns.js').ActiveConcernResolveOptions;
+type ActiveConcernStaleResolutionOptions = import('./concerns.js').ActiveConcernStaleResolutionOptions;
+type ActiveConcernTransitionOptions = import('./concerns.js').ActiveConcernTransitionOptions;
 
 export interface ActiveConcernContextProvider {
   getActiveConcerns(contactId?: string): ActiveConcern[];
@@ -28,6 +30,11 @@ export interface ConcernStorePortBackend {
     id: string,
     options?: ActiveConcernResolveOptions,
   ): Awaitable<ActiveConcern | null>;
+  transitionConcernStatus(
+    id: string,
+    options: ActiveConcernTransitionOptions,
+  ): Awaitable<ActiveConcern | null>;
+  resolveStaleConcerns(options?: ActiveConcernStaleResolutionOptions): Awaitable<ActiveConcern[]>;
 }
 
 export interface ConcernStorePort {
@@ -46,6 +53,11 @@ export interface ConcernStorePort {
     asOf?: string;
   }): Promise<ActiveConcern | null>;
   resolveConcern(id: string, options?: ActiveConcernResolveOptions): Promise<ActiveConcern | null>;
+  transitionConcernStatus(
+    id: string,
+    options: ActiveConcernTransitionOptions,
+  ): Promise<ActiveConcern | null>;
+  resolveStaleConcerns(options?: ActiveConcernStaleResolutionOptions): Promise<ActiveConcern[]>;
 }
 
 export function createConcernStorePort(store: ConcernStorePortBackend): ConcernStorePort {
@@ -61,5 +73,7 @@ export function createConcernStorePort(store: ConcernStorePortBackend): ConcernS
       await store.findRecentlyResolvedSimilarConcern(input)
     ),
     resolveConcern: async (id, options) => await store.resolveConcern(id, options),
+    transitionConcernStatus: async (id, options) => await store.transitionConcernStatus(id, options),
+    resolveStaleConcerns: async (options) => await store.resolveStaleConcerns(options),
   };
 }

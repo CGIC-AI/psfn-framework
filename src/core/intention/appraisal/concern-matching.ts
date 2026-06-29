@@ -1,4 +1,9 @@
-import type { ActiveConcernPriority, ActiveConcernVAD } from '../concerns.js';
+import {
+  isConcernTerminalStatus,
+  type ActiveConcernEvidenceRef,
+  type ActiveConcernPriority,
+  type ActiveConcernVAD,
+} from '../concerns.js';
 import type { ConcernStorePort } from '../concern-store-port.js';
 import type {
   ActiveConcernSnapshot,
@@ -40,7 +45,7 @@ export function toActiveConcernSnapshot(
   return {
     id: concern.id,
     title: concern.text,
-    status: 'open',
+    status: concern.status,
     ...(Number.isFinite(dueAtMs) ? { dueAt: dueAtMs } : {}),
     priority: concern.priority,
   };
@@ -53,7 +58,7 @@ export function toRecentlyResolvedConcernSnapshot(
   return {
     id: concern.id,
     title: concern.text,
-    status: 'resolved',
+    status: concern.status,
     priority: concern.priority,
     ...(Number.isFinite(resolvedAtMs) ? { resolvedAt: resolvedAtMs } : {}),
     ...(concern.resolutionOutcome
@@ -80,23 +85,25 @@ export async function createConcernFromDecision(input: {
   contactId?: string;
   expiresAt?: string;
   formationVAD?: ActiveConcernVAD;
+  sourceMessageId?: string;
 }): Promise<void> {
   const text = resolveConcernDecisionText(input.decision);
-  const matched = await hasRecentlyResolvedSimilarConcern({
-    concernStore: input.concernStore,
-    text,
-    ...(input.contactId ? { contactId: input.contactId } : {}),
-  });
-  if (matched) {
+  const status = input.decision.concern?.status ?? 'active';
+  if (isConcernTerminalStatus(status) && !input.decision.concern?.summary) {
     return;
   }
+  const evidenceRefs: ActiveConcernEvidenceRef[] = input.sourceMessageId
+    ? [{ kind: 'message', ref: input.sourceMessageId }]
+    : [];
   await input.concernStore.create({
     text,
     priority: (input.decision.concern?.priority ?? input.decision.priority) as ActiveConcernPriority,
     source: 'appraisal',
+    status,
     ...(input.contactId ? { contactId: input.contactId } : {}),
     ...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
     ...(input.formationVAD ? { formationVAD: input.formationVAD } : {}),
+    ...(evidenceRefs.length > 0 ? { evidenceRefs } : {}),
   });
 }
 

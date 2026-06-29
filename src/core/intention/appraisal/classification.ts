@@ -3,6 +3,7 @@ import type {
   ActiveConcernSnapshot,
   AppraisalTrigger,
 } from './types.js';
+import { isConcernTerminalStatus } from '../concerns.js';
 
 export function isBackgroundAppraisalChannel(channelId: string): boolean {
   return channelId.startsWith('internal:');
@@ -34,7 +35,7 @@ export function hasDueSoonConcern(
     && Number.isFinite(concern.dueAt)
     && concern.dueAt > 0
     && concern.dueAt <= windowEnd
-    && concern.status !== 'resolved'
+    && (concern.status === undefined || !isConcernTerminalStatus(concern.status))
   ));
 }
 

@@ -97,7 +97,7 @@ describe('wireIntentionRuntime', () => {
     expect(active).toHaveLength(1);
     expect(active[0]).toMatchObject({
       title: 'Check hydration reminder',
-      status: 'open',
+      status: 'active',
       priority: 'medium',
     });
     expect(typeof active[0]?.dueAt).toBe('number');

@@ -596,7 +596,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           id: 'concern-1',
           title: 'Clarify the recovery timeline',
           summary: 'Keep the follow-up explicit.',
-          status: 'open',
+          status: 'active',
           dueAt: Date.parse('2026-04-01T12:00:00.000Z'),
           priority: 'high',
         }],
@@ -951,7 +951,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
                 id: 'concern-1',
                 title: 'Clarify the recovery timeline',
                 summary: 'Keep the follow-up explicit.',
-                status: 'open',
+                status: 'active',
                 dueAt: Date.parse('2026-04-01T12:00:00.000Z'),
                 priority: 'high',
               }]

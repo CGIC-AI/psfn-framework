@@ -144,6 +144,7 @@ const ORIENT_WRITE_ACTIONS = new Set([
   'values_update',
   'create_concern',
   'resolve_concern',
+  'transition_concern',
 ]);
 
 function resolveOrientRequirement(action: string | null): CapabilityRequirement {

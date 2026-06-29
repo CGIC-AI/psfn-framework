@@ -337,6 +337,7 @@ The table below maps current or retired first-party tool names to the canonical 
 | `create_concern` | `orient` | background-only | Active concerns are orientation data, not a task board. |
 | `list_concerns` | `orient` | background-only | Concern visibility belongs to the same active-state lane. |
 | `resolve_concern` | `orient` | background-only | Concern resolution closes the loop on active-state tracking. |
+| `transition_concern` | `orient` | background-only | Concern lifecycle transitions stay on the same active-state lane. |
 | `persona_update` | `identity` | always-on | Collapsed into `identity action=update_persona` with the existing review guards preserved. |
 | `character_card_update` | `identity` | hidden | Historical prompt/persona mutation name; use `identity action="update_persona"`. |
 | `north_star` | `north_star` | extended | Unified long-horizon guiding-intent surface with `action=list|create|update|delete|reorder`; keep it semantic and non-core. |

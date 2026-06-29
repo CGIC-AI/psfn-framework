@@ -1769,27 +1769,66 @@ async function upsertActiveConcerns(
       continue;
     }
     const formationVad = decodeJsonValue(row.formation_vad, null, 'active_concerns.formation_vad');
+    const evidenceRefs = decodeJsonValue(row.evidence_refs, [], 'active_concerns.evidence_refs');
+    const resolutionEvidenceRefs = decodeJsonValue(
+      row.resolution_evidence_refs,
+      [],
+      'active_concerns.resolution_evidence_refs',
+    );
+    const mergedFromIds = decodeJsonValue(row.merged_from_ids, [], 'active_concerns.merged_from_ids');
     addJsonWarning(warnings, 'active_concerns', rowId, 'formation_vad', formationVad.warning);
+    addJsonWarning(warnings, 'active_concerns', rowId, 'evidence_refs', evidenceRefs.warning);
+    addJsonWarning(
+      warnings,
+      'active_concerns',
+      rowId,
+      'resolution_evidence_refs',
+      resolutionEvidenceRefs.warning,
+    );
+    addJsonWarning(warnings, 'active_concerns', rowId, 'merged_from_ids', mergedFromIds.warning);
     await client.query(`
       INSERT INTO active_concerns (
-        id, text, priority, source, created_at, expires_at, resolved_at,
-        resolution_outcome, contact_id, formation_vad
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+        id, text, priority, source, status, created_at, expires_at,
+        salience, sensitivity, owner, evidence_refs, resolution_evidence_refs,
+        resolved_at, resolution_outcome, contact_id, formation_vad,
+        last_reviewed_at, next_review_at, merged_from_ids, split_from_id
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13,$14,$15,$16::jsonb,$17,$18,$19::jsonb,$20)
       ON CONFLICT (id) DO UPDATE SET
         text = EXCLUDED.text,
         priority = EXCLUDED.priority,
         source = EXCLUDED.source,
+        status = EXCLUDED.status,
         expires_at = EXCLUDED.expires_at,
+        salience = EXCLUDED.salience,
+        sensitivity = EXCLUDED.sensitivity,
+        owner = EXCLUDED.owner,
+        evidence_refs = EXCLUDED.evidence_refs,
+        resolution_evidence_refs = EXCLUDED.resolution_evidence_refs,
         resolved_at = EXCLUDED.resolved_at,
         resolution_outcome = EXCLUDED.resolution_outcome,
         contact_id = EXCLUDED.contact_id,
-        formation_vad = EXCLUDED.formation_vad
+        formation_vad = EXCLUDED.formation_vad,
+        last_reviewed_at = EXCLUDED.last_reviewed_at,
+        next_review_at = EXCLUDED.next_review_at,
+        merged_from_ids = EXCLUDED.merged_from_ids,
+        split_from_id = EXCLUDED.split_from_id
     `, [
-      id, text, priority, source, createdAt, expiresAt,
+      id, text, priority, source,
+      getString(row, 'status') ?? (getOptionalString(row, 'resolved_at') ? 'resolved' : 'active'),
+      createdAt, expiresAt,
+      getNumber(row, 'salience', 0.5),
+      getString(row, 'sensitivity') ?? 'personal',
+      getString(row, 'owner') ?? 'companion',
+      jsonParamOrNull(evidenceRefs.value),
+      jsonParamOrNull(resolutionEvidenceRefs.value),
       getOptionalString(row, 'resolved_at'),
       getOptionalString(row, 'resolution_outcome'),
       getOptionalString(row, 'contact_id'),
       jsonParamOrNull(formationVad.value),
+      getOptionalString(row, 'last_reviewed_at') ?? createdAt,
+      getOptionalString(row, 'next_review_at'),
+      jsonParamOrNull(mergedFromIds.value),
+      getOptionalString(row, 'split_from_id'),
     ]);
     appliedRows += 1;
   }

@@ -27,17 +27,31 @@ describe('intention tools', () => {
       text: 'Check if V has eaten.',
       priority: 'high',
       contactId: 'contact-v',
+      status: 'deferred',
+      evidenceRefs: [{ kind: 'message', ref: 'msg-tool-1' }],
+      nextReviewAt: '2026-02-02T10:00:00.000Z',
     });
 
     const payload = JSON.parse(resultText(result)) as {
       created: boolean;
-      concern: { id: string; text: string; priority: string; contactId?: string };
+      concern: {
+        id: string;
+        text: string;
+        priority: string;
+        status: string;
+        contactId?: string;
+        evidenceRefs: Array<{ kind: string; ref: string }>;
+        nextReviewAt?: string;
+      };
     };
     expect(payload.created).toBe(true);
     expect(payload.concern.id).toBeTruthy();
     expect(payload.concern.text).toBe('Check if V has eaten.');
     expect(payload.concern.priority).toBe('high');
+    expect(payload.concern.status).toBe('deferred');
     expect(payload.concern.contactId).toBe('contact-v');
+    expect(payload.concern.evidenceRefs).toEqual([{ kind: 'message', ref: 'msg-tool-1' }]);
+    expect(payload.concern.nextReviewAt).toBe('2026-02-02T10:00:00.000Z');
   });
 
   it('list_concerns returns serialized concern rows', async () => {

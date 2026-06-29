@@ -10,12 +10,22 @@ interface ActiveConcernRow {
   text: string;
   priority: string;
   source: string;
+  status: string | null;
   created_at: string;
   expires_at: string;
+  salience: number | null;
+  sensitivity: string | null;
+  owner: string | null;
+  evidence_refs: unknown;
+  resolution_evidence_refs: unknown;
   resolved_at: string | null;
   resolution_outcome: string | null;
   contact_id: string | null;
   formation_vad: unknown;
+  last_reviewed_at: string | null;
+  next_review_at: string | null;
+  merged_from_ids: unknown;
+  split_from_id: string | null;
 }
 
 interface PendingFollowUpRow {
@@ -85,27 +95,68 @@ class FakeIntentionPool {
     const normalized = text.replace(/\s+/g, ' ').trim();
 
     if (normalized.startsWith('INSERT INTO active_concerns')) {
-      const [id, textValue, priority, source, createdAt, expiresAt, contactId, formationVAD] = values as [
+      const [
+        id,
+        textValue,
+        priority,
+        source,
+        status,
+        createdAt,
+        expiresAt,
+        salience,
+        sensitivity,
+        owner,
+        evidenceRefs,
+        resolutionEvidenceRefs,
+        resolvedAt,
+        contactId,
+        formationVAD,
+        lastReviewedAt,
+        nextReviewAt,
+        mergedFromIds,
+        splitFromId,
+      ] = values as [
         string,
         string,
         string,
         string,
         string,
+        string,
+        string,
+        number,
+        string,
+        string,
+        unknown,
+        unknown,
+        string | null,
+        string | null,
+        unknown,
         string,
         string | null,
         unknown,
+        string | null,
       ];
       this.activeConcerns.set(id, {
         id,
         text: textValue,
         priority,
         source,
+        status,
         created_at: createdAt,
         expires_at: expiresAt,
-        resolved_at: null,
+        salience,
+        sensitivity,
+        owner,
+        evidence_refs: evidenceRefs,
+        resolution_evidence_refs: resolutionEvidenceRefs,
+        resolved_at: resolvedAt,
         resolution_outcome: null,
         contact_id: contactId,
         formation_vad: formationVAD,
+        last_reviewed_at: lastReviewedAt,
+        next_review_at: nextReviewAt,
+        merged_from_ids: mergedFromIds,
+        split_from_id: splitFromId,
       });
       return { rows: [this.activeConcerns.get(id)! as Row] };
     }
@@ -136,6 +187,7 @@ class FakeIntentionPool {
       const limit = typeof maybeLimit === 'number' ? maybeLimit : Number(maybeContactId);
       const rows = [...this.activeConcerns.values()]
         .filter((row) => row.resolved_at === null)
+        .filter((row) => row.status !== 'resolved' && row.status !== 'dismissed' && row.status !== 'suppressed')
         .filter((row) => row.expires_at > asOf)
         .filter((row) => !contactId || row.contact_id === null || row.contact_id === contactId)
         .sort((left, right) => concernSort(left, right))
@@ -145,13 +197,57 @@ class FakeIntentionPool {
     }
 
     if (normalized.startsWith('UPDATE active_concerns')) {
-      const [id, resolvedAt, resolutionOutcome] = values as [string, string, string | null];
-      const row = this.activeConcerns.get(id);
-      if (!row || row.resolved_at !== null) {
+      const row = this.activeConcerns.get(values[0] as string);
+      if (!row) {
         return { rows: [] };
       }
-      row.resolved_at = resolvedAt;
-      row.resolution_outcome = resolutionOutcome;
+      if (normalized.includes('SET status = $2')) {
+        const [
+          ,
+          status,
+          resolvedAt,
+          resolutionOutcome,
+          lastReviewedAt,
+          nextReviewAt,
+          salience,
+          evidenceRefs,
+          resolutionEvidenceRefs,
+        ] = values as [string, string, string | null, string | null, string, string | null, number, unknown, unknown];
+        row.status = status;
+        row.resolved_at = resolvedAt;
+        row.resolution_outcome = resolutionOutcome;
+        row.last_reviewed_at = lastReviewedAt;
+        row.next_review_at = nextReviewAt;
+        row.salience = salience;
+        row.evidence_refs = evidenceRefs;
+        row.resolution_evidence_refs = resolutionEvidenceRefs;
+        return { rows: [row as Row] };
+      }
+      const [
+        ,
+        priority,
+        status,
+        expiresAt,
+        salience,
+        sensitivity,
+        owner,
+        evidenceRefs,
+        lastReviewedAt,
+        nextReviewAt,
+        mergedFromIds,
+        splitFromId,
+      ] = values as [string, string, string, string, number, string, string, unknown, string, string | null, unknown, string | null];
+      row.priority = priority;
+      row.status = status;
+      row.expires_at = expiresAt;
+      row.salience = salience;
+      row.sensitivity = sensitivity;
+      row.owner = owner;
+      row.evidence_refs = evidenceRefs;
+      row.last_reviewed_at = lastReviewedAt;
+      row.next_review_at = nextReviewAt;
+      row.merged_from_ids = mergedFromIds;
+      row.split_from_id = splitFromId;
       return { rows: [row as Row] };
     }
 
@@ -459,6 +555,21 @@ describe('postgres intention adapters', () => {
       contactId: 'contact-a',
       priority: 'medium',
       source: 'agent',
+      status: 'active',
+    });
+
+    const duplicate = await ports.concernStore.create({
+      text: 'Check the hydration reminder',
+      contactId: 'contact-a',
+      priority: 'high',
+      status: 'blocked',
+      evidenceRefs: [{ kind: 'runtime', ref: 'pg-dedupe-1' }],
+    });
+    expect(duplicate.id).toBe(created.id);
+    expect(duplicate).toMatchObject({
+      priority: 'high',
+      status: 'blocked',
+      evidenceRefs: [{ kind: 'runtime', ref: 'pg-dedupe-1' }],
     });
 
     const resolved = await ports.concernStore.resolveConcern(created.id, {

@@ -2,8 +2,16 @@ import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import {
+  ACTIVE_CONCERN_EVIDENCE_KINDS,
+  ACTIVE_CONCERN_OWNERS,
   ACTIVE_CONCERN_PRIORITIES,
+  ACTIVE_CONCERN_SENSITIVITIES,
+  ACTIVE_CONCERN_STATUSES,
+  type ActiveConcernEvidenceRef,
+  type ActiveConcernOwner,
   type ActiveConcernPriority,
+  type ActiveConcernSensitivity,
+  type ActiveConcernStatus,
 } from '../../core/intention/concerns.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import {
@@ -39,6 +47,7 @@ const ORIENT_ACTIONS = [
   'create_concern',
   'list_concerns',
   'resolve_concern',
+  'transition_concern',
 ] as const;
 type OrientAction = (typeof ORIENT_ACTIONS)[number];
 
@@ -69,6 +78,14 @@ interface OrientToolParams extends ValuesListParams {
   human?: string;
   goals?: string;
   priority?: ActiveConcernPriority;
+  status?: ActiveConcernStatus;
+  salience?: number;
+  sensitivity?: ActiveConcernSensitivity;
+  owner?: ActiveConcernOwner;
+  evidenceRefs?: ActiveConcernEvidenceRef[];
+  reopenResolved?: boolean;
+  nextReviewAt?: string;
+  clearNextReview?: boolean;
   contactId?: string;
   source?: 'appraisal' | 'agent' | 'heartbeat';
   includeResolved?: boolean;
@@ -77,6 +94,25 @@ interface OrientToolParams extends ValuesListParams {
   concernIds?: string[];
   outcome?: string;
 }
+
+const CONCERN_EVIDENCE_REF_SCHEMA = Type.Object({
+  kind: Type.Unsafe<ActiveConcernEvidenceRef['kind']>({
+    type: 'string',
+    enum: [...ACTIVE_CONCERN_EVIDENCE_KINDS],
+    description: 'Safe evidence reference kind. Do not include raw sensitive content.',
+  }),
+  ref: Type.String({
+    minLength: 1,
+    maxLength: 240,
+    description: 'Opaque id, pointer, or stable reference. Do not include raw source text.',
+  }),
+  sensitivity: Type.Optional(Type.Unsafe<ActiveConcernSensitivity>({
+    type: 'string',
+    enum: [...ACTIVE_CONCERN_SENSITIVITIES],
+  })),
+  redacted: Type.Optional(Type.Boolean()),
+  hash: Type.Optional(Type.String({ minLength: 1, maxLength: 240 })),
+});
 
 function ensureAction(raw: unknown): OrientAction | null {
   if (typeof raw !== 'string') return null;
@@ -135,10 +171,10 @@ export function createOrientTool(
       + 'action=reorient for a holistic refresh of all three blocks, '
       + 'action=values_list to inspect recent values reflections, '
       + 'action=values_add|values_update to append values journal entries or append-only revisions, and '
-      + 'action=create_concern|list_concerns|resolve_concern to manage active open threads, reminders, checkups, and proactive communication items. '
+      + 'action=create_concern|list_concerns|resolve_concern|transition_concern to manage lifecycle-tracked open threads, reminders, checkups, and proactive communication items. '
       + 'When you decide "I should check this later", "I will follow up", "ask about this tomorrow", or similar, call orient action=create_concern in the same turn instead of only saying it in chat or journal prose. '
       + 'Open threads are not necessarily problems. Put follow-ups such as "reach out tonight" here, not in scratchpad. '
-      + 'For action=resolve_concern, pass concernId or concernIds copied exactly from the concern.id returned by create_concern or list_concerns; '
+      + 'For action=resolve_concern or action=transition_concern, pass concernId or concernIds copied exactly from the concern.id returned by create_concern or list_concerns; '
       + 'do not use tool_search, fs, or analysis_workbench to rediscover it.',
     parameters: Type.Object({
       action: Type.Unsafe<OrientAction>({
@@ -189,6 +225,40 @@ export function createOrientTool(
         type: 'string',
         enum: [...ACTIVE_CONCERN_PRIORITIES],
         description: 'Concern priority for action=create_concern.',
+      })),
+      status: Type.Optional(Type.Unsafe<ActiveConcernStatus>({
+        type: 'string',
+        enum: [...ACTIVE_CONCERN_STATUSES],
+        description: 'Concern lifecycle status for action=create_concern or action=transition_concern.',
+      })),
+      salience: Type.Optional(Type.Number({
+        minimum: 0,
+        maximum: 1,
+        description: 'Concern salience for action=create_concern or action=transition_concern.',
+      })),
+      sensitivity: Type.Optional(Type.Unsafe<ActiveConcernSensitivity>({
+        type: 'string',
+        enum: [...ACTIVE_CONCERN_SENSITIVITIES],
+        description: 'Concern sensitivity metadata for action=create_concern.',
+      })),
+      owner: Type.Optional(Type.Unsafe<ActiveConcernOwner>({
+        type: 'string',
+        enum: [...ACTIVE_CONCERN_OWNERS],
+        description: 'Concern lifecycle owner for action=create_concern.',
+      })),
+      evidenceRefs: Type.Optional(Type.Array(CONCERN_EVIDENCE_REF_SCHEMA, {
+        maxItems: 20,
+        description: 'Safe evidence references for concern creation, resolution, or transition. Do not include raw sensitive content.',
+      })),
+      reopenResolved: Type.Optional(Type.Boolean({
+        description: 'For action=create_concern, true only when new evidence should reopen a matching terminal concern.',
+      })),
+      nextReviewAt: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Optional ISO timestamp for deferred/watching lifecycle review.',
+      })),
+      clearNextReview: Type.Optional(Type.Boolean({
+        description: 'For action=transition_concern, clear any existing next review timestamp.',
       })),
       contactId: Type.Optional(Type.String({
         minLength: 1,
@@ -273,6 +343,13 @@ export function createOrientTool(
               priority: params.priority,
               contactId: params.contactId,
               source: params.source,
+              status: params.status,
+              salience: params.salience,
+              sensitivity: params.sensitivity,
+              owner: params.owner,
+              evidenceRefs: params.evidenceRefs,
+              reopenResolved: params.reopenResolved,
+              nextReviewAt: params.nextReviewAt,
             },
           );
         }
@@ -310,7 +387,10 @@ export function createOrientTool(
           const resolved = [];
           const missing = [];
           for (const concernId of uniqueConcernIds) {
-            const concern = await concernStore.resolveConcern(concernId, { outcome: params.outcome });
+            const concern = await concernStore.resolveConcern(concernId, {
+              outcome: params.outcome,
+              evidenceRefs: params.evidenceRefs,
+            });
             if (concern) {
               resolved.push(concern);
             } else {
@@ -321,6 +401,52 @@ export function createOrientTool(
             resolved: resolved.length,
             missing,
             concerns: resolved,
+          }, null, 2);
+          return missing.length > 0
+            ? textResultWithError(resultText, true)
+            : textResult(resultText);
+        }
+
+        if (action === 'transition_concern') {
+          const concernIds = Array.isArray(params.concernIds)
+            ? params.concernIds.map(ensureString).filter((id): id is string => Boolean(id))
+            : [];
+          const singleConcernId = ensureString(params.concernId);
+          if (singleConcernId) {
+            concernIds.unshift(singleConcernId);
+          }
+          const uniqueConcernIds = [...new Set(concernIds)];
+          if (uniqueConcernIds.length === 0 || !params.status) {
+            return textResultWithError(JSON.stringify({
+              error: 'missing_required_parameter',
+              action: 'transition_concern',
+              required: 'concernId or concernIds, and status',
+              hint: 'Retry orient with action="transition_concern", status, and concern id(s) returned by list_concerns.',
+            }, null, 2), true);
+          }
+          const concernStore = requireConcernStore(options.concernStore);
+          const transitioned = [];
+          const missing = [];
+          for (const concernId of uniqueConcernIds) {
+            const concern = await concernStore.transitionConcernStatus(concernId, {
+              status: params.status,
+              outcome: params.outcome,
+              evidenceRefs: params.evidenceRefs,
+              resolutionEvidenceRefs: params.evidenceRefs,
+              nextReviewAt: params.nextReviewAt,
+              clearNextReview: params.clearNextReview,
+              salience: params.salience,
+            });
+            if (concern) {
+              transitioned.push(concern);
+            } else {
+              missing.push(concernId);
+            }
+          }
+          const resultText = JSON.stringify({
+            transitioned: transitioned.length,
+            missing,
+            concerns: transitioned,
           }, null, 2);
           return missing.length > 0
             ? textResultWithError(resultText, true)

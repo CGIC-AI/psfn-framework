@@ -1,8 +1,16 @@
 import { Type } from '@sinclair/typebox';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import {
+  ACTIVE_CONCERN_EVIDENCE_KINDS,
+  ACTIVE_CONCERN_OWNERS,
   ACTIVE_CONCERN_PRIORITIES,
+  ACTIVE_CONCERN_SENSITIVITIES,
+  ACTIVE_CONCERN_STATUSES,
+  type ActiveConcernEvidenceRef,
+  type ActiveConcernOwner,
   type ActiveConcernPriority,
+  type ActiveConcernSensitivity,
+  type ActiveConcernStatus,
 } from './concerns.js';
 import type { ConcernStorePort } from './concern-store-port.js';
 import { textResultWithError } from '../tools/results.js';
@@ -18,6 +26,7 @@ interface ListConcernsParams {
 interface ResolveConcernParams {
   concernId: string;
   outcome?: string;
+  evidenceRefs?: ActiveConcernEvidenceRef[];
 }
 
 interface CreateConcernParams {
@@ -25,7 +34,39 @@ interface CreateConcernParams {
   priority?: ActiveConcernPriority;
   contactId?: string;
   source?: 'appraisal' | 'agent' | 'heartbeat';
+  status?: ActiveConcernStatus;
+  salience?: number;
+  sensitivity?: ActiveConcernSensitivity;
+  owner?: ActiveConcernOwner;
+  evidenceRefs?: ActiveConcernEvidenceRef[];
+  reopenResolved?: boolean;
+  nextReviewAt?: string;
 }
+
+const CONCERN_EVIDENCE_REF_SCHEMA = Type.Object({
+  kind: Type.Unsafe<ActiveConcernEvidenceRef['kind']>({
+    type: 'string',
+    enum: [...ACTIVE_CONCERN_EVIDENCE_KINDS],
+    description: 'Safe evidence reference kind. Do not include raw sensitive content.',
+  }),
+  ref: Type.String({
+    minLength: 1,
+    maxLength: 240,
+    description: 'Opaque id, pointer, or stable reference. Do not include raw source text.',
+  }),
+  sensitivity: Type.Optional(Type.Unsafe<ActiveConcernSensitivity>({
+    type: 'string',
+    enum: [...ACTIVE_CONCERN_SENSITIVITIES],
+  })),
+  redacted: Type.Optional(Type.Boolean({
+    description: 'True when this points to redacted or sensitive source material.',
+  })),
+  hash: Type.Optional(Type.String({
+    minLength: 1,
+    maxLength: 240,
+    description: 'Optional digest for source verification without copying source content.',
+  })),
+});
 
 function textResult(text: string): AgentToolResult<{ isError?: boolean }> {
   return {
@@ -94,6 +135,10 @@ export function createResolveConcernTool(store: ConcernStorePort): AgentTool<any
         minLength: 1,
         description: 'Optional concise outcome note.',
       })),
+      evidenceRefs: Type.Optional(Type.Array(CONCERN_EVIDENCE_REF_SCHEMA, {
+        maxItems: 20,
+        description: 'Safe resolution evidence references. Do not include raw sensitive content.',
+      })),
     }),
     execute: async (
       _toolCallId: string,
@@ -102,6 +147,7 @@ export function createResolveConcernTool(store: ConcernStorePort): AgentTool<any
       try {
         const resolved = await store.resolveConcern(params.concernId, {
           outcome: params.outcome,
+          evidenceRefs: params.evidenceRefs,
         });
         if (!resolved) {
           return textResultWithError(`No unresolved concern found for id: ${params.concernId}`, true);
@@ -135,6 +181,11 @@ export function createCreateConcernTool(store: ConcernStorePort): AgentTool<any>
         enum: [...ACTIVE_CONCERN_PRIORITIES],
         description: 'Concern priority (high, medium, low). Defaults to medium.',
       })),
+      status: Type.Optional(Type.Unsafe<ActiveConcernStatus>({
+        type: 'string',
+        enum: [...ACTIVE_CONCERN_STATUSES],
+        description: 'Concern lifecycle status. Defaults to active.',
+      })),
       contactId: Type.Optional(Type.String({
         minLength: 1,
         description: 'Optional contact id this concern is scoped to.',
@@ -145,6 +196,32 @@ export function createCreateConcernTool(store: ConcernStorePort): AgentTool<any>
         Type.Literal('heartbeat'),
       ], {
         description: 'Creation source. Defaults to agent.',
+      })),
+      salience: Type.Optional(Type.Number({
+        minimum: 0,
+        maximum: 1,
+        description: 'Lifecycle salience from 0 to 1. Defaults to 0.5.',
+      })),
+      sensitivity: Type.Optional(Type.Unsafe<ActiveConcernSensitivity>({
+        type: 'string',
+        enum: [...ACTIVE_CONCERN_SENSITIVITIES],
+        description: 'Concern sensitivity metadata. Defaults to personal.',
+      })),
+      owner: Type.Optional(Type.Unsafe<ActiveConcernOwner>({
+        type: 'string',
+        enum: [...ACTIVE_CONCERN_OWNERS],
+        description: 'Lifecycle owner. Defaults to companion.',
+      })),
+      evidenceRefs: Type.Optional(Type.Array(CONCERN_EVIDENCE_REF_SCHEMA, {
+        maxItems: 20,
+        description: 'Safe evidence references. Do not include raw sensitive content.',
+      })),
+      reopenResolved: Type.Optional(Type.Boolean({
+        description: 'Only true when new evidence should reopen a matching terminal concern.',
+      })),
+      nextReviewAt: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Optional ISO timestamp for deferred or watching review.',
       })),
     }),
     execute: async (
@@ -157,6 +234,13 @@ export function createCreateConcernTool(store: ConcernStorePort): AgentTool<any>
           priority: params.priority,
           contactId: params.contactId,
           source: params.source,
+          status: params.status,
+          salience: params.salience,
+          sensitivity: params.sensitivity,
+          owner: params.owner,
+          evidenceRefs: params.evidenceRefs,
+          reopenResolved: params.reopenResolved,
+          nextReviewAt: params.nextReviewAt,
         });
         return textResult(JSON.stringify({
           created: true,

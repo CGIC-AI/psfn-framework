@@ -308,8 +308,9 @@ export function createSessionNewTool(options: SessionNewToolOptions): AgentTool<
     name: 'session_new',
     label: 'session_new',
     description:
-      'Start a fresh session and switch the active runtime context to that session. '
-      + 'Returns previous/new session IDs for follow-up operations.',
+      'Start a fresh session and switch the active runtime context to that new session. '
+      + 'No required arguments; optional metadata can preserve why the split happened. '
+      + 'Returns previousSessionId and newSessionId so later session_resume calls can use exact IDs.',
     parameters: Type.Object({
       metadata: Type.Optional(
         Type.Record(
@@ -384,7 +385,8 @@ export function createSessionListTool(
     name: 'session_list',
     label: 'session_list',
     description:
-      'List recent sessions ordered by last activity, including message counts and a preview of each latest message.',
+      'List recent sessions ordered by last activity, including exact sessionId values, message counts, '
+      + 'and latest-message previews. Use this before session_resume when you do not know the exact sessionId.',
     parameters: Type.Object({
       limit: Type.Optional(Type.Number({
         minimum: 1,
@@ -412,7 +414,8 @@ export function createSessionResumeTool(
     name: 'session_resume',
     label: 'session_resume',
     description:
-      'Resume a prior session by session ID. Updates active context so subsequent API/terminal turns continue in that session.',
+      'Resume a prior session by exact sessionId and switch active context so subsequent API/terminal turns continue there. '
+      + 'Requires sessionId; get valid IDs from session_list rather than guessing from preview text.',
     parameters: Type.Object({
       sessionId: Type.String({
         minLength: 1,

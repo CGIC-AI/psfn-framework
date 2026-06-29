@@ -20,6 +20,8 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 
+export type { FatigueEnforcementMetadata };
+
 export type PromptCacheabilityClass = 'static' | 'session_stable' | 'append_only' | 'volatile';
 export type PromptCacheBreaker =
   | 'prompt_layer'

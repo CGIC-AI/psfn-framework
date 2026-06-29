@@ -4,8 +4,37 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionStore, sanitizeChannelId, unsanitizeChannelId } from './store.js';
 import { buildSessionHmacKeyring, signJournalEntry, verifyJournalEntryIntegrity } from '../journals/journal-utils.js';
+import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { createTurnId, isTurnId } from '../../core/turns/id.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
+
+function appendSessionMessages(
+  targetStore: SessionStore,
+  channelId: string,
+  count: number,
+  contentPrefix = 'Message',
+): void {
+  for (let index = 0; index < count; index += 1) {
+    targetStore.append({
+      channelId,
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      content: `${contentPrefix} ${index}`,
+      timestamp: 1_700_000_000_000 + index,
+    });
+  }
+}
+
+function findSessionJournalPath(rootDir: string, filenameFragment: string): string {
+  const file = readdirSync(rootDir)
+    .find(candidate => (
+      candidate.endsWith('.jsonl')
+      && !candidate.startsWith('_')
+      && !candidate.startsWith('user_')
+      && candidate.includes(filenameFragment)
+    ));
+  expect(file).toBeDefined();
+  return join(rootDir, file!);
+}
 
 describe('SessionStore', () => {
   let dir: string;
@@ -856,6 +885,130 @@ describe('SessionStore', () => {
     };
     expect(index.channels[channelId].messageCount).toBe(1500);
     expect(index.channels[channelId].lastTimestamp).toBe(baseTimestamp + 1499);
+  });
+
+  it('caches lightweight session tails across repeated unchanged reads', () => {
+    const channelId = 'api:tail-cache-repeat';
+    appendSessionMessages(store, channelId, 8);
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const tailSpy = vi.spyOn(archivePort, 'readJournalTailEntries');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    tailSpy.mockClear();
+
+    const first = reloaded.getRecent(channelId, 3);
+    const second = reloaded.getRecent(channelId, 3);
+
+    expect(first.map(entry => entry.content)).toEqual(['Message 5', 'Message 6', 'Message 7']);
+    expect(second).toEqual(first);
+    expect(tailSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates cached lightweight tails after append', () => {
+    const channelId = 'api:tail-cache-append';
+    appendSessionMessages(store, channelId, 5);
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const tailSpy = vi.spyOn(archivePort, 'readJournalTailEntries');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    tailSpy.mockClear();
+
+    expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['Message 3', 'Message 4']);
+    expect(tailSpy).toHaveBeenCalledTimes(1);
+
+    reloaded.append({
+      channelId,
+      role: 'assistant',
+      content: 'Message 5',
+      timestamp: 1_700_000_000_005,
+    });
+
+    expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['Message 4', 'Message 5']);
+    expect(tailSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps tail cache entries isolated by channel and requested size', () => {
+    appendSessionMessages(store, 'api:tail-cache-alpha', 6, 'alpha');
+    appendSessionMessages(store, 'api:tail-cache-beta', 6, 'beta');
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const tailSpy = vi.spyOn(archivePort, 'readJournalTailEntries');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    tailSpy.mockClear();
+
+    expect(reloaded.getRecent('api:tail-cache-alpha', 2).map(entry => entry.content)).toEqual(['alpha 4', 'alpha 5']);
+    expect(reloaded.getRecent('api:tail-cache-alpha', 3).map(entry => entry.content)).toEqual([
+      'alpha 3',
+      'alpha 4',
+      'alpha 5',
+    ]);
+    expect(reloaded.getRecent('api:tail-cache-beta', 2).map(entry => entry.content)).toEqual(['beta 4', 'beta 5']);
+    expect(tailSpy).toHaveBeenCalledTimes(3);
+
+    expect(reloaded.getRecent('api:tail-cache-alpha', 2).map(entry => entry.content)).toEqual(['alpha 4', 'alpha 5']);
+    expect(reloaded.getRecent('api:tail-cache-alpha', 3).map(entry => entry.content)).toEqual([
+      'alpha 3',
+      'alpha 4',
+      'alpha 5',
+    ]);
+    expect(reloaded.getRecent('api:tail-cache-beta', 2).map(entry => entry.content)).toEqual(['beta 4', 'beta 5']);
+    expect(tailSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not let cached tails hide malformed archive lines', () => {
+    const channelId = 'api:tail-cache-parse';
+    appendSessionMessages(store, channelId, 5);
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const tailSpy = vi.spyOn(archivePort, 'readJournalTailEntries');
+    const reloaded = new SessionStore(dir, { sessionArchivePort: archivePort });
+    tailSpy.mockClear();
+
+    expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['Message 3', 'Message 4']);
+    expect(tailSpy).toHaveBeenCalledTimes(1);
+
+    const journalPath = findSessionJournalPath(dir, 'tail-cache-parse');
+    writeFileSync(journalPath, `${readFileSync(journalPath, 'utf-8')}{bad\n`, 'utf-8');
+
+    expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['Message 3', 'Message 4']);
+    expect(tailSpy).toHaveBeenCalledTimes(2);
+    const tailResult = tailSpy.mock.results.at(-1)?.value as { quarantined?: Array<{ raw: string }> } | undefined;
+    expect(tailResult?.quarantined).toEqual([expect.objectContaining({ raw: '{bad' })]);
+  });
+
+  it('does not let cached tails hide integrity failures after archive changes', () => {
+    const channelId = 'api:tail-cache-integrity';
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:integrity-key',
+      activeVersion: 'v1',
+    });
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    appendSessionMessages(signedStore, channelId, 4, 'signed');
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const tailSpy = vi.spyOn(archivePort, 'readJournalTailEntries');
+    const reloaded = new SessionStore(dir, {
+      integrityKeyring: keyring,
+      sessionArchivePort: archivePort,
+    });
+    tailSpy.mockClear();
+
+    expect(reloaded.getRecent(channelId, 2).map(entry => entry.content)).toEqual(['signed 2', 'signed 3']);
+    expect(tailSpy).toHaveBeenCalledTimes(1);
+
+    const journalPath = findSessionJournalPath(dir, 'tail-cache-integrity');
+    const lines = readFileSync(journalPath, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+    lines[3].content = 'tampered 3 with additional bytes';
+    writeFileSync(journalPath, `${lines.map(line => JSON.stringify(line)).join('\n')}\n`, 'utf-8');
+
+    const entries = reloaded.getRecent(channelId, 2);
+    expect(tailSpy).toHaveBeenCalledTimes(2);
+    expect(entries[0].content).toBe('signed 2');
+    expect(entries[1].content).toContain('<unverified_history>');
+    expect(entries[1].content).toContain('tampered 3 with additional bytes');
   });
 
   it('persists discord message IDs for dedup helpers', () => {

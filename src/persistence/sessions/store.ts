@@ -458,6 +458,11 @@ export class SessionStore implements TranscriptSearchPort {
       limit,
     );
   }
+  private fingerprintArchive(cache: ChannelCache): string | null {
+    return this.journalRuntime.fingerprintArchive(
+      this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath),
+    );
+  }
   private applyTurnTombstonesToEntries(entries: readonly SessionEntry[], tombstones: ReadonlySet<string>): SessionEntry[] {
     if (tombstones.size === 0) return [...entries];
     return entries.filter((entry) => {
@@ -509,12 +514,23 @@ export class SessionStore implements TranscriptSearchPort {
     const cached = cache.recentEntriesByLimit.get(limit);
     if (!cached) return null;
     if (cached.fingerprint !== this.buildRecentEntriesFingerprint(cache)) return null;
+    if (cached.archiveFingerprint !== this.fingerprintArchive(cache)) return null;
     return [...cached.entries];
   }
-  private writeCachedRecentEntries(cache: ChannelCache, limit: number, entries: SessionEntry[]): void {
+  private writeCachedRecentEntries(
+    cache: ChannelCache,
+    limit: number,
+    entries: SessionEntry[],
+    archiveFingerprintBeforeRead: string | null,
+  ): void {
     if (cache.fullyLoaded) return;
+    const archiveFingerprint = this.fingerprintArchive(cache);
+    if (!archiveFingerprint || archiveFingerprint !== archiveFingerprintBeforeRead) {
+      return;
+    }
     cache.recentEntriesByLimit.set(limit, {
       fingerprint: this.buildRecentEntriesFingerprint(cache),
+      archiveFingerprint,
       entries: [...entries],
     });
     while (cache.recentEntriesByLimit.size > MAX_RECENT_ENTRY_CACHE_LIMITS) {
@@ -681,9 +697,10 @@ export class SessionStore implements TranscriptSearchPort {
     if (recentCacheHit) {
       return recentCacheHit;
     }
+    const archiveFingerprintBeforeRead = cached ? this.fingerprintArchive(cached) : null;
     const recentEntries = this.readRecentEntriesFromTail(resolved.channelId, resolved.filePath, limit);
     if (cached) {
-      this.writeCachedRecentEntries(cached, limit, recentEntries);
+      this.writeCachedRecentEntries(cached, limit, recentEntries, archiveFingerprintBeforeRead);
     }
     return recentEntries;
   }

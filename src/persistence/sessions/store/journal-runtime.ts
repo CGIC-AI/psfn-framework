@@ -97,6 +97,10 @@ export class SessionJournalRuntime {
     return this.archivePort.scanJournalFileMetadata(archive);
   }
 
+  fingerprintArchive(archive: SessionArchiveHandle): string | null {
+    return this.archivePort.fingerprintArchive(archive);
+  }
+
   verifyAndNormalizeEntry(
     entry: JournalEntry,
     previousHmacCandidates: readonly (string | null)[],

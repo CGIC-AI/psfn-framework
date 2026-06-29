@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { JournalEntry } from '../../../core/session/types.js';
 import { buildMessageJournalEntry } from './entries.js';
@@ -79,6 +79,7 @@ export interface SessionArchivePort {
   readJournalFile(handle: SessionArchiveHandle, options?: ReadJournalFileOptions): ReadJournalResult;
   readJournalFirstEntry(handle: SessionArchiveHandle): JournalEntry | null;
   readJournalTailEntries(handle: SessionArchiveHandle, options: ReadJournalTailOptions): ReadJournalTailResult;
+  fingerprintArchive(handle: SessionArchiveHandle): string | null;
   scanJournalFileMetadata(
     handle: SessionArchiveHandle,
     options?: ScanJournalMetadataOptions,
@@ -137,6 +138,23 @@ export function createFilesystemSessionArchivePort(
     readJournalTailEntries: (handle, options) => (
       journalPort.readJournalTailEntries(requireFilesystemHandle(handle).filePath, options)
     ),
+    fingerprintArchive: (handle) => {
+      const { filePath } = requireFilesystemHandle(handle);
+      try {
+        const stats = statSync(filePath);
+        return [
+          stats.dev,
+          stats.ino,
+          stats.size,
+          stats.mtimeMs,
+          stats.ctimeMs,
+        ].join(':');
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') return null;
+        throw error;
+      }
+    },
     scanJournalFileMetadata: (handle, options) => (
       journalPort.scanJournalFileMetadata(requireFilesystemHandle(handle).filePath, options)
     ),

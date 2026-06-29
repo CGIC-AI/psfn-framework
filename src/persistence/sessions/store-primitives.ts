@@ -43,6 +43,7 @@ export interface ChannelCache {
 
 export interface CachedRecentEntries {
   fingerprint: string;
+  archiveFingerprint: string;
   entries: import('../../core/session/types.js').SessionEntry[];
 }
 

@@ -73,8 +73,15 @@ import { ModelCallGate } from './model-call-gate.js';
 import { clampVisionCompletionMaxTokens } from './vision-limits.js';
 import type { ModelUsageRecorder } from '../../shared/telemetry/model-usage.js';
 import { getRunChargeSnapshot } from '../../shared/telemetry/run-charge.js';
+import {
+  type CircuitBreakerTransition,
+  SlidingWindowCircuitBreaker,
+} from '../../shared/resilience/circuit-breaker.js';
 
 const log = createComponentLogger('LLMClient');
+const LLM_CIRCUIT_BREAKER_WINDOW_MS = 60_000;
+const LLM_CIRCUIT_BREAKER_COOLDOWN_MS = 30_000;
+const LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
 const PROVIDER_RESPONSE_PREFIX_ARTIFACTS = [
   '<｜begin▁of▁sentence｜>',
   '<｜begin_of_sentence｜>',
@@ -110,6 +117,7 @@ export interface LLMClientRuntimeOptions {
   onEligibilityDecision?: (decision: EligibilityDecision) => void;
   onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   usageRecorder?: ModelUsageRecorder;
+  circuitBreaker?: SlidingWindowCircuitBreaker;
 }
 
 const FULL_KNOB_PASSTHROUGH_PROVIDERS = new Set(['openrouter', 'litellm', 'local_endpoint']);
@@ -153,6 +161,7 @@ export class LLMClient {
   private onBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
   private modelCallGate: ModelCallGate;
   private usageRecorder?: ModelUsageRecorder;
+  private circuitBreaker: SlidingWindowCircuitBreaker;
   private usageCallCounter = 0;
 
   constructor(
@@ -173,6 +182,11 @@ export class LLMClient {
     this.onBudgetBlocked = runtimeOptions.onBudgetBlocked;
     this.usageRecorder = runtimeOptions.usageRecorder;
     this.modelCallGate = new ModelCallGate();
+    this.circuitBreaker = runtimeOptions.circuitBreaker ?? new SlidingWindowCircuitBreaker({
+      failureThreshold: LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+      windowMs: LLM_CIRCUIT_BREAKER_WINDOW_MS,
+      cooldownMs: LLM_CIRCUIT_BREAKER_COOLDOWN_MS,
+    });
   }
 
   private getModelAndKey(candidate: RoutingCandidate): { model: Model<any>; apiKey: string | undefined } {
@@ -803,6 +817,43 @@ export class LLMClient {
     return null;
   }
 
+  private resolveCircuitBreakerKey(
+    method: 'llm.stream' | 'llm.complete',
+    candidate: RoutingCandidate,
+  ): string {
+    const routeKey = this.resolveModelCallResourceKey(candidate) ?? 'registered_model';
+    return [
+      method,
+      candidate.provider.trim().toLowerCase(),
+      candidate.model.trim().toLowerCase(),
+      routeKey,
+    ].join('::');
+  }
+
+  private logCircuitBreakerTransition(transition: CircuitBreakerTransition): void {
+    const payload = {
+      method: transition.method,
+      circuitKey: transition.key,
+      from: transition.from,
+      to: transition.to,
+      reason: transition.reason,
+      failureCount: transition.failureCount,
+      failureThreshold: transition.failureThreshold,
+      windowMs: transition.windowMs,
+      cooldownMs: transition.cooldownMs,
+      ...(transition.openUntilMs !== undefined ? {
+        openUntil: new Date(transition.openUntilMs).toISOString(),
+      } : {}),
+      ...(transition.lastError ? { lastError: transition.lastError } : {}),
+    };
+
+    if (transition.to === 'open') {
+      log.warn('LLM circuit breaker opened', payload);
+      return;
+    }
+    log.info('LLM circuit breaker state changed', payload);
+  }
+
   private async runWithModelCallGate<T>(
     purpose: RoutingPurpose,
     candidate: RoutingCandidate,
@@ -1123,6 +1174,12 @@ export class LLMClient {
             assertUsableProviderResponse(incompleteResponse, candidateTarget);
             return incompleteResponse;
           }, llmRetryConfig(this.config), {
+            circuitBreaker: {
+              breaker: this.circuitBreaker,
+              key: this.resolveCircuitBreakerKey('llm.stream', candidateTarget),
+              method: 'llm.stream',
+              onTransition: transition => this.logCircuitBreakerTransition(transition),
+            },
             onRetry: ({ attempt, maxRetries, delayMs, error }) => {
               log.warn('LLM stream failed, retrying', {
                 model: String(model.id),
@@ -1243,6 +1300,12 @@ export class LLMClient {
         }
 
         const response = await withRetry(request, llmRetryConfig(this.config), {
+          circuitBreaker: {
+            breaker: this.circuitBreaker,
+            key: this.resolveCircuitBreakerKey('llm.complete', candidateTarget),
+            method: 'llm.complete',
+            onTransition: transition => this.logCircuitBreakerTransition(transition),
+          },
           onRetry: ({ attempt, maxRetries, delayMs, error }) => {
             log.warn('LLM complete failed, retrying', {
               model: String(model.id),

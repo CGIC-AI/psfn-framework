@@ -1,4 +1,8 @@
 import { sleep as defaultSleep } from '../../shared/utils/timing.js';
+import type {
+  CircuitBreakerTransition,
+  SlidingWindowCircuitBreaker,
+} from '../../shared/resilience/circuit-breaker.js';
 
 export interface RetryConfig {
   maxRetries?: number;
@@ -17,6 +21,12 @@ export interface RetryOptions {
   isRetryable?: (error: Error) => boolean;
   onRetry?: (attempt: RetryAttempt) => void | Promise<void>;
   sleep?: (delayMs: number) => Promise<void>;
+  circuitBreaker?: {
+    breaker: SlidingWindowCircuitBreaker;
+    key: string;
+    method?: string;
+    onTransition?: (transition: CircuitBreakerTransition) => void;
+  };
 }
 
 export const DEFAULT_MAX_RETRIES = 3;
@@ -126,22 +136,36 @@ export async function withRetry<T>(
   const isRetryable = options?.isRetryable
     ?? ((error: Error) => isRetryableError(error, resolved.retryableErrors));
 
-  for (let retryAttempt = 0; ; retryAttempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      const err = toError(error);
-      const canRetry = retryAttempt < resolved.maxRetries && isRetryable(err);
-      if (!canRetry) throw err;
+  const run = async (): Promise<T> => {
+    for (let retryAttempt = 0; ; retryAttempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        const err = toError(error);
+        const canRetry = retryAttempt < resolved.maxRetries && isRetryable(err);
+        if (!canRetry) throw err;
 
-      const delayMs = backoffDelay(resolved.baseDelayMs, retryAttempt);
-      await options?.onRetry?.({
-        attempt: retryAttempt + 1,
-        maxRetries: resolved.maxRetries,
-        delayMs,
-        error: err,
-      });
-      await sleep(delayMs);
+        const delayMs = backoffDelay(resolved.baseDelayMs, retryAttempt);
+        await options?.onRetry?.({
+          attempt: retryAttempt + 1,
+          maxRetries: resolved.maxRetries,
+          delayMs,
+          error: err,
+        });
+        await sleep(delayMs);
+      }
     }
+  };
+
+  if (!options?.circuitBreaker) {
+    return await run();
   }
+
+  return await options.circuitBreaker.breaker.execute({
+    key: options.circuitBreaker.key,
+    ...(options.circuitBreaker.method ? { method: options.circuitBreaker.method } : {}),
+    operation: run,
+    shouldRecordFailure: isRetryable,
+    onTransition: options.circuitBreaker.onTransition,
+  });
 }

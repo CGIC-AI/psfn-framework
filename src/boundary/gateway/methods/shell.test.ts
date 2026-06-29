@@ -1,10 +1,10 @@
 import { chmodSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GatewayMethodRuntime } from './types.js';
 import type { PolicyConfig } from '../policy.js';
-import { registerShellMethods } from './shell.js';
+import { registerShellMethods, resetShellCircuitBreakersForTests } from './shell.js';
 import { GatewayErrors } from '../protocol.js';
 
 function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<string, unknown>): Promise<any> } {
@@ -12,6 +12,15 @@ function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<stri
   const keyring = {
     activeVersion: 'v1',
     keys: { v1: 'test-shell-secret' },
+  };
+  const effectivePolicyConfig: PolicyConfig = {
+    ...policyConfig,
+    ...(policyConfig.shellExec ? {
+      shellExec: {
+        pathOverride: dirname(process.execPath),
+        ...policyConfig.shellExec,
+      },
+    } : {}),
   };
   const runtime: GatewayMethodRuntime = {
     target: {
@@ -22,7 +31,7 @@ function createHarness(policyConfig: PolicyConfig): { invoke(params: Record<stri
     llmProvider: {} as any,
     embeddingService: {} as any,
     discordAdapter: {} as any,
-    policyConfig,
+    policyConfig: effectivePolicyConfig,
     workspacePath: process.cwd(),
     sessionHmacKeyring: keyring,
     notifyAll: vi.fn(),
@@ -57,6 +66,7 @@ describe('registerShellMethods', () => {
   const tempPaths: string[] = [];
 
   afterEach(() => {
+    resetShellCircuitBreakersForTests();
     while (tempPaths.length > 0) {
       const target = tempPaths.pop();
       if (!target) continue;
@@ -148,6 +158,31 @@ describe('registerShellMethods', () => {
 
     expect(result.timedOut).toBe(true);
     expect(result.exitCode).toBeNull();
+  });
+
+  it('opens a per-command shell.exec circuit after repeated execution failures', async () => {
+    const harness = createHarness({
+      workspacePath: process.cwd(),
+      shellExec: {
+        enabled: true,
+        allowlist: ['node'],
+        allowedCwd: [process.cwd()],
+      },
+    });
+    const params = {
+      command: 'node',
+      args: ['-e', 'process.exit(7)'],
+    };
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const result = await harness.invoke(params);
+      expect(result.exitCode).toBe(7);
+    }
+
+    await expect(harness.invoke(params)).rejects.toMatchObject({
+      code: GatewayErrors.PROVIDER_ERROR,
+      message: expect.stringContaining('Circuit open for shell.exec'),
+    });
   });
 
   it('enforces output limit', async () => {

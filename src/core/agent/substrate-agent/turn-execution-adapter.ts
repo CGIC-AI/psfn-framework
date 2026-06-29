@@ -93,7 +93,10 @@ interface TurnExecutionAdapterCallbacks {
     canonicalContactKey: string | undefined,
     subjectIdentityKey: string | undefined,
   ) => string;
-  buildStaticPromptSettingsHash: (templateVariables: Record<string, string>) => string;
+  buildStaticPromptSettingsHash: (
+    templateVariables: Record<string, string>,
+    staticPrefixTemplate?: string,
+  ) => string;
   resolveStaticPromptPrefix: (params: {
     cacheKey: string;
     staticPrefixTemplate: string;
@@ -283,8 +286,8 @@ export function createTurnExecutionRuntimeAdapter(
     ),
     buildPromptPrefixCacheKey: (message, channelType, canonicalContactKey, subjectIdentityKey) => options.callbacks
       .buildPromptPrefixCacheKey(message, channelType, canonicalContactKey, subjectIdentityKey),
-    buildStaticPromptSettingsHash: (templateVariables) => options.callbacks
-      .buildStaticPromptSettingsHash(templateVariables),
+    buildStaticPromptSettingsHash: (templateVariables, staticPrefixTemplate) => options.callbacks
+      .buildStaticPromptSettingsHash(templateVariables, staticPrefixTemplate),
     resolveStaticPromptPrefix: (params) => options.callbacks.resolveStaticPromptPrefix(params),
     hashPromptText: (text) => options.callbacks.hashPromptText(text),
     getPersonaAdaptation: (trustLevel, internalState, metacognitiveFlags, templateVariables) => options.callbacks

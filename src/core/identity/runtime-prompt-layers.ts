@@ -151,10 +151,7 @@ const CURRENT_DATETIME_LAYER_CONTENT = '<runtime.current_datetime authority="can
 const RUNTIME_STATE_LAYER_SECTIONS = [
   "<last_message_received>\n<weekday>{{runtime_last_message_received_weekday}}</weekday>\n<date>{{runtime_last_message_received_date_human}}</date>\n<time>{{runtime_last_message_received_time_human}}</time>\n<timezone>{{runtime_last_message_received_timezone}}</timezone>\n<elapsed_time_since_last>{{runtime_last_message_received_ago}}</elapsed_time_since_last>\n<status>{{runtime_last_message_received_missing_notice}}</status>\n</last_message_received>",
   "<internal_turn_context>\n<kind>{{runtime_internal_turn_kind}}</kind>\n</internal_turn_context>",
-  "<speaking_with>\n<name>{{runtime_speaking_with_name}}</name>\n<trust_level>{{runtime_speaking_with_trust_level}}</trust_level>\n</speaking_with>",
-  "<channel_context>\n<type>{{runtime_channel_type}}</type>\n<visibility>{{runtime_channel_visibility}}</visibility>\n</channel_context>",
-  "<model_context>\n<identifier>{{model}}</identifier>\n</model_context>",
-  "<capability_tier>\n<tier>{{runtime_capability_tier}}</tier>\n</capability_tier>",
+  "<conversation_state>\n<chat_type>{{runtime_chat_type}}</chat_type>\n<channel_id>{{runtime_room_id}}</channel_id>\n<channel_type>{{runtime_channel_type}}</channel_type>\n<channel_visibility>{{runtime_channel_visibility}}</channel_visibility>\n<current_message_author name=\"{{runtime_current_message_author_name_xml_attr}}\" id=\"{{runtime_current_message_author_id_xml_attr}}\" />\n{{runtime_recent_active_participants_xml}}\n</conversation_state>",
 ] as const;
 
 const LEGACY_RUNTIME_STATE_LAYER_CONTENT_WITH_CURRENT_DATETIME = wrapRuntimeUmbrella('runtime_state', [
@@ -180,8 +177,7 @@ const RUNTIME_ATTENTION_LAYER_CONTENT = wrapRuntimeUmbrella('runtime_attention',
 ]);
 
 const RUNTIME_TOOLING_LAYER_CONTENT = wrapRuntimeUmbrella('runtime_tooling', [
-  "<tooling>\n<active_count>{{runtime_tooling_active_count}}</active_count>\n<core_count>{{runtime_tooling_core_count}}</core_count>\n<promoted_count>{{runtime_tooling_promoted_count}}</promoted_count>\n<loaded_count>{{runtime_tooling_loaded_count}}</loaded_count>\n<autoload_count>{{runtime_tooling_autoload_count}}</autoload_count>\n<deferred_count>{{runtime_tooling_deferred_count}}</deferred_count>\n<available_extended_count>{{runtime_tooling_available_extended_count}}</available_extended_count>\n</tooling>",
-  `<analysis_workbench_guidance>\n${ANALYSIS_WORKBENCH_GUIDANCE_BODY_TEMPLATE}\n</analysis_workbench_guidance>`,
+  `{{#if runtime_analysis_workbench_available}}<analysis_workbench_guidance>\n${ANALYSIS_WORKBENCH_GUIDANCE_BODY_TEMPLATE}\n</analysis_workbench_guidance>{{/if}}`,
   "<appearance_context>\n{{runtime_appearance_context_body}}\n</appearance_context>",
   `<self_image_tool_guidance>\n${SELF_IMAGE_TOOL_GUIDANCE_BODY_TEMPLATE}\n</self_image_tool_guidance>`,
   `<extended_tools>\n${EXTENDED_TOOLS_BODY_TEMPLATE}\n</extended_tools>`,
@@ -348,28 +344,10 @@ const REQUIRED_RUNTIME_PROMPT_SIGNAL_DEFINITIONS: readonly RequiredRuntimePrompt
     ['<internal_turn_context>', '{{runtime_internal_turn_kind}}'],
   ),
   createRequiredRuntimePromptSignalDefinition(
-    'runtime.speaking_with',
-    'Speaking With',
+    'runtime.conversation_state',
+    'Conversation State',
     ['runtime.state'],
-    ['<speaking_with>', '{{runtime_speaking_with_'],
-  ),
-  createRequiredRuntimePromptSignalDefinition(
-    'runtime.channel_context',
-    'Channel Context',
-    ['runtime.state'],
-    ['<channel_context>', '{{runtime_channel_'],
-  ),
-  createRequiredRuntimePromptSignalDefinition(
-    'runtime.model_context',
-    'Model Context',
-    ['runtime.state'],
-    ['<model_context>', '{{model}}'],
-  ),
-  createRequiredRuntimePromptSignalDefinition(
-    'runtime.capability_tier',
-    'Capability Tier',
-    ['runtime.state'],
-    ['<capability_tier>', '{{runtime_capability_tier}}'],
+    ['<conversation_state>', '{{runtime_chat_type}}', '{{runtime_current_message_author_'],
   ),
   createRequiredRuntimePromptSignalDefinition(
     'runtime.trust',
@@ -405,7 +383,7 @@ const REQUIRED_RUNTIME_PROMPT_SIGNAL_DEFINITIONS: readonly RequiredRuntimePrompt
     'runtime.tooling',
     'Tooling',
     [],
-    ['<tooling>', '{{runtime_tooling_'],
+    ['<runtime_tooling>', '<tooling>', '<extended_tools>', '{{runtime_tooling_'],
   ),
 ] as const;
 

@@ -287,10 +287,14 @@ export async function assembleTurnPrompt(input: {
       authorContext.canonicalContactKey,
       authorContext.subjectIdentityKey,
     );
-    const staticSettingsHash = runtime.buildStaticPromptSettingsHash(templateVariables);
+    const staticPrefixTemplate = turnSnapshot.prompt?.staticPrefixTemplate ?? runtime.systemPrompt;
+    const staticSettingsHash = runtime.buildStaticPromptSettingsHash(
+      templateVariables,
+      staticPrefixTemplate,
+    );
     renderedStaticPrefix = await runtime.resolveStaticPromptPrefix({
       cacheKey: staticCacheKey,
-      staticPrefixTemplate: turnSnapshot.prompt?.staticPrefixTemplate ?? runtime.systemPrompt,
+      staticPrefixTemplate,
       staticHash: turnSnapshot.prompt?.staticHash ?? runtime.hashPromptText(runtime.systemPrompt),
       settingsHash: staticSettingsHash,
       now: runtimeNow,

@@ -5,6 +5,7 @@ import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prom
 import { formatActiveConcernsContextBlock } from '../../intention/concerns.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { ApiHealthResponse, ApiHealthSubsystemStatus } from '../../../channels/api/types.js';
+import type { SessionEntry } from '../../session/types.js';
 import type { InternalState } from '../../self-model/state.js';
 import {
   buildDynamicPromptTemplateVariables,
@@ -36,6 +37,22 @@ function makeMessage(overrides: Partial<SubstrateMessage> = {}): SubstrateMessag
     content: 'Reflect on recent activity.',
     timestamp: new Date('2026-03-17T12:00:00Z'),
     ...overrides,
+  };
+}
+
+function makeSessionEntry(overrides: Partial<SessionEntry>): SessionEntry {
+  return {
+    id: overrides.id ?? 1,
+    channelId: overrides.channelId ?? 'discord:group:ops',
+    role: overrides.role ?? 'user',
+    content: overrides.content ?? 'hello',
+    timestamp: overrides.timestamp ?? 0,
+    ...(overrides.authorId !== undefined ? { authorId: overrides.authorId } : {}),
+    ...(overrides.authorName !== undefined ? { authorName: overrides.authorName } : {}),
+    ...(overrides.discordMessageId !== undefined ? { discordMessageId: overrides.discordMessageId } : {}),
+    ...(overrides.metadata !== undefined ? { metadata: overrides.metadata } : {}),
+    ...(overrides.originChannelId !== undefined ? { originChannelId: overrides.originChannelId } : {}),
+    ...(overrides.channelVisibility !== undefined ? { channelVisibility: overrides.channelVisibility } : {}),
   };
 }
 
@@ -588,16 +605,56 @@ describe('runtime subject identity', () => {
     });
 
     expect(runtimeContext).toContain('<runtime_charge_budget>');
-    expect(runtimeContext).toContain('current-run spend 0; remaining 24 of 24 run-charge units');
-    expect(runtimeContext).toContain('Shared rolling 24h lane spend: 0; remaining 24 of 24 run-charge units across all callers.');
-    expect(runtimeContext).toContain('shared rolling 24-hour deployment budget');
-    expect(runtimeContext).toContain('visible in Garden Charge / Budget');
+    expect(runtimeContext).toContain('You have 24 of 24 run-charge units left for the interactive lane/window.');
+    expect(runtimeContext).toContain('Available charge action costs:');
     expect(runtimeContext).toContain('paid image/video generation: 6');
-    expect(runtimeContext).toContain('analysis_workbench extension pass after the first iteration: 4');
-    expect(runtimeContext).toContain('analysis_workbench first pass: 0 charge units');
-    expect(runtimeContext).toContain('each extension pass after the first iteration costs 4 run-charge units');
-    expect(runtimeContext).toContain('Do not use it for routine orient actions, concern maintenance, scheduler work, tool discovery, schema confusion, simple lookup, or ordinary replies.');
+    expect(runtimeContext).not.toContain('analysis_workbench extension pass after the first iteration: 4');
+    expect(runtimeContext).not.toContain('analysis_workbench first pass: 0 charge units');
+    expect(runtimeContext).not.toContain('Use analysis_workbench only');
+    expect(runtimeContext).not.toContain('visible in Garden Charge / Budget');
     expect(runtimeContext).not.toContain('think');
+  });
+
+  it('lists Workbench extension cost only when analysis_workbench is available', async () => {
+    const runtimeContext = await runWithChargeContext({
+      chargePolicy: TEST_CHARGE_POLICY,
+      lane: 'interactive',
+      runId: 'charge-workbench-available',
+    }, async () => buildRuntimeContext({
+      message: makeMessage({
+        channelId: 'api:general',
+        channelType: 'api',
+        authorId: 'user-1',
+        authorName: 'User',
+      }),
+      resolvedUserName: 'User',
+      trustLevel: 'primary',
+      channelType: 'api',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      modelId: 'test-model',
+      contextWindow: 4096,
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 6,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 6,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      formatTopEmotions: () => '',
+      config: { chargePolicy: TEST_CHARGE_POLICY },
+      analysisWorkbenchAvailable: true,
+    }));
+
+    expect(runtimeContext).toContain('analysis_workbench extension pass after the first iteration: 4');
+    expect(runtimeContext).not.toContain('analysis_workbench first pass: 0 charge units');
+    expect(runtimeContext).not.toContain('Use analysis_workbench only');
   });
 
   it('renders satellite endpoint capability context for registered mobile speech turns', () => {
@@ -766,12 +823,13 @@ describe('runtime subject identity', () => {
       config: {},
     });
 
-    expect(renderedRuntimeLayers).toContain('<speaking_with>');
-    expect(renderedRuntimeLayers).toContain('<name>Admin User</name>');
-    expect(renderedRuntimeLayers).toContain('<trust_level>regular</trust_level>');
-    expect(renderedRuntimeLayers).toContain('<channel_context>');
-    expect(renderedRuntimeLayers).toContain('<type>api</type>');
-    expect(renderedRuntimeLayers).toContain('<visibility>broadcast</visibility>');
+    expect(renderedRuntimeLayers).toContain('<conversation_state>');
+    expect(renderedRuntimeLayers).toContain('<chat_type>group</chat_type>');
+    expect(renderedRuntimeLayers).toContain('<channel_id>api:admin-broadcast</channel_id>');
+    expect(renderedRuntimeLayers).toContain('<channel_type>api</channel_type>');
+    expect(renderedRuntimeLayers).toContain('<channel_visibility>broadcast</channel_visibility>');
+    expect(renderedRuntimeLayers).toContain('<current_message_author name="Admin User" id="admin-user" />');
+    expect(renderedRuntimeLayers).not.toContain('<speaking_with>');
   });
 
   it('keeps appearance context available for chat when generic media tools are active', () => {
@@ -1242,6 +1300,7 @@ describe('runtime subject identity', () => {
       message: makeMessage({
         channelId: 'discord:dm:alex',
         channelType: 'discord_text',
+        isDirectMessage: true,
         authorId: 'alex',
         authorName: 'Alex',
         content: 'hey',
@@ -1286,7 +1345,13 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_last_message_received_days_hours).toBe('2 days 4 hours');
     expect(variables.runtime_last_message_received_missing_notice).toBe('');
     expect(variables.runtime_speaking_with_trust_level).toBe('trusted');
-    expect(variables.runtime_channel_visibility).toBe('semi_private');
+    expect(variables.runtime_chat_type).toBe('direct_message');
+    expect(variables.runtime_room_id).toBe('discord:dm:alex');
+    expect(variables.runtime_current_message_author_name).toBe('Alex');
+    expect(variables.runtime_current_message_author_id).toBe('alex');
+    expect(variables.runtime_recent_active_participants_xml).toBe('');
+    expect(variables.runtime_recent_active_participants_count).toBe('0');
+    expect(variables.runtime_channel_visibility).toBe('private');
     expect(variables.runtime_response_style).toBe('expressive');
     expect(variables.runtime_response_style_name).toBe('Expressive');
     expect(variables.runtime_response_style_guidance_body).toBe(variables.runtime_response_style_guidance);
@@ -1296,6 +1361,177 @@ describe('runtime subject identity', () => {
     );
     expect(variables.runtime_tooling_active_count).toBe('5');
     expect(variables.runtime_tooling_available_extended_count).toBe('1');
+  });
+
+  it('renders group conversation_state with five recent active participants newest-first', () => {
+    const { rendered, variables } = buildRuntimePromptOutputs({
+      message: makeMessage({
+        channelId: 'discord:group:ops',
+        channelType: 'discord',
+        isDirectMessage: false,
+        authorId: 'discord:u-current',
+        authorName: 'Vega "Pilot"',
+        content: 'status?',
+      }),
+      resolvedUserName: 'Vega',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-vega',
+      responseStyle: 'concise',
+      now: new Date('2026-03-18T13:30:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 2,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 2,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      recentChannelEntries: [
+        makeSessionEntry({ id: 1, authorId: 'discord:u-a', authorName: 'Aster', timestamp: 1000 }),
+        makeSessionEntry({ id: 2, authorId: 'discord:u-b', authorName: 'Basil old', timestamp: 2000 }),
+        makeSessionEntry({ id: 3, authorId: 'discord:u-c', authorName: 'Cyra', timestamp: 3000 }),
+        makeSessionEntry({ id: 4, authorId: 'discord:u-d', authorName: 'Dax', timestamp: 4000 }),
+        makeSessionEntry({ id: 5, authorId: 'discord:u-e', authorName: 'Echo', timestamp: 5000 }),
+        makeSessionEntry({ id: 6, authorId: 'discord:u-f', authorName: 'Fenn', timestamp: 6000 }),
+        makeSessionEntry({ id: 7, authorId: 'discord:u-g', authorName: 'Gale', timestamp: 7000 }),
+        makeSessionEntry({ id: 8, authorId: 'discord:u-b', authorName: 'Basil', timestamp: 8000 }),
+        makeSessionEntry({ id: 9, role: 'assistant', authorId: 'companion', authorName: 'Companion', timestamp: 9000 }),
+      ],
+      config: {},
+    });
+
+    expect(variables.runtime_chat_type).toBe('group');
+    expect(variables.runtime_room_id).toBe('discord:group:ops');
+    expect(variables.runtime_current_message_author_name).toBe('Vega "Pilot"');
+    expect(variables.runtime_current_message_author_name_xml_attr).toBe('Vega &quot;Pilot&quot;');
+    expect(variables.runtime_recent_active_participants_count).toBe('5');
+    expect(variables.runtime_recent_active_participants_xml.match(/<participant\b/gu)).toHaveLength(5);
+    expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Basil" id="discord:u-b" />');
+    expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Gale" id="discord:u-g" />');
+    expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Fenn" id="discord:u-f" />');
+    expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Echo" id="discord:u-e" />');
+    expect(variables.runtime_recent_active_participants_xml).toContain('<participant name="Dax" id="discord:u-d" />');
+    expect(variables.runtime_recent_active_participants_xml).not.toContain('Cyra');
+    expect(variables.runtime_recent_active_participants_xml).not.toContain('Aster');
+    expect(variables.runtime_recent_active_participants_xml).not.toContain('Companion');
+
+    const participantXml = variables.runtime_recent_active_participants_xml;
+    expect(participantXml.indexOf('Basil')).toBeLessThan(participantXml.indexOf('Gale'));
+    expect(participantXml.indexOf('Gale')).toBeLessThan(participantXml.indexOf('Fenn'));
+    expect(participantXml.indexOf('Fenn')).toBeLessThan(participantXml.indexOf('Echo'));
+    expect(participantXml.indexOf('Echo')).toBeLessThan(participantXml.indexOf('Dax'));
+    expect(rendered).toContain('<conversation_state>');
+    expect(rendered).toContain('<chat_type>group</chat_type>');
+    expect(rendered).toContain('<channel_id>discord:group:ops</channel_id>');
+    expect(rendered).toContain('<current_message_author name="Vega &quot;Pilot&quot;" id="discord:u-current" />');
+    expect(rendered).toContain('<recent_active_participants max="5">');
+  });
+
+  it('does not render a fake participant list for direct messages', () => {
+    const { rendered, variables } = buildRuntimePromptOutputs({
+      message: makeMessage({
+        channelId: 'discord:dm:alex',
+        channelType: 'discord',
+        isDirectMessage: true,
+        authorId: 'discord:u-alex',
+        authorName: 'Alex',
+        content: 'ping',
+      }),
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      responseStyle: 'concise',
+      now: new Date('2026-03-18T13:30:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 2,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 2,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      recentChannelEntries: [
+        makeSessionEntry({ channelId: 'discord:dm:alex', id: 1, authorId: 'discord:u-alex', authorName: 'Alex', timestamp: 1000 }),
+      ],
+      config: {},
+    });
+
+    expect(variables.runtime_chat_type).toBe('direct_message');
+    expect(variables.runtime_recent_active_participants_xml).toBe('');
+    expect(variables.runtime_recent_active_participants_count).toBe('0');
+    expect(rendered).toContain('<chat_type>direct_message</chat_type>');
+    expect(rendered).not.toContain('<recent_active_participants');
+  });
+
+  it('renders Analyst Workbench guidance only when the tool is available', () => {
+    const baseInput = {
+      message: makeMessage({
+        channelId: 'api:worker',
+        channelType: 'api',
+        authorId: 'worker',
+        authorName: 'Worker',
+        content: 'analyze this evidence set',
+      }),
+      resolvedUserName: 'Worker',
+      trustLevel: 'regular' as const,
+      channelType: 'api',
+      responseStyle: 'concise' as const,
+      now: new Date('2026-03-18T13:30:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous' as const,
+      activeToolCounts: {
+        core: 2,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 2,
+      },
+      extendedTools: [],
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay' as const,
+      promotedExtendedToolNames: new Set<string>(),
+      skillsContext: '',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      config: {},
+    };
+
+    const unavailable = buildRuntimePromptOutputs({
+      ...baseInput,
+      analysisWorkbenchAvailable: false,
+    }).rendered;
+    const available = buildRuntimePromptOutputs({
+      ...baseInput,
+      analysisWorkbenchAvailable: true,
+    }).rendered;
+
+    expect(unavailable).not.toContain('<analysis_workbench_guidance>');
+    expect(available.match(/<analysis_workbench_guidance>/gu)).toHaveLength(1);
+    expect(available).toContain('analysis_workbench is a large-evidence escalation surface only.');
   });
 
   it('substitutes atomic affect macros under both honne and tatemae trust tiers', () => {
@@ -1601,6 +1837,7 @@ describe('runtime subject identity', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord_text',
+      isDirectMessage: true,
       authorId: 'alex',
       authorName: 'Alex',
       content: 'hey',
@@ -1747,8 +1984,13 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_last_message_received_ago).toBe('2 days ago');
     expect(variables.runtime_speaking_with_name).toBe('Alex');
     expect(variables.runtime_speaking_with_trust_level).toBe('trusted');
+    expect(variables.runtime_chat_type).toBe('direct_message');
+    expect(variables.runtime_room_id).toBe('discord:dm:alex');
+    expect(variables.runtime_current_message_author_name).toBe('Alex');
+    expect(variables.runtime_current_message_author_id).toBe('alex');
+    expect(variables.runtime_recent_active_participants_xml).toBe('');
     expect(variables.runtime_channel_type).toBe('discord_text');
-    expect(variables.runtime_channel_visibility).toBe('semi_private');
+    expect(variables.runtime_channel_visibility).toBe('private');
     expect(variables.runtime_capability_tier).toBe('autonomous');
     expect(variables.runtime_response_style).toBe('expressive');
     expect(variables.runtime_internal_state_attention_conversation_trajectory).toBe('deepening');
@@ -1769,19 +2011,21 @@ describe('runtime subject identity', () => {
     expect(rendered).toContain('<runtime_self>');
     expect(rendered).toContain('<runtime_attention>');
     expect(rendered).toContain('<runtime_tooling>');
-    expect(rendered).toContain('<name>Alex</name>');
-    expect(rendered).toContain('<trust_level>trusted</trust_level>');
-    expect(rendered).toContain('<type>discord_text</type>');
-    expect(rendered).toContain('<visibility>semi_private</visibility>');
-    expect(rendered).toContain('<identifier>test-model</identifier>');
-    expect(rendered).toContain('<tier>autonomous</tier>');
-    expect(rendered).toContain('<active_count>5</active_count>');
-    expect(rendered).toContain('<available_extended_count>3</available_extended_count>');
-    expect(rendered).toContain('<analysis_workbench_guidance>');
-    expect(rendered).toContain('analysis_workbench is a large-evidence escalation surface only.');
-    expect(rendered).toContain('large files, codebases, logs, transcripts, datasets, or evidence sets');
-    expect(rendered).toContain('Do not use analysis_workbench for routine orient actions, concern maintenance, scheduler or schedule work, simple lookup');
-    expect(rendered).toContain('orient for persona/human/goals/values/concerns');
+    expect(rendered).toContain('<conversation_state>');
+    expect(rendered).toContain('<chat_type>direct_message</chat_type>');
+    expect(rendered).toContain('<channel_id>discord:dm:alex</channel_id>');
+    expect(rendered).toContain('<channel_type>discord_text</channel_type>');
+    expect(rendered).toContain('<channel_visibility>private</channel_visibility>');
+    expect(rendered).toContain('<current_message_author name="Alex" id="alex" />');
+    expect(rendered).not.toContain('<speaking_with>');
+    expect(rendered).not.toContain('<model_context>');
+    expect(rendered).not.toContain('<identifier>test-model</identifier>');
+    expect(rendered).not.toContain('<capability_tier>');
+    expect(rendered).not.toContain('<tier>autonomous</tier>');
+    expect(rendered).not.toContain('<active_count>');
+    expect(rendered).not.toContain('<available_extended_count>');
+    expect(rendered).not.toContain('<analysis_workbench_guidance>');
+    expect(rendered).not.toContain('analysis_workbench is a large-evidence escalation surface only.');
     expect(rendered).toContain('<appearance_context>');
     expect(rendered).toContain('<self_image_tool_guidance>');
     expect(rendered).toContain('<extended_tools>');
@@ -2003,7 +2247,7 @@ describe('runtime subject identity', () => {
 
     expect(renderedRuntimeLayers).toContain('Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.');
     expect(renderedRuntimeLayers).toContain('blocked by current tier: external.web');
-    expect(renderedRuntimeLayers).toContain('<available_extended_count>2</available_extended_count>');
+    expect(renderedRuntimeLayers).not.toContain('<available_extended_count>');
   });
 });
 

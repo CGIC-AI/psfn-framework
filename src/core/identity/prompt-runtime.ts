@@ -196,6 +196,15 @@ const RUNTIME_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_last_message_received_present}}', 'Whether an earlier message is loaded for the current channel (bare boolean for custom phrasing).', 'true'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_speaking_with_is_machine_intelligence}}', 'Whether the resolved speaking partner is another machine intelligence (peer companion/agent).', 'false'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_internal_turn_kind}}', 'Internal task kind for heartbeat/reflection/planning/maintenance turns when applicable.', 'reflection'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_conversation_state_available}}', 'Whether compact conversation state is available for the current turn.', 'true'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_chat_type}}', 'Conversation shape for this turn: direct_message or group.', 'group'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_room_id}}', 'Room identity for the current turn; this is the channel ID.', '1486443955561299979'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_current_message_author_name}}', 'Display name of the author of the current message.', 'Vega'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_current_message_author_id}}', 'Stable platform/source ID of the author of the current message.', 'discord:123456789'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_current_message_author_name_xml_attr}}', 'XML-attribute-safe display name of the current message author.', 'Vega'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_current_message_author_id_xml_attr}}', 'XML-attribute-safe stable platform/source ID of the current message author.', 'discord:123456789'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_recent_active_participants_xml}}', 'Compact recent active participant XML for group turns, capped at five deduped authors.', '<recent_active_participants max="5">...</recent_active_participants>'),
+  createPromptRuntimeMacroHint('runtime_state', '{{runtime_recent_active_participants_count}}', 'Count of recent active participant entries rendered for group turns.', '3'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_speaking_with_name}}', 'Resolved speaking-partner display name for user-facing turns.', 'Vega'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_speaking_with_trust_level}}', 'Trust level for the current speaking partner when the turn is user-facing.', 'trusted'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_channel_type}}', 'Resolved channel type for the current speaking context when user-facing.', 'discord_text'),
@@ -300,6 +309,8 @@ const ATTENTION_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
 ];
 
 const TOOLING_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
+  createPromptRuntimeMacroHint('tooling', '{{runtime_analysis_workbench_available}}', 'Whether analysis_workbench is active and callable for the current turn.', 'false'),
+  createPromptRuntimeMacroHint('tooling', '{{runtime_analysis_workbench_guidance_body}}', 'Workbench guidance body rendered only when analysis_workbench is available.', 'analysis_workbench is a large-evidence escalation surface only.'),
   createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_active_count}}', 'Count of currently active tools.', '6'),
   createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_core_count}}', 'Count of active core tools.', '4'),
   createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_promoted_count}}', 'Count of promoted extended tools that are always active.', '1'),

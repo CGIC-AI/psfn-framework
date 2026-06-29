@@ -105,7 +105,6 @@ export class AdminServer implements Lifecycle {
     handleAdminRequest(req, res, {
       token: this.token,
       checkAuth: (request, response) => this.checkAuth(request, response),
-      tryServeStaticAsset: (path, response) => this.transport.tryServeStaticAsset(path, response),
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
       serveGardenBuildAsset: (path, response) => this.transport.serveGardenBuildAsset(path, response),
       serveGardenPage: (path, response) => this.transport.serveGardenPage(path, response),

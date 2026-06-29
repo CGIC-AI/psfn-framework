@@ -37,7 +37,6 @@ const GARDEN_CLIENT_ROUTES = new Set([
 interface AdminRequestRoutingDependencies {
   token?: string;
   checkAuth: (req: IncomingMessage, res: ServerResponse) => boolean;
-  tryServeStaticAsset: (path: string, res: ServerResponse) => boolean;
   isGardenUiEnabled: () => boolean;
   serveGardenBuildAsset: (path: string, res: ServerResponse) => void;
   serveGardenPage: (path: string, res: ServerResponse) => void;
@@ -60,8 +59,6 @@ function isGardenClientRoute(method: string | undefined, requestPath: string): b
     || requestPath.startsWith('/health/')
     || requestPath === '/login'
     || requestPath.startsWith('/login/')
-    || requestPath === '/static'
-    || requestPath.startsWith('/static/')
     || requestPath === '/_app'
     || requestPath.startsWith('/_app/')
   ) {
@@ -87,19 +84,14 @@ export function handleAdminRequest(
   const url = parseRequestUrl(req);
   const requestPath = url.pathname;
 
-  // Skip auth for OPTIONS, static files, SvelteKit built assets, and login page.
+  // Skip auth for OPTIONS, SvelteKit built assets, health probes, and login page.
   const skipAuth = req.method === 'OPTIONS'
-    || requestPath.startsWith('/static/')
     || requestPath.startsWith('/_app/')
     || requestPath === '/health'
     || requestPath.startsWith('/health/')
     || requestPath === '/login';
 
   if (!skipAuth && deps.token && !deps.checkAuth(req, res)) return;
-
-  if (deps.tryServeStaticAsset(requestPath, res)) {
-    return;
-  }
 
   try {
     const handled = deps.route(req.method ?? 'GET', requestPath, req, res);

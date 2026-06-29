@@ -109,7 +109,6 @@ export class GardenOperatorSurface implements Lifecycle {
     handleAdminRequest(req, res, {
       token: this.config.token,
       checkAuth: (request, response) => checkAdminRequestAuth(request, response, this.config.token),
-      tryServeStaticAsset: (path, response) => this.transport.tryServeStaticAsset(path, response),
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
       serveGardenBuildAsset: (path, response) => this.transport.serveGardenBuildAsset(path, response),
       serveGardenPage: (path, response) => this.transport.serveGardenPage(path, response),

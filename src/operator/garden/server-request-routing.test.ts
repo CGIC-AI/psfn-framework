@@ -28,7 +28,6 @@ describe('handleAdminRequest', () => {
 
     handleAdminRequest(req, res, {
       checkAuth: vi.fn(() => true),
-      tryServeStaticAsset: vi.fn(() => false),
       isGardenUiEnabled: vi.fn(() => true),
       serveGardenBuildAsset,
       serveGardenPage,
@@ -43,6 +42,28 @@ describe('handleAdminRequest', () => {
     expect(sendNotFound).not.toHaveBeenCalled();
   });
 
+  it('serves the native Garden chat SPA route on direct load', () => {
+    const req = makeRequest('GET', '/chat');
+    const res = makeResponse();
+    const serveGardenPage = vi.fn();
+    const serveGardenBuildAsset = vi.fn();
+    const sendNotFound = vi.fn();
+
+    handleAdminRequest(req, res, {
+      checkAuth: vi.fn(() => true),
+      isGardenUiEnabled: vi.fn(() => true),
+      serveGardenBuildAsset,
+      serveGardenPage,
+      route: vi.fn(() => false),
+      sendNotFound,
+      onRequestError: vi.fn(),
+    });
+
+    expect(serveGardenPage).toHaveBeenCalledWith('/chat', res);
+    expect(serveGardenBuildAsset).not.toHaveBeenCalled();
+    expect(sendNotFound).not.toHaveBeenCalled();
+  });
+
   it('serves the Garden SPA for nav-advertised client routes on direct load', () => {
     for (const { path } of navItems) {
       const req = makeRequest('GET', path);
@@ -53,7 +74,6 @@ describe('handleAdminRequest', () => {
 
       handleAdminRequest(req, res, {
         checkAuth: vi.fn(() => true),
-        tryServeStaticAsset: vi.fn(() => false),
         isGardenUiEnabled: vi.fn(() => true),
         serveGardenBuildAsset,
         serveGardenPage,
@@ -76,7 +96,6 @@ describe('handleAdminRequest', () => {
 
     handleAdminRequest(req, res, {
       checkAuth: vi.fn(() => true),
-      tryServeStaticAsset: vi.fn(() => false),
       isGardenUiEnabled: vi.fn(() => true),
       serveGardenBuildAsset,
       serveGardenPage,
@@ -98,7 +117,6 @@ describe('handleAdminRequest', () => {
 
     handleAdminRequest(req, res, {
       checkAuth: vi.fn(() => true),
-      tryServeStaticAsset: vi.fn(() => false),
       isGardenUiEnabled: vi.fn(() => true),
       serveGardenBuildAsset,
       serveGardenPage,
@@ -121,7 +139,6 @@ describe('handleAdminRequest', () => {
     handleAdminRequest(healthReq, healthRes, {
       token: 'secret-token',
       checkAuth,
-      tryServeStaticAsset: vi.fn(() => false),
       isGardenUiEnabled: vi.fn(() => true),
       serveGardenBuildAsset: vi.fn(),
       serveGardenPage: vi.fn(),
@@ -140,7 +157,6 @@ describe('handleAdminRequest', () => {
     handleAdminRequest(apiReq, apiRes, {
       token: 'secret-token',
       checkAuth,
-      tryServeStaticAsset: vi.fn(() => false),
       isGardenUiEnabled: vi.fn(() => true),
       serveGardenBuildAsset: vi.fn(),
       serveGardenPage: vi.fn(),
@@ -163,7 +179,6 @@ describe('handleAdminRequest', () => {
 
       handleAdminRequest(req, res, {
         checkAuth: vi.fn(() => true),
-        tryServeStaticAsset: vi.fn(() => false),
         isGardenUiEnabled: vi.fn(() => true),
         serveGardenBuildAsset,
         serveGardenPage,

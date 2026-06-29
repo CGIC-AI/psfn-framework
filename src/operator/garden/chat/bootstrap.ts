@@ -33,8 +33,6 @@ import {
 const CHAT_COMPLETIONS_PATH = '/v1/chat/completions';
 const VOICE_WEBSOCKET_PATH = '/v1/voice/ws';
 const OPENAI_API_BASE_PATH = '/v1';
-const PI_WEB_UI_MODULE_ROUTE = '/static/pi-web-ui/index.js';
-const PI_WEB_UI_STYLESHEET_ROUTE = '/static/pi-web-ui/app.css';
 const DEFAULT_MODEL_ROOM_ID = 'garden-model-room';
 const STARTER_IDENTITY_ONBOARDING_MESSAGE = 'Starter identity is active. Import a character card or edit Identity to personalize your companion.';
 const MODEL_ROOM_DIRECT_PROVIDERS = new Set(['anthropic', 'openai', 'google']);
@@ -439,10 +437,6 @@ export class AdminChatBootstrapService {
         voiceWebSocketUrl,
       },
       runtime: {
-        assets: {
-          moduleUrl: PI_WEB_UI_MODULE_ROUTE,
-          stylesheetUrl: PI_WEB_UI_STYLESHEET_ROUTE,
-        },
         transportHeaders,
         model: runtimeModel,
       },

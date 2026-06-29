@@ -57,9 +57,10 @@ This includes:
 
 - `pi-agent-core` as the agent runtime substrate
 - `pi-ai` as the model interaction substrate
-- `pi-web-ui` where used for admin chat/runtime surfaces
 
 The Pi suite is not treated as incidental glue. It is the base that gives PSFN its lightweight, agentic, and interoperable core behavior.
+
+Admin chat and runtime surfaces are handled by the native SvelteKit Garden UI under `admin-ui`.
 
 Rules:
 

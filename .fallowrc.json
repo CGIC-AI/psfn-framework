@@ -27,7 +27,6 @@
     ]
   },
   "ignoreDependencies": [
-    "@mariozechner/pi-web-ui",
     "@sinclair/typebox",
     "@snazzah/davey",
     "@sveltejs/adapter-static",

@@ -12,6 +12,7 @@ import type { GatewayClient } from '../../boundary/gateway/client.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
+import { registerAmbientPresenceTask } from '../../core/scheduler/ambient-presence.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
@@ -178,6 +179,12 @@ export function buildAgentSchedulerRuntime(
       timestamp: now,
       taskCount: scheduler.taskCount,
     });
+  });
+  registerAmbientPresenceTask({
+    scheduler,
+    sessionManager: options.sessionManager,
+    restWindow: options.schedulerConfig.episodicProcessing,
+    eventBus: options.eventBus,
   });
 
   const postTurnActions = wirePostTurnActionRuntime({

@@ -1203,12 +1203,14 @@ export class SessionManager {
         orientation.idleGapMs,
         orientation.lastActivityAt,
         orientation.noteText,
+        orientation.timeTexture?.kind,
+        orientation.timeTexture?.reconnectionWarmth,
       ]),
     };
   }
 
   /** Append a system note to a session's internal lane. Hidden from ordinary context builds. */
-  appendSystemNote(channelId: string, note: string): void {
+  appendSystemNote(channelId: string, note: string, source = 'appendSystemNote'): void {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (!shouldPersistSessionChannel(resolvedChannelId)) return;
     this.store.append({
@@ -1222,10 +1224,15 @@ export class SessionManager {
         sessionLane: {
           schemaVersion: 1,
           kind: 'internal',
-          source: 'appendSystemNote',
+          source,
         },
       }),
     });
+  }
+
+  getRecentSessionEntries(channelId: string, limit: number): SessionEntry[] {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    return this.store.getRecent(resolvedChannelId, limit);
   }
 
   setPreCompactionExtractionHandler(handler: PreCompactionExtractionHandler | null): void {

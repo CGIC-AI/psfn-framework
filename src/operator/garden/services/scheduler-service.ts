@@ -5,6 +5,7 @@ import { isRecord } from '../../../shared/utils/types.js';
 
 import { join } from 'node:path';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
+import { AMBIENT_PRESENCE_TASK_ID } from '../../../core/scheduler/ambient-presence.js';
 import {
   HeartbeatPolicyStore,
   resolveConsolidatedReflectionTemplateId,
@@ -498,6 +499,7 @@ export class AdminSchedulerService {
     // Protect core system tasks
     const protectedTasks = new Set([
       'heartbeat',
+      AMBIENT_PRESENCE_TASK_ID,
       'salience-decay',
       'maintenance',
     ]);

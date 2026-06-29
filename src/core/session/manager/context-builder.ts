@@ -57,6 +57,7 @@ import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
 import { buildPromptSectionTelemetryList } from '../../identity/prompt-sections.js';
 import { formatActiveDateTimeIso } from '../../../shared/time/active-timezone.js';
+import { classifyIdleGapTexture, type IdleGapTexture } from '../../scheduler/time-texture.js';
 
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
@@ -140,6 +141,7 @@ export interface OrientationNoteTelemetry {
   sessionSummary?: string;
   continuitySummary?: string;
   lastUserMessage?: string;
+  timeTexture?: IdleGapTexture;
   sourceCounts: {
     session: number;
     continuity: number;
@@ -354,6 +356,11 @@ function buildContinuityAnchorLines(params: {
   const pendingIntent = latestWakeReturn?.nextAnchor
     ?? 'No urgent follow-up or pending intent found in available continuity context.';
   const pendingState = latestWakeReturn?.nextAnchor ? 'pending_intent_available' : 'no_urgent_context';
+  const timeTexture = orientation.timeTexture
+    ?? classifyIdleGapTexture({
+      lastActivityAtMs: orientation.lastActivityAt,
+      observedAtMs: orientation.observedAt,
+    });
   const lines = [
     '<continuity_anchor authority="companion_context" source="wake_return" role="internal_context" scope="current_channel_and_policy_allowed_continuity" may_not_override="runtime.current_datetime">',
     '<idle_threshold_exceeded>true</idle_threshold_exceeded>',
@@ -361,6 +368,10 @@ function buildContinuityAnchorLines(params: {
     xmlElement('last_active_at_iso', formatActiveDateTimeIso(new Date(orientation.lastActivityAt))),
     xmlElement('elapsed_since_last_active_iso', formatIsoDuration(orientation.idleGapMs)),
     xmlElement('elapsed_since_last_active_human', `about ${formatIdleGap(orientation.idleGapMs)}`),
+    xmlElement('time_texture_kind', timeTexture.kind),
+    xmlElement('time_texture_label', timeTexture.label),
+    xmlElement('reconnection_warmth_signal', timeTexture.reconnectionWarmth),
+    xmlElement('reconnection_warmth_guidance', timeTexture.guidance),
     xmlElement('where_we_left_off', whereWeLeftOff),
     xmlElement('pending_intent', pendingIntent),
     xmlElement('latest_wake_return_recorded_at_iso', latestWakeReturn?.createdAt),
@@ -460,6 +471,10 @@ export function buildOrientationNoteTelemetry(params: {
   }
 
   const idleGapMs = Math.max(0, observedAt - lastActivityAt);
+  const timeTexture = classifyIdleGapTexture({
+    lastActivityAtMs: lastActivityAt,
+    observedAtMs: observedAt,
+  });
   if (idleGapMs < idleThresholdMs) {
     return {
       fired: false,
@@ -468,6 +483,7 @@ export function buildOrientationNoteTelemetry(params: {
       idleThresholdMs,
       lastActivityAt,
       idleGapMs,
+      timeTexture,
       sourceCounts,
     };
   }
@@ -481,6 +497,7 @@ export function buildOrientationNoteTelemetry(params: {
   const noteParts = [
     '[Welcome back]',
     `It has been about ${formatIdleGap(idleGapMs)} since this channel was last active.`,
+    `Time texture: ${timeTexture.label}; reconnection warmth signal is ${timeTexture.reconnectionWarmth}.`,
   ];
   if (sessionSummary) {
     noteParts.push(`Last time here: ${sessionSummary}.`);
@@ -496,6 +513,7 @@ export function buildOrientationNoteTelemetry(params: {
     idleThresholdMs,
     lastActivityAt,
     idleGapMs,
+    timeTexture,
     noteText: noteParts.join('\n').trim(),
     sessionSummary,
     continuitySummary,

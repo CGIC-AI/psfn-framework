@@ -220,8 +220,8 @@ describe('SessionManager', () => {
   it('adds a wake orientation note after a meaningful idle gap and captures telemetry', async () => {
     const config = makeConfig({ dataDir: dir });
     const mgr = new SessionManager(store, config);
-    const previousAt = 1_700_000_000_000;
-    const currentAt = previousAt + (4 * 60 * 60 * 1000);
+    const previousAt = Date.parse('2026-06-10T23:30:00-04:00');
+    const currentAt = Date.parse('2026-06-11T08:30:00-04:00');
     const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(currentAt);
     const continuityStore = new UserContinuityStore(join(dir, 'continuity-orientation'));
     mgr.continuityStore = continuityStore;
@@ -299,7 +299,11 @@ describe('SessionManager', () => {
       const ctx = await mgr.buildContext('api:main', 'System prompt', '', undefined, 'u1', undefined, [], snapshot);
       expect(ctx.systemPrompt).toContain('<continuity_anchor authority="companion_context"');
       expect(ctx.systemPrompt).toContain('role="internal_context"');
-      expect(ctx.systemPrompt).toContain('<elapsed_since_last_active_human>about 4 hours</elapsed_since_last_active_human>');
+      expect(ctx.systemPrompt).toContain('<elapsed_since_last_active_human>about 9 hours</elapsed_since_last_active_human>');
+      expect(ctx.systemPrompt).toContain('<time_texture_kind>overnight</time_texture_kind>');
+      expect(ctx.systemPrompt).toContain('<time_texture_label>overnight gap</time_texture_label>');
+      expect(ctx.systemPrompt).toContain('<reconnection_warmth_signal>medium</reconnection_warmth_signal>');
+      expect(ctx.systemPrompt).toContain('do not treat it as a requirement to perform affection');
       expect(ctx.systemPrompt).toContain('<current_turn_user_message>Please keep the visibility work focused.</current_turn_user_message>');
       expect(ctx.systemPrompt).toContain('<where_we_left_off>Visibility audit paused with prompt ordering still in progress.</where_we_left_off>');
       expect(ctx.systemPrompt).toContain('<pending_state>pending_intent_available</pending_state>');

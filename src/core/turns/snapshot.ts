@@ -11,6 +11,7 @@ import type {
 import type { EpisodicRetrievalChain } from '../../faculties/memory/retrieval/episodic.js';
 import type { SessionEntry } from '../session/types.js';
 import type { SessionContinuityArtifact } from '../session/continuity-artifacts.js';
+import type { IdleGapTexture } from '../scheduler/time-texture.js';
 import type {
   ContextMessage,
   FatigueEnforcementMetadata,
@@ -87,6 +88,7 @@ export interface TurnOrientationSnapshot {
   continuitySummary?: string;
   lastUserMessage?: string;
   openThreadSummary?: string;
+  timeTexture?: IdleGapTexture;
   sourceCounts: {
     session: number;
     continuity: number;

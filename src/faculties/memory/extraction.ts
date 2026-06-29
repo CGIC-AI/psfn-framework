@@ -9,6 +9,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { GroupMemoryWriteCapSettings } from '../../system/config/group-memory-config.js';
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   normalizeCostTelemetryPort,
   type CostTelemetryInput,
@@ -693,6 +694,13 @@ export class MemoryExtractor {
       recentEntries,
       contactStore: this.contactStore,
       telemetryEnabled: this.isTelemetryEnabled(),
+    }).catch((error: unknown) => {
+      log.warn('Failed to persist emotional state from extraction', {
+        canonicalContactId: canonicalContactId ?? null,
+        acceptedFactCount: acceptedFacts.length,
+        recentEntryCount: recentEntries.length,
+        error: toErrorMessage(error),
+      });
     });
   }
 

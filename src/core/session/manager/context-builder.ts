@@ -209,6 +209,7 @@ function buildHistorySummaryMessage(
 function buildSessionHistoryMessages(
   verbatimEntries: SessionEntry[],
   channelVisibility: ChannelVisibility,
+  renderGroupUserAttribution: boolean,
   summaryText?: string,
   summarySourceSpanCount = 0,
 ): ContextMessage[] {
@@ -218,6 +219,7 @@ function buildSessionHistoryMessages(
     channelVisibility,
     true,
     Boolean(trimmedSummary),
+    renderGroupUserAttribution,
   );
   if (!trimmedSummary) {
     return tailMessages;
@@ -231,6 +233,7 @@ function buildSessionHistoryMessages(
 export function assembleSessionHistoryForContext(params: {
   entries: SessionEntry[];
   channelVisibility: ChannelVisibility;
+  renderGroupUserAttribution: boolean;
   tokenBudget: number;
   characterName?: string;
 }): {
@@ -239,7 +242,13 @@ export function assembleSessionHistoryForContext(params: {
   verbatimEntries: SessionEntry[];
   messages: ContextMessage[];
 } {
-  const allMessages = entriesToMessages(params.entries, params.channelVisibility);
+  const allMessages = entriesToMessages(
+    params.entries,
+    params.channelVisibility,
+    true,
+    false,
+    params.renderGroupUserAttribution,
+  );
   if (params.entries.length <= SESSION_HISTORY_MIN_MESSAGES || countMessageTokens(allMessages) <= params.tokenBudget) {
     return {
       summaryText: '',
@@ -273,6 +282,7 @@ export function assembleSessionHistoryForContext(params: {
       params.channelVisibility,
       true,
       true,
+      params.renderGroupUserAttribution,
     );
     const tailTokenCount = countMessageTokens(tailMessages);
     const remainingBudget = params.tokenBudget - tailTokenCount;
@@ -292,6 +302,7 @@ export function assembleSessionHistoryForContext(params: {
     const messages = buildSessionHistoryMessages(
       verbatimEntries,
       params.channelVisibility,
+      params.renderGroupUserAttribution,
       summaryText,
       summaryEntries.length,
     );
@@ -310,8 +321,23 @@ export function assembleSessionHistoryForContext(params: {
     summaryText: '',
     summarizedEntryCount: 0,
     verbatimEntries: fallbackEntries,
-    messages: entriesToMessages(fallbackEntries, params.channelVisibility),
+    messages: entriesToMessages(
+      fallbackEntries,
+      params.channelVisibility,
+      true,
+      false,
+      params.renderGroupUserAttribution,
+    ),
   };
+}
+
+function shouldRenderSessionHistoryUserAttribution(
+  channelVisibility: ChannelVisibility,
+  channelMeta?: ChannelMeta,
+): boolean {
+  if (channelMeta?.isDirectMessage === true) return false;
+  if (channelMeta?.isDirectMessage === false) return true;
+  return channelVisibility === 'public' || channelVisibility === 'broadcast';
 }
 
 function formatIdleGap(idleGapMs: number): string {
@@ -591,6 +617,10 @@ interface BuildSessionContextParams {
 
 export async function buildSessionContext(params: BuildSessionContextParams): Promise<LLMContext> {
   const channelVisibility = classifyChannel(params.channelId, params.channelMeta);
+  const renderGroupUserAttribution = shouldRenderSessionHistoryUserAttribution(
+    channelVisibility,
+    params.channelMeta,
+  );
   const adaptiveBudgetProfile = resolveAdaptiveContextBudgetProfile(
     params.config,
     params.turnBudgetCharacteristics,
@@ -677,7 +707,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   const memoryTokenCount = countTokens(memorySectionText);
   const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount;
   const preAssemblySessionMessageTokens = countMessageTokens(
-    entriesToMessages(recent, channelVisibility, false),
+    entriesToMessages(recent, channelVisibility, false, false, renderGroupUserAttribution),
   );
   const compactionMode = params.compactionMode ?? 'deferred';
   const compactionCheck = shouldCompact({
@@ -722,7 +752,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       ];
     }
     const postCompactionMessageTokens = countMessageTokens(
-      entriesToMessages(recent, channelVisibility, false),
+      entriesToMessages(recent, channelVisibility, false, false, renderGroupUserAttribution),
     );
     const newSummaryTokenCount = result.compactionSummaryText
       ? countTokens(wrapCompactionSummaryAsUntrustedContext(result.compactionSummaryText))
@@ -777,6 +807,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     const assembledHistory = assembleSessionHistoryForContext({
       entries: recent,
       channelVisibility,
+      renderGroupUserAttribution,
       tokenBudget: historyBudget.tokenBudget,
       characterName: params.characterName,
     });
@@ -897,6 +928,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   const messages: ContextMessage[] = buildSessionHistoryMessages(
     recent,
     channelVisibility,
+    renderGroupUserAttribution,
     historySummaryText,
     historySummaryEntryCount,
   );

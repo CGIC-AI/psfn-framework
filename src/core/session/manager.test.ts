@@ -234,6 +234,28 @@ describe('SessionManager', () => {
     });
   });
 
+  it('buildContext preserves group speaker labels when the current channel is explicitly not a DM', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('discord:guild:room', 'first group message', 'vega-id', 'Vega');
+    mgr.recordUserMessage('discord:guild:room', 'second group message', 'iku-id', 'Iku');
+
+    const ctx = await mgr.buildContext(
+      'discord:guild:room',
+      'System',
+      '',
+      undefined,
+      undefined,
+      { isDirectMessage: false },
+    );
+
+    expect(ctx.messages).toHaveLength(1);
+    expect(ctx.messages[0]?.content).toBe([
+      'Vega (discord:vega-id): first group message',
+      'Iku (discord:iku-id): second group message',
+    ].join('\n'));
+  });
+
   it('adds a wake orientation note after a meaningful idle gap and captures telemetry', async () => {
     const config = makeConfig({ dataDir: dir });
     const mgr = new SessionManager(store, config);

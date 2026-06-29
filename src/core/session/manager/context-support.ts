@@ -231,6 +231,7 @@ export function entriesToMessages(
   defaultVisibility: ChannelVisibility,
   includeTrustTags: boolean = true,
   preserveLeadingAssistant: boolean = false,
+  renderGroupUserAttribution: boolean = true,
 ): ContextMessage[] {
   const messages: Array<ContextMessage & { sourceRole: SessionEntry['role'] }> = [];
 
@@ -264,7 +265,7 @@ export function entriesToMessages(
       content = formatToolObservationForContext(entry.content, toolObservation);
     } else if (attribution.role === 'system') {
       content = formatAttributedSystemContent(entry.content, attribution.authorName);
-    } else if (role === 'user' && shouldRenderGroupUserAttribution(visibility)) {
+    } else if (role === 'user' && renderGroupUserAttribution && shouldRenderGroupUserAttribution(visibility)) {
       content = formatGroupUserMessageContent(entry.content, {
         authorId: entry.authorId,
         authorName: attribution.authorName,

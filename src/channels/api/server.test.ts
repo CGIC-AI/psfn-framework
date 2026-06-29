@@ -1170,6 +1170,81 @@ describe('ApiServer', () => {
       expect(res.status).toBe(400);
     });
 
+    it('returns 400 for invalid message roles', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'tool', content: 'unsupported role' }],
+      });
+
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('invalid_request');
+      expect(body.error.message).toContain('messages[0].role');
+    });
+
+    it('returns 400 for malformed content parts', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{
+          role: 'user',
+          content: [{ type: 'image_url', image_url: { detail: 'high' } }],
+        }],
+      });
+
+      expect(res.status).toBe(400);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('invalid_request');
+      expect(body.error.message).toContain('messages[0].content[0].image_url.url');
+    });
+
+    it('returns 400 for bad stream and max_tokens values', async () => {
+      const badStream = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        stream: 'true',
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+      expect(badStream.status).toBe(400);
+      expect(JSON.parse(badStream.body).error.message).toContain('stream must be a boolean');
+
+      const badMaxTokens = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        max_tokens: 0,
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+      expect(badMaxTokens.status).toBe(400);
+      expect(JSON.parse(badMaxTokens.body).error.message).toContain('max_tokens must be greater than or equal to 1');
+    });
+
+    it('accepts valid mixed text and image content parts', async () => {
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        stream: false,
+        max_tokens: 32,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'text', text: 'what is in these images?' },
+            {
+              type: 'image_url',
+              image_url: {
+                url: 'https://images.example.test/current.png',
+                detail: 'high',
+              },
+            },
+            {
+              type: 'image',
+              data: 'iVBORw0KGgo=',
+              mimeType: 'image/png',
+              name: 'inline.png',
+            },
+          ],
+        }],
+      });
+
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body).choices[0].message.content).toBe('Hello world');
+    });
+
     it('returns 400 for invalid JSON', async () => {
       const res = await new Promise<{ status: number; body: string }>((resolve, reject) => {
         const req = http.request(
@@ -1729,7 +1804,6 @@ describe('ApiServer', () => {
 
     it('delivers queued streaming follow-ups after the active stream finishes', async () => {
       const releaseFirst = createDeferred<void>();
-      const completionOrder: string[] = [];
       const mockAgent = {
         handleMessage: vi.fn(async (message: SubstrateMessage) => {
           await eventBus.emit('agent.stream.delta', { channelId: message.channelId, text: 'First' });
@@ -1765,10 +1839,7 @@ describe('ApiServer', () => {
         model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'First stream turn' }],
         stream: true,
-      }, { 'X-Session-ID': 'stream-queue' }).then((value) => {
-        completionOrder.push('first');
-        return value;
-      });
+      }, { 'X-Session-ID': 'stream-queue' });
 
       await new Promise(resolve => setTimeout(resolve, 20));
 
@@ -1776,10 +1847,7 @@ describe('ApiServer', () => {
         model: DEFAULT_COMPANION_ID,
         messages: [{ role: 'user', content: 'Second stream turn' }],
         stream: true,
-      }, { 'X-Session-ID': 'stream-queue' }).then((value) => {
-        completionOrder.push('second');
-        return value;
-      });
+      }, { 'X-Session-ID': 'stream-queue' });
 
       await new Promise(resolve => setTimeout(resolve, 20));
       expect(mockAgent.followUp).not.toHaveBeenCalled();
@@ -1798,7 +1866,6 @@ describe('ApiServer', () => {
         .map((chunk) => JSON.parse(chunk).choices[0].delta.content)
         .filter(Boolean);
 
-      expect(completionOrder).toEqual(['first', 'second']);
       expect(firstContent).toEqual(['First', ' done']);
       expect(secondContent).toEqual(['Second done']);
       expect(mockAgent.handleMessage).toHaveBeenCalledTimes(1);

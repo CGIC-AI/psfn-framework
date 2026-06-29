@@ -7,7 +7,10 @@ import type {
 import { isChannelVisibility, type ChannelVisibility } from '../../../system/trust/types.js';
 import { readJsonBodyWithLimit } from '../../backplane/http/primitives.js';
 import type { ApiRuntimeChatRequest, ChatCompletionRequest } from '../types.js';
-import { hasCallerProvidedPrimaryTrust } from '../request-validation.js';
+import {
+  hasCallerProvidedPrimaryTrust,
+  validateChatCompletionRequest,
+} from '../request-validation.js';
 import {
   clampHttpHeader as clampHeaderValue,
   singleHeader as firstHeaderValue,
@@ -115,13 +118,19 @@ export async function readChatCompletionRequest(
     return null;
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime validation of untrusted JSON
-  if (!parsed.messages || !Array.isArray(parsed.messages) || parsed.messages.length === 0) {
-    sendApiError(res, 400, 'invalid_request', 'messages field is required and must be a non-empty array');
+  const validation = validateChatCompletionRequest(parsed);
+  if (!validation.ok) {
+    sendApiError(
+      res,
+      400,
+      'invalid_request',
+      validation.message,
+      validation.details,
+    );
     return null;
   }
 
-  return parsed;
+  return validation.value;
 }
 
 export function resolveChannelPrivacy(req: IncomingMessage): ChannelPrivacyResolution | ChannelPrivacyError {

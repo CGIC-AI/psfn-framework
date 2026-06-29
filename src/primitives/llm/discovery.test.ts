@@ -72,6 +72,20 @@ describe('ModelDiscovery', () => {
     };
   }
 
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((promiseResolve, promiseReject) => {
+      resolve = promiseResolve;
+      reject = promiseReject;
+    });
+    return { promise, resolve, reject };
+  }
+
+  function fetchCallCount(url: string): number {
+    return mockFetch.mock.calls.filter(([calledUrl]) => String(calledUrl) === url).length;
+  }
+
   it('uses OpenRouter models as the authoritative discovery list and enriches with LiteLLM hints', async () => {
     mockFetch.mockImplementation((url: string) => {
       if (url === OPENROUTER_ZDR_ENDPOINTS_API_URL) {
@@ -363,6 +377,125 @@ describe('ModelDiscovery', () => {
 
     // 3 calls each time (LiteLLM + OpenRouter metadata + ZDR)
     expect(mockFetch).toHaveBeenCalledTimes(6);
+  });
+
+  it('coalesces concurrent cache misses across upstream discovery fetches', async () => {
+    const litellmModelsUrl = 'http://localhost:4000/v1/models';
+    const litellmFetch = deferred<ReturnType<typeof litellmResponse>>();
+    const openRouterFetch = deferred<ReturnType<typeof openRouterResponse>>();
+    const openRouterZdrFetch = deferred<ReturnType<typeof openRouterZdrResponse>>();
+    mockFetch.mockImplementation((url: string) => {
+      if (url === litellmModelsUrl) return litellmFetch.promise;
+      if (url === OPENROUTER_MODELS_API_URL) return openRouterFetch.promise;
+      if (url === OPENROUTER_ZDR_ENDPOINTS_API_URL) return openRouterZdrFetch.promise;
+      return Promise.reject(new Error(`unexpected URL ${url}`));
+    });
+
+    const discovery = createDiscovery('http://localhost:4000');
+    const first = discovery.getAvailableModels();
+    const second = discovery.getAvailableModels();
+    await Promise.resolve();
+
+    expect(fetchCallCount(litellmModelsUrl)).toBe(1);
+    expect(fetchCallCount(OPENROUTER_MODELS_API_URL)).toBe(1);
+    expect(fetchCallCount(OPENROUTER_ZDR_ENDPOINTS_API_URL)).toBe(1);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+
+    litellmFetch.resolve(litellmResponse([
+      { id: 'coalesced/model', litellm_provider: 'openrouter' },
+    ]));
+    openRouterFetch.resolve(openRouterResponse([
+      { id: 'coalesced/model', architecture: { output_modalities: ['text'] } },
+    ]));
+    openRouterZdrFetch.resolve(openRouterZdrResponse([]));
+
+    const [firstModels, secondModels] = await Promise.all([first, second]);
+    expect(firstModels.map(model => model.id)).toEqual(['coalesced/model']);
+    expect(secondModels).toEqual(firstModels);
+
+    await discovery.getAvailableModels();
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('clears failed in-flight fetches before future attempts retry', async () => {
+    let openRouterAttempts = 0;
+    mockFetch.mockImplementation((url: string) => {
+      if (url === 'http://localhost:4000/v1/models') {
+        return Promise.resolve(litellmResponse([
+          { id: 'retry/model', litellm_provider: 'openrouter' },
+        ]));
+      }
+      if (url === OPENROUTER_ZDR_ENDPOINTS_API_URL) {
+        return Promise.resolve(openRouterZdrResponse([]));
+      }
+      if (url === OPENROUTER_MODELS_API_URL) {
+        openRouterAttempts += 1;
+        if (openRouterAttempts === 1) {
+          return Promise.reject(new Error('temporary OpenRouter failure'));
+        }
+        return Promise.resolve(openRouterResponse([
+          { id: 'retry/model', architecture: { output_modalities: ['text'] } },
+        ]));
+      }
+      return Promise.reject(new Error(`unexpected URL ${url}`));
+    });
+
+    const discovery = createDiscovery('http://localhost:4000');
+    const first = discovery.getAvailableModels();
+    const second = discovery.getAvailableModels();
+
+    await expect(Promise.all([first, second])).rejects.toThrow('temporary OpenRouter failure');
+    expect(openRouterAttempts).toBe(1);
+
+    const models = await discovery.getAvailableModels();
+    expect(models.map(model => model.id)).toEqual(['retry/model']);
+    expect(openRouterAttempts).toBe(2);
+  });
+
+  it('keeps provider and endpoint coalescing keys isolated', async () => {
+    const sharedModelsUrl = 'https://openrouter.ai/api/v1/models';
+    const zdrUrl = 'https://openrouter.ai/api/v1/endpoints/zdr';
+    let sharedModelsCalls = 0;
+    let zdrCalls = 0;
+    mockFetch.mockImplementation((url: string) => {
+      if (url === sharedModelsUrl) {
+        sharedModelsCalls += 1;
+        if (sharedModelsCalls === 1) {
+          return Promise.resolve(litellmResponse([
+            { id: 'litellm-only/model', litellm_provider: 'proxy' },
+          ]));
+        }
+        return Promise.resolve(openRouterResponse([
+          { id: 'openrouter-only/model', architecture: { output_modalities: ['text'] } },
+        ]));
+      }
+      if (url === zdrUrl) {
+        zdrCalls += 1;
+        return Promise.resolve(openRouterZdrResponse([
+          {
+            model_id: 'openrouter-only/model',
+            provider_name: 'OpenRouter',
+            tag: 'zdr',
+          },
+        ]));
+      }
+      return Promise.reject(new Error(`unexpected URL ${url}`));
+    });
+
+    const discovery = createDiscovery('https://openrouter.ai/api', undefined, {
+      openRouterModelsApiUrl: sharedModelsUrl,
+    });
+
+    const [firstModels, secondModels] = await Promise.all([
+      discovery.getAvailableModels(),
+      discovery.getAvailableModels(),
+    ]);
+
+    expect(sharedModelsCalls).toBe(2);
+    expect(zdrCalls).toBe(1);
+    expect(firstModels.map(model => model.id)).toEqual(['openrouter-only/model']);
+    expect(firstModels[0].zdrAvailable).toBe(true);
+    expect(secondModels).toEqual(firstModels);
   });
 
   it('uses OpenRouter models when LiteLLM enrichment fails', async () => {

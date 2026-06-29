@@ -407,6 +407,18 @@ function deriveOpenRouterZdrEndpointsApiUrl(openRouterModelsApiUrl: string): str
 
 const CACHE_TTL_MS = 5 * 60_000; // 5 minutes
 
+type ModelDiscoveryFetchProvider = 'litellm' | 'openrouter';
+type ModelDiscoveryFetchPurpose = 'models' | 'zdr-endpoints';
+
+function buildInFlightFetchKey(
+  provider: ModelDiscoveryFetchProvider,
+  purpose: ModelDiscoveryFetchPurpose,
+  endpoint: string,
+  configScope: string,
+): string {
+  return JSON.stringify([provider, purpose, endpoint, configScope]);
+}
+
 function isGatewayAgentEntrypoint(): boolean {
   const entrypoint = (process.argv[1] ?? '')
     .replace(/\\/g, '/')
@@ -423,6 +435,7 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
   private allowDirectNetworkEgress: boolean;
   private cache: DiscoveredModel[] | null = null;
   private cacheTime = 0;
+  private readonly inFlightFetches = new Map<string, Promise<unknown>>();
 
   constructor(
     litellmBaseUrl: string,
@@ -478,26 +491,52 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
     );
   }
 
-  private async fetchLiteLLM(): Promise<LiteLLMModelEntry[]> {
+  private coalesceInFlightFetch<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
+    const existing = this.inFlightFetches.get(key);
+    if (existing) {
+      return existing as Promise<T>;
+    }
+
+    const promise = Promise.resolve()
+      .then(fetcher)
+      .finally(() => {
+        if (this.inFlightFetches.get(key) === promise) {
+          this.inFlightFetches.delete(key);
+        }
+      });
+    this.inFlightFetches.set(key, promise);
+    return promise;
+  }
+
+  private fetchLiteLLM(): Promise<LiteLLMModelEntry[]> {
+    const url = `${this.litellmBaseUrl}/v1/models`;
+    const key = buildInFlightFetchKey(
+      'litellm',
+      'models',
+      url,
+      this.litellmApiKey ? 'auth:present' : 'auth:none',
+    );
     const headers: Record<string, string> = {};
     if (this.litellmApiKey) {
       headers['Authorization'] = `Bearer ${this.litellmApiKey}`;
     }
 
-    try {
-      const res = await this.resolveFetch()(`${this.litellmBaseUrl}/v1/models`, { headers });
-      if (!res.ok) {
-        throw new Error(`LiteLLM /v1/models returned ${res.status}`);
+    return this.coalesceInFlightFetch(key, async () => {
+      try {
+        const res = await this.resolveFetch()(url, { headers });
+        if (!res.ok) {
+          throw new Error(`LiteLLM /v1/models returned ${res.status}`);
+        }
+        const data = await res.json() as { data?: LiteLLMModelEntry[] };
+        if (!Array.isArray(data.data)) {
+          throw new Error('LiteLLM /v1/models returned invalid payload');
+        }
+        return data.data;
+      } catch (err) {
+        log.warn('Failed to fetch LiteLLM models', { error: String(err) });
+        throw err instanceof Error ? err : new Error(String(err));
       }
-      const data = await res.json() as { data?: LiteLLMModelEntry[] };
-      if (!Array.isArray(data.data)) {
-        throw new Error('LiteLLM /v1/models returned invalid payload');
-      }
-      return data.data;
-    } catch (err) {
-      log.warn('Failed to fetch LiteLLM models', { error: String(err) });
-      throw err instanceof Error ? err : new Error(String(err));
-    }
+    });
   }
 
   private async fetchLiteLLMForEnrichment(): Promise<LiteLLMModelEntry[]> {
@@ -508,36 +547,47 @@ export class ModelDiscovery implements ModelDiscoveryBackend {
     }
   }
 
-  private async fetchOpenRouterMeta(): Promise<OpenRouterModelEntry[]> {
-    try {
-      const res = await this.resolveFetch()(this.openRouterModelsApiUrl);
-      if (!res.ok) {
-        throw new Error(`OpenRouter /api/v1/models returned ${res.status}`);
+  private fetchOpenRouterMeta(): Promise<OpenRouterModelEntry[]> {
+    const key = buildInFlightFetchKey('openrouter', 'models', this.openRouterModelsApiUrl, 'auth:none');
+    return this.coalesceInFlightFetch(key, async () => {
+      try {
+        const res = await this.resolveFetch()(this.openRouterModelsApiUrl);
+        if (!res.ok) {
+          throw new Error(`OpenRouter /api/v1/models returned ${res.status}`);
+        }
+        const data = await res.json() as { data?: OpenRouterModelEntry[] };
+        if (!Array.isArray(data.data)) {
+          throw new Error('OpenRouter /api/v1/models returned invalid payload');
+        }
+        return data.data;
+      } catch (err) {
+        log.warn('Failed to fetch OpenRouter metadata', { error: String(err) });
+        throw err instanceof Error ? err : new Error(String(err));
       }
-      const data = await res.json() as { data?: OpenRouterModelEntry[] };
-      if (!Array.isArray(data.data)) {
-        throw new Error('OpenRouter /api/v1/models returned invalid payload');
-      }
-      return data.data;
-    } catch (err) {
-      log.warn('Failed to fetch OpenRouter metadata', { error: String(err) });
-      throw err instanceof Error ? err : new Error(String(err));
-    }
+    });
   }
 
-  private async fetchOpenRouterZdrEndpoints(): Promise<OpenRouterZdrEndpointEntry[]> {
-    try {
-      const res = await this.resolveFetch()(this.openRouterZdrEndpointsApiUrl);
-      if (!res.ok) {
-        log.warn(`OpenRouter /api/v1/endpoints/zdr returned ${res.status}`);
+  private fetchOpenRouterZdrEndpoints(): Promise<OpenRouterZdrEndpointEntry[]> {
+    const key = buildInFlightFetchKey(
+      'openrouter',
+      'zdr-endpoints',
+      this.openRouterZdrEndpointsApiUrl,
+      'auth:none',
+    );
+    return this.coalesceInFlightFetch(key, async () => {
+      try {
+        const res = await this.resolveFetch()(this.openRouterZdrEndpointsApiUrl);
+        if (!res.ok) {
+          log.warn(`OpenRouter /api/v1/endpoints/zdr returned ${res.status}`);
+          return [];
+        }
+        const data = await res.json() as { data?: OpenRouterZdrEndpointEntry[] };
+        return data.data ?? [];
+      } catch (err) {
+        log.warn('Failed to fetch OpenRouter ZDR endpoints', { error: String(err) });
         return [];
       }
-      const data = await res.json() as { data?: OpenRouterZdrEndpointEntry[] };
-      return data.data ?? [];
-    } catch (err) {
-      log.warn('Failed to fetch OpenRouter ZDR endpoints', { error: String(err) });
-      return [];
-    }
+    });
   }
 }
 

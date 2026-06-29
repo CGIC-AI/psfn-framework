@@ -36,6 +36,9 @@ export function buildManifestSeedFromTelemetry(telemetry: RetrievalTelemetry): C
     ...(telemetry.contactScopeRejectedCount !== undefined
       ? { contactScopeRejectedCount: telemetry.contactScopeRejectedCount }
       : {}),
+    ...(telemetry.roomVisibilityRejectedCount !== undefined
+      ? { roomVisibilityRejectedCount: telemetry.roomVisibilityRejectedCount }
+      : {}),
     sensitivityRejectedCount: telemetry.sensitivityRejectedCount ?? 0,
     policyRejectedCount: telemetry.policyRejectedCount ?? 0,
     ...(telemetry.policyRejectedReasonTags

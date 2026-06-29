@@ -33,6 +33,18 @@ const CONSENT_REQUIRED_BOUNDARY_TAGS = new Set([
   'disclosure_requires_consent',
   'gate_consent',
 ]);
+const ROOM_CONTEXT_SCOPE_TAGS = new Set([
+  'group_memory',
+  'room_context',
+  'conversation',
+  'channel',
+]);
+
+export interface RetrievalRoomVisibilityContext {
+  currentChannelId: string;
+  currentIsDirectMessage?: boolean;
+  canonicalContactRoomIds?: ReadonlySet<string>;
+}
 
 function violatesHighIntimacyContactScope(
   memory: Pick<PurrMemory, 'sensitivity' | 'contactId'>,
@@ -43,16 +55,103 @@ function violatesHighIntimacyContactScope(
   return memory.contactId !== canonicalContactId;
 }
 
+function normalizeRoomId(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function hasRoomContextScopeTag(memory: Pick<PurrMemory, 'scopeTags'>): boolean {
+  for (const rawTag of memory.scopeTags ?? []) {
+    const normalized = rawTag.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
+    if (ROOM_CONTEXT_SCOPE_TAGS.has(normalized)) return true;
+  }
+  return false;
+}
+
+function resolveMemorySourceRoom(memory: Pick<PurrMemory, 'provenance' | 'scopeRef'>): {
+  roomId?: string;
+  inconsistent: boolean;
+} {
+  const scopedRoomId = memory.scopeRef?.kind === 'conversation'
+    ? normalizeRoomId(memory.scopeRef.id)
+    : undefined;
+  const provenanceRoomId = normalizeRoomId(memory.provenance?.channelId);
+  return {
+    roomId: scopedRoomId ?? provenanceRoomId,
+    inconsistent: scopedRoomId !== undefined
+      && provenanceRoomId !== undefined
+      && scopedRoomId !== provenanceRoomId,
+  };
+}
+
+function requiresRoomProofWhenSourceMissing(
+  memory: Pick<PurrMemory, 'scopeRef' | 'scopeTags'>,
+  roomVisibility: RetrievalRoomVisibilityContext,
+): boolean {
+  if (roomVisibility.currentIsDirectMessage === undefined) return false;
+  return memory.scopeRef?.kind === 'conversation'
+    || hasRoomContextScopeTag(memory);
+}
+
+function evaluateRoomVisibilityDecision(
+  memory: Pick<PurrMemory, 'sensitivity' | 'provenance' | 'scopeRef' | 'scopeTags'>,
+  roomVisibility: RetrievalRoomVisibilityContext | undefined,
+): RetrievalAccessDecision | undefined {
+  const currentRoomId = normalizeRoomId(roomVisibility?.currentChannelId);
+  if (!roomVisibility || !currentRoomId) return undefined;
+
+  const source = resolveMemorySourceRoom(memory);
+  if (source.inconsistent) {
+    return {
+      allowed: false,
+      rejectionKind: 'room_visibility',
+      withheldReason: 'room_visibility.blocked',
+    };
+  }
+  if (!source.roomId) {
+    if (requiresRoomProofWhenSourceMissing(memory, roomVisibility)) {
+      return {
+        allowed: false,
+        rejectionKind: 'room_visibility',
+        withheldReason: 'room_visibility.blocked',
+      };
+    }
+    return undefined;
+  }
+  if (source.roomId === currentRoomId) return undefined;
+
+  if (roomVisibility.currentIsDirectMessage === true) {
+    if (roomVisibility.canonicalContactRoomIds?.has(source.roomId)) {
+      return undefined;
+    }
+    return {
+      allowed: false,
+      rejectionKind: 'room_visibility',
+      withheldReason: 'room_visibility.blocked',
+    };
+  }
+
+  return {
+    allowed: false,
+    rejectionKind: 'room_visibility',
+    withheldReason: 'room_visibility.blocked',
+  };
+}
+
 export function evaluateRetrievalAccessDecision(
-  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'consentFlags' | 'tags'>,
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'consentFlags' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'>,
   options: {
     trustLevel: TrustLevel;
     channelVisibility: ChannelVisibility;
     channelMeta?: ChannelMeta;
     canonicalContactId?: string;
     operatorApproval?: boolean;
+    roomVisibility?: RetrievalRoomVisibilityContext;
   },
 ): RetrievalAccessDecision {
+  const roomDecision = evaluateRoomVisibilityDecision(memory, options.roomVisibility);
+  if (roomDecision) return roomDecision;
+
   if (violatesHighIntimacyContactScope(memory, options.canonicalContactId)) {
     return {
       allowed: false,
@@ -87,11 +186,14 @@ export function evaluateRetrievalAccessDecision(
   return {
     allowed: false,
     rejectionKind: 'policy',
-    withheldReason: policy.reasonTag as Exclude<MemoryWithheldReasonTag, 'contact_scope.high_intimacy'>,
+    withheldReason: policy.reasonTag as Exclude<
+      MemoryWithheldReasonTag,
+      'contact_scope.high_intimacy' | 'room_visibility.blocked'
+    >,
   };
 }
 
-export function summarizeWithheldMemories<T extends Pick<PurrMemory, 'id' | 'sensitivity' | 'contactId' | 'consentFlags' | 'tags'> & { similarity?: number }>(
+export function summarizeWithheldMemories<T extends Pick<PurrMemory, 'id' | 'sensitivity' | 'contactId' | 'consentFlags' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'> & { similarity?: number }>(
   memories: readonly T[],
   options: {
     trustLevel: TrustLevel;
@@ -99,6 +201,7 @@ export function summarizeWithheldMemories<T extends Pick<PurrMemory, 'id' | 'sen
     channelMeta?: ChannelMeta;
     canonicalContactId?: string;
     operatorApproval?: boolean;
+    roomVisibility?: RetrievalRoomVisibilityContext;
   },
 ): { summary?: MemoryWithheldSummary; withheldIds: string[] } {
   const summary = createEmptyMemoryWithheldSummary();

@@ -42,6 +42,7 @@ export interface MemoryEvolutionPromptLink {
 export interface RetrievalDecisionDiagnostics {
   candidateCount: number;
   policyAllowedCount: number;
+  rejectedByRoomVisibility: number;
   rejectedByContactScope: number;
   rejectedBySensitivity: number;
   rejectedByPolicy: number;
@@ -85,6 +86,7 @@ export interface RetrievalTelemetry {
   retrievalTokenBudget: number;
   retrievalLimitMode: 'budget' | 'hard_limit';
   policyAllowedCount?: number;
+  roomVisibilityRejectedCount?: number;
   contactScopeRejectedCount?: number;
   sensitivityRejectedCount?: number;
   policyRejectedCount?: number;
@@ -147,7 +149,7 @@ export interface RetrievalSocialContext {
   relatedContactsById: ReadonlyMap<string, RetrievalContactContext>;
 }
 
-export type RetrievalAccessRejectionKind = 'contact_scope' | 'sensitivity' | 'policy';
+export type RetrievalAccessRejectionKind = 'room_visibility' | 'contact_scope' | 'sensitivity' | 'policy';
 
 export interface RetrievalAccessDecision {
   allowed: boolean;

@@ -8,6 +8,15 @@ import type { ExtractionSourceSpeaker } from './speaker-routing.js';
 import { MemoryWritePolicyError } from '../writer.js';
 import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 
+type LlmCompletionContext = Parameters<ExtractionRunOptions['llmClient']['complete']>[0];
+type LlmCompletionResponse = Awaited<ReturnType<ExtractionRunOptions['llmClient']['complete']>>;
+
+interface PendingChunkCompletion {
+  context: LlmCompletionContext;
+  resolve: (content: string) => void;
+  reject: (error: Error) => void;
+}
+
 function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): ExtractionRunOptions {
   const recoveredEntries = [
     {
@@ -72,6 +81,42 @@ function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): Extraction
     maybeRefreshContactProfile: vi.fn(),
     ...overrides,
   };
+}
+
+function buildChunkedEntries(count: number): NonNullable<ExtractionRunOptions['recoveredEntries']> {
+  return Array.from({ length: count }, (_, index) => {
+    const id = index + 1;
+    const role = index % 2 === 0 ? 'user' : 'assistant';
+    return {
+      id,
+      channelId: 'api:test',
+      role,
+      authorName: role,
+      content: role === 'user'
+        ? `I prefer durable travel planning note ${id}.`
+        : `Noted travel planning detail ${id}.`,
+      timestamp: id,
+    };
+  }) as NonNullable<ExtractionRunOptions['recoveredEntries']>;
+}
+
+function factResponse(text: string): string {
+  return `<response>
+<fact>
+<text>${text}</text>
+<type>semantic</type>
+<importance>0.8</importance>
+<confidence>0.9</confidence>
+</fact>
+</response>`;
+}
+
+async function waitForCondition(description: string, condition: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (condition()) return;
+    await new Promise(resolve => setTimeout(resolve, 0));
+  }
+  throw new Error(`Timed out waiting for ${description}`);
 }
 
 describe('runExtractionOrchestration fail-closed errors', () => {
@@ -166,6 +211,163 @@ describe('runExtractionOrchestration fail-closed errors', () => {
       cause: llmFailure,
     });
     expect(options.emitExtractionEnd).not.toHaveBeenCalled();
+  });
+});
+
+describe('runExtractionOrchestration chunk concurrency', () => {
+  it('runs multi-chunk LLM extraction with a cap of two and merges in chunk order', async () => {
+    const pendingCompletions: PendingChunkCompletion[] = [];
+    let activeCalls = 0;
+    let maxActiveCalls = 0;
+    const complete = vi.fn((context: LlmCompletionContext): Promise<LlmCompletionResponse> => {
+      activeCalls++;
+      maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
+
+      return new Promise((resolve, reject) => {
+        pendingCompletions.push({
+          context,
+          resolve: (content: string) => {
+            activeCalls--;
+            resolve({ content });
+          },
+          reject: (error: Error) => {
+            activeCalls--;
+            reject(error);
+          },
+        });
+      });
+    });
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-chunk' },
+    });
+    const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
+    const options = buildOptions({
+      recoveredEntries: buildChunkedEntries(25),
+      useCompositionalExtraction: true,
+      maxWrites: 5,
+      llmClient: { complete } as ExtractionRunOptions['llmClient'],
+      processFact,
+      emitExtractionEnd,
+    });
+
+    const runPromise = runExtractionOrchestration(options);
+    await waitForCondition('first two chunk requests', () => complete.mock.calls.length === 2);
+
+    expect(maxActiveCalls).toBe(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+
+    pendingCompletions[1].resolve(factResponse('Ceramic studio weekends are planned'));
+    await waitForCondition('third chunk request', () => complete.mock.calls.length === 3);
+    pendingCompletions[2].resolve(factResponse('Sourdough starter notes stay organized'));
+    pendingCompletions[0].resolve(factResponse('Alpine train journeys remain preferred'));
+
+    await expect(runPromise).resolves.toBeUndefined();
+
+    expect(maxActiveCalls).toBe(2);
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(pendingCompletions.map(completion => completion.context.correlation?.requestId)).toEqual([
+      'memory-extraction:api:test:manual:chunk:1',
+      'memory-extraction:api:test:manual:chunk:2',
+      'memory-extraction:api:test:manual:chunk:3',
+    ]);
+    expect(processFact.mock.calls.map(call => call[0].text)).toEqual([
+      'Alpine train journeys remain preferred',
+      'Ceramic studio weekends are planned',
+      'Sourdough starter notes stay organized',
+    ]);
+    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+      compositionalMode: 'chunk_compose',
+      chunkCount: 3,
+      mergedFactCount: 3,
+      crossChunkDeduplicatedCount: 0,
+    }));
+  });
+
+  it('fails closed when one concurrent chunk request fails', async () => {
+    const llmFailure = new Error('simulated chunk failure');
+    let callIndex = 0;
+    let resolveFirstChunk: ((content: string) => void) | undefined;
+    let activeCalls = 0;
+    let maxActiveCalls = 0;
+    const complete = vi.fn((_context: LlmCompletionContext): Promise<LlmCompletionResponse> => {
+      const currentIndex = callIndex;
+      callIndex++;
+      activeCalls++;
+      maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
+
+      if (currentIndex === 1) {
+        activeCalls--;
+        return Promise.reject(llmFailure);
+      }
+
+      return new Promise(resolve => {
+        resolveFirstChunk = (content: string) => {
+          activeCalls--;
+          resolve({ content });
+        };
+      });
+    });
+    const processFact = vi.fn();
+    const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
+    const recordExtractionMarker = vi.fn();
+    const options = buildOptions({
+      recoveredEntries: buildChunkedEntries(25),
+      useCompositionalExtraction: true,
+      llmClient: { complete } as ExtractionRunOptions['llmClient'],
+      processFact,
+      emitExtractionEnd,
+      recordExtractionMarker,
+    });
+
+    const runPromise = runExtractionOrchestration(options);
+    await waitForCondition('first two chunk requests', () => complete.mock.calls.length === 2);
+    resolveFirstChunk?.(factResponse('Alpine train journeys remain preferred'));
+
+    await expect(runPromise).rejects.toMatchObject({
+      context: {
+        stage: 'orchestration',
+        channelId: 'api:test',
+        triggerReason: 'manual',
+      },
+      cause: llmFailure,
+    });
+
+    expect(maxActiveCalls).toBe(2);
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(processFact).not.toHaveBeenCalled();
+    expect(emitExtractionEnd).not.toHaveBeenCalled();
+    expect(recordExtractionMarker).not.toHaveBeenCalled();
+  });
+
+  it('keeps single-chunk extraction on one request without chunk request-id suffixes', async () => {
+    const complete = vi.fn().mockResolvedValue({
+      content: factResponse('Alpine train journeys remain preferred'),
+    });
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-single-chunk' },
+    });
+    const emitExtractionEnd = vi.fn().mockResolvedValue(undefined);
+    const options = buildOptions({
+      useCompositionalExtraction: true,
+      llmClient: { complete } as ExtractionRunOptions['llmClient'],
+      processFact,
+      emitExtractionEnd,
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0][0].correlation?.requestId).toBe(
+      'memory-extraction:api:test:manual',
+    );
+    expect(processFact).toHaveBeenCalledTimes(1);
+    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+      compositionalMode: 'chunk_compose',
+      chunkCount: 1,
+      mergedFactCount: 1,
+    }));
   });
 });
 

@@ -59,6 +59,7 @@ import type {
 import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './types.js';
 
 const log = createComponentLogger('Extraction');
+const EXTRACTION_CHUNK_LLM_CONCURRENCY = 2;
 
 type ExtractionIntegrityErrorStage = 'orchestration' | 'fact_processing';
 type RoutedAcceptedFactCandidate = AcceptedFactCandidate & {
@@ -245,39 +246,42 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       ? buildExtractionEntryChunks(transcriptEntries)
       : [transcriptEntries];
     const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'legacy';
-    const parsedFactGroups: ExtractedFact[][] = [];
-    for (const [index, chunkEntries] of entryChunks.entries()) {
-      const renderedPrompt = injectPromptRuntimeTokens(extractionPrompt)
-        .replace('{existing_facts}', existingFacts)
-        .replace('{recent_messages}', formatExtractionTranscript(chunkEntries, {
-          charName: participantNames.companionName ?? options.sessionManager.characterName,
-          userName: participantNames.userName,
-        }));
-      const namingGuidance = buildExtractionNamingGuidance(participantNames);
-      const prompt = namingGuidance
-        ? `${renderedPrompt}\n\n${namingGuidance}`
-        : renderedPrompt;
-      const chunkRequestId = entryChunks.length > 1
-        ? `${requestId}:chunk:${index + 1}`
-        : requestId;
+    const parsedFactGroups = await mapWithConcurrency(
+      entryChunks,
+      EXTRACTION_CHUNK_LLM_CONCURRENCY,
+      async (chunkEntries, index): Promise<ExtractedFact[]> => {
+        const renderedPrompt = injectPromptRuntimeTokens(extractionPrompt)
+          .replace('{existing_facts}', existingFacts)
+          .replace('{recent_messages}', formatExtractionTranscript(chunkEntries, {
+            charName: participantNames.companionName ?? options.sessionManager.characterName,
+            userName: participantNames.userName,
+          }));
+        const namingGuidance = buildExtractionNamingGuidance(participantNames);
+        const prompt = namingGuidance
+          ? `${renderedPrompt}\n\n${namingGuidance}`
+          : renderedPrompt;
+        const chunkRequestId = entryChunks.length > 1
+          ? `${requestId}:chunk:${index + 1}`
+          : requestId;
 
-      const response = await options.llmClient.complete(
-        {
-          systemPrompt: prompt,
-          messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
-          correlation: {
-            requestId: chunkRequestId,
-            ...(turnId ? { turnId } : {}),
-            channelId: options.channelId,
-            callType: 'memory',
-            purpose: 'memory.extraction',
+        const response = await options.llmClient.complete(
+          {
+            systemPrompt: prompt,
+            messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
+            correlation: {
+              requestId: chunkRequestId,
+              ...(turnId ? { turnId } : {}),
+              channelId: options.channelId,
+              callType: 'memory',
+              purpose: 'memory.extraction',
+            },
           },
-        },
-        'extraction',
-      );
+          'extraction',
+        );
 
-      parsedFactGroups.push(parseFactsXml(response.content));
-    }
+        return parseFactsXml(response.content);
+      },
+    );
     const rawParsedFactCount = parsedFactGroups
       .reduce((total, group) => total + group.length, 0);
     const mergedParsedFacts = mergeExtractedFactGroups(parsedFactGroups);
@@ -662,6 +666,33 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function mapWithConcurrency<T, U>(
+  items: readonly T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<U>,
+): Promise<U[]> {
+  const results = new Array<U>(items.length);
+  let nextIndex = 0;
+  let firstError: unknown;
+  const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length && firstError === undefined) {
+      const index = nextIndex;
+      nextIndex += 1;
+      try {
+        results[index] = await mapper(items[index], index);
+      } catch (error) {
+        firstError ??= error;
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  if (firstError !== undefined) throw firstError;
+  return results;
 }
 
 function appendAcceptedFactForContact(

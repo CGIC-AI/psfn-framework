@@ -9,6 +9,7 @@ import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
+import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus, ExternalTelemetryEvent } from '../../shared/event-bus.js';
@@ -72,8 +73,10 @@ import {
   validateApiServerAuthConfig,
 } from './server/auth.js';
 import { handleModelsEndpoint } from './server/models.js';
+import { resolveSatelliteConfigPull } from '../backplane/satellite-registry.js';
 
 const log = createComponentLogger('ApiServer');
+const API_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
 const TELEMETRY_MAX_SKEW_MS = 5 * 60_000;
 const TELEMETRY_NONCE_TTL_MS = 10 * 60_000;
 const TELEMETRY_EVENT_TYPE_ALLOWLIST = new Set([
@@ -157,6 +160,7 @@ export class ApiServer implements ChannelAdapterPort {
   private seenTelemetryNonces = new Map<string, number>();
   private voiceWebSocket: ApiVoiceWebSocketAdapter;
   private chatCompletions: ApiChatCompletionsHandler;
+  private satelliteRegistry?: SatelliteRegistryConfig;
   private healthChecks: ApiServerHealthChecks;
   private schedulerHealthcheckStaleAfterMs: number;
   private lastSchedulerHealthcheckAtMs: number | null = null;
@@ -177,6 +181,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.companionName = config.companionName?.trim() || this.modelName;
     this.requestTimeoutMs = parseChatRequestTimeoutMs(config.requestTimeoutMs);
     this.healthChecks = config.healthChecks ?? {};
+    this.satelliteRegistry = config.satelliteRegistry;
     this.schedulerHealthcheckStaleAfterMs = parseSchedulerHealthcheckStaleAfterMs(
       config.schedulerHealthcheckStaleAfterMs,
     );
@@ -289,6 +294,8 @@ export class ApiServer implements ChannelAdapterPort {
       handleModelsEndpoint(res, this.modelName);
     } else if (req.method === 'GET' && path === '/v1/identity') {
       this.handleIdentity(res);
+    } else if (req.method === 'GET' && path === '/v1/satellites/config') {
+      this.handleSatelliteConfigPull(req, res, url, principal);
     } else if (req.method === 'GET' && path === '/health') {
       void this.handleHealth(res);
     } else if (req.method === 'POST' && path === '/v1/chat/completions') {
@@ -327,6 +334,27 @@ export class ApiServer implements ChannelAdapterPort {
           : {}),
       },
     });
+  }
+
+  private handleSatelliteConfigPull(
+    req: IncomingMessage,
+    res: ServerResponse,
+    url: URL,
+    principal: ApiAuthPrincipal,
+  ): void {
+    const resolution = resolveSatelliteConfigPull({
+      headers: req.headers,
+      principal,
+      registry: this.satelliteRegistry,
+      satelliteId: url.searchParams.get('satelliteId') ?? undefined,
+      endpointId: url.searchParams.get('endpointId') ?? undefined,
+      claimType: url.searchParams.get('claimType') ?? undefined,
+    });
+    if (!resolution.ok) {
+      sendApiError(res, resolution.status, resolution.type, resolution.message);
+      return;
+    }
+    sendJson(res, 200, resolution.value, API_DYNAMIC_JSON_HEADERS);
   }
 
   private async handleHealth(res: ServerResponse): Promise<void> {

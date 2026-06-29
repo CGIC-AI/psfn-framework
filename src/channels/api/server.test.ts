@@ -59,6 +59,25 @@ const SATELLITE_TEST_REGISTRY = parseSatelliteRegistryConfig({
             'location',
           ],
           telemetryScopes: ['location', 'timezone', 'presence'],
+          runtime: {
+            schemaVersion: 1,
+            transport: {
+              mode: 'openhome_bridge',
+            },
+            audio: {
+              inputDevice: 'plughw:1,0',
+              outputDevice: 'default',
+              sampleRateHz: 16000,
+              channelCount: 1,
+              frameMs: 20,
+            },
+            refresh: {
+              intervalMs: 300000,
+              jitterMs: 30000,
+              restartPolicy: 'restart_on_runtime_change',
+              restartGraceMs: 5000,
+            },
+          },
         },
       ],
     },
@@ -2094,6 +2113,83 @@ describe('ApiServer with auth', () => {
       Authorization: 'Bearer test-secret-key',
     });
     expect(res.status).toBe(200);
+  });
+
+  it('serves authorized satellite config pulls from the core registry', async () => {
+    await server.stop();
+    server = createApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+      satelliteRegistry: SATELLITE_TEST_REGISTRY,
+    });
+    await server.init();
+    await server.start();
+
+    const res = await request(
+      port,
+      'GET',
+      '/v1/satellites/config?satelliteId=android-phone&endpointId=companion-app&claimType=android-mobile',
+      undefined,
+      { Authorization: 'Bearer test-secret-key' },
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    const body = JSON.parse(res.body);
+    expect(body).toMatchObject({
+      object: 'psfn.satellite_config',
+      schemaVersion: 1,
+      satellite: {
+        satelliteId: 'android-phone',
+        displayName: 'Android Mobile Satellite',
+        mobility: 'mobile',
+      },
+      endpoint: {
+        endpointId: 'companion-app',
+        promptChannelType: 'mobile_satellite',
+        claimType: 'android-mobile',
+      },
+      identity: {
+        authorId: 'primary-user',
+        authorName: 'Primary User',
+        canonicalContactId: 'contact-primary-user',
+        channelPrivacy: 'private',
+      },
+      session: {
+        channelIdTemplate: 'satellite:android-mobile:{sessionId}',
+        fixedHeaders: {
+          claimType: 'android-mobile',
+          satelliteId: 'android-phone',
+          endpointId: 'companion-app',
+        },
+      },
+      runtime: {
+        transport: { mode: 'openhome_bridge' },
+        audio: {
+          inputDevice: 'plughw:1,0',
+          sampleRateHz: 16000,
+        },
+        refresh: {
+          intervalMs: 300000,
+          restartPolicy: 'restart_on_runtime_change',
+        },
+      },
+    });
+    expect(body.configVersion).toMatch(/^[a-f0-9]{64}$/u);
+  });
+
+  it('fails closed when satellite config pulls are not registry-backed', async () => {
+    const res = await request(
+      port,
+      'GET',
+      '/v1/satellites/config?satelliteId=android-phone&endpointId=companion-app&claimType=android-mobile',
+      undefined,
+      { Authorization: 'Bearer test-secret-key' },
+    );
+    expect(res.status).toBe(503);
+    expect(JSON.parse(res.body).error.type).toBe('satellite_registry_not_configured');
   });
 
   it('accepts requests with admin token when configured as alternate auth token', async () => {

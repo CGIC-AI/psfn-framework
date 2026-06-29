@@ -1,21 +1,31 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { IncomingHttpHeaders } from 'node:http';
 import type {
   SatelliteCapability,
+  SatelliteConfigPullResponse,
   SatelliteConfig,
+  SatelliteConfigRestartPolicy,
   SatelliteEndpointAuthConfig,
+  SatelliteEndpointAudioRuntimeConfig,
   SatelliteEndpointConfig,
+  SatelliteEndpointRefreshConfig,
+  SatelliteEndpointRuntimeConfig,
+  SatelliteEndpointTransportConfig,
   SatelliteMobility,
   SatelliteRegistryConfig,
   SatelliteRoutingMetadata,
   SatelliteTelemetryScope,
+  SatelliteTransportMode,
 } from '../../shared/contracts/satellite-registry.js';
 import {
   SATELLITE_CAPABILITIES,
+  SATELLITE_CONFIG_RESTART_POLICIES,
   SATELLITE_REGISTRY_FILE_NAME,
   SATELLITE_RUNTIME_ENABLED_CAPABILITIES,
   SATELLITE_TELEMETRY_SCOPES,
+  SATELLITE_TRANSPORT_MODES,
 } from '../../shared/contracts/satellite-registry.js';
 import type { ApiAuthPrincipal } from './http/auth.js';
 import type { ChannelVisibility } from '../../system/trust/types.js';
@@ -31,6 +41,8 @@ const HEX_SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SATELLITE_CAPABILITY_SET = new Set<string>(SATELLITE_CAPABILITIES);
 const SATELLITE_RUNTIME_ENABLED_CAPABILITY_SET = new Set<string>(SATELLITE_RUNTIME_ENABLED_CAPABILITIES);
 const SATELLITE_TELEMETRY_SCOPE_SET = new Set<string>(SATELLITE_TELEMETRY_SCOPES);
+const SATELLITE_TRANSPORT_MODE_SET = new Set<string>(SATELLITE_TRANSPORT_MODES);
+const SATELLITE_CONFIG_RESTART_POLICY_SET = new Set<string>(SATELLITE_CONFIG_RESTART_POLICIES);
 
 export const EMPTY_SATELLITE_REGISTRY_CONFIG: SatelliteRegistryConfig = Object.freeze({
   schemaVersion: 1,
@@ -69,6 +81,14 @@ export type SatelliteClaimResolution = { ok: true; value: ResolvedSatelliteClaim
   type: string;
   message: string;
 };
+type SatelliteClaimErrorResolution = Extract<SatelliteClaimResolution, { ok: false }>;
+
+export type SatelliteConfigPullResolution = { ok: true; value: SatelliteConfigPullResponse } | {
+  ok: false;
+  status: number;
+  type: string;
+  message: string;
+};
 
 function parseConfiguredString(value: unknown, fieldName: string): string {
   if (typeof value !== 'string') {
@@ -84,6 +104,26 @@ function parseConfiguredString(value: unknown, fieldName: string): string {
 function parseOptionalConfiguredString(value: unknown, fieldName: string): string | undefined {
   if (value === undefined) return undefined;
   return parseConfiguredString(value, fieldName);
+}
+
+function parseOptionalConfiguredBoolean(value: unknown, fieldName: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') {
+    throw new Error(`${fieldName} must be a boolean`);
+  }
+  return value;
+}
+
+function parsePositiveInteger(value: unknown, fieldName: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
+    throw new Error(`${fieldName} must be a positive integer`);
+  }
+  return value;
+}
+
+function parseOptionalPositiveInteger(value: unknown, fieldName: string): number | undefined {
+  if (value === undefined) return undefined;
+  return parsePositiveInteger(value, fieldName);
 }
 
 function parseStringArray(value: unknown, fieldName: string): string[] {
@@ -135,6 +175,15 @@ function parseChannelPrivacy(value: unknown, fieldName: string): ChannelVisibili
   const parsed = normalizeChannelVisibility(raw);
   if (!parsed) {
     throw new Error(`${fieldName} must be one of: private, semi_private, public, broadcast`);
+  }
+  return parsed;
+}
+
+function parseEndpointPath(value: unknown, fieldName: string): string | undefined {
+  const parsed = parseOptionalConfiguredString(value, fieldName);
+  if (parsed === undefined) return undefined;
+  if (!parsed.startsWith('/') || parsed.includes('://') || parsed.includes('?') || parsed.includes('#')) {
+    throw new Error(`${fieldName} must be an absolute HTTP path without query string or fragment`);
   }
   return parsed;
 }
@@ -207,6 +256,110 @@ function parseTelemetryScopes(value: unknown, fieldName: string): SatelliteTelem
   });
 }
 
+function parseTransportMode(value: unknown, fieldName: string): SatelliteTransportMode {
+  const parsed = parseConfiguredString(value, fieldName);
+  if (!SATELLITE_TRANSPORT_MODE_SET.has(parsed)) {
+    throw new Error(`${fieldName} must be one of: ${SATELLITE_TRANSPORT_MODES.join(', ')}`);
+  }
+  return parsed as SatelliteTransportMode;
+}
+
+function parseRestartPolicy(value: unknown, fieldName: string): SatelliteConfigRestartPolicy {
+  const parsed = parseConfiguredString(value, fieldName);
+  if (!SATELLITE_CONFIG_RESTART_POLICY_SET.has(parsed)) {
+    throw new Error(`${fieldName} must be one of: ${SATELLITE_CONFIG_RESTART_POLICIES.join(', ')}`);
+  }
+  return parsed as SatelliteConfigRestartPolicy;
+}
+
+function parseEndpointTransportConfig(value: unknown, fieldName: string): SatelliteEndpointTransportConfig {
+  if (!isRecord(value)) {
+    throw new Error(`${fieldName} must be an object`);
+  }
+  const transport: SatelliteEndpointTransportConfig = {
+    mode: parseTransportMode(value.mode, `${fieldName}.mode`),
+    ...(value.chatCompletionsPath !== undefined
+      ? { chatCompletionsPath: parseEndpointPath(value.chatCompletionsPath, `${fieldName}.chatCompletionsPath`) }
+      : {}),
+    ...(value.voiceWebSocketPath !== undefined
+      ? { voiceWebSocketPath: parseEndpointPath(value.voiceWebSocketPath, `${fieldName}.voiceWebSocketPath`) }
+      : {}),
+  };
+
+  if (transport.mode === 'http_chat_completions' && !transport.chatCompletionsPath) {
+    throw new Error(`${fieldName}.chatCompletionsPath must be configured when mode is http_chat_completions`);
+  }
+  if (transport.mode === 'voice_websocket' && !transport.voiceWebSocketPath) {
+    throw new Error(`${fieldName}.voiceWebSocketPath must be configured when mode is voice_websocket`);
+  }
+  return transport;
+}
+
+function parseEndpointAudioRuntimeConfig(value: unknown, fieldName: string): SatelliteEndpointAudioRuntimeConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`${fieldName} must be an object`);
+  }
+  return {
+    ...(value.inputDevice !== undefined
+      ? { inputDevice: parseConfiguredString(value.inputDevice, `${fieldName}.inputDevice`) }
+      : {}),
+    ...(value.outputDevice !== undefined
+      ? { outputDevice: parseConfiguredString(value.outputDevice, `${fieldName}.outputDevice`) }
+      : {}),
+    ...(value.sampleRateHz !== undefined
+      ? { sampleRateHz: parsePositiveInteger(value.sampleRateHz, `${fieldName}.sampleRateHz`) }
+      : {}),
+    ...(value.channelCount !== undefined
+      ? { channelCount: parsePositiveInteger(value.channelCount, `${fieldName}.channelCount`) }
+      : {}),
+    ...(value.frameMs !== undefined
+      ? { frameMs: parsePositiveInteger(value.frameMs, `${fieldName}.frameMs`) }
+      : {}),
+    ...(value.wakeWordEnabled !== undefined
+      ? { wakeWordEnabled: parseOptionalConfiguredBoolean(value.wakeWordEnabled, `${fieldName}.wakeWordEnabled`) }
+      : {}),
+  };
+}
+
+function parseEndpointRefreshConfig(value: unknown, fieldName: string): SatelliteEndpointRefreshConfig {
+  if (!isRecord(value)) {
+    throw new Error(`${fieldName} must be an object`);
+  }
+  const refresh: SatelliteEndpointRefreshConfig = {
+    intervalMs: parsePositiveInteger(value.intervalMs, `${fieldName}.intervalMs`),
+    ...(value.jitterMs !== undefined
+      ? { jitterMs: parseOptionalPositiveInteger(value.jitterMs, `${fieldName}.jitterMs`) }
+      : {}),
+    restartPolicy: parseRestartPolicy(value.restartPolicy, `${fieldName}.restartPolicy`),
+    ...(value.restartGraceMs !== undefined
+      ? { restartGraceMs: parseOptionalPositiveInteger(value.restartGraceMs, `${fieldName}.restartGraceMs`) }
+      : {}),
+  };
+  if (refresh.jitterMs !== undefined && refresh.jitterMs >= refresh.intervalMs) {
+    throw new Error(`${fieldName}.jitterMs must be less than ${fieldName}.intervalMs`);
+  }
+  return refresh;
+}
+
+function parseEndpointRuntimeConfig(value: unknown, fieldName: string): SatelliteEndpointRuntimeConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`${fieldName} must be an object`);
+  }
+  if (value.schemaVersion !== 1) {
+    throw new Error(`${fieldName}.schemaVersion must be 1`);
+  }
+  return {
+    schemaVersion: 1,
+    transport: parseEndpointTransportConfig(value.transport, `${fieldName}.transport`),
+    ...(value.audio !== undefined
+      ? { audio: parseEndpointAudioRuntimeConfig(value.audio, `${fieldName}.audio`) }
+      : {}),
+    refresh: parseEndpointRefreshConfig(value.refresh, `${fieldName}.refresh`),
+  };
+}
+
 function parseEndpointConfig(value: unknown, fieldName: string): SatelliteEndpointConfig {
   if (!isRecord(value)) {
     throw new Error(`${fieldName} must be an object`);
@@ -222,6 +375,7 @@ function parseEndpointConfig(value: unknown, fieldName: string): SatelliteEndpoi
   const auth = parseAuthConfig(value.auth, `${fieldName}.auth`);
   const maxCapabilities = parseCapabilities(value.maxCapabilities, `${fieldName}.maxCapabilities`);
   const telemetryScopes = parseTelemetryScopes(value.telemetryScopes, `${fieldName}.telemetryScopes`);
+  const runtime = parseEndpointRuntimeConfig(value.runtime, `${fieldName}.runtime`);
   if (!isRecord(value.defaultIdentity)) {
     throw new Error(`${fieldName}.defaultIdentity must be an object`);
   }
@@ -247,6 +401,7 @@ function parseEndpointConfig(value: unknown, fieldName: string): SatelliteEndpoi
     defaultIdentity,
     maxCapabilities,
     telemetryScopes,
+    ...(runtime ? { runtime } : {}),
   };
 }
 
@@ -465,7 +620,90 @@ function resolveEffectiveTelemetryScopes(input: {
   return requested;
 }
 
-function verifyApiKeyAuth(auth: SatelliteEndpointAuthConfig, principal: ApiAuthPrincipal): SatelliteClaimResolution | null {
+function stableHash(value: unknown): string {
+  return createHash('sha256')
+    .update(JSON.stringify(value))
+    .digest('hex');
+}
+
+function buildRuntimeCapabilityPolicy(endpoint: SatelliteEndpointConfig): SatelliteConfigPullResponse['capabilities'] {
+  const registryMax = [...new Set(endpoint.maxCapabilities)];
+  const runtimeEnabled = registryMax.filter((capability): capability is SatelliteCapability => (
+    SATELLITE_RUNTIME_ENABLED_CAPABILITY_SET.has(capability)
+  ));
+  const policyDenied = registryMax.filter(capability => !SATELLITE_RUNTIME_ENABLED_CAPABILITY_SET.has(capability));
+  return {
+    registryMax,
+    runtimeEnabled,
+    policyDenied,
+  };
+}
+
+function buildSatelliteConfigPullResponse(input: {
+  satellite: SatelliteConfig;
+  endpoint: SatelliteEndpointConfig;
+  claimType: string;
+  principal: ApiAuthPrincipal;
+}): SatelliteConfigPullResponse {
+  const { satellite, endpoint, claimType, principal } = input;
+  if (!endpoint.runtime) {
+    throw new Error('Satellite endpoint does not have runtime config');
+  }
+  const responseWithoutVersion = {
+    object: 'psfn.satellite_config' as const,
+    schemaVersion: 1 as const,
+    satellite: {
+      satelliteId: satellite.satelliteId,
+      displayName: satellite.displayName,
+      mobility: satellite.mobility,
+      ...(satellite.staticLocationLabel ? { staticLocationLabel: satellite.staticLocationLabel } : {}),
+    },
+    endpoint: {
+      endpointId: endpoint.endpointId,
+      displayName: endpoint.displayName,
+      promptChannelType: endpoint.promptChannelType,
+      claimType,
+      claimTypes: endpoint.claimTypes,
+    },
+    identity: endpoint.defaultIdentity,
+    session: {
+      channelType: 'api' as const,
+      routingSource: 'satellite' as const,
+      claimType,
+      channelIdTemplate: `satellite:${claimType}:{sessionId}`,
+      sessionIdHeader: SATELLITE_CLAIM_HEADERS.sessionId,
+      fixedHeaders: {
+        claimType,
+        satelliteId: satellite.satelliteId,
+        endpointId: endpoint.endpointId,
+      },
+      headerNames: {
+        claimType: SATELLITE_CLAIM_HEADERS.claimType,
+        satelliteId: SATELLITE_CLAIM_HEADERS.satelliteId,
+        endpointId: SATELLITE_CLAIM_HEADERS.endpointId,
+        sessionId: SATELLITE_CLAIM_HEADERS.sessionId,
+        threadId: SATELLITE_CLAIM_HEADERS.threadId,
+        capabilities: SATELLITE_CLAIM_HEADERS.capabilities,
+        telemetryScopes: SATELLITE_CLAIM_HEADERS.telemetryScopes,
+      },
+    },
+    capabilities: buildRuntimeCapabilityPolicy(endpoint),
+    telemetryScopes: endpoint.telemetryScopes,
+    auth: {
+      mode: endpoint.auth.mode,
+      principalId: principal.id,
+      certBound: endpoint.auth.mode === 'mtls',
+    },
+    runtime: endpoint.runtime,
+  };
+
+  return {
+    ...responseWithoutVersion,
+    configVersion: stableHash(responseWithoutVersion),
+  };
+}
+
+function verifyApiKeyAuth(auth: SatelliteEndpointAuthConfig, principal: ApiAuthPrincipal): SatelliteClaimErrorResolution | null {
   if (principal.mode !== 'api_key') {
     return {
       ok: false,
@@ -489,7 +727,7 @@ function verifyMtlsAuth(
   auth: SatelliteEndpointAuthConfig,
   headers: HeaderMap,
   principal: ApiAuthPrincipal,
-): SatelliteClaimResolution | null {
+): SatelliteClaimErrorResolution | null {
   const apiKeyError = verifyApiKeyAuth(auth, principal);
   if (apiKeyError) return apiKeyError;
 
@@ -526,7 +764,7 @@ function verifySatelliteAuth(
   auth: SatelliteEndpointAuthConfig,
   headers: HeaderMap,
   principal: ApiAuthPrincipal,
-): SatelliteClaimResolution | null {
+): SatelliteClaimErrorResolution | null {
   if (auth.mode === 'api_key') {
     return verifyApiKeyAuth(auth, principal);
   }
@@ -534,6 +772,10 @@ function verifySatelliteAuth(
 }
 
 function satelliteClaimError(status: number, type: string, message: string): SatelliteClaimResolution {
+  return { ok: false, status, type, message };
+}
+
+function satelliteConfigPullError(status: number, type: string, message: string): SatelliteConfigPullResolution {
   return { ok: false, status, type, message };
 }
 
@@ -631,4 +873,60 @@ export function resolveSatelliteClaim(options: {
       satellite: satelliteMetadata,
     },
   };
+}
+
+export function resolveSatelliteConfigPull(options: {
+  headers: HeaderMap;
+  principal: ApiAuthPrincipal;
+  registry?: SatelliteRegistryConfig;
+  satelliteId: string | undefined;
+  endpointId: string | undefined;
+  claimType: string | undefined;
+}): SatelliteConfigPullResolution {
+  const { headers, principal, registry } = options;
+  if (!registry?.enabled) {
+    return satelliteConfigPullError(503, 'satellite_registry_not_configured', 'Satellite config pulls require an enabled satellites.json registry');
+  }
+  if (!options.satelliteId || !options.endpointId || !options.claimType) {
+    return satelliteConfigPullError(
+      400,
+      'invalid_satellite_config_request',
+      'Satellite config pulls require satelliteId, endpointId, and claimType query parameters',
+    );
+  }
+
+  let satelliteId: string;
+  let endpointId: string;
+  let claimType: string;
+  try {
+    satelliteId = assertIdToken(options.satelliteId.trim(), 'satelliteId');
+    endpointId = assertIdToken(options.endpointId.trim(), 'endpointId');
+    claimType = assertClaimType(options.claimType, 'claimType');
+  } catch (error) {
+    return satelliteConfigPullError(400, 'invalid_satellite_config_request', toErrorMessage(error));
+  }
+
+  const match = findEndpoint({ registry, satelliteId, endpointId, claimType });
+  if (!match) {
+    return satelliteConfigPullError(403, 'satellite_config_not_registered', 'Satellite config pull is not registered for this satellite endpoint');
+  }
+
+  const authError = verifySatelliteAuth(match.endpoint.auth, headers, principal);
+  if (authError) {
+    return satelliteConfigPullError(authError.status, authError.type, authError.message);
+  }
+
+  try {
+    return {
+      ok: true,
+      value: buildSatelliteConfigPullResponse({
+        satellite: match.satellite,
+        endpoint: match.endpoint,
+        claimType,
+        principal,
+      }),
+    };
+  } catch (error) {
+    return satelliteConfigPullError(503, 'satellite_runtime_config_not_configured', toErrorMessage(error));
+  }
 }

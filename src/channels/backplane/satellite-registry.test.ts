@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { principalFromApiKeyToken } from './http/auth.js';
 import {
   parseSatelliteRegistryConfig,
+  resolveSatelliteConfigPull,
   resolveSatelliteClaim,
 } from './satellite-registry.js';
 
@@ -32,6 +33,25 @@ function exampleRegistry(overrides: Record<string, unknown> = {}) {
             },
             maxCapabilities: ['text', 'audio_input', 'speech_to_text', 'audio_output', 'text_to_speech'],
             telemetryScopes: ['presence', 'health'],
+            runtime: {
+              schemaVersion: 1,
+              transport: {
+                mode: 'openhome_bridge',
+              },
+              audio: {
+                inputDevice: 'plughw:1,0',
+                outputDevice: 'default',
+                sampleRateHz: 16000,
+                channelCount: 1,
+                frameMs: 20,
+              },
+              refresh: {
+                intervalMs: 300000,
+                jitterMs: 30000,
+                restartPolicy: 'restart_on_runtime_change',
+                restartGraceMs: 5000,
+              },
+            },
           },
         ],
       },
@@ -131,6 +151,18 @@ describe('satellite registry', () => {
       'hall-sensor',
       'android-phone',
     ]);
+    expect(registry.satellites[0]?.endpoints[0]?.runtime).toMatchObject({
+      schemaVersion: 1,
+      transport: { mode: 'openhome_bridge' },
+      audio: {
+        inputDevice: 'plughw:1,0',
+        sampleRateHz: 16000,
+      },
+      refresh: {
+        intervalMs: 300000,
+        restartPolicy: 'restart_on_runtime_change',
+      },
+    });
   });
 
   it('rejects unknown capabilities and empty mTLS bindings', () => {
@@ -189,6 +221,192 @@ describe('satellite registry', () => {
         },
       ],
     })).toThrow('mTLS mode requires at least one client certificate binding');
+  });
+
+  it('rejects malformed runtime pull config', () => {
+    expect(() => parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [
+        {
+          satelliteId: 'bad-runtime',
+          displayName: 'Bad Runtime Satellite',
+          mobility: 'static',
+          endpoints: [
+            {
+              endpointId: 'voice',
+              displayName: 'Voice Endpoint',
+              claimTypes: ['voice-pi'],
+              promptChannelType: 'voice_satellite',
+              auth: { mode: 'api_key' },
+              defaultIdentity: {
+                authorId: 'primary-user',
+                authorName: 'Primary User',
+                canonicalContactId: 'contact-primary-user',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text'],
+              runtime: {
+                schemaVersion: 1,
+                transport: {
+                  mode: 'http_chat_completions',
+                },
+                refresh: {
+                  intervalMs: 300000,
+                  jitterMs: 300000,
+                  restartPolicy: 'manual',
+                },
+              },
+            },
+          ],
+        },
+      ],
+    })).toThrow('chatCompletionsPath must be configured');
+  });
+
+  it('builds sanitized satellite config pulls from registered runtime config', () => {
+    const registry = exampleRegistry();
+    const result = resolveSatelliteConfigPull({
+      registry,
+      principal,
+      headers: {},
+      satelliteId: 'pi-voice',
+      endpointId: 'wyoming-voice',
+      claimType: 'voice-pi',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        object: 'psfn.satellite_config',
+        schemaVersion: 1,
+        satellite: {
+          satelliteId: 'pi-voice',
+          displayName: 'Kitchen Voice Pi',
+          mobility: 'static',
+          staticLocationLabel: 'kitchen',
+        },
+        endpoint: {
+          endpointId: 'wyoming-voice',
+          claimType: 'voice-pi',
+          claimTypes: ['voice-pi'],
+        },
+        identity: {
+          authorId: 'primary-user',
+          canonicalContactId: 'contact-primary-user',
+        },
+        session: {
+          channelType: 'api',
+          routingSource: 'satellite',
+          channelIdTemplate: 'satellite:voice-pi:{sessionId}',
+          fixedHeaders: {
+            claimType: 'voice-pi',
+            satelliteId: 'pi-voice',
+            endpointId: 'wyoming-voice',
+          },
+        },
+        capabilities: {
+          registryMax: ['text', 'audio_input', 'speech_to_text', 'audio_output', 'text_to_speech'],
+          runtimeEnabled: ['text', 'audio_input', 'speech_to_text', 'audio_output', 'text_to_speech'],
+          policyDenied: [],
+        },
+        auth: {
+          mode: 'api_key',
+          principalId: principal.id,
+          certBound: false,
+        },
+        runtime: {
+          transport: { mode: 'openhome_bridge' },
+          audio: {
+            inputDevice: 'plughw:1,0',
+            outputDevice: 'default',
+          },
+          refresh: {
+            intervalMs: 300000,
+            restartPolicy: 'restart_on_runtime_change',
+          },
+        },
+      },
+    });
+    expect(result.ok && result.value.configVersion).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(result)).not.toContain('clientCertFingerprintSha256');
+    expect(JSON.stringify(result)).not.toContain('apiKeyPrincipalIds');
+  });
+
+  it('fails closed for unauthorized and unconfigured config pulls', () => {
+    const restrictedRegistry = exampleRegistry({
+      satellites: [
+        {
+          satelliteId: 'restricted',
+          displayName: 'Restricted Satellite',
+          mobility: 'static',
+          endpoints: [
+            {
+              endpointId: 'voice',
+              displayName: 'Voice Endpoint',
+              claimTypes: ['voice-pi'],
+              promptChannelType: 'voice_satellite',
+              auth: { mode: 'api_key', apiKeyPrincipalIds: ['api-key-other'] },
+              defaultIdentity: {
+                authorId: 'primary-user',
+                authorName: 'Primary User',
+                canonicalContactId: 'contact-primary-user',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text'],
+              runtime: {
+                schemaVersion: 1,
+                transport: { mode: 'openhome_bridge' },
+                refresh: {
+                  intervalMs: 300000,
+                  restartPolicy: 'manual',
+                },
+              },
+            },
+            {
+              endpointId: 'missing-runtime',
+              displayName: 'Missing Runtime Endpoint',
+              claimTypes: ['missing-runtime'],
+              promptChannelType: 'voice_satellite',
+              auth: { mode: 'api_key' },
+              defaultIdentity: {
+                authorId: 'primary-user',
+                authorName: 'Primary User',
+                canonicalContactId: 'contact-primary-user',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text'],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(resolveSatelliteConfigPull({
+      registry: restrictedRegistry,
+      principal,
+      headers: {},
+      satelliteId: 'restricted',
+      endpointId: 'voice',
+      claimType: 'voice-pi',
+    })).toMatchObject({
+      ok: false,
+      status: 403,
+      type: 'satellite_principal_not_allowed',
+    });
+
+    expect(resolveSatelliteConfigPull({
+      registry: restrictedRegistry,
+      principal,
+      headers: {},
+      satelliteId: 'restricted',
+      endpointId: 'missing-runtime',
+      claimType: 'missing-runtime',
+    })).toMatchObject({
+      ok: false,
+      status: 503,
+      type: 'satellite_runtime_config_not_configured',
+    });
   });
 
   it('resolves mobile speech and vision capabilities from registered claims', () => {

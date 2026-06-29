@@ -246,13 +246,6 @@ function makeMessage(overrides?: Partial<SubstrateMessage>): SubstrateMessage {
   };
 }
 
-function extractPromptExpressiveness(prompt: string): number | null {
-  const match = prompt.match(/expressiveness=([0-9]+\.[0-9]+)/);
-  if (!match) return null;
-  const parsed = Number(match[1]);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
 function makeMockSessionManager(): SessionManager {
   let activeContextSessionId: string | null = null;
   const resolveSessionChannelId = vi.fn((channelId: string) => {
@@ -3594,11 +3587,14 @@ describe('SubstrateAgent.handleMessage', () => {
 
     await agent.handleMessage(makeMessage());
 
-    // buildContext should have been called with adapted prompt containing trust hint
+    // buildContext should carry deterministic relationship facts without a prose trust/persona block.
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     expect(buildCall[1]).toContain('Base prompt');
-    expect(buildCall[1]).toContain('<trust>');
-    expect(buildCall[1]).toContain('honne');
+    expect(buildCall[1]).toContain('<conversation_state>');
+    expect(buildCall[1]).toContain('trust="primary"');
+    expect(buildCall[1]).toContain('relationship="friend"');
+    expect(buildCall[1]).not.toContain('<trust>');
+    expect(buildCall[1]).not.toContain('honne');
   });
 
   it('injects expressive style guidance for API turns', async () => {
@@ -3842,10 +3838,10 @@ describe('SubstrateAgent.handleMessage', () => {
     const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
     expect(firstPrompt).toContain('Address V by name.');
     expect(secondPrompt).toContain('Address V by name.');
-    expect(firstPrompt).toContain('<speaking_with>');
-    expect(secondPrompt).toContain('<speaking_with>');
-    expect(firstPrompt).toContain('<name>V</name>');
-    expect(secondPrompt).toContain('<name>V</name>');
+    expect(firstPrompt).toContain('<current_message_author name="discord-user" id="discord-user" trust="primary" relationship="friend" />');
+    expect(secondPrompt).toContain('<current_message_author name="5635268079" id="5635268079" trust="primary" relationship="friend" />');
+    expect(firstPrompt).not.toContain('<speaking_with>');
+    expect(secondPrompt).not.toContain('<speaking_with>');
     expect(firstPrompt).not.toContain('Address discord-user by name.');
     expect(secondPrompt).not.toContain('Address 5635268079 by name.');
   });
@@ -4470,7 +4466,7 @@ describe('SubstrateAgent.handleMessage', () => {
     }
   });
 
-  it('invalidates frozen static prefix when static settings signature changes', async () => {
+  it('keeps dynamic user changes in the runtime suffix when a static layer incorrectly references {{user}}', async () => {
     const config = makeConfig();
     const sessionManager = makeMockSessionManager();
     const agent = new SubstrateAgent(
@@ -4508,7 +4504,8 @@ describe('SubstrateAgent.handleMessage', () => {
     const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
     const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
     expect(firstPrompt).toContain('[STATIC] PrimaryUser');
-    expect(secondPrompt).toContain('[STATIC] Nyx');
+    expect(secondPrompt).toContain('[STATIC] PrimaryUser');
+    expect(secondPrompt).toContain('<current_message_author name="Nyx" id="same-user" trust="regular" />');
   });
 
   it('injects formatted skills index into runtime context when skills runtime is wired', async () => {
@@ -4561,7 +4558,6 @@ describe('SubstrateAgent.handleMessage', () => {
     const buildCall = (sessionManager.buildContext as any).mock.calls[0];
     const prompt = buildCall[1] as string;
     expect(prompt).toContain('<open_threads>');
-    expect(prompt).toContain('soft threads to verify');
     expect(prompt).toContain('Check whether V ate today');
     expect(prompt).toContain('high');
   });
@@ -4707,10 +4703,10 @@ describe('SubstrateAgent.handleMessage', () => {
 
       const firstPrompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
       const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
-      expect(firstPrompt).toContain('<internal_state>');
-      expect(firstPrompt).toContain('joy and trust present');
-      expect(secondPrompt).toContain('Current affect:');
-      expect(secondPrompt).toContain('anger');
+      expect(firstPrompt).not.toContain('<internal_state>');
+      expect(firstPrompt).not.toContain('joy and trust present');
+      expect(secondPrompt).not.toContain('Current affect:');
+      expect(secondPrompt).not.toContain('anger');
       expect(secondPrompt).not.toContain('Metacognitive flags:');
 
       const firstAssistantOptions = (sessionManager.recordAssistantMessage as any).mock.calls[0][5] as { metadata?: string };
@@ -4822,8 +4818,8 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(agent.getCurrentInternalStateSnapshotRef()).toBe(response.metadata.internalStateSnapshotRef);
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
-    expect(prompt).toContain('<internal_state>');
-    expect(prompt).toContain('Relationship baseline: trusted trust');
+    expect(prompt).not.toContain('<internal_state>');
+    expect(prompt).not.toContain('Relationship baseline: trusted trust');
     expect(prompt).toContain('<open_threads>');
     expect(prompt).toContain('Confirm release rollback owner');
   });
@@ -4903,10 +4899,10 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
-    expect(secondPrompt).toContain('<internal_state>');
+    expect(secondPrompt).not.toContain('<internal_state>');
     expect(secondPrompt).not.toContain('Metacognitive flags:');
-    expect(secondPrompt).toContain('<metacognitive_persona_guidance>');
-    expect(secondPrompt).toContain('Use tentative language and acknowledge uncertainty explicitly.');
+    expect(secondPrompt).not.toContain('<metacognitive_persona_guidance>');
+    expect(secondPrompt).not.toContain('Use tentative language and acknowledge uncertainty explicitly.');
   });
 
   it('runs post-turn emotion appraisal and injects appraisal chain on the next turn', async () => {
@@ -4955,7 +4951,8 @@ describe('SubstrateAgent.handleMessage', () => {
       content: 'Checking in again.',
     }));
 
-    expect(completeSpy).toHaveBeenCalledWith(
+    const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
+    expect(completeSpy).not.toHaveBeenCalledWith(
       expect.objectContaining({
         systemPrompt: expect.any(String),
       }),
@@ -4966,10 +4963,8 @@ describe('SubstrateAgent.handleMessage', () => {
         }),
       }),
     );
-
-    const secondPrompt = (sessionManager.buildContext as any).mock.calls[1][1] as string;
-    expect(secondPrompt).toContain('<emotion_appraisal_chain>');
-    expect(secondPrompt).toContain('Appraisal summary: she feels guarded but recovering composure.');
+    expect(secondPrompt).not.toContain('<emotion_appraisal_chain>');
+    expect(secondPrompt).not.toContain('Appraisal summary: she feels guarded but recovering composure.');
   });
 
   it('injects trust-gated emotional affect guidance into persona adaptation', async () => {
@@ -5048,16 +5043,12 @@ describe('SubstrateAgent.handleMessage', () => {
     const primaryPrompt = (primarySessionManager.buildContext as any).mock.calls[0][1] as string;
     const publicPrompt = (publicSessionManager.buildContext as any).mock.calls[0][1] as string;
 
-    expect(primaryPrompt).toContain('<emotional_affect>');
-    expect(primaryPrompt).toContain('Trust gate: honne (genuine)');
-    expect(publicPrompt).toContain('<emotional_affect>');
-    expect(publicPrompt).toContain('Trust gate: tatemae (controlled)');
-
-    const primaryExpressiveness = extractPromptExpressiveness(primaryPrompt);
-    const publicExpressiveness = extractPromptExpressiveness(publicPrompt);
-    expect(primaryExpressiveness).not.toBeNull();
-    expect(publicExpressiveness).not.toBeNull();
-    expect(publicExpressiveness as number).toBeLessThan(primaryExpressiveness as number);
+    expect(primaryPrompt).not.toContain('<emotional_affect>');
+    expect(primaryPrompt).not.toContain('Trust gate: honne (genuine)');
+    expect(publicPrompt).not.toContain('<emotional_affect>');
+    expect(publicPrompt).not.toContain('Trust gate: tatemae (controlled)');
+    expect(primaryPrompt).toContain('trust="primary"');
+    expect(publicPrompt).toContain('trust="public"');
   });
 
   it('fails closed when strict emotion wiring is requested without observer/state', () => {

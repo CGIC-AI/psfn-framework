@@ -7,7 +7,6 @@ import {
   COMPACTION_SUMMARY_PROMPT_KEY,
   PromptRegistryStore,
 } from '../../../core/identity/prompt-registry.js';
-import { IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER } from '../../../core/identity/prompt-composer.js';
 import { composeDefaultFoundationTemplate } from '../../../core/identity/foundation-sections.js';
 import { createPromptStatePort } from '../../../core/identity/prompt-state-port.js';
 import { PromptRuntimeLayoutStore } from '../../../core/identity/prompt-runtime.js';
@@ -300,7 +299,7 @@ describe('AdminPromptsDataService', () => {
     expect(nonNullSnapshot.immutableBlocks.map(block => block.editable)).toEqual([false, false, false, false]);
     expect(nonNullSnapshot.companionLayer?.editable).toBe(false);
     expect(nonNullSnapshot.mutableLayers).toHaveLength(0);
-    expect(nonNullSnapshot.preview.text).toContain(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
+    expect(nonNullSnapshot.preview.text).toContain('<immutable_human_safety_amendments>');
     expect(nonNullSnapshot.preview.text).not.toContain('operator constitution content');
     expect(nonNullSnapshot.preview.text).not.toContain('seeded foundation');
   });

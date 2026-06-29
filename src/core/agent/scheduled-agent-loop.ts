@@ -1,5 +1,5 @@
 import { EventStream, type AssistantMessage } from '@mariozechner/pi-ai';
-import type { AgentContext, AgentLoopConfig, AgentMessage, StreamFn } from '@mariozechner/pi-agent-core';
+import type { AgentContext, AgentLoopConfig, AgentMessage, AgentTool, StreamFn } from '@mariozechner/pi-agent-core';
 import {
   createToolCallExecutionGuard,
   executeToolCallsWithScheduler,
@@ -16,6 +16,10 @@ type AgentLoopErrorEvent = {
   messages: AgentMessage[];
 };
 
+type LiveToolAgentContext = AgentContext & {
+  getTools?: () => AgentTool<any>[] | undefined;
+};
+
 export function agentLoopWithScheduler(
   prompts: AgentMessage[],
   context: AgentContext,
@@ -28,7 +32,7 @@ export function agentLoopWithScheduler(
   (async () => {
     const newMessages = [...prompts];
     try {
-      const currentContext = {
+      const currentContext: LiveToolAgentContext = {
         ...context,
         messages: [...context.messages, ...prompts],
       };
@@ -63,7 +67,7 @@ export function agentLoopContinueWithScheduler(
   (async () => {
     const newMessages: AgentMessage[] = [];
     try {
-      const currentContext = { ...context };
+      const currentContext: LiveToolAgentContext = { ...context };
       stream.push({ type: 'agent_start' });
       stream.push({ type: 'turn_start' });
       await runLoop(currentContext, newMessages, config, signal, stream, streamFn, schedulerOptions);
@@ -82,7 +86,7 @@ function createAgentStream() {
 }
 
 async function runLoop(
-  currentContext: AgentContext,
+  currentContext: LiveToolAgentContext,
   newMessages: AgentMessage[],
   config: AgentLoopConfig,
   signal: AbortSignal,
@@ -152,7 +156,7 @@ async function runLoop(
       const toolResults: any[] = [];
       if (hasMoreToolCalls) {
         const toolExecution = await executeToolCallsWithScheduler(
-          currentContext.tools,
+          () => resolveCurrentTools(currentContext),
           message,
           config.getSteeringMessages,
           { signal, stream },
@@ -238,7 +242,7 @@ function buildLoopLimitMessage(
 }
 
 async function streamAssistantResponse(
-  context: AgentContext,
+  context: LiveToolAgentContext,
   config: AgentLoopConfig,
   signal: AbortSignal,
   stream: ReturnType<typeof createAgentStream>,
@@ -255,7 +259,7 @@ async function streamAssistantResponse(
   const llmContext = {
     systemPrompt: context.systemPrompt,
     messages: llmMessages,
-    tools: context.tools,
+    tools: resolveCurrentTools(context),
   };
 
   const response = await streamFn(config.model, llmContext, {
@@ -321,6 +325,10 @@ async function streamAssistantResponse(
     throw error;
   }
   return resolveStreamResult(response, { partialMessage });
+}
+
+function resolveCurrentTools(context: LiveToolAgentContext): AgentTool<any>[] | undefined {
+  return context.getTools?.() ?? context.tools;
 }
 
 function terminateStreamWithError(

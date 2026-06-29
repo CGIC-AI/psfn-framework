@@ -3613,7 +3613,8 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(snapshotPayload.immutableBlocks).toHaveLength(4);
     expect(snapshotPayload.immutableBlocks.every(block => block.editable === false)).toBe(true);
-    expect(snapshotPayload.preview.text).toContain('[Immutable Human-Safety Amendments]');
+    expect(snapshotPayload.preview.text).toContain('<immutable_human_safety_amendments>');
+    expect(snapshotPayload.preview.text).not.toContain('[Immutable Human-Safety Amendments]');
     expect(snapshotPayload.preview.text).not.toContain('You are {{char}}.');
     expect(snapshotPayload.mutableLayers).toEqual([]);
 
@@ -4314,7 +4315,7 @@ describe('AdminServer JSON API routes', () => {
       trustCeiling: {
         primary: ['public', 'personal', 'intimate', 'confidential'],
         trusted: ['public', 'personal'],
-        regular: ['public'],
+        regular: ['public', 'personal'],
         public: ['public'],
       },
       visibilityAllowed: {

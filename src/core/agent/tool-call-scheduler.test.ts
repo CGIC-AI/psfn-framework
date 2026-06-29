@@ -187,6 +187,43 @@ describe('tool-call-scheduler', () => {
     );
   });
 
+  it('re-resolves tools after a sequential toolset activation in the same assistant batch', async () => {
+    let activeTools: AgentTool<any>[] = [];
+    const overlay = makeTool(
+      'overlay_probe',
+      async () => ({
+        content: [{ type: 'text', text: 'overlay-ok' }],
+        details: {},
+      }),
+      { concurrency: makeConcurrencyMeta('read_only') },
+    );
+    const toolset = makeTool(
+      'toolset',
+      async () => {
+        activeTools = [toolset, overlay];
+        return {
+          content: [{ type: 'text', text: 'activated overlay_probe' }],
+          details: {},
+        };
+      },
+      { concurrency: makeConcurrencyMeta('exclusive') },
+    );
+    activeTools = [toolset];
+
+    const result = await executeToolCallsWithScheduler(
+      () => activeTools,
+      makeAssistantMessage(['toolset', 'overlay_probe']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 8 },
+    );
+
+    expect(result.toolResults).toHaveLength(2);
+    expect(result.toolResults[0]?.isError).toBe(false);
+    expect(result.toolResults[1]?.isError).toBe(false);
+    expect(result.toolResults[1]?.content).toEqual([{ type: 'text', text: 'overlay-ok' }]);
+  });
+
   it('respects maxParallelToolCalls bound for subagent batches', async () => {
     let active = 0;
     let peak = 0;

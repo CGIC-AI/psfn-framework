@@ -28,6 +28,7 @@ export function createToolCallExecutionGuard(): ToolCallExecutionGuard {
 interface ToolCallDescriptor {
   toolCall: any;
   tool: AgentTool<any> | undefined;
+  resolveTool: (toolName: string) => AgentTool<any> | undefined;
   metadata: ToolConcurrencyMeta;
   metadataIssue?: 'missing' | 'invalid';
 }
@@ -63,19 +64,22 @@ function toolResultDetailsFlagError(result: { details?: unknown } | undefined): 
 }
 
 export async function executeToolCallsWithScheduler(
-  tools: AgentTool<any>[] | undefined,
+  tools: AgentTool<any>[] | (() => AgentTool<any>[] | undefined) | undefined,
   assistantMessage: any,
   getSteeringMessages: (() => Promise<AgentMessage[]>) | undefined,
   context: ToolExecutionContext,
   options: ToolCallSchedulerOptions,
 ): Promise<ToolExecutionResult> {
   const toolCalls = assistantMessage.content.filter((content: any) => content.type === 'toolCall');
+  const resolveTools = typeof tools === 'function' ? tools : () => tools;
+  const resolveTool = (toolName: string) => resolveTools()?.find((entry) => entry.name === toolName);
   const descriptors = toolCalls.map((toolCall: any): ToolCallDescriptor => {
-    const tool = tools?.find((entry) => entry.name === toolCall.name);
+    const tool = resolveTool(toolCall.name);
     const resolved = resolveToolConcurrencyMetadata(tool);
     return {
       toolCall,
       tool,
+      resolveTool,
       metadata: resolved.metadata,
       metadataIssue: resolved.issue,
     };
@@ -217,7 +221,8 @@ async function executeSingleToolCall(
   context: ToolExecutionContext,
   options: ToolCallSchedulerOptions,
 ): Promise<ToolResultMessage> {
-  const { toolCall, tool } = descriptor;
+  const { toolCall } = descriptor;
+  const tool = descriptor.resolveTool(toolCall.name) ?? descriptor.tool;
   const guard = options.guard;
   const signature = buildToolCallSignature(toolCall);
   const maxFailures = Number.isFinite(options.maxFailuresPerSignature)

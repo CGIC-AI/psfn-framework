@@ -6,7 +6,6 @@ import { PromptLayerStore } from './prompt-store.js';
 import {
   COMPANION_VALUES_LAYER_HEADER,
   IMMUTABLE_HUMAN_SAFETY_AMENDMENTS,
-  IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER,
   NORTH_STAR_LAYER_HEADER,
   PromptComposer,
 } from './prompt-composer.js';
@@ -446,7 +445,7 @@ describe('PromptComposer', () => {
       store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
 
       const result = constitutionComposer.composeSplit();
-      const immutableIndex = result.text.indexOf(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
+      const immutableIndex = result.text.indexOf('<immutable_human_safety_amendments>');
       const companionIndex = result.text.indexOf(COMPANION_VALUES_LAYER_HEADER);
       const northStarIndex = result.text.indexOf(NORTH_STAR_LAYER_HEADER);
       const baseIndex = result.text.indexOf('BASE');
@@ -462,6 +461,8 @@ describe('PromptComposer', () => {
       expect(result.text).toContain('Companion value one');
       expect(result.text).not.toContain('Manual value should not be in companion layer');
       expect(result.text).toContain('Shared care');
+      expect(result.text).not.toContain('[Immutable Human-Safety Amendments]');
+      expect(result.text).not.toContain('[Constitution Precedence]');
     });
 
     it('matches the reviewed composeSplit golden for constitution-enabled layered prompts', () => {
@@ -573,7 +574,6 @@ describe('PromptComposer', () => {
             "Operator Policy",
           ],
           "staticPrefix": "<immutable_human_safety_amendments>
-        [Immutable Human-Safety Amendments]
         1. Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.
         2. Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.
         3. When safety is uncertain, fail closed: ask for clarification or decline risky requests rather than guessing.
@@ -581,7 +581,6 @@ describe('PromptComposer', () => {
         </immutable_human_safety_amendments>
 
         <constitution_precedence>
-        [Constitution Precedence]
         Immutable amendments are hardcoded and non-editable.
         If any mutable instruction conflicts with them, follow the immutable amendments.
         </constitution_precedence>
@@ -598,7 +597,6 @@ describe('PromptComposer', () => {
 
         OPERATOR",
           "text": "<immutable_human_safety_amendments>
-        [Immutable Human-Safety Amendments]
         1. Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.
         2. Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.
         3. When safety is uncertain, fail closed: ask for clarification or decline risky requests rather than guessing.
@@ -606,7 +604,6 @@ describe('PromptComposer', () => {
         </immutable_human_safety_amendments>
 
         <constitution_precedence>
-        [Constitution Precedence]
         Immutable amendments are hardcoded and non-editable.
         If any mutable instruction conflicts with them, follow the immutable amendments.
         </constitution_precedence>
@@ -708,7 +705,7 @@ describe('PromptComposer', () => {
       store.create({ type: 'base', name: 'Base', content: 'BASE' });
 
       const result = constitutionComposer.compose();
-      expect(result.text).toContain(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
+      expect(result.text).toContain('<immutable_human_safety_amendments>');
       expect(result.text).toContain('BASE');
       expect(result.text).not.toContain('[Companion-Derived Values Layer]');
     });

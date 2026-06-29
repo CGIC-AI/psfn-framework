@@ -111,8 +111,8 @@ const DEFAULT_EMOTIONAL_SALIENCE_THRESHOLD_PCT = 75;
 const MAX_PRESERVED_SAFETY_TAGS = 8;
 const MAX_PRESERVED_EMOTIONAL_ENTRIES = 6;
 const MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS = 240;
-const MAX_HISTORY_SUMMARY_LINES = 6;
-const MAX_HISTORY_SUMMARY_LINE_CHARS = 160;
+const MAX_HISTORY_SUMMARY_ITEMS = 6;
+const MAX_HISTORY_SUMMARY_ITEM_CHARS = 160;
 
 export interface SessionMessageRecordOptions {
   trustLevel?: TrustLevel;
@@ -530,26 +530,52 @@ function buildHistorySummaryLines(
   }
   flushToolFailures();
 
-  return grouped.slice(-MAX_HISTORY_SUMMARY_LINES);
+  return grouped.slice(-MAX_HISTORY_SUMMARY_ITEMS);
 }
 
-function fitHistorySummaryLine(
-  prefixLines: string[],
-  line: HistorySummaryLine,
+function formatHistorySummaryClause(line: HistorySummaryLine, maxContentChars: number): string {
+  const content = clipHistorySummaryContent(line.content, maxContentChars).replace(/[.!?]+$/u, '');
+  const verb = line.speaker === 'Tool' ? 'reported' : 'said';
+  return `${line.speaker} ${verb}: ${content}`;
+}
+
+function joinHistorySummaryClauses(clauses: readonly string[]): string {
+  if (clauses.length === 0) return '';
+  if (clauses.length === 1) return clauses[0];
+  if (clauses.length === 2) return `${clauses[0]} and ${clauses[1]}`;
+  return `${clauses.slice(0, -1).join('; ')}; and ${clauses[clauses.length - 1]}`;
+}
+
+function buildHistorySummaryParagraph(
+  lines: readonly HistorySummaryLine[],
+  maxContentChars: number,
+): string | null {
+  if (lines.length === 0) return null;
+  const clauses = lines.map(line => formatHistorySummaryClause(line, maxContentChars));
+  return `In the summarized span, ${joinHistorySummaryClauses(clauses)}.`;
+}
+
+function fitHistorySummaryParagraph(
+  headerLines: readonly string[],
+  summaryLines: readonly HistorySummaryLine[],
   maxTokens: number,
 ): string | null {
-  let content = clipHistorySummaryContent(line.content, MAX_HISTORY_SUMMARY_LINE_CHARS);
-
-  for (;;) {
-    const candidate = `- ${line.speaker}: ${content}`;
-    if (countTokens([...prefixLines, candidate].join('\n')) <= maxTokens) {
-      return candidate;
+  for (let lineCount = summaryLines.length; lineCount > 0; lineCount -= 1) {
+    const lines = summaryLines.slice(-lineCount);
+    for (
+      let maxContentChars = MAX_HISTORY_SUMMARY_ITEM_CHARS;
+      maxContentChars >= 32;
+      maxContentChars -= 24
+    ) {
+      const paragraph = buildHistorySummaryParagraph(lines, maxContentChars);
+      if (!paragraph) continue;
+      if (countTokens([...headerLines, paragraph].join('\n')) <= maxTokens) {
+        return paragraph;
+      }
     }
-    if (content.length <= 16) {
-      return null;
-    }
-    content = clipHistorySummaryContent(content, Math.max(16, content.length - 24));
   }
+
+  return null;
 }
 
 export function buildSessionHistorySummaryText(params: {
@@ -566,14 +592,12 @@ export function buildSessionHistorySummaryText(params: {
     return '';
   }
 
-  const lines = [...headerLines];
-  for (const line of buildHistorySummaryLines(params.entries, params.characterName)) {
-    const fitted = fitHistorySummaryLine(lines, line, params.maxTokens);
-    if (!fitted) break;
-    lines.push(fitted);
-  }
-
-  return lines.length > headerLines.length ? lines.join('\n') : '';
+  const paragraph = fitHistorySummaryParagraph(
+    headerLines,
+    buildHistorySummaryLines(params.entries, params.characterName),
+    params.maxTokens,
+  );
+  return paragraph ? [...headerLines, paragraph].join('\n') : '';
 }
 
 export function normalizeImportBootstrapMaxTokens(value: number | undefined): number {

@@ -172,14 +172,21 @@ describe('evaluateMemoryPolicy', () => {
     expect(intimate.layer).toBe('trust');
   });
 
-  it('regular cannot access personal memories', () => {
+  it('regular can access personal but not intimate memories', () => {
     const result = evaluateMemoryPolicy(ctx({
       trustLevel: 'regular',
       channelVisibility: 'semi_private',
       memorySensitivity: 'personal',
     }));
-    expect(result.decision).toBe('deny');
-    expect(result.layer).toBe('trust');
+    expect(result.decision).toBe('allow');
+
+    const intimate = evaluateMemoryPolicy(ctx({
+      trustLevel: 'regular',
+      channelVisibility: 'private',
+      memorySensitivity: 'intimate',
+    }));
+    expect(intimate.decision).toBe('deny');
+    expect(intimate.layer).toBe('trust');
   });
 
   it('public cannot access anything except public', () => {
@@ -566,9 +573,9 @@ describe('getAllowedSensitivities', () => {
     expect(allowed).toEqual(['public', 'personal']);
   });
 
-  it('regular + private = public only (trust ceiling limits)', () => {
+  it('regular + private = public + personal', () => {
     const allowed = getAllowedSensitivities('regular', 'private');
-    expect(allowed).toEqual(['public']);
+    expect(allowed).toEqual(['public', 'personal']);
   });
 
   it('public + public = public only', () => {
@@ -607,7 +614,7 @@ describe('type ordering helpers', () => {
   it('TRUST_CEILING has correct structure', () => {
     expect(TRUST_CEILING.primary).toHaveLength(4);
     expect(TRUST_CEILING.trusted).toHaveLength(2);
-    expect(TRUST_CEILING.regular).toHaveLength(1);
+    expect(TRUST_CEILING.regular).toHaveLength(2);
     expect(TRUST_CEILING.public).toHaveLength(1);
   });
 });

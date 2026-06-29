@@ -85,9 +85,6 @@ const RESPONSE_STYLE_MACRO_TOKENS = [
   '{{runtime_response_style_name}}',
   '{{runtime_response_style_is_concise}}',
   '{{runtime_response_style_is_expressive}}',
-  '{{runtime_response_style_delivery_guidance}}',
-  '{{runtime_response_style_expansion_guidance}}',
-  '{{runtime_response_style_guidance_body}}',
 ] as const;
 
 const AFFECT_MACRO_TOKENS = [
@@ -169,7 +166,6 @@ const ATTENTION_MACRO_TOKENS = [
 
 const TOOLING_MACRO_TOKENS = [
   '{{runtime_analysis_workbench_available}}',
-  '{{runtime_analysis_workbench_guidance_body}}',
   '{{runtime_tooling_active_count}}',
   '{{runtime_tooling_core_count}}',
   '{{runtime_tooling_promoted_count}}',

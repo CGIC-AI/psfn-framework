@@ -55,13 +55,13 @@ const SENSITIVITY_ORDER: Record<SensitivityLevel, number> = {
 // ── Trust ceiling — which sensitivities are accessible at each trust level ──
 // primary:  full access (honne — inner truth)
 // trusted:  public + personal
-// regular:  public only
+// regular:  public + personal
 // public:   public only (tatemae — public face)
 
 export const TRUST_CEILING: Record<TrustLevel, readonly SensitivityLevel[]> = {
   primary: ['public', 'personal', 'intimate', 'confidential'],
   trusted: ['public', 'personal'],
-  regular: ['public'],
+  regular: ['public', 'personal'],
   public: ['public'],
 };
 

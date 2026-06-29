@@ -1545,8 +1545,8 @@ describe('handleMessageForTurn compaction scheduling', () => {
     );
     expect(recordUserMessage).not.toHaveBeenCalled();
     expect(buildPromptTemplateVariablesMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
-    expect(buildDynamicPromptTemplateVariablesMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
-    expect(buildRuntimeContextMock.mock.calls[0]?.[5]).toBe(DEFAULT_COMPANION_ID);
+    expect(buildDynamicPromptTemplateVariablesMock.mock.calls[0]?.[6]).toBe(DEFAULT_COMPANION_ID);
+    expect(buildRuntimeContextMock.mock.calls[0]?.[6]).toBe(DEFAULT_COMPANION_ID);
     expect(buildPromptPrefixCacheKeyMock.mock.calls[0]?.[3]).toBe(DEFAULT_COMPANION_ID);
     expect(buildContext.mock.calls[0]?.[4]).toBe(DEFAULT_COMPANION_ID);
     expect(scheduleAutoCompactionBetweenTurns).toHaveBeenCalledWith(expect.objectContaining({

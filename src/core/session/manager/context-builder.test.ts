@@ -207,12 +207,12 @@ describe('orientation context surface wiring', () => {
       const assembled = assembleSessionHistoryForContext({
         entries: spanBound.entries,
         channelVisibility: 'private',
-        tokenBudget: 150,
+        tokenBudget: 180,
         characterName: 'Companion',
       });
 
       expect(assembled.summaryText).toContain('[History summary]');
-      expect(assembled.summaryText).toContain('m01xxxxx');
+      expect(assembled.summaryText).toContain('m05xxxxx');
       expect(assembled.summaryText).not.toContain('outside-old-01');
       expect(assembled.summarizedEntryCount).toBeGreaterThan(0);
       expect(assembled.verbatimEntries.length).toBeGreaterThanOrEqual(5);

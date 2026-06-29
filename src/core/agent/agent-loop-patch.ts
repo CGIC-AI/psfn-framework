@@ -50,6 +50,7 @@ export function installAgentToolSchedulerPatch(agent: Agent, schedulerOptions: T
       systemPrompt: this._state.systemPrompt,
       messages: this._state.messages.slice(),
       tools: this._state.tools,
+      getTools: () => this._state.tools,
     };
     let skipInitialSteeringPoll = options?.skipInitialSteeringPoll === true;
 

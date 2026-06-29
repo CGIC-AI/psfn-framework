@@ -3,7 +3,6 @@ import {
   contextMessagesToPiMessages,
   mergeSystemContextIntoSystemPrompt,
 } from './message-conversion.js';
-import { buildAuthenticityProvenance } from '../../shared/authenticity-provenance.js';
 
 describe('contextMessagesToPiMessages', () => {
   it('maps user and assistant context messages to pi chat messages', () => {
@@ -111,12 +110,13 @@ describe('contextMessagesToPiMessages', () => {
     ].join('\n\n'));
   });
 
-  it('renders provenance markers when system context is moved into the system prompt', () => {
+  it('does not serialize provenance metadata when system context is moved into the system prompt', () => {
     const systemPrompt = mergeSystemContextIntoSystemPrompt('Base instructions', [
       {
         role: 'system',
         content: '[Tool result: search_logs] Returned 2 hits.',
-        provenance: buildAuthenticityProvenance({
+        provenance: {
+          schemaVersion: 1,
           kind: 'tool_result',
           sourceAuthor: 'tool',
           transformedBy: 'tool',
@@ -125,12 +125,13 @@ describe('contextMessagesToPiMessages', () => {
           detailLoss: 'none',
           emotionalTexture: 'unknown',
           safeAsPartnerSpeech: false,
-        }),
+        },
       },
     ]);
 
-    expect(systemPrompt).toContain('kind="tool_result"');
-    expect(systemPrompt).toContain('safe_as_partner_speech="false"');
+    expect(systemPrompt).not.toContain('kind="tool_result"');
+    expect(systemPrompt).not.toContain('safe_as_partner_speech="false"');
+    expect(systemPrompt).not.toContain('authenticity_provenance');
     expect(systemPrompt).toContain('[Tool result: search_logs] Returned 2 hits.');
   });
 

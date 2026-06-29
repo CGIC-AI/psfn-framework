@@ -48,7 +48,11 @@ function makeConfig(): SubstrateConfig {
       models: [
         {
           id: 'deepseek-v3.2',
-          identity: { provider: 'openrouter', model: 'deepseek/deepseek-v3.2' },
+          identity: {
+            provider: 'openrouter',
+            model: 'deepseek/deepseek-v3.2',
+            source: { type: 'openrouter' },
+          },
           rank: 1,
           purposes: [{ purpose: 'chat', primary: true }],
           capabilities: { contextWindow: 128_000, maxOutputTokens: 1024 },

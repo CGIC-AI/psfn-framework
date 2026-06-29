@@ -172,6 +172,7 @@ function listTrackedFiles() {
 export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
   const localBlocklist = options.localBlocklist ?? loadLocalBlocklist();
   const readTextFile = options.readTextFile ?? ((file) => readFileSync(file, 'utf8'));
+  const skipMissingWorkingTreeFiles = options.readTextFile === undefined;
 
   /** @type {Array<{file:string, line:number, rule:string, snippet:string}>} */
   const violations = [];
@@ -196,6 +197,9 @@ export function scanPublicSanitizeTrackedFiles(trackedFiles, options = {}) {
       continue;
     }
 
+    if (skipMissingWorkingTreeFiles && !existsSync(trackedFile)) {
+      continue;
+    }
     const text = readTextFile(trackedFile);
     violations.push(...collectTextViolations(trackedFile, text, TEXT_RULES));
     violations.push(...collectTextViolations(trackedFile, text, localBlocklist.textRuleRegex));

@@ -6,6 +6,7 @@ interface ToolSchemaCandidate {
   name?: unknown;
   description?: unknown;
   inputSchema?: unknown;
+  parameters?: unknown;
 }
 
 interface AgentStateCandidate {
@@ -22,14 +23,15 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 
 function toToolSchema(candidate: unknown): ToolSchema | null {
   if (!isPlainRecord(candidate)) return null;
-  const { name, description, inputSchema } = candidate as ToolSchemaCandidate;
+  const { name, description, inputSchema, parameters } = candidate as ToolSchemaCandidate;
   if (typeof name !== 'string' || name.trim().length === 0) return null;
   if (typeof description !== 'string' || description.trim().length === 0) return null;
-  if (!isPlainRecord(inputSchema)) return null;
+  const schema = inputSchema ?? parameters;
+  if (!isPlainRecord(schema)) return null;
   return cloneToolSchema({
     name: name.trim(),
     description: description.trim(),
-    inputSchema,
+    inputSchema: schema,
   });
 }
 

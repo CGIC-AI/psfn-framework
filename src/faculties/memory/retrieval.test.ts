@@ -348,17 +348,16 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(store.getEvolutionLinksForSourceMemory).not.toHaveBeenCalled();
   });
 
-  it('regular trust returns only public memories', async () => {
+  it('regular trust returns public and personal memories', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
     const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
 
-    // Regular trust, semi_private channel (numeric Discord ID)
     const result = await retriever.retrieve('test query', '1234567890', 'regular');
 
     expect(result).toContain('Public fact');
-    expect(result).not.toContain('Personal detail');
+    expect(result).toContain('Personal detail');
     expect(result).not.toContain('Intimate memory');
     expect(result).not.toContain('Confidential secret');
   });
@@ -366,7 +365,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
   it('explains withheld memories with abstract reasons in the memory context block', async () => {
     const memories = [
       makeMemory({ text: 'Public fact', sensitivity: 'public', similarity: 0.95 }),
-      makeMemory({ text: 'Personal detail', sensitivity: 'personal', similarity: 0.9 }),
+      makeMemory({ text: 'Intimate detail', sensitivity: 'intimate', similarity: 0.9 }),
     ];
     const store = makeMockStore(memories);
     const embedding = makeMockEmbedding();
@@ -387,7 +386,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
     const result = await retriever.retrieve('test query', '1234567890', 'regular', undefined, undefined, snapshot);
 
     expect(result).toContain('Public fact');
-    expect(result).not.toContain('Personal detail');
+    expect(result).not.toContain('Intimate detail');
     expect(result).toContain('Memory context note:');
     expect(result).toContain('1 candidate memory was kept out');
     expect(result).toContain('Broad trust/privacy reasons: 1 trust ceiling.');
@@ -1068,9 +1067,8 @@ describe('MemoryRetriever trust-gated filtering', () => {
     // No trustLevel argument — should default to 'regular'
     const result = await retriever.retrieve('test query', '1234567890');
 
-    // regular trust + semi_private = public only
     expect(result).toContain('Public fact');
-    expect(result).not.toContain('Personal detail');
+    expect(result).toContain('Personal detail');
     expect(result).not.toContain('Intimate memory');
     expect(result).not.toContain('Confidential secret');
   });
@@ -1371,10 +1369,10 @@ describe('MemoryRetriever trust-gated filtering', () => {
 
     await retriever.retrieve('test query', '1234567890', 'regular');
 
-    // Only the public memory (mem-1) should have updateMemory called
+    // Regular trust allows public and personal memories; denied intimate/confidential memories are not updated.
     const updateCalls = (store.updateMemory as ReturnType<typeof vi.fn>).mock.calls;
-    expect(updateCalls.length).toBe(1);
-    expect(updateCalls[0][0]).toBe('mem-1'); // The public memory ID
+    expect(updateCalls.length).toBe(2);
+    expect(updateCalls.map(call => call[0])).toEqual(['mem-1', 'mem-2']);
   });
 
   it('trusted trust + private channel returns public + personal only', async () => {
@@ -1490,7 +1488,7 @@ describe('MemoryRetriever basic behavior', () => {
     const staleSensitive = makeMemory({
       id: 'stale-sensitive',
       text: 'Old introspection grounding probe residue from another run.',
-      sensitivity: 'personal',
+      sensitivity: 'intimate',
       similarity: 0.95,
       extractedAt: Date.now() - 60_000,
     });
@@ -2030,7 +2028,7 @@ describe('MemoryRetriever basic behavior', () => {
     const result = await retriever.retrieve(
       'How is your family doing lately?',
       '1234567890',
-      'regular',
+      'public',
       undefined,
       primary.id,
     );
@@ -2821,7 +2819,6 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
     const eventBus = makeMockEventBus();
     const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 }, eventBus);
 
-    // regular trust + semi_private = only public allowed
     await retriever.retrieve('test query', '1234567890', 'regular');
 
     const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
@@ -2931,6 +2928,45 @@ describe('MemoryRetriever room-scoped visibility', () => {
     expect(telemetry.policyAllowedCount).toBe(1);
   });
 
+  it('allows same-room personal memories for regular contacts without trust ceiling rejection', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
+    const sameRoomPersonalMemory = makeMemory({
+      id: 'group-x-personal-memory',
+      text: 'Room X heard Vega prefers the quiet rollout plan.',
+      sensitivity: 'personal',
+      contactId: vegaId,
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.99,
+    });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      makeMockStore([sameRoomPersonalMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'quiet rollout plan',
+      GROUP_ROOM_X,
+      'regular',
+      { isDirectMessage: false, privacyLevel: 'semi_private' },
+      vegaId,
+    );
+
+    expect(result).toContain('Room X heard Vega prefers the quiet rollout plan.');
+
+    const telemetry = latestRetrievalTelemetry(eventBus);
+    expect(telemetry.roomVisibilityRejectedCount).toBe(0);
+    expect(telemetry.withheldReasonCounts).not.toMatchObject({
+      'trust.ceiling_exceeded': expect.any(Number),
+    });
+    expect(telemetry.returnedCount).toBe(1);
+  });
+
   it('allows participated group memories in the participant DM and blocks non-participated rooms', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
     contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
@@ -2986,6 +3022,45 @@ describe('MemoryRetriever room-scoped visibility', () => {
       'room_visibility.blocked': 1,
     });
     expect(telemetry.returnedCount).toBe(2);
+  });
+
+  it('allows participated group personal memories in the participant DM for regular contacts', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
+    const participatedGroupMemory = makeMemory({
+      id: 'group-x-personal-memory',
+      text: 'Room X knows Vega volunteered to own the risky checklist.',
+      sensitivity: 'personal',
+      contactId: vegaId,
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.99,
+    });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      makeMockStore([participatedGroupMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'risky checklist',
+      VEGA_DM,
+      'regular',
+      { isDirectMessage: true, privacyLevel: 'private' },
+      vegaId,
+    );
+
+    expect(result).toContain('Room X knows Vega volunteered to own the risky checklist.');
+
+    const telemetry = latestRetrievalTelemetry(eventBus);
+    expect(telemetry.roomVisibilityRejectedCount).toBe(0);
+    expect(telemetry.withheldReasonCounts).not.toMatchObject({
+      'trust.ceiling_exceeded': expect.any(Number),
+    });
+    expect(telemetry.returnedCount).toBe(1);
   });
 
   it('fails closed for DM access when room participation proof is missing', async () => {

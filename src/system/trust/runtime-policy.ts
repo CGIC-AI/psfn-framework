@@ -4,7 +4,7 @@ const DEFAULT_POLICY: TrustPolicyConfig = {
   trustCeiling: {
     primary: ['public', 'personal', 'intimate', 'confidential'],
     trusted: ['public', 'personal'],
-    regular: ['public'],
+    regular: ['public', 'personal'],
     public: ['public'],
   },
   visibilityAllowed: {

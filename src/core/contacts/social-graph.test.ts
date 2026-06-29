@@ -57,12 +57,19 @@ describe('ContactStore social graph', () => {
       confidence: 0.9,
     });
 
+    const publicVisible = store.listSocialRelationshipEdges({
+      contactId: alice.id,
+      viewerTrustLevel: 'public',
+      viewerChannelVisibility: 'private',
+    });
+    expect(publicVisible).toHaveLength(0);
+
     const regularVisible = store.listSocialRelationshipEdges({
       contactId: alice.id,
       viewerTrustLevel: 'regular',
       viewerChannelVisibility: 'private',
     });
-    expect(regularVisible).toHaveLength(0);
+    expect(regularVisible).toHaveLength(2);
 
     const trustedVisible = store.listSocialRelationshipEdges({
       contactId: alice.id,

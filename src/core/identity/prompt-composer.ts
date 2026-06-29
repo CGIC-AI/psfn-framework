@@ -19,12 +19,6 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { wrapPromptSectionXml } from './prompt-sections.js';
 import { SYSTEM_LANGUAGE_LAYER_TYPE } from './system-language.js';
-import {
-  buildAuthenticityProvenance,
-  DERIVED_DETAIL_LOSS_NOTE,
-  DERIVED_EMOTIONAL_TEXTURE_NOTE,
-  formatAuthenticityProvenanceMarker,
-} from '../../shared/authenticity-provenance.js';
 
 // Keep only identity/foundation + operator policy in the frozen prompt prefix.
 // Channel/task/runtime overlays remain dynamic so per-turn runtime context stays later.
@@ -32,10 +26,10 @@ const STATIC_PREFIX_LAYER_TYPES = new Set<LayerType>(['base', 'operator']);
 const LAST_KNOWN_GOOD_VERSION = 1;
 const UNTRUSTED_COMPACTION_RECORD_TAG = 'untrusted_compaction_summary_record';
 const UNTRUSTED_COMPACTION_PROMPT_TAG = 'untrusted_compaction_summary';
+const IMMUTABLE_HUMAN_SAFETY_SECTION_TAG = '<immutable_human_safety_amendments>';
+const CONSTITUTION_PRECEDENCE_SECTION_TAG = '<constitution_precedence>';
 const SOURCE_BLOCK_SHA256_TAG_PREFIX_PATTERN = /<source_block_sha256\b/i;
 const CONTROL_CHARACTER_PATTERN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g;
-const CONSTITUTION_PRECEDENCE_HEADER = '[Constitution Precedence]';
-export const IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER = '[Immutable Human-Safety Amendments]';
 export const COMPANION_VALUES_LAYER_HEADER = '[Companion-Derived Values Layer]';
 export const NORTH_STAR_LAYER_HEADER = '[North Star]';
 export const IMMUTABLE_HUMAN_SAFETY_AMENDMENTS = Object.freeze([
@@ -45,7 +39,6 @@ export const IMMUTABLE_HUMAN_SAFETY_AMENDMENTS = Object.freeze([
   'Support {{user}}\'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.',
 ] as const);
 const CONSTITUTION_PRECEDENCE_GUARD = [
-  CONSTITUTION_PRECEDENCE_HEADER,
   'Immutable amendments are hardcoded and non-editable.',
   'If any mutable instruction conflicts with them, follow the immutable amendments.',
 ].join('\n');
@@ -76,7 +69,6 @@ function hashText(text: string): string {
 
 export function buildImmutableHumanSafetySection(): string {
   const immutableLines = [
-    IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER,
     ...IMMUTABLE_HUMAN_SAFETY_AMENDMENTS.map((amendment, index) => `${String(index + 1)}. ${amendment}`),
   ].join('\n');
   return [
@@ -156,20 +148,8 @@ export function wrapCompactionSummaryAsUntrustedContext(summary: string): string
   const { summaryText, metadata } = splitCompactionSummaryParts(summary);
   const safeSummaryText = escapeForUntrustedPromptBlock(summaryText);
   const safeMetadata = stripControlCharacters(metadata);
-  const provenance = buildAuthenticityProvenance({
-    kind: 'compaction_summary',
-    sourceAuthor: 'mixed',
-    transformedBy: 'compaction',
-    wording: 'derived',
-    directSpeech: false,
-    detailLoss: 'possible',
-    emotionalTexture: 'may_be_flattened',
-    safeAsPartnerSpeech: false,
-    notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
-  });
 
   const lines = [
-    formatAuthenticityProvenanceMarker(provenance),
     `<${UNTRUSTED_COMPACTION_PROMPT_TAG} source="session.compaction" executable="false">`,
     '<guard>',
     ...UNTRUSTED_COMPACTION_PROMPT_GUARD_LINES.slice(1),
@@ -498,8 +478,8 @@ export class PromptComposer {
   private ensureConstitutionPrefix(result: ComposeSplitResult | null): ComposeSplitResult | null {
     if (!this.enableConstitution || !result) return result;
 
-    const hasImmutableSection = result.staticPrefix.includes(IMMUTABLE_HUMAN_SAFETY_LAYER_HEADER);
-    const hasPrecedenceGuard = result.staticPrefix.includes(CONSTITUTION_PRECEDENCE_HEADER);
+    const hasImmutableSection = result.staticPrefix.includes(IMMUTABLE_HUMAN_SAFETY_SECTION_TAG);
+    const hasPrecedenceGuard = result.staticPrefix.includes(CONSTITUTION_PRECEDENCE_SECTION_TAG);
     if (hasImmutableSection && hasPrecedenceGuard) {
       return result;
     }

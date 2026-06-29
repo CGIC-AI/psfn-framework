@@ -124,7 +124,7 @@ describe('createMemoryCapabilities session_search', () => {
     const result = await capabilities.session_search('launch', 5, {
       channelId: 'api:current',
       isDirectMessage: true,
-      trustLevel: 'regular',
+      trustLevel: 'public',
     });
 
     expect(result.totalHits).toBe(3);

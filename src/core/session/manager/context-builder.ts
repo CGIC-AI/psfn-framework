@@ -6,7 +6,6 @@ import {
   buildAuthenticityProvenance,
   DERIVED_DETAIL_LOSS_NOTE,
   DERIVED_EMOTIONAL_TEXTURE_NOTE,
-  prependAuthenticityProvenanceMarker,
 } from '../../../shared/authenticity-provenance.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import {
@@ -697,12 +696,12 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   const baseSystemTokenCount = countTokens(params.systemPrompt);
   const hasCoreMemorySection = params.coreMemoryBlock.trim().length > 0;
   const coreMemorySectionText = hasCoreMemorySection
-    ? prependAuthenticityProvenanceMarker(params.coreMemoryBlock, coreMemoryProvenance)
+    ? params.coreMemoryBlock
     : '';
   const coreMemoryTokenCount = countTokens(coreMemorySectionText);
   const hasMemorySection = params.memoriesBlock.trim().length > 0;
   const memorySectionText = hasMemorySection
-    ? prependAuthenticityProvenanceMarker(params.memoriesBlock, memorySectionProvenance)
+    ? params.memoriesBlock
     : '';
   const memoryTokenCount = countTokens(memorySectionText);
   const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount;
@@ -785,22 +784,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
 
   let focusKnowledgeSectionText = '';
   if (focusKnowledgeTexts.length > 0) {
-    const focusKnowledgeProvenance = buildAuthenticityProvenance({
-      kind: 'extraction_artifact',
-      sourceAuthor: 'mixed',
-      transformedBy: 'extraction',
-      wording: 'derived',
-      directSpeech: false,
-      detailLoss: 'possible',
-      emotionalTexture: 'may_be_flattened',
-      safeAsPartnerSpeech: false,
-      sourceSpanCount: focusKnowledgeTexts.length,
-      notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
-    });
-    focusKnowledgeSectionText = prependAuthenticityProvenanceMarker(
-      '[Focus knowledge]\n' + focusKnowledgeTexts.join('\n'),
-      focusKnowledgeProvenance,
-    );
+    focusKnowledgeSectionText = '[Focus knowledge]\n' + focusKnowledgeTexts.join('\n');
   }
 
   if (!params.turnSnapshot) {
@@ -885,10 +869,10 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     params.characterName,
   );
   const markedOrientationSectionText = orientationSectionText
-    ? prependAuthenticityProvenanceMarker(orientationSectionText, orientationProvenance)
+    ? orientationSectionText
     : '';
   const continuitySectionText = continuityBlock
-    ? prependAuthenticityProvenanceMarker(continuityBlock, continuityProvenance)
+    ? continuityBlock
     : '';
 
   const promptRuntimeLayout = resolveCachedPromptRuntimeLayoutStore(params.config);

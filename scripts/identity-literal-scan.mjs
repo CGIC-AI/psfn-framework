@@ -203,11 +203,13 @@ export function loadAllowlist(allowlistPath) {
 /**
  * @param {string[]} trackedFiles
  * @param {string[]} roots
+ * @param {{ skipMissing?: boolean }} [options]
  * @returns {Array<{ path: string; text: string }>}
  */
-export function readScanEntriesFromFiles(trackedFiles, roots = DEFAULT_SCAN_ROOTS) {
+export function readScanEntriesFromFiles(trackedFiles, roots = DEFAULT_SCAN_ROOTS, options = {}) {
   return trackedFiles
     .filter((file) => shouldScanFile(file, roots))
+    .filter((file) => !(options.skipMissing === true && !existsSync(file)))
     .map((file) => ({
       path: file,
       text: readFileSync(file, 'utf8'),
@@ -232,7 +234,7 @@ export function scanRepositoryIdentityLiterals(options = {}) {
   const roots = options.roots ?? DEFAULT_SCAN_ROOTS;
   const allowlistPath = options.allowlistPath ?? DEFAULT_ALLOWLIST_PATH;
   const allowlist = loadAllowlist(allowlistPath);
-  const entries = readScanEntriesFromFiles(trackedFiles, roots);
+  const entries = readScanEntriesFromFiles(trackedFiles, roots, { skipMissing: true });
 
   const result = scanIdentityLiteralEntries(entries, { allowlist });
 

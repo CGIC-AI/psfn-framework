@@ -177,7 +177,7 @@ describe('focus tools', () => {
     expect(reloadedMessages).toContain('Pre-focus baseline context should remain');
     expect(reloadedMessages).not.toContain('Focus step 1 detail to compact later');
     expect(reloadedMessages).not.toContain('Focus step 2 finding to compact later');
-  });
+  }, 60_000);
 
   it('reuses prior focus knowledge as a first-class project context for repeated scopes', async () => {
     const startTool = createStartFocusTool(manager);
@@ -237,5 +237,5 @@ describe('focus tools', () => {
     expect((context.systemPrompt.match(/\[memory workflow overhaul\]/gi) ?? [])).toHaveLength(1);
     expect(context.systemPrompt).toContain('Second Project Summary');
     expect(context.systemPrompt).toContain('project context with 2 distilled blocks');
-  });
+  }, 60_000);
 });

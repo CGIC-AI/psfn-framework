@@ -43,9 +43,11 @@ describe('buildSessionHistorySummaryText', () => {
     });
 
     expect(summary).toContain('[History summary]');
-    expect(summary).toContain('Vega: We need room-scoped memory boundaries.');
-    expect(summary).toContain('Iku: Speaker attribution must survive provider rendering.');
-    expect(summary).toContain('Cardellini: I will keep the summary compact.');
+    expect(summary).toContain('In the summarized span,');
+    expect(summary).toContain('Vega said: We need room-scoped memory boundaries');
+    expect(summary).toContain('Iku said: Speaker attribution must survive provider rendering');
+    expect(summary).toContain('Cardellini said: I will keep the summary compact');
+    expect(summary).not.toContain('\n- Vega:');
   });
 
   it('compresses repeated tool failures into one bounded summary line', () => {
@@ -86,7 +88,7 @@ describe('buildSessionHistorySummaryText', () => {
       ],
     });
 
-    expect(summary).toContain('Tool: search_logs failed 3 times.');
+    expect(summary).toContain('Tool reported: search_logs failed 3 times.');
     expect(summary).toContain('Most recent failure: [Tool result: search_logs (error)]');
     expect(summary.match(/kubectl logs timed out/g)).toHaveLength(1);
   });

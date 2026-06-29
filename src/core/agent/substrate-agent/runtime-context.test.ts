@@ -17,7 +17,6 @@ import {
   resolveIdentityChannel,
 } from './runtime-context.js';
 import {
-  chargeSurface,
   resetRunChargeRollingWindowForTests,
   runWithChargeContext,
 } from '../../../shared/telemetry/run-charge.js';
@@ -457,7 +456,7 @@ describe('runtime subject identity', () => {
       promotedExtendedToolNames: new Set(),
       formatTopEmotions: () => '',
     });
-    expect(runtimeContext).toContain('<runtime_substrate_health>');
+    expect(runtimeContext).not.toContain('<runtime_substrate_health>');
     expect(runtimeContext).not.toContain('<companion_runtime_context>');
     expect(runtimeContext).not.toContain('userId: scheduler');
   });
@@ -828,11 +827,11 @@ describe('runtime subject identity', () => {
     expect(renderedRuntimeLayers).toContain('<channel_id>api:admin-broadcast</channel_id>');
     expect(renderedRuntimeLayers).toContain('<channel_type>api</channel_type>');
     expect(renderedRuntimeLayers).toContain('<channel_visibility>broadcast</channel_visibility>');
-    expect(renderedRuntimeLayers).toContain('<current_message_author name="Admin User" id="admin-user" />');
+    expect(renderedRuntimeLayers).toContain('<current_message_author name="Admin User" id="admin-user" trust="regular" />');
     expect(renderedRuntimeLayers).not.toContain('<speaking_with>');
   });
 
-  it('keeps appearance context available for chat when generic media tools are active', () => {
+  it('keeps appearance variables available for chat when generic media tools are active', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord',
@@ -898,11 +897,11 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_appearance_context_body).toBe(
       templateVariables['character.visual_description'],
     );
-    expect(rendered).toContain('<appearance_context>');
+    expect(rendered).not.toContain('<appearance_context>');
     expect(rendered).not.toContain('<self_image_tool_guidance>');
   });
 
-  it('keeps appearance context available for chat when the unified media tool is active', () => {
+  it('keeps appearance variables available for chat when the unified media tool is active', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord',
@@ -968,11 +967,11 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_appearance_context_body).toBe(
       templateVariables['character.visual_description'],
     );
-    expect(rendered).toContain('<appearance_context>');
+    expect(rendered).not.toContain('<appearance_context>');
     expect(rendered).not.toContain('<self_image_tool_guidance>');
   });
 
-  it('exposes appearance context when the explicit selfie tool is active', () => {
+  it('activates selfie guidance while appearance stays in static foundation context', () => {
     const message = makeMessage({
       channelId: 'discord:dm:alex',
       channelType: 'discord',
@@ -1038,8 +1037,9 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_appearance_context_body).toBe(
       templateVariables['character.visual_description'],
     );
-    expect(rendered).toContain('<appearance_context>');
+    expect(rendered).not.toContain('<appearance_context>');
     expect(rendered).toContain('<self_image_tool_guidance>');
+    expect(rendered).toContain('character appearance section');
   });
 
   it('surfaces attention counts for pending whispers and active concerns through prompt-owned layers', () => {
@@ -1139,7 +1139,7 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_internal_state_attention_active_concern_count).toBe('2');
     expect(variables.runtime_internal_state_attention_pending_follow_up_count).toBe('1');
     expect(variables.runtime_internal_state_relational_trust_level).toBe('primary');
-    expect(rendered).toContain('<internal_state>');
+    expect(rendered).not.toContain('<internal_state>');
   });
 
   it('appends companion runtime guidance overrides when present', () => {
@@ -1349,7 +1349,9 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_room_id).toBe('discord:dm:alex');
     expect(variables.runtime_current_message_author_name).toBe('Alex');
     expect(variables.runtime_current_message_author_id).toBe('alex');
-    expect(variables.runtime_current_message_author_xml).toBe('<current_message_author name="Alex" id="alex" />');
+    expect(variables.runtime_current_message_author_trust_level).toBe('trusted');
+    expect(variables.runtime_current_message_author_relationship).toBe('');
+    expect(variables.runtime_current_message_author_xml).toBe('<current_message_author name="Alex" id="alex" trust="trusted" />');
     expect(variables.runtime_current_message_author_timezone).toBe('');
     expect(variables.runtime_current_message_author_local_time).toBe('');
     expect(variables.runtime_recent_active_participants_xml).toBe('');
@@ -1357,11 +1359,9 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_channel_visibility).toBe('private');
     expect(variables.runtime_response_style).toBe('expressive');
     expect(variables.runtime_response_style_name).toBe('Expressive');
-    expect(variables.runtime_response_style_guidance_body).toBe(variables.runtime_response_style_guidance);
-    expect(variables.runtime_response_style_delivery_guidance).toBe('Keep your voice warm and vivid.');
-    expect(variables.runtime_response_style_expansion_guidance).toBe(
-      'Add personality-rich detail when it helps clarity.',
-    );
+    expect('runtime_response_style_guidance_body' in variables).toBe(false);
+    expect('runtime_response_style_delivery_guidance' in variables).toBe(false);
+    expect('runtime_response_style_expansion_guidance' in variables).toBe(false);
     expect(variables.runtime_tooling_active_count).toBe('5');
     expect(variables.runtime_tooling_available_extended_count).toBe('1');
   });
@@ -1378,6 +1378,7 @@ describe('runtime subject identity', () => {
       }),
       resolvedUserName: 'Vega',
       trustLevel: 'trusted',
+      relationshipType: 'friend',
       channelType: 'discord_text',
       canonicalContactKey: 'contact-vega',
       responseStyle: 'concise',
@@ -1430,8 +1431,10 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_current_message_author_name_xml_attr).toBe('Vega &quot;Pilot&quot;');
     expect(variables.runtime_current_message_author_timezone).toBe('America/Chicago');
     expect(variables.runtime_current_message_author_local_time).toBe('8:30 AM');
+    expect(variables.runtime_current_message_author_trust_level).toBe('trusted');
+    expect(variables.runtime_current_message_author_relationship).toBe('friend');
     expect(variables.runtime_current_message_author_xml).toBe(
-      '<current_message_author name="Vega &quot;Pilot&quot;" id="discord:u-current" timezone="America/Chicago" local_time="8:30 AM" />',
+      '<current_message_author name="Vega &quot;Pilot&quot;" id="discord:u-current" trust="trusted" relationship="friend" timezone="America/Chicago" local_time="8:30 AM" />',
     );
     expect(variables.runtime_recent_active_participants_count).toBe('5');
     expect(variables.runtime_recent_active_participants_xml.match(/<participant\b/gu)).toHaveLength(5);
@@ -1456,7 +1459,7 @@ describe('runtime subject identity', () => {
     expect(rendered).toContain('<conversation_state>');
     expect(rendered).toContain('<chat_type>group</chat_type>');
     expect(rendered).toContain('<channel_id>discord:group:ops</channel_id>');
-    expect(rendered).toContain('<current_message_author name="Vega &quot;Pilot&quot;" id="discord:u-current" timezone="America/Chicago" local_time="8:30 AM" />');
+    expect(rendered).toContain('<current_message_author name="Vega &quot;Pilot&quot;" id="discord:u-current" trust="trusted" relationship="friend" timezone="America/Chicago" local_time="8:30 AM" />');
     expect(rendered).toContain('<recent_active_participants max="5">');
   });
 
@@ -1511,11 +1514,11 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_recent_active_participants_xml).toBe('');
     expect(variables.runtime_recent_active_participants_count).toBe('0');
     expect(rendered).toContain('<chat_type>direct_message</chat_type>');
-    expect(rendered).toContain('<current_message_author name="Alex" id="discord:u-alex" timezone="America/Los_Angeles" local_time="6:30 AM" />');
+    expect(rendered).toContain('<current_message_author name="Alex" id="discord:u-alex" trust="trusted" timezone="America/Los_Angeles" local_time="6:30 AM" />');
     expect(rendered).not.toContain('<recent_active_participants');
   });
 
-  it('renders Analyst Workbench guidance only when the tool is available', () => {
+  it('does not render hardcoded Analyst Workbench guidance from default runtime layers', () => {
     const baseInput = {
       message: makeMessage({
         channelId: 'api:worker',
@@ -1553,15 +1556,17 @@ describe('runtime subject identity', () => {
     const unavailable = buildRuntimePromptOutputs({
       ...baseInput,
       analysisWorkbenchAvailable: false,
-    }).rendered;
+    });
     const available = buildRuntimePromptOutputs({
       ...baseInput,
       analysisWorkbenchAvailable: true,
-    }).rendered;
+    });
 
-    expect(unavailable).not.toContain('<analysis_workbench_guidance>');
-    expect(available.match(/<analysis_workbench_guidance>/gu)).toHaveLength(1);
-    expect(available).toContain('analysis_workbench is a large-evidence escalation surface only.');
+    expect(unavailable.variables.runtime_analysis_workbench_available).toBe('false');
+    expect(available.variables.runtime_analysis_workbench_available).toBe('true');
+    expect(unavailable.rendered).not.toContain('<analysis_workbench_guidance>');
+    expect(available.rendered).not.toContain('<analysis_workbench_guidance>');
+    expect(available.rendered).not.toContain('analysis_workbench is a large-evidence escalation surface only.');
   });
 
   it('substitutes atomic affect macros under both honne and tatemae trust tiers', () => {
@@ -1857,10 +1862,9 @@ describe('runtime subject identity', () => {
       + ' avoidance=false||'
       + ' confabulation=true|0.650|assertions=2; supporting_memories=0',
     );
-    expect(variables.runtime_metacognitive_persona_guidance_body).toBe([
-      '- Use tentative language and acknowledge uncertainty explicitly.',
-      '- Anchor strong claims to retrieved evidence, or state when evidence is missing.',
-    ].join('\n'));
+    expect(variables.runtime_flag_uncertainty_present).toBe('true');
+    expect(variables.runtime_flag_confabulation_risk_present).toBe('true');
+    expect('runtime_metacognitive_persona_guidance_body' in variables).toBe(false);
   });
 
   it('preserves structured runtime sections while sourcing prose from atomic prompt variables', () => {
@@ -2038,7 +2042,7 @@ describe('runtime subject identity', () => {
       characterPromptVariables['character.visual_description'],
     );
     expect(rendered).toContain('<runtime_state>');
-    expect(rendered).toContain('<runtime_self>');
+    expect(rendered).not.toContain('<runtime_self>');
     expect(rendered).toContain('<runtime_attention>');
     expect(rendered).toContain('<runtime_tooling>');
     expect(rendered).toContain('<conversation_state>');
@@ -2046,7 +2050,7 @@ describe('runtime subject identity', () => {
     expect(rendered).toContain('<channel_id>discord:dm:alex</channel_id>');
     expect(rendered).toContain('<channel_type>discord_text</channel_type>');
     expect(rendered).toContain('<channel_visibility>private</channel_visibility>');
-    expect(rendered).toContain('<current_message_author name="Alex" id="alex" />');
+    expect(rendered).toContain('<current_message_author name="Alex" id="alex" trust="trusted" />');
     expect(rendered).not.toContain('<speaking_with>');
     expect(rendered).not.toContain('<model_context>');
     expect(rendered).not.toContain('<identifier>test-model</identifier>');
@@ -2056,7 +2060,6 @@ describe('runtime subject identity', () => {
     expect(rendered).not.toContain('<available_extended_count>');
     expect(rendered).not.toContain('<analysis_workbench_guidance>');
     expect(rendered).not.toContain('analysis_workbench is a large-evidence escalation surface only.');
-    expect(rendered).toContain('<appearance_context>');
     expect(rendered).toContain('<self_image_tool_guidance>');
     expect(rendered).toContain('<extended_tools>');
     expect(rendered).not.toContain('{{');
@@ -2158,9 +2161,9 @@ describe('runtime subject identity', () => {
       expect(variables[`runtime_flag_${flagName}_confidence`]).toBe('');
       expect(variables[`runtime_flag_${flagName}_evidence`]).toBe('');
     }
-    expect(variables.runtime_emotional_affect_body).toBe('');
-    expect(variables.runtime_metacognitive_persona_guidance_body).toBe('');
-    expect(variables.runtime_internal_state_body).toBe('');
+    expect('runtime_emotional_affect_body' in variables).toBe(false);
+    expect('runtime_metacognitive_persona_guidance_body' in variables).toBe(false);
+    expect('runtime_internal_state_body' in variables).toBe(false);
     expect(variables.runtime_internal_turn_kind).toBe('heartbeat');
     expect(variables.runtime_speaking_with_name).toBe('');
     expect(variables.runtime_speaking_with_trust_level).toBe('');
@@ -2282,65 +2285,11 @@ describe('runtime subject identity', () => {
 });
 
 describe('companion-facing substrate health context', () => {
-  it('renders nominal health when available probes report healthy', async () => {
+  it('does not render backend health telemetry into default prompt context', async () => {
     const rendered = await runWithChargeContext({
       chargePolicy: TEST_CHARGE_POLICY,
       lane: 'interactive',
-      runId: 'health-nominal',
-    }, async () => buildRuntimeContext({
-      ...buildMinimalRuntimeContextInput(),
-      config: { chargePolicy: TEST_CHARGE_POLICY },
-      substrateHealth: {
-        apiHealth: makeApiHealthResponse(),
-      },
-    }));
-
-    expect(rendered).toContain('<runtime_substrate_health>');
-    expect(rendered).toContain('Overall: healthy. Available probes report no substrate degradation.');
-    expect(rendered).toContain('Gateway responsiveness: healthy');
-    expect(rendered).toContain('LLM provider: healthy - provider probe reported healthy (probe 18 ms).');
-    expect(rendered).toContain('Memory store: healthy - memory store probe reported healthy (probe 7 ms).');
-    expect(rendered).toContain('Charge pressure: healthy - interactive lane has 24 of 24 run-charge units remaining this run');
-    expect(rendered).toContain('Active subsystem warnings: none reported by available probes.');
-  });
-
-  it('makes degraded LLM provider health visible with bounded actionable wording', async () => {
-    const rendered = await runWithChargeContext({
-      chargePolicy: TEST_CHARGE_POLICY,
-      lane: 'interactive',
-      runId: 'health-llm-degraded',
-    }, async () => buildRuntimeContext({
-      ...buildMinimalRuntimeContextInput(),
-      config: { chargePolicy: TEST_CHARGE_POLICY },
-      substrateHealth: {
-        apiHealth: makeApiHealthResponse({
-          subsystems: {
-            llm: {
-              status: 'degraded',
-              detail: 'timeout after 10000ms',
-              meta: { probeLatencyMs: 10_000 },
-            },
-          },
-          continuityChecks: {
-            gatewayLink: {
-              status: 'degraded',
-              detail: 'LLM and embeddings probes are slow',
-            },
-          },
-        }),
-      },
-    }));
-
-    expect(rendered).toContain('Overall: degraded. One or more substrate signals need attention.');
-    expect(rendered).toContain('Gateway responsiveness: degraded');
-    expect(rendered).toContain('LLM provider: degraded - timeout after 10000ms (probe 10000 ms); use simpler paths and avoid optional costly work until it recovers.');
-  });
-
-  it('renders degraded memory health without leaking internal paths or env names', async () => {
-    const rendered = await runWithChargeContext({
-      chargePolicy: TEST_CHARGE_POLICY,
-      lane: 'interactive',
-      runId: 'health-memory-degraded',
+      runId: 'health-omitted',
     }, async () => buildRuntimeContext({
       ...buildMinimalRuntimeContextInput(),
       config: { chargePolicy: TEST_CHARGE_POLICY },
@@ -2357,43 +2306,11 @@ describe('companion-facing substrate health context', () => {
       },
     }));
 
-    expect(rendered).toContain('Memory store: degraded');
-    expect(rendered).toContain('[internal path]');
-    expect(rendered).toContain('configuration value');
+    expect(rendered).not.toContain('<runtime_substrate_health>');
+    expect(rendered).not.toContain('Overall: healthy');
+    expect(rendered).not.toContain('Memory store: degraded');
     expect(rendered).not.toContain('/var/lib/psfn');
     expect(rendered).not.toContain('DATABASE_URL');
-  });
-
-  it('surfaces low charge pressure as degraded', async () => {
-    const rendered = await runWithChargeContext({
-      chargePolicy: TEST_CHARGE_POLICY,
-      lane: 'interactive',
-      runId: 'health-low-charge',
-    }, async () => {
-      chargeSurface('externalModelConsult', { amount: 23 });
-      return buildRuntimeContext({
-        ...buildMinimalRuntimeContextInput(),
-        config: { chargePolicy: TEST_CHARGE_POLICY },
-        substrateHealth: {
-          apiHealth: makeApiHealthResponse(),
-        },
-      });
-    });
-
-    expect(rendered).toContain('Overall: degraded. One or more substrate signals need attention.');
-    expect(rendered).toContain('Charge pressure: degraded - interactive lane has 1 of 24 run-charge units remaining this run; shared 24h budget has 1 of 24 remaining; avoid optional costly escalations unless they are necessary.');
-  });
-
-  it('honestly renders unavailable health probes instead of nominal health', () => {
-    const rendered = buildRuntimeContext(buildMinimalRuntimeContextInput());
-
-    expect(rendered).toContain('<runtime_substrate_health>');
-    expect(rendered).toContain('Overall: unavailable. runtime health probes are not connected to this prompt context; do not assume the substrate is nominal.');
-    expect(rendered).toContain('Gateway responsiveness: unavailable - no gateway responsiveness probe snapshot is available.');
-    expect(rendered).toContain('LLM provider: unavailable - no probe snapshot is available.');
-    expect(rendered).toContain('Memory store: unavailable - no probe snapshot is available.');
-    expect(rendered).toContain('Charge pressure: unavailable - charge policy is not configured, so runtime pressure is unknown.');
-    expect(rendered).not.toContain('Overall: healthy');
   });
 });
 
@@ -2428,6 +2345,6 @@ describe('internal state continuity gap context', () => {
   it('omits the continuity notice without a gap', () => {
     const rendered = buildRuntimeContext(buildMinimalRuntimeContextInput());
     expect(rendered).not.toContain('runtime_continuity_notice');
-    expect(rendered).toContain('<runtime_substrate_health>');
+    expect(rendered).not.toContain('<runtime_substrate_health>');
   });
 });

@@ -228,9 +228,6 @@ const RESPONSE_STYLE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   createPromptRuntimeMacroHint('response_style', '{{runtime_response_style_name}}', 'Human-readable response style name for the current turn.', 'Expressive'),
   createPromptRuntimeMacroHint('response_style', '{{runtime_response_style_is_concise}}', 'Whether the current turn should use the concise delivery profile.', 'false'),
   createPromptRuntimeMacroHint('response_style', '{{runtime_response_style_is_expressive}}', 'Whether the current turn should use the expressive delivery profile.', 'true'),
-  createPromptRuntimeMacroHint('response_style', '{{runtime_response_style_delivery_guidance}}', 'Prompt fragment describing the default delivery for the current response style.', 'Keep your voice warm and vivid.'),
-  createPromptRuntimeMacroHint('response_style', '{{runtime_response_style_expansion_guidance}}', 'Prompt fragment describing when to expand or compress detail for the current response style.', 'Add personality-rich detail when it helps clarity.'),
-  createPromptRuntimeMacroHint('response_style', '{{runtime_response_style_guidance_body}}', 'Detailed response-style guidance text for the current turn.', 'Prefer expressive responses: keep your voice warm and vivid, and add personality-rich detail when it helps clarity.'),
 ];
 
 const AFFECT_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
@@ -313,7 +310,6 @@ const ATTENTION_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
 
 const TOOLING_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   createPromptRuntimeMacroHint('tooling', '{{runtime_analysis_workbench_available}}', 'Whether analysis_workbench is active and callable for the current turn.', 'false'),
-  createPromptRuntimeMacroHint('tooling', '{{runtime_analysis_workbench_guidance_body}}', 'Workbench guidance body rendered only when analysis_workbench is available.', 'analysis_workbench is a large-evidence escalation surface only.'),
   createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_active_count}}', 'Count of currently active tools.', '6'),
   createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_core_count}}', 'Count of active core tools.', '4'),
   createPromptRuntimeMacroHint('tooling', '{{runtime_tooling_promoted_count}}', 'Count of promoted extended tools that are always active.', '1'),

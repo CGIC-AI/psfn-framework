@@ -26,6 +26,16 @@ export const FOUNDATION_SECTION_DEFINITIONS = [
     defaultEnabled: true,
   },
   {
+    id: 'appearance',
+    title: 'Appearance',
+    layerName: 'Character Foundation · Appearance',
+    identifier: 'visualDescription',
+    promptOrder: 15,
+    priority: 15,
+    defaultContent: '{{character.visual_description}}',
+    defaultEnabled: true,
+  },
+  {
     id: 'personality',
     title: 'Personality',
     layerName: 'Character Foundation · Personality',

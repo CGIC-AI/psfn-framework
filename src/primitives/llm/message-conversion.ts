@@ -9,7 +9,6 @@ import type {
   UserMessage,
 } from '@mariozechner/pi-ai';
 import type { ContextMessage } from '../../shared/contracts/runtime.js';
-import { prependAuthenticityProvenanceMarker } from '../../shared/authenticity-provenance.js';
 
 export type PiChatMessage = UserMessage | AssistantMessage | ToolResultMessage;
 const SYSTEM_CONTEXT_OPEN_TAG = '<session_context>';
@@ -72,9 +71,7 @@ function createInternalAssistantMessage(
 function getSystemContextContents(messages: readonly ContextMessage[]): string[] {
   return messages
     .filter(message => message.role === 'system' && typeof message.content === 'string' && message.content.trim().length > 0)
-    .map(message => (message.provenance
-      ? prependAuthenticityProvenanceMarker(message.content, message.provenance)
-      : message.content));
+    .map(message => message.content);
 }
 
 function resolveTimestamp(

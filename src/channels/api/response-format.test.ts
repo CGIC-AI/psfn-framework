@@ -5,11 +5,12 @@ import {
   buildChatCompletionResponse,
   buildModelListResponse,
   buildStreamingContentChunk,
-  buildStreamingErrorChunk,
+  buildStreamingErrorEvent,
   buildStreamingFinishChunk,
   buildStreamingRoleChunk,
   formatSseDataEvent,
   formatSseDoneEvent,
+  formatSseErrorEvent,
 } from './response-format.js';
 
 describe('buildApiErrorEnvelope', () => {
@@ -91,10 +92,17 @@ describe('streaming chunk builders', () => {
     expect(finishChunk.choices[0].finish_reason).toBe('stop');
   });
 
-  it('builds terminal error chunk payloads for SSE streams', () => {
-    const chunk = buildStreamingErrorChunk(metadata, '\n[Error: Internal server error]');
-    expect(chunk.choices[0].delta.content).toContain('Internal server error');
-    expect(chunk.choices[0].finish_reason).toBe('stop');
+  it('builds machine-readable error event payloads for SSE streams', () => {
+    const event = buildStreamingErrorEvent('internal_error', 'Internal server error', { phase: 'turn' });
+    expect(event).toEqual({
+      error: {
+        message: 'Internal server error',
+        type: 'internal_error',
+        param: null,
+        code: null,
+        details: { phase: 'turn' },
+      },
+    });
   });
 });
 
@@ -108,6 +116,8 @@ describe('SSE event formatters', () => {
     const dataEvent = formatSseDataEvent(chunk);
     expect(dataEvent).toContain('data: {"id":"chatcmpl-xyz"');
     expect(dataEvent.endsWith('\n\n')).toBe(true);
+    expect(formatSseErrorEvent(buildStreamingErrorEvent('agent_busy', 'Agent busy')))
+      .toBe('event: error\ndata: {"error":{"message":"Agent busy","type":"agent_busy","param":null,"code":null}}\n\n');
     expect(formatSseDoneEvent()).toBe('data: [DONE]\n\n');
   });
 });

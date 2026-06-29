@@ -131,27 +131,70 @@ function request(
   });
 }
 
+interface ParsedSseEvent {
+  event: string;
+  data: string;
+}
+
+function parseSseFrame(frame: string): ParsedSseEvent | null {
+  let event = 'message';
+  const dataLines: string[] = [];
+  for (const line of frame.split(/\r?\n/)) {
+    if (line.startsWith('event:')) {
+      event = line.slice('event:'.length).trim();
+    } else if (line.startsWith('data:')) {
+      dataLines.push(line.slice('data:'.length).trimStart());
+    }
+  }
+  if (dataLines.length === 0) return null;
+  return {
+    event,
+    data: dataLines.join('\n'),
+  };
+}
+
 function streamRequest(
   port: number,
   body: object,
   headers?: Record<string, string>,
-): Promise<{ status: number; headers: http.IncomingHttpHeaders; chunks: string[] }> {
+): Promise<{
+  status: number;
+  headers: http.IncomingHttpHeaders;
+  chunks: string[];
+  events: ParsedSseEvent[];
+}> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
     const req = http.request(
       { hostname: '127.0.0.1', port, method: 'POST', path: '/v1/chat/completions', headers: { 'Content-Type': 'application/json', ...headers } },
       (res) => {
         const chunks: string[] = [];
+        const events: ParsedSseEvent[] = [];
+        let buffer = '';
+        const flushFrame = (frame: string) => {
+          const parsed = parseSseFrame(frame);
+          if (!parsed) return;
+          events.push(parsed);
+          if (parsed.event === 'message') {
+            chunks.push(parsed.data);
+          }
+        };
         res.on('data', (chunk: Buffer) => {
-          const text = chunk.toString();
-          // Split SSE data lines
-          for (const line of text.split('\n')) {
-            if (line.startsWith('data: ')) {
-              chunks.push(line.slice(6));
-            }
+          buffer += chunk.toString();
+          let frameEnd = buffer.indexOf('\n\n');
+          while (frameEnd !== -1) {
+            const frame = buffer.slice(0, frameEnd);
+            buffer = buffer.slice(frameEnd + 2);
+            flushFrame(frame);
+            frameEnd = buffer.indexOf('\n\n');
           }
         });
-        res.on('end', () => resolve({ status: res.statusCode!, headers: res.headers, chunks }));
+        res.on('end', () => {
+          if (buffer.trim()) {
+            flushFrame(buffer);
+          }
+          resolve({ status: res.statusCode!, headers: res.headers, chunks, events });
+        });
       },
     );
     req.on('error', reject);
@@ -1603,6 +1646,84 @@ describe('ApiServer', () => {
       expect(finishChunk.choices[0].finish_reason).toBe('stop');
 
       // Final signal
+      expect(res.chunks[res.chunks.length - 1]).toBe('[DONE]');
+    });
+
+    it('emits machine-readable SSE errors for empty streaming agent responses', async () => {
+      const mockAgent = {
+        handleMessage: vi.fn(async (message: SubstrateMessage) => ({
+          content: '',
+          channelId: message.channelId,
+          metadata: { model: 'test-model', inputTokens: 1, outputTokens: 0, durationMs: 1 },
+        })),
+      } as unknown as SubstrateAgent;
+
+      await server.stop();
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const res = await streamRequest(port, {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Hello' }],
+        stream: true,
+      });
+
+      expect(res.status).toBe(200);
+      const errorEvent = res.events.find((event) => event.event === 'error');
+      expect(errorEvent).toBeDefined();
+      expect(JSON.parse(errorEvent!.data).error).toMatchObject({
+        type: 'empty_response',
+        message: 'Agent returned empty content',
+      });
+      expect(res.chunks[res.chunks.length - 1]).toBe('[DONE]');
+      const nonDoneDataChunks = res.chunks.filter((chunk) => chunk !== '[DONE]');
+      expect(nonDoneDataChunks.some((chunk) => {
+        const parsed = JSON.parse(chunk) as { choices?: Array<{ delta?: { content?: string }; finish_reason?: string | null }> };
+        return parsed.choices?.some((choice) => (
+          choice.delta?.content?.includes('[Error:') === true
+          || choice.finish_reason === 'stop'
+        )) === true;
+      })).toBe(false);
+    });
+
+    it('emits machine-readable SSE errors for streaming agent-busy failures', async () => {
+      const mockAgent = {
+        handleMessage: vi.fn(async () => {
+          throw new Error('Agent is already processing a prompt');
+        }),
+      } as unknown as SubstrateAgent;
+
+      await server.stop();
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const res = await streamRequest(port, {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Hello' }],
+        stream: true,
+      });
+
+      expect(res.status).toBe(200);
+      const errorEvent = res.events.find((event) => event.event === 'error');
+      expect(errorEvent).toBeDefined();
+      expect(JSON.parse(errorEvent!.data).error).toMatchObject({
+        type: 'agent_busy',
+        message: 'Agent is already processing another prompt',
+      });
       expect(res.chunks[res.chunks.length - 1]).toBe('[DONE]');
     });
 

@@ -129,21 +129,20 @@ export function buildStreamingFinishChunk(metadata: StreamingChunkMetadata): Cha
   };
 }
 
-export function buildStreamingErrorChunk(
-  metadata: StreamingChunkMetadata,
-  content: string,
-): ChatCompletionChunk {
-  return {
-    id: metadata.completionId,
-    object: 'chat.completion.chunk',
-    created: metadata.created,
-    model: metadata.model,
-    choices: [{ index: 0, delta: { content }, finish_reason: 'stop' }],
-  };
+export function buildStreamingErrorEvent(
+  type: string,
+  message: string,
+  details?: Record<string, unknown>,
+): ApiErrorEnvelope {
+  return buildApiErrorEnvelope(type, message, details);
 }
 
 export function formatSseDataEvent(chunk: ChatCompletionChunk): string {
   return `data: ${JSON.stringify(chunk)}\n\n`;
+}
+
+export function formatSseErrorEvent(error: ApiErrorEnvelope): string {
+  return `event: error\ndata: ${JSON.stringify(error)}\n\n`;
 }
 
 export function formatSseDoneEvent(): string {

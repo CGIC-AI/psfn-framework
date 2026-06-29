@@ -181,7 +181,7 @@ export function createNorthStarTool(store: NorthStarStore): AgentTool<any> {
   return withCapabilityRequirement(tool, resolveNorthStarCapabilityRequirement);
 }
 
-export function createNorthStarListTool(store: NorthStarStore): AgentTool<any> {
+function createNorthStarListTool(store: NorthStarStore): AgentTool<any> {
   return {
     name: 'north_star_list',
     label: 'north_star_list',
@@ -203,7 +203,7 @@ export function createNorthStarListTool(store: NorthStarStore): AgentTool<any> {
   };
 }
 
-export function createNorthStarCreateTool(store: NorthStarStore): AgentTool<any> {
+function createNorthStarCreateTool(store: NorthStarStore): AgentTool<any> {
   return {
     name: 'north_star_create',
     label: 'north_star_create',
@@ -242,7 +242,7 @@ export function createNorthStarCreateTool(store: NorthStarStore): AgentTool<any>
   };
 }
 
-export function createNorthStarUpdateTool(store: NorthStarStore): AgentTool<any> {
+function createNorthStarUpdateTool(store: NorthStarStore): AgentTool<any> {
   return {
     name: 'north_star_update',
     label: 'north_star_update',
@@ -286,7 +286,7 @@ export function createNorthStarUpdateTool(store: NorthStarStore): AgentTool<any>
   };
 }
 
-export function createNorthStarDeleteTool(store: NorthStarStore): AgentTool<any> {
+function createNorthStarDeleteTool(store: NorthStarStore): AgentTool<any> {
   return {
     name: 'north_star_delete',
     label: 'north_star_delete',
@@ -313,7 +313,7 @@ export function createNorthStarDeleteTool(store: NorthStarStore): AgentTool<any>
   };
 }
 
-export function createNorthStarReorderTool(store: NorthStarStore): AgentTool<any> {
+function createNorthStarReorderTool(store: NorthStarStore): AgentTool<any> {
   return {
     name: 'north_star_reorder',
     label: 'north_star_reorder',

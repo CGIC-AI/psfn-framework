@@ -13,7 +13,7 @@ const postgresMocks = vi.hoisted(() => ({
   createPostgresPool: vi.fn(() => postgresMocks.activePool as never),
   ensurePostgresSchema: vi.fn(async () => undefined),
   executeQuery: vi.fn(async (_pool: unknown, text: string, values: readonly unknown[] = []) => {
-    await postgresMocks.activePool.query(text, values);
+    return await postgresMocks.activePool.query(text, values);
   }),
   queryRows: vi.fn(async (_pool: unknown, text: string, values: readonly unknown[] = []) => {
     const result = await postgresMocks.activePool.query(text, values);
@@ -297,6 +297,24 @@ class FakeMemoryPool {
       };
       this.memories.set(row.id, row);
       return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (
+      normalized.startsWith('update l2_memories as memory')
+      && normalized.includes('set salience = updates.salience')
+    ) {
+      let rowCount = 0;
+      const rows: Array<{ id: string }> = [];
+      for (let index = 0; index < values.length; index += 2) {
+        const id = String(values[index] ?? '');
+        const salience = Number(values[index + 1] ?? Number.NaN);
+        const row = this.memories.get(id);
+        if (!row || row.deleted_at !== null || row.superseded_by !== null) continue;
+        row.salience = salience;
+        rowCount += 1;
+        rows.push({ id });
+      }
+      return { rows, rowCount, command: 'UPDATE', oid: 0, fields: [] } as QueryResult;
     }
 
     if (normalized.startsWith('insert into memory_evolution_links')) {
@@ -823,6 +841,48 @@ describe('postgres memory store unit coverage', () => {
     expect(await store.getById(memory.id)).toEqual(memory);
     expect(await store.getDeleteVersion('delete-version')).toBeUndefined();
     expect(await store.countActiveMemories()).toBe(1);
+  });
+
+  it('bulk-updates distinct Postgres salience values and skips deleted memories', async () => {
+    const pool = new FakeMemoryPool();
+    postgresMocks.activePool = pool;
+
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    await store.insertMemory(makeMemory('pg-salience-1', 'First salience memory'), new Float32Array([0.1, 0.2, 0.3, 0.4]));
+    await store.insertMemory(makeMemory('pg-salience-2', 'Second salience memory'), new Float32Array([0.2, 0.3, 0.4, 0.5]));
+    await store.insertMemory(makeMemory('pg-salience-deleted', 'Deleted salience memory', {
+      deletedAt: 1_700_000_000_100,
+      deletedBy: 'tester',
+    }), new Float32Array([0.3, 0.4, 0.5, 0.6]));
+
+    const count = await store.bulkUpdateSalience([
+      { id: 'pg-salience-1', salience: 0.22 },
+      { id: 'pg-salience-2', salience: 0.44 },
+      { id: 'pg-salience-deleted', salience: 0.66 },
+    ]);
+
+    expect(count).toBe(2);
+    await expect(store.getById('pg-salience-1')).resolves.toMatchObject({ salience: 0.22 });
+    await expect(store.getById('pg-salience-2')).resolves.toMatchObject({ salience: 0.44 });
+    await expect(store.getById('pg-salience-deleted')).resolves.toMatchObject({ salience: 0.8 });
+    expect(pool.memories.get('pg-salience-1')?.salience).toBe(0.22);
+    expect(pool.memories.get('pg-salience-2')?.salience).toBe(0.44);
+    expect(pool.memories.get('pg-salience-deleted')?.salience).toBe(0.8);
+  });
+
+  it('keeps Postgres salience cache unchanged when the batch write fails', async () => {
+    const pool = new FakeMemoryPool();
+    postgresMocks.activePool = pool;
+
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    await store.insertMemory(makeMemory('pg-salience-failure', 'Failure salience memory'), new Float32Array([0.1, 0.2, 0.3, 0.4]));
+    pool.failNextQuery('update l2_memories as memory', 'simulated salience update failure');
+
+    await expect(store.bulkUpdateSalience([
+      { id: 'pg-salience-failure', salience: 0.11 },
+    ])).rejects.toThrow('simulated salience update failure');
+    await expect(store.getById('pg-salience-failure')).resolves.toMatchObject({ salience: 0.8 });
+    expect(pool.memories.get('pg-salience-failure')?.salience).toBe(0.8);
   });
 
   it('rejects postgres memory schemas that still use the legacy embeddings table', async () => {

@@ -81,6 +81,7 @@ function makeReviewCapableStore(candidate?: PurrMemory & { similarity: number })
     getLinkedMemories: vi.fn(() => []),
     bulkDelete: vi.fn(),
     bulkUpdate: vi.fn(),
+    bulkUpdateSalience: vi.fn(),
     upsertContactProfile: vi.fn(),
     getContactProfile: vi.fn(),
     listContactProfiles: vi.fn(() => []),

@@ -2,7 +2,7 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { runInTransaction as runSqliteTransaction } from '../../../persistence/sqlite-utils.js';
 import type { MemoryJournal } from '../journal.js';
-import { MEMORY_EVOLUTION_RELATIONS } from '../memory-store-port.js';
+import { MEMORY_EVOLUTION_RELATIONS, normalizeMemorySalienceUpdates } from '../memory-store-port.js';
 import type {
   MemoryAbstractionLink,
   MemoryAbstractionLinkInput,
@@ -12,6 +12,7 @@ import type {
   MemoryEvolutionLinkInput,
   MemoryEvolutionRelation,
   MemoryPatchEvent,
+  MemorySalienceUpdate,
   MemorySoftDeleteOptions,
   MemoryStoreUpdatePatch,
   MemoryUndoSoftDeleteOptions,
@@ -713,6 +714,31 @@ export function bulkUpdate(
       const normalizedId = id.trim();
       if (!normalizedId) continue;
       const result = stmt.run(...setValues, normalizedId);
+      if (result.changes > 0) count++;
+    }
+  });
+
+  transaction();
+  return count;
+}
+
+export function bulkUpdateSalience(
+  db: Database.Database,
+  updates: MemorySalienceUpdate[],
+): number {
+  const normalizedUpdates = normalizeMemorySalienceUpdates(updates);
+  if (normalizedUpdates.length === 0) return 0;
+
+  const stmt = db.prepare(`
+    UPDATE l2_memories
+    SET salience = ?
+    WHERE id = ? AND deleted_at IS NULL AND superseded_by IS NULL
+  `);
+
+  let count = 0;
+  const transaction = db.transaction(() => {
+    for (const update of normalizedUpdates) {
+      const result = stmt.run(update.salience, update.id);
       if (result.changes > 0) count++;
     }
   });

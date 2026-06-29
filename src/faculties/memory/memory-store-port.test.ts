@@ -12,6 +12,7 @@ import {
   type MemoryLink,
   type MemoryPatchEvent,
   type MemorySearchResult,
+  type MemorySalienceUpdate,
   type MemorySoftDeleteOptions,
   type MemoryStorePort,
   type MemoryStoreStats,
@@ -286,6 +287,20 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
       this.memories.set(id, {
         ...memory,
         ...fields,
+      });
+      count += 1;
+    }
+    return count;
+  }
+
+  bulkUpdateSalience(updates: MemorySalienceUpdate[]): number {
+    let count = 0;
+    for (const update of updates) {
+      const memory = this.memories.get(update.id);
+      if (!memory || memory.deletedAt) continue;
+      this.memories.set(update.id, {
+        ...memory,
+        salience: update.salience,
       });
       count += 1;
     }

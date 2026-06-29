@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from 'node:timers/promises';
 import type { MemoryStorePort } from './memory-store-port.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { DECAY_HALFLIFE, MEMORY_CONFIG, getMemoryDecayProfile } from './types.js';
@@ -48,6 +49,7 @@ export class SalienceDecay {
       });
       if (memories.length === 0) break;
 
+      const salienceUpdates: Array<{ id: string; salience: number }> = [];
       for (const memory of memories) {
         const profile = getMemoryDecayProfile(memory);
         const halflife = DECAY_HALFLIFE[memory.type as MemoryType] * profile.halflifeMultiplier;
@@ -62,12 +64,17 @@ export class SalienceDecay {
 
         // Only update if meaningful change
         if (Math.abs(newSalience - memory.salience) > 0.01) {
-          await this.memoryStore.updateMemory(memory.id, { salience: newSalience });
+          salienceUpdates.push({ id: memory.id, salience: newSalience });
         }
+      }
+
+      if (salienceUpdates.length > 0) {
+        await this.memoryStore.bulkUpdateSalience(salienceUpdates);
       }
 
       if (memories.length < this.batchSize) break;
       offset += memories.length;
+      await yieldToEventLoop();
     }
   }
 }

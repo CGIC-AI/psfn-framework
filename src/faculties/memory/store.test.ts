@@ -983,5 +983,41 @@ describe('MemoryStore', () => {
       expect(mem?.type).toBe('relational');
       expect(mem?.sensitivity).toBe('intimate');
     });
+
+    it('bulkUpdateSalience applies distinct salience values per memory', () => {
+      store.insertMemory(makeMemory('m1', 'A', { salience: 0.8 }), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'B', { salience: 0.7 }), makeEmbedding(2));
+      store.insertMemory(makeMemory('m3', 'C', { salience: 0.6 }), makeEmbedding(3));
+
+      const count = store.bulkUpdateSalience([
+        { id: 'm1', salience: 0.2 },
+        { id: 'm2', salience: 0.35 },
+      ]);
+
+      expect(count).toBe(2);
+      expect(store.getById('m1')?.salience).toBe(0.2);
+      expect(store.getById('m2')?.salience).toBe(0.35);
+      expect(store.getById('m3')?.salience).toBe(0.6);
+    });
+
+    it('bulkUpdateSalience rolls back the page when a write fails', () => {
+      store.insertMemory(makeMemory('m1', 'A', { salience: 0.8 }), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'B', { salience: 0.7 }), makeEmbedding(2));
+      db.exec(`
+        CREATE TRIGGER fail_m2_salience_update
+        BEFORE UPDATE OF salience ON l2_memories
+        WHEN OLD.id = 'm2'
+        BEGIN
+          SELECT RAISE(ABORT, 'simulated salience failure');
+        END;
+      `);
+
+      expect(() => store.bulkUpdateSalience([
+        { id: 'm1', salience: 0.2 },
+        { id: 'm2', salience: 0.35 },
+      ])).toThrow('simulated salience failure');
+      expect(store.getById('m1')?.salience).toBe(0.8);
+      expect(store.getById('m2')?.salience).toBe(0.7);
+    });
   });
 });

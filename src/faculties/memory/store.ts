@@ -13,6 +13,7 @@ import type {
   MemoryListOptions,
   MemoryLink,
   MemoryPatchEvent,
+  MemorySalienceUpdate,
   MemorySoftDeleteOptions,
   MemoryStoreUpdatePatch,
   MemoryUndoSoftDeleteOptions,
@@ -48,6 +49,7 @@ import {
   getEvolutionLinksForTargetMemory,
   bulkDelete,
   bulkUpdate,
+  bulkUpdateSalience,
 } from './store/read-write-operations.js';
 import {
   getAllActiveMemories,
@@ -261,6 +263,10 @@ export class MemoryStore {
 
   bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): number {
     return bulkUpdate(this.db, ids, fields);
+  }
+
+  bulkUpdateSalience(updates: MemorySalienceUpdate[]): number {
+    return bulkUpdateSalience(this.db, updates);
   }
 
   upsertContactProfile(profile: ContactProfileArtifact): void {

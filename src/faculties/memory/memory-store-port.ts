@@ -275,6 +275,26 @@ export interface MemoryBulkUpdatePatch {
   sensitivity?: PurrMemory['sensitivity'];
 }
 
+export interface MemorySalienceUpdate {
+  id: string;
+  salience: number;
+}
+
+export function normalizeMemorySalienceUpdates(
+  updates: readonly MemorySalienceUpdate[],
+): MemorySalienceUpdate[] {
+  const byId = new Map<string, number>();
+  for (const update of updates) {
+    const id = update.id.trim();
+    if (!id) continue;
+    if (!Number.isFinite(update.salience)) {
+      throw new Error('bulkUpdateSalience requires finite salience values');
+    }
+    byId.set(id, update.salience);
+  }
+  return Array.from(byId, ([id, salience]) => ({ id, salience }));
+}
+
 export interface ScratchpadEntryCreateOptions {
   id?: string;
   now?: number;
@@ -344,6 +364,7 @@ interface MemoryStorePortBackend extends ScratchpadProvider {
   getLinkedMemories(id: string): Awaitable<MemoryLink[]>;
   bulkDelete(ids: string[]): Awaitable<number>;
   bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Awaitable<number>;
+  bulkUpdateSalience(updates: MemorySalienceUpdate[]): Awaitable<number>;
   upsertContactProfile(profile: ContactProfileArtifact): Awaitable<void>;
   getContactProfile(contactId: string): Awaitable<ContactProfileArtifact | undefined>;
   listContactProfiles(): Awaitable<ContactProfileArtifact[]>;
@@ -418,6 +439,7 @@ export interface MemoryStorePort extends ScratchpadProvider {
   getLinkedMemories(id: string): Promise<MemoryLink[]>;
   bulkDelete(ids: string[]): Promise<number>;
   bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Promise<number>;
+  bulkUpdateSalience(updates: MemorySalienceUpdate[]): Promise<number>;
   upsertContactProfile(profile: ContactProfileArtifact): Promise<void>;
   getContactProfile(contactId: string): Promise<ContactProfileArtifact | undefined>;
   listContactProfiles(): Promise<ContactProfileArtifact[]>;
@@ -504,6 +526,7 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
     getLinkedMemories: async (id) => await store.getLinkedMemories(id),
     bulkDelete: async (ids) => await store.bulkDelete(ids),
     bulkUpdate: async (ids, fields) => await store.bulkUpdate(ids, fields),
+    bulkUpdateSalience: async (updates) => await store.bulkUpdateSalience(updates),
     upsertContactProfile: async (profile) => {
       await store.upsertContactProfile(profile);
     },

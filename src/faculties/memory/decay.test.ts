@@ -262,8 +262,9 @@ describe('SalienceDecay', () => {
     expect(updated[0].salience).toBe(0.8);
   });
 
-  it('updates eligible memories without relying on a transaction wrapper helper', async () => {
+  it('batches eligible salience updates instead of updating each memory individually', async () => {
     const updateSpy = vi.spyOn(store, 'updateMemory');
+    const bulkSpy = vi.spyOn(store, 'bulkUpdateSalience');
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
     store.insertMemory(makeMemory({
       id: 'tx-check',
@@ -274,7 +275,11 @@ describe('SalienceDecay', () => {
 
     await decay.run();
 
-    expect(updateSpy).toHaveBeenCalledTimes(1);
+    expect(updateSpy).not.toHaveBeenCalled();
+    expect(bulkSpy).toHaveBeenCalledTimes(1);
+    expect(bulkSpy).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 'tx-check', salience: expect.any(Number) }),
+    ]);
   });
 
   it('uses provided maintenance interval when starting timer', () => {
@@ -297,13 +302,16 @@ describe('SalienceDecay', () => {
 
   it('processes salience decay across multiple pages of active memories', async () => {
     const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const baseExtractedAt = Date.now();
     const pagedDecay = new SalienceDecay(store, { batchSize: 2 });
+    const bulkSpy = vi.spyOn(store, 'bulkUpdateSalience');
 
     for (let i = 0; i < 5; i += 1) {
       store.insertMemory(makeMemory({
         id: `batch-${i}`,
         type: 'episodic',
         salience: 1.0,
+        extractedAt: baseExtractedAt - i,
         lastAccessed: oneWeekAgo,
       }), makeEmbedding());
     }
@@ -315,6 +323,13 @@ describe('SalienceDecay', () => {
     for (const memory of updated) {
       expect(memory.salience).toBeCloseTo(0.5, 1);
     }
+    expect(bulkSpy).toHaveBeenCalledTimes(3);
+    expect(bulkSpy.mock.calls.map(([updates]) => updates.length)).toEqual([2, 2, 1]);
+    expect(bulkSpy.mock.calls.map(([updates]) => updates.map(update => update.id))).toEqual([
+      ['batch-0', 'batch-1'],
+      ['batch-2', 'batch-3'],
+      ['batch-4'],
+    ]);
   });
 
   it('uses paginated reads while decaying active memories', async () => {
@@ -335,5 +350,62 @@ describe('SalienceDecay', () => {
     expect(listSpy).toHaveBeenCalledWith({ limit: 2, offset: 0 });
     expect(listSpy).toHaveBeenCalledWith({ limit: 2, offset: 2 });
     expect(listSpy).toHaveBeenCalledWith({ limit: 2, offset: 4 });
+  });
+
+  it('propagates salience batch write failures without reading later pages', async () => {
+    const pagedDecay = new SalienceDecay(store, { batchSize: 2 });
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 4; i += 1) {
+      store.insertMemory(makeMemory({
+        id: `failure-${i}`,
+        type: 'episodic',
+        salience: 1.0,
+        extractedAt: Date.now() - i,
+        lastAccessed: oneWeekAgo,
+      }), makeEmbedding());
+    }
+
+    const listSpy = vi.spyOn(store, 'listActiveMemories');
+    vi.spyOn(store, 'bulkUpdateSalience').mockImplementation(() => {
+      throw new Error('simulated salience batch failure');
+    });
+
+    await expect(pagedDecay.run()).rejects.toThrow('simulated salience batch failure');
+    expect(listSpy).toHaveBeenCalledTimes(1);
+    expect(store.getById('failure-0')?.salience).toBe(1.0);
+    expect(store.getById('failure-1')?.salience).toBe(1.0);
+  });
+
+  it('yields to the event loop between salience decay pages', async () => {
+    const pagedDecay = new SalienceDecay(store, { batchSize: 1 });
+    const oneWeekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const baseExtractedAt = Date.now();
+    for (let i = 0; i < 2; i += 1) {
+      store.insertMemory(makeMemory({
+        id: `yield-${i}`,
+        type: 'episodic',
+        salience: 1.0,
+        extractedAt: baseExtractedAt - i,
+        lastAccessed: oneWeekAgo,
+      }), makeEmbedding());
+    }
+
+    let immediateRan = false;
+    let yieldedBeforeSecondPage = false;
+    const listActiveMemories = store.listActiveMemories.bind(store);
+    vi.spyOn(store, 'listActiveMemories').mockImplementation((options) => {
+      if (options?.offset === 1) {
+        yieldedBeforeSecondPage = immediateRan;
+      }
+      return listActiveMemories(options);
+    });
+
+    const runPromise = pagedDecay.run();
+    setImmediate(() => {
+      immediateRan = true;
+    });
+    await runPromise;
+
+    expect(yieldedBeforeSecondPage).toBe(true);
   });
 });

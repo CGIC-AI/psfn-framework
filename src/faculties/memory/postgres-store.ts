@@ -28,6 +28,7 @@ import type {
   MemoryMaintenanceReview,
   MemoryMaintenanceReviewInput,
   MemoryMaintenanceReviewListOptions,
+  MemorySalienceUpdate,
   MemorySoftDeleteOptions,
   MemoryStorePort,
   MemoryStoreStats,
@@ -39,7 +40,7 @@ import type {
   ScratchpadEntryReplaceOptions,
   MemoryWriteCommit,
 } from './memory-store-port.js';
-import { MEMORY_EVOLUTION_RELATIONS } from './memory-store-port.js';
+import { MEMORY_EVOLUTION_RELATIONS, normalizeMemorySalienceUpdates } from './memory-store-port.js';
 import {
   inferMemorySourceTypeFromSourceRef,
   normalizeConsentFlags,
@@ -1340,6 +1341,41 @@ class PostgresMemoryStore implements MemoryStorePort {
       count += 1;
     }
     return count;
+  }
+
+  async bulkUpdateSalience(updates: MemorySalienceUpdate[]): Promise<number> {
+    const normalizedUpdates = normalizeMemorySalienceUpdates(updates);
+    if (normalizedUpdates.length === 0) return 0;
+
+    const values: unknown[] = [];
+    const rows = normalizedUpdates.map((update, index) => {
+      const idParam = index * 2 + 1;
+      const salienceParam = idParam + 1;
+      values.push(update.id, update.salience);
+      return `($${idParam}::text, $${salienceParam}::numeric)`;
+    });
+
+    const result = await this.persist(() => executeQuery(this.pool, `
+      UPDATE l2_memories AS memory
+      SET salience = updates.salience
+      FROM (VALUES ${rows.join(', ')}) AS updates(id, salience)
+      WHERE memory.id = updates.id
+        AND memory.deleted_at IS NULL
+        AND memory.superseded_by IS NULL
+      RETURNING memory.id
+    `, values));
+
+    const updatedIds = new Set(result.rows.flatMap(row => (
+      typeof row.id === 'string' ? [row.id] : []
+    )));
+    for (const update of normalizedUpdates) {
+      if (!updatedIds.has(update.id)) continue;
+      const existing = this.memories.get(update.id);
+      if (!existing || existing.deletedAt) continue;
+      this.memories.set(update.id, { ...existing, salience: update.salience });
+    }
+
+    return result.rowCount ?? 0;
   }
 
   async upsertContactProfile(profile: ContactProfileArtifact): Promise<void> {

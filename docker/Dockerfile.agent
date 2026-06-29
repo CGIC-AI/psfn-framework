@@ -17,13 +17,22 @@ RUN set -eux; \
       chmod 0755 "/opt/postgresql-client/wrappers/${binary}"; \
     done
 
-FROM node:22.22.2-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS build
+FROM node:24.13.1-slim@sha256:85a395c77b811fa7f5b5e4aa69cd6eb4c3b80c7f1a8e34704dc0ce061e5b404e AS native-toolchain
 
 WORKDIR /app
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+      g++=4:12.2.0-3 \
+      make=4.3-4.1 \
+      python3=3.11.2-1+b1 \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM native-toolchain AS build
+
 COPY package*.json ./
 COPY admin-ui/package*.json ./admin-ui/
-RUN npm ci
+RUN npm_config_nodedir=/usr/local npm ci
 
 COPY tsconfig.json tsup.config.ts ./
 COPY src/ ./src/
@@ -33,7 +42,16 @@ COPY admin-ui/ ./admin-ui/
 RUN npm run build
 RUN npm run garden:build
 
-FROM node:22.22.2-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS runtime
+FROM native-toolchain AS production-deps
+
+WORKDIR /app
+
+COPY package*.json ./
+COPY admin-ui/package*.json ./admin-ui/
+RUN npm_config_nodedir=/usr/local npm ci --omit=dev \
+    && rm -rf /root/.npm /app/admin-ui/node_modules
+
+FROM node:24.13.1-slim@sha256:85a395c77b811fa7f5b5e4aa69cd6eb4c3b80c7f1a8e34704dc0ce061e5b404e AS runtime
 
 WORKDIR /app
 
@@ -43,8 +61,7 @@ RUN apt-get update \
 
 COPY package*.json ./
 COPY admin-ui/package*.json ./admin-ui/
-RUN npm ci --omit=dev \
-    && rm -rf /root/.npm /app/admin-ui/node_modules
+COPY --from=production-deps /app/node_modules/ ./node_modules/
 
 COPY --from=postgres-client /opt/postgresql-client/ /opt/postgresql-client/
 COPY --from=build /app/dist/ ./dist/

@@ -48,4 +48,24 @@ describe('parseFactsXml', () => {
       sourceMessageIds: [5],
     });
   });
+
+  it('parses durable retention metadata for extracted preference facts', () => {
+    const facts = parseFactsXml(`<response>
+<fact>
+<text>Vega's favorite color is teal.</text>
+<type>semantic</type>
+<importance>0.82</importance>
+<confidence>0.95</confidence>
+<tags>preference, favorite</tags>
+<retention_class>durable</retention_class>
+</fact>
+</response>`);
+
+    expect(facts).toHaveLength(1);
+    expect(facts[0]).toMatchObject({
+      text: "Vega's favorite color is teal.",
+      retentionClass: 'durable',
+      tags: ['preference', 'favorite'],
+    });
+  });
 });

@@ -28,6 +28,7 @@
 
   const MEMORY_TYPES = ['', 'episodic', 'semantic', 'emotional', 'procedural', 'reflection', 'relational'];
   const SENSITIVITY_LEVELS = ['', 'public', 'personal', 'intimate', 'confidential'];
+  const RETENTION_CLASSES = ['', 'standard', 'durable'];
   const MEMORY_LINK_TYPES = ['related', 'supports', 'conflicts', 'sequence', 'causal'];
   const MANAGED_SCOPE_KINDS = [
     { value: 'project', label: 'Project' },
@@ -44,6 +45,8 @@
 
   let typeFilter = $state('');
   let sensitivityFilter = $state('');
+  let retentionFilter = $state('');
+  let preferenceOnlyFilter = $state(false);
   let startDateFilter = $state('');
   let endDateFilter = $state('');
   let searchQuery = $state('');
@@ -62,6 +65,7 @@
   let selectedIds = $state<string[]>([]);
   let bulkMemoryType = $state('');
   let bulkSensitivity = $state('');
+  let bulkRetentionClass = $state('');
   let linksById = $state<Record<string, AdminMemoryLink[]>>({});
   let linkTargetById = $state<Record<string, string>>({});
   let linkTypeById = $state<Record<string, string>>({});
@@ -166,6 +170,8 @@
   function clearListFilters(): void {
     typeFilter = '';
     sensitivityFilter = '';
+    retentionFilter = '';
+    preferenceOnlyFilter = false;
     startDateFilter = '';
     endDateFilter = '';
     offset = 0;
@@ -193,6 +199,8 @@
       data = await listMemories({
         type: typeFilter || undefined,
         sensitivity: sensitivityFilter || undefined,
+        retention: retentionFilter || undefined,
+        preference: preferenceOnlyFilter || undefined,
         startDate: startDateFilter || undefined,
         endDate: endDateFilter || undefined,
         limit: PAGE_SIZE,
@@ -325,14 +333,15 @@
       flash(false, 'Select at least one memory');
       return;
     }
-    if (!bulkMemoryType && !bulkSensitivity) {
-      flash(false, 'Choose a memory type and/or sensitivity');
+    if (!bulkMemoryType && !bulkSensitivity && !bulkRetentionClass) {
+      flash(false, 'Choose a memory type, sensitivity, or retention class');
       return;
     }
     try {
       const result = await bulkUpdateMemories(selectedIds, {
         ...(bulkMemoryType ? { memoryType: bulkMemoryType } : {}),
         ...(bulkSensitivity ? { sensitivity: bulkSensitivity } : {}),
+        ...(bulkRetentionClass ? { retentionClass: bulkRetentionClass } : {}),
       });
       flash(true, `Updated ${result.count} memories`);
       await loadMemories();
@@ -500,6 +509,24 @@
     return String(m.tags ?? '');
   }
 
+  function memoryTagSet(m: AdminUiPurrMemory): Set<string> {
+    return new Set(
+      (Array.isArray(m.tags) ? m.tags : String(m.tags ?? '').split(','))
+        .map(tag => tag.trim().toLowerCase())
+        .filter(Boolean)
+    );
+  }
+
+  function isDurableMemoryView(m: AdminUiPurrMemory): boolean {
+    const tags = memoryTagSet(m);
+    return m.retentionClass === 'durable' || tags.has('durable') || tags.has('durable_preference');
+  }
+
+  function isPreferenceMemoryView(m: AdminUiPurrMemory): boolean {
+    const tags = memoryTagSet(m);
+    return tags.has('preference') || [...tags].some(tag => tag.startsWith('preference:'));
+  }
+
   function managedScopeKey(kind: string, id: string): string {
     return `${kind}:${id}`;
   }
@@ -661,7 +688,7 @@
       </p>
     </div>
 
-    <div class="grid grid-cols-2 gap-3 lg:grid-cols-5">
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-7">
       <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Active</p>
         <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.activeMemoryCount ?? 0}</p>
@@ -681,6 +708,14 @@
       <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
         <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Scoped</p>
         <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.scopedCount ?? 0}</p>
+      </div>
+      <div class="rounded-xl border border-bark-200 bg-bark-50 p-3">
+        <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Preferences</p>
+        <p class="mt-2 font-serif text-2xl text-shadow-900">{privacySummary?.preferenceCount ?? 0}</p>
+      </div>
+      <div class="rounded-xl border border-moss-200 bg-moss-50 p-3">
+        <p class="text-xs uppercase tracking-[0.16em] text-moss-700">Durable Prefs</p>
+        <p class="mt-2 font-serif text-2xl text-moss-700">{privacySummary?.durablePreferenceCount ?? 0}</p>
       </div>
     </div>
 
@@ -859,7 +894,7 @@
 
   <!-- Filter bar -->
   <div class="card-garden p-4 space-y-3">
-    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3">
       <select
         bind:value={typeFilter}
         onchange={applyListFilters}
@@ -883,6 +918,28 @@
           <option value={level}>{level.charAt(0).toUpperCase() + level.slice(1)}</option>
         {/each}
       </select>
+
+      <select
+        bind:value={retentionFilter}
+        onchange={applyListFilters}
+        class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800
+               focus:outline-none focus:border-gold-400 focus:ring-2 focus:ring-gold-300 text-sm"
+      >
+        <option value="">All Retention</option>
+        {#each RETENTION_CLASSES.filter(level => level) as retentionClass}
+          <option value={retentionClass}>{retentionClass.charAt(0).toUpperCase() + retentionClass.slice(1)}</option>
+        {/each}
+      </select>
+
+      <label class="flex items-center gap-2 px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-sm text-shadow-800">
+        <input
+          type="checkbox"
+          bind:checked={preferenceOnlyFilter}
+          onchange={applyListFilters}
+          class="h-4 w-4 rounded border-bark-300 accent-gold-600"
+        />
+        Preferences
+      </label>
 
       <input
         type="date"
@@ -1000,6 +1057,15 @@
           <option value={sensitivity}>{sensitivity}</option>
         {/each}
       </select>
+      <select
+        bind:value={bulkRetentionClass}
+        class="px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm"
+      >
+        <option value="">Set retention (optional)</option>
+        {#each RETENTION_CLASSES.filter(t => t) as retentionClass}
+          <option value={retentionClass}>{retentionClass}</option>
+        {/each}
+      </select>
       <button
         onclick={handleBulkUpdate}
         disabled={selectedCount === 0}
@@ -1058,6 +1124,16 @@
               {#if memory.sensitivity && memory.sensitivity !== 'public'}
                 <span class="px-2.5 py-0.5 text-sm rounded-full font-medium" style={sensitivityBadgeStyle(memory.sensitivity)}>
                   {memory.sensitivity}
+                </span>
+              {/if}
+              {#if isDurableMemoryView(memory)}
+                <span class="px-2 py-0.5 text-sm rounded border bg-moss-50 text-moss-700 border-moss-200">
+                  durable
+                </span>
+              {/if}
+              {#if isPreferenceMemoryView(memory)}
+                <span class="px-2 py-0.5 text-sm rounded border bg-gold-50 text-gold-800 border-gold-200">
+                  preference
                 </span>
               {/if}
               {#if memory.contactId && contactsById[memory.contactId]}
@@ -1197,6 +1273,16 @@
                 {detailModalData.memory.sensitivity}
               </span>
             {/if}
+            {#if isDurableMemoryView(detailModalData.memory)}
+              <span class="px-2 py-0.5 text-sm rounded border bg-moss-50 text-moss-700 border-moss-200">
+                durable
+              </span>
+            {/if}
+            {#if isPreferenceMemoryView(detailModalData.memory)}
+              <span class="px-2 py-0.5 text-sm rounded border bg-gold-50 text-gold-800 border-gold-200">
+                preference
+              </span>
+            {/if}
             {#if detailModalData.linkedContact}
               <span class="px-2 py-0.5 text-sm rounded border bg-bark-200 text-shadow-800 border-bark-300">
                 {detailModalData.linkedContact.displayName}
@@ -1224,6 +1310,9 @@
             {/if}
             {#if detailModalData.memory.accessCount !== undefined}
               <span>Access Count: <span class="text-shadow-800">{detailModalData.memory.accessCount}</span></span>
+            {/if}
+            {#if detailModalData.memory.retentionClass}
+              <span>Retention: <span class="text-shadow-800">{detailModalData.memory.retentionClass}</span></span>
             {/if}
             {#if detailModalData.memory.sourceRef}
               <span class="sm:col-span-2">Source: <code class="text-shadow-800 bg-bark-200 px-1 rounded text-sm break-all">{detailModalData.memory.sourceRef}</code></span>

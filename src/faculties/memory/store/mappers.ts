@@ -218,6 +218,7 @@ export function mapMemoryRow(row: MemoryRow): PurrMemory {
     ...(scopeRef ? { scopeRef } : {}),
     ...(scopeTags.length > 0 ? { scopeTags } : {}),
     provenanceRefs,
+    ...(row.retention_class ? { retentionClass: row.retention_class } : {}),
     sensitivity: (row.sensitivity ?? 'personal') as SensitivityLevel,
     consentFlags,
     contactId: row.contact_id ?? undefined,

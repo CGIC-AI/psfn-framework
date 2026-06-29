@@ -12,6 +12,7 @@ import {
 import { injectPromptRuntimeTokens } from '../../../core/identity/prompt-runtime.js';
 import { classifyChannel } from '../../../system/trust/policy.js';
 import { extractBoundaryFactsFromEntries } from '../boundary-log.js';
+import { extractExplicitPreferenceFactsFromEntries } from './preference.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { ExtractedFact } from '../types.js';
 import { MemoryWritePolicyError, type WriteResult } from '../writer.js';
@@ -307,8 +308,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       parsedFacts.push(normalized.fact);
     }
     const inferredBoundaryFacts = extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
+    const inferredPreferenceFacts = extractExplicitPreferenceFactsFromEntries(recentEntries, {
+      fallbackSubjectName: participantNames.userName,
+    });
     const adjustFactForWrite = options.adjustFactForWrite ?? ((fact: ExtractedFact) => fact);
-    const facts = mergeExtractedFactGroups([parsedFacts, inferredBoundaryFacts])
+    const facts = mergeExtractedFactGroups([parsedFacts, inferredBoundaryFacts, inferredPreferenceFacts])
       .map(fact => applyChannelImportanceCaps(adjustFactForWrite(fact), channelVisibility));
 
     if (inferredBoundaryFacts.length > 0 && options.telemetryEnabled) {
@@ -316,6 +320,13 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         channelId: options.channelId,
         triggerReason: options.triggerReason,
         inferredCount: inferredBoundaryFacts.length,
+      });
+    }
+    if (inferredPreferenceFacts.length > 0 && options.telemetryEnabled) {
+      log.info('Detected explicit preference facts from conversation transcript', {
+        channelId: options.channelId,
+        triggerReason: options.triggerReason,
+        inferredCount: inferredPreferenceFacts.length,
       });
     }
 

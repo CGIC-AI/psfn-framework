@@ -241,6 +241,52 @@ describe('SalienceDecay', () => {
     expect(durableUpdated.salience).toBeGreaterThan(MEMORY_CONFIG.durableSalienceFloor);
   });
 
+  it('retains durable preference memories longer than ordinary durable memories', async () => {
+    const oneYearAgo = Date.now() - 365 * 24 * 60 * 60 * 1000;
+
+    const preference = makeMemory({
+      id: 'durable-preference',
+      text: 'My favorite color is teal.',
+      type: 'semantic',
+      salience: 1.0,
+      lastAccessed: oneYearAgo,
+      tags: ['preference', 'favorite', 'preference:color'],
+      retentionClass: 'durable',
+    });
+    const durable = makeMemory({
+      id: 'durable-standard',
+      text: 'Durable profile memory',
+      type: 'semantic',
+      salience: 1.0,
+      lastAccessed: oneYearAgo,
+      tags: ['durable'],
+      retentionClass: 'durable',
+    });
+    const standard = makeMemory({
+      id: 'standard-semantic',
+      text: 'Standard semantic memory',
+      type: 'semantic',
+      salience: 1.0,
+      lastAccessed: oneYearAgo,
+      tags: [],
+    });
+
+    store.insertMemory(preference, makeEmbedding());
+    store.insertMemory(durable, makeEmbedding());
+    store.insertMemory(standard, makeEmbedding());
+
+    await decay.run();
+
+    const all = store.getAllActiveMemories();
+    const preferenceUpdated = all.find(m => m.id === 'durable-preference')!;
+    const durableUpdated = all.find(m => m.id === 'durable-standard')!;
+    const standardUpdated = all.find(m => m.id === 'standard-semantic')!;
+
+    expect(preferenceUpdated.salience).toBeGreaterThan(durableUpdated.salience);
+    expect(durableUpdated.salience).toBeGreaterThan(standardUpdated.salience);
+    expect(preferenceUpdated.salience).toBeGreaterThan(MEMORY_CONFIG.preferenceDurableSalienceFloor);
+  });
+
   it('never decays durable memories below durable floor', async () => {
     const veryOld = Date.now() - 20 * 365 * 24 * 60 * 60 * 1000;
     const mem = makeMemory({

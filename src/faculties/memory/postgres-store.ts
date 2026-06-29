@@ -995,6 +995,7 @@ class PostgresMemoryStore implements MemoryStorePort {
     if (updates.scopeRef !== undefined) next.scopeRef = normalizeMemoryScopeRef(updates.scopeRef);
     if (updates.scopeTags !== undefined) next.scopeTags = normalizeMemoryScopeTags(updates.scopeTags);
     if (updates.provenanceRefs !== undefined) next.provenanceRefs = [...updates.provenanceRefs];
+    if (updates.retentionClass !== undefined) next.retentionClass = updates.retentionClass;
     if (updates.contactId !== undefined) next.contactId = updates.contactId;
     if (updates.deletedAt !== undefined) next.deletedAt = updates.deletedAt;
     if (updates.deletedBy !== undefined) next.deletedBy = updates.deletedBy;
@@ -1378,6 +1379,7 @@ class PostgresMemoryStore implements MemoryStorePort {
       const next = { ...existing };
       if (fields.type !== undefined) next.type = fields.type;
       if (fields.sensitivity !== undefined) next.sensitivity = fields.sensitivity;
+      if (fields.retentionClass !== undefined) next.retentionClass = fields.retentionClass;
       await this.persist(() => this.upsertMemoryRow(next, this.embeddings.get(id)));
       this.memories.set(id, next);
       count += 1;

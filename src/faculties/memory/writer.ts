@@ -25,9 +25,11 @@ import type {
 } from './types.js';
 import {
   DEDUP_THRESHOLD,
+  DURABLE_PREFERENCE_MEMORY_TAG,
   DURABLE_RETENTION_TAG,
   MEMORY_CONFIG,
   inferMemorySourceTypeFromSourceRef,
+  inferPreferenceMemoryTags,
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
   VALID_MEMORY_TYPES,
@@ -186,6 +188,7 @@ export interface MemoryRedactionResult {
 }
 
 function applyRetentionSemantics(input: {
+  text: string;
   type: MemoryType;
   importance: number;
   tags: readonly string[];
@@ -194,16 +197,31 @@ function applyRetentionSemantics(input: {
   tags: string[];
   retentionClass?: MemoryRetentionClass;
 } {
-  const tags = normalizeMemoryTags(input.tags);
+  const tags = normalizeMemoryTags([
+    ...input.tags,
+    ...inferPreferenceMemoryTags({
+      text: input.text,
+      type: input.type,
+      tags: input.tags,
+    }),
+  ]);
   const inferred = inferMemoryRetentionClass({
     type: input.type,
     importance: input.importance,
+    text: input.text,
     tags,
     retentionClass: input.retentionClass,
   });
 
   if (inferred === 'durable' && !tags.includes(DURABLE_RETENTION_TAG)) {
     tags.push(DURABLE_RETENTION_TAG);
+  }
+  if (
+    inferred === 'durable'
+    && tags.includes('preference')
+    && !tags.includes(DURABLE_PREFERENCE_MEMORY_TAG)
+  ) {
+    tags.push(DURABLE_PREFERENCE_MEMORY_TAG);
   }
 
   return {
@@ -728,6 +746,7 @@ export class MemoryWriter {
     }
 
     const retention = applyRetentionSemantics({
+      text,
       type,
       importance,
       tags,
@@ -775,6 +794,7 @@ export class MemoryWriter {
         consentFlags?: ConsentFlags;
         scopeRef?: MemoryScopeRef;
         scopeTags?: string[];
+        retentionClass?: MemoryRetentionClass;
       } = {
         lastAccessed: Date.now(),
         accessCount: existing.accessCount + 1,
@@ -819,6 +839,9 @@ export class MemoryWriter {
       // If this write is durable, upgrade duplicate memory tags so durability survives persistence.
       if (retention.retentionClass === 'durable' && !isDurableMemory(existing)) {
         updates.tags = normalizeMemoryTags([...(updates.tags ?? existing.tags), DURABLE_RETENTION_TAG]);
+        updates.retentionClass = 'durable';
+      } else if (retention.retentionClass === 'durable' && existing.retentionClass !== 'durable') {
+        updates.retentionClass = 'durable';
       }
 
       await this.memoryStore.updateMemory(existing.id, updates);
@@ -842,7 +865,7 @@ export class MemoryWriter {
           tags: updates.tags ?? existing.tags,
           provenanceRefs: updates.provenanceRefs ?? existingProvenanceRefs,
           consentFlags: updates.consentFlags ?? existing.consentFlags,
-          retentionClass: retention.retentionClass ?? existing.retentionClass,
+          retentionClass: updates.retentionClass ?? retention.retentionClass ?? existing.retentionClass,
           scopeRef: updates.scopeRef ?? existing.scopeRef,
           scopeTags: updates.scopeTags ?? existing.scopeTags,
         },
@@ -1020,6 +1043,7 @@ export class MemoryWriter {
     }
 
     const retention = applyRetentionSemantics({
+      text,
       type,
       importance,
       tags,
@@ -1254,6 +1278,7 @@ export class MemoryWriter {
     if (replacementTags || appendedTags) {
       const nextTagInput = replacementTags ?? [...existing.tags, ...(appendedTags ?? [])];
       const retention = applyRetentionSemantics({
+        text: updates.text ?? existing.text,
         type: existing.type,
         importance: updates.importance ?? existing.importance,
         tags: nextTagInput,
@@ -1364,6 +1389,7 @@ export class MemoryWriter {
     const embedding = await this.embeddingService.embed(nextText);
     this.validateEmbedding(embedding, 'patch');
     const replacementRetention = applyRetentionSemantics({
+      text: nextText,
       type: existing.type,
       importance: opts.importance ?? existing.importance,
       tags: [...existing.tags, 'corrected'],

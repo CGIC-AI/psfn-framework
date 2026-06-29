@@ -133,7 +133,13 @@ describe('MemoryWriter', () => {
       expect(result.memory.importance).toBe(0.8);
       expect(result.memory.emotionalValence).toBe(0.6);
       expect(result.memory.confidence).toBe(0.9);
-      expect(result.memory.tags).toEqual(['identity', 'preference']);
+      expect(result.memory.tags).toEqual(expect.arrayContaining([
+        'identity',
+        'preference',
+        'durable',
+        'durable_preference',
+      ]));
+      expect(result.memory.retentionClass).toBe('durable');
       expect(result.memory.sourceRef).toBe('test:manual');
       expect(result.memory.sourceType).toBe('unknown');
       expect(result.memory.salience).toBe(0.8); // Initial salience = importance
@@ -145,6 +151,7 @@ describe('MemoryWriter', () => {
       expect(store.insertMemory).toHaveBeenCalledOnce();
       const [insertedMemory, insertedEmbedding] = store.insertMemory.mock.calls[0];
       expect(insertedMemory.text).toBe('V loves cats');
+      expect(insertedMemory.retentionClass).toBe('durable');
       expect(insertedEmbedding).toBeInstanceOf(Float32Array);
     });
 
@@ -256,6 +263,22 @@ describe('MemoryWriter', () => {
       expect(result.memory.retentionClass).toBe('durable');
       expect(result.memory.tags).toContain('profile');
       expect(result.memory.tags).toContain('durable');
+    });
+
+    it('auto-marks explicit favorite writes as durable preferences without requiring tags', async () => {
+      const result = await writer.write({
+        text: 'My favorite color is teal.',
+        type: 'semantic',
+      });
+
+      expect(result.memory.retentionClass).toBe('durable');
+      expect(result.memory.tags).toEqual(expect.arrayContaining([
+        'preference',
+        'favorite',
+        'preference:color',
+        'durable',
+        'durable_preference',
+      ]));
     });
 
     it('throws on invalid memory type', async () => {

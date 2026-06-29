@@ -55,9 +55,9 @@ export function insertMemory(
   const insertMem = db.prepare(`
     INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence, formation_vad,
       salience, source_ref, source_type, provenance_json, extracted_at, last_accessed, access_count, superseded_by, tags,
-      scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs, sensitivity,
+      scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs, retention_class, sensitivity,
       consent_flags, contact_id, deleted_at, deleted_by, delete_reason)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const insertVec = db.prepare(`
@@ -88,6 +88,7 @@ export function insertMemory(
       memory.scopeRef?.label ?? null,
       JSON.stringify(normalizeMemoryScopeTags(memory.scopeTags)),
       JSON.stringify(memory.provenanceRefs ?? []),
+      memory.retentionClass ?? null,
       // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- default for callers without sensitivity
       memory.sensitivity ?? 'personal',
       JSON.stringify(memory.consentFlags ?? {}),
@@ -192,6 +193,10 @@ export function updateMemory(
   if (updates.provenanceRefs !== undefined) {
     setClauses.push('provenance_refs = ?');
     values.push(JSON.stringify(updates.provenanceRefs));
+  }
+  if (updates.retentionClass !== undefined) {
+    setClauses.push('retention_class = ?');
+    values.push(updates.retentionClass);
   }
   if (updates.sourceType !== undefined) {
     setClauses.push('source_type = ?');
@@ -700,6 +705,10 @@ export function bulkUpdate(
   if (fields.sensitivity !== undefined) {
     setClauses.push('sensitivity = ?');
     setValues.push(fields.sensitivity);
+  }
+  if (fields.retentionClass !== undefined) {
+    setClauses.push('retention_class = ?');
+    setValues.push(fields.retentionClass);
   }
 
   if (setClauses.length === 0) return 0;

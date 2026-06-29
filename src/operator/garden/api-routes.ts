@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendJson } from '../../channels/backplane/http/primitives.js';
-import { VALID_MEMORY_TYPES, type MemoryType } from '../../faculties/memory/types.js';
+import { VALID_MEMORY_TYPES, type MemoryRetentionClass, type MemoryType } from '../../faculties/memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../system/trust/types.js';
 import { buildAdminEpisodicMemoryRoutes } from './api-routes-episodic-memory.js';
 import { parseAdminJsonBody } from './request-body.js';
@@ -76,6 +76,14 @@ function toSensitivityLevel(value: string | null): SensitivityLevel | undefined 
   if (!normalized) return undefined;
   return VALID_SENSITIVITY_LEVELS.includes(normalized as SensitivityLevel)
     ? normalized as SensitivityLevel
+    : undefined;
+}
+
+function toMemoryRetentionClass(value: string | null): MemoryRetentionClass | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'standard' || normalized === 'durable'
+    ? normalized
     : undefined;
 }
 
@@ -549,6 +557,11 @@ export function buildAdminApiRoutes(options: {
           sendJson(res, 400, { error: 'Invalid memory sensitivity filter' });
           return;
         }
+        const retentionFilter = toMemoryRetentionClass(url.searchParams.get('retention'));
+        if (url.searchParams.get('retention') && !retentionFilter) {
+          sendJson(res, 400, { error: 'Invalid memory retention filter' });
+          return;
+        }
         const startDate = toDateFilter(url.searchParams.get('startDate'), 'start');
         if (url.searchParams.get('startDate') && startDate === undefined) {
           sendJson(res, 400, { error: 'Invalid startDate filter' });
@@ -815,13 +828,14 @@ export function buildAdminApiRoutes(options: {
 
           const memoryType = typeof fields.memoryType === 'string' ? fields.memoryType : undefined;
           const sensitivity = typeof fields.sensitivity === 'string' ? fields.sensitivity : undefined;
+          const retentionClass = typeof fields.retentionClass === 'string' ? fields.retentionClass : undefined;
 
-          if (!memoryType && !sensitivity) {
-            sendJson(res, 400, { error: 'At least one field (memoryType, sensitivity) is required' });
+          if (!memoryType && !sensitivity && !retentionClass) {
+            sendJson(res, 400, { error: 'At least one field (memoryType, sensitivity, retentionClass) is required' });
             return;
           }
 
-          memoryService.bulkUpdate(ids, { memoryType, sensitivity }).then(
+          memoryService.bulkUpdate(ids, { memoryType, sensitivity, retentionClass }).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, 400, { error: result.message ?? 'Bulk update failed' });

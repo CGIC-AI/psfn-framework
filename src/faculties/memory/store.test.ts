@@ -167,6 +167,23 @@ describe('MemoryStore', () => {
       expect(all[0].accessCount).toBe(5);
     });
 
+    it('round-trips retention class on insert and update', () => {
+      const emb = makeEmbedding(1);
+      store.insertMemory(makeMemory('m-retention', 'My favorite color is teal.', {
+        tags: ['preference', 'favorite', 'preference:color'],
+        retentionClass: 'durable',
+      }), emb);
+
+      expect(store.getById('m-retention')).toMatchObject({
+        retentionClass: 'durable',
+        tags: expect.arrayContaining(['preference', 'favorite', 'preference:color']),
+      });
+
+      store.updateMemory('m-retention', { retentionClass: 'standard' });
+
+      expect(store.getById('m-retention')?.retentionClass).toBe('standard');
+    });
+
     it('superseded memories are excluded from active list', () => {
       const emb = makeEmbedding(1);
       store.insertMemory(makeMemory('m1', 'Old fact'), emb);

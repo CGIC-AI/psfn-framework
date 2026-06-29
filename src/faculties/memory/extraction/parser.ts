@@ -50,6 +50,8 @@ function parseFactBlock(block: string): ExtractedFact | null {
   const sensitivity: SensitivityLevel = VALID_SENSITIVITY_LEVELS.includes(sensitivityStr as SensitivityLevel)
     ? (sensitivityStr as SensitivityLevel)
     : 'personal';
+  const retentionClassStr = extractTag(block, 'retention_class')?.trim().toLowerCase();
+  const retentionClass = retentionClassStr === 'durable' ? 'durable' : undefined;
 
   const attribution = parseFactAttribution(block);
 
@@ -61,6 +63,7 @@ function parseFactBlock(block: string): ExtractedFact | null {
     confidence,
     tags,
     sensitivity,
+    ...(retentionClass ? { retentionClass } : {}),
     ...(attribution ? { attribution } : {}),
   };
 }

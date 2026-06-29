@@ -33,6 +33,7 @@ export interface MemoryRow {
   scope_ref_label: string | null;
   scope_tags: string | null;
   provenance_refs: string | null;
+  retention_class: PurrMemory['retentionClass'] | null;
   sensitivity: string | null;
   consent_flags: string | null;
   contact_id: string | null;

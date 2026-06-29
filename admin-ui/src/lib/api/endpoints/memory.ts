@@ -15,6 +15,8 @@ import type {
 export interface MemoryListParams {
   type?: string;
   sensitivity?: string;
+  retention?: string;
+  preference?: boolean;
   startDate?: string;
   endDate?: string;
   limit?: number;
@@ -27,6 +29,8 @@ export function listMemories(
   const search = new URLSearchParams();
   if (params?.type) search.set('type', params.type);
   if (params?.sensitivity) search.set('sensitivity', params.sensitivity);
+  if (params?.retention) search.set('retention', params.retention);
+  if (params?.preference) search.set('preference', 'true');
   if (params?.startDate) search.set('startDate', params.startDate);
   if (params?.endDate) search.set('endDate', params.endDate);
   if (params?.limit !== undefined) search.set('limit', String(params.limit));
@@ -128,7 +132,7 @@ export function bulkDeleteMemories(ids: string[]): Promise<AdminBulkMutationResu
 
 export function bulkUpdateMemories(
   ids: string[],
-  fields: { memoryType?: string; sensitivity?: string }
+  fields: { memoryType?: string; sensitivity?: string; retentionClass?: string }
 ): Promise<AdminBulkMutationResult> {
   return apiPost<AdminBulkMutationResult>('/api/admin/memory/bulk-update', {
     ids,

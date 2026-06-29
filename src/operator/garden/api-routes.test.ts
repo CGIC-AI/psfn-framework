@@ -1700,6 +1700,131 @@ describe('AdminServer JSON API routes', () => {
     expect(badRange.status).toBe(400);
   });
 
+  it('supports preference memory review filters and retention edits', async () => {
+    const now = Date.UTC(2026, 2, 1, 10, 0, 0);
+    memoryStore.insertMemory({
+      id: 'pref-durable-color',
+      text: "V's favorite color is teal.",
+      type: 'semantic',
+      importance: 0.9,
+      confidence: 0.95,
+      emotionalValence: 0.1,
+      salience: 0.9,
+      sourceRef: 'api:preference:1',
+      extractedAt: now,
+      lastAccessed: now,
+      accessCount: 0,
+      tags: ['preference', 'favorite', 'preference:color', 'durable_preference'],
+      retentionClass: 'durable',
+      sensitivity: 'personal',
+    }, new Float32Array([0.1, 0.3, 0.2]));
+    memoryStore.insertMemory({
+      id: 'pref-standard-style',
+      text: 'V likes matte stationery.',
+      type: 'semantic',
+      importance: 0.65,
+      confidence: 0.85,
+      emotionalValence: 0,
+      salience: 0.65,
+      sourceRef: 'api:preference:2',
+      extractedAt: now + 1,
+      lastAccessed: now + 1,
+      accessCount: 0,
+      tags: ['preference', 'preference:style'],
+      retentionClass: 'standard',
+      sensitivity: 'personal',
+    }, new Float32Array([0.2, 0.4, 0.1]));
+    memoryStore.insertMemory({
+      id: 'durable-non-preference',
+      text: 'Durable non-preference profile fact.',
+      type: 'semantic',
+      importance: 0.75,
+      confidence: 0.9,
+      emotionalValence: 0,
+      salience: 0.75,
+      sourceRef: 'api:profile:1',
+      extractedAt: now + 2,
+      lastAccessed: now + 2,
+      accessCount: 0,
+      tags: ['durable'],
+      retentionClass: 'durable',
+      sensitivity: 'personal',
+    }, new Float32Array([0.3, 0.2, 0.4]));
+
+    const preferenceRes = await request(port, 'GET', '/api/admin/memory?preference=true', undefined, authHeaders);
+    expect(preferenceRes.status).toBe(200);
+    const preferencePayload = JSON.parse(preferenceRes.body) as {
+      memories: Array<{ id: string }>;
+      privacySummary: {
+        matchingMemoryCount: number;
+        preferenceCount: number;
+        durablePreferenceCount: number;
+      };
+    };
+    expect(preferencePayload.memories.map(memory => memory.id)).toEqual(expect.arrayContaining([
+      'pref-durable-color',
+      'pref-standard-style',
+    ]));
+    expect(preferencePayload.memories.map(memory => memory.id)).not.toContain('durable-non-preference');
+    expect(preferencePayload.privacySummary.matchingMemoryCount).toBe(2);
+    expect(preferencePayload.privacySummary.preferenceCount).toBe(2);
+    expect(preferencePayload.privacySummary.durablePreferenceCount).toBe(1);
+
+    const durablePreferenceRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory?preference=true&retention=durable',
+      undefined,
+      authHeaders,
+    );
+    expect(durablePreferenceRes.status).toBe(200);
+    const durablePreferencePayload = JSON.parse(durablePreferenceRes.body) as {
+      memories: Array<{ id: string }>;
+    };
+    expect(durablePreferencePayload.memories.map(memory => memory.id)).toEqual(['pref-durable-color']);
+
+    const markDurableRes = await request(
+      port,
+      'POST',
+      '/api/admin/memory/bulk-update',
+      JSON.stringify({
+        ids: ['pref-standard-style'],
+        fields: { retentionClass: 'durable' },
+      }),
+      authHeaders,
+    );
+    expect(markDurableRes.status).toBe(200);
+    expect(memoryStore.getById('pref-standard-style')).toMatchObject({
+      retentionClass: 'durable',
+      tags: expect.arrayContaining(['durable', 'durable_preference']),
+    });
+
+    const markStandardRes = await request(
+      port,
+      'POST',
+      '/api/admin/memory/bulk-update',
+      JSON.stringify({
+        ids: ['pref-durable-color'],
+        fields: { retentionClass: 'standard' },
+      }),
+      authHeaders,
+    );
+    expect(markStandardRes.status).toBe(200);
+    const standardMemory = memoryStore.getById('pref-durable-color');
+    expect(standardMemory?.retentionClass).toBe('standard');
+    expect(standardMemory?.tags).not.toContain('durable');
+    expect(standardMemory?.tags).not.toContain('durable_preference');
+
+    const invalidRetentionRes = await request(
+      port,
+      'GET',
+      '/api/admin/memory?retention=forever',
+      undefined,
+      authHeaders,
+    );
+    expect(invalidRetentionRes.status).toBe(400);
+  });
+
   it('exposes L0.1 episodic episodes, provenance, arcs, and threads', async () => {
     const baseEpisode = (overrides: Partial<EpisodeCreateInput> = {}): EpisodeCreateInput => ({
       title: 'Operator reviewed a woven thread',

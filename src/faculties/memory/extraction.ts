@@ -559,6 +559,7 @@ export class MemoryExtractor {
       formationVAD,
       confidence: fact.confidence,
       tags: fact.tags,
+      retentionClass: fact.retentionClass,
       sourceRef,
       sourceType: triggerReason === 'pre_compaction' ? 'compaction_summary' : undefined,
       ...(routing?.scopeRef ? { scopeRef: routing.scopeRef } : {}),

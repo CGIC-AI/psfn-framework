@@ -151,6 +151,8 @@ export interface AdminMemoryPrivacySummary {
   consentGatedCount: number;
   contactLinkedCount: number;
   scopedCount: number;
+  preferenceCount: number;
+  durablePreferenceCount: number;
   sensitivityCounts: Record<string, number>;
 }
 

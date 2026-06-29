@@ -420,6 +420,8 @@ export interface AdminMemoryPrivacySummary {
   consentGatedCount: number;
   contactLinkedCount: number;
   scopedCount: number;
+  preferenceCount: number;
+  durablePreferenceCount: number;
   sensitivityCounts: Record<string, number>;
 }
 
@@ -535,7 +537,7 @@ export interface AdminMemoryService {
   unlinkMemories(id1: string, id2: string): Promise<MemoryMutationResult>;
   getMemoryLinks(id: string): Promise<MemoryLink[]>;
   bulkDelete(ids: string[]): Promise<AdminBulkMutationResult>;
-  bulkUpdate(ids: string[], fields: { memoryType?: string; sensitivity?: string }): Promise<AdminBulkMutationResult>;
+  bulkUpdate(ids: string[], fields: { memoryType?: string; sensitivity?: string; retentionClass?: string }): Promise<AdminBulkMutationResult>;
 }
 
 export interface AdminGroupMemoryClassificationView {

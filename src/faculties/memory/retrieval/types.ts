@@ -21,6 +21,8 @@ export interface ScoredMemory {
   contradictionPenaltyMultiplier: number;
   explicitlyQueried: boolean;
   lowConfidenceSingleSourceSuppressed: boolean;
+  quietPreferenceSuppressed: boolean;
+  preferenceContextBoost: number;
   evidenceSourceCount: number;
   privacyRisk: number;
   privacyPenalty: number;

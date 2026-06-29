@@ -10,7 +10,13 @@ import type {
 import {
   normalizeMemoryScopeRef,
   normalizeMemoryScopeTags,
+  normalizeMemoryTags,
+  isDurableMemory,
+  isPreferenceMemory,
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  DURABLE_RETENTION_TAG,
   VALID_MEMORY_TYPES,
+  type MemoryRetentionClass,
   type MemoryType,
 } from '../../../faculties/memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../system/trust/types.js';
@@ -57,6 +63,19 @@ function parseSensitivityFilter(value: string | null | undefined): SensitivityLe
   return VALID_SENSITIVITY_LEVELS.includes(normalized as SensitivityLevel)
     ? normalized as SensitivityLevel
     : undefined;
+}
+
+function parseRetentionFilter(value: string | null | undefined): MemoryRetentionClass | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'standard' || normalized === 'durable') return normalized;
+  return undefined;
+}
+
+function parseBooleanFilter(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'true' || normalized === '1' || normalized === 'yes';
 }
 
 function parseDateFilter(value: string | null | undefined, boundary: 'start' | 'end'): number | undefined {
@@ -126,6 +145,8 @@ function buildPrivacySummary(
   let consentGatedCount = 0;
   let contactLinkedCount = 0;
   let scopedCount = 0;
+  let preferenceCount = 0;
+  let durablePreferenceCount = 0;
 
   for (const memory of activeMemories) {
     sensitivityCounts[memory.sensitivity] = (sensitivityCounts[memory.sensitivity] ?? 0) + 1;
@@ -141,6 +162,12 @@ function buildPrivacySummary(
     if (memory.scopeRef || (memory.scopeTags?.length ?? 0) > 0) {
       scopedCount += 1;
     }
+    if (isPreferenceMemory(memory)) {
+      preferenceCount += 1;
+      if (isDurableMemory(memory)) {
+        durablePreferenceCount += 1;
+      }
+    }
   }
 
   return {
@@ -151,6 +178,8 @@ function buildPrivacySummary(
     consentGatedCount,
     contactLinkedCount,
     scopedCount,
+    preferenceCount,
+    durablePreferenceCount,
     sensitivityCounts,
   };
 }
@@ -218,6 +247,8 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const offset = parsePositiveInteger(params?.get('offset'), 0, 0, Number.MAX_SAFE_INTEGER);
     const typeFilter = parseMemoryTypeFilter(params?.get('type'));
     const sensitivityFilter = parseSensitivityFilter(params?.get('sensitivity'));
+    const retentionFilter = parseRetentionFilter(params?.get('retention'));
+    const preferenceOnly = parseBooleanFilter(params?.get('preference'));
     const startDate = parseDateFilter(params?.get('startDate'), 'start');
     const endDate = parseDateFilter(params?.get('endDate'), 'end');
 
@@ -230,6 +261,9 @@ export class AdminMemoryDataService implements AdminMemoryService {
       .filter((memory) => {
         if (typeFilter && memory.type !== typeFilter) return false;
         if (sensitivityFilter && memory.sensitivity !== sensitivityFilter) return false;
+        if (retentionFilter === 'durable' && !isDurableMemory(memory)) return false;
+        if (retentionFilter === 'standard' && isDurableMemory(memory)) return false;
+        if (preferenceOnly && !isPreferenceMemory(memory)) return false;
         const createdAt = memoryTimestamp(memory);
         if (startDate !== undefined && createdAt < startDate) return false;
         if (endDate !== undefined && createdAt > endDate) return false;
@@ -552,7 +586,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
 
   async bulkUpdate(
     ids: string[],
-    fields: { memoryType?: string; sensitivity?: string },
+    fields: { memoryType?: string; sensitivity?: string; retentionClass?: string },
   ): Promise<AdminBulkMutationResult> {
     if (!ids.length) {
       return { ok: false, count: 0, message: 'No IDs provided' };
@@ -562,6 +596,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     }
 
     const storeFields: Partial<Pick<import('../../../faculties/memory/types.js').PurrMemory, 'type' | 'sensitivity'>> = {};
+    let retentionClass: MemoryRetentionClass | undefined;
 
     if (fields.memoryType !== undefined) {
       const normalized = fields.memoryType.trim().toLowerCase();
@@ -579,16 +614,61 @@ export class AdminMemoryDataService implements AdminMemoryService {
       storeFields.sensitivity = normalized as SensitivityLevel;
     }
 
-    if (Object.keys(storeFields).length === 0) {
+    if (fields.retentionClass !== undefined) {
+      const normalized = fields.retentionClass.trim().toLowerCase();
+      if (normalized !== 'standard' && normalized !== 'durable') {
+        return { ok: false, count: 0, message: `Invalid retention class: ${fields.retentionClass}` };
+      }
+      retentionClass = normalized as MemoryRetentionClass;
+    }
+
+    if (Object.keys(storeFields).length === 0 && retentionClass === undefined) {
       return { ok: false, count: 0, message: 'No valid fields to update' };
     }
 
-    const count = await this.deps.memoryStore.bulkUpdate(ids, storeFields);
+    const count = retentionClass === undefined
+      ? await this.deps.memoryStore.bulkUpdate(ids, storeFields)
+      : await this.bulkUpdateWithRetentionClass(ids, storeFields, retentionClass);
     this.deps.appendAuditTimelineEntry?.(
       'memory_mutation',
       'allowed',
-      `Bulk updated ${count} memories (${ids.length} requested, fields: ${Object.keys(storeFields).join(', ')}).`,
+      `Bulk updated ${count} memories (${ids.length} requested, fields: ${[
+        ...Object.keys(storeFields),
+        ...(retentionClass ? ['retentionClass'] : []),
+      ].join(', ')}).`,
     );
     return { ok: true, count };
+  }
+
+  private async bulkUpdateWithRetentionClass(
+    ids: string[],
+    storeFields: Partial<Pick<import('../../../faculties/memory/types.js').PurrMemory, 'type' | 'sensitivity'>>,
+    retentionClass: MemoryRetentionClass,
+  ): Promise<number> {
+    let count = 0;
+    for (const rawId of ids) {
+      const id = rawId.trim();
+      if (!id) continue;
+      const memory = await this.deps.memoryStore.getById(id);
+      if (!memory || memory.deletedAt !== undefined) continue;
+      const tags = retentionClass === 'durable'
+        ? normalizeMemoryTags([
+          ...memory.tags,
+          DURABLE_RETENTION_TAG,
+          ...(isPreferenceMemory(memory) ? [DURABLE_PREFERENCE_MEMORY_TAG] : []),
+        ])
+        : normalizeMemoryTags(memory.tags.filter((tag) => {
+          const normalizedTag = tag.trim().toLowerCase();
+          return normalizedTag !== DURABLE_RETENTION_TAG
+            && normalizedTag !== DURABLE_PREFERENCE_MEMORY_TAG;
+        }));
+      await this.deps.memoryStore.updateMemory(id, {
+        ...storeFields,
+        retentionClass,
+        tags,
+      });
+      count += 1;
+    }
+    return count;
   }
 }

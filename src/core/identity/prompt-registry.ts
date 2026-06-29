@@ -57,6 +57,7 @@ For each fact, provide:
   - personal: Only share with trusted contacts ("Jordan has a dog named Rex")
   - intimate: Only share with that participant in an appropriate private context ("Riley feels anxious about work")
   - confidential: Never share outside primary 1:1 context ("Morgan shared trauma details")
+- retention_class: standard|durable (default standard). Use durable for explicit favorites, stable likes/dislikes, favorite colors/outfits/moments, long-term identity facts, and enduring relationship anchors.
 
 Only extract durable participant-centric or relationship-centric facts likely to matter in future conversations. Preserve the named speaker/contact when known; do not collapse group-room facts into a singular generic person.
 When the transcript contains message IDs or line IDs, include structured attribution for each group-room fact:
@@ -91,6 +92,7 @@ Respond with facts inside a <response> block. Each fact as a <fact> block:
 <confidence>0.9</confidence>
 <tags>identity, profession</tags>
 <sensitivity>personal</sensitivity>
+<retention_class>standard</retention_class>
 <source_message_ids>12</source_message_ids>
 <source_speaker_name>Alex</source_speaker_name>
 <subject_name>Alex</subject_name>

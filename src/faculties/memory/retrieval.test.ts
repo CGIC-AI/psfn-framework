@@ -779,6 +779,69 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).not.toContain('Context feedback for turn abc');
   });
 
+  it('boosts durable preferences when the context asks for a matching preference category', async () => {
+    const preference = makeMemory({
+      id: 'favorite-color',
+      text: "V's favorite color is teal.",
+      sensitivity: 'public',
+      importance: 0.9,
+      salience: 0.9,
+      similarity: 0.55,
+      tags: ['preference', 'favorite', 'preference:color', 'durable_preference'],
+      retentionClass: 'durable',
+    });
+    const higherSimilarityTask = makeMemory({
+      id: 'receipt-task',
+      text: 'V recently filed receipts for grocery budgeting.',
+      sensitivity: 'public',
+      importance: 0.55,
+      salience: 0.65,
+      similarity: 0.75,
+      tags: ['task'],
+    });
+    const store = makeMockStore([higherSimilarityTask, preference]);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve("What is V's favorite color?", 'api:test', 'primary');
+
+    expect(result).toContain("V's favorite color is teal.");
+    expect(result.indexOf("V's favorite color is teal.")).toBeLessThan(
+      result.indexOf('V recently filed receipts for grocery budgeting.'),
+    );
+  });
+
+  it('keeps durable preferences quiet during unrelated retrieval', async () => {
+    const preference = makeMemory({
+      id: 'quiet-favorite-color',
+      text: "V's favorite color is teal.",
+      sensitivity: 'public',
+      importance: 0.95,
+      salience: 0.95,
+      similarity: 0.99,
+      tags: ['preference', 'favorite', 'preference:color', 'durable_preference'],
+      retentionClass: 'durable',
+    });
+    const deployment = makeMemory({
+      id: 'deployment-checklist',
+      text: 'The deployment checklist requires npm run build before handoff.',
+      sensitivity: 'public',
+      importance: 0.7,
+      salience: 0.7,
+      similarity: 0.7,
+      tags: ['deployment'],
+    });
+    const store = makeMockStore([preference, deployment]);
+    const embedding = makeMockEmbedding();
+    const retriever = new MemoryRetriever(store, embedding, { retrievalLimit: 20 });
+
+    const result = await retriever.retrieve('deployment checklist status', 'api:test', 'primary');
+
+    expect(result).toContain('The deployment checklist requires npm run build before handoff.');
+    expect(result).not.toContain("V's favorite color is teal.");
+    expect(countRenderedMemories(result)).toBe(1);
+  });
+
   it('broadcast channels stay public_only unless explicit approval token is present', async () => {
     const memories = makeAllSensitivities();
     const store = makeMockStore(memories);

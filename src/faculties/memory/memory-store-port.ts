@@ -234,6 +234,7 @@ export type MemoryStoreUpdatePatch = Partial<Pick<
   | 'scopeRef'
   | 'scopeTags'
   | 'provenanceRefs'
+  | 'retentionClass'
   | 'sourceType'
   | 'provenance'
   | 'contactId'
@@ -273,6 +274,7 @@ export interface MemoryAbstractionLinkInput {
 export interface MemoryBulkUpdatePatch {
   type?: PurrMemory['type'];
   sensitivity?: PurrMemory['sensitivity'];
+  retentionClass?: PurrMemory['retentionClass'];
 }
 
 export interface MemorySalienceUpdate {

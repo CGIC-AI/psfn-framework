@@ -25,6 +25,7 @@ export function createMemoryStoreSchema(db: Database.Database, embeddingDims: nu
       scope_ref_label TEXT,
       scope_tags TEXT NOT NULL DEFAULT '[]',
       provenance_refs TEXT NOT NULL DEFAULT '[]',
+      retention_class TEXT CHECK (retention_class IN ('standard', 'durable') OR retention_class IS NULL),
       contact_id TEXT,
       deleted_at INTEGER,
       deleted_by TEXT,
@@ -162,6 +163,9 @@ export function migrateMemoryStoreSchema(db: Database.Database): void {
 
   if (!hasColumn(db, 'l2_memories', 'provenance_refs')) {
     db.exec(`ALTER TABLE l2_memories ADD COLUMN provenance_refs TEXT NOT NULL DEFAULT '[]'`);
+  }
+  if (!hasColumn(db, 'l2_memories', 'retention_class')) {
+    db.exec(`ALTER TABLE l2_memories ADD COLUMN retention_class TEXT`);
   }
   if (!hasColumn(db, 'l2_memories', 'scope_ref_kind')) {
     db.exec(`ALTER TABLE l2_memories ADD COLUMN scope_ref_kind TEXT`);

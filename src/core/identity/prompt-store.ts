@@ -33,7 +33,7 @@ import {
 import {
   SYSTEM_LANGUAGE_LAYER_TYPE,
   validateSystemLanguageLayerContent,
-} from './system-language.js';
+} from './system-language-contracts.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';

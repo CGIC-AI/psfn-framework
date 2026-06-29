@@ -126,6 +126,29 @@ export function summarizeWithheldMemories<T extends Pick<PurrMemory, 'id' | 'sen
   };
 }
 
+export function mergeMemoryWithheldSummaries(
+  ...summaries: Array<MemoryWithheldSummary | undefined>
+): MemoryWithheldSummary | undefined {
+  let merged: MemoryWithheldSummary | undefined;
+  for (const summary of summaries) {
+    if (!summary || summary.totalCount <= 0) continue;
+    merged ??= { totalCount: 0, reasonCounts: {}, relevanceBands: {} };
+    merged.totalCount += summary.totalCount;
+    for (const [reason, count] of Object.entries(summary.reasonCounts)) {
+      if (!count || count <= 0) continue;
+      const reasonKey = reason as keyof MemoryWithheldSummary['reasonCounts'];
+      merged.reasonCounts[reasonKey] = (merged.reasonCounts[reasonKey] ?? 0) + count;
+    }
+    for (const [band, count] of Object.entries(summary.relevanceBands ?? {})) {
+      if (!count || count <= 0) continue;
+      const bandKey = band as keyof NonNullable<MemoryWithheldSummary['relevanceBands']>;
+      merged.relevanceBands ??= {};
+      merged.relevanceBands[bandKey] = (merged.relevanceBands[bandKey] ?? 0) + count;
+    }
+  }
+  return merged;
+}
+
 function normalizeBoundaryTag(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_');
 }

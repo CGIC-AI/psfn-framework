@@ -44,7 +44,6 @@ import {
   type CostTelemetryPort,
 } from '../../shared/telemetry/cost-telemetry-port.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
-import { evaluateCompositionalPolicyForChannelId } from '../../system/capabilities/compositional-policy.js';
 import {
   buildSnapshotVersionPointer,
   cloneContactProfileArtifact,
@@ -52,13 +51,6 @@ import {
   cloneMemory,
   cloneScoredMemory,
 } from '../../core/turns/snapshot.js';
-import {
-  composeRetrievalRanking,
-  RETRIEVAL_COMPOSITION_BATCH_SIZE,
-  RETRIEVAL_COMPOSITION_FINALIST_LIMIT,
-  RETRIEVAL_COMPOSITION_MAX_CANDIDATES,
-  type RetrievalComposeCandidate,
-} from './retrieval-compose.js';
 import { isInternalMemoryArtifact } from './internal-artifacts.js';
 import {
   cloneMemoryWithheldSummary,
@@ -71,12 +63,31 @@ import {
 } from './types.js';
 import {
   evaluateRetrievalAccessDecision,
+  mergeMemoryWithheldSummaries,
   summarizeWithheldMemories,
 } from './retrieval/access.js';
+import {
+  ACTIVE_MEMORY_ENTRY_LIMIT_MULTIPLIER,
+  ACTIVE_MEMORY_ENTRY_MIN_LIMIT,
+  ACTIVE_MEMORY_MISS_DECAY,
+  ACTIVE_MEMORY_MISS_LIMIT,
+  cloneActiveMemorySnapshot,
+  type ActiveMemoryEntry,
+  type ActiveMemoryRefreshLoop,
+  type ActiveMemoryRefreshTarget,
+  type ActiveMemoryState,
+} from './retrieval/active-state.js';
 import {
   resolveGuaranteedSelectionFloor,
   selectWithinRelevanceAndTokenBudget,
 } from './retrieval/budget.js';
+import {
+  collectRecentLexicalMemoryCandidates,
+  mergeScoredMemoryCandidates,
+} from './retrieval/candidates.js';
+import {
+  applyCompositionalRetrievalRanking as applyCompositionalRetrievalRankingWithPolicy,
+} from './retrieval/compositional.js';
 import {
   renderProactiveRecall,
   renderPromptBlock,
@@ -121,8 +132,15 @@ import {
   normalizeRelationCue,
   querySuggestsContactFocus,
 } from './retrieval/social.js';
+import {
+  collectContactProfileProvenanceRefs,
+  mergeProvenanceRefs,
+} from './retrieval/provenance.js';
+import {
+  applyWithheldSummaryTelemetry,
+  buildManifestSeedFromTelemetry,
+} from './retrieval/telemetry.js';
 import type {
-  CompositionalRetrievalDecision,
   RetrievalContactContext,
   RetrievalDecisionDiagnostics,
   RetrievalSocialContext,
@@ -130,108 +148,9 @@ import type {
   ScoredMemory,
 } from './retrieval/types.js';
 const log = createComponentLogger('Retrieval');
-const RECENT_MEMORY_AUGMENT_SCAN_LIMIT = 96;
-const RECENT_MEMORY_AUGMENT_SELECTED_LIMIT = 12;
-const RECENT_MEMORY_AUGMENT_MIN_OVERLAP = 2;
-const RECENT_MEMORY_AUGMENT_BASE_SIMILARITY = 0.62;
 const EVOLUTION_CHAIN_SELECTED_LIMIT = 3;
 const EVOLUTION_CHAIN_PER_MEMORY_LIMIT = 3;
-const ACTIVE_MEMORY_ENTRY_LIMIT_MULTIPLIER = 2;
-const ACTIVE_MEMORY_ENTRY_MIN_LIMIT = 12;
-const ACTIVE_MEMORY_MISS_LIMIT = 3;
-const ACTIVE_MEMORY_MISS_DECAY = 0.72;
 const EVOLUTION_CHAIN_USEFUL_HINT = /\b(history|lineage|changed|change|updated|update|previous|old|correction|corrected|conflict|contradict|superseded|why)\b/i;
-
-function hasCountEntries(record: Record<string, number | undefined> | undefined): boolean {
-  return !!record && Object.values(record).some(count => count !== undefined && count > 0);
-}
-
-function applyWithheldSummaryTelemetry(
-  telemetry: RetrievalTelemetry,
-  withheldSummary: MemoryWithheldSummary | undefined,
-): void {
-  telemetry.withheldCount = withheldSummary?.totalCount ?? 0;
-  const reasonCounts = withheldSummary?.reasonCounts;
-  if (hasCountEntries(reasonCounts)) {
-    telemetry.withheldReasonCounts = { ...reasonCounts };
-  }
-  const relevanceBands = withheldSummary?.relevanceBands;
-  if (hasCountEntries(relevanceBands)) {
-    telemetry.withheldRelevanceBands = { ...relevanceBands };
-  }
-}
-
-function collectContactProfileProvenanceRefs(profile: ContactProfileArtifact | undefined): string[] {
-  if (!profile) return [];
-  const refs = new Set<string>();
-  const contactId = profile.contactId.trim();
-  if (contactId) {
-    refs.add(`contact_profile:${contactId}`);
-  }
-  for (const sourceMemoryId of profile.sourceMemoryIds) {
-    const normalized = sourceMemoryId.trim();
-    if (normalized) {
-      refs.add(`contact_profile_source_memory:${normalized}`);
-    }
-  }
-  return [...refs];
-}
-
-function mergeProvenanceRefs(...groups: Array<readonly string[] | undefined>): string[] {
-  const refs = new Set<string>();
-  for (const group of groups) {
-    for (const ref of group ?? []) {
-      const normalized = ref.trim();
-      if (normalized) refs.add(normalized);
-    }
-  }
-  return [...refs];
-}
-
-function mergeScoredMemoryCandidates(
-  primary: Array<PurrMemory & { similarity: number }>,
-  augment: Array<PurrMemory & { similarity: number }>,
-): Array<PurrMemory & { similarity: number }> {
-  if (augment.length === 0) return primary;
-  const byId = new Map<string, PurrMemory & { similarity: number }>();
-  for (const memory of primary) {
-    byId.set(memory.id, memory);
-  }
-  for (const memory of augment) {
-    const existing = byId.get(memory.id);
-    if (!existing || memory.similarity > existing.similarity) {
-      byId.set(memory.id, memory);
-    }
-  }
-  return [...byId.values()].sort((left, right) => (
-    right.similarity - left.similarity
-    || right.salience - left.salience
-    || right.extractedAt - left.extractedAt
-  ));
-}
-
-function mergeMemoryWithheldSummaries(
-  ...summaries: Array<MemoryWithheldSummary | undefined>
-): MemoryWithheldSummary | undefined {
-  let merged: MemoryWithheldSummary | undefined;
-  for (const summary of summaries) {
-    if (!summary || summary.totalCount <= 0) continue;
-    merged ??= { totalCount: 0, reasonCounts: {}, relevanceBands: {} };
-    merged.totalCount += summary.totalCount;
-    for (const [reason, count] of Object.entries(summary.reasonCounts)) {
-      if (!count || count <= 0) continue;
-      const reasonKey = reason as keyof MemoryWithheldSummary['reasonCounts'];
-      merged.reasonCounts[reasonKey] = (merged.reasonCounts[reasonKey] ?? 0) + count;
-    }
-    for (const [band, count] of Object.entries(summary.relevanceBands ?? {})) {
-      if (!count || count <= 0) continue;
-      const bandKey = band as keyof NonNullable<MemoryWithheldSummary['relevanceBands']>;
-      merged.relevanceBands ??= {};
-      merged.relevanceBands[bandKey] = (merged.relevanceBands[bandKey] ?? 0) + count;
-    }
-  }
-  return merged;
-}
 
 interface ContactProfileAccessResult {
   profile?: ContactProfileArtifact;
@@ -262,39 +181,6 @@ export class RetrievalIntegrityError extends Error {
     this.context = context;
     this.cause = cause;
   }
-}
-
-interface ActiveMemoryEntry {
-  scored: ScoredMemory;
-  retainedScore: number;
-  firstSelectedAt: number;
-  lastSelectedAt: number;
-  missCount: number;
-}
-
-interface ActiveMemoryState {
-  snapshot: ActiveMemoryContextSnapshot;
-  entries: Map<string, ActiveMemoryEntry>;
-  profile?: ContactProfileArtifact;
-  emotionalSnapshot?: EmotionalSnapshot;
-  emotionalContinuityMemories: PurrMemory[];
-  withheldSummary?: MemoryWithheldSummary;
-  socialContext?: RetrievalSocialContext;
-  contactContextById?: ReadonlyMap<string, RetrievalContactContext>;
-  episodicChains: EpisodicRetrievalChain[];
-  refreshSerial: number;
-  maxEntries: number;
-}
-
-interface ActiveMemoryRefreshTarget {
-  request: ActiveMemoryContextRequest;
-  startedAt: number;
-  identity: ReturnType<typeof resolveActiveMemoryContextIdentity>;
-}
-
-interface ActiveMemoryRefreshLoop {
-  latestRequest?: ActiveMemoryContextRequest;
-  running: Promise<ActiveMemoryContextSnapshot | null>;
 }
 
 export interface MemoryRetrieverConfig {
@@ -406,7 +292,7 @@ export class MemoryRetriever implements MemoryProvider {
     const identity = resolveActiveMemoryContextIdentity(request);
     const state = this.activeMemoryContexts.get(identity.key);
     if (!state) return null;
-    return this.cloneActiveMemorySnapshot(state.snapshot);
+    return cloneActiveMemorySnapshot(state.snapshot);
   }
 
   refreshActiveMemoryContext(request: ActiveMemoryContextRequest): Promise<ActiveMemoryContextSnapshot | null> {
@@ -487,7 +373,7 @@ export class MemoryRetriever implements MemoryProvider {
           identity,
         },
       );
-      return this.cloneActiveMemorySnapshot(this.activeMemoryContexts.get(identity.key)?.snapshot ?? null);
+      return cloneActiveMemorySnapshot(this.activeMemoryContexts.get(identity.key)?.snapshot ?? null);
     } catch (error) {
       return this.markActiveMemoryDegraded(identity.key, request.channelId, startedAt, error);
     }
@@ -537,36 +423,7 @@ export class MemoryRetriever implements MemoryProvider {
       lastRefreshCompletedAt: Date.now(),
       lastRefreshError: errorText,
     };
-    return this.cloneActiveMemorySnapshot(state.snapshot);
-  }
-
-  private cloneActiveMemorySnapshot(
-    snapshot: ActiveMemoryContextSnapshot | null,
-  ): ActiveMemoryContextSnapshot | null {
-    if (!snapshot) return null;
-    return {
-      ...snapshot,
-      selectedMemoryIds: [...snapshot.selectedMemoryIds],
-      ...(snapshot.manifestSeed
-        ? {
-          manifestSeed: {
-            ...snapshot.manifestSeed,
-            ...(snapshot.manifestSeed.selectedTypes
-              ? { selectedTypes: { ...snapshot.manifestSeed.selectedTypes } }
-              : {}),
-            ...(snapshot.manifestSeed.policyRejectedReasonTags
-              ? { policyRejectedReasonTags: { ...snapshot.manifestSeed.policyRejectedReasonTags } }
-              : {}),
-            ...(snapshot.manifestSeed.withheldReasonCounts
-              ? { withheldReasonCounts: { ...snapshot.manifestSeed.withheldReasonCounts } }
-              : {}),
-            ...(snapshot.manifestSeed.withheldRelevanceBands
-              ? { withheldRelevanceBands: { ...snapshot.manifestSeed.withheldRelevanceBands } }
-              : {}),
-          },
-        }
-        : {}),
-    };
+    return cloneActiveMemorySnapshot(state.snapshot);
   }
 
   private async resolveContactProfileAccess(
@@ -608,56 +465,6 @@ export class MemoryRetriever implements MemoryProvider {
       withheldSummary: summary,
       withheldSourceMemoryIds: withheldIds,
     };
-  }
-
-  private async collectRecentLexicalMemoryCandidates(
-    contextText: string,
-    existingIds: ReadonlySet<string>,
-    scopeQuery: MemoryScopeQuery | undefined,
-  ): Promise<Array<PurrMemory & { similarity: number }>> {
-    const contextTokens = new Set(tokenizeForExplicitMatch(contextText));
-    if (contextTokens.size === 0) return [];
-
-    const recentMemories = await this.memoryStore.listActiveMemories({
-      limit: RECENT_MEMORY_AUGMENT_SCAN_LIMIT,
-    });
-    const candidates: Array<PurrMemory & { similarity: number }> = [];
-    for (const memory of recentMemories) {
-      if (existingIds.has(memory.id)) continue;
-      if (isInternalMemoryArtifact(memory)) continue;
-      if (scopeQuery?.mode === 'only' && !memoryMatchesScopeQuery(memory, scopeQuery)) continue;
-
-      const memoryTokens = new Set([
-        ...tokenizeForExplicitMatch(memory.text),
-        ...memory.tags.flatMap(tag => tokenizeForExplicitMatch(tag)),
-      ]);
-      let overlap = 0;
-      let longOverlap = false;
-      for (const token of contextTokens) {
-        if (!memoryTokens.has(token)) continue;
-        overlap++;
-        if (token.length >= 6) {
-          longOverlap = true;
-        }
-      }
-      if (overlap < RECENT_MEMORY_AUGMENT_MIN_OVERLAP || !longOverlap) continue;
-
-      const overlapWeight = Math.min(0.24, overlap * 0.035);
-      const salienceWeight = clamp(memory.salience, 0, 1) * 0.08;
-      const importanceWeight = clamp(memory.importance, 0, 1) * 0.06;
-      const similarity = Math.min(
-        0.92,
-        RECENT_MEMORY_AUGMENT_BASE_SIMILARITY + overlapWeight + salienceWeight + importanceWeight,
-      );
-      candidates.push({ ...cloneMemory(memory), similarity });
-    }
-
-    return candidates
-      .sort((left, right) => (
-        right.similarity - left.similarity
-        || right.extractedAt - left.extractedAt
-      ))
-      .slice(0, RECENT_MEMORY_AUGMENT_SELECTED_LIMIT);
   }
 
   async captureTurnMemorySnapshot(
@@ -722,14 +529,15 @@ export class MemoryRetriever implements MemoryProvider {
           .filter(memory => !isInternalMemoryArtifact(memory))
           .map(cloneScoredMemory);
       }
-      const recentLexicalCandidates = await this.collectRecentLexicalMemoryCandidates(
+      const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
+        memoryStore: this.memoryStore,
         contextText,
-        new Set([
+        existingIds: new Set([
           ...semanticCandidates.map(memory => memory.id),
           ...lexicalCandidates.map(memory => memory.id),
         ]),
-        normalizedScopeQuery,
-      );
+        scopeQuery: normalizedScopeQuery,
+      });
       semanticCandidates = mergeScoredMemoryCandidates(semanticCandidates, recentLexicalCandidates);
     }
 
@@ -818,40 +626,6 @@ export class MemoryRetriever implements MemoryProvider {
     };
   }
 
-  private buildManifestSeedFromTelemetry(telemetry: RetrievalTelemetry): ContextManifestMemorySeed {
-    return {
-      reason: telemetry.reason,
-      retrievalSource: telemetry.retrievalSource,
-      candidateCount: telemetry.candidateCount,
-      policyAllowedCount: telemetry.policyAllowedCount ?? 0,
-      rankedCount: telemetry.rankedCount,
-      returnedCount: telemetry.returnedCount,
-      retrievalLimit: telemetry.retrievalLimit,
-      retrievalBudgetPct: telemetry.retrievalBudgetPct,
-      retrievalTokenBudget: telemetry.retrievalTokenBudget,
-      retrievalLimitMode: telemetry.retrievalLimitMode,
-      ...(telemetry.contactScopeRejectedCount !== undefined
-        ? { contactScopeRejectedCount: telemetry.contactScopeRejectedCount }
-        : {}),
-      sensitivityRejectedCount: telemetry.sensitivityRejectedCount ?? 0,
-      policyRejectedCount: telemetry.policyRejectedCount ?? 0,
-      ...(telemetry.policyRejectedReasonTags
-        ? { policyRejectedReasonTags: { ...telemetry.policyRejectedReasonTags } }
-        : {}),
-      ...(telemetry.withheldCount !== undefined ? { withheldCount: telemetry.withheldCount } : {}),
-      ...(telemetry.withheldReasonCounts
-        ? { withheldReasonCounts: { ...telemetry.withheldReasonCounts } }
-        : {}),
-      ...(telemetry.withheldRelevanceBands
-        ? { withheldRelevanceBands: { ...telemetry.withheldRelevanceBands } }
-        : {}),
-      scoreRejectedCount: telemetry.scoreRejectedCount ?? 0,
-      budgetCappedCount: telemetry.budgetCappedCount ?? 0,
-      ...(telemetry.selectedTypes ? { selectedTypes: { ...telemetry.selectedTypes } } : {}),
-      ...(telemetry.compositionalMode ? { compositionalMode: telemetry.compositionalMode } : {}),
-    };
-  }
-
   private finalizeRetrievalPromptBlock(input: {
     activeContextTarget?: ActiveMemoryRefreshTarget;
     profile?: ContactProfileArtifact;
@@ -887,7 +661,7 @@ export class MemoryRetriever implements MemoryProvider {
       socialContext: input.socialContext,
       contactContextById: input.contactContextById,
       episodicChains: input.episodicChains ?? [],
-      manifestSeed: this.buildManifestSeedFromTelemetry(input.telemetry),
+      manifestSeed: buildManifestSeedFromTelemetry(input.telemetry),
     }).contextBlock;
   }
 
@@ -1187,11 +961,12 @@ export class MemoryRetriever implements MemoryProvider {
         semanticMemories = semanticMemories.filter(memory => !isInternalMemoryArtifact(memory));
       }
       if (!turnSnapshot) {
-        const recentLexicalCandidates = await this.collectRecentLexicalMemoryCandidates(
+        const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
+          memoryStore: this.memoryStore,
           contextText,
-          new Set(semanticMemories.map(memory => memory.id)),
-          normalizedScopeQuery,
-        );
+          existingIds: new Set(semanticMemories.map(memory => memory.id)),
+          scopeQuery: normalizedScopeQuery,
+        });
         semanticMemories = mergeScoredMemoryCandidates(semanticMemories, recentLexicalCandidates);
       }
       telemetry.semanticCandidateCount = semanticMemories.length;
@@ -1408,11 +1183,13 @@ export class MemoryRetriever implements MemoryProvider {
         }))
         .filter(item => !item.retrievalModeExcluded)
         .sort((a, b) => b.score - a.score);
-      const rerankDecision = await this.applyCompositionalRetrievalRanking(
+      const rerankDecision = await applyCompositionalRetrievalRankingWithPolicy({
         contextText,
         channelId,
-        allScored,
-      );
+        candidates: allScored,
+        runtimeConfig: this.runtimeConfig,
+        llmProvider: this.llmProvider,
+      });
       const scoredCandidates = await this.applySocialContextRankingAdjustments(
         rerankDecision.ranked ?? allScored,
         contextText,
@@ -2079,113 +1856,6 @@ export class MemoryRetriever implements MemoryProvider {
       .filter(memory => !isInternalMemoryArtifact(memory))
       .sort((left, right) => right.lastAccessed - left.lastAccessed)
       .slice(0, 24);
-  }
-
-  private shouldUseCompositionalRetrieval(channelId: string): boolean {
-    if (!this.runtimeConfig || !this.llmProvider) return false;
-
-    return evaluateCompositionalPolicyForChannelId({
-      policy: this.runtimeConfig.compositionalPolicy,
-      capabilityTier: this.runtimeConfig.capabilityTier,
-      channelId,
-      purpose: 'retrieval',
-    }).allowed;
-  }
-
-  private async applyCompositionalRetrievalRanking(
-    contextText: string,
-    channelId: string,
-    candidates: ScoredMemory[],
-  ): Promise<CompositionalRetrievalDecision> {
-    const compositionalCandidateCount = Math.min(candidates.length, RETRIEVAL_COMPOSITION_MAX_CANDIDATES);
-    const finalistCount = compositionalCandidateCount < 2
-      ? compositionalCandidateCount
-      : Math.min(RETRIEVAL_COMPOSITION_FINALIST_LIMIT, compositionalCandidateCount);
-    const evaluationBatchCount = compositionalCandidateCount < 2
-      ? 0
-      : Math.ceil(compositionalCandidateCount / RETRIEVAL_COMPOSITION_BATCH_SIZE);
-
-    if (!this.shouldUseCompositionalRetrieval(channelId)) {
-      return {
-        ranked: null,
-        mode: 'disabled_policy',
-        candidateCount: compositionalCandidateCount,
-        evaluationBatchCount,
-        finalistCount,
-      };
-    }
-    if (candidates.length < 2) {
-      return {
-        ranked: null,
-        mode: 'insufficient_candidates',
-        candidateCount: compositionalCandidateCount,
-        evaluationBatchCount,
-        finalistCount,
-      };
-    }
-    if (!this.llmProvider) {
-      return {
-        ranked: null,
-        mode: 'llm_unavailable',
-        candidateCount: compositionalCandidateCount,
-        evaluationBatchCount,
-        finalistCount,
-      };
-    }
-
-    const decision = await composeRetrievalRanking({
-      llmClient: this.llmProvider,
-      query: contextText,
-      channelId,
-      candidates: candidates.map((candidate): RetrievalComposeCandidate => ({
-        id: candidate.memory.id,
-        text: candidate.memory.text,
-        type: candidate.memory.type,
-        score: candidate.score,
-        similarity: candidate.memory.similarity,
-        importance: candidate.memory.importance,
-        confidence: candidate.memory.confidence,
-        salience: candidate.memory.salience,
-        evidenceSupport: candidate.evidenceSupport,
-        explicitlyQueried: candidate.explicitlyQueried,
-      })),
-    });
-    if (!decision) {
-      return {
-        ranked: null,
-        mode: 'malformed_or_failed',
-        candidateCount: compositionalCandidateCount,
-        evaluationBatchCount,
-        finalistCount,
-      };
-    }
-
-    const finalOrderIndex = new Map(
-      decision.finalOrder.map((id, index) => [id, index] as const),
-    );
-
-    return {
-      ranked: candidates
-      .map((candidate) => {
-        const relevance = decision.relevanceById.get(candidate.memory.id) ?? 0;
-        const finalIndex = finalOrderIndex.get(candidate.memory.id);
-        let multiplier = 1 + (relevance * 0.75);
-        if (finalIndex !== undefined && decision.finalOrder.length > 0) {
-          const composeWeight = (decision.finalOrder.length - finalIndex) / decision.finalOrder.length;
-          multiplier += composeWeight * 1.25;
-        }
-
-        return {
-          ...candidate,
-          score: candidate.score * multiplier,
-        };
-      })
-      .sort((left, right) => right.score - left.score),
-      mode: 'applied',
-      candidateCount: compositionalCandidateCount,
-      evaluationBatchCount,
-      finalistCount,
-    };
   }
 
   private isTelemetryEnabled(): boolean {

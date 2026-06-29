@@ -86,6 +86,15 @@ describe('operator alerts', () => {
     expect(notifier.notify).not.toHaveBeenCalled();
   });
 
+  it('fails closed instead of inventing an operator alert identity', () => {
+    expect(() => formatPromptGenerationFailureAlert(makeEvent(), '  ')).toThrow(
+      'Missing companion name for operator alert: explicit identity is required',
+    );
+    expect(() => createPromptGenerationFailureAlertHandler({
+      notify: vi.fn(),
+    }, '')).toThrow('Missing companion name for operator alert: explicit identity is required');
+  });
+
   it('requires both ntfy base URL and topic for prompt-generation alerts', () => {
     expect(isPromptGenerationFailureAlertConfigured({
       NTFY_BASE_URL: 'https://ntfy.local',

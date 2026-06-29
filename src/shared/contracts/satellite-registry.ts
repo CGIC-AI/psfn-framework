@@ -235,7 +235,7 @@ export interface SatelliteConfigPullSessionContract {
 }
 
 export interface SatelliteConfigPullResponse {
-  object: 'psfn.satellite_config';
+  object: 'companion.satellite_config';
   schemaVersion: 1;
   configVersion: string;
   satellite: {

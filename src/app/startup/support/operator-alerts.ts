@@ -17,10 +17,10 @@ export interface PromptGenerationFailureAlertEnv extends NodeJS.ProcessEnv {
 
 export function createPromptGenerationFailureAlertHandler(
   notifier: NotificationPort,
-  companionName = 'PSFN',
+  companionName: string,
   options: { enabled?: boolean } = {},
 ): (event: StreamTerminalFailureEvent) => Promise<void> {
-  const resolvedCompanionName = companionName.trim() || 'PSFN';
+  const resolvedCompanionName = requireOperatorAlertCompanionName(companionName);
   const enabled = options.enabled !== false;
 
   return async (event: StreamTerminalFailureEvent): Promise<void> => {
@@ -58,8 +58,9 @@ export function createPromptGenerationFailureAlertHandler(
 
 export function formatPromptGenerationFailureAlert(
   event: StreamTerminalFailureEvent,
-  companionName = 'PSFN',
+  companionName: string,
 ): string {
+  const resolvedCompanionName = requireOperatorAlertCompanionName(companionName);
   const candidates = event.candidates
     .map(candidate => `${candidate.provider}/${candidate.model}`)
     .join(' -> ');
@@ -68,7 +69,7 @@ export function formatPromptGenerationFailureAlert(
     : 'unknown';
 
   return [
-    `${companionName} prompt generation failed after exhausting configured fallback.`,
+    `${resolvedCompanionName} prompt generation failed after exhausting configured fallback.`,
     `Service: ${event.service}`,
     `Process: ${event.process}`,
     `Purpose: ${event.purpose}`,
@@ -78,6 +79,12 @@ export function formatPromptGenerationFailureAlert(
     `Last tried: ${lastTried}`,
     `Error: ${event.error.message}`,
   ].join('\n');
+}
+
+function requireOperatorAlertCompanionName(companionName: string): string {
+  const resolved = companionName.trim();
+  if (resolved) return resolved;
+  throw new Error('Missing companion name for operator alert: explicit identity is required');
 }
 
 export function isPromptGenerationFailureAlertConfigured(

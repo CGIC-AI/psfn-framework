@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CANONICAL_PURPOSES,
+  PURPOSE_LABELS,
   parseModelRegistryJson,
 } from './registry';
 
@@ -87,5 +88,9 @@ describe('model registry helpers', () => {
 
     expect(registry.models).toHaveLength(1);
     expect(registry.models[0]?.id).toBe('primary');
+  });
+
+  it('labels the dedicated memory purpose for operator-facing model assignment', () => {
+    expect(PURPOSE_LABELS.memory).toBe('memory recall');
   });
 });

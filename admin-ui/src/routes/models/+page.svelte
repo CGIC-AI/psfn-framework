@@ -1221,7 +1221,7 @@
                 value={entry.modelsApiUrl ?? ''}
                 oninput={(event) => setProviderField(index, 'modelsApiUrl', (event.currentTarget as HTMLInputElement).value)}
                 class="w-full rounded border border-bark-300 bg-white px-2 py-1 text-sm focus:border-gold-400 focus:outline-none disabled:bg-bark-100"
-                placeholder={providerSupportsModelsApi(entry.type) ? 'https://.../models' : 'Only used for OpenRouter'}
+                placeholder={providerSupportsModelsApi(entry.type) ? 'https://.../models' : 'Only used for LiteLLM/OpenRouter catalogs'}
                 disabled={!providerSupportsModelsApi(entry.type)}
               />
             </div>
@@ -1275,7 +1275,7 @@
         </span>
       {/each}
     </div>
-    <p class="text-sm text-shadow-600">Each purpose, including the dedicated memory route, must have exactly one primary model before save. Purpose chips cycle off → standard → primary.</p>
+    <p class="text-sm text-shadow-600">Each purpose must have exactly one primary model before save. The memory recall purpose is the dedicated model route for memory retrieval, synthesis, and improvement work. Purpose chips cycle off → standard → primary.</p>
   </div>
 
   <div class="card-garden p-4 space-y-3">
@@ -1511,6 +1511,16 @@
                       <p class="text-shadow-500 text-xs">thinking flags</p>
                       <p class="font-mono text-shadow-800 truncate">{summarizeThinkingFlags(entry)}</p>
                     </div>
+                  </div>
+                  <div class="rounded-lg border border-moss-200 bg-moss-50 px-3 py-2 text-sm">
+                    <p class="text-xs font-semibold uppercase tracking-[0.12em] text-moss-700">Memory model purpose</p>
+                    <p class="mt-1 text-moss-800">
+                      {purposeState(entry, 'memory') === 'primary'
+                        ? 'Primary memory recall model'
+                        : (purposeState(entry, 'memory') === 'standard'
+                          ? 'Eligible for memory recall'
+                          : 'Not assigned to memory recall')}
+                    </p>
                   </div>
                 </div>
                 <div class="flex items-center gap-2">

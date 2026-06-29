@@ -2139,7 +2139,7 @@ describe('ApiServer with auth', () => {
     expect(res.headers['cache-control']).toBe('no-store');
     const body = JSON.parse(res.body);
     expect(body).toMatchObject({
-      object: 'psfn.satellite_config',
+      object: 'companion.satellite_config',
       schemaVersion: 1,
       satellite: {
         satelliteId: 'android-phone',

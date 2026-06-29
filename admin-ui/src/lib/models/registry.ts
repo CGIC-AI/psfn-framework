@@ -81,7 +81,7 @@ export const CANONICAL_PURPOSES = [
 export const PURPOSE_LABELS: Record<CanonicalModelPurpose, string> = {
   chat: 'chat',
   background: 'background',
-  memory: 'memory',
+  memory: 'memory recall',
   extraction: 'extraction',
   summary: 'summary',
   reasoning: 'reasoning',

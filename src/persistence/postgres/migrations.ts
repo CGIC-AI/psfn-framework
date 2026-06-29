@@ -35,6 +35,19 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `,
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT 'unknown';`,
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS formation_vad JSONB;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS scope_ref_kind TEXT;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS scope_ref_id TEXT;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS scope_ref_label TEXT;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS scope_tags JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS provenance_refs JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS retention_class TEXT;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS sensitivity TEXT NOT NULL DEFAULT 'personal';`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS consent_flags JSONB NOT NULL DEFAULT '{}'::jsonb;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS contact_id TEXT;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS deleted_at BIGINT;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS deleted_by TEXT;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS delete_reason TEXT;`,
   `
   DO $$
   BEGIN
@@ -471,6 +484,10 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
   );
   `,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS emotional_time_series JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS nickname TEXT;`,
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS notes TEXT;`,
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS channel_identities JSONB NOT NULL DEFAULT '[]'::jsonb;`,
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS conversation_channels JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS is_machine_intelligence BOOLEAN NOT NULL DEFAULT FALSE;`,
   `CREATE INDEX IF NOT EXISTS idx_contacts_trust ON contacts(trust_level);`,
   `CREATE INDEX IF NOT EXISTS idx_contacts_discord ON contacts(discord_user_id);`,

@@ -650,7 +650,7 @@ function buildSatelliteConfigPullResponse(input: {
     throw new Error('Satellite endpoint does not have runtime config');
   }
   const responseWithoutVersion = {
-    object: 'psfn.satellite_config' as const,
+    object: 'companion.satellite_config' as const,
     schemaVersion: 1 as const,
     satellite: {
       satelliteId: satellite.satelliteId,

@@ -131,7 +131,7 @@ export function createEmptyProviderEntry(index: number): ProviderRegistryEntry {
 }
 
 export function providerSupportsModelsApi(type: CanonicalProviderType): boolean {
-  return type === 'openrouter';
+  return type === 'openrouter' || type === 'litellm_proxy';
 }
 
 export function providerIsEnabled(entry: { enabled?: boolean }): boolean {

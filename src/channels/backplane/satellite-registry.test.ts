@@ -278,7 +278,7 @@ describe('satellite registry', () => {
     expect(result).toMatchObject({
       ok: true,
       value: {
-        object: 'psfn.satellite_config',
+        object: 'companion.satellite_config',
         schemaVersion: 1,
         satellite: {
           satelliteId: 'pi-voice',

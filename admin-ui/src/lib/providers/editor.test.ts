@@ -104,10 +104,34 @@ describe('provider editor helpers', () => {
 
   it('exposes stable provider summaries and runtime roles', () => {
     expect(providerTypeSummary('generic_openai')).toBe('OpenAI-compatible backend');
+    expect(providerTypeSummary('litellm_proxy')).toBe(
+      'LiteLLM gateway routing + OpenAI-compatible model catalog',
+    );
     expect(providerRuntimeRole({
       id: 'proxy',
       type: 'litellm_proxy',
       enabled: false,
-    })).toEqual(['proxy routing', 'disabled']);
+    })).toEqual(['proxy routing', 'catalog discovery', 'disabled']);
+  });
+
+  it('keeps LiteLLM model catalog URLs when switching provider types', () => {
+    let registry: CanonicalProviderRegistry = {
+      schemaVersion: 1,
+      providers: [
+        {
+          id: 'litellm',
+          type: 'openai',
+          enabled: true,
+          apiBaseUrl: 'http://127.0.0.1:4000/v1',
+          modelsApiUrl: 'http://127.0.0.1:4000/v1/models',
+        },
+      ],
+    };
+
+    registry = setProviderType(registry, 0, 'litellm_proxy');
+    expect(registry.providers[0]?.modelsApiUrl).toBe('http://127.0.0.1:4000/v1/models');
+
+    registry = setProviderType(registry, 0, 'anthropic');
+    expect(registry.providers[0]?.modelsApiUrl).toBeUndefined();
   });
 });

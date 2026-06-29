@@ -316,6 +316,20 @@ export class ContactStore implements ContactStorePort {
         outcome: 'allowed',
       });
     }
+    if (
+      target
+      && Object.prototype.hasOwnProperty.call(partial, 'timezone')
+      && (target.timezone ?? null) !== (contact.timezone ?? null)
+    ) {
+      appendMutationAuditEntry(
+        this.db,
+        contact.id,
+        'timezone',
+        target.timezone ?? null,
+        contact.timezone ?? null,
+        options.actor,
+      );
+    }
     log.debug('Upserted contact', { id: contact.id, displayName: partial.displayName });
     this.syncContactExports();
     return contact;

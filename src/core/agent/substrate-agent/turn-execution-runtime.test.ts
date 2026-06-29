@@ -1853,6 +1853,58 @@ describe('handleMessageForTurn compaction scheduling', () => {
     });
   });
 
+  it('renders current group user attribution before the provider prompt without changing stored user content', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'Final system prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordUserMessage = vi.fn(() => 1);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage,
+      recordAssistantMessage: vi.fn(() => 2),
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'regular',
+        speakerRole: 'user',
+        resolvedUserName: 'Vega',
+        canonicalContactKey: 'contact-vega',
+        continuityFallbackKeys: [],
+      })),
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-group-current', {
+      channelId: '123456789012345678',
+      channelType: 'discord',
+      authorId: '388908766306893854',
+      authorName: 'Vega',
+      content: 'can you hear us?',
+      isDirectMessage: false,
+    }));
+
+    expect(runtime.agent.prompt).toHaveBeenCalledWith(expect.objectContaining({
+      role: 'user',
+      content: 'Vega (discord:388908766306893854): can you hear us?',
+    }));
+    expect(recordUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channelId: '123456789012345678',
+        authorId: '388908766306893854',
+        authorName: 'Vega',
+        content: 'can you hear us?',
+      }),
+      expect.any(String),
+      'msg-group-current',
+      'regular',
+      'contact-vega',
+    );
+  });
+
   it('moves system context into the prompt system lane instead of assistant history in observability snapshots', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({

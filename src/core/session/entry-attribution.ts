@@ -14,6 +14,59 @@ export interface NormalizedSessionEntryAttribution {
   authorName?: string;
 }
 
+interface GroupUserAttributionInput {
+  authorId?: string;
+  authorName?: string;
+  channelId?: string;
+  source?: string;
+}
+
+const DISCORD_SNOWFLAKE_ID = /^\d{15,25}$/;
+
+function trimToUndefined(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function inferAuthorSourceFromChannelId(channelId: string | undefined): string | undefined {
+  const normalized = trimToUndefined(channelId);
+  if (!normalized) return undefined;
+  if (normalized.startsWith('discord-voice:')) return 'discord';
+  if (DISCORD_SNOWFLAKE_ID.test(normalized)) return 'discord';
+
+  const separatorIndex = normalized.indexOf(':');
+  if (separatorIndex <= 0) return undefined;
+  const prefix = normalized.slice(0, separatorIndex).trim();
+  if (!prefix) return undefined;
+  return prefix === 'discord-voice' ? 'discord' : prefix;
+}
+
+function formatStableAuthorId(input: GroupUserAttributionInput): string {
+  const authorId = trimToUndefined(input.authorId);
+  const source = trimToUndefined(input.source) ?? inferAuthorSourceFromChannelId(input.channelId);
+  if (!authorId) return source ? `${source}:unknown` : 'unknown';
+  if (!source || authorId.startsWith(`${source}:`)) return authorId;
+  return `${source}:${authorId}`;
+}
+
+function formatGroupUserAttributionLabel(input: GroupUserAttributionInput): string {
+  const stableAuthorId = formatStableAuthorId(input);
+  const displayName = trimToUndefined(input.authorName) ?? stableAuthorId;
+  return `${displayName} (${stableAuthorId})`;
+}
+
+export function formatGroupUserMessageContent(
+  content: string,
+  input: GroupUserAttributionInput,
+): string {
+  const label = formatGroupUserAttributionLabel(input);
+  const trimmedContent = content.trim();
+  if (!trimmedContent) return `${label}:`;
+  const prefix = `${label}:`;
+  if (trimmedContent.startsWith(prefix)) return trimmedContent;
+  return `${prefix} ${trimmedContent}`;
+}
+
 function parseTurnMetadata(metadata: string | undefined): ParsedTurnMetadata {
   if (!metadata) return {};
 

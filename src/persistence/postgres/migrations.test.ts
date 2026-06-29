@@ -52,6 +52,7 @@ describe('Postgres live schema migrations', () => {
     for (const column of [
       'nickname',
       'notes',
+      'timezone',
       'channel_identities',
       'conversation_channels',
       'emotional_time_series',

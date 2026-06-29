@@ -79,6 +79,7 @@ export function mergeContacts(
     const mergedFirstSeen = earliestTimestamp(sourceRow.first_seen, targetRow.first_seen);
     const mergedLastSeen = latestTimestamp(sourceRow.last_seen, targetRow.last_seen);
     const mergedNotes = targetRow.notes ?? sourceRow.notes;
+    const mergedTimezone = targetRow.timezone ?? sourceRow.timezone;
 
     context.db.prepare('DELETE FROM contacts WHERE id = ?').run(sourceId);
     context.db.prepare(`
@@ -92,7 +93,8 @@ export function mergeContacts(
           emotional_time_series = ?,
           first_seen = ?,
           last_seen = ?,
-          notes = ?
+          notes = ?,
+          timezone = ?
       WHERE id = ?
     `).run(
       mergedDiscordUserId,
@@ -105,6 +107,7 @@ export function mergeContacts(
       mergedFirstSeen,
       mergedLastSeen,
       mergedNotes,
+      mergedTimezone,
       targetId,
     );
 

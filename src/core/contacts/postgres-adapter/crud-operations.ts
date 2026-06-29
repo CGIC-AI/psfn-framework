@@ -51,6 +51,15 @@ import {
 import { queryOne, queryRows, withPostgresClient } from './connection.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
 
+function hasOwnTimezone(partial: Partial<Contact>): boolean {
+  return Object.prototype.hasOwnProperty.call(partial, 'timezone');
+}
+
+function normalizeTimezoneValue(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
 const postgresContactCrudOperations: PostgresContactOperationMap = {
   async upsert(
     partial: Partial<Contact> & { displayName: string },
@@ -101,6 +110,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         : (partial.relationshipType ?? target.relationshipType);
       const nextEmotion = partial.emotionalBaseline ?? target.emotionalBaseline ?? {};
       const nextDiscordUserId = partial.discordUserId ?? target.discordUserId ?? undefined;
+      const nextTimezone = hasOwnTimezone(partial)
+        ? normalizeTimezoneValue(partial.timezone)
+        : (target.timezone ?? null);
       await this.pool.query(
         `
           UPDATE contacts
@@ -111,8 +123,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
               relationship_type = $5,
               emotional_baseline = $6,
               last_seen = $7,
-              notes = COALESCE($8, notes)
-          WHERE id = $9
+              notes = COALESCE($8, notes),
+              timezone = $9
+          WHERE id = $10
         `,
         [
           nextDiscordUserId ?? null,
@@ -123,6 +136,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
           nextEmotion,
           now,
           partial.notes ?? null,
+          nextTimezone,
           target.id,
         ],
       );
@@ -151,6 +165,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       }
       if ((target.notes ?? null) !== (partial.notes ?? target.notes ?? null) && partial.notes !== undefined) {
         await this.appendMutationAuditEntry(target.id, 'notes', target.notes ?? null, partial.notes ?? null, options.actor);
+      }
+      if (hasOwnTimezone(partial) && (target.timezone ?? null) !== nextTimezone) {
+        await this.appendMutationAuditEntry(target.id, 'timezone', target.timezone ?? null, nextTimezone, options.actor);
       }
 
       const hydrated = await this.loadContactById(target.id);
@@ -181,6 +198,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       firstSeen: partial.firstSeen ?? now,
       lastSeen: partial.lastSeen ?? now,
       ...(partial.notes ? { notes: partial.notes } : {}),
+      ...(normalizeTimezoneValue(partial.timezone) ? { timezone: normalizeTimezoneValue(partial.timezone) ?? undefined } : {}),
     };
 
     await this.pool.query(
@@ -195,9 +213,10 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
           emotional_baseline,
           first_seen,
           last_seen,
-          notes
+          notes,
+          timezone
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       `,
       [
         contact.id,
@@ -210,6 +229,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         contact.firstSeen,
         contact.lastSeen,
         contact.notes ?? null,
+        contact.timezone ?? null,
       ],
     );
 
@@ -245,7 +265,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       this.pool,
       `
         SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-               emotional_baseline, first_seen, last_seen, notes
+               emotional_baseline, first_seen, last_seen, notes, timezone
         FROM contacts
         WHERE discord_user_id = $1
         LIMIT 1
@@ -265,7 +285,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       this.pool,
       `
         SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-               emotional_baseline, first_seen, last_seen, notes
+               emotional_baseline, first_seen, last_seen, notes, timezone
         FROM contacts
         WHERE trust_level = $1
         ORDER BY last_seen DESC
@@ -379,7 +399,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         this.pool,
         `
           SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes
+                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone
           FROM contacts
           WHERE id = $1
           LIMIT 1
@@ -390,7 +410,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         this.pool,
         `
           SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes
+                 emotional_baseline, emotional_time_series, first_seen, last_seen, notes, timezone
           FROM contacts
           WHERE id = $1
           LIMIT 1
@@ -440,6 +460,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const mergedFirstSeen = earliestTimestamp(sourceRow.first_seen, targetRow.first_seen);
       const mergedLastSeen = latestTimestamp(sourceRow.last_seen, targetRow.last_seen);
       const mergedNotes = targetRow.notes ?? sourceRow.notes;
+      const mergedTimezone = targetRow.timezone ?? sourceRow.timezone;
 
       const sourceEntity = await this.loadSocialGraphEntityByContactId(sourceContactId);
       const targetEntity = await this.loadSocialGraphEntityByContactId(targetContactId);
@@ -547,8 +568,9 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
               emotional_time_series = $7,
               first_seen = $8,
               last_seen = $9,
-              notes = $10
-          WHERE id = $11
+              notes = $10,
+              timezone = $11
+          WHERE id = $12
         `,
         [
           mergedDiscordUserId,
@@ -561,6 +583,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
           mergedFirstSeen,
           mergedLastSeen,
           mergedNotes ?? null,
+          mergedTimezone ?? null,
           targetContactId,
         ],
       );
@@ -1093,7 +1116,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       this.pool,
       `
         SELECT id, discord_user_id, display_name, nickname, trust_level, relationship_type, is_machine_intelligence,
-               emotional_baseline, first_seen, last_seen, notes
+               emotional_baseline, first_seen, last_seen, notes, timezone
         FROM contacts
         ORDER BY last_seen DESC
       `,

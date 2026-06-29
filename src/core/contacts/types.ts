@@ -120,6 +120,7 @@ export const CONTACT_MUTATION_AUDIT_FIELDS = [
   'notes',
   'display_name',
   'nickname',
+  'timezone',
   'relationship_type',
   'channel_privacy',
   'channel_link',
@@ -247,6 +248,7 @@ export interface Contact {
   channels?: ContactChannelLink[];
   conversationChannels?: ContactConversationChannel[];
   displayName: string;
+  timezone?: string;
   trustLevel: TrustLevel;
   relationshipType: RelationshipType;
   emotionalBaseline?: Record<string, number>;  // e.g. { warmth: 0.7, formality: 0.3 }

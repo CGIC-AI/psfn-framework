@@ -14,7 +14,7 @@ import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
 import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
-import type { ResolvedAuthorContext } from './runtime-context.js';
+import type { ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import type { TurnSupportRuntime } from './turn-support-runtime.js';
 import type { ToolRuntimeFacade } from './tool-runtime-facade.js';
@@ -66,6 +66,7 @@ interface TurnExecutionAdapterCallbacks {
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
+    currentUserRuntimeProfile?: UserRuntimeProfile,
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,
@@ -93,7 +94,10 @@ interface TurnExecutionAdapterCallbacks {
     canonicalContactKey: string | undefined,
     subjectIdentityKey: string | undefined,
   ) => string;
-  buildStaticPromptSettingsHash: (templateVariables: Record<string, string>) => string;
+  buildStaticPromptSettingsHash: (
+    templateVariables: Record<string, string>,
+    staticPrefixTemplate?: string,
+  ) => string;
   resolveStaticPromptPrefix: (params: {
     cacheKey: string;
     staticPrefixTemplate: string;
@@ -232,6 +236,7 @@ export function createTurnExecutionRuntimeAdapter(
       internalState,
       metacognitiveFlags,
       emotionAppraisalChain,
+      currentUserRuntimeProfile,
     ) => options.callbacks.buildDynamicPromptTemplateVariables(
       message,
       resolvedUserName,
@@ -246,6 +251,7 @@ export function createTurnExecutionRuntimeAdapter(
       internalState,
       metacognitiveFlags,
       emotionAppraisalChain,
+      currentUserRuntimeProfile,
     ),
     setCurrentSelfModelState: (
       state,
@@ -283,8 +289,8 @@ export function createTurnExecutionRuntimeAdapter(
     ),
     buildPromptPrefixCacheKey: (message, channelType, canonicalContactKey, subjectIdentityKey) => options.callbacks
       .buildPromptPrefixCacheKey(message, channelType, canonicalContactKey, subjectIdentityKey),
-    buildStaticPromptSettingsHash: (templateVariables) => options.callbacks
-      .buildStaticPromptSettingsHash(templateVariables),
+    buildStaticPromptSettingsHash: (templateVariables, staticPrefixTemplate) => options.callbacks
+      .buildStaticPromptSettingsHash(templateVariables, staticPrefixTemplate),
     resolveStaticPromptPrefix: (params) => options.callbacks.resolveStaticPromptPrefix(params),
     hashPromptText: (text) => options.callbacks.hashPromptText(text),
     getPersonaAdaptation: (trustLevel, internalState, metacognitiveFlags, templateVariables) => options.callbacks

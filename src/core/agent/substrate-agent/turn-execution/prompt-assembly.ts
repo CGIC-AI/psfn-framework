@@ -36,7 +36,7 @@ import type { TurnRetrievalTelemetryRecord } from '../../../turns/observability.
 import { detectTurnObservabilityWarnings } from '../../../turns/observability-warnings.js';
 import type { TurnSnapshot } from '../../../turns/snapshot.js';
 import { buildFatiguePromptAlert } from '../../fatigue/runtime-enforcement.js';
-import type { ResolvedAuthorContext } from '../runtime-context.js';
+import type { ResolvedAuthorContext, UserRuntimeProfile } from '../runtime-context.js';
 import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -126,6 +126,27 @@ function buildTurnObservabilityWarningPayload(input: {
   return {
     observabilityWarnings: warningSummary.warnings,
     observabilityCounters: warningSummary.counters,
+  };
+}
+
+function buildCurrentUserRuntimeProfile(input: {
+  authorContext: ResolvedAuthorContext;
+  message: SubstrateMessage;
+}): UserRuntimeProfile | undefined {
+  const timezone = input.authorContext.timezone?.trim();
+  if (!timezone) return undefined;
+
+  const userId = input.message.authorId.trim()
+    || input.authorContext.subjectIdentityKey?.trim()
+    || input.authorContext.canonicalContactKey?.trim();
+  if (!userId) return undefined;
+
+  return {
+    user_id: userId,
+    display_name: input.message.authorName.trim()
+      || input.authorContext.resolvedUserName.trim()
+      || userId,
+    timezone,
   };
 }
 
@@ -226,6 +247,7 @@ export async function assembleTurnPrompt(input: {
     preTurnInternalState,
     preTurnMetacognitiveFlags,
     emotionAppraisalChain,
+    buildCurrentUserRuntimeProfile({ authorContext, message }),
   );
   const promptRuntimeVariables = {
     ...templateVariables,
@@ -287,10 +309,14 @@ export async function assembleTurnPrompt(input: {
       authorContext.canonicalContactKey,
       authorContext.subjectIdentityKey,
     );
-    const staticSettingsHash = runtime.buildStaticPromptSettingsHash(templateVariables);
+    const staticPrefixTemplate = turnSnapshot.prompt?.staticPrefixTemplate ?? runtime.systemPrompt;
+    const staticSettingsHash = runtime.buildStaticPromptSettingsHash(
+      templateVariables,
+      staticPrefixTemplate,
+    );
     renderedStaticPrefix = await runtime.resolveStaticPromptPrefix({
       cacheKey: staticCacheKey,
-      staticPrefixTemplate: turnSnapshot.prompt?.staticPrefixTemplate ?? runtime.systemPrompt,
+      staticPrefixTemplate,
       staticHash: turnSnapshot.prompt?.staticHash ?? runtime.hashPromptText(runtime.systemPrompt),
       settingsHash: staticSettingsHash,
       now: runtimeNow,

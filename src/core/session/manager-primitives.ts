@@ -14,6 +14,11 @@ import { formatActiveDate } from '../../shared/time/active-timezone.js';
 import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js';
 import type { ChannelMeta } from '../../system/trust/policy.js';
 import { COMPACTION_REFUSAL_PATTERNS, matchesRefusalPatterns } from '../../system/security/refusal-patterns.js';
+import {
+  formatToolObservationForContext,
+  parseToolObservationMetadata,
+  type ToolObservationMetadata,
+} from './tool-observation.js';
 import type { SessionEntry } from './types.js';
 
 /** Default number of cross-channel continuity messages to include in context. */
@@ -450,25 +455,80 @@ interface HistorySummaryLine {
   content: string;
 }
 
+interface ToolFailureSummary {
+  metadata: ToolObservationMetadata;
+  content: string;
+}
+
+function resolveToolHistorySummary(entry: SessionEntry): ToolFailureSummary | null {
+  const metadata = parseToolObservationMetadata(entry.metadata);
+  if (!metadata?.isError) return null;
+  return {
+    metadata,
+    content: formatToolObservationForContext(entry.content, metadata),
+  };
+}
+
+function formatRepeatedToolFailureSummary(failures: readonly ToolFailureSummary[]): HistorySummaryLine {
+  const latest = failures[failures.length - 1];
+  const toolName = latest.metadata.toolName;
+  const latestContent = latest.content;
+  const content = failures.length === 1
+    ? latestContent
+    : `${toolName} failed ${failures.length} times. Most recent failure: ${latestContent}`;
+  return {
+    speaker: 'Tool',
+    content,
+  };
+}
+
+function pushHistorySummaryLine(
+  grouped: HistorySummaryLine[],
+  line: HistorySummaryLine,
+): void {
+  const last = grouped.at(-1);
+  if (last && last.speaker === line.speaker) {
+    last.content = `${last.content} / ${line.content}`;
+    return;
+  }
+
+  grouped.push(line);
+}
+
 function buildHistorySummaryLines(
   entries: SessionEntry[],
   characterName?: string,
 ): HistorySummaryLine[] {
   const grouped: HistorySummaryLine[] = [];
+  let pendingToolFailures: ToolFailureSummary[] = [];
+
+  const flushToolFailures = (): void => {
+    if (pendingToolFailures.length === 0) return;
+    pushHistorySummaryLine(grouped, formatRepeatedToolFailureSummary(pendingToolFailures));
+    pendingToolFailures = [];
+  };
 
   for (const entry of entries) {
+    if (entry.role === 'tool') {
+      const failureSummary = resolveToolHistorySummary(entry);
+      if (failureSummary) {
+        pendingToolFailures.push(failureSummary);
+        continue;
+      }
+      flushToolFailures();
+    } else {
+      flushToolFailures();
+    }
+
     const normalizedContent = normalizeHistorySummaryContent(entry.content);
     if (!normalizedContent) continue;
 
-    const speaker = resolveHistorySummarySpeaker(entry, characterName);
-    const last = grouped.at(-1);
-    if (last && last.speaker === speaker) {
-      last.content = `${last.content} / ${normalizedContent}`;
-      continue;
-    }
-
-    grouped.push({ speaker, content: normalizedContent });
+    pushHistorySummaryLine(grouped, {
+      speaker: resolveHistorySummarySpeaker(entry, characterName),
+      content: normalizedContent,
+    });
   }
+  flushToolFailures();
 
   return grouped.slice(-MAX_HISTORY_SUMMARY_LINES);
 }

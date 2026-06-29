@@ -234,6 +234,28 @@ describe('SessionManager', () => {
     });
   });
 
+  it('buildContext preserves group speaker labels when the current channel is explicitly not a DM', async () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    mgr.recordUserMessage('discord:guild:room', 'first group message', 'vega-id', 'Vega');
+    mgr.recordUserMessage('discord:guild:room', 'second group message', 'iku-id', 'Iku');
+
+    const ctx = await mgr.buildContext(
+      'discord:guild:room',
+      'System',
+      '',
+      undefined,
+      undefined,
+      { isDirectMessage: false },
+    );
+
+    expect(ctx.messages).toHaveLength(1);
+    expect(ctx.messages[0]?.content).toBe([
+      'Vega (discord:vega-id): first group message',
+      'Iku (discord:iku-id): second group message',
+    ].join('\n'));
+  });
+
   it('adds a wake orientation note after a meaningful idle gap and captures telemetry', async () => {
     const config = makeConfig({ dataDir: dir });
     const mgr = new SessionManager(store, config);
@@ -654,17 +676,19 @@ describe('SessionManager', () => {
         retrievalBudgetPct: 15,
         retrievalTokenBudget: 150,
         retrievalLimitMode: 'budget',
+        roomVisibilityRejectedCount: 1,
         contactScopeRejectedCount: 1,
         sensitivityRejectedCount: 1,
         policyRejectedCount: 1,
-        withheldCount: 3,
+        withheldCount: 4,
         withheldReasonCounts: {
+          'room_visibility.blocked': 1,
           'contact_scope.high_intimacy': 1,
           'trust.ceiling_exceeded': 1,
           'boundary.withhold': 1,
         },
         withheldRelevanceBands: {
-          high: 2,
+          high: 3,
           medium: 1,
         },
         scoreRejectedCount: 1,
@@ -685,17 +709,19 @@ describe('SessionManager', () => {
       rankedCount: 3,
       returnedCount: 2,
       excluded: {
+        roomVisibilityRejectedCount: 1,
         contactScopeRejectedCount: 1,
         sensitivityRejectedCount: 1,
         policyRejectedCount: 1,
-        withheldCount: 3,
+        withheldCount: 4,
         withheldReasonCounts: {
+          'room_visibility.blocked': 1,
           'contact_scope.high_intimacy': 1,
           'trust.ceiling_exceeded': 1,
           'boundary.withhold': 1,
         },
         withheldRelevanceBands: {
-          high: 2,
+          high: 3,
           medium: 1,
         },
         scoreRejectedCount: 1,

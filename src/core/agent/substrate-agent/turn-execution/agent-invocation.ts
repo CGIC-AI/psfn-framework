@@ -1,7 +1,10 @@
 import type { AgentMessage } from '@mariozechner/pi-agent-core';
 import type { AssistantMessage, UserMessage } from '@mariozechner/pi-ai';
 import { enforceUntrustedCompactionGuard } from '../../../identity/prompt-composer.js';
-import { formatAttributedSystemContent } from '../../../session/entry-attribution.js';
+import {
+  formatAttributedSystemContent,
+  formatGroupUserMessageContent,
+} from '../../../session/entry-attribution.js';
 import { runWithVisionToolRequestContext } from '../../../../primitives/images/request-context.js';
 import { runWithRequestContext } from '../../../../primitives/llm/request-context.js';
 import {
@@ -141,7 +144,15 @@ function buildPromptMessage(
   speakerRole: 'user' | 'system',
   content: UserMessage['content'],
 ): UserMessage | SystemNoteMessage {
-  if (speakerRole !== 'system' || typeof content !== 'string') {
+  if (speakerRole !== 'system') {
+    return {
+      role: 'user',
+      content: formatCurrentTurnUserContentForPrompt(message, content),
+      timestamp: Date.now(),
+    } satisfies UserMessage;
+  }
+
+  if (typeof content !== 'string') {
     return {
       role: 'user',
       content,
@@ -156,6 +167,44 @@ function buildPromptMessage(
     content: formatAttributedSystemContent(content, message.authorName),
     timestamp: Date.now(),
   } satisfies SystemNoteMessage;
+}
+
+function shouldRenderCurrentTurnGroupAttribution(message: SubstrateMessage): boolean {
+  if (message.isDirectMessage === true) return false;
+  if (message.isDirectMessage === false) return true;
+  const explicitChannelVisibility = message.routing?.channelPrivacy;
+  return explicitChannelVisibility !== undefined && explicitChannelVisibility !== 'private';
+}
+
+function formatCurrentTurnUserContentForPrompt(
+  message: SubstrateMessage,
+  content: UserMessage['content'],
+): UserMessage['content'] {
+  if (!shouldRenderCurrentTurnGroupAttribution(message)) return content;
+  const attribution = {
+    authorId: message.authorId,
+    authorName: message.authorName,
+    source: message.channelType,
+  };
+  if (typeof content === 'string') {
+    return formatGroupUserMessageContent(content, attribution);
+  }
+
+  const firstTextIndex = content.findIndex(block => block.type === 'text');
+  if (firstTextIndex < 0) {
+    return [
+      { type: 'text', text: formatGroupUserMessageContent('', attribution) },
+      ...content,
+    ];
+  }
+
+  return content.map((block, index) => {
+    if (index !== firstTextIndex || block.type !== 'text') return block;
+    return {
+      ...block,
+      text: formatGroupUserMessageContent(block.text, attribution),
+    };
+  });
 }
 
 function readAssistantReasoning(message: AssistantMessage | null): string | undefined {

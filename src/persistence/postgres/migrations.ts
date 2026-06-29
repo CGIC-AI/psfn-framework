@@ -481,6 +481,7 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
     notes TEXT,
+    timezone TEXT,
     channel_identities JSONB NOT NULL DEFAULT '[]'::jsonb,
     conversation_channels JSONB NOT NULL DEFAULT '[]'::jsonb,
     is_machine_intelligence BOOLEAN NOT NULL DEFAULT FALSE
@@ -489,6 +490,7 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS emotional_time_series JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS nickname TEXT;`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS notes TEXT;`,
+  `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS timezone TEXT;`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS channel_identities JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS conversation_channels JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `ALTER TABLE contacts ADD COLUMN IF NOT EXISTS is_machine_intelligence BOOLEAN NOT NULL DEFAULT FALSE;`,

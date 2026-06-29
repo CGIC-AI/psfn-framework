@@ -26,6 +26,15 @@ import {
   upsertIdentityLink,
 } from './upsert.js';
 
+function hasOwnTimezone(partial: Partial<Contact>): boolean {
+  return Object.prototype.hasOwnProperty.call(partial, 'timezone');
+}
+
+function normalizeTimezoneValue(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
 function touchContactLastSeen(db: Database.Database, id: string): void {
   const now = new Date().toISOString();
   db.prepare('UPDATE contacts SET last_seen = ? WHERE id = ?').run(now, id);
@@ -104,6 +113,9 @@ export function upsertContact(
     const nickname = requestedNickname === undefined
       ? (existing.nickname ?? null)
       : requestedNickname;
+    const timezone = hasOwnTimezone(partial)
+      ? normalizeTimezoneValue(partial.timezone)
+      : (existing.timezone ?? null);
 
     context.db.prepare(`
       UPDATE contacts SET
@@ -114,7 +126,8 @@ export function upsertContact(
         relationship_type = ?,
         emotional_baseline = ?,
         last_seen = ?,
-        notes = ?
+        notes = ?,
+        timezone = ?
       WHERE id = ?
     `).run(
       legacyDiscordUserId ?? null,
@@ -125,6 +138,7 @@ export function upsertContact(
       JSON.stringify(emotionalBaseline),
       now,
       partial.notes ?? existing.notes ?? null,
+      timezone,
       existing.id,
     );
 
@@ -163,12 +177,13 @@ export function upsertContact(
     firstSeen: partial.firstSeen ?? now,
     lastSeen: partial.lastSeen ?? now,
     notes: partial.notes,
+    timezone: normalizeTimezoneValue(partial.timezone) ?? undefined,
   };
 
   context.db.prepare(`
     INSERT INTO contacts (id, discord_user_id, display_name, trust_level, relationship_type,
-      nickname, emotional_baseline, first_seen, last_seen, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      nickname, emotional_baseline, first_seen, last_seen, notes, timezone)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     contact.id,
     contact.discordUserId ?? null,
@@ -180,6 +195,7 @@ export function upsertContact(
     contact.firstSeen,
     contact.lastSeen,
     contact.notes ?? null,
+    contact.timezone ?? null,
   );
 
   applyIdentityLinks(context.db, contact.id, identities, contact.firstSeen, contact.lastSeen);

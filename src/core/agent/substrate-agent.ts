@@ -121,6 +121,7 @@ import {
   resolveAuthorContext as resolveAuthorContextForTurn,
   type CompanionSubstrateHealthContext,
   type ResolvedAuthorContext,
+  type UserRuntimeProfile,
 } from './substrate-agent/runtime-context.js';
 import {
   type ExtendedToolActivationOptions,
@@ -951,6 +952,7 @@ export class SubstrateAgent {
           internalState,
           metacognitiveFlags,
           emotionAppraisalChain,
+          currentUserRuntimeProfile,
         ) => this.buildDynamicPromptTemplateVariables(
           turnMessage,
           resolvedUserName,
@@ -965,6 +967,7 @@ export class SubstrateAgent {
           internalState,
           metacognitiveFlags,
           emotionAppraisalChain,
+          currentUserRuntimeProfile,
         ),
         setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
           this.currentInternalState = state;
@@ -1017,7 +1020,10 @@ export class SubstrateAgent {
           canonicalContactKey,
           subjectIdentityKey,
         ),
-        buildStaticPromptSettingsHash: (templateVariables) => this.buildStaticPromptSettingsHash(templateVariables),
+        buildStaticPromptSettingsHash: (templateVariables, staticPrefixTemplate) => this.buildStaticPromptSettingsHash(
+          templateVariables,
+          staticPrefixTemplate,
+        ),
         resolveStaticPromptPrefix: (params) => this.resolveStaticPromptPrefix(params),
         hashPromptText: (text) => this.hashPromptText(text),
         getPersonaAdaptation: (
@@ -1083,8 +1089,11 @@ export class SubstrateAgent {
     );
   }
 
-  private buildStaticPromptSettingsHash(templateVariables: Record<string, string>): string {
-    return buildStaticPromptSettingsHashForTurn(templateVariables);
+  private buildStaticPromptSettingsHash(
+    templateVariables: Record<string, string>,
+    staticPrefixTemplate?: string,
+  ): string {
+    return buildStaticPromptSettingsHashForTurn(templateVariables, staticPrefixTemplate);
   }
 
   private async resolveStaticPromptPrefix(params: {
@@ -1189,8 +1198,9 @@ export class SubstrateAgent {
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     emotionAppraisalChain: readonly EmotionAppraisalEntry[],
+    currentUserRuntimeProfile?: UserRuntimeProfile,
   ): Record<string, string> {
-    const recentMessages = this.sessionManager.getRecentMessages(message.channelId, 6);
+    const recentMessages = this.sessionManager.getRecentMessages(message.channelId, 32);
     const latestPriorMessage = [...recentMessages]
       .reverse()
       .find((entry, index) => {
@@ -1206,6 +1216,10 @@ export class SubstrateAgent {
         return true;
       });
     const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
+    const analysisWorkbenchAvailable = this.toolRuntimeFacade
+      .getAdaptiveToolRuntimeState()
+      .activeTools
+      .some(entry => entry.toolName === 'analysis_workbench');
     const loadedExtended = new Map<string, AdaptiveLoadedExtendedToolState>(
       this.toolRuntimeFacade.getLoadedExtendedTools(),
     );
@@ -1236,11 +1250,14 @@ export class SubstrateAgent {
       activeConcernsBlock: this.buildActiveConcernsContextBlock(canonicalContactKey),
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       lastMessageReceivedAtMs: latestPriorMessage?.timestamp ?? null,
+      recentChannelEntries: recentMessages,
+      currentUserRuntimeProfile,
+      analysisWorkbenchAvailable,
       config: this.config as Record<string, unknown>,
     });
   }
 
-  /** Build a runtime context block with current time, channel, user, model info */
+  /** Build a runtime context block with live operational overlays for this turn. */
   private buildRuntimeContext(
     message: SubstrateMessage,
     resolvedUserName: string,
@@ -1257,6 +1274,10 @@ export class SubstrateAgent {
     emotionAppraisalChain: readonly EmotionAppraisalEntry[] = [],
   ): string {
     const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
+    const analysisWorkbenchAvailable = this.toolRuntimeFacade
+      .getAdaptiveToolRuntimeState()
+      .activeTools
+      .some(entry => entry.toolName === 'analysis_workbench');
     if (this.internalStateContinuityGap) {
       this.internalStateContinuityGapRenderCount += 1;
     }
@@ -1292,6 +1313,7 @@ export class SubstrateAgent {
       config: this.config as unknown as Record<string, unknown>,
       internalStateContinuityGap: this.internalStateContinuityGap,
       substrateHealth: this.companionSubstrateHealthContext,
+      analysisWorkbenchAvailable,
     });
   }
 

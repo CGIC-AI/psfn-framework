@@ -9,6 +9,7 @@ import type { UserContinuityStore } from '../continuity.js';
 import type { SessionEntry } from '../types.js';
 import {
   formatAttributedSystemContent,
+  formatGroupUserMessageContent,
   isIntentionAppraisalArtifact,
   normalizeSessionEntryAttribution,
 } from '../entry-attribution.js';
@@ -119,6 +120,10 @@ function provenanceForEntry(
   return directUserProvenance(entry);
 }
 
+function shouldRenderGroupUserAttribution(visibility: ChannelVisibility): boolean {
+  return visibility !== 'private';
+}
+
 function mergeProvenance(
   left: ContextMessage['provenance'],
   right: ContextMessage['provenance'],
@@ -226,6 +231,7 @@ export function entriesToMessages(
   defaultVisibility: ChannelVisibility,
   includeTrustTags: boolean = true,
   preserveLeadingAssistant: boolean = false,
+  renderGroupUserAttribution: boolean = true,
 ): ContextMessage[] {
   const messages: Array<ContextMessage & { sourceRole: SessionEntry['role'] }> = [];
 
@@ -241,6 +247,7 @@ export function entriesToMessages(
       ? 'system'
       : attribution.role;
     let content = entry.content;
+    const visibility = parseChannelVisibility(entry.channelVisibility) ?? defaultVisibility;
     let toolObservation: ToolObservationMetadata | undefined;
     if (entry.role === 'system') {
       const mirror = parseMirrorMetadata(entry.metadata);
@@ -258,9 +265,14 @@ export function entriesToMessages(
       content = formatToolObservationForContext(entry.content, toolObservation);
     } else if (attribution.role === 'system') {
       content = formatAttributedSystemContent(entry.content, attribution.authorName);
+    } else if (role === 'user' && renderGroupUserAttribution && shouldRenderGroupUserAttribution(visibility)) {
+      content = formatGroupUserMessageContent(entry.content, {
+        authorId: entry.authorId,
+        authorName: attribution.authorName,
+        channelId: entry.originChannelId ?? entry.channelId,
+      });
     }
     if (includeTrustTags) {
-      const visibility = parseChannelVisibility(entry.channelVisibility) ?? defaultVisibility;
       if (isUntrustedVisibility(visibility)) {
         content = wrapUntrustedContext(content);
       }

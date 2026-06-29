@@ -2841,6 +2841,242 @@ describe('MemoryRetriever retrieval trace telemetry', () => {
   });
 });
 
+describe('MemoryRetriever room-scoped visibility', () => {
+  const GROUP_ROOM_X = 'discord:guild-1:room-x';
+  const GROUP_ROOM_Y = 'discord:guild-1:room-y';
+  const VEGA_DM = 'discord:dm:vega';
+
+  beforeEach(() => {
+    idCounter = 0;
+  });
+
+  afterEach(() => {
+    tokenTestUtils.resetTokenizerState();
+  });
+
+  function latestRetrievalTelemetry(eventBus: EventBus): Record<string, unknown> {
+    const calls = ((eventBus.emit as unknown) as ReturnType<typeof vi.fn>).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0]).toBe('memory.retrieval');
+    return calls[0][1] as Record<string, unknown>;
+  }
+
+  function makeRoomVisibilityContactStore(): { contactStore: ContactStore; vegaId: string } {
+    const db = new Database(':memory:');
+    const contactStore = new ContactStore(db, 'primary-user');
+    const vega = contactStore.upsert({
+      displayName: 'Vega',
+      discordUserId: 'vega-discord',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+    });
+    contactStore.recordChannelActivity(vega.id, 'discord', VEGA_DM, 'private');
+    return { contactStore, vegaId: vega.id };
+  }
+
+  it('allows same-room group memories while blocking cross-room and DM memories in a group room', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_Y, 'semi_private');
+    const sameRoomMemory = makeMemory({
+      id: 'group-x-memory',
+      text: 'Room X decided the deployment window is Friday.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.97,
+    });
+    const crossRoomMemory = makeMemory({
+      id: 'group-y-memory',
+      text: 'Room Y private launch codename is Lantern.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_Y },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_Y },
+      similarity: 0.96,
+    });
+    const dmMemory = makeMemory({
+      id: 'vega-dm-memory',
+      text: 'Vega said in DM that the invoice folder is personal.',
+      sensitivity: 'public',
+      contactId: vegaId,
+      provenance: { channelId: VEGA_DM },
+      similarity: 0.95,
+    });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      makeMockStore([sameRoomMemory, crossRoomMemory, dmMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'deployment window and launch notes',
+      GROUP_ROOM_X,
+      'primary',
+      { isDirectMessage: false, privacyLevel: 'semi_private' },
+      vegaId,
+    );
+
+    expect(result).toContain('Room X decided the deployment window is Friday.');
+    expect(result).not.toContain('Room Y private launch codename is Lantern.');
+    expect(result).not.toContain('invoice folder is personal');
+
+    const telemetry = latestRetrievalTelemetry(eventBus);
+    expect(telemetry.roomVisibilityRejectedCount).toBe(2);
+    expect(telemetry.withheldReasonCounts).toMatchObject({
+      'room_visibility.blocked': 2,
+    });
+    expect(telemetry.policyAllowedCount).toBe(1);
+  });
+
+  it('allows participated group memories in the participant DM and blocks non-participated rooms', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
+    const dmMemory = makeMemory({
+      id: 'vega-dm-memory',
+      text: 'Vega DM reminder: prefer short deployment summaries.',
+      sensitivity: 'public',
+      contactId: vegaId,
+      provenance: { channelId: VEGA_DM },
+      similarity: 0.98,
+    });
+    const participatedGroupMemory = makeMemory({
+      id: 'group-x-memory',
+      text: 'Room X agreed Vega owns the smoke test checklist.',
+      sensitivity: 'public',
+      contactId: vegaId,
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.97,
+    });
+    const nonParticipatedGroupMemory = makeMemory({
+      id: 'group-y-memory',
+      text: 'Room Y agreed on a secret budget ceiling.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_Y },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_Y },
+      similarity: 0.96,
+    });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      makeMockStore([dmMemory, participatedGroupMemory, nonParticipatedGroupMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'deployment summary and checklist',
+      VEGA_DM,
+      'primary',
+      { isDirectMessage: true, privacyLevel: 'private' },
+      vegaId,
+    );
+
+    expect(result).toContain('Vega DM reminder: prefer short deployment summaries.');
+    expect(result).toContain('Room X agreed Vega owns the smoke test checklist.');
+    expect(result).not.toContain('Room Y agreed on a secret budget ceiling.');
+
+    const telemetry = latestRetrievalTelemetry(eventBus);
+    expect(telemetry.roomVisibilityRejectedCount).toBe(1);
+    expect(telemetry.withheldReasonCounts).toMatchObject({
+      'room_visibility.blocked': 1,
+    });
+    expect(telemetry.returnedCount).toBe(2);
+  });
+
+  it('fails closed for DM access when room participation proof is missing', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    const blockedGroupMemory = makeMemory({
+      id: 'group-x-memory',
+      text: 'Room X discussed a private server migration plan.',
+      sensitivity: 'public',
+      contactId: vegaId,
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.99,
+    });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      makeMockStore([blockedGroupMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      contactStore,
+    );
+
+    const result = await retriever.retrieve(
+      'server migration plan',
+      VEGA_DM,
+      'primary',
+      { isDirectMessage: true, privacyLevel: 'private' },
+      vegaId,
+    );
+
+    expect(result).not.toContain('private server migration plan');
+    expect(result).toContain('Memory context note:');
+    expect(result).toContain('room visibility boundary');
+
+    const telemetry = latestRetrievalTelemetry(eventBus);
+    expect(telemetry.roomVisibilityRejectedCount).toBe(1);
+    expect(telemetry.withheldReasonCounts).toMatchObject({
+      'room_visibility.blocked': 1,
+    });
+    expect(telemetry.reason).toBe('trust_filtered');
+    expect(telemetry.returnedCount).toBe(0);
+  });
+
+  it('carries room-visibility rejections into active context manifest seeds', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
+    const sameRoomMemory = makeMemory({
+      id: 'group-x-memory',
+      text: 'Room X selected the blue release train.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      similarity: 0.97,
+    });
+    const crossRoomMemory = makeMemory({
+      id: 'group-y-memory',
+      text: 'Room Y selected the red release train.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_Y },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_Y },
+      similarity: 0.96,
+    });
+    const retriever = new MemoryRetriever(
+      makeMockStore([sameRoomMemory, crossRoomMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      makeMockEventBus(),
+      contactStore,
+    );
+    const request = {
+      contextText: 'release train',
+      channelId: GROUP_ROOM_X,
+      trustLevel: 'primary' as const,
+      channelMeta: { isDirectMessage: false, privacyLevel: 'semi_private' as const },
+      canonicalContactId: vegaId,
+    };
+
+    await retriever.refreshActiveMemoryContext(request);
+    const active = retriever.getActiveMemoryContext(request);
+
+    expect(active?.contextBlock).toContain('Room X selected the blue release train.');
+    expect(active?.contextBlock).not.toContain('Room Y selected the red release train.');
+    expect(active?.manifestSeed).toMatchObject({
+      roomVisibilityRejectedCount: 1,
+      withheldReasonCounts: {
+        'room_visibility.blocked': 1,
+      },
+    });
+  });
+});
+
 describe('MemoryRetriever compositional retrieval rerank', () => {
   beforeEach(() => {
     idCounter = 0;

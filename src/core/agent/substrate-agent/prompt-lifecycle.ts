@@ -57,6 +57,30 @@ const VOLATILE_MACRO_TOKENS = new Set([
   'timestamp()',
 ]);
 const CHANNEL_MACRO_TOKENS = new Set(['channel_id', 'channel_type']);
+const STATIC_PROMPT_DYNAMIC_VARIABLE_KEYS = new Set([
+  'user',
+  'user_name',
+  'user_id',
+  'channel',
+  'channel_id',
+  'channel_type',
+  'channel_visibility',
+  'trust_level',
+  'canonical_contact_id',
+  'model',
+  'model_id',
+  'now_iso',
+]);
+const STATIC_PROMPT_DYNAMIC_VARIABLE_PREFIXES = [
+  'runtime_',
+  'memory_',
+  'charge_',
+  'tool_',
+  'tools_',
+  'session_',
+  'scratchpad_',
+  'current_',
+] as const;
 
 interface TemplateSectionConfig {
   section: 'staticPrefixTemplate' | 'dynamicSuffixTemplate';
@@ -328,9 +352,27 @@ export function buildPromptPrefixCacheKey(
   ].join('::');
 }
 
-export function buildStaticPromptSettingsHash(templateVariables: Record<string, string>): string {
+function isStaticPromptStableVariable(key: string): boolean {
+  const normalized = normalizePromptMacroToken(key);
+  if (STATIC_PROMPT_DYNAMIC_VARIABLE_KEYS.has(normalized)) return false;
+  return !STATIC_PROMPT_DYNAMIC_VARIABLE_PREFIXES.some(prefix => normalized.startsWith(prefix));
+}
+
+export function buildStaticPromptSettingsHash(
+  templateVariables: Record<string, string>,
+  staticPrefixTemplate?: string,
+): string {
+  const referencedTokens = staticPrefixTemplate
+    ? new Set(collectPromptMacroTokens(staticPrefixTemplate))
+    : null;
   const stableEntries = Object.entries(templateVariables)
-    .filter(([key]) => key !== 'now_iso')
+    .filter(([key]) => (
+      isStaticPromptStableVariable(key)
+      && (
+        referencedTokens === null
+        || referencedTokens.has(normalizePromptMacroToken(key))
+      )
+    ))
     .sort(([left], [right]) => left.localeCompare(right));
   return hashPromptText(JSON.stringify(stableEntries));
 }

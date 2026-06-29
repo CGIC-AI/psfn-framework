@@ -202,6 +202,10 @@ export function migrateMemoryStoreSchema(db: Database.Database): void {
     db.exec(`ALTER TABLE l2_memories ADD COLUMN delete_reason TEXT`);
   } catch { /* column already exists */ }
   db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_deleted_at ON l2_memories(deleted_at)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_admin_active ON l2_memories(superseded_by, deleted_at, extracted_at DESC, id DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_admin_type ON l2_memories(type, superseded_by, deleted_at, extracted_at DESC, id DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_admin_sensitivity ON l2_memories(sensitivity, superseded_by, deleted_at, extracted_at DESC, id DESC)`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_l2_admin_retention ON l2_memories(retention_class, superseded_by, deleted_at, extracted_at DESC, id DESC)`);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS l2_memory_delete_versions (

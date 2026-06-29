@@ -72,6 +72,9 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   $$;
   `,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_active ON l2_memories(superseded_by, deleted_at, extracted_at DESC, id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_l2_memories_admin_type ON l2_memories(type, superseded_by, deleted_at, extracted_at DESC, id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_l2_memories_admin_sensitivity ON l2_memories(sensitivity, superseded_by, deleted_at, extracted_at DESC, id DESC);`,
+  `CREATE INDEX IF NOT EXISTS idx_l2_memories_admin_retention ON l2_memories(retention_class, superseded_by, deleted_at, extracted_at DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_status ON l2_memories(deleted_at, superseded_by, extracted_at DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_contact ON l2_memories(contact_id, deleted_at, extracted_at DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_source_ref ON l2_memories(source_ref);`,

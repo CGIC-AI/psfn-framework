@@ -5,6 +5,9 @@ import type {
   ContactProfileArtifact,
   MemoryAbstractionLink,
   MemoryAbstractionLinkInput,
+  MemoryAdminListOptions,
+  MemoryAdminListResult,
+  MemoryAdminPrivacySummary,
   MemoryBulkUpdatePatch,
   MemoryDeleteVersion,
   MemoryEvolutionLink,
@@ -55,6 +58,8 @@ import {
   getAllActiveMemories,
   listMemories,
   listActiveMemories,
+  listAdminMemories,
+  getAdminMemoryPrivacySummary,
   countActiveMemories,
   getById,
   getStats,
@@ -160,6 +165,14 @@ export class MemoryStore {
 
   listActiveMemories(options: MemoryListOptions = {}): PurrMemory[] {
     return listActiveMemories(this.db, options);
+  }
+
+  listAdminMemories(options: MemoryAdminListOptions = {}): MemoryAdminListResult {
+    return listAdminMemories(this.db, options);
+  }
+
+  getAdminMemoryPrivacySummary(): MemoryAdminPrivacySummary {
+    return getAdminMemoryPrivacySummary(this.db);
   }
 
   countActiveMemories(): number {

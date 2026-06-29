@@ -1,5 +1,8 @@
 import type {
+  AdminAuthenticityProvenance,
+  AdminPromptSectionTelemetry,
   AdminSessionTurnData,
+  AdminTurnPromptContextMessage,
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
 } from '../types';
@@ -60,6 +63,35 @@ function cloneStage(stage: AdminTurnStageTelemetry): AdminTurnStageTelemetry {
   };
 }
 
+function cloneProvenance(
+  provenance: AdminAuthenticityProvenance | undefined,
+): AdminAuthenticityProvenance | undefined {
+  if (!provenance) return undefined;
+  return {
+    ...provenance,
+    ...(provenance.sourceEntryIds ? { sourceEntryIds: [...provenance.sourceEntryIds] } : {}),
+    ...(provenance.notes ? { notes: [...provenance.notes] } : {}),
+  };
+}
+
+function clonePromptContextMessage(
+  message: AdminTurnPromptContextMessage,
+): AdminTurnPromptContextMessage {
+  return {
+    ...message,
+    ...(message.provenance ? { provenance: cloneProvenance(message.provenance) } : {}),
+  };
+}
+
+function clonePromptSection(
+  section: AdminPromptSectionTelemetry,
+): AdminPromptSectionTelemetry {
+  return {
+    ...section,
+    ...(section.provenance ? { provenance: cloneProvenance(section.provenance) } : {}),
+  };
+}
+
 function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
   return {
     ...snapshot,
@@ -68,20 +100,20 @@ function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
       ? {
         promptContext: {
           ...snapshot.promptContext,
-          messages: snapshot.promptContext.messages.map(message => ({ ...message })),
+          messages: snapshot.promptContext.messages.map(clonePromptContextMessage),
           ...(snapshot.promptContext.inputSections
             ? {
-              inputSections: snapshot.promptContext.inputSections.map(section => ({ ...section })),
+              inputSections: snapshot.promptContext.inputSections.map(clonePromptSection),
             }
             : {}),
           ...(snapshot.promptContext.runtimeContextSections
             ? {
-              runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(section => ({ ...section })),
+              runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSection),
             }
             : {}),
           ...(snapshot.promptContext.finalSystemSections
             ? {
-              finalSystemSections: snapshot.promptContext.finalSystemSections.map(section => ({ ...section })),
+              finalSystemSections: snapshot.promptContext.finalSystemSections.map(clonePromptSection),
             }
             : {}),
           ...(snapshot.promptContext.providerObservability

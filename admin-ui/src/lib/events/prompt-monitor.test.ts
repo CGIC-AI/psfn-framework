@@ -272,8 +272,45 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
           finalSystemPrompt: 'Live final system prompt',
           currentTurnInput: 'live user input',
           messages: [
-            { role: 'user', content: 'earlier' },
+            {
+              role: 'user',
+              content: 'earlier',
+              provenance: {
+                schemaVersion: 1,
+                kind: 'user_direct',
+                sourceAuthor: 'partner',
+                transformedBy: 'none',
+                wording: 'direct',
+                directSpeech: true,
+                detailLoss: 'none',
+                emotionalTexture: 'preserved',
+                safeAsPartnerSpeech: true,
+                sourceSpanCount: 1,
+                sourceEntryIds: [1],
+              },
+            },
             { role: 'assistant', content: 'reply' },
+          ],
+          finalSystemSections: [
+            {
+              id: 'retrieved_memory',
+              title: 'Retrieved Memory',
+              content: 'Live memory block',
+              charCount: 17,
+              tokenCount: 3,
+              provenance: {
+                schemaVersion: 1,
+                kind: 'memory_retrieval',
+                sourceAuthor: 'memory',
+                transformedBy: 'retrieval',
+                wording: 'derived',
+                directSpeech: false,
+                detailLoss: 'possible',
+                emotionalTexture: 'may_be_flattened',
+                safeAsPartnerSpeech: false,
+                notes: ['Derived context; exact details may be lost.'],
+              },
+            },
           ],
           providerObservability: {
             routeKind: 'configured_litellm_proxy',
@@ -372,9 +409,29 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
   assert.equal(mergedStages[0]?.snapshot?.promptContext?.finalSystemPrompt, 'Live final system prompt');
   assert.equal(mergedStages[0]?.snapshot?.promptContext?.currentTurnInput, 'live user input');
   assert.deepEqual(mergedStages[0]?.snapshot?.promptContext?.messages, [
-    { role: 'user', content: 'earlier' },
+    {
+      role: 'user',
+      content: 'earlier',
+      provenance: {
+        schemaVersion: 1,
+        kind: 'user_direct',
+        sourceAuthor: 'partner',
+        transformedBy: 'none',
+        wording: 'direct',
+        directSpeech: true,
+        detailLoss: 'none',
+        emotionalTexture: 'preserved',
+        safeAsPartnerSpeech: true,
+        sourceSpanCount: 1,
+        sourceEntryIds: [1],
+      },
+    },
     { role: 'assistant', content: 'reply' },
   ]);
+  assert.equal(
+    mergedStages[0]?.snapshot?.promptContext?.finalSystemSections?.[0]?.provenance?.kind,
+    'memory_retrieval',
+  );
   assert.deepEqual(mergedStages[0]?.snapshot?.promptContext?.providerObservability?.providerWireMessages, [
     { role: 'developer', source: 'system_prompt', content: 'Live final system prompt' },
     { role: 'user', source: 'message', content: 'earlier' },

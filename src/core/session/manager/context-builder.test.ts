@@ -217,6 +217,13 @@ describe('orientation context surface wiring', () => {
       expect(assembled.summarizedEntryCount).toBeGreaterThan(0);
       expect(assembled.verbatimEntries.length).toBeGreaterThanOrEqual(5);
       expect(assembled.messages[0]).toMatchObject({ role: 'system' });
+      expect(assembled.messages[0]?.provenance).toMatchObject({
+        kind: 'compaction_summary',
+        detailLoss: 'possible',
+        emotionalTexture: 'may_be_flattened',
+        safeAsPartnerSpeech: false,
+      });
+      expect(assembled.messages[0]?.provenance?.sourceSpanCount).toBe(assembled.summarizedEntryCount);
       expect(assembled.messages.some(message => message.content.includes('m10xxxxx'))).toBe(true);
     } finally {
       tokenTestUtils.resetTokenizerState();

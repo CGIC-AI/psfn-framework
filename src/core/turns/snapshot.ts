@@ -20,6 +20,7 @@ import type {
   ToolSchema,
   TurnID,
 } from '../../shared/contracts/runtime.js';
+import { cloneAuthenticityProvenance } from '../../shared/authenticity-provenance.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 
 export type { FatigueEnforcementMetadata };
@@ -201,7 +202,10 @@ export function cloneEmotionalSnapshot(snapshot: EmotionalSnapshot): EmotionalSn
 }
 
 export function cloneContextMessage(message: ContextMessage): ContextMessage {
-  return { ...message };
+  return {
+    ...message,
+    ...(message.provenance ? { provenance: cloneAuthenticityProvenance(message.provenance) } : {}),
+  };
 }
 
 export function cloneProviderObservability(
@@ -228,6 +232,13 @@ export function clonePromptSectionCacheability(
   return {
     ...section,
     cacheBreakers: [...section.cacheBreakers],
+  };
+}
+
+export function clonePromptSectionTelemetry(section: PromptSectionTelemetry): PromptSectionTelemetry {
+  return {
+    ...section,
+    ...(section.provenance ? { provenance: cloneAuthenticityProvenance(section.provenance) } : {}),
   };
 }
 

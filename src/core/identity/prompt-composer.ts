@@ -19,6 +19,12 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { wrapPromptSectionXml } from './prompt-sections.js';
 import { SYSTEM_LANGUAGE_LAYER_TYPE } from './system-language.js';
+import {
+  buildAuthenticityProvenance,
+  DERIVED_DETAIL_LOSS_NOTE,
+  DERIVED_EMOTIONAL_TEXTURE_NOTE,
+  formatAuthenticityProvenanceMarker,
+} from '../../shared/authenticity-provenance.js';
 
 // Keep only identity/foundation + operator policy in the frozen prompt prefix.
 // Channel/task/runtime overlays remain dynamic so per-turn runtime context stays later.
@@ -150,8 +156,20 @@ export function wrapCompactionSummaryAsUntrustedContext(summary: string): string
   const { summaryText, metadata } = splitCompactionSummaryParts(summary);
   const safeSummaryText = escapeForUntrustedPromptBlock(summaryText);
   const safeMetadata = stripControlCharacters(metadata);
+  const provenance = buildAuthenticityProvenance({
+    kind: 'compaction_summary',
+    sourceAuthor: 'mixed',
+    transformedBy: 'compaction',
+    wording: 'derived',
+    directSpeech: false,
+    detailLoss: 'possible',
+    emotionalTexture: 'may_be_flattened',
+    safeAsPartnerSpeech: false,
+    notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+  });
 
   const lines = [
+    formatAuthenticityProvenanceMarker(provenance),
     `<${UNTRUSTED_COMPACTION_PROMPT_TAG} source="session.compaction" executable="false">`,
     '<guard>',
     ...UNTRUSTED_COMPACTION_PROMPT_GUARD_LINES.slice(1),

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AdminPromptSectionTelemetry } from '$lib/types';
+  import type { AdminAuthenticityProvenance, AdminPromptSectionTelemetry } from '$lib/types';
   import PromptMonitorTextBlock from './PromptMonitorTextBlock.svelte';
 
   interface Props {
@@ -16,6 +16,19 @@
 
   function formatCount(value: number): string {
     return value.toLocaleString();
+  }
+
+  function formatProvenanceLabel(provenance: AdminAuthenticityProvenance): string {
+    return [
+      provenance.kind.replaceAll('_', ' '),
+      `source: ${provenance.sourceAuthor}`,
+      `via: ${provenance.transformedBy}`,
+      `wording: ${provenance.wording}`,
+    ].join(' . ');
+  }
+
+  function formatSafetyLabel(provenance: AdminAuthenticityProvenance): string {
+    return provenance.safeAsPartnerSpeech ? 'safe as partner speech' : 'not partner speech';
   }
 </script>
 
@@ -36,6 +49,22 @@
               {formatCount(section.charCount)} chars . {formatCount(section.tokenCount)} tokens
             </p>
           </div>
+          {#if section.provenance}
+            <div class="mt-3 flex flex-wrap gap-2 text-xs">
+              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+                {formatProvenanceLabel(section.provenance)}
+              </span>
+              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+                {formatSafetyLabel(section.provenance)}
+              </span>
+              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+                detail loss: {section.provenance.detailLoss}
+              </span>
+              <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">
+                emotion: {section.provenance.emotionalTexture}
+              </span>
+            </div>
+          {/if}
           <div class="mt-3 text-sm">
             <PromptMonitorTextBlock
               title="Section Content"

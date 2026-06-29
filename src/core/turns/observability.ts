@@ -22,6 +22,7 @@ import {
   cloneAdaptiveToolSnapshotTelemetry,
   cloneContextMessage,
   clonePromptSectionCacheability,
+  clonePromptSectionTelemetry,
   cloneProviderObservability,
   cloneOrientationSnapshot,
   cloneSessionContinuityArtifact,
@@ -233,6 +234,15 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
           ...(snapshot.promptContext.sectionCacheability
             ? { sectionCacheability: snapshot.promptContext.sectionCacheability.map(clonePromptSectionCacheability) }
             : {}),
+          ...(snapshot.promptContext.inputSections
+            ? { inputSections: snapshot.promptContext.inputSections.map(clonePromptSectionTelemetry) }
+            : {}),
+          ...(snapshot.promptContext.runtimeContextSections
+            ? { runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSectionTelemetry) }
+            : {}),
+          ...(snapshot.promptContext.finalSystemSections
+            ? { finalSystemSections: snapshot.promptContext.finalSystemSections.map(clonePromptSectionTelemetry) }
+            : {}),
         },
       }
       : {}),
@@ -341,6 +351,15 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
             : {}),
           ...(snapshot.promptContext.sectionCacheability
             ? { sectionCacheability: snapshot.promptContext.sectionCacheability.map(clonePromptSectionCacheability) }
+            : {}),
+          ...(snapshot.promptContext.inputSections
+            ? { inputSections: snapshot.promptContext.inputSections.map(clonePromptSectionTelemetry) }
+            : {}),
+          ...(snapshot.promptContext.runtimeContextSections
+            ? { runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSectionTelemetry) }
+            : {}),
+          ...(snapshot.promptContext.finalSystemSections
+            ? { finalSystemSections: snapshot.promptContext.finalSystemSections.map(clonePromptSectionTelemetry) }
             : {}),
         },
       }

@@ -1,10 +1,12 @@
 import { countTokens } from '../../primitives/llm/tokens.js';
 import type { PromptSectionTelemetry } from '../../shared/contracts/runtime.js';
+import { cloneAuthenticityProvenance } from '../../shared/authenticity-provenance.js';
 
 export interface PromptSectionInput {
   id: string;
   title?: string;
   content: string;
+  provenance?: PromptSectionTelemetry['provenance'];
 }
 
 const WRAPPED_PROMPT_SECTION_PATTERN = /<([a-z0-9_.-]+)(?:\s+[^>]*)?>\n?([\s\S]*?)<\/\1>/gi;
@@ -73,6 +75,7 @@ export function buildPromptSectionTelemetry(
     content: wrapped,
     charCount: wrapped.length,
     tokenCount: countTokens(wrapped),
+    ...(input.provenance ? { provenance: cloneAuthenticityProvenance(input.provenance) } : {}),
   };
 }
 

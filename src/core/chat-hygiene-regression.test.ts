@@ -180,12 +180,15 @@ describe('Sprint 8 chat hygiene regressions', () => {
       }),
     ], 'private');
 
-    expect(messages).toEqual([
-      {
-        role: 'system',
-        content: '[Tool result: session_search] Returned JSON object: status=ok; results=2.',
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: 'system',
+      content: '[Tool result: session_search] Returned JSON object: status=ok; results=2.',
+      provenance: {
+        kind: 'tool_result',
+        safeAsPartnerSpeech: false,
       },
-    ]);
+    });
     expect(messages[0]?.content).not.toContain('sk-live-');
     expect(messages[0]?.content).not.toContain('"secret"');
     expect(messages[0]?.content).not.toContain('{"status"');

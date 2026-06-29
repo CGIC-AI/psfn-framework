@@ -2,6 +2,12 @@ import type { LLMProviderPort } from '../../agent/contracts.js';
 import { countMessageTokens, countTokens } from '../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { ContextMessage, LLMContext } from '../../../shared/contracts/runtime.js';
+import {
+  buildAuthenticityProvenance,
+  DERIVED_DETAIL_LOSS_NOTE,
+  DERIVED_EMOTIONAL_TEXTURE_NOTE,
+  prependAuthenticityProvenanceMarker,
+} from '../../../shared/authenticity-provenance.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import {
   resolveAdaptiveContextBudgetProfile,
@@ -177,6 +183,7 @@ function summarizeConversationEntries(
 function buildHistorySummaryMessage(
   summaryText: string,
   channelVisibility: ChannelVisibility,
+  sourceSpanCount: number,
 ): ContextMessage {
   const content = isUntrustedVisibility(channelVisibility)
     ? wrapUntrustedContext(summaryText)
@@ -184,6 +191,18 @@ function buildHistorySummaryMessage(
   return {
     role: 'system',
     content,
+    provenance: buildAuthenticityProvenance({
+      kind: 'compaction_summary',
+      sourceAuthor: 'mixed',
+      transformedBy: 'compaction',
+      wording: 'derived',
+      directSpeech: false,
+      detailLoss: 'possible',
+      emotionalTexture: 'may_be_flattened',
+      safeAsPartnerSpeech: false,
+      sourceSpanCount,
+      notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+    }),
   };
 }
 
@@ -191,6 +210,7 @@ function buildSessionHistoryMessages(
   verbatimEntries: SessionEntry[],
   channelVisibility: ChannelVisibility,
   summaryText?: string,
+  summarySourceSpanCount = 0,
 ): ContextMessage[] {
   const trimmedSummary = summaryText?.trim();
   const tailMessages = entriesToMessages(
@@ -203,7 +223,7 @@ function buildSessionHistoryMessages(
     return tailMessages;
   }
   return [
-    buildHistorySummaryMessage(trimmedSummary, channelVisibility),
+    buildHistorySummaryMessage(trimmedSummary, channelVisibility, summarySourceSpanCount),
     ...tailMessages,
   ];
 }
@@ -273,6 +293,7 @@ export function assembleSessionHistoryForContext(params: {
       verbatimEntries,
       params.channelVisibility,
       summaryText,
+      summaryEntries.length,
     );
     if (countMessageTokens(messages) <= params.tokenBudget) {
       return {
@@ -614,11 +635,41 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   const focusKnowledgeTexts = params.turnSnapshot
     ? [...params.turnSnapshot.focusKnowledgeTexts]
     : [...params.focusKnowledgeTexts];
+  const memoryIncludedCount = params.memoryManifestSeed?.returnedCount ?? 0;
+  const coreMemoryProvenance = buildAuthenticityProvenance({
+    kind: 'memory_retrieval',
+    sourceAuthor: 'memory',
+    transformedBy: 'retrieval',
+    wording: 'derived',
+    directSpeech: false,
+    detailLoss: 'possible',
+    emotionalTexture: 'may_be_flattened',
+    safeAsPartnerSpeech: false,
+    notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+  });
+  const memorySectionProvenance = buildAuthenticityProvenance({
+    kind: 'memory_retrieval',
+    sourceAuthor: 'memory',
+    transformedBy: 'retrieval',
+    wording: 'derived',
+    directSpeech: false,
+    detailLoss: 'possible',
+    emotionalTexture: 'may_be_flattened',
+    safeAsPartnerSpeech: false,
+    sourceSpanCount: memoryIncludedCount || undefined,
+    notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+  });
   const baseSystemTokenCount = countTokens(params.systemPrompt);
   const hasCoreMemorySection = params.coreMemoryBlock.trim().length > 0;
-  const coreMemorySectionText = hasCoreMemorySection ? params.coreMemoryBlock : '';
+  const coreMemorySectionText = hasCoreMemorySection
+    ? prependAuthenticityProvenanceMarker(params.coreMemoryBlock, coreMemoryProvenance)
+    : '';
   const coreMemoryTokenCount = countTokens(coreMemorySectionText);
-  const memoryTokenCount = countTokens(params.memoriesBlock);
+  const hasMemorySection = params.memoriesBlock.trim().length > 0;
+  const memorySectionText = hasMemorySection
+    ? prependAuthenticityProvenanceMarker(params.memoriesBlock, memorySectionProvenance)
+    : '';
+  const memoryTokenCount = countTokens(memorySectionText);
   const systemTokens = baseSystemTokenCount + coreMemoryTokenCount + memoryTokenCount;
   const preAssemblySessionMessageTokens = countMessageTokens(
     entriesToMessages(recent, channelVisibility, false),
@@ -689,8 +740,6 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
 
   // Build system prompt with memories
   let fullSystem = params.systemPrompt;
-  const hasMemorySection = params.memoriesBlock.trim().length > 0;
-  const memorySectionText = hasMemorySection ? params.memoriesBlock : '';
 
   // Prepend compaction summaries as context
   let compactionSummarySectionText = '';
@@ -701,7 +750,22 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
 
   let focusKnowledgeSectionText = '';
   if (focusKnowledgeTexts.length > 0) {
-    focusKnowledgeSectionText = '[Focus knowledge]\n' + focusKnowledgeTexts.join('\n');
+    const focusKnowledgeProvenance = buildAuthenticityProvenance({
+      kind: 'extraction_artifact',
+      sourceAuthor: 'mixed',
+      transformedBy: 'extraction',
+      wording: 'derived',
+      directSpeech: false,
+      detailLoss: 'possible',
+      emotionalTexture: 'may_be_flattened',
+      safeAsPartnerSpeech: false,
+      sourceSpanCount: focusKnowledgeTexts.length,
+      notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+    });
+    focusKnowledgeSectionText = prependAuthenticityProvenanceMarker(
+      '[Focus knowledge]\n' + focusKnowledgeTexts.join('\n'),
+      focusKnowledgeProvenance,
+    );
   }
 
   if (!params.turnSnapshot) {
@@ -753,11 +817,43 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     orientation: orientationTelemetry,
     wakeReturnArtifacts: params.wakeReturnArtifacts,
   }).join('\n');
-  const continuitySectionText = buildStructuredContinuityBlock(
+  const orientationProvenance = buildAuthenticityProvenance({
+    kind: 'system_note',
+    sourceAuthor: 'system',
+    transformedBy: 'runtime',
+    wording: 'derived',
+    directSpeech: false,
+    detailLoss: 'possible',
+    emotionalTexture: 'may_be_flattened',
+    safeAsPartnerSpeech: false,
+    sourceSpanCount: orientationTelemetry.sourceCounts.session
+      + orientationTelemetry.sourceCounts.continuity
+      + orientationTelemetry.sourceCounts.focusKnowledge,
+    notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+  });
+  const continuityProvenance = buildAuthenticityProvenance({
+    kind: 'projection',
+    sourceAuthor: 'mixed',
+    transformedBy: 'projection',
+    wording: 'transformed',
+    directSpeech: false,
+    detailLoss: 'possible',
+    emotionalTexture: 'unknown',
+    safeAsPartnerSpeech: false,
+    sourceSpanCount: crossChannel.length,
+    notes: ['Retrieved continuity is context, not current partner-authored direct speech.'],
+  });
+  const continuityBlock = buildStructuredContinuityBlock(
     crossChannel,
     orientationTelemetry.observedAt,
     params.characterName,
   );
+  const markedOrientationSectionText = orientationSectionText
+    ? prependAuthenticityProvenanceMarker(orientationSectionText, orientationProvenance)
+    : '';
+  const continuitySectionText = continuityBlock
+    ? prependAuthenticityProvenanceMarker(continuityBlock, continuityProvenance)
+    : '';
 
   const promptRuntimeLayout = resolveCachedPromptRuntimeLayoutStore(params.config);
   const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
@@ -779,7 +875,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     },
     {
       id: 'session.orientation' as PromptRuntimeSystemPromptBlockId,
-      content: orientationSectionText,
+      content: markedOrientationSectionText,
     },
     {
       id: 'session.continuity' as PromptRuntimeSystemPromptBlockId,
@@ -797,13 +893,13 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     recent,
     channelVisibility,
     historySummaryText,
+    historySummaryEntryCount,
   );
   const sessionMessageTokenCount = countMessageTokens(messages);
   const trimmedEntryCount = Math.max(
     0,
     sourceEntryCount - recent.length - historySummaryEntryCount,
   );
-  const memoryIncludedCount = params.memoryManifestSeed?.returnedCount ?? 0;
   const seededMemoryHardLimit = params.memoryManifestSeed?.retrievalLimitMode === 'hard_limit'
     ? params.memoryManifestSeed.retrievalLimit
     : undefined;
@@ -902,7 +998,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
           section: 'compaction_summary',
           tokenCount: countTokens(compactionSummarySectionText) + countTokens(focusKnowledgeSectionText),
         },
-        { section: 'orientation', tokenCount: countTokens(orientationSectionText) },
+        { section: 'orientation', tokenCount: countTokens(markedOrientationSectionText) },
         { section: 'continuity', tokenCount: countTokens(continuitySectionText) },
         { section: 'session_history', tokenCount: sessionMessageTokenCount },
       ],
@@ -930,31 +1026,59 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       id: 'core_memory',
       title: 'Core Memory',
       content: coreMemorySectionText,
+      provenance: coreMemoryProvenance,
     },
     {
       id: 'retrieved_memory',
       title: 'Retrieved Memory',
       content: memorySectionText,
+      provenance: memorySectionProvenance,
     },
     {
       id: 'previous_conversation_summary',
       title: 'Previous Conversation Summary',
       content: compactionSummarySectionText,
+      provenance: buildAuthenticityProvenance({
+        kind: 'compaction_summary',
+        sourceAuthor: 'mixed',
+        transformedBy: 'compaction',
+        wording: 'derived',
+        directSpeech: false,
+        detailLoss: 'possible',
+        emotionalTexture: 'may_be_flattened',
+        safeAsPartnerSpeech: false,
+        sourceSpanCount: compactionSummaryTexts.length || undefined,
+        notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+      }),
     },
     {
       id: 'focus_knowledge',
       title: 'Focus Knowledge',
       content: focusKnowledgeSectionText,
+      provenance: buildAuthenticityProvenance({
+        kind: 'extraction_artifact',
+        sourceAuthor: 'mixed',
+        transformedBy: 'extraction',
+        wording: 'derived',
+        directSpeech: false,
+        detailLoss: 'possible',
+        emotionalTexture: 'may_be_flattened',
+        safeAsPartnerSpeech: false,
+        sourceSpanCount: focusKnowledgeTexts.length || undefined,
+        notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+      }),
     },
     {
       id: 'wake_orientation',
       title: 'Wake Orientation',
-      content: orientationSectionText,
+      content: markedOrientationSectionText,
+      provenance: orientationProvenance,
     },
     {
       id: 'cross_channel_continuity',
       title: 'Cross-Channel Continuity',
       content: continuitySectionText,
+      provenance: continuityProvenance,
     },
   ]);
 

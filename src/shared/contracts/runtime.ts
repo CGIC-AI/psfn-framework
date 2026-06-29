@@ -487,9 +487,62 @@ export interface ToolSchema {
 
 export type Role = 'user' | 'assistant' | 'system';
 
+export type AuthenticityProvenanceKind =
+  | 'user_direct'
+  | 'companion_direct'
+  | 'compaction_summary'
+  | 'system_note'
+  | 'system_injection'
+  | 'memory_retrieval'
+  | 'extraction_artifact'
+  | 'projection'
+  | 'search_result'
+  | 'tool_result'
+  | 'redacted_transformed';
+
+export type AuthenticitySourceAuthor =
+  | 'partner'
+  | 'companion'
+  | 'system'
+  | 'tool'
+  | 'memory'
+  | 'mixed'
+  | 'unknown';
+
+export type AuthenticityTransformer =
+  | 'none'
+  | 'runtime'
+  | 'compaction'
+  | 'retrieval'
+  | 'extraction'
+  | 'projection'
+  | 'redaction'
+  | 'tool'
+  | 'system';
+
+export type AuthenticityWording = 'direct' | 'derived' | 'transformed' | 'redacted';
+export type AuthenticityDetailLossRisk = 'none' | 'possible' | 'likely';
+export type AuthenticityEmotionalTexture = 'preserved' | 'may_be_flattened' | 'unknown';
+
+export interface AuthenticityProvenance {
+  schemaVersion: 1;
+  kind: AuthenticityProvenanceKind;
+  sourceAuthor: AuthenticitySourceAuthor;
+  transformedBy: AuthenticityTransformer;
+  wording: AuthenticityWording;
+  directSpeech: boolean;
+  detailLoss: AuthenticityDetailLossRisk;
+  emotionalTexture: AuthenticityEmotionalTexture;
+  safeAsPartnerSpeech: boolean;
+  sourceSpanCount?: number;
+  sourceEntryIds?: number[];
+  notes?: string[];
+}
+
 export interface ContextMessage {
   role: Role;
   content: string;
+  provenance?: AuthenticityProvenance;
 }
 
 export interface PromptSectionTelemetry {
@@ -498,6 +551,7 @@ export interface PromptSectionTelemetry {
   content: string;
   charCount: number;
   tokenCount: number;
+  provenance?: AuthenticityProvenance;
 }
 
 export interface LLMContext {

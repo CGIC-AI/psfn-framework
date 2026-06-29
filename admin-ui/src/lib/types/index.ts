@@ -313,9 +313,38 @@ export interface AdminTurnPromptSnapshotData {
   versionPointer: string;
 }
 
+export type AdminAuthenticityProvenanceKind =
+  | 'user_direct'
+  | 'companion_direct'
+  | 'compaction_summary'
+  | 'system_note'
+  | 'system_injection'
+  | 'memory_retrieval'
+  | 'extraction_artifact'
+  | 'projection'
+  | 'search_result'
+  | 'tool_result'
+  | 'redacted_transformed';
+
+export interface AdminAuthenticityProvenance {
+  schemaVersion: 1;
+  kind: AdminAuthenticityProvenanceKind;
+  sourceAuthor: string;
+  transformedBy: string;
+  wording: string;
+  directSpeech: boolean;
+  detailLoss: string;
+  emotionalTexture: string;
+  safeAsPartnerSpeech: boolean;
+  sourceSpanCount?: number;
+  sourceEntryIds?: number[];
+  notes?: string[];
+}
+
 export interface AdminTurnPromptContextMessage {
   role: string;
   content: string;
+  provenance?: AdminAuthenticityProvenance;
 }
 
 export type AdminPromptSectionCacheabilityClass =
@@ -358,6 +387,7 @@ export interface AdminPromptSectionTelemetry {
   content: string;
   charCount: number;
   tokenCount: number;
+  provenance?: AdminAuthenticityProvenance;
 }
 
 export interface AdminTurnProviderWireMessage {

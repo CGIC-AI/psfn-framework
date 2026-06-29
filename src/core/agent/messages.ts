@@ -18,6 +18,12 @@ import {
   type MessageClassMetadata,
 } from './message-classes.js';
 import { renderSystemLanguageTemplate } from '../identity/system-language.js';
+import {
+  buildAuthenticityProvenance,
+  DERIVED_DETAIL_LOSS_NOTE,
+  DERIVED_EMOTIONAL_TEXTURE_NOTE,
+  formatAuthenticityProvenanceMarker,
+} from '../../shared/authenticity-provenance.js';
 
 // ── Custom message types ──
 
@@ -181,9 +187,20 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
 
   for (const msg of messages) {
     if (isCompactionMessage(msg)) {
+      const provenanceMarker = formatAuthenticityProvenanceMarker(buildAuthenticityProvenance({
+        kind: 'compaction_summary',
+        sourceAuthor: 'mixed',
+        transformedBy: 'compaction',
+        wording: 'derived',
+        directSpeech: false,
+        detailLoss: 'possible',
+        emotionalTexture: 'may_be_flattened',
+        safeAsPartnerSpeech: false,
+        notes: [DERIVED_DETAIL_LOSS_NOTE, DERIVED_EMOTIONAL_TEXTURE_NOTE],
+      }));
       result.push({
         role: 'user',
-        content: `${renderSystemLanguageTemplate('compaction.header')}\n${msg.summary}`,
+        content: `${renderSystemLanguageTemplate('compaction.header')}\n${provenanceMarker}\n${msg.summary}`,
         timestamp: msg.timestamp,
         messageClass: MESSAGE_CLASSES.compaction,
       } satisfies ClassifiedUserMessage);

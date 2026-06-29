@@ -3,6 +3,7 @@ import {
   contextMessagesToPiMessages,
   mergeSystemContextIntoSystemPrompt,
 } from './message-conversion.js';
+import { buildAuthenticityProvenance } from '../../shared/authenticity-provenance.js';
 
 describe('contextMessagesToPiMessages', () => {
   it('maps user and assistant context messages to pi chat messages', () => {
@@ -108,6 +109,29 @@ describe('contextMessagesToPiMessages', () => {
       '[Tool result: search_logs] Returned 2 hits.',
       '</session_context>',
     ].join('\n\n'));
+  });
+
+  it('renders provenance markers when system context is moved into the system prompt', () => {
+    const systemPrompt = mergeSystemContextIntoSystemPrompt('Base instructions', [
+      {
+        role: 'system',
+        content: '[Tool result: search_logs] Returned 2 hits.',
+        provenance: buildAuthenticityProvenance({
+          kind: 'tool_result',
+          sourceAuthor: 'tool',
+          transformedBy: 'tool',
+          wording: 'transformed',
+          directSpeech: false,
+          detailLoss: 'none',
+          emotionalTexture: 'unknown',
+          safeAsPartnerSpeech: false,
+        }),
+      },
+    ]);
+
+    expect(systemPrompt).toContain('kind="tool_result"');
+    expect(systemPrompt).toContain('safe_as_partner_speech="false"');
+    expect(systemPrompt).toContain('[Tool result: search_logs] Returned 2 hits.');
   });
 
   it('uses Date.now by default for each converted message', () => {

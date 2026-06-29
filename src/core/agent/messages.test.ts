@@ -166,9 +166,10 @@ describe('convertToLlm', () => {
     const result = convertToLlm(messages);
     expect(result).toHaveLength(1);
     expect(result[0].role).toBe('user');
-    expect((result[0] as UserMessage).content).toBe(
-      '[Previous conversation summary]\nUsers discussed cats',
-    );
+    expect((result[0] as UserMessage).content).toContain('[Previous conversation summary]');
+    expect((result[0] as UserMessage).content).toContain('kind="compaction_summary"');
+    expect((result[0] as UserMessage).content).toContain('safe_as_partner_speech="false"');
+    expect((result[0] as UserMessage).content).toContain('Users discussed cats');
     expect((result[0] as { messageClass?: string }).messageClass).toBe(MESSAGE_CLASSES.compaction);
   });
 

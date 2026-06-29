@@ -21,6 +21,7 @@ import type {
   ObservabilityCallType,
   SubstrateMessage,
 } from '../../../../shared/contracts/runtime.js';
+import { buildAuthenticityProvenance } from '../../../../shared/authenticity-provenance.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { resolveMaxHistorySpanMs } from '../../../session/manager-primitives.js';
 import { buildInternalStateSnapshotRef, type InternalState } from '../../../self-model/state.js';
@@ -394,6 +395,18 @@ export async function assembleTurnPrompt(input: {
         id: 'memory_context',
         title: 'Memory Context',
         content: memoryContextBlock,
+        provenance: buildAuthenticityProvenance({
+          kind: 'memory_retrieval',
+          sourceAuthor: 'memory',
+          transformedBy: 'retrieval',
+          wording: 'derived',
+          directSpeech: false,
+          detailLoss: 'possible',
+          emotionalTexture: 'may_be_flattened',
+          safeAsPartnerSpeech: false,
+          sourceSpanCount: memoryManifestSeed?.returnedCount,
+          notes: ['Retrieved memory is derived context, not partner-authored direct speech.'],
+        }),
       },
       {
         id: 'scratchpad_context',
@@ -413,6 +426,18 @@ export async function assembleTurnPrompt(input: {
             content: systemContextPromptBlock,
             charCount: systemContextPromptBlock.length,
             tokenCount: countTokens(systemContextPromptBlock),
+            provenance: buildAuthenticityProvenance({
+              kind: 'system_injection',
+              sourceAuthor: 'system',
+              transformedBy: 'runtime',
+              wording: 'transformed',
+              directSpeech: false,
+              detailLoss: 'possible',
+              emotionalTexture: 'unknown',
+              safeAsPartnerSpeech: false,
+              sourceSpanCount: context.messages.filter(contextMessage => contextMessage.role === 'system').length || undefined,
+              notes: ['Provider system context is injected runtime context, not partner-authored direct speech.'],
+            }),
           }]
           : []),
         ...(currentDatetimeProximityAnchor
@@ -422,6 +447,17 @@ export async function assembleTurnPrompt(input: {
             content: currentDatetimeProximityAnchor,
             charCount: currentDatetimeProximityAnchor.length,
             tokenCount: countTokens(currentDatetimeProximityAnchor),
+            provenance: buildAuthenticityProvenance({
+              kind: 'system_injection',
+              sourceAuthor: 'system',
+              transformedBy: 'runtime',
+              wording: 'direct',
+              directSpeech: false,
+              detailLoss: 'none',
+              emotionalTexture: 'unknown',
+              safeAsPartnerSpeech: false,
+              notes: ['Canonical runtime clock injection; not partner-authored direct speech.'],
+            }),
           }]
           : []),
       ]

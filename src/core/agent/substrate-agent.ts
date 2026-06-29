@@ -23,7 +23,7 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
 import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
-import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { CapabilityTier, CoreSubstrateConfig, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { ImageVisionReviewer } from '../../primitives/images/types.js';
 import type { LLMProviderPort, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
@@ -71,6 +71,7 @@ import {
   type ExtendedToolAutoloadPolicy,
 } from './extended-tool-autoload-policy.js';
 import type {
+  AdaptiveLoadedExtendedToolState,
   AdaptiveToolRuntimeState,
 } from './adaptive-tools-telemetry.js';
 import type { RuntimeToolCatalogSnapshot } from './tool-catalog.js';
@@ -208,7 +209,7 @@ export interface SelfModelRuntimeWiring {
 
 export interface SubstrateAgentOptions {
   streamFn?: StreamFn;
-  streamRuntimeOptions?: Omit<SubstrateStreamRuntimeOptions, 'onBudgetBlocked'>;
+  streamRuntimeOptions?: Omit<SubstrateStreamRuntimeOptions, 'onBudgetBlocked' | 'transport'>;
   characterName?: string;
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;

@@ -11,6 +11,7 @@ import '../../shared/utils/load-dotenv.js';
 import { join } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
@@ -104,7 +105,7 @@ async function main(): Promise<void> {
       llmProvider: llmClient,
       sessionManager,
       systemPrompt,
-      config,
+      config: sanitizeCoreSubstrateConfig(config),
     });
     const memoryExtractor = wireMemoryRuntime({
       agentLoop,

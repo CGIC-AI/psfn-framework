@@ -84,6 +84,15 @@ function resolveExecutableFromPath(command: string, pathValue: string): string |
   return null;
 }
 
+function resolveCurrentNodeExecutable(): string | null {
+  try {
+    accessSync(process.execPath, constants.X_OK);
+    return realpathSync(process.execPath);
+  } catch {
+    return null;
+  }
+}
+
 function buildSandboxChildEnv(
   requestedEnvVars: readonly string[],
   envAllowlist: readonly string[],
@@ -289,7 +298,11 @@ function resolveBoundedExecutionPolicy(
   return { timeoutMs, maxOutputChars };
 }
 
-function assertCommandAllowed(command: string, allowlist: readonly string[], sandboxPath: string): void {
+function resolveAllowedCommandExecutable(
+  command: string,
+  allowlist: readonly string[],
+  sandboxPath: string,
+): string {
   if (!command) {
     throw new ShellExecPolicyError('shell.exec command is required');
   }
@@ -308,13 +321,20 @@ function assertCommandAllowed(command: string, allowlist: readonly string[], san
     ? resolveCanonicalExecutablePath(command)
     : resolveExecutableFromPath(command, sandboxPath);
   const commandLower = command.toLowerCase();
+  const currentNodeExecutable = commandLower === 'node'
+    ? resolveCurrentNodeExecutable()
+    : null;
 
   if (!commandIsPath) {
     if (normalizedAllowlist.names.has(commandLower)) {
-      return;
+      const resolvedCommand = canonicalCommand ?? currentNodeExecutable;
+      if (resolvedCommand) {
+        return resolvedCommand;
+      }
+      throw new ShellExecPolicyError(`shell.exec command not executable or not found: ${command}`);
     }
     if (canonicalCommand && normalizedAllowlist.canonicalPaths.has(canonicalCommand)) {
-      return;
+      return canonicalCommand;
     }
     throw new ShellExecPolicyError(`shell.exec command not allowlisted: ${command}`);
   }
@@ -324,14 +344,17 @@ function assertCommandAllowed(command: string, allowlist: readonly string[], san
   }
 
   if (normalizedAllowlist.canonicalPaths.has(canonicalCommand)) {
-    return;
+    return canonicalCommand;
   }
 
   const canonicalBase = basename(canonicalCommand).toLowerCase();
   if (normalizedAllowlist.names.has(canonicalBase)) {
     const expectedCanonical = resolveExecutableFromPath(canonicalBase, sandboxPath);
-    if (expectedCanonical && expectedCanonical === canonicalCommand) {
-      return;
+    if (
+      (expectedCanonical && expectedCanonical === canonicalCommand)
+      || (canonicalBase === 'node' && currentNodeExecutable === canonicalCommand)
+    ) {
+      return canonicalCommand;
     }
   }
 
@@ -340,6 +363,7 @@ function assertCommandAllowed(command: string, allowlist: readonly string[], san
 
 async function runCommandBounded(
   command: string,
+  executableCommand: string,
   args: string[],
   cwd: string,
   limits: { timeoutMs: number; maxOutputChars: number },
@@ -347,7 +371,7 @@ async function runCommandBounded(
 ): Promise<ShellExecResult> {
   const startedAt = Date.now();
   return await new Promise<ShellExecResult>((resolveResult, rejectResult) => {
-    const child = spawn(command, args, {
+    const child = spawn(executableCommand, args, {
       cwd,
       env: childEnv,
       shell: false,
@@ -423,7 +447,7 @@ export async function executeShellCommandWithPolicy(
 
   const sandboxPath = policy.pathOverride ?? DEFAULT_SANDBOX_PATH;
   const command = resolveCommand(params.command);
-  assertCommandAllowed(command, policy.allowlist ?? [], sandboxPath);
+  const executableCommand = resolveAllowedCommandExecutable(command, policy.allowlist ?? [], sandboxPath);
   const args = resolveArgs(params.args);
   const allowedRoots = resolveAllowedShellRoots(workspacePath, policy);
   const cwd = resolveWorkingDirectory(params.cwd, workspacePath, allowedRoots);
@@ -431,5 +455,5 @@ export async function executeShellCommandWithPolicy(
   const limits = resolveBoundedExecutionPolicy(params, policy);
   const requestedEnvVars = resolveRequestedEnvVars((params as { envVars?: unknown }).envVars);
   const childEnv = buildSandboxChildEnv(requestedEnvVars, policy.envAllowlist ?? [], sandboxPath);
-  return await runCommandBounded(command, args, cwd, limits, childEnv);
+  return await runCommandBounded(command, executableCommand, args, cwd, limits, childEnv);
 }

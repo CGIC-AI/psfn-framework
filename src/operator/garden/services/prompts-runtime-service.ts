@@ -14,6 +14,8 @@ import {
 import type {
   AdminPromptListData,
   AdminPromptRuntimeBlock,
+  AdminRuntimePromptLayerCoverage,
+  AdminRuntimePromptLayerCoverageEntry,
   RuntimePromptUpdateResult,
 } from './types.js';
 import type { AdminPromptsServiceContext } from './prompts-service-context.js';
@@ -80,10 +82,10 @@ export class PromptsRuntimeService {
       });
   }
 
-  private listRuntimeLayerCoverage() {
+  private listRuntimeLayerCoverage(): AdminRuntimePromptLayerCoverage {
     const layers = this.context.deps.promptStore.getAll();
     const validation = validateRuntimePromptLayerCoverage(layers);
-    const issueByIdentifier = new Map(
+    const issueByIdentifier = new Map<string, AdminRuntimePromptLayerCoverageEntry['status']>(
       validation.issues.map((issue) => [issue.identifier, issue.reason] as const),
     );
 

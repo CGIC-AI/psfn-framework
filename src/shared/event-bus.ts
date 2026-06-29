@@ -48,8 +48,8 @@ export interface EventMap {
   'agent.post_turn.action.telemetry': {
     actionId: string;
     actionKind: string;
-    channelId: string;
-    sourceMessageId: string;
+    channelId?: string;
+    sourceMessageId?: string;
     dedupeKey: string;
     capability: 'generic' | 'subagent_spawn';
     runtimeClass:
@@ -77,6 +77,7 @@ export interface EventMap {
     nextRetryAt?: number;
     delayMs?: number;
     error?: string;
+    rawType?: string;
   };
   'agent.post_turn.drain': {
     channelId: string;
@@ -166,6 +167,10 @@ export interface EventMap {
   'agent.fatigue': FatigueBudgetEvent;
   'agent.stream.delta': { channelId: string; text: string } & EventCorrelationFields;
   'agent.stream.thinking': { channelId: string; text: string } & EventCorrelationFields;
+  'api.turn.abort': {
+    channelId: string;
+    reason: 'timeout' | 'client_disconnected';
+  } & EventCorrelationFields;
   'agent.toolcall.start': {
     channelId: string;
     contentIndex: number;
@@ -285,6 +290,16 @@ export interface EventMap {
     mergedFactCount?: number;
     crossChunkDeduplicatedCount?: number;
     boundaryFactCount?: number;
+  } & EventCorrelationFields;
+  'memory.extraction.flush': {
+    channelId: string;
+    templateId: string;
+    templateName: string;
+    timeoutMs: number;
+    waitMs: number;
+    phase: 'completed' | 'failed' | 'timeout';
+    canonicalContactId?: string;
+    error?: string;
   } & EventCorrelationFields;
   'memory.retrieval': {
     channelId: string;
@@ -632,6 +647,20 @@ export interface EventMap {
     ok: boolean;
     details?: string;
   };
+  'reflection.guardrail': {
+    templateId: string;
+    templateName: string;
+    channelId: string;
+    executionSource: string;
+    reflectionMode: string;
+    timestamp: number;
+    snapshotSource: string;
+    warnings: unknown[];
+    counters: Record<string, unknown>;
+    canonicalContactId?: string;
+    primarySessionId?: string;
+    internalStateSnapshotRef?: string;
+  } & EventCorrelationFields;
   'system.init': Record<string, never>;
   'system.ready': Record<string, never>;
   'system.shutdown': Record<string, never>;

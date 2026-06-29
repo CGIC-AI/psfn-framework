@@ -124,7 +124,7 @@ class EmoSimObserverEvalSidecar implements ObserverEvalSidecarPort {
       });
     }
 
-    if (shouldPropagateObserverEvalObservationError(error, Boolean(this.options.persistence))) {
+    if (error && shouldPropagateObserverEvalObservationError(error, Boolean(this.options.persistence))) {
       throw new Error(error.message);
     }
   }

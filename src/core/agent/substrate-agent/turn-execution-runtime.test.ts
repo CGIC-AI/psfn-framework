@@ -2496,12 +2496,14 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       expect(contextStage?.data.observabilityWarnings.map((warning: { code: string }) => warning.code).sort()).toEqual([
         'history_span_exceeded',
         'stale_tool_observation_verbatim',
+        'temporal_reflection_only_retrieval',
         'values_activity_contradiction',
       ]);
       expect(contextStage?.data.observabilityCounters).toEqual({
-        warningCount: 3,
+        warningCount: 4,
         historySpanExceededCount: 1,
         staleToolObservationVerbatimCount: 1,
+        temporalReflectionOnlyRetrievalCount: 2,
         valuesActivityContradictionCount: 1,
       });
     } finally {

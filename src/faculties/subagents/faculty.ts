@@ -5,6 +5,7 @@ import type {
   ShardToolsetConfig,
   SubstrateConfig,
 } from '../../system/config/runtime-config-contracts.js';
+import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type {
   EmbeddingProviderPort as EmbeddingService,
@@ -328,9 +329,9 @@ export class SubagentFaculty implements SubagentControlPort {
         this.deps.llmProvider,
         sessionManager,
         handle.request.systemPrompt ?? this.deps.parentSystemPrompt,
-        this.deps.config,
+        sanitizeCoreSubstrateConfig(this.deps.config),
         {
-          runtimeMode: this.deps.runtimeMode ?? 'direct',
+          runtimeMode: this.deps.runtimeMode === 'gateway' ? 'gateway' : undefined,
         },
       );
       handle.agentLoop = agentLoop;

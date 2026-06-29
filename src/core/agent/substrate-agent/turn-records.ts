@@ -445,7 +445,7 @@ function cloneTurnObservabilityForRecord(
 }
 
 function hasOwnKeys(value: Record<string, unknown> | undefined): boolean {
-  return Boolean(value) && Object.keys(value).length > 0;
+  return Object.keys(value ?? {}).length > 0;
 }
 
 function collectToolProvenanceRefs(input: {

@@ -5,7 +5,7 @@ import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../../shared/contracts/runtime.js';
-import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { EventBridge } from '../event-bridge.js';
 import type { LLMProviderPort, MemoryExtractor, MemoryProvider } from '../contracts.js';
@@ -122,7 +122,7 @@ export interface TurnExecutionAdapterOptions {
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;
-  config: SubstrateConfig;
+  config: CoreSubstrateConfig;
   runtimeMode: RuntimeMode;
   agent: Agent;
   bridge: EventBridge;

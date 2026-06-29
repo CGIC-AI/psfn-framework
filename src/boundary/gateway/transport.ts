@@ -70,7 +70,7 @@ export interface GatewayRpcWssEndpoint {
 
 export type GatewayRpcEndpoint = GatewayRpcUnixEndpoint | GatewayRpcWssEndpoint;
 
-export interface GatewayRpcEndpointEnv {
+export interface GatewayRpcEndpointEnv extends NodeJS.ProcessEnv {
   GATEWAY_RPC_ENDPOINT?: string;
   GATEWAY_SOCKET?: string;
   GATEWAY_RPC_TLS_CA_PATH?: string;
@@ -729,7 +729,9 @@ function loadGatewayRpcClientTlsOptions(config: GatewayRpcTlsFileConfig): WebSoc
     cert: readFileSync(tlsConfig.certPath),
     key: readFileSync(tlsConfig.keyPath),
     rejectUnauthorized: true,
-    checkServerIdentity: createSpiffeCheckServerIdentity(tlsConfig.expectedPeerSpiffeUri),
+    checkServerIdentity: createSpiffeCheckServerIdentity(
+      tlsConfig.expectedPeerSpiffeUri,
+    ) as unknown as WebSocket.ClientOptions['checkServerIdentity'],
     ...(tlsConfig.serverName ? { servername: tlsConfig.serverName } : {}),
   };
 }

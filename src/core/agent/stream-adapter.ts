@@ -3,7 +3,7 @@
 // Core always uses an injected transport port so provider credentials remain outside
 // the core runtime boundary.
 
-import type { AssistantMessage, AssistantMessageEvent, Model, ThinkingLevel } from '@mariozechner/pi-ai';
+import type { AssistantMessage, AssistantMessageEvent, Model, StopReason, ThinkingLevel } from '@mariozechner/pi-ai';
 import type { StreamFn } from '@mariozechner/pi-agent-core';
 import type { LLMContext, LLMResponse, ModelBudgetBlockedEvent, MessageModelOverride, ModelPurpose, CorrelationMetadata, StreamCallbacks, ToolCall } from '../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -112,7 +112,7 @@ export function createSubstrateStreamFn(
           litellmBaseUrl,
           model,
           context,
-          options,
+          options: options ? { ...(options as object) } as Record<string, unknown> : undefined,
           purpose,
           service,
           processName,
@@ -568,7 +568,7 @@ function applyTerminalResponse(
   response: LLMResponse,
 ): void {
   state.partial.model = response.model;
-  state.partial.stopReason = response.stopReason;
+  state.partial.stopReason = normalizeStopReason(response.stopReason);
   state.partial.timestamp = Date.now();
   state.partial.usage = buildUsage(response);
   if (response.content) {
@@ -972,6 +972,13 @@ function toUsageCost(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0
     ? value
     : 0;
+}
+
+function normalizeStopReason(value: string): StopReason {
+  if (value === 'stop' || value === 'length' || value === 'toolUse' || value === 'error' || value === 'aborted') {
+    return value;
+  }
+  return 'stop';
 }
 
 function resolveModelProvider(model: Model<any>): string | undefined {

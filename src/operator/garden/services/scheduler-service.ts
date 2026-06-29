@@ -22,7 +22,10 @@ import type {
   TaskType,
 } from '../../../core/scheduler/types.js';
 import { resolveReflectionMetacognitionJournalPath } from '../../../persistence/layout.js';
-import { ReflectionMetacognitionJournalStore } from '../../../persistence/journals/reflection-metacognition-journal.js';
+import {
+  ReflectionMetacognitionJournalStore,
+  type ReflectionMutationSnapshot,
+} from '../../../persistence/journals/reflection-metacognition-journal.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 
 const log = createComponentLogger('AdminSchedulerService');
@@ -72,6 +75,10 @@ function cloneReflectionTemplate(template: ReflectionTemplate): ReflectionTempla
       ? { deliberation: cloneDeliberation(template.deliberation) }
       : {}),
   };
+}
+
+function toReflectionMutationSnapshot(template: ReflectionTemplate): ReflectionMutationSnapshot {
+  return JSON.parse(JSON.stringify(cloneReflectionTemplate(template))) as ReflectionMutationSnapshot;
 }
 
 function clonePolicy(policy: HeartbeatPolicy): HeartbeatPolicy {
@@ -303,8 +310,8 @@ export class AdminSchedulerService {
         reason: `Garden scheduler task update for reflection template "${templateId}"`,
         templateId,
         templateName: template.name,
-        mutationBefore: templateBefore,
-        mutationAfter: cloneReflectionTemplate(template),
+        mutationBefore: toReflectionMutationSnapshot(templateBefore),
+        mutationAfter: toReflectionMutationSnapshot(template),
       }).catch((error) => {
         this.policyStore.save(policyBefore);
         log.error(`Failed to persist reflection mutation audit for "${templateId}"`, {
@@ -558,8 +565,8 @@ export class AdminSchedulerService {
       reason: `Garden scheduler reflection template update for "${templateId}"`,
       templateId,
       templateName: template.name,
-      mutationBefore: templateBefore,
-      mutationAfter: cloneReflectionTemplate(template),
+      mutationBefore: toReflectionMutationSnapshot(templateBefore),
+      mutationAfter: toReflectionMutationSnapshot(template),
     }).catch((error) => {
       this.policyStore.save(policyBefore);
       log.error(`Failed to persist reflection mutation audit for "${templateId}"`, {

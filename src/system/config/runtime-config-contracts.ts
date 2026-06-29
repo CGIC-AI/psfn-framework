@@ -265,7 +265,16 @@ export const CORE_SECRET_BEARING_CONFIG_KEYS = [
 
 export type CoreSecretBearingConfigKey = (typeof CORE_SECRET_BEARING_CONFIG_KEYS)[number];
 
-export type CoreSubstrateConfig = Omit<SubstrateConfig, CoreSecretBearingConfigKey>;
+export interface CoreSubstrateConfig extends SubstrateConfig {
+  credentialVault?: never;
+  discordToken?: never;
+  discordBotId?: never;
+  litellmApiKeyRef?: never;
+  openRouterApiKeyRef?: never;
+  deepgramApiKey?: never;
+  elevenLabsApiKey?: never;
+  falApiKey?: never;
+}
 
 export function sanitizeCoreSubstrateConfig(config: SubstrateConfig): CoreSubstrateConfig {
   const {
@@ -280,5 +289,5 @@ export function sanitizeCoreSubstrateConfig(config: SubstrateConfig): CoreSubstr
     ...coreConfig
   } = config;
 
-  return coreConfig;
+  return coreConfig as CoreSubstrateConfig;
 }

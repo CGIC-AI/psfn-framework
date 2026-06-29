@@ -48,6 +48,7 @@ export interface PromptLayerStatePort {
   reorderByLayerIds(layerIds: string[], updatedBy: string, reason?: string): PromptLayer[];
   toggle(id: string): PromptLayer;
   delete(id: string): void;
+  getHistory(): PromptHistoryEntry[];
   getLayerHistory(layerId: string): PromptHistoryEntry[];
   rollback(layerId: string, version: number): PromptLayer;
   seedFromCharacterCard(systemPrompt: string): boolean;
@@ -90,6 +91,7 @@ export function createPromptLayerStatePort(store: PromptLayerStatePort): PromptL
     reorderByLayerIds: (layerIds, updatedBy, reason) => store.reorderByLayerIds(layerIds, updatedBy, reason),
     toggle: (id) => store.toggle(id),
     delete: (id) => store.delete(id),
+    getHistory: () => store.getHistory(),
     getLayerHistory: (layerId) => store.getLayerHistory(layerId),
     rollback: (layerId, version) => store.rollback(layerId, version),
     seedFromCharacterCard: (systemPrompt) => store.seedFromCharacterCard(systemPrompt),
@@ -124,6 +126,7 @@ function createDisabledPromptLayerStatePort(): PromptLayerStatePort {
     reorderByLayerIds: disabledError,
     toggle: disabledError,
     delete: disabledError,
+    getHistory: () => [],
     getLayerHistory: () => [],
     rollback: disabledError,
     seedFromCharacterCard: () => false,

@@ -141,6 +141,11 @@ import type {
   ImageReferenceUpdateInput,
   ImageReferenceUploadInput,
 } from '../../../primitives/images/reference-store.js';
+import type { ArtifactLifecycleStatus } from '../../../persistence/artifact-lifecycle/manager.js';
+import type {
+  ResearchLibraryEntryDetail,
+  ResearchLibraryEntrySummary,
+} from '../../../faculties/memory/research-library/types.js';
 import type {
   WikiDocument,
   WikiDocumentListEntry,
@@ -938,6 +943,19 @@ export interface AdminContactsService {
   mergeContacts(targetId: string, body: string): Promise<ContactUpdateResult>;
   unlinkChannelIdentity(contactId: string, body: string): Promise<ContactUpdateResult>;
   deleteConversationChannel(contactId: string, body: string): Promise<ContactUpdateResult>;
+}
+
+export interface AdminArtifactLifecycleService {
+  getArtifactLifecycleData(): ArtifactLifecycleStatus;
+}
+
+export interface AdminResearchLibraryData {
+  entries: ResearchLibraryEntrySummary[];
+}
+
+export interface AdminResearchLibraryService {
+  listEntries(): AdminResearchLibraryData;
+  getEntry(id: string): ResearchLibraryEntryDetail | null;
 }
 
 export interface AdminPromptListData {

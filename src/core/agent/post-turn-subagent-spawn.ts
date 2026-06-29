@@ -9,6 +9,8 @@ import {
 } from './post-turn-action-runtime.js';
 import {
   normalizeBoundedSubagentLaunchRequest,
+  type BoundedSubagentLaunchRequestInput,
+  type BoundedSubagentSourceContext,
   type SubagentExecutionPort,
 } from './substrate-agent/bounded-subagent-contract.js';
 import { RUNTIME_LANE_CLASSES } from './worker-lanes.js';
@@ -50,6 +52,20 @@ function requirePostTurnSubagentSpawnPolicy(payload: Record<string, unknown>): P
   };
 }
 
+function normalizePostTurnSourceContext(value: unknown): BoundedSubagentSourceContext | undefined {
+  if (!isRecord(value) || typeof value.channelId !== 'string' || !value.channelId.trim()) {
+    return undefined;
+  }
+  return {
+    channelId: value.channelId,
+    ...(typeof value.requestId === 'string' ? { requestId: value.requestId } : {}),
+    ...(typeof value.turnId === 'string' ? { turnId: value.turnId } : {}),
+    ...(isRecord(value.embodimentContext)
+      ? { embodimentContext: value.embodimentContext as unknown as BoundedSubagentSourceContext['embodimentContext'] }
+      : {}),
+  };
+}
+
 export function normalizePostTurnSubagentSpawnPayload(
   payload: Record<string, unknown>,
 ): PostTurnSubagentSpawnPayload {
@@ -69,10 +85,18 @@ export function normalizePostTurnSubagentSpawnPayload(
     throw new Error('Post-turn subagent spawn request exceeds policy budget.maxTurns.');
   }
 
-  const request = normalizeBoundedSubagentLaunchRequest({
-    ...payload.request,
+  const requestInput: BoundedSubagentLaunchRequestInput = {
+    name: String(payload.request.name ?? ''),
+    task: String(payload.request.task ?? ''),
+    ...(typeof payload.request.systemPrompt === 'string' ? { systemPrompt: payload.request.systemPrompt } : {}),
     maxTurns,
-  });
+    ...(Array.isArray(payload.request.capabilities) ? { capabilities: payload.request.capabilities.filter((value): value is string => typeof value === 'string') } : {}),
+    ...(Array.isArray(payload.request.requiredCapabilities) ? { requiredCapabilities: payload.request.requiredCapabilities.filter((value): value is string => typeof value === 'string') } : {}),
+    ...(normalizePostTurnSourceContext(payload.request.sourceContext)
+      ? { sourceContext: normalizePostTurnSourceContext(payload.request.sourceContext) }
+      : {}),
+  };
+  const request = normalizeBoundedSubagentLaunchRequest(requestInput);
   return {
     request,
     policy,
@@ -129,7 +153,7 @@ export function registerPostTurnSubagentSpawnRuntime(
     POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
     async (action): Promise<PostTurnActionHandlerResult> => {
       const normalized = normalizePostTurnSubagentSpawnPayload(action.payload);
-      const summary = await input.subagentExecutionPort.executeSubagent(normalized.request);
+      const summary = await input.subagentExecutionPort.executeSubagent(normalizeBoundedSubagentLaunchRequest(normalized.request));
       const subagentSpawn = summarizeSubagentSpawnResult(summary);
       return {
         detail: `subagent ${subagentSpawn.name} completed with ${subagentSpawn.lifecycleState}/${subagentSpawn.health}`,

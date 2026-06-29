@@ -281,8 +281,11 @@ function summarizeTitle(entries: readonly SessionEntry[], themes: readonly strin
 }
 
 function summarizeLandmark(entries: readonly SessionEntry[], themes: readonly string[]): string {
+  if (entries.length === 0) {
+    throw new Error('Cannot summarize an empty episode group');
+  }
   const first = entries[0];
-  const last = entries.at(-1);
+  const last = entries[entries.length - 1];
   const userTurns = entries.filter(entry => entry.role === 'user').length;
   const assistantTurns = entries.filter(entry => entry.role === 'assistant').length;
   return [
@@ -340,8 +343,11 @@ function inferAffect(entries: readonly SessionEntry[]): EpisodeAffect {
 }
 
 function buildSpanRef(sessionId: string, entries: readonly SessionEntry[]): EpisodeSpanRef {
+  if (entries.length === 0) {
+    throw new Error('Cannot build an episode span for an empty group');
+  }
   const first = entries[0];
-  const last = entries.at(-1);
+  const last = entries[entries.length - 1];
   return {
     spanId: stableId('l0-session-span', [
       sessionId,
@@ -418,8 +424,11 @@ function buildEpisodeInput(
   group: EpisodeGroup,
 ): EpisodeCandidateInput {
   const entries = group.entries;
+  if (entries.length === 0) {
+    throw new Error('Cannot synthesize an empty episode group');
+  }
   const first = entries[0];
-  const last = entries.at(-1);
+  const last = entries[entries.length - 1];
 
   const themes = inferThemes(entries);
   const spanRef = buildSpanRef(sessionId, entries);

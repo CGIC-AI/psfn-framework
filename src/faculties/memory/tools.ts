@@ -1406,9 +1406,9 @@ export function createMemoryTool(
       try {
         const normalizedParams = (normalizeToolArguments(
           'memory',
-          params as Record<string, unknown>,
+          params as unknown as Record<string, unknown>,
         ) ?? params) as MemoryToolParams;
-        const internalSource = extractInternalSource(normalizedParams as Record<string, unknown>);
+        const internalSource = extractInternalSource(normalizedParams as unknown as Record<string, unknown>);
         const action = normalizedParams.action;
 
         if (!MEMORY_TOOL_ACTIONS.includes(action)) {

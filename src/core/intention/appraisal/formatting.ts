@@ -6,6 +6,7 @@ import {
   isIntentionAppraisalArtifact,
   normalizeSessionEntryAttribution,
 } from '../../session/entry-attribution.js';
+import type { SessionEntryRole } from '../../session/types.js';
 import type { IntentionAppraisalMessage } from './types.js';
 
 export function formatPromptTimestamp(value: number | undefined): string | undefined {
@@ -31,18 +32,12 @@ export function sessionEntriesToIntentionMessages(
     if (typeof entry.role !== 'string' || typeof entry.content !== 'string') {
       continue;
     }
-    if (isIntentionAppraisalArtifact(entry)) {
+    const entryRole = normalizeSessionEntryRole(entry.role);
+    if (isIntentionAppraisalArtifact({ ...entry, role: entryRole })) {
       continue;
     }
     const normalized = normalizeSessionEntryAttribution({
-      role: (
-        entry.role === 'assistant'
-        || entry.role === 'system'
-        || entry.role === 'tool'
-        || entry.role === 'user'
-      )
-        ? entry.role
-        : 'user',
+      role: entryRole,
       content: entry.content,
       authorId: entry.authorId,
       authorName: entry.authorName,
@@ -65,4 +60,11 @@ export function sessionEntriesToIntentionMessages(
     });
   }
   return messages;
+}
+
+function normalizeSessionEntryRole(role: string): SessionEntryRole {
+  if (role === 'assistant' || role === 'system' || role === 'tool' || role === 'user') {
+    return role;
+  }
+  return 'user';
 }

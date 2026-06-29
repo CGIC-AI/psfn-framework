@@ -6,7 +6,7 @@ import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
 import type { CompositionalPolicyConfig } from '../../system/config/runtime-config-contracts.js';
 import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { LLMProvider } from '../agent/contracts.js';
+import type { LLMProviderPort } from '../agent/contracts.js';
 import type {
   ExtendedToolActivationOptions,
   ExtendedToolActivationResult,
@@ -63,7 +63,7 @@ export interface HeartbeatAgent {
 
 export interface HeartbeatRuntimeOptions {
   eventBus?: EventBus;
-  llmProvider?: LLMProvider;
+  llmProvider?: LLMProviderPort;
   capabilityTier?: CapabilityTier;
   compositionalPolicy?: CompositionalPolicyConfig;
   characterPromptVariablesProvider?: () => Record<string, string>;

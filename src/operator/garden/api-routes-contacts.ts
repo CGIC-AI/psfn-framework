@@ -32,12 +32,16 @@ export function buildAdminContactRoutes(options: {
         sendJson(res, 400, { error: parsed.error });
         return;
       }
-      const result = contactsService.updateContact(id, JSON.stringify(parsed.value));
-      if (!result.ok) {
-        sendJson(res, result.message === 'Contact not found' ? 404 : 400, { error: result.message });
-        return;
-      }
-      sendJson(res, 200, result);
+      contactsService.updateContact(id, JSON.stringify(parsed.value)).then(
+        (result) => {
+          if (!result.ok) {
+            sendJson(res, result.message === 'Contact not found' ? 404 : 400, { error: result.message });
+            return;
+          }
+          sendJson(res, 200, result);
+        },
+        (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+      );
     });
   };
 
@@ -47,17 +51,19 @@ export function buildAdminContactRoutes(options: {
       match: exactPath('/api/admin/contacts'),
       handle: (req, res) => {
         const url = parseRequestUrl(req, '/api/admin/contacts');
-        const data = contactsService.listContacts(url.searchParams);
-        sendJson(
-          res,
-          200,
-          {
-            ...data,
-            profileMap: Object.fromEntries(data.profileMap.entries()),
-            relatedChannelMap: Object.fromEntries(data.relatedChannelMap.entries()),
-            socialGraphMap: Object.fromEntries(data.socialGraphMap.entries()),
-          },
-          ADMIN_DYNAMIC_JSON_HEADERS,
+        contactsService.listContacts(url.searchParams).then(
+          (data) => sendJson(
+            res,
+            200,
+            {
+              ...data,
+              profileMap: Object.fromEntries(data.profileMap.entries()),
+              relatedChannelMap: Object.fromEntries(data.relatedChannelMap.entries()),
+              socialGraphMap: Object.fromEntries(data.socialGraphMap.entries()),
+            },
+            ADMIN_DYNAMIC_JSON_HEADERS,
+          ),
+          (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
         );
       },
     },
@@ -71,12 +77,16 @@ export function buildAdminContactRoutes(options: {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          const result = contactsService.createContact(JSON.stringify(parsed.value));
-          if (!result.ok) {
-            sendJson(res, 400, { error: result.message });
-            return;
-          }
-          sendJson(res, 201, result);
+          contactsService.createContact(JSON.stringify(parsed.value)).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, 400, { error: result.message });
+                return;
+              }
+              sendJson(res, 201, result);
+            },
+            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          );
         });
       },
     },
@@ -91,12 +101,16 @@ export function buildAdminContactRoutes(options: {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          const result = contactsService.mergeContacts(id, JSON.stringify(parsed.value));
-          if (!result.ok) {
-            sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
-            return;
-          }
-          sendJson(res, 200, result);
+          contactsService.mergeContacts(id, JSON.stringify(parsed.value)).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          );
         });
       },
     },
@@ -110,12 +124,16 @@ export function buildAdminContactRoutes(options: {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          const result = contactsService.unlinkChannelIdentity(id, JSON.stringify(parsed.value));
-          if (!result.ok) {
-            sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
-            return;
-          }
-          sendJson(res, 200, result);
+          contactsService.unlinkChannelIdentity(id, JSON.stringify(parsed.value)).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          );
         });
       },
     },
@@ -129,21 +147,16 @@ export function buildAdminContactRoutes(options: {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          const deleteConversationChannel = (
-            contactsService as AdminContactsService & {
-              deleteConversationChannel?: (contactId: string, requestBody: string) => { ok: boolean; message: string };
-            }
-          ).deleteConversationChannel;
-          if (typeof deleteConversationChannel !== 'function') {
-            sendJson(res, 400, { error: 'Conversation channel deletion is not available' });
-            return;
-          }
-          const result = deleteConversationChannel(id, JSON.stringify(parsed.value));
-          if (!result.ok) {
-            sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
-            return;
-          }
-          sendJson(res, 200, result);
+          contactsService.deleteConversationChannel(id, JSON.stringify(parsed.value)).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          );
         });
       },
     },
@@ -169,12 +182,16 @@ export function buildAdminContactRoutes(options: {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
       handle: (_req, res, { id }) => {
-        const result = contactsService.deleteContact(id);
-        if (!result.ok) {
-          sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
-          return;
-        }
-        sendJson(res, 200, result);
+        contactsService.deleteContact(id).then(
+          (result) => {
+            if (!result.ok) {
+              sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
+              return;
+            }
+            sendJson(res, 200, result);
+          },
+          (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+        );
       },
     },
     {

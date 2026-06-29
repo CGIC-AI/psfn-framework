@@ -384,7 +384,7 @@ async function completeForDeliberation(
 function buildCompletionOptions(
   requestedModel: string | undefined,
   maxTokens: number | undefined,
-  correlation?: CorrelationMetadata,
+  correlation?: Partial<CorrelationMetadata>,
 ): LLMCompletionOptions | undefined {
   if (!requestedModel && maxTokens === undefined && !correlation) return undefined;
   return {
@@ -404,12 +404,13 @@ function buildDeliberationCorrelation(
   baseCorrelation: Partial<CorrelationMetadata> | undefined,
   stageSuffix: string,
   fallbackOriginType: ObservabilityCallType,
-): CorrelationMetadata {
+): Partial<CorrelationMetadata> {
   const baseOriginStage = baseCorrelation?.originStage?.trim();
   const originStage = baseOriginStage
     ? `${baseOriginStage}.${stageSuffix}`
     : `deliberation.${stageSuffix}`;
   const pinnedCallType = baseCorrelation?.callType ?? baseCorrelation?.originType;
+  const resolvedCallType = pinnedCallType ?? fallbackOriginType;
   const shouldInferCallType = pinnedCallType === undefined
     && typeof baseCorrelation?.channelId === 'string'
     && baseCorrelation.channelId.trim().length > 0;
@@ -419,13 +420,9 @@ function buildDeliberationCorrelation(
     ...(baseCorrelation?.channelId ? { channelId: baseCorrelation.channelId } : {}),
     ...(baseCorrelation?.toolName ? { toolName: baseCorrelation.toolName } : {}),
     ...(baseCorrelation?.toolCallId ? { toolCallId: baseCorrelation.toolCallId } : {}),
-    ...(!shouldInferCallType
-      ? { callType: pinnedCallType ?? fallbackOriginType }
-      : {}),
+    ...(!shouldInferCallType ? { callType: resolvedCallType } : {}),
     purpose: originStage,
-    ...(!shouldInferCallType
-      ? { originType: pinnedCallType ?? fallbackOriginType }
-      : {}),
+    ...(!shouldInferCallType ? { originType: resolvedCallType } : {}),
     originStage,
   };
 }

@@ -38,6 +38,7 @@ import {
 } from '../startup/composition/composition.js';
 import { wirePromptRuntime, wireCharacterCardRuntime, wireStaticPromptRegistry, wireSettingsRuntime, wireSessionToolsRuntime, buildCharacterPromptVariablesProvider } from '../startup/composition/parity.js';
 import { registerContactRuntime, wireContactRuntime } from '../../core/contacts/runtime-wiring.js';
+import type { ContactRuntimeOptions } from '../../core/contacts/runtime-wiring.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { wireSkillsRuntime } from '../../faculties/skills/runtime-wiring.js';
 import { wireWikiRuntime } from '../../faculties/wiki/runtime-wiring.js';
@@ -265,7 +266,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   wireSettingsRuntime(agentLoop, config, { registerSystemTool: false });
   wireSessionToolsRuntime(agentLoop, sessionManager, pathSnapshot.companionDataDir, gateway);
-  const contactRuntimeOptions = {
+  const contactRuntimeOptions: ContactRuntimeOptions = {
     exportDir: resolveContactsDir(pathSnapshot.companionDataDir),
     ...(primaryTelegramUserId
       ? {

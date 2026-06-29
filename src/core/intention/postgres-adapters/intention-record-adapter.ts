@@ -358,7 +358,7 @@ export class PostgresBehavioralPatternTracker implements BehavioralPatternStoreP
       return rows[0] ?? null;
     }
 
-    return await queryOne<BehavioralPatternRow>(
+    const row = await queryOne<BehavioralPatternRow>(
       this.pool,
       `
         SELECT
@@ -372,6 +372,7 @@ export class PostgresBehavioralPatternTracker implements BehavioralPatternStoreP
       `,
       input.strategy ? [input.contactId, input.strategy] : [input.contactId],
     );
+    return row ?? null;
   }
 
   private async maybePromoteStrategy(contactId: string, strategy: string): Promise<void> {

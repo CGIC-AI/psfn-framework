@@ -5,7 +5,7 @@ import {
   parseToolObservationMetadata,
 } from '../session/tool-observation.js';
 import type { TurnRetrievalTelemetryRecord } from './observability.js';
-import type { TurnSnapshot } from './snapshot.js';
+import type { TurnMemorySnapshot, TurnSnapshot } from './snapshot.js';
 
 const REFLECTION_PROVENANCE_PREFIXES = ['reflection:', 'internal:reflection:', 'values:'] as const;
 const RECENT_LIVE_ACTIVITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -334,7 +334,7 @@ function collectValuesLayerClaimMatches(renderedDynamicSuffix: string): ClaimMat
 }
 
 function collectReflectionMemoryClaimMatches(
-  memorySnapshot: TurnSnapshot['memory'] | undefined,
+  memorySnapshot: TurnMemorySnapshot | undefined,
 ): ClaimMatch[] {
   if (!memorySnapshot) {
     return [];
@@ -354,7 +354,7 @@ function collectReflectionMemoryClaimMatches(
 }
 
 function isReflectionCandidate(
-  memory: Pick<TurnSnapshot['memory']['contactEmotionalMemories'][number], 'type' | 'sourceRef' | 'provenanceRefs'>,
+  memory: Pick<TurnMemorySnapshot['contactEmotionalMemories'][number], 'type' | 'sourceRef' | 'provenanceRefs'>,
 ): boolean {
   if (memory.type === 'reflection') {
     return true;

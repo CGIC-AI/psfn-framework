@@ -1240,10 +1240,10 @@ export function wirePostTurnActionRuntime(
         nextRunAt: entry.nextRunAt,
       }));
     },
-    cancel(actionRef: string, reason = 'cancelled'): boolean {
+    cancel(actionRef: string, reason: PostTurnActionTerminalReason = 'cancelled'): boolean {
       return completeQueuedActionWithoutRunning(actionRef, 'cancelled', reason);
     },
-    acknowledge(actionRef: string, detail = 'acknowledged'): boolean {
+    acknowledge(actionRef: string, detail: PostTurnActionTerminalReason = 'acknowledged'): boolean {
       return completeQueuedActionWithoutRunning(actionRef, 'acknowledged', detail);
     },
     getActionStatus,

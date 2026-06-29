@@ -33,6 +33,7 @@ import type {
   MemoryStorePort,
   MemoryStoreStats,
   MemoryStoreUpdatePatch,
+  MemoryPatchEvent,
   MemoryUndoSoftDeleteOptions,
   ScratchpadAddResult,
   ScratchpadEntry,
@@ -886,6 +887,30 @@ class PostgresMemoryStore implements MemoryStorePort {
       await this.updateMemory(id, { supersededBy: input.memory.id });
     }
     await this.insertMemory(input.memory, input.embedding);
+  }
+
+  async runInTransaction<T>(handler: () => T): Promise<T> {
+    return handler();
+  }
+
+  async recordPatchEvent(event: MemoryPatchEvent): Promise<void> {
+    await this.persist(() => executeQuery(this.pool, `
+      INSERT INTO l2_memory_patch_events (
+        id, memory_id, source_ref, source_type, provenance_json, reason, patch_json, previous_json, next_json, created_at
+      )
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+    `, [
+      event.id,
+      event.memoryId,
+      event.sourceRef,
+      normalizeMemorySourceType(event.sourceType),
+      serializeJsonValue(normalizeMemoryProvenance(event.provenance) ?? {}),
+      event.reason ?? null,
+      serializeJsonValue(event.patch),
+      serializeJsonValue(event.previousValues),
+      serializeJsonValue(event.nextValues),
+      event.createdAt,
+    ]));
   }
 
   async searchByEmbedding(

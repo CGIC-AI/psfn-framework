@@ -378,6 +378,7 @@ export function createRebuildTool(
           true,
         );
       }
+      const runBuildCommand = options.runBuildCommand;
       const fullReason = `rebuild: ${reason}`;
 
       log.info('Self-rebuild requested', { reason, tier });
@@ -393,7 +394,7 @@ export function createRebuildTool(
       setImmediate(async () => {
         try {
           log.info('Running configured rebuild command...');
-          await options.runBuildCommand();
+          await runBuildCommand();
           log.info('Build complete, shutting down...');
         } catch (err) {
           const errorText = err instanceof Error ? err.message : String(err);
@@ -495,18 +496,20 @@ export function createSystemTool(
       }
 
       if (action === 'restart') {
-        return createRestartTool(
+        const restartTool = createRestartTool(
           options.notifier,
           options.stopFn,
           options,
-        ).execute(toolCallId, { reason: params.reason ?? '' }, signal);
+        );
+        return restartTool.execute(toolCallId, { reason: params.reason ?? '' }, signal);
       }
 
-      return createRebuildTool(
+      const rebuildTool = createRebuildTool(
         options.notifier,
         options.stopFn,
         options,
-      ).execute(toolCallId, { reason: params.reason ?? '' }, signal);
+      );
+      return rebuildTool.execute(toolCallId, { reason: params.reason ?? '' }, signal);
     },
   };
 }
@@ -748,13 +751,14 @@ async function executeDeferredRebuild(
     await input.notifier.notifyShutdown('rebuild blocked: no lifecycle rebuild command is configured');
     return;
   }
+  const runBuildCommand = input.runBuildCommand;
   setImmediate(() => {
     void (async () => {
       const fullReason = `rebuild: ${payload.reason}`;
       await input.notifier.notifyPreRestart(fullReason);
       try {
         log.info('Running configured rebuild command...');
-        await input.runBuildCommand();
+        await runBuildCommand();
         log.info('Build complete, shutting down...');
       } catch (err) {
         const errorText = err instanceof Error ? err.message : String(err);

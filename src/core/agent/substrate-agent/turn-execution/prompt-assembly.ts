@@ -17,6 +17,7 @@ import type { ContextBudgetTurnCharacteristics } from '../../../../shared/contex
 import type {
   CorrelationMetadata,
   FatigueEnforcementMetadata,
+  LLMProviderWireMessage,
   MessagePromptOverrideMode,
   ObservabilityCallType,
   SubstrateMessage,
@@ -339,7 +340,7 @@ export async function assembleTurnPrompt(input: {
   turnSnapshot.capturedAt = Date.now();
   const providerModel = runtime.agent.state.model;
   const providerSystemRole = resolveSystemRoleCapabilityMetadata(providerModel);
-  const providerWireMessages = [];
+  const providerWireMessages: LLMProviderWireMessage[] = [];
   if (providerSystemPrompt) {
     providerWireMessages.push({
       role: providerSystemRole.transport === 'openai_developer'
@@ -477,6 +478,10 @@ export async function assembleTurnPrompt(input: {
       backendApi: providerModel.api,
       ...(providerModel.baseUrl ? { backendBaseUrl: providerModel.baseUrl } : {}),
       systemRole: providerSystemRole,
+      promptCaching: {
+        configured: false,
+        engaged: false,
+      },
       providerWireMessages,
     },
   };

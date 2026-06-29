@@ -689,7 +689,7 @@ export class ToolRuntimeFacade {
         continue;
       }
 
-      const guardedTool = this.createMaintenanceGuardedCoreTool(tool, taskKind, correlation);
+      const guardedTool = this.createMaintenanceGuardedCoreTool(tool, taskKind ?? '', correlation);
       if (!guardedTool) {
         this.emitTelemetry('agent.tools.core_guardrail.skipped', {
           ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.skipped'),

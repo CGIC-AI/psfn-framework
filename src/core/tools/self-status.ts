@@ -66,9 +66,14 @@ function clampLimit(value: unknown): number {
   return Math.max(1, Math.min(20, Math.floor(value)));
 }
 
-function cloneRecord<T extends Record<string, unknown>>(record: T): T {
+function cloneRecord<T>(record: T): T {
   return JSON.parse(JSON.stringify(record)) as T;
 }
+
+type ToolCatalogSection = {
+  generatedAt: number;
+  tools: Array<{ name: string; scope: string }>;
+} | SectionUnavailable | SectionError;
 
 function resolveCapabilityTier(runtime: SelfStatusToolRuntime): MaybeAvailable<{
   tier: CapabilityTier;
@@ -140,10 +145,7 @@ function resolveTools(runtime: SelfStatusToolRuntime): MaybeAvailable<{
     promotedActive: number;
     loadedExtended: number;
   };
-  catalog: {
-    generatedAt: number;
-    tools: Array<{ name: string; scope: string }>;
-  } | SectionUnavailable | SectionError;
+  catalog: ToolCatalogSection;
   health: ReturnType<typeof resolveToolHealth>;
 }> {
   if (!runtime.getAdaptiveToolRuntimeState) {
@@ -157,7 +159,7 @@ function resolveTools(runtime: SelfStatusToolRuntime): MaybeAvailable<{
     return sectionError('adaptive tool runtime state provider failed');
   }
 
-  let catalog: ReturnType<typeof resolveTools> extends MaybeAvailable<infer T> ? T['catalog'] : never;
+  let catalog: ToolCatalogSection;
   if (!runtime.getToolCatalogSnapshot) {
     catalog = unavailable('tool catalog snapshot provider is not wired');
   } else {
@@ -344,7 +346,7 @@ function resolveHeartbeat(
 }
 
 function resolveObserverEval(runtime: SelfStatusToolRuntime): MaybeAvailable<{
-  status: ObserverEvalSidecarHealthSnapshot['status'];
+  healthStatus: ObserverEvalSidecarHealthSnapshot['status'];
   enabled: boolean;
   available: boolean;
   accepting: boolean;
@@ -361,6 +363,7 @@ function resolveObserverEval(runtime: SelfStatusToolRuntime): MaybeAvailable<{
     const health = runtime.getObserverEvalSidecarHealth();
     return {
       status: 'available',
+      healthStatus: health.status,
       enabled: health.enabled,
       available: health.available,
       accepting: health.accepting,

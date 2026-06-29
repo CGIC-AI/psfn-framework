@@ -1,6 +1,7 @@
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { sessionEntryToMessage } from '../../../core/agent/messages.js';
+import { MESSAGE_CLASSES } from '../../../core/agent/message-classes.js';
 import { resolveValidatedCrossChannelContinuityProvenance } from '../../../core/session/cross-channel-continuity-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
@@ -28,6 +29,12 @@ import { AdminSessionTurnObservabilityStore } from './session-turn-observability
 import type { SessionEntry } from '../../../core/session/types.js';
 
 const DEFAULT_ADMIN_TURN_LIMIT = 50;
+
+function resolveMessageClass(value: unknown): AdminSessionMessageOntologyView['messageClass'] {
+  return typeof value === 'string' && Object.values(MESSAGE_CLASSES).includes(value as never)
+    ? value as AdminSessionMessageOntologyView['messageClass']
+    : MESSAGE_CLASSES.outwardSpeech;
+}
 
 function buildMessageOntologyView(entry: AdminSessionMessagesData['messages'][number]): AdminSessionMessageOntologyView {
   const classified = sessionEntryToMessage(entry);
@@ -73,7 +80,7 @@ function buildMessageOntologyView(entry: AdminSessionMessagesData['messages'][nu
     transportRole: entry.role,
     promptRole: classified.role,
     semanticType: 'outwardSpeech',
-    messageClass: classified.messageClass,
+    messageClass: resolveMessageClass('messageClass' in classified ? classified.messageClass : undefined),
     promptVisibility: 'prompt_visible',
     displayLabel: 'Outward speech',
   };

@@ -7,6 +7,7 @@ import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import { resolveCompanionIdFromConfig } from '../../identity/companion-runtime.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { SessionManager } from '../../session/manager.js';
 import {
   cloneMetacognitiveFlags,
@@ -14,7 +15,6 @@ import {
 } from '../../self-model/metacognition.js';
 import {
   buildInternalStateSnapshotRef,
-  cloneInternalState,
   type InternalState,
 } from '../../self-model/state.js';
 import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
@@ -23,7 +23,7 @@ import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
 import type { AgentResponse, CorrelationMetadata, FatigueEnforcementMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
-import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
 import { isTemporalContextBudgetTurn } from '../../../shared/context-budget.js';
 import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
@@ -71,6 +71,10 @@ import type { SessionEntry } from '../../session/types.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
+function cloneComputedInternalStateForResponse(internalState: InternalState): InternalState {
+  return JSON.parse(JSON.stringify(internalState)) as InternalState;
+}
+
 export interface TurnExecutionRuntime {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
@@ -79,7 +83,7 @@ export interface TurnExecutionRuntime {
   llmClient: LLMProviderPort;
   imageVisionReviewer: ImageVisionReviewer | null;
   sessionManager: SessionManager;
-  config: SubstrateConfig;
+  config: CoreSubstrateConfig;
   runtimeMode: RuntimeMode;
   agent: Agent;
   bridge: EventBridge;
@@ -104,7 +108,7 @@ export interface TurnExecutionRuntime {
     channelId: string;
     turnId: TurnID;
     requestId: string;
-    work: readonly Array<{ name: string; promise: Promise<unknown> }>;
+    work: ReadonlyArray<{ name: string; promise: Promise<unknown> }>;
     correlation: CorrelationMetadata;
   }) => void;
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
@@ -937,7 +941,7 @@ export async function handleMessageForTurn(
         inputTokens: turnUsage.inputTokens,
         outputTokens: turnUsage.outputTokens,
         durationMs: completedAt - startTime,
-        internalState: cloneInternalState(internalState),
+        internalState: cloneComputedInternalStateForResponse(internalState),
         internalStateSnapshotRef,
         metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),
         ...(retrievalProvenanceRefs.length > 0 ? { retrievalProvenanceRefs } : {}),

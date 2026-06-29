@@ -6,6 +6,7 @@
 import '../../shared/utils/load-dotenv.js';
 import { createInterface } from 'node:readline';
 import { loadConfig } from '../../system/config/load-config.js';
+import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { resolveCompanionNameFromCard } from '../../core/identity/companion-runtime.js';
@@ -62,7 +63,7 @@ async function main(): Promise<void> {
     llmProvider: llmClient,
     sessionManager,
     systemPrompt,
-    config,
+    config: sanitizeCoreSubstrateConfig(config),
   });
 
   // Memory

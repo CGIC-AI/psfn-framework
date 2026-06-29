@@ -13,6 +13,7 @@ import type {
   FatiguePolicyState,
 } from './charge-policy.js';
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
+import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 
 // ── Channel-agnostic message types ──
 
@@ -35,6 +36,7 @@ export interface TurnRecordToolCall {
   toolName: string;
   toolCallId?: string;
   isError?: boolean;
+  provenanceRefs?: string[];
 }
 
 export interface TurnRecordVersionPointers {
@@ -74,10 +76,7 @@ export interface WyomingShardDelegationHint {
   reason: string;
 }
 
-export interface GatewayRoutingMetadata {
-  schemaVersion: 1;
-  companionId: string;
-}
+export interface GatewayRoutingMetadata extends GatewayRoutingEnvelope {}
 
 export interface WyomingRoutingMetadata {
   connectionId?: string;
@@ -206,6 +205,12 @@ export interface MessageRoutingMetadata {
   canonicalContactId?: string;
   /** Internal provenance for generated messages so runtime handoffs do not masquerade as user-authored turns. */
   generated?: GeneratedMessageProvenanceMetadata;
+  workerExecution?: {
+    lane: string;
+    profileClass: string;
+    modelPurpose: ModelPurpose;
+    failClosed: boolean;
+  };
 }
 
 export interface SubstrateMessage {
@@ -846,8 +851,8 @@ export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
   budget: ModelBudgetWindowSnapshot;
 }
 
-export type ModelPurpose = 'chat' | 'background' | 'memory' | 'context' | 'reasoning' | 'longContext' | 'vision';
-export type CompletionPurpose = 'background' | 'memory' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing' | 'vision';
+export type ModelPurpose = 'chat' | 'background' | 'memory' | 'context' | 'reasoning' | 'longContext' | 'vision' | 'moa';
+export type CompletionPurpose = 'chat' | 'background' | 'memory' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing' | 'vision';
 export type ImportProcessingRouteMode = 'background' | 'openrouter_zdr' | 'local_endpoint';
 export const COMPOSITIONAL_PURPOSES = [
   'extraction',

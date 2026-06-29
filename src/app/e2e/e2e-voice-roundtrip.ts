@@ -17,6 +17,7 @@ import { promisify } from 'node:util';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { LLMClient } from '../../primitives/llm/client.js';
 import { composeSubstrateAgent, composeIdentity, composeSessionRuntimeAsync } from '../startup/composition/composition.js';
@@ -393,7 +394,7 @@ async function main(): Promise<void> {
       llmProvider: llmClient,
       sessionManager,
       systemPrompt,
-      config,
+      config: sanitizeCoreSubstrateConfig(config),
     });
 
     await eventBus.emit('system.init', {});

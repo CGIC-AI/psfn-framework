@@ -42,9 +42,14 @@ export function registerGatedDescriptors(
     }) => (params: unknown) => Promise<unknown>)
     | undefined;
   if (runtimeWithCompatibility.approvalBoundary) {
-    gateMethod = runtimeWithCompatibility.approvalBoundary.gate.bind(
-      runtimeWithCompatibility.approvalBoundary,
-    );
+    gateMethod = (input) => runtimeWithCompatibility.approvalBoundary!.gate({
+      method: input.method,
+      handler: input.handler,
+      paramsSummary: input.paramsSummary ?? (() => ({})),
+      approvalAction: input.approvalAction ?? input.method,
+      approvalScope: input.approvalScope ?? (() => input.method),
+      ...(input.approvalReason ? { approvalReason: input.approvalReason } : {}),
+    });
   } else if (runtimeWithCompatibility.gated) {
     gateMethod = ({ method, handler }) => runtimeWithCompatibility.gated!(method, handler);
   }

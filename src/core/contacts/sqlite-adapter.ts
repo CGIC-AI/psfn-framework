@@ -27,6 +27,11 @@ function asyncContactStore(store: ContactStore): ContactStorePort {
     mergeContacts: async (sourceContactId, targetContactId) => store.mergeContacts(sourceContactId, targetContactId),
     updateNotes: async (id, notes, actor) => store.updateNotes(id, notes, actor),
     updateEmotionalBaseline: async (id, observation) => store.updateEmotionalBaseline(id, observation),
+    setMachineIntelligence: async (id, isMachineIntelligence, actor) => store.setMachineIntelligence(
+      id,
+      isMachineIntelligence,
+      actor,
+    ),
     getEmotionalSnapshot: async (id) => store.getEmotionalSnapshot(id),
     getEmotionalTimeSeries: async (id, limit) => store.getEmotionalTimeSeries(id, limit),
     updateRelationshipType: async (id, relationshipType, actor) => store.updateRelationshipType(id, relationshipType, actor),

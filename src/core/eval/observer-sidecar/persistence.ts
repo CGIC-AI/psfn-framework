@@ -20,8 +20,6 @@ import type {
   ObserverEvalSanitizedInputPayload,
   ObserverEvalSanitizedLifecycleStatePayload,
 } from './privacy.js';
-import type { ObserverEvalSidecarConfig } from './types.js';
-
 export {
   OBSERVER_EVAL_COMPARISON_METRICS_VERSION,
   type ObserverEvalSidecarComparisonMetrics,
@@ -46,6 +44,7 @@ export const OBSERVER_EVAL_RETENTION_CLASSES = Object.freeze([
 export type ObserverEvalRetentionClass = typeof OBSERVER_EVAL_RETENTION_CLASSES[number];
 export type ObserverEvalSidecarRunStatus = 'running' | 'completed' | 'degraded' | 'failed';
 export type ObserverEvalSidecarObservationStatus = 'ok' | 'degraded' | 'error';
+export type ObserverEvalPersistenceDeployment = 'live' | 'eval' | 'test';
 
 export interface ObserverEvalSidecarRetentionMetadata {
   retentionClass: ObserverEvalRetentionClass;
@@ -189,7 +188,7 @@ interface ObserverEvalRunRow {
   eval_owner: string;
   authoritative: boolean;
   sidecar_id: string;
-  deployment: NonNullable<ObserverEvalSidecarConfig['deployment']>;
+  deployment: ObserverEvalPersistenceDeployment;
   eval_session_id: string | null;
   scenario_id: string | null;
   test_run_id: string | null;
@@ -712,8 +711,11 @@ function mapObservationRow(row: ObserverEvalObservationRow): ObserverEvalSidecar
     privacyClass: row.privacy_class,
     sensitivity: row.sensitivity,
     channelVisibility: row.channel_visibility,
-    rawContentRedacted: row.raw_content_redacted,
-    sensitiveIdentifiersRedacted: row.sensitive_identifiers_redacted,
+    rawContentRedacted: requireTrue(row.raw_content_redacted, 'observer_eval_sidecar_observations.raw_content_redacted'),
+    sensitiveIdentifiersRedacted: requireTrue(
+      row.sensitive_identifiers_redacted,
+      'observer_eval_sidecar_observations.sensitive_identifiers_redacted',
+    ),
     derivedTelemetryPermitted: row.derived_telemetry_permitted,
     redactionReason: row.redaction_reason,
   };
@@ -853,9 +855,16 @@ function normalizeLimit(limit: number | undefined): number {
   return Math.min(MAX_QUERY_LIMIT, Math.floor(limit));
 }
 
-function normalizeDeployment(value: string): NonNullable<ObserverEvalSidecarConfig['deployment']> {
+function normalizeDeployment(value: string): ObserverEvalPersistenceDeployment {
   if (value === 'live' || value === 'eval' || value === 'test') return value;
   throw new Error(`deployment is invalid: ${String(value)}`);
+}
+
+function requireTrue(value: boolean, field: string): true {
+  if (value !== true) {
+    throw new Error(`${field} must be true`);
+  }
+  return true;
 }
 
 function normalizeRunStatus(value: string): ObserverEvalSidecarRunStatus {

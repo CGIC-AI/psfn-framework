@@ -34,14 +34,15 @@ export function renderPromptBlock(
   },
 ): string {
   const sections: string[] = [];
+  const socialContext = options?.socialContext;
   if (profile && profile.summary.trim().length > 0) {
     sections.push(wrapPromptSectionXml({
       id: 'core_profile',
       content: `Core profile for this person:\n${profile.summary.trim()}`,
     }));
   }
-  if ((options?.socialContext?.relatedContactsById.size ?? 0) > 0) {
-    sections.push(renderSocialContext(options.socialContext!));
+  if ((socialContext?.relatedContactsById.size ?? 0) > 0 && socialContext) {
+    sections.push(renderSocialContext(socialContext));
   }
   if (options?.emotionalSnapshot) {
     sections.push(renderEmotionalSnapshot(options.emotionalSnapshot));

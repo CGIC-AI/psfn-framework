@@ -171,6 +171,7 @@ export function createNorthStarTool(store: NorthStarStore): AgentTool<any> {
           case 'reorder':
             return reorderTool.execute(toolCallId, params as { item_ids: string[] });
         }
+        return textResultWithError(`north_star failed: unsupported action=${String(action)}`, true);
       } catch (error) {
         return textResultWithError(`north_star failed for action=${action}: ${errorMessage(error)}`, true);
       }

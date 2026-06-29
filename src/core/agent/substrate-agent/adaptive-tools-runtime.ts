@@ -743,7 +743,10 @@ export function createToolsetTool(runtime: ToolsetToolRuntime): AgentTool<any> {
       }
 
       if (action === 'activate') {
-        return executeToolsetActivateAction(runtime, executeParams);
+        return executeToolsetActivateAction(runtime, {
+          ...executeParams,
+          tools: normalizeToolNameList(executeParams.tools ?? []),
+        });
       }
 
       const toolName = typeof executeParams.tool === 'string' ? executeParams.tool.trim() : '';
@@ -864,14 +867,14 @@ export function createToolSearchTool(runtime: SearchToolsToolRuntime): AgentTool
         })
         .sort((left, right) => {
           if (right.score !== left.score) return right.score - left.score;
-          if (left.status !== right.status) {
+          if (left.status.status !== right.status.status) {
             const weight: Record<ToolSearchResultEntry['status'], number> = {
               active: 0,
               available: 1,
               capability_denied: 2,
               background_only: 3,
             };
-            return weight[left.status] - weight[right.status];
+            return weight[left.status.status] - weight[right.status.status];
           }
           if (left.turnClass !== right.turnClass) {
             return left.turnClass.localeCompare(right.turnClass);

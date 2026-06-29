@@ -34,7 +34,11 @@ export class ModelCallGate {
       return execute();
     }
 
-    const release = await this.acquire(request);
+    const release = await this.acquire({
+      resourceKey: request.resourceKey,
+      runtimeClass: request.runtimeClass,
+      ...(request.signal ? { signal: request.signal } : {}),
+    });
     try {
       return await execute();
     } finally {
@@ -42,17 +46,20 @@ export class ModelCallGate {
     }
   }
 
-  private async acquire(request: Required<Pick<ModelCallGateRequest, 'resourceKey' | 'runtimeClass'>> & {
+  private async acquire(request: {
+    resourceKey: string;
+    runtimeClass: RuntimeLaneClass;
     signal?: AbortSignal;
   }): Promise<() => void> {
     if (request.signal?.aborted) {
       throw createAbortError();
     }
 
-    const queue = this.ensureQueue(request.resourceKey);
+    const resourceKey = request.resourceKey;
+    const queue = this.ensureQueue(resourceKey);
     if (!queue.active && queue.pending.length === 0) {
       queue.active = true;
-      return this.createRelease(request.resourceKey);
+      return this.createRelease(resourceKey);
     }
 
     return await new Promise<() => void>((resolve, reject) => {
@@ -66,7 +73,7 @@ export class ModelCallGate {
 
       if (request.signal) {
         const onAbort = () => {
-          const nextQueue = this.queues.get(request.resourceKey);
+          const nextQueue = this.queues.get(resourceKey);
           if (!nextQueue) {
             reject(createAbortError());
             return;
@@ -74,7 +81,7 @@ export class ModelCallGate {
           const index = nextQueue.pending.indexOf(pending);
           if (index >= 0) {
             nextQueue.pending.splice(index, 1);
-            this.deleteQueueIfIdle(request.resourceKey, nextQueue);
+            this.deleteQueueIfIdle(resourceKey, nextQueue);
           }
           reject(createAbortError());
         };

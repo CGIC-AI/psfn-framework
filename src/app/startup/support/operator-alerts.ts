@@ -10,6 +10,11 @@ const PROMPT_GENERATION_FAILURE_SENDER: NotificationSenderMetadata = Object.free
   provenance: 'system.operator_alert.prompt_generation_failure',
 });
 
+export interface PromptGenerationFailureAlertEnv extends NodeJS.ProcessEnv {
+  NTFY_BASE_URL?: string;
+  NTFY_TOPIC?: string;
+}
+
 export function createPromptGenerationFailureAlertHandler(
   notifier: NotificationPort,
   companionName = 'PSFN',
@@ -76,7 +81,7 @@ export function formatPromptGenerationFailureAlert(
 }
 
 export function isPromptGenerationFailureAlertConfigured(
-  env: Pick<NodeJS.ProcessEnv, 'NTFY_BASE_URL' | 'NTFY_TOPIC'> = process.env,
+  env: PromptGenerationFailureAlertEnv = process.env,
 ): boolean {
   return Boolean(env.NTFY_BASE_URL?.trim() && env.NTFY_TOPIC?.trim());
 }

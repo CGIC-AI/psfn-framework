@@ -246,11 +246,12 @@ function recordEmbeddingUsage(
   error?: unknown,
 ): void {
   const completedAtMs = Date.now();
-  const provider = typeof (runtime.embeddingService as { kind?: unknown }).kind === 'string'
-    ? String((runtime.embeddingService as { kind: string }).kind)
+  const embeddingMetadata = runtime.embeddingService as unknown as { kind?: unknown; model?: unknown };
+  const provider = typeof embeddingMetadata.kind === 'string'
+    ? embeddingMetadata.kind
     : 'embedding';
-  const model = typeof (runtime.embeddingService as { model?: unknown }).model === 'string'
-    ? String((runtime.embeddingService as { model: string }).model)
+  const model = typeof embeddingMetadata.model === 'string'
+    ? embeddingMetadata.model
     : `dims:${runtime.embeddingService.dims}`;
   const logicalCallId = [
     'embedding',

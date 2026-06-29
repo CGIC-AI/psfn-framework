@@ -70,6 +70,8 @@ import {
 } from './services/observer-eval-sidecar-service.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { GroupMemoryBackfillInput } from '../../faculties/memory/extraction/group-backfill.js';
+import type { ReflectionTemplate } from '../../core/scheduler/heartbeat-policy.js';
+import type { ScheduledTask, TaskType } from '../../core/scheduler/types.js';
 
 export interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -2830,7 +2832,7 @@ export function buildAdminApiRoutes(options: {
             runAt: task.runAt,
             state: task.state,
             cadence: task.type === 'every'
-              ? (task as ScheduledTaskWithCadence).cadence
+              ? (task as ScheduledTask).cadence
               : undefined,
             lastRunAt: task.lastRunAt,
             lastFinishedAt: task.lastFinishedAt,

@@ -2212,6 +2212,6 @@ describe('createBoundedSubagentLaunchTool', () => {
 
     const text = result.content.map((c: any) => c.text).join('');
     expect(text).toContain('Bounded subagent error');
-    expect(result.details?.isError).toBe(true);
+    expect(result.details.isError).toBe(true);
   });
 });

@@ -5,6 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentTool, AgentToolResult } from '@mariozechner/pi-agent-core';
 import type { CapabilityTier, ShardToolsetConfig, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { resolvePresenceSubjectId } from '../../core/agent/presence-metadata.js';
 import type { EventBus } from '../../shared/event-bus.js';
@@ -527,7 +528,7 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         this.deps.llmProvider,
         sessionManager,
         systemPrompt,
-        runtimeConfig,
+        sanitizeCoreSubstrateConfig(runtimeConfig),
         {
           runtimeMode: this.deps.runtimeMode,
         },
@@ -1283,8 +1284,9 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     if (toolName !== 'memory' || typeof params !== 'object' || params === null || Array.isArray(params)) {
       return false;
     }
-    const action = typeof (params as Record<string, unknown>).action === 'string'
-      ? (params as Record<string, unknown>).action.trim().toLowerCase()
+    const paramRecord = params as Record<string, unknown>;
+    const action = typeof paramRecord.action === 'string'
+      ? paramRecord.action.trim().toLowerCase()
       : '';
     return action === 'import';
   }
@@ -1445,8 +1447,9 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       if (typeof params !== 'object' || params === null || Array.isArray(params)) {
         return null;
       }
-      const action = typeof (params as Record<string, unknown>).action === 'string'
-        ? (params as Record<string, unknown>).action.trim().toLowerCase()
+      const paramRecord = params as Record<string, unknown>;
+      const action = typeof paramRecord.action === 'string'
+        ? paramRecord.action.trim().toLowerCase()
         : '';
       if (action === 'write') return 'memory_write';
       if (action === 'import') return 'memory_import_batch';
@@ -1479,8 +1482,9 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       if (typeof params !== 'object' || params === null || Array.isArray(params)) {
         return params;
       }
-      const action = typeof (params as Record<string, unknown>).action === 'string'
-        ? (params as Record<string, unknown>).action.trim().toLowerCase()
+      const paramRecord = params as Record<string, unknown>;
+      const action = typeof paramRecord.action === 'string'
+        ? paramRecord.action.trim().toLowerCase()
         : '';
       if (action !== 'write') {
         return params;

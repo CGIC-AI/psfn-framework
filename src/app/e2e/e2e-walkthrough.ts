@@ -9,6 +9,7 @@ import '../../shared/utils/load-dotenv.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { sleep } from '../../shared/utils/timing.js';
+import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { SalienceDecay } from '../../faculties/memory/decay.js';
 import { DEFAULT_REPL_CONFIG } from '../../core/tools/analysis-workbench/types.js';
@@ -82,7 +83,7 @@ async function main(): Promise<void> {
       llmProvider: llmClient,
       sessionManager,
       systemPrompt,
-      config,
+      config: sanitizeCoreSubstrateConfig(config),
     });
     const memoryExtractor = wireMemoryRuntime({
       agentLoop,

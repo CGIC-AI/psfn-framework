@@ -55,6 +55,10 @@ import type {
 
 export const CONSTITUTION_IMMUTABLE_LAYER_ID_PREFIX = 'constitution:immutable:';
 export const CONSTITUTION_COMPANION_LAYER_ID = 'constitution:companion-derived-values';
+type FoundationSectionIdentifier = (typeof FOUNDATION_SECTION_DEFINITIONS)[number]['identifier'];
+const FOUNDATION_SECTION_IDENTIFIER_SET = new Set<string>(
+  FOUNDATION_SECTION_DEFINITIONS.map(section => section.identifier),
+);
 
 export interface AdminPromptsDataServiceDeps {
   promptStore: PromptLayerStatePort;
@@ -311,9 +315,14 @@ export class AdminPromptsServiceContext {
     const orderByIdentifier = new Map(
       FOUNDATION_SECTION_DEFINITIONS.map((section, index) => [section.identifier, index] as const),
     );
+    const resolveOrder = (identifier: string | undefined): number => (
+      identifier && FOUNDATION_SECTION_IDENTIFIER_SET.has(identifier)
+        ? orderByIdentifier.get(identifier as FoundationSectionIdentifier) ?? Number.MAX_SAFE_INTEGER
+        : Number.MAX_SAFE_INTEGER
+    );
     return layers.sort((left, right) => {
-      const leftOrder = left.identifier ? (orderByIdentifier.get(left.identifier) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
-      const rightOrder = right.identifier ? (orderByIdentifier.get(right.identifier) ?? Number.MAX_SAFE_INTEGER) : Number.MAX_SAFE_INTEGER;
+      const leftOrder = resolveOrder(left.identifier);
+      const rightOrder = resolveOrder(right.identifier);
       if (leftOrder !== rightOrder) return leftOrder - rightOrder;
       return left.priority - right.priority;
     });

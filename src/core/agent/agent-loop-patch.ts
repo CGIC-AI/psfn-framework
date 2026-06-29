@@ -115,12 +115,13 @@ export function installAgentToolSchedulerPatch(agent: Agent, schedulerOptions: T
             }
             break;
           case 'agent_error':
-            terminalStreamError = event.error instanceof Error
+            const normalizedError = event.error instanceof Error
               ? event.error
               : new Error(String(event.error));
+            terminalStreamError = normalizedError;
             sawTerminalStreamError = true;
             partial = null;
-            this._state.error = terminalStreamError.message;
+            this._state.error = normalizedError.message;
             this._state.streamMessage = null;
             break;
           case 'agent_end':

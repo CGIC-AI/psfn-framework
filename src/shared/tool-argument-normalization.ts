@@ -110,7 +110,7 @@ function normalizeFsReadArguments(args: Record<string, unknown>): Record<string,
     return args;
   }
 
-  const normalized = { ...args, path: normalizedPath };
+  const normalized: Record<string, unknown> = { ...args, path: normalizedPath };
   for (const key of Object.keys(args)) {
     const canonicalKey = normalizeArgumentKey(key);
     if ((canonicalKey === 'path' || canonicalKey === 'file_path' || canonicalKey === 'filepath') && key !== 'path') {

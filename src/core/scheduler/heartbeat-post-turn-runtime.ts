@@ -549,8 +549,8 @@ export function wireHeartbeatPostTurnRuntime(
       emitDeferredToolHandoffTelemetry({
         actionId: telemetry.actionId,
         dedupeKey: telemetry.dedupeKey,
-        channelId: telemetry.channelId,
-        sourceMessageId: telemetry.sourceMessageId,
+        channelId: telemetry.channelId ?? payload.turn.channelId,
+        sourceMessageId: telemetry.sourceMessageId ?? payload.turn.turnId,
         toolNames: payload.toolNames,
         intendedAction: payload.intendedAction,
         phase: 'queued',
@@ -561,8 +561,8 @@ export function wireHeartbeatPostTurnRuntime(
       emitDeferredToolHandoffTelemetry({
         actionId: telemetry.actionId,
         dedupeKey: telemetry.dedupeKey,
-        channelId: telemetry.channelId,
-        sourceMessageId: telemetry.sourceMessageId,
+        channelId: telemetry.channelId ?? payload.turn.channelId,
+        sourceMessageId: telemetry.sourceMessageId ?? payload.turn.turnId,
         toolNames: payload.toolNames,
         intendedAction: payload.intendedAction,
         phase: 'failed',

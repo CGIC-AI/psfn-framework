@@ -87,6 +87,11 @@ interface HeartbeatRunTemplateResult {
   deferredAction?: PostTurnActionCandidate;
 }
 
+interface ScheduleToolResultDetails {
+  isError?: boolean;
+  deferredAction?: PostTurnActionCandidate;
+}
+
 interface ScheduleToolParams {
   action?: ScheduleToolActionName;
   limit?: number;
@@ -427,8 +432,8 @@ function resolveScheduleRequirement(params: Record<string, unknown>): Capability
   }
 }
 
-export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any> {
-  const tool: AgentTool<any> = {
+export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any, ScheduleToolResultDetails> {
+  const tool: AgentTool<any, ScheduleToolResultDetails> = {
     name: 'schedule',
     label: 'schedule',
     description:
@@ -522,7 +527,7 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any>
       _toolCallId: string,
       params: ScheduleToolParams = {},
       _signal?: AbortSignal,
-    ): Promise<AgentToolResult<{ isError?: boolean }>> => {
+    ): Promise<AgentToolResult<ScheduleToolResultDetails>> => {
       let action: ScheduleToolAction;
       try {
         action = normalizeAction(params.action);

@@ -102,11 +102,13 @@ export function buildAdminMemoryRoutes(options: {
           sendJson(res, 400, { error: 'startDate must be before or equal to endDate' });
           return;
         }
-        const data = memoryService.listMemories(url.searchParams);
-        sendJson(res, 200, {
-          ...data,
-          contactsById: Object.fromEntries(data.contactsById.entries()),
-        });
+        memoryService.listMemories(url.searchParams).then(
+          (data) => sendJson(res, 200, {
+            ...data,
+            contactsById: Object.fromEntries(data.contactsById.entries()),
+          }),
+          (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+        );
       },
     },
     {
@@ -138,7 +140,10 @@ export function buildAdminMemoryRoutes(options: {
           sendJson(res, 400, { error: 'Invalid managed memory scope kind' });
           return;
         }
-        sendJson(res, 200, memoryService.listManagedScopes(url.searchParams));
+        memoryService.listManagedScopes(url.searchParams).then(
+          (data) => sendJson(res, 200, data),
+          (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+        );
       },
     },
     {
@@ -194,13 +199,17 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          const result = memoryService.updateMemoryScope(id, { scopeRef, scopeTags, repair });
-          if (!result.ok) {
-            const status = result.message === 'Memory not found' ? 404 : 400;
-            sendJson(res, status, { error: result.message ?? 'Failed to update memory scope' });
-            return;
-          }
-          sendJson(res, 200, result);
+          memoryService.updateMemoryScope(id, { scopeRef, scopeTags, repair }).then(
+            (result) => {
+              if (!result.ok) {
+                const status = result.message === 'Memory not found' ? 404 : 400;
+                sendJson(res, status, { error: result.message ?? 'Failed to update memory scope' });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          );
         });
       },
     },
@@ -225,12 +234,16 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          const result = memoryService.linkMemories(id1, id2, linkType);
-          if (!result.ok) {
-            sendJson(res, 400, { error: result.message ?? 'Failed to create link' });
-            return;
-          }
-          sendJson(res, 201, result);
+          memoryService.linkMemories(id1, id2, linkType).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, 400, { error: result.message ?? 'Failed to create link' });
+                return;
+              }
+              sendJson(res, 201, result);
+            },
+            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          );
         });
       },
     },
@@ -253,12 +266,16 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          const result = memoryService.unlinkMemories(id1, id2);
-          if (!result.ok) {
-            sendJson(res, 404, { error: result.message ?? 'Link not found' });
-            return;
-          }
-          sendJson(res, 200, { ok: true });
+          memoryService.unlinkMemories(id1, id2).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, 404, { error: result.message ?? 'Link not found' });
+                return;
+              }
+              sendJson(res, 200, { ok: true });
+            },
+            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          );
         });
       },
     },
@@ -283,12 +300,16 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          const result = memoryService.bulkDelete(ids);
-          if (!result.ok) {
-            sendJson(res, 400, { error: result.message ?? 'Bulk delete failed' });
-            return;
-          }
-          sendJson(res, 200, result);
+          memoryService.bulkDelete(ids).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, 400, { error: result.message ?? 'Bulk delete failed' });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          );
         });
       },
     },
@@ -323,12 +344,16 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          const result = memoryService.bulkUpdate(ids, { memoryType, sensitivity });
-          if (!result.ok) {
-            sendJson(res, 400, { error: result.message ?? 'Bulk update failed' });
-            return;
-          }
-          sendJson(res, 200, result);
+          memoryService.bulkUpdate(ids, { memoryType, sensitivity }).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, 400, { error: result.message ?? 'Bulk update failed' });
+                return;
+              }
+              sendJson(res, 200, result);
+            },
+            (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+          );
         });
       },
     },
@@ -337,8 +362,10 @@ export function buildAdminMemoryRoutes(options: {
       method: 'GET',
       match: paramWithSuffix('/api/admin/memory/', 'id', '/links'),
       handle: (_req, res, { id }) => {
-        const links = memoryService.getMemoryLinks(id);
-        sendJson(res, 200, { links });
+        memoryService.getMemoryLinks(id).then(
+          (links) => sendJson(res, 200, { links }),
+          (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+        );
       },
     },
     {
@@ -360,7 +387,20 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          void memoryService.patchMemory(id, { text, reason, referencePath })
+          const patchMemory = (
+            memoryService as AdminMemoryService & {
+              patchMemory?: (
+                memoryId: string,
+                fields: { text: string; reason?: string; referencePath?: string },
+              ) => Promise<{ ok: boolean; message?: string }>;
+            }
+          ).patchMemory;
+          if (typeof patchMemory !== 'function') {
+            sendJson(res, 400, { error: 'Memory patching is not available' });
+            return;
+          }
+
+          void patchMemory(id, { text, reason, referencePath })
             .then((result) => {
               if (!result.ok) {
                 const status = result.message === 'Memory not found' ? 404 : 400;
@@ -397,12 +437,16 @@ export function buildAdminMemoryRoutes(options: {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/memory/', 'id'),
       handle: (_req, res, { id }) => {
-        const result = memoryService.supersedeMemory(id);
-        if (!result.ok) {
-          sendJson(res, 404, { error: result.message ?? 'Memory not found' });
-          return;
-        }
-        sendJson(res, 200, { ok: true });
+        memoryService.supersedeMemory(id).then(
+          (result) => {
+            if (!result.ok) {
+              sendJson(res, 404, { error: result.message ?? 'Memory not found' });
+              return;
+            }
+            sendJson(res, 200, { ok: true });
+          },
+          (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
+        );
       },
     },
   ];

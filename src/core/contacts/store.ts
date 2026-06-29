@@ -203,7 +203,7 @@ export class ContactStore implements ContactStorePort {
     contact: Contact | undefined,
     identities: ContactChannelIdentity[],
     discordUserId: string | undefined,
-    options: TrustMutationOptions = {},
+    options: ContactTrustMutationOptions = {},
   ): boolean {
     if (options.allowPrimaryTrustAssignment === true) return true;
 

@@ -193,10 +193,11 @@ export class TurnSupportRuntime {
   }): IntentionalNoReplyMetadata | null {
     const correlation = this.activeTurnCorrelation;
     const turnId = correlation?.turnId as TurnID | undefined;
-    if (!turnId) {
+    if (!correlation || !turnId) {
       log.warn('Intentional no-reply requested without active turn correlation');
       return null;
     }
+    const activeCorrelation = correlation;
 
     const decision: IntentionalNoReplyMetadata = {
       schemaVersion: 1,
@@ -205,15 +206,15 @@ export class TurnSupportRuntime {
       auditId: `no-reply:${turnId}:${input.toolCallId ?? 'unknown-tool-call'}`,
       decidedAt: Date.now(),
       turnId,
-      ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
-      ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
+      ...(activeCorrelation.requestId ? { requestId: activeCorrelation.requestId } : {}),
+      ...(activeCorrelation.channelId ? { channelId: activeCorrelation.channelId } : {}),
       ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
       ...(input.reason ? { reason: input.reason } : {}),
     };
     this.intentionalNoReplyDecisions.set(turnId, decision);
     this.emitTelemetry('agent.no_reply.intentional', {
       ...decision,
-      ...this.withCorrelationPurpose(correlation, 'agent.no_reply.intentional'),
+      ...this.withCorrelationPurpose(activeCorrelation, 'agent.no_reply.intentional'),
     });
     return decision;
   }
@@ -666,8 +667,11 @@ export class TurnSupportRuntime {
     completedAt: number;
     userSessionEntryId: number | null;
     assistantSessionEntryId: number | null;
-    response: AgentResponse;
+    response?: AgentResponse;
+    model?: string;
+    assistantMessageContent?: string;
     turnMessages: AgentMessage[];
+    status?: TurnRecord['status'];
     promptMode: MessagePromptOverrideMode;
     promptText: string;
     contextMessageCount: number;

@@ -328,13 +328,33 @@ export async function computePreTurnState(input: {
     && typeof memoryProvider.getActiveMemoryContext === 'function'
     ? memoryProvider.getActiveMemoryContext(activeMemoryRequest)
     : null;
-  const activeMemoryRefreshScheduled = !!(
+  const legacyMemoryContextBlock = memoryProvider
+    && !bypassMemoryForVisionTurn
+    && typeof memoryProvider.getActiveMemoryContext !== 'function'
+    ? await memoryProvider.retrieve(
+      memoryRetrievalContextText,
+      message.channelId,
+      trustLevel,
+      channelMeta,
+      authorContext.canonicalContactKey,
+      undefined,
+      turnBudgetCharacteristics,
+      undefined,
+      focusMemoryScopeQuery ?? undefined,
+      temporalRetrievalCallerContext,
+      temporalRetrievalMode,
+    )
+    : '';
+  const refreshActiveMemoryContext = (
     memoryProvider
     && !bypassMemoryForVisionTurn
     && typeof memoryProvider.refreshActiveMemoryContext === 'function'
-  );
-  if (activeMemoryRefreshScheduled) {
-    void memoryProvider.refreshActiveMemoryContext(activeMemoryRequest).catch((error: unknown) => {
+  )
+    ? memoryProvider.refreshActiveMemoryContext.bind(memoryProvider)
+    : undefined;
+  const activeMemoryRefreshScheduled = refreshActiveMemoryContext !== undefined;
+  if (refreshActiveMemoryContext) {
+    void refreshActiveMemoryContext(activeMemoryRequest).catch((error: unknown) => {
       const errorText = toErrorMessage(error);
       log.error('Active memory context refresh failed after scheduling', {
         channelId: message.channelId,
@@ -431,7 +451,9 @@ export async function computePreTurnState(input: {
     toolCallCount: 0,
     sessionChannelId: emotionSessionId,
   });
-  const memoryContextBlock = bypassMemoryForVisionTurn ? '' : activeMemoryContext?.contextBlock ?? '';
+  const memoryContextBlock = bypassMemoryForVisionTurn
+    ? ''
+    : activeMemoryContext?.contextBlock ?? legacyMemoryContextBlock;
   const memoryContextChars = memoryContextBlock.length;
   const scratchpadBlock = runtime.buildScratchpadContextBlock();
   observability.emitObservedTurnStage('memory', {

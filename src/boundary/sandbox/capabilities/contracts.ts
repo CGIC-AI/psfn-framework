@@ -87,7 +87,7 @@ export interface ChildProcessCodeExecutionBoundary {
 
 export type SandboxCodeExecutionBoundary = ChildProcessCodeExecutionBoundary;
 
-export type SandboxHostHelper = (...args: unknown[]) => unknown | Promise<unknown>;
+export type SandboxHostHelper = (...args: any[]) => unknown | Promise<unknown>;
 
 export interface SandboxCodeExecutionRequest {
   code: string;
@@ -162,6 +162,10 @@ export interface SandboxDeps {
   runNestedAnalysis?: NestedAnalysisRunner;
   moduleInstallConfirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
+  mutationPolicy?: {
+    allowRepoMutation?: boolean;
+    allowWorkspaceWrite?: boolean;
+  };
   requestMetadata?: Partial<LLMRequestMetadata>;
 }
 

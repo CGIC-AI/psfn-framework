@@ -10,7 +10,7 @@ import {
 } from './settings.js';
 import { textResultWithError as textResult } from '../core/tools/results.js';
 
-interface SettingsGetParams {
+export interface SettingsGetParams {
   key?: string;
   keys?: string[];
   list?: boolean;

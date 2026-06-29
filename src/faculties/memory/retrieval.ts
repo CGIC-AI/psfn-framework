@@ -143,7 +143,7 @@ const ACTIVE_MEMORY_MISS_DECAY = 0.72;
 const EVOLUTION_CHAIN_USEFUL_HINT = /\b(history|lineage|changed|change|updated|update|previous|old|correction|corrected|conflict|contradict|superseded|why)\b/i;
 
 function hasCountEntries(record: Record<string, number | undefined> | undefined): boolean {
-  return !!record && Object.values(record).some(count => count > 0);
+  return !!record && Object.values(record).some(count => count !== undefined && count > 0);
 }
 
 function applyWithheldSummaryTelemetry(
@@ -2015,12 +2015,9 @@ export class MemoryRetriever implements MemoryProvider {
 
     const contact = this.contactStore ? await this.contactStore.getById(contactId) : undefined;
     if (contact && querySuggestsContactFocus(queryTokens, {
-      contactId,
       displayName: contact.displayName,
-      trustLevel: contact.trustLevel,
       relationshipType: contact.relationshipType,
       relationshipLabels: [],
-      relatedToCanonical: false,
     })) {
       return 0.9;
     }

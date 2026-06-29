@@ -493,7 +493,7 @@ function maybeLoadSqliteVec(db: Database.Database, warnings: SqliteToPostgresMem
 function loadSqliteData(sqlitePath: string, embeddingDims: number): LoadedSqliteData {
   const db = new Database(sqlitePath, { readonly: true, fileMustExist: true });
   const rows = Object.fromEntries(
-    MIGRATION_TABLES.map(table => [table, []]),
+    MIGRATION_TABLES.map((table): [MigrationTableName, SqliteRow[]] => [table, []]),
   ) as Record<MigrationTableName, SqliteRow[]>;
   const tables = createInitialTablesReport();
   const tableColumns = Object.fromEntries(
@@ -1053,7 +1053,7 @@ async function upsertMemories(
         deleted_by = EXCLUDED.deleted_by,
         delete_reason = EXCLUDED.delete_reason,
         embedding = EXCLUDED.embedding
-    `, values);
+    `, [...values]);
     appliedRows += 1;
   }
   return appliedRows;
@@ -1080,7 +1080,7 @@ async function upsertScratchpadEntries(
         content = EXCLUDED.content,
         created_at = EXCLUDED.created_at,
         updated_at = EXCLUDED.updated_at
-    `, values);
+    `, [...values]);
     appliedRows += 1;
   }
   return appliedRows;
@@ -1123,7 +1123,7 @@ async function upsertDeleteVersions(
         delete_reason = EXCLUDED.delete_reason,
         restored_at = EXCLUDED.restored_at,
         restored_by = EXCLUDED.restored_by
-    `, values);
+    `, [...values]);
     appliedRows += 1;
   }
   return appliedRows;
@@ -1154,7 +1154,7 @@ async function upsertAbstractionLinks(
         created_at = EXCLUDED.created_at,
         created_by = EXCLUDED.created_by,
         reason = EXCLUDED.reason
-    `, values);
+    `, [...values]);
     appliedRows += 1;
   }
   return appliedRows;
@@ -1190,7 +1190,7 @@ async function upsertPatchEvents(
         previous_json = EXCLUDED.previous_json,
         next_json = EXCLUDED.next_json,
         created_at = EXCLUDED.created_at
-    `, values);
+    `, [...values]);
     appliedRows += 1;
   }
   return appliedRows;
@@ -1225,7 +1225,7 @@ async function upsertMaintenanceReviews(
         quarantine_reason = EXCLUDED.quarantine_reason,
         created_at = EXCLUDED.created_at,
         updated_at = EXCLUDED.updated_at
-    `, values);
+    `, [...values]);
     appliedRows += 1;
   }
   return appliedRows;
@@ -1251,7 +1251,7 @@ async function upsertMemoryLinks(
       ON CONFLICT (id1, id2) DO UPDATE SET
         link_type = EXCLUDED.link_type,
         created_at = EXCLUDED.created_at
-    `, values);
+    `, [...values]);
     appliedRows += 1;
   }
   return appliedRows;
@@ -1282,7 +1282,7 @@ async function upsertContactProfiles(
         confidence_score = EXCLUDED.confidence_score,
         novelty_score = EXCLUDED.novelty_score,
         updated_at = EXCLUDED.updated_at
-    `, values);
+    `, [...values]);
     appliedRows += 1;
   }
   return appliedRows;
@@ -1338,7 +1338,7 @@ async function upsertEpisodes(
         embedding = EXCLUDED.embedding,
         episode_json = EXCLUDED.episode_json,
         updated_at = EXCLUDED.updated_at
-    `, values);
+    `, [...values]);
     appliedRows += 1;
   }
   return appliedRows;
@@ -1386,7 +1386,7 @@ async function upsertEpisodeArcs(
         provenance_refs = EXCLUDED.provenance_refs,
         arc_json = EXCLUDED.arc_json,
         updated_at = EXCLUDED.updated_at
-    `, values);
+    `, [...values]);
     appliedRows += 1;
   }
   return appliedRows;

@@ -49,6 +49,7 @@ import {
   ReflectionProcessLogStore,
   type ReflectionContactActiveConcern,
   type ReflectionContactContextBundle,
+  type ReflectionContactEmotionalSnapshot,
   type ReflectionContactRecentMessage,
   type ReflectionSubstrateContext,
 } from '../../persistence/journals/reflection-substrate.js';
@@ -1043,6 +1044,17 @@ export function createHeartbeatTemplateRuntime(
     )
       ? await runtimeOptions.contactStore.getEmotionalSnapshot(reflectionCanonicalContactId) ?? null
       : null;
+    const reflectionEmotionalSnapshot: ReflectionContactEmotionalSnapshot | null = emotionalSnapshot
+      ? {
+        baselineValence: emotionalSnapshot.baselineValence,
+        moodValence: emotionalSnapshot.moodValence,
+        moodDrift: emotionalSnapshot.moodDrift,
+        moodSamples: emotionalSnapshot.moodSamples,
+        ...(emotionalSnapshot.lastMoodUpdateEpochMs !== undefined
+          ? { lastMoodUpdateEpochMs: emotionalSnapshot.lastMoodUpdateEpochMs }
+          : {}),
+      }
+      : null;
     const emotionalTimeSeries = (
       reflectionCanonicalContactId && runtimeOptions.contactStore?.getEmotionalTimeSeries
     )
@@ -1118,7 +1130,7 @@ export function createHeartbeatTemplateRuntime(
         primarySessionId,
         lastSeen,
         lastSeenDeltaSeconds,
-        emotionalSnapshot,
+        emotionalSnapshot: reflectionEmotionalSnapshot,
         emotionalTimeSeries,
         recentSessionMessages,
         memoryBlock: memoryRetrieval.memoryBlock,

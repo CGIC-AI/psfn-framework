@@ -346,10 +346,18 @@ export function resolveGatewayBootstrapInput(
     { credentialVault: config.credentialVault },
   );
 
-  const ntfyConfigured = Boolean(ntfyBaseUrl && ntfyTopic);
   const ntfyConfigIncomplete = Boolean(
     (ntfyBaseUrl && !ntfyTopic) || (!ntfyBaseUrl && ntfyTopic),
   );
+  const ntfy = ntfyBaseUrl && ntfyTopic
+    ? {
+      baseUrl: ntfyBaseUrl,
+      defaultTopic: ntfyTopic,
+      token: ntfyToken,
+      timeoutMs: ntfyTimeoutMs,
+      debounceWindowMs: ntfyDebounceMs,
+    }
+    : undefined;
 
   return {
     diagnostics: {
@@ -374,17 +382,7 @@ export function resolveGatewayBootstrapInput(
     server: {
       sessionHmacKeyring,
       wyomingShardRouting,
-      ...(ntfyConfigured
-        ? {
-          ntfy: {
-            baseUrl: ntfyBaseUrl,
-            defaultTopic: ntfyTopic,
-            token: ntfyToken,
-            timeoutMs: ntfyTimeoutMs,
-            debounceWindowMs: ntfyDebounceMs,
-          },
-        }
-        : {}),
+      ...(ntfy ? { ntfy } : {}),
       confirmation: {
         expiryMs: confirmationExpiryMs,
         operatorDiscordChannelId: confirmationOperatorDiscordChannelId,

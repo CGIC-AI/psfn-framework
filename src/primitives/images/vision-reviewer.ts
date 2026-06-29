@@ -15,10 +15,11 @@ import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
 import { resolveProviderApiKey } from '../../boundary/custody/credential-vault.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { sanitizeCoreSubstrateConfig, type SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { extractTextContent } from '../llm/conversion.js';
 import { clampVisionCompletionMaxTokens } from '../llm/vision-limits.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type { LLMContext } from '../../shared/contracts/runtime.js';
 import type {
   ImageMode,
   ImageVisionReview,
@@ -162,7 +163,7 @@ function buildCandidateModelHint(candidate: RoutingCandidate) {
 }
 
 export class DefaultImageVisionReviewer implements ImageVisionReviewer {
-  private readonly completeImpl: ImageVisionReviewerOptions['completeImpl'];
+  private readonly completeImpl: NonNullable<ImageVisionReviewerOptions['completeImpl']>;
 
   constructor(
     private readonly config: SubstrateConfig,
@@ -205,7 +206,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
         ],
         timestamp: Date.now(),
       }],
-    } satisfies PiContext;
+    };
 
     if (this.options.llmProvider) {
       const candidates = resolveRoutingCandidates(this.config, 'vision');
@@ -219,7 +220,7 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
           const response = await this.options.llmProvider.complete(
             {
               systemPrompt: context.systemPrompt,
-              messages: context.messages,
+              messages: context.messages as unknown as LLMContext['messages'],
               modelHint: buildCandidateModelHint(candidate),
             },
             'vision',
@@ -242,10 +243,10 @@ export class DefaultImageVisionReviewer implements ImageVisionReviewer {
       throw new Error(`vision review failed for all configured vision models: ${lastError?.message ?? 'unknown error'}`);
     }
 
-    const model = resolveModel(this.config, 'vision');
+    const model = resolveModel(sanitizeCoreSubstrateConfig(this.config), 'vision');
     const response = await this.completeImpl(
       model,
-      context,
+      context as unknown as PiContext,
       {
         apiKey: resolveApiKey(model, this.config),
         maxTokens: clampVisionCompletionMaxTokens(model.maxTokens),

@@ -285,12 +285,12 @@ async function executeCodeInChildProcess(
   const timeoutMs = normalizeTimeoutMs(request.timeoutMs);
 
   return await new Promise<SandboxCodeExecutionResponse>((resolve) => {
-    const child = spawn(
+    const child: ChildProcess = spawn(
       process.execPath,
-      CHILD_PROCESS_NODE_ARGS,
+      [...CHILD_PROCESS_NODE_ARGS],
       {
         env: {},
-        stdio: CHILD_STDIO,
+        stdio: [...CHILD_STDIO],
         serialization: 'advanced',
       },
     );
@@ -340,11 +340,11 @@ async function executeCodeInChildProcess(
       void handleHelperCall(child, request, rawMessage);
     });
 
-    child.on('error', (error) => {
+    child.on('error', (error: Error) => {
       settle(createChildProcessFailure(`child process sandbox failed: ${toErrorMessage(error)}`));
     });
 
-    child.on('exit', (code, signal) => {
+    child.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
       const stderr = stderrChunks.join('').trim();
       const suffix = stderr ? `: ${stderr}` : '';

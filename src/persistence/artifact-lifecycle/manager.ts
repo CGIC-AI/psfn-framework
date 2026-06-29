@@ -9,7 +9,7 @@ import {
 import { join, relative, resolve } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { ArtifactLifecyclePolicyConfig } from '../../system/config/scheduler-config.js';
-import type { ScratchpadEntry } from '../../faculties/memory/store.js';
+import type { ScratchpadEntry } from '../../core/agent/contracts.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import {
   resolveArtifactLifecycleAuditPath,

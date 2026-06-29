@@ -512,9 +512,14 @@ export function buildOrientationNoteTelemetry(params: {
 
   const sessionSummary = summarizeConversationEntries(priorEntries, params.characterName);
   const continuitySummary = summarizeConversationEntries(params.continuityEntries, params.characterName);
-  const lastUserMessage = relevantRecentEntries
-    .findLast(entry => entry.role === 'user')
-    ?.content;
+  let lastUserMessage: string | undefined;
+  for (let index = relevantRecentEntries.length - 1; index >= 0; index -= 1) {
+    const entry = relevantRecentEntries[index];
+    if (entry.role === 'user') {
+      lastUserMessage = entry.content;
+      break;
+    }
+  }
 
   const noteParts = [
     renderSystemLanguageTemplate('wake_return.header'),

@@ -903,16 +903,16 @@ export class DiscordAdapter implements ChannelAdapterPort {
     const chunks = splitMessage(content);
     if (chunks.length === 0) return;
 
-    await msg.reply(chunks[0]);
+    await msg.reply(chunks[0]!);
     for (let i = 1; i < chunks.length; i++) {
-      await (msg.channel as TextChannel).send(chunks[i]);
+      await (msg.channel as TextChannel).send(chunks[i]!);
     }
   }
 
   private resolveRuntimeBotId(): string | undefined {
     const liveBotId = this.client.user?.id;
     if (liveBotId) return liveBotId;
-    const configuredBotId = this.runtimeConfig.discordBotId.trim();
+    const configuredBotId = this.runtimeConfig.discordBotId?.trim() ?? '';
     return configuredBotId.length > 0 ? configuredBotId : undefined;
   }
 

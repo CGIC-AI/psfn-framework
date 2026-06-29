@@ -121,7 +121,7 @@ function normalizeStringArray(
   lowerCase = false,
 ): string[] {
   if (value === undefined) return [];
-  const rawItems = Array.isArray(value) ? value : value.split(',');
+  const rawItems = typeof value === 'string' ? value.split(',') : value;
   const normalized: string[] = [];
   const seen = new Set<string>();
   for (const item of rawItems) {

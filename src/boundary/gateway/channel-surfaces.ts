@@ -76,7 +76,7 @@ export async function loadGatewayChannelSurfaces(
 
   return {
     discord: requireChannelAdapter<DiscordAdapter>(gatewayChannelRegistry, 'discord'),
-    telegram: getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram'),
+    telegram: getOptionalChannelAdapter<TelegramAdapter>(gatewayChannelRegistry, 'telegram') ?? undefined,
   };
 }
 

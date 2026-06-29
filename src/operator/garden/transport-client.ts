@@ -24,6 +24,7 @@ import {
 import type {
   GardenAdminTransportClientEndpoint,
   GardenAdminTransportNetworkClientEndpoint,
+  GardenAdminTransportSocketEndpoint,
 } from './transport-paths.js';
 
 const log = createComponentLogger('GardenAdminTransportProxy');
@@ -51,6 +52,10 @@ interface TlsRequestOptions {
   checkServerIdentity: NonNullable<ConnectionOptions['checkServerIdentity']>;
 }
 
+type WebSocketTlsRequestOptions = Omit<TlsRequestOptions, 'checkServerIdentity'> & {
+  checkServerIdentity: NonNullable<ClientOptions['checkServerIdentity']>;
+};
+
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
@@ -70,6 +75,30 @@ function buildProxyHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
   forwardedHeaders['x-forwarded-proto'] = forwardedProto;
   forwardedHeaders.host = forwardedHost ?? 'localhost';
   return forwardedHeaders;
+}
+
+function buildWebSocketHeaders(headers: IncomingHttpHeaders): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(buildProxyHeaders(headers))) {
+    const firstValue = firstHeader(value);
+    if (firstValue !== undefined) {
+      normalized[key] = firstValue;
+    }
+  }
+  return normalized;
+}
+
+function toWebSocketTlsOptions(tlsOptions: TlsRequestOptions): WebSocketTlsRequestOptions {
+  return tlsOptions as unknown as WebSocketTlsRequestOptions;
+}
+
+function asSocketEndpoint(
+  endpoint: GardenAdminTransportClientEndpoint,
+): GardenAdminTransportSocketEndpoint {
+  if (endpoint.mode !== 'socket') {
+    throw new Error('Garden admin transport endpoint is not socket-backed');
+  }
+  return endpoint;
 }
 
 function parseTransportProbePayload(body: string): { status?: string; error?: string } | null {
@@ -372,20 +401,23 @@ export class GardenAdminTransportProxy {
 
   private buildTelemetryWebSocketOptions(req: IncomingMessage): ClientOptions {
     const options: ClientOptions = {
-      headers: buildProxyHeaders(req.headers),
+      headers: buildWebSocketHeaders(req.headers),
       handshakeTimeout: this.endpoint.timeoutMs,
     };
 
     if (this.endpoint.mode === 'socket') {
+      const socketEndpoint = asSocketEndpoint(this.endpoint);
       return {
         ...options,
-        createConnection: () => createConnection(this.endpoint.socketPath),
+        createConnection: () => createConnection(socketEndpoint.socketPath),
       };
     }
 
     return {
       ...options,
-      ...(this.endpoint.wsUrl.protocol === 'wss:' ? this.tlsRequestOptions : {}),
+      ...(this.endpoint.wsUrl.protocol === 'wss:' && this.tlsRequestOptions
+        ? toWebSocketTlsOptions(this.tlsRequestOptions)
+        : {}),
     };
   }
 

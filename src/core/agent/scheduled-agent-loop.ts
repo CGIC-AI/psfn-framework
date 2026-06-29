@@ -201,7 +201,7 @@ function buildLoopCheckInMessage(stepCount: number): AgentMessage {
         + 'Do not repeat failed tool calls; continue only when the next step directly advances the goal and fits the charge budget.',
     }],
     timestamp: Date.now(),
-  } as AgentMessage;
+  } as unknown as AgentMessage;
 }
 
 function buildLoopLimitMessage(

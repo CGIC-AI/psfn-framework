@@ -30,6 +30,10 @@ import type {
   AdminMemoryPrivacySummary,
   AdminMemorySearchResult,
   AdminMemoryService,
+  AdminMemoryScopeDetailData,
+  AdminMemoryScopeListData,
+  AdminMemoryScopeMutationResult,
+  AdminMemoryScopeRepairView,
   MemoryMutationResult,
 } from './types.js';
 
@@ -194,7 +198,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     }));
   }
 
-  private buildScopeRepair(memory: AdminMemoryDetailData['memory']): AdminMemoryDetailData['scopeRepair'] {
+  private buildScopeRepair(memory: AdminMemoryDetailData['memory']): AdminMemoryScopeRepairView {
     const preview = buildManagedScopeRepairPreview(memory);
     return {
       needsRepair: preview.needsRepair,

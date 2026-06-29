@@ -127,6 +127,15 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     ],
   },
   {
+    name: 'response_control',
+    domain: 'system',
+    exposure: 'core',
+    description: 'Canonical response-disposition surface for intentional no-reply decisions.',
+    actions: ['no_reply'],
+    capabilityMetadata: { kind: 'static', source: CAPABILITIES_REQUIREMENTS },
+    retiredAliases: [],
+  },
+  {
     name: 'fs',
     domain: 'boundary',
     exposure: 'core',

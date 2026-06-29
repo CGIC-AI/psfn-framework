@@ -38,6 +38,7 @@ import type {
   WebSocketVoiceSession,
 } from '../../primitives/voice/transports/websocket/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { resolveAgentResponseDisposition } from '../../shared/agent-response-disposition.js';
 import type { WebRequestBinaryResult } from '../../boundary/gateway/protocol.js';
 import type {
   VoiceWebSocketRuntime,
@@ -462,14 +463,19 @@ async function runAgentAssistantTurn(params: {
 
     await eventBus.emit('message.received', { message });
     const response = await agentLoop.handleMessage(message);
-    await eventBus.emit('message.sent', { response });
-    await eventBus.emit('voice.tts.requested', {
-      turnId,
-      channelId,
-      userId: actor.authorId,
-      text: response.content,
-      timestampMs: Date.now(),
-    });
+    const disposition = resolveAgentResponseDisposition(response);
+    if (disposition.kind === 'send') {
+      await eventBus.emit('message.sent', { response });
+      await eventBus.emit('voice.tts.requested', {
+        turnId,
+        channelId,
+        userId: actor.authorId,
+        text: response.content,
+        timestampMs: Date.now(),
+      });
+    } else if (disposition.kind === 'empty_response_error') {
+      throw new Error('Voice agent returned empty content without an intentional no-reply marker');
+    }
     await eventBus.emit('voice.turn.end', {
       turnId,
       channelId,

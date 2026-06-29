@@ -3,7 +3,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { SessionManager } from '../../session/manager.js';
 import { normalizeChannelVisibility, type TrustLevel } from '../../../system/trust/types.js';
-import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, MessagePromptOverrideMode, ObservabilityCallType, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, CorrelationMetadata, InferredPostTurnAction, IntentionalNoReplyMetadata, MessagePromptOverrideMode, ObservabilityCallType, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
@@ -135,6 +135,7 @@ export class TurnSupportRuntime {
   private readonly backgroundContinuationTasks = new Map<string, BackgroundContinuationTaskRecord>();
   private readonly postTurnActionInferers: PostTurnActionInferer[] = [];
   private readonly intentionPostTurnHooks: IntentionPostTurnHook[] = [];
+  private readonly intentionalNoReplyDecisions = new Map<TurnID, IntentionalNoReplyMetadata>();
   private postTurnDrainSequence = 0;
   private activePostTurnDrain: ActivePostTurnDrain | null = null;
 
@@ -183,6 +184,46 @@ export class TurnSupportRuntime {
 
   setActiveTurnIntent(intent: string | null): void {
     this.activeTurnIntent = intent;
+  }
+
+  recordIntentionalNoReplyDecision(input: {
+    source: IntentionalNoReplyMetadata['source'];
+    toolCallId?: string;
+    reason?: string;
+  }): IntentionalNoReplyMetadata | null {
+    const correlation = this.activeTurnCorrelation;
+    const turnId = correlation?.turnId as TurnID | undefined;
+    if (!turnId) {
+      log.warn('Intentional no-reply requested without active turn correlation');
+      return null;
+    }
+
+    const decision: IntentionalNoReplyMetadata = {
+      schemaVersion: 1,
+      disposition: 'intentional_no_reply',
+      source: input.source,
+      auditId: `no-reply:${turnId}:${input.toolCallId ?? 'unknown-tool-call'}`,
+      decidedAt: Date.now(),
+      turnId,
+      ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
+      ...(correlation.channelId ? { channelId: correlation.channelId } : {}),
+      ...(input.toolCallId ? { toolCallId: input.toolCallId } : {}),
+      ...(input.reason ? { reason: input.reason } : {}),
+    };
+    this.intentionalNoReplyDecisions.set(turnId, decision);
+    this.emitTelemetry('agent.no_reply.intentional', {
+      ...decision,
+      ...this.withCorrelationPurpose(correlation, 'agent.no_reply.intentional'),
+    });
+    return decision;
+  }
+
+  consumeIntentionalNoReplyDecision(turnId: TurnID): IntentionalNoReplyMetadata | null {
+    const decision = this.intentionalNoReplyDecisions.get(turnId) ?? null;
+    if (decision) {
+      this.intentionalNoReplyDecisions.delete(turnId);
+    }
+    return decision;
   }
 
   getBackgroundContinuationTasks(): readonly BackgroundContinuationTaskRecord[] {

@@ -8,7 +8,7 @@ import { ContactStore } from '../../core/contacts/store.js';
 import { ApiServer } from './server.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { SessionManager } from '../../core/session/manager.js';
-import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, IntentionalNoReplyMetadata, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { ApiServerHealthChecks } from './types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
@@ -290,6 +290,21 @@ function emitQueuedTurnResult(
       await eventBus.emit('agent.turn.end', { message, response });
     })();
   });
+}
+
+function makeNoReplyMetadata(channelId: string): IntentionalNoReplyMetadata {
+  return {
+    schemaVersion: 1,
+    disposition: 'intentional_no_reply',
+    source: 'response_control_tool',
+    auditId: `no-reply:test-turn:${channelId}`,
+    decidedAt: Date.parse('2026-03-08T12:00:00Z'),
+    turnId: '018f0000-0000-7000-9000-000000000001' as IntentionalNoReplyMetadata['turnId'],
+    requestId: 'api-no-reply-request',
+    channelId,
+    toolCallId: 'tool-call-no-reply',
+    reason: 'intentional quiet',
+  };
 }
 
 function toAuthSubprotocol(apiToken: string): string {
@@ -659,6 +674,102 @@ describe('ApiServer', () => {
       expect(body.usage.prompt_tokens).toBe(10);
       expect(body.usage.completion_tokens).toBe(5);
       expect(body.usage.total_tokens).toBe(15);
+    });
+
+    it('returns an empty completion for structured intentional no-reply responses', async () => {
+      await server.stop();
+      const mockAgent = {
+        handleMessage: vi.fn(async (msg: SubstrateMessage) => ({
+          content: '',
+          channelId: msg.channelId,
+          metadata: {
+            model: 'test-model',
+            inputTokens: 4,
+            outputTokens: 1,
+            durationMs: 12,
+            noReply: makeNoReplyMetadata(msg.channelId),
+          },
+        } satisfies AgentResponse)),
+      } as unknown as SubstrateAgent;
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Just observe this.' }],
+      });
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.choices[0].message.content).toBe('');
+      expect(body.usage.prompt_tokens).toBe(4);
+      expect(body.usage.completion_tokens).toBe(1);
+    });
+
+    it('treats literal NO_REPLY API content as ordinary assistant text', async () => {
+      await server.stop();
+      const mockAgent = {
+        handleMessage: vi.fn(async (msg: SubstrateMessage) => ({
+          content: 'NO_REPLY',
+          channelId: msg.channelId,
+          metadata: { model: 'test-model', inputTokens: 2, outputTokens: 1, durationMs: 3 },
+        } satisfies AgentResponse)),
+      } as unknown as SubstrateAgent;
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Say the marker literally.' }],
+      });
+
+      expect(res.status).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.choices[0].message.content).toBe('NO_REPLY');
+    });
+
+    it('rejects empty agent output without a no-reply marker', async () => {
+      await server.stop();
+      const mockAgent = {
+        handleMessage: vi.fn(async (msg: SubstrateMessage) => ({
+          content: '   ',
+          channelId: msg.channelId,
+          metadata: { model: 'test-model', inputTokens: 2, outputTokens: 0, durationMs: 3 },
+        } satisfies AgentResponse)),
+      } as unknown as SubstrateAgent;
+      server = createApiServer({
+        port,
+        agentLoop: mockAgent,
+        eventBus,
+        sessionManager: createMockSessionManager(),
+        allowInsecureWithoutAuth: true,
+      });
+      await server.init();
+      await server.start();
+
+      const res = await request(port, 'POST', '/v1/chat/completions', {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'Return nothing.' }],
+      });
+
+      expect(res.status).toBe(502);
+      const body = JSON.parse(res.body);
+      expect(body.error.type).toBe('model_error');
+      expect(body.error.message).toContain('intentional no-reply marker');
     });
 
     it('binds author identity to the local insecure principal and ignores spoofed headers', async () => {

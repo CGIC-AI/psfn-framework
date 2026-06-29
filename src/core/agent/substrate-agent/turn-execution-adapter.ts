@@ -355,6 +355,7 @@ export function createTurnExecutionRuntimeAdapter(
     dequeueBackgroundContinuationDeliveries: (deliverySessionId, limit) => options.turnSupportRuntime
       .dequeueBackgroundContinuationDeliveries(deliverySessionId, limit),
     emitTelemetry: (eventName, payload) => options.turnSupportRuntime.emitTelemetry(eventName, payload),
+    consumeIntentionalNoReplyDecision: (turnId) => options.turnSupportRuntime.consumeIntentionalNoReplyDecision(turnId),
     runIntentionPostTurnHooks: (context) => options.turnSupportRuntime.runIntentionPostTurnHooks(context),
   };
 }

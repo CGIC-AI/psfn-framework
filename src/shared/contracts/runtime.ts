@@ -415,6 +415,7 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  noReply?: IntentionalNoReplyMetadata;
   internalState?: import('../../core/self-model/state.js').InternalState;
   internalStateSnapshotRef?: string;
   metacognitiveFlags?: import('../../core/self-model/metacognition.js').MetacognitiveFlag[];
@@ -448,6 +449,19 @@ export interface ResponseMetadata {
     provenanceRefs: string[];
   };
   fatigue?: FatigueEnforcementMetadata;
+}
+
+export interface IntentionalNoReplyMetadata {
+  schemaVersion: 1;
+  disposition: 'intentional_no_reply';
+  source: 'response_control_tool';
+  auditId: string;
+  decidedAt: number;
+  turnId: TurnID;
+  requestId?: string;
+  channelId?: string;
+  toolCallId?: string;
+  reason?: string;
 }
 
 export interface TurnUsage {

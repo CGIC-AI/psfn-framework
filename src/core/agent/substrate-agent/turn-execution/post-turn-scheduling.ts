@@ -179,6 +179,13 @@ export async function schedulePostTurnWork(input: {
     ttftMs: firstTokenAt - startTime,
     inputTokens: turnUsage.inputTokens,
     outputTokens: turnUsage.outputTokens,
+    ...(response.metadata.noReply
+      ? {
+          responseDisposition: 'intentional_no_reply',
+          noReplyAuditId: response.metadata.noReply.auditId,
+          noReplySource: response.metadata.noReply.source,
+        }
+      : {}),
   });
   runtime.sessionManager.recordTurn(
     runtime.buildTurnRecord({

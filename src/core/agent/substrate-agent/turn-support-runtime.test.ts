@@ -295,3 +295,59 @@ describe('TurnSupportRuntime post-turn drain gate', () => {
     }));
   });
 });
+
+describe('TurnSupportRuntime intentional no-reply decisions', () => {
+  it('records, emits, and consumes a turn-scoped no-reply audit decision', async () => {
+    const eventBus = new EventBus();
+    const telemetry: Array<Record<string, unknown>> = [];
+    eventBus.on('agent.no_reply.intentional', (event) => {
+      telemetry.push(event);
+    });
+    const runtime = new TurnSupportRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      hashPromptText: (text) => `hash:${text.length}`,
+      resolveContextWindow: () => 1_000,
+    });
+    const turnId = createTurnId();
+    runtime.setActiveTurnContext(
+      {
+        turnId,
+        requestId: 'request-no-reply',
+        channelId: 'api:no-reply',
+        callType: 'chat',
+        purpose: 'agent.turn',
+      },
+      null,
+      null,
+    );
+
+    const decision = runtime.recordIntentionalNoReplyDecision({
+      source: 'response_control_tool',
+      toolCallId: 'tool-call-1',
+      reason: 'user is resting',
+    });
+    await flushAsyncWork();
+
+    expect(decision).toMatchObject({
+      schemaVersion: 1,
+      disposition: 'intentional_no_reply',
+      source: 'response_control_tool',
+      auditId: `no-reply:${turnId}:tool-call-1`,
+      turnId,
+      requestId: 'request-no-reply',
+      channelId: 'api:no-reply',
+      toolCallId: 'tool-call-1',
+      reason: 'user is resting',
+    });
+    expect(telemetry).toContainEqual(expect.objectContaining({
+      auditId: `no-reply:${turnId}:tool-call-1`,
+      turnId,
+      requestId: 'request-no-reply',
+      channelId: 'api:no-reply',
+      purpose: 'agent.no_reply.intentional',
+    }));
+    expect(runtime.consumeIntentionalNoReplyDecision(turnId)).toEqual(decision);
+    expect(runtime.consumeIntentionalNoReplyDecision(turnId)).toBeNull();
+  });
+});

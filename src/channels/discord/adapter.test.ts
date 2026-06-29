@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { IntentionalNoReplyMetadata, SubstrateMessage } from '../../shared/contracts/runtime.js';
 
 const discordMock = vi.hoisted(() => {
   return {
@@ -474,6 +474,21 @@ function makeDiscordIncomingMessage(
     mentions: { has: () => mentioned },
     attachments,
     reply: vi.fn(async () => {}),
+  };
+}
+
+function makeNoReplyMetadata(channelId: string): IntentionalNoReplyMetadata {
+  return {
+    schemaVersion: 1,
+    disposition: 'intentional_no_reply',
+    source: 'response_control_tool',
+    auditId: `no-reply:test-turn:${channelId}`,
+    decidedAt: Date.parse('2026-03-08T12:00:00Z'),
+    turnId: '018f0000-0000-7000-9000-000000000001' as IntentionalNoReplyMetadata['turnId'],
+    requestId: 'msg-no-reply',
+    channelId,
+    toolCallId: 'tool-call-no-reply',
+    reason: 'resting intentionally',
   };
 }
 
@@ -1847,7 +1862,7 @@ describe('DiscordAdapter status visibility', () => {
     )).toBe(true);
   });
 
-  it('suppresses empty handler responses instead of sending empty Discord messages', async () => {
+  it('reports empty handler responses instead of silently treating them as no-reply', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);
     await adapter.init();
@@ -1855,6 +1870,10 @@ describe('DiscordAdapter status visibility', () => {
     const channelId = 'ch-empty';
     const interactive = makeInteractiveTextChannel();
     discordMock.channelsById.set(channelId, interactive.channel);
+    const diagnostics: any[] = [];
+    (eventBus as any).on('channel.message.error', (event: any) => {
+      diagnostics.push(event);
+    });
 
     adapter.onMessage(async () => {
       return {
@@ -1867,6 +1886,72 @@ describe('DiscordAdapter status visibility', () => {
     await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
 
     expect(interactive.sent).toHaveLength(0);
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      channelId,
+      channelType: 'discord',
+      phase: 'handler',
+      error: 'empty_agent_response_without_suppression_marker',
+    }));
+  });
+
+  it('suppresses Discord output for structured intentional no-reply responses', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'ch-no-reply';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+    const sentEvents: any[] = [];
+    const diagnostics: any[] = [];
+    (eventBus as any).on('message.sent', (event: any) => {
+      sentEvents.push(event);
+    });
+    (eventBus as any).on('channel.message.error', (event: any) => {
+      diagnostics.push(event);
+    });
+
+    adapter.onMessage(async () => {
+      return {
+        content: '',
+        channelId,
+        metadata: {
+          model: 'test',
+          inputTokens: 3,
+          outputTokens: 1,
+          durationMs: 1,
+          noReply: makeNoReplyMetadata(channelId),
+        },
+      };
+    });
+
+    await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
+
+    expect(interactive.sent).toHaveLength(0);
+    expect(sentEvents).toHaveLength(0);
+    expect(diagnostics).toHaveLength(0);
+  });
+
+  it('treats literal NO_REPLY text as normal Discord content', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'ch-literal-no-reply';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    adapter.onMessage(async () => {
+      return {
+        content: 'NO_REPLY',
+        channelId,
+        metadata: { model: 'test', inputTokens: 0, outputTokens: 1, durationMs: 1 },
+      };
+    });
+
+    await (adapter as any).onDiscordMessage(makeDiscordIncomingMessage(channelId, interactive.channel));
+
+    expect(interactive.sent).toContain('NO_REPLY');
   });
 
   it('emits channel.message.error diagnostics without sending canned fallback text when handler throws', async () => {

@@ -151,6 +151,7 @@ import {
   ToolRuntimeFacade,
   type PromotedToolMutationResult,
 } from './substrate-agent/tool-runtime-facade.js';
+import { createResponseControlTool } from './no-reply-tool.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import type { ObserverEvalSidecarRuntime } from '../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
@@ -400,7 +401,10 @@ export class SubstrateAgent {
     // Persistent event bridge: pi-agent-core events → EventBus
     this.bridge = createEventBridge(this.agent, eventBus);
 
-    // Register the core discovery and non-default tool control tools.
+    // Register the core response/discovery and non-default tool control tools.
+    this.registerTool(createResponseControlTool((input) => (
+      this.turnSupportRuntime.recordIntentionalNoReplyDecision(input)
+    )), 'core');
     this.registerTool(this.toolRuntimeFacade.createToolSearchTool(), 'core');
     this.registerTool(this.toolRuntimeFacade.createToolsetTool(), 'core');
 

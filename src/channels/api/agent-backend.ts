@@ -314,6 +314,7 @@ export class AgentApiBackend {
           channelId: response.channelId,
           inputTokens: response.metadata.inputTokens,
           outputTokens: response.metadata.outputTokens,
+          ...(response.metadata.noReply ? { noReply: response.metadata.noReply } : {}),
         },
       };
     } catch (error) {

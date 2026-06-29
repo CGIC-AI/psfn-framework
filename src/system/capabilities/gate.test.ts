@@ -173,6 +173,7 @@ describe('capability tool gating', () => {
     expect(resolveToolRequiredCapabilities(createTool('media').tool, { action: 'generate' })).toEqual(['external.web']);
     expect(resolveToolRequiredCapabilities(createTool('media').tool, { action: 'analyze' })).toEqual(['external.web']);
     expect(resolveToolRequiredCapabilities(createTool('selfie_create').tool, {})).toEqual(['external.web']);
+    expect(resolveToolRequiredCapabilities(createTool('response_control').tool, { action: 'no_reply' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('subagent').tool, { action: 'status' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('subagent').tool, { action: 'spawn' })).toEqual(['shard.spawn']);
     expect(resolveToolRequiredCapabilities(createTool('skill').tool, { action: 'stats' })).toEqual(['identity.read']);

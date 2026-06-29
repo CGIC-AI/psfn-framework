@@ -1,6 +1,7 @@
 import type {
   SubstrateMessage,
   AgentResponse,
+  IntentionalNoReplyMetadata,
   ModelBudgetBlockedEvent,
   TurnUsage,
   InferredPostTurnAction,
@@ -160,6 +161,7 @@ export interface EventMap {
     [key: string]: unknown;
   };
   'agent.turn.usage': { message: SubstrateMessage; usage: TurnUsage } & EventCorrelationFields;
+  'agent.no_reply.intentional': IntentionalNoReplyMetadata & EventCorrelationFields;
   'agent.charge': RunChargeEvent;
   'agent.fatigue': FatigueBudgetEvent;
   'agent.stream.delta': { channelId: string; text: string } & EventCorrelationFields;

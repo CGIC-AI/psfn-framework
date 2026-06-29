@@ -29,6 +29,7 @@ import type {
 } from '../backplane/types.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import { resolveAgentResponseDisposition } from '../../shared/agent-response-disposition.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -571,16 +572,17 @@ export class DiscordAdapter implements ChannelAdapterPort {
 
       const response = await this.handler(substrateMsg);
       const trimmedResponse = response.content.trim();
-      const hasText = trimmedResponse.length > 0;
+      const disposition = resolveAgentResponseDisposition(response);
+      const hasText = disposition.kind === 'send' && disposition.hasText;
       const responseAttachments = response.attachments ?? [];
-      if (hasText) {
+      if (disposition.kind === 'send' && hasText) {
         if (replyToOriginal) {
           await this.sendReply(msg, trimmedResponse);
         } else {
           await this.outbound.sendText({ channelId }, response.content);
         }
       }
-      if (responseAttachments.length > 0) {
+      if (disposition.kind === 'send' && responseAttachments.length > 0) {
         const mediaContext = replyToOriginal && !hasText
           ? { channelId, replyToMessageId: msg.id }
           : { channelId };
@@ -588,10 +590,27 @@ export class DiscordAdapter implements ChannelAdapterPort {
           await this.outbound.sendMedia?.(mediaContext, attachment);
         }
       }
-      if (hasText || responseAttachments.length > 0) {
+      if (disposition.kind === 'send' && (hasText || responseAttachments.length > 0)) {
         await this.eventBus.emit('message.sent', { response });
+      } else if (disposition.kind === 'intentional_no_reply') {
+        log.debug('Suppressing intentional no-reply for Discord channel', {
+          channelId,
+          auditId: disposition.noReply.auditId,
+        });
+      } else if (disposition.kind === 'policy_suppressed') {
+        log.debug('Suppressing policy-held Discord response', {
+          channelId,
+          reason: disposition.reason,
+        });
       } else {
-        log.debug('Suppressing empty handler response for Discord channel', { channelId });
+        log.warn('Discord handler returned empty response without a suppression marker', { channelId });
+        await this.eventBus.emit('channel.message.error', {
+          channelId,
+          channelType: 'discord',
+          messageId: substrateMsg.id,
+          phase: 'handler',
+          error: 'empty_agent_response_without_suppression_marker',
+        }).catch(() => undefined);
       }
 
     } catch (error) {

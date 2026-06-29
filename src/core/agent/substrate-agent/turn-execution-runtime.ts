@@ -320,6 +320,7 @@ export interface TurnExecutionRuntime {
     limit?: number,
   ) => PendingBackgroundContinuationDelivery[];
   emitTelemetry: (event: string, payload: Record<string, unknown>) => void;
+  consumeIntentionalNoReplyDecision: (turnId: TurnID) => AgentResponse['metadata']['noReply'] | null;
   runIntentionPostTurnHooks: (context: {
     message: SubstrateMessage;
     response: AgentResponse;
@@ -768,7 +769,8 @@ export async function handleMessageForTurn(
       runtimeContradictionDiagnostics,
       turnIntent,
     } = invocationResult;
-    let safeResponseText = responseText;
+    const noReplyDecision = runtime.consumeIntentionalNoReplyDecision(turnId);
+    let safeResponseText = noReplyDecision ? '' : responseText;
     let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
 
     if (channelVisibility === 'broadcast') {
@@ -856,12 +858,14 @@ export async function handleMessageForTurn(
       turnMessages,
       trustLevel,
     );
-    const responseAttachments = await collectTurnResponseAttachments({
-      runtime,
-      turnMessages,
-    });
+    const responseAttachments = noReplyDecision
+      ? []
+      : await collectTurnResponseAttachments({
+          runtime,
+          turnMessages,
+        });
 
-    if (!broadcastSafetyMeta?.approvalRequired) {
+    if (!broadcastSafetyMeta?.approvalRequired && !noReplyDecision) {
       assistantSessionEntryId = runtime.recordAssistantMessage(
         message,
         turnId,
@@ -940,6 +944,7 @@ export async function handleMessageForTurn(
         ...(Object.keys(responseDiagnostics).length > 0 ? { diagnostics: responseDiagnostics } : {}),
         ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
         ...(responseFatigueMetadata ? { fatigue: responseFatigueMetadata } : {}),
+        ...(noReplyDecision ? { noReply: noReplyDecision } : {}),
       },
     };
     await schedulePostTurnWork({

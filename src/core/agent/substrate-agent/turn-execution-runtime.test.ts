@@ -22,7 +22,7 @@ import type {
 import { drainObserverEvalSidecarQueue } from '../../eval/observer-sidecar/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
-import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type { IntentionalNoReplyMetadata, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { createActiveEmanationSatellitePresencePort } from '../satellite-adapter-port.js';
 import type { FatigueBudgetEvent } from '../../../shared/contracts/runtime.js';
@@ -441,6 +441,7 @@ function createRuntime(params: {
   buildTurnBudgetCharacteristics?: ReturnType<typeof vi.fn>;
   awaitPostTurnDrain?: ReturnType<typeof vi.fn>;
   registerPostTurnBackgroundWork?: ReturnType<typeof vi.fn>;
+  consumeIntentionalNoReplyDecision?: ReturnType<typeof vi.fn>;
   memoryProvider?: TurnExecutionRuntime['memoryProvider'];
   imageVisionReviewer?: TurnExecutionRuntime['imageVisionReviewer'];
   emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
@@ -625,11 +626,62 @@ function createRuntime(params: {
     emitBackgroundContinuationEvent: vi.fn(async () => undefined),
     dequeueBackgroundContinuationDeliveries: vi.fn(() => []),
     emitTelemetry: vi.fn(),
+    consumeIntentionalNoReplyDecision: params.consumeIntentionalNoReplyDecision ?? vi.fn(() => null),
     runIntentionPostTurnHooks: vi.fn(async () => undefined),
   } as unknown as TurnExecutionRuntime;
 
   return runtime;
 }
+
+describe('handleMessageForTurn intentional no-reply', () => {
+  it('returns structured no-reply metadata and skips assistant persistence', async () => {
+    const eventBus = new EventBus();
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const recordAssistantMessage = vi.fn(() => 2);
+    const noReply: IntentionalNoReplyMetadata = {
+      schemaVersion: 1,
+      disposition: 'intentional_no_reply',
+      source: 'response_control_tool',
+      auditId: 'no-reply:test-turn:tool-call-1',
+      decidedAt: Date.parse('2026-03-08T12:00:00Z'),
+      turnId: '018f0000-0000-7000-9000-000000000001' as IntentionalNoReplyMetadata['turnId'],
+      requestId: 'msg-no-reply',
+      channelId: 'ch1',
+      toolCallId: 'tool-call-1',
+      reason: 'resting intentionally',
+    };
+    const consumeIntentionalNoReplyDecision = vi.fn(() => noReply);
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {
+        buildContext,
+      } as unknown as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage,
+      consumeIntentionalNoReplyDecision,
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-no-reply'));
+
+    expect(response.content).toBe('');
+    expect(response.metadata.noReply).toEqual(noReply);
+    expect(recordAssistantMessage).not.toHaveBeenCalled();
+    expect(consumeIntentionalNoReplyDecision).toHaveBeenCalledTimes(1);
+    expect(runtime.buildTurnRecord).toHaveBeenCalledWith(expect.objectContaining({
+      assistantSessionEntryId: null,
+      response: expect.objectContaining({
+        metadata: expect.objectContaining({ noReply }),
+      }),
+    }));
+  });
+});
 
 describe('handleMessageForTurn fatigue enforcement', () => {
   function createFatigueRuntime(params: {

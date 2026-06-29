@@ -330,6 +330,39 @@ describe('contact tools', () => {
       expect(result.details?.isError).toBe(true);
     });
 
+    it('gives a contactId recovery path when lookup guesses a display name', async () => {
+      const contact = store.upsert({
+        displayName: 'Grace',
+        channelIdentities: [{ channel: 'discord', userId: 'grace-discord' }],
+      });
+      const listTool = createContactListTool(store);
+      const lookupTool = createContactLookupTool(store);
+
+      const list = await listTool.execute('contact-list-recovery', {});
+      const miss = await lookupTool.execute('contact-lookup-display-name-miss', { contactId: 'Grace' });
+      const text = resultText(miss);
+
+      expect(resultText(list)).toContain(`${contact.id}: Grace`);
+      expect(text).toContain('No contact found for contactId "Grace"');
+      expect(text).toContain(`Valid contactIds: ${contact.id}`);
+      expect(text).toContain(`Minimal valid JSON: {"action":"lookup","contactId":"${contact.id}"}`);
+      expect(text).toContain('do not guess contactId from display names');
+      expect(miss.details?.isError).toBe(true);
+    });
+
+    it('names missing contactId and points to list recovery', async () => {
+      const contact = store.upsert({ displayName: 'Lookup Target' });
+      const tool = createContactLookupTool(store);
+
+      const result = await tool.execute('contact-lookup-missing-id', {} as any);
+      const text = resultText(result);
+
+      expect(text).toContain('Missing required field "contactId" for action=lookup');
+      expect(text).toContain(`Valid contactIds: ${contact.id}`);
+      expect(text).toContain(`Minimal valid JSON: {"action":"lookup","contactId":"${contact.id}"}`);
+      expect(result.details?.isError).toBe(true);
+    });
+
     it('does not include Notes line when notes are empty', async () => {
       store.upsert({ displayName: 'Frank' });
       const frank = store.listAll().find(c => c.displayName === 'Frank')!;
@@ -362,17 +395,30 @@ describe('contact tools', () => {
       expect(resultText(result)).toContain('No contacts in address book');
     });
 
-    it('lists all contacts with trust and relationship info', async () => {
-      store.upsert({ displayName: 'Grace', trustLevel: 'trusted', relationshipType: 'friend', notes: 'Met at conf' });
+    it('lists all contacts with contactId, channels, trust, and relationship info', async () => {
+      const grace = store.upsert({
+        displayName: 'Grace',
+        trustLevel: 'trusted',
+        relationshipType: 'friend',
+        notes: 'Met at conf',
+        channelIdentities: [
+          { channel: 'discord', userId: 'grace-discord' },
+          { channel: 'api', userId: 'grace-api' },
+        ],
+      });
       store.upsert({ displayName: 'Hank', trustLevel: 'regular', relationshipType: 'acquaintance' });
       const tool = createContactListTool(store);
 
       const result = await tool.execute('call-12', {});
+      const text = resultText(result);
 
-      expect(resultText(result)).toContain('Contacts (2)');
-      expect(resultText(result)).toContain('Grace [trusted/friend]');
-      expect(resultText(result)).toContain('Met at conf');
-      expect(resultText(result)).toContain('Hank [regular/acquaintance]');
+      expect(text).toContain('Contacts (2)');
+      expect(text).toContain(`${grace.id}: Grace [trusted/friend]`);
+      expect(text).toContain('channels=api:grace-api[private]');
+      expect(text).toContain('discord:grace-discord[semi_private]');
+      expect(text).toContain('Met at conf');
+      expect(text).toContain('Hank [regular/acquaintance]');
+      expect(text).toContain('Pass contactId from this list to action=lookup, action=set_trust, or action=note');
     });
 
     it('prefers nickname over display name in list output', async () => {

@@ -516,6 +516,28 @@ describe('createToolsetTool', () => {
     expect(activateResult.content?.[0]?.text).not.toContain('image_create');
   });
 
+  it('explains the required tools array when activate is called without tool names', async () => {
+    const toolset = createBaseToolset();
+
+    const result = await (toolset as any).execute('toolset-activate-missing-tools', {
+      action: 'activate',
+    });
+    const payload = JSON.parse(result.content?.[0]?.text as string);
+
+    expect(result.details?.isError).toBe(true);
+    expect(payload).toMatchObject({
+      action: 'activate',
+      requiredField: 'tools',
+      minimalValidJson: { action: 'activate', tools: ['media'] },
+      availableTools: ['media'],
+    });
+    expect(payload.message).toContain('Missing required field "tools" for action="activate"');
+    expect(payload.message).toContain('Provide a non-empty tools array');
+    expect(payload.message).toContain('Minimal valid JSON: {"action":"activate","tools":["media"]}');
+    expect(payload.message).toContain('Use {"action":"list"} to see valid extended tool names');
+    expect(payload.message).toContain('do not repeat activate without tools');
+  });
+
   it('accepts object-form tool names for activate requests', async () => {
     const activateExtendedTools = vi.fn((toolNames: readonly string[]) => ({
       requestedTools: [...toolNames],

@@ -29,8 +29,9 @@ export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
     name: 'subagent',
     label: 'subagent',
     description:
-      'Control bounded short-horizon subagents with action=spawn, message, wait, cancel, or status. '
-      + 'Use shard action=spawn for long-horizon or distributed shard work.',
+      'Control bounded short-horizon subagents. action=spawn requires name and task and returns subagent_id; '
+      + 'action=message requires subagent_id and message; wait/cancel/status use subagent_id from spawn or status. '
+      + 'Use status without subagent_id to list visible tasks. Use shard action=spawn for long-horizon or distributed shard work.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union([
         Type.Literal('spawn'),

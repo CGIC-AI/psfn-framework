@@ -172,9 +172,11 @@ export function createRepoTool(
     description:
       access === 'read_only'
         ? 'Unified repository inspection primitive for git-backed status and diff lookup. '
-          + 'Use action=inspect with target=status|diff|both.'
+          + 'Use action=inspect with target=status|diff|both; empty arguments default to status inspection.'
         : 'Unified repository primitive for git-backed inspection and mutation. '
-          + 'Use action=inspect|patch|branch|commit|publish. '
+          + 'Use action=inspect before mutating; target=status|diff|both controls inspection detail. '
+          + 'action=patch requires file_path and full replacement content; action=branch requires name; '
+          + 'action=commit requires message, and action=publish/open_pr requires title/body. '
           + 'Inspect is read-only; patch, branch, commit, and publish remain explicitly gated.',
     parameters: Type.Object({
       action: buildActionSchema(access),

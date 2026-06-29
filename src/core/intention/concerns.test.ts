@@ -425,6 +425,72 @@ describe('ActiveConcernStore', () => {
     })).toThrow(/expiresAt must be after createdAt/);
   });
 
+  it('clamps concern expiry to the one-week hard lifetime', () => {
+    const created = store.create({
+      text: 'Long horizon item should leave concerns after a week.',
+      createdAt: '2026-02-01T10:00:00.000Z',
+      expiresAt: '2026-03-01T10:00:00.000Z',
+    });
+
+    expect(created.expiresAt).toBe('2026-02-08T10:00:00.000Z');
+  });
+
+  it('rejects an eighth active concern while allowing duplicate merge into the capped set', () => {
+    const activeTexts = [
+      'Confirm Tuesday cardiology appointment logistics.',
+      'Review database migration rollback checklist.',
+      'Check whether voice latency regression returned.',
+      'Track hydration routine follow up after medication change.',
+      'Revisit backup verification evidence after tonight.',
+      'Clarify calendar scheduling conflict with Sam.',
+      'Inspect avatar render pipeline failure notes.',
+    ];
+    for (const [i, text] of activeTexts.entries()) {
+      store.create({
+        text,
+        priority: i === 0 ? 'high' : 'low',
+      });
+    }
+
+    expect(() => store.create({
+      text: 'An eighth distinct concern should not be opened.',
+    })).toThrow(/Active concern cap reached \(7\)/);
+
+    const merged = store.create({
+      text: activeTexts[0]!,
+      priority: 'high',
+      evidenceRefs: [{ kind: 'runtime', ref: 'merge-under-cap' }],
+    });
+    expect(merged.text).toBe(activeTexts[0]);
+    expect(store.getActiveConcerns()).toHaveLength(7);
+  });
+
+  it('treats concerns beyond the one-week hard lifetime as stale even with future expiresAt', () => {
+    const created = store.create({
+      text: 'Legacy long-lived concern',
+      createdAt: '2026-02-01T10:00:00.000Z',
+      expiresAt: '2026-02-08T10:00:00.000Z',
+    });
+    db.prepare('UPDATE active_concerns SET expires_at = @expiresAt WHERE id = @id').run({
+      id: created.id,
+      expiresAt: '2026-03-01T10:00:00.000Z',
+    });
+
+    const activeAtBoundary = store.list({
+      asOf: '2026-02-08T10:00:00.000Z',
+      includeResolved: false,
+      includeExpired: false,
+    });
+    expect(activeAtBoundary).toHaveLength(0);
+
+    const stale = store.resolveStaleConcerns({
+      asOf: '2026-02-08T10:00:00.000Z',
+      evidenceRefs: [{ kind: 'runtime', ref: 'hard-lifetime-sweep' }],
+    });
+    expect(stale).toHaveLength(1);
+    expect(stale[0]?.id).toBe(created.id);
+  });
+
   it('formats active concerns context block with bounded output', () => {
     const uniqueTopics = [
       'medication reminder logistics',
@@ -437,7 +503,7 @@ describe('ActiveConcernStore', () => {
       'avatar render pipeline',
       'backup verification audit',
     ];
-    for (let i = 0; i < 9; i++) {
+    for (let i = 0; i < 7; i++) {
       store.create({
         text: textFixture(uniqueTopics[i]!),
         priority: i === 0 ? 'high' : 'low',
@@ -445,12 +511,12 @@ describe('ActiveConcernStore', () => {
       });
     }
 
-    const block = formatActiveConcernsContextBlock(store.getActiveConcerns(), 6);
+    const block = formatActiveConcernsContextBlock(store.getActiveConcerns(), 5);
     expect(block).toContain('<open_threads>');
     expect(block).toContain('Treat these as soft threads to verify, not alarms that must dominate the turn.');
     expect(block).toContain('additional lower-salience threads omitted');
     const concernLines = block.split('\n').filter(line => line.startsWith('- '));
-    expect(concernLines.length).toBe(7);
+    expect(concernLines.length).toBe(6);
   });
 
   it('builds atomic active-concern runtime data without the prose opener', () => {

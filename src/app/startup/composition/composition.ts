@@ -38,6 +38,7 @@ import type { ObserverEvalSidecarRuntime } from '../../../core/eval/observer-sid
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import type { EpisodicRetrievalStore } from '../../../faculties/memory/retrieval/episodic.js';
 import { MemoryExtractor } from '../../../faculties/memory/extraction.js';
+import type { ConcernCandidateExtractionSink } from '../../../faculties/memory/extraction/types.js';
 import { MemoryWriter } from '../../../faculties/memory/writer.js';
 import type {
   CoreMemoryStorePort,
@@ -315,6 +316,7 @@ export interface MemoryRuntimeOptions {
   promptRegistry?: PromptRegistryStatePort | null;
   contactStore?: ContactStorePort | null;
   episodicStore?: EpisodicRetrievalStore | null;
+  concernCandidateSink?: ConcernCandidateExtractionSink | null;
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
@@ -350,6 +352,9 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.promptRegistry ?? null,
       options.sessionStore ?? null,
       options.contactStore ?? null,
+      options.concernCandidateSink
+        ? { emitConcernCandidates: options.concernCandidateSink }
+        : undefined,
     )
     : new MemoryExtractor(
       options.llmProvider,
@@ -361,6 +366,9 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.promptRegistry ?? null,
       options.sessionStore ?? null,
       options.contactStore ?? null,
+      options.concernCandidateSink
+        ? { emitConcernCandidates: options.concernCandidateSink }
+        : undefined,
     );
   options.sessionManager.setPreCompactionExtractionHandler(async ({
     channelId,

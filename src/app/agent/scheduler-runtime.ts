@@ -13,6 +13,8 @@ import { SalienceDecay } from '../../faculties/memory/decay.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { registerAmbientPresenceTask } from '../../core/scheduler/ambient-presence.js';
+import { registerConcernGroomingTask } from '../../core/intention/concern-grooming.js';
+import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
@@ -45,6 +47,7 @@ export interface BuildAgentSchedulerRuntimeOptions {
   gateway: GatewayClient;
   memoryStore: MemoryStorePort;
   agentLoop: SubstrateAgent;
+  concernStore?: ConcernStorePort | null;
   db?: Database.Database | null;
   backupConfig: BackupRuntimeConfig;
   pathSnapshot: RuntimePathSnapshot;
@@ -186,6 +189,13 @@ export function buildAgentSchedulerRuntime(
     restWindow: options.schedulerConfig.episodicProcessing,
     eventBus: options.eventBus,
   });
+  if (options.concernStore) {
+    registerConcernGroomingTask({
+      scheduler,
+      concernStore: options.concernStore,
+      eventBus: options.eventBus,
+    });
+  }
 
   const postTurnActions = wirePostTurnActionRuntime({
     eventBus: options.eventBus,

@@ -56,6 +56,7 @@ import type {
   ExtractionRejectionReason,
   ExtractionTriggerReason,
   GroupMemoryWriteCapSkip,
+  ConcernCandidateExtractionSink,
 } from './types.js';
 import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './types.js';
 
@@ -159,6 +160,7 @@ export interface ExtractionRunOptions {
     canonicalContactId: string | undefined,
     acceptedWrites: AcceptedFactWrite[],
   ) => void;
+  emitConcernCandidates?: ConcernCandidateExtractionSink;
 }
 
 export async function runExtractionOrchestration(options: ExtractionRunOptions): Promise<void> {
@@ -483,6 +485,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     let supersededCount = 0;
     let routedFactCount = 0;
     const acceptedWrites: AcceptedFactWrite[] = [];
+    const acceptedFactsForConcernCandidates: ExtractedFact[] = [];
     const acceptedFactsByContact = new Map<string | undefined, ExtractedFact[]>();
     const routedContactIds = new Set<string>();
     const sourceSpeakerNames = new Set<string>();
@@ -524,6 +527,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         if (routing.contactId) routedContactIds.add(routing.contactId);
         if (routing.sourceSpeakerName) sourceSpeakerNames.add(routing.sourceSpeakerName);
         appendAcceptedFactForContact(acceptedFactsByContact, routing.contactId, fact);
+        acceptedFactsForConcernCandidates.push(fact);
 
         switch (result.action) {
           case 'created':
@@ -633,6 +637,27 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     }
     options.recordExtractionMarker(options.channelId, coveredUpToMessageId);
     await options.emitExtractionEnd(telemetry);
+    if (options.emitConcernCandidates) {
+      await options.emitConcernCandidates({
+        channelId: options.channelId,
+        triggerReason: options.triggerReason,
+        ...(options.canonicalContactId ? { canonicalContactId: options.canonicalContactId } : {}),
+        ...(turnId ? { turnId } : {}),
+        sourceRef,
+        recentEntries,
+        acceptedFacts: acceptedFactsForConcernCandidates,
+        acceptedWrites,
+        relatedMemories: existing.map(memory => ({
+          id: memory.id,
+          type: memory.type,
+          text: memory.text,
+          importance: memory.importance,
+          confidence: memory.confidence,
+          salience: memory.salience,
+          sourceRef: memory.sourceRef,
+        })),
+      });
+    }
     const emotionalFactGroups = acceptedFactsByContact.size > 0
       ? acceptedFactsByContact
       : new Map<string | undefined, ExtractedFact[]>([[options.canonicalContactId, []]]);

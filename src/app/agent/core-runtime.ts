@@ -57,6 +57,7 @@ import {
   wireIntentionRuntime,
   wireIntentionRuntimeStores,
 } from '../../core/intention/runtime-wiring.js';
+import { createAutomatedConcernRuntime } from '../../core/intention/concern-candidates.js';
 import { createIdentityCoolingOffManagerFromEnv } from '../../system/capabilities/safeguards.js';
 import { composeSystemPromptTemplate } from '../../core/identity/loader.js';
 import {
@@ -324,6 +325,11 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   const intentionBehavioralHooks = createIntentionBehavioralPatternHooks(
     intentionRuntime.behavioralPatternTracker,
   );
+  const automatedConcernRuntime = createAutomatedConcernRuntime({
+    eventBus,
+    llmProvider,
+    concernStore: intentionRuntime.concernStore,
+  });
   const memoryExtractor = wireMemoryRuntime({
     agentLoop,
     llmProvider,
@@ -336,6 +342,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     promptRegistry,
     contactStore,
     episodicStore,
+    concernCandidateSink: automatedConcernRuntime.extractionSink,
   });
   const promptState = createPromptStatePort({
     layers: promptStore,

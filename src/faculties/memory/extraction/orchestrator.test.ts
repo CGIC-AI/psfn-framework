@@ -40,9 +40,9 @@ function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): Extraction
     channelId: 'api:test',
     triggerReason: 'manual',
     recoveredEntries: recoveredEntries as ExtractionRunOptions['recoveredEntries'],
-    llmClient: {
-      complete: vi.fn().mockResolvedValue({
-        content: `<response>
+	      llmClient: {
+	        complete: vi.fn().mockResolvedValue({
+	          content: `<response>
 <fact>
 <text>User enjoys board games</text>
 <type>semantic</type>
@@ -120,6 +120,76 @@ async function waitForCondition(description: string, condition: () => boolean): 
 }
 
 describe('runExtractionOrchestration fail-closed errors', () => {
+  it('emits concern candidate context from accepted extraction material', async () => {
+    const emitConcernCandidates = vi.fn().mockResolvedValue(undefined);
+    const options = buildOptions({
+      turnId: 'turn-extract-1',
+      emitConcernCandidates,
+      memoryStore: {
+        getMemoriesByChannel: vi.fn().mockResolvedValue([{
+          id: 'mem-related',
+          type: 'semantic',
+          text: 'Alex has an appointment tomorrow.',
+          importance: 0.8,
+          confidence: 0.9,
+          emotionalValence: 0,
+          salience: 0.7,
+          sourceRef: 'memory:related',
+          extractedAt: 1,
+          lastAccessed: 1,
+          accessCount: 0,
+          tags: [],
+          sensitivity: 'personal',
+        }]),
+      } as ExtractionRunOptions['memoryStore'],
+      llmClient: {
+        complete: vi.fn().mockResolvedValue({
+          content: `<response>
+<fact>
+	<text>The user asked for a follow up about tomorrow's appointment.</text>
+<type>semantic</type>
+<importance>0.9</importance>
+<confidence>0.95</confidence>
+<source_message_ids>1</source_message_ids>
+</fact>
+	</response>`,
+	        }),
+      } as ExtractionRunOptions['llmClient'],
+      canonicalContactId: 'contact-alex',
+      resolveSourceSpeakerContactId: vi.fn(async (speaker: ExtractionSourceSpeaker) => (
+        speaker.name === 'Alex' ? 'contact-alex' : undefined
+      )),
+      resolveParticipantNames: () => ({
+        userName: 'Alex',
+        companionName: 'Lyra',
+      }),
+    });
+
+    await runExtractionOrchestration(options);
+
+    expect(emitConcernCandidates).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'api:test',
+      triggerReason: 'manual',
+      turnId: 'turn-extract-1',
+	      acceptedFacts: expect.arrayContaining([
+	        expect.objectContaining({
+	          text: "Alex asked for a follow up about tomorrow's appointment.",
+	        }),
+	      ]),
+	      acceptedWrites: expect.arrayContaining([
+	        expect.objectContaining({
+	          memoryId: 'mem-1',
+	        }),
+	      ]),
+      relatedMemories: [
+        expect.objectContaining({
+          id: 'mem-related',
+          text: 'Alex has an appointment tomorrow.',
+        }),
+      ],
+    }));
+  });
+
   it('surfaces fact write failures with structured context instead of continuing', async () => {
     const processFactFailure = new Error('simulated write failure');
     const options = buildOptions({
@@ -182,12 +252,12 @@ describe('runExtractionOrchestration fail-closed errors', () => {
 
     expect(processFact).toHaveBeenCalledTimes(2);
     expect(options.recordExtractionMarker).toHaveBeenCalledWith('api:test', 2);
-    expect(options.emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
-      acceptedCount: 1,
-      rejectedCount: 1,
-      writeCount: 1,
-      rejectionBreakdown: expect.objectContaining({
-        low_novelty: 1,
+	    expect(options.emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+	      acceptedCount: 1,
+	      rejectedCount: 2,
+	      writeCount: 1,
+	      rejectionBreakdown: expect.objectContaining({
+	        low_novelty: 1,
       }),
     }));
   });
@@ -630,12 +700,12 @@ describe('runExtractionOrchestration naming fidelity', () => {
     await runExtractionOrchestration(options);
 
     expect(processFact).not.toHaveBeenCalled();
-    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
-      parsedCount: 1,
-      acceptedCount: 0,
-      rejectedCount: 1,
-      writeCount: 0,
-      rejectionBreakdown: expect.objectContaining({
+	    expect(emitExtractionEnd).toHaveBeenCalledWith(expect.objectContaining({
+	      parsedCount: 2,
+	      acceptedCount: 0,
+	      rejectedCount: 2,
+	      writeCount: 0,
+	      rejectionBreakdown: expect.objectContaining({
         low_signal: 1,
       }),
     }));

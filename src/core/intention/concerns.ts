@@ -199,6 +199,8 @@ const DEFAULT_RECENT_RESOLUTION_WINDOW_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_RECENT_RESOLUTION_LIMIT = 8;
 const CONCERN_DUPLICATE_SIMILARITY_THRESHOLD = 0.72;
 const DEFAULT_CONCERN_SALIENCE = 0.5;
+export const MAX_ACTIVE_CONCERNS = 7;
+export const MAX_ACTIVE_CONCERN_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 
 export const DEFAULT_CONCERN_TTL_MS_BY_PRIORITY: Record<ActiveConcernPriority, number> = {
   high: 48 * 60 * 60 * 1000,
@@ -244,6 +246,13 @@ function normalizeIsoTimestamp(value: string, fieldName: string): string {
     throw new Error(`Active concern ${fieldName} must be a valid ISO timestamp`);
   }
   return new Date(parsed).toISOString();
+}
+
+function clampConcernExpiresAt(expiresAt: string, createdAt: string): string {
+  const createdAtMs = Date.parse(createdAt);
+  const expiresAtMs = Date.parse(expiresAt);
+  const maxExpiresAtMs = createdAtMs + MAX_ACTIVE_CONCERN_LIFETIME_MS;
+  return new Date(Math.min(expiresAtMs, maxExpiresAtMs)).toISOString();
 }
 
 function normalizeOptionalId(value: string | undefined): string | undefined {
@@ -757,6 +766,10 @@ function resolveConcernTtlByPriority(
   return resolved;
 }
 
+function isConcernPastHardLifetime(concern: ActiveConcern, asOfMs: number): boolean {
+  return Date.parse(concern.createdAt) + MAX_ACTIVE_CONCERN_LIFETIME_MS <= asOfMs;
+}
+
 export function formatActiveConcernsContextBlock(
   concerns: readonly ActiveConcern[],
   limit = DEFAULT_RUNTIME_CONTEXT_LIMIT,
@@ -844,7 +857,8 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
     const expiresAt = input.expiresAt
       ? normalizeIsoTimestamp(input.expiresAt, 'expiresAt')
       : new Date(createdAtMs + this.ttlMsByPriority[priority]).toISOString();
-    if (Date.parse(expiresAt) <= createdAtMs) {
+    const boundedExpiresAt = clampConcernExpiresAt(expiresAt, createdAt);
+    if (Date.parse(boundedExpiresAt) <= createdAtMs) {
       throw new Error('Active concern expiresAt must be after createdAt');
     }
 
@@ -875,7 +889,7 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
         return this.mergeConcern(activeDuplicate, {
           priority,
           status,
-          expiresAt,
+          expiresAt: boundedExpiresAt,
           salience,
           sensitivity,
           owner,
@@ -907,7 +921,7 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
           return this.mergeConcern(reopened, {
             priority,
             status,
-            expiresAt,
+            expiresAt: boundedExpiresAt,
             salience,
             sensitivity,
             owner,
@@ -919,6 +933,16 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
           });
         }
         return recentlyResolved;
+      }
+
+      const activeCount = this.list({
+        includeResolved: false,
+        includeExpired: false,
+        asOf: createdAt,
+        limit: MAX_ACTIVE_CONCERNS + 1,
+      }).filter(concern => isConcernAttentionStatus(concern.status)).length;
+      if (activeCount >= MAX_ACTIVE_CONCERNS) {
+        throw new Error(`Active concern cap reached (${MAX_ACTIVE_CONCERNS})`);
       }
     }
 
@@ -974,7 +998,7 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
       source,
       status,
       created_at: createdAt,
-      expires_at: expiresAt,
+      expires_at: boundedExpiresAt,
       salience,
       sensitivity,
       owner,
@@ -1048,6 +1072,7 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
     }
     if (!includeExpired) {
       whereClauses.push('expires_at > @asOf');
+      whereClauses.push('created_at > @activeAfter');
     }
     if (normalizedContactId) {
       whereClauses.push('(contact_id IS NULL OR contact_id = @contactId)');
@@ -1093,6 +1118,7 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
       LIMIT @limit
     `).all({
       asOf,
+      activeAfter: new Date(Date.parse(asOf) - MAX_ACTIVE_CONCERN_LIFETIME_MS).toISOString(),
       contactId: normalizedContactId ?? null,
       limit,
     }) as ActiveConcernRow[];
@@ -1279,7 +1305,10 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
       limit: MAX_LIST_LIMIT,
     }).filter(concern => (
       statusSet.has(concern.status)
-      && Date.parse(concern.expiresAt) <= Date.parse(asOf)
+      && (
+        Date.parse(concern.expiresAt) <= Date.parse(asOf)
+        || isConcernPastHardLifetime(concern, Date.parse(asOf))
+      )
     )).slice(0, limit);
 
     const resolved: ActiveConcern[] = [];
@@ -1355,6 +1384,7 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
       to: status,
       evidenceRefs: input.evidenceRefs,
     });
+    const boundedExpiresAt = clampConcernExpiresAt(input.expiresAt, existing.createdAt);
     const nextReviewAt = chooseEarlierOptionalConcernTimestamp(existing.nextReviewAt, input.nextReviewAt);
     this.db.prepare(`
       UPDATE active_concerns
@@ -1375,7 +1405,10 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
       id: existing.id,
       priority: chooseHigherConcernPriority(existing.priority, input.priority),
       status,
-      expires_at: chooseLaterConcernTimestamp(existing.expiresAt, input.expiresAt),
+      expires_at: clampConcernExpiresAt(
+        chooseLaterConcernTimestamp(existing.expiresAt, boundedExpiresAt),
+        existing.createdAt,
+      ),
       salience: Math.max(existing.salience, input.salience),
       sensitivity: mergeConcernSensitivity(existing.sensitivity, input.sensitivity),
       owner: input.owner,

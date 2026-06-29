@@ -298,6 +298,34 @@ export interface EventMap {
     crossChunkDeduplicatedCount?: number;
     boundaryFactCount?: number;
   } & EventCorrelationFields;
+  'intention.concern_candidate.enqueued': {
+    candidateCount: number;
+    pendingCount: number;
+    candidateIds: string[];
+    channelId: string;
+    turnId?: string;
+    timestamp: number;
+  } & EventCorrelationFields;
+  'intention.concern_candidate.reviewed': {
+    candidateCount: number;
+    outcomeCount: number;
+    outcomes: Array<{
+      candidateId: string;
+      action: string;
+      status: string;
+      reason: string;
+      concernId?: string;
+      routeTarget?: string;
+    }>;
+    timestamp: number;
+  } & EventCorrelationFields;
+  'intention.concern.groomed': {
+    staleResolvedCount: number;
+    capResolvedCount: number;
+    activeCountBeforeCap: number;
+    activeCountAfterCap: number;
+    timestamp: number;
+  } & EventCorrelationFields;
   'memory.extraction.flush': {
     channelId: string;
     templateId: string;

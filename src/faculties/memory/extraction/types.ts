@@ -1,5 +1,6 @@
-import type { ExtractedFact, MemoryScopeRef, MemoryType } from '../types.js';
+import type { ExtractedFact, MemoryScopeRef, MemoryType, PurrMemory } from '../types.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
+import type { SessionEntry } from '../../../core/session/types.js';
 
 export interface MemoryExtractorConfig {
   extractionInterval?: number;
@@ -129,6 +130,25 @@ export interface AcceptedFactWrite {
   sourceSpeakerName?: string;
   scopeRef?: MemoryScopeRef;
 }
+
+export interface ConcernCandidateExtractionContext {
+  channelId: string;
+  triggerReason: ExtractionTriggerReason;
+  canonicalContactId?: string;
+  turnId?: TurnID;
+  sourceRef: string;
+  recentEntries: readonly SessionEntry[];
+  acceptedFacts: readonly ExtractedFact[];
+  acceptedWrites: readonly AcceptedFactWrite[];
+  relatedMemories: readonly Pick<
+    PurrMemory,
+    'id' | 'type' | 'text' | 'importance' | 'confidence' | 'salience' | 'sourceRef'
+  >[];
+}
+
+export type ConcernCandidateExtractionSink = (
+  context: ConcernCandidateExtractionContext,
+) => void | Promise<void>;
 
 export interface AcceptedFactCandidate {
   fact: ExtractedFact;

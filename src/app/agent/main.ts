@@ -233,6 +233,7 @@ async function main(): Promise<void> {
     gateway,
     memoryStore,
     agentLoop,
+    concernStore: intentionRuntime.concernStore,
     db,
     backupConfig,
     pathSnapshot,

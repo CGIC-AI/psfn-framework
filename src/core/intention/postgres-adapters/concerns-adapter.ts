@@ -3,6 +3,8 @@ import { queryOne, queryRows } from './connection.js';
 import type { ConcernStorePortBackend } from '../concern-store-port.js';
 import {
   ACTIVE_CONCERN_STATUSES,
+  MAX_ACTIVE_CONCERNS,
+  MAX_ACTIVE_CONCERN_LIFETIME_MS,
   chooseEarlierOptionalConcernTimestamp,
   chooseHigherConcernPriority,
   chooseLaterConcernTimestamp,
@@ -62,6 +64,17 @@ const ACTIVE_CONCERN_SELECT_COLUMNS = `
   last_reviewed_at, next_review_at, merged_from_ids, split_from_id
 `;
 
+function clampConcernExpiresAt(expiresAt: string, createdAt: string): string {
+  const createdAtMs = Date.parse(createdAt);
+  const expiresAtMs = Date.parse(expiresAt);
+  const maxExpiresAtMs = createdAtMs + MAX_ACTIVE_CONCERN_LIFETIME_MS;
+  return new Date(Math.min(expiresAtMs, maxExpiresAtMs)).toISOString();
+}
+
+function isConcernPastHardLifetime(concern: ActiveConcern, asOfMs: number): boolean {
+  return Date.parse(concern.createdAt) + MAX_ACTIVE_CONCERN_LIFETIME_MS <= asOfMs;
+}
+
 export class PostgresActiveConcernStore implements ConcernStorePortBackend {
   private activeConcernCache = new Map<string, ActiveConcern>();
 
@@ -78,6 +91,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       .filter((concern) => {
         if (concern.resolvedAt || isConcernTerminalStatus(concern.status)) return false;
         if (Date.parse(concern.expiresAt) <= asOfMs) return false;
+        if (isConcernPastHardLifetime(concern, asOfMs)) return false;
         if (!normalizedContactId) return true;
         return !concern.contactId || concern.contactId === normalizedContactId;
       })
@@ -114,7 +128,8 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     const expiresAt = input.expiresAt
       ? normalizeIsoTimestamp(input.expiresAt, 'expiresAt')
       : new Date(createdAtMs + this.resolveConcernTtlMs(priority)).toISOString();
-    if (Date.parse(expiresAt) <= createdAtMs) {
+    const boundedExpiresAt = clampConcernExpiresAt(expiresAt, createdAt);
+    if (Date.parse(boundedExpiresAt) <= createdAtMs) {
       throw new Error('Active concern expiresAt must be after createdAt');
     }
 
@@ -152,7 +167,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         return await this.mergeConcern(activeDuplicate, {
           priority,
           status,
-          expiresAt,
+          expiresAt: boundedExpiresAt,
           salience,
           sensitivity,
           owner,
@@ -184,7 +199,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           return await this.mergeConcern(reopened, {
             priority,
             status,
-            expiresAt,
+            expiresAt: boundedExpiresAt,
             salience,
             sensitivity,
             owner,
@@ -196,6 +211,16 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           });
         }
         return recentlyResolved;
+      }
+
+      const activeCount = (await this.list({
+        includeResolved: false,
+        includeExpired: false,
+        asOf: createdAt,
+        limit: MAX_ACTIVE_CONCERNS + 1,
+      })).filter(concern => isConcernAttentionStatus(concern.status)).length;
+      if (activeCount >= MAX_ACTIVE_CONCERNS) {
+        throw new Error(`Active concern cap reached (${MAX_ACTIVE_CONCERNS})`);
       }
     }
     const id = normalizeRequiredText(this.idFactory(), 'id', 128);
@@ -222,7 +247,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         source,
         status,
         createdAt,
-        expiresAt,
+        boundedExpiresAt,
         salience,
         sensitivity,
         owner,
@@ -288,6 +313,8 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     if (!includeExpired) {
       params.push(asOf);
       whereClauses.push(`expires_at > $${params.length}`);
+      params.push(new Date(Date.parse(asOf) - MAX_ACTIVE_CONCERN_LIFETIME_MS).toISOString());
+      whereClauses.push(`created_at > $${params.length}`);
     }
     if (normalizedContactId) {
       params.push(normalizedContactId);
@@ -470,7 +497,10 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       limit: clampListLimit(options.limit, DEFAULT_CONCERN_LIST_LIMIT),
     })).filter(concern => (
       statusSet.has(concern.status)
-      && Date.parse(concern.expiresAt) <= Date.parse(asOf)
+      && (
+        Date.parse(concern.expiresAt) <= Date.parse(asOf)
+        || isConcernPastHardLifetime(concern, Date.parse(asOf))
+      )
     ));
 
     const resolved: ActiveConcern[] = [];
@@ -495,7 +525,10 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
   }): ActiveConcern | null {
     const asOfMs = Date.parse(input.asOf);
     const activeConcerns = this.snapshotActiveConcerns(input.contactId)
-      .filter(concern => Date.parse(concern.expiresAt) > asOfMs);
+      .filter(concern => (
+        Date.parse(concern.expiresAt) > asOfMs
+        && !isConcernPastHardLifetime(concern, asOfMs)
+      ));
     let bestMatch: ActiveConcern | null = null;
     let bestScore = 0;
     for (const concern of activeConcerns) {
@@ -532,6 +565,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       to: status,
       evidenceRefs: input.evidenceRefs,
     });
+    const boundedExpiresAt = clampConcernExpiresAt(input.expiresAt, existing.createdAt);
     const nextReviewAt = chooseEarlierOptionalConcernTimestamp(existing.nextReviewAt, input.nextReviewAt);
     const row = await queryOne<ActiveConcernRow>(
       this.pool,
@@ -556,7 +590,10 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         existing.id,
         chooseHigherConcernPriority(existing.priority, input.priority),
         status,
-        chooseLaterConcernTimestamp(existing.expiresAt, input.expiresAt),
+        clampConcernExpiresAt(
+          chooseLaterConcernTimestamp(existing.expiresAt, boundedExpiresAt),
+          existing.createdAt,
+        ),
         Math.max(existing.salience, input.salience),
         mergeConcernSensitivity(existing.sensitivity, input.sensitivity),
         input.owner,

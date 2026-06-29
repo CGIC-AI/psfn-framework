@@ -26,6 +26,7 @@ import {
   DEFAULT_MIN_CONFIDENCE,
   DEFAULT_MIN_IMPORTANCE,
   DEFAULT_MIN_NOVELTY,
+  type ConcernCandidateExtractionSink,
   type AcceptedFactWrite,
   type ExtractionTriggerReason,
   type MemoryExtractorConfig,
@@ -75,6 +76,7 @@ const log = createComponentLogger('Extraction');
 
 export interface MemoryExtractorFormationOptions {
   getFormationVAD?: () => MemoryFormationVAD | undefined;
+  emitConcernCandidates?: ConcernCandidateExtractionSink;
 }
 
 export interface ObservedGroupExtractionOptions {
@@ -121,6 +123,7 @@ export class MemoryExtractor {
   private inFlightProfileRefreshes = new Set<Promise<void>>();
   private inFlightProfileByContact = new Map<string, Promise<void>>();
   private getFormationVAD: (() => MemoryFormationVAD | undefined) | null = null;
+  private emitConcernCandidates: ConcernCandidateExtractionSink | null = null;
 
   constructor(
     llmClient: LLMProviderPort,
@@ -170,6 +173,7 @@ export class MemoryExtractor {
     this.sessionStore = sessionStore ?? null;
     this.contactStore = contactStore ?? null;
     this.getFormationVAD = formationOptions?.getFormationVAD ?? null;
+    this.emitConcernCandidates = formationOptions?.emitConcernCandidates ?? null;
   }
 
   async queueRetroactiveExtraction(
@@ -487,6 +491,9 @@ export class MemoryExtractor {
         contactId,
         acceptedWrites,
       ) => this.maybeRefreshContactProfile(extractionChannelId, reason, contactId, acceptedWrites),
+      ...(this.emitConcernCandidates
+        ? { emitConcernCandidates: this.emitConcernCandidates }
+        : {}),
     });
   }
 

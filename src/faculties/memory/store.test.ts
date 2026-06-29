@@ -3,7 +3,11 @@ import Database from 'better-sqlite3';
 import * as sqliteVec from 'sqlite-vec';
 import { MemoryStore } from './store.js';
 import { DEFAULT_EMBEDDING_CONFIG } from './embedding.js';
-import type { PurrMemory } from './types.js';
+import {
+  DURABLE_PREFERENCE_MEMORY_TAG,
+  DURABLE_RETENTION_TAG,
+  type PurrMemory,
+} from './types.js';
 
 const EMBEDDING_DIMS = DEFAULT_EMBEDDING_CONFIG.dims;
 
@@ -1097,6 +1101,40 @@ describe('MemoryStore', () => {
       const mem = store.getById('m1');
       expect(mem?.type).toBe('relational');
       expect(mem?.sensitivity).toBe('intimate');
+    });
+
+    it('bulkUpdate applies retention tags and skips deleted or missing memories', () => {
+      store.insertMemory(makeMemory('m1', 'V prefers oolong tea', {
+        tags: ['preference:tea'],
+      }), makeEmbedding(1));
+      store.insertMemory(makeMemory('m2', 'Standard memory', {
+        tags: [DURABLE_RETENTION_TAG, DURABLE_PREFERENCE_MEMORY_TAG, 'preference'],
+        retentionClass: 'durable',
+      }), makeEmbedding(2));
+      store.insertMemory(makeMemory('m-deleted', 'Deleted memory', {
+        tags: ['preference:music'],
+      }), makeEmbedding(3));
+      store.softDeleteMemory('m-deleted', { deletedBy: 'test' });
+
+      const durableCount = store.bulkUpdate(['m1', 'missing', 'm-deleted'], { retentionClass: 'durable' });
+      expect(durableCount).toBe(1);
+      expect(store.getById('m1')).toMatchObject({
+        retentionClass: 'durable',
+        tags: ['preference:tea', DURABLE_RETENTION_TAG, DURABLE_PREFERENCE_MEMORY_TAG],
+      });
+      expect(store.getById('m-deleted')?.retentionClass).toBeUndefined();
+      expect(store.getById('m-deleted')?.tags).toEqual(['preference:music']);
+
+      const standardCount = store.bulkUpdate(['m1', 'm2'], { retentionClass: 'standard' });
+      expect(standardCount).toBe(2);
+      expect(store.getById('m1')).toMatchObject({
+        retentionClass: 'standard',
+        tags: ['preference:tea'],
+      });
+      expect(store.getById('m2')).toMatchObject({
+        retentionClass: 'standard',
+        tags: ['preference'],
+      });
     });
 
     it('bulkUpdateSalience applies distinct salience values per memory', () => {

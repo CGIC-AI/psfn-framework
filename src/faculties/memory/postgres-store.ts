@@ -46,6 +46,7 @@ import type {
 } from './memory-store-port.js';
 import { MEMORY_EVOLUTION_RELATIONS, normalizeMemorySalienceUpdates } from './memory-store-port.js';
 import {
+  applyRetentionClassTags,
   CORE_DURABLE_MEMORY_TAGS,
   DURABLE_PREFERENCE_MEMORY_TAG,
   DURABLE_RETENTION_TAG,
@@ -1618,19 +1619,87 @@ class PostgresMemoryStore implements MemoryStorePort {
   }
 
   async bulkUpdate(ids: string[], fields: MemoryBulkUpdatePatch): Promise<number> {
-    let count = 0;
+    if (
+      fields.type === undefined
+      && fields.sensitivity === undefined
+      && fields.retentionClass === undefined
+    ) {
+      return 0;
+    }
+
+    const updatesById = new Map<string, PurrMemory>();
     for (const id of ids) {
-      const existing = this.memories.get(id);
+      const normalizedId = id.trim();
+      if (!normalizedId) continue;
+      const existing = this.memories.get(normalizedId);
       if (!existing || existing.deletedAt) continue;
       const next = { ...existing };
       if (fields.type !== undefined) next.type = fields.type;
       if (fields.sensitivity !== undefined) next.sensitivity = fields.sensitivity;
-      if (fields.retentionClass !== undefined) next.retentionClass = fields.retentionClass;
-      await this.persist(() => this.upsertMemoryRow(next, this.embeddings.get(id)));
-      this.memories.set(id, next);
-      count += 1;
+      if (fields.retentionClass !== undefined) {
+        next.retentionClass = fields.retentionClass;
+        next.tags = applyRetentionClassTags(existing, fields.retentionClass);
+      }
+      updatesById.set(normalizedId, next);
     }
-    return count;
+    const updates = [...updatesById.values()];
+    if (updates.length === 0) return 0;
+
+    const values: unknown[] = [];
+    const valueColumns = ['id'];
+    const setClauses: string[] = [];
+    if (fields.type !== undefined) {
+      valueColumns.push('type');
+      setClauses.push('type = updates.type');
+    }
+    if (fields.sensitivity !== undefined) {
+      valueColumns.push('sensitivity');
+      setClauses.push('sensitivity = updates.sensitivity');
+    }
+    if (fields.retentionClass !== undefined) {
+      valueColumns.push('retention_class', 'tags');
+      setClauses.push('retention_class = updates.retention_class', 'tags = updates.tags');
+    }
+
+    const rows = updates.map((update) => {
+      const row: string[] = [];
+      values.push(update.id);
+      row.push(`$${values.length}::text`);
+      if (fields.type !== undefined) {
+        values.push(update.type);
+        row.push(`$${values.length}::text`);
+      }
+      if (fields.sensitivity !== undefined) {
+        values.push(update.sensitivity);
+        row.push(`$${values.length}::text`);
+      }
+      if (fields.retentionClass !== undefined) {
+        values.push(update.retentionClass ?? null);
+        row.push(`$${values.length}::text`);
+        values.push(JSON.stringify(update.tags));
+        row.push(`$${values.length}::jsonb`);
+      }
+      return `(${row.join(', ')})`;
+    });
+
+    const result = await this.persist(() => executeQuery(this.pool, `
+      UPDATE l2_memories AS memory
+      SET ${setClauses.join(', ')}
+      FROM (VALUES ${rows.join(', ')}) AS updates(${valueColumns.join(', ')})
+      WHERE memory.id = updates.id
+        AND memory.deleted_at IS NULL
+      RETURNING memory.id
+    `, values));
+
+    const updatedIds = new Set(result.rows.flatMap(row => (
+      typeof row.id === 'string' ? [row.id] : []
+    )));
+    for (const update of updates) {
+      if (updatedIds.has(update.id)) {
+        this.memories.set(update.id, update);
+      }
+    }
+    return result.rowCount ?? updatedIds.size;
   }
 
   async bulkUpdateSalience(updates: MemorySalienceUpdate[]): Promise<number> {

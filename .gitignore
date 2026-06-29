@@ -32,6 +32,9 @@ workspace/
 # Companion personal files live inside the repo tree but are runtime/personal data.
 purrsephone/
 
+# Local satellite hub checkout; not part of this repository.
+PSFN-Satellite-Hub/
+
 # SvelteKit admin UI
 .svelte-kit/
 admin-ui/node_modules/

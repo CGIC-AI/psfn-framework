@@ -19,6 +19,7 @@
     ".codex-*/**",
     ".fallow/**",
     ".firecrawl/**",
+    "PSFN-Satellite-Hub/**",
     "worktrees/**"
   ],
   "workspaces": {

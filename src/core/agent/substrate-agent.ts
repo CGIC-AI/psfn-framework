@@ -118,6 +118,7 @@ import {
   getPersonaAdaptation as getPersonaAdaptationForTurn,
   resolveContinuitySubjectKey,
   resolveAuthorContext as resolveAuthorContextForTurn,
+  type CompanionSubstrateHealthContext,
   type ResolvedAuthorContext,
 } from './substrate-agent/runtime-context.js';
 import {
@@ -251,6 +252,7 @@ export class SubstrateAgent {
   private internalStateStore: InternalStateStorePort | null = null;
   private internalStateContinuityGap: InternalStateContinuityGap | null = null;
   private internalStateContinuityGapRenderCount = 0;
+  private companionSubstrateHealthContext: CompanionSubstrateHealthContext | null = null;
   private runtimeMode: RuntimeMode;
 
   private get activeTurnCorrelation(): CorrelationMetadata | null {
@@ -588,6 +590,10 @@ export class SubstrateAgent {
 
   getToolHealthStatusByName(): ReadonlyMap<string, RuntimeServiceHealthStatus> {
     return this.toolRuntimeFacade.getToolHealthStatusByName();
+  }
+
+  setCompanionSubstrateHealthContext(context: CompanionSubstrateHealthContext | null): void {
+    this.companionSubstrateHealthContext = context;
   }
 
   getBackgroundContinuationTasks(): readonly BackgroundContinuationTaskRecord[] {
@@ -1280,6 +1286,7 @@ export class SubstrateAgent {
       formatTopEmotions: (discrete) => this.emotionSelfModelRuntime.formatTopEmotions(discrete),
       config: this.config as unknown as Record<string, unknown>,
       internalStateContinuityGap: this.internalStateContinuityGap,
+      substrateHealth: this.companionSubstrateHealthContext,
     });
   }
 

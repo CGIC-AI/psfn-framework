@@ -180,6 +180,8 @@ export class AgentApiBackend {
       lastSchedulerHealthcheckAtMs: this.lastSchedulerHealthcheckAtMs,
       schedulerHealthcheckStaleAfterMs: this.schedulerHealthcheckStaleAfterMs,
     });
+    const healthAwareAgent = this.agentLoop as Partial<Pick<SubstrateAgent, 'setCompanionSubstrateHealthContext'>>;
+    healthAwareAgent.setCompanionSubstrateHealthContext?.({ apiHealth: result.body });
     return result.body;
   }
 

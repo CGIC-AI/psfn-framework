@@ -4,6 +4,7 @@ import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
 import { formatActiveConcernsContextBlock } from '../../intention/concerns.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import type { ApiHealthResponse, ApiHealthSubsystemStatus } from '../../../channels/api/types.js';
 import type { InternalState } from '../../self-model/state.js';
 import {
   buildDynamicPromptTemplateVariables,
@@ -14,7 +15,11 @@ import {
   resolveAuthorContext,
   resolveIdentityChannel,
 } from './runtime-context.js';
-import { resetRunChargeRollingWindowForTests } from '../../../shared/telemetry/run-charge.js';
+import {
+  chargeSurface,
+  resetRunChargeRollingWindowForTests,
+  runWithChargeContext,
+} from '../../../shared/telemetry/run-charge.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 
 afterEach(() => {
@@ -141,6 +146,51 @@ const TEST_CHARGE_POLICY = {
   fatigue: makeTestFatiguePolicyConfig(),
 };
 
+function healthySubsystem(meta: Record<string, unknown> = { checkLatencyMs: 8 }): ApiHealthSubsystemStatus {
+  return {
+    status: 'healthy',
+    meta,
+  };
+}
+
+function makeApiHealthResponse(overrides: {
+  subsystems?: Partial<ApiHealthResponse['subsystems']>;
+  continuityChecks?: Partial<ApiHealthResponse['continuity']['checks']>;
+  checkedAt?: string;
+} = {}): ApiHealthResponse {
+  const subsystems: ApiHealthResponse['subsystems'] = {
+    memory: healthySubsystem({ checkLatencyMs: 7 }),
+    llm: healthySubsystem({ probeLatencyMs: 18, checkLatencyMs: 19 }),
+    discord: healthySubsystem(),
+    embeddings: healthySubsystem({ probeLatencyMs: 11 }),
+    scheduler: healthySubsystem(),
+    ...(overrides.subsystems ?? {}),
+  };
+  const checks: ApiHealthResponse['continuity']['checks'] = {
+    database: healthySubsystem(),
+    gatewayLink: healthySubsystem(),
+    schedulerHealthcheck: healthySubsystem(),
+    ...(overrides.continuityChecks ?? {}),
+  };
+  const status = (
+    Object.values(subsystems).every(subsystem => subsystem.status === 'healthy')
+    && Object.values(checks).every(check => check.status === 'healthy')
+  )
+    ? 'healthy'
+    : 'degraded';
+
+  return {
+    status,
+    checkedAt: overrides.checkedAt ?? '2026-06-29T10:30:00.000Z',
+    uptimeSeconds: 120,
+    subsystems,
+    continuity: {
+      status: Object.values(checks).every(check => check.status === 'healthy') ? 'healthy' : 'degraded',
+      checks,
+    },
+  };
+}
+
 function buildRuntimePromptOutputs(
   input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
 ): { variables: Record<string, string>; rendered: string } {
@@ -216,6 +266,37 @@ function buildAtomicMetacognitionTemplateOutput(
       ...variables,
     },
   });
+}
+
+function buildMinimalRuntimeContextInput() {
+  return {
+    message: makeMessage({ channelId: 'api:general', channelType: 'api' as const }),
+    resolvedUserName: 'User',
+    trustLevel: 'primary' as const,
+    channelType: 'api',
+    canonicalContactKey: undefined,
+    subjectIdentityKey: 'user-1',
+    responseStyle: 'concise' as const,
+    now: new Date('2026-06-10T12:00:00Z'),
+    taskKind: 'chat',
+    templateVariables: {},
+    modelId: 'test-model',
+    contextWindow: 4096,
+    capabilityTier: 'nursery' as const,
+    activeToolCounts: {
+      core: 0,
+      promoted: 0,
+      extendedLoaded: 0,
+      autoload: 0,
+      deferred: 0,
+      total: 0,
+    },
+    extendedTools: [],
+    loadedExtended: new Map(),
+    classifyExtendedToolForTurn: () => 'overlay' as const,
+    promotedExtendedToolNames: new Set<string>(),
+    formatTopEmotions: () => '',
+  };
 }
 
 describe('runtime subject identity', () => {
@@ -331,7 +412,7 @@ describe('runtime subject identity', () => {
     expect(rendered).not.toContain('userId: scheduler');
     expect(rendered).not.toContain('Channel: internal:reflection:whisper');
     expect(rendered).not.toContain('<appearance_context>');
-    expect(buildRuntimeContext({
+    const runtimeContext = buildRuntimeContext({
       message,
       resolvedUserName: 'Companion',
       trustLevel: 'primary',
@@ -358,7 +439,10 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       formatTopEmotions: () => '',
-    })).toBe('');
+    });
+    expect(runtimeContext).toContain('<runtime_substrate_health>');
+    expect(runtimeContext).not.toContain('<companion_runtime_context>');
+    expect(runtimeContext).not.toContain('userId: scheduler');
   });
 
   it('marks ordinary external turns as user speakers', async () => {
@@ -1923,38 +2007,123 @@ describe('runtime subject identity', () => {
   });
 });
 
-describe('internal state continuity gap context', () => {
-  function buildMinimalRuntimeContextInput() {
-    return {
-      message: makeMessage({ channelId: 'api:general', channelType: 'api' as const }),
-      resolvedUserName: 'User',
-      trustLevel: 'primary' as const,
-      channelType: 'api',
-      canonicalContactKey: undefined,
-      subjectIdentityKey: 'user-1',
-      responseStyle: 'concise' as const,
-      now: new Date('2026-06-10T12:00:00Z'),
-      taskKind: 'chat',
-      templateVariables: {},
-      modelId: 'test-model',
-      contextWindow: 4096,
-      capabilityTier: 'nursery' as const,
-      activeToolCounts: {
-        core: 0,
-        promoted: 0,
-        extendedLoaded: 0,
-        autoload: 0,
-        deferred: 0,
-        total: 0,
+describe('companion-facing substrate health context', () => {
+  it('renders nominal health when available probes report healthy', async () => {
+    const rendered = await runWithChargeContext({
+      chargePolicy: TEST_CHARGE_POLICY,
+      lane: 'interactive',
+      runId: 'health-nominal',
+    }, async () => buildRuntimeContext({
+      ...buildMinimalRuntimeContextInput(),
+      config: { chargePolicy: TEST_CHARGE_POLICY },
+      substrateHealth: {
+        apiHealth: makeApiHealthResponse(),
       },
-      extendedTools: [],
-      loadedExtended: new Map(),
-      classifyExtendedToolForTurn: () => 'overlay' as const,
-      promotedExtendedToolNames: new Set<string>(),
-      formatTopEmotions: () => '',
-    };
-  }
+    }));
 
+    expect(rendered).toContain('<runtime_substrate_health>');
+    expect(rendered).toContain('Overall: healthy. Available probes report no substrate degradation.');
+    expect(rendered).toContain('Gateway responsiveness: healthy');
+    expect(rendered).toContain('LLM provider: healthy - provider probe reported healthy (probe 18 ms).');
+    expect(rendered).toContain('Memory store: healthy - memory store probe reported healthy (probe 7 ms).');
+    expect(rendered).toContain('Charge pressure: healthy - interactive lane has 24 of 24 run-charge units remaining this run');
+    expect(rendered).toContain('Active subsystem warnings: none reported by available probes.');
+  });
+
+  it('makes degraded LLM provider health visible with bounded actionable wording', async () => {
+    const rendered = await runWithChargeContext({
+      chargePolicy: TEST_CHARGE_POLICY,
+      lane: 'interactive',
+      runId: 'health-llm-degraded',
+    }, async () => buildRuntimeContext({
+      ...buildMinimalRuntimeContextInput(),
+      config: { chargePolicy: TEST_CHARGE_POLICY },
+      substrateHealth: {
+        apiHealth: makeApiHealthResponse({
+          subsystems: {
+            llm: {
+              status: 'degraded',
+              detail: 'timeout after 10000ms',
+              meta: { probeLatencyMs: 10_000 },
+            },
+          },
+          continuityChecks: {
+            gatewayLink: {
+              status: 'degraded',
+              detail: 'LLM and embeddings probes are slow',
+            },
+          },
+        }),
+      },
+    }));
+
+    expect(rendered).toContain('Overall: degraded. One or more substrate signals need attention.');
+    expect(rendered).toContain('Gateway responsiveness: degraded');
+    expect(rendered).toContain('LLM provider: degraded - timeout after 10000ms (probe 10000 ms); use simpler paths and avoid optional costly work until it recovers.');
+  });
+
+  it('renders degraded memory health without leaking internal paths or env names', async () => {
+    const rendered = await runWithChargeContext({
+      chargePolicy: TEST_CHARGE_POLICY,
+      lane: 'interactive',
+      runId: 'health-memory-degraded',
+    }, async () => buildRuntimeContext({
+      ...buildMinimalRuntimeContextInput(),
+      config: { chargePolicy: TEST_CHARGE_POLICY },
+      substrateHealth: {
+        apiHealth: makeApiHealthResponse({
+          subsystems: {
+            memory: {
+              status: 'degraded',
+              detail: 'Postgres check failed at /var/lib/psfn/runtime using DATABASE_URL',
+              meta: { checkLatencyMs: 44 },
+            },
+          },
+        }),
+      },
+    }));
+
+    expect(rendered).toContain('Memory store: degraded');
+    expect(rendered).toContain('[internal path]');
+    expect(rendered).toContain('configuration value');
+    expect(rendered).not.toContain('/var/lib/psfn');
+    expect(rendered).not.toContain('DATABASE_URL');
+  });
+
+  it('surfaces low charge pressure as degraded', async () => {
+    const rendered = await runWithChargeContext({
+      chargePolicy: TEST_CHARGE_POLICY,
+      lane: 'interactive',
+      runId: 'health-low-charge',
+    }, async () => {
+      chargeSurface('externalModelConsult', { amount: 23 });
+      return buildRuntimeContext({
+        ...buildMinimalRuntimeContextInput(),
+        config: { chargePolicy: TEST_CHARGE_POLICY },
+        substrateHealth: {
+          apiHealth: makeApiHealthResponse(),
+        },
+      });
+    });
+
+    expect(rendered).toContain('Overall: degraded. One or more substrate signals need attention.');
+    expect(rendered).toContain('Charge pressure: degraded - interactive lane has 1 of 24 run-charge units remaining this run; shared 24h budget has 1 of 24 remaining; avoid optional costly escalations unless they are necessary.');
+  });
+
+  it('honestly renders unavailable health probes instead of nominal health', () => {
+    const rendered = buildRuntimeContext(buildMinimalRuntimeContextInput());
+
+    expect(rendered).toContain('<runtime_substrate_health>');
+    expect(rendered).toContain('Overall: unavailable. runtime health probes are not connected to this prompt context; do not assume the substrate is nominal.');
+    expect(rendered).toContain('Gateway responsiveness: unavailable - no gateway responsiveness probe snapshot is available.');
+    expect(rendered).toContain('LLM provider: unavailable - no probe snapshot is available.');
+    expect(rendered).toContain('Memory store: unavailable - no probe snapshot is available.');
+    expect(rendered).toContain('Charge pressure: unavailable - charge policy is not configured, so runtime pressure is unknown.');
+    expect(rendered).not.toContain('Overall: healthy');
+  });
+});
+
+describe('internal state continuity gap context', () => {
   it('renders a continuity notice when a gap is present', () => {
     const rendered = buildRuntimeContext({
       ...buildMinimalRuntimeContextInput(),
@@ -1982,8 +2151,9 @@ describe('internal state continuity gap context', () => {
     expect(rendered).toContain('offline for about 11 hours');
   });
 
-  it('renders nothing without a gap', () => {
+  it('omits the continuity notice without a gap', () => {
     const rendered = buildRuntimeContext(buildMinimalRuntimeContextInput());
     expect(rendered).not.toContain('runtime_continuity_notice');
+    expect(rendered).toContain('<runtime_substrate_health>');
   });
 });

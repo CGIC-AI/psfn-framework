@@ -5,6 +5,12 @@ import type {
   SubstrateMessage,
   ResponseStyle,
 } from '../../../shared/contracts/runtime.js';
+import type {
+  ApiContinuityWatchdogCheck,
+  ApiHealthResponse,
+  ApiHealthSubsystem,
+  ApiHealthSubsystemStatus,
+} from '../../../channels/api/types.js';
 import {
   CHARGE_POLICY_RUNTIME_LANE_VALUES,
   CHARGE_POLICY_SURFACE_VALUES,
@@ -99,9 +105,32 @@ interface ExtendedToolGuideEntry {
   activatable: boolean;
 }
 
+export type CompanionSubstrateHealthStatus = 'healthy' | 'degraded' | 'unavailable';
+
+export interface CompanionSubstrateHealthWarning {
+  label: string;
+  detail: string;
+  status?: CompanionSubstrateHealthStatus;
+}
+
+export interface CompanionSubstrateHealthContext {
+  apiHealth?: ApiHealthResponse | null;
+  unavailableReason?: string;
+  warnings?: readonly CompanionSubstrateHealthWarning[];
+}
+
+interface CompanionSubstrateHealthLine {
+  label: string;
+  status: CompanionSubstrateHealthStatus;
+  detail: string;
+}
+
 const OMITTED_CONCERN_LINE_PATTERN = /^- (\d+) additional lower-salience thread(?:s)? omitted\.$/;
 const CONCERN_PRIORITY_PATTERN = /\[(high|medium|low);/i;
 const SKILL_TAG_PATTERN = /<skill\b/gi;
+const HEALTH_DETAIL_MAX_CHARS = 180;
+const HEALTH_WARNING_LIMIT = 4;
+const LOW_CHARGE_REMAINING_RATIO = 0.2;
 
 const CHARGE_SURFACE_PROMPT_LABELS: Record<ChargePolicySurface, string> = {
   ownerFileInspection: 'owner-file inspection',
@@ -171,6 +200,293 @@ function resolveChargePolicyConfig(config: Record<string, unknown> | undefined):
 
 function formatChargeAmount(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/u, '').replace(/\.$/u, '');
+}
+
+function compactHealthText(value: string, maxChars = HEALTH_DETAIL_MAX_CHARS): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= maxChars) return normalized;
+  return `${normalized.slice(0, maxChars - 3)}...`;
+}
+
+function sanitizeHealthDetail(value: string | undefined, fallback: string): string {
+  const raw = value?.trim() || fallback;
+  const redacted = raw
+    .replace(/https?:\/\/[^\s"'<>]+/giu, '[endpoint]')
+    .replace(/\b[A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASS|KEY|URL|URI|PATH|DIR|HOME|ROOT|SOCKET|HOST|PORT|TOPIC)[A-Z0-9_]*\b/gu, 'configuration value')
+    .replace(/\/(?:home|var|etc|mnt|tmp|run|opt|srv|root|Users|Volumes)\/[^\s,;)"']+/giu, '[internal path]')
+    .replace(/[A-Za-z]:\\(?:[^\s,;)"']+\\)+[^\s,;)"']*/gu, '[internal path]')
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/giu, '[contact]');
+  return compactHealthText(redacted);
+}
+
+function sanitizeHealthLabel(value: string, fallback: string): string {
+  const normalized = value.replace(/[^A-Za-z0-9 _./:-]/gu, '').replace(/\s+/g, ' ').trim();
+  return compactHealthText(normalized || fallback, 64);
+}
+
+function extractHealthLatencyMs(status: ApiHealthSubsystemStatus | undefined): number | null {
+  const meta = status?.meta;
+  if (!meta) return null;
+  const candidates = [meta.probeLatencyMs, meta.checkLatencyMs];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0) {
+      return Math.round(candidate);
+    }
+  }
+  return null;
+}
+
+function formatHealthLatencySuffix(status: ApiHealthSubsystemStatus | undefined): string {
+  const latencyMs = extractHealthLatencyMs(status);
+  return latencyMs === null ? '' : ` (probe ${latencyMs} ms)`;
+}
+
+function formatHealthLine(line: CompanionSubstrateHealthLine): string {
+  return `- ${line.label}: ${line.status} - ${line.detail}`;
+}
+
+function statusRank(status: CompanionSubstrateHealthStatus): number {
+  switch (status) {
+    case 'healthy':
+      return 0;
+    case 'degraded':
+      return 1;
+    case 'unavailable':
+      return 2;
+  }
+}
+
+function buildApiSubsystemHealthLine(input: {
+  label: string;
+  subsystem: ApiHealthSubsystemStatus | undefined;
+  healthyDetail: string;
+  degradedFallback: string;
+}): CompanionSubstrateHealthLine {
+  if (!input.subsystem) {
+    return {
+      label: input.label,
+      status: 'unavailable',
+      detail: 'no probe snapshot is available.',
+    };
+  }
+
+  if (input.subsystem.status === 'healthy') {
+    return {
+      label: input.label,
+      status: 'healthy',
+      detail: `${input.healthyDetail}${formatHealthLatencySuffix(input.subsystem)}.`,
+    };
+  }
+
+  return {
+    label: input.label,
+    status: 'degraded',
+    detail: `${sanitizeHealthDetail(input.subsystem.detail, input.degradedFallback)}${formatHealthLatencySuffix(input.subsystem)}; use simpler paths and avoid optional costly work until it recovers.`,
+  };
+}
+
+function buildGatewayHealthLine(apiHealth: ApiHealthResponse | null | undefined): CompanionSubstrateHealthLine {
+  const gatewayLink = apiHealth?.continuity.checks.gatewayLink;
+  if (!gatewayLink) {
+    return {
+      label: 'Gateway responsiveness',
+      status: 'unavailable',
+      detail: 'no gateway responsiveness probe snapshot is available.',
+    };
+  }
+
+  if (gatewayLink.status === 'healthy') {
+    return {
+      label: 'Gateway responsiveness',
+      status: 'healthy',
+      detail: 'available probes report the gateway link is responsive.',
+    };
+  }
+
+  return {
+    label: 'Gateway responsiveness',
+    status: 'degraded',
+    detail: `${sanitizeHealthDetail(gatewayLink.detail, 'gateway-linked model or embedding checks are degraded')}; replies or tool calls that depend on the gateway may be slow or fail.`,
+  };
+}
+
+function buildChargeHealthLine(input: {
+  config?: Record<string, unknown>;
+}): CompanionSubstrateHealthLine {
+  const chargePolicy = resolveChargePolicyConfig(input.config);
+  if (!chargePolicy) {
+    return {
+      label: 'Charge pressure',
+      status: 'unavailable',
+      detail: 'charge policy is not configured, so runtime pressure is unknown.',
+    };
+  }
+
+  const snapshot = getRunChargeSnapshot();
+  const lane = snapshot?.lane && isChargePolicyRuntimeLane(snapshot.lane)
+    ? snapshot.lane
+    : 'interactive';
+  const quota = chargePolicy.runChargeQuotaByLane[lane];
+  const rollingSnapshot = getRunChargeRollingWindowSnapshot();
+  const rollingSpent = rollingSnapshot.spentByLane[lane] ?? 0;
+  const rollingRemaining = Math.max(0, quota - rollingSpent);
+
+  if (!snapshot) {
+    return {
+      label: 'Charge pressure',
+      status: 'unavailable',
+      detail: `${lane} lane has no active run-charge context; shared 24h budget has ${formatChargeAmount(rollingRemaining)} of ${formatChargeAmount(quota)} run-charge units remaining.`,
+    };
+  }
+
+  const spent = snapshot.quotaSpentByLane[lane] ?? 0;
+  const remaining = Math.max(0, quota - spent);
+  const lowCurrentRun = quota <= 0 || remaining / quota <= LOW_CHARGE_REMAINING_RATIO;
+  const lowRolling = quota <= 0 || rollingRemaining / quota <= LOW_CHARGE_REMAINING_RATIO;
+  const status: CompanionSubstrateHealthStatus = lowCurrentRun || lowRolling ? 'degraded' : 'healthy';
+  const pressureDetail = `${lane} lane has ${formatChargeAmount(remaining)} of ${formatChargeAmount(quota)} run-charge units remaining this run; shared 24h budget has ${formatChargeAmount(rollingRemaining)} of ${formatChargeAmount(quota)} remaining`;
+
+  return {
+    label: 'Charge pressure',
+    status,
+    detail: status === 'healthy'
+      ? `${pressureDetail}.`
+      : `${pressureDetail}; avoid optional costly escalations unless they are necessary.`,
+  };
+}
+
+function shouldIncludeSubsystemWarning(
+  subsystem: ApiHealthSubsystem,
+  status: ApiHealthSubsystemStatus,
+): boolean {
+  if (status.status === 'healthy') return false;
+  if (subsystem === 'memory' || subsystem === 'llm') return false;
+  if (subsystem === 'discord' && status.detail?.includes('runs outside the agent container')) return false;
+  return true;
+}
+
+function shouldIncludeContinuityWarning(
+  check: ApiContinuityWatchdogCheck,
+  status: ApiHealthSubsystemStatus,
+): boolean {
+  if (status.status === 'healthy') return false;
+  return check !== 'database' && check !== 'gatewayLink';
+}
+
+function collectActiveSubsystemWarnings(input: {
+  apiHealth?: ApiHealthResponse | null;
+  warnings?: readonly CompanionSubstrateHealthWarning[];
+}): CompanionSubstrateHealthLine[] {
+  const warnings: CompanionSubstrateHealthLine[] = [];
+  for (const warning of input.warnings ?? []) {
+    warnings.push({
+      label: sanitizeHealthLabel(warning.label, 'Subsystem warning'),
+      status: warning.status ?? 'degraded',
+      detail: sanitizeHealthDetail(warning.detail, 'subsystem warning is active'),
+    });
+  }
+
+  const apiHealth = input.apiHealth;
+  if (!apiHealth) return warnings;
+
+  for (const [subsystem, status] of Object.entries(apiHealth.subsystems) as Array<[ApiHealthSubsystem, ApiHealthSubsystemStatus]>) {
+    if (!shouldIncludeSubsystemWarning(subsystem, status)) continue;
+    warnings.push({
+      label: sanitizeHealthLabel(subsystem, 'Subsystem'),
+      status: 'degraded',
+      detail: sanitizeHealthDetail(status.detail, `${subsystem} subsystem is degraded`),
+    });
+  }
+
+  for (const [check, status] of Object.entries(apiHealth.continuity.checks) as Array<[ApiContinuityWatchdogCheck, ApiHealthSubsystemStatus]>) {
+    if (!shouldIncludeContinuityWarning(check, status)) continue;
+    warnings.push({
+      label: sanitizeHealthLabel(check, 'Continuity check'),
+      status: 'degraded',
+      detail: sanitizeHealthDetail(status.detail, `${check} continuity check is degraded`),
+    });
+  }
+
+  return warnings;
+}
+
+function buildActiveSubsystemWarningLines(input: {
+  apiHealth?: ApiHealthResponse | null;
+  warnings?: readonly CompanionSubstrateHealthWarning[];
+}): string[] {
+  const warnings = collectActiveSubsystemWarnings(input);
+  if (warnings.length === 0) {
+    return [
+      input.apiHealth
+        ? '- Active subsystem warnings: none reported by available probes.'
+        : '- Active subsystem warnings: unavailable - no health probe snapshot is available.',
+    ];
+  }
+
+  const shown = warnings.slice(0, HEALTH_WARNING_LIMIT);
+  const omitted = Math.max(0, warnings.length - shown.length);
+  return [
+    ...shown.map(warning => `- Warning: ${warning.label}: ${warning.status} - ${warning.detail}`),
+    ...(omitted > 0 ? [`- Additional subsystem warnings omitted: ${omitted}.`] : []),
+  ];
+}
+
+function buildSubstrateHealthContextBlock(input: {
+  config?: Record<string, unknown>;
+  substrateHealth?: CompanionSubstrateHealthContext | null;
+}): string {
+  const health = input.substrateHealth ?? null;
+  const apiHealth = health?.apiHealth ?? null;
+  const gatewayLine = buildGatewayHealthLine(apiHealth);
+  const llmLine = buildApiSubsystemHealthLine({
+    label: 'LLM provider',
+    subsystem: apiHealth?.subsystems.llm,
+    healthyDetail: 'provider probe reported healthy',
+    degradedFallback: 'LLM provider probe is degraded',
+  });
+  const memoryLine = buildApiSubsystemHealthLine({
+    label: 'Memory store',
+    subsystem: apiHealth?.subsystems.memory,
+    healthyDetail: 'memory store probe reported healthy',
+    degradedFallback: 'memory store probe is degraded',
+  });
+  const chargeLine = buildChargeHealthLine({ config: input.config });
+  const warningLines = buildActiveSubsystemWarningLines({
+    apiHealth,
+    warnings: health?.warnings,
+  });
+  const coreStatuses = [gatewayLine.status, llmLine.status, memoryLine.status, chargeLine.status];
+  const warningStatuses = collectActiveSubsystemWarnings({ apiHealth, warnings: health?.warnings })
+    .map(warning => warning.status);
+  const overall: CompanionSubstrateHealthStatus = !apiHealth
+    ? 'unavailable'
+    : [...coreStatuses, ...warningStatuses].some(status => statusRank(status) > statusRank('healthy'))
+      ? 'degraded'
+      : 'healthy';
+  const unavailableReason = !apiHealth
+    ? sanitizeHealthDetail(health?.unavailableReason, 'runtime health probes are not connected to this prompt context')
+    : '';
+  const overallDetail = overall === 'healthy'
+    ? 'Available probes report no substrate degradation.'
+    : overall === 'degraded'
+      ? 'One or more substrate signals need attention.'
+      : `${unavailableReason}; do not assume the substrate is nominal.`;
+  const checkedAt = apiHealth ? apiHealth.checkedAt.trim() : '';
+  const lines = [
+    '[Substrate health]',
+    `Overall: ${overall}. ${overallDetail}`,
+    ...(checkedAt ? [`Probe snapshot: ${sanitizeHealthDetail(checkedAt, checkedAt)}.`] : []),
+    formatHealthLine(gatewayLine),
+    formatHealthLine(llmLine),
+    formatHealthLine(memoryLine),
+    formatHealthLine(chargeLine),
+    ...warningLines,
+  ];
+
+  return wrapPromptSectionXml({
+    id: 'runtime_substrate_health',
+    content: lines.join('\n'),
+  });
 }
 
 function buildChargeBudgetContextBlock(input: {
@@ -996,6 +1312,7 @@ export function buildRuntimeContext(input: {
   formatTopEmotions: (discrete: Record<string, number>) => string;
   config?: Record<string, unknown>;
   internalStateContinuityGap?: InternalStateContinuityGap | null;
+  substrateHealth?: CompanionSubstrateHealthContext | null;
 }): string {
   const runtimeContextExtra = (() => {
     const raw = input.templateVariables?.runtime_context_extra;
@@ -1012,6 +1329,10 @@ export function buildRuntimeContext(input: {
   if (continuityGapContext) {
     sections.push(continuityGapContext);
   }
+  sections.push(buildSubstrateHealthContextBlock({
+    config: input.config,
+    substrateHealth: input.substrateHealth,
+  }));
   const chargeBudgetContext = buildChargeBudgetContextBlock({ config: input.config });
   if (chargeBudgetContext) {
     sections.push(chargeBudgetContext);

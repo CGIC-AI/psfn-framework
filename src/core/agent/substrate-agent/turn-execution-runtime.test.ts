@@ -683,6 +683,111 @@ describe('handleMessageForTurn intentional no-reply', () => {
   });
 });
 
+describe('handleMessageForTurn generated media delivery', () => {
+  it('turns successful media tool results into response attachments for chat egress', async () => {
+    const eventBus = new EventBus();
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+    const companionDataDir = makeTempDir();
+    const localPath = join(companionDataDir, 'generated-purr.png');
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      configOverrides: {
+        companionDataDir,
+      },
+    });
+    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: 'call-media-1',
+          name: 'media',
+          arguments: { prompt: 'a purring cat on a server rack' },
+        }],
+        stopReason: 'toolUse',
+      });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'toolResult',
+        toolCallId: 'call-media-1',
+        toolName: 'media',
+        isError: false,
+        timestamp: 1_700_000_100_180,
+        content: [{ type: 'text', text: 'Generated 1 image.' }],
+        details: {
+          mediaResult: {
+            provider: 'fal',
+            mode: 'create',
+            requestId: 'image-request-1',
+            images: [{
+              url: 'https://images.example.test/purr.png',
+              contentType: 'image/png',
+              fileName: 'purr.png',
+              localPath,
+            }],
+          },
+        },
+      });
+      (runtime.agent.state.messages as any[]).push({ role: 'assistant', content: 'Here is the image.' });
+    });
+    runtime.extractResponseText = vi.fn(() => 'Here is the image.');
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-generated-media'));
+
+    const expectedAttachment = {
+      url: 'https://images.example.test/purr.png',
+      contentType: 'image/png',
+      name: 'purr.png',
+      localPath,
+    };
+    expect(response.attachments).toEqual([expectedAttachment]);
+    expect(runtime.recordToolObservations).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'msg-generated-media' }),
+      expect.any(String),
+      'msg-generated-media',
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: 'toolResult',
+          toolName: 'media',
+          details: expect.objectContaining({
+            mediaResult: expect.objectContaining({
+              images: [expect.objectContaining({ localPath })],
+            }),
+          }),
+        }),
+      ]),
+      'regular',
+    );
+    expect(runtime.buildTurnRecord).toHaveBeenCalledWith(expect.objectContaining({
+      response: expect.objectContaining({
+        attachments: [expectedAttachment],
+      }),
+      turnMessages: expect.arrayContaining([
+        expect.objectContaining({
+          role: 'toolResult',
+          toolName: 'media',
+        }),
+      ]),
+    }));
+    expect(emitSpy).toHaveBeenCalledWith('agent.turn.end', expect.objectContaining({
+      response: expect.objectContaining({
+        attachments: [expectedAttachment],
+      }),
+    }));
+  });
+});
+
 describe('handleMessageForTurn fatigue enforcement', () => {
   function createFatigueRuntime(params: {
     fatigueBudget: FatigueBudgetPort;

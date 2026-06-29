@@ -65,6 +65,7 @@ import {
   evaluateRetrievalAccessDecision,
   mergeMemoryWithheldSummaries,
   summarizeWithheldMemories,
+  type RetrievalRoomVisibilityContext,
 } from './retrieval/access.js';
 import {
   ACTIVE_MEMORY_ENTRY_LIMIT_MULTIPLIER,
@@ -156,6 +157,26 @@ interface ContactProfileAccessResult {
   profile?: ContactProfileArtifact;
   withheldSummary?: MemoryWithheldSummary;
   withheldSourceMemoryIds: string[];
+}
+
+function buildRoomVisibilityContext(
+  channelId: string,
+  channelMeta: ChannelMeta | undefined,
+  canonicalContact: Contact | undefined,
+): RetrievalRoomVisibilityContext {
+  const canonicalContactRoomIds = new Set<string>();
+  for (const conversation of canonicalContact?.conversationChannels ?? []) {
+    const roomId = conversation.channelId.trim();
+    if (roomId.length > 0) canonicalContactRoomIds.add(roomId);
+  }
+
+  return {
+    currentChannelId: channelId,
+    ...(channelMeta?.isDirectMessage !== undefined
+      ? { currentIsDirectMessage: channelMeta.isDirectMessage }
+      : {}),
+    ...(canonicalContactRoomIds.size > 0 ? { canonicalContactRoomIds } : {}),
+  };
 }
 
 type RetrievalIntegrityErrorStage =
@@ -426,6 +447,17 @@ export class MemoryRetriever implements MemoryProvider {
     return cloneActiveMemorySnapshot(state.snapshot);
   }
 
+  private async resolveRoomVisibilityContext(
+    channelId: string,
+    channelMeta: ChannelMeta | undefined,
+    canonicalContactId: string | undefined,
+  ): Promise<RetrievalRoomVisibilityContext> {
+    const canonicalContact = canonicalContactId && this.contactStore
+      ? await this.contactStore.getById(canonicalContactId)
+      : undefined;
+    return buildRoomVisibilityContext(channelId, channelMeta, canonicalContact);
+  }
+
   private async resolveContactProfileAccess(
     profile: ContactProfileArtifact | undefined,
     options: {
@@ -434,6 +466,7 @@ export class MemoryRetriever implements MemoryProvider {
       channelMeta?: ChannelMeta;
       canonicalContactId?: string;
       operatorApproval?: boolean;
+      roomVisibility?: RetrievalRoomVisibilityContext;
     },
   ): Promise<ContactProfileAccessResult> {
     if (!profile) {
@@ -490,6 +523,7 @@ export class MemoryRetriever implements MemoryProvider {
     const channelVisibility = classifyChannel(channelId, channelMeta);
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
+    const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId);
     const rawProfile = canonicalContactId
       ? await this.memoryStore.getContactProfile(canonicalContactId)
       : undefined;
@@ -499,6 +533,7 @@ export class MemoryRetriever implements MemoryProvider {
       channelMeta,
       canonicalContactId,
       operatorApproval,
+      roomVisibility,
     });
     const profile = profileAccess.profile;
     const emotionalSnapshot = canonicalContactId
@@ -565,6 +600,7 @@ export class MemoryRetriever implements MemoryProvider {
         channelMeta,
         canonicalContactId,
         operatorApproval,
+        roomVisibility,
       },
     );
     const withheldSummary = mergeMemoryWithheldSummaries(
@@ -834,6 +870,7 @@ export class MemoryRetriever implements MemoryProvider {
     const channelVisibility = classifyChannel(channelId, channelMeta);
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
+    const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId);
     const socialContext = canonicalContactId
       ? await this.resolveRetrievalSocialContext(canonicalContactId, effectiveTrust, channelVisibility)
       : undefined;
@@ -872,6 +909,7 @@ export class MemoryRetriever implements MemoryProvider {
       channelMeta,
       canonicalContactId,
       operatorApproval,
+      roomVisibility,
     });
     const profile = profileAccess.profile;
     telemetry.profileIncluded = !!profile;
@@ -914,6 +952,7 @@ export class MemoryRetriever implements MemoryProvider {
         operatorApproval,
         channelMeta,
         contactEmotionalSource,
+        roomVisibility,
       )
       : [];
     telemetry.emotionalContinuityCount = fallbackEmotionalContinuity.length;
@@ -928,6 +967,7 @@ export class MemoryRetriever implements MemoryProvider {
             channelMeta,
             canonicalContactId,
             operatorApproval,
+            roomVisibility,
           },
         ).summary, profileAccess.withheldSummary);
       }
@@ -1001,6 +1041,7 @@ export class MemoryRetriever implements MemoryProvider {
                 channelMeta,
                 canonicalContactId,
                 operatorApproval,
+                roomVisibility,
               },
             ).summary, profileAccess.withheldSummary);
           }
@@ -1058,6 +1099,7 @@ export class MemoryRetriever implements MemoryProvider {
             channelMeta,
             canonicalContactId,
             operatorApproval,
+            roomVisibility,
           },
         ).summary, profileAccess.withheldSummary);
       }
@@ -1071,6 +1113,7 @@ export class MemoryRetriever implements MemoryProvider {
       const diagnostics: RetrievalDecisionDiagnostics = {
         candidateCount: memories.length,
         policyAllowedCount: 0,
+        rejectedByRoomVisibility: 0,
         rejectedByContactScope: 0,
         rejectedBySensitivity: 0,
         rejectedByPolicy: 0,
@@ -1094,9 +1137,12 @@ export class MemoryRetriever implements MemoryProvider {
           channelMeta,
           canonicalContactId,
           operatorApproval,
+          roomVisibility,
         });
         if (!accessDecision.allowed) {
-          if (accessDecision.rejectionKind === 'contact_scope') {
+          if (accessDecision.rejectionKind === 'room_visibility') {
+            diagnostics.rejectedByRoomVisibility++;
+          } else if (accessDecision.rejectionKind === 'contact_scope') {
             diagnostics.rejectedByContactScope++;
           } else if (accessDecision.rejectionKind === 'sensitivity') {
             diagnostics.rejectedBySensitivity++;
@@ -1115,6 +1161,7 @@ export class MemoryRetriever implements MemoryProvider {
       }
       diagnostics.policyAllowedCount = policyAllowed.length;
       telemetry.policyAllowedCount = diagnostics.policyAllowedCount;
+      telemetry.roomVisibilityRejectedCount = diagnostics.rejectedByRoomVisibility;
       telemetry.contactScopeRejectedCount = diagnostics.rejectedByContactScope;
       telemetry.sensitivityRejectedCount = diagnostics.rejectedBySensitivity;
       telemetry.policyRejectedCount = diagnostics.rejectedByPolicy;
@@ -1149,6 +1196,7 @@ export class MemoryRetriever implements MemoryProvider {
           trustLevel: effectiveTrust,
           channelVisibility,
           candidateCount: diagnostics.candidateCount,
+          rejectedByRoomVisibility: diagnostics.rejectedByRoomVisibility,
           rejectedByContactScope: diagnostics.rejectedByContactScope,
           rejectedBySensitivity: diagnostics.rejectedBySensitivity,
           rejectedByPolicy: diagnostics.rejectedByPolicy,
@@ -1337,6 +1385,7 @@ export class MemoryRetriever implements MemoryProvider {
         withheldCount: telemetry.withheldCount,
         withheldReasonCounts: telemetry.withheldReasonCounts,
         withheldRelevanceBands: telemetry.withheldRelevanceBands,
+        rejectedByRoomVisibility: diagnostics.rejectedByRoomVisibility,
         rejectedByScore: diagnostics.rejectedByScore,
         scoreGuaranteedCount,
         evidenceSupportAverage: telemetry.evidenceSupportAverage,
@@ -1365,6 +1414,7 @@ export class MemoryRetriever implements MemoryProvider {
           operatorApproval,
           channelMeta,
           turnSnapshot?.contactEmotionalMemories,
+          roomVisibility,
         )
         : [];
       telemetry.emotionalContinuityCount = emotionalContinuityMemories.length;
@@ -1383,6 +1433,7 @@ export class MemoryRetriever implements MemoryProvider {
         channelMeta,
         canonicalContactId,
         operatorApproval,
+        roomVisibility,
       });
       const selectedContactContextById = await this.buildSelectedContactContext(selectedForPrompt, socialContext);
 
@@ -1469,6 +1520,7 @@ export class MemoryRetriever implements MemoryProvider {
     const channelVisibility = classifyChannel(channelId, channelMeta);
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
+    const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId);
     const candidates = turnSnapshot?.proactiveCandidates.map(cloneMemory)
       ?? await this.collectProactiveRecallCandidates(channelId, canonicalContactId);
     if (candidates.length === 0) return '';
@@ -1480,6 +1532,7 @@ export class MemoryRetriever implements MemoryProvider {
         channelMeta,
         canonicalContactId,
         operatorApproval,
+        roomVisibility,
       }).allowed)
       .map(memory => ({
         memory,
@@ -1714,6 +1767,7 @@ export class MemoryRetriever implements MemoryProvider {
       channelMeta?: ChannelMeta;
       canonicalContactId?: string;
       operatorApproval: boolean;
+      roomVisibility?: RetrievalRoomVisibilityContext;
     },
   ): Promise<ScoredMemory[]> {
     if (!this.shouldExpandEvolutionChains(options)) {
@@ -1737,6 +1791,7 @@ export class MemoryRetriever implements MemoryProvider {
           channelMeta: options.channelMeta,
           canonicalContactId: options.canonicalContactId,
           operatorApproval: options.operatorApproval,
+          roomVisibility: options.roomVisibility,
         });
         if (!accessDecision.allowed) continue;
         chain.push({
@@ -1810,6 +1865,7 @@ export class MemoryRetriever implements MemoryProvider {
     operatorApproval = false,
     channelMeta?: ChannelMeta,
     sourceOverride?: readonly PurrMemory[],
+    roomVisibility?: RetrievalRoomVisibilityContext,
   ): Promise<PurrMemory[]> {
     const source = (sourceOverride?.map(cloneMemory) ?? await this.collectContactEmotionalMemories(canonicalContactId))
       .filter(memory => !isInternalMemoryArtifact(memory));
@@ -1824,6 +1880,7 @@ export class MemoryRetriever implements MemoryProvider {
         channelMeta,
         canonicalContactId,
         operatorApproval,
+        roomVisibility,
       }).allowed)
       .sort((left, right) => right.extractedAt - left.extractedAt)
       .slice(0, 3);

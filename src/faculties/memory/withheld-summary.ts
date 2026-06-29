@@ -1,6 +1,7 @@
 import type { PolicyReasonTag } from '../../system/trust/policy.js';
 
 export type MemoryWithheldReasonTag =
+  | 'room_visibility.blocked'
   | 'contact_scope.high_intimacy'
   | Exclude<PolicyReasonTag, 'operator.approval_override' | 'default.within_bounds'>;
 
@@ -15,6 +16,7 @@ export interface MemoryWithheldSummary {
 }
 
 const MEMORY_WITHHELD_REASON_ORDER: readonly MemoryWithheldReasonTag[] = [
+  'room_visibility.blocked',
   'contact_scope.high_intimacy',
   'boundary.withhold',
   'boundary.consent_required',
@@ -24,6 +26,7 @@ const MEMORY_WITHHELD_REASON_ORDER: readonly MemoryWithheldReasonTag[] = [
 ];
 
 const MEMORY_WITHHELD_REASON_LABELS: Record<MemoryWithheldReasonTag, string> = {
+  'room_visibility.blocked': 'room visibility boundary',
   'contact_scope.high_intimacy': 'high-intimacy contact scope',
   'boundary.withhold': 'explicit non-disclosure boundary',
   'boundary.consent_required': 'explicit consent requirement',

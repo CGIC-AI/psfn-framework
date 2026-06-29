@@ -936,6 +936,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       rankedCount: params.memoryManifestSeed?.rankedCount ?? 0,
       returnedCount: memoryIncludedCount,
       excluded: {
+        ...(params.memoryManifestSeed?.roomVisibilityRejectedCount !== undefined
+          ? { roomVisibilityRejectedCount: params.memoryManifestSeed.roomVisibilityRejectedCount }
+          : {}),
         ...(params.memoryManifestSeed?.contactScopeRejectedCount !== undefined
           ? { contactScopeRejectedCount: params.memoryManifestSeed.contactScopeRejectedCount }
           : {}),

@@ -354,6 +354,7 @@ export interface EventMap {
     operatorApproval?: boolean;
     provenanceRefs?: string[];
     policyAllowedCount?: number;
+    roomVisibilityRejectedCount?: number;
     contactScopeRejectedCount?: number;
     sensitivityRejectedCount?: number;
     policyRejectedCount?: number;

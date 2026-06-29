@@ -14,6 +14,7 @@ import type {
   AdaptiveToolDecisionTelemetry,
   AdaptiveToolSnapshotTelemetry,
 } from '../core/agent/adaptive-tools-telemetry.js';
+import type { CompletionHandoffRecord } from '../core/agent/completion-handoff.js';
 import { createComponentLogger } from './logger.js';
 
 const log = createComponentLogger('EventBus');
@@ -125,6 +126,12 @@ export interface EventMap {
     timestamp: number;
     error?: string;
   };
+  'agent.completion_handoff': {
+    handoff: CompletionHandoffRecord;
+    targetChannelId?: string;
+    sessionEntryId?: number;
+    timestamp: number;
+  } & EventCorrelationFields;
   'agent.tools.autoload': {
     channelId: string;
     intent: string;

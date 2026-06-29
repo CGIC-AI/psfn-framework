@@ -117,8 +117,8 @@ export function createBoundedSubagentLaunchTool(
                 : ''}` +
               `${result.requiredCapabilities.length > 0
                 ? `[Required capabilities: ${result.requiredCapabilities.join(', ')}]\n`
-                : ''}\n` +
-              result.content,
+                : ''}` +
+              `[Internal handoff: review worker output via subagent ${result.subagentId}; do not forward raw worker text directly to a partner.]`,
             }] satisfies TextContent[],
           details: {
             boundedSubagent,

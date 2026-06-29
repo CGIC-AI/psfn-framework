@@ -1,7 +1,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AgentResponse, InferredPostTurnAction, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import { EventBus } from '../../../shared/event-bus.js';
 import {
@@ -15,6 +15,7 @@ import {
   registerPostTurnSubagentSpawnRuntime,
   wirePostTurnActionRuntime,
 } from './post-turn-actions.js';
+import { resetCompletionHandoffDedupeForTests } from '../../../core/agent/completion-handoff.js';
 
 function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   let resolve!: (value: T) => void;
@@ -108,7 +109,69 @@ function readQuarantineSidecar(path: string): Array<{
     });
 }
 
+function createCompletionHandoffSink(): {
+  entries: Array<{
+    id: number;
+    channelId: string;
+    role: 'system';
+    content: string;
+    authorId: string;
+    authorName: string;
+    timestamp: number;
+    metadata?: string | null;
+  }>;
+  manager: {
+    getRecentMessages: ReturnType<typeof vi.fn>;
+    recordSystemMessage: ReturnType<typeof vi.fn>;
+  };
+} {
+  const entries: Array<{
+    id: number;
+    channelId: string;
+    role: 'system';
+    content: string;
+    authorId: string;
+    authorName: string;
+    timestamp: number;
+    metadata?: string | null;
+  }> = [];
+  return {
+    entries,
+    manager: {
+      getRecentMessages: vi.fn((channelId: string, limit: number) => (
+        entries.filter(entry => entry.channelId === channelId).slice(-limit)
+      )),
+      recordSystemMessage: vi.fn((
+        channelId: string,
+        content: string,
+        authorId: string,
+        authorName: string,
+        _isDirectMessage?: boolean,
+        _continuation?: unknown,
+        options?: { metadata?: string },
+      ) => {
+        const id = entries.length + 1;
+        entries.push({
+          id,
+          channelId,
+          role: 'system',
+          content,
+          authorId,
+          authorName,
+          timestamp: Date.now(),
+          metadata: options?.metadata ?? null,
+        });
+        return id;
+      }),
+    },
+  };
+}
+
 describe('wirePostTurnActionRuntime', () => {
+  beforeEach(() => {
+    resetCompletionHandoffDedupeForTests();
+  });
+
   it('deduplicates queued actions and executes once after idle', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
@@ -1136,6 +1199,11 @@ describe('wirePostTurnActionRuntime', () => {
 
   it('routes post-turn subagent spawn actions through explicit policy and records status', async () => {
     const eventBus = new EventBus();
+    const handoffSink = createCompletionHandoffSink();
+    const handoffEvents: unknown[] = [];
+    eventBus.on('agent.completion_handoff', event => {
+      handoffEvents.push(event);
+    });
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
       heartbeatIntervalMs: 1_000,
@@ -1147,6 +1215,9 @@ describe('wirePostTurnActionRuntime', () => {
         waitForIdle: vi.fn().mockResolvedValue(undefined),
       },
       intervalMs: 1,
+      completionHandoff: {
+        sessionManager: handoffSink.manager as any,
+      },
     });
     const executeSubagent = vi.fn(async () => ({
       subagentId: 'subagent-1',
@@ -1196,6 +1267,7 @@ describe('wirePostTurnActionRuntime', () => {
     });
 
     await scheduler.tick();
+    await Promise.resolve();
 
     expect(executeSubagent).toHaveBeenCalledWith({
       name: 'research',
@@ -1236,6 +1308,21 @@ describe('wirePostTurnActionRuntime', () => {
         ],
       },
     });
+    expect(handoffSink.entries).toHaveLength(1);
+    expect(handoffSink.entries[0]).toMatchObject({
+      channelId: 'test-channel',
+      role: 'system',
+      authorId: 'system:completion-handoff',
+    });
+    expect(JSON.parse(handoffSink.entries[0]?.metadata ?? '{}')).toMatchObject({
+      type: 'completion_handoff',
+      status: 'completed',
+      partialResult: false,
+    });
+    expect(handoffSink.entries[0]?.content).toContain('"source": "post_turn_action"');
+    expect(handoffSink.entries[0]?.content).toContain('"subagentId": "subagent-1"');
+    expect(handoffSink.entries[0]?.content).toContain('policy_gated_companion_authored');
+    expect(handoffEvents).toHaveLength(1);
   });
 
   it('rejects malformed post-turn subagent spawn actions without invoking the port', async () => {
@@ -1356,6 +1443,7 @@ describe('wirePostTurnActionRuntime', () => {
 
   it('blocks deferred actions when eligibility denies required capabilities', async () => {
     const eventBus = new EventBus();
+    const handoffSink = createCompletionHandoffSink();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 100,
       heartbeatIntervalMs: 1_000,
@@ -1374,6 +1462,9 @@ describe('wirePostTurnActionRuntime', () => {
       agentLoop,
       eligibilityGate,
       intervalMs: 10,
+      completionHandoff: {
+        sessionManager: handoffSink.manager as any,
+      },
     });
     const handler = vi.fn().mockResolvedValue(undefined);
     runtime.registerHandler('heartbeat.run_template', handler);
@@ -1390,9 +1481,18 @@ describe('wirePostTurnActionRuntime', () => {
     });
 
     await scheduler.tick();
+    await Promise.resolve();
 
     expect(handler).not.toHaveBeenCalled();
     expect(runtime.listQueued()).toHaveLength(0);
     expect(phases).toContain('failed');
+    expect(handoffSink.entries).toHaveLength(1);
+    expect(JSON.parse(handoffSink.entries[0]?.metadata ?? '{}')).toMatchObject({
+      type: 'completion_handoff',
+      status: 'blocked',
+      partialResult: false,
+    });
+    expect(handoffSink.entries[0]?.content).toContain('"reason": "eligibility_denied"');
+    expect(handoffSink.entries[0]?.content).toContain('policy_gated_companion_authored');
   });
 });

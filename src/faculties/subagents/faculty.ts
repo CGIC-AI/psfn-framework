@@ -31,10 +31,18 @@ import { SessionManager } from '../../core/session/manager.js';
 import { inferSessionChannelType } from '../../core/session/session-id.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
+import {
+  buildCompletionHandoffDedupeKey,
+  emitCompletionHandoffToSessionStore,
+  safeEmitCompletionHandoffError,
+  summarizeCompletionText,
+  type CompletionHandoffInput,
+} from '../../core/agent/completion-handoff.js';
 import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
 import type {
   SubagentExecutionRequest,
+  SubagentExecutionSourceContext,
   SubagentRuntimeArtifactView,
   SubagentRuntimeTaskDetail,
   SubagentRuntimeResumeView,
@@ -174,19 +182,32 @@ export class SubagentFaculty implements SubagentControlPort {
   }
 
   async spawn(request: SubagentExecutionRequest): Promise<SubagentTaskRecord> {
+    const subagentId = `subagent-${randomUUID()}`;
+    const startTime = Date.now();
     if (this.taskRegistry.getActiveCount() >= this.maxConcurrent) {
+      await this.emitBlockedSpawnHandoff(
+        request,
+        subagentId,
+        'concurrency_limit',
+        `Subagent limit reached (${this.maxConcurrent} concurrent). Wait for active subagent tasks to finish.`,
+      );
       throw new Error(
         `Subagent limit reached (${this.maxConcurrent} concurrent). Wait for active subagent tasks to finish.`,
       );
     }
 
-    const subagentId = `subagent-${randomUUID()}`;
-    const startTime = Date.now();
     const maxTurns = normalizeSubagentMaxTurns(request.maxTurns);
     const capabilities = this.resolveAdvertisedCapabilities(request.capabilities);
     const requiredCapabilities = this.resolveRequiredCapabilities(request.requiredCapabilities);
     const missingCapabilities = requiredCapabilities.filter(capability => !capabilities.includes(capability));
     if (missingCapabilities.length > 0) {
+      await this.emitBlockedSpawnHandoff(
+        request,
+        subagentId,
+        'missing_capabilities',
+        `Subagent routing denied: "${request.name}" is missing required capability tokens `
+        + `(${missingCapabilities.join(', ')}).`,
+      );
       throw new Error(
         `Subagent routing denied: "${request.name}" is missing required capability tokens `
         + `(${missingCapabilities.join(', ')}).`,
@@ -204,6 +225,7 @@ export class SubagentFaculty implements SubagentControlPort {
       channelId: executionChannelId,
       capabilities,
       requiredCapabilities,
+      ...(request.sourceContext ? { sourceContext: request.sourceContext } : {}),
       createdAt: startTime,
     });
     this.auditTrail?.append('subagent.lifecycle.transition', {
@@ -308,7 +330,7 @@ export class SubagentFaculty implements SubagentControlPort {
       if (handle.agentLoop) {
         handle.agentLoop.abort();
       } else {
-        this.finishHandle(handle, this.finalizeCancelled(handle, 0, 0, '', '', 0));
+        await this.finishHandle(handle, this.finalizeCancelled(handle, 0, 0, '', '', 0));
       }
     }
 
@@ -351,7 +373,7 @@ export class SubagentFaculty implements SubagentControlPort {
       });
 
       if (this.isCancellationRequested(handle)) {
-        this.finishHandle(handle, this.finalizeCancelled(handle, 0, 0, '', '', 0));
+        await this.finishHandle(handle, this.finalizeCancelled(handle, 0, 0, '', '', 0));
         return;
       }
 
@@ -380,7 +402,7 @@ export class SubagentFaculty implements SubagentControlPort {
         turns += 1;
 
         if (this.isCancellationRequested(handle)) {
-          this.finishHandle(handle, this.finalizeCancelled(
+          await this.finishHandle(handle, this.finalizeCancelled(
             handle,
             totalInput,
             totalOutput,
@@ -394,7 +416,7 @@ export class SubagentFaculty implements SubagentControlPort {
         if (turn === 0 && handle.maxTurns === 1) break;
       }
 
-      this.finishHandle(handle, this.finalizeCompleted(
+      await this.finishHandle(handle, this.finalizeCompleted(
         handle,
         totalInput,
         totalOutput,
@@ -404,10 +426,10 @@ export class SubagentFaculty implements SubagentControlPort {
       ));
     } catch (error) {
       if (this.isCancellationRequested(handle)) {
-        this.finishHandle(handle, this.finalizeCancelled(handle, 0, 0, '', '', 0));
+        await this.finishHandle(handle, this.finalizeCancelled(handle, 0, 0, '', '', 0));
         return;
       }
-      this.finishHandle(handle, this.finalizeFailed(handle, toErrorMessage(error)));
+      await this.finishHandle(handle, this.finalizeFailed(handle, toErrorMessage(error)));
     }
   }
 
@@ -569,12 +591,146 @@ export class SubagentFaculty implements SubagentControlPort {
     }
   }
 
-  private finishHandle(handle: ActiveSubagentHandle, result: SubagentResult): void {
+  private async finishHandle(handle: ActiveSubagentHandle, result: SubagentResult): Promise<void> {
     if (handle.settled) return;
     handle.settled = true;
     this.activeHandles.delete(handle.subagentId);
     this.storeRecentResult(result);
+    await this.emitCompletionHandoff(handle, result);
     handle.resolveCompletion(cloneSubagentResult(result));
+  }
+
+  private async emitBlockedSpawnHandoff(
+    request: SubagentExecutionRequest,
+    subagentId: string,
+    reason: string,
+    error: string,
+  ): Promise<void> {
+    const sourceContext = this.resolveSourceContext(request);
+    if (!sourceContext) return;
+    await this.emitHandoff({
+      source: 'subagent',
+      taskId: subagentId,
+      taskLabel: request.name,
+      subagentId,
+      status: 'blocked',
+      resultSummary: `Subagent "${request.name}" did not start.`,
+      outputRefs: [],
+      validationPerformed: ['subagent_spawn_policy', reason],
+      blocker: { reason, error },
+      partialResult: false,
+      recommendedNextAction: 'Revise the worker request, wait for active workers to clear, or choose a narrower task before notifying any partner.',
+      origin: {
+        ...this.originFromSourceContext(sourceContext),
+        sourceChannelId: sourceContext.channelId,
+      },
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'subagent',
+        subagentId,
+        'blocked',
+        reason,
+        sourceContext.requestId,
+        sourceContext.turnId,
+      ]),
+    }, sourceContext.channelId);
+  }
+
+  private async emitCompletionHandoff(
+    handle: ActiveSubagentHandle,
+    result: SubagentResult,
+  ): Promise<void> {
+    const sourceContext = this.resolveSourceContext(handle.request);
+    if (!sourceContext) return;
+
+    const isPartial = result.lifecycleState === 'cancelled' && result.content.trim().length > 0;
+    const status = result.lifecycleState === 'completed'
+      ? 'completed'
+      : result.lifecycleState === 'cancelled'
+        ? (isPartial ? 'partial' : 'cancelled')
+        : 'failed';
+    await this.emitHandoff({
+      source: 'subagent',
+      taskId: handle.subagentId,
+      taskLabel: result.name,
+      subagentId: handle.subagentId,
+      status,
+      resultSummary: result.lifecycleState === 'completed' || isPartial
+        ? summarizeCompletionText(result.content)
+        : `Subagent "${result.name}" ended without a usable final output.`,
+      outputRefs: [
+        { kind: 'session', ref: handle.channelId, label: 'subagent transcript' },
+        { kind: 'subagent_result', ref: result.subagentId, label: result.lifecycleState },
+      ],
+      validationPerformed: [
+        'subagent_lifecycle_terminal',
+        `state_reason:${result.stateReason}`,
+        ...(result.turns > 0 ? [`turns:${result.turns}`] : []),
+      ],
+      ...(result.failureReason
+        ? {
+            blocker: {
+              reason: result.stateReason,
+              error: result.failureReason,
+            },
+          }
+        : {}),
+      partialResult: isPartial || status === 'partial',
+      recommendedNextAction: result.lifecycleState === 'completed'
+        ? 'Review the internal handoff and decide whether to continue, ask a follow-up, or write a companion-authored partner response.'
+        : 'Decide whether to retry, narrow the worker task, or surface a companion-authored status after policy review.',
+      origin: {
+        ...this.originFromSourceContext(sourceContext),
+        sourceChannelId: sourceContext.channelId,
+      },
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'subagent',
+        handle.subagentId,
+        result.lifecycleState,
+        result.stateReason,
+        sourceContext.requestId,
+        sourceContext.turnId,
+      ]),
+    }, sourceContext.channelId);
+  }
+
+  private async emitHandoff(handoff: CompletionHandoffInput, targetChannelId: string): Promise<void> {
+    try {
+      await emitCompletionHandoffToSessionStore({
+        eventBus: this.deps.eventBus,
+        sessionStore: this.deps.sessionStore,
+        targetChannelId,
+        handoff,
+      });
+    } catch (error) {
+      this.auditTrail?.append('subagent.completion_handoff.failed', {
+        subagentId: handoff.subagentId,
+        targetChannelId,
+        error: safeEmitCompletionHandoffError(error),
+      });
+    }
+  }
+
+  private resolveSourceContext(request: SubagentExecutionRequest): SubagentExecutionSourceContext | null {
+    if (request.sourceContext?.channelId.trim()) {
+      return request.sourceContext;
+    }
+    if (request.message?.channelId.trim()) {
+      return {
+        channelId: request.message.channelId,
+        requestId: request.message.id,
+        ...(request.message.routing?.wyoming?.turnId ? { turnId: request.message.routing.wyoming.turnId } : {}),
+      };
+    }
+    return null;
+  }
+
+  private originFromSourceContext(sourceContext: SubagentExecutionSourceContext): CompletionHandoffInput['origin'] {
+    return {
+      ...(sourceContext.originatingTaskId ? { originatingTaskId: sourceContext.originatingTaskId } : {}),
+      ...(sourceContext.originatingBeadId ? { originatingBeadId: sourceContext.originatingBeadId } : {}),
+      ...(sourceContext.requestId ? { requestId: sourceContext.requestId, sourceMessageId: sourceContext.requestId } : {}),
+      ...(sourceContext.turnId ? { turnId: sourceContext.turnId } : {}),
+    };
   }
 
   private storeRecentResult(result: SubagentResult): void {

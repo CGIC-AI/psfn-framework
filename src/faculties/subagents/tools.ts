@@ -5,6 +5,7 @@ import { tagToolWithReversibility } from '../../system/capabilities/safeguards.j
 import type { SubagentControlPort } from './port.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 
 type SubagentToolAction = 'spawn' | 'message' | 'wait' | 'cancel' | 'status';
 
@@ -75,6 +76,7 @@ export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
       try {
         switch (action) {
           case 'spawn': {
+            const requestContext = getRequestContext();
             const task = await port.spawn({
               name: normalizeRequiredText(params.name, 'name'),
               task: normalizeRequiredText(params.task, 'task'),
@@ -83,6 +85,15 @@ export function createSubagentTool(port: SubagentControlPort): AgentTool<any> {
               ...(params.capabilities?.length ? { capabilities: params.capabilities } : {}),
               ...(params.required_capabilities?.length
                 ? { requiredCapabilities: params.required_capabilities }
+                : {}),
+              ...(requestContext?.channelId
+                ? {
+                    sourceContext: {
+                      channelId: requestContext.channelId,
+                      ...(requestContext.requestId ? { requestId: requestContext.requestId } : {}),
+                      ...(requestContext.turnId ? { turnId: requestContext.turnId } : {}),
+                    },
+                  }
                 : {}),
             });
             return textResult(formatPayload({

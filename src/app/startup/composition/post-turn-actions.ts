@@ -3,9 +3,18 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import type { InferredPostTurnAction } from '../../../shared/contracts/runtime.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
+import type { SessionManager } from '../../../core/session/manager.js';
 import {
   POST_TURN_SUBAGENT_SPAWN_ACTION_KIND,
 } from '../../../core/agent/post-turn-action-runtime.js';
+import {
+  buildCompletionHandoffDedupeKey,
+  emitCompletionHandoffToSessionManager,
+  extractOriginIds,
+  safeEmitCompletionHandoffError,
+  type CompletionHandoffInput,
+  type CompletionHandoffStatus,
+} from '../../../core/agent/completion-handoff.js';
 import type {
   PostTurnActionAgent,
   PostTurnActionCapability,
@@ -115,6 +124,9 @@ export interface WirePostTurnActionRuntimeOptions {
   baseRetryDelayMs?: number;
   maxRetryDelayMs?: number;
   persistencePath?: string;
+  completionHandoff?: {
+    sessionManager: Pick<SessionManager, 'getRecentMessages' | 'recordSystemMessage'>;
+  };
 }
 
 const DEFAULT_TASK_ID = 'post-turn-action-executor';
@@ -147,6 +159,7 @@ export function wirePostTurnActionRuntime(
     baseRetryDelayMs = 750,
     maxRetryDelayMs = 30_000,
     persistencePath,
+    completionHandoff,
   } = options;
 
   const handlers = new Map<string, Map<PostTurnActionHandler, RegisteredPostTurnActionHandler>>();
@@ -546,6 +559,74 @@ export function wirePostTurnActionRuntime(
     });
   };
 
+  const emitCompletionHandoff = (
+    entry: DeferredQueueEntry,
+    status: CompletionHandoffStatus,
+    input: {
+      summary: string;
+      validationPerformed: string[];
+      recommendedNextAction: string;
+      blocker?: { reason: string; error?: string };
+      partialResult?: boolean;
+      subagentSpawn?: PostTurnActionHandlerResult['subagentSpawn'];
+    },
+  ): void => {
+    if (!completionHandoff) {
+      return;
+    }
+    const originIds = extractOriginIds(entry.action.payload);
+    const subagentId = input.subagentSpawn?.subagentId;
+    const subagentOutputRefs: CompletionHandoffInput['outputRefs'] = subagentId
+      ? [{
+          kind: 'subagent_result',
+          ref: subagentId,
+          ...(input.subagentSpawn?.name ? { label: input.subagentSpawn.name } : {}),
+        }]
+      : [];
+    const handoff: CompletionHandoffInput = {
+      source: 'post_turn_action',
+      taskId: entry.action.id,
+      taskLabel: entry.action.kind,
+      ...(subagentId ? { subagentId } : {}),
+      status,
+      resultSummary: input.summary,
+      outputRefs: [
+        { kind: 'post_turn_action', ref: entry.action.id, label: entry.action.kind },
+        { kind: 'dedupe_key', ref: entry.action.dedupeKey },
+        ...subagentOutputRefs,
+      ],
+      validationPerformed: input.validationPerformed,
+      ...(input.blocker ? { blocker: input.blocker } : {}),
+      partialResult: input.partialResult ?? false,
+      recommendedNextAction: input.recommendedNextAction,
+      origin: {
+        ...originIds,
+        sourceChannelId: entry.action.channelId,
+        sourceMessageId: entry.action.sourceMessageId,
+        requestId: entry.action.sourceMessageId,
+      },
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'post_turn_action',
+        entry.action.id,
+        entry.action.dedupeKey,
+        status,
+        input.blocker?.reason,
+      ]),
+    };
+    emitCompletionHandoffToSessionManager({
+      eventBus,
+      sessionManager: completionHandoff.sessionManager,
+      targetChannelId: entry.action.channelId,
+      handoff,
+    }).catch((error) => {
+      log.warn('Deferred action completion handoff failed', {
+        actionId: entry.action.id,
+        actionKind: entry.action.kind,
+        error: safeEmitCompletionHandoffError(error),
+      });
+    });
+  };
+
   const recordDrop = (
     entry: DeferredQueueEntry,
     reason: string,
@@ -568,6 +649,12 @@ export function wirePostTurnActionRuntime(
       maxQueuedActions: runtimeProfile.maxQueuedActions,
       backPressureMode: runtimeProfile.degradationMode,
     });
+    emitCompletionHandoff(entry, 'blocked', {
+      summary: `Post-turn action "${entry.action.kind}" was dropped before running.`,
+      validationPerformed: ['runtime_lane_budget', 'post_turn_action_not_executed'],
+      blocker: { reason: 'dropped_budget', error: reason },
+      recommendedNextAction: 'Decide whether to requeue a narrower action or ignore the stale work before notifying any partner.',
+    });
   };
 
   const recordFailure = (
@@ -587,6 +674,12 @@ export function wirePostTurnActionRuntime(
       attempt: entry.attempt,
       maxAttempts: entry.maxRetries + 1,
       error,
+    });
+    emitCompletionHandoff(entry, reason === 'eligibility_denied' ? 'blocked' : 'failed', {
+      summary: `Post-turn action "${entry.action.kind}" did not complete.`,
+      validationPerformed: ['post_turn_action_terminal_failure', reason],
+      blocker: { reason, error },
+      recommendedNextAction: 'Review the failure and decide whether to retry, narrow scope, or produce a companion-authored status.',
     });
   };
 
@@ -648,6 +741,12 @@ export function wirePostTurnActionRuntime(
       maxAttempts: entry.maxRetries + 1,
       detail,
     });
+    emitCompletionHandoff(entry, reason === 'cancelled' ? 'cancelled' : 'blocked', {
+      summary: `Post-turn action "${entry.action.kind}" was ${reason}.`,
+      validationPerformed: ['post_turn_action_terminal', reason],
+      blocker: { reason, error: detail },
+      recommendedNextAction: 'Decide whether any replacement action is needed; do not send raw action text as a partner update.',
+    });
   };
 
   const recordCompletion = (
@@ -666,6 +765,15 @@ export function wirePostTurnActionRuntime(
       maxAttempts: entry.maxRetries + 1,
       detail: result?.detail?.trim() || 'succeeded',
       ...(result?.subagentSpawn ? { subagentSpawn: { ...result.subagentSpawn } } : {}),
+    });
+    emitCompletionHandoff(entry, 'completed', {
+      summary: result?.detail?.trim() || `Post-turn action "${entry.action.kind}" succeeded.`,
+      validationPerformed: [
+        'post_turn_action_handler_completed',
+        ...(result?.subagentSpawn ? ['subagent_spawn_result_recorded'] : []),
+      ],
+      subagentSpawn: result?.subagentSpawn,
+      recommendedNextAction: 'Review the internal action result and decide the next companion-authored step.',
     });
   };
 

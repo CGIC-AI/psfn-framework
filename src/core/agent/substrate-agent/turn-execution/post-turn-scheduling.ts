@@ -14,6 +14,12 @@ import type {
 import type { ContextBudgetTurnCharacteristics } from '../../../../shared/context-budget.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
+import {
+  buildCompletionHandoffDedupeKey,
+  emitCompletionHandoffToSessionManager,
+  safeEmitCompletionHandoffError,
+  type CompletionHandoffInput,
+} from '../../completion-handoff.js';
 import type { ChannelMeta } from '../../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../../system/trust/types.js';
 import type { InternalState } from '../../../self-model/state.js';
@@ -71,6 +77,77 @@ function createPostTurnBackgroundTask(input: {
       throw error;
     }),
   };
+}
+
+async function emitBackgroundContinuationCompletionHandoff(input: {
+  runtime: TurnExecutionRuntime;
+  message: SubstrateMessage;
+  response: AgentResponse;
+  turnId: TurnID;
+  requestId: string;
+  completionSignal: ReturnType<TurnExecutionRuntime['queueBackgroundContinuationCompletion']>;
+}): Promise<void> {
+  const { runtime, message, response, turnId, requestId, completionSignal } = input;
+  const handoff: CompletionHandoffInput = {
+    source: 'background_continuation',
+    taskId: completionSignal.continuationId,
+    taskLabel: completionSignal.taskKind ?? completionSignal.intent ?? 'background_continuation',
+    status: 'completed',
+    resultSummary: response.content.trim()
+      ? response.content
+      : 'Background continuation completed without deliverable text.',
+    outputRefs: [
+      { kind: 'background_continuation', ref: completionSignal.continuationId },
+      { kind: 'delivery_session', ref: completionSignal.deliverySessionId },
+      { kind: 'source_message', ref: completionSignal.sourceMessageId },
+    ],
+    validationPerformed: [
+      'background_completion_policy',
+      `notification_reason:${completionSignal.notificationReason}`,
+      `notify_user:${String(completionSignal.notifyUser)}`,
+      `queued_for_post_turn_delivery:${String(completionSignal.queuedForPostTurnDelivery)}`,
+    ],
+    partialResult: false,
+    recommendedNextAction: completionSignal.notifyUser
+      ? 'Review this internal handoff on the next foreground turn and write any partner update in the companion voice under outbound policy.'
+      : 'Keep this as internal completion context unless a later policy decision asks for a companion-authored update.',
+    origin: {
+      originatingTaskId: completionSignal.continuationId,
+      sourceChannelId: message.channelId,
+      sourceMessageId: message.id,
+      requestId,
+      turnId,
+    },
+    dedupeKey: buildCompletionHandoffDedupeKey([
+      'background_continuation',
+      completionSignal.continuationId,
+      completionSignal.sourceMessageId,
+      completionSignal.completedAt.toString(),
+    ]),
+  };
+
+  try {
+    await emitCompletionHandoffToSessionManager({
+      eventBus: runtime.eventBus,
+      sessionManager: runtime.sessionManager,
+      targetChannelId: completionSignal.deliverySessionId,
+      handoff,
+      authorId: 'system:background-continuation',
+      authorName: 'BackgroundContinuation',
+      isDirectMessage: message.isDirectMessage,
+      turn: {
+        turnId,
+        requestId,
+        sourceMessageId: message.id,
+      },
+    });
+  } catch (error) {
+    log.warn('Background continuation completion handoff failed', {
+      continuationId: completionSignal.continuationId,
+      channelId: message.channelId,
+      error: safeEmitCompletionHandoffError(error),
+    });
+  }
 }
 
 export async function schedulePostTurnWork(input: {
@@ -233,6 +310,14 @@ export async function schedulePostTurnWork(input: {
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.end'),
   });
   if (completionSignal) {
+    await emitBackgroundContinuationCompletionHandoff({
+      runtime,
+      message,
+      response,
+      turnId,
+      requestId,
+      completionSignal,
+    });
     await runtime.emitBackgroundContinuationEvent(
       'agent.background.continuation.completed',
       {

@@ -26,6 +26,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { LLMResponse } from '../../shared/contracts/runtime.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
+import { resetCompletionHandoffDedupeForTests } from '../../core/agent/completion-handoff.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
@@ -92,6 +93,18 @@ function lastSetToolNames(): string[] {
   if (!call) return [];
   const tools = call[0] as Array<{ name: string }>;
   return tools.map((tool) => tool.name);
+}
+
+function parseEntryMetadata(entry: { metadata?: string | null | undefined }): Record<string, unknown> {
+  return JSON.parse(String(entry.metadata ?? '{}')) as Record<string, unknown>;
+}
+
+function isCompletionHandoffEntry(entry: { metadata?: string | null | undefined }): boolean {
+  try {
+    return parseEntryMetadata(entry).type === 'completion_handoff';
+  } catch {
+    return false;
+  }
 }
 
 // ── Fixtures ──
@@ -202,6 +215,7 @@ describe('ShardManager', () => {
     setSystemPromptSpy.mockClear();
     setToolsSpy.mockClear();
     restoreDefaultPromptMock();
+    resetCompletionHandoffDedupeForTests();
   });
 
   afterEach(() => {
@@ -248,6 +262,46 @@ describe('ShardManager', () => {
         isDirectMessage: false,
       }),
       }));
+  });
+
+  it('emits a structured completion handoff for shard results with source context', async () => {
+    mockShardContent = 'Shard found the answer.';
+    const events: unknown[] = [];
+    eventBus.on('agent.completion_handoff', event => {
+      events.push(event);
+    });
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'You are a helpful assistant.',
+    });
+
+    const result = await manager.spawn({
+      name: 'handoff-shard',
+      task: 'Do something',
+      sourceContext: {
+        channelId: 'api:parent',
+        requestId: 'msg-parent',
+        turnId: 'turn-parent',
+      },
+    });
+
+    const entries = sessionStore.getRecent('api:parent', 10);
+    expect(entries).toHaveLength(1);
+    expect(parseEntryMetadata(entries[0] ?? {})).toMatchObject({
+      type: 'completion_handoff',
+      status: 'completed',
+      partialResult: false,
+    });
+    expect(entries[0]?.content).toContain('"source": "shard"');
+    expect(entries[0]?.content).toContain(`"shardId": "${result.shardId}"`);
+    expect(entries[0]?.content).toContain('"summary": "Shard found the answer."');
+    expect(entries[0]?.content).toContain('policy_gated_companion_authored');
+    expect(events).toHaveLength(1);
   });
 
   it('caps explicit multi-turn shard requests at the shared agent loop ceiling', async () => {
@@ -950,7 +1004,9 @@ describe('ShardManager', () => {
         content: 'context-packed response',
       }),
     ]));
-    expect(sessionStore.getRecent(sourceChannelId, 10)).toEqual(sourceEntriesBefore);
+    const sourceEntriesAfter = sessionStore.getRecent(sourceChannelId, 10);
+    expect(sourceEntriesAfter.filter(entry => !isCompletionHandoffEntry(entry))).toEqual(sourceEntriesBefore);
+    expect(sourceEntriesAfter.filter(isCompletionHandoffEntry)).toHaveLength(1);
   });
 
   it('audits and persists allow decisions for source-to-shard context-pack sync', async () => {
@@ -1853,15 +1909,20 @@ describe('ShardManager', () => {
       },
     }));
     const delegatedEntries = sessionStore.getRecent('api:wyoming:ha-main:voice-pe-kitchen', 10);
-    expect(delegatedEntries).toHaveLength(2);
-    expect(delegatedEntries[0]).toMatchObject({
+    const visibleTranscriptEntries = delegatedEntries.filter(entry => !isCompletionHandoffEntry(entry));
+    const handoffEntries = delegatedEntries.filter(isCompletionHandoffEntry);
+    expect(visibleTranscriptEntries).toHaveLength(2);
+    expect(visibleTranscriptEntries[0]).toMatchObject({
       role: 'user',
       content: 'status check',
     });
-    expect(delegatedEntries[1]).toMatchObject({
+    expect(visibleTranscriptEntries[1]).toMatchObject({
       role: 'assistant',
       content: result.content,
     });
+    expect(handoffEntries).toHaveLength(1);
+    expect(handoffEntries[0]?.content).toContain('"source": "shard"');
+    expect(handoffEntries[0]?.content).toContain('policy_gated_companion_authored');
   });
 
   it('audits Wyoming delegation start/end with routing identity context', async () => {
@@ -2046,11 +2107,28 @@ describe('ShardManager', () => {
     });
 
     await expect(
-      manager.spawn({ name: 'fail', task: 'test' }),
+      manager.spawn({
+        name: 'fail',
+        task: 'test',
+        sourceContext: {
+          channelId: 'api:parent',
+          requestId: 'msg-failure',
+          turnId: 'turn-failure',
+        },
+      }),
     ).rejects.toThrow('LLM failed');
 
     // Active count should be back to 0
     expect(manager.getActiveCount()).toBe(0);
+    const entries = sessionStore.getRecent('api:parent', 10);
+    expect(entries).toHaveLength(1);
+    expect(parseEntryMetadata(entries[0] ?? {})).toMatchObject({
+      type: 'completion_handoff',
+      status: 'failed',
+      partialResult: false,
+    });
+    expect(entries[0]?.content).toContain('"reason": "execution_failed"');
+    expect(entries[0]?.content).toContain('policy_gated_companion_authored');
   });
 });
 
@@ -2117,7 +2195,8 @@ describe('createBoundedSubagentLaunchTool', () => {
     expect(text).toContain('1 turn(s)');
     expect(text).toContain('0 tokens');  // pi-agent-core doesn't surface token counts
     expect(text).toContain('[State reason: completed]');
-    expect(text).toContain('tool output');
+    expect(text).not.toContain('tool output');
+    expect(text).toContain('do not forward raw worker text directly to a partner');
   });
 
   it('surfaces explicit lifecycle failure diagnostics from bounded subagent results', async () => {

@@ -112,6 +112,9 @@ describe('createBoundedSubagentLaunchTool', () => {
           mutationWorkflow: 'artifact_return_only',
           artifactReturn: null,
         });
+        const text = result.content.map((entry: any) => entry.text).join('');
+        expect(text).not.toContain('result text');
+        expect(text).toContain('do not forward raw worker text directly to a partner');
       },
     );
   });

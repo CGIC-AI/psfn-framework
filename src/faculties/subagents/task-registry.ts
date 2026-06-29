@@ -1,5 +1,5 @@
 import { SUBAGENT_WORKER_LANE } from '../../core/agent/worker-lanes.js';
-import type { SubagentTaskLifecycleState, SubagentTaskRecord } from './types.js';
+import type { SubagentExecutionSourceContext, SubagentTaskLifecycleState, SubagentTaskRecord } from './types.js';
 
 const DEFAULT_COMPLETED_TASK_LIMIT = 25;
 
@@ -18,6 +18,7 @@ export interface RegisterSubagentTaskInput {
   channelId: string;
   capabilities: readonly string[];
   requiredCapabilities: readonly string[];
+  sourceContext?: SubagentExecutionSourceContext;
   createdAt?: number;
 }
 
@@ -43,6 +44,7 @@ export class SubagentTaskRegistry {
       createdAt,
       capabilities: [...input.capabilities],
       requiredCapabilities: [...input.requiredCapabilities],
+      ...(input.sourceContext ? { sourceContext: cloneSourceContext(input.sourceContext) } : {}),
     };
     this.activeTasks.set(record.subagentId, record);
     return cloneTaskRecord(record);
@@ -159,5 +161,16 @@ function cloneTaskRecord(record: SubagentTaskRecord): SubagentTaskRecord {
     ...record,
     capabilities: [...record.capabilities],
     requiredCapabilities: [...record.requiredCapabilities],
+    ...(record.sourceContext ? { sourceContext: cloneSourceContext(record.sourceContext) } : {}),
+  };
+}
+
+function cloneSourceContext(sourceContext: SubagentExecutionSourceContext): SubagentExecutionSourceContext {
+  return {
+    channelId: sourceContext.channelId,
+    ...(sourceContext.requestId ? { requestId: sourceContext.requestId } : {}),
+    ...(sourceContext.turnId ? { turnId: sourceContext.turnId } : {}),
+    ...(sourceContext.originatingTaskId ? { originatingTaskId: sourceContext.originatingTaskId } : {}),
+    ...(sourceContext.originatingBeadId ? { originatingBeadId: sourceContext.originatingBeadId } : {}),
   };
 }

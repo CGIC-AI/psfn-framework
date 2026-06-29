@@ -16,6 +16,7 @@ import type {
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { SubagentFaculty } from './faculty.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
+import { resetCompletionHandoffDedupeForTests } from '../../core/agent/completion-handoff.js';
 
 let mockSubagentContent = 'subagent response';
 let mockSubagentError: Error | null = null;
@@ -100,6 +101,14 @@ function parseEntryMetadata(entry: { metadata?: string | null | undefined }): Re
   return JSON.parse(String(entry.metadata ?? '{}')) as Record<string, unknown>;
 }
 
+function isCompletionHandoffEntry(entry: { metadata?: string | null | undefined }): boolean {
+  try {
+    return parseEntryMetadata(entry).type === 'completion_handoff';
+  } catch {
+    return false;
+  }
+}
+
 const CHAT_SLOT: ModelSlot = {
   model: 'deepseek/deepseek-v3.2',
   provider: 'openrouter',
@@ -155,6 +164,7 @@ describe('SubagentFaculty', () => {
     mockSubagentError = null;
     mockSubagentDelayMs = 0;
     promptSpy.mockClear();
+    resetCompletionHandoffDedupeForTests();
   });
 
   afterEach(() => {
@@ -327,6 +337,55 @@ describe('SubagentFaculty', () => {
     });
   });
 
+  it('emits a replay-guarded completion handoff to the parent companion context', async () => {
+    mockSubagentContent = 'handoff result with implementation details';
+    const events: unknown[] = [];
+    eventBus.on('agent.completion_handoff', event => {
+      events.push(event);
+    });
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const result = await faculty.execute({
+      name: 'handoff',
+      task: 'inspect completion handoff behavior',
+      sourceContext: {
+        channelId: 'api:parent',
+        requestId: 'msg-parent',
+        turnId: 'turn-parent',
+        originatingBeadId: 'PSFNLIVE-hlh0',
+      },
+    });
+    const replay = await faculty.wait(result.subagentId);
+
+    const entries = sessionStore.getRecent('api:parent', 10);
+    expect(replay.subagentId).toBe(result.subagentId);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      role: 'system',
+      authorId: 'system:completion-handoff',
+      authorName: 'CompletionHandoff',
+    });
+    expect(parseEntryMetadata(entries[0] ?? {})).toMatchObject({
+      type: 'completion_handoff',
+      status: 'completed',
+      partialResult: false,
+    });
+    expect(entries[0]?.content).toContain('"source": "subagent"');
+    expect(entries[0]?.content).toContain(`"subagentId": "${result.subagentId}"`);
+    expect(entries[0]?.content).toContain('"originatingBeadId": "PSFNLIVE-hlh0"');
+    expect(entries[0]?.content).toContain('policy_gated_companion_authored');
+    expect(entries[0]?.content).toContain('not partner-authored speech');
+    expect(events).toHaveLength(1);
+  });
+
   it('cancels active bounded workers without crossing into shard semantics', async () => {
     mockSubagentContent = 'late result';
     mockSubagentDelayMs = 50;
@@ -356,6 +415,45 @@ describe('SubagentFaculty', () => {
       lifecycleState: 'cancelled',
       workerLane: 'subagent',
     });
+  });
+
+  it('emits blocked handoff when subagent spawn policy rejects required capabilities', async () => {
+    const events: unknown[] = [];
+    eventBus.on('agent.completion_handoff', event => {
+      events.push(event);
+    });
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    await expect(faculty.execute({
+      name: 'blocked',
+      task: 'requires unavailable capability',
+      capabilities: ['general'],
+      requiredCapabilities: ['missing-capability'],
+      sourceContext: {
+        channelId: 'api:parent',
+        requestId: 'msg-blocked',
+        turnId: 'turn-blocked',
+      },
+    })).rejects.toThrow('missing required capability');
+
+    const entries = sessionStore.getRecent('api:parent', 10);
+    expect(entries).toHaveLength(1);
+    expect(parseEntryMetadata(entries[0] ?? {})).toMatchObject({
+      type: 'completion_handoff',
+      status: 'blocked',
+      partialResult: false,
+    });
+    expect(entries[0]?.content).toContain('"reason": "missing_capabilities"');
+    expect(entries[0]?.content).toContain('policy_gated_companion_authored');
+    expect(events).toHaveLength(1);
   });
 
   it('delegates Wyoming sessions through subagent lifecycle without shard ids', async () => {
@@ -405,17 +503,22 @@ describe('SubagentFaculty', () => {
     });
 
     const delegatedEntries = sessionStore.getRecent('api:wyoming:ha-main:voice-pe-kitchen', 10);
-    expect(delegatedEntries).toHaveLength(2);
-    expect(delegatedEntries[0]).toMatchObject({
+    const visibleTranscriptEntries = delegatedEntries.filter(entry => !isCompletionHandoffEntry(entry));
+    const handoffEntries = delegatedEntries.filter(isCompletionHandoffEntry);
+    expect(visibleTranscriptEntries).toHaveLength(2);
+    expect(visibleTranscriptEntries[0]).toMatchObject({
       role: 'user',
       authorId: 'wyoming-user:owner',
       authorName: 'Wyoming Voice User',
     });
-    expect(parseEntryMetadata(delegatedEntries[0] ?? {})).toMatchObject({
+    expect(parseEntryMetadata(visibleTranscriptEntries[0] ?? {})).toMatchObject({
       turn: { speakerRole: 'user' },
     });
-    expect(delegatedEntries[0]?.content).toBe('status check');
-    expect(delegatedEntries[1]?.content).toBe('wyoming delegated response');
+    expect(visibleTranscriptEntries[0]?.content).toBe('status check');
+    expect(visibleTranscriptEntries[1]?.content).toBe('wyoming delegated response');
+    expect(handoffEntries).toHaveLength(1);
+    expect(handoffEntries[0]?.content).toContain('"source": "subagent"');
+    expect(handoffEntries[0]?.content).toContain('policy_gated_companion_authored');
     expect(result.gatewayRouting).toEqual({
       schemaVersion: 1,
       companionId: 'companion',

@@ -55,6 +55,14 @@ import {
 } from './output-review.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { textResultWithError } from '../../core/tools/results.js';
+import {
+  buildCompletionHandoffDedupeKey,
+  emitCompletionHandoffToSessionStore,
+  safeEmitCompletionHandoffError,
+  summarizeCompletionText,
+  type CompletionHandoffInput,
+  type CompletionHandoffRef,
+} from '../../core/agent/completion-handoff.js';
 import type {
   ShardFoldReviewController,
   ShardFoldReviewRecord,
@@ -443,6 +451,14 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
   ): Promise<ShardResult> {
     this.refreshShardHealth();
     if (this.activeCount >= this.maxConcurrent) {
+      await this.emitShardBlockedHandoff({
+        shardId,
+        channelId,
+        shardConfig,
+        lineage,
+        reason: 'concurrency_limit',
+        error: `Shard limit reached (${this.maxConcurrent} concurrent). Wait for active shards to complete.`,
+      });
       throw new Error(
         `Shard limit reached (${this.maxConcurrent} concurrent). Wait for active shards to complete.`,
       );
@@ -454,6 +470,15 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
     const requiredCapabilities = this.resolveRequiredCapabilities(shardConfig.requiredCapabilities);
     const missingCapabilities = requiredCapabilities.filter(capability => !capabilities.includes(capability));
     if (missingCapabilities.length > 0) {
+      await this.emitShardBlockedHandoff({
+        shardId,
+        channelId,
+        shardConfig,
+        lineage,
+        reason: 'missing_capabilities',
+        error: `Shard routing denied: "${shardConfig.name}" is missing required capability tokens `
+        + `(${missingCapabilities.join(', ')}).`,
+      });
       throw new Error(
         `Shard routing denied: "${shardConfig.name}" is missing required capability tokens `
         + `(${missingCapabilities.join(', ')}).`,
@@ -647,6 +672,11 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         lifecycleState: result.lifecycleState,
         health: result.health,
       });
+      await this.emitShardCompletionHandoff({
+        shardConfig,
+        channelId,
+        result,
+      });
       return result;
     } catch (error) {
       const msg = toErrorMessage(error);
@@ -656,6 +686,13 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
         shardId,
         status: 'failed',
         durationMs: Date.now() - startTime,
+        error: msg,
+      });
+      await this.emitShardFailureHandoff({
+        shardId,
+        channelId,
+        shardConfig,
+        lineage,
         error: msg,
       });
       throw new Error(`Shard "${shardConfig.name}" failed (execution_failed): ${msg}`);
@@ -676,6 +713,166 @@ export class ShardManager implements ShardExecutionPort, SubagentExecutionPort {
       capabilities: [...shard.capabilities],
       requiredCapabilities: [...shard.requiredCapabilities],
     }));
+  }
+
+  private async emitShardBlockedHandoff(input: {
+    shardId: string;
+    channelId: string;
+    shardConfig: ShardConfig;
+    lineage: ShardResult['lineage'];
+    reason: string;
+    error: string;
+  }): Promise<void> {
+    await this.emitShardHandoff({
+      source: 'shard',
+      taskId: input.shardId,
+      taskLabel: input.shardConfig.name,
+      shardId: input.shardId,
+      status: 'blocked',
+      resultSummary: `Shard "${input.shardConfig.name}" did not start.`,
+      outputRefs: [
+        { kind: 'session', ref: input.channelId, label: 'shard transcript' },
+        { kind: 'lineage', ref: input.lineage.shardId, label: input.lineage.kind },
+      ],
+      validationPerformed: ['shard_spawn_policy', input.reason],
+      blocker: {
+        reason: input.reason,
+        error: input.error,
+      },
+      partialResult: false,
+      recommendedNextAction: 'Revise the shard request, wait for active shards to clear, or choose a narrower task before any partner notification.',
+      origin: this.originFromShardConfig(input.shardConfig),
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'shard',
+        input.shardId,
+        'blocked',
+        input.reason,
+        input.shardConfig.sourceContext?.requestId,
+        input.shardConfig.sourceContext?.turnId,
+      ]),
+    }, input.shardConfig.sourceContext?.channelId);
+  }
+
+  private async emitShardCompletionHandoff(input: {
+    shardConfig: ShardConfig;
+    channelId: string;
+    result: ShardResult;
+  }): Promise<void> {
+    const artifactRefs = this.buildArtifactRefs(input.result);
+    await this.emitShardHandoff({
+      source: 'shard',
+      taskId: input.result.shardId,
+      taskLabel: input.result.name,
+      shardId: input.result.shardId,
+      status: 'completed',
+      resultSummary: summarizeCompletionText(input.result.content),
+      artifactRefs,
+      outputRefs: [
+        { kind: 'session', ref: input.channelId, label: 'shard transcript' },
+        { kind: 'lineage', ref: input.result.lineage.shardId, label: input.result.lineage.kind },
+        ...(artifactRefs.length > 0
+          ? [{ kind: 'fold_review', ref: input.result.shardId, label: 'artifact review required' }]
+          : []),
+      ],
+      validationPerformed: [
+        'shard_lifecycle_terminal',
+        `state_reason:${input.result.stateReason}`,
+        `health:${input.result.health}`,
+        ...(input.result.artifactReturn ? ['artifact_return_review_required'] : []),
+      ],
+      partialResult: false,
+      recommendedNextAction: input.result.artifactReturn
+        ? 'Review returned artifacts through fold review, then decide whether to continue or write a companion-authored response.'
+        : 'Review the shard handoff and decide whether to continue, delegate follow-up work, or write a companion-authored response.',
+      origin: this.originFromShardConfig(input.shardConfig),
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'shard',
+        input.result.shardId,
+        'completed',
+        input.result.stateReason,
+        input.shardConfig.sourceContext?.requestId,
+        input.shardConfig.sourceContext?.turnId,
+      ]),
+    }, input.shardConfig.sourceContext?.channelId);
+  }
+
+  private async emitShardFailureHandoff(input: {
+    shardId: string;
+    channelId: string;
+    shardConfig: ShardConfig;
+    lineage: ShardResult['lineage'];
+    error: string;
+  }): Promise<void> {
+    await this.emitShardHandoff({
+      source: 'shard',
+      taskId: input.shardId,
+      taskLabel: input.shardConfig.name,
+      shardId: input.shardId,
+      status: 'failed',
+      resultSummary: `Shard "${input.shardConfig.name}" failed before producing a final handoff.`,
+      outputRefs: [
+        { kind: 'session', ref: input.channelId, label: 'shard transcript' },
+        { kind: 'lineage', ref: input.lineage.shardId, label: input.lineage.kind },
+      ],
+      validationPerformed: ['shard_lifecycle_terminal', 'execution_failed'],
+      blocker: {
+        reason: 'execution_failed',
+        error: input.error,
+      },
+      partialResult: false,
+      recommendedNextAction: 'Inspect the shard transcript/error, then decide whether to retry with narrower scope or communicate a companion-authored status.',
+      origin: this.originFromShardConfig(input.shardConfig),
+      dedupeKey: buildCompletionHandoffDedupeKey([
+        'shard',
+        input.shardId,
+        'failed',
+        input.error,
+        input.shardConfig.sourceContext?.requestId,
+        input.shardConfig.sourceContext?.turnId,
+      ]),
+    }, input.shardConfig.sourceContext?.channelId);
+  }
+
+  private async emitShardHandoff(
+    handoff: CompletionHandoffInput,
+    targetChannelId: string | undefined,
+  ): Promise<void> {
+    if (!targetChannelId?.trim()) return;
+    try {
+      await emitCompletionHandoffToSessionStore({
+        eventBus: this.deps.eventBus,
+        sessionStore: this.deps.sessionStore,
+        targetChannelId,
+        handoff,
+      });
+    } catch (error) {
+      this.auditTrail?.append('shard.completion_handoff.failed', {
+        shardId: handoff.shardId,
+        targetChannelId,
+        error: safeEmitCompletionHandoffError(error),
+      });
+    }
+  }
+
+  private buildArtifactRefs(result: ShardResult): CompletionHandoffRef[] {
+    return (result.artifactReturn?.artifacts ?? []).map(artifact => ({
+      kind: artifact.kind,
+      ref: artifact.artifactId,
+      label: artifact.name,
+      policy: artifact.mergePolicy,
+    }));
+  }
+
+  private originFromShardConfig(shardConfig: ShardConfig): CompletionHandoffInput['origin'] {
+    const source = shardConfig.sourceContext;
+    if (!source) {
+      return {};
+    }
+    return {
+      sourceChannelId: source.channelId,
+      ...(source.requestId ? { requestId: source.requestId, sourceMessageId: source.requestId } : {}),
+      ...(source.turnId ? { turnId: source.turnId, originatingTaskId: source.turnId } : {}),
+    };
   }
 
   async listFoldReviews(): Promise<ShardFoldReviewRecord[]> {

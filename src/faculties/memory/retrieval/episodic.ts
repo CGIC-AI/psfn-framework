@@ -3,6 +3,7 @@ import {
   parseEpisodeArc,
   type Episode,
   type EpisodeArc,
+  type EpisodeArcKind,
   type EpisodeArtifactRef,
   type EpisodeProvenanceRef,
   type EpisodeSpanRef,
@@ -16,12 +17,26 @@ export type EpisodicRetrievalStore = Pick<
   'listEpisodes' | 'getEpisode' | 'listEpisodeArcsForEpisode'
 >;
 
+export type EpisodicTimelineStore = Pick<
+  EpisodicStorePort,
+  'searchByTime' | 'getEpisode' | 'listEpisodeArcsForEpisode'
+>;
+
 export interface EpisodicRetrievalChain {
   rootEpisodeId: string;
   episodes: Episode[];
   arcs: EpisodeArc[];
   score: number;
   matchedTerms: string[];
+}
+
+export interface EpisodicTimelineEntry {
+  episode: Episode;
+  source: 'range' | 'linked';
+  outsideRequestedRange: boolean;
+  relation?: EpisodeArcKind;
+  linkedFromEpisodeId?: string;
+  linkedArcId?: string;
 }
 
 export interface EpisodicRetrievalInput {
@@ -37,6 +52,20 @@ export interface EpisodicRetrievalInput {
   maxEpisodesPerChain?: number;
 }
 
+export interface EpisodicTimelineInput {
+  from?: string;
+  to?: string;
+  channelId: string;
+  trustLevel: TrustLevel;
+  channelVisibility: ChannelVisibility;
+  canonicalContactId?: string;
+  scopeQuery?: MemoryScopeQuery;
+  limit?: number;
+  scanLimit?: number;
+  maxDepth?: number;
+  maxEpisodesPerRoot?: number;
+}
+
 interface EpisodeCandidate {
   episode: Episode;
   score: number;
@@ -47,6 +76,10 @@ const DEFAULT_SCAN_LIMIT = 1000;
 const DEFAULT_MAX_CHAINS = 3;
 const DEFAULT_MAX_DEPTH = 2;
 const DEFAULT_MAX_EPISODES_PER_CHAIN = 5;
+const DEFAULT_TIMELINE_LIMIT = 8;
+const DEFAULT_TIMELINE_SCAN_LIMIT = 200;
+const DEFAULT_TIMELINE_MAX_DEPTH = 1;
+const DEFAULT_TIMELINE_MAX_EPISODES_PER_ROOT = 3;
 const ARC_SCAN_LIMIT = 8;
 const MIN_ROOT_MATCH_SCORE = 0.18;
 const MIN_RELATED_MATCH_SCORE = 0.08;
@@ -175,6 +208,96 @@ export async function retrieveEpisodicChains(
     if (right.score !== left.score) return right.score - left.score;
     return left.rootEpisodeId.localeCompare(right.rootEpisodeId);
   });
+}
+
+export async function retrieveEpisodicTimeline(
+  store: EpisodicTimelineStore,
+  input: EpisodicTimelineInput,
+): Promise<EpisodicTimelineEntry[]> {
+  const limit = normalizePositiveInteger(input.limit, DEFAULT_TIMELINE_LIMIT);
+  const scanLimit = normalizePositiveInteger(
+    input.scanLimit,
+    Math.max(DEFAULT_TIMELINE_SCAN_LIMIT, limit * 4),
+  );
+  const maxDepth = normalizeNonNegativeInteger(input.maxDepth, DEFAULT_TIMELINE_MAX_DEPTH);
+  const maxEpisodesPerRoot = Math.max(
+    2,
+    normalizePositiveInteger(input.maxEpisodesPerRoot, DEFAULT_TIMELINE_MAX_EPISODES_PER_ROOT),
+  );
+  const visibilityInput: EpisodicRetrievalInput = {
+    contextText: '',
+    channelId: input.channelId,
+    trustLevel: input.trustLevel,
+    channelVisibility: input.channelVisibility,
+    ...(input.canonicalContactId ? { canonicalContactId: input.canonicalContactId } : {}),
+    ...(input.scopeQuery ? { scopeQuery: input.scopeQuery } : {}),
+  };
+
+  const scannedEpisodes = (await store.searchByTime({
+    ...(input.from ? { from: input.from } : {}),
+    ...(input.to ? { to: input.to } : {}),
+    limit: scanLimit,
+  }))
+    .map(episode => parseEpisode(cloneEpisode(episode)))
+    .sort(compareEpisodesChronological);
+
+  const episodeIndex = new Map<string, Episode>();
+  for (const episode of scannedEpisodes) {
+    episodeIndex.set(episode.id, episode);
+  }
+
+  const visibleRoots = scannedEpisodes
+    .filter(episode => isEpisodeVisibleForTurn(episode, visibilityInput))
+    .slice(0, limit);
+  const inRangeEpisodeIds = new Set(visibleRoots.map(episode => episode.id));
+  const entriesById = new Map<string, EpisodicTimelineEntry>();
+
+  for (const root of visibleRoots) {
+    if (entriesById.size >= limit && !entriesById.has(root.id)) break;
+    recordTimelineEntry(entriesById, {
+      episode: root,
+      source: 'range',
+      outsideRequestedRange: false,
+    });
+    if (entriesById.size >= limit) continue;
+
+    const chain = await buildEpisodeChain({
+      store,
+      root: {
+        episode: root,
+        score: root.salience.score,
+        matchedTerms: [],
+      },
+      input: visibilityInput,
+      queryTokens: [],
+      normalizedQuery: '',
+      episodeIndex,
+      maxDepth,
+      maxEpisodesPerChain: maxEpisodesPerRoot,
+    });
+
+    for (const episode of chain.episodes.slice(1).sort(compareEpisodesChronological)) {
+      if (entriesById.has(episode.id)) continue;
+      if (entriesById.size >= limit) break;
+      const arc = findTimelineArcForEpisode(episode.id, chain.arcs);
+      const linkedFromEpisodeId = arc
+        ? (arc.sourceEpisodeId === episode.id ? arc.targetEpisodeId : arc.sourceEpisodeId)
+        : undefined;
+      const source = inRangeEpisodeIds.has(episode.id) ? 'range' : 'linked';
+      recordTimelineEntry(entriesById, {
+        episode,
+        source,
+        outsideRequestedRange: !episodeOverlapsRange(episode, input.from, input.to),
+        ...(arc ? { relation: arc.arcKind, linkedArcId: arc.id } : {}),
+        ...(linkedFromEpisodeId ? { linkedFromEpisodeId } : {}),
+      });
+    }
+  }
+
+  return [...entriesById.values()].sort((left, right) => (
+    compareEpisodesChronological(left.episode, right.episode)
+    || sourceOrder(left.source) - sourceOrder(right.source)
+  ));
 }
 
 export function cloneEpisodicRetrievalChain(chain: EpisodicRetrievalChain): EpisodicRetrievalChain {
@@ -450,6 +573,42 @@ function compareArcs(left: EpisodeArc, right: EpisodeArc): number {
   if (rightScore !== leftScore) return rightScore - leftScore;
   if (right.updatedAt !== left.updatedAt) return right.updatedAt.localeCompare(left.updatedAt);
   return left.id.localeCompare(right.id);
+}
+
+function compareEpisodesChronological(left: Episode, right: Episode): number {
+  if (left.startedAt !== right.startedAt) return left.startedAt.localeCompare(right.startedAt);
+  if (left.endedAt !== right.endedAt) return left.endedAt.localeCompare(right.endedAt);
+  return left.id.localeCompare(right.id);
+}
+
+function sourceOrder(source: EpisodicTimelineEntry['source']): number {
+  return source === 'range' ? 0 : 1;
+}
+
+function recordTimelineEntry(
+  entriesById: Map<string, EpisodicTimelineEntry>,
+  entry: EpisodicTimelineEntry,
+): void {
+  const existing = entriesById.get(entry.episode.id);
+  if (!existing || (existing.source === 'linked' && entry.source === 'range')) {
+    entriesById.set(entry.episode.id, {
+      ...entry,
+      episode: cloneEpisode(entry.episode),
+    });
+  }
+}
+
+function findTimelineArcForEpisode(
+  episodeId: string,
+  arcs: readonly EpisodeArc[],
+): EpisodeArc | undefined {
+  return arcs.find(arc => arc.sourceEpisodeId === episodeId || arc.targetEpisodeId === episodeId);
+}
+
+function episodeOverlapsRange(episode: Episode, from: string | undefined, to: string | undefined): boolean {
+  if (from !== undefined && episode.endedAt < from) return false;
+  if (to !== undefined && episode.startedAt > to) return false;
+  return true;
 }
 
 function tokenizeQuery(value: string): string[] {

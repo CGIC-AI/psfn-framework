@@ -285,6 +285,7 @@ async function main(): Promise<void> {
   registerMemoryTools(agentLoop, {
     writer: memoryWriter,
     memoryStore,
+    episodicStore,
   });
   log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 

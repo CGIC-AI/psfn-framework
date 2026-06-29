@@ -22,6 +22,12 @@ import type {
   MemoryRedactionResult,
 } from './writer.js';
 import type { PurrMemory } from './types.js';
+import {
+  EPISODIC_CONTRACT_VERSION,
+  type Episode,
+  type EpisodeArc,
+} from '../../shared/contracts/episodic-memory.js';
+import type { EpisodicTimelineStore } from './retrieval/episodic.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -46,6 +52,87 @@ function makeMemory(overrides: Partial<PurrMemory> = {}): PurrMemory {
     tags: [],
     sensitivity: 'personal',
     ...overrides,
+  };
+}
+
+function makeEpisode(overrides: Partial<Episode> = {}): Episode {
+  const id = overrides.id ?? 'episode-1';
+  const startedAt = overrides.startedAt ?? '2026-03-30T10:00:00.000Z';
+  const endedAt = overrides.endedAt ?? '2026-03-30T10:05:00.000Z';
+  return {
+    schemaVersion: EPISODIC_CONTRACT_VERSION,
+    id,
+    title: 'Morning planning check-in',
+    landmark: 'They reviewed the next practical step and why it mattered.',
+    startedAt,
+    endedAt,
+    threadId: 'thread-alpha',
+    channelId: 'api:test',
+    participantContactIds: ['contact:primary'],
+    salience: { score: 0.76, novelty: 0.4, emotionalIntensity: 0.3 },
+    affect: { valence: 0.2, arousal: 0.3, dominance: 0.4, labels: ['focused'] },
+    themes: ['planning'],
+    spanRefs: [{
+      spanId: `span-${id}`,
+      threadId: 'thread-alpha',
+      channelId: 'api:test',
+      startedAt,
+      endedAt,
+    }],
+    artifactRefs: [],
+    provenanceRefs: [{ kind: 'l0_span', refId: `span-${id}` }],
+    createdAt: '2026-03-30T10:06:00.000Z',
+    updatedAt: '2026-03-30T10:06:00.000Z',
+    ...overrides,
+  };
+}
+
+function makeEpisodeArc(overrides: Partial<EpisodeArc> = {}): EpisodeArc {
+  return {
+    schemaVersion: EPISODIC_CONTRACT_VERSION,
+    id: 'arc-1',
+    sourceEpisodeId: 'episode-root',
+    targetEpisodeId: 'episode-linked',
+    arcKind: 'continuation',
+    salience: 0.8,
+    confidence: 0.78,
+    themes: ['planning'],
+    spanRefs: [{ spanId: 'span-arc-1' }],
+    artifactRefs: [],
+    provenanceRefs: [{ kind: 'l0_span', refId: 'span-arc-1' }],
+    createdAt: '2026-03-30T10:06:00.000Z',
+    updatedAt: '2026-03-30T10:06:00.000Z',
+    ...overrides,
+  };
+}
+
+function makeEpisodicTimelineStore(
+  episodes: Episode[],
+  arcs: EpisodeArc[] = [],
+): EpisodicTimelineStore & {
+  searchByTime: ReturnType<typeof vi.fn>;
+  getEpisode: ReturnType<typeof vi.fn>;
+  listEpisodeArcsForEpisode: ReturnType<typeof vi.fn>;
+} {
+  return {
+    searchByTime: vi.fn((options: { from?: string; to?: string; limit?: number; offset?: number } = {}) => {
+      const filtered = episodes
+        .filter(episode => (
+          (options.from === undefined || episode.endedAt >= options.from)
+          && (options.to === undefined || episode.startedAt <= options.to)
+        ))
+        .sort((left, right) => (
+          left.startedAt.localeCompare(right.startedAt)
+          || left.id.localeCompare(right.id)
+        ));
+      const offset = options.offset ?? 0;
+      const limit = options.limit ?? filtered.length;
+      return filtered.slice(offset, offset + limit);
+    }),
+    getEpisode: vi.fn((id: string) => episodes.find(episode => episode.id === id)),
+    listEpisodeArcsForEpisode: vi.fn((id: string) => arcs.filter(arc => (
+      arc.sourceEpisodeId === id || arc.targetEpisodeId === id
+    ))),
   };
 }
 
@@ -214,6 +301,223 @@ describe('createMemoryTool', () => {
     expect(resultText(result as any)).toContain('Memory search results (1)');
     expect(resultText(result as any)).toContain('mem-search-1');
     expect(resultText(result as any)).toContain('similarity=0.82');
+  });
+
+  it('returns date timeline episodes using inclusive range boundaries', async () => {
+    const store = mockUnifiedStore();
+    const episodicStore = makeEpisodicTimelineStore([
+      makeEpisode({
+        id: 'episode-previous-overlap',
+        title: 'Midnight handoff',
+        landmark: 'A previous-night episode ended exactly at the day boundary.',
+        startedAt: '2026-03-29T23:50:00.000Z',
+        endedAt: '2026-03-30T00:00:00.000Z',
+      }),
+      makeEpisode({
+        id: 'episode-inside-day',
+        title: 'Noon garden plan',
+        landmark: 'They made the main plan during the requested day.',
+        startedAt: '2026-03-30T12:00:00.000Z',
+        endedAt: '2026-03-30T12:10:00.000Z',
+      }),
+      makeEpisode({
+        id: 'episode-next-overlap',
+        title: 'Late-day wrap',
+        landmark: 'The episode started exactly at the end of the requested day.',
+        startedAt: '2026-03-30T23:59:59.999Z',
+        endedAt: '2026-03-31T00:05:00.000Z',
+      }),
+      makeEpisode({
+        id: 'episode-outside',
+        title: 'Next-day only',
+        landmark: 'This episode starts after the requested day.',
+        startedAt: '2026-03-31T00:00:00.000Z',
+        endedAt: '2026-03-31T00:10:00.000Z',
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort, {
+      episodicStore,
+    });
+
+    const result = await tool.execute('memory-call-timeline-date', {
+      action: 'timeline',
+      date: '2026-03-30',
+      channel_id: 'api:test',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+      limit: 10,
+    });
+
+    expect(episodicStore.searchByTime).toHaveBeenCalledWith({
+      from: '2026-03-30T00:00:00.000Z',
+      to: '2026-03-30T23:59:59.999Z',
+      limit: 200,
+    });
+    const text = resultText(result as any);
+    expect(text).toContain('Episodic timeline for date 2026-03-30');
+    expect(text).toContain('Midnight handoff');
+    expect(text).toContain('Noon garden plan');
+    expect(text).toContain('Late-day wrap');
+    expect(text).not.toContain('Next-day only');
+
+    episodicStore.searchByTime.mockClear();
+    const rangeResult = await tool.execute('memory-call-timeline-range', {
+      action: 'timeline',
+      after: '2026-03-30T11:00:00Z',
+      before: '2026-03-30T13:00:00Z',
+      channel_id: 'api:test',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+      limit: 10,
+    });
+
+    expect(episodicStore.searchByTime).toHaveBeenCalledWith({
+      from: '2026-03-30T11:00:00.000Z',
+      to: '2026-03-30T13:00:00.000Z',
+      limit: 200,
+    });
+    const rangeText = resultText(rangeResult as any);
+    expect(rangeText).toContain('Noon garden plan');
+    expect(rangeText).not.toContain('Midnight handoff');
+    expect(rangeText).not.toContain('Late-day wrap');
+  });
+
+  it('filters hidden off-channel timeline episodes by existing episodic visibility rules', async () => {
+    const store = mockUnifiedStore();
+    const episodicStore = makeEpisodicTimelineStore([
+      makeEpisode({
+        id: 'episode-visible',
+        title: 'Visible same-channel episode',
+        landmark: 'This same-channel episode can be shown.',
+      }),
+      makeEpisode({
+        id: 'episode-hidden-confidential',
+        title: 'Confidential off-channel episode',
+        landmark: 'This off-channel episode should remain hidden at regular trust.',
+        channelId: 'api:hidden',
+        participantContactIds: ['contact:primary'],
+      }),
+      makeEpisode({
+        id: 'episode-hidden-contact',
+        title: 'Other contact hidden episode',
+        landmark: 'This episode belongs to another contact and must not leak.',
+        channelId: 'api:other',
+        participantContactIds: ['contact:other'],
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort, {
+      episodicStore,
+    });
+
+    const result = await tool.execute('memory-call-timeline-hidden', {
+      action: 'timeline',
+      date: '2026-03-30',
+      channel_id: 'api:test',
+      trust_level: 'regular',
+      channel_visibility: 'public',
+      canonical_contact_id: 'contact:primary',
+      limit: 10,
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Visible same-channel episode');
+    expect(text).not.toContain('Confidential off-channel episode');
+    expect(text).not.toContain('Other contact hidden episode');
+  });
+
+  it('returns a clear no-results message for empty visible timeline ranges', async () => {
+    const store = mockUnifiedStore();
+    const episodicStore = makeEpisodicTimelineStore([
+      makeEpisode({
+        id: 'episode-other-day',
+        title: 'Other day episode',
+        startedAt: '2026-03-30T10:00:00.000Z',
+        endedAt: '2026-03-30T10:10:00.000Z',
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort, {
+      episodicStore,
+    });
+
+    const result = await tool.execute('memory-call-timeline-empty', {
+      action: 'timeline',
+      date: '2026-04-02',
+      channel_id: 'api:test',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+    });
+
+    expect(resultText(result as any)).toBe('No visible episodic memories found for date 2026-04-02.');
+  });
+
+  it('includes visible graph-linked continuation episodes without leaking hidden linked episodes', async () => {
+    const store = mockUnifiedStore();
+    const root = makeEpisode({
+      id: 'episode-root',
+      title: 'Garden repair begins',
+      landmark: 'They identified the first garden repair step.',
+      startedAt: '2026-03-30T09:00:00.000Z',
+      endedAt: '2026-03-30T09:10:00.000Z',
+      themes: ['garden', 'repair'],
+    });
+    const linked = makeEpisode({
+      id: 'episode-linked',
+      title: 'Garden repair continues',
+      landmark: 'The repair continued the next day with a visible follow-up.',
+      startedAt: '2026-03-31T09:00:00.000Z',
+      endedAt: '2026-03-31T09:15:00.000Z',
+      themes: ['garden', 'repair'],
+    });
+    const hiddenLinked = makeEpisode({
+      id: 'episode-hidden-linked',
+      title: 'Hidden continuation detail',
+      landmark: 'This linked episode is in a different contact scope.',
+      startedAt: '2026-03-31T10:00:00.000Z',
+      endedAt: '2026-03-31T10:15:00.000Z',
+      channelId: 'api:hidden',
+      participantContactIds: ['contact:other'],
+      themes: ['garden', 'repair'],
+    });
+    const episodicStore = makeEpisodicTimelineStore([
+      root,
+      linked,
+      hiddenLinked,
+    ], [
+      makeEpisodeArc({
+        id: 'arc-visible-continuation',
+        sourceEpisodeId: root.id,
+        targetEpisodeId: linked.id,
+        arcKind: 'continuation',
+        confidence: 0.82,
+      }),
+      makeEpisodeArc({
+        id: 'arc-hidden-continuation',
+        sourceEpisodeId: root.id,
+        targetEpisodeId: hiddenLinked.id,
+        arcKind: 'continuation',
+        confidence: 0.9,
+      }),
+    ]);
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort, {
+      episodicStore,
+    });
+
+    const result = await tool.execute('memory-call-timeline-linked', {
+      action: 'timeline',
+      date: '2026-03-30',
+      channel_id: 'api:test',
+      trust_level: 'trusted',
+      channel_visibility: 'semi_private',
+      canonical_contact_id: 'contact:primary',
+      limit: 4,
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Garden repair begins');
+    expect(text).toContain('Garden repair continues');
+    expect(text).toContain('linked continuation episode');
+    expect(text).toContain('outside requested range');
+    expect(text).not.toContain('Hidden continuation detail');
   });
 
   it('imports through action=import with unified provenance qualifiers', async () => {

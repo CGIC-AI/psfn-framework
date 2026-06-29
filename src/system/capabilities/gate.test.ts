@@ -165,10 +165,20 @@ describe('capability tool gating', () => {
     const patchDenied = await writeGated.execute('call-patch', { action: 'patch' });
     expect(memoryWrite.executeSpy).not.toHaveBeenCalled();
     expect((patchDenied.content[0] as any).text).toContain('memory.write');
+
+    const memoryTimeline = createTool('memory');
+    const timelineGated = gateToolWithCapabilities(
+      memoryTimeline.tool,
+      () => accessForTier('custom', ['memory.write']),
+    );
+    const timelineDenied = await timelineGated.execute('call-timeline', { action: 'timeline' });
+    expect(memoryTimeline.executeSpy).not.toHaveBeenCalled();
+    expect((timelineDenied.content[0] as any).text).toContain('identity.read');
   });
 
   it('resolves canonical action-aware requirements for consolidated tool domains', () => {
     expect(resolveToolRequiredCapabilities(createTool('contact').tool, { action: 'lookup', contactId: 'contact-1' })).toEqual(['identity.read']);
+    expect(resolveToolRequiredCapabilities(createTool('memory').tool, { action: 'timeline' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('contact').tool, { action: 'note', contactId: 'contact-1' })).toEqual(['identity.write.runtime']);
     expect(resolveToolRequiredCapabilities(createTool('media').tool, { action: 'generate' })).toEqual(['external.web']);
     expect(resolveToolRequiredCapabilities(createTool('media').tool, { action: 'analyze' })).toEqual(['external.web']);

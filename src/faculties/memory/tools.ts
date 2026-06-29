@@ -20,15 +20,32 @@ import {
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { normalizeToolArguments } from '../../shared/tool-argument-normalization.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
+import {
+  CHANNEL_VISIBILITIES,
+  TRUST_LEVELS,
+  type ChannelVisibility,
+  type TrustLevel,
+} from '../../system/trust/types.js';
+import {
+  retrieveEpisodicTimeline,
+  type EpisodicTimelineEntry,
+  type EpisodicTimelineStore,
+} from './retrieval/episodic.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const SCRATCHPAD_DEFAULT_LIMIT = 20;
 const SCRATCHPAD_MAX_LIMIT = 64;
 const MEMORY_SEARCH_DEFAULT_LIMIT = 5;
 const MEMORY_SEARCH_MAX_LIMIT = 20;
+const MEMORY_TIMELINE_DEFAULT_LIMIT = 8;
+const MEMORY_TIMELINE_MAX_LIMIT = 20;
+const DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+const ISO_INSTANT_WITH_ZONE_PATTERN = /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:?\d{2})$/i;
 const MEMORY_TOOL_ACTIONS = [
   'write',
   'search',
+  'timeline',
   'import',
   'patch',
   'redact',
@@ -97,7 +114,7 @@ function buildToolSourceContext(
 }
 
 function buildUnifiedMemorySourceContext(
-  action: Exclude<MemoryToolAction, 'search'>,
+  action: Exclude<MemoryToolAction, 'search' | 'timeline'>,
   toolCallId: string,
   shardSource: string | null,
   qualifiers: string[] = [],
@@ -166,6 +183,55 @@ function formatMemorySearchResults(
   return lines.join('\n');
 }
 
+function formatEpisodicTimeline(
+  entries: readonly EpisodicTimelineEntry[],
+  rangeLabel: string,
+): string {
+  if (entries.length === 0) {
+    return `No visible episodic memories found for ${rangeLabel}.`;
+  }
+
+  const linkedCount = entries.filter(entry => entry.source === 'linked').length;
+  const linkedSuffix = linkedCount > 0
+    ? `, including ${linkedCount} linked continuation${linkedCount === 1 ? '' : 's'}`
+    : '';
+  const lines = [
+    `Episodic timeline for ${rangeLabel} (${entries.length} episode${entries.length === 1 ? '' : 's'}${linkedSuffix}):`,
+  ];
+
+  for (const entry of entries) {
+    const episode = entry.episode;
+    const timeRange = `${formatTimelineInstant(episode.startedAt)} to ${formatTimelineInstant(episode.endedAt)}`;
+    const linkParts: string[] = [];
+    if (entry.source === 'linked') {
+      linkParts.push(`linked ${entry.relation ?? 'related'} episode`);
+      if (entry.outsideRequestedRange) linkParts.push('outside requested range');
+      if (entry.linkedFromEpisodeId) linkParts.push(`from ${entry.linkedFromEpisodeId}`);
+    }
+    const linkSuffix = linkParts.length > 0 ? ` [${linkParts.join(', ')}]` : '';
+    lines.push(`- ${timeRange}: ${episode.title} (${episode.id})${linkSuffix}`);
+    lines.push(`  ${truncateTimelineText(episode.landmark, 220)}`);
+    if (episode.themes.length > 0) {
+      lines.push(`  Themes: ${episode.themes.slice(0, 6).join(', ')}`);
+    }
+    if (episode.meaning?.text) {
+      lines.push(`  Meaning: ${truncateTimelineText(episode.meaning.text, 180)}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
+function formatTimelineInstant(isoInstant: string): string {
+  return isoInstant.replace('.000Z', 'Z').replace('T', ' ');
+}
+
+function truncateTimelineText(value: string, maxLength: number): string {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  if (compact.length <= maxLength) return compact;
+  return `${compact.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
+}
+
 function normalizeTagEntries(entries: readonly unknown[]): string[] | undefined {
   const normalized = entries
     .flatMap(entry => (typeof entry === 'string' ? [entry.trim().toLowerCase()] : []))
@@ -194,6 +260,10 @@ export interface MemoryWriteToolOptions {
   getFormationVAD?: () => MemoryFormationVAD | undefined;
 }
 
+export interface MemoryToolOptions extends MemoryWriteToolOptions {
+  episodicStore?: EpisodicTimelineStore | null;
+}
+
 interface MemoryToolParams {
   action: MemoryToolAction;
   text?: string;
@@ -219,9 +289,208 @@ interface MemoryToolParams {
   operation?: MemoryRedactionOperation;
   reason?: string;
   delete_id?: string;
+  date?: string;
+  after?: string;
+  before?: string;
+  channel_id?: string;
+  channelId?: string;
+  trust_level?: TrustLevel;
+  trustLevel?: TrustLevel;
+  channel_visibility?: ChannelVisibility;
+  channelVisibility?: ChannelVisibility;
+  canonical_contact_id?: string;
+  canonicalContactId?: string;
   formation_vad?: MemoryFormationVAD;
   clear_formation_vad?: boolean;
   append_tags?: string;
+}
+
+type TimelineRangeResult =
+  | { ok: true; from?: string; to?: string; label: string }
+  | { ok: false; error: string };
+
+type TimelineVisibilityResult =
+  | {
+    ok: true;
+    channelId: string;
+    trustLevel: TrustLevel;
+    channelVisibility: ChannelVisibility;
+    canonicalContactId?: string;
+  }
+  | { ok: false; error: string };
+
+function resolveTimelineRange(params: MemoryToolParams): TimelineRangeResult {
+  const date = normalizeOptionalToolString(params.date);
+  const after = normalizeOptionalToolString(params.after);
+  const before = normalizeOptionalToolString(params.before);
+
+  if (date && (after || before)) {
+    return { ok: false, error: 'Error: provide either date or after/before for action=timeline, not both' };
+  }
+
+  if (date) {
+    const dayRange = normalizeTimelineDate(date);
+    if (!dayRange) {
+      return { ok: false, error: 'Error: date must be a valid YYYY-MM-DD UTC date for action=timeline' };
+    }
+    return {
+      ok: true,
+      from: dayRange.from,
+      to: dayRange.to,
+      label: `date ${date}`,
+    };
+  }
+
+  if (!after && !before) {
+    return { ok: false, error: 'Error: date or after/before is required for action=timeline' };
+  }
+
+  const from = after ? normalizeTimelineBoundary(after, 'after', 'start') : undefined;
+  if (from && 'error' in from) {
+    return { ok: false, error: from.error };
+  }
+  const to = before ? normalizeTimelineBoundary(before, 'before', 'end') : undefined;
+  if (to && 'error' in to) {
+    return { ok: false, error: to.error };
+  }
+
+  const normalizedFrom = from?.value;
+  const normalizedTo = to?.value;
+  if (normalizedFrom && normalizedTo && normalizedFrom > normalizedTo) {
+    return { ok: false, error: 'Error: after must be before or equal to before for action=timeline' };
+  }
+
+  return {
+    ok: true,
+    ...(normalizedFrom ? { from: normalizedFrom } : {}),
+    ...(normalizedTo ? { to: normalizedTo } : {}),
+    label: normalizedFrom && normalizedTo
+      ? `range ${normalizedFrom} to ${normalizedTo}`
+      : normalizedFrom
+        ? `range after ${normalizedFrom}`
+        : `range before ${normalizedTo}`,
+  };
+}
+
+function resolveTimelineVisibility(params: MemoryToolParams): TimelineVisibilityResult {
+  const requestContext = getRequestContext();
+  const channelId = normalizeOptionalToolString(params.channel_id)
+    ?? normalizeOptionalToolString(params.channelId)
+    ?? normalizeOptionalToolString(requestContext?.channelId);
+  const trustLevelResult = normalizeTimelineTrustLevel(
+    params.trust_level ?? params.trustLevel ?? requestContext?.viewerTrustLevel,
+  );
+  const visibilityResult = normalizeTimelineChannelVisibility(
+    params.channel_visibility ?? params.channelVisibility ?? requestContext?.viewerChannelVisibility,
+  );
+  const canonicalContactId = normalizeOptionalToolString(params.canonical_contact_id)
+    ?? normalizeOptionalToolString(params.canonicalContactId);
+
+  if (!channelId) {
+    return { ok: false, error: 'Error: channel_id is required for action=timeline when no request context channel is available' };
+  }
+  if (!trustLevelResult.ok) {
+    return { ok: false, error: trustLevelResult.error };
+  }
+  if (!visibilityResult.ok) {
+    return { ok: false, error: visibilityResult.error };
+  }
+
+  return {
+    ok: true,
+    channelId,
+    trustLevel: trustLevelResult.value,
+    channelVisibility: visibilityResult.value,
+    ...(canonicalContactId ? { canonicalContactId } : {}),
+  };
+}
+
+function normalizeOptionalToolString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeTimelineTrustLevel(value: unknown): { ok: true; value: TrustLevel } | { ok: false; error: string } {
+  const normalized = normalizeOptionalToolString(value);
+  if (!normalized) {
+    return { ok: false, error: 'Error: trust_level is required for action=timeline when no request context trust is available' };
+  }
+  if ((TRUST_LEVELS as readonly string[]).includes(normalized)) {
+    return { ok: true, value: normalized as TrustLevel };
+  }
+  return {
+    ok: false,
+    error: `Error: invalid trust_level "${normalized}" for action=timeline. Must be one of: ${TRUST_LEVELS.join(', ')}`,
+  };
+}
+
+function normalizeTimelineChannelVisibility(
+  value: unknown,
+): { ok: true; value: ChannelVisibility } | { ok: false; error: string } {
+  const normalized = normalizeOptionalToolString(value);
+  if (!normalized) {
+    return {
+      ok: false,
+      error: 'Error: channel_visibility is required for action=timeline when no request context visibility is available',
+    };
+  }
+  if ((CHANNEL_VISIBILITIES as readonly string[]).includes(normalized)) {
+    return { ok: true, value: normalized as ChannelVisibility };
+  }
+  return {
+    ok: false,
+    error: `Error: invalid channel_visibility "${normalized}" for action=timeline. Must be one of: ${CHANNEL_VISIBILITIES.join(', ')}`,
+  };
+}
+
+function normalizeTimelineDate(value: string): { from: string; to: string } | null {
+  const dateParts = parseDateOnlyParts(value);
+  if (!dateParts) return null;
+  return {
+    from: new Date(Date.UTC(dateParts.year, dateParts.month - 1, dateParts.day, 0, 0, 0, 0)).toISOString(),
+    to: new Date(Date.UTC(dateParts.year, dateParts.month - 1, dateParts.day, 23, 59, 59, 999)).toISOString(),
+  };
+}
+
+function normalizeTimelineBoundary(
+  value: string,
+  field: 'after' | 'before',
+  dateOnlyEdge: 'start' | 'end',
+): { value: string } | { error: string } {
+  const dateRange = normalizeTimelineDate(value);
+  if (dateRange) {
+    return { value: dateOnlyEdge === 'start' ? dateRange.from : dateRange.to };
+  }
+  if (!ISO_INSTANT_WITH_ZONE_PATTERN.test(value)) {
+    return {
+      error: `Error: ${field} must be a valid YYYY-MM-DD date or ISO-8601 timestamp with timezone for action=timeline`,
+    };
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return {
+      error: `Error: ${field} must be a valid YYYY-MM-DD date or ISO-8601 timestamp with timezone for action=timeline`,
+    };
+  }
+  return { value: new Date(timestamp).toISOString() };
+}
+
+function parseDateOnlyParts(value: string): { year: number; month: number; day: number } | null {
+  const match = DATE_ONLY_PATTERN.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (
+    date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return { year, month, day };
 }
 
 export function createMemoryWriteTool(
@@ -680,19 +949,19 @@ export function createUndoMemoryDeleteTool(memoryStore: MemoryStorePort): AgentT
 export function createMemoryTool(
   writer: MemoryWriter,
   memoryStore: MemoryStorePort,
-  options: MemoryWriteToolOptions = {},
+  options: MemoryToolOptions = {},
 ): AgentTool<any> {
   return {
     name: 'memory',
     description:
       'Unified long-term memory tool. '
-      + 'Use action=write|search|import|patch|redact|delete|restore to manage durable memory explicitly.',
+      + 'Use action=write|search|timeline|import|patch|redact|delete|restore to manage durable memory explicitly.',
     label: 'memory',
     parameters: Type.Object({
       action: Type.Unsafe<MemoryToolAction>({
         type: 'string',
         enum: [...MEMORY_TOOL_ACTIONS],
-        description: 'One of: write, search, import, patch, redact, delete, restore.',
+        description: 'One of: write, search, timeline, import, patch, redact, delete, restore.',
       }),
       text: Type.Optional(
         Type.String({ description: 'Required for action=write. The memory text to store.' }),
@@ -721,8 +990,37 @@ export function createMemoryTool(
       ),
       limit: Type.Optional(
         Type.Number({
-          description: `Optional result limit for action=search (${MEMORY_SEARCH_DEFAULT_LIMIT}-${MEMORY_SEARCH_MAX_LIMIT}).`,
+          description: `Optional result limit for action=search or action=timeline. Search: ${MEMORY_SEARCH_DEFAULT_LIMIT}-${MEMORY_SEARCH_MAX_LIMIT}; timeline: ${MEMORY_TIMELINE_DEFAULT_LIMIT}-${MEMORY_TIMELINE_MAX_LIMIT}.`,
         }),
+      ),
+      date: Type.Optional(
+        Type.String({ description: 'For action=timeline, UTC day to navigate as YYYY-MM-DD.' }),
+      ),
+      after: Type.Optional(
+        Type.String({ description: 'For action=timeline, inclusive range start as YYYY-MM-DD or ISO-8601 timestamp with timezone.' }),
+      ),
+      before: Type.Optional(
+        Type.String({ description: 'For action=timeline, inclusive range end as YYYY-MM-DD or ISO-8601 timestamp with timezone.' }),
+      ),
+      channel_id: Type.Optional(
+        Type.String({ description: 'For action=timeline, current channel id. Usually supplied by runtime context.' }),
+      ),
+      trust_level: Type.Optional(
+        Type.Unsafe<TrustLevel>({
+          type: 'string',
+          enum: [...TRUST_LEVELS],
+          description: 'For action=timeline, current viewer trust level. Usually supplied by runtime context.',
+        }),
+      ),
+      channel_visibility: Type.Optional(
+        Type.Unsafe<ChannelVisibility>({
+          type: 'string',
+          enum: [...CHANNEL_VISIBILITIES],
+          description: 'For action=timeline, current channel visibility. Usually supplied by runtime context.',
+        }),
+      ),
+      canonical_contact_id: Type.Optional(
+        Type.String({ description: 'For action=timeline, optional canonical contact id for trusted cross-channel continuity.' }),
       ),
       records: Type.Optional(
         Type.Array(
@@ -851,6 +1149,35 @@ export function createMemoryTool(
               sensitivity: memory.sensitivity,
               similarity: memory.similarity,
             }))));
+          }
+
+          case 'timeline': {
+            if (!options.episodicStore) {
+              return textResultWithError('Error: episodic timeline store is not configured for action=timeline', true);
+            }
+
+            const range = resolveTimelineRange(normalizedParams);
+            if (!range.ok) {
+              return textResultWithError(range.error, true);
+            }
+            const visibility = resolveTimelineVisibility(normalizedParams);
+            if (!visibility.ok) {
+              return textResultWithError(visibility.error, true);
+            }
+
+            const limit = normalizedParams.limit === undefined
+              ? MEMORY_TIMELINE_DEFAULT_LIMIT
+              : clampInt(normalizedParams.limit, 1, MEMORY_TIMELINE_MAX_LIMIT);
+            const entries = await retrieveEpisodicTimeline(options.episodicStore, {
+              ...(range.from ? { from: range.from } : {}),
+              ...(range.to ? { to: range.to } : {}),
+              channelId: visibility.channelId,
+              trustLevel: visibility.trustLevel,
+              channelVisibility: visibility.channelVisibility,
+              ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
+              limit,
+            });
+            return textResult(formatEpisodicTimeline(entries, range.label));
           }
 
           case 'import': {

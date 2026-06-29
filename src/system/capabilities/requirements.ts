@@ -73,7 +73,7 @@ function resolveIdentityRequirement(action: string | null): CapabilityRequiremen
   return IDENTITY_LAYER_REQUIREMENTS;
 }
 
-const MEMORY_READ_ACTIONS = new Set(['search', 'list', 'read', 'get']);
+const MEMORY_READ_ACTIONS = new Set(['search', 'timeline', 'list', 'read', 'get']);
 const MEMORY_WRITE_ACTIONS = new Set(['write', 'add', 'patch', 'import']);
 const MEMORY_DELETE_ACTIONS = new Set(['delete', 'restore', 'redact']);
 

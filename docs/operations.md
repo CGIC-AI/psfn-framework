@@ -212,7 +212,8 @@ For the LiteLLM proxy and custom CAs:
 Key runtime wiring:
 
 - `GATEWAY_TLS_CA_PATH` adds a trusted CA bundle for outbound TLS
-- `GATEWAY_TLS_REJECT_UNAUTHORIZED=false` disables TLS verification and should stay development-only
+- `GATEWAY_TLS_REJECT_UNAUTHORIZED=false` is rejected in production and never sets `NODE_TLS_REJECT_UNAUTHORIZED`; any development self-signed exception must be wired on the intended endpoint client
+- `NODE_TLS_REJECT_UNAUTHORIZED=0` is rejected in production because it disables TLS verification process-wide
 
 If you enable HTTPS on the bundled proxy, update the proxy compose mounts and keep the certs under the repo-owned tree.
 

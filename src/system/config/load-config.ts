@@ -7,7 +7,7 @@ import {
   resolveCredentialVaultBackend,
   resolveOptionalEnvCredential,
 } from '../../boundary/custody/credential-vault.js';
-import { resolveCompanionStateDir, resolveRuntimePathLayout } from '../../persistence/layout.js';
+import { RUNTIME_LAYOUT_MODE, resolveCompanionStateDir, resolveRuntimePathLayout } from '../../persistence/layout.js';
 import { parseOptionalStringEnv } from '../../shared/utils/env.js';
 import type {
   CanonicalModelRegistry,
@@ -81,6 +81,10 @@ const DEFAULT_THINK_MAX_TOKENS = 76_000;
 const DEFAULT_THINK_MAX_WALL_TIME_MS = 300_000;
 const DEFAULT_THINK_MAX_SUB_QUERIES = 12;
 type LoadConfigMode = 'gateway' | 'agent';
+
+function isNodeTlsVerificationGloballyDisabled(value: string | undefined): boolean {
+  return value?.trim() === '0';
+}
 
 function requireCompanionId(env: NodeJS.ProcessEnv): string {
   const companionId = parseOptionalStringEnv(env.COMPANION_ID);
@@ -230,6 +234,20 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     tempDir: env.PSFN_TEMP_DIR,
     backupsDir: env.BACKUP_ROOT_DIR,
   });
+  if (runtimePathLayout.mode === RUNTIME_LAYOUT_MODE.PRODUCTION) {
+    if (gatewayTlsRejectUnauthorized === false) {
+      throw new Error(
+        'GATEWAY_TLS_REJECT_UNAUTHORIZED=false is not supported in production runtime layout; ' +
+        'configure GATEWAY_TLS_CA_PATH or endpoint-scoped TLS trust instead.',
+      );
+    }
+    if (isNodeTlsVerificationGloballyDisabled(env.NODE_TLS_REJECT_UNAUTHORIZED)) {
+      throw new Error(
+        'NODE_TLS_REJECT_UNAUTHORIZED=0 is not supported in production runtime layout; ' +
+        'remove the process-global TLS bypass and configure endpoint-scoped TLS trust instead.',
+      );
+    }
+  }
   const dataDir = runtimePathLayout.systemDataDir;
   const companionDataDir = runtimePathLayout.companionDataDir;
   const companionId = requireCompanionId(env);

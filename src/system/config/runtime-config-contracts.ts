@@ -218,7 +218,7 @@ export interface SubstrateConfig {
   webFetchTlsCaCertPaths?: string[];
   /** Path to a CA certificate file (PEM) to trust for all outbound TLS connections (LLM, embeddings, etc.). Sets NODE_EXTRA_CA_CERTS at startup. */
   gatewayTlsCaPath?: string;
-  /** When explicitly set to false, disables TLS certificate verification (NODE_TLS_REJECT_UNAUTHORIZED=0). DANGEROUS — dev only. */
+  /** Dev/test-only request for endpoint-scoped TLS verification exceptions. Rejected in production; never maps to NODE_TLS_REJECT_UNAUTHORIZED. */
   gatewayTlsRejectUnauthorized?: boolean;
   wyomingShardRouting?: WyomingShardRoutingConfig;
   wyomingEnabled?: boolean;

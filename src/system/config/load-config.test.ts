@@ -40,6 +40,9 @@ function clearRuntimePathEnv(): void {
   delete process.env.OPENBAO_KV_PATH;
   delete process.env.OPENBAO_KV_VERSION;
   delete process.env.OPENBAO_NAMESPACE;
+  delete process.env.GATEWAY_TLS_CA_PATH;
+  delete process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED;
+  delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
   process.env.COMPANION_ID = 'test-companion';
   process.env.POSTGRES_DATABASE_URL = 'postgres://postgres:secret@localhost:5432/psfn_test';
 }
@@ -177,6 +180,26 @@ describe('loadConfig path defaults', () => {
     process.env.DATA_DIR = './shared-data';
 
     expect(() => loadConfig()).toThrow('DATA_DIR shared-root mode is forbidden');
+  });
+
+  it('rejects global TLS verification disable in production runtime layout', () => {
+    clearRuntimePathEnv();
+    process.env.PSFN_RUNTIME_LAYOUT_MODE = 'production';
+    process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED = 'false';
+
+    expect(() => loadConfig()).toThrow(
+      'GATEWAY_TLS_REJECT_UNAUTHORIZED=false is not supported in production runtime layout',
+    );
+  });
+
+  it('rejects NODE_TLS_REJECT_UNAUTHORIZED=0 in production runtime layout', () => {
+    clearRuntimePathEnv();
+    process.env.PSFN_RUNTIME_LAYOUT_MODE = 'production';
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
+    expect(() => loadConfig()).toThrow(
+      'NODE_TLS_REJECT_UNAUTHORIZED=0 is not supported in production runtime layout',
+    );
   });
 
   it('rejects partial split-root configuration', () => {

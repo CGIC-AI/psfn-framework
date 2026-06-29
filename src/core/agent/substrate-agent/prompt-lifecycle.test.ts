@@ -76,6 +76,47 @@ describe('prompt-lifecycle cacheability', () => {
     expect(changedStableSetting).not.toBe(baseline);
   });
 
+  it('ignores volatile unreferenced runtime fields in the static settings hash', () => {
+    const staticPrefixTemplate = [
+      '<identity>{{char_name}}</identity>',
+      '<style>{{personality}}</style>',
+    ].join('\n');
+    const baseline = buildStaticPromptSettingsHash({
+      char_name: 'Purrsephone',
+      personality: 'Warm and precise.',
+      user: 'Vega',
+      user_id: 'discord:vega',
+      channel_id: 'discord:group:1',
+      runtime_current_datetime_iso: '2026-04-04T10:00:00.000-04:00',
+      runtime_charge_budget_body: '24 remaining',
+      memory_context: 'remembered item A',
+      now_iso: '2026-04-04T10:00:00.000-04:00',
+    }, staticPrefixTemplate);
+    const volatileOnlyChange = buildStaticPromptSettingsHash({
+      char_name: 'Purrsephone',
+      personality: 'Warm and precise.',
+      user: 'Different speaker',
+      user_id: 'discord:different',
+      channel_id: 'discord:group:2',
+      runtime_current_datetime_iso: '2026-04-04T10:30:00.000-04:00',
+      runtime_charge_budget_body: '4 remaining',
+      memory_context: 'remembered item B',
+      now_iso: '2026-04-04T10:30:00.000-04:00',
+    }, staticPrefixTemplate);
+    const stableIdentityChange = buildStaticPromptSettingsHash({
+      char_name: 'Artemis',
+      personality: 'Warm and precise.',
+      user: 'Vega',
+      runtime_current_datetime_iso: '2026-04-04T10:00:00.000-04:00',
+      runtime_charge_budget_body: '24 remaining',
+      memory_context: 'remembered item A',
+      now_iso: '2026-04-04T10:00:00.000-04:00',
+    }, staticPrefixTemplate);
+
+    expect(volatileOnlyChange).toBe(baseline);
+    expect(stableIdentityChange).not.toBe(baseline);
+  });
+
   it('annotates template sections with cacheability classes and breakers', () => {
     const promptComposer = {
       composeSplit: () => ({

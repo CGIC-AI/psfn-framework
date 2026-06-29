@@ -198,6 +198,7 @@ const REQUIRED_RUNTIME_SIGNAL_SECTIONS: Record<string, string> = {
   'runtime.internal_turn_context': '<internal_turn_context>{{runtime_internal_turn_kind}}</internal_turn_context>',
   'runtime.speaking_with': '<speaking_with>{{runtime_speaking_with_name}}</speaking_with>',
   'runtime.channel_context': '<channel_context>{{runtime_channel_visibility}}</channel_context>',
+  'runtime.conversation_state': '<conversation_state>{{runtime_chat_type}}{{runtime_current_message_author_name}}</conversation_state>',
   'runtime.model_context': '<model_context>{{model}}</model_context>',
   'runtime.capability_tier': '<capability_tier>{{runtime_capability_tier}}</capability_tier>',
   'runtime.current_datetime': '<runtime.current_datetime>{{runtime_current_datetime_iso}}</runtime.current_datetime>',
@@ -267,10 +268,7 @@ describe('runtime prompt layer schema', () => {
     expect(manifest.map(signal => signal.identifier)).toEqual([
       'runtime.last_message_received',
       'runtime.internal_turn_context',
-      'runtime.speaking_with',
-      'runtime.channel_context',
-      'runtime.model_context',
-      'runtime.capability_tier',
+      'runtime.conversation_state',
       'runtime.trust',
       'runtime.emotional_affect',
       'runtime.metacognitive_guidance',
@@ -289,10 +287,17 @@ describe('runtime prompt layer schema', () => {
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_last_message_received_timezone}}');
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_last_message_received_missing_notice}}');
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_internal_turn_kind}}');
-    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_speaking_with_trust_level}}');
+    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('<conversation_state>');
+    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_chat_type}}');
+    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_current_message_author_name_xml_attr}}');
+    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_recent_active_participants_xml}}');
     expect(getRuntimePromptLayerDefinition('runtime.state')?.content).toContain('{{runtime_channel_visibility}}');
-    expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).toContain('{{runtime_tooling_active_count}}');
+    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).not.toContain('<model_context>');
+    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).not.toContain('<capability_tier>');
+    expect(getRuntimePromptLayerDefinition('runtime.state')?.content).not.toContain('<speaking_with>');
+    expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).not.toContain('{{runtime_tooling_active_count}}');
     expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).toContain('<analysis_workbench_guidance>');
+    expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).toContain('{{#if runtime_analysis_workbench_available}}');
     expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).toContain('large files, codebases, logs, transcripts, datasets, or evidence sets');
     expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).toContain('Do not use analysis_workbench for routine orient actions, concern maintenance, scheduler or schedule work, simple lookup');
     expect(getRuntimePromptLayerDefinition('runtime.tooling')?.content).toContain('{{runtime_appearance_context_body}}');
@@ -407,6 +412,7 @@ describe('runtime prompt layer schema', () => {
       'runtime.internal_turn_context',
       'runtime.speaking_with',
       'runtime.channel_context',
+      'runtime.conversation_state',
       'runtime.model_context',
       'runtime.capability_tier',
       'runtime.trust',

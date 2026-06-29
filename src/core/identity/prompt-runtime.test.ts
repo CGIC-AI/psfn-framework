@@ -53,6 +53,15 @@ const RUNTIME_STATE_MACRO_TOKENS = [
   '{{runtime_last_message_received_days_hours}}',
   '{{runtime_last_message_received_missing_notice}}',
   '{{runtime_internal_turn_kind}}',
+  '{{runtime_conversation_state_available}}',
+  '{{runtime_chat_type}}',
+  '{{runtime_room_id}}',
+  '{{runtime_current_message_author_name}}',
+  '{{runtime_current_message_author_id}}',
+  '{{runtime_current_message_author_name_xml_attr}}',
+  '{{runtime_current_message_author_id_xml_attr}}',
+  '{{runtime_recent_active_participants_xml}}',
+  '{{runtime_recent_active_participants_count}}',
   '{{runtime_speaking_with_name}}',
   '{{runtime_speaking_with_trust_level}}',
   '{{runtime_channel_type}}',
@@ -156,6 +165,8 @@ const ATTENTION_MACRO_TOKENS = [
 ] as const;
 
 const TOOLING_MACRO_TOKENS = [
+  '{{runtime_analysis_workbench_available}}',
+  '{{runtime_analysis_workbench_guidance_body}}',
   '{{runtime_tooling_active_count}}',
   '{{runtime_tooling_core_count}}',
   '{{runtime_tooling_promoted_count}}',

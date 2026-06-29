@@ -216,7 +216,10 @@ export interface TurnExecutionRuntime {
     canonicalContactKey: string | undefined,
     subjectIdentityKey: string | undefined,
   ) => string;
-  buildStaticPromptSettingsHash: (templateVariables: Record<string, string>) => string;
+  buildStaticPromptSettingsHash: (
+    templateVariables: Record<string, string>,
+    staticPrefixTemplate?: string,
+  ) => string;
   resolveStaticPromptPrefix: (params: {
     cacheKey: string;
     staticPrefixTemplate: string;

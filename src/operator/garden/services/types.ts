@@ -782,15 +782,30 @@ export interface AdminSessionMessagesData {
   sessionId: string;
   channelId: string;
   messages: SessionEntry[];
+  pagination: AdminSessionMessagePaginationData;
   messageOntologyViews: AdminSessionMessageOntologyView[];
   roleEnvelopePreviews: AdminSessionRoleEnvelopePreview[];
   compactionAuditViews: CompactionAuditView[];
   turns: AdminSessionTurnData[];
 }
 
+export interface AdminSessionMessagePaginationOptions {
+  limit?: number;
+  beforeId?: number | null;
+}
+
+export interface AdminSessionMessagePaginationData {
+  limit: number;
+  beforeId: number | null;
+  nextBeforeId: number | null;
+  hasMoreOlder: boolean;
+  totalMessages: number;
+  returnedMessages: number;
+}
+
 export interface AdminSessionService {
   listSessions(): Promise<AdminSessionListData>;
-  getSessionMessages(sessionId: string): AdminSessionMessagesData;
+  getSessionMessages(sessionId: string, options?: AdminSessionMessagePaginationOptions): AdminSessionMessagesData;
 }
 
 export type AdminObservedMemory = ObservedMemory;

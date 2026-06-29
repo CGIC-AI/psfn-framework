@@ -1,5 +1,5 @@
 import { JSONRPCErrorException } from 'json-rpc-2.0';
-import { writeFile, glob as fsGlob, realpath, stat } from 'node:fs/promises';
+import { writeFile, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, relative } from 'node:path';
 import type {
   FsEditParams,
@@ -19,8 +19,10 @@ import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import {
   buildWorkingFolderSearchGlob,
+  collectBoundedGlobFiles,
   editWorkspaceFile,
   isBroadSearchGlob,
+  normalizeListLimits,
   readTextFile,
   searchWorkspaceFiles,
 } from '../../integrations/filesystem/workspace-ops.js';
@@ -202,30 +204,23 @@ const fsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
   {
     name: 'fs.list',
     handler: async (params: FsListParams, runtime) => {
-      const maxEntries = Number.isFinite(params.maxEntries)
-        ? Math.max(1, Math.min(500, Math.floor(Number(params.maxEntries))))
-        : 200;
+      const limits = normalizeListLimits(params.maxEntries, params.maxScannedEntries);
 
       const listBase = await resolveListBase(params, runtime);
-      const paths: string[] = [];
-      for await (const match of fsGlob(listBase.glob, {
+      return collectBoundedGlobFiles({
         cwd: listBase.cwd,
-      })) {
-        const relativeMatch = String(match).replace(/\\/g, '/').replace(/^\.\//, '');
-        const absolute = resolveWorkspaceFsPathFromRoot(relativeMatch, listBase.cwd);
-        if (!isInsideAllowedPaths(absolute, [listBase.cwd])) {
-          continue;
-        }
-        paths.push(relativePathForDisplay(absolute, listBase.displayRoot));
-        if (paths.length >= maxEntries) {
-          break;
-        }
-      }
-
-      paths.sort((a, b) => a.localeCompare(b));
-      return { paths };
+        glob: listBase.glob,
+        allowedRoots: [listBase.cwd],
+        ...limits,
+        toDisplayPath: absolutePath => relativePathForDisplay(absolutePath, listBase.displayRoot),
+      });
     },
-    summary: (p: FsListParams) => ({ path: p.path, glob: p.glob ?? '*', maxEntries: p.maxEntries ?? 200 }),
+    summary: (p: FsListParams) => ({
+      path: p.path,
+      glob: p.glob ?? '*',
+      maxEntries: p.maxEntries ?? 200,
+      maxScannedEntries: p.maxScannedEntries ?? 5_000,
+    }),
     approvalAction: 'read',
     approvalScope: (p: FsListParams) => `${p.path ?? '.'}:${p.glob ?? '*'}`,
   },

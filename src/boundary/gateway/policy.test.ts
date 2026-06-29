@@ -369,7 +369,7 @@ describe('evaluatePolicy', () => {
 
   it('allows fs.list with workspace-relative glob', () => {
     expect(evaluatePolicy(
-      { method: 'fs.list', params: { glob: 'src/**/*.ts', maxEntries: 50 } },
+      { method: 'fs.list', params: { glob: 'src/**/*.ts', maxEntries: 50, maxScannedEntries: 500 } },
       policyConfig,
     )).toBe('ALLOW');
   });
@@ -509,6 +509,23 @@ describe('evaluatePolicy', () => {
 
     expect(evaluatePolicy(
       { method: 'fs.list', params: { path: 'downloads/*' } },
+      policyConfig,
+    )).toBe('DENY');
+  });
+
+  it('denies unbounded or malformed fs.list scan controls', () => {
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { glob: 'src/**/*.ts', maxScannedEntries: 0 } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { glob: 'src/**/*.ts', maxScannedEntries: 20_001 } },
+      policyConfig,
+    )).toBe('DENY');
+
+    expect(evaluatePolicy(
+      { method: 'fs.list', params: { glob: 'src/**/*.ts', maxScannedEntries: '500' } },
       policyConfig,
     )).toBe('DENY');
   });

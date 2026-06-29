@@ -41,6 +41,16 @@ export interface ShellExecView {
   durationMs: number;
 }
 
+export interface FsListView {
+  paths: string[];
+  scannedEntries: number;
+  maxEntries: number;
+  maxScannedEntries: number;
+  truncated: boolean;
+  scanLimitReached: boolean;
+  entryLimitReached: boolean;
+}
+
 export interface SandboxBrokerExecutionBoundary {
   kind: 'sandbox_broker';
   isolatedFromGatewaySecrets: true;
@@ -122,7 +132,7 @@ export type GatewayREPLCapabilities = {
   gitCommit?: (message: string, intent: string, scope?: string) => Promise<GitCommitView>;
   fsRead?: (path: string) => Promise<string>;
   fsWrite?: (path: string, content: string) => Promise<void>;
-  fsList?: (glob?: string, maxEntries?: number) => Promise<string[]>;
+  fsList?: (glob?: string, maxEntries?: number) => Promise<FsListView>;
 };
 
 export interface ScheduleView {

@@ -11,6 +11,17 @@ export interface FilesystemReadResult {
 
 export interface FilesystemListOptions {
   path?: string;
+  maxScannedEntries?: number;
+}
+
+export interface FilesystemListResult {
+  paths: string[];
+  scannedEntries: number;
+  maxEntries: number;
+  maxScannedEntries: number;
+  truncated: boolean;
+  scanLimitReached: boolean;
+  entryLimitReached: boolean;
 }
 
 export interface FilesystemSearchOptions {
@@ -66,7 +77,7 @@ export interface FilesystemEditResult {
 
 export interface FilesystemOperations {
   read(path: string, options?: FilesystemReadOptions): Promise<FilesystemReadResult>;
-  list(glob?: string, maxEntries?: number, options?: FilesystemListOptions): Promise<string[]>;
+  list(glob?: string, maxEntries?: number, options?: FilesystemListOptions): Promise<FilesystemListResult>;
   search(options: FilesystemSearchOptions): Promise<FilesystemSearchResult>;
   write(options: FilesystemWriteOptions): Promise<FilesystemWriteResult>;
   edit(options: FilesystemEditOptions): Promise<FilesystemEditResult>;

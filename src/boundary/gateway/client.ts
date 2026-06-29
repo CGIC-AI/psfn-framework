@@ -1064,13 +1064,17 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     await this.rpcInstance.request('fs.write', { path, content }) as FsWriteResult;
   }
 
-  async fsList(glob?: string, maxEntries = 200, options?: { path?: string }): Promise<string[]> {
-    const result = await this.rpcInstance.request('fs.list', {
+  async fsList(
+    glob?: string,
+    maxEntries = 200,
+    options?: { path?: string; maxScannedEntries?: number },
+  ): Promise<FsListResult> {
+    return await this.rpcInstance.request('fs.list', {
       ...(typeof options?.path === 'string' ? { path: options.path } : {}),
       ...(typeof glob === 'string' ? { glob } : {}),
+      ...(typeof options?.maxScannedEntries === 'number' ? { maxScannedEntries: options.maxScannedEntries } : {}),
       maxEntries,
     }) as FsListResult;
-    return result.paths;
   }
 
   async fsSearch(params: FsSearchParams): Promise<FsSearchResult> {

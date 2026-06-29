@@ -156,6 +156,7 @@ export interface FsListParams {
   path?: string;
   glob?: string;
   maxEntries?: number;
+  maxScannedEntries?: number;
 }
 
 export interface FsSearchParams {
@@ -410,6 +411,12 @@ export interface FsWriteResult {
 
 export interface FsListResult {
   paths: string[];
+  scannedEntries: number;
+  maxEntries: number;
+  maxScannedEntries: number;
+  truncated: boolean;
+  scanLimitReached: boolean;
+  entryLimitReached: boolean;
 }
 
 export interface FsSearchMatch {

@@ -3,6 +3,7 @@ import type {
   FilesystemEditOptions,
   FilesystemEditResult,
   FilesystemListOptions,
+  FilesystemListResult,
   FilesystemOperations,
   FilesystemReadOptions,
   FilesystemReadResult,
@@ -27,7 +28,7 @@ export class GatewayFilesystemOps implements FilesystemOperations {
     glob = '**/*',
     maxEntries = 200,
     options?: FilesystemListOptions,
-  ): Promise<string[]> {
+  ): Promise<FilesystemListResult> {
     return this.filesystemOps.list(glob, maxEntries, options);
   }
 

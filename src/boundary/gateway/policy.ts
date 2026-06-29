@@ -417,15 +417,13 @@ export function evaluatePolicy(ctx: PolicyContext, policyConfig: PolicyConfig): 
       }
 
       const maxEntries = (params as Record<string, unknown>).maxEntries;
-      if (maxEntries !== undefined) {
-        if (
-          typeof maxEntries !== 'number' ||
-          !Number.isFinite(maxEntries) ||
-          Math.floor(maxEntries) < 1 ||
-          maxEntries > 500
-        ) {
-          return 'DENY';
-        }
+      if (maxEntries !== undefined && !isPositiveIntegerInRange(maxEntries, 1, 500)) {
+        return 'DENY';
+      }
+
+      const maxScannedEntries = (params as Record<string, unknown>).maxScannedEntries;
+      if (maxScannedEntries !== undefined && !isPositiveIntegerInRange(maxScannedEntries, 1, 20_000)) {
+        return 'DENY';
       }
 
       return 'ALLOW';

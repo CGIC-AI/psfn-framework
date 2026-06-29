@@ -409,10 +409,50 @@ describe('GatewayServer', () => {
         maxEntries: 10,
       });
 
-      expect(listed.result.paths).toEqual([
-        'alpha.txt',
-        'nested/beta.txt',
-      ]);
+      expect(listed.result).toMatchObject({
+        paths: [
+          'alpha.txt',
+          'nested/beta.txt',
+        ],
+        maxEntries: 10,
+        maxScannedEntries: 5000,
+        truncated: false,
+        scanLimitReached: false,
+        entryLimitReached: false,
+      });
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it('serves explicit fs.list scan-limit metadata for sparse globbing', async () => {
+    const workspace = mkdtempSync(join(tmpdir(), 'gw-fs-list-scan-cap-'));
+    mkdirSync(join(workspace, 'one', 'two'), { recursive: true });
+    writeFileSync(join(workspace, 'one', 'two', 'noise.txt'), 'noise');
+
+    try {
+      const { conn } = await setupServerConnection({
+        ...createMinimalOptions(),
+        policyConfig: {
+          workspacePath: workspace,
+        },
+      });
+
+      const listed = await invokeRpc(conn, 951, 'fs.list', {
+        glob: '**/*.needle',
+        maxEntries: 10,
+        maxScannedEntries: 2,
+      });
+
+      expect(listed.result).toMatchObject({
+        paths: [],
+        scannedEntries: 2,
+        maxEntries: 10,
+        maxScannedEntries: 2,
+        truncated: true,
+        scanLimitReached: true,
+        entryLimitReached: false,
+      });
     } finally {
       rmSync(workspace, { recursive: true, force: true });
     }
@@ -539,11 +579,14 @@ describe('GatewayServer', () => {
         glob: '**/*',
         maxEntries: 20,
       });
-      expect(homeListResponse.result.paths).toEqual(expect.arrayContaining([
-        'AGENTS.md',
-        'downloads',
-      ]));
+      expect(homeListResponse.result).toMatchObject({
+        paths: ['AGENTS.md'],
+        truncated: false,
+        scanLimitReached: false,
+        entryLimitReached: false,
+      });
       expect(homeListResponse.result.paths).not.toContain('src/app.ts');
+      expect(homeListResponse.result.paths).not.toContain('downloads');
       expect(homeListResponse.result.paths).not.toContain('downloads/COMPANION_EXPERIENCE.md');
 
       const downloadsListResponse = await invokeRpc(conn, 973, 'fs.list', {

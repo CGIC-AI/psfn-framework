@@ -139,6 +139,20 @@ describe('orient tool', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('keeps model-facing orientation guidance concise and action grouped', () => {
+    const tool = createOrientTool({
+      append: vi.fn(),
+      replace: vi.fn(),
+      rethink: vi.fn(),
+    });
+
+    expect(tool.description.length).toBeLessThan(620);
+    expect(tool.description).toContain('Blocks: append/replace');
+    expect(tool.description).toContain('Values: values_list/add/update');
+    expect(tool.description).toContain('Concerns: create_concern/list_concerns/resolve_concern/transition_concern');
+    expect((tool.parameters as any).properties.text.description).toContain('Create a concern in the same turn');
+  });
+
   it('appends to the requested orientation block', async () => {
     const store = {
       append: vi.fn<(

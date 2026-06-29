@@ -301,6 +301,16 @@ describe('createMemoryTool', () => {
     expect((result.details as any).isError).toBe(true);
   });
 
+  it('describes required fields for model-facing memory actions', () => {
+    const store = mockUnifiedStore();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort);
+
+    expect(tool.description).toContain('action=search with required query');
+    expect(tool.description).toContain('action=write with required text and type');
+    expect(tool.description).toContain('patch/redact/delete use memory_id');
+    expect(tool.description).toContain('restore uses delete_id');
+  });
+
   it('searches through action=search and formats results', async () => {
     const store = mockUnifiedStore();
     store.searchByText.mockResolvedValue([

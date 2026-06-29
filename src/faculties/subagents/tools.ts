@@ -200,7 +200,23 @@ function formatPayload(payload: Record<string, unknown>): string {
 function normalizeRequiredText(value: string | undefined, field: string): string {
   const normalized = value?.trim();
   if (!normalized) {
-    throw new Error(`${field} is required.`);
+    if (field === 'name' || field === 'task') {
+      throw new Error(
+        `Missing required field "${field}". Minimal valid JSON: {"action":"spawn","name":"short-label","task":"bounded task to run"}.`,
+      );
+    }
+    if (field === 'message') {
+      throw new Error(
+        'Missing required field "message". Minimal valid JSON: {"action":"message","subagent_id":"subagent-1","message":"follow-up instruction"}.',
+      );
+    }
+    if (field === 'subagent_id') {
+      throw new Error(
+        'Missing required field "subagent_id". Use the id returned by action=spawn or action=status. '
+        + 'Minimal valid JSON: {"action":"message","subagent_id":"subagent-1","message":"follow-up instruction"}.',
+      );
+    }
+    throw new Error(`Missing required field "${field}".`);
   }
   return normalized;
 }

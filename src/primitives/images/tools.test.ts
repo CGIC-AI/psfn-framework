@@ -112,6 +112,65 @@ describe('image tools', () => {
     });
 
     expect(readActions(tool)).toEqual(['generate', 'edit', 'analyze']);
+    expect(tool.description).toContain('generate requires prompt');
+    expect(tool.description).toContain('edit requires prompt and input_urls');
+    expect(tool.description).toContain('analyze requires input_urls');
+    expect((tool.parameters as any).properties.prompt.description).toContain('Required for action=generate');
+    expect((tool.parameters as any).properties.input_urls.description).toContain('Required for action=edit');
+  });
+
+  it('keeps selfie_create concise and focused on required prompt/reference behavior', () => {
+    const tool = createSelfieTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    });
+
+    expect(tool.description.length).toBeLessThan(520);
+    expect(tool.description).toContain('Requires prompt');
+    expect(tool.description).toContain('saved-reference anchoring');
+    expect(tool.description).not.toContain('content policy');
+    expect((tool.parameters as any).properties.edit_model.description.length).toBeLessThan(220);
+    expect((tool.parameters as any).properties.edit_model.description).not.toContain('gpt-image-2');
+  });
+
+  it('returns minimal valid examples for missing media arguments', async () => {
+    const reviewer: ImageVisionReviewer = {
+      analyze: vi.fn(async () => ({
+        question: 'unused',
+        summary: 'unused',
+        model: 'vision-model',
+        imageCount: 1,
+      })),
+    };
+    const tool = createMediaTool({
+      create: vi.fn(),
+      edit: vi.fn(),
+    }, reviewer);
+
+    const missingGeneratePrompt = await tool.execute('media-missing-generate-prompt', {
+      action: 'generate',
+    }) as AgentToolResult<MediaToolResultDetails>;
+    const missingEditPrompt = await tool.execute('media-missing-edit-prompt', {
+      action: 'edit',
+      input_urls: ['https://images.example.test/source.png'],
+    }) as AgentToolResult<MediaToolResultDetails>;
+    const missingEditInput = await tool.execute('media-missing-edit-input', {
+      action: 'edit',
+      prompt: 'make this warmer',
+    }) as AgentToolResult<MediaToolResultDetails>;
+    const missingAnalyzeInput = await tool.execute('media-missing-analyze-input', {
+      action: 'analyze',
+    }) as AgentToolResult<MediaToolResultDetails>;
+
+    expect(resultText(missingGeneratePrompt)).toContain('Missing required field "prompt" for media action="generate"');
+    expect(resultText(missingGeneratePrompt)).toContain('{"action":"generate","prompt":"full image description"}');
+    expect(resultText(missingEditPrompt)).toContain('Missing required field "prompt" for media action="edit"');
+    expect(resultText(missingEditInput)).toContain('Missing required field "input_urls" for media action="edit"');
+    expect(resultText(missingAnalyzeInput)).toContain('Missing required field "input_urls" for media action="analyze"');
+    expect(missingGeneratePrompt.details.isError).toBe(true);
+    expect(missingEditPrompt.details.isError).toBe(true);
+    expect(missingEditInput.details.isError).toBe(true);
+    expect(missingAnalyzeInput.details.isError).toBe(true);
   });
 
   it('does not capability-gate benign media and selfie actions', () => {

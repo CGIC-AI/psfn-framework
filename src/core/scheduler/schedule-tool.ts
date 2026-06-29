@@ -437,11 +437,11 @@ export function createScheduleTool(options: ScheduleToolOptions): AgentTool<any,
     name: 'schedule',
     label: 'schedule',
     description:
-      'Manage time-based continuity through one schedule surface. '
-      + 'action=list is the safe orientation call and can filter by contact_id. '
-      + 'create_follow_up needs content and usually channel_id/channel_type or contact_id; activate_follow_up needs follow_up_id. '
-      + 'create_reminder needs title/content; trigger_reminder needs reminder_id. '
-      + 'Template actions use template_id, and schedule_prompt needs name, prompt, and delay_minutes.',
+      'Manage time-based continuity through one schedule surface. Orientation: action=list is safe and can filter by contact_id. '
+      + 'Follow-ups: create_follow_up needs content and usually channel_id/channel_type or contact_id; activate_follow_up needs follow_up_id. '
+      + 'Reminders: create_reminder needs title/content; trigger_reminder needs reminder_id. '
+      + 'Templates: list_templates inspects them, update_template uses template_id for existing templates and id only when adding a new template, run_template needs template_id. '
+      + 'Scheduled prompts: schedule_prompt needs name, prompt, and delay_minutes.',
     parameters: Type.Object({
       action: Type.Optional(Type.Union(
         SCHEDULE_TOOL_ACTIONS.map(action => Type.Literal(action)),

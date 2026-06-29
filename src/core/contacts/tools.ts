@@ -16,6 +16,7 @@ import { tagToolWithReversibility } from '../../system/capabilities/safeguards.j
 
 const CONTACT_ACTION_NAMES = [
   'list',
+  'search',
   'lookup',
   'note',
   'set_trust',
@@ -25,6 +26,7 @@ const CONTACT_ACTION_NAMES = [
 ] as const;
 const CONTACT_ACTION_HELP = [
   'list',
+  'search',
   'lookup',
   'note',
   'set_trust',
@@ -36,6 +38,7 @@ const CONTACT_ACTION_HELP = [
 type ContactActionName = (typeof CONTACT_ACTION_NAMES)[number];
 type ContactAction =
   | 'list'
+  | 'search'
   | 'lookup'
   | 'note'
   | 'set_trust'
@@ -52,6 +55,7 @@ interface ContactSetTrustParams {
 
 interface ContactToolParams extends Partial<ContactSetTrustParams> {
   action?: ContactActionName;
+  query?: string;
   isMachineIntelligence?: boolean;
   notes?: string;
   channel?: string;
@@ -131,6 +135,8 @@ function normalizeContactAction(params: ContactToolParams): ContactAction {
   switch (rawAction) {
     case 'list':
       return 'list';
+    case 'search':
+      return 'search';
     case 'lookup':
       return 'lookup';
     case 'note':
@@ -424,20 +430,93 @@ async function executeContactList(
     return textResult('No contacts in address book.');
   }
 
-  const lines = contacts.map((contact) => {
-    const channels = formatContactChannels(contact);
-    const identities = formatContactIdentities(contact);
-    const relatedChannels = formatRelatedChannels(contact);
-    return `- ${contact.id}: ${(resolvePreferredContactName(contact) ?? contact.displayName)} `
-      + `[${contact.trustLevel}/${contact.relationshipType}]`
-      + (channels ? ` channels=${channels}` : '')
-      + (identities ? ` identities=${identities}` : '')
-      + (relatedChannels ? ` related_channels=${relatedChannels}` : '')
-      + (contact.notes ? ` — ${contact.notes}` : '');
-  });
+  const lines = contacts.map(formatContactSummaryLine);
   return textResult(
     `Contacts (${contacts.length}):\n${lines.join('\n')}\n`
     + 'Pass contactId from this list to action=lookup, action=set_trust, or action=note; do not guess from display names.',
+  );
+}
+
+function formatContactSummaryLine(contact: Contact): string {
+  const channels = formatContactChannels(contact);
+  const identities = formatContactIdentities(contact);
+  const relatedChannels = formatRelatedChannels(contact);
+  return `- ${contact.id}: ${(resolvePreferredContactName(contact) ?? contact.displayName)} `
+    + `[${contact.trustLevel}/${contact.relationshipType}]`
+    + (channels ? ` channels=${channels}` : '')
+    + (identities ? ` identities=${identities}` : '')
+    + (relatedChannels ? ` related_channels=${relatedChannels}` : '')
+    + (contact.notes ? ` — ${contact.notes}` : '');
+}
+
+function normalizeContactSearchTokens(query: string): string[] {
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .map(token => token.trim())
+    .filter(token => token.length > 0);
+}
+
+function contactSearchHaystack(contact: Contact): string {
+  return [
+    contact.id,
+    contact.discordUserId,
+    contact.displayName,
+    contact.nickname,
+    contact.trustLevel,
+    contact.relationshipType,
+    contact.notes,
+    ...(contact.channels ?? []).flatMap(channel => [
+      channel.channel,
+      channel.userId,
+      channel.privacyLevel,
+    ]),
+    ...(contact.channelIdentities ?? []).flatMap(identity => [
+      identity.channel,
+      identity.userId,
+    ]),
+    ...(contact.conversationChannels ?? []).flatMap(channel => [
+      channel.channel,
+      channel.channelId,
+      channel.privacyLevel ?? '',
+    ]),
+  ]
+    .filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+    .join(' ')
+    .toLowerCase();
+}
+
+async function executeContactSearch(
+  contactStore: ContactStorePort,
+  params: { query?: string },
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  const query = params.query?.trim() ?? '';
+  if (!query) {
+    return textResultWithError(
+      'Missing required field "query" for action=search. '
+      + 'Minimal valid JSON: {"action":"search","query":"name, handle, channel, or note text"}. '
+      + 'Use action=list to browse contactId values; do not retry action=search without a non-empty query.',
+      true,
+    );
+  }
+
+  const contacts = await contactStore.listAll();
+  const tokens = normalizeContactSearchTokens(query);
+  const matches = contacts.filter((contact) => {
+    const haystack = contactSearchHaystack(contact);
+    return tokens.every(token => haystack.includes(token));
+  });
+
+  if (matches.length === 0) {
+    return textResult(
+      `No contacts matched query "${query}". `
+      + 'Run contact with {"action":"list"} to browse valid contactId values, or search for a name, handle, channel, or note phrase.',
+    );
+  }
+
+  return textResult(
+    `Contact search results for "${query}" (${matches.length}):\n${matches.map(formatContactSummaryLine).join('\n')}\n`
+    + 'Pass an exact contactId from these results to action=lookup, action=set_trust, or action=note; do not guess from display names.',
   );
 }
 
@@ -450,6 +529,8 @@ async function executeUnifiedContactAction(
   switch (action) {
     case 'list':
       return await executeContactList(contactStore);
+    case 'search':
+      return await executeContactSearch(contactStore, params);
     case 'lookup':
       return await executeContactLookup(contactStore, params);
     case 'note':
@@ -496,9 +577,11 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
     name: 'contact',
     label: 'contact',
     description:
-      'Unified contact surface for listing, lookup, notes, trust, identity linking, and channel privacy. '
-      + 'Start with action=list to see contactId values and channel identities. '
-      + 'Use action=lookup with contactId; action=note and action=set_trust also require contactId. '
+      'Unified contact surface for browsing, searching, lookup, notes, trust, identity linking, and channel privacy. '
+      + 'Use action=list to browse contactId values, action=search with query to find contacts by name/handle/channel/notes, '
+      + 'then action=lookup with exact contactId for details. action=note and action=set_trust also require contactId. '
+      + 'link_identity and set_channel_privacy require contactId, channel, and channelUserId; privacy changes also require privacyLevel. '
+      + 'set_machine_intelligence requires contactId and isMachineIntelligence. '
       + `Other actions: ${CONTACT_ACTION_HELP}. `
       + 'Trust and disclosure boundaries remain enforced.',
     parameters: Type.Object({
@@ -510,6 +593,10 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
       contactId: Type.Optional(Type.String({
         minLength: 1,
         description: 'Canonical contact ID, Discord user ID, or channel identity (channel:userId) for lookup.',
+      })),
+      query: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Required for action=search. Matches name, nickname, canonical id, Discord/channel identity, related channel, trust/relationship, or notes.',
       })),
       notes: Type.Optional(Type.String({
         description: 'Notes to store when action=note.',
@@ -574,6 +661,7 @@ export function createContactTool(contactStore: ContactStorePort): AgentTool<any
             ? 'identity.read'
             : ['identity.read', 'identity.write.runtime'] as const;
         case 'list':
+        case 'search':
         case 'lookup':
           return 'identity.read';
         case 'note':

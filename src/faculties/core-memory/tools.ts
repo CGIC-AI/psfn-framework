@@ -166,16 +166,11 @@ export function createOrientTool(
     name: 'orient',
     label: 'orient',
     description:
-      'Manage active orientation across persona, human, and goals blocks. '
-      + 'Use action=append for incremental updates, action=replace to rewrite one block, '
-      + 'action=reorient for a holistic refresh of all three blocks, '
-      + 'action=values_list to inspect recent values reflections, '
-      + 'action=values_add|values_update to append values journal entries or append-only revisions, and '
-      + 'action=create_concern|list_concerns|resolve_concern|transition_concern to manage lifecycle-tracked open threads, reminders, checkups, and proactive communication items. '
-      + 'When you decide "I should check this later", "I will follow up", "ask about this tomorrow", or similar, call orient action=create_concern in the same turn instead of only saying it in chat or journal prose. '
-      + 'Open threads are not necessarily problems. Put follow-ups such as "reach out tonight" here, not in scratchpad. '
-      + 'For action=resolve_concern or action=transition_concern, pass concernId or concernIds copied exactly from the concern.id returned by create_concern or list_concerns; '
-      + 'do not use tool_search, fs, or analysis_workbench to rediscover it.',
+      'Manage active orientation across persona, human, goals, values, and active concerns. '
+      + 'Blocks: append/replace update one block; reorient refreshes persona/human/goals together. '
+      + 'Values: values_list/add/update handles values reflections. '
+      + 'Concerns: create_concern/list_concerns/resolve_concern/transition_concern tracks short-term follow-ups, checkups, reminders, and open threads. '
+      + 'Use exact concernId values from create_concern or list_concerns when resolving or transitioning.',
     parameters: Type.Object({
       action: Type.Unsafe<OrientAction>({
         type: 'string',
@@ -188,7 +183,9 @@ export function createOrientTool(
         description: 'Orientation block label for append/replace: persona, human, or goals.',
       })),
       text: Type.Optional(Type.String({
-        description: 'Block text for append or replace actions, or concern text for action=create_concern.',
+        description:
+          'Block text for append or replace actions, or concern text for action=create_concern. '
+          + 'Create a concern in the same turn when deciding to follow up later, ask again tomorrow, reach out tonight, or track a short-term open thread.',
       })),
       separator: Type.Optional(
         Type.String({

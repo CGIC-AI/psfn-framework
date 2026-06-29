@@ -32,6 +32,10 @@ describe('contact tools', () => {
       expect(tool.name).toBe('contact');
       expect(tool.label).toBe('contact');
       expect(tool.description).toContain('Unified contact surface');
+      expect(tool.description).toContain('action=search with query');
+      expect(tool.description).toContain('action=lookup with exact contactId');
+      expect((tool.parameters as any).properties.action.anyOf.map((entry: { const: string }) => entry.const)).toContain('search');
+      expect((tool.parameters as any).properties.query.description).toContain('Required for action=search');
       expect(tool.parameters).toBeDefined();
       expect(typeof tool.execute).toBe('function');
     });
@@ -76,6 +80,7 @@ describe('contact tools', () => {
       };
 
       expect(tool.requiredCapability?.({ action: 'list' })).toBe('identity.read');
+      expect(tool.requiredCapability?.({ action: 'search', query: 'grace' })).toBe('identity.read');
       expect(tool.requiredCapability?.({ action: 'lookup', contactId: 'contact-1' })).toBe('identity.read');
       expect(tool.requiredCapability?.({ action: 'note', contactId: 'contact-1', notes: 'x' })).toBe('identity.write.runtime');
       expect(tool.requiredCapability?.({ action: 'set_trust', contactId: 'contact-1', trustLevel: 'public' })).toBe('identity.write.runtime');
@@ -118,6 +123,42 @@ describe('contact tools', () => {
       });
 
       expect(resultText(result)).toContain('action is required');
+      expect(result.details?.isError).toBe(true);
+    });
+
+    it('searches contacts separately from list and lookup and returns exact contactIds', async () => {
+      const grace = store.upsert({
+        displayName: 'Grace Hopper',
+        nickname: 'Amazing Grace',
+        notes: 'Compiler history and navy stories',
+        channelIdentities: [{ channel: 'discord', userId: 'grace-discord' }],
+      });
+      store.upsert({ displayName: 'Ada Lovelace', notes: 'Analytical engine notes' });
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-search', {
+        action: 'search',
+        query: 'compiler discord',
+      });
+      const text = resultText(result);
+
+      expect(text).toContain('Contact search results for "compiler discord" (1)');
+      expect(text).toContain(`${grace.id}: Amazing Grace [regular/stranger]`);
+      expect(text).toContain('discord:grace-discord');
+      expect(text).toContain('Pass an exact contactId from these results to action=lookup');
+    });
+
+    it('names missing search query and gives a minimal valid example', async () => {
+      const tool = createContactTool(store);
+
+      const result = await tool.execute('contact-search-missing-query', {
+        action: 'search',
+      });
+      const text = resultText(result);
+
+      expect(text).toContain('Missing required field "query" for action=search');
+      expect(text).toContain('Minimal valid JSON: {"action":"search","query":"name, handle, channel, or note text"}');
+      expect(text).toContain('do not retry action=search without a non-empty query');
       expect(result.details?.isError).toBe(true);
     });
   });

@@ -45,11 +45,8 @@ const SELFIE_EDIT_MODEL_CHAIN = [
 ] as const satisfies readonly typeof FAL_EDIT_MODELS[number][];
 
 const SELFIE_EDIT_MODEL_DESCRIPTION = [
-  'Starting edit-model tier for the reference selfie.',
-  'Tiers, strictest first: openai/gpt-image-2/edit (highest fidelity, strictest content filter, slow - can take minutes),',
-  'fal-ai/nano-banana-2/edit (fast, strong fidelity), xai/grok-imagine-image/quality/edit (most permissive filter).',
-  'On a content-policy block or timeout the tool automatically falls through to the next tier, always keeping the reference image.',
-  'For casual but filter-sensitive looks (swimwear, beachwear, tank tops, fitted or shoulder-baring outfits), start directly at fal-ai/nano-banana-2/edit or xai/grok-imagine-image/quality/edit instead of waiting out a gpt-image false-positive block.',
+  'Optional reference-edit model override for selfie_create.',
+  'Usually omit this; the tool chooses a reference-preserving edit path and keeps the saved reference image anchored.',
 ].join(' ');
 
 function resolveSelfieEditModelChain(
@@ -228,7 +225,7 @@ function resolveCurrentTurnVisionReviewFallback(
 
 function buildImageCreateDescription(selfImage: boolean): string {
   if (selfImage) {
-    return 'Generate a dedicated selfie or self-portrait of the companion; the result does not have to be a literal selfie angle - any portrait of her works. Use this explicit path when the request is specifically about her own representation; the always-on appearance context is the identity anchor, and this tool adds the self-image reference workflow. When a default reference photo is configured, use_reference_image=true anchors her likeness; set use_reference_image=false only when the user explicitly wants no saved reference. Use reference_image_id or reference_image_tags to choose a different saved reference. If the provider blocks the request for content policy, report the block and ask for a safer non-explicit direction instead of retrying minor prompt variants. Successful generations return a vision review of the produced image.';
+    return 'Generate a dedicated selfie or self-portrait of the companion. Requires prompt. Use this path for her own representation so appearance context and saved-reference anchoring are active. Default behavior uses the configured reference photo; set use_reference_image=false only when the user explicitly wants no saved reference, or use reference_image_id/reference_image_tags to choose one. Results include a vision review.';
   }
   return 'Generate a new image. Write the prompt as the full image you want to create, including subject, framing, pose, lighting, setting, mood, and style. For selfies or self-portraits, use the first-class selfie_create tool instead of this generic path. Common aspect ratios: 1:1, 3:4, 9:16, 4:3, 16:9. Successful generations also return a vision review of the produced image, so use that instead of asking the user to check whether it looks like you unless you need their aesthetic preference.';
 }
@@ -465,7 +462,11 @@ async function executeMediaGenerate(
 ): Promise<AgentToolResult<MediaToolResultDetails>> {
   const prompt = normalizePrompt(params.prompt);
   if (!prompt) {
-    return textResultWithError('media action "generate" requires a non-empty prompt', true);
+    return textResultWithError(
+      'Missing required field "prompt" for media action="generate". '
+      + 'Minimal valid JSON: {"action":"generate","prompt":"full image description"}.',
+      true,
+    );
   }
 
   try {
@@ -524,12 +525,20 @@ async function executeMediaEdit(
 ): Promise<AgentToolResult<MediaToolResultDetails>> {
   const prompt = normalizePrompt(params.prompt);
   if (!prompt) {
-    return textResultWithError('media action "edit" requires a non-empty prompt', true);
+    return textResultWithError(
+      'Missing required field "prompt" for media action="edit". '
+      + 'Minimal valid JSON: {"action":"edit","prompt":"edit instruction","input_urls":["https://example.test/image.png"]}.',
+      true,
+    );
   }
 
   const inputUrls = normalizeInputUrls(params.input_urls);
   if (inputUrls.length === 0) {
-    return textResultWithError('media action "edit" requires at least one input URL', true);
+    return textResultWithError(
+      'Missing required field "input_urls" for media action="edit"; provide at least one image URL. '
+      + 'Minimal valid JSON: {"action":"edit","prompt":"edit instruction","input_urls":["https://example.test/image.png"]}.',
+      true,
+    );
   }
 
   try {
@@ -592,7 +601,11 @@ async function executeMediaAnalyze(
 
   const inputUrls = normalizeInputUrls(params.input_urls);
   if (inputUrls.length === 0) {
-    return textResultWithError('media action "analyze" requires at least one input URL', true);
+    return textResultWithError(
+      'Missing required field "input_urls" for media action="analyze"; provide at least one image URL. '
+      + 'Minimal valid JSON: {"action":"analyze","input_urls":["https://example.test/image.png"]}.',
+      true,
+    );
   }
 
   try {
@@ -646,7 +659,9 @@ export function createMediaTool(
     name: 'media',
     label: 'media',
     description:
-      'Unified media surface for generate, edit, and analyze actions. Use action="generate" for new image outputs, action="edit" to transform existing inputs, and action="analyze" to inspect visible contents. For selfies, portraits, or self-representation, use the first-class selfie_create tool so the self-expression reference workflow is active. Current implementation is image-backed.',
+      'Unified media surface for image generate, edit, and analyze actions. generate requires prompt. '
+      + 'edit requires prompt and input_urls. analyze requires input_urls and can include question. '
+      + 'For selfies, portraits, or self-representation, use selfie_create so the self-expression reference workflow is active.',
     parameters: Type.Object({
       action: Type.Union(
         MEDIA_ACTION_VALUES.map((value) => Type.Literal(value)),
@@ -655,12 +670,12 @@ export function createMediaTool(
         },
       ),
       prompt: Type.Optional(Type.String({
-        description: 'Instruction text for generate or edit actions.',
+        description: 'Required for action=generate or action=edit. Full generation prompt or edit instruction.',
       })),
       input_urls: Type.Optional(Type.Array(Type.String(), {
         minItems: 1,
         maxItems: 4,
-        description: 'Source media URLs for edit or analyze. Current implementation expects image URLs.',
+        description: 'Required for action=edit or action=analyze. Source image URLs.',
       })),
       question: Type.Optional(Type.String({
         description: 'Optional analysis question. If omitted, the tool returns a concise visible-contents review.',

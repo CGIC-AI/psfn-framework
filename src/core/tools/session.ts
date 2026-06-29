@@ -484,8 +484,10 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
     name: 'session',
     label: 'session',
     description:
-      'Unified session continuity surface for list/search/grep/new/resume/wake_return and focus workflow actions. '
-      + `Use action=${SESSION_TOOL_ACTION_HELP}.`,
+      'Unified session continuity surface. Orientation: action=list returns exact sessionId values; action=search requires query; action=grep requires pattern. '
+      + 'Context switching: action=new starts a fresh session; action=resume requires a sessionId from list/search, not preview text. '
+      + 'Continuity: action=wake_return requires summary and can include nextAnchor/facets. Focus workflow: start_focus requires scope; complete_focus can include conclusion. '
+      + `Actions: ${SESSION_TOOL_ACTION_HELP}.`,
     parameters: Type.Object({
       action: Type.Optional(Type.Union(SESSION_TOOL_ACTION_NAMES.map((action) => Type.Literal(action)), {
         description:

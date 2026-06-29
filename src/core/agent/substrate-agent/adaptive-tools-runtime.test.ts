@@ -248,6 +248,15 @@ describe('createToolsetTool', () => {
     };
   }
 
+  it('describes list-first activation and required tools array', () => {
+    const toolset = createBaseToolset();
+
+    expect(toolset.description).toContain('Use action=list to see valid extended tool names');
+    expect(toolset.description).toContain('action=suggest with intent');
+    expect(toolset.description).toContain('action=activate requires tools as an array');
+    expect((toolset as any).parameters.properties.tools.description).toContain('Tool names to activate');
+  });
+
   it('suggests distinct session, web, and filesystem actions for confusing search/read intents', async () => {
     const coreTools = [
       createActionTool(

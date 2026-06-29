@@ -7,6 +7,10 @@ function parseText(result: Awaited<ReturnType<ReturnType<typeof createSubagentTo
   return JSON.parse(result.content[0]?.text ?? '{}');
 }
 
+function resultText(result: Awaited<ReturnType<ReturnType<typeof createSubagentTool>['execute']>>): string {
+  return result.content.map(entry => entry.text).join('');
+}
+
 function createPort(): SubagentControlPort {
   return {
     portFamily: 'subagent',
@@ -139,6 +143,9 @@ describe('createSubagentTool', () => {
     const tool = createSubagentTool(createPort());
 
     expect((tool.parameters as any).properties.max_turns.maximum).toBe(16);
+    expect(tool.description).toContain('action=spawn requires name and task');
+    expect(tool.description).toContain('action=message requires subagent_id and message');
+    expect(tool.description).toContain('Use status without subagent_id');
   });
 
   it('routes spawn requests through the bounded subagent control surface', async () => {
@@ -265,5 +272,29 @@ describe('createSubagentTool', () => {
     expect(resolveToolRequiredCapabilities(tool, { action: 'cancel' })).toEqual(['shard.spawn']);
     expect(resolveToolRequiredCapabilities(tool, { action: 'status' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(tool, { action: 'wait' })).toEqual(['identity.read']);
+  });
+
+  it('returns minimal valid JSON examples for missing spawn and message arguments', async () => {
+    const tool = createSubagentTool(createPort());
+
+    const missingSpawnName = await tool.execute('call-missing-spawn-name', {
+      action: 'spawn',
+      task: 'inspect runtime state',
+    });
+    const missingMessageText = await tool.execute('call-missing-message-text', {
+      action: 'message',
+      subagent_id: 'subagent-1',
+    });
+    const missingMessageId = await tool.execute('call-missing-message-id', {
+      action: 'message',
+      message: 'please continue',
+    });
+
+    expect(resultText(missingSpawnName)).toContain('Missing required field "name"');
+    expect(resultText(missingSpawnName)).toContain('{"action":"spawn","name":"short-label","task":"bounded task to run"}');
+    expect(resultText(missingMessageText)).toContain('Missing required field "message"');
+    expect(resultText(missingMessageText)).toContain('{"action":"message","subagent_id":"subagent-1","message":"follow-up instruction"}');
+    expect(resultText(missingMessageId)).toContain('Missing required field "subagent_id"');
+    expect(resultText(missingMessageId)).toContain('Use the id returned by action=spawn or action=status');
   });
 });

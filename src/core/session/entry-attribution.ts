@@ -49,7 +49,7 @@ function formatStableAuthorId(input: GroupUserAttributionInput): string {
   return `${source}:${authorId}`;
 }
 
-export function formatGroupUserAttributionLabel(input: GroupUserAttributionInput): string {
+function formatGroupUserAttributionLabel(input: GroupUserAttributionInput): string {
   const stableAuthorId = formatStableAuthorId(input);
   const displayName = trimToUndefined(input.authorName) ?? stableAuthorId;
   return `${displayName} (${stableAuthorId})`;

@@ -867,6 +867,14 @@ export async function handleMessageForTurn(
       : await collectTurnResponseAttachments({
           runtime,
           turnMessages,
+          galleryContext: {
+            channelId: message.channelId,
+            channelType: message.channelType,
+            turnId,
+            requestId,
+            sourceMessageId: message.id,
+            ...(userSessionEntryId !== null ? { userSessionEntryId } : {}),
+          },
         });
 
     if (!broadcastSafetyMeta?.approvalRequired && !noReplyDecision) {

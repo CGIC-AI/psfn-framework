@@ -4,7 +4,14 @@ import { handleMultipartUpload } from '../multipart.js';
 import { parseAdminJsonBody } from '../request-body.js';
 import { parseRequestUrl } from '../request-url.js';
 import { exactPath, paramWithSuffix, prefixedParamPath } from '../route-matchers.js';
-import type { AdminImagesService } from '../services/types.js';
+import type {
+  AdminGeneratedImageArtifactRef,
+  AdminGeneratedImageCompanionNoteRef,
+  AdminGeneratedImageConversationLink,
+  AdminGeneratedImageListQuery,
+  AdminGeneratedImageUpdateInput,
+  AdminImagesService,
+} from '../services/types.js';
 import type { AdminAuditDecision } from '../types.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
@@ -26,6 +33,30 @@ function parseReferenceTagsQuery(value: string | null): string[] {
   return value?.split(',').map((tag) => tag.trim()).filter(Boolean) ?? [];
 }
 
+function parseBooleanQuery(value: string | null): boolean | undefined {
+  if (value === null) return undefined;
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes'].includes(normalized)) return true;
+  if (['0', 'false', 'no'].includes(normalized)) return false;
+  return undefined;
+}
+
+function parseGeneratedImagesQuery(req: Parameters<AdminApiRoute['handle']>[0]): AdminGeneratedImageListQuery {
+  const url = parseRequestUrl(req, '/api/admin/images/generated');
+  return {
+    ...(parseReferenceTagsQuery(url.searchParams.get('tags')).length > 0
+      ? { tags: parseReferenceTagsQuery(url.searchParams.get('tags')) }
+      : {}),
+    ...(parseBooleanQuery(url.searchParams.get('favorite')) !== undefined
+      ? { favorite: parseBooleanQuery(url.searchParams.get('favorite')) }
+      : {}),
+    ...(parseBooleanQuery(url.searchParams.get('meaningful')) !== undefined
+      ? { meaningful: parseBooleanQuery(url.searchParams.get('meaningful')) }
+      : {}),
+    ...(url.searchParams.get('q')?.trim() ? { search: url.searchParams.get('q')!.trim() } : {}),
+  };
+}
+
 function parseSetDefaultQuery(value: string | null): boolean {
   return value === '1' || value === 'true' || value === 'yes';
 }
@@ -33,6 +64,96 @@ function parseSetDefaultQuery(value: string | null): boolean {
 function statusFromReferenceError(error: unknown): number {
   const message = error instanceof Error ? error.message : String(error);
   return message.includes('not found') ? 404 : 400;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function parseConversationLink(value: unknown): AdminGeneratedImageConversationLink | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  return {
+    ...(stringValue(record.channelId) !== undefined ? { channelId: stringValue(record.channelId) } : {}),
+    ...(stringValue(record.channelType) !== undefined ? { channelType: stringValue(record.channelType) } : {}),
+    ...(stringValue(record.turnId) !== undefined ? { turnId: stringValue(record.turnId) } : {}),
+    ...(stringValue(record.requestId) !== undefined ? { requestId: stringValue(record.requestId) } : {}),
+    ...(stringValue(record.sourceMessageId) !== undefined ? { sourceMessageId: stringValue(record.sourceMessageId) } : {}),
+    ...(numberValue(record.userSessionEntryId) !== undefined ? { userSessionEntryId: numberValue(record.userSessionEntryId) } : {}),
+    ...(numberValue(record.assistantSessionEntryId) !== undefined ? { assistantSessionEntryId: numberValue(record.assistantSessionEntryId) } : {}),
+  };
+}
+
+function parseCompanionNoteRefs(value: unknown): AdminGeneratedImageCompanionNoteRef[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .filter((entry): entry is Record<string, unknown> => (
+      entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+    ))
+    .map((entry) => ({
+      ...(stringValue(entry.id) !== undefined ? { id: stringValue(entry.id)! } : { id: '' }),
+      ...(stringValue(entry.label) !== undefined ? { label: stringValue(entry.label) } : {}),
+      ...(stringValue(entry.url) !== undefined ? { url: stringValue(entry.url) } : {}),
+    }))
+    .filter((entry) => entry.id.trim().length > 0);
+}
+
+function parseArtifactRefs(value: unknown): AdminGeneratedImageArtifactRef[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .filter((entry): entry is Record<string, unknown> => (
+      entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+    ))
+    .map((entry) => ({
+      kind: entry.kind,
+      ...(stringValue(entry.refId) !== undefined ? { refId: stringValue(entry.refId) } : {}),
+      ...(stringValue(entry.label) !== undefined ? { label: stringValue(entry.label) } : {}),
+      ...(stringValue(entry.url) !== undefined ? { url: stringValue(entry.url) } : {}),
+      ...(stringValue(entry.localPath) !== undefined ? { localPath: stringValue(entry.localPath) } : {}),
+    }))
+    .filter((entry): entry is AdminGeneratedImageArtifactRef => (
+      entry.kind === 'generated_image'
+      || entry.kind === 'shared_image'
+      || entry.kind === 'conversation_turn'
+      || entry.kind === 'companion_note'
+      || entry.kind === 'l0_artifact'
+    ));
+}
+
+function parseGeneratedImageUpdatePayload(payload: Record<string, unknown>): AdminGeneratedImageUpdateInput {
+  const meaningfulMoment = payload.meaningfulMoment;
+  const parsedMeaningfulMoment = meaningfulMoment !== undefined
+    && meaningfulMoment !== null
+    && typeof meaningfulMoment === 'object'
+    && !Array.isArray(meaningfulMoment)
+    ? meaningfulMoment as Record<string, unknown>
+    : undefined;
+  return {
+    ...(typeof payload.favorite === 'boolean' ? { favorite: payload.favorite } : {}),
+    ...(Array.isArray(payload.tags)
+      ? { tags: payload.tags.filter((tag): tag is string => typeof tag === 'string') }
+      : {}),
+    ...(parsedMeaningfulMoment
+      && typeof parsedMeaningfulMoment.marked === 'boolean'
+      ? {
+          meaningfulMoment: {
+            marked: parsedMeaningfulMoment.marked,
+            ...(stringValue(parsedMeaningfulMoment.note) !== undefined ? { note: stringValue(parsedMeaningfulMoment.note) } : {}),
+          },
+        }
+      : {}),
+    ...(payload.conversation !== undefined ? { conversation: parseConversationLink(payload.conversation) ?? {} } : {}),
+    ...(parseCompanionNoteRefs(payload.companionNoteRefs) !== undefined
+      ? { companionNoteRefs: parseCompanionNoteRefs(payload.companionNoteRefs) }
+      : {}),
+    ...(parseArtifactRefs(payload.artifactRefs) !== undefined
+      ? { artifactRefs: parseArtifactRefs(payload.artifactRefs) }
+      : {}),
+  };
 }
 
 export function buildAdminImageRoutes(options: {
@@ -54,8 +175,8 @@ export function buildAdminImageRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/images/generated'),
-      handle: (_req, res) => {
-        imagesService.listGeneratedImages().then(
+      handle: (req, res) => {
+        imagesService.listGeneratedImages(parseGeneratedImagesQuery(req)).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list generated images') }),
         );
@@ -75,6 +196,30 @@ export function buildAdminImageRoutes(options: {
           },
           error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load generated image') }),
         );
+      },
+    },
+    {
+      method: 'PATCH',
+      match: prefixedParamPath('/api/admin/images/generated/', 'id'),
+      handle: (req, res, { id }) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          if (parsed.value === null || typeof parsed.value !== 'object' || Array.isArray(parsed.value)) {
+            sendJson(res, 400, { error: 'Generated image update payload must be a JSON object' });
+            return;
+          }
+          imagesService.updateGeneratedImage(id, parseGeneratedImageUpdatePayload(parsed.value as Record<string, unknown>)).then(
+            image => sendJson(res, 200, { ok: true, image }, ADMIN_DYNAMIC_JSON_HEADERS),
+            error => {
+              const safeError = toSanitizedMessage(error, 'Failed to update generated image');
+              sendJson(res, safeError.includes('not found') ? 404 : 400, { error: safeError });
+            },
+          );
+        });
       },
     },
     {

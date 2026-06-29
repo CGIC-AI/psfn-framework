@@ -23,10 +23,19 @@ describe('collectGeneratedImageAttachments', () => {
 
     const attachments = await collectGeneratedImageAttachments({
       companionDataDir,
+      galleryContext: {
+        channelId: 'discord:gallery',
+        channelType: 'discord',
+        turnId: 'turn-gallery-1',
+        requestId: 'turn-request-1',
+        sourceMessageId: 'message-gallery-1',
+        userSessionEntryId: 42,
+      },
       turnMessages: [
         {
           role: 'toolResult',
           toolName: 'selfie_create',
+          toolCallId: 'call-gallery-1',
           content: [{
             type: 'text',
             text: JSON.stringify({
@@ -62,6 +71,36 @@ describe('collectGeneratedImageAttachments', () => {
     expect(attachments[0]?.localPath).toBeTruthy();
     expect(existsSync(attachments[0]!.localPath!)).toBe(true);
     expect(readFileSync(attachments[0]!.localPath!)).toEqual(Buffer.from('png-bytes'));
+    const metadata = JSON.parse(readFileSync(`${attachments[0]!.localPath!}.image-meta.json`, 'utf-8')) as {
+      sourceToolName: string;
+      toolCallId: string;
+      requestId: string;
+      originalUrl: string;
+      conversation: {
+        channelId: string;
+        turnId: string;
+        userSessionEntryId: number;
+      };
+      artifactRefs: Array<{ kind: string; url: string; localPath: string }>;
+    };
+    expect(metadata).toMatchObject({
+      sourceToolName: 'selfie_create',
+      toolCallId: 'call-gallery-1',
+      requestId: 'req-123',
+      originalUrl: 'https://images.example.test/purr.png',
+      conversation: {
+        channelId: 'discord:gallery',
+        turnId: 'turn-gallery-1',
+        userSessionEntryId: 42,
+      },
+    });
+    expect(metadata.artifactRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'shared_image',
+        url: 'https://images.example.test/purr.png',
+        localPath: attachments[0]!.localPath,
+      }),
+    ]));
   });
 
   it('uses structured media tool details when available', async () => {

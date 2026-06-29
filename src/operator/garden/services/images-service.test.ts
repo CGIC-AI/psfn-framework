@@ -57,6 +57,97 @@ describe('AdminImagesDataService', () => {
     expect(blob?.data).toEqual(readFileSync(imagePath));
   });
 
+  it('persists gallery favorites, tags, meaningful markers, and filters across service instances', async () => {
+    const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-images-companion-'));
+    const workspacePath = mkdtempSync(join(tmpdir(), 'psfn-images-workspace-'));
+    tempDirs.push(companionDataDir, workspacePath);
+    const personalImagesDir = join(resolvePersonalImagesDir(workspacePath), '2026-05-25');
+    await mkdir(personalImagesDir, { recursive: true });
+    const firstPath = join(personalImagesDir, 'first.png');
+    const secondPath = join(personalImagesDir, 'second.png');
+    writeFileSync(firstPath, Buffer.from([1, 2, 3]));
+    writeFileSync(secondPath, Buffer.from([4, 5, 6]));
+    writeFileSync(`${firstPath}.image-meta.json`, JSON.stringify({
+      schemaVersion: 1,
+      createdAt: '2026-05-25T10:00:00.000Z',
+      prompt: 'first portrait',
+      requestId: 'req-first',
+      originalUrl: 'https://images.example.test/first.png',
+    }));
+    writeFileSync(`${secondPath}.image-meta.json`, JSON.stringify({
+      schemaVersion: 1,
+      createdAt: '2026-05-25T11:00:00.000Z',
+      prompt: 'second landscape',
+      requestId: 'req-second',
+    }));
+
+    const service = new AdminImagesDataService({
+      companionDataDir,
+      config: { workspacePath } as any,
+    });
+    const first = (await service.listGeneratedImages()).images.find((image) => image.fileName === 'first.png');
+    expect(first).toBeDefined();
+
+    const updated = await service.updateGeneratedImage(first!.id, {
+      favorite: true,
+      tags: ['Portrait', 'meaningful', 'Portrait'],
+      meaningfulMoment: { marked: true, note: 'A warm conversation moment.' },
+      conversation: {
+        channelId: 'discord:gallery',
+        channelType: 'discord',
+        turnId: 'turn-gallery-1',
+        requestId: 'req-turn-gallery',
+        sourceMessageId: 'message-gallery-1',
+        userSessionEntryId: 100,
+      },
+      companionNoteRefs: [{ id: 'wiki:gallery-note', label: 'Gallery note', url: '/wiki/gallery-note' }],
+      artifactRefs: [{ kind: 'l0_artifact', refId: 'artifact-gallery-note', label: 'Episode artifact' }],
+    });
+
+    expect(updated.favorite).toBe(true);
+    expect(updated.tags).toEqual(['portrait', 'meaningful']);
+    expect(updated.meaningfulMoment).toMatchObject({
+      marked: true,
+      note: 'A warm conversation moment.',
+      conversation: {
+        channelId: 'discord:gallery',
+        turnId: 'turn-gallery-1',
+      },
+    });
+    expect(updated.companionNoteRefs).toEqual([
+      { id: 'wiki:gallery-note', label: 'Gallery note', url: '/wiki/gallery-note' },
+    ]);
+    expect(updated.artifactRefs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'generated_image', localPath: firstPath }),
+      expect.objectContaining({ kind: 'shared_image', url: 'https://images.example.test/first.png' }),
+      expect.objectContaining({ kind: 'l0_artifact', refId: 'artifact-gallery-note' }),
+    ]));
+
+    const persistedMetadata = JSON.parse(readFileSync(`${firstPath}.image-meta.json`, 'utf-8')) as {
+      favorite: boolean;
+      tags: string[];
+      meaningfulMoment: { marked: boolean; note: string };
+      companionNoteRefs: Array<{ id: string }>;
+    };
+    expect(persistedMetadata.favorite).toBe(true);
+    expect(persistedMetadata.tags).toEqual(['portrait', 'meaningful']);
+    expect(persistedMetadata.meaningfulMoment).toMatchObject({
+      marked: true,
+      note: 'A warm conversation moment.',
+    });
+    expect(persistedMetadata.companionNoteRefs).toEqual([expect.objectContaining({ id: 'wiki:gallery-note' })]);
+
+    const reloaded = new AdminImagesDataService({
+      companionDataDir,
+      config: { workspacePath } as any,
+    });
+    expect((await reloaded.listGeneratedImages({ favorite: true })).images.map((image) => image.fileName)).toEqual(['first.png']);
+    expect((await reloaded.listGeneratedImages({ tags: ['portrait'] })).images.map((image) => image.fileName)).toEqual(['first.png']);
+    expect((await reloaded.listGeneratedImages({ meaningful: true, search: 'warm conversation' })).images.map((image) => image.fileName)).toEqual(['first.png']);
+    expect((await reloaded.listGeneratedImages({ tags: ['missing'] })).images).toEqual([]);
+    expect((await reloaded.listGeneratedImages({ favorite: false })).images.map((image) => image.fileName)).toEqual(['second.png']);
+  });
+
   it('stores, updates, defaults, and deletes identity reference photos', async () => {
     const companionDataDir = mkdtempSync(join(tmpdir(), 'psfn-ref-companion-'));
     tempDirs.push(companionDataDir);

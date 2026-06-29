@@ -720,6 +720,7 @@ function makeServices(): GardenAdminDomainServices {
     images: {
       listGeneratedImages: async () => ({ roots: [], images: [] }),
       getGeneratedImageBlob: async () => null,
+      updateGeneratedImage: async () => { throw new Error('not used in smoke'); },
       listReferencePhotos: async () => ({ roots: [], photos: [] } as never),
       addReferencePhoto: async () => { throw new Error('not used in smoke'); },
       updateReferencePhoto: async () => { throw new Error('not used in smoke'); },

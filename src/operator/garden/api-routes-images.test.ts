@@ -62,12 +62,42 @@ function makeImagesService(): AdminImagesService {
         createdAt: '2026-05-24T00:00:00.000Z',
         updatedAt: '2026-05-24T00:00:00.000Z',
         sourceToolName: 'selfie_create',
+        favorite: false,
+        tags: ['portrait'],
+        companionNoteRefs: [],
+        artifactRefs: [{
+          kind: 'generated_image',
+          refId: '2026-05-24/image.png',
+          url: '/api/admin/images/generated/img-1/blob',
+          localPath: '/workspace/images/2026-05-24/image.png',
+        }],
       }],
     })),
     getGeneratedImageBlob: vi.fn(async () => ({
       fileName: 'image.png',
       contentType: 'image/png',
       data: Buffer.from([1, 2, 3, 4]),
+    })),
+    updateGeneratedImage: vi.fn(async (id) => ({
+      id,
+      url: `/api/admin/images/generated/${id}/blob`,
+      rootKind: 'personal',
+      relativePath: '2026-05-24/image.png',
+      fileName: 'image.png',
+      contentType: 'image/png',
+      sizeBytes: 4,
+      createdAt: '2026-05-24T00:00:00.000Z',
+      updatedAt: '2026-05-24T01:00:00.000Z',
+      sourceToolName: 'selfie_create',
+      favorite: true,
+      tags: ['portrait', 'keeper'],
+      meaningfulMoment: {
+        marked: true,
+        markedAt: '2026-05-24T01:00:00.000Z',
+        note: 'operator marked it',
+      },
+      companionNoteRefs: [],
+      artifactRefs: [],
     })),
     listReferencePhotos: vi.fn(async () => ({
       defaultReferenceId: 'ref-1',
@@ -159,8 +189,18 @@ describe('image admin API routes', () => {
     const imagesService = makeImagesService();
     const routes = makeRoutes(imagesService);
 
-    const listResponse = await invokeRoute(routes, 'GET', '/api/admin/images/generated');
+    const listResponse = await invokeRoute(
+      routes,
+      'GET',
+      '/api/admin/images/generated?tags=portrait&favorite=true&meaningful=true&q=turn',
+    );
     expect(listResponse.status).toBe(200);
+    expect(imagesService.listGeneratedImages).toHaveBeenCalledWith({
+      tags: ['portrait'],
+      favorite: true,
+      meaningful: true,
+      search: 'turn',
+    });
     expect(JSON.parse(String(listResponse.body))).toMatchObject({
       images: [expect.objectContaining({ sourceToolName: 'selfie_create' })],
     });
@@ -169,6 +209,42 @@ describe('image admin API routes', () => {
     expect(blobResponse.status).toBe(200);
     expect(blobResponse.headers['Content-Type']).toBe('image/png');
     expect(blobResponse.body).toEqual(Buffer.from([1, 2, 3, 4]));
+  });
+
+  it('updates generated image gallery metadata behind admin routes', async () => {
+    const imagesService = makeImagesService();
+    const routes = makeRoutes(imagesService);
+
+    const patchResponse = await invokeRoute(
+      routes,
+      'PATCH',
+      '/api/admin/images/generated/img-1',
+      JSON.stringify({
+        favorite: true,
+        tags: ['portrait', 'keeper'],
+        meaningfulMoment: { marked: true, note: 'operator marked it' },
+        conversation: { channelId: 'discord:gallery', turnId: 'turn-gallery-1' },
+        companionNoteRefs: [{ id: 'wiki:note', label: 'Note' }],
+        artifactRefs: [{ kind: 'l0_artifact', refId: 'artifact-1' }],
+      }),
+    );
+
+    expect(patchResponse.status).toBe(200);
+    expect(imagesService.updateGeneratedImage).toHaveBeenCalledWith('img-1', {
+      favorite: true,
+      tags: ['portrait', 'keeper'],
+      meaningfulMoment: { marked: true, note: 'operator marked it' },
+      conversation: { channelId: 'discord:gallery', turnId: 'turn-gallery-1' },
+      companionNoteRefs: [{ id: 'wiki:note', label: 'Note' }],
+      artifactRefs: [{ kind: 'l0_artifact', refId: 'artifact-1' }],
+    });
+    expect(JSON.parse(String(patchResponse.body))).toMatchObject({
+      ok: true,
+      image: expect.objectContaining({
+        favorite: true,
+        tags: ['portrait', 'keeper'],
+      }),
+    });
   });
 
   it('serves and updates identity reference photo records', async () => {

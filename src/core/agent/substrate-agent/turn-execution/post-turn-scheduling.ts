@@ -36,10 +36,20 @@ interface PostTurnBackgroundTask {
 export async function collectTurnResponseAttachments(input: {
   runtime: TurnExecutionRuntime;
   turnMessages: AgentMessage[];
+  galleryContext?: {
+    channelId?: string;
+    channelType?: string;
+    turnId?: string;
+    requestId?: string;
+    sourceMessageId?: string;
+    userSessionEntryId?: number;
+    assistantSessionEntryId?: number;
+  };
 }): Promise<NonNullable<AgentResponse['attachments']>> {
   return collectGeneratedImageAttachments({
     turnMessages: input.turnMessages,
     companionDataDir: resolveConfiguredCompanionDataDir(input.runtime.config),
+    galleryContext: input.galleryContext,
   });
 }
 

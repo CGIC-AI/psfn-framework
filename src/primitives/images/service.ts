@@ -169,6 +169,11 @@ function buildGeneratedImageMetadata(
     ...(params?.sourceToolName ? { sourceToolName: params.sourceToolName } : {}),
     ...(params?.referenceImageIds?.length ? { referenceImageIds: params.referenceImageIds } : {}),
     sourceImageCount,
+    artifactRefs: [{
+      kind: 'shared_image',
+      refId: result.requestId ?? asset.fileName ?? asset.url,
+      url: asset.url,
+    }],
   };
 }
 

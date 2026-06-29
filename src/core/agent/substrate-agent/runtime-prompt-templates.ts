@@ -32,6 +32,7 @@ export const SELF_IMAGE_TOOL_GUIDANCE_BODY_TEMPLATE = '{{#if runtime_self_image_
 export const ANALYSIS_WORKBENCH_GUIDANCE_BODY_TEMPLATE = [
   'analysis_workbench is a large-evidence escalation surface only.',
   'Use it only for bounded multi-stage analysis of large files, codebases, logs, transcripts, datasets, or evidence sets that would overload the main conversation context.',
+  'On parent turns, delegate large-evidence analysis to a bounded subagent or shard; analysis_workbench is available inside worker contexts.',
   'Do not use analysis_workbench for routine orient actions, concern maintenance, scheduler or schedule work, simple lookup, simple file/session inspection, tool discovery, missing schemas, ordinary replies, or routine state changes.',
   'For routine workflows, use direct active tools instead: orient for persona/human/goals/values/concerns, schedule for scheduler operations, session or memory tools for conversation/memory lookup, and repo/filesystem tools for basic inspection.',
 ].join('\n');

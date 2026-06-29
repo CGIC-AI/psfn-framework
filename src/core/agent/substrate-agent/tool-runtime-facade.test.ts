@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '@mariozechner/pi-agent-core';
 import { ToolRuntimeFacade } from './tool-runtime-facade.js';
+import { createWorkerExecutionPolicy, SUBAGENT_WORKER_LANE } from '../worker-lanes.js';
 
 function makeTool(name: string, execute = vi.fn(async () => ({
   content: [{ type: 'text', text: `${name} ok` }],
@@ -96,7 +97,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     ]));
   });
 
-  it('leaves the core tool set unchanged for non-maintenance turns', () => {
+  it('routes analysis_workbench away from non-worker parent turns', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade(null);
     facade.registerTool(makeTool('identity'), 'core');
     facade.registerTool(makeTool('system'), 'core');
@@ -116,10 +117,14 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, undefined, 'chat', correlation, { intent: null, skipped: [] });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    expect(tools.map(tool => tool.name)).toEqual(['analysis_workbench', 'contact', 'identity', 'session', 'subagent', 'system']);
-    expect(emitTelemetry).not.toHaveBeenCalledWith(
+    expect(tools.map(tool => tool.name)).toEqual(['contact', 'identity', 'session', 'subagent', 'system']);
+    expect(emitTelemetry).toHaveBeenCalledWith(
       'agent.tools.core_guardrail.skipped',
-      expect.anything(),
+      expect.objectContaining({
+        toolName: 'analysis_workbench',
+        reason: 'analysis_workbench_worker_context_required',
+        recommendation: 'delegate_large_evidence_analysis_to_subagent_or_shard',
+      }),
     );
   });
 
@@ -180,8 +185,8 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     );
   });
 
-  it('keeps analysis_workbench available for explicit large-evidence turns', () => {
-    const { facade, agent, correlation } = createFacade(null);
+  it('requires delegation for explicit large-evidence parent turns', () => {
+    const { facade, agent, emitTelemetry, correlation } = createFacade(null);
     facade.registerTool(makeTool('session'), 'core');
     facade.registerTool(makeTool('analysis_workbench'), 'core');
 
@@ -196,7 +201,44 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, undefined, 'chat', correlation, { intent: 'memory', skipped: [] });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    expect(tools.map(tool => tool.name)).toEqual(['session']);
+    expect(emitTelemetry).toHaveBeenCalledWith(
+      'agent.tools.core_guardrail.skipped',
+      expect.objectContaining({
+        toolName: 'analysis_workbench',
+        intent: 'memory',
+        reason: 'analysis_workbench_worker_context_required',
+      }),
+    );
+  });
+
+  it('keeps analysis_workbench available inside worker contexts', () => {
+    const { facade, agent, emitTelemetry, correlation } = createFacade(null);
+    facade.registerTool(makeTool('session'), 'core');
+    facade.registerTool(makeTool('analysis_workbench'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-worker-large-evidence-1',
+      channelId: 'subagent:analysis',
+      channelType: 'api',
+      authorId: 'system:subagent-task',
+      authorName: 'Subagent Task',
+      content: 'Analyze this large transcript and evidence set.',
+      routing: {
+        workerExecution: createWorkerExecutionPolicy(SUBAGENT_WORKER_LANE),
+      },
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    }, undefined, 'background', correlation, { intent: 'memory', skipped: [] });
+
+    const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
     expect(tools.map(tool => tool.name)).toEqual(['analysis_workbench', 'session']);
+    expect(emitTelemetry).not.toHaveBeenCalledWith(
+      'agent.tools.core_guardrail.skipped',
+      expect.objectContaining({
+        toolName: 'analysis_workbench',
+        reason: 'analysis_workbench_worker_context_required',
+      }),
+    );
   });
 
   it('removes visual tools from audio-only satellite turns', () => {

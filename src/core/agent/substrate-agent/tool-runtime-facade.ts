@@ -66,6 +66,7 @@ import {
   buildRuntimeToolCatalogEntry,
   type RuntimeToolCatalogSnapshot,
 } from '../tool-catalog.js';
+import { resolveTurnWorkerExecutionPolicy } from './model-runtime.js';
 
 interface ToolRuntimeFacadeOptions {
   config: SubstrateConfig;
@@ -140,6 +141,10 @@ function explicitlyRequestsLargeEvidenceAnalysis(content: string): boolean {
     || /\blarge[-\s]context\b/i.test(content)
     || /\blarge\s+(file|files|codebase|codebases|log|logs|transcript|transcripts|dataset|datasets|evidence\s+set|evidence)\b/i.test(content)
     || /\bmulti[-\s]stage\s+analysis\b/i.test(content);
+}
+
+function isWorkerExecutionTurn(message: SubstrateMessage): boolean {
+  return resolveTurnWorkerExecutionPolicy(message) !== null;
 }
 
 function resolveMaintenanceIdentityAction(params: Record<string, unknown>): string | null {
@@ -500,8 +505,15 @@ export class ToolRuntimeFacade {
       autoloadOutcome.intent,
       correlation,
     );
-    const satelliteResolution = this.applySatelliteCapabilityToolPolicy(
+    const workerScopedResolution = this.applyAnalysisWorkbenchWorkerContextPolicy(
       resolution,
+      message,
+      taskKind,
+      autoloadOutcome.intent,
+      correlation,
+    );
+    const satelliteResolution = this.applySatelliteCapabilityToolPolicy(
+      workerScopedResolution,
       message,
       correlation,
     );
@@ -747,6 +759,77 @@ export class ToolRuntimeFacade {
           taskKind: taskKind ?? null,
           intent,
           reason: 'routine_intent_direct_tool_path',
+        });
+        continue;
+      }
+
+      filteredTools.push(tool);
+      if (source) {
+        filteredSnapshotTools.push({ toolName: tool.name, source });
+      }
+    }
+
+    if (!removed) {
+      return resolution;
+    }
+
+    const counts: AdaptiveToolSnapshotTelemetry['counts'] = {
+      core: 0,
+      promoted: 0,
+      extendedLoaded: 0,
+      autoload: 0,
+      deferred: 0,
+      total: filteredSnapshotTools.length,
+    };
+    for (const entry of filteredSnapshotTools) {
+      if (entry.source === 'core') counts.core += 1;
+      else if (entry.source === 'promoted') counts.promoted += 1;
+      else if (entry.source === 'extended_loaded') counts.extendedLoaded += 1;
+      else if (entry.source === 'autoload') counts.autoload += 1;
+      else counts.deferred += 1;
+    }
+
+    return {
+      tools: filteredTools,
+      snapshotTools: filteredSnapshotTools,
+      promotedSkipped: resolution.promotedSkipped.map(entry => ({
+        ...entry,
+        ...(entry.missingTokens ? { missingTokens: [...entry.missingTokens] } : {}),
+      })),
+      counts,
+    };
+  }
+
+  private applyAnalysisWorkbenchWorkerContextPolicy(
+    resolution: ActiveToolResolution,
+    message: SubstrateMessage,
+    taskKind: string | null | undefined,
+    intent: string | null | undefined,
+    correlation: CorrelationMetadata | null,
+  ): ActiveToolResolution {
+    if (isWorkerExecutionTurn(message)) {
+      return resolution;
+    }
+
+    const sourceByToolName = new Map(
+      resolution.snapshotTools.map((entry) => [entry.toolName, entry.source] as const),
+    );
+    const filteredTools: AgentTool<any>[] = [];
+    const filteredSnapshotTools: AdaptiveToolSnapshotTool[] = [];
+    let removed = false;
+
+    for (const tool of resolution.tools) {
+      const source = sourceByToolName.get(tool.name);
+      if (tool.name === 'analysis_workbench' && source === 'core') {
+        removed = true;
+        this.emitTelemetry('agent.tools.core_guardrail.skipped', {
+          ...this.withAdaptiveCorrelation(correlation ?? undefined, 'agent.tools.core_guardrail.skipped'),
+          toolName: tool.name,
+          taskKind: taskKind ?? null,
+          intent: intent ?? null,
+          channelId: message.channelId,
+          reason: 'analysis_workbench_worker_context_required',
+          recommendation: 'delegate_large_evidence_analysis_to_subagent_or_shard',
         });
         continue;
       }

@@ -19,6 +19,7 @@ import type { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episo
 import type { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import type { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
 import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
+import type { OutreachOutboxStore } from '../intention/outreach-outbox.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
 import type { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import type { SessionManager } from '../session/manager.js';
@@ -69,7 +70,7 @@ export interface HeartbeatRuntimeOptions {
   characterPromptVariablesProvider?: () => Record<string, string>;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
   reflectionStore?: ReflectionMetacognitionJournalStore;
-  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>;
+  sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'> & Partial<Pick<SessionManager, 'recordSystemMessage'>>;
   emotionState?: { getState(): EmotionStateSnapshot };
   contactStore?: Pick<ContactStorePort, 'getById' | 'getEmotionalSnapshot' | 'getEmotionalTimeSeries'>;
   getActiveConcerns?: (input: {
@@ -149,6 +150,7 @@ export interface HeartbeatRuntimeOptions {
   arcWeaver?: Pick<EpisodeArcWeaver, 'run'> | null;
   dreamMeaningPass?: Pick<DreamMeaningPass, 'run'> | null;
   proactiveOutbound?: Pick<ProactiveOutboundDispatcher, 'dispatch'> | null;
+  outreachOutbox?: OutreachOutboxStore | null;
   memoryMaintenanceStore?: Pick<
     MemoryStorePort,
     'upsertMemoryMaintenanceReview' | 'listActiveMemories' | 'getById' | 'getMemoryMaintenanceDiagnostics'

@@ -49,6 +49,7 @@ import {
   resolvePromptHistoryPath,
   resolvePromptLayersPath,
   resolveNorthStarPath,
+  resolveOutreachOutboxLedgerPath,
   resolvePostTurnActionQueuePath,
   resolvePromptRegistryHistoryPath,
   resolvePromptRegistryPath,
@@ -121,6 +122,7 @@ describe('persistence layout', () => {
     expect(resolveNorthStarPath(dataDir)).toBe(join(dataDir, 'state', 'north-star.json'));
     expect(resolveHeartbeatPolicyPath(dataDir)).toBe(join(dataDir, 'state', 'heartbeat-policy.json'));
     expect(resolvePostTurnActionQueuePath(dataDir)).toBe(join(dataDir, 'state', 'post-turn-actions.queue.json'));
+    expect(resolveOutreachOutboxLedgerPath(dataDir)).toBe(join(dataDir, 'state', 'outreach-outbox.jsonl'));
     expect(resolveSafeguardAuditTrailPath(dataDir)).toBe(join(dataDir, 'state', 'safeguards-audit.jsonl'));
     expect(resolveShardSessionMemorySyncAuditPath(dataDir)).toBe(
       join(dataDir, 'state', 'shard-session-memory-sync-audit.jsonl'),

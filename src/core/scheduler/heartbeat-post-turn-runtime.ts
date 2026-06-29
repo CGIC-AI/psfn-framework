@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
 import {
@@ -198,6 +199,50 @@ export function wireHeartbeatPostTurnRuntime(
     }
 
     return undefined;
+  };
+
+  const hashOutreachContent = (content: string): string => (
+    createHash('sha256').update(content).digest('hex')
+  );
+
+  const recordOutreachSessionAudit = (
+    action: { id: string; dedupeKey: string; sourceMessageId: string },
+    payload: IntentionOutboundMessageActionPayload,
+    status: 'sent' | 'blocked' | 'failed' | 'skipped',
+    detail: string,
+  ): void => {
+    if (!runtimeOptions.sessionManager?.recordSystemMessage) {
+      return;
+    }
+    try {
+      runtimeOptions.sessionManager.recordSystemMessage(
+        payload.channelId,
+        `[SYSTEM: Outreach Outbox] ${status}: ${detail}`,
+        'system:outreach-outbox',
+        'Outreach Outbox',
+        payload.channelType === 'discord',
+        undefined,
+        {
+          requestId: action.id,
+          sourceMessageId: action.sourceMessageId,
+          metadata: JSON.stringify({
+            type: 'outreach_outbox',
+            status,
+            actionId: action.id,
+            dedupeKey: action.dedupeKey,
+            channelId: payload.channelId,
+            channelType: payload.channelType,
+            detail,
+          }),
+        },
+      );
+    } catch (error) {
+      log.warn('Outreach session audit write failed', {
+        actionId: action.id,
+        dedupeKey: action.dedupeKey,
+        error: String(error),
+      });
+    }
   };
 
   const emitDeferredToolHandoffTelemetry = (
@@ -716,6 +761,36 @@ export function wireHeartbeatPostTurnRuntime(
             if (!payload) {
               throw new Error(`Intention outbound action "${action.id}" payload is missing required fields`);
             }
+            const contentHash = hashOutreachContent(payload.content);
+            const baseOutboxRecord = {
+              actionId: action.id,
+              dedupeKey: action.dedupeKey,
+              channelId: payload.channelId,
+              channelType: payload.channelType,
+              sourceMessageId: action.sourceMessageId,
+              contentHash,
+              contentLength: payload.content.length,
+              ...(payload.reason ? { reason: payload.reason } : {}),
+              ...(typeof action.runAt === 'number' ? { runAt: action.runAt } : {}),
+            };
+            const terminalRecord = runtimeOptions.outreachOutbox?.getTerminal(action.dedupeKey);
+            if (terminalRecord) {
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'skipped',
+                metadata: {
+                  skippedReason: 'terminal_dedupe_replay',
+                  terminalPhase: terminalRecord.phase,
+                  terminalRecordedAt: terminalRecord.recordedAt,
+                },
+              });
+              recordOutreachSessionAudit(action, payload, 'skipped', `terminal history already recorded as ${terminalRecord.phase}`);
+              return { detail: `skipped:terminal_dedupe:${terminalRecord.phase}` };
+            }
+            runtimeOptions.outreachOutbox?.append({
+              ...baseOutboxRecord,
+              phase: typeof action.runAt === 'number' && action.runAt > Date.now() ? 'scheduled' : 'queued',
+            });
             const provenanceBlockReason = await resolveOutboundProvenanceBlockReason(action, payload);
             if (provenanceBlockReason) {
               log.info('Intention outbound action blocked by stale or missing provenance', {
@@ -725,6 +800,12 @@ export function wireHeartbeatPostTurnRuntime(
                 pendingFollowUpId: payload.pendingFollowUpId,
                 concernIds: payload.concernIds,
               });
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'blocked',
+                reason: provenanceBlockReason,
+              });
+              recordOutreachSessionAudit(action, payload, 'blocked', provenanceBlockReason);
               return { detail: `blocked:${provenanceBlockReason}` };
             }
             const timeGate = evaluateProactiveOutboundTimeGate({
@@ -733,18 +814,35 @@ export function wireHeartbeatPostTurnRuntime(
               quietHours: runtimeOptions.episodicProcessingRestWindow,
             });
             if (!timeGate.allowed) {
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'scheduled',
+                reason: timeGate.reason,
+                runAt: timeGate.nextEligibleAtMs,
+              });
               return {
                 detail: timeGate.reason,
                 rescheduleAt: timeGate.nextEligibleAtMs,
               };
             }
-            const dispatchResult = await proactiveOutbound.dispatch({
-              actionId: action.id,
-              channelId: payload.channelId,
-              channelType: payload.channelType,
-              content: payload.content,
-              ...(payload.reason ? { reason: payload.reason } : {}),
-            });
+            let dispatchResult: Awaited<ReturnType<typeof proactiveOutbound.dispatch>>;
+            try {
+              dispatchResult = await proactiveOutbound.dispatch({
+                actionId: action.id,
+                channelId: payload.channelId,
+                channelType: payload.channelType,
+                content: payload.content,
+                ...(payload.reason ? { reason: payload.reason } : {}),
+              });
+            } catch (error) {
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'failed',
+                error: String(error),
+              });
+              recordOutreachSessionAudit(action, payload, 'failed', String(error));
+              throw error;
+            }
             if (
               dispatchResult.outcome === 'blocked'
               && dispatchResult.reason === 'rate_limited'
@@ -752,11 +850,28 @@ export function wireHeartbeatPostTurnRuntime(
               && Number.isFinite(dispatchResult.retryAfterMs)
               && dispatchResult.retryAfterMs > 0
             ) {
+              runtimeOptions.outreachOutbox?.append({
+                ...baseOutboxRecord,
+                phase: 'scheduled',
+                reason: 'rate_limited',
+                runAt: Date.now() + dispatchResult.retryAfterMs,
+              });
               return {
                 detail: 'rate_limited',
                 rescheduleAt: Date.now() + dispatchResult.retryAfterMs,
               };
             }
+            runtimeOptions.outreachOutbox?.append({
+              ...baseOutboxRecord,
+              phase: dispatchResult.outcome === 'sent' ? 'sent' : 'blocked',
+              ...(dispatchResult.outcome === 'blocked' ? { reason: dispatchResult.reason } : {}),
+            });
+            recordOutreachSessionAudit(
+              action,
+              payload,
+              dispatchResult.outcome === 'sent' ? 'sent' : 'blocked',
+              dispatchResult.outcome === 'sent' ? 'sent' : dispatchResult.reason,
+            );
             return dispatchResult.outcome === 'sent'
               ? { detail: 'sent' }
               : { detail: `blocked:${dispatchResult.reason}` };

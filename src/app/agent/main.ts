@@ -14,6 +14,7 @@ import { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/s
 import { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
 import { ProactiveOutboundDispatcher } from '../../core/intention/proactive-outbound.js';
+import { createFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
@@ -30,6 +31,7 @@ import {
   wireHeartbeatRuntime,
 } from '../startup/composition/parity.js';
 import { createAgentPersistenceRuntime } from '../../persistence/runtime-factory.js';
+import { resolveOutreachOutboxLedgerPath } from '../../persistence/layout.js';
 import { rehydratePersistedInternalState } from '../../core/self-model/internal-state-persistence.js';
 import { ModuleLoader } from '../../system/modules/loader.js';
 import { DEFAULT_GATEWAY_TOOL_METADATA_COVERAGE } from '../../core/agent/tool-wiring-validator.js';
@@ -438,6 +440,9 @@ async function main(): Promise<void> {
       eventBus,
     })
     : null;
+  const outreachOutbox = createFileOutreachOutboxStore(
+    resolveOutreachOutboxLedgerPath(pathSnapshot.companionDataDir),
+  );
 
   // Journal auto-publisher (for heartbeat reflections -> markdown journal)
   const journalAutoPublisher = createOptionalJournalAutoPublisher(pathSnapshot.workspaceRoot, config);
@@ -475,6 +480,7 @@ async function main(): Promise<void> {
       arcWeaver,
       dreamMeaningPass,
       proactiveOutbound,
+      outreachOutbox,
       memoryMaintenanceStore: memoryStore,
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,

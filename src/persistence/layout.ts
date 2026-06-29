@@ -688,6 +688,10 @@ export function resolvePostTurnActionQueuePath(companionDataDir: string): string
   return join(resolveCompanionStateDir(companionDataDir), 'post-turn-actions.queue.json');
 }
 
+export function resolveOutreachOutboxLedgerPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'outreach-outbox.jsonl');
+}
+
 export function resolveSafeguardAuditTrailPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'safeguards-audit.jsonl');
 }
@@ -846,6 +850,7 @@ function migrateLegacyCompanionStateLayout(companionDataDir: string): void {
     ['north-star.json', resolveNorthStarPath(companionDataDir)],
     ['heartbeat-policy.json', resolveHeartbeatPolicyPath(companionDataDir)],
     ['post-turn-actions.queue.json', resolvePostTurnActionQueuePath(companionDataDir)],
+    ['outreach-outbox.jsonl', resolveOutreachOutboxLedgerPath(companionDataDir)],
     ['safeguards-audit.jsonl', resolveSafeguardAuditTrailPath(companionDataDir)],
     ['charge-ledger.jsonl', resolveChargeLedgerPath(companionDataDir)],
     ['fatigue-ledger.jsonl', resolveFatigueLedgerPath(companionDataDir)],

@@ -24,7 +24,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createModel, createOpenAICompatibleEndpointModel, type OpenAICompatibleApi } from './models.js';
-import { withRetry, markErrorAsNonRetryable } from './retry.js';
+import { withRetry, markErrorAsNonRetryable, isRetryableError } from './retry.js';
 import { llmRetryConfig } from './retry-config.js';
 import {
   extractReasoningContent,
@@ -854,6 +854,20 @@ export class LLMClient {
     log.info('LLM circuit breaker state changed', payload);
   }
 
+  private async runTransportWithCircuitBreaker<T>(
+    method: 'llm.stream' | 'llm.complete',
+    candidate: RoutingCandidate,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return await this.circuitBreaker.execute({
+      key: this.resolveCircuitBreakerKey(method, candidate),
+      method,
+      operation,
+      shouldRecordFailure: isRetryableError,
+      onTransition: transition => this.logCircuitBreakerTransition(transition),
+    });
+  }
+
   private async runWithModelCallGate<T>(
     purpose: RoutingPurpose,
     candidate: RoutingCandidate,
@@ -1031,10 +1045,13 @@ export class LLMClient {
       const { result: finalResponse, candidate, attempts } = await this.runWithFallback(
         'chat',
         async (candidateTarget) => {
-          if (this.transport) {
-            return await this.transport.stream(
-              this.buildTransportContext(context, candidateTarget, correlation),
-              callbacks,
+          const transport = this.transport;
+          if (transport) {
+            const transportContext = this.buildTransportContext(context, candidateTarget, correlation);
+            return await this.runTransportWithCircuitBreaker(
+              'llm.stream',
+              candidateTarget,
+              async () => await transport.stream(transportContext, callbacks),
             );
           }
           const { model, apiKey } = this.getModelAndKey(candidateTarget);
@@ -1259,11 +1276,17 @@ export class LLMClient {
     const { result: response, candidate, attempts } = await this.runWithFallback(
       routingPurpose,
       async (candidateTarget) => {
-        if (this.transport) {
-          const response = await this.transport.complete(
-            this.buildTransportContext(context, candidateTarget, correlation),
-            purpose,
-          );
+        const transport = this.transport;
+        if (transport) {
+          const transportContext = this.buildTransportContext(context, candidateTarget, correlation);
+          const executeTransport = async () => await transport.complete(transportContext, purpose);
+          const response = options.disableRetry
+            ? await executeTransport()
+            : await this.runTransportWithCircuitBreaker(
+                'llm.complete',
+                candidateTarget,
+                executeTransport,
+              );
           assertUsableProviderResponse(response, candidateTarget);
           return response;
         }

@@ -36,6 +36,10 @@ import {
   SensitiveImportRoutePolicyError,
 } from './client.js';
 import { MODEL_USAGE_LEDGER_FILE_NAME } from './model-budget.js';
+import {
+  CircuitOpenError,
+  SlidingWindowCircuitBreaker,
+} from '../../shared/resilience/circuit-breaker.js';
 
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -2651,6 +2655,160 @@ describe('LLMClient model budget gates and usage metering', () => {
       inputTokens: 11,
       outputTokens: 6,
     });
+  });
+
+  it('short-circuits retryable injected transport completions and recovers after cooldown', async () => {
+    let now = 1_000;
+    const circuitBreaker = new SlidingWindowCircuitBreaker({
+      failureThreshold: 2,
+      windowMs: 60_000,
+      cooldownMs: 30_000,
+      now: () => now,
+    });
+    const circuitKey = 'llm.complete::openrouter::deepseek/deepseek-v3.2::registered_model';
+    const transport = {
+      stream: vi.fn(),
+      complete: vi.fn()
+        .mockRejectedValueOnce(new Error('503 service unavailable'))
+        .mockRejectedValueOnce(new Error('503 service unavailable'))
+        .mockResolvedValue({
+          content: 'gateway-recovered',
+          model: 'deepseek/deepseek-v3.2',
+          inputTokens: 9,
+          outputTokens: 4,
+          stopReason: 'stop',
+          toolCalls: [],
+        }),
+    };
+    const client = new LLMClient(makeConfig(), {
+      transport: transport as any,
+      circuitBreaker,
+    });
+    const transitionSpy = vi.spyOn(client as any, 'logCircuitBreakerTransition');
+    const request = () => client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Summarize this quickly' }],
+      },
+      'background',
+    );
+
+    await expect(request()).rejects.toThrow('503 service unavailable');
+    now += 1_000;
+    await expect(request()).rejects.toThrow('503 service unavailable');
+    now += 1_000;
+    await expect(request()).rejects.toBeInstanceOf(CircuitOpenError);
+    expect(transport.complete).toHaveBeenCalledTimes(2);
+    expect(circuitBreaker.snapshot(circuitKey).state).toBe('open');
+
+    now += 30_001;
+    await expect(request()).resolves.toMatchObject({
+      content: 'gateway-recovered',
+      model: 'deepseek/deepseek-v3.2',
+      inputTokens: 9,
+      outputTokens: 4,
+    });
+
+    expect(transport.complete).toHaveBeenCalledTimes(3);
+    expect(circuitBreaker.snapshot(circuitKey).state).toBe('closed');
+    expect(transitionSpy).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'llm.complete',
+      key: circuitKey,
+      to: 'open',
+      reason: 'failure_threshold',
+    }));
+    expect(transitionSpy).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'llm.complete',
+      key: circuitKey,
+      to: 'half_open',
+      reason: 'cooldown_elapsed',
+    }));
+    expect(transitionSpy).toHaveBeenCalledWith(expect.objectContaining({
+      method: 'llm.complete',
+      key: circuitKey,
+      to: 'closed',
+      reason: 'half_open_success',
+    }));
+  });
+
+  it('short-circuits retryable injected transport streams after the threshold', async () => {
+    const circuitBreaker = new SlidingWindowCircuitBreaker({
+      failureThreshold: 1,
+      windowMs: 60_000,
+      cooldownMs: 30_000,
+    });
+    const callbacks = {
+      onDone: vi.fn(),
+      onError: vi.fn(),
+    };
+    const transport = {
+      stream: vi.fn().mockRejectedValue(new Error('fetch failed')),
+      complete: vi.fn(),
+    };
+    const client = new LLMClient(makeConfig(), {
+      transport: transport as any,
+      circuitBreaker,
+    });
+    const request = () => client.stream(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Stream this reply' }],
+      },
+      callbacks,
+    );
+
+    await expect(request()).rejects.toThrow('fetch failed');
+    await expect(request()).rejects.toBeInstanceOf(CircuitOpenError);
+
+    expect(transport.stream).toHaveBeenCalledTimes(1);
+    expect(callbacks.onDone).not.toHaveBeenCalled();
+    expect(callbacks.onError).toHaveBeenCalledTimes(2);
+    expect(callbacks.onError.mock.calls[1]?.[0]).toBeInstanceOf(CircuitOpenError);
+  });
+
+  it('does not count non-retryable injected transport configuration failures as outages', async () => {
+    const circuitBreaker = new SlidingWindowCircuitBreaker({
+      failureThreshold: 1,
+      windowMs: 60_000,
+      cooldownMs: 30_000,
+    });
+    const circuitKey = 'llm.complete::openrouter::deepseek/deepseek-v3.2::registered_model';
+    const transport = {
+      stream: vi.fn(),
+      complete: vi.fn()
+        .mockRejectedValueOnce(new Error('Gateway provider config is not wired on the gateway'))
+        .mockResolvedValue({
+          content: 'gateway-after-config-failure',
+          model: 'deepseek/deepseek-v3.2',
+          inputTokens: 7,
+          outputTokens: 3,
+          stopReason: 'stop',
+          toolCalls: [],
+        }),
+    };
+    const client = new LLMClient(makeConfig(), {
+      transport: transport as any,
+      circuitBreaker,
+    });
+    const transitionSpy = vi.spyOn(client as any, 'logCircuitBreakerTransition');
+    const request = () => client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Summarize this quickly' }],
+      },
+      'background',
+    );
+
+    await expect(request()).rejects.toThrow('Gateway provider config is not wired on the gateway');
+    expect(circuitBreaker.snapshot(circuitKey).state).toBe('closed');
+
+    await expect(request()).resolves.toMatchObject({
+      content: 'gateway-after-config-failure',
+      model: 'deepseek/deepseek-v3.2',
+    });
+
+    expect(transport.complete).toHaveBeenCalledTimes(2);
+    expect(transitionSpy).not.toHaveBeenCalled();
   });
 
   it('prioritizes queued foreground chat ahead of queued background work on constrained routes', async () => {

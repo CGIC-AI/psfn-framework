@@ -1,6 +1,11 @@
-let token = $state<string>(
-  typeof window !== 'undefined' ? (localStorage.getItem('psfn_token') ?? '') : ''
-);
+import {
+  clearLegacyPersistentAdminToken,
+  clearLegacyScriptReadableAdminTokenCookie,
+} from './auth-storage';
+
+clearLegacyPersistentAdminToken();
+
+let token = $state<string>('');
 let serverSessionAuthenticated = $state(false);
 let authResolved = $state(typeof window === 'undefined');
 let sessionProbePromise: Promise<boolean> | null = null;
@@ -51,10 +56,7 @@ export function setToken(t: string) {
   token = t;
   serverSessionAuthenticated = token.length > 0;
   authResolved = true;
-  if (typeof window !== 'undefined') {
-    localStorage.setItem('psfn_token', t);
-    document.cookie = `psfn_token=${encodeURIComponent(t)}; path=/; SameSite=Strict`;
-  }
+  clearLegacyPersistentAdminToken();
 }
 
 export function clearToken() {
@@ -62,8 +64,6 @@ export function clearToken() {
   serverSessionAuthenticated = false;
   authResolved = true;
   sessionProbePromise = null;
-  if (typeof window !== 'undefined') {
-    localStorage.removeItem('psfn_token');
-    document.cookie = 'psfn_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-  }
+  clearLegacyPersistentAdminToken();
+  clearLegacyScriptReadableAdminTokenCookie();
 }

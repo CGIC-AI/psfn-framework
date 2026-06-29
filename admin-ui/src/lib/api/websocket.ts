@@ -1,7 +1,19 @@
-import { getToken } from '$lib/stores/auth.svelte';
-
 export type WsMessageHandler = (event: MessageEvent) => void;
 export type WsConnectionHandler = (connected: boolean) => void;
+
+interface WebSocketLocation {
+  protocol: string;
+  host: string;
+}
+
+export function buildAdminWebSocketUrl(
+  path: string,
+  location: WebSocketLocation | undefined = typeof window !== 'undefined' ? window.location : undefined,
+): string {
+  const proto = location?.protocol === 'https:' ? 'wss:' : 'ws:';
+  const host = location?.host ?? 'localhost:3001';
+  return `${proto}//${host}${path}`;
+}
 
 export class ReconnectingWebSocket {
   private ws: WebSocket | null = null;
@@ -89,11 +101,7 @@ export class ReconnectingWebSocket {
   }
 
   private buildUrl(): string {
-    const proto = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const host = typeof window !== 'undefined' ? window.location.host : 'localhost:3001';
-    const token = getToken();
-    const qs = token ? `?token=${encodeURIComponent(token)}` : '';
-    return `${proto}//${host}${this.path}${qs}`;
+    return buildAdminWebSocketUrl(this.path);
   }
 
   private scheduleReconnect(): void {

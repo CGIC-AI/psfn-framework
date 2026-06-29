@@ -475,6 +475,9 @@ async function executeSandbox(message) {
       timeoutHandle = setTimeout(() => {
         reject(new Error('Execution timed out after ' + message.timeoutMs + 'ms'));
       }, message.timeoutMs);
+      if (timeoutHandle && typeof timeoutHandle.unref === 'function') {
+        timeoutHandle.unref();
+      }
     });
     const memory = new Promise((resolve, reject) => {
       if (!Number.isFinite(message.memoryCeilingBytes) || message.memoryCeilingBytes <= 0) return;
@@ -485,6 +488,9 @@ async function executeSandbox(message) {
           reject(error);
         }
       }, 20);
+      if (memoryGuard && typeof memoryGuard.unref === 'function') {
+        memoryGuard.unref();
+      }
     });
 
     await Promise.race([execution, timeout, memory]);

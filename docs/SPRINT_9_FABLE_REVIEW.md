@@ -1,5 +1,7 @@
 # Sprint 9 Reality Check — PSFN vs. the Purrsephone Vision
 
+> Current status update, 2026-06-29: this is a historical audit from 2026-06-09. Several critical findings have since been resolved or narrowed. Postgres backup/restore coverage, companion tree/workspace/system-config backups, restore verification, the values read-back loop, group-memory tooling, and a minimal proactive outbound path have landed. Still-open work includes Garden memory API sensitivity gating (`psfn-framework-zet.1`), Atrium direct-model chat loading (`PSFNLIVE-70nb`), production `WORKSPACE_PATH` installer preservation (`psfn-framework-b30`), weighted-thought lifecycle (`psfn-framework-1xb.4`), richer memory projection/recall expansion (`psfn-framework-z6z`), and broader introspection/personal-time work.
+
 - Date: 2026-06-09
 - Branch reviewed: `sprint_9_memory` (HEAD `7d15525d`)
 - Reviewer: Claude (Fable 5), six-pillar parallel code audit

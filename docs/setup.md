@@ -5,6 +5,7 @@ PSFN boots through the split runtime. The legacy `src/app/startup/index.ts` entr
 ## Prerequisites
 
 - Node.js 22+
+- PostgreSQL 16+ with the `pgvector` extension. The repo-owned runtime is Postgres-only for memories, episodes, contacts, concerns, intentions, internal state, and searchable projections.
 - One provider secret for the model/provider owner file you plan to use. The shipped examples include OpenRouter, so using those examples usually means `OPENROUTER_API_KEY`.
 - Optional channel/service secrets only for the surfaces you enable:
   - `DISCORD_TOKEN` and `DISCORD_BOT_ID`
@@ -20,7 +21,7 @@ PSFN boots through the split runtime. The legacy `src/app/startup/index.ts` entr
 
 ```bash
 git clone <repo-url>
-cd psfn-live
+cd psfn-framework
 npm install
 cp .env.example .env
 ```
@@ -56,7 +57,9 @@ Mutable runtime/admin configuration lives under the system-data config domain:
 - `charge-policy.json`
 - `backup.json`
 
-Startup requires these files to exist. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state.
+Startup verifies the seed-backed owner files before the split runtime comes up. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state.
+
+`channels.json` has no seed file. Channel config loads safe defaults when it is absent and is created or updated when channel settings are saved through Garden or the admin API.
 
 ## First Local Bring-Up
 
@@ -68,7 +71,7 @@ Startup requires these files to exist. Distributed `config/*.seed.json` files ar
    DATA_DIR=./data
    WORKSPACE_PATH=./purrsephone
    CHARACTER_CARD_PATH=./data/companion.json
-   DATABASE_PATH=./data/companion.db
+   POSTGRES_DATABASE_URL=postgresql://psfn:password@127.0.0.1:5432/psfn
    PSFN_BACKUP_ENCRYPTION_KEY=<long random secret>
    ```
 
@@ -98,13 +101,13 @@ Startup requires these files to exist. Distributed `config/*.seed.json` files ar
 
    The launcher loads `.env` for gateway/operator processes, then starts the agent with a curated non-secret environment allowlist. Provider credentials, API keys, and admin tokens stay gateway/operator-owned.
 
-5. If you want the integrated Garden SPA served by the admin host, build it once:
+6. If you want the integrated Garden SPA served by the admin host, build it once:
 
    ```bash
    npm run garden:build
    ```
 
-6. If you want the standalone Garden dev server instead:
+7. If you want the standalone Garden dev server instead:
 
    ```bash
    npm run garden:dev

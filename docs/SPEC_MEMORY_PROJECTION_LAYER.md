@@ -2,6 +2,8 @@
 
 *2026-06-11, Fable Window 1. Companion packet: `context_packets/2026-06-11-memory-schema-session.md`. Sibling spec: `docs/SPEC_L01_LANDMARK_SCHEMA.md`. Charter authority: §6.23 (Mirror and Projection), §8.6 (Context Presentation Quality Is Architecture), Laws 17–20.*
 
+> Status as of 2026-06-29: this is a design contract, not a fully implemented module. The current runtime has landmark-first retrieval and multiple hand-coded prompt renderers; the declarative `ProjectionProfile` registry and `recall_expand` tool are still future work. Keep new retrieval rendering bounded, provenance-preserving, and trust-gated while that work remains open.
+
 ## 1. The principle
 
 **Storage schema and attention schema are different layers.** Postgres stores rich — provenance chains, formation VAD, lineage, arc membership, callbacks — because storage is cheap and provenance is law. Model attention is the scarce resource: the operator's empirical ceiling is **roughly five fields per item** of useful per-item metadata in attention, regardless of storage richness. The ~30% context-token reduction (commits `83cc7c47`, `716186d7`, `1ee91df9`, 2026-06-09) was achieved by stripping metadata at retrieval time and degraded nothing — evidence that everything stripped was attention noise.

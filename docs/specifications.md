@@ -2,6 +2,8 @@
 
 This document is the compact contract for how the live runtime is supposed to behave. When this file disagrees with code, prefer the code in the order listed below.
 
+Last updated: 2026-06-29.
+
 ## Source Of Truth Order
 
 1. Runtime entrypoints and composition
@@ -64,6 +66,7 @@ Out of boundary:
 - `channels.json`
 - `skills.json`
 - `trust-policy.json`
+- `charge-policy.json`
 - `backup.json`
 
 Legacy env values for JSON-owned settings are ignored, and startup hydration migrates or warns on drift where compatibility shims still exist.
@@ -106,8 +109,8 @@ Legacy env values for JSON-owned settings are ignored, and startup hydration mig
 ### Companion-owned
 
 - character card
-- companion SQLite database
-- sessions
+- PostgreSQL-backed companion runtime state
+- append-only session JSONL archives
 - notes, reflections, scratchpad mirror, values journal
 - prompt layers and prompt registry
 - core memory and north-star state
@@ -123,7 +126,7 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
 - resolves runtime path layout
 - loads settings and splits them by owner domain
 - loads model and provider registries with legacy migration support
-- loads trust-policy and scheduler config
+- loads trust-policy, scheduler, capability, charge-policy, backup, skills, and channel config
 - warns on legacy drift instead of silently re-authorizing `.env`
 
 ## Security And Fail-Closed Posture

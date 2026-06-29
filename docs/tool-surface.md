@@ -15,6 +15,7 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - `analysis_workbench`
 - `tool_search`
 - `toolset`
+- `response_control`
 
 ### Semantic Companion Tools
 
@@ -29,6 +30,7 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - `subagent`
 - `shard`
 - `wiki`
+- `journal`
 - `vault`
 - `beads`
 - `skill`
@@ -46,6 +48,7 @@ Always-on adaptive control:
 
 - `tool_search`
 - `toolset`
+- `response_control`
 
 Unified top-level direct tools in the current runtime:
 
@@ -54,6 +57,8 @@ Unified top-level direct tools in the current runtime:
 - `shell`
 - `web`
 - `skill`
+- `wiki`
+- `journal`
 - `orient`
 - `memory`
 - `scratchpad`
@@ -65,7 +70,6 @@ Unified top-level direct tools in the current runtime:
 - `self_status`
 - `system`
 - `subagent`
-- `wiki`
 - `vault`
 - `beads`
 - `notify`
@@ -78,7 +82,10 @@ Important current-state notes:
 - `fs_list`, `fs_read`, `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr`, `vault_*`, `issue_*`, `settings_get`, `self_restart`, `self_rebuild`, and `notify_operator` are historical or action-alias names, not model-facing control paths.
 - Transcript lookup stays on `session`; memory and scratchpad mutation stay on `memory` and `scratchpad`; contact mutation stays on `contact`; values and concerns stay on `orient`.
 - Safe companion-facing runtime introspection stays on `self_status`; guarded runtime settings and lifecycle actions stay on `system`.
+- `response_control action="no_reply"` is the explicit no-response disposition surface. It is for intentional non-replies, not hidden failure.
 - Generic image generation, editing, and analysis stay on `media`; `selfie_create` stays separate as the first-class self-expression image tool.
+- `journal` is an extended durable markdown note surface for companion-authored notes and longer-lived context that is not typed memory, active orientation, or scratch work.
+- `shard` is currently a reserved extended registry entry for future long-horizon shard lifecycle control. Shard execution internals, fold-review lineage, and satellite delegation exist, but bounded model-facing worker control is currently `subagent`.
 - Garden's Tools page must reflect the runtime catalog for canonical names only. It may show actions, required parameters, capability requirements, reversibility, interruptibility/concurrency, and bundle membership, but must not present retired aliases as callable tools.
 
 ## Canonical Discovery Surface
@@ -87,6 +94,7 @@ Important current-state notes:
 
 - `tool_search` searches non-default canonical tools by purpose and description.
 - `toolset action="list"` reports active, loaded, available, and pinned canonical tools.
+- `toolset action="suggest"` proposes canonical tools for the current task without loading them.
 - `toolset action="describe"` returns canonical action schemas, required parameters, capability requirements, reversibility, interruptibility/concurrency metadata, and bundle membership.
 - `toolset action="activate"` loads canonical extended tools for the current turn.
 - `toolset action="pin"` and `toolset action="unpin"` mutate the small pinned overlay.
@@ -105,7 +113,7 @@ The surface is always on so the model does not have to discover or choose among 
 
 ## Canonical Schedule Surface
 
-The canonical model-facing `schedule` surface collapses time-based continuity and scheduling work into one tool.
+The canonical model-facing `schedule` surface collapses time-based continuity and scheduling work into one tool. The registry tracks the broad target verbs (`list`, `create`, `update`, `delete`, `run`); the live schedule implementation still exposes concrete scheduler actions for continuity and templates:
 
 - Continuity actions: `list`, `create_follow_up`, `activate_follow_up`, `create_reminder`, `trigger_reminder`
 - Scheduler/template actions: `list_templates`, `update_template`, `run_template`, `schedule_prompt`
@@ -178,7 +186,7 @@ This keeps transcript lookup, gentle checkpointing, wake/return recaps, and focu
 
 The canonical model-facing `contact` surface collapses relationship operations and canonical contact continuity into one tool.
 
-- Actions: `list`, `lookup`, `note`, `set_trust`, `link_identity`, `set_channel_privacy`
+- Actions: `list`, `lookup`, `note`, `set_trust`, `link_identity`, `set_channel_privacy`, `set_machine_intelligence`
 - Retired aliases that must not be model-facing:
   `contact_list` -> `list`
   `contact_lookup` -> `lookup`
@@ -202,9 +210,10 @@ The surface keeps lightweight visible tool output separate from the heavier inte
 
 ## Canonical Skill Surface
 
-The current runtime already exposes a unified model-facing `skill` tool for skill discovery, inspection, and managed-skill mutation, and that remains the canonical shape.
+The current runtime already exposes a unified model-facing `skill` tool for skill discovery, inspection, usage telemetry, and managed-skill mutation, and that remains the canonical shape.
 
 - Actions: `list`, `view`, `create`, `update`
+- Usage telemetry action: `stats`
 - Retired action aliases must not be model-facing; the model-facing tool name is `skill`
 - `list` preserves discovery metadata, eligibility outcomes, and filtered-skill reasons
 - `view` loads one skill's full YAML + Markdown body on demand
@@ -245,6 +254,15 @@ The canonical model-facing `wiki` surface is the canonical PSFN-owned knowledge-
 
 This keeps durable reference creation, retrieval, search, and import on one semantic surface. Stable facts or relational knowledge still belong in `memory`; temporary working context stays in `scratchpad`; active operational state stays in `orient`.
 
+## Canonical Journal Surface
+
+The canonical model-facing `journal` surface is for durable companion-authored markdown notes, reflections, and longer-lived context that should remain narrative but should not become active orientation, typed memory, or same-turn scratch work.
+
+- Actions: `list`, `read`, `write`, `append`, `search`
+- Journal notes are durable markdown files managed by the runtime journal operations.
+- Use separate notes for separate topics; append only when continuing an existing note.
+- Use `scratchpad` for temporary excerpts or working hypotheses, `orient` for active concerns/open threads, `wiki` for curated reference knowledge, and `memory` for typed recall facts.
+
 ## Legacy External Vault Surface
 
 The legacy model-facing `vault` surface is an optional external Obsidian bridge for bounded source read/search/write compatibility. It is not the canonical durable companion note store.
@@ -273,14 +291,14 @@ The canonical model-facing `system` surface collapses safe runtime-setting reads
 
 `system action="read"` preserves the existing safe runtime-settings snapshot behavior. `system action="restart|rebuild"` preserves the existing restart safeguard checks, notification flow, and capability enforcement, but keeps lifecycle control on one semantic surface instead of separate micro-tools.
 
-## Canonical Shard Surface
+## Reserved Shard Surface
 
-The canonical model-facing `shard` surface collapses long-horizon shard work and fold-back lifecycle control into one tool.
+The `shard` registry entry is reserved for long-horizon shard work and fold-back lifecycle control. It is not yet the ordinary direct model-facing control surface.
 
-- Actions: `spawn`, `list`, `status`, `deliver`
+- Current registry action: `spawn`
 - Bounded short-horizon worker control belongs to `subagent action="spawn"`; `spawn_subagent` and the old `spawn_shard` name must not be used in active prompts or checklists.
-- `list` and `status` are anchored on the live shard runtime snapshot/detail views instead of ad hoc summaries
-- `deliver` wires to the real shard delivery path, which transitions available artifacts into delivered state and refreshes fold-back review metadata
+- Shard internals already include `ShardManager`, fold-review records, lineage tagging, artifact review policy, active/degraded/offline lifecycle state, charge accounting, and satellite delegation hooks.
+- Future direct shard control should converge on this one surface rather than reintroducing `spawn_shard` or shard-specific micro-tools.
 
 This keeps long-horizon shard execution, operator-visible shard runtime state, and explicit fold-back delivery on one semantic surface while preserving shard-specific concurrency scheduling and merge-review semantics.
 
@@ -325,7 +343,7 @@ The table below maps current or retired first-party tool names to the canonical 
 
 | Retired or current name | Canonical surface | Exposure | Notes |
 | --- | --- | --- | --- |
-| `memory` | `memory` | always-on | Unified long-term memory surface with `action=write|search|import|patch|redact|delete|restore`; capability gating still distinguishes read/write/delete-sensitive paths. |
+| `memory` | `memory` | always-on | Unified long-term memory surface with `action=write|search|census|exists|timeline|import|patch|redact|delete|restore`; capability gating still distinguishes read/write/delete-sensitive paths. |
 | `scratchpad` | `scratchpad` | always-on | Unified ephemeral workspace with `action=list|add|replace|append|remove`; short-lived working notes stay explicit and non-canonical. |
 | `wiki` | `wiki` | always-on | Internal PSFN-owned durable reference knowledge with `action=list|read|search|write|import`; separate from memory, scratchpad, journals, orientation, and Obsidian/Vault. |
 | `core_memory_append` | `orient` | always-on | Now maps to `orient action="append"` for incremental orientation updates. |
@@ -384,8 +402,9 @@ The table below maps current or retired first-party tool names to the canonical 
 | `spawn_subagent` | `subagent` | retired | Use `subagent action="spawn"` for bounded short-horizon work. |
 | `spawn_shard` | `shard` | hidden | Historical name from the pre-consolidation surface. Do not use it in active prompts or checklists; future long-horizon shard work should converge on `shard action="spawn"`. |
 | `analysis_workbench` | `analysis_workbench` | always-on | Bounded RLM+REPL analysis for large files, codebases, logs, transcripts, datasets, or evidence sets. Not for routine reasoning, tool discovery, schema confusion, simple lookup, or state changes. |
-| `skill` | `skill` | always-on | Unified surface with `action=list|view|create|update`; skills stay discoverable and managed-skill mutation remains explicit on the same semantic tool. |
+| `skill` | `skill` | always-on | Unified surface with `action=list|view|stats|create|update`; skills stay discoverable and managed-skill mutation remains explicit on the same semantic tool. |
 | `vault` | `vault` | extended | Legacy external Obsidian bridge for bounded source read/search/write compatibility; canonical durable reference knowledge belongs in `wiki`. |
+| `journal` | `journal` | extended | Durable markdown journal with `action=list|read|write|append|search`; separate from memory, scratchpad, wiki, and active orientation. |
 | `vault_write` | `vault` | hidden | Historical top-level name; use `vault action="write"` only for the external Obsidian bridge. |
 | `vault_read` | `vault` | hidden | Historical top-level name; use `vault action="read"` only for the external Obsidian bridge. |
 | `vault_search` | `vault` | hidden | Historical top-level name; use `vault action="search"` only for the external Obsidian bridge. |

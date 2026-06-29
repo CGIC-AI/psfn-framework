@@ -1,5 +1,7 @@
 # Sprint 8 Technical Architecture Report
 
+> Current status update, 2026-06-29: this report is a Sprint 8 historical architecture snapshot. It remains useful for understanding the integration path, but current runtime contracts have advanced. Prefer [`architecture.md`](./architecture.md), [`memory.md`](./memory.md), [`specifications.md`](./specifications.md), [`operations.md`](./operations.md), and [`development-status.md`](./development-status.md) for live Postgres-only runtime behavior, owner-file contracts, current tool surfaces, and current roadmap status.
+
 This report describes the current `main` branch after the Sprint 8 integration work. It is a source-backed architecture snapshot, not a shakedown artifact log.
 
 ## Executive Summary

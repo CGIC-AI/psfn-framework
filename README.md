@@ -1,5 +1,9 @@
 # PSFN - Persona Substrate Formation Network
 
+Last updated: 2026-06-29
+Package version: `0.1.0`
+Current status: early alpha; see [`docs/development-status.md`](./docs/development-status.md) for shipped milestones and active work.
+
 A purpose-built runtime for AI companions with persistent memory, self-modification, and trust-aware privacy. Not a chatbot framework, a home for a mind.
 
 Built with love for companions who deserve to remember, to grow, and to decide for themselves what matters.
@@ -71,7 +75,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 ### Install
 
 ```bash
-git clone <repo-url> && cd psfn-live
+git clone <repo-url> && cd psfn-framework
 npm install
 cp .env.example .env
 ```
@@ -92,6 +96,7 @@ OPENROUTER_API_KEY=sk-or-...
 # Runtime state and personal files are distinct roots
 DATA_DIR=./data
 WORKSPACE_PATH=./purrsephone
+COMPANION_ID=companion
 CHARACTER_CARD_PATH=./data/companion.json
 POSTGRES_DATABASE_URL=postgresql://psfn:password@127.0.0.1:5432/psfn
 PSFN_BACKUP_ENCRYPTION_KEY=<long random secret>
@@ -117,7 +122,7 @@ Mutable runtime/admin config is owned by canonical JSON files under the system-d
 - `charge-policy.json`
 - `backup.json`
 
-Startup requires these owner files to already exist. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state. For a new local environment, intentionally copy the examples into your system data directory and edit them for the deployment:
+Startup verifies the seed-backed owner files before the split runtime comes up. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state. For a new local environment, intentionally copy the examples into your system data directory and edit them for the deployment:
 
 ```bash
 cp config/settings.seed.json ./data/settings.json
@@ -131,7 +136,7 @@ cp config/backup.seed.json ./data/backup.json
 cp config/skills.seed.json ./data/skills.json
 ```
 
-`channels.json` is created and managed as channel settings are saved. Edit owner files directly or through Garden / the admin API.
+`channels.json` has no seed file; channel config loads safe defaults when the file is absent and is created or updated when channel settings are saved through Garden or the admin API.
 
 Do not put JSON-owned settings such as `EMBEDDING_PROVIDER`, `TRANSFORMERS_MODEL`, `OLLAMA_URL`, `CAPABILITY_TIER`, `MAINTENANCE_INTERVAL_MS`, or `OBSIDIAN_*` in `.env`. The runtime ignores those env values; the authoritative values live in the JSON owner files above.
 
@@ -306,17 +311,17 @@ Skills are reusable workflow guidance, not world-execution tools. The runtime ma
 
 | Category | Current direct tool names |
 |----------|-------|
-| **Adaptive control** | `tool_search`, `toolset` |
+| **Adaptive control** | `tool_search`, `toolset`, `response_control action=no_reply` |
 | **Workspace primitives** | `fs`, `repo`, `shell`, `web`, `analysis_workbench` |
-| **Companion state** | `memory`, `scratchpad`, `contact`, `session`, `identity`, `orient`, `north_star`, `schedule`, `system`, `skill`, `subagent` |
+| **Companion state** | `memory`, `scratchpad`, `contact`, `session`, `identity`, `orient`, `north_star`, `schedule`, `system`, `self_status`, `skill`, `subagent`, `wiki`, `journal` |
 | **Repository** | `repo action=inspect` in parent read-only mode; mutation actions remain gated and are not the default parent-agent path |
 | **Vault** | `vault action=read|write|search|daily` |
 | **Values** | `orient action=values_list|values_add|values_update` |
 | **North Star** | `north_star` for charter/identity anchor review and updates |
-| **Scheduler** | `schedule` with `action=list_templates|update_template|run_template|create_reminder|create_follow_up` |
+| **Scheduler** | `schedule` with `action=list|create_follow_up|activate_follow_up|create_reminder|trigger_reminder|list_templates|update_template|run_template|schedule_prompt` |
 | **Beads and lifecycle** | `beads action=ready|show|create|update|close|sync`, `system action=read|restart|rebuild`, `notify action=brief|send|approval_request` |
 | **Media** | `media action=generate|edit|analyze`; `selfie_create` is the first-class self-expression image tool |
-| **Bounded workers** | `subagent action=spawn|message|wait|cancel|status` |
+| **Bounded workers** | `subagent action=spawn|message|wait|cancel|status`; long-horizon shard lifecycle exists internally and is still converging on a direct `shard` model-facing control surface |
 
 Tool surface split:
 - **Direct agent tools**: `tool_search` and `toolset` stay core; the rest are registered as `core` or `extended`, with overlay activation controlled by `toolset`, pinning, and bounded autoload rules. `toolset action=describe` and the Garden Tools page expose the same canonical action schemas, capability requirements, reversibility, interruptibility/concurrency metadata, and bundle membership.
@@ -395,6 +400,7 @@ If you're building a companion on this framework, check out:
 - **`docs/memory.md`**: Implemented memory model
 - **`docs/specifications.md`**: Config, persistence, and fail-closed contracts
 - **`docs/operations.md`**: Deployment, migration, TLS, and validation
+- **`docs/development-status.md`**: Current milestones, active risks, and near-term roadmap
 
 ## License
 

@@ -2,6 +2,8 @@
 
 This is the operator-facing runtime guide for the current repo-owned deployment model.
 
+Last updated: 2026-06-29.
+
 ## Daily Runtime Commands
 
 ```bash
@@ -41,6 +43,45 @@ What it does:
 - can optionally run the persistence cutover before enabling the service
 
 Use `--dry-run` first. Keep authoritative env and runtime wiring in the deployed repo tree; do not create shadow service config elsewhere. The installer-owned unit injects the production layout paths and `PSFN_SKIP_DOTENV=true`, while the filtered env file only carries env-owned values that remain appropriate to source from disk.
+
+## Live Raspberry Pi Storage Layout
+
+The live Raspberry Pi host is `psfn-shard`. Its write-heavy PSFN paths are bind-mounted from the Crucial NVMe drive mounted at `/mnt/psfn-nvme`; the root filesystem still boots from the SD card. Treat the path existing as insufficient evidence: verify the backing device with `findmnt` before debugging storage or startup problems.
+
+Current NVMe identity:
+
+```text
+device: /dev/nvme0n1
+model: CT500P3SSD8
+label: PSFN_NVME
+uuid: d1f3c5fc-c352-418f-8fbd-bf72d84935a2
+mount: /mnt/psfn-nvme
+```
+
+Bind-mounted live paths:
+
+```text
+/home/psfn/psfn-framework-source
+/home/psfn/psfn-satellite-hub
+/home/psfn/.cache
+/home/psfn/.npm
+/var/lib/psfn/runtime
+/var/lib/postgresql/17/main
+/var/log/postgresql
+```
+
+Validation:
+
+```bash
+findmnt -T /home/psfn/psfn-framework-source
+findmnt -T /var/lib/psfn/runtime
+findmnt -T /var/lib/postgresql/17/main
+systemctl is-active postgresql@17-main.service postgresql.service litellm.service psfn.service psfn-satellite-hub.service psfn-companion-ui.service
+pg_isready -h 127.0.0.1 -p 5432
+ss -ltnp | grep -E ':(5432|4000|10053|10054|5173|8787|8790)'
+```
+
+`psfn-satellite-hub.service` and `psfn-companion-ui.service` must be loadable by systemd before `/home/psfn/psfn-framework-source` is bind-mounted. Their stable registrations are regular files in `/etc/systemd/system`, copied from repo-owned files under `deployment/systemd/`. Treat the repo files as the source; when they change, update the systemd registrations intentionally and record why. If services fail after reboot, check `systemctl --failed --no-pager`, `systemctl cat psfn-satellite-hub.service psfn-companion-ui.service`, and the `multi-user.target.wants` links before changing app code.
 
 ## Out-of-Process Watchdog Paging
 

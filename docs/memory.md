@@ -2,6 +2,8 @@
 
 PSFN memory is not a single store. The runtime combines append-only session history, typed long-term memories, continuity artifacts, contact state, and a few small high-priority ledgers.
 
+Last updated: 2026-06-29.
+
 ## Layers That Exist Today
 
 ### L0: Session history
@@ -13,7 +15,7 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 
 ### L0.1: Episodic landmarks
 
-- Stored in SQLite through `EpisodicStore` tables `l01_episodes` and `l01_episode_arcs`
+- Stored in PostgreSQL through the runtime episodic store tables `l01_episodes`, `l01_episode_spans`, `l01_episode_arcs`, lineage, review, candidate, and watermark tables
 - Represents bounded lived episodes with L0 span/artifact provenance, salience, affect, themes, participants, thread IDs, and channel IDs
 - Created during configured rest/me-time windows after user inactivity by the sleeptime episodic synthesizer
 - Allows multiple episodes per day; a long-running theme is a graph of linked episodes, not one large aggregate record
@@ -30,13 +32,13 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 
 ### L2: Typed long-term memories
 
-- Stored in SQLite through `MemoryStore`
-- Embedded with the configured embeddings provider and indexed with `sqlite-vec`
+- Stored in PostgreSQL through `PostgresMemoryStore`
+- Embedded with the configured embeddings provider and indexed/searchable through `pgvector`
 - Retrieved by `MemoryRetriever`
 - Written through `MemoryWriter` and `MemoryExtractor`
-- The storage contract stays async-safe at the port level so SQLite and PostgreSQL share the same `MemoryStorePort` surface.
-- The supported PostgreSQL memory path stores embeddings in `l2_memories.embedding` via `pgvector` and performs database-side similarity search. Missing `pgvector` support is a fail-closed startup error, not a silent fallback to app-side array scanning.
-- Backends may optimize the internal implementation differently, but the caller contract must not assume SQLite-specific transaction or vector-index behavior.
+- The storage contract stays async-safe at the port level so tests, repair utilities, and legacy migration code can exercise adapters without leaking storage details into callers.
+- The supported memory path stores embeddings in `l2_memories.embedding` via `pgvector` and performs database-side similarity search. Missing `pgvector` support is a fail-closed startup error, not a silent fallback to app-side array scanning.
+- SQLite/sqlite-vec code remains only for legacy migration utilities and adapter tests; it is not a runtime default.
 
 ### Parallel memory/state artifacts
 
@@ -45,7 +47,7 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 - append-only daily reflection journals under `notes/reflections/daily/`
 - append-only long-process reflection logs under `notes/reflections/process-logs/`
 - active orientation persisted in `core_memory.json`
-- contact profiles and social graph state in SQLite/contact stores
+- contact profiles, social graph state, concerns, intentions, internal state, and follow-ups in PostgreSQL stores
 - scratchpad mirror at `notes/scratchpad.json`
 - memory mutation journal at `notes/memories.jsonl`
 
@@ -62,7 +64,7 @@ PSFN memory is not a single store. The runtime combines append-only session hist
 
 Scratchpad is a separate semantic surface, not a subtype of long-term memory.
 
-- Lives in SQLite `scratchpad_entries` with an optional mirror at `notes/scratchpad.json`
+- Lives in runtime scratchpad storage with an optional mirror at `notes/scratchpad.json`; live runtime state is Postgres-backed where scratchpad rows are persisted through the active runtime store
 - Holds temporary long-context notes, excerpts, rolling summaries, and working hypotheses for large source material
 - Is bounded and intentionally ephemeral; it helps the current work, not durable recall
 - Must stay distinct from `orient`, which is active canon, and from typed long-term `memory`, which is durable retrieval state
@@ -218,6 +220,8 @@ Compaction is context-window maintenance, not a replacement memory layer.
 
 The open design boundary is richer L1/L2 integration: future work can let contextual memory agents traverse an L0.1 chain and then selectively expand L0 spans, artifacts, or L2 memories. That expansion must stay bounded, provenance-preserving, and trust-gated.
 
+The richer projection specs in [`SPEC_L01_LANDMARK_SCHEMA.md`](./SPEC_L01_LANDMARK_SCHEMA.md) and [`SPEC_MEMORY_PROJECTION_LAYER.md`](./SPEC_MEMORY_PROJECTION_LAYER.md) are design contracts for additional motif, occasion, callback, and declarative projection work. They do not mean those tables or the `recall_expand` tool are fully implemented today.
+
 ## Retrieval Path
 
 `MemoryRetriever` combines multiple filters and ranking stages:
@@ -266,10 +270,13 @@ Start here when behavior matters:
 
 - `src/faculties/memory/types.ts`
 - `src/faculties/memory/store.ts`
+- `src/faculties/memory/postgres-store.ts`
 - `src/faculties/memory/writer.ts`
 - `src/faculties/memory/extraction.ts`
 - `src/faculties/memory/retrieval.ts`
 - `src/faculties/memory/episodic/store.ts`
+- `src/faculties/memory/episodic/postgres-store.ts`
 - `src/faculties/memory/episodic/synthesis.ts`
 - `src/faculties/memory/retrieval/episodic.ts`
 - `src/app/startup/composition/composition.ts`
+- `src/persistence/runtime-factory.ts`

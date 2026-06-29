@@ -2,7 +2,7 @@
 
 This is the operator reference for runtime prompt macros (template variables) and the rules that keep companion prompts operator-tunable.
 
-Audited 2026-06-10 against the live macro surface (`PROMPT_RUNTIME_MACRO_HINTS` in `src/core/identity/prompt-runtime.ts` and the variable builders in `src/core/agent/substrate-agent/runtime-context.ts`).
+Audited 2026-06-10 against the live macro surface (`PROMPT_RUNTIME_MACRO_HINTS` in `src/core/identity/prompt-runtime.ts` and the variable builders in `src/core/agent/substrate-agent/runtime-context.ts`). Rechecked for documentation alignment on 2026-06-29; the open items at the end remain design debt, not separate task tracking.
 
 ## The purity rule
 

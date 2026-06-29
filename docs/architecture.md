@@ -1,6 +1,8 @@
 # Architecture
 
-This is the current runtime shape. For the component graph, start with [`docs/architecture-diagram.mmd`](./architecture-diagram.mmd); for behavior, trust the code in `src/`. For the post-Sprint 8 source-backed deep dive, see [`docs/sprint-8-architecture-report.md`](./sprint-8-architecture-report.md).
+Last updated: 2026-06-29.
+
+This is the current runtime shape. For the component graph, see [`docs/architecture-diagram.mmd`](./architecture-diagram.mmd). For the post-Sprint 8 source-backed snapshot, see [`docs/sprint-8-architecture-report.md`](./sprint-8-architecture-report.md); for current feature status and active work, see [`docs/development-status.md`](./development-status.md).
 
 ## Canonical Runtime Model
 
@@ -8,6 +10,26 @@ This is the current runtime shape. For the component graph, start with [`docs/ar
 - `src/app/gateway/main.ts` is the host-side process. It owns secrets, outbound network access, policy checks, SSRF defense, confirmation queues, audit logging, gateway-backed tool execution, and the public OpenAI-compatible API edge.
 - `src/app/operator/main.ts` is the operator-plane process. It hosts Garden HTTP/UI and proxies admin traffic over the private admin transport.
 - `src/app/agent/main.ts` is the isolated agent process. It loads companion state, enforces startup network isolation, connects to the gateway over the Unix socket, and runs the companion loop plus the private admin transport.
+
+```text
+External channels / API / Garden
+        |
+        v
+Gateway process
+  - secrets, provider credentials, outbound network
+  - LLM and embedding clients
+  - URL, filesystem, shell, git, vault, beads, media policy
+        |
+        | JSON-RPC over Unix socket
+        v
+Agent process
+  - companion loop, prompt stack, memory/retrieval
+  - scheduler, post-turn work, internal state
+  - private admin transport and model-facing tools
+        |
+        v
+PostgreSQL + JSONL/session files + owner-file roots
+```
 
 ## Composition Layer
 
@@ -43,10 +65,10 @@ Those helpers keep the split runtime and shared wiring aligned on core wiring:
 `src/app/agent/main.ts` builds the companion runtime:
 
 - loads config, owner-file state, and trust policy
-- initializes SQLite-backed companion data
+- initializes PostgreSQL-backed companion runtime stores through `createAgentPersistenceRuntime`
 - loads the character card and prompt registry
 - composes `SessionManager`, `SubstrateAgent`, `MemoryStore`, `MemoryRetriever`, `MemoryExtractor`, `Scheduler`, the gateway-routed API backend, and the private admin transport
-- wires contacts, values, skills, safeguards, core memory, shards, analysis workbench tools, image tools, and post-turn actions
+- wires contacts, values, skills, safeguards, core memory, subagents, shard internals, analysis workbench tools, media/journal/wiki tools, and post-turn actions
 
 The agent talks to the gateway through `GatewayClient`, which acts as the LLM and embeddings provider inside the isolated process.
 
@@ -111,9 +133,9 @@ Persistence is shaped around domain ports, not raw database adapters.
 
 - L0 archive operations belong to `SessionArchivePort` and continue to use JSONL as the canonical backing format.
 - Searchable transcript mirrors and projections belong to `TranscriptProjectionPort` and `TranscriptSearchPort`.
-- Durable state that may move across SQLite or PostgreSQL belongs behind async-safe domain ports such as `MemoryStorePort`, `ContactStorePort`, `ConcernStorePort`, `PendingFollowUpStorePort`, `BehavioralPatternStorePort`, `GatewayAuditStorePort`, and `TurnRecordStorePort`.
-- Raw SQLite or PostgreSQL adapter code stays behind those ports and is not a composition-root seam.
-- Backend choice happens in composition/runtime wiring so callers only see the port contracts.
+- Durable state belongs behind async-safe domain ports such as `MemoryStorePort`, `ContactStorePort`, `ConcernStorePort`, `PendingFollowUpStorePort`, `BehavioralPatternStorePort`, `GatewayAuditStorePort`, and `TurnRecordStorePort`.
+- Raw adapter code stays behind those ports and is not a composition-root seam.
+- The live runtime composes PostgreSQL implementations. SQLite implementations remain for legacy migration utilities, explicit repair flows, and adapter tests.
 
 ## Extension Surfaces
 
@@ -123,6 +145,18 @@ These are the main extension points that already exist in code:
 - channel adapter factory manifests
 - module registry and loader
 - skills runtime
-- gateway-backed git, filesystem, vault, image, shell, and beads tool surfaces
+- gateway-backed git, filesystem, vault, media, shell, web, journal, and beads tool surfaces
+
+## Current Model-Facing Surface
+
+The direct first-party surface is declared in `src/core/agent/tool-surface/registry.ts` and implemented by the agent/gateway composition roots. The current important surfaces are:
+
+- adaptive control: `tool_search`, `toolset`, and `response_control action=no_reply`
+- workspace and external primitives: `fs`, `repo`, `shell`, `web`, `analysis_workbench`
+- companion state: `memory`, `scratchpad`, `contact`, `session`, `identity`, `orient`, `north_star`, `schedule`, `self_status`, `system`, `skill`, `wiki`, `journal`
+- operations and lifecycle: `beads`, `notify`, `media`, `selfie_create`, `vault`
+- bounded workers: `subagent action=spawn|message|wait|cancel|status`
+
+Shard execution is implemented as an internal long-horizon runtime with fold-back lineage and review, but the direct model-facing `shard` surface is still a reserved extended control-plane entry. Use `subagent` for bounded worker control until the shard surface is fully registered and documented as live.
 
 If documentation and diagrams disagree with the code, prefer the entrypoints and composition files first.

@@ -2,6 +2,8 @@
 
 *2026-06-11, Fable Window 1. Companion packet: `context_packets/2026-06-11-memory-schema-session.md`. Discharges the design scope of PSFN-h5r3 and PSFN-a2na; supersedes-in-part PSFN-qxdx/z80i/cyzi (see §6). Charter authority: `docs/PSFN_PROJECT_CHARTER_524.md` §6.20–6.23, Laws 2, 17–20, 27.*
 
+> Status as of 2026-06-29: the core Postgres L0.1 episode/span/arc/watermark/candidate/review/lineage substrate exists. The motif, occasion, callback, typed-VAD migration, and contact emotional sample work in this spec remains planned implementation work, tracked under the current `bd` graph. Do not build a second landmark table; extend the existing `l01_episodes` substrate.
+
 Schema mistakes here are the most expensive in the system: they mean migrations against the provenance-bearing episodic store and the journal-replayed L2 store. Every decision below states its rationale and its migration cost.
 
 ## 1. What already exists (do not rebuild)

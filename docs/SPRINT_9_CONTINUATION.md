@@ -1,5 +1,7 @@
 # Sprint 9 Continuation Notes
 
+> Current status update, 2026-06-29: this file is a historical sprint handoff from 2026-06-11. It should not be read as the live next-session plan. The branch has since moved to `sprint_9_final`, the runtime is Postgres-only, backup/restore coverage has landed, group-memory diagnostics exist, and the live task graph is `bd`. Use [`development-status.md`](./development-status.md) for the current milestone/roadmap summary.
+
 - Last session: 2026-06-11 morning (overnight verification + fixes; previous audits: `docs/SPRINT_9_FABLE_REVIEW.md`)
 - Branch: `sprint_9_memory` @ `c94b3ef0`, **4,120/4,120 tests green**, lint clean (a service-staging tmpdir test is occasionally flaky under full-suite parallelism; passes on re-run)
 - Live deployment: the Pi (`ssh psfn-pi`, checkout `~/psfn-framework-source`) runs the Postgres-only build; the Pi now pushes/pulls GitHub directly (`git pull --ff-only` works there — no more bundle dance). Deploy = pull, `npm run build` (+ `npm run garden:build` if admin-ui changed), `sudo systemctl restart psfn.service`.

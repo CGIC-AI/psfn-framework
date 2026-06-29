@@ -69,6 +69,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     const { facade, agent, emitTelemetry, correlation } = createFacade('reflection');
     facade.registerTool(makeTool('identity'), 'core');
     facade.registerTool(makeTool('system'), 'core');
+    facade.registerTool(makeTool('self_status'), 'core');
     facade.registerTool(makeTool('session'), 'core');
     facade.registerTool(makeTool('contact'), 'core');
     facade.registerTool(makeTool('subagent'), 'core');
@@ -85,7 +86,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
     }, 'reflection', 'background', correlation, { intent: null, skipped: [] });
 
     const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
-    expect(tools.map(tool => tool.name)).toEqual(['contact', 'identity', 'session', 'system']);
+    expect(tools.map(tool => tool.name)).toEqual(['contact', 'identity', 'self_status', 'session', 'system']);
 
     const skippedEvents = emitTelemetry.mock.calls
       .filter(([eventName]) => eventName === 'agent.tools.core_guardrail.skipped');

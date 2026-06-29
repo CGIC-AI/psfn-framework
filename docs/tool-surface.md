@@ -32,6 +32,7 @@ The goal is not to expose more tools. The goal is to reduce tool-choice entropy 
 - `vault`
 - `beads`
 - `skill`
+- `self_status`
 - `system`
 - `notify`
 - `media`
@@ -61,6 +62,7 @@ Unified top-level direct tools in the current runtime:
 - `identity`
 - `north_star`
 - `schedule`
+- `self_status`
 - `system`
 - `subagent`
 - `wiki`
@@ -75,6 +77,7 @@ Important current-state notes:
 - `load_tools` and `promoted_tools_*` are no longer live runtime control tools. Discovery, activation, pinning, and catalog inspection run through `tool_search` and `toolset`.
 - `fs_list`, `fs_read`, `repo_status`, `repo_diff`, `repo_apply_patch`, `repo_commit`, `repo_create_branch`, `repo_open_pr`, `vault_*`, `issue_*`, `settings_get`, `self_restart`, `self_rebuild`, and `notify_operator` are historical or action-alias names, not model-facing control paths.
 - Transcript lookup stays on `session`; memory and scratchpad mutation stay on `memory` and `scratchpad`; contact mutation stays on `contact`; values and concerns stay on `orient`.
+- Safe companion-facing runtime introspection stays on `self_status`; guarded runtime settings and lifecycle actions stay on `system`.
 - Generic image generation, editing, and analysis stay on `media`; `selfie_create` stays separate as the first-class self-expression image tool.
 - Garden's Tools page must reflect the runtime catalog for canonical names only. It may show actions, required parameters, capability requirements, reversibility, interruptibility/concurrency, and bundle membership, but must not present retired aliases as callable tools.
 

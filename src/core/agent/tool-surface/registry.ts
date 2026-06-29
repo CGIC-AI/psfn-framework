@@ -304,6 +304,15 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     ],
   },
   {
+    name: 'self_status',
+    domain: 'system',
+    exposure: 'core',
+    description: 'Canonical companion-facing safe runtime self-status surface.',
+    actions: ['snapshot'],
+    capabilityMetadata: { kind: 'static', source: CAPABILITIES_REQUIREMENTS },
+    retiredAliases: [],
+  },
+  {
     name: 'system',
     domain: 'system',
     exposure: 'core',

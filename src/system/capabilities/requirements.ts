@@ -281,6 +281,7 @@ const STATIC_TOOL_REQUIREMENTS: Readonly<Record<string, CapabilityRequirement>> 
   self_rebuild: 'lifecycle.rebuild',
   self_restart: 'lifecycle.restart',
   settings_get: 'identity.read',
+  self_status: 'identity.read',
   analysis_workbench: 'repl.execute',
   web: 'external.web',
   web_fetch: 'external.web',

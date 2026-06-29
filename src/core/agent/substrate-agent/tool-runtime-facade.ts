@@ -108,6 +108,10 @@ const MAINTENANCE_CORE_TOOL_POLICIES = new Map<string, MaintenanceCoreToolPolicy
     allowedActions: ['list', 'search', 'grep'],
     resolveAction: resolveMaintenanceSessionAction,
   }],
+  ['self_status', {
+    allowedActions: ['snapshot'],
+    resolveAction: resolveMaintenanceSelfStatusAction,
+  }],
   ['system', {
     allowedActions: ['read'],
     resolveAction: resolveMaintenanceSystemAction,
@@ -206,6 +210,14 @@ function resolveMaintenanceSessionAction(params: Record<string, unknown>): strin
     default:
       return null;
   }
+}
+
+function resolveMaintenanceSelfStatusAction(params: Record<string, unknown>): string | null {
+  const rawAction = typeof params.action === 'string' ? params.action.trim() : '';
+  if (!rawAction) {
+    return 'snapshot';
+  }
+  return rawAction === 'snapshot' ? 'snapshot' : null;
 }
 
 function resolveMaintenanceContactAction(params: Record<string, unknown>): string | null {

@@ -153,6 +153,7 @@ import {
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import type { ObserverEvalSidecarRuntime } from '../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
+import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/types.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -583,6 +584,10 @@ export class SubstrateAgent {
 
   getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot {
     return this.toolRuntimeFacade.getToolCatalogSnapshot();
+  }
+
+  getToolHealthStatusByName(): ReadonlyMap<string, RuntimeServiceHealthStatus> {
+    return this.toolRuntimeFacade.getToolHealthStatusByName();
   }
 
   getBackgroundContinuationTasks(): readonly BackgroundContinuationTaskRecord[] {

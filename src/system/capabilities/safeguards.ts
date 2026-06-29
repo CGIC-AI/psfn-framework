@@ -33,6 +33,7 @@ const TOOL_REVERSIBILITY_BY_NAME: Readonly<Record<string, ToolReversibility>> = 
   north_star_delete: 'irreversible',
   north_star_reorder: 'irreversible',
   settings_get: 'reversible',
+  self_status: 'reversible',
   contact: 'irreversible',
   media: 'irreversible',
   selfie_create: 'irreversible',

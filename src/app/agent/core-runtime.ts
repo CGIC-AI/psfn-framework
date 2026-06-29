@@ -80,6 +80,8 @@ import {
   resolvePersonalSkillsDir,
   resolveScratchpadMirrorPath,
 } from '../../persistence/layout.js';
+import { createSelfStatusTool } from '../../core/tools/self-status.js';
+import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
 
 export interface AgentCoreRuntimeOptions {
   config: CoreSubstrateConfig;
@@ -211,6 +213,17 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   });
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
+  agentLoop.registerTool(createSelfStatusTool({
+    config,
+    getCapabilityTier: () => capabilityRuntime.getTier(),
+    getAdaptiveToolRuntimeState: () => agentLoop.getAdaptiveToolRuntimeState(),
+    getToolCatalogSnapshot: () => agentLoop.getToolCatalogSnapshot(),
+    getToolHealthStatusByName: () => agentLoop.getToolHealthStatusByName(),
+    getObserverEvalSidecarHealth: () => getObserverEvalSidecarHealthSnapshot(observerEvalSidecar),
+    getMemoryStats: () => memoryStore.getStats(),
+    listRecentSessions: (limit) => sessionManager.listRecentSessions(limit),
+    getStreamingState: () => agentLoop.isStreaming,
+  }), 'core');
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
     dataDir: pathSnapshot.systemDataDir,

@@ -175,6 +175,36 @@ describe('capability tool gating', () => {
     expect(resolveToolRequiredCapabilities(createTool('selfie_create').tool, {})).toEqual(['external.web']);
     expect(resolveToolRequiredCapabilities(createTool('subagent').tool, { action: 'status' })).toEqual(['identity.read']);
     expect(resolveToolRequiredCapabilities(createTool('subagent').tool, { action: 'spawn' })).toEqual(['shard.spawn']);
+    expect(resolveToolRequiredCapabilities(createTool('skill').tool, { action: 'stats' })).toEqual(['identity.read']);
+    expect(resolveToolRequiredCapabilities(createTool('skill').tool, { action: 'skill_view' })).toEqual(['identity.read']);
+    expect(resolveToolRequiredCapabilities(createTool('skill').tool, { action: 'update' })).toEqual(['identity.write.runtime']);
+  });
+
+  it('gates unified skill stats as read-oriented and mutations as runtime writes', async () => {
+    const skillStats = createTool('skill');
+    const statsDeniedGated = gateToolWithCapabilities(
+      skillStats.tool,
+      () => accessForTier('custom', ['identity.write.runtime']),
+    );
+    const statsDenied = await statsDeniedGated.execute('call-skill-stats-denied', { action: 'stats' });
+    expect(skillStats.executeSpy).not.toHaveBeenCalled();
+    expect((statsDenied.content[0] as any).text).toContain('identity.read');
+
+    const statsAllowedGated = gateToolWithCapabilities(
+      skillStats.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    await statsAllowedGated.execute('call-skill-stats-allowed', { action: 'stats' });
+    expect(skillStats.executeSpy).toHaveBeenCalledTimes(1);
+
+    const skillUpdate = createTool('skill');
+    const updateDeniedGated = gateToolWithCapabilities(
+      skillUpdate.tool,
+      () => accessForTier('custom', ['identity.read']),
+    );
+    const updateDenied = await updateDeniedGated.execute('call-skill-update-denied', { action: 'update' });
+    expect(skillUpdate.executeSpy).not.toHaveBeenCalled();
+    expect((updateDenied.content[0] as any).text).toContain('identity.write.runtime');
   });
 
   it('does not grant static capability metadata to retired model-facing split aliases', () => {

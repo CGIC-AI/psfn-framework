@@ -330,7 +330,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'knowledge',
     exposure: 'core',
     description: 'Canonical managed-skill discovery and mutation surface.',
-    actions: ['list', 'view', 'create', 'update'],
+    actions: ['list', 'view', 'stats', 'create', 'update'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [
       retiredAlias('skill_list', 'skill', 'hidden', 'list', 'Skill discovery belongs on skill.'),

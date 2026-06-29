@@ -1,0 +1,15 @@
+[Unit]
+Description=PSFN Purrsephone out-of-process watchdog page
+Documentation=file:%h/psfn-framework-source/docs/operations.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/psfn-framework-source
+Environment=PATH=%h/.local/bin:/opt/node-v22/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EnvironmentFile=%h/psfn-framework-source/deployment/systemd/user/purrsephone-watchdog.env
+ExecStart=/usr/bin/env node %h/psfn-framework-source/scripts/ops/continuity-watchdog-healthcheck.mjs
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=psfn-watchdog

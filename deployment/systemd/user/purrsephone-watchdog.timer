@@ -1,0 +1,12 @@
+[Unit]
+Description=Run PSFN Purrsephone watchdog paging checks
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=10s
+Persistent=true
+Unit=purrsephone-watchdog.service
+
+[Install]
+WantedBy=timers.target

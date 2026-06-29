@@ -42,6 +42,39 @@ What it does:
 
 Use `--dry-run` first. Keep authoritative env and runtime wiring in the deployed repo tree; do not create shadow service config elsewhere. The installer-owned unit injects the production layout paths and `PSFN_SKIP_DOTENV=true`, while the filtered env file only carries env-owned values that remain appropriate to source from disk.
 
+## Out-of-Process Watchdog Paging
+
+The repo-owned watchdog runner lives at:
+
+```bash
+scripts/ops/continuity-watchdog-healthcheck.mjs
+```
+
+It is intended to run outside the Purrsephone runtime, usually through the repo-owned systemd user timer templates:
+
+```text
+deployment/systemd/user/purrsephone-watchdog.service
+deployment/systemd/user/purrsephone-watchdog.timer
+deployment/systemd/user/purrsephone-watchdog.environment.example
+```
+
+The watchdog checks the configured `systemd --user` service, optional process pattern, and API `/health` continuity contract. It pages through ntfy when the service is down, the health endpoint is unreachable, or continuity checks such as `schedulerHealthcheck` report stale liveness. It persists a small replay guard under the repo-local `data/ops/` default so repeated timer runs do not send duplicate pages for the same unresolved incident until `CONTINUITY_WATCHDOG_REPEAT_PAGE_AFTER_MS` elapses.
+
+Configuration is fail-closed. The service template targets the live checkout at `%h/psfn-framework-source`, requires `deployment/systemd/user/purrsephone-watchdog.env` in that deployed repo checkout, and the script refuses to run without explicit ntfy base URL, topic, and token by default. If a deployment uses a different checkout path, edit the repo-owned template before installation. Copy the example file to that ignored env path and fill in deployment-specific values there. Do not create shadow watchdog env files in `~/.config/systemd`, `/etc/systemd`, `/tmp`, or other off-repo locations.
+
+Dry-run and config validation:
+
+```bash
+set -a
+. deployment/systemd/user/purrsephone-watchdog.env
+set +a
+CONTINUITY_WATCHDOG_DRY_RUN=true node scripts/ops/continuity-watchdog-healthcheck.mjs
+node scripts/ops/continuity-watchdog-healthcheck.mjs --check-config
+node scripts/ops/continuity-watchdog-smoke.mjs
+```
+
+The smoke harness uses a local fake health endpoint and dummy dry-run ntfy settings; it does not install or enable the systemd timer.
+
 ## Persistence Cutover
 
 Use this when moving from legacy shared `data/` layout into split roots:

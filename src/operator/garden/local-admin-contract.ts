@@ -18,6 +18,7 @@ import type { SessionManager } from '../../core/session/manager.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
 import type { ObserverEvalSidecarRuntime } from '../../core/eval/observer-sidecar/types.js';
+import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
@@ -63,6 +64,7 @@ import {
 } from './services/audit-history-service.js';
 import { registerAuditTimelineSources } from './services/audit-event-collector.js';
 import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
+import { AdminConcernDataService } from './services/concern-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
 import { AdminEpisodicMemoryDataService } from './services/episodic-memory-service.js';
@@ -95,6 +97,7 @@ export interface InProcessGardenAdminContractOptions {
   shardManager: ShardExecutionPort;
   eventBus: EventBus;
   contactStore?: ContactStorePort | null;
+  concernStore?: ConcernStorePort | null;
   characterCard: CharacterCardV2;
   config: SubstrateConfig;
   embeddingService: EmbeddingProviderPort | null;
@@ -242,6 +245,9 @@ export function createInProcessGardenAdminContract(
       memoryStore: options.memoryStore,
       sessionStore: options.sessionStore,
     }),
+    concerns: options.concernStore
+      ? new AdminConcernDataService(options.concernStore)
+      : null,
     settings: new AdminSettingsDataService({
       config: options.config,
       configStore,

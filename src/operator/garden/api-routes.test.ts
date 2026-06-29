@@ -32,6 +32,7 @@ import {
 } from '../../core/identity/prompt-registry.js';
 import { createPromptStatePort } from '../../core/identity/prompt-state-port.js';
 import { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
+import { ActiveConcernStore } from '../../core/intention/concerns.js';
 import { loadSettings } from '../../system/settings.js';
 import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
 import { loadModelsConfig, saveModelsConfig } from '../../system/config/models-config.js';
@@ -440,6 +441,7 @@ describe('AdminServer JSON API routes', () => {
   let shardManager: ShardManager;
   let foldReviewController: ShardFoldReviewController;
   let contactStore: ContactStore;
+  let concernStore: ActiveConcernStore;
   let promptStore: PromptLayerStore;
   let promptRegistry: PromptRegistryStore;
   let cardVersionStore: CharacterCardVersionStore;
@@ -491,6 +493,9 @@ describe('AdminServer JSON API routes', () => {
     sessionManager = new SessionManager(sessionStore, testConfig, eventBus);
     scheduler = new Scheduler(eventBus);
     contactStore = new ContactStore(db, 'primary-user');
+    concernStore = new ActiveConcernStore(db, {
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+    });
     promptStore = new PromptLayerStore(
       join(tempDir, 'prompt-layers.json'),
       join(tempDir, 'prompt-history.jsonl'),
@@ -676,6 +681,7 @@ describe('AdminServer JSON API routes', () => {
       config: testConfig,
       embeddingService: testEmbeddingService,
       contactStore,
+      concernStore,
       promptState: createPromptStatePort({
         layers: promptStore,
         registry: promptRegistry,
@@ -717,6 +723,69 @@ describe('AdminServer JSON API routes', () => {
     expect(authorized.status).toBe(200);
     const payload = JSON.parse(authorized.body) as { stats: { memoryTotal: number } };
     expect(payload.stats.memoryTotal).toBeGreaterThanOrEqual(0);
+  });
+
+  it('exposes Garden concern management actions', async () => {
+    const active = concernStore.create({
+      text: 'Inspect medication reminder pressure',
+      priority: 'high',
+      expiresAt: '2026-06-29T18:00:00.000Z',
+    });
+    concernStore.create({
+      text: 'Resolve stale hydration reminder',
+      status: 'watching',
+      createdAt: '2026-06-29T08:00:00.000Z',
+      expiresAt: '2026-06-29T09:00:00.000Z',
+    });
+
+    const listed = await request(port, 'GET', '/api/admin/concerns?includeExpired=true', undefined, authHeaders);
+    expect(listed.status).toBe(200);
+    expect(JSON.parse(listed.body)).toMatchObject({
+      concerns: [
+        expect.objectContaining({ id: active.id, text: 'Inspect medication reminder pressure' }),
+        expect.objectContaining({ text: 'Resolve stale hydration reminder' }),
+      ],
+    });
+
+    const sweep = await request(
+      port,
+      'POST',
+      '/api/admin/concerns/resolve-stale',
+      JSON.stringify({
+        asOf: '2026-06-29T12:00:00.000Z',
+        evidenceRefs: [{ kind: 'operator', ref: 'garden:stale-sweep' }],
+      }),
+      authHeaders,
+    );
+    expect(sweep.status).toBe(200);
+    expect(JSON.parse(sweep.body)).toMatchObject({
+      ok: true,
+      concerns: [expect.objectContaining({
+        text: 'Resolve stale hydration reminder',
+        status: 'resolved',
+      })],
+    });
+
+    const suppress = await request(
+      port,
+      'POST',
+      `/api/admin/concerns/${encodeURIComponent(active.id)}/suppress`,
+      JSON.stringify({ outcome: 'Operator suppressed this thread.', evidenceRef: 'garden:manual-suppress' }),
+      authHeaders,
+    );
+    expect(suppress.status).toBe(200);
+    expect(JSON.parse(suppress.body)).toMatchObject({
+      ok: true,
+      concerns: [expect.objectContaining({
+        id: active.id,
+        status: 'suppressed',
+        resolutionOutcome: 'Operator suppressed this thread.',
+      })],
+    });
+
+    const promptFacing = await request(port, 'GET', '/api/admin/concerns', undefined, authHeaders);
+    expect(promptFacing.status).toBe(200);
+    expect(JSON.parse(promptFacing.body)).toEqual({ concerns: [] });
   });
 
   it('lists and fetches persisted shard fold reviews on the canonical admin shard routes', async () => {

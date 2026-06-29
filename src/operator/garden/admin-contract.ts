@@ -23,6 +23,7 @@ import type {
   AdminAuditHistoryService,
   AdminChargeLedgerService,
   AdminContactsService,
+  AdminConcernService,
   AdminDashboardService,
   AdminEpisodicMemoryService,
   AdminGroupMemoryService,
@@ -145,6 +146,7 @@ export interface GardenAdminDomainServices {
   memory: AdminMemoryService;
   sessions: AdminSessionService;
   contacts: AdminContactsService;
+  concerns?: AdminConcernService | null;
   settings: AdminSettingsService;
   identity: AdminIdentityService;
   prompts: AdminPromptsService;

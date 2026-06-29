@@ -11,6 +11,7 @@ import {
   prefixedParamPath,
 } from './route-matchers.js';
 import { buildAdminContactRoutes } from './routes/contact-routes.js';
+import { buildAdminConcernRoutes } from './routes/concern-routes.js';
 import { buildAdminIdentityRoutes } from './routes/identity-routes.js';
 import { buildAdminImageRoutes } from './routes/image-routes.js';
 import { buildAdminOverviewRoutes } from './routes/overview-routes.js';
@@ -26,6 +27,7 @@ import type {
   AdminAuditHistoryService,
   AdminChargeLedgerService,
   AdminContactsService,
+  AdminConcernService,
   AdminDashboardService,
   AdminEpisodicMemoryService,
   AdminGroupMemoryService,
@@ -245,6 +247,7 @@ export function buildAdminApiRoutes(options: {
   memoryService: AdminMemoryService;
   sessionService: AdminSessionService;
   contactsService: AdminContactsService;
+  concernService?: AdminConcernService | null;
   settingsService: AdminSettingsService;
   identityService: AdminIdentityService;
   promptsService: AdminPromptsService;
@@ -280,6 +283,7 @@ export function buildAdminApiRoutes(options: {
     memoryService,
     sessionService,
     contactsService,
+    concernService,
     settingsService,
     identityService,
     promptsService,
@@ -1026,6 +1030,7 @@ export function buildAdminApiRoutes(options: {
     },
     ...buildAdminSessionRoutes({ sessionService }),
     ...buildAdminContactRoutes({ contactsService, withBody }),
+    ...buildAdminConcernRoutes({ concernService, withBody }),
     ...buildAdminSettingsRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
     ...buildAdminIdentityRoutes({ identityService, appendAuditTimelineEntry, withBody }),
     ...buildAdminPromptRoutes({ promptsService, withBody }),

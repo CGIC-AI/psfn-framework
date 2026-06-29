@@ -182,16 +182,21 @@ class FakeIntentionPool {
     }
 
     if (normalized.includes('FROM active_concerns') && normalized.includes('ORDER BY CASE priority')) {
-      const [asOf, maybeContactId, maybeLimit] = values as [string, string | number, number | undefined];
-      const contactId = typeof maybeLimit === 'number' ? (typeof maybeContactId === 'string' ? maybeContactId : undefined) : undefined;
-      const limit = typeof maybeLimit === 'number' ? maybeLimit : Number(maybeContactId);
+      const filtersExpired = normalized.includes('expires_at >');
+      const filtersResolved = normalized.includes('resolved_at IS NULL');
+      const maybeAsOf = filtersExpired ? values[0] as string : undefined;
+      const maybeContactId = values.length === (filtersExpired ? 3 : 2)
+        ? values[filtersExpired ? 1 : 0]
+        : undefined;
+      const contactId = typeof maybeContactId === 'string' ? maybeContactId : undefined;
+      const limit = Number(values[values.length - 1]);
       const rows = [...this.activeConcerns.values()]
-        .filter((row) => row.resolved_at === null)
-        .filter((row) => row.status !== 'resolved' && row.status !== 'dismissed' && row.status !== 'suppressed')
-        .filter((row) => row.expires_at > asOf)
+        .filter((row) => !filtersResolved || row.resolved_at === null)
+        .filter((row) => !filtersResolved || (row.status !== 'resolved' && row.status !== 'dismissed' && row.status !== 'suppressed'))
+        .filter((row) => !maybeAsOf || row.expires_at > maybeAsOf)
         .filter((row) => !contactId || row.contact_id === null || row.contact_id === contactId)
         .sort((left, right) => concernSort(left, right))
-        .slice(0, Number(limit))
+        .slice(0, limit)
         .map(row => row as Row);
       return { rows };
     }
@@ -596,6 +601,37 @@ describe('postgres intention adapters', () => {
       withinMs: 4 * 60 * 60 * 1000,
     });
     expect(match?.id).toBe(created.id);
+  });
+
+  it('resolves stale duplicate concerns before Postgres creation opens another thread', async () => {
+    const pool = new FakeIntentionPool();
+    const ports = createPostgresIntentionPortsFromPool(pool as never);
+
+    const stale = await ports.concernStore.create({
+      text: 'Follow up on hydration tomorrow morning',
+      contactId: 'contact-a',
+      status: 'watching',
+      createdAt: '2026-03-28T00:00:00.000Z',
+      expiresAt: '2026-03-28T01:00:00.000Z',
+    });
+
+    const duplicate = await ports.concernStore.create({
+      text: 'Follow up on hydration tomorrow',
+      contactId: 'contact-a',
+      priority: 'high',
+      createdAt: '2026-03-28T02:00:00.000Z',
+      evidenceRefs: [{ kind: 'message', ref: 'msg-repeat-hydration' }],
+    });
+
+    expect(duplicate.id).toBe(stale.id);
+    expect(duplicate.status).toBe('resolved');
+    expect(duplicate.resolutionOutcome).toBe('Resolved as stale after review window elapsed.');
+    await expect(ports.concernStore.getActiveConcerns('contact-a')).resolves.toEqual([]);
+    await expect(ports.concernStore.list({
+      contactId: 'contact-a',
+      includeResolved: true,
+      includeExpired: true,
+    })).resolves.toHaveLength(1);
   });
 
   it('persists pending follow-ups and activation state', async () => {

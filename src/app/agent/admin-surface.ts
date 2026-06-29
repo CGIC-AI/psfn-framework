@@ -49,6 +49,7 @@ export interface StartOptionalAdminTransportServerOptions {
     | 'observerEvalSidecar'
     | 'agentLoop'
     | 'memoryExtractor'
+    | 'intentionRuntime'
   >;
 }
 
@@ -79,6 +80,7 @@ export async function startOptionalAdminTransportServer(
     shardManager: options.shardManager,
     eventBus: options.eventBus,
     contactStore: options.coreRuntime.contactStore,
+    concernStore: options.coreRuntime.intentionRuntime.concernStore,
     characterCard: options.card,
     config: adminConfig,
     embeddingService: options.gateway,

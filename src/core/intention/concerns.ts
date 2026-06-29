@@ -861,6 +861,11 @@ export class ActiveConcernStore implements ActiveConcernContextProvider {
     const splitFromId = normalizeOptionalId(input.splitFromId);
 
     if (isConcernAttentionStatus(status)) {
+      this.resolveStaleConcerns({
+        asOf: createdAt,
+        limit: MAX_LIST_LIMIT,
+        evidenceRefs: [{ kind: 'runtime', ref: `concern-create-stale-sweep:${createdAt}` }],
+      });
       const activeDuplicate = this.findActiveSimilarConcern({
         text,
         contactId,

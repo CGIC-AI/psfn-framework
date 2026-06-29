@@ -32,6 +32,7 @@ import {
   CONCERN_DUPLICATE_SIMILARITY_THRESHOLD,
   DEFAULT_CONCERN_LIST_LIMIT,
   DEFAULT_RECENT_RESOLUTION_LIMIT,
+  MAX_LIST_LIMIT,
   MAX_CONCERN_RESOLUTION_CHARS,
   MAX_CONCERN_TEXT_CHARS,
   ActiveConcernRow,
@@ -137,6 +138,11 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     const splitFromId = normalizeContactId(input.splitFromId);
 
     if (isConcernAttentionStatus(status)) {
+      await this.resolveStaleConcerns({
+        asOf: createdAt,
+        limit: MAX_LIST_LIMIT,
+        evidenceRefs: [{ kind: 'runtime', ref: `concern-create-stale-sweep:${createdAt}` }],
+      });
       const activeDuplicate = this.findActiveSimilarConcern({
         text,
         contactId,

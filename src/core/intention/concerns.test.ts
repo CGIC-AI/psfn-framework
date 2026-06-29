@@ -300,6 +300,32 @@ describe('ActiveConcernStore', () => {
     expect(store.list({ includeExpired: true })).toHaveLength(1);
   });
 
+  it('resolves stale duplicate concerns before creating another prompt-facing thread', () => {
+    const stale = store.create({
+      text: 'Follow up on hydration tomorrow morning',
+      priority: 'medium',
+      status: 'watching',
+      createdAt: '2026-02-01T08:00:00.000Z',
+      expiresAt: '2026-02-01T09:00:00.000Z',
+    });
+
+    const duplicate = store.create({
+      text: 'Follow up on hydration tomorrow',
+      priority: 'high',
+      createdAt: '2026-02-01T10:00:00.000Z',
+      evidenceRefs: [{ kind: 'message', ref: 'msg-hydration-repeat' }],
+    });
+
+    expect(duplicate.id).toBe(stale.id);
+    expect(duplicate.status).toBe('resolved');
+    expect(duplicate.resolutionOutcome).toBe('Resolved as stale after review window elapsed.');
+    expect(duplicate.resolutionEvidenceRefs).toEqual([
+      { kind: 'runtime', ref: 'concern-create-stale-sweep:2026-02-01T10:00:00.000Z' },
+    ]);
+    expect(store.getActiveConcerns()).toEqual([]);
+    expect(store.list({ includeResolved: true, includeExpired: true })).toHaveLength(1);
+  });
+
   it('records split children with parent provenance', () => {
     const parent = store.create({
       text: 'Separate mixed deployment and care follow-up thread',

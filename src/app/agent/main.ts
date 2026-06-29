@@ -377,6 +377,7 @@ async function main(): Promise<void> {
       agentLoop,
       observerEvalSidecar,
       memoryExtractor,
+      intentionRuntime,
     },
   });
   if (adminTransport) {

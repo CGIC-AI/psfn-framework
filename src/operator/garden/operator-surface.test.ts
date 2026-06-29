@@ -687,19 +687,26 @@ function createNetworkEndpoints(
 
 async function createOperatorOnlyHarness(
   transportEndpoint: GardenAdminTransportClientEndpoint,
+  options: { host?: string } = {},
 ): Promise<OperatorOnlyHarness> {
   const tempDir = mkdtempSync(join(tmpdir(), 'garden-operator-surface-test-'));
   const config = createTestConfig(tempDir);
   const port = await allocatePort();
   const operatorSurface = new GardenOperatorSurface({
     port,
-    host: '127.0.0.1',
+    host: options.host ?? '127.0.0.1',
     allowInsecureWithoutToken: true,
     config,
     transportEndpoint,
   });
-  await operatorSurface.init();
-  await operatorSurface.start();
+  try {
+    await operatorSurface.init();
+    await operatorSurface.start();
+  } catch (error) {
+    rmSync(tempDir, { recursive: true, force: true });
+    resetRuntimeTrustPolicy();
+    throw error;
+  }
 
   return {
     tempDir,
@@ -781,6 +788,59 @@ async function destroyOperatorOnlyHarness(harness: OperatorOnlyHarness): Promise
   rmSync(harness.tempDir, { recursive: true, force: true });
   resetRuntimeTrustPolicy();
 }
+
+describe('Garden operator surface startup policy', () => {
+  it('rejects insecure local mode on non-loopback hosts', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'garden-operator-surface-policy-test-'));
+    const config = createTestConfig(tempDir);
+    const operatorSurface = new GardenOperatorSurface({
+      port: await allocatePort(),
+      host: '0.0.0.0',
+      allowInsecureWithoutToken: true,
+      config,
+      transportEndpoint: createSocketEndpoint(join(tempDir, 'garden-admin.sock'), 1_000),
+    });
+
+    try {
+      await operatorSurface.init();
+      await expect(operatorSurface.start()).rejects.toThrow(
+        'ADMIN_ALLOW_INSECURE=true requires ADMIN_HOST to be loopback',
+      );
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      resetRuntimeTrustPolicy();
+    }
+  });
+
+  it('allows insecure local mode on explicit loopback hosts', async () => {
+    const socketTempDir = mkdtempSync(join(tmpdir(), 'garden-operator-surface-policy-test-'));
+    let loopbackHarness: OperatorOnlyHarness | undefined;
+    let localhostHarness: OperatorOnlyHarness | undefined;
+    try {
+      loopbackHarness = await createOperatorOnlyHarness(
+        createSocketEndpoint(join(socketTempDir, 'loopback.sock'), 1_000),
+        { host: '127.0.0.1' },
+      );
+      await destroyOperatorOnlyHarness(loopbackHarness);
+      loopbackHarness = undefined;
+
+      localhostHarness = await createOperatorOnlyHarness(
+        createSocketEndpoint(join(socketTempDir, 'localhost.sock'), 1_000),
+        { host: 'localhost' },
+      );
+      await destroyOperatorOnlyHarness(localhostHarness);
+      localhostHarness = undefined;
+    } finally {
+      if (loopbackHarness) {
+        await destroyOperatorOnlyHarness(loopbackHarness);
+      }
+      if (localhostHarness) {
+        await destroyOperatorOnlyHarness(localhostHarness);
+      }
+      rmSync(socketTempDir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('Garden operator surface', () => {
   let harness: Harness;

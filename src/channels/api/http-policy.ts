@@ -7,6 +7,9 @@ import {
   principalFromApiKeyToken,
   type ApiAuthPrincipal,
 } from '../backplane/http/auth.js';
+import { isLoopbackHost } from '../../shared/net/hosts.js';
+
+export { isLoopbackHost } from '../../shared/net/hosts.js';
 
 export const API_CORS_ALLOWED_METHODS = 'GET, POST, OPTIONS';
 export const API_CORS_ALLOWED_HEADERS = [
@@ -393,12 +396,6 @@ export function resolveApiCorsAllowedOrigins(
   }
 
   return mergedOrigins;
-}
-
-export function isLoopbackHost(host: string): boolean {
-  const normalized = host.trim().toLowerCase();
-  if (normalized === 'localhost' || normalized === '::1') return true;
-  return normalized.startsWith('127.');
 }
 
 export function singleHeader(value: string | string[] | undefined): string | undefined {

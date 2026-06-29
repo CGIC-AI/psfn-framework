@@ -19,6 +19,7 @@ import {
   type GardenAdminTransportHealth,
 } from './transport-client.js';
 import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
+import { validateAdminAuthStartupPolicy } from './auth-policy.js';
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -57,20 +58,20 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   async start(): Promise<void> {
-    if (!this.config.token && !this.config.allowInsecureWithoutToken) {
-      const error = new Error('ADMIN_TOKEN is required unless ADMIN_ALLOW_INSECURE=true');
-      log.error('Refusing to start Garden operator surface without authentication', {
-        host: this.config.host ?? '127.0.0.1',
-        port: this.config.port,
-        requiredEnv: 'ADMIN_TOKEN or ADMIN_ALLOW_INSECURE=true',
-      });
-      throw error;
-    }
+    const host = this.config.host ?? '127.0.0.1';
+    validateAdminAuthStartupPolicy({
+      host,
+      port: this.config.port,
+      token: this.config.token,
+      allowInsecureWithoutToken: this.config.allowInsecureWithoutToken,
+      componentLabel: 'Garden operator surface',
+      logger: log,
+    });
 
     return await new Promise((resolve, reject) => {
       const onError = (error: NodeJS.ErrnoException) => {
         log.error('Garden operator surface failed to start', {
-          host: this.config.host ?? '127.0.0.1',
+          host,
           port: this.config.port,
           code: error.code,
           errno: error.errno,
@@ -81,10 +82,10 @@ export class GardenOperatorSurface implements Lifecycle {
       };
 
       this.server.once('error', onError);
-      this.server.listen(this.config.port, this.config.host ?? '127.0.0.1', () => {
+      this.server.listen(this.config.port, host, () => {
         this.server.off('error', onError);
         log.info('Garden operator surface listening', {
-          host: this.config.host ?? '127.0.0.1',
+          host,
           port: this.config.port,
           transportMode: this.config.transportEndpoint.mode,
         });

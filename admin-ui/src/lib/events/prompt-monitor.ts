@@ -1,8 +1,10 @@
 import type {
   AdminAuthenticityProvenance,
+  AdminPromptLoomData,
   AdminPromptSectionTelemetry,
   AdminSessionTurnData,
   AdminTurnPromptContextMessage,
+  AdminTurnProviderWireMessage,
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
 } from '../types';
@@ -26,6 +28,7 @@ export interface PromptMonitorTurn {
   latestEventAt: number;
   record: AdminSessionTurnData['record'] | null;
   snapshot: AdminTurnSnapshotData | null;
+  promptLoom: AdminPromptLoomData | null;
   stages: AdminTurnStageTelemetry[];
 }
 
@@ -90,6 +93,10 @@ function clonePromptSection(
     ...section,
     ...(section.provenance ? { provenance: cloneProvenance(section.provenance) } : {}),
   };
+}
+
+function clonePromptLoom(loom: AdminPromptLoomData): AdminPromptLoomData {
+  return structuredClone(loom);
 }
 
 function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
@@ -220,6 +227,7 @@ function sortTurns(turns: readonly PromptMonitorTurn[]): PromptMonitorTurn[] {
       ...turn,
       stages: sortStages(turn.stages),
       snapshot: turn.snapshot ? cloneSnapshot(turn.snapshot) : null,
+      promptLoom: turn.promptLoom ? clonePromptLoom(turn.promptLoom) : null,
     }));
 }
 
@@ -256,8 +264,165 @@ function buildTurnFromSession(turn: AdminSessionTurnData): PromptMonitorTurn {
     latestEventAt,
     record: { ...turn.record },
     snapshot: turn.snapshot ? cloneSnapshot(turn.snapshot) : null,
+    promptLoom: turn.promptLoom ? clonePromptLoom(turn.promptLoom) : null,
     stages: sortStages(turn.stages),
   };
+}
+
+const HISTORICAL_SNAPSHOT_LABEL = 'Persisted turn snapshot; not current prompt generator state.';
+const REMOVED_PROMPT_LAYER_IDS = [
+  'runtime_self',
+  'model_context',
+  'analysis_workbench_guidance',
+] as const;
+
+function historicalLayerMatches(text: string | null | undefined, layerId: string): boolean {
+  if (!text) return false;
+  const normalized = text.toLowerCase();
+  return normalized.includes(layerId) || normalized.includes(layerId.replaceAll('_', ' '));
+}
+
+function addHistoricalHitsForText(
+  hits: AdminPromptLoomData['historicalSnapshot']['hits'],
+  source: string,
+  text: string | null | undefined,
+): void {
+  for (const layerId of REMOVED_PROMPT_LAYER_IDS) {
+    if (historicalLayerMatches(text, layerId)) {
+      hits.push({ layerId, source });
+    }
+  }
+}
+
+function addHistoricalHitsForSections(
+  hits: AdminPromptLoomData['historicalSnapshot']['hits'],
+  source: string,
+  sections: AdminPromptSectionTelemetry[] | undefined,
+): void {
+  for (const section of sections ?? []) {
+    for (const layerId of REMOVED_PROMPT_LAYER_IDS) {
+      if (
+        historicalLayerMatches(section.id, layerId)
+        || historicalLayerMatches(section.title, layerId)
+        || historicalLayerMatches(section.content, layerId)
+      ) {
+        hits.push({
+          layerId,
+          source,
+          sectionId: section.id,
+          title: section.title,
+        });
+      }
+    }
+  }
+}
+
+function collectHistoricalSnapshotHits(
+  snapshot: AdminTurnSnapshotData | null,
+): AdminPromptLoomData['historicalSnapshot']['hits'] {
+  const hits: AdminPromptLoomData['historicalSnapshot']['hits'] = [];
+  addHistoricalHitsForText(hits, 'prompt.staticPrefixTemplate', snapshot?.prompt?.staticPrefixTemplate);
+  addHistoricalHitsForText(hits, 'prompt.dynamicSuffixTemplate', snapshot?.prompt?.dynamicSuffixTemplate);
+  addHistoricalHitsForSections(hits, 'promptContext.inputSections', snapshot?.promptContext?.inputSections);
+  addHistoricalHitsForSections(
+    hits,
+    'promptContext.runtimeContextSections',
+    snapshot?.promptContext?.runtimeContextSections,
+  );
+  addHistoricalHitsForSections(
+    hits,
+    'promptContext.finalSystemSections',
+    snapshot?.promptContext?.finalSystemSections,
+  );
+  return hits;
+}
+
+function hasToolResultPayload(toolCall: AdminSessionTurnData['record']['toolCalls'][number]): boolean {
+  const record = toolCall as unknown as Record<string, unknown>;
+  return typeof record.resultText === 'string'
+    || typeof record.isError === 'boolean'
+    || record.details !== undefined;
+}
+
+function clonePromptContextMessagesForLoom(
+  messages: AdminTurnPromptContextMessage[] | undefined,
+): AdminPromptLoomData['generatedPrompt']['contextMessages'] {
+  return (messages?.map(clonePromptContextMessage) ?? []) as AdminPromptLoomData['generatedPrompt']['contextMessages'];
+}
+
+function clonePromptSectionsForLoom(
+  sections: AdminPromptSectionTelemetry[] | undefined,
+): AdminPromptLoomData['generatedPrompt']['inputSections'] {
+  return (sections?.map(clonePromptSection) ?? []) as AdminPromptLoomData['generatedPrompt']['inputSections'];
+}
+
+function cloneProviderMessagesForLoom(
+  messages: AdminTurnProviderWireMessage[] | undefined,
+): AdminPromptLoomData['providerPayload']['providerMessages'] {
+  return (messages?.map(message => ({ ...message })) ?? []) as AdminPromptLoomData['providerPayload']['providerMessages'];
+}
+
+function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
+  const snapshot = turn.snapshot;
+  const promptContext = snapshot?.promptContext;
+  const response = promptContext?.response ?? null;
+  const renderedChatOutput = response?.content ?? turn.record?.assistantMessage?.content ?? null;
+  const historicalHits = collectHistoricalSnapshotHits(snapshot);
+  const toolCalls = turn.record?.toolCalls ?? [];
+  return {
+    source: 'turn_snapshot',
+    snapshotCapturedAt: snapshot?.capturedAt ?? null,
+    historicalSnapshot: {
+      label: HISTORICAL_SNAPSHOT_LABEL,
+      removedPromptLayerIds: [...new Set(historicalHits.map(hit => hit.layerId))],
+      hits: historicalHits,
+    },
+    generatedPrompt: {
+      renderedStaticPrefix: promptContext?.renderedStaticPrefix ?? null,
+      renderedDynamicSuffix: promptContext?.renderedDynamicSuffix ?? null,
+      runtimeContext: promptContext?.runtimeContext ?? null,
+      memoryContextBlock: promptContext?.memoryContextBlock ?? null,
+      scratchpadContext: promptContext?.scratchpadContext ?? null,
+      assembledPrompt: promptContext?.assembledPrompt ?? null,
+      contextMessages: clonePromptContextMessagesForLoom(promptContext?.messages),
+      inputSections: clonePromptSectionsForLoom(promptContext?.inputSections),
+      runtimeContextSections: clonePromptSectionsForLoom(promptContext?.runtimeContextSections),
+      finalSystemSections: clonePromptSectionsForLoom(promptContext?.finalSystemSections),
+    },
+    providerPayload: {
+      finalSystemPrompt: promptContext?.finalSystemPrompt ?? null,
+      providerMessages: cloneProviderMessagesForLoom(promptContext?.providerObservability?.providerWireMessages),
+      activeTools: snapshot?.toolContext?.activeTools.map(tool => ({
+        ...tool,
+        inputSchema: structuredClone(tool.inputSchema),
+      })) ?? [],
+    },
+    providerResult: {
+      response: response ? { ...response } : null,
+      renderedChatOutput,
+    },
+    memoryCapture: {
+      input: {
+        currentTurnInput: promptContext?.currentTurnInput ?? null,
+        ...(turn.record?.userMessage ? { userMessage: { ...turn.record.userMessage } } : {}),
+        ...(turn.record?.assistantMessage ? { assistantMessage: { ...turn.record.assistantMessage } } : {}),
+        renderedChatOutput,
+      },
+      output: {
+        extractedMemoryIds: [...(turn.record?.extractedMemoryIds ?? [])],
+      },
+    },
+    toolActivity: {
+      toolCalls: toolCalls.map(toolCall => structuredClone(toolCall)),
+      toolResults: toolCalls
+        .filter(hasToolResultPayload)
+        .map(toolCall => structuredClone(toolCall)),
+    },
+  };
+}
+
+export function resolvePromptMonitorPromptLoom(turn: PromptMonitorTurn): AdminPromptLoomData {
+  return turn.promptLoom ? clonePromptLoom(turn.promptLoom) : buildPromptLoomFromTurn(turn);
 }
 
 function readSnapshotEnvelopeData(
@@ -332,6 +497,7 @@ export function mergePromptMonitorEvent(
       latestEventAt: event.timestamp,
       record: null,
       snapshot: snapshot,
+      promptLoom: null,
       stages: stage ? [stage] : [],
     };
 

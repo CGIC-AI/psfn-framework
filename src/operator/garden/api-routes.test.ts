@@ -2966,7 +2966,7 @@ describe('AdminServer JSON API routes', () => {
             };
           };
           toolContext?: {
-            activeTools?: Array<{ name: string }>;
+            activeTools?: Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>;
             adaptiveSnapshot?: {
               skipped?: Array<{ toolName?: string; reason?: string }>;
             };
@@ -2980,6 +2980,29 @@ describe('AdminServer JSON API routes', () => {
           };
           sessionContext?: { compactionPromptText?: string };
         } | null;
+        promptLoom?: {
+          historicalSnapshot: {
+            label: string;
+            removedPromptLayerIds: string[];
+          };
+          providerPayload: {
+            finalSystemPrompt: string | null;
+            providerMessages: Array<{ role: string; source: string; content: string }>;
+            activeTools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
+          };
+          providerResult: {
+            renderedChatOutput: string | null;
+          };
+          memoryCapture: {
+            input: {
+              currentTurnInput: string | null;
+              renderedChatOutput: string | null;
+            };
+            output: {
+              extractedMemoryIds: string[];
+            };
+          };
+        };
       }>;
     };
     expect(messagesPayload.messages.map(message => message.content)).toContain('hello');
@@ -3037,6 +3060,39 @@ describe('AdminServer JSON API routes', () => {
         reason: 'not_needed_for_turn',
       }),
     ]);
+    expect(messagesPayload.turns[0]?.promptLoom?.providerPayload).toEqual({
+      finalSystemPrompt: 'Final system prompt',
+      providerMessages: [
+        { role: 'developer', source: 'system_prompt', content: 'Final system prompt' },
+        { role: 'user', source: 'message', content: 'hello' },
+        { role: 'assistant', source: 'message', content: 'world' },
+      ],
+      activeTools: [
+        {
+          name: 'contact_lookup',
+          description: 'Look up a contact.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string' },
+            },
+            required: ['query'],
+          },
+        },
+      ],
+    });
+    expect(messagesPayload.turns[0]?.promptLoom?.historicalSnapshot.label).toBe(
+      'Persisted turn snapshot; not current prompt generator state.',
+    );
+    expect(messagesPayload.turns[0]?.promptLoom?.memoryCapture).toMatchObject({
+      input: {
+        currentTurnInput: 'hello',
+        renderedChatOutput: 'world',
+      },
+      output: {
+        extractedMemoryIds: [],
+      },
+    });
     expect(messagesPayload.turns[0]?.snapshot?.sessionContext?.compactionPromptText).toBe('Compaction prompt snapshot');
     expect(messagesPayload.turns[0]?.snapshot?.memory?.contactEmotionalMemories[0]).not.toHaveProperty('embedding');
     expect(messagesPayload.turns[0]?.snapshot?.memory?.semanticCandidates).toHaveLength(1);

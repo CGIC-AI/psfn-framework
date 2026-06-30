@@ -3,6 +3,7 @@
   import {
     formatPromptMonitorStageLabel,
     PROMPT_MONITOR_STAGE_ORDER,
+    resolvePromptMonitorPromptLoom,
     type PromptMonitorMetrics,
     type PromptMonitorTurn,
   } from '$lib/events/prompt-monitor';
@@ -19,6 +20,7 @@
     | 'prompt'
     | 'context'
     | 'tools'
+    | 'exact'
     | 'provider'
     | 'timeline'
     | 'raw';
@@ -40,6 +42,7 @@
     { id: 'prompt', label: 'Prompt Assembly', description: 'Templates, rendered blocks, assembled prompt, and model context' },
     { id: 'context', label: 'Context & Memory', description: 'Session inputs, memory retrievals, withholds, and metadata' },
     { id: 'tools', label: 'Tools', description: 'Active schemas and adaptive activation state' },
+    { id: 'exact', label: 'Exact Payload', description: 'Exact provider input, tools, response, memory capture, and tool activity' },
     { id: 'provider', label: 'Provider Wire', description: 'Provider routing, system-role transport, payload, and response' },
     { id: 'timeline', label: 'Timeline', description: 'Stage order, elapsed time, and stage payloads' },
     { id: 'raw', label: 'Raw Events', description: 'Record, snapshot, stage telemetry, and live bus envelopes' },
@@ -47,6 +50,7 @@
 
   let activeTab = $state<SelectedTurnTab>('summary');
   let lastTurnId = $state<string | null>(null);
+  const promptLoom = $derived(resolvePromptMonitorPromptLoom(turn));
 
   $effect(() => {
     if (lastTurnId !== turn.turnId) {
@@ -423,7 +427,19 @@
     {:else if activeTab === 'prompt'}
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <div class="rounded-xl border border-bark-200 bg-white p-4">
-          <h3 class="font-medium text-shadow-900">Template Snapshot</h3>
+          <div class="flex flex-wrap items-center gap-2">
+            <h3 class="font-medium text-shadow-900">Template Snapshot</h3>
+            <span class="rounded-full border border-gold-300 bg-gold-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-900">
+              Historical Snapshot
+            </span>
+          </div>
+          <p class="mt-1 text-xs text-shadow-600">{promptLoom.historicalSnapshot.label}</p>
+          {#if promptLoom.historicalSnapshot.removedPromptLayerIds.length > 0}
+            <p class="mt-2 text-sm text-wilt-700">
+              Removed historical prompt layer data detected:
+              {promptLoom.historicalSnapshot.removedPromptLayerIds.join(', ')}
+            </p>
+          {/if}
           <div class="mt-3 space-y-3 text-sm">
             <PromptMonitorTextBlock
               title="Static Prefix Template"
@@ -722,6 +738,154 @@
               value={formatJson(turn.snapshot?.toolContext?.adaptiveSnapshot?.skipped)}
               emptyText="No adaptive tool skips recorded."
               maxHeightClass="max-h-56"
+            />
+          </div>
+        </div>
+      </div>
+    {:else if activeTab === 'exact'}
+      <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 class="font-medium text-shadow-900">Historical Snapshot Boundary</h3>
+            <p class="mt-1 text-sm text-shadow-600">{promptLoom.historicalSnapshot.label}</p>
+          </div>
+          <span class="rounded-full border border-bark-300 bg-bark-50 px-2 py-0.5 text-xs font-medium uppercase tracking-wide text-shadow-700">
+            {promptLoom.source.replace('_', ' ')}
+          </span>
+        </div>
+        {#if promptLoom.historicalSnapshot.removedPromptLayerIds.length > 0}
+          <div class="mt-3 rounded-lg border border-wilt-200 bg-wilt-50 p-3 text-sm text-wilt-800">
+            <p class="font-medium">Historical removed prompt layers</p>
+            <p class="mt-1">{promptLoom.historicalSnapshot.removedPromptLayerIds.join(', ')}</p>
+            <PromptMonitorTextBlock
+              title="Historical Snapshot Hits"
+              value={formatJson(promptLoom.historicalSnapshot.hits)}
+              emptyText="No removed historical prompt layer hits recorded."
+              maxHeightClass="max-h-48"
+            />
+          </div>
+        {/if}
+      </div>
+
+      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div class="rounded-xl border border-bark-200 bg-white p-4">
+          <h3 class="font-medium text-shadow-900">Generated Prompt Sections</h3>
+          <div class="mt-3 space-y-3 text-sm">
+            <PromptMonitorTextBlock
+              title="Rendered Static Prefix"
+              value={promptLoom.generatedPrompt.renderedStaticPrefix}
+              emptyText="No rendered static prefix recorded."
+              maxHeightClass="max-h-56"
+            />
+            <PromptMonitorTextBlock
+              title="Rendered Dynamic Suffix"
+              value={promptLoom.generatedPrompt.renderedDynamicSuffix}
+              emptyText="No rendered dynamic suffix recorded."
+              maxHeightClass="max-h-56"
+            />
+            <PromptMonitorTextBlock
+              title="Section Telemetry"
+              value={formatJson({
+                inputSections: promptLoom.generatedPrompt.inputSections,
+                runtimeContextSections: promptLoom.generatedPrompt.runtimeContextSections,
+                finalSystemSections: promptLoom.generatedPrompt.finalSystemSections,
+              })}
+              emptyText="No generated prompt section telemetry recorded."
+              maxHeightClass="max-h-[28rem]"
+            />
+            <PromptMonitorTextBlock
+              title="Canonical Context Messages"
+              value={formatJson(promptLoom.generatedPrompt.contextMessages)}
+              emptyText="No canonical context messages recorded."
+              maxHeightClass="max-h-[28rem]"
+            />
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-bark-200 bg-white p-4">
+          <h3 class="font-medium text-shadow-900">Final Provider Payload</h3>
+          <div class="mt-3 space-y-3 text-sm">
+            <PromptMonitorTextBlock
+              title="Final System Prompt"
+              value={promptLoom.providerPayload.finalSystemPrompt}
+              emptyText="No final provider system prompt recorded."
+              maxHeightClass="max-h-[28rem]"
+            />
+            <PromptMonitorTextBlock
+              title="Provider Message Array"
+              value={formatJson(promptLoom.providerPayload.providerMessages)}
+              emptyText="No provider message array recorded."
+              maxHeightClass="max-h-[28rem]"
+            />
+            <PromptMonitorTextBlock
+              title="Active Provider Tools"
+              value={formatJson(promptLoom.providerPayload.activeTools)}
+              emptyText="No active provider tool payload recorded."
+              maxHeightClass="max-h-[28rem]"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div class="rounded-xl border border-bark-200 bg-white p-4">
+          <h3 class="font-medium text-shadow-900">Provider Response & Rendered Chat</h3>
+          <div class="mt-3 space-y-3 text-sm">
+            <PromptMonitorTextBlock
+              title="Provider Response"
+              value={formatJson(promptLoom.providerResult.response)}
+              emptyText="No provider response snapshot recorded."
+              maxHeightClass="max-h-[24rem]"
+            />
+            <PromptMonitorTextBlock
+              title="Rendered Chat Output"
+              value={promptLoom.providerResult.renderedChatOutput}
+              emptyText="No rendered chat output recorded."
+              maxHeightClass="max-h-[20rem]"
+            />
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-bark-200 bg-white p-4">
+          <h3 class="font-medium text-shadow-900">Memory Capture Input & Output</h3>
+          <div class="mt-3 space-y-3 text-sm">
+            <PromptMonitorTextBlock
+              title="Memory Capture Input"
+              value={formatJson(promptLoom.memoryCapture.input)}
+              emptyText="No memory capture input recorded."
+              maxHeightClass="max-h-[24rem]"
+            />
+            <PromptMonitorTextBlock
+              title="Memory Capture Output"
+              value={formatJson(promptLoom.memoryCapture.output)}
+              emptyText="No memory capture output recorded."
+              maxHeightClass="max-h-[16rem]"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <div class="rounded-xl border border-bark-200 bg-white p-4">
+          <h3 class="font-medium text-shadow-900">Tool Calls</h3>
+          <div class="mt-3 text-sm">
+            <PromptMonitorTextBlock
+              title="Model-Emitted Tool Calls"
+              value={formatJson(promptLoom.toolActivity.toolCalls)}
+              emptyText="No model-emitted tool calls recorded."
+              maxHeightClass="max-h-[28rem]"
+            />
+          </div>
+        </div>
+
+        <div class="rounded-xl border border-bark-200 bg-white p-4">
+          <h3 class="font-medium text-shadow-900">Tool Results</h3>
+          <div class="mt-3 text-sm">
+            <PromptMonitorTextBlock
+              title="Tool Result Payloads"
+              value={formatJson(promptLoom.toolActivity.toolResults)}
+              emptyText="No tool results recorded."
+              maxHeightClass="max-h-[28rem]"
             />
           </div>
         </div>

@@ -82,6 +82,7 @@ export type {
   AdminSessionListData,
   AdminSessionMessagesData,
   AdminSessionTurnData,
+  AdminPromptLoomData,
   AdminTurnRetrievalTelemetry,
   AdminTurnStageTelemetry,
   AdminSettingsData,

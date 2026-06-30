@@ -33,7 +33,13 @@ import type {
 } from '../../../shared/contracts/episodic-memory.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
-import type { TurnRecord } from '../../../shared/contracts/runtime.js';
+import type {
+  ContextMessage,
+  LLMProviderWireMessage,
+  PromptSectionTelemetry,
+  ToolSchema,
+  TurnRecord,
+} from '../../../shared/contracts/runtime.js';
 import type {
   RunChargeLedgerData,
   RunChargeLedgerQuery,
@@ -822,6 +828,71 @@ export type AdminTurnMemorySnapshotData = TurnMemorySnapshotRecord;
 
 export type AdminTurnSnapshotData = TurnSnapshotRecord;
 
+export interface AdminPromptLoomHistoricalSnapshotHit {
+  layerId: string;
+  source: string;
+  sectionId?: string;
+  title?: string;
+}
+
+export interface AdminPromptLoomHistoricalSnapshotData {
+  label: string;
+  removedPromptLayerIds: string[];
+  hits: AdminPromptLoomHistoricalSnapshotHit[];
+}
+
+export interface AdminPromptLoomGeneratedPromptData {
+  renderedStaticPrefix: string | null;
+  renderedDynamicSuffix: string | null;
+  runtimeContext: string | null;
+  memoryContextBlock: string | null;
+  scratchpadContext: string | null;
+  assembledPrompt: string | null;
+  contextMessages: ContextMessage[];
+  inputSections: PromptSectionTelemetry[];
+  runtimeContextSections: PromptSectionTelemetry[];
+  finalSystemSections: PromptSectionTelemetry[];
+}
+
+export interface AdminPromptLoomProviderPayloadData {
+  finalSystemPrompt: string | null;
+  providerMessages: LLMProviderWireMessage[];
+  activeTools: ToolSchema[];
+}
+
+export interface AdminPromptLoomProviderResultData {
+  response: NonNullable<TurnSnapshotRecord['promptContext']>['response'] | null;
+  renderedChatOutput: string | null;
+}
+
+export interface AdminPromptLoomMemoryCaptureData {
+  input: {
+    currentTurnInput: string | null;
+    userMessage?: TurnRecord['userMessage'];
+    assistantMessage?: TurnRecord['assistantMessage'];
+    renderedChatOutput: string | null;
+  };
+  output: {
+    extractedMemoryIds: string[];
+  };
+}
+
+export interface AdminPromptLoomToolActivityData {
+  toolCalls: TurnRecord['toolCalls'];
+  toolResults: TurnRecord['toolCalls'];
+}
+
+export interface AdminPromptLoomData {
+  source: 'turn_snapshot';
+  snapshotCapturedAt: number | null;
+  historicalSnapshot: AdminPromptLoomHistoricalSnapshotData;
+  generatedPrompt: AdminPromptLoomGeneratedPromptData;
+  providerPayload: AdminPromptLoomProviderPayloadData;
+  providerResult: AdminPromptLoomProviderResultData;
+  memoryCapture: AdminPromptLoomMemoryCaptureData;
+  toolActivity: AdminPromptLoomToolActivityData;
+}
+
 export interface AdminSessionRoleEnvelopePreview {
   sessionEntryId: number;
   preview: SessionRoleEnvelopePreview;
@@ -845,6 +916,7 @@ export interface AdminSessionTurnData {
   stages: AdminTurnStageTelemetry[];
   retrievals: AdminTurnRetrievalTelemetry[];
   snapshot: AdminTurnSnapshotData | null;
+  promptLoom?: AdminPromptLoomData;
 }
 
 export interface AdminIdentityData {

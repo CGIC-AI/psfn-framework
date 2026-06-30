@@ -7,6 +7,7 @@ import {
   formatPromptMonitorStageLabel,
   mergePromptMonitorEvent,
   resolvePromptMonitorMetrics,
+  resolvePromptMonitorPromptLoom,
   resolvePromptMonitorSummary,
 } from './prompt-monitor';
 
@@ -291,6 +292,15 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
             },
             { role: 'assistant', content: 'reply' },
           ],
+          inputSections: [
+            {
+              id: 'analysis_workbench_guidance',
+              title: 'Analysis Workbench Guidance',
+              content: 'Historical removed prompt layer content.',
+              charCount: 40,
+              tokenCount: 5,
+            },
+          ],
           finalSystemSections: [
             {
               id: 'retrieved_memory',
@@ -452,6 +462,24 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
       },
     },
   ]);
+  const promptLoom = resolvePromptMonitorPromptLoom(mergedStages[0]!);
+  assert.equal(promptLoom.providerPayload.finalSystemPrompt, 'Live final system prompt');
+  assert.deepEqual(promptLoom.providerPayload.providerMessages, [
+    { role: 'developer', source: 'system_prompt', content: 'Live final system prompt' },
+    { role: 'user', source: 'message', content: 'earlier' },
+  ]);
+  assert.deepEqual(promptLoom.providerPayload.activeTools, [
+    {
+      name: 'session_list',
+      description: 'List sessions.',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  ]);
+  assert.deepEqual(promptLoom.historicalSnapshot.removedPromptLayerIds, ['analysis_workbench_guidance']);
+  assert.equal(promptLoom.historicalSnapshot.label, 'Persisted turn snapshot; not current prompt generator state.');
 });
 
 test('mergePromptMonitorEvent ignores unrelated payloads and labels stages clearly', () => {

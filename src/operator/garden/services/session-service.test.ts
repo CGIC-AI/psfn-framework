@@ -213,7 +213,7 @@ describe('AdminSessionDataService', () => {
           capturedAt: 1_700_000_000_020,
           trustLevel: 'regular',
           prompt: {
-            staticPrefixTemplate: 'Static prefix',
+            staticPrefixTemplate: '<runtime_self>Historical runtime self layer</runtime_self>',
             dynamicSuffixTemplate: 'Dynamic suffix',
             staticHash: 'static-hash',
             versionPointer: 'prompt-v1',
@@ -230,6 +230,30 @@ describe('AdminSessionDataService', () => {
               { role: 'user', content: 'hello' },
               { role: 'assistant', content: 'world' },
             ],
+            providerObservability: {
+              routeKind: 'configured_litellm_proxy',
+              requestedProvider: 'openrouter',
+              requestedModel: 'openrouter/test-model',
+              backendProvider: 'litellm',
+              backendModel: 'openrouter/test-model',
+              backendApi: 'openai-responses',
+              backendBaseUrl: 'http://127.0.0.1:4000',
+              promptCaching: {
+                configured: false,
+                engaged: false,
+              },
+              systemRole: {
+                transport: 'openai_developer',
+                supportsSystemRole: true,
+                supportsDeveloperRole: true,
+                usesOutOfBandSystemPrompt: false,
+              },
+              providerWireMessages: [
+                { role: 'developer', source: 'system_prompt', content: 'Final system prompt' },
+                { role: 'user', source: 'message', content: 'hello' },
+                { role: 'assistant', source: 'message', content: 'world' },
+              ],
+            },
           },
           toolContext: {
             activeTools: [
@@ -400,6 +424,42 @@ describe('AdminSessionDataService', () => {
       },
       sessionContext: {
         compactionPromptText: 'Compaction prompt snapshot',
+      },
+    });
+    expect(result.turns[0]?.promptLoom).toMatchObject({
+      historicalSnapshot: {
+        label: 'Persisted turn snapshot; not current prompt generator state.',
+        removedPromptLayerIds: ['runtime_self'],
+      },
+      providerPayload: {
+        finalSystemPrompt: 'Final system prompt',
+        providerMessages: [
+          { role: 'developer', source: 'system_prompt', content: 'Final system prompt' },
+          { role: 'user', source: 'message', content: 'hello' },
+          { role: 'assistant', source: 'message', content: 'world' },
+        ],
+        activeTools: [
+          {
+            name: 'contact_lookup',
+            description: 'Look up a contact.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                query: { type: 'string' },
+              },
+              required: ['query'],
+            },
+          },
+        ],
+      },
+      memoryCapture: {
+        input: {
+          currentTurnInput: null,
+          renderedChatOutput: 'world',
+        },
+        output: {
+          extractedMemoryIds: [],
+        },
       },
     });
   });

@@ -1820,6 +1820,7 @@ describe('scratchpad tools', () => {
     const text = resultText(result as any);
     expect(text).toContain('Scratchpad entries (1)');
     expect(text).toContain('sp-1');
+    expect(text).toContain('2023-11-14T22:15:00.000Z');
     expect(text).toContain('Remember to check weekly backup integrity.');
     expect(store.listScratchpadEntries).toHaveBeenCalledWith(3);
   });

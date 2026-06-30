@@ -229,10 +229,18 @@ export function mapMemoryRow(row: MemoryRow): PurrMemory {
 }
 
 export function mapScratchpadRow(row: ScratchpadRow): ScratchpadEntry {
+  const createdAt = Number(row.created_at);
+  const updatedAt = Number(row.updated_at);
+  if (!Number.isFinite(createdAt)) {
+    throw new Error('Invalid scratchpad row created_at: expected a finite number');
+  }
+  if (!Number.isFinite(updatedAt)) {
+    throw new Error('Invalid scratchpad row updated_at: expected a finite number');
+  }
   return {
     id: row.id,
     content: row.content,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
+    createdAt,
+    updatedAt,
   };
 }

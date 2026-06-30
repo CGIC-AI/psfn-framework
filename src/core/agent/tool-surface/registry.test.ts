@@ -9,6 +9,8 @@ import {
   isCanonicalFirstPartyToolName,
   listRetiredToolAliases,
 } from './registry.js';
+import { createJournalTool } from '../../../boundary/integrations/journal/tools.js';
+import { isRecord } from '../../../shared/utils/types.js';
 
 const FORBIDDEN_LEGACY_ACTION_NAMES = [
   'session_new',
@@ -33,6 +35,23 @@ const FORBIDDEN_LEGACY_ACTION_NAMES = [
   'contact_link_identity',
   'contact_set_channel_privacy',
 ] as const;
+
+function extractLiteralStrings(schema: unknown): string[] {
+  if (!isRecord(schema)) return [];
+  if (typeof schema.const === 'string') return [schema.const];
+  const unionItems = Array.isArray(schema.anyOf)
+    ? schema.anyOf
+    : Array.isArray(schema.oneOf)
+      ? schema.oneOf
+      : [];
+  return unionItems.flatMap(extractLiteralStrings);
+}
+
+function extractActionLiterals(toolParameters: unknown): string[] {
+  if (!isRecord(toolParameters)) return [];
+  const properties = isRecord(toolParameters.properties) ? toolParameters.properties : {};
+  return extractLiteralStrings(properties.action).sort();
+}
 
 describe('first-party tool surface registry', () => {
   it('keeps canonical tool names unique and self-describing', () => {
@@ -92,6 +111,20 @@ describe('first-party tool surface registry', () => {
   it('declares memory visibility actions on the canonical memory surface', () => {
     expect(getCanonicalToolSurface('memory')?.actions).toEqual(
       expect.arrayContaining(['census', 'exists']),
+    );
+  });
+
+  it('keeps journal canonical actions aligned with the actual tool schema', () => {
+    const journalTool = createJournalTool({
+      list: async () => ({ root: '/tmp/journal', notes: [] }),
+      read: async () => ({ path: 'note.md', content: '' }),
+      write: async (path: string) => ({ path, mode: 'write', created: true }),
+      append: async (path: string) => ({ path, mode: 'append', created: false }),
+      search: async (query: string) => ({ query, results: [] }),
+    });
+
+    expect(getCanonicalToolSurface('journal')?.actions?.slice().sort()).toEqual(
+      extractActionLiterals(journalTool.parameters),
     );
   });
 

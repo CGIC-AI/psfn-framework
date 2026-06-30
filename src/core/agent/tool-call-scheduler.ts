@@ -15,6 +15,7 @@ export interface ToolCallExecutionGuard {
   inFlightSignatures: Set<string>;
   successfulSignatures: Set<string>;
   failureCountsBySignature: Map<string, number>;
+  malformedArgumentFailuresByAction: Map<string, MissingArgumentRequirement[]>;
 }
 
 export function createToolCallExecutionGuard(): ToolCallExecutionGuard {
@@ -22,6 +23,7 @@ export function createToolCallExecutionGuard(): ToolCallExecutionGuard {
     inFlightSignatures: new Set(),
     successfulSignatures: new Set(),
     failureCountsBySignature: new Map(),
+    malformedArgumentFailuresByAction: new Map(),
   };
 }
 
@@ -36,6 +38,11 @@ interface ToolCallDescriptor {
 interface ToolExecutionContext {
   signal?: AbortSignal;
   stream: { push: (event: any) => void };
+}
+
+interface MissingArgumentRequirement {
+  label: string;
+  alternatives: string[];
 }
 
 export interface ToolExecutionResult {
@@ -229,6 +236,20 @@ async function executeSingleToolCall(
     ? Math.max(1, Math.floor(options.maxFailuresPerSignature as number))
     : 2;
   if (guard) {
+    const repeatedMalformed = resolveRepeatedMalformedArgumentSkip(toolCall, guard);
+    if (repeatedMalformed) {
+      options.onTelemetry?.('agent.tools.scheduler.skipped', {
+        reason: 'repeated_malformed_arguments',
+        toolName: toolCall.name,
+        action: repeatedMalformed.action,
+        missingRequirement: repeatedMalformed.requirement.label,
+      });
+      return skipToolCall(
+        toolCall,
+        context.stream,
+        `Internal tool status: skipped repeated malformed ${toolCall.name}${repeatedMalformed.action ? ` action=${repeatedMalformed.action}` : ''} call because required field(s) are still missing: ${repeatedMalformed.requirement.label}. Use one minimal valid JSON call with all required fields before retrying. This is not a user-facing message.`,
+      );
+    }
     if (guard.inFlightSignatures.has(signature)) {
       options.onTelemetry?.('agent.tools.scheduler.skipped', {
         reason: 'duplicate_in_flight',
@@ -316,6 +337,7 @@ async function executeSingleToolCall(
         signature,
         (guard.failureCountsBySignature.get(signature) ?? 0) + 1,
       );
+      recordMalformedArgumentFailure(guard, toolCall, result);
     } else {
       guard.successfulSignatures.add(signature);
     }
@@ -382,6 +404,86 @@ function skipToolCall(
 
 function buildToolCallSignature(toolCall: any): string {
   return `${String(toolCall.name)}:${stableStringify(toolCall.arguments)}`;
+}
+
+function resolveToolCallAction(toolCall: any): string {
+  const args = toolCall?.arguments;
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return '';
+  const action = (args as Record<string, unknown>).action;
+  return typeof action === 'string' ? action.trim() : '';
+}
+
+function buildMalformedActionKey(toolCall: any): string {
+  return `${String(toolCall.name)}:${resolveToolCallAction(toolCall)}`;
+}
+
+function hasUsefulArgumentValue(value: unknown): boolean {
+  if (typeof value === 'string') return value.trim().length > 0;
+  return value !== undefined && value !== null;
+}
+
+function satisfiesRequirement(toolCall: any, requirement: MissingArgumentRequirement): boolean {
+  const args = toolCall?.arguments;
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return false;
+  const record = args as Record<string, unknown>;
+  return requirement.alternatives.some(field => hasUsefulArgumentValue(record[field]));
+}
+
+function resolveRepeatedMalformedArgumentSkip(
+  toolCall: any,
+  guard: ToolCallExecutionGuard,
+): { action: string; requirement: MissingArgumentRequirement } | null {
+  const requirements = guard.malformedArgumentFailuresByAction.get(buildMalformedActionKey(toolCall));
+  if (!requirements || requirements.length === 0) return null;
+  for (const requirement of requirements) {
+    if (!satisfiesRequirement(toolCall, requirement)) {
+      return { action: resolveToolCallAction(toolCall), requirement };
+    }
+  }
+  return null;
+}
+
+function normalizeRequiredFieldLabel(value: string): string {
+  return value.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+function parseMissingArgumentRequirement(text: string): MissingArgumentRequirement | null {
+  const normalized = normalizeRequiredFieldLabel(text);
+  const match = /(?:^|[.:\s])([a-z][a-z0-9_]*(?:\s+or\s+[a-z][a-z0-9_]*)*)\s+is\s+required(?:[.\s]|$)/iu.exec(normalized);
+  if (!match?.[1]) return null;
+  const alternatives = match[1]
+    .split(/\s+or\s+/iu)
+    .map(field => field.trim())
+    .filter(Boolean);
+  if (alternatives.length === 0) return null;
+  return {
+    label: alternatives.join(' or '),
+    alternatives,
+  };
+}
+
+function toolResultText(result: { content?: unknown[] }): string {
+  return (result.content ?? [])
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return '';
+      const text = (entry as { text?: unknown }).text;
+      return typeof text === 'string' ? text : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function recordMalformedArgumentFailure(
+  guard: ToolCallExecutionGuard,
+  toolCall: any,
+  result: { content?: unknown[] },
+): void {
+  const requirement = parseMissingArgumentRequirement(toolResultText(result));
+  if (!requirement) return;
+  const key = buildMalformedActionKey(toolCall);
+  const existing = guard.malformedArgumentFailuresByAction.get(key) ?? [];
+  if (existing.some(entry => entry.label === requirement.label)) return;
+  guard.malformedArgumentFailuresByAction.set(key, [...existing, requirement]);
 }
 
 function stableStringify(value: unknown): string {

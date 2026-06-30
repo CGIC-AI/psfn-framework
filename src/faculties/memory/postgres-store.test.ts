@@ -72,8 +72,8 @@ interface MemoryEvolutionLinkRow {
 interface ScratchpadTestRow {
   id: string;
   content: string;
-  created_at: number;
-  updated_at: number;
+  created_at: number | string;
+  updated_at: number | string;
 }
 
 function postgresMemoryMigrationSql(): string {
@@ -686,6 +686,32 @@ describe('postgres memory store unit coverage', () => {
     await vi.waitFor(() => {
       expect(pool.scratchpadEntries.has('expired-note')).toBe(false);
     });
+  });
+
+  it('coerces string BIGINT scratchpad timestamps during hydration', async () => {
+    const pool = new FakeMemoryPool();
+    const now = Date.now();
+    pool.scratchpadEntries.set('string-time-note', {
+      id: 'string-time-note',
+      content: 'Hydrated from pg bigint strings.',
+      created_at: String(now - 2_000),
+      updated_at: String(now - 1_000),
+    });
+    postgresMocks.activePool = pool;
+
+    const store = await createPostgresMemoryStore('postgres://unused', 4);
+    const entries = store.listScratchpadEntries();
+
+    expect(entries).toEqual([
+      {
+        id: 'string-time-note',
+        content: 'Hydrated from pg bigint strings.',
+        createdAt: now - 2_000,
+        updatedAt: now - 1_000,
+      },
+    ]);
+    expect(typeof entries[0]?.createdAt).toBe('number');
+    expect(typeof entries[0]?.updatedAt).toBe('number');
   });
 
   it('persists and hydrates first-class memory evolution links', async () => {

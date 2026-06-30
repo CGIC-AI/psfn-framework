@@ -51,4 +51,22 @@ describe('classifyIdleGapTexture', () => {
       reconnectionWarmth: 'high',
     });
   });
+
+  it('short-circuits very old timestamps without hourly boundary walking', () => {
+    const startedAt = Date.now();
+    const texture = classifyIdleGapTexture({
+      lastActivityAtMs: 1_000,
+      observedAtMs: Date.parse('2026-06-30T00:00:00.000Z'),
+      timeZone: 'UTC',
+    });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(texture).toMatchObject({
+      kind: 'multiple_days',
+      label: 'multiple days away',
+      reconnectionWarmth: 'high',
+    });
+    expect(texture.dayBoundaryCount).toBeGreaterThanOrEqual(2);
+    expect(elapsedMs).toBeLessThan(100);
+  });
 });

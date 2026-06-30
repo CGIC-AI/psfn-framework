@@ -34,6 +34,19 @@ function makeAssistantMessage(toolNames: string[]) {
   };
 }
 
+function makeAssistantToolCalls(calls: Array<{ name: string; arguments: Record<string, unknown> }>) {
+  return {
+    role: 'assistant',
+    content: calls.map((call, index) => ({
+      type: 'toolCall',
+      id: `call-${index + 1}`,
+      name: call.name,
+      arguments: call.arguments,
+    })),
+    stopReason: 'stop',
+  };
+}
+
 function makeConcurrencyMeta(
   className: ToolConcurrencyMeta['class'],
   overrides: Partial<ToolConcurrencyMeta> = {},
@@ -636,6 +649,93 @@ describe('tool-call-scheduler', () => {
         reason: 'tool_signature_degraded',
         toolName: 'scratchpad',
         failures: 2,
+      }),
+    );
+  });
+
+  it('skips repeated malformed same-action calls while allowing a later valid call', async () => {
+    const execute = vi.fn(async (_toolCallId: string, params: { action: string; title?: string; content?: string }) => {
+      if (params.action === 'write' && !params.title) {
+        return {
+          content: [{ type: 'text', text: 'journal failed for action=write: path or title is required' }],
+          details: { isError: true },
+        };
+      }
+      if (params.action === 'write' && !params.content) {
+        return {
+          content: [{ type: 'text', text: 'journal failed for action=write: content is required' }],
+          details: { isError: true },
+        };
+      }
+      return {
+        content: [{ type: 'text', text: 'Journal note created: carlini-notes.md' }],
+        details: {},
+      };
+    });
+    const journal = makeTool(
+      'journal',
+      execute,
+      {
+        concurrency: makeConcurrencyMeta('exclusive', {
+          exclusivityKeyPolicy: 'category_tool_name',
+          exclusivityKey: 'extended:journal',
+        }),
+      },
+    );
+    journal.parameters = Type.Object({
+      action: Type.String(),
+      title: Type.Optional(Type.String()),
+      content: Type.Optional(Type.String()),
+    });
+    const guard = createToolCallExecutionGuard();
+    const telemetry = vi.fn();
+    const options = {
+      maxParallelToolCalls: 1,
+      guard,
+      onTelemetry: telemetry,
+    };
+
+    const first = await executeToolCallsWithScheduler(
+      [journal],
+      makeAssistantToolCalls([{ name: 'journal', arguments: { action: 'write', content: 'body' } }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+    const repeatedMalformed = await executeToolCallsWithScheduler(
+      [journal],
+      makeAssistantToolCalls([{ name: 'journal', arguments: { action: 'write', content: 'body again' } }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+    const valid = await executeToolCallsWithScheduler(
+      [journal],
+      makeAssistantToolCalls([{ name: 'journal', arguments: { action: 'write', title: 'Carlini notes', content: 'body' } }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect((first.toolResults[0] as ToolResultMessage).isError).toBe(true);
+    expect((repeatedMalformed.toolResults[0] as ToolResultMessage).content).toEqual([
+      {
+        type: 'text',
+        text: 'Internal tool status: skipped repeated malformed journal action=write call because required field(s) are still missing: path or title. Use one minimal valid JSON call with all required fields before retrying. This is not a user-facing message.',
+      },
+    ]);
+    expect((valid.toolResults[0] as ToolResultMessage).isError).toBe(false);
+    expect((valid.toolResults[0] as ToolResultMessage).content).toEqual([
+      { type: 'text', text: 'Journal note created: carlini-notes.md' },
+    ]);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.scheduler.skipped',
+      expect.objectContaining({
+        reason: 'repeated_malformed_arguments',
+        toolName: 'journal',
+        action: 'write',
+        missingRequirement: 'path or title',
       }),
     );
   });

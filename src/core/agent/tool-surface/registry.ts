@@ -472,7 +472,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     domain: 'memory',
     exposure: 'extended',
     description: 'Companion journal import/write surface.',
-    actions: ['write'],
+    actions: ['list', 'read', 'write', 'append', 'search'],
     capabilityMetadata: { kind: 'action_aware', source: CAPABILITIES_REQUIREMENTS },
     retiredAliases: [],
   },

@@ -75,9 +75,21 @@ export function classifyIdleGapTexture(input: ClassifyIdleGapTextureInput): Idle
   const lastActivityAtMs = normalizeTimestamp(input.lastActivityAtMs, observedAtMs);
   const elapsedMs = Math.max(0, observedAtMs - lastActivityAtMs);
   const timeZone = input.timeZone?.trim() || resolveActiveTimezone();
+
+  if (elapsedMs >= MULTIPLE_DAYS_MIN_MS) {
+    return {
+      kind: 'multiple_days',
+      label: 'multiple days away',
+      elapsedMs,
+      dayBoundaryCount: Math.max(2, Math.floor(elapsedMs / (24 * HOUR_MS))),
+      reconnectionWarmth: 'high',
+      guidance: RECONNECTION_GUIDANCE,
+    };
+  }
+
   const dayBoundaryCount = localDateBoundaryCount(lastActivityAtMs, observedAtMs, timeZone);
 
-  if (elapsedMs >= MULTIPLE_DAYS_MIN_MS || dayBoundaryCount >= 2) {
+  if (dayBoundaryCount >= 2) {
     return {
       kind: 'multiple_days',
       label: 'multiple days away',

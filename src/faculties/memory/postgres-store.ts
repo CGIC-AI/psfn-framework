@@ -212,8 +212,8 @@ interface ContactProfileRow {
 interface ScratchpadRow {
   id: string;
   content: string;
-  created_at: number;
-  updated_at: number;
+  created_at: PgNumeric;
+  updated_at: PgNumeric;
 }
 
 interface CountRow {
@@ -871,8 +871,8 @@ class PostgresMemoryStore implements MemoryStorePort {
       this.scratchpadEntries.set(row.id, {
         id: row.id,
         content: row.content,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at,
+        createdAt: parsePgNumber(row.created_at, 'scratchpad_entries.created_at'),
+        updatedAt: parsePgNumber(row.updated_at, 'scratchpad_entries.updated_at'),
       });
     }
     this.pruneExpiredScratchpadEntries();

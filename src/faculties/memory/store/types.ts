@@ -121,8 +121,8 @@ export interface ContactProfileRow {
 export interface ScratchpadRow {
   id: string;
   content: string;
-  created_at: number;
-  updated_at: number;
+  created_at: number | string;
+  updated_at: number | string;
 }
 
 export interface MemoryStoreOptions {

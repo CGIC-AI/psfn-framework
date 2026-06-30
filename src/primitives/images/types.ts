@@ -1,31 +1,13 @@
 import { isRecord } from '../../shared/utils/types.js';
 import type { CredentialVaultPort } from '../../boundary/custody/credential-vault.js';
 import type { DnsResolver } from '../../boundary/gateway/url-policy.js';
+import { IMAGE_MODEL_CATALOG } from './model-catalog.js';
 
-export const FAL_CREATE_MODELS = [
-  'fal-ai/nano-banana-2',
-  'fal-ai/nano-banana-pro',
-  'fal-ai/gpt-image-1.5',
-  'xai/grok-imagine-image',
-  'fal-ai/flux-2',
-  'fal-ai/flux-2-pro',
-  'fal-ai/flux-2-flex',
-  'fal-ai/flux/krea',
-  'fal-ai/flux-2/klein/4b',
-  'fal-ai/flux-2/klein/9b',
-  'fal-ai/z-image/base',
-  'fal-ai/z-image/turbo',
-  'fal-ai/qwen-image',
-  'fal-ai/qwen-image-2/text-to-image',
-] as const;
-
-export const FAL_EDIT_MODELS = [
-  'openai/gpt-image-2/edit',
-  'fal-ai/nano-banana-2/edit',
-  'xai/grok-imagine-image/quality/edit',
-  'xai/grok-imagine-image/edit',
-  'fal-ai/gpt-image-1.5/edit',
-] as const;
+export const FAL_CREATE_MODELS = IMAGE_MODEL_CATALOG.createModels;
+export const FAL_EDIT_MODELS = IMAGE_MODEL_CATALOG.editModels;
+export const DEFAULT_FAL_CREATE_MODEL_CHAIN = IMAGE_MODEL_CATALOG.defaultCreateModelChain;
+export const DEFAULT_FAL_EDIT_MODEL_CHAIN = IMAGE_MODEL_CATALOG.defaultEditModelChain;
+export const DEFAULT_SELFIE_EDIT_MODEL_CHAIN = IMAGE_MODEL_CATALOG.selfieEditModelChain;
 
 export const IMAGE_ASPECT_RATIO_VALUES = [
   'auto',

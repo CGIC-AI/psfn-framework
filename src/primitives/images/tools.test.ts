@@ -600,8 +600,9 @@ describe('image tools', () => {
     expect(ops.create).not.toHaveBeenCalled();
     expect(ops.edit).toHaveBeenNthCalledWith(1, expect.objectContaining({
       prompt,
-      model: 'openai/gpt-image-2/edit',
+      model: 'xai/grok-imagine-image/quality/edit',
       imageUrls: ['data:image/png;base64,cmVm'],
+      aspectRatio: '3:4',
       sourceToolName: 'selfie_create',
       referenceImageIds: ['ref-default'],
     }));
@@ -641,14 +642,14 @@ describe('image tools', () => {
         return {
           provider: 'fal',
           mode: 'edit' as const,
-          model: 'xai/grok-imagine-image/quality/edit',
+          model: 'openai/gpt-image-2/edit',
           fallbackUsed: false,
-          requestId: 'req-selfie-grok-1',
+          requestId: 'req-selfie-gpt-edit-1',
           images: [{
-            url: 'https://images.example.test/selfie-grok.png',
+            url: 'https://images.example.test/selfie-gpt-edit.png',
             contentType: 'image/png',
-            fileName: 'selfie-grok.png',
-            localPath: '/tmp/selfie-grok.png',
+            fileName: 'selfie-gpt-edit.png',
+            localPath: '/tmp/selfie-gpt-edit.png',
           }],
         };
       }),
@@ -674,7 +675,7 @@ describe('image tools', () => {
       model: 'fal-ai/nano-banana-2/edit',
     }));
     expect(ops.edit).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      model: 'xai/grok-imagine-image/quality/edit',
+      model: 'openai/gpt-image-2/edit',
       prompt: 'me at the beach in a modest one-piece swimsuit, golden hour',
     }));
     expect(result.details.imageResult?.fallbackUsed).toBe(true);
@@ -727,7 +728,7 @@ describe('image tools', () => {
     expect(resultText(result)).toContain('timeout or provider error');
   });
 
-  it('retries the most permissive tier with a sanitized prompt when every tier blocks the original', async () => {
+  it('retries the last configured tier with a sanitized prompt when every tier blocks the original', async () => {
     const providerBlock = new Error(
       'FAL edit result fetch failed (422): {"detail":[{"type":"content_policy_violation","msg":"flagged by a content checker"}]}',
     );
@@ -742,7 +743,7 @@ describe('image tools', () => {
         return {
           provider: 'fal',
           mode: 'edit' as const,
-          model: 'xai/grok-imagine-image/quality/edit',
+          model: 'openai/gpt-image-2/edit',
           fallbackUsed: false,
           requestId: 'req-selfie-sanitized-1',
           images: [{
@@ -771,7 +772,7 @@ describe('image tools', () => {
     expect(ops.create).not.toHaveBeenCalled();
     expect(ops.edit).toHaveBeenCalledTimes(4);
     const sanitizedParams = ops.edit.mock.calls[3]?.[0] as { prompt: string; model: string; referenceImageIds: string[] };
-    expect(sanitizedParams.model).toBe('xai/grok-imagine-image/quality/edit');
+    expect(sanitizedParams.model).toBe('openai/gpt-image-2/edit');
     expect(sanitizedParams.referenceImageIds).toEqual(['ref-default']);
     expect(sanitizedParams.prompt).toContain('Tasteful fully clothed companion self-portrait');
     expect(sanitizedParams.prompt).not.toMatch(/flirty|off[- ]shoulder|rumpled sheets|bedroom/i);

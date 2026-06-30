@@ -16,6 +16,7 @@ import {
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import {
+  DEFAULT_SELFIE_EDIT_MODEL_CHAIN,
   FAL_CREATE_MODELS,
   FAL_EDIT_MODELS,
   IMAGE_ASPECT_RATIO_VALUES,
@@ -35,14 +36,9 @@ const IMAGE_ASPECT_RATIO_DESCRIPTION = [
 ].join(' ');
 const MEDIA_ACTION_VALUES = ['generate', 'edit', 'analyze'] as const;
 
-// Reference-selfie edit tiers, strictest/highest-fidelity first. Every tier is an
-// edit endpoint so the saved reference photo always anchors the result; on a
-// content-policy block or timeout the chain advances to the next, more permissive tier.
-const SELFIE_EDIT_MODEL_CHAIN = [
-  'openai/gpt-image-2/edit',
-  'fal-ai/nano-banana-2/edit',
-  'xai/grok-imagine-image/quality/edit',
-] as const satisfies readonly typeof FAL_EDIT_MODELS[number][];
+// Reference-selfie edit tiers come from the image model catalog. Every tier is
+// an edit endpoint so the saved reference photo always anchors the result.
+const SELFIE_EDIT_MODEL_CHAIN = DEFAULT_SELFIE_EDIT_MODEL_CHAIN;
 
 const SELFIE_EDIT_MODEL_DESCRIPTION = [
   'Optional reference-edit model override for selfie_create.',
@@ -60,7 +56,7 @@ function resolveSelfieEditModelChain(
     return SELFIE_EDIT_MODEL_CHAIN.slice(startIndex);
   }
   // Off-chain start (e.g. grok speed mode or gpt-image-1.5): try it, then fall
-  // through the non-gpt tiers rather than escalating back to a stricter model.
+  // through later configured tiers rather than jumping back to the first tier.
   return [startModel, ...SELFIE_EDIT_MODEL_CHAIN.slice(1).filter((model) => model !== startModel)];
 }
 
@@ -875,7 +871,7 @@ function createImageGenerationTool(
               );
             }
             // Every tier blocked the original prompt; last resort is a sanitized
-            // prompt on the most permissive tier, still anchored to the reference.
+            // prompt on the last configured tier, still anchored to the reference.
             const fallbackPrompt = buildSelfImageContentPolicyFallbackPrompt(params.prompt);
             const finalModel = editChain[editChain.length - 1]!;
             try {

@@ -4,8 +4,8 @@ import { basename, extname, join } from 'node:path';
 import { ComfyUiImageClient } from './comfyui.js';
 import { FalImageClient, isFalContentPolicyError, isTransientFalError } from './fal.js';
 import {
-  FAL_CREATE_MODELS,
-  FAL_EDIT_MODELS,
+  DEFAULT_FAL_CREATE_MODEL_CHAIN,
+  DEFAULT_FAL_EDIT_MODEL_CHAIN,
   type FalCreateModel,
   type FalEditModel,
 } from './types.js';
@@ -29,17 +29,7 @@ import type {
 
 const log = createComponentLogger('ImageService');
 const FAL_TRANSIENT_ATTEMPTS = 2;
-const FAL_TRANSIENT_MODEL_ATTEMPTS = 2;
 const GENERATED_IMAGE_META_SUFFIX = '.image-meta.json';
-
-const DEFAULT_FAL_CREATE_MODEL_CHAIN: readonly FalCreateModel[] = FAL_CREATE_MODELS.slice(
-  0,
-  FAL_TRANSIENT_MODEL_ATTEMPTS,
-);
-const DEFAULT_FAL_EDIT_MODEL_CHAIN: readonly FalEditModel[] = FAL_EDIT_MODELS.slice(
-  0,
-  FAL_TRANSIENT_MODEL_ATTEMPTS,
-);
 
 function hasWorkflowForMode(
   config: ImageRuntimeConfig,

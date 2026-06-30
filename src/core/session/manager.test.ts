@@ -753,7 +753,7 @@ describe('SessionManager', () => {
     ]));
   });
 
-  it('persists tool observations and renders them as distinct context blocks', async () => {
+  it('persists tool observations without rendering stale tool blocks in session prompt history', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     const turnId = createTurnId();
@@ -776,7 +776,7 @@ describe('SessionManager', () => {
     expect(entries.map(entry => entry.role)).toEqual(['user', 'tool', 'assistant']);
 
     const ctx = await reloadedManager.buildContext('ch1', 'System prompt', '');
-    expect(ctx.messages).toHaveLength(3);
+    expect(ctx.messages).toHaveLength(2);
     expect(ctx.messages[0]).toMatchObject({
       role: 'user',
       content: 'Search for the latest log',
@@ -786,14 +786,6 @@ describe('SessionManager', () => {
       },
     });
     expect(ctx.messages[1]).toMatchObject({
-      role: 'system',
-      content: '[Tool result: search_logs] Found 3 matching log entries.',
-      provenance: {
-        kind: 'tool_result',
-        safeAsPartnerSpeech: false,
-      },
-    });
-    expect(ctx.messages[2]).toMatchObject({
       role: 'assistant',
       content: 'I found the relevant logs.',
       provenance: {
@@ -801,6 +793,7 @@ describe('SessionManager', () => {
         safeAsPartnerSpeech: false,
       },
     });
+    expect(ctx.messages.map(message => message.content).join('\n')).not.toContain('[Tool result: search_logs]');
   });
 
   it('stores role-envelope previews without leaking hidden body text into history or search', async () => {
@@ -1039,7 +1032,7 @@ describe('SessionManager', () => {
     expect(hits[0]?.channelId).toBe('api:search-hit');
   });
 
-  it('renders structured tool payloads as summaries instead of raw machine output', async () => {
+  it('omits structured historical tool payloads from session prompt history', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     mgr.recordUserMessage('ch1', 'Inspect the latest result payload', 'u1', 'User');
@@ -1056,19 +1049,11 @@ describe('SessionManager', () => {
     const ctx = await mgr.buildContext('ch1', 'System prompt', '');
     const toolMessage = ctx.messages.find(message => message.content.startsWith('[Tool result: search_logs]'));
 
-    expect(toolMessage).toMatchObject({
-      role: 'system',
-      content: '[Tool result: search_logs] Returned JSON object: status=ok; total=2; matches=2.',
-      provenance: {
-        kind: 'tool_result',
-        sourceAuthor: 'tool',
-        safeAsPartnerSpeech: false,
-      },
-    });
-    expect(toolMessage?.content).not.toContain('"matches"');
+    expect(toolMessage).toBeUndefined();
+    expect(ctx.messages.map(message => message.content).join('\n')).not.toContain('"matches"');
   });
 
-  it('masks prior-turn tool dumps by default while keeping the current turn verbatim', async () => {
+  it('omits historical tool dumps while preserving conversational turns', async () => {
     const config = makeConfig();
     const mgr = new SessionManager(store, config);
     const firstTurnId = createTurnId();
@@ -1116,21 +1101,23 @@ describe('SessionManager', () => {
 
     const ctx = await mgr.buildContext('ch1', 'System prompt', '');
     const allContent = ctx.messages.map(message => message.content).join('\n');
-    expect(allContent).toContain('[Tool result: search_logs] Captured 1 line of text output.');
+    expect(allContent).not.toContain('[Tool result: search_logs]');
     expect(allContent).not.toContain('Orientation note: older tool output should be masked.');
-    expect(allContent).toContain('[Tool result: search_logs] Newest tool output should remain visible.');
+    expect(allContent).not.toContain('Newest tool output should remain visible.');
+    expect(allContent).toContain('First tool turn');
+    expect(allContent).toContain('Second turn complete.');
     expect(ctx.manifest?.session).toMatchObject({
       sourceEntryCount: 6,
       trimmedEntryCount: 0,
       maskedEntryCount: 1,
       compactedEntryCount: 0,
       finalEntryCount: 6,
-      finalMessageCount: 6,
+      finalMessageCount: 4,
       compactionSummaryCount: 0,
       continuityEntryCount: 0,
     });
     expect(ctx.manifest?.budgets.sessionHistory).toMatchObject({
-      actualCount: 6,
+      actualCount: 4,
       actualTokenCount: expect.any(Number),
     });
   });

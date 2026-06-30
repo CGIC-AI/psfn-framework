@@ -202,7 +202,7 @@ describe('entriesToMessages', () => {
     });
   });
 
-  it('renders masked stale tool dumps as summaries instead of verbatim output', () => {
+  it('omits masked stale tool dumps from historical prompt messages', () => {
     const observation = normalizeToolObservation({
       toolName: 'orientation_dump',
       content: 'Orientation note: keep the trust policy lane isolated.',
@@ -216,22 +216,10 @@ describe('entriesToMessages', () => {
       }),
     ], 'private');
 
-    expect(messages).toHaveLength(1);
-    expect(messages[0]).toMatchObject({
-      role: 'system',
-      content: '[Tool result: orientation_dump] Captured 1 line of text output.',
-      provenance: {
-        kind: 'tool_result',
-        sourceAuthor: 'tool',
-        transformedBy: 'redaction',
-        wording: 'redacted',
-        detailLoss: 'possible',
-        safeAsPartnerSpeech: false,
-      },
-    });
+    expect(messages).toHaveLength(0);
   });
 
-  it('marks direct user, companion, system, and tool context with distinct authenticity provenance', () => {
+  it('marks direct user, companion, and system context with distinct authenticity provenance', () => {
     const observation = normalizeToolObservation({
       toolName: 'search',
       content: 'Search result one.',
@@ -271,7 +259,6 @@ describe('entriesToMessages', () => {
       'user_direct',
       'companion_direct',
       'system_note',
-      'tool_result',
     ]);
     expect(messages[0]?.provenance?.safeAsPartnerSpeech).toBe(true);
     expect(messages.slice(1).every(message => message.provenance?.safeAsPartnerSpeech === false)).toBe(true);

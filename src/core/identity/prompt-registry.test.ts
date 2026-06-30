@@ -7,6 +7,7 @@ import {
   EXTRACTION_PROMPT_KEY,
   COMPACTION_SUMMARY_PROMPT_KEY,
   PROFILE_SYNTHESIS_PROMPT_KEY,
+  SLEEPTIME_ORIENTATION_PROMPT_KEY,
   getDefaultPromptText,
 } from './prompt-registry.js';
 
@@ -66,6 +67,7 @@ describe('PromptRegistryStore', () => {
     expect(seeded.list().map(entry => entry.key)).toEqual([
       EXTRACTION_PROMPT_KEY,
       PROFILE_SYNTHESIS_PROMPT_KEY,
+      SLEEPTIME_ORIENTATION_PROMPT_KEY,
       COMPACTION_SUMMARY_PROMPT_KEY,
     ]);
     expect(seeded.getPrompt(EXTRACTION_PROMPT_KEY)).toBe(getDefaultPromptText(EXTRACTION_PROMPT_KEY));
@@ -96,6 +98,16 @@ describe('PromptRegistryStore', () => {
     expect(prompt).toContain('{target_contact}');
     expect(prompt).toContain('Do not infer aliases for the target from names merely mentioned');
     expect(prompt).toContain('If the target mentioned or discussed another person');
+  });
+
+  it('seeds the sleeptime orientation prompt without assigning companion identity or mood', () => {
+    const prompt = getDefaultPromptText(SLEEPTIME_ORIENTATION_PROMPT_KEY);
+
+    expect(prompt).toContain('Review recent conversation evidence for one channel scope');
+    expect(prompt).toContain('Do not assign the companion an identity');
+    expect(prompt).toContain('Do not override the character card');
+    expect(prompt).toContain('"orient"');
+    expect(prompt).not.toMatch(/you are an? .*assistant/i);
   });
 
   it('updates prompt text and writes history entry', () => {

@@ -42,6 +42,7 @@ export function wireHeartbeatRuntime(
   });
 
   wireHeartbeatPostTurnRuntime({
+    scheduler,
     agentLoop,
     sender,
     templateRuntime,

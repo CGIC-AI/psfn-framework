@@ -26,13 +26,17 @@ import {
 } from '../values/tools.js';
 import type { ValuesJournalStore } from '../values/store.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 import {
   CORE_MEMORY_LABELS,
+  coreMemoryChannelScope,
   isCoreMemoryLabel,
   type CoreMemoryAppendOptions,
   type CoreMemoryBlock,
   type CoreMemoryLabel,
+  type CoreMemoryMutationOptions,
   type CoreMemoryRethinkInput,
+  type CoreMemoryScopeDescriptor,
   type CoreMemorySnapshot,
 } from './store.js';
 
@@ -57,8 +61,8 @@ interface CoreMemoryToolStore {
     appendText: string,
     options?: CoreMemoryAppendOptions,
   ): CoreMemoryBlock;
-  replace(label: CoreMemoryLabel, content: string): CoreMemoryBlock;
-  rethink(input: CoreMemoryRethinkInput): CoreMemorySnapshot;
+  replace(label: CoreMemoryLabel, content: string, options?: CoreMemoryMutationOptions): CoreMemoryBlock;
+  rethink(input: CoreMemoryRethinkInput, options?: CoreMemoryMutationOptions): CoreMemorySnapshot;
 }
 
 export interface OrientToolOptions {
@@ -158,6 +162,19 @@ function requireConcernStore(concernStore: ConcernStorePort | null | undefined):
   return concernStore;
 }
 
+function resolveCurrentCoreMemoryScope(): CoreMemoryScopeDescriptor | null {
+  const requestContext = getRequestContext();
+  if (!requestContext?.channelId?.trim()) {
+    return null;
+  }
+  return coreMemoryChannelScope({
+    channelId: requestContext.channelId,
+    ...(requestContext.viewerIsDirectMessage !== undefined
+      ? { isDirectMessage: requestContext.viewerIsDirectMessage }
+      : {}),
+  });
+}
+
 export function createOrientTool(
   store: CoreMemoryToolStore,
   options: OrientToolOptions = {},
@@ -166,8 +183,9 @@ export function createOrientTool(
     name: 'orient',
     label: 'orient',
     description:
-      'Manage active orientation across persona, human, goals, values, and active concerns. '
-      + 'Blocks: append/replace update one block; reorient refreshes persona/human/goals together. '
+      'Manage scoped continuity notes, values, and active concerns for the current channel or DM. '
+      + 'Do not use continuity blocks to assign identity, mood, feelings, or relationship stance. '
+      + 'Blocks: append/replace update one storage block; reorient refreshes local continuity, participant/room context, and commitments together. '
       + 'Values: values_list/add/update handles values reflections. '
       + 'Concerns: create_concern/list_concerns/resolve_concern/transition_concern tracks short-term follow-ups, checkups, reminders, and open threads. '
       + 'Use exact concernId values from create_concern or list_concerns when resolving or transitioning.',
@@ -180,7 +198,7 @@ export function createOrientTool(
       block: Type.Optional(Type.Unsafe<CoreMemoryLabel>({
         type: 'string',
         enum: LABEL_ENUM,
-        description: 'Orientation block label for append/replace: persona, human, or goals.',
+        description: 'Internal storage block for append/replace. persona=local continuity, human=participant or room context, goals=continuity commitments.',
       })),
       text: Type.Optional(Type.String({
         description:
@@ -193,13 +211,13 @@ export function createOrientTool(
         }),
       ),
       persona: Type.Optional(Type.String({
-        description: 'Complete replacement text for the persona block when action=reorient.',
+        description: 'Complete replacement text for local continuity observations when action=reorient. Do not assign identity or mood.',
       })),
       human: Type.Optional(Type.String({
-        description: 'Complete replacement text for the human block when action=reorient.',
+        description: 'Complete replacement text for participant or room context when action=reorient.',
       })),
       goals: Type.Optional(Type.String({
-        description: 'Complete replacement text for the goals block when action=reorient.',
+        description: 'Complete replacement text for scoped continuity commitments when action=reorient.',
       })),
       limit: Type.Optional(Type.Integer({
         minimum: 1,
@@ -451,6 +469,10 @@ export function createOrientTool(
         }
 
         if (action === 'append') {
+          const scope = resolveCurrentCoreMemoryScope();
+          if (!scope) {
+            return textResultWithError('Error: orient requires current channel context', true);
+          }
           const label = ensureLabel(params.block);
           if (!label) {
             return textResultWithError(
@@ -465,13 +487,20 @@ export function createOrientTool(
           if (params.separator !== undefined && typeof params.separator !== 'string') {
             return textResultWithError('Error: separator must be a string when provided', true);
           }
-          const block = store.append(label, appendText, { separator: params.separator });
+          const block = store.append(label, appendText, {
+            separator: params.separator,
+            scope,
+          });
           return textResult(
             `Appended to ${label} orientation (${block.content.length}/${block.maxChars} chars).`,
           );
         }
 
         if (action === 'replace') {
+          const scope = resolveCurrentCoreMemoryScope();
+          if (!scope) {
+            return textResultWithError('Error: orient requires current channel context', true);
+          }
           const label = ensureLabel(params.block);
           if (!label) {
             return textResultWithError(
@@ -483,7 +512,7 @@ export function createOrientTool(
           if (replacementText === null) {
             return textResultWithError('Error: text must be a string for action=replace', true);
           }
-          const block = store.replace(label, replacementText);
+          const block = store.replace(label, replacementText, { scope });
           return textResult(
             `Replaced ${label} orientation (${block.content.length}/${block.maxChars} chars).`,
           );
@@ -501,11 +530,15 @@ export function createOrientTool(
         if (goals === null) {
           return textResultWithError('Error: goals must be a string for action=reorient', true);
         }
+        const scope = resolveCurrentCoreMemoryScope();
+        if (!scope) {
+          return textResultWithError('Error: orient requires current channel context', true);
+        }
         const snapshot = store.rethink({
           persona,
           human,
           goals,
-        });
+        }, { scope });
         const personaBlock = snapshot.blocks.persona;
         const humanBlock = snapshot.blocks.human;
         const goalsBlock = snapshot.blocks.goals;

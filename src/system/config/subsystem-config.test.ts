@@ -295,6 +295,73 @@ describe('subsystem config round-trip', () => {
     expect(loadTrustPolicyConfig(dataDir)).toEqual(expected);
   });
 
+  it('migrates the known old default trust-policy regular ceiling', () => {
+    const dataDir = makeDataDir('psfn-trust-policy-migrate-');
+    const oldDefault = {
+      trustCeiling: {
+        primary: ['public', 'personal', 'intimate', 'confidential'],
+        trusted: ['public', 'personal'],
+        regular: ['public'],
+        public: ['public'],
+      },
+      visibilityAllowed: {
+        private: ['public', 'personal', 'intimate', 'confidential'],
+        semi_private: ['public', 'personal'],
+        public: ['public'],
+        broadcast: ['public'],
+      },
+      channelClassification: {
+        privatePrefixes: ['api:', 'sillytavern:', 'openwebui:', 'shard:', 'internal:'],
+        broadcastPrefixes: ['twitter:', 'social:'],
+        defaultVisibility: 'semi_private',
+        visibilityOverrides: {
+          exact: {},
+          prefix: {},
+        },
+      },
+    };
+    writeFileSync(join(dataDir, TRUST_POLICY_FILE_NAME), JSON.stringify(oldDefault, null, 2), 'utf-8');
+
+    const loaded = loadTrustPolicyConfig(dataDir);
+
+    expect(loaded.trustCeiling.regular).toEqual(['public', 'personal']);
+    expect(readJsonFile<{ trustCeiling: { regular: string[] } }>(
+      join(dataDir, TRUST_POLICY_FILE_NAME),
+    ).trustCeiling.regular)
+      .toEqual(['public', 'personal']);
+  });
+
+  it('preserves valid custom trust policies that are not the known old default', () => {
+    const dataDir = makeDataDir('psfn-trust-policy-custom-');
+    const custom = {
+      trustCeiling: {
+        primary: ['public', 'personal', 'intimate', 'confidential'],
+        trusted: ['public', 'personal'],
+        regular: ['public'],
+        public: ['public'],
+      },
+      visibilityAllowed: {
+        private: ['public', 'personal', 'intimate', 'confidential'],
+        semi_private: ['public'],
+        public: ['public'],
+        broadcast: ['public'],
+      },
+      channelClassification: {
+        privatePrefixes: ['custom:'],
+        broadcastPrefixes: ['social:'],
+        defaultVisibility: 'semi_private',
+        visibilityOverrides: {
+          exact: {},
+          prefix: {},
+        },
+      },
+    };
+    writeFileSync(join(dataDir, TRUST_POLICY_FILE_NAME), JSON.stringify(custom, null, 2), 'utf-8');
+
+    expect(loadTrustPolicyConfig(dataDir)).toEqual(custom);
+    expect(readJsonFile(join(dataDir, TRUST_POLICY_FILE_NAME))).toEqual(custom);
+  });
+
   it('round-trips capability-tier.json without drift', () => {
     const dataDir = makeDataDir('psfn-capability-tier-config-');
     const expected = {

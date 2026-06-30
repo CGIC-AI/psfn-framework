@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   createOrientTool,
 } from './tools.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import type { ActiveConcern } from '../../core/intention/concerns.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
 import { ValuesJournalStore } from '../values/store.js';
@@ -167,13 +168,20 @@ describe('orient tool', () => {
     };
     const tool = createOrientTool(store);
 
-    const result = await tool.execute('call-1', {
-      action: 'append',
-      block: 'persona',
-      text: '  line two  ',
-    });
+    const result = await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'test',
+      channelId: 'discord:room-a',
+    }, async () => tool.execute('call-1', {
+        action: 'append',
+        block: 'persona',
+        text: '  line two  ',
+      }));
 
-    expect(store.append).toHaveBeenCalledWith('persona', 'line two', { separator: undefined });
+    expect(store.append).toHaveBeenCalledWith('persona', 'line two', {
+      separator: undefined,
+      scope: expect.objectContaining({ key: 'channel:discord:room-a' }),
+    });
     expect(resultText(result)).toContain('Appended to persona orientation');
     expect(result.details?.isError).toBeUndefined();
   });
@@ -186,11 +194,15 @@ describe('orient tool', () => {
     };
     const tool = createOrientTool(store);
 
-    const result = await tool.execute('call-2', {
-      action: 'append',
-      block: 'persona',
-      text: '   ',
-    });
+    const result = await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'test',
+      channelId: 'discord:room-a',
+    }, async () => tool.execute('call-2', {
+        action: 'append',
+        block: 'persona',
+        text: '   ',
+      }));
 
     expect(resultText(result)).toContain('Error: text is required for action=append');
     expect(result.details?.isError).toBe(true);
@@ -210,13 +222,19 @@ describe('orient tool', () => {
     };
     const tool = createOrientTool(store);
 
-    const result = await tool.execute('call-3', {
-      action: 'replace',
-      block: 'goals',
-      text: 'Ship PSFN-du0t today.',
-    });
+    const result = await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'test',
+      channelId: 'discord:room-a',
+    }, async () => tool.execute('call-3', {
+        action: 'replace',
+        block: 'goals',
+        text: 'Ship PSFN-du0t today.',
+      }));
 
-    expect(store.replace).toHaveBeenCalledWith('goals', 'Ship PSFN-du0t today.');
+    expect(store.replace).toHaveBeenCalledWith('goals', 'Ship PSFN-du0t today.', {
+      scope: expect.objectContaining({ key: 'channel:discord:room-a' }),
+    });
     expect(resultText(result)).toContain('Replaced goals orientation');
     expect(result.details?.isError).toBeUndefined();
   });
@@ -237,17 +255,23 @@ describe('orient tool', () => {
     };
     const tool = createOrientTool(store);
 
-    const result = await tool.execute('call-4', {
-      action: 'reorient',
-      persona: 'Pragmatic and helpful.',
-      human: 'Prefers concise, technical answers.',
-      goals: 'Complete Phase V core memory integration.',
-    });
+    const result = await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'test',
+      channelId: 'discord:room-a',
+    }, async () => tool.execute('call-4', {
+        action: 'reorient',
+        persona: 'Pragmatic and helpful.',
+        human: 'Prefers concise, technical answers.',
+        goals: 'Complete Phase V core memory integration.',
+      }));
 
     expect(store.rethink).toHaveBeenCalledWith({
       persona: 'Pragmatic and helpful.',
       human: 'Prefers concise, technical answers.',
       goals: 'Complete Phase V core memory integration.',
+    }, {
+      scope: expect.objectContaining({ key: 'channel:discord:room-a' }),
     });
     expect(resultText(result)).toContain('Reoriented active blocks');
     expect(result.details?.isError).toBeUndefined();
@@ -263,12 +287,16 @@ describe('orient tool', () => {
     };
     const tool = createOrientTool(store);
 
-    const result = await tool.execute('call-5', {
-      action: 'reorient',
-      persona: 'x',
-      human: 'y',
-      goals: 'z',
-    });
+    const result = await runWithRequestContext({
+      callType: 'tool',
+      purpose: 'test',
+      channelId: 'discord:room-a',
+    }, async () => tool.execute('call-5', {
+        action: 'reorient',
+        persona: 'x',
+        human: 'y',
+        goals: 'z',
+      }));
 
     expect(resultText(result)).toContain('Error updating orientation');
     expect(resultText(result)).toContain('disk full');

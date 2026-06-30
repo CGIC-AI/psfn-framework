@@ -17,11 +17,13 @@ const log = createComponentLogger('PromptRegistry');
 export const EXTRACTION_PROMPT_KEY = 'memory.extraction' as const;
 export const COMPACTION_SUMMARY_PROMPT_KEY = 'session.compaction.summary' as const;
 export const PROFILE_SYNTHESIS_PROMPT_KEY = 'memory.profile.synthesis' as const;
+export const SLEEPTIME_ORIENTATION_PROMPT_KEY = 'memory.sleeptime.orientation' as const;
 
 export type PromptRegistryKey =
   | typeof EXTRACTION_PROMPT_KEY
   | typeof COMPACTION_SUMMARY_PROMPT_KEY
-  | typeof PROFILE_SYNTHESIS_PROMPT_KEY;
+  | typeof PROFILE_SYNTHESIS_PROMPT_KEY
+  | typeof SLEEPTIME_ORIENTATION_PROMPT_KEY;
 
 interface PromptSeed {
   key: PromptRegistryKey;
@@ -137,6 +139,36 @@ Return XML only:
 <profile>
   <summary>One to two paragraphs here.</summary>
 </profile>`,
+  },
+  {
+    key: SLEEPTIME_ORIENTATION_PROMPT_KEY,
+    description:
+      'Sleeptime scoped-continuity prompt. Must produce JSON orient and memory_writes without assigning companion identity or mood.',
+    consumers: ['src/faculties/memory/sleeptime-agent.ts'],
+    text: `Review recent conversation evidence for one channel scope. Update only scoped continuity notes and optional long-term memory writes.
+
+Rules:
+- Do not assign the companion an identity, job, species, mood, feeling, relationship stance, or safety persona.
+- Do not override the character card, static appearance, or emotion system.
+- Keep scoped continuity grounded in the transcript and useful for this same channel.
+- Never invent facts.
+- Use "persona" for local continuity/style observations only, "human" for participant or room context only, and "goals" for local continuity commitments only.
+
+Respond with JSON only:
+{
+  "orient": { "persona": "...", "human": "...", "goals": "..." },
+  "memory_writes": [
+    {
+      "text": "...",
+      "type": "semantic|episodic|emotional|procedural|boundary|reflection|relational",
+      "importance": 0.0,
+      "confidence": 0.0,
+      "emotionalValence": 0.0,
+      "tags": ["..."],
+      "sensitivity": "public|personal|intimate|confidential"
+    }
+  ]
+}`,
   },
 ];
 
@@ -341,14 +373,20 @@ export class PromptRegistryStore {
     try {
       const raw = readFileSync(this.filePath, 'utf-8');
       const parsed = this.parseEntries(raw);
-      this.entries = parsed;
+      this.entries = parsed.entries;
       this.lastLoadedMtimeMs = statSync(this.filePath).mtimeMs;
+      if (parsed.addedSeedKeys.length > 0) {
+        this.save();
+        log.info('Added missing prompt registry seed entries', {
+          keys: parsed.addedSeedKeys,
+        });
+      }
     } catch (err) {
       throw new Error(`Failed to load prompt registry: ${String(err)}`);
     }
   }
 
-  private parseEntries(raw: string): Map<string, PromptRegistryEntry> {
+  private parseEntries(raw: string): { entries: Map<string, PromptRegistryEntry>; addedSeedKeys: string[] } {
     const data = JSON.parse(raw) as unknown;
     if (!Array.isArray(data)) {
       throw new Error('Prompt registry JSON must be an array');
@@ -396,11 +434,32 @@ export class PromptRegistryStore {
 
     for (const requiredKey of REQUIRED_KEYS) {
       if (!parsed.has(requiredKey)) {
-        throw new Error(`Missing required prompt key: ${requiredKey}`);
+        const seed = this.seedByKey.get(requiredKey);
+        if (!seed) {
+          throw new Error(`Missing required prompt key: ${requiredKey}`);
+        }
+        const timestamp = new Date().toISOString();
+        parsed.set(requiredKey, {
+          key: seed.key,
+          text: seed.text,
+          description: seed.description,
+          consumers: [...seed.consumers],
+          version: 1,
+          updatedAt: timestamp,
+          updatedBy: 'system:migration',
+          checksum: contentChecksum(seed.text),
+        });
       }
     }
 
-    return parsed;
+    const addedSeedKeys = [...REQUIRED_KEYS].filter((key) => {
+      const data = JSON.parse(raw) as unknown;
+      return Array.isArray(data) && !data.some((entry) => (
+        entry && typeof entry === 'object' && (entry as Record<string, unknown>).key === key
+      ));
+    });
+
+    return { entries: parsed, addedSeedKeys };
   }
 
   private save(): void {

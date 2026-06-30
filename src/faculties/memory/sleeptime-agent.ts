@@ -1,5 +1,11 @@
 import { createHash } from 'node:crypto';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import {
+  getDefaultPromptText,
+  SLEEPTIME_ORIENTATION_PROMPT_KEY,
+} from '../../core/identity/prompt-registry.js';
+import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
+import { coreMemoryChannelScope } from '../core-memory/store.js';
 import { evaluateRestWindowEligibility } from '../../core/scheduler/rest-window.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -38,6 +44,7 @@ const log = createComponentLogger('SleeptimeMemoryAgent');
 export const SLEEPTIME_MEMORY_ACTION_KIND = 'memory.sleeptime.run';
 
 const DEFAULT_CADENCE_TURNS = 3;
+const DEFAULT_IDLE_SESSION_LIMIT = 20;
 const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 24;
 const DEFAULT_MAX_MEMORY_WRITES = 4;
 const MAX_TRANSCRIPT_ENTRY_CHARS = 600;
@@ -63,7 +70,8 @@ const EVIDENCE_TOKEN_STOP_WORDS = new Set([
 ]);
 
 type CoreMemoryRewriter = Pick<CoreMemoryStorePort, 'getSnapshot' | 'rethink'>;
-type SessionMemoryReader = Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>;
+type SessionMemoryReader = Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>
+  & Partial<Pick<SessionManager, 'listRecentSessions'>>;
 type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
 type SleeptimeEpisodicSynthesizer = Pick<EpisodicSynthesizer, 'run'>;
 type SleeptimeEpisodeConsolidator = Pick<SleepCycleEpisodeConsolidator, 'run'>;
@@ -101,6 +109,7 @@ export interface SleeptimeMemoryAgentOptions {
   sessionManager: SessionMemoryReader;
   coreMemoryStore: CoreMemoryRewriter;
   memoryWriter: SleeptimeMemoryWriter;
+  promptRegistry?: PromptRegistryStatePort | null;
   cadenceTurns?: number;
   transcriptMessageLimit?: number;
   maxMemoryWrites?: number;
@@ -357,6 +366,14 @@ function buildSleepTimeMemoryWritePayload(input: {
     emotionalValence: input.memory.emotionalValence,
     sensitivity: input.memory.sensitivity,
     sourceRef,
+    sourceType: 'autonomous_action',
+    provenance: {
+      channelId: input.sessionId,
+      sessionId: input.sessionId,
+      actor: 'system',
+      reason: 'sleeptime',
+      ...(input.sourceMessageId ? { sourceMessageIds: [Number(input.sourceMessageId)].filter(Number.isFinite) } : {}),
+    },
     provenanceRefs: [
       sourceRef,
       `sleeptime_action:${input.actionId}`,
@@ -368,6 +385,12 @@ function buildSleepTimeMemoryWritePayload(input: {
       'sleeptime',
       ...(repeatedFact ? ['repeated_fact', 'stable_fact'] : []),
     ],
+    scopeRef: {
+      kind: 'conversation',
+      id: input.sessionId,
+      label: 'sleeptime source session',
+    },
+    scopeTags: [`channel:${input.sessionId}`, 'sleeptime'],
     ...(repeatedFact ? { retentionClass: 'durable' as const } : {}),
   };
 }
@@ -393,6 +416,13 @@ function buildBehavioralSummaryWrites(input: {
       emotionalValence: 0,
       sensitivity: 'personal',
       sourceRef,
+      sourceType: 'autonomous_action',
+      provenance: {
+        channelId: input.sessionId,
+        sessionId: input.sessionId,
+        actor: 'system',
+        reason: 'sleeptime_behavioral_summary',
+      },
       provenanceRefs: [
         sourceRef,
         `l01_episode_arc:${arc.id}`,
@@ -407,6 +437,12 @@ function buildBehavioralSummaryWrites(input: {
         'evidence_chain',
         `episode_arc:${arc.arcKind}`,
       ],
+      scopeRef: {
+        kind: 'conversation',
+        id: input.sessionId,
+        label: 'sleeptime source session',
+      },
+      scopeTags: [`channel:${input.sessionId}`, 'sleeptime'],
     };
   });
 }
@@ -416,6 +452,7 @@ export class SleeptimeMemoryAgent {
   private readonly sessionManager: SessionMemoryReader;
   private readonly coreMemoryStore: CoreMemoryRewriter;
   private readonly memoryWriter: SleeptimeMemoryWriter;
+  private readonly promptRegistry: PromptRegistryStatePort | null;
   private readonly cadenceTurns: number;
   private readonly transcriptMessageLimit: number;
   private readonly maxMemoryWrites: number;
@@ -433,6 +470,7 @@ export class SleeptimeMemoryAgent {
     this.sessionManager = options.sessionManager;
     this.coreMemoryStore = options.coreMemoryStore;
     this.memoryWriter = options.memoryWriter;
+    this.promptRegistry = options.promptRegistry ?? null;
     this.cadenceTurns = normalizePositiveInteger(options.cadenceTurns, DEFAULT_CADENCE_TURNS);
     this.transcriptMessageLimit = normalizePositiveInteger(
       options.transcriptMessageLimit,
@@ -468,20 +506,21 @@ export class SleeptimeMemoryAgent {
     const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
     const nextCount = (this.turnCountBySession.get(sessionId) ?? 0) + 1;
     this.turnCountBySession.set(sessionId, nextCount);
-    if (nextCount % this.cadenceTurns !== 0) {
-      return null;
-    }
-
     const lastUserActivityAtMs = message.timestamp instanceof Date
       ? message.timestamp.getTime()
       : Date.now();
-    const restWindowDecision = this.restWindow
-      ? evaluateRestWindowEligibility({
+    if (this.restWindow) {
+      const restWindowDecision = evaluateRestWindowEligibility({
         config: this.restWindow,
         nowMs: lastUserActivityAtMs,
         lastUserActivityAtMs,
-      })
-      : null;
+      });
+      if (!restWindowDecision.allowed) {
+        return null;
+      }
+    } else if (nextCount % this.cadenceTurns !== 0) {
+      return null;
+    }
 
     return {
       kind: SLEEPTIME_MEMORY_ACTION_KIND,
@@ -493,10 +532,44 @@ export class SleeptimeMemoryAgent {
       },
       dedupeKey: `${SLEEPTIME_MEMORY_ACTION_KIND}:${sessionId}`,
       maxRetries: 1,
-      ...(restWindowDecision?.nextEligibleAtMs !== undefined
-        ? { runAt: restWindowDecision.nextEligibleAtMs }
-        : {}),
     };
+  }
+
+  inferIdlePostTurnActions(options: {
+    nowMs?: number;
+    limit?: number;
+  } = {}): PostTurnActionCandidate[] {
+    if (!this.restWindow || !this.sessionManager.listRecentSessions) {
+      return [];
+    }
+    const nowMs = typeof options.nowMs === 'number' && Number.isFinite(options.nowMs)
+      ? options.nowMs
+      : Date.now();
+    const limit = normalizePositiveInteger(options.limit, DEFAULT_IDLE_SESSION_LIMIT);
+    const actions: PostTurnActionCandidate[] = [];
+    for (const session of this.sessionManager.listRecentSessions(limit)) {
+      const sessionId = this.sessionManager.resolveSessionChannelId(session.channelId);
+      if (sessionId.startsWith('internal:')) continue;
+      const lastUserActivityAtMs = session.lastActivityAt;
+      const restWindowDecision = evaluateRestWindowEligibility({
+        config: this.restWindow,
+        nowMs,
+        lastUserActivityAtMs,
+      });
+      if (!restWindowDecision.allowed) continue;
+      actions.push({
+        kind: SLEEPTIME_MEMORY_ACTION_KIND,
+        payload: {
+          sessionId,
+          sourceChannelId: session.channelId,
+          trigger: 'idle_rest_window',
+          lastUserActivityAtMs,
+        },
+        dedupeKey: `${SLEEPTIME_MEMORY_ACTION_KIND}:${sessionId}`,
+        maxRetries: 1,
+      });
+    }
+    return actions;
   }
 
   async execute(action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>): Promise<void> {
@@ -559,7 +632,8 @@ export class SleeptimeMemoryAgent {
       })
       : null;
 
-    const currentSnapshot = this.coreMemoryStore.getSnapshot();
+    const coreMemoryScope = coreMemoryChannelScope({ channelId: sessionId });
+    const currentSnapshot = this.coreMemoryStore.getSnapshot({ scope: coreMemoryScope });
     const transcript = recentEntries.map(summarizeSessionEntry).join('\n');
     const requestPrompt = [
       'Current orientation blocks:',
@@ -575,27 +649,7 @@ export class SleeptimeMemoryAgent {
 
     const response = await this.llmProvider.complete(
       {
-        systemPrompt: [
-          'You are a sleeptime orientation maintainer.',
-          'Reorient the active persona, human, and goals blocks using only grounded transcript evidence.',
-          'Propose optional durable memory writes for the long-term memory store.',
-          'Never invent facts. Keep orientation concise, stable, and action-guiding.',
-          'Respond with JSON only:',
-          '{',
-          '  "orient": { "persona": "...", "human": "...", "goals": "..." },',
-          '  "memory_writes": [',
-          '    {',
-          '      "text": "...",',
-          '      "type": "semantic|episodic|emotional|procedural|boundary|reflection|relational",',
-          '      "importance": 0.0,',
-          '      "confidence": 0.0,',
-          '      "emotionalValence": 0.0,',
-          '      "tags": ["..."],',
-          '      "sensitivity": "public|personal|intimate|confidential"',
-          '    }',
-          '  ]',
-          '}',
-        ].join('\n'),
+        systemPrompt: this.resolveSleeptimePromptText(),
         messages: [{ role: 'user', content: requestPrompt }],
         correlation: {
           requestId: `sleeptime:${sessionId}:${action.id}`,
@@ -614,7 +668,7 @@ export class SleeptimeMemoryAgent {
       persona: plan.orient.persona,
       human: plan.orient.human,
       goals: plan.orient.goals,
-    });
+    }, { scope: coreMemoryScope });
 
     let writtenCount = 0;
     let reviewQueuedCount = await this.queueStaleMemoryReviews();
@@ -687,6 +741,11 @@ export class SleeptimeMemoryAgent {
       ...(memoryMaintenanceDiagnostics ? { memoryMaintenanceDiagnostics } : {}),
       ...(episodicMaintenanceDiagnostics ? { episodicMaintenanceDiagnostics } : {}),
     });
+  }
+
+  private resolveSleeptimePromptText(): string {
+    return this.promptRegistry?.getPrompt(SLEEPTIME_ORIENTATION_PROMPT_KEY)
+      ?? getDefaultPromptText(SLEEPTIME_ORIENTATION_PROMPT_KEY);
   }
 
   private async queueMaintenanceReview(

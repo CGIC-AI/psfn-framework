@@ -8,6 +8,7 @@ import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import { CoreMemoryStore } from '../core-memory/store.js';
+import { coreMemoryChannelScope } from '../core-memory/store.js';
 import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
@@ -120,7 +121,7 @@ describe('SleeptimeMemoryAgent', () => {
     expect(agent.inferPostTurnAction({ id: 'm4', channelId: 'internal:reflection:whisper' })).toBeNull();
   });
 
-  it('schedules sleeptime actions for the next rest-window and inactivity threshold', () => {
+  it('does not enqueue sleeptime from an active turn before inactivity threshold', () => {
     const llmProvider = makeLLMProvider('{}');
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
@@ -154,12 +155,60 @@ describe('SleeptimeMemoryAgent', () => {
       timestamp: new Date('2026-03-16T23:30:00.000Z'),
     });
 
-    expect(action).toEqual(expect.objectContaining({
-      runAt: Date.parse('2026-03-17T00:30:00.000Z'),
-      payload: expect.objectContaining({
-        lastUserActivityAtMs: Date.parse('2026-03-16T23:30:00.000Z'),
-      }),
-    }));
+    expect(action).toBeNull();
+  });
+
+  it('infers idle sleeptime actions for quiet rest-window sessions', () => {
+    const llmProvider = makeLLMProvider('{}');
+    const sessionManager = {
+      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getRecentMessages: vi.fn().mockReturnValue([]),
+      listRecentSessions: vi.fn().mockReturnValue([
+        {
+          channelId: 'terminal:alpha',
+          channelType: 'terminal',
+          messageCount: 10,
+          lastActivityAt: Date.parse('2026-03-16T01:00:00.000Z'),
+          lastRole: 'user',
+        },
+      ]),
+    };
+    const coreMemoryStore = {
+      getSnapshot: vi.fn(),
+      rethink: vi.fn(),
+    };
+    const memoryWriter = {
+      write: vi.fn(),
+    };
+    const agent = new SleeptimeMemoryAgent({
+      llmProvider,
+      sessionManager,
+      coreMemoryStore,
+      memoryWriter,
+      cadenceTurns: 1,
+      restWindow: {
+        enabled: true,
+        startLocalTime: '00:00',
+        endLocalTime: '09:00',
+        timeZone: 'UTC',
+        inactivityThresholdMinutes: 60,
+      },
+    });
+
+    const actions = agent.inferIdlePostTurnActions({
+      nowMs: Date.parse('2026-03-16T03:30:00.000Z'),
+    });
+
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({
+      kind: SLEEPTIME_MEMORY_ACTION_KIND,
+      dedupeKey: `${SLEEPTIME_MEMORY_ACTION_KIND}:terminal:alpha`,
+      payload: {
+        sessionId: 'terminal:alpha',
+        trigger: 'idle_rest_window',
+        lastUserActivityAtMs: Date.parse('2026-03-16T01:00:00.000Z'),
+      },
+    });
   });
 
   it('reorients active blocks and writes long-term memory facts from a sleeptime plan', async () => {
@@ -238,7 +287,9 @@ describe('SleeptimeMemoryAgent', () => {
         sourceMessageId: 'msg-42',
       }));
 
-      const snapshot = coreMemoryStore.getSnapshot();
+      const snapshot = coreMemoryStore.getSnapshot({
+        scope: coreMemoryChannelScope({ channelId: 'terminal:test' }),
+      });
       expect(snapshot.blocks.persona.content).toContain('Warm, direct, and practical');
       expect(snapshot.blocks.human.content).toContain('Primary user prefers concise answers');
       expect(snapshot.blocks.goals.content).toContain('track unresolved commitments');

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { MessageSender } from '../../system/lifecycle/notifications.js';
+import { inferSessionChannelType } from '../session/session-id.js';
 import {
   buildDeferredToolHandoffMessage,
   DEFERRED_TOOL_HANDOFF_ACTION_KIND,
@@ -47,10 +48,14 @@ import type {
 } from './heartbeat-runtime-contracts.js';
 import { DEFERRED_HEARTBEAT_ACTION_KIND } from './heartbeat-runtime-contracts.js';
 import type { HeartbeatTemplateRuntime } from './heartbeat-template-runtime.js';
+import type { Scheduler } from './scheduler.js';
 
 const log = createComponentLogger('HeartbeatPostTurn');
+const SLEEPTIME_IDLE_INFER_TASK_ID = 'memory.sleeptime.idle-infer';
+const SLEEPTIME_IDLE_INFER_INTERVAL_MS = 5 * 60_000;
 
 interface WireHeartbeatPostTurnRuntimeOptions {
+  scheduler: Scheduler;
   agentLoop: HeartbeatAgent;
   sender: MessageSender;
   templateRuntime: Pick<HeartbeatTemplateRuntime, 'runDeferredTemplate'>;
@@ -61,6 +66,7 @@ export function wireHeartbeatPostTurnRuntime(
   options: WireHeartbeatPostTurnRuntimeOptions,
 ): void {
   const {
+    scheduler,
     agentLoop,
     sender,
     templateRuntime,
@@ -93,6 +99,7 @@ export function wireHeartbeatPostTurnRuntime(
       sessionManager: runtimeOptions.sessionManager,
       coreMemoryStore: runtimeOptions.coreMemoryStore,
       memoryWriter: runtimeOptions.memoryWriter,
+      promptRegistry: runtimeOptions.promptRegistry ?? null,
       cadenceTurns: runtimeOptions.sleeptimeCadenceTurns,
       restWindow: runtimeOptions.episodicProcessingRestWindow,
       episodicSynthesizer: runtimeOptions.episodicSynthesizer,
@@ -1007,6 +1014,53 @@ export function wireHeartbeatPostTurnRuntime(
   }
 
   if (sleeptimeAgent) {
+    if (telemetryEventBus && !scheduler.getTask(SLEEPTIME_IDLE_INFER_TASK_ID)) {
+      scheduler.register({
+        id: SLEEPTIME_IDLE_INFER_TASK_ID,
+        name: 'Sleeptime Idle Inference',
+        type: 'every',
+        intervalMs: SLEEPTIME_IDLE_INFER_INTERVAL_MS,
+        handler: async () => {
+          const actions = sleeptimeAgent.inferIdlePostTurnActions();
+          for (const action of actions) {
+            const payload = action.payload ?? {};
+            const channelId = typeof payload.sourceChannelId === 'string'
+              ? payload.sourceChannelId
+              : typeof payload.sessionId === 'string'
+                ? payload.sessionId
+                : 'api:sleeptime';
+            const inferredChannelType = inferSessionChannelType(channelId);
+            const channelType = inferredChannelType && inferredChannelType !== 'subagent'
+              ? inferredChannelType
+              : 'api';
+            await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
+              message: {
+                id: `sleeptime-idle:${channelId}:${Date.now()}`,
+                channelId,
+                channelType,
+                authorId: 'system:sleeptime',
+                authorName: 'Sleeptime',
+                content: 'Sleeptime idle maintenance became eligible.',
+                timestamp: new Date(),
+              },
+              response: {
+                content: '',
+                channelId,
+                metadata: {
+                  model: 'scheduler:sleeptime-idle',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  durationMs: 0,
+                },
+              },
+              actions: [action],
+            });
+          }
+        },
+        eligibility: { requiredTokens: ['memory.write'] },
+        state: 'idle',
+      }, { skipFirstRun: true });
+    }
     runtimeOptions.postTurnActions.registerHandler(
       SLEEPTIME_MEMORY_ACTION_KIND,
       async (action) => {

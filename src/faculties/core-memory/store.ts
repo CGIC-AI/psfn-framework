@@ -15,6 +15,7 @@ export interface CoreMemoryBlock {
 export interface CoreMemorySnapshot {
   version: number;
   updatedAt: string;
+  scope?: CoreMemoryScopeDescriptor;
   blocks: Record<CoreMemoryLabel, CoreMemoryBlock>;
 }
 
@@ -24,15 +25,46 @@ export interface CoreMemoryRethinkInput {
   goals: string;
 }
 
+export interface CoreMemoryScopeDescriptor {
+  kind: 'channel' | 'legacy_global';
+  key: string;
+  channelId?: string;
+  isDirectMessage?: boolean;
+  participantId?: string;
+  participantName?: string;
+  roomName?: string;
+  participantCount?: number;
+  activeParticipantNames?: string[];
+}
+
+export interface CoreMemoryScopeOptions {
+  scope?: CoreMemoryScopeDescriptor | string;
+}
+
 export interface CoreMemoryAppendOptions {
   separator?: string;
+  scope?: CoreMemoryScopeDescriptor | string;
+}
+
+export interface CoreMemoryMutationOptions extends CoreMemoryScopeOptions {}
+
+export interface CoreMemoryFormatContext extends CoreMemoryScopeOptions {
+  channelId?: string;
+  isDirectMessage?: boolean;
+  participantId?: string;
+  participantName?: string;
+  roomName?: string;
+  participantCount?: number;
+  activeParticipantNames?: string[];
 }
 
 export interface CoreMemoryStoreOptions {
   now?: () => Date;
 }
 
-const CORE_MEMORY_VERSION = 1 as const;
+const CORE_MEMORY_BLOCK_VERSION = 1 as const;
+const CORE_MEMORY_FILE_VERSION = 2 as const;
+const DEFAULT_SCOPE_KEY = 'channel:default';
 const GOALS_TIMESTAMP_SOURCE = String.raw`(?:\d{4}-\d{2}-\d{2}[T\s]\d{2}[:-]\d{2}[:-]\d{2}(?:[.:\s-]\d{3})?(?:Z|[+-]\d{2}:?\d{2})?|\d{8}T\d{6}(?:\.\d+)?Z?)`;
 const GOALS_TIMESTAMP_PATTERN = new RegExp(String.raw`\b${GOALS_TIMESTAMP_SOURCE}\b`, 'i');
 const GOALS_ORIENT_LOG_LINE_PATTERN = new RegExp(
@@ -80,11 +112,19 @@ function cloneSnapshot(snapshot: CoreMemorySnapshot): CoreMemorySnapshot {
   return {
     version: snapshot.version,
     updatedAt: snapshot.updatedAt,
+    ...(snapshot.scope ? { scope: cloneScopeDescriptor(snapshot.scope) } : {}),
     blocks,
   };
 }
 
-function buildDefaultSnapshot(now: Date): CoreMemorySnapshot {
+function cloneScopeDescriptor(scope: CoreMemoryScopeDescriptor): CoreMemoryScopeDescriptor {
+  return {
+    ...scope,
+    ...(scope.activeParticipantNames ? { activeParticipantNames: [...scope.activeParticipantNames] } : {}),
+  };
+}
+
+function buildDefaultSnapshot(now: Date, scope?: CoreMemoryScopeDescriptor): CoreMemorySnapshot {
   const blocks = {} as Record<CoreMemoryLabel, CoreMemoryBlock>;
   for (const label of CORE_MEMORY_LABELS) {
     blocks[label] = {
@@ -94,8 +134,9 @@ function buildDefaultSnapshot(now: Date): CoreMemorySnapshot {
   }
 
   return {
-    version: CORE_MEMORY_VERSION,
+    version: CORE_MEMORY_BLOCK_VERSION,
     updatedAt: now.toISOString(),
+    ...(scope ? { scope: cloneScopeDescriptor(scope) } : {}),
     blocks,
   };
 }
@@ -241,7 +282,7 @@ function parseSnapshot(raw: unknown): CoreMemorySnapshot {
   const updatedAt = raw.updatedAt;
   const blocksRaw = raw.blocks;
 
-  if (version !== CORE_MEMORY_VERSION) {
+  if (version !== CORE_MEMORY_BLOCK_VERSION) {
     throw new Error(`unsupported core memory version: ${String(version)}`);
   }
   if (typeof updatedAt !== 'string' || updatedAt.trim().length === 0) {
@@ -263,29 +304,312 @@ function parseSnapshot(raw: unknown): CoreMemorySnapshot {
   }
 
   return {
-    version: CORE_MEMORY_VERSION,
+    version: CORE_MEMORY_BLOCK_VERSION,
     updatedAt,
     blocks,
   };
 }
 
+interface ScopedCoreMemoryRecord {
+  scope: CoreMemoryScopeDescriptor;
+  updatedAt: string;
+  blocks: Record<CoreMemoryLabel, CoreMemoryBlock>;
+}
+
+interface ArchivedLegacyCoreMemory {
+  archivedAt: string;
+  snapshot: CoreMemorySnapshot;
+}
+
+interface ScopedCoreMemoryFile {
+  version: typeof CORE_MEMORY_FILE_VERSION;
+  updatedAt: string;
+  scopes: Partial<Record<string, ScopedCoreMemoryRecord>>;
+  legacyGlobal?: ArchivedLegacyCoreMemory;
+}
+
+function normalizeScopeKeyPart(value: string): string {
+  return value.trim().replace(/\s+/g, ' ');
+}
+
+function sanitizeActiveParticipantNames(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of raw) {
+    if (typeof value !== 'string') continue;
+    const normalized = value.trim();
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+    if (out.length >= 5) break;
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+function normalizeOptionalString(raw: unknown): string | undefined {
+  return typeof raw === 'string' && raw.trim().length > 0 ? raw.trim() : undefined;
+}
+
+function normalizeOptionalBoolean(raw: unknown): boolean | undefined {
+  return typeof raw === 'boolean' ? raw : undefined;
+}
+
+function normalizeOptionalCount(raw: unknown): number | undefined {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return undefined;
+  const normalized = Math.floor(raw);
+  return normalized >= 0 ? normalized : undefined;
+}
+
+function buildChannelScope(input: {
+  channelId: string;
+  isDirectMessage?: boolean;
+  participantId?: string;
+  participantName?: string;
+  roomName?: string;
+  participantCount?: number;
+  activeParticipantNames?: string[];
+}): CoreMemoryScopeDescriptor {
+  const channelId = normalizeScopeKeyPart(input.channelId);
+  if (!channelId) {
+    throw new Error('core memory channel scope requires channelId');
+  }
+  return {
+    kind: 'channel',
+    key: `channel:${channelId}`,
+    channelId,
+    ...(input.isDirectMessage !== undefined ? { isDirectMessage: input.isDirectMessage } : {}),
+    ...(input.participantId ? { participantId: input.participantId } : {}),
+    ...(input.participantName ? { participantName: input.participantName } : {}),
+    ...(input.roomName ? { roomName: input.roomName } : {}),
+    ...(input.participantCount !== undefined ? { participantCount: input.participantCount } : {}),
+    ...(input.activeParticipantNames?.length ? { activeParticipantNames: input.activeParticipantNames.slice(0, 5) } : {}),
+  };
+}
+
+export function coreMemoryChannelScope(input: {
+  channelId: string;
+  isDirectMessage?: boolean;
+  participantId?: string;
+  participantName?: string;
+  roomName?: string;
+  participantCount?: number;
+  activeParticipantNames?: string[];
+}): CoreMemoryScopeDescriptor {
+  return buildChannelScope(input);
+}
+
+function defaultScope(): CoreMemoryScopeDescriptor {
+  return {
+    kind: 'channel',
+    key: DEFAULT_SCOPE_KEY,
+    channelId: 'default',
+  };
+}
+
+function resolveScopeDescriptor(input?: CoreMemoryScopeDescriptor | string): CoreMemoryScopeDescriptor {
+  if (typeof input === 'string') {
+    return buildChannelScope({ channelId: input });
+  }
+  if (!input) {
+    return defaultScope();
+  }
+  if (input.kind === 'channel') {
+    const channelId = input.channelId ?? input.key.replace(/^channel:/, '');
+    return buildChannelScope({
+      channelId,
+      isDirectMessage: input.isDirectMessage,
+      participantId: input.participantId,
+      participantName: input.participantName,
+      roomName: input.roomName,
+      participantCount: input.participantCount,
+      activeParticipantNames: input.activeParticipantNames,
+    });
+  }
+  return {
+    kind: 'legacy_global',
+    key: 'legacy:global',
+  };
+}
+
+function resolveFormatScope(context?: CoreMemoryFormatContext): CoreMemoryScopeDescriptor {
+  if (context?.scope) {
+    const scope = resolveScopeDescriptor(context.scope);
+    if (scope.kind === 'channel') {
+      return {
+        ...scope,
+        ...(context.isDirectMessage !== undefined ? { isDirectMessage: context.isDirectMessage } : {}),
+        ...(context.participantId ? { participantId: context.participantId } : {}),
+        ...(context.participantName ? { participantName: context.participantName } : {}),
+        ...(context.roomName ? { roomName: context.roomName } : {}),
+        ...(context.participantCount !== undefined ? { participantCount: context.participantCount } : {}),
+        ...(context.activeParticipantNames?.length
+          ? { activeParticipantNames: context.activeParticipantNames.slice(0, 5) }
+          : {}),
+      };
+    }
+    return scope;
+  }
+  if (context?.channelId) {
+    return buildChannelScope({
+      channelId: context.channelId,
+      isDirectMessage: context.isDirectMessage,
+      participantId: context.participantId,
+      participantName: context.participantName,
+      roomName: context.roomName,
+      participantCount: context.participantCount,
+      activeParticipantNames: context.activeParticipantNames,
+    });
+  }
+  return defaultScope();
+}
+
+function parseScopeDescriptor(raw: unknown): CoreMemoryScopeDescriptor {
+  if (!isRecord(raw)) {
+    throw new Error('core memory scope must be an object');
+  }
+  const kind = raw.kind;
+  if (kind !== 'channel' && kind !== 'legacy_global') {
+    throw new Error('core memory scope kind must be channel or legacy_global');
+  }
+  if (kind === 'legacy_global') {
+    return { kind, key: 'legacy:global' };
+  }
+  const key = normalizeOptionalString(raw.key);
+  const channelId = normalizeOptionalString(raw.channelId) ?? key?.replace(/^channel:/, '');
+  if (!channelId) {
+    throw new Error('core memory channel scope requires channelId');
+  }
+  return buildChannelScope({
+    channelId,
+    isDirectMessage: normalizeOptionalBoolean(raw.isDirectMessage),
+    participantId: normalizeOptionalString(raw.participantId),
+    participantName: normalizeOptionalString(raw.participantName),
+    roomName: normalizeOptionalString(raw.roomName),
+    participantCount: normalizeOptionalCount(raw.participantCount),
+    activeParticipantNames: sanitizeActiveParticipantNames(raw.activeParticipantNames),
+  });
+}
+
+function parseScopedRecord(raw: unknown, expectedKey: string): ScopedCoreMemoryRecord {
+  if (!isRecord(raw)) {
+    throw new Error(`core memory scoped record "${expectedKey}" must be an object`);
+  }
+  const scope = parseScopeDescriptor(raw.scope);
+  if (scope.key !== expectedKey) {
+    throw new Error(`core memory scope key mismatch: expected "${expectedKey}"`);
+  }
+  const updatedAt = normalizeOptionalString(raw.updatedAt);
+  if (!updatedAt) {
+    throw new Error(`core memory scoped record "${expectedKey}" updatedAt must be non-empty`);
+  }
+  if (!isRecord(raw.blocks)) {
+    throw new Error(`core memory scoped record "${expectedKey}" blocks must be an object`);
+  }
+  const blocks = {} as Record<CoreMemoryLabel, CoreMemoryBlock>;
+  for (const label of CORE_MEMORY_LABELS) {
+    blocks[label] = parseBlock(raw.blocks[label], label);
+  }
+  return {
+    scope,
+    updatedAt,
+    blocks,
+  };
+}
+
+function parseScopedFile(raw: unknown): ScopedCoreMemoryFile {
+  if (!isRecord(raw)) {
+    throw new Error('core memory file must be an object');
+  }
+  if (raw.version !== CORE_MEMORY_FILE_VERSION) {
+    throw new Error(`unsupported core memory file version: ${String(raw.version)}`);
+  }
+  const updatedAt = normalizeOptionalString(raw.updatedAt);
+  if (!updatedAt) {
+    throw new Error('core memory file updatedAt must be non-empty');
+  }
+  if (!isRecord(raw.scopes)) {
+    throw new Error('core memory file scopes must be an object');
+  }
+  const scopes: Record<string, ScopedCoreMemoryRecord> = {};
+  for (const [key, value] of Object.entries(raw.scopes)) {
+    scopes[key] = parseScopedRecord(value, key);
+  }
+  let legacyGlobal: ArchivedLegacyCoreMemory | undefined;
+  if (raw.legacyGlobal !== undefined) {
+    if (!isRecord(raw.legacyGlobal)) {
+      throw new Error('core memory legacyGlobal must be an object');
+    }
+    const archivedAt = normalizeOptionalString(raw.legacyGlobal.archivedAt);
+    if (!archivedAt) {
+      throw new Error('core memory legacyGlobal archivedAt must be non-empty');
+    }
+    legacyGlobal = {
+      archivedAt,
+      snapshot: parseSnapshot(raw.legacyGlobal.snapshot),
+    };
+  }
+  return {
+    version: CORE_MEMORY_FILE_VERSION,
+    updatedAt,
+    scopes,
+    ...(legacyGlobal ? { legacyGlobal } : {}),
+  };
+}
+
+function snapshotFromRecord(record: ScopedCoreMemoryRecord): CoreMemorySnapshot {
+  return cloneSnapshot({
+    version: CORE_MEMORY_BLOCK_VERSION,
+    updatedAt: record.updatedAt,
+    scope: record.scope,
+    blocks: record.blocks,
+  });
+}
+
+function recordFromSnapshot(snapshot: CoreMemorySnapshot, scope: CoreMemoryScopeDescriptor): ScopedCoreMemoryRecord {
+  return {
+    scope: cloneScopeDescriptor(scope),
+    updatedAt: snapshot.updatedAt,
+    blocks: cloneSnapshot(snapshot).blocks,
+  };
+}
+
+function hasAnyBlockContent(snapshot: CoreMemorySnapshot): boolean {
+  return CORE_MEMORY_LABELS.some(label => snapshot.blocks[label].content.trim().length > 0);
+}
+
+function escapeXmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function formatAttributes(attrs: Record<string, string | number | boolean | undefined>): string {
+  const rendered = Object.entries(attrs)
+    .filter(([, value]) => value !== undefined && String(value).length > 0)
+    .map(([key, value]) => `${key}="${escapeXmlAttribute(String(value))}"`);
+  return rendered.length > 0 ? ` ${rendered.join(' ')}` : '';
+}
+
 export class CoreMemoryStore {
   private readonly filePath: string;
   private readonly now: () => Date;
-  private snapshot: CoreMemorySnapshot;
+  private state: ScopedCoreMemoryFile;
 
   constructor(filePath: string, options: CoreMemoryStoreOptions = {}) {
     this.filePath = filePath;
     this.now = options.now ?? (() => new Date());
-    this.snapshot = this.loadOrInitialize();
+    this.state = this.loadOrInitialize();
   }
 
-  getSnapshot(): CoreMemorySnapshot {
-    return cloneSnapshot(this.snapshot);
+  getSnapshot(options: CoreMemoryScopeOptions = {}): CoreMemorySnapshot {
+    return this.getOrCreateScopedSnapshot(resolveScopeDescriptor(options.scope));
   }
 
-  getBlock(label: CoreMemoryLabel): CoreMemoryBlock {
-    return cloneBlock(this.snapshot.blocks[label]);
+  getBlock(label: CoreMemoryLabel, options: CoreMemoryScopeOptions = {}): CoreMemoryBlock {
+    return cloneBlock(this.getOrCreateScopedSnapshot(resolveScopeDescriptor(options.scope)).blocks[label]);
   }
 
   append(
@@ -293,7 +617,9 @@ export class CoreMemoryStore {
     appendText: string,
     options: CoreMemoryAppendOptions = {},
   ): CoreMemoryBlock {
-    const current = this.snapshot.blocks[label];
+    const scope = resolveScopeDescriptor(options.scope);
+    const snapshot = this.getOrCreateScopedSnapshot(scope);
+    const current = snapshot.blocks[label];
     const nextContent = normalizeAppendContent(
       label,
       current.content,
@@ -301,24 +627,34 @@ export class CoreMemoryStore {
       current.maxChars,
       options.separator ?? '\n',
     );
-    return this.writeBlock(label, nextContent);
+    return this.writeBlock(label, nextContent, scope);
   }
 
-  replace(label: CoreMemoryLabel, content: string): CoreMemoryBlock {
-    const current = this.snapshot.blocks[label];
+  replace(
+    label: CoreMemoryLabel,
+    content: string,
+    options: CoreMemoryMutationOptions = {},
+  ): CoreMemoryBlock {
+    const scope = resolveScopeDescriptor(options.scope);
+    const current = this.getOrCreateScopedSnapshot(scope).blocks[label];
     const nextContent = normalizeBlockContent(
       label,
       content,
       current.maxChars,
       normalizeTruncateHead,
     );
-    return this.writeBlock(label, nextContent);
+    return this.writeBlock(label, nextContent, scope);
   }
 
-  rethink(input: CoreMemoryRethinkInput): CoreMemorySnapshot {
+  rethink(
+    input: CoreMemoryRethinkInput,
+    options: CoreMemoryMutationOptions = {},
+  ): CoreMemorySnapshot {
+    const scope = resolveScopeDescriptor(options.scope);
+    const snapshot = this.getOrCreateScopedSnapshot(scope);
     const nextBlocks = {} as Record<CoreMemoryLabel, CoreMemoryBlock>;
     for (const label of CORE_MEMORY_LABELS) {
-      const current = this.snapshot.blocks[label];
+      const current = snapshot.blocks[label];
       const replacement = normalizeBlockContent(
         label,
         input[label],
@@ -332,58 +668,150 @@ export class CoreMemoryStore {
     }
 
     const nextSnapshot: CoreMemorySnapshot = {
-      version: CORE_MEMORY_VERSION,
+      version: CORE_MEMORY_BLOCK_VERSION,
       updatedAt: this.now().toISOString(),
+      scope,
       blocks: nextBlocks,
     };
-    this.persist(nextSnapshot);
-    this.snapshot = nextSnapshot;
-    return cloneSnapshot(this.snapshot);
+    this.writeSnapshot(scope, nextSnapshot);
+    return this.getSnapshot({ scope });
   }
 
-  formatForContext(): string {
-    const lines = ['<core_memory>'];
+  formatForContext(context: CoreMemoryFormatContext = {}): string {
+    const scope = resolveFormatScope(context);
+    const record = this.state.scopes[scope.key];
+    if (!record) return '';
+    const snapshot = snapshotFromRecord({
+      ...record,
+      scope: {
+        ...record.scope,
+        ...(scope.isDirectMessage !== undefined ? { isDirectMessage: scope.isDirectMessage } : {}),
+        ...(scope.participantId ? { participantId: scope.participantId } : {}),
+        ...(scope.participantName ? { participantName: scope.participantName } : {}),
+        ...(scope.roomName ? { roomName: scope.roomName } : {}),
+        ...(scope.participantCount !== undefined ? { participantCount: scope.participantCount } : {}),
+        ...(scope.activeParticipantNames?.length ? { activeParticipantNames: scope.activeParticipantNames } : {}),
+      },
+    });
+    if (!hasAnyBlockContent(snapshot)) return '';
 
-    for (const label of CORE_MEMORY_LABELS) {
-      const block = this.snapshot.blocks[label];
-      lines.push(`<${label}>`);
-      lines.push(block.content.length > 0 ? block.content : '(empty)');
-      lines.push(`</${label}>`);
+    const lines = [
+      `<core_memory${formatAttributes({
+        scope_kind: scope.kind,
+        scope_key: scope.key,
+        channel_id: scope.channelId,
+      })}>`,
+    ];
+
+    const participantNames = scope.activeParticipantNames?.slice(0, 5);
+    if (scope.kind === 'channel' && scope.isDirectMessage === true) {
+      lines.push(`<participant_context${formatAttributes({
+        name: scope.participantName,
+        id: scope.participantId,
+      })}>`);
+      lines.push(snapshot.blocks.human.content.trim() || '(empty)');
+      lines.push('</participant_context>');
+    } else if (scope.kind === 'channel') {
+      lines.push(`<room_context${formatAttributes({
+        name: scope.roomName,
+        participant_count: scope.participantCount,
+        active_participants: participantNames?.join(', '),
+      })}>`);
+      lines.push(snapshot.blocks.human.content.trim() || '(empty)');
+      lines.push('</room_context>');
+    }
+
+    const persona = snapshot.blocks.persona.content.trim();
+    if (persona) {
+      lines.push('<local_continuity>');
+      lines.push(persona);
+      lines.push('</local_continuity>');
+    }
+    const goals = snapshot.blocks.goals.content.trim();
+    if (goals) {
+      lines.push('<continuity_goals>');
+      lines.push(goals);
+      lines.push('</continuity_goals>');
     }
 
     lines.push('</core_memory>');
     return lines.join('\n');
   }
 
-  private writeBlock(label: CoreMemoryLabel, content: string): CoreMemoryBlock {
+  private writeBlock(label: CoreMemoryLabel, content: string, scope: CoreMemoryScopeDescriptor): CoreMemoryBlock {
+    const snapshot = this.getOrCreateScopedSnapshot(scope);
     const nextSnapshot: CoreMemorySnapshot = {
-      version: CORE_MEMORY_VERSION,
+      version: CORE_MEMORY_BLOCK_VERSION,
       updatedAt: this.now().toISOString(),
+      scope,
       blocks: {
-        ...this.snapshot.blocks,
+        ...snapshot.blocks,
         [label]: {
-          ...this.snapshot.blocks[label],
+          ...snapshot.blocks[label],
           content,
         },
       },
     };
-    this.persist(nextSnapshot);
-    this.snapshot = nextSnapshot;
-    return this.getBlock(label);
+    this.writeSnapshot(scope, nextSnapshot);
+    return this.getBlock(label, { scope });
   }
 
-  private loadOrInitialize(): CoreMemorySnapshot {
+  private getOrCreateScopedSnapshot(scope: CoreMemoryScopeDescriptor): CoreMemorySnapshot {
+    const existing = this.state.scopes[scope.key];
+    if (existing) {
+      return snapshotFromRecord(existing);
+    }
+    const snapshot = buildDefaultSnapshot(this.now(), scope);
+    this.writeSnapshot(scope, snapshot);
+    return snapshot;
+  }
+
+  private writeSnapshot(scope: CoreMemoryScopeDescriptor, snapshot: CoreMemorySnapshot): void {
+    const nextState: ScopedCoreMemoryFile = {
+      ...this.state,
+      version: CORE_MEMORY_FILE_VERSION,
+      updatedAt: snapshot.updatedAt,
+      scopes: {
+        ...this.state.scopes,
+        [scope.key]: recordFromSnapshot(snapshot, scope),
+      },
+    };
+    this.persist(nextState);
+    this.state = nextState;
+  }
+
+  private loadOrInitialize(): ScopedCoreMemoryFile {
     if (!existsSync(this.filePath)) {
-      const defaults = buildDefaultSnapshot(this.now());
+      const now = this.now().toISOString();
+      const defaults: ScopedCoreMemoryFile = {
+        version: CORE_MEMORY_FILE_VERSION,
+        updatedAt: now,
+        scopes: {},
+      };
       this.persist(defaults);
       return defaults;
     }
 
     const raw = readFileSync(this.filePath, 'utf-8');
-    return parseSnapshot(JSON.parse(raw) as unknown);
+    const parsed = JSON.parse(raw) as unknown;
+    if (isRecord(parsed) && parsed.version === CORE_MEMORY_BLOCK_VERSION && isRecord(parsed.blocks)) {
+      const legacySnapshot = parseSnapshot(parsed);
+      const migrated: ScopedCoreMemoryFile = {
+        version: CORE_MEMORY_FILE_VERSION,
+        updatedAt: this.now().toISOString(),
+        scopes: {},
+        legacyGlobal: {
+          archivedAt: this.now().toISOString(),
+          snapshot: legacySnapshot,
+        },
+      };
+      this.persist(migrated);
+      return migrated;
+    }
+    return parseScopedFile(parsed);
   }
 
-  private persist(snapshot: CoreMemorySnapshot): void {
+  private persist(snapshot: ScopedCoreMemoryFile): void {
     writeJsonAtomic(this.filePath, snapshot);
   }
 }

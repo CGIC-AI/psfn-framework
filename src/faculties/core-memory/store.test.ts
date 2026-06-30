@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { CoreMemoryStore } from './store.js';
+import { CoreMemoryStore, coreMemoryChannelScope } from './store.js';
 
 describe('CoreMemoryStore', () => {
   const tempRoots: string[] = [];
@@ -30,16 +30,19 @@ describe('CoreMemoryStore', () => {
     const snapshot = store.getSnapshot();
     expect(snapshot.version).toBe(1);
     expect(snapshot.updatedAt).toBe(now.toISOString());
+    expect(snapshot.scope?.key).toBe('channel:default');
     expect(snapshot.blocks.persona.content).toBe('');
     expect(snapshot.blocks.human.content).toBe('');
     expect(snapshot.blocks.goals.content).toBe('');
 
     const parsed = JSON.parse(readFileSync(path, 'utf-8')) as {
-      blocks: Record<string, { content: string }>;
+      version: number;
+      scopes: Record<string, { blocks: Record<string, { content: string }> }>;
     };
-    expect(parsed.blocks.persona.content).toBe('');
-    expect(parsed.blocks.human.content).toBe('');
-    expect(parsed.blocks.goals.content).toBe('');
+    expect(parsed.version).toBe(2);
+    expect(parsed.scopes['channel:default'].blocks.persona.content).toBe('');
+    expect(parsed.scopes['channel:default'].blocks.human.content).toBe('');
+    expect(parsed.scopes['channel:default'].blocks.goals.content).toBe('');
   });
 
   it('appends to a block and persists across reload', () => {
@@ -126,14 +129,14 @@ describe('CoreMemoryStore', () => {
     expect(snapshot.blocks.goals.content).toContain('Phase V');
 
     const persisted = JSON.parse(readFileSync(path, 'utf-8')) as {
-      blocks: Record<string, { content: string }>;
+      scopes: Record<string, { blocks: Record<string, { content: string }> }>;
     };
-    expect(persisted.blocks.persona.content).toContain('Analytical');
-    expect(persisted.blocks.human.content).toContain('Primary user');
-    expect(persisted.blocks.goals.content).toContain('Phase V');
+    expect(persisted.scopes['channel:default'].blocks.persona.content).toContain('Analytical');
+    expect(persisted.scopes['channel:default'].blocks.human.content).toContain('Primary user');
+    expect(persisted.scopes['channel:default'].blocks.goals.content).toContain('Phase V');
   });
 
-  it('normalizes persisted raw orient-log goals before prompt context', () => {
+  it('archives legacy global snapshots and does not inject them into scoped prompt context', () => {
     const path = makeStorePath('psfn-core-memory-load-goals-log-normalize-');
     writeFileSync(path, JSON.stringify({
       version: 1,
@@ -153,10 +156,56 @@ describe('CoreMemoryStore', () => {
     }), 'utf-8');
 
     const store = new CoreMemoryStore(path);
-    const context = store.formatForContext();
-    expect(context).toContain('Preserve semantic goals.');
+    const context = store.formatForContext({ channelId: 'discord:room-1' });
+    expect(context).toBe('');
+
+    const persisted = JSON.parse(readFileSync(path, 'utf-8')) as {
+      version: number;
+      legacyGlobal?: { snapshot: { blocks: Record<string, { content: string }> } };
+    };
+    expect(persisted.version).toBe(2);
+    expect(persisted.legacyGlobal?.snapshot.blocks.goals.content).toContain('Preserve semantic goals.');
     expect(context).not.toContain('matrix orient 2026-05-11T03-54-10-841Z');
     expect(context).not.toContain('2026-05-11T04:01:02.003Z');
+  });
+
+  it('keeps channel-scoped orientation isolated and renders group context without human tag', () => {
+    const path = makeStorePath('psfn-core-memory-scope-');
+    const store = new CoreMemoryStore(path);
+    const groupScope = coreMemoryChannelScope({ channelId: 'discord:room-a', isDirectMessage: false });
+    const dmScope = coreMemoryChannelScope({ channelId: 'discord:dm-vega', isDirectMessage: true });
+
+    store.rethink({
+      persona: 'Room A local continuity.',
+      human: 'Room A includes monastery debugging chatter.',
+      goals: 'Keep room A continuity local.',
+    }, { scope: groupScope });
+    store.rethink({
+      persona: 'DM local continuity.',
+      human: 'Vega one-to-one context.',
+      goals: 'Keep DM continuity local.',
+    }, { scope: dmScope });
+
+    const groupContext = store.formatForContext({
+      channelId: 'discord:room-a',
+      isDirectMessage: false,
+      activeParticipantNames: ['Vega', 'Iku', 'Miss Dragon Fox', 'A', 'B', 'C'],
+    });
+    expect(groupContext).toContain('<room_context');
+    expect(groupContext).toContain('active_participants="Vega, Iku, Miss Dragon Fox, A, B"');
+    expect(groupContext).toContain('Room A local continuity.');
+    expect(groupContext).not.toContain('<human>');
+    expect(groupContext).not.toContain('DM local continuity.');
+
+    const dmContext = store.formatForContext({
+      channelId: 'discord:dm-vega',
+      isDirectMessage: true,
+      participantName: 'Vega',
+    });
+    expect(dmContext).toContain('<participant_context name="Vega"');
+    expect(dmContext).toContain('DM local continuity.');
+    expect(dmContext).not.toContain('Room A local continuity.');
+    expect(dmContext).not.toContain('<human>');
   });
 
   it('throws on malformed persisted snapshot', () => {

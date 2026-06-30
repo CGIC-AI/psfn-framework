@@ -3,7 +3,10 @@ import type {
   CoreMemoryAppendOptions,
   CoreMemoryBlock,
   CoreMemoryLabel,
+  CoreMemoryFormatContext,
+  CoreMemoryMutationOptions,
   CoreMemoryRethinkInput,
+  CoreMemoryScopeOptions,
   CoreMemorySnapshot,
 } from '../core-memory/store.js';
 import type {
@@ -498,16 +501,16 @@ export interface MemoryStorePort extends ScratchpadProvider {
 }
 
 export interface CoreMemoryStorePort {
-  getSnapshot(): CoreMemorySnapshot;
-  getBlock(label: CoreMemoryLabel): CoreMemoryBlock;
+  getSnapshot(options?: CoreMemoryScopeOptions): CoreMemorySnapshot;
+  getBlock(label: CoreMemoryLabel, options?: CoreMemoryScopeOptions): CoreMemoryBlock;
   append(
     label: CoreMemoryLabel,
     appendText: string,
     options?: CoreMemoryAppendOptions,
   ): CoreMemoryBlock;
-  replace(label: CoreMemoryLabel, content: string): CoreMemoryBlock;
-  rethink(input: CoreMemoryRethinkInput): CoreMemorySnapshot;
-  formatForContext(): string;
+  replace(label: CoreMemoryLabel, content: string, options?: CoreMemoryMutationOptions): CoreMemoryBlock;
+  rethink(input: CoreMemoryRethinkInput, options?: CoreMemoryMutationOptions): CoreMemorySnapshot;
+  formatForContext(context?: CoreMemoryFormatContext): string;
 }
 
 export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStorePort {
@@ -606,11 +609,11 @@ export function createMemoryStorePort(store: MemoryStorePortBackend): MemoryStor
 
 export function createCoreMemoryStorePort(store: CoreMemoryStorePort): CoreMemoryStorePort {
   return {
-    getSnapshot: () => store.getSnapshot(),
-    getBlock: (label) => store.getBlock(label),
+    getSnapshot: (options) => store.getSnapshot(options),
+    getBlock: (label, options) => store.getBlock(label, options),
     append: (label, appendText, options) => store.append(label, appendText, options),
-    replace: (label, content) => store.replace(label, content),
-    rethink: (input) => store.rethink(input),
-    formatForContext: () => store.formatForContext(),
+    replace: (label, content, options) => store.replace(label, content, options),
+    rethink: (input, options) => store.rethink(input, options),
+    formatForContext: (context) => store.formatForContext(context),
   };
 }

@@ -31,6 +31,7 @@ import {
   getDefaultPromptText,
 } from '../identity/prompt-registry.js';
 import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
+import type { CoreMemoryFormatContext } from '../../faculties/core-memory/store.js';
 import {
   markCompactionSummaryAsUntrustedRecord,
   wrapCompactionSummaryAsUntrustedContext,
@@ -208,7 +209,7 @@ export interface StartupSessionMetadata {
 }
 
 export interface SessionCoreMemoryProvider {
-  formatForContext(): string;
+  formatForContext(context?: CoreMemoryFormatContext): string;
 }
 
 export interface AutoCompactionBetweenTurnsParams {
@@ -869,7 +870,13 @@ export class SessionManager {
           recent,
           this.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
         ).entries;
-        const coreMemoryBlock = this.coreMemoryProvider?.formatForContext().trim() ?? '';
+        const coreMemoryBlock = this.coreMemoryProvider
+          ?.formatForContext(this.buildCoreMemoryFormatContext(
+            resolvedChannelId,
+            params.userId,
+            params.channelMeta,
+          ))
+          .trim() ?? '';
         const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
           ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
         const systemTokens = countTokens(params.systemPrompt)
@@ -1031,7 +1038,9 @@ export class SessionManager {
   ): Promise<LLMContext> {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     const coreMemoryBlock = this.coreMemoryProvider
-      ? this.coreMemoryProvider.formatForContext()
+      ? this.coreMemoryProvider.formatForContext(
+        this.buildCoreMemoryFormatContext(resolvedChannelId, userId, channelMeta),
+      )
       : '';
     const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
@@ -1241,6 +1250,35 @@ export class SessionManager {
 
   setCoreMemoryProvider(provider: SessionCoreMemoryProvider | null): void {
     this.coreMemoryProvider = provider;
+  }
+
+  private buildCoreMemoryFormatContext(
+    channelId: string,
+    userId?: string,
+    channelMeta?: ChannelMeta,
+  ): CoreMemoryFormatContext {
+    const recentParticipants: string[] = [];
+    const seenParticipantKeys = new Set<string>();
+    for (const entry of this.store.getRecent(channelId, 50)) {
+      if (entry.role !== 'user') continue;
+      const key = entry.authorId?.trim() || entry.authorName?.trim() || '';
+      if (!key || seenParticipantKeys.has(key)) continue;
+      seenParticipantKeys.add(key);
+      const name = entry.authorName?.trim() || entry.authorId?.trim();
+      if (name) {
+        recentParticipants.push(name);
+      }
+      if (recentParticipants.length >= 5) break;
+    }
+    return {
+      channelId,
+      ...(channelMeta?.isDirectMessage !== undefined ? { isDirectMessage: channelMeta.isDirectMessage } : {}),
+      ...(userId ? { participantId: userId } : {}),
+      ...(channelMeta?.isDirectMessage && recentParticipants[0]
+        ? { participantName: recentParticipants[0] }
+        : {}),
+      ...(recentParticipants.length > 0 ? { activeParticipantNames: recentParticipants } : {}),
+    };
   }
 
   setInternalRoleEnvelopeLedger(ledger: InternalRoleEnvelopeLedger | null): void {

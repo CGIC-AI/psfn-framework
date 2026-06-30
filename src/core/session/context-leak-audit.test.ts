@@ -79,9 +79,7 @@ describe('context leak audit (assembled context)', () => {
       const assembled = [context.systemPrompt, ...context.messages.map(message => message.content)].join('\n');
 
       expect(assembled).not.toContain(secretSentinel);
-      expect(assembled).toContain(
-        '[Tool result: diagnostic_dump] Captured 1 line of text output with credential-like values omitted.',
-      );
+      expect(assembled).not.toContain('[Tool result: diagnostic_dump]');
       expect(context.manifest?.session.maskedEntryCount).toBeGreaterThan(0);
       expect(context.manifest?.session.intentionAppraisalArtifactCount).toBe(1);
 

@@ -60,6 +60,7 @@ import {
   createSessionActivityTracker,
   writeStartupSessionMetadata,
 } from './session-activity.js';
+import { hydrateStartupActiveMemoryContexts } from '../../faculties/memory/startup-hydration.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import {
   createOptionalJournalAutoPublisher,
@@ -199,6 +200,16 @@ async function main(): Promise<void> {
     pathSnapshot.companionDataDir,
     config.sessionRestartBehavior ?? 'reuse_latest_session',
   );
+  try {
+    await hydrateStartupActiveMemoryContexts({
+      memoryProvider: agentLoop.memoryProvider,
+      sessionManager,
+    });
+  } catch (error) {
+    log.warn('Startup active memory hydration failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 
   agentLoop.setInternalStateStore(persistenceRuntime.internalStateStore);
   const internalStateRehydration = await rehydratePersistedInternalState({
@@ -465,6 +476,7 @@ async function main(): Promise<void> {
       compositionalPolicy: config.compositionalPolicy,
       characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
       memoryWriter,
+      promptRegistry: promptState.registry,
       reflectionStore,
       sessionManager,
       emotionState,

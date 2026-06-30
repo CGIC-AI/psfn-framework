@@ -9,9 +9,11 @@ import {
 } from './load-or-seed.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { createComponentLogger } from '../../shared/logger.js';
 
 export const TRUST_POLICY_FILE_NAME = 'trust-policy.json';
 export const TRUST_POLICY_SEED_FILE_NAME = 'trust-policy.seed.json';
+const log = createComponentLogger('TrustPolicyConfig');
 
 const TRUST_LEVELS: TrustLevel[] = ['primary', 'trusted', 'regular', 'public'];
 const SENSITIVITY_LEVELS: SensitivityLevel[] = ['public', 'personal', 'intimate', 'confidential'];
@@ -150,16 +152,87 @@ function validateTrustPolicy(raw: unknown, sourcePath: string): TrustPolicyConfi
   };
 }
 
+function sensitivityListEquals(
+  actual: readonly SensitivityLevel[],
+  expected: readonly SensitivityLevel[],
+): boolean {
+  return actual.length === expected.length
+    && actual.every((value, index) => value === expected[index]);
+}
+
+function stringListEquals(actual: readonly string[], expected: readonly string[]): boolean {
+  return actual.length === expected.length
+    && actual.every((value, index) => value === expected[index]);
+}
+
+function visibilityMapEquals(
+  actual: Record<string, ChannelVisibility>,
+  expected: Record<string, ChannelVisibility>,
+): boolean {
+  const actualEntries = Object.entries(actual).sort(([a], [b]) => a.localeCompare(b));
+  const expectedEntries = Object.entries(expected).sort(([a], [b]) => a.localeCompare(b));
+  return actualEntries.length === expectedEntries.length
+    && actualEntries.every(([key, value], index) => (
+      key === expectedEntries[index]?.[0] && value === expectedEntries[index]?.[1]
+    ));
+}
+
+function isKnownOldDefaultTrustPolicy(config: TrustPolicyConfig): boolean {
+  return sensitivityListEquals(config.trustCeiling.primary, ['public', 'personal', 'intimate', 'confidential'])
+    && sensitivityListEquals(config.trustCeiling.trusted, ['public', 'personal'])
+    && sensitivityListEquals(config.trustCeiling.regular, ['public'])
+    && sensitivityListEquals(config.trustCeiling.public, ['public'])
+    && sensitivityListEquals(config.visibilityAllowed.private, ['public', 'personal', 'intimate', 'confidential'])
+    && sensitivityListEquals(config.visibilityAllowed.semi_private, ['public', 'personal'])
+    && sensitivityListEquals(config.visibilityAllowed.public, ['public'])
+    && sensitivityListEquals(config.visibilityAllowed.broadcast, ['public'])
+    && stringListEquals(config.channelClassification.privatePrefixes, ['api:', 'sillytavern:', 'openwebui:', 'shard:', 'internal:'])
+    && stringListEquals(config.channelClassification.broadcastPrefixes, ['twitter:', 'social:'])
+    && config.channelClassification.defaultVisibility === 'semi_private'
+    && visibilityMapEquals(config.channelClassification.visibilityOverrides.exact, {})
+    && visibilityMapEquals(config.channelClassification.visibilityOverrides.prefix, {});
+}
+
+function migrateKnownOldDefaultTrustPolicy(config: TrustPolicyConfig): {
+  config: TrustPolicyConfig;
+  migrated: boolean;
+} {
+  if (!isKnownOldDefaultTrustPolicy(config)) {
+    return { config, migrated: false };
+  }
+  return {
+    migrated: true,
+    config: {
+      ...config,
+      trustCeiling: {
+        ...config.trustCeiling,
+        regular: ['public', 'personal'],
+      },
+    },
+  };
+}
+
 export function loadTrustPolicyConfig(
   dataDir: string,
   options: TrustPolicyLoadOptions = {},
 ): TrustPolicyConfig {
   const seedDir = options.seedDir ?? process.env.CONFIG_DIR ?? './config';
-  return loadRequiredJson({
-    dataPath: join(dataDir, TRUST_POLICY_FILE_NAME),
+  const dataPath = join(dataDir, TRUST_POLICY_FILE_NAME);
+  const loaded = loadRequiredJson({
+    dataPath,
     examplePath: join(seedDir, TRUST_POLICY_SEED_FILE_NAME),
     validate: validateTrustPolicy,
   });
+  const migrated = migrateKnownOldDefaultTrustPolicy(loaded);
+  if (migrated.migrated) {
+    writeJsonAtomic(dataPath, migrated.config);
+    log.info('Migrated known old trust-policy default regular ceiling', {
+      dataPath,
+      from: ['public'],
+      to: ['public', 'personal'],
+    });
+  }
+  return migrated.config;
 }
 
 export function saveTrustPolicyConfig(

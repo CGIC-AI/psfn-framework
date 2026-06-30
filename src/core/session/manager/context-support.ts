@@ -242,6 +242,9 @@ export function entriesToMessages(
     if (isIntentionAppraisalArtifact(entry)) {
       continue;
     }
+    if (entry.role === 'tool') {
+      continue;
+    }
     const attribution = normalizeSessionEntryAttribution(entry);
     const role = attribution.role === 'tool'
       ? 'system'

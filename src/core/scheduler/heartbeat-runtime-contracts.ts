@@ -36,6 +36,7 @@ import type { CareReminderStore } from '../intention/care-reminders.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import type { InternalState } from '../self-model/state.js';
 import type { MemoryExtractor } from '../agent/contracts.js';
+import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
 
 export const DEFERRED_HEARTBEAT_ACTION_KIND = 'heartbeat.run_template';
 
@@ -69,6 +70,7 @@ export interface HeartbeatRuntimeOptions {
   compositionalPolicy?: CompositionalPolicyConfig;
   characterPromptVariablesProvider?: () => Record<string, string>;
   memoryWriter?: Pick<MemoryWriter, 'write'>;
+  promptRegistry?: PromptRegistryStatePort | null;
   reflectionStore?: ReflectionMetacognitionJournalStore;
   sessionManager?: Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'> & Partial<Pick<SessionManager, 'recordSystemMessage' | 'recordAssistantMessage'>>;
   emotionState?: { getState(): EmotionStateSnapshot };

@@ -354,15 +354,12 @@ function normalizeRuntimeLayerMetadata(
   const metadataPatch = {
     ...(layer.identifier !== definition.identifier ? { identifier: definition.identifier } : {}),
     ...(layer.role !== 'system' ? { role: 'system' as const } : {}),
-    ...(layer.promptOrder !== definition.priority ? { promptOrder: definition.priority } : {}),
   };
-  const needsPriority = layer.priority !== definition.priority;
-  if (Object.keys(metadataPatch).length === 0 && !needsPriority && !shouldUpgradeContent) {
+  if (Object.keys(metadataPatch).length === 0 && !shouldUpgradeContent) {
     return false;
   }
   promptStore.update(layer.id, {
     ...(shouldUpgradeContent ? { content: definition.content } : {}),
-    ...(needsPriority ? { priority: definition.priority } : {}),
     ...(Object.keys(metadataPatch).length > 0 ? { metadata: metadataPatch } : {}),
   }, 'system:runtime-layer-seed', `Normalize seeded runtime prompt layer ${definition.identifier}`);
   return true;

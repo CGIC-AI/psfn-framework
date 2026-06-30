@@ -124,12 +124,20 @@ describe('system language templates', () => {
       templates: Record<string, string>;
     };
     payload.templates['compaction.header'] = '[Old system default]';
-    store.update(layer.id, JSON.stringify(payload), 'system');
+    store.update(layer.id, {
+      content: JSON.stringify(payload),
+      priority: 42,
+      metadata: {
+        promptOrder: 43,
+      },
+    }, 'system');
 
     const normalized = ensureSystemLanguagePromptLayer(store);
 
     expect(normalized.content).toBe(composeDefaultSystemLanguageLayerContent());
     expect(normalized.updatedBy).toBe('system:system-language-seed');
+    expect(normalized.priority).toBe(42);
+    expect(normalized.promptOrder).toBe(43);
   }));
 
   it('preserves admin-owned custom template content during seed normalization', () => withStore((store) => {

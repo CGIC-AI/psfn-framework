@@ -860,23 +860,15 @@ export class PromptLayerStore {
     const metadataPatch = {
       ...(layer.identifier !== definition.identifier ? { identifier: definition.identifier } : {}),
       ...(layer.role !== 'system' ? { role: 'system' as const } : {}),
-      ...(layer.promptOrder !== definition.promptOrder ? { promptOrder: definition.promptOrder } : {}),
     };
-    const nextPriority = layer.priority !== definition.priority ? definition.priority : undefined;
     const nextName = layer.name !== definition.layerName ? definition.layerName : undefined;
-    if (Object.keys(metadataPatch).length === 0 && nextPriority === undefined && nextName === undefined) {
+    if (Object.keys(metadataPatch).length === 0 && nextName === undefined) {
       return false;
     }
     this.update(layer.id, {
-      ...(nextPriority !== undefined ? { priority: nextPriority } : {}),
+      ...(nextName !== undefined ? { name: nextName } : {}),
       ...(Object.keys(metadataPatch).length > 0 ? { metadata: metadataPatch } : {}),
     }, updatedBy, reason);
-    if (nextName !== undefined) {
-      layer.name = nextName;
-      layer.updatedAt = new Date().toISOString();
-      layer.updatedBy = updatedBy;
-      this.save();
-    }
     return true;
   }
 

@@ -101,7 +101,13 @@ describe('PromptComposer', () => {
       expect(temporalLayer).toBeDefined();
       store.update(
         temporalLayer!.id,
-        '<temporal_rules>\n<rule>Custom temporal wording.</rule>\n</temporal_rules>',
+        {
+          content: '<temporal_rules>\n<rule>Custom temporal wording.</rule>\n</temporal_rules>',
+          priority: 12,
+          metadata: {
+            promptOrder: 13,
+          },
+        },
         'admin',
       );
 
@@ -112,7 +118,8 @@ describe('PromptComposer', () => {
       expect(updated).toMatchObject({
         identifier: TEMPORAL_RULES_LAYER_IDENTIFIER,
         role: 'system',
-        promptOrder: 990,
+        priority: 12,
+        promptOrder: 13,
       });
     });
 

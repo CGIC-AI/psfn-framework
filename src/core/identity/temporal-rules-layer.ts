@@ -37,17 +37,14 @@ export function ensureTemporalRulesPromptLayer(promptStore: PromptLayerStatePort
   const metadataPatch = {
     ...(existing.identifier !== TEMPORAL_RULES_LAYER_IDENTIFIER ? { identifier: TEMPORAL_RULES_LAYER_IDENTIFIER } : {}),
     ...(existing.role !== 'system' ? { role: 'system' as const } : {}),
-    ...(existing.promptOrder !== TEMPORAL_RULES_LAYER_PRIORITY ? { promptOrder: TEMPORAL_RULES_LAYER_PRIORITY } : {}),
   };
-  const needsPriority = existing.priority !== TEMPORAL_RULES_LAYER_PRIORITY;
   const needsName = existing.name !== TEMPORAL_RULES_LAYER_NAME;
-  if (!needsPriority && !needsName && Object.keys(metadataPatch).length === 0) {
+  if (!needsName && Object.keys(metadataPatch).length === 0) {
     return;
   }
 
   promptStore.update(existing.id, {
     ...(needsName ? { name: TEMPORAL_RULES_LAYER_NAME } : {}),
-    ...(needsPriority ? { priority: TEMPORAL_RULES_LAYER_PRIORITY } : {}),
     ...(Object.keys(metadataPatch).length > 0 ? { metadata: metadataPatch } : {}),
   }, 'system:temporal-rules-seed', 'Normalize temporal grounding rules prompt layer metadata');
 }

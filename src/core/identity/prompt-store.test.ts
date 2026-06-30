@@ -104,17 +104,21 @@ describe('PromptLayerStore', () => {
   });
 
   describe('load migrations', () => {
-    function writeSystemLanguageLayer(content: string, updatedBy = 'system'): void {
+    function writeSystemLanguageLayer(
+      content: string,
+      updatedBy = 'system',
+      order: { priority?: number; promptOrder?: number } = {},
+    ): void {
       writeFileSync(filePath, JSON.stringify([{
         id: 'system-language-layer',
         type: 'system_language',
         name: 'System Language Templates',
         identifier: SYSTEM_LANGUAGE_LAYER_IDENTIFIER,
         role: 'system',
-        promptOrder: 880,
+        promptOrder: order.promptOrder ?? 880,
         content,
         enabled: true,
-        priority: 880,
+        priority: order.priority ?? 880,
         updatedAt: '2026-06-29T00:00:00.000Z',
         updatedBy,
         checksum: checksum(content),
@@ -133,7 +137,10 @@ describe('PromptLayerStore', () => {
       payload.templates['substrate_health.subsystem_missing_probe'] = 'missing';
       payload.templates['substrate_health.subsystem_degraded_suffix'] = 'degraded';
       payload.templates['substrate_health.gateway_degraded_suffix'] = 'gateway';
-      writeSystemLanguageLayer(JSON.stringify(payload, null, 2));
+      writeSystemLanguageLayer(JSON.stringify(payload, null, 2), 'system', {
+        priority: 44,
+        promptOrder: 45,
+      });
 
       const migratedStore = new PromptLayerStore(filePath, historyPath);
       const loaded = migratedStore.getById('system-language-layer');
@@ -142,6 +149,8 @@ describe('PromptLayerStore', () => {
       expect(loaded?.content).not.toContain('substrate_health');
       expect(loaded?.version).toBe(2);
       expect(loaded?.updatedBy).toBe('system:migration:prompt-layer-store');
+      expect(loaded?.priority).toBe(44);
+      expect(loaded?.promptOrder).toBe(45);
       expect(readFileSync(filePath, 'utf-8')).not.toContain('substrate_health');
       expect(readFileSync(historyPath, 'utf-8')).toContain('2026-06-30-system-language-retired-template-keys');
     });
@@ -510,6 +519,26 @@ describe('PromptLayerStore', () => {
       expect(upgraded.content).toContain('{{user}}');
       expect(upgraded.updatedBy).toBe('system:migrate-user-token');
       expect(upgraded.version).toBe(2);
+    });
+
+    it('preserves moved Character Foundation section order during metadata normalization', () => {
+      const foundationTemplate = composeSystemPromptTemplate();
+      store.seedFromCharacterCard(foundationTemplate);
+      const identityLayer = foundationLayers().find(layer => layer.identifier === 'main')!;
+      store.update(identityLayer.id, {
+        name: 'Old Identity Layer Name',
+        priority: 777,
+        metadata: {
+          promptOrder: 778,
+        },
+      }, 'admin');
+
+      store.seedFromCharacterCard(foundationTemplate);
+
+      const normalized = store.getById(identityLayer.id)!;
+      expect(normalized.name).toBe('Character Foundation · Identity');
+      expect(normalized.priority).toBe(777);
+      expect(normalized.promptOrder).toBe(778);
     });
   });
 

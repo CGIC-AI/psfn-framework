@@ -323,6 +323,11 @@ describe('runtime prompt layer schema', () => {
       'runtime.tooling',
       'runtime.state',
     ]);
+    for (const definition of getRuntimePromptLayerDefinitions()) {
+      const layer = store.getByType('runtime').find(entry => entry.identifier === definition.identifier);
+      expect(layer?.priority).toBe(definition.priority);
+      expect(layer?.promptOrder).toBe(definition.priority);
+    }
     expect(summary).toMatchObject({
       outcome: 'seeded_umbrella_defaults',
       createdUmbrellaIdentifiers: ['runtime.attention', 'runtime.response_style', 'runtime.tooling', 'runtime.state'],
@@ -372,6 +377,35 @@ describe('runtime prompt layer schema', () => {
         outcome: 'migrated_legacy_defaults',
       }),
     });
+  });
+
+  it('preserves existing runtime layer order while normalizing system-owned content', () => {
+    const root = makeTempDir();
+    const store = new PromptLayerStore(
+      join(root, 'prompt-layers.json'),
+      join(root, 'prompt-history.jsonl'),
+    );
+    seedLegacyRuntimeLayers(store, {
+      'runtime.state': {
+        priority: 900,
+        promptOrder: 901,
+      },
+      'runtime.tooling': {
+        priority: 902,
+        promptOrder: 903,
+      },
+    });
+
+    ensureRuntimePromptLayers(store);
+
+    const stateLayer = store.getByType('runtime').find(layer => layer.identifier === 'runtime.state');
+    const toolingLayer = store.getByType('runtime').find(layer => layer.identifier === 'runtime.tooling');
+    expect(stateLayer?.content).toBe(getRuntimePromptLayerDefinition('runtime.state')?.content);
+    expect(stateLayer?.priority).toBe(900);
+    expect(stateLayer?.promptOrder).toBe(901);
+    expect(toolingLayer?.content).toBe(getRuntimePromptLayerDefinition('runtime.tooling')?.content);
+    expect(toolingLayer?.priority).toBe(902);
+    expect(toolingLayer?.promptOrder).toBe(903);
   });
 
   it('retains customized legacy layers while adding current seed-backed layers alongside them', () => {

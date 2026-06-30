@@ -262,6 +262,69 @@ describe('session search tools', () => {
     expect(llmProvider.complete).not.toHaveBeenCalled();
   });
 
+  it('session_search labels retired and active logical session route hits for audit', async () => {
+    const sourceChannelId = 'discord:garden:room';
+    manager.recordUserMessage(sourceChannelId, 'Route audit needle before reset.', 'vega-id', 'Vega', false);
+    const reset = manager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'operator',
+      reason: 'audit label test',
+      mode: 'break_glass_quarantine',
+    });
+    manager.recordUserMessage(sourceChannelId, 'Route audit needle after reset.', 'vega-id', 'Vega', false);
+
+    const llmProvider = {
+      complete: vi.fn(async () => ({
+        content: 'Route audit summary.',
+        toolCalls: [],
+        model: 'mock',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      })),
+    } as any;
+    const tool = createSessionSearchTool(manager, llmProvider);
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId: sourceChannelId,
+        viewerTrustLevel: 'primary',
+        viewerChannelVisibility: 'private',
+      },
+      () => tool.execute('session-search-routes', { query: 'Route audit needle', limit: 5 }),
+    );
+    const payload = JSON.parse(toolText(result)) as {
+      hits: Array<{
+        channelId: string;
+        sessionRoute?: {
+          sourceChannelId: string;
+          activeLogicalSessionId: string;
+          status: 'active' | 'retired';
+          mode?: string;
+          retiredAt?: string;
+        };
+      }>;
+    };
+
+    const oldHit = payload.hits.find(hit => hit.channelId === sourceChannelId);
+    const freshHit = payload.hits.find(hit => hit.channelId === reset.newLogicalSessionId);
+    expect(oldHit?.sessionRoute).toMatchObject({
+      sourceChannelId,
+      activeLogicalSessionId: reset.newLogicalSessionId,
+      status: 'retired',
+      mode: 'break_glass_quarantine',
+    });
+    expect(oldHit?.sessionRoute?.retiredAt).toBeTruthy();
+    expect(freshHit?.sessionRoute).toMatchObject({
+      sourceChannelId,
+      activeLogicalSessionId: reset.newLogicalSessionId,
+      status: 'active',
+      mode: 'break_glass_quarantine',
+    });
+  });
+
   it('session_grep filters raw journal hits by caller privacy and returns structured matches', async () => {
     const runRipgrep = vi.fn(async () => ({
       matches: [
@@ -342,6 +405,71 @@ describe('session search tools', () => {
     expect(payload.hits[0]?.channelId).toBe('api:public-session');
     expect(payload.hits[0]?.authorName).toBe('Purrsephone');
     expect(payload.hits[0]?.snippet).toContain('Orion launch date');
+  });
+
+  it('session_grep labels retired logical session route hits for audit', async () => {
+    const sourceChannelId = 'discord:garden:grep-room';
+    const reset = manager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'operator',
+      reason: 'grep audit label test',
+      mode: 'break_glass_quarantine',
+    });
+    const runRipgrep = vi.fn(async () => ({
+      matches: [
+        {
+          filePath: '20260325_discord_garden_grep-room_000001.jsonl',
+          lineNumber: 4,
+          lineText: JSON.stringify({
+            type: 'message',
+            id: 4,
+            channelId: sourceChannelId,
+            role: 'user',
+            content: 'Grep route needle before reset.',
+            timestamp: 7_000,
+            channelVisibility: 'private',
+            authorName: 'Vega',
+          }),
+        },
+      ],
+      truncated: false,
+    }));
+    const tool = createSessionGrepTool({
+      sessionsDir: join(dir, 'sessions'),
+      runRipgrep,
+      sessionRouteState: manager,
+    });
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId: sourceChannelId,
+        viewerTrustLevel: 'primary',
+        viewerChannelVisibility: 'private',
+      },
+      () => tool.execute('session-grep-routes', { pattern: 'Grep route needle' }),
+    );
+    const payload = JSON.parse(toolText(result)) as {
+      hits: Array<{
+        channelId: string;
+        sessionRoute?: {
+          sourceChannelId: string;
+          activeLogicalSessionId: string;
+          status: 'active' | 'retired';
+          mode?: string;
+          retiredAt?: string;
+        };
+      }>;
+    };
+
+    expect(payload.hits[0]?.sessionRoute).toMatchObject({
+      sourceChannelId,
+      activeLogicalSessionId: reset.newLogicalSessionId,
+      status: 'retired',
+      mode: 'break_glass_quarantine',
+    });
+    expect(payload.hits[0]?.sessionRoute?.retiredAt).toBeTruthy();
   });
 
   it('session_grep reports runner failures as tool errors', async () => {

@@ -501,12 +501,14 @@ export function buildExtractionSourceRef(
   channelVisibility: ChannelVisibility,
   triggerReason?: string,
   turnId?: TurnID,
+  logicalSessionId?: string,
 ): string {
   const source = resolveExtractionSource(channelId);
   const lineRange = resolveExtractionLineRange(entries);
   const turnToken = turnId ? `|turn:${turnId}` : '';
   const triggerToken = triggerReason ? `|trigger:${triggerReason}` : '';
-  return `${channelId}:extract|source:${source}|session:${channelId}|lines:${lineRange}${turnToken}${triggerToken}|visibility:${channelVisibility}|operation:extract`;
+  const sessionToken = logicalSessionId?.trim() || channelId;
+  return `${channelId}:extract|source:${source}|session:${sessionToken}|lines:${lineRange}${turnToken}${triggerToken}|visibility:${channelVisibility}|operation:extract`;
 }
 
 function resolveExtractionSource(channelId: string): string {

@@ -345,7 +345,7 @@ export class MemoryExtractor {
   }
 
   getPendingExtractionPromise(channelId: string): Promise<void> | null {
-    const resolvedChannelId = this.sessionManager.resolveSessionChannelId(channelId);
+    const resolvedChannelId = this.resolveExtractionLogicalSessionId(channelId);
     return this.inFlightByChannel.get(channelId)
       ?? this.inFlightByChannel.get(resolvedChannelId)
       ?? null;
@@ -359,14 +359,16 @@ export class MemoryExtractor {
     turnId?: TurnID,
     groupOptions?: MemoryExtractorGroupOptions,
   ): Promise<void> {
-    const existing = this.inFlightByChannel.get(channelId);
+    const logicalSessionId = this.resolveExtractionLogicalSessionId(channelId);
+    const existing = this.inFlightByChannel.get(logicalSessionId);
     if (existing) {
-      log.debug('Reusing in-flight extraction', { channelId, triggerReason });
+      log.debug('Reusing in-flight extraction', { channelId, logicalSessionId, triggerReason });
       return existing;
     }
 
     const promise = this.runExtraction(
       channelId,
+      logicalSessionId,
       triggerReason,
       canonicalContactId,
       recoveredEntries,
@@ -374,19 +376,20 @@ export class MemoryExtractor {
       groupOptions,
     );
     this.inFlightExtractions.add(promise);
-    this.inFlightByChannel.set(channelId, promise);
+    this.inFlightByChannel.set(logicalSessionId, promise);
     void promise
       .catch((error) => {
         log.error('Extraction run failed', {
           channelId,
+          logicalSessionId,
           triggerReason,
           error: String(error),
         });
       })
       .finally(() => {
         this.inFlightExtractions.delete(promise);
-        if (this.inFlightByChannel.get(channelId) === promise) {
-          this.inFlightByChannel.delete(channelId);
+        if (this.inFlightByChannel.get(logicalSessionId) === promise) {
+          this.inFlightByChannel.delete(logicalSessionId);
         }
       });
 
@@ -395,12 +398,21 @@ export class MemoryExtractor {
 
   private async runExtraction(
     channelId: string,
+    logicalSessionId: string,
     triggerReason: ExtractionTriggerReason,
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
     turnId?: TurnID,
     groupOptions?: MemoryExtractorGroupOptions,
   ): Promise<void> {
+    if (!this.isExtractionSessionCurrent(channelId, logicalSessionId)) {
+      log.debug('Skipping stale extraction after session route changed', {
+        channelId,
+        logicalSessionId,
+        triggerReason,
+      });
+      return;
+    }
     let cachedFormationVAD: MemoryFormationVAD | undefined;
     let didResolveFormationVAD = false;
     const resolveFormationVAD = (): MemoryFormationVAD | undefined => {
@@ -425,6 +437,7 @@ export class MemoryExtractor {
       triggerReason,
       canonicalContactId,
       turnId,
+      sourceSessionId: logicalSessionId,
       recoveredEntries,
       resolveParticipantNames: (recentEntries, extractionCanonicalContactId) => resolveExtractionParticipantNames({
         entries: recentEntries,
@@ -452,7 +465,10 @@ export class MemoryExtractor {
       useCompositionalExtraction: groupOptions?.forceLegacyExtraction
         ? false
         : this.shouldUseCompositionalExtraction(channelId),
-      isAcceptingExtractions: () => this.acceptingExtractions,
+      isAcceptingExtractions: () => (
+        this.acceptingExtractions
+        && this.isExtractionSessionCurrent(channelId, logicalSessionId)
+      ),
       adjustFactForWrite: fact => (
         this.adjustFactImportanceByEmotion(fact, resolveFormationVAD(), intensityWeight)
       ),
@@ -463,6 +479,7 @@ export class MemoryExtractor {
           maybeContactId,
           resolveFormationVAD(),
           channelId,
+          logicalSessionId,
           canonicalContactName,
           this.sessionManager.characterName,
           triggerReason,
@@ -479,8 +496,8 @@ export class MemoryExtractor {
       resolveCoveredUpToMessageId: (extractionChannelId, entries) => (
         resolveCoveredMarker(this.sessionManager, extractionChannelId, entries)
       ),
-      recordExtractionMarker: (extractionChannelId, coveredUpToMessageId) => (
-        persistExtractionMarker(this.sessionStore, extractionChannelId, coveredUpToMessageId)
+      recordExtractionMarker: (_extractionChannelId, coveredUpToMessageId) => (
+        persistExtractionMarker(this.sessionStore, logicalSessionId, coveredUpToMessageId)
       ),
       maybePersistEmotionalState: (contactId, acceptedFacts, recentEntries) => (
         this.maybePersistEmotionalState(contactId, acceptedFacts, recentEntries)
@@ -508,12 +525,27 @@ export class MemoryExtractor {
     }).allowed;
   }
 
+  private resolveExtractionLogicalSessionId(channelId: string): string {
+    const resolver = this.sessionManager.resolveSessionChannelId;
+    if (typeof resolver !== 'function') return channelId;
+    return resolver.call(this.sessionManager, channelId);
+  }
+
+  private isExtractionSessionCurrent(channelId: string, logicalSessionId: string): boolean {
+    const isRetired = this.sessionManager.isSessionRetiredOrQuarantined;
+    if (typeof isRetired === 'function' && isRetired.call(this.sessionManager, logicalSessionId)) {
+      return false;
+    }
+    return this.resolveExtractionLogicalSessionId(channelId) === logicalSessionId;
+  }
+
   private async processFact(
     fact: ExtractedFact,
     sourceRef: string,
     canonicalContactId?: string,
     formationVAD?: MemoryFormationVAD,
     channelId?: string,
+    logicalSessionId?: string,
     canonicalContactName?: string,
     companionName?: string,
     triggerReason?: ExtractionTriggerReason,
@@ -571,11 +603,12 @@ export class MemoryExtractor {
       sourceType: triggerReason === 'pre_compaction' ? 'compaction_summary' : undefined,
       ...(routing?.scopeRef ? { scopeRef: routing.scopeRef } : {}),
       ...(routing?.scopeTags ? { scopeTags: routing.scopeTags } : {}),
-      provenance: channelId
-        ? {
-          channelId,
-          ...(turnId ? { turnId } : {}),
-          ...(triggerReason ? { reason: triggerReason } : {}),
+        provenance: channelId
+          ? {
+            channelId,
+            ...(logicalSessionId ? { sessionId: logicalSessionId } : {}),
+            ...(turnId ? { turnId } : {}),
+            ...(triggerReason ? { reason: triggerReason } : {}),
           ...(routing?.triggerContactId ? { triggerContactId: routing.triggerContactId } : {}),
           ...(routing?.routedContactId ? { routedContactId: routing.routedContactId } : {}),
           ...(routing?.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),

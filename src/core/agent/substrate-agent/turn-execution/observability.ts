@@ -132,9 +132,12 @@ export function createTurnExecutionObservability(input: {
       ...(telemetry.retrievalLimit !== undefined ? { retrievalLimit: telemetry.retrievalLimit } : {}),
       ...(telemetry.retrievalBudgetPct !== undefined ? { retrievalBudgetPct: telemetry.retrievalBudgetPct } : {}),
       ...(telemetry.retrievalTokenBudget !== undefined ? { retrievalTokenBudget: telemetry.retrievalTokenBudget } : {}),
-      ...(telemetry.retrievalLimitMode ? { retrievalLimitMode: telemetry.retrievalLimitMode } : {}),
-      ...(telemetry.roomVisibilityRejectedCount !== undefined
-        ? { roomVisibilityRejectedCount: telemetry.roomVisibilityRejectedCount }
+	      ...(telemetry.retrievalLimitMode ? { retrievalLimitMode: telemetry.retrievalLimitMode } : {}),
+	      ...(telemetry.sessionQuarantineRejectedCount !== undefined
+	        ? { sessionQuarantineRejectedCount: telemetry.sessionQuarantineRejectedCount }
+	        : {}),
+	      ...(telemetry.roomVisibilityRejectedCount !== undefined
+	        ? { roomVisibilityRejectedCount: telemetry.roomVisibilityRejectedCount }
         : {}),
       ...(telemetry.contactScopeRejectedCount !== undefined
         ? { contactScopeRejectedCount: telemetry.contactScopeRejectedCount }

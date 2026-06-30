@@ -146,12 +146,13 @@ describe('MemoryExtractor mention-only contacts', () => {
     await (extractor as any).processFact(
       makeFact("Avery's sister Alex is moving to Seattle", { tags: ['family'] }),
       'api:mention-contact:1',
-      primary.id,
-      undefined,
-      'api:mention-contact',
-      primary.displayName,
-      'Purrsephone',
-    );
+	      primary.id,
+	      undefined,
+	      'api:mention-contact',
+	      undefined,
+	      primary.displayName,
+	      'Purrsephone',
+	    );
 
     expect(contactStore.listAll().filter(contact => contact.displayName === 'Alex')).toHaveLength(0);
     expect(memoryStore.getMemoriesByContact(primary.id, 10).map(memory => memory.text)).toContain(
@@ -161,12 +162,13 @@ describe('MemoryExtractor mention-only contacts', () => {
     const secondWrite = await (extractor as any).processFact(
       makeFact('Alex called before dinner with the family', { tags: ['family'] }),
       'api:mention-contact:2',
-      primary.id,
-      undefined,
-      'api:mention-contact',
-      primary.displayName,
-      'Purrsephone',
-    );
+	      primary.id,
+	      undefined,
+	      'api:mention-contact',
+	      undefined,
+	      primary.displayName,
+	      'Purrsephone',
+	    );
 
     const alexContacts = contactStore.listAll().filter(contact => contact.displayName === 'Alex');
     expect(alexContacts).toHaveLength(1);
@@ -205,12 +207,13 @@ describe('MemoryExtractor mention-only contacts', () => {
     await (extractor as any).processFact(
       makeFact("Avery's coworker Jordan likes this cafe", { tags: ['coworker'] }),
       'api:mention-contact:3',
-      primary.id,
-      undefined,
-      'api:mention-contact',
-      primary.displayName,
-      'Purrsephone',
-    );
+	      primary.id,
+	      undefined,
+	      'api:mention-contact',
+	      undefined,
+	      primary.displayName,
+	      'Purrsephone',
+	    );
 
     expect(contactStore.listAll().filter(contact => contact.displayName === 'Jordan')).toHaveLength(0);
     expect(memoryStore.getMemoriesByContact(primary.id, 10)).toHaveLength(1);

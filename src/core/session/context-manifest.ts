@@ -25,6 +25,7 @@ export interface ContextManifestMemorySeed {
   retrievalBudgetPct?: number;
   retrievalTokenBudget?: number;
   retrievalLimitMode?: 'budget' | 'hard_limit';
+  sessionQuarantineRejectedCount?: number;
   roomVisibilityRejectedCount?: number;
   contactScopeRejectedCount?: number;
   sensitivityRejectedCount?: number;
@@ -79,6 +80,7 @@ export interface ContextManifestMemorySummary {
   rankedCount: number;
   returnedCount: number;
   excluded: {
+    sessionQuarantineRejectedCount?: number;
     roomVisibilityRejectedCount?: number;
     contactScopeRejectedCount?: number;
     sensitivityRejectedCount: number;

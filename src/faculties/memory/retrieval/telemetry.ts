@@ -12,9 +12,10 @@ export function applyWithheldSummaryTelemetry(
 ): void {
   telemetry.withheldCount = withheldSummary?.totalCount ?? 0;
   const reasonCounts = withheldSummary?.reasonCounts;
-  if (hasCountEntries(reasonCounts)) {
-    telemetry.withheldReasonCounts = { ...reasonCounts };
-  }
+    if (hasCountEntries(reasonCounts)) {
+      telemetry.withheldReasonCounts = { ...reasonCounts };
+      telemetry.sessionQuarantineRejectedCount = reasonCounts?.['session_quarantine.blocked'] ?? 0;
+    }
   const relevanceBands = withheldSummary?.relevanceBands;
   if (hasCountEntries(relevanceBands)) {
     telemetry.withheldRelevanceBands = { ...relevanceBands };
@@ -33,12 +34,15 @@ export function buildManifestSeedFromTelemetry(telemetry: RetrievalTelemetry): C
     retrievalBudgetPct: telemetry.retrievalBudgetPct,
     retrievalTokenBudget: telemetry.retrievalTokenBudget,
     retrievalLimitMode: telemetry.retrievalLimitMode,
-    ...(telemetry.contactScopeRejectedCount !== undefined
-      ? { contactScopeRejectedCount: telemetry.contactScopeRejectedCount }
-      : {}),
-    ...(telemetry.roomVisibilityRejectedCount !== undefined
-      ? { roomVisibilityRejectedCount: telemetry.roomVisibilityRejectedCount }
-      : {}),
+      ...(telemetry.contactScopeRejectedCount !== undefined
+        ? { contactScopeRejectedCount: telemetry.contactScopeRejectedCount }
+        : {}),
+      ...(telemetry.sessionQuarantineRejectedCount !== undefined
+        ? { sessionQuarantineRejectedCount: telemetry.sessionQuarantineRejectedCount }
+        : {}),
+      ...(telemetry.roomVisibilityRejectedCount !== undefined
+        ? { roomVisibilityRejectedCount: telemetry.roomVisibilityRejectedCount }
+        : {}),
     sensitivityRejectedCount: telemetry.sensitivityRejectedCount ?? 0,
     policyRejectedCount: telemetry.policyRejectedCount ?? 0,
     ...(telemetry.policyRejectedReasonTags

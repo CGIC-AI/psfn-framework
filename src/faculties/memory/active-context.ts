@@ -15,6 +15,7 @@ export type ActiveMemoryRefreshStatus = 'ready' | 'refreshing' | 'degraded';
 export interface ActiveMemoryContextRequest {
   contextText: string;
   channelId: string;
+  sessionChannelId?: string;
   trustLevel?: TrustLevel;
   channelMeta?: ChannelMeta;
   canonicalContactId?: string;
@@ -74,6 +75,7 @@ function serializeScopeQuery(query: MemoryScopeQuery | undefined): string {
 export function resolveActiveMemoryContextIdentity(
   request: Pick<ActiveMemoryContextRequest,
     | 'channelId'
+    | 'sessionChannelId'
     | 'trustLevel'
     | 'channelMeta'
     | 'canonicalContactId'
@@ -89,9 +91,11 @@ export function resolveActiveMemoryContextIdentity(
   const subjectKey = contactKey && contactKey.length > 0
     ? `contact:${contactKey}`
     : `channel:${request.channelId}`;
+  const sessionChannelKey = request.sessionChannelId?.trim() || request.channelId;
   const callerRetrievalMode = request.callerContext?.retrievalMode;
   const key = [
     subjectKey,
+    `session:${sessionChannelKey}`,
     `trust:${trustLevel}`,
     `visibility:${channelVisibility}`,
     `scope:${visibilityScope}`,

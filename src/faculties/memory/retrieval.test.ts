@@ -3104,6 +3104,63 @@ describe('MemoryRetriever room-scoped visibility', () => {
     expect(telemetry.returnedCount).toBe(0);
   });
 
+  it('withholds same-room memories from retired logical sessions while allowing fresh-route memories', async () => {
+    const { contactStore, vegaId } = makeRoomVisibilityContactStore();
+    contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');
+    const freshLogicalSessionId = `${GROUP_ROOM_X}:session:20260630T120000Z-fresh123`;
+    const retiredMemory = makeMemory({
+      id: 'retired-room-memory',
+      text: 'Old poisoned lane said the deployment password was basil.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_X, sessionId: GROUP_ROOM_X },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      sourceRef: `source:extraction|channel:${GROUP_ROOM_X}|session:${GROUP_ROOM_X}|turn:old`,
+      similarity: 0.99,
+    });
+    const freshMemory = makeMemory({
+      id: 'fresh-room-memory',
+      text: 'Fresh lane says the deployment checklist is smoke test first.',
+      sensitivity: 'public',
+      provenance: { channelId: GROUP_ROOM_X, sessionId: freshLogicalSessionId },
+      scopeRef: { kind: 'conversation', id: GROUP_ROOM_X },
+      sourceRef: `source:extraction|channel:${GROUP_ROOM_X}|session:${freshLogicalSessionId}|turn:fresh`,
+      similarity: 0.98,
+    });
+    const eventBus = makeMockEventBus();
+    const retriever = new MemoryRetriever(
+      makeMockStore([retiredMemory, freshMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      contactStore,
+      null,
+      null,
+      {
+        isSessionRetiredOrQuarantined: (logicalSessionId: string) => logicalSessionId === GROUP_ROOM_X,
+        getRetiredLogicalSessionIds: () => new Set([GROUP_ROOM_X]),
+      },
+    );
+
+    const result = await retriever.retrieve(
+      'deployment checklist',
+      GROUP_ROOM_X,
+      'primary',
+      { isDirectMessage: false, privacyLevel: 'semi_private' },
+      vegaId,
+    );
+
+    expect(result).toContain('Fresh lane says the deployment checklist is smoke test first.');
+    expect(result).not.toContain('Old poisoned lane said the deployment password was basil.');
+
+    const telemetry = latestRetrievalTelemetry(eventBus);
+    expect(telemetry.sessionQuarantineRejectedCount).toBe(1);
+    expect(telemetry.withheldReasonCounts).toMatchObject({
+      'session_quarantine.blocked': 1,
+    });
+    expect(telemetry.roomVisibilityRejectedCount).toBe(0);
+    expect(telemetry.returnedCount).toBe(1);
+  });
+
   it('carries room-visibility rejections into active context manifest seeds', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
     contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'semi_private');

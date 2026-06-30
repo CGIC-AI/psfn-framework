@@ -1,5 +1,6 @@
 import type { MemoryProvider } from '../../core/agent/contracts.js';
 import type { StartupSessionMetadata } from '../../core/session/manager.js';
+import type { SourceChannelSessionRoute } from '../../core/session/session-routes.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SessionActivitySummary } from '../../persistence/sessions/store.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -14,6 +15,8 @@ export interface StartupMemoryHydrationSessionManager {
   resolveStartupSessionMetadata(behavior?: 'reuse_latest_session'): StartupSessionMetadata | null;
   listRecentSessions(limit?: number): SessionActivitySummary[];
   getRecentMessages(channelId: string, limit?: number): SessionEntry[];
+  listSessionRoutes?(): SourceChannelSessionRoute[];
+  isSessionRetiredOrQuarantined?(logicalSessionId: string): boolean;
 }
 
 export interface StartupMemoryHydrationResult {
@@ -50,9 +53,13 @@ function collectHydrationChannelIds(
   const add = (channelId: string | undefined): void => {
     const normalized = channelId?.trim();
     if (!normalized || seen.has(normalized)) return;
+    if (sessionManager.isSessionRetiredOrQuarantined?.(normalized)) return;
     seen.add(normalized);
     ids.push(normalized);
   };
+  for (const route of sessionManager.listSessionRoutes?.() ?? []) {
+    add(route.activeLogicalSessionId);
+  }
   add(sessionManager.resolveStartupSessionMetadata('reuse_latest_session')?.sessionId);
   for (const session of sessionManager.listRecentSessions(recentSessionLimit)) {
     add(session.channelId);

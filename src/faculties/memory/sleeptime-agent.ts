@@ -71,7 +71,7 @@ const EVIDENCE_TOKEN_STOP_WORDS = new Set([
 
 type CoreMemoryRewriter = Pick<CoreMemoryStorePort, 'getSnapshot' | 'rethink'>;
 type SessionMemoryReader = Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>
-  & Partial<Pick<SessionManager, 'listRecentSessions'>>;
+  & Partial<Pick<SessionManager, 'listRecentSessions' | 'isSessionRetiredOrQuarantined'>>;
 type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
 type SleeptimeEpisodicSynthesizer = Pick<EpisodicSynthesizer, 'run'>;
 type SleeptimeEpisodeConsolidator = Pick<SleepCycleEpisodeConsolidator, 'run'>;
@@ -503,8 +503,9 @@ export class SleeptimeMemoryAgent {
       return null;
     }
 
-    const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
-    const nextCount = (this.turnCountBySession.get(sessionId) ?? 0) + 1;
+	    const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
+	    if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) return null;
+	    const nextCount = (this.turnCountBySession.get(sessionId) ?? 0) + 1;
     this.turnCountBySession.set(sessionId, nextCount);
     const lastUserActivityAtMs = message.timestamp instanceof Date
       ? message.timestamp.getTime()
@@ -547,10 +548,11 @@ export class SleeptimeMemoryAgent {
       : Date.now();
     const limit = normalizePositiveInteger(options.limit, DEFAULT_IDLE_SESSION_LIMIT);
     const actions: PostTurnActionCandidate[] = [];
-    for (const session of this.sessionManager.listRecentSessions(limit)) {
-      const sessionId = this.sessionManager.resolveSessionChannelId(session.channelId);
-      if (sessionId.startsWith('internal:')) continue;
-      const lastUserActivityAtMs = session.lastActivityAt;
+	    for (const session of this.sessionManager.listRecentSessions(limit)) {
+	      const sessionId = this.sessionManager.resolveSessionChannelId(session.channelId);
+	      if (sessionId.startsWith('internal:')) continue;
+	      if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) continue;
+	      const lastUserActivityAtMs = session.lastActivityAt;
       const restWindowDecision = evaluateRestWindowEligibility({
         config: this.restWindow,
         nowMs,
@@ -572,9 +574,16 @@ export class SleeptimeMemoryAgent {
     return actions;
   }
 
-  async execute(action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>): Promise<void> {
-    const sessionId = this.resolveActionSessionId(action);
-    const restWindowDecision = this.restWindow
+	  async execute(action: Pick<InferredPostTurnAction, 'id' | 'channelId' | 'sourceMessageId' | 'payload'>): Promise<void> {
+	    const sessionId = this.resolveActionSessionId(action);
+	    if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) {
+	      log.info('Skipping sleeptime run for retired session', {
+	        sessionId,
+	        actionId: action.id,
+	      });
+	      return;
+	    }
+	    const restWindowDecision = this.restWindow
       ? evaluateRestWindowEligibility({
         config: this.restWindow,
         lastUserActivityAtMs: this.resolveActionLastUserActivityAtMs(action),

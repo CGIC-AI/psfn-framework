@@ -1,5 +1,6 @@
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type { SessionEntry } from './types.js';
+import type { SourceChannelSessionRoute, SessionRouteResetMode } from './session-routes.js';
 import { classifyChannel, getAllowedSensitivities } from '../../system/trust/policy.js';
 import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../system/trust/types.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
@@ -26,6 +27,19 @@ export interface SessionSearchViewerContext {
   channelVisibility?: ChannelVisibility;
 }
 
+export interface SessionSearchRouteLabel {
+  sourceChannelId: string;
+  activeLogicalSessionId: string;
+  status: 'active' | 'retired';
+  mode?: SessionRouteResetMode;
+  retiredAt?: string;
+}
+
+export interface SessionSearchRouteStateProvider {
+  getRouteForLogicalSession?(logicalSessionId: string): SourceChannelSessionRoute | null | undefined;
+  getSessionRouteForLogicalSession?(logicalSessionId: string): SourceChannelSessionRoute | null | undefined;
+}
+
 export interface SessionSearchHitResult {
   channelId: string;
   messageId: number;
@@ -34,6 +48,7 @@ export interface SessionSearchHitResult {
   channelVisibility: ChannelVisibility;
   score: number;
   snippet: string;
+  sessionRoute?: SessionSearchRouteLabel;
 }
 
 export interface SessionSearchResult {
@@ -151,7 +166,10 @@ function buildSessionSearchSummaryPayload(
   let budgetUsed = lines.join('\n').length;
   for (const hit of hits.slice(0, SESSION_SEARCH_MAX_SUMMARY_MATCHES)) {
     const timestampIso = new Date(hit.timestamp).toISOString();
-    const line = `- [${timestampIso}] channel=${hit.channelId} role=${hit.role} visibility=${hit.channelVisibility} score=${hit.score.toFixed(3)} snippet=${truncateSessionSearchSnippet(hit.snippet)}`;
+    const routeLabel = hit.sessionRoute
+      ? ` route_status=${hit.sessionRoute.status} source_channel=${hit.sessionRoute.sourceChannelId}`
+      : '';
+    const line = `- [${timestampIso}] channel=${hit.channelId} role=${hit.role} visibility=${hit.channelVisibility}${routeLabel} score=${hit.score.toFixed(3)} snippet=${truncateSessionSearchSnippet(hit.snippet)}`;
     if (budgetUsed + line.length > SESSION_SEARCH_MAX_SUMMARY_CONTEXT_CHARS) {
       break;
     }
@@ -162,6 +180,32 @@ function buildSessionSearchSummaryPayload(
   lines.push('');
   lines.push('Summarize what these snippets indicate and highlight the most relevant channels.');
   return lines.join('\n');
+}
+
+export function resolveSessionSearchRouteLabel(
+  routeState: SessionSearchRouteStateProvider | null | undefined,
+  logicalSessionId: string,
+): SessionSearchRouteLabel | undefined {
+  const route = routeState?.getSessionRouteForLogicalSession?.(logicalSessionId)
+    ?? routeState?.getRouteForLogicalSession?.(logicalSessionId);
+  if (!route) return undefined;
+  if (route.activeLogicalSessionId === logicalSessionId) {
+    return {
+      sourceChannelId: route.sourceChannelId,
+      activeLogicalSessionId: route.activeLogicalSessionId,
+      status: 'active',
+      mode: route.mode,
+    };
+  }
+  const retired = route.retiredSessions.find(entry => entry.logicalSessionId === logicalSessionId);
+  if (!retired) return undefined;
+  return {
+    sourceChannelId: route.sourceChannelId,
+    activeLogicalSessionId: route.activeLogicalSessionId,
+    status: 'retired',
+    mode: retired.mode,
+    retiredAt: retired.retiredAt,
+  };
 }
 
 async function summarizeSessionSearch(
@@ -198,6 +242,7 @@ export async function runSessionSearch(params: {
   summarize?: boolean;
   targetChannelId?: string;
   viewer?: SessionSearchViewerContext;
+  sessionRouteState?: SessionSearchRouteStateProvider | null;
 }): Promise<SessionSearchResult> {
   const normalizedQuery = params.query.trim();
   if (!normalizedQuery || !params.transcriptSearch) {
@@ -229,6 +274,7 @@ export async function runSessionSearch(params: {
     .slice(0, requestedLimit)
     .map(hit => {
       const visibility = resolveSessionSearchHitVisibility(hit.channelVisibility, hit.channelId);
+      const sessionRoute = resolveSessionSearchRouteLabel(params.sessionRouteState, hit.channelId);
       return {
         channelId: hit.channelId,
         messageId: hit.messageId,
@@ -237,6 +283,7 @@ export async function runSessionSearch(params: {
         channelVisibility: visibility,
         score: hit.score,
         snippet: truncateSessionSearchSnippet(hit.snippet || hit.content),
+        ...(sessionRoute ? { sessionRoute } : {}),
       };
     });
 

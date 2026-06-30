@@ -472,6 +472,7 @@ export function createSessionTool(options: UnifiedSessionToolOptions): AgentTool
   const sessionSearchTool = createSessionSearchTool(options.manager, options.llmProvider);
   const sessionGrepTool = createSessionGrepTool({
     sessionsDir: options.sessionsDir,
+    sessionRouteState: options.manager,
     ...(options.runRipgrep ? { runRipgrep: options.runRipgrep } : {}),
   });
   const sessionNewTool = createSessionNewTool(options);

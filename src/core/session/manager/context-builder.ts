@@ -749,6 +749,7 @@ export function buildOrientationNoteTelemetry(params: {
 
 interface BuildSessionContextParams {
   channelId: string;
+  sourceChannelId?: string;
   systemPrompt: string;
   coreMemoryBlock: string;
   memoriesBlock: string;
@@ -783,7 +784,8 @@ interface BuildSessionContextParams {
 }
 
 export async function buildSessionContext(params: BuildSessionContextParams): Promise<LLMContext> {
-  const channelVisibility = classifyChannel(params.channelId, params.channelMeta);
+  const sourceChannelId = params.sourceChannelId ?? params.channelId;
+  const channelVisibility = classifyChannel(sourceChannelId, params.channelMeta);
   const renderGroupUserAttribution = shouldRenderSessionHistoryUserAttribution(
     channelVisibility,
     params.channelMeta,
@@ -984,11 +986,11 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
         canonicalUserId: params.userId,
         limit: params.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT,
         fallbackUserIds: params.continuityFallbackUserIds,
-        channelId: params.channelId,
+        channelId: sourceChannelId,
         channelMeta: params.channelMeta,
       })
       : [];
-  const crossChannel = filterContinuityEntriesForChannel(params.channelId, rawCrossChannel);
+  const crossChannel = filterContinuityEntriesForChannel(sourceChannelId, rawCrossChannel);
   const recentActivityEntries = getOrientationRecentActivityEntries({
     channelId: params.channelId,
     userId: params.userId,
@@ -1166,9 +1168,12 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       policyAllowedCount: params.memoryManifestSeed?.policyAllowedCount ?? 0,
       rankedCount: params.memoryManifestSeed?.rankedCount ?? 0,
       returnedCount: memoryIncludedCount,
-      excluded: {
-        ...(params.memoryManifestSeed?.roomVisibilityRejectedCount !== undefined
-          ? { roomVisibilityRejectedCount: params.memoryManifestSeed.roomVisibilityRejectedCount }
+        excluded: {
+          ...(params.memoryManifestSeed?.sessionQuarantineRejectedCount !== undefined
+            ? { sessionQuarantineRejectedCount: params.memoryManifestSeed.sessionQuarantineRejectedCount }
+            : {}),
+          ...(params.memoryManifestSeed?.roomVisibilityRejectedCount !== undefined
+            ? { roomVisibilityRejectedCount: params.memoryManifestSeed.roomVisibilityRejectedCount }
           : {}),
         ...(params.memoryManifestSeed?.contactScopeRejectedCount !== undefined
           ? { contactScopeRejectedCount: params.memoryManifestSeed.contactScopeRejectedCount }

@@ -1209,6 +1209,81 @@ describe('SessionManager', () => {
     expect(context.messages.some(message => message.content.includes('continued assistant turn'))).toBe(true);
   });
 
+  it('routes a Discord source channel to a fresh logical session without pulling pre-reset chat context', async () => {
+    const config = makeConfig({ dataDir: dir, sessionMessageLimit: 20 });
+    const mgr = new SessionManager(store, config);
+    const sourceChannelId = 'discord:guild:room';
+    const otherChannelId = 'discord:guild:other';
+
+    mgr.recordUserMessage(sourceChannelId, 'old poisoned room line', 'vega-id', 'Vega', false);
+    mgr.recordAssistantMessage(sourceChannelId, 'old assistant room line', undefined, false);
+    mgr.recordUserMessage(otherChannelId, 'other room stays on its own lane', 'iku-id', 'Iku', false);
+
+    const reset = mgr.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'operator',
+      reason: 'poisoned context reset',
+      mode: 'break_glass_quarantine',
+    });
+
+    expect(reset.oldLogicalSessionId).toBe(sourceChannelId);
+    expect(reset.newLogicalSessionId).toMatch(/^discord:guild:room:session:/);
+    expect(mgr.resolveSessionChannelId(sourceChannelId)).toBe(reset.newLogicalSessionId);
+    expect(mgr.resolveSessionChannelId(otherChannelId)).toBe(otherChannelId);
+    expect(mgr.isSessionRetiredOrQuarantined(sourceChannelId)).toBe(true);
+
+    mgr.recordUserMessage(sourceChannelId, 'fresh user line after reset', 'vega-id', 'Vega', false);
+    mgr.recordAssistantMessage(sourceChannelId, 'fresh assistant line after reset', undefined, false);
+
+    expect(store.getRecent(sourceChannelId, 10).map(entry => entry.content)).toEqual([
+      'old poisoned room line',
+      'old assistant room line',
+    ]);
+    expect(store.getRecent(reset.newLogicalSessionId, 10).map(entry => entry.content)).toEqual([
+      'fresh user line after reset',
+      'fresh assistant line after reset',
+    ]);
+    expect(store.getRecent(reset.newLogicalSessionId, 10)).toEqual([
+      expect.objectContaining({ originChannelId: sourceChannelId }),
+      expect.objectContaining({ originChannelId: sourceChannelId }),
+    ]);
+
+    const routedRecent = mgr.getRecentMessages(sourceChannelId, 10);
+    expect(routedRecent.map(entry => entry.content)).toEqual([
+      'fresh user line after reset',
+      'fresh assistant line after reset',
+    ]);
+
+    const context = await mgr.buildContext(
+      sourceChannelId,
+      'System',
+      '',
+      undefined,
+      undefined,
+      { isDirectMessage: false },
+    );
+    expect(context.messages.some(message => message.content.includes('fresh user line after reset'))).toBe(true);
+    expect(context.messages.some(message => message.content.includes('fresh assistant line after reset'))).toBe(true);
+    expect(context.messages.some(message => message.content.includes('old poisoned room line'))).toBe(false);
+    expect(context.messages.some(message => message.content.includes('old assistant room line'))).toBe(false);
+
+    const otherRecent = mgr.getRecentMessages(otherChannelId, 10);
+    expect(otherRecent.map(entry => entry.content)).toEqual(['other room stays on its own lane']);
+
+    const reloaded = new SessionManager(store, config);
+    expect(reloaded.resolveSessionChannelId(sourceChannelId)).toBe(reset.newLogicalSessionId);
+    const reloadedContext = await reloaded.buildContext(
+      sourceChannelId,
+      'System',
+      '',
+      undefined,
+      undefined,
+      { isDirectMessage: false },
+    );
+    expect(reloadedContext.messages.some(message => message.content.includes('fresh user line after reset'))).toBe(true);
+    expect(reloadedContext.messages.some(message => message.content.includes('old poisoned room line'))).toBe(false);
+  });
+
   it('loads verified session history without unverified tags', async () => {
     const config = makeConfig();
     const keyring = {

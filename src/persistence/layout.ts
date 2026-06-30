@@ -712,6 +712,10 @@ export function resolveShardFoldReviewStorePath(companionDataDir: string): strin
   return join(resolveCompanionStateDir(companionDataDir), 'shard-fold-reviews.json');
 }
 
+export function resolveSessionRoutesPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'session-routes.json');
+}
+
 export function resolveIdentityAssetsDir(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'identity-assets');
 }
@@ -856,6 +860,7 @@ function migrateLegacyCompanionStateLayout(companionDataDir: string): void {
     ['fatigue-ledger.jsonl', resolveFatigueLedgerPath(companionDataDir)],
     ['shard-session-memory-sync-audit.jsonl', resolveShardSessionMemorySyncAuditPath(companionDataDir)],
     ['shard-fold-reviews.json', resolveShardFoldReviewStorePath(companionDataDir)],
+    ['session-routes.json', resolveSessionRoutesPath(companionDataDir)],
     ['last_active_channel.json', resolveLastActiveSessionPath(companionDataDir)],
   ] as const;
 

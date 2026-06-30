@@ -106,6 +106,7 @@ import {
   resolveCompressionGuidelinePath,
   resolveConfiguredCompanionDataDir,
   resolveFocusKnowledgePath,
+  resolveSessionRoutesPath,
   resolveSessionContinuityArtifactsDir,
 } from '../../persistence/layout.js';
 import {
@@ -121,6 +122,12 @@ import {
   type SessionContinuityArtifactInput,
   type SessionContinuityArtifactListOptions,
 } from './continuity-artifacts.js';
+import {
+  SessionRouteStore,
+  type SessionRouteResetInput,
+  type SessionRouteResetResult,
+  type SourceChannelSessionRoute,
+} from './session-routes.js';
 
 export type {
   ImportedHistoryBootstrapChunk,
@@ -270,6 +277,7 @@ export class SessionManager {
   private promptRegistry: PromptRegistryStatePort | null;
   private focusKnowledgeStore: FocusKnowledgeStore;
   private continuityArtifactStore: SessionContinuityArtifactStore;
+  private sessionRouteStore: SessionRouteStore;
   private compressionGuidelineRuntime: CompressionGuidelineRuntime;
   private preCompactionExtractionHandler: PreCompactionExtractionHandler | null;
   private coreMemoryProvider: SessionCoreMemoryProvider | null;
@@ -300,6 +308,7 @@ export class SessionManager {
     this.continuityArtifactStore = new SessionContinuityArtifactStore(
       resolveSessionContinuityArtifactsDir(companionDataDir),
     );
+    this.sessionRouteStore = new SessionRouteStore(resolveSessionRoutesPath(companionDataDir));
     this.compressionGuidelineRuntime = new CompressionGuidelineRuntime(
       new CompressionGuidelineStore(resolveCompressionGuidelinePath(companionDataDir)),
       new CompressionFailureLogStore(resolveCompressionFailureLogPath(companionDataDir)),
@@ -341,10 +350,60 @@ export class SessionManager {
     return channelId.startsWith('api:') || channelId.startsWith('terminal:');
   }
 
+  private resolveOriginChannelId(channelId: string, resolvedChannelId: string): string | undefined {
+    const normalized = channelId.trim();
+    return normalized && normalized !== resolvedChannelId ? normalized : undefined;
+  }
+
+  private resolveSourceChannelId(channelId: string): string {
+    return this.sessionRouteStore.resolveSourceChannelId(channelId);
+  }
+
   resolveSessionChannelId(channelId: string): string {
+    const routedSessionId = this.sessionRouteStore.resolve(channelId);
+    if (routedSessionId) return routedSessionId;
     if (!this.activeContextSessionId) return channelId;
     if (!this.shouldOverrideSessionContext(channelId)) return channelId;
     return this.activeContextSessionId;
+  }
+
+  listSessionRoutes(): SourceChannelSessionRoute[] {
+    return this.sessionRouteStore.listRoutes();
+  }
+
+  getSessionRoute(sourceChannelId: string): SourceChannelSessionRoute | null {
+    return this.sessionRouteStore.getRoute(sourceChannelId);
+  }
+
+  getSessionRouteForLogicalSession(logicalSessionId: string): SourceChannelSessionRoute | null {
+    return this.sessionRouteStore.getRouteForLogicalSession(logicalSessionId);
+  }
+
+  getRetiredLogicalSessionIds(): Set<string> {
+    return this.sessionRouteStore.getRetiredLogicalSessionIds();
+  }
+
+  isSessionRetiredOrQuarantined(logicalSessionId: string): boolean {
+    return this.sessionRouteStore.isRetiredOrQuarantined(logicalSessionId);
+  }
+
+  resetSourceChannelSession(input: SessionRouteResetInput): SessionRouteResetResult {
+    const result = this.sessionRouteStore.resetSourceChannel(input);
+    this.activeFocusSessions.delete(result.oldLogicalSessionId);
+    this.activeFocusSessions.delete(result.newLogicalSessionId);
+    this.pendingAutoCompactions.delete(result.oldLogicalSessionId);
+    this.pendingAutoCompactions.delete(result.newLogicalSessionId);
+    void this.eventBus?.emit('session.route.reset', {
+      sourceChannelId: result.sourceChannelId,
+      oldLogicalSessionId: result.oldLogicalSessionId,
+      newLogicalSessionId: result.newLogicalSessionId,
+      routeGeneration: result.route.routeGeneration,
+      mode: result.route.mode,
+      actor: result.route.actor,
+      reason: result.route.reason,
+      timestamp: Date.now(),
+    });
+    return result;
   }
 
   setActiveContextSession(sessionId: string | null): void {
@@ -578,8 +637,10 @@ export class SessionManager {
     options: SessionMessageRecordOptions = {},
   ): number | null {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
+    const sourceChannelId = originChannelId ?? resolvedChannelId;
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
-    const channelVisibility = classifyChannel(resolvedChannelId, meta);
+    const channelVisibility = classifyChannel(sourceChannelId, meta);
     const timestamp = Date.now();
     const turnMetadata = options.turnId
       ? buildSessionMetadataWithTurn(options.metadata, {
@@ -639,7 +700,7 @@ export class SessionManager {
             authorId,
             authorName,
             timestamp,
-            originChannelId: resolvedChannelId,
+            originChannelId: sourceChannelId,
             channelVisibility,
             ...(metadata ? { metadata } : {}),
           },
@@ -656,6 +717,7 @@ export class SessionManager {
       authorName,
       timestamp,
       channelVisibility,
+      ...(originChannelId ? { originChannelId } : {}),
       ...(metadata ? { metadata } : {}),
     });
 
@@ -669,7 +731,7 @@ export class SessionManager {
           authorId,
           authorName,
           timestamp,
-          originChannelId: resolvedChannelId,
+          originChannelId: sourceChannelId,
           channelVisibility,
           ...(metadata ? { metadata } : {}),
         },
@@ -679,7 +741,7 @@ export class SessionManager {
     if (!guardReason) {
       this.mirrorMessageToActiveSessions({
         continuityKey,
-        sourceChannelId: resolvedChannelId,
+        sourceChannelId,
         sourceVisibility: channelVisibility,
         sourceRole: 'user',
         sourceAuthorName: authorName,
@@ -701,8 +763,10 @@ export class SessionManager {
     options: SessionMessageRecordOptions = {},
   ): number | null {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
+    const sourceChannelId = originChannelId ?? resolvedChannelId;
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
-    const channelVisibility = classifyChannel(resolvedChannelId, meta);
+    const channelVisibility = classifyChannel(sourceChannelId, meta);
     const timestamp = Date.now();
     const turnMetadata = options.turnId
       ? buildSessionMetadataWithTurn(options.metadata, {
@@ -729,7 +793,7 @@ export class SessionManager {
             role: 'assistant',
             content,
             timestamp,
-            originChannelId: resolvedChannelId,
+            originChannelId: sourceChannelId,
             channelVisibility,
             ...(metadata ? { metadata } : {}),
           },
@@ -744,6 +808,7 @@ export class SessionManager {
       content,
       timestamp,
       channelVisibility,
+      ...(originChannelId ? { originChannelId } : {}),
       ...(metadata ? { metadata } : {}),
     });
 
@@ -755,7 +820,7 @@ export class SessionManager {
           role: 'assistant',
           content,
           timestamp,
-          originChannelId: resolvedChannelId,
+          originChannelId: sourceChannelId,
           channelVisibility,
           ...(metadata ? { metadata } : {}),
         },
@@ -764,7 +829,7 @@ export class SessionManager {
 
     this.mirrorMessageToActiveSessions({
       continuityKey,
-      sourceChannelId: resolvedChannelId,
+      sourceChannelId,
       sourceVisibility: channelVisibility,
       sourceRole: 'assistant',
       content,
@@ -786,8 +851,10 @@ export class SessionManager {
   ): number | null {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
+    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
+    const sourceChannelId = originChannelId ?? resolvedChannelId;
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
-    const channelVisibility = classifyChannel(resolvedChannelId, meta);
+    const channelVisibility = classifyChannel(sourceChannelId, meta);
     const timestamp = Date.now();
     const turnMetadata = options.turnId
       ? buildSessionMetadataWithTurn(options.metadata, {
@@ -808,6 +875,7 @@ export class SessionManager {
       authorName,
       timestamp,
       channelVisibility,
+      ...(originChannelId ? { originChannelId } : {}),
       ...(metadata ? { metadata } : {}),
     });
 
@@ -822,7 +890,7 @@ export class SessionManager {
           authorId,
           authorName,
           timestamp,
-          originChannelId: resolvedChannelId,
+          originChannelId: sourceChannelId,
           channelVisibility,
           ...(metadata ? { metadata } : {}),
         },
@@ -924,8 +992,10 @@ export class SessionManager {
   ): number | null {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
+    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
+    const sourceChannelId = originChannelId ?? resolvedChannelId;
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
-    const channelVisibility = classifyChannel(resolvedChannelId, meta);
+    const channelVisibility = classifyChannel(sourceChannelId, meta);
     const timestamp = Date.now();
     const turnMetadata = options.turnId
       ? buildSessionMetadataWithTurn(options.metadata, {
@@ -952,6 +1022,7 @@ export class SessionManager {
       authorName: normalizedObservation.metadata.toolName,
       timestamp,
       channelVisibility,
+      ...(originChannelId ? { originChannelId } : {}),
       metadata,
     });
   }
@@ -1037,6 +1108,7 @@ export class SessionManager {
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): Promise<LLMContext> {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
     const coreMemoryBlock = this.coreMemoryProvider
       ? this.coreMemoryProvider.formatForContext(
         this.buildCoreMemoryFormatContext(resolvedChannelId, userId, channelMeta),
@@ -1059,6 +1131,7 @@ export class SessionManager {
       });
     return buildSessionContext({
       channelId: resolvedChannelId,
+      sourceChannelId,
       systemPrompt,
       coreMemoryBlock,
       memoriesBlock,
@@ -1101,6 +1174,7 @@ export class SessionManager {
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
   ): TurnSessionContextSnapshot {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
     const adaptiveProfile = resolveAdaptiveContextBudgetProfile(
       this.config,
       turnBudgetCharacteristics,
@@ -1129,7 +1203,7 @@ export class SessionManager {
     ).entries;
     const assembledHistory = assembleSessionHistoryForContext({
       entries: recent,
-      channelVisibility: classifyChannel(resolvedChannelId, channelMeta),
+      channelVisibility: classifyChannel(sourceChannelId, channelMeta),
       tokenBudget: historyBudget.tokenBudget,
       characterName: this.resolveContextCharacterName(),
     });
@@ -1141,12 +1215,12 @@ export class SessionManager {
         canonicalUserId: userId,
         limit: this.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT,
         fallbackUserIds: continuityFallbackUserIds,
-        channelId: resolvedChannelId,
+        channelId: sourceChannelId,
         channelMeta,
       })
       : [];
     const orientationContinuityEntries = filterContinuityEntriesForChannel(
-      resolvedChannelId,
+      sourceChannelId,
       continuityEntries,
     );
     const orientationRecentActivityEntries = getOrientationRecentActivityEntries({
@@ -1222,6 +1296,7 @@ export class SessionManager {
   appendSystemNote(channelId: string, note: string, source = 'appendSystemNote'): void {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     if (!shouldPersistSessionChannel(resolvedChannelId)) return;
+    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
     this.store.append({
       channelId: resolvedChannelId,
       role: 'system',
@@ -1229,6 +1304,7 @@ export class SessionManager {
       authorId: 'system',
       authorName: 'System',
       timestamp: Date.now(),
+      ...(originChannelId ? { originChannelId } : {}),
       metadata: JSON.stringify({
         sessionLane: {
           schemaVersion: 1,

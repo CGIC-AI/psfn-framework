@@ -1,5 +1,11 @@
-import { apiGet } from '$lib/api/client';
-import type { AdminSessionListData, AdminSessionMessagesData } from '$lib/types';
+import { apiGet, apiPost } from '$lib/api/client';
+import type {
+  AdminSessionListData,
+  AdminSessionMessagesData,
+  AdminSessionRouteListData,
+  AdminSessionRouteResetData,
+  AdminSessionRouteResetInput,
+} from '$lib/types';
 
 export const SESSION_MESSAGE_PAGE_SIZE = 100;
 
@@ -33,4 +39,14 @@ export function getSessionMessages(
   request: SessionMessagesRequest = {},
 ): Promise<AdminSessionMessagesData> {
   return apiGet<AdminSessionMessagesData>(buildSessionMessagesPath(sessionId, request));
+}
+
+export function listSessionRoutes(): Promise<AdminSessionRouteListData> {
+  return apiGet<AdminSessionRouteListData>('/api/admin/session-routes');
+}
+
+export function resetSourceChannelSession(
+  input: AdminSessionRouteResetInput,
+): Promise<AdminSessionRouteResetData> {
+  return apiPost<AdminSessionRouteResetData>('/api/admin/session-routes/reset', input);
 }

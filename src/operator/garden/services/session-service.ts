@@ -19,6 +19,9 @@ import {
 import type { ChannelVisibility } from '../../../system/trust/types.js';
 import type {
   AdminContinuityProvenanceView,
+  AdminSessionRouteListData,
+  AdminSessionRouteResetData,
+  AdminSessionRouteResetInput,
   AdminSessionMessageOntologyView,
   AdminSessionListData,
   AdminSessionMessagesData,
@@ -217,6 +220,27 @@ export class AdminSessionDataService implements AdminSessionService {
           linkedContactName: linkedContact.displayName,
         };
       })),
+    };
+  }
+
+  async listSessionRoutes(): Promise<AdminSessionRouteListData> {
+    const sessions = await this.listSessions();
+    return {
+      routes: this.deps.sessionManager.listSessionRoutes(),
+      channels: sessions.channels,
+    };
+  }
+
+  async resetSourceChannelSession(input: AdminSessionRouteResetInput): Promise<AdminSessionRouteResetData> {
+    const result = this.deps.sessionManager.resetSourceChannelSession(input);
+    return {
+      ok: true,
+      message: `Source channel ${result.sourceChannelId} now routes to ${result.newLogicalSessionId}. Old L0 history remains available for explicit audit/search.`,
+      sourceChannelId: result.sourceChannelId,
+      oldLogicalSessionId: result.oldLogicalSessionId,
+      newLogicalSessionId: result.newLogicalSessionId,
+      route: result.route,
+      retiredSession: result.retiredSession,
     };
   }
 

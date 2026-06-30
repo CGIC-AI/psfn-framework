@@ -9,9 +9,12 @@ import type { ChannelVisibility, TrustLevel } from '../../system/trust/types.js'
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
 import {
   canViewerAccessSessionHit,
+  resolveSessionSearchRouteLabel,
   resolveSessionSearchHitVisibility,
   runSessionSearch,
   truncateSessionSearchSnippet,
+  type SessionSearchRouteLabel,
+  type SessionSearchRouteStateProvider,
   type SessionSearchViewerContext,
 } from '../session/search-runtime.js';
 import { textResult, textResultWithError } from './results.js';
@@ -34,6 +37,7 @@ export interface SessionGrepHitResult {
   filePath: string;
   lineNumber: number;
   snippet: string;
+  sessionRoute?: SessionSearchRouteLabel;
 }
 
 export interface SessionGrepResult {
@@ -69,6 +73,18 @@ interface SessionGrepRunnerParams {
 export interface SessionGrepToolOptions {
   sessionsDir: string;
   runRipgrep?: (params: SessionGrepRunnerParams) => Promise<SessionGrepRunnerResult>;
+  sessionRouteState?: SessionSearchRouteStateProvider;
+}
+
+function asSessionRouteStateProvider(value: unknown): SessionSearchRouteStateProvider | undefined {
+  const candidate = value as {
+    getRouteForLogicalSession?: unknown;
+    getSessionRouteForLogicalSession?: unknown;
+  } | null | undefined;
+  return typeof candidate?.getRouteForLogicalSession === 'function'
+    || typeof candidate?.getSessionRouteForLogicalSession === 'function'
+    ? value as SessionSearchRouteStateProvider
+    : undefined;
 }
 
 function normalizeOptionalTrustLevel(value: unknown): TrustLevel | undefined {
@@ -318,6 +334,7 @@ async function runRipgrepSearch(params: SessionGrepRunnerParams): Promise<Sessio
 export function createSessionSearchTool(
   transcriptSearch: TranscriptSearchPort,
   llmProvider: LLMProviderPort,
+  sessionRouteState = asSessionRouteStateProvider(transcriptSearch),
 ): AgentTool<any> {
   return {
     name: 'session_search',
@@ -372,6 +389,7 @@ export function createSessionSearchTool(
         summarize: params.summarize === true,
         targetChannelId: params.channelId,
         viewer: resolveViewerContextFromRequest(),
+        sessionRouteState,
       });
       return textResult(JSON.stringify(result, null, 2));
     },
@@ -460,6 +478,7 @@ export function createSessionGrepTool(
             gatedOutCount += 1;
             continue;
           }
+          const sessionRoute = resolveSessionSearchRouteLabel(options.sessionRouteState, entry.channelId);
           visibleHits.push({
             channelId: entry.channelId,
             messageId: entry.id,
@@ -472,6 +491,7 @@ export function createSessionGrepTool(
             filePath: match.filePath,
             lineNumber: match.lineNumber,
             snippet: buildSessionMatchSnippet(entry.content, pattern, mode, caseSensitive),
+            ...(sessionRoute ? { sessionRoute } : {}),
           });
           if (visibleHits.length >= limit) {
             break;

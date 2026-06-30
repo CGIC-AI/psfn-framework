@@ -1,6 +1,7 @@
 import type { PolicyReasonTag } from '../../system/trust/policy.js';
 
 export type MemoryWithheldReasonTag =
+  | 'session_quarantine.blocked'
   | 'room_visibility.blocked'
   | 'contact_scope.high_intimacy'
   | Exclude<PolicyReasonTag, 'operator.approval_override' | 'default.within_bounds'>;
@@ -16,6 +17,7 @@ export interface MemoryWithheldSummary {
 }
 
 const MEMORY_WITHHELD_REASON_ORDER: readonly MemoryWithheldReasonTag[] = [
+  'session_quarantine.blocked',
   'room_visibility.blocked',
   'contact_scope.high_intimacy',
   'boundary.withhold',
@@ -26,6 +28,7 @@ const MEMORY_WITHHELD_REASON_ORDER: readonly MemoryWithheldReasonTag[] = [
 ];
 
 const MEMORY_WITHHELD_REASON_LABELS: Record<MemoryWithheldReasonTag, string> = {
+  'session_quarantine.blocked': 'retired session quarantine',
   'room_visibility.blocked': 'room visibility boundary',
   'contact_scope.high_intimacy': 'high-intimacy contact scope',
   'boundary.withhold': 'explicit non-disclosure boundary',

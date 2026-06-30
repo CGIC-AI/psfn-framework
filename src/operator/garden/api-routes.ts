@@ -614,7 +614,7 @@ export function buildAdminApiRoutes(options: {
         );
       },
     },
-    ...buildAdminSessionRoutes({ sessionService }),
+    ...buildAdminSessionRoutes({ sessionService, withBody }),
     ...buildAdminContactRoutes({ contactsService, withBody }),
     ...buildAdminConcernRoutes({ concernService, withBody }),
     ...buildAdminSettingsRoutes({ settingsService, appendAuditTimelineEntry, withBody }),

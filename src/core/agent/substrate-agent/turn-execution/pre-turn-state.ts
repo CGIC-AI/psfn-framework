@@ -313,9 +313,11 @@ export async function computePreTurnState(input: {
     )
     : undefined;
   const memoryRetrievalContextText = buildMemoryRetrievalContextText(message, sessionContextSnapshot);
+  const sessionChannelId = runtime.resolveSessionChannelId(message.channelId);
   const activeMemoryRequest = {
     contextText: memoryRetrievalContextText,
     channelId: message.channelId,
+    sessionChannelId,
     trustLevel,
     channelMeta,
     turnBudgetCharacteristics,

@@ -23,6 +23,7 @@ const GARDEN_CLIENT_ROUTES = new Set([
   '/prompts',
   '/satellites',
   '/scheduler',
+  '/session-recovery',
   '/sessions',
   '/settings',
   '/shards',

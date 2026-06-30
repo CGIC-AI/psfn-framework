@@ -1,11 +1,13 @@
 import type { IncomingMessage } from 'node:http';
 import { sendCompressedJson, sendJson } from '../../../channels/backplane/http/primitives.js';
 import { exactPath, prefixedParamPath } from '../route-matchers.js';
-import type { AdminSessionService } from '../services/types.js';
+import { isRecord } from '../../../shared/utils/types.js';
+import { parseAdminJsonBody } from '../request-body.js';
+import type { AdminSessionRouteResetInput, AdminSessionService } from '../services/types.js';
 import { MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT } from '../services/session-service.js';
 import { parseRequestUrl } from '../request-url.js';
 import { toSanitizedMessage } from './shared.js';
-import type { AdminApiRoute } from './types.js';
+import type { AdminApiRoute, AdminBodyReader } from './types.js';
 
 interface ParsedSessionMessageQuery {
   limit?: number;
@@ -49,10 +51,48 @@ function parseSessionMessageQuery(req: IncomingMessage):
   };
 }
 
+function parseOptionalString(value: unknown, field: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    throw new Error(`${field} must be a string`);
+  }
+  const normalized = value.trim();
+  return normalized || undefined;
+}
+
+function parseRequiredString(value: unknown, field: string): string {
+  const normalized = parseOptionalString(value, field);
+  if (!normalized) {
+    throw new Error(`${field} must be a non-empty string`);
+  }
+  return normalized;
+}
+
+function parseResetMode(value: unknown): AdminSessionRouteResetInput['mode'] {
+  if (value === undefined) return undefined;
+  if (value === 'fresh_split' || value === 'break_glass_quarantine') return value;
+  throw new Error('mode must be fresh_split or break_glass_quarantine');
+}
+
+function parseSessionRouteResetInput(value: unknown): AdminSessionRouteResetInput {
+  if (!isRecord(value)) {
+    throw new Error('Request body must be a JSON object');
+  }
+  const actor = parseOptionalString(value.actor, 'actor');
+  const mode = parseResetMode(value.mode);
+  return {
+    sourceChannelId: parseRequiredString(value.sourceChannelId, 'sourceChannelId'),
+    reason: parseRequiredString(value.reason, 'reason'),
+    ...(actor ? { actor } : {}),
+    ...(mode ? { mode } : {}),
+  };
+}
+
 export function buildAdminSessionRoutes(options: {
   sessionService: AdminSessionService;
+  withBody: AdminBodyReader;
 }): AdminApiRoute[] {
-  const { sessionService } = options;
+  const { sessionService, withBody } = options;
 
   return [
     {
@@ -69,6 +109,48 @@ export function buildAdminSessionRoutes(options: {
             });
           },
         );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/session-routes'),
+      handle: (_req, res) => {
+        sessionService.listSessionRoutes().then(
+          payload => sendJson(res, 200, payload),
+          error => sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to load session routes'),
+          }),
+        );
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/session-routes/reset'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsedBody = parseAdminJsonBody(body);
+          if (!parsedBody.ok) {
+            sendJson(res, 400, { ok: false, message: parsedBody.error });
+            return;
+          }
+          let input: AdminSessionRouteResetInput;
+          try {
+            input = parseSessionRouteResetInput(parsedBody.value);
+          } catch (error) {
+            sendJson(res, 400, {
+              ok: false,
+              message: error instanceof Error ? error.message : String(error),
+            });
+            return;
+          }
+          sessionService.resetSourceChannelSession(input).then(
+            payload => sendJson(res, 200, payload),
+            error => sendJson(res, 500, {
+              ok: false,
+              message: toSanitizedMessage(error, 'Failed to reset session route'),
+            }),
+          );
+        });
       },
     },
     {

@@ -113,8 +113,9 @@ export interface ExtractionRunOptions {
   channelId: string;
   triggerReason: ExtractionTriggerReason;
   canonicalContactId?: string;
-  turnId?: TurnID;
-  recoveredEntries?: SessionEntry[];
+	  turnId?: TurnID;
+	  sourceSessionId?: string;
+	  recoveredEntries?: SessionEntry[];
   resolveParticipantNames?: (
     recentEntries: readonly SessionEntry[],
     canonicalContactId?: string,
@@ -222,13 +223,14 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       }
     }
 
-    const sourceRef = buildExtractionSourceRef(
-      options.channelId,
-      recentEntries,
-      channelVisibility,
-      options.triggerReason,
-      turnId,
-    );
+	    const sourceRef = buildExtractionSourceRef(
+	      options.channelId,
+	      recentEntries,
+	      channelVisibility,
+	      options.triggerReason,
+	      turnId,
+	      options.sourceSessionId,
+	    );
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
     const participantNames = options.resolveParticipantNames?.(recentEntries, options.canonicalContactId) ?? {};
     const speakerRouting = await buildSpeakerRoutingContext(
@@ -490,9 +492,17 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const routedContactIds = new Set<string>();
     const sourceSpeakerNames = new Set<string>();
 
-    for (const candidate of selectedCandidates) {
-      const { fact } = candidate;
-      const { routing } = candidate;
+	    for (const candidate of selectedCandidates) {
+	      if (!options.isAcceptingExtractions()) {
+	        log.debug('Stopping fact writes after extraction route changed or extractor stopped', {
+	          channelId: options.channelId,
+	          remainingCandidateCount: selectedCandidates.length - acceptedCount,
+	          triggerReason: options.triggerReason,
+	        });
+	        break;
+	      }
+	      const { fact } = candidate;
+	      const { routing } = candidate;
 
       const routingTelemetry: ExtractionFactRouting = {
         ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),

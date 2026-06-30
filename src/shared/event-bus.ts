@@ -353,8 +353,9 @@ export interface EventMap {
     visibilityScope?: 'public_only' | 'approved_private_context' | 'non_broadcast';
     operatorApproval?: boolean;
     provenanceRefs?: string[];
-    policyAllowedCount?: number;
-    roomVisibilityRejectedCount?: number;
+	    policyAllowedCount?: number;
+	    sessionQuarantineRejectedCount?: number;
+	    roomVisibilityRejectedCount?: number;
     contactScopeRejectedCount?: number;
     sensitivityRejectedCount?: number;
     policyRejectedCount?: number;

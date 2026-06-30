@@ -326,20 +326,22 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       options.memoryStore,
       options.embeddingService,
       options.config,
-      costTelemetry,
-      options.contactStore ?? null,
-      options.llmProvider,
-      options.episodicStore ?? null,
-    )
-    : new MemoryRetriever(
-      options.memoryStore,
-      options.embeddingService,
+	      costTelemetry,
+	      options.contactStore ?? null,
+	      options.llmProvider,
+	      options.episodicStore ?? null,
+	      options.sessionManager,
+	    )
+	    : new MemoryRetriever(
+	      options.memoryStore,
+	      options.embeddingService,
       undefined,
-      costTelemetry,
-      options.contactStore ?? null,
-      options.llmProvider,
-      options.episodicStore ?? null,
-    );
+	      costTelemetry,
+	      options.contactStore ?? null,
+	      options.llmProvider,
+	      options.episodicStore ?? null,
+	      options.sessionManager,
+	    );
 
   const memoryExtractor = options.config
     ? new MemoryExtractor(

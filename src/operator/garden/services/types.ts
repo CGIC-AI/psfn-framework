@@ -32,6 +32,10 @@ import type {
   EpisodeSpanRef,
 } from '../../../shared/contracts/episodic-memory.js';
 import type { SessionEntry } from '../../../core/session/types.js';
+import type {
+  SessionRouteResetMode,
+  SourceChannelSessionRoute,
+} from '../../../core/session/session-routes.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type {
   ContextMessage,
@@ -774,6 +778,30 @@ export interface AdminSessionListData {
   channels: ChannelInfo[];
 }
 
+export type AdminSessionRouteView = SourceChannelSessionRoute;
+
+export interface AdminSessionRouteListData {
+  routes: AdminSessionRouteView[];
+  channels: ChannelInfo[];
+}
+
+export interface AdminSessionRouteResetInput {
+  sourceChannelId: string;
+  reason: string;
+  actor?: string;
+  mode?: SessionRouteResetMode;
+}
+
+export interface AdminSessionRouteResetData {
+  ok: boolean;
+  message: string;
+  sourceChannelId: string;
+  oldLogicalSessionId: string;
+  newLogicalSessionId: string;
+  route: AdminSessionRouteView;
+  retiredSession: SourceChannelSessionRoute['retiredSessions'][number];
+}
+
 export interface AdminSessionMessageOntologyView {
   sessionEntryId: number;
   transportRole: SessionEntry['role'];
@@ -812,6 +840,8 @@ export interface AdminSessionMessagePaginationData {
 export interface AdminSessionService {
   listSessions(): Promise<AdminSessionListData>;
   getSessionMessages(sessionId: string, options?: AdminSessionMessagePaginationOptions): AdminSessionMessagesData;
+  listSessionRoutes(): Promise<AdminSessionRouteListData>;
+  resetSourceChannelSession(input: AdminSessionRouteResetInput): Promise<AdminSessionRouteResetData>;
 }
 
 export type AdminObservedMemory = ObservedMemory;

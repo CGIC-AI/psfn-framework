@@ -54,6 +54,10 @@ import {
 import { isInternalMemoryArtifact } from './internal-artifacts.js';
 import {
   cloneMemoryWithheldSummary,
+  createEmptyMemoryWithheldSummary,
+  incrementMemoryWithheldRelevanceBand,
+  incrementMemoryWithheldReason,
+  resolveMemoryWithheldRelevanceBand,
   serializeMemoryWithheldSummary,
   type MemoryWithheldSummary,
 } from './withheld-summary.js';
@@ -214,6 +218,14 @@ export interface MemoryRetrieverConfig {
   proactiveRecallMinTurnsBetween?: number;
 }
 
+export interface MemorySessionQuarantineFilter {
+  isSessionRetiredOrQuarantined(logicalSessionId: string): boolean;
+  getRetiredLogicalSessionIds?(): ReadonlySet<string>;
+}
+
+type MemoryQuarantineCandidate = Pick<PurrMemory, 'id' | 'sourceRef' | 'provenance' | 'provenanceRefs'>
+  & { similarity?: number };
+
 function isSubstrateConfig(config: MemoryRetrieverConfig | SubstrateConfig | undefined): config is SubstrateConfig {
   return !!config && typeof config === 'object' && 'defaultContextWindow' in config;
 }
@@ -242,6 +254,7 @@ export class MemoryRetriever implements MemoryProvider {
   private lastProactiveRecallTurn: number;
   private activeMemoryContexts: Map<string, ActiveMemoryState>;
   private activeMemoryRefreshLoops: Map<string, ActiveMemoryRefreshLoop>;
+  private sessionQuarantineFilter: MemorySessionQuarantineFilter | null;
 
   constructor(
     memoryStore: MemoryStorePort,
@@ -251,6 +264,7 @@ export class MemoryRetriever implements MemoryProvider {
     contactStore?: ContactStorePort | null,
     llmProvider?: LLMProviderPort | null,
     episodicStore?: EpisodicRetrievalStore | null,
+    sessionQuarantineFilter?: MemorySessionQuarantineFilter | null,
   ) {
     this.memoryStore = memoryStore;
     this.embeddingService = embeddingService;
@@ -283,6 +297,7 @@ export class MemoryRetriever implements MemoryProvider {
     this.contactStore = contactStore ?? null;
     this.llmProvider = llmProvider ?? null;
     this.episodicStore = episodicStore ?? null;
+    this.sessionQuarantineFilter = sessionQuarantineFilter ?? null;
     this.proactiveTurnCounter = 0;
     this.lastProactiveRecallTurn = Number.NEGATIVE_INFINITY;
     this.activeMemoryContexts = new Map();
@@ -458,6 +473,102 @@ export class MemoryRetriever implements MemoryProvider {
     return buildRoomVisibilityContext(channelId, channelMeta, canonicalContact);
   }
 
+  private getRetiredLogicalSessionIds(): ReadonlySet<string> {
+    return this.sessionQuarantineFilter?.getRetiredLogicalSessionIds?.() ?? new Set<string>();
+  }
+
+  private isRetiredSessionId(logicalSessionId: string | undefined): boolean {
+    const normalized = logicalSessionId?.trim();
+    if (!normalized || !this.sessionQuarantineFilter) return false;
+    return this.sessionQuarantineFilter.isSessionRetiredOrQuarantined(normalized);
+  }
+
+  private referenceTargetsRetiredSession(reference: string | undefined): boolean {
+    const normalized = reference?.trim();
+    if (!normalized || !this.sessionQuarantineFilter) return false;
+    if (this.isRetiredSessionId(normalized)) return true;
+    for (const retiredId of this.getRetiredLogicalSessionIds()) {
+      const sessionId = retiredId.trim();
+      if (!sessionId) continue;
+      if (normalized === `session:${sessionId}`) return true;
+      if (this.hasDelimitedSessionReference(normalized, sessionId)) return true;
+    }
+    return false;
+  }
+
+  private hasDelimitedSessionReference(reference: string, sessionId: string): boolean {
+    const marker = `session:${sessionId}`;
+    const index = reference.indexOf(marker);
+    if (index < 0) return false;
+    const before = index === 0 ? '' : reference[index - 1];
+    const after = reference[index + marker.length] ?? '';
+    const beforeDelimited = index === 0 || before === '|' || before === ',' || before === ' ' || before === '#';
+    const afterDelimited = after === '' || after === '|' || after === ',' || after === ' ' || after === '#';
+    return beforeDelimited && afterDelimited;
+  }
+
+  private isMemoryQuarantined(memory: MemoryQuarantineCandidate): boolean {
+    if (!this.sessionQuarantineFilter) return false;
+    if (this.isRetiredSessionId(memory.provenance?.sessionId)) return true;
+    if (this.referenceTargetsRetiredSession(memory.sourceRef)) return true;
+    return (memory.provenanceRefs ?? []).some(ref => this.referenceTargetsRetiredSession(ref));
+  }
+
+  private summarizeQuarantinedMemories<T extends MemoryQuarantineCandidate>(
+    memories: readonly T[],
+  ): { summary?: MemoryWithheldSummary; withheldIds: string[] } {
+    const summary = createEmptyMemoryWithheldSummary();
+    const withheldIds = new Set<string>();
+    const seenIds = new Set<string>();
+    for (const memory of memories) {
+      if (seenIds.has(memory.id)) continue;
+      seenIds.add(memory.id);
+      if (!this.isMemoryQuarantined(memory)) continue;
+      incrementMemoryWithheldReason(summary, 'session_quarantine.blocked');
+      incrementMemoryWithheldRelevanceBand(
+        summary,
+        resolveMemoryWithheldRelevanceBand(memory.similarity),
+      );
+      withheldIds.add(memory.id);
+    }
+    return {
+      ...(summary.totalCount > 0 ? { summary } : {}),
+      withheldIds: [...withheldIds],
+    };
+  }
+
+  private filterQuarantinedMemories<T extends MemoryQuarantineCandidate>(
+    memories: readonly T[],
+  ): { memories: T[]; summary?: MemoryWithheldSummary; withheldIds: string[] } {
+    if (!this.sessionQuarantineFilter || memories.length === 0) {
+      return { memories: [...memories], withheldIds: [] };
+    }
+    const summary = createEmptyMemoryWithheldSummary();
+    const withheldIds = new Set<string>();
+    const filtered: T[] = [];
+    const seenIds = new Set<string>();
+    for (const memory of memories) {
+      if (this.isMemoryQuarantined(memory)) {
+        if (!seenIds.has(memory.id)) {
+          seenIds.add(memory.id);
+          incrementMemoryWithheldReason(summary, 'session_quarantine.blocked');
+          incrementMemoryWithheldRelevanceBand(
+            summary,
+            resolveMemoryWithheldRelevanceBand(memory.similarity),
+          );
+          withheldIds.add(memory.id);
+        }
+        continue;
+      }
+      filtered.push(memory);
+    }
+    return {
+      memories: filtered,
+      ...(summary.totalCount > 0 ? { summary } : {}),
+      withheldIds: [...withheldIds],
+    };
+  }
+
   private async resolveContactProfileAccess(
     profile: ContactProfileArtifact | undefined,
     options: {
@@ -480,25 +591,28 @@ export class MemoryRetriever implements MemoryProvider {
       return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
     }
 
-    const sourceMemories = (
-      await Promise.all(sourceMemoryIds.map(id => this.memoryStore.getById(id)))
-    )
-      .filter((memory): memory is PurrMemory => Boolean(memory))
-      .map(memory => ({ ...memory, similarity: 1 }));
-    if (sourceMemories.length === 0) {
-      return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
-    }
+      const sourceMemories = (
+        await Promise.all(sourceMemoryIds.map(id => this.memoryStore.getById(id)))
+      )
+        .filter((memory): memory is PurrMemory => Boolean(memory))
+        .map(memory => ({ ...memory, similarity: 1 }));
+      if (sourceMemories.length === 0) {
+        return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
+      }
 
-    const { summary, withheldIds } = summarizeWithheldMemories(sourceMemories, options);
-    if (withheldIds.length === 0) {
-      return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
-    }
+      const quarantine = this.summarizeQuarantinedMemories(sourceMemories);
+      const { summary, withheldIds } = summarizeWithheldMemories(sourceMemories, options);
+      const withheldSummary = mergeMemoryWithheldSummaries(quarantine.summary, summary);
+      const blockedIds = [...new Set([...quarantine.withheldIds, ...withheldIds])];
+      if (blockedIds.length === 0) {
+        return { profile: cloneContactProfileArtifact(profile), withheldSourceMemoryIds: [] };
+      }
 
-    return {
-      withheldSummary: summary,
-      withheldSourceMemoryIds: withheldIds,
-    };
-  }
+      return {
+        withheldSummary,
+        withheldSourceMemoryIds: blockedIds,
+      };
+    }
 
   async captureTurnMemorySnapshot(
     contextText: string,
@@ -536,15 +650,32 @@ export class MemoryRetriever implements MemoryProvider {
       roomVisibility,
     });
     const profile = profileAccess.profile;
-    const emotionalSnapshot = canonicalContactId
-      ? await this.resolveEmotionalSnapshot(canonicalContactId)
-      : undefined;
-    const contactEmotionalMemories = canonicalContactId
-      ? await this.collectContactEmotionalMemories(canonicalContactId)
-      : [];
+      const emotionalSnapshot = canonicalContactId
+        ? await this.resolveEmotionalSnapshot(canonicalContactId)
+        : undefined;
+      let quarantineWithheldSummary: MemoryWithheldSummary | undefined;
+      const quarantineWithheldIds: string[] = [];
+      const applyQuarantineResult = <T extends MemoryQuarantineCandidate>(result: {
+        memories: T[];
+        summary?: MemoryWithheldSummary;
+        withheldIds: string[];
+      }): T[] => {
+        quarantineWithheldSummary = mergeMemoryWithheldSummaries(
+          quarantineWithheldSummary,
+          result.summary,
+        );
+        quarantineWithheldIds.push(...result.withheldIds);
+        return result.memories;
+      };
+      let contactEmotionalMemories = canonicalContactId
+        ? await this.collectContactEmotionalMemories(canonicalContactId)
+        : [];
+      contactEmotionalMemories = applyQuarantineResult(
+        this.filterQuarantinedMemories(contactEmotionalMemories),
+      );
 
-    let semanticCandidates: Array<PurrMemory & { similarity: number }> = [];
-    let lexicalCandidates: Array<PurrMemory & { similarity: number }> = [];
+      let semanticCandidates: Array<PurrMemory & { similarity: number }> = [];
+      let lexicalCandidates: Array<PurrMemory & { similarity: number }> = [];
 
     if (contextText.trim().length > 0) {
       const embedding = await this.embeddingService.embed(contextText);
@@ -555,39 +686,49 @@ export class MemoryRetriever implements MemoryProvider {
         candidateLimit,
         normalizedScopeQuery,
       );
-      semanticCandidates = semanticCandidates
-        .filter(memory => !isInternalMemoryArtifact(memory))
-        .map(cloneScoredMemory);
-      if (semanticCandidates.length === 0) {
-        lexicalCandidates = (await this.memoryStore
-          .searchByText(contextText, candidateLimit, normalizedScopeQuery))
+        semanticCandidates = semanticCandidates
           .filter(memory => !isInternalMemoryArtifact(memory))
           .map(cloneScoredMemory);
-      }
-      const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
-        memoryStore: this.memoryStore,
+        semanticCandidates = applyQuarantineResult(
+          this.filterQuarantinedMemories(semanticCandidates),
+        );
+        if (semanticCandidates.length === 0) {
+          lexicalCandidates = (await this.memoryStore
+            .searchByText(contextText, candidateLimit, normalizedScopeQuery))
+            .filter(memory => !isInternalMemoryArtifact(memory))
+            .map(cloneScoredMemory);
+          lexicalCandidates = applyQuarantineResult(
+            this.filterQuarantinedMemories(lexicalCandidates),
+          );
+        }
+        const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
+          memoryStore: this.memoryStore,
         contextText,
         existingIds: new Set([
           ...semanticCandidates.map(memory => memory.id),
           ...lexicalCandidates.map(memory => memory.id),
         ]),
-        scopeQuery: normalizedScopeQuery,
-      });
-      semanticCandidates = mergeScoredMemoryCandidates(semanticCandidates, recentLexicalCandidates);
-    }
+          scopeQuery: normalizedScopeQuery,
+        });
+        semanticCandidates = mergeScoredMemoryCandidates(semanticCandidates, recentLexicalCandidates);
+        semanticCandidates = applyQuarantineResult(
+          this.filterQuarantinedMemories(semanticCandidates),
+        );
+      }
 
-    const proactiveCandidates = (await this.collectProactiveRecallCandidates(
-      channelId,
-      canonicalContactId,
-    )).map(cloneMemory);
-    const episodicChains = await this.resolveEpisodicChains({
-      contextText,
-      channelId,
-      trustLevel: effectiveTrust,
-      channelVisibility,
-      canonicalContactId,
-      scopeQuery: normalizedScopeQuery,
-    });
+      const proactiveCandidates = applyQuarantineResult(this.filterQuarantinedMemories(await this.collectProactiveRecallCandidates(
+        channelId,
+        canonicalContactId,
+      )))
+        .map(cloneMemory);
+      const episodicChains = this.filterQuarantinedEpisodicChains(await this.resolveEpisodicChains({
+        contextText,
+        channelId,
+        trustLevel: effectiveTrust,
+        channelVisibility,
+        canonicalContactId,
+        scopeQuery: normalizedScopeQuery,
+      }));
     const retrievalCandidates = semanticCandidates.length > 0 ? semanticCandidates : lexicalCandidates;
     const {
       summary: candidateWithheldSummary,
@@ -603,13 +744,15 @@ export class MemoryRetriever implements MemoryProvider {
         roomVisibility,
       },
     );
-    const withheldSummary = mergeMemoryWithheldSummaries(
-      candidateWithheldSummary,
-      profileAccess.withheldSummary,
-    );
-    const withheldIds = [...new Set([
-      ...withheldCandidateIds,
-      ...profileAccess.withheldSourceMemoryIds,
+      const withheldSummary = mergeMemoryWithheldSummaries(
+        quarantineWithheldSummary,
+        candidateWithheldSummary,
+        profileAccess.withheldSummary,
+      );
+      const withheldIds = [...new Set([
+        ...quarantineWithheldIds,
+        ...withheldCandidateIds,
+        ...profileAccess.withheldSourceMemoryIds,
     ])];
 
     return {
@@ -725,9 +868,10 @@ export class MemoryRetriever implements MemoryProvider {
       input.selectedForPrompt.length,
     );
 
-    for (const [id, entry] of previousEntries.entries()) {
-      if (selectedIds.has(id)) continue;
-      const missCount = entry.missCount + 1;
+      for (const [id, entry] of previousEntries.entries()) {
+        if (selectedIds.has(id)) continue;
+        if (this.isMemoryQuarantined(entry.scored.memory)) continue;
+        const missCount = entry.missCount + 1;
       if (missCount >= ACTIVE_MEMORY_MISS_LIMIT) continue;
       const retainedScore = entry.retainedScore * ACTIVE_MEMORY_MISS_DECAY;
       nextEntries.set(id, {
@@ -761,15 +905,15 @@ export class MemoryRetriever implements MemoryProvider {
     const selectedForActivePrompt = rankedEntries.map(([, entry]) => this.cloneScoredPromptMemory(entry.scored));
     const profile = input.profile ?? existing?.profile;
     const emotionalSnapshot = input.emotionalSnapshot ?? existing?.emotionalSnapshot;
-    const emotionalContinuityMemories = input.emotionalContinuityMemories.length > 0
-      ? input.emotionalContinuityMemories.map(memory => cloneMemory(memory))
-      : existing?.emotionalContinuityMemories.map(memory => cloneMemory(memory)) ?? [];
+      const emotionalContinuityMemories = input.emotionalContinuityMemories.length > 0
+        ? input.emotionalContinuityMemories.map(memory => cloneMemory(memory))
+        : this.filterQuarantinedMemories(existing?.emotionalContinuityMemories.map(memory => cloneMemory(memory)) ?? []).memories;
     const withheldSummary = input.withheldSummary ?? existing?.withheldSummary;
     const socialContext = input.socialContext ?? existing?.socialContext;
     const contactContextById = input.contactContextById ?? existing?.contactContextById;
-    const episodicChains = input.episodicChains.length > 0
-      ? input.episodicChains.map(cloneEpisodicRetrievalChain)
-      : existing?.episodicChains.map(cloneEpisodicRetrievalChain) ?? [];
+      const episodicChains = input.episodicChains.length > 0
+        ? input.episodicChains.map(cloneEpisodicRetrievalChain)
+        : this.filterQuarantinedEpisodicChains(existing?.episodicChains.map(cloneEpisodicRetrievalChain) ?? []);
     const contextBlock = renderPromptBlock(profile, selectedForActivePrompt, {
       emotionalSnapshot,
       emotionalContinuityMemories,
@@ -919,28 +1063,37 @@ export class MemoryRetriever implements MemoryProvider {
       : canonicalContactId
         ? await this.resolveEmotionalSnapshot(canonicalContactId)
         : undefined;
-    telemetry.emotionalSnapshotIncluded = !!emotionalSnapshot;
-    const contactEmotionalSource = turnSnapshot?.contactEmotionalMemories.map(cloneMemory)
-      ?? (canonicalContactId ? await this.collectContactEmotionalMemories(canonicalContactId) : []);
-    const proactiveSource = turnSnapshot?.proactiveCandidates.map(cloneMemory) ?? [];
-    const episodicChains = Array.isArray(turnSnapshot?.episodicChains)
-      ? turnSnapshot.episodicChains.map(cloneEpisodicRetrievalChain)
-      : await this.resolveEpisodicChains({
-        contextText,
+      telemetry.emotionalSnapshotIncluded = !!emotionalSnapshot;
+      const contactQuarantine = this.filterQuarantinedMemories(
+        turnSnapshot?.contactEmotionalMemories.map(cloneMemory)
+        ?? (canonicalContactId ? await this.collectContactEmotionalMemories(canonicalContactId) : []),
+      );
+      const contactEmotionalSource = contactQuarantine.memories;
+      const proactiveQuarantine = this.filterQuarantinedMemories(
+        turnSnapshot?.proactiveCandidates.map(cloneMemory) ?? [],
+      );
+      const proactiveSource = proactiveQuarantine.memories;
+      const rawEpisodicChains = Array.isArray(turnSnapshot?.episodicChains)
+        ? turnSnapshot.episodicChains.map(cloneEpisodicRetrievalChain)
+        : await this.resolveEpisodicChains({
+          contextText,
         channelId,
         trustLevel: effectiveTrust,
         channelVisibility,
-        canonicalContactId,
-        scopeQuery: normalizedScopeQuery,
-      });
+          canonicalContactId,
+          scopeQuery: normalizedScopeQuery,
+        });
+      const episodicChains = this.filterQuarantinedEpisodicChains(rawEpisodicChains);
     const episodicEpisodeCount = countEpisodicChainEpisodes(episodicChains);
     telemetry.episodicChainCount = episodicChains.length;
     telemetry.episodicEpisodeCount = episodicEpisodeCount;
-    const snapshotWithheldSummary = cloneMemoryWithheldSummary(turnSnapshot?.withheldSummary);
-    let withheldSummary = mergeMemoryWithheldSummaries(
-      snapshotWithheldSummary,
-      profileAccess.withheldSummary,
-    );
+      const snapshotWithheldSummary = cloneMemoryWithheldSummary(turnSnapshot?.withheldSummary);
+      let withheldSummary = mergeMemoryWithheldSummaries(
+        snapshotWithheldSummary,
+        profileAccess.withheldSummary,
+        contactQuarantine.summary,
+        proactiveQuarantine.summary,
+      );
 
     const emptySelectedIds = new Set<string>();
     const fallbackEmotionalContinuity = canonicalContactId
@@ -959,17 +1112,20 @@ export class MemoryRetriever implements MemoryProvider {
 
     if (!contextText.trim()) {
       if (!snapshotWithheldSummary) {
-        withheldSummary = mergeMemoryWithheldSummaries(summarizeWithheldMemories(
-          contactEmotionalSource,
-          {
+        withheldSummary = mergeMemoryWithheldSummaries(
+          withheldSummary,
+          summarizeWithheldMemories(
+            contactEmotionalSource,
+            {
             trustLevel: effectiveTrust,
             channelVisibility,
             channelMeta,
             canonicalContactId,
             operatorApproval,
             roomVisibility,
-          },
-        ).summary, profileAccess.withheldSummary);
+            },
+          ).summary,
+        );
       }
       telemetry.reason = 'empty_input';
       applyWithheldSummaryTelemetry(telemetry, withheldSummary);
@@ -987,9 +1143,9 @@ export class MemoryRetriever implements MemoryProvider {
     }
 
     try {
-      let semanticMemories = (turnSnapshot?.semanticCandidates.map(cloneScoredMemory) ?? [])
-        .filter(memory => !isInternalMemoryArtifact(memory));
-      if (semanticMemories.length === 0 && !turnSnapshot) {
+        let semanticMemories = (turnSnapshot?.semanticCandidates.map(cloneScoredMemory) ?? [])
+          .filter(memory => !isInternalMemoryArtifact(memory));
+        if (semanticMemories.length === 0 && !turnSnapshot) {
         const embedding = await this.embeddingService.embed(contextText);
         const candidateLimit = Math.max(40, limit * 4);
         semanticMemories = await this.memoryStore.searchByEmbedding(
@@ -997,32 +1153,44 @@ export class MemoryRetriever implements MemoryProvider {
           this.retrievalThreshold,
           candidateLimit,
           normalizedScopeQuery,
-        );
-        semanticMemories = semanticMemories.filter(memory => !isInternalMemoryArtifact(memory));
-      }
-      if (!turnSnapshot) {
-        const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
+          );
+          semanticMemories = semanticMemories.filter(memory => !isInternalMemoryArtifact(memory));
+        }
+        const semanticQuarantine = this.filterQuarantinedMemories(semanticMemories);
+        semanticMemories = semanticQuarantine.memories;
+        if (!turnSnapshot) {
+          const recentLexicalCandidates = await collectRecentLexicalMemoryCandidates({
           memoryStore: this.memoryStore,
           contextText,
           existingIds: new Set(semanticMemories.map(memory => memory.id)),
           scopeQuery: normalizedScopeQuery,
-        });
-        semanticMemories = mergeScoredMemoryCandidates(semanticMemories, recentLexicalCandidates);
-      }
-      telemetry.semanticCandidateCount = semanticMemories.length;
+          });
+          semanticMemories = mergeScoredMemoryCandidates(semanticMemories, recentLexicalCandidates);
+          const mergedSemanticQuarantine = this.filterQuarantinedMemories(semanticMemories);
+          semanticMemories = mergedSemanticQuarantine.memories;
+          withheldSummary = mergeMemoryWithheldSummaries(
+            withheldSummary,
+            mergedSemanticQuarantine.summary,
+          );
+        }
+        withheldSummary = mergeMemoryWithheldSummaries(withheldSummary, semanticQuarantine.summary);
+        telemetry.semanticCandidateCount = semanticMemories.length;
 
       let memories = semanticMemories;
       if (semanticMemories.length === 0) {
-        const lexicalMemories = (turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
-          ?? await this.memoryStore.searchByText(
-            contextText,
+          const lexicalMemories = (turnSnapshot?.lexicalCandidates.map(cloneScoredMemory)
+            ?? await this.memoryStore.searchByText(
+              contextText,
             Math.max(40, limit * 4),
-            normalizedScopeQuery,
-          )).filter(memory => !isInternalMemoryArtifact(memory));
-        telemetry.lexicalCandidateCount = lexicalMemories.length;
-        if (lexicalMemories.length > 0) {
-          memories = lexicalMemories;
-          telemetry.retrievalSource = 'lexical_fallback';
+              normalizedScopeQuery,
+            )).filter(memory => !isInternalMemoryArtifact(memory));
+          const lexicalQuarantine = this.filterQuarantinedMemories(lexicalMemories);
+          const visibleLexicalMemories = lexicalQuarantine.memories;
+          withheldSummary = mergeMemoryWithheldSummaries(withheldSummary, lexicalQuarantine.summary);
+          telemetry.lexicalCandidateCount = visibleLexicalMemories.length;
+          if (visibleLexicalMemories.length > 0) {
+            memories = visibleLexicalMemories;
+            telemetry.retrievalSource = 'lexical_fallback';
           log.info('Retrieval: lexical fallback activated after semantic miss', {
             channelId,
             trustLevel: effectiveTrust,
@@ -1032,19 +1200,22 @@ export class MemoryRetriever implements MemoryProvider {
             queryLength: contextText.length,
           });
         } else {
-          if (!snapshotWithheldSummary) {
-            withheldSummary = mergeMemoryWithheldSummaries(summarizeWithheldMemories(
-              [...contactEmotionalSource, ...proactiveSource],
-              {
-                trustLevel: effectiveTrust,
-                channelVisibility,
-                channelMeta,
-                canonicalContactId,
-                operatorApproval,
-                roomVisibility,
-              },
-            ).summary, profileAccess.withheldSummary);
-          }
+            if (!snapshotWithheldSummary) {
+              withheldSummary = mergeMemoryWithheldSummaries(
+                withheldSummary,
+                summarizeWithheldMemories(
+                  [...contactEmotionalSource, ...proactiveSource],
+                  {
+                    trustLevel: effectiveTrust,
+                    channelVisibility,
+                    channelMeta,
+                    canonicalContactId,
+                    operatorApproval,
+                    roomVisibility,
+                  },
+                ).summary,
+              );
+            }
           telemetry.reason = 'no_candidates';
           applyWithheldSummaryTelemetry(telemetry, withheldSummary);
           if (episodicChains.length > 0) {
@@ -1091,17 +1262,20 @@ export class MemoryRetriever implements MemoryProvider {
       }
       telemetry.candidateCount = memories.length;
       if (!snapshotWithheldSummary) {
-        withheldSummary = mergeMemoryWithheldSummaries(summarizeWithheldMemories(
-          [...memories, ...contactEmotionalSource, ...proactiveSource],
-          {
-            trustLevel: effectiveTrust,
-            channelVisibility,
-            channelMeta,
-            canonicalContactId,
-            operatorApproval,
-            roomVisibility,
-          },
-        ).summary, profileAccess.withheldSummary);
+        withheldSummary = mergeMemoryWithheldSummaries(
+          withheldSummary,
+          summarizeWithheldMemories(
+            [...memories, ...contactEmotionalSource, ...proactiveSource],
+            {
+              trustLevel: effectiveTrust,
+              channelVisibility,
+              channelMeta,
+              canonicalContactId,
+              operatorApproval,
+              roomVisibility,
+            },
+          ).summary,
+        );
       }
       applyWithheldSummaryTelemetry(telemetry, withheldSummary);
 
@@ -1110,10 +1284,11 @@ export class MemoryRetriever implements MemoryProvider {
         telemetry.bottomSimilarity = memories[memories.length - 1].similarity;
       }
 
-      const diagnostics: RetrievalDecisionDiagnostics = {
-        candidateCount: memories.length,
-        policyAllowedCount: 0,
-        rejectedByRoomVisibility: 0,
+        const diagnostics: RetrievalDecisionDiagnostics = {
+          candidateCount: memories.length,
+          policyAllowedCount: 0,
+          rejectedBySessionQuarantine: telemetry.sessionQuarantineRejectedCount ?? 0,
+          rejectedByRoomVisibility: 0,
         rejectedByContactScope: 0,
         rejectedBySensitivity: 0,
         rejectedByPolicy: 0,
@@ -1197,8 +1372,9 @@ export class MemoryRetriever implements MemoryProvider {
           channelVisibility,
           candidateCount: diagnostics.candidateCount,
           rejectedByRoomVisibility: diagnostics.rejectedByRoomVisibility,
-          rejectedByContactScope: diagnostics.rejectedByContactScope,
-          rejectedBySensitivity: diagnostics.rejectedBySensitivity,
+            rejectedByContactScope: diagnostics.rejectedByContactScope,
+            rejectedBySessionQuarantine: diagnostics.rejectedBySessionQuarantine,
+            rejectedBySensitivity: diagnostics.rejectedBySensitivity,
           rejectedByPolicy: diagnostics.rejectedByPolicy,
           rejectedByPolicyReasonTags: diagnostics.rejectedByPolicyReasonTag,
         });
@@ -1520,10 +1696,12 @@ export class MemoryRetriever implements MemoryProvider {
     const channelVisibility = classifyChannel(channelId, channelMeta);
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
-    const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId);
-    const candidates = turnSnapshot?.proactiveCandidates.map(cloneMemory)
-      ?? await this.collectProactiveRecallCandidates(channelId, canonicalContactId);
-    if (candidates.length === 0) return '';
+      const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId);
+      const candidates = this.filterQuarantinedMemories(
+        turnSnapshot?.proactiveCandidates.map(cloneMemory)
+        ?? await this.collectProactiveRecallCandidates(channelId, canonicalContactId),
+      ).memories;
+      if (candidates.length === 0) return '';
 
     const weighted = candidates
       .filter((memory) => evaluateRetrievalAccessDecision(memory, {
@@ -1587,8 +1765,10 @@ export class MemoryRetriever implements MemoryProvider {
     }
 
     try {
-      return (await retrieveEpisodicChains(this.episodicStore, input))
-        .map(cloneEpisodicRetrievalChain);
+      return this.filterQuarantinedEpisodicChains(
+        (await retrieveEpisodicChains(this.episodicStore, input))
+          .map(cloneEpisodicRetrievalChain),
+      );
     } catch (error) {
       throw new RetrievalIntegrityError(
         'Episodic landmark retrieval failed',
@@ -1600,6 +1780,37 @@ export class MemoryRetriever implements MemoryProvider {
         error,
       );
     }
+  }
+
+  private filterQuarantinedEpisodicChains(
+    chains: readonly EpisodicRetrievalChain[],
+  ): EpisodicRetrievalChain[] {
+    if (!this.sessionQuarantineFilter || chains.length === 0) {
+      return chains.map(cloneEpisodicRetrievalChain);
+    }
+    return chains
+      .filter(chain => !this.isEpisodicChainQuarantined(chain))
+      .map(cloneEpisodicRetrievalChain);
+  }
+
+  private isEpisodicChainQuarantined(chain: EpisodicRetrievalChain): boolean {
+    for (const episode of chain.episodes) {
+      if (episode.spanRefs.some(ref => this.isRetiredSessionId(ref.sessionId))) return true;
+      if (episode.provenanceRefs.some(ref => (
+        ref.kind === 'session' && this.isRetiredSessionId(ref.refId)
+      ))) {
+        return true;
+      }
+    }
+    for (const arc of chain.arcs) {
+      if (arc.spanRefs.some(ref => this.isRetiredSessionId(ref.sessionId))) return true;
+      if (arc.provenanceRefs.some(ref => (
+        ref.kind === 'session' && this.isRetiredSessionId(ref.refId)
+      ))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private async resolveEmotionalSnapshot(contactId: string): Promise<EmotionalSnapshot | undefined> {
@@ -1783,9 +1994,10 @@ export class MemoryRetriever implements MemoryProvider {
       const chain: NonNullable<ScoredMemory['evolutionChain']> = [];
       for (const link of links) {
         if (selectedIds.has(link.targetMemoryId)) continue;
-        const target = await this.memoryStore.getById(link.targetMemoryId);
-        if (!target || target.deletedAt !== undefined) continue;
-        const accessDecision = evaluateRetrievalAccessDecision(target, {
+          const target = await this.memoryStore.getById(link.targetMemoryId);
+          if (!target || target.deletedAt !== undefined) continue;
+          if (this.isMemoryQuarantined(target)) continue;
+          const accessDecision = evaluateRetrievalAccessDecision(target, {
           trustLevel: options.trustLevel,
           channelVisibility: options.channelVisibility,
           channelMeta: options.channelMeta,
@@ -1867,8 +2079,10 @@ export class MemoryRetriever implements MemoryProvider {
     sourceOverride?: readonly PurrMemory[],
     roomVisibility?: RetrievalRoomVisibilityContext,
   ): Promise<PurrMemory[]> {
-    const source = (sourceOverride?.map(cloneMemory) ?? await this.collectContactEmotionalMemories(canonicalContactId))
-      .filter(memory => !isInternalMemoryArtifact(memory));
+      const source = this.filterQuarantinedMemories(
+        (sourceOverride?.map(cloneMemory) ?? await this.collectContactEmotionalMemories(canonicalContactId))
+          .filter(memory => !isInternalMemoryArtifact(memory)),
+      ).memories;
     if (source.length === 0) return [];
 
     return source

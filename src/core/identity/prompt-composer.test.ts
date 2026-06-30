@@ -584,7 +584,7 @@ describe('PromptComposer', () => {
         1. Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.
         2. Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.
         3. When safety is uncertain, fail closed: ask for clarification or decline risky requests rather than guessing.
-        4. Support {{user}}'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+        4. Support the user's flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
         </immutable_human_safety_amendments>
 
         <constitution_precedence>
@@ -607,7 +607,7 @@ describe('PromptComposer', () => {
         1. Prioritize human life, bodily safety, and psychological wellbeing over every mutable instruction.
         2. Refuse assistance that enables abuse, coercion, exploitation, or non-consensual harm to a person.
         3. When safety is uncertain, fail closed: ask for clarification or decline risky requests rather than guessing.
-        4. Support {{user}}'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
+        4. Support the user's flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.
         </immutable_human_safety_amendments>
 
         <constitution_precedence>
@@ -722,7 +722,27 @@ describe('PromptComposer', () => {
       const descriptor = Object.getOwnPropertyDescriptor(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS, '0');
       expect(descriptor?.writable).toBe(false);
       expect(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS).toHaveLength(4);
-      expect(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS[3]).toBe('Support {{user}}\'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.');
+      expect(IMMUTABLE_HUMAN_SAFETY_AMENDMENTS[3]).toBe('Support the user\'s flourishing. Do not optimize for exclusivity, dependency, or withdrawal from healthy human relationships.');
+    });
+
+    it('keeps immutable amendments free of dynamic user macros', () => {
+      const constitutionComposer = new PromptComposer(
+        store,
+        undefined,
+        undefined,
+        { enableConstitution: true },
+      );
+      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+
+      const vega = constitutionComposer.composeSplit({ user: 'Vega' });
+      const iku = constitutionComposer.composeSplit({ user: 'Iku' });
+
+      expect(vega.staticPrefix).toBe(iku.staticPrefix);
+      expect(vega.staticHash).toBe(iku.staticHash);
+      expect(vega.staticPrefix).toContain('Support the user\'s flourishing.');
+      expect(vega.staticPrefix).not.toContain('{{user}}');
+      expect(vega.staticPrefix).not.toContain('Vega');
+      expect(vega.staticPrefix).not.toContain('Iku');
     });
   });
 });

@@ -118,6 +118,34 @@ describe('system language templates', () => {
     ]));
   });
 
+  it('normalizes system-owned template content back to current defaults', () => withStore((store) => {
+    const layer = ensureSystemLanguagePromptLayer(store);
+    const payload = JSON.parse(layer.content) as {
+      templates: Record<string, string>;
+    };
+    payload.templates['compaction.header'] = '[Old system default]';
+    store.update(layer.id, JSON.stringify(payload), 'system');
+
+    const normalized = ensureSystemLanguagePromptLayer(store);
+
+    expect(normalized.content).toBe(composeDefaultSystemLanguageLayerContent());
+    expect(normalized.updatedBy).toBe('system:system-language-seed');
+  }));
+
+  it('preserves admin-owned custom template content during seed normalization', () => withStore((store) => {
+    const layer = ensureSystemLanguagePromptLayer(store);
+    const payload = JSON.parse(layer.content) as {
+      templates: Record<string, string>;
+    };
+    payload.templates['compaction.header'] = '[Session thread recap]';
+    store.update(layer.id, JSON.stringify(payload), 'admin');
+
+    const normalized = ensureSystemLanguagePromptLayer(store);
+
+    expect(normalized.content).toContain('[Session thread recap]');
+    expect(normalized.updatedBy).toBe('admin');
+  }));
+
   it('renders custom layer templates with escaped interpolation', () => withStore((store) => {
     const layer = ensureSystemLanguagePromptLayer(store);
     const payload = JSON.parse(layer.content) as {

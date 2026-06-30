@@ -150,9 +150,68 @@ const REQUIRED_PLACEHOLDERS: Partial<Record<SystemLanguageTemplateKey, readonly 
 };
 
 const TEMPLATE_KEY_SET = new Set<SystemLanguageTemplateKey>(SYSTEM_LANGUAGE_TEMPLATE_KEYS);
+const RETIRED_SYSTEM_LANGUAGE_TEMPLATE_KEYS = [
+  'substrate_health.header',
+  'substrate_health.overall.healthy',
+  'substrate_health.overall.degraded',
+  'substrate_health.overall.unavailable',
+  'substrate_health.subsystem_missing_probe',
+  'substrate_health.subsystem_degraded_suffix',
+  'substrate_health.gateway_degraded_suffix',
+] as const;
+const RETIRED_SYSTEM_LANGUAGE_TEMPLATE_KEY_SET = new Set<string>(RETIRED_SYSTEM_LANGUAGE_TEMPLATE_KEYS);
 
 export function cloneDefaultSystemLanguageTemplates(): SystemLanguageTemplateMap {
   return { ...DEFAULT_SYSTEM_LANGUAGE_TEMPLATES };
+}
+
+export interface RetiredSystemLanguageLayerNormalization {
+  content: string;
+  removedKeys: string[];
+}
+
+export function normalizeRetiredSystemLanguageLayerContent(
+  content: string,
+): RetiredSystemLanguageLayerNormalization | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content) as unknown;
+  } catch {
+    return null;
+  }
+  if (!isRecord(parsed) || parsed.version !== SYSTEM_LANGUAGE_SCHEMA_VERSION || !isRecord(parsed.templates)) {
+    return null;
+  }
+
+  const templates: Record<string, unknown> = { ...parsed.templates };
+  const removedKeys: string[] = [];
+  for (const key of Object.keys(templates)) {
+    if (TEMPLATE_KEY_SET.has(key as SystemLanguageTemplateKey)) {
+      continue;
+    }
+    if (!RETIRED_SYSTEM_LANGUAGE_TEMPLATE_KEY_SET.has(key)) {
+      return null;
+    }
+    delete templates[key];
+    removedKeys.push(key);
+  }
+
+  if (removedKeys.length === 0) {
+    return null;
+  }
+
+  const contentCandidate = JSON.stringify({
+    version: SYSTEM_LANGUAGE_SCHEMA_VERSION,
+    templates,
+  } satisfies SystemLanguageLayerFile, null, 2);
+  if (parseSystemLanguageLayerContent(contentCandidate).diagnostics.length > 0) {
+    return null;
+  }
+
+  return {
+    content: contentCandidate,
+    removedKeys,
+  };
 }
 
 function extractTemplateTokens(template: string): string[] {

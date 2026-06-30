@@ -31,21 +31,36 @@ import {
   isCanonicalCharacterFoundationLayer,
 } from './canonical-foundation.js';
 import {
+  normalizeRetiredSystemLanguageLayerContent,
   SYSTEM_LANGUAGE_LAYER_TYPE,
   validateSystemLanguageLayerContent,
 } from './system-language-contracts.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 const log = createComponentLogger('PromptStore');
 const HISTORY_SCAN_CHUNK_BYTES = 32 * 1024;
 const HISTORY_CORRUPTION_DETAIL_LIMIT = 5;
+const PROMPT_LAYER_STORE_MIGRATION_UPDATED_BY = 'system:migration:prompt-layer-store';
+const SYSTEM_LANGUAGE_RETIRED_TEMPLATE_KEYS_MIGRATION = '2026-06-30-system-language-retired-template-keys';
 
 interface HistoryCorruptionDetail {
   lineNumber: number;
   error: string;
   linePreview: string;
+}
+
+interface PromptLayerLoadMigration {
+  layerId: string;
+  layerName: string;
+  previousContent: string;
+  previousChecksum: string;
+  newContent: string;
+  newChecksum: string;
+  previousVersion: number;
+  reason: string;
 }
 
 function contentChecksum(content: string): string {
@@ -85,6 +100,60 @@ function validatePriority(priority: unknown): number {
     throw new Error('priority must be an integer');
   }
   return priority;
+}
+
+function migrateStoredPromptLayerBeforeValidation(
+  layer: unknown,
+  index: number,
+  timestamp: string,
+): { layer: unknown; migration?: PromptLayerLoadMigration } {
+  if (!isRecord(layer) || layer.type !== SYSTEM_LANGUAGE_LAYER_TYPE || typeof layer.content !== 'string') {
+    return { layer };
+  }
+
+  const normalization = normalizeRetiredSystemLanguageLayerContent(layer.content);
+  if (!normalization) {
+    return { layer };
+  }
+
+  const previousContent = layer.content;
+  const previousChecksum = typeof layer.checksum === 'string'
+    ? layer.checksum
+    : contentChecksum(previousContent);
+  const previousVersion = typeof layer.version === 'number'
+    && Number.isInteger(layer.version)
+    && layer.version >= 1
+    ? layer.version
+    : 1;
+  const layerId = typeof layer.id === 'string' && layer.id.trim().length > 0
+    ? layer.id.trim()
+    : `layers[${String(index)}]`;
+  const layerName = typeof layer.name === 'string' && layer.name.trim().length > 0
+    ? layer.name.trim()
+    : SYSTEM_LANGUAGE_LAYER_TYPE;
+  const newChecksum = contentChecksum(normalization.content);
+  const migratedLayer = {
+    ...layer,
+    content: normalization.content,
+    checksum: newChecksum,
+    version: previousVersion + 1,
+    updatedAt: timestamp,
+    updatedBy: PROMPT_LAYER_STORE_MIGRATION_UPDATED_BY,
+  };
+
+  return {
+    layer: migratedLayer,
+    migration: {
+      layerId,
+      layerName,
+      previousContent,
+      previousChecksum,
+      newContent: normalization.content,
+      newChecksum,
+      previousVersion,
+      reason: `${SYSTEM_LANGUAGE_RETIRED_TEMPLATE_KEYS_MIGRATION}: removed retired system_language template keys ${normalization.removedKeys.join(', ')}`,
+    },
+  };
 }
 
 function validateStoredPromptLayer(layer: unknown, index: number): PromptLayer {
@@ -232,7 +301,39 @@ export class PromptLayerStore {
       if (!Array.isArray(parsed)) {
         throw new Error('prompt layers file must contain a JSON array');
       }
-      this.layers = parsed.map((layer, index) => validateStoredPromptLayer(layer, index));
+      const timestamp = new Date().toISOString();
+      const migrations: PromptLayerLoadMigration[] = [];
+      const migrated = parsed.map((layer, index) => {
+        const result = migrateStoredPromptLayerBeforeValidation(layer, index, timestamp);
+        if (result.migration) {
+          migrations.push(result.migration);
+        }
+        return result.layer;
+      });
+      this.layers = migrated.map((layer, index) => validateStoredPromptLayer(layer, index));
+      if (migrations.length > 0) {
+        for (const migration of migrations) {
+          this.appendHistory({
+            layerId: migration.layerId,
+            layerName: migration.layerName,
+            previousContent: migration.previousContent,
+            previousChecksum: migration.previousChecksum,
+            newContent: migration.newContent,
+            newChecksum: migration.newChecksum,
+            updatedBy: PROMPT_LAYER_STORE_MIGRATION_UPDATED_BY,
+            reason: migration.reason,
+            timestamp,
+            version: migration.previousVersion,
+          });
+        }
+        this.save();
+        this.notifyMutation('prompt-layer-load-migration');
+        log.info('Migrated prompt layers during load', {
+          filePath: this.filePath,
+          migrationCount: migrations.length,
+          reasons: migrations.map(migration => migration.reason),
+        });
+      }
     } catch (err) {
       log.error('Failed to load prompt layers', { error: String(err) });
       if (!this.throwOnLoadError) {

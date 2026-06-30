@@ -1,10 +1,20 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { createHash } from 'node:crypto';
 import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { FOUNDATION_SECTION_DEFINITIONS } from './foundation-sections.js';
 import { composeSystemPromptTemplate } from './loader.js';
 import { PromptLayerStore } from './prompt-store.js';
+import {
+  composeDefaultSystemLanguageLayerContent,
+  ensureSystemLanguagePromptLayer,
+  SYSTEM_LANGUAGE_LAYER_IDENTIFIER,
+} from './system-language.js';
+
+function checksum(content: string): string {
+  return createHash('sha256').update(content).digest('hex').slice(0, 16);
+}
 
 describe('PromptLayerStore', () => {
   let tmpDir: string;
@@ -90,6 +100,76 @@ describe('PromptLayerStore', () => {
       });
 
       expect(layer.taskKind).toBe('heartbeat');
+    });
+  });
+
+  describe('load migrations', () => {
+    function writeSystemLanguageLayer(content: string, updatedBy = 'system'): void {
+      writeFileSync(filePath, JSON.stringify([{
+        id: 'system-language-layer',
+        type: 'system_language',
+        name: 'System Language Templates',
+        identifier: SYSTEM_LANGUAGE_LAYER_IDENTIFIER,
+        role: 'system',
+        promptOrder: 880,
+        content,
+        enabled: true,
+        priority: 880,
+        updatedAt: '2026-06-29T00:00:00.000Z',
+        updatedBy,
+        checksum: checksum(content),
+        version: 1,
+      }], null, 2));
+    }
+
+    it('loads and migrates persisted system_language layers with retired substrate health template keys', () => {
+      const payload = JSON.parse(composeDefaultSystemLanguageLayerContent()) as {
+        templates: Record<string, string>;
+      };
+      payload.templates['substrate_health.header'] = '[Substrate health]';
+      payload.templates['substrate_health.overall.healthy'] = 'healthy';
+      payload.templates['substrate_health.overall.degraded'] = 'degraded';
+      payload.templates['substrate_health.overall.unavailable'] = '{{unavailable_reason}}';
+      payload.templates['substrate_health.subsystem_missing_probe'] = 'missing';
+      payload.templates['substrate_health.subsystem_degraded_suffix'] = 'degraded';
+      payload.templates['substrate_health.gateway_degraded_suffix'] = 'gateway';
+      writeSystemLanguageLayer(JSON.stringify(payload, null, 2));
+
+      const migratedStore = new PromptLayerStore(filePath, historyPath);
+      const loaded = migratedStore.getById('system-language-layer');
+
+      expect(loaded?.content).toBe(composeDefaultSystemLanguageLayerContent());
+      expect(loaded?.content).not.toContain('substrate_health');
+      expect(loaded?.version).toBe(2);
+      expect(loaded?.updatedBy).toBe('system:migration:prompt-layer-store');
+      expect(readFileSync(filePath, 'utf-8')).not.toContain('substrate_health');
+      expect(readFileSync(historyPath, 'utf-8')).toContain('2026-06-30-system-language-retired-template-keys');
+    });
+
+    it('still rejects arbitrary unknown system_language template keys', () => {
+      const payload = JSON.parse(composeDefaultSystemLanguageLayerContent()) as {
+        templates: Record<string, string>;
+      };
+      payload.templates['debug.unowned_template'] = 'should fail';
+      writeSystemLanguageLayer(JSON.stringify(payload, null, 2));
+
+      expect(() => new PromptLayerStore(filePath, historyPath)).toThrow('unknown template key "debug.unowned_template"');
+    });
+
+    it('lets seed normalization rewrite migrated system-owned system_language layers', () => {
+      const payload = JSON.parse(composeDefaultSystemLanguageLayerContent()) as {
+        templates: Record<string, string>;
+      };
+      payload.templates['compaction.header'] = '[Previous summary from old system default]';
+      payload.templates['substrate_health.header'] = '[Substrate health]';
+      writeSystemLanguageLayer(JSON.stringify(payload, null, 2));
+
+      const migratedStore = new PromptLayerStore(filePath, historyPath);
+      const normalized = ensureSystemLanguagePromptLayer(migratedStore);
+
+      expect(normalized.content).toBe(composeDefaultSystemLanguageLayerContent());
+      expect(normalized.content).not.toContain('substrate_health');
+      expect(normalized.updatedBy).toBe('system:system-language-seed');
     });
   });
 

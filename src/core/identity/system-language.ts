@@ -56,6 +56,10 @@ function findSystemLanguageLayer(promptStore: PromptLayerStatePort): PromptLayer
   ));
 }
 
+function isSystemOwnedPromptLayer(layer: Pick<PromptLayer, 'updatedBy'>): boolean {
+  return layer.updatedBy === 'system' || layer.updatedBy.startsWith('system:');
+}
+
 export function ensureSystemLanguagePromptLayer(promptStore: PromptLayerStatePort): PromptLayer {
   const existing = findSystemLanguageLayer(promptStore);
   if (!existing) {
@@ -78,12 +82,16 @@ export function ensureSystemLanguagePromptLayer(promptStore: PromptLayerStatePor
   }
 
   validateSystemLanguageLayerContent(existing.content);
+  const defaultContent = composeDefaultSystemLanguageLayerContent();
+  const shouldNormalizeContent = isSystemOwnedPromptLayer(existing)
+    && existing.content !== defaultContent;
   const metadataPatch = {
     ...(existing.identifier !== SYSTEM_LANGUAGE_LAYER_IDENTIFIER ? { identifier: SYSTEM_LANGUAGE_LAYER_IDENTIFIER } : {}),
     ...(existing.role !== 'system' ? { role: 'system' as const } : {}),
     ...(existing.promptOrder !== SYSTEM_LANGUAGE_LAYER_PROMPT_ORDER ? { promptOrder: SYSTEM_LANGUAGE_LAYER_PROMPT_ORDER } : {}),
   };
   const patch = {
+    ...(shouldNormalizeContent ? { content: defaultContent } : {}),
     ...(existing.name !== SYSTEM_LANGUAGE_LAYER_NAME ? { name: SYSTEM_LANGUAGE_LAYER_NAME } : {}),
     ...(existing.priority !== SYSTEM_LANGUAGE_LAYER_PROMPT_ORDER ? { priority: SYSTEM_LANGUAGE_LAYER_PROMPT_ORDER } : {}),
     ...(Object.keys(metadataPatch).length > 0 ? { metadata: metadataPatch } : {}),

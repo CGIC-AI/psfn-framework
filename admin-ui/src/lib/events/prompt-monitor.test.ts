@@ -231,6 +231,108 @@ test('buildPromptMonitorTurns preserves newest-first order and summary metrics',
   });
 });
 
+test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dropping useful fields', () => {
+  const proxiedSchema = new Proxy({
+    type: 'object',
+    properties: {
+      query: { type: 'string' },
+    },
+    uncloneable: () => 'drop me',
+  }, {});
+  assert.throws(() => structuredClone(proxiedSchema), {
+    name: 'DataCloneError',
+  });
+
+  const turn = buildTurn({
+    turnId: 'turn-uncloneable',
+    channelId: 'api:monitor',
+    promptVersionPointer: 'prompt-uncloneable',
+    completedAt: 4_000,
+    ttftMs: 30,
+    promptDurationMs: 140,
+  });
+
+  turn.snapshot!.toolContext!.activeTools[0]!.inputSchema = proxiedSchema as Record<string, unknown>;
+  turn.promptLoom = {
+    source: 'turn_snapshot',
+    snapshotCapturedAt: 3_950,
+    historicalSnapshot: {
+      label: 'Persisted turn snapshot; not current prompt generator state.',
+      removedPromptLayerIds: [],
+      hits: [],
+    },
+    generatedPrompt: {
+      renderedStaticPrefix: 'Rendered static prefix',
+      renderedDynamicSuffix: 'Rendered dynamic suffix',
+      runtimeContext: 'Runtime context',
+      memoryContextBlock: 'Memory block',
+      scratchpadContext: 'Scratchpad block',
+      assembledPrompt: 'Assembled prompt',
+      contextMessages: [],
+      inputSections: [],
+      runtimeContextSections: [],
+      finalSystemSections: [],
+    },
+    providerPayload: {
+      finalSystemPrompt: 'Final system prompt',
+      providerMessages: [
+        { role: 'system', source: 'system_prompt', content: 'Final system prompt' },
+      ],
+      activeTools: [
+        {
+          name: 'contact_lookup',
+          description: 'Look up a contact.',
+          inputSchema: proxiedSchema as Record<string, unknown>,
+        },
+      ],
+    },
+    providerResult: {
+      response: null,
+      renderedChatOutput: 'world',
+    },
+    memoryCapture: {
+      input: {
+        currentTurnInput: 'hello',
+        renderedChatOutput: 'world',
+      },
+      output: {
+        extractedMemoryIds: [],
+      },
+    },
+    toolActivity: {
+      toolCalls: [
+        new Proxy({
+          id: 'call-1',
+          name: 'contact_lookup',
+          arguments: { query: 'Vega' },
+          uncloneable: () => 'drop me',
+        }, {}) as AdminSessionTurnData['record']['toolCalls'][number],
+      ],
+      toolResults: [],
+    },
+  };
+
+  const turns = buildPromptMonitorTurns([turn]);
+  assert.equal(turns[0]?.snapshot?.toolContext?.activeTools[0]?.inputSchema.type, 'object');
+  assert.deepEqual(
+    turns[0]?.snapshot?.toolContext?.activeTools[0]?.inputSchema.properties,
+    { query: { type: 'string' } },
+  );
+
+  const promptLoom = resolvePromptMonitorPromptLoom(turns[0]!);
+  assert.equal(promptLoom.providerPayload.finalSystemPrompt, 'Final system prompt');
+  assert.equal(promptLoom.providerPayload.providerMessages.length, 1);
+  assert.equal(promptLoom.providerPayload.activeTools[0]?.inputSchema.type, 'object');
+  assert.deepEqual(
+    promptLoom.providerPayload.activeTools[0]?.inputSchema.properties,
+    { query: { type: 'string' } },
+  );
+  assert.equal(
+    Object.hasOwn(promptLoom.providerPayload.activeTools[0]?.inputSchema ?? {}, 'uncloneable'),
+    false,
+  );
+});
+
 test('mergePromptMonitorEvent overlays live snapshots and stages onto the selected turn', () => {
   const seeded = buildPromptMonitorTurns([
     buildTurn({

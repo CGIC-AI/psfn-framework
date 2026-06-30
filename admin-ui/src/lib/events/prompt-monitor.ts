@@ -62,8 +62,67 @@ export interface PromptMonitorSummary {
 function cloneStage(stage: AdminTurnStageTelemetry): AdminTurnStageTelemetry {
   return {
     ...stage,
-    data: { ...stage.data },
+    data: cloneJsonObject(stage.data),
   };
+}
+
+function cloneJsonSafe<T>(value: T): T {
+  return cloneJsonSafeValue(value, new WeakSet<object>()) as T;
+}
+
+function cloneJsonObject<T extends Record<string, unknown>>(value: T): T {
+  return cloneJsonSafe(value);
+}
+
+function cloneJsonSafeValue(value: unknown, seen: WeakSet<object>): unknown {
+  if (
+    value === null
+    || typeof value === 'string'
+    || typeof value === 'number'
+    || typeof value === 'boolean'
+  ) {
+    return value;
+  }
+  if (typeof value === 'bigint') return value.toString();
+  if (value === undefined || typeof value === 'function' || typeof value === 'symbol') {
+    return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(item => {
+      const cloned = cloneJsonSafeValue(item, seen);
+      return cloned === undefined ? null : cloned;
+    });
+  }
+
+  if (typeof value !== 'object') return undefined;
+  if (seen.has(value)) return '[Circular]';
+  seen.add(value);
+
+  if (value instanceof Date) return value.toISOString();
+  if (value instanceof RegExp) return value.toString();
+
+  const tag = Object.prototype.toString.call(value);
+  if (tag === '[object Window]' || tag === '[object global]') {
+    return '[Unserializable global object]';
+  }
+
+  const output: Record<string, unknown> = {};
+  let entries: [string, unknown][];
+  try {
+    entries = Object.entries(value as Record<string, unknown>);
+  } catch {
+    return `[Unserializable ${tag}]`;
+  }
+
+  for (const [key, nested] of entries) {
+    const cloned = cloneJsonSafeValue(nested, seen);
+    if (cloned !== undefined) {
+      output[key] = cloned;
+    }
+  }
+  seen.delete(value);
+  return output;
 }
 
 function cloneProvenance(
@@ -96,7 +155,7 @@ function clonePromptSection(
 }
 
 function clonePromptLoom(loom: AdminPromptLoomData): AdminPromptLoomData {
-  return structuredClone(loom);
+  return cloneJsonSafe(loom);
 }
 
 function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
@@ -148,7 +207,7 @@ function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
         toolContext: {
           activeTools: snapshot.toolContext.activeTools.map(tool => ({
             ...tool,
-            inputSchema: structuredClone(tool.inputSchema),
+            inputSchema: cloneJsonObject(tool.inputSchema),
           })),
           ...(snapshot.toolContext.adaptiveSnapshot
             ? {
@@ -394,7 +453,7 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
       providerMessages: cloneProviderMessagesForLoom(promptContext?.providerObservability?.providerWireMessages),
       activeTools: snapshot?.toolContext?.activeTools.map(tool => ({
         ...tool,
-        inputSchema: structuredClone(tool.inputSchema),
+        inputSchema: cloneJsonObject(tool.inputSchema),
       })) ?? [],
     },
     providerResult: {
@@ -413,10 +472,10 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
       },
     },
     toolActivity: {
-      toolCalls: toolCalls.map(toolCall => structuredClone(toolCall)),
+      toolCalls: toolCalls.map(toolCall => cloneJsonSafe(toolCall)),
       toolResults: toolCalls
         .filter(hasToolResultPayload)
-        .map(toolCall => structuredClone(toolCall)),
+        .map(toolCall => cloneJsonSafe(toolCall)),
     },
   };
 }

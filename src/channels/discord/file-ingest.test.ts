@@ -345,6 +345,30 @@ describe('Discord document file ingest', () => {
     expect(decision.reasons.some(reason => reason.includes('archive_contains_risky_entry:scripts/install.sh'))).toBe(true);
   });
 
+  it('allows Discord image subtype disagreements when extension and bytes are still images', () => {
+    const decision = classifyDiscordAttachmentQuarantineRisk({
+      name: 'image.png',
+      contentType: 'image/webp',
+      declaredContentType: 'image/webp',
+      bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    });
+
+    expect(decision.quarantined).toBe(false);
+    expect(decision.sniffedContentType).toBe('image/png');
+    expect(decision.reasons).toEqual([]);
+  });
+
+  it('allows metadata-only image subtype disagreements before byte sniffing', () => {
+    const decision = classifyDiscordAttachmentQuarantineRisk({
+      name: 'image.png',
+      contentType: 'image/webp',
+      declaredContentType: 'image/webp',
+    });
+
+    expect(decision.quarantined).toBe(false);
+    expect(decision.reasons).toEqual([]);
+  });
+
   it('detects archives containing skill and plugin manifests', () => {
     const decision = classifyDiscordAttachmentQuarantineRisk({
       name: 'bundle.zip',

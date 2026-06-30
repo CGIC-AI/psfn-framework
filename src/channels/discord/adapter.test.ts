@@ -819,6 +819,67 @@ describe('DiscordAdapter DM routing', () => {
     }
   });
 
+  it('keeps image attachments visible when Discord declares a different image subtype', async () => {
+    const personalFilesDir = mkdtempSync(join(tmpdir(), 'psfn-discord-image-mismatch-'));
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      { headers: { 'content-type': 'image/png' } },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    try {
+      const eventBus = new EventBus();
+      const adapter = new DiscordAdapter(makeConfig(), eventBus, { personalFilesDir });
+      await adapter.init();
+
+      const channelId = 'dm-channel-image-type-mismatch';
+      const interactive = makeInteractiveTextChannel();
+      discordMock.channelsById.set(channelId, interactive.channel);
+
+      const handler = vi.fn(async () => {
+        return {
+          content: 'image received',
+          channelId,
+          metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+        };
+      });
+      adapter.onMessage(handler);
+
+      await (adapter as any).onDiscordMessage(
+        makeDiscordIncomingMessage(channelId, interactive.channel, {
+          id: 'dm-image-mismatch-1',
+          content: '',
+          attachments: [
+            {
+              id: 'att-image-mismatch',
+              name: 'image.png',
+              url: 'https://cdn.discordapp.com/attachments/a/b/image.png',
+              contentType: 'image/webp',
+              size: 251_293,
+            },
+          ],
+        }),
+      );
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(handler).toHaveBeenCalledTimes(1);
+      const message = handler.mock.calls[0][0] as SubstrateMessage;
+      expect(message.content).toBe('(image attachment)');
+      expect(message.content).not.toContain('quarantined');
+      expect(message.attachments).toEqual([
+        {
+          url: 'https://cdn.discordapp.com/attachments/a/b/image.png',
+          contentType: 'image/webp',
+          name: 'image.png',
+        },
+      ]);
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+      rmSync(personalFilesDir, { recursive: true, force: true });
+    }
+  });
+
   it('prefers canonical Discord attachment URLs over proxy URLs for image attachments', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);

@@ -130,6 +130,17 @@ const EXPECTED_EXTENSION_CONTENT_TYPES: Readonly<Partial<Record<string, string>>
   '.webp': 'image/webp',
   '.zip': 'application/zip',
 });
+const SAFE_RASTER_IMAGE_CONTENT_TYPES = new Set([
+  'image/avif',
+  'image/bmp',
+  'image/gif',
+  'image/heic',
+  'image/heif',
+  'image/jpeg',
+  'image/png',
+  'image/tiff',
+  'image/webp',
+]);
 const MAX_ARCHIVE_ENTRIES_TO_REPORT = 5;
 
 export type DiscordAttachmentQuarantineStatus = typeof QUARANTINE_STATUS;
@@ -350,6 +361,7 @@ function parsesAsJson(text: string): boolean {
 function areCompatibleContentTypes(left: string, right: string): boolean {
   if (left === right) return true;
   if (CODE_OR_SCRIPT_CONTENT_TYPES.has(left) || CODE_OR_SCRIPT_CONTENT_TYPES.has(right)) return false;
+  if (SAFE_RASTER_IMAGE_CONTENT_TYPES.has(left) && SAFE_RASTER_IMAGE_CONTENT_TYPES.has(right)) return true;
   if (left.startsWith('text/') && right.startsWith('text/')) return true;
   if (left === 'application/json' && right === 'text/plain') return true;
   if (left === 'text/plain' && right === 'application/json') return true;

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { buildSessionHistorySummaryText } from './manager-primitives.js';
+import {
+  buildRecentSessionSummaryFallbackText,
+  buildSessionSummarySourceBlock,
+} from './manager-primitives.js';
 import {
   buildToolObservationMetadata,
   normalizeToolObservation,
@@ -14,9 +17,9 @@ function entry(input: Partial<SessionEntry> & Pick<SessionEntry, 'id' | 'role' |
   };
 }
 
-describe('buildSessionHistorySummaryText', () => {
-  it('preserves speaker names in fallback multi-user summaries', () => {
-    const summary = buildSessionHistorySummaryText({
+describe('recent session summary primitives', () => {
+  it('builds a bounded paragraph fallback instead of clipped speaker lines', () => {
+    const summary = buildRecentSessionSummaryFallbackText({
       characterName: 'Cardellini',
       maxTokens: 200,
       entries: [
@@ -43,23 +46,23 @@ describe('buildSessionHistorySummaryText', () => {
     });
 
     expect(summary).toContain('[History summary]');
-    expect(summary).toContain('In the summarized span,');
-    expect(summary).toContain('Vega said: We need room-scoped memory boundaries');
-    expect(summary).toContain('Iku said: Speaker attribution must survive provider rendering');
-    expect(summary).toContain('Cardellini said: I will keep the summary compact');
+    expect(summary).toContain('Earlier in the summarized span,');
+    expect(summary).toContain('Vega noted "We need room-scoped memory boundaries');
+    expect(summary).toContain('Iku noted "Speaker attribution must survive provider rendering');
+    expect(summary).toContain('Cardellini noted "I will keep the summary compact');
+    expect(summary).not.toContain('Vega said:');
     expect(summary).not.toContain('\n- Vega:');
   });
 
-  it('compresses repeated tool failures into one bounded summary line', () => {
+  it('compresses repeated tool failures before summary input', () => {
     const failure = normalizeToolObservation({
       toolName: 'search_logs',
       content: 'kubectl logs timed out while reading provider payload output',
       isError: true,
     });
     const metadata = buildToolObservationMetadata(undefined, failure.metadata);
-    const summary = buildSessionHistorySummaryText({
+    const sourceBlock = buildSessionSummarySourceBlock({
       characterName: 'Cardellini',
-      maxTokens: 200,
       entries: [
         entry({
           id: 1,
@@ -88,8 +91,9 @@ describe('buildSessionHistorySummaryText', () => {
       ],
     });
 
-    expect(summary).toContain('Tool reported: search_logs failed 3 times.');
-    expect(summary).toContain('Most recent failure: [Tool result: search_logs (error)]');
-    expect(summary.match(/kubectl logs timed out/g)).toHaveLength(1);
+    expect(sourceBlock).toContain('[Compressed tool failures]');
+    expect(sourceBlock).toContain('search_logs failed 3 times; latest error: kubectl logs timed out');
+    expect(sourceBlock.match(/kubectl logs timed out/g)).toHaveLength(1);
+    expect(sourceBlock).not.toContain('[Tool result: search_logs (error)]');
   });
 });

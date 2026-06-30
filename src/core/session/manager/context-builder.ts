@@ -41,7 +41,7 @@ import type {
   ContextManifestMemorySeed,
 } from '../context-manifest.js';
 import {
-  buildSessionHistorySummaryText,
+  buildRecentSessionSummaryFallbackText,
   collectRecentEntriesWithinHistorySpan,
   DEFAULT_CONTINUITY_CONTEXT_LIMIT,
   applyTemporalSessionHistoryWindow,
@@ -58,7 +58,7 @@ import {
   countIntentionAppraisalArtifacts,
   entriesToMessages,
 } from './context-support.js';
-import { runAutoCompaction, shouldCompact } from './compaction-service.js';
+import { runAutoCompaction, shouldCompact, summarizeRecentSessionEntries } from './compaction-service.js';
 import { MASKED_TOOL_OBSERVATION_CONTENT } from '../tool-observation.js';
 import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-knowledge.js';
 import { buildPromptSectionTelemetryList } from '../../identity/prompt-sections.js';
@@ -70,6 +70,7 @@ const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
 const INTERNAL_HEARTBEAT_CHANNEL = 'internal:heartbeat';
 export const DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS = 3 * 60 * 60 * 1000;
 const ORIENTATION_SUMMARY_MAX_CHARS = 180;
+const MIN_HISTORY_SUMMARY_TOKEN_BUDGET = 32;
 
 export function isInternalHeartbeatChannel(channelId: string): boolean {
   return channelId === INTERNAL_HEARTBEAT_CHANNEL;
@@ -161,24 +162,6 @@ function compactPromptText(value: string, maxChars = ORIENTATION_SUMMARY_MAX_CHA
   return `${normalized.slice(0, maxChars - 3)}...`;
 }
 
-function summarizeConversationEntries(
-  entries: SessionEntry[],
-  characterName?: string,
-  maxItems = 2,
-): string {
-  const relevant = entries.filter(entry => entry.role === 'user' || entry.role === 'assistant');
-  if (relevant.length === 0) return '';
-
-  const recent = relevant.slice(-maxItems);
-  const roleNames = { charName: characterName };
-  return recent.map((entry) => {
-    const speaker = entry.role === 'assistant'
-      ? resolveRoleName('assistant', roleNames)
-      : entry.authorName ?? resolveRoleName('user', roleNames);
-    return `${speaker}: ${compactPromptText(entry.content)}`;
-  }).join(' / ');
-}
-
 function buildHistorySummaryMessage(
   summaryText: string,
   channelVisibility: ChannelVisibility,
@@ -241,6 +224,102 @@ export function assembleSessionHistoryForContext(params: {
   verbatimEntries: SessionEntry[];
   messages: ContextMessage[];
 } {
+  const directAssembly = assembleVerbatimSessionHistory(params);
+  if (directAssembly) return directAssembly;
+
+  const candidate = selectHistorySummaryCandidate(params);
+  if (candidate) {
+    const fallbackSummaryText = buildRecentSessionSummaryFallbackText({
+      entries: candidate.summaryEntries,
+      characterName: params.characterName,
+      maxTokens: candidate.remainingBudget,
+    });
+    const fittedSummaryText = fitHistorySummaryTextToBudget({
+      summaryText: fallbackSummaryText,
+      candidate,
+      channelVisibility: params.channelVisibility,
+      renderGroupUserAttribution: params.renderGroupUserAttribution,
+      tokenBudget: params.tokenBudget,
+    });
+    if (fittedSummaryText) {
+      return buildHistoryAssemblyFromSummary({
+        summaryText: fittedSummaryText,
+        candidate,
+        channelVisibility: params.channelVisibility,
+        renderGroupUserAttribution: params.renderGroupUserAttribution,
+      });
+    }
+  }
+
+  return assembleTrimmedSessionHistory(params);
+}
+
+export async function assembleSessionHistoryForContextWithLlmSummary(params: {
+  entries: SessionEntry[];
+  channelVisibility: ChannelVisibility;
+  renderGroupUserAttribution: boolean;
+  tokenBudget: number;
+  characterName?: string;
+  channelId: string;
+  llmProvider?: LLMProviderPort;
+  promptRegistry: PromptRegistryStatePort | null;
+}): Promise<{
+  summaryText: string;
+  summarizedEntryCount: number;
+  verbatimEntries: SessionEntry[];
+  messages: ContextMessage[];
+}> {
+  const directAssembly = assembleVerbatimSessionHistory(params);
+  if (directAssembly) return directAssembly;
+
+  const candidate = selectHistorySummaryCandidate(params);
+  if (candidate) {
+    const generatedSummaryText = await summarizeRecentSessionEntries({
+      channelId: params.channelId,
+      entries: candidate.summaryEntries,
+      characterName: params.characterName,
+      llmProvider: params.llmProvider,
+      promptRegistry: params.promptRegistry,
+      maxTokens: candidate.remainingBudget,
+      purpose: 'history_budget',
+    });
+    const fittedGeneratedSummaryText = fitHistorySummaryTextToBudget({
+      summaryText: generatedSummaryText,
+      candidate,
+      channelVisibility: params.channelVisibility,
+      renderGroupUserAttribution: params.renderGroupUserAttribution,
+      tokenBudget: params.tokenBudget,
+    });
+    if (fittedGeneratedSummaryText) {
+      return buildHistoryAssemblyFromSummary({
+        summaryText: fittedGeneratedSummaryText,
+        candidate,
+        channelVisibility: params.channelVisibility,
+        renderGroupUserAttribution: params.renderGroupUserAttribution,
+      });
+    }
+  }
+
+  return assembleTrimmedSessionHistory(params);
+}
+
+interface HistorySummaryCandidate {
+  summaryEntries: SessionEntry[];
+  verbatimEntries: SessionEntry[];
+  remainingBudget: number;
+}
+
+function assembleVerbatimSessionHistory(params: {
+  entries: SessionEntry[];
+  channelVisibility: ChannelVisibility;
+  renderGroupUserAttribution: boolean;
+  tokenBudget: number;
+}): {
+  summaryText: string;
+  summarizedEntryCount: number;
+  verbatimEntries: SessionEntry[];
+  messages: ContextMessage[];
+} | null {
   const allMessages = entriesToMessages(
     params.entries,
     params.channelVisibility,
@@ -257,6 +336,15 @@ export function assembleSessionHistoryForContext(params: {
     };
   }
 
+  return null;
+}
+
+function selectHistorySummaryCandidate(params: {
+  entries: SessionEntry[];
+  channelVisibility: ChannelVisibility;
+  renderGroupUserAttribution: boolean;
+  tokenBudget: number;
+}): HistorySummaryCandidate | null {
   const maxSplitIndex = params.entries.length - SESSION_HISTORY_MIN_MESSAGES;
   for (let splitIndex = 1; splitIndex <= maxSplitIndex; splitIndex += 1) {
     const initialVerbatimEntries = params.entries.slice(splitIndex);
@@ -285,36 +373,109 @@ export function assembleSessionHistoryForContext(params: {
     );
     const tailTokenCount = countMessageTokens(tailMessages);
     const remainingBudget = params.tokenBudget - tailTokenCount;
-    if (remainingBudget <= 0) {
+    if (remainingBudget < MIN_HISTORY_SUMMARY_TOKEN_BUDGET) {
       continue;
     }
 
-    const summaryText = buildSessionHistorySummaryText({
-      entries: summaryEntries,
-      characterName: params.characterName,
-      maxTokens: remainingBudget,
-    });
-    if (!summaryText) {
-      continue;
-    }
-
-    const messages = buildSessionHistoryMessages(
+    return {
+      summaryEntries,
       verbatimEntries,
-      params.channelVisibility,
-      params.renderGroupUserAttribution,
-      summaryText,
-      summaryEntries.length,
-    );
-    if (countMessageTokens(messages) <= params.tokenBudget) {
-      return {
-        summaryText,
-        summarizedEntryCount: summaryEntries.length,
-        verbatimEntries,
-        messages,
-      };
-    }
+      remainingBudget,
+    };
   }
 
+  return null;
+}
+
+function stripHistorySummaryHeader(summaryText: string): string {
+  return summaryText
+    .replace(/^\[History summary\]\s*/iu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function withHistorySummaryHeader(summaryText: string): string {
+  const normalized = stripHistorySummaryHeader(summaryText);
+  return normalized ? `[History summary]\n${normalized}` : '';
+}
+
+function buildOrientationFallbackSummary(
+  entries: readonly SessionEntry[],
+  characterName?: string,
+): string {
+  return stripHistorySummaryHeader(buildRecentSessionSummaryFallbackText({
+    entries,
+    characterName,
+    maxTokens: 96,
+  }));
+}
+
+function fitHistorySummaryTextToBudget(params: {
+  summaryText: string;
+  candidate: HistorySummaryCandidate;
+  channelVisibility: ChannelVisibility;
+  renderGroupUserAttribution: boolean;
+  tokenBudget: number;
+}): string {
+  const normalized = stripHistorySummaryHeader(params.summaryText);
+  if (!normalized) return '';
+
+  let candidateText = withHistorySummaryHeader(normalized);
+  for (;;) {
+    const messages = buildSessionHistoryMessages(
+      params.candidate.verbatimEntries,
+      params.channelVisibility,
+      params.renderGroupUserAttribution,
+      candidateText,
+      params.candidate.summaryEntries.length,
+    );
+    if (countMessageTokens(messages) <= params.tokenBudget) {
+      return candidateText;
+    }
+
+    const body = stripHistorySummaryHeader(candidateText);
+    if (body.length < 100) return '';
+    candidateText = withHistorySummaryHeader(`${body.slice(0, Math.floor(body.length * 0.8)).trimEnd()}...`);
+  }
+}
+
+function buildHistoryAssemblyFromSummary(params: {
+  summaryText: string;
+  candidate: HistorySummaryCandidate;
+  channelVisibility: ChannelVisibility;
+  renderGroupUserAttribution: boolean;
+}): {
+  summaryText: string;
+  summarizedEntryCount: number;
+  verbatimEntries: SessionEntry[];
+  messages: ContextMessage[];
+} {
+  const messages = buildSessionHistoryMessages(
+    params.candidate.verbatimEntries,
+    params.channelVisibility,
+    params.renderGroupUserAttribution,
+    params.summaryText,
+    params.candidate.summaryEntries.length,
+  );
+  return {
+    summaryText: params.summaryText,
+    summarizedEntryCount: params.candidate.summaryEntries.length,
+    verbatimEntries: params.candidate.verbatimEntries,
+    messages,
+  };
+}
+
+function assembleTrimmedSessionHistory(params: {
+  entries: SessionEntry[];
+  channelVisibility: ChannelVisibility;
+  renderGroupUserAttribution: boolean;
+  tokenBudget: number;
+}): {
+  summaryText: string;
+  summarizedEntryCount: number;
+  verbatimEntries: SessionEntry[];
+  messages: ContextMessage[];
+} {
   const fallbackEntries = trimRecentEntriesToTokenBudget(params.entries, params.tokenBudget);
   return {
     summaryText: '',
@@ -468,6 +629,8 @@ export function buildOrientationNoteTelemetry(params: {
   continuityEntries: SessionEntry[];
   focusKnowledgeTexts: string[];
   characterName?: string;
+  sessionSummary?: string;
+  continuitySummary?: string;
   nowMs?: number;
   idleThresholdMs?: number;
 }): OrientationNoteTelemetry {
@@ -535,8 +698,12 @@ export function buildOrientationNoteTelemetry(params: {
     };
   }
 
-  const sessionSummary = summarizeConversationEntries(priorEntries, params.characterName);
-  const continuitySummary = summarizeConversationEntries(params.continuityEntries, params.characterName);
+  const sessionSummary = params.sessionSummary !== undefined
+    ? params.sessionSummary.trim()
+    : buildOrientationFallbackSummary(priorEntries, params.characterName);
+  const continuitySummary = params.continuitySummary !== undefined
+    ? params.continuitySummary.trim()
+    : buildOrientationFallbackSummary(params.continuityEntries, params.characterName);
   let lastUserMessage: string | undefined;
   for (let index = relevantRecentEntries.length - 1; index >= 0; index -= 1) {
     const entry = relevantRecentEntries[index];
@@ -611,6 +778,7 @@ interface BuildSessionContextParams {
   memoryManifestSeed?: ContextManifestMemorySeed;
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
   compactionMode?: 'deferred' | 'foreground';
+  recentSummaryMode?: 'deferred' | 'foreground';
   pendingCompaction?: boolean;
 }
 
@@ -709,6 +877,11 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     entriesToMessages(recent, channelVisibility, false, false, renderGroupUserAttribution),
   );
   const compactionMode = params.compactionMode ?? 'deferred';
+  const recentSummaryMode = params.recentSummaryMode
+    ?? (params.llmProvider ? 'foreground' : 'deferred');
+  const foregroundRecentSummaryProvider = recentSummaryMode === 'foreground'
+    ? params.llmProvider
+    : undefined;
   const compactionCheck = shouldCompact({
     recent,
     channelVisibility,
@@ -788,12 +961,15 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   }
 
   if (!params.turnSnapshot) {
-    const assembledHistory = assembleSessionHistoryForContext({
+    const assembledHistory = await assembleSessionHistoryForContextWithLlmSummary({
       entries: recent,
       channelVisibility,
       renderGroupUserAttribution,
       tokenBudget: historyBudget.tokenBudget,
       characterName: params.characterName,
+      channelId: params.channelId,
+      llmProvider: foregroundRecentSummaryProvider,
+      promptRegistry: params.promptRegistry,
     });
     recent = assembledHistory.verbatimEntries;
     historySummaryText = assembledHistory.summaryText;
@@ -822,14 +998,53 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     config: params.config,
     crossChannelContinuity: params.crossChannelContinuity,
   });
-  const computedOrientationTelemetry = buildOrientationNoteTelemetry({
+  let computedOrientationTelemetry = buildOrientationNoteTelemetry({
     channelId: params.channelId,
     recentActivityEntries,
     continuityEntries: crossChannel,
     focusKnowledgeTexts,
     characterName: params.characterName,
   });
-  const orientationTelemetry = params.turnSnapshot && !isInternalReflectionChannel(params.channelId)
+  const shouldUseSnapshotOrientation = params.turnSnapshot && !isInternalReflectionChannel(params.channelId);
+  if (!shouldUseSnapshotOrientation && computedOrientationTelemetry.fired) {
+    const latestWakeReturnSummary = params.wakeReturnArtifacts.at(0)?.summary.trim();
+    const relevantRecentEntries = recentActivityEntries.filter(
+      entry => entry.role === 'user' || entry.role === 'assistant',
+    );
+    const priorRecentEntries = relevantRecentEntries.slice(0, -1);
+    const [sessionSummary, continuitySummary] = await Promise.all([
+      latestWakeReturnSummary
+        ? Promise.resolve(latestWakeReturnSummary)
+        : summarizeRecentSessionEntries({
+          channelId: params.channelId,
+          entries: priorRecentEntries,
+          characterName: params.characterName,
+          llmProvider: foregroundRecentSummaryProvider,
+          promptRegistry: params.promptRegistry,
+          maxTokens: 160,
+          purpose: 'wake_session',
+        }),
+      summarizeRecentSessionEntries({
+        channelId: params.channelId,
+        entries: crossChannel,
+        characterName: params.characterName,
+        llmProvider: foregroundRecentSummaryProvider,
+        promptRegistry: params.promptRegistry,
+        maxTokens: 160,
+        purpose: 'wake_continuity',
+      }),
+    ]);
+    computedOrientationTelemetry = buildOrientationNoteTelemetry({
+      channelId: params.channelId,
+      recentActivityEntries,
+      continuityEntries: crossChannel,
+      focusKnowledgeTexts,
+      characterName: params.characterName,
+      sessionSummary,
+      continuitySummary,
+    });
+  }
+  const orientationTelemetry = shouldUseSnapshotOrientation
     ? (params.turnSnapshot.orientation ?? computedOrientationTelemetry)
     : computedOrientationTelemetry;
 

@@ -2233,7 +2233,17 @@ describe('SessionManager', () => {
 
     expect(ctx.messages.length).toBeLessThan(20);
     expect(ctx.systemPrompt).not.toContain('Previous conversation summary');
-    expect(mockLLM.complete).not.toHaveBeenCalled();
+    expect(mockLLM.complete).toHaveBeenCalledTimes(1);
+    expect(mockLLM.complete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        correlation: expect.objectContaining({
+          callType: 'summary',
+          purpose: 'session.recent.summary',
+          originStage: 'session.recent.summary.history_budget',
+        }),
+      }),
+      'background',
+    );
     const sessionManifest = ctx.manifest?.session;
     expect(sessionManifest).toBeDefined();
     expect(sessionManifest!.sourceEntryCount).toBe(20);

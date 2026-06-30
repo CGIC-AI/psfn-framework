@@ -16,12 +16,14 @@ const log = createComponentLogger('PromptRegistry');
 
 export const EXTRACTION_PROMPT_KEY = 'memory.extraction' as const;
 export const COMPACTION_SUMMARY_PROMPT_KEY = 'session.compaction.summary' as const;
+export const RECENT_SESSION_SUMMARY_PROMPT_KEY = 'session.recent.summary' as const;
 export const PROFILE_SYNTHESIS_PROMPT_KEY = 'memory.profile.synthesis' as const;
 export const SLEEPTIME_ORIENTATION_PROMPT_KEY = 'memory.sleeptime.orientation' as const;
 
 export type PromptRegistryKey =
   | typeof EXTRACTION_PROMPT_KEY
   | typeof COMPACTION_SUMMARY_PROMPT_KEY
+  | typeof RECENT_SESSION_SUMMARY_PROMPT_KEY
   | typeof PROFILE_SYNTHESIS_PROMPT_KEY
   | typeof SLEEPTIME_ORIENTATION_PROMPT_KEY;
 
@@ -110,6 +112,20 @@ If there are no new facts worth extracting, respond with an empty response block
     description: 'Session compaction system prompt used when conversation context exceeds budget.',
     consumers: ['src/core/session/manager.ts'],
     text: 'Summarize this conversation excerpt concisely, preserving key facts and context.',
+  },
+  {
+    key: RECENT_SESSION_SUMMARY_PROMPT_KEY,
+    description:
+      'Recent session/wake summary prompt used for budget history summaries and idle orientation context.',
+    consumers: [
+      'src/core/session/manager/context-builder.ts',
+      'src/core/session/manager/compaction-service.ts',
+    ],
+    text: `Summarize the supplied recent conversation span in one compact prose paragraph for model context. Preserve open tasks, decisions, emotional or relational continuity, and named speakers when attribution matters.
+
+Do not write a transcript, bullet list, or speaker-by-speaker clipped lines. Do not repeat tool results. Omit tool failures unless they changed the conversation; if they matter, mention them once as a brief status.
+
+Return summary text only.`,
   },
   {
     key: PROFILE_SYNTHESIS_PROMPT_KEY,

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { SessionEntry } from './types.js';
+import { buildSessionSummarySourceBlock } from './manager-primitives.js';
 
 const SOURCE_BLOCK_SHA256_TAG_PATTERN = /<source_block_sha256\s+first_message_id="(\d+)"\s+last_message_id="(\d+)"\s+message_count="(\d+)">([0-9a-f]{64})<\/source_block_sha256>/i;
 
@@ -11,9 +12,7 @@ export interface CompactionSourceHashMetadata {
 }
 
 export function buildCompactionSourceBlock(entries: SessionEntry[]): string {
-  return entries
-    .map(entry => `${entry.authorName ?? entry.role}: ${entry.content}`)
-    .join('\n');
+  return buildSessionSummarySourceBlock({ entries });
 }
 
 export function computeCompactionSourceSha256(sourceBlock: string): string {

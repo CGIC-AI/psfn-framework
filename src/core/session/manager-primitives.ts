@@ -113,6 +113,10 @@ const MAX_PRESERVED_EMOTIONAL_ENTRIES = 6;
 const MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS = 240;
 const MAX_HISTORY_SUMMARY_ITEMS = 6;
 const MAX_HISTORY_SUMMARY_ITEM_CHARS = 160;
+const DEFAULT_SUMMARY_SOURCE_ENTRY_CHARS = 700;
+const MAX_SUMMARY_SOURCE_TOOL_FAILURE_CHARS = 220;
+const MAX_FALLBACK_RECENT_SUMMARY_ITEMS = 4;
+const MAX_FALLBACK_RECENT_SUMMARY_ITEM_CHARS = 140;
 
 export interface SessionMessageRecordOptions {
   trustLevel?: TrustLevel;
@@ -460,6 +464,12 @@ interface ToolFailureSummary {
   content: string;
 }
 
+interface ToolFailureAggregate {
+  toolName: string;
+  count: number;
+  latestContent: string;
+}
+
 function resolveToolHistorySummary(entry: SessionEntry): ToolFailureSummary | null {
   const metadata = parseToolObservationMetadata(entry.metadata);
   if (!metadata?.isError) return null;
@@ -467,6 +477,174 @@ function resolveToolHistorySummary(entry: SessionEntry): ToolFailureSummary | nu
     metadata,
     content: formatToolObservationForContext(entry.content, metadata),
   };
+}
+
+function normalizeToolFailureSummaryContent(content: string): string {
+  return content
+    .replace(/\[Tool result:[^\]]+\]\s*/giu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function aggregateToolFailure(
+  aggregates: Map<string, ToolFailureAggregate>,
+  failure: ToolFailureSummary,
+): void {
+  const toolName = failure.metadata.toolName || 'unknown_tool';
+  const latestContent = clipHistorySummaryContent(
+    normalizeToolFailureSummaryContent(failure.content) || 'failed without a readable error payload',
+    MAX_SUMMARY_SOURCE_TOOL_FAILURE_CHARS,
+  );
+  const existing = aggregates.get(toolName);
+  if (existing) {
+    existing.count += 1;
+    existing.latestContent = latestContent;
+    return;
+  }
+  aggregates.set(toolName, {
+    toolName,
+    count: 1,
+    latestContent,
+  });
+}
+
+function formatToolFailureAggregate(aggregate: ToolFailureAggregate): string {
+  const countText = aggregate.count === 1 ? '1 time' : `${aggregate.count} times`;
+  return `${aggregate.toolName} failed ${countText}; latest error: ${aggregate.latestContent}`;
+}
+
+function resolveSummarySourceSpeaker(entry: SessionEntry, characterName?: string): string {
+  if (entry.role === 'tool') {
+    const metadata = parseToolObservationMetadata(entry.metadata);
+    return `Tool ${metadata?.toolName || entry.authorName || 'result'}`;
+  }
+  return resolveHistorySummarySpeaker(entry, characterName);
+}
+
+export function buildSessionSummarySourceBlock(params: {
+  entries: readonly SessionEntry[];
+  characterName?: string;
+  maxEntryChars?: number;
+  omitToolFailures?: boolean;
+}): string {
+  const maxEntryChars = Math.max(80, Math.floor(params.maxEntryChars ?? DEFAULT_SUMMARY_SOURCE_ENTRY_CHARS));
+  const transcriptLines: string[] = [];
+  const toolFailures = new Map<string, ToolFailureAggregate>();
+
+  for (const entry of params.entries) {
+    if (isNonConversationalSessionEntry(entry)) continue;
+
+    if (entry.role === 'tool') {
+      const failureSummary = resolveToolHistorySummary(entry);
+      if (failureSummary) {
+        if (!params.omitToolFailures) {
+          aggregateToolFailure(toolFailures, failureSummary);
+        }
+        continue;
+      }
+    }
+
+    const normalizedContent = normalizeHistorySummaryContent(entry.content);
+    if (!normalizedContent) continue;
+    const speaker = resolveSummarySourceSpeaker(entry, params.characterName);
+    transcriptLines.push(`${speaker}: ${clipHistorySummaryContent(normalizedContent, maxEntryChars)}`);
+  }
+
+  const sections: string[] = [];
+  if (transcriptLines.length > 0) {
+    sections.push(['[Conversation excerpt]', ...transcriptLines].join('\n'));
+  }
+
+  if (toolFailures.size > 0) {
+    sections.push([
+      '[Compressed tool failures]',
+      ...[...toolFailures.values()].map(formatToolFailureAggregate),
+    ].join('\n'));
+  }
+
+  return sections.join('\n\n').trim();
+}
+
+interface FallbackRecentSummaryLine {
+  speaker: string;
+  content: string;
+}
+
+function buildFallbackRecentSummaryLines(
+  entries: readonly SessionEntry[],
+  characterName?: string,
+): FallbackRecentSummaryLine[] {
+  const lines: FallbackRecentSummaryLine[] = [];
+  for (const entry of entries) {
+    if (entry.role !== 'user' && entry.role !== 'assistant') continue;
+    if (isNonConversationalSessionEntry(entry)) continue;
+    const normalizedContent = normalizeHistorySummaryContent(entry.content);
+    if (!normalizedContent) continue;
+    lines.push({
+      speaker: resolveHistorySummarySpeaker(entry, characterName),
+      content: normalizedContent,
+    });
+  }
+  return lines.slice(-MAX_FALLBACK_RECENT_SUMMARY_ITEMS);
+}
+
+function formatFallbackRecentSummaryClause(line: FallbackRecentSummaryLine, maxContentChars: number): string {
+  const content = clipHistorySummaryContent(
+    line.content,
+    maxContentChars,
+  );
+  return `${line.speaker} noted "${content}"`;
+}
+
+function buildFallbackRecentSummaryParagraph(
+  lines: readonly FallbackRecentSummaryLine[],
+  maxContentChars: number,
+): string | null {
+  if (lines.length === 0) return null;
+  const clauses = lines.map(line => formatFallbackRecentSummaryClause(line, maxContentChars));
+  return `Earlier in the summarized span, ${joinHistorySummaryClauses(clauses)}.`;
+}
+
+export function buildRecentSessionSummaryFallbackText(params: {
+  entries: readonly SessionEntry[];
+  characterName?: string;
+  maxTokens: number;
+}): string {
+  if (params.entries.length === 0 || params.maxTokens <= 0) {
+    return '';
+  }
+
+  const headerLines = ['[History summary]'];
+  if (countTokens(headerLines.join('\n')) > params.maxTokens) {
+    return '';
+  }
+
+  const lines = buildFallbackRecentSummaryLines(params.entries, params.characterName);
+  for (let lineCount = lines.length; lineCount > 0; lineCount -= 1) {
+    const selectedLines = lines.slice(-lineCount);
+    for (
+      let maxContentChars = MAX_FALLBACK_RECENT_SUMMARY_ITEM_CHARS;
+      maxContentChars >= 32;
+      maxContentChars -= 24
+    ) {
+      const paragraph = buildFallbackRecentSummaryParagraph(selectedLines, maxContentChars);
+      if (!paragraph) continue;
+      if (countTokens([...headerLines, paragraph].join('\n')) <= params.maxTokens) {
+        return [...headerLines, paragraph].join('\n');
+      }
+    }
+  }
+
+  const failureBlock = buildSessionSummarySourceBlock({
+    entries: params.entries,
+    characterName: params.characterName,
+  }).split('\n').filter(line => line.includes('failed ')).slice(-2);
+  if (failureBlock.length === 0) return '';
+  const compressedFailureSummary = [
+    ...headerLines,
+    `Earlier tool calls had compressed failures: ${failureBlock.join(' / ')}.`,
+  ].join('\n');
+  return countTokens(compressedFailureSummary) <= params.maxTokens ? compressedFailureSummary : '';
 }
 
 function formatRepeatedToolFailureSummary(failures: readonly ToolFailureSummary[]): HistorySummaryLine {

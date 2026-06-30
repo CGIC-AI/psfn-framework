@@ -6,6 +6,7 @@ import {
   PromptRegistryStore,
   EXTRACTION_PROMPT_KEY,
   COMPACTION_SUMMARY_PROMPT_KEY,
+  RECENT_SESSION_SUMMARY_PROMPT_KEY,
   PROFILE_SYNTHESIS_PROMPT_KEY,
   SLEEPTIME_ORIENTATION_PROMPT_KEY,
   getDefaultPromptText,
@@ -69,6 +70,7 @@ describe('PromptRegistryStore', () => {
       PROFILE_SYNTHESIS_PROMPT_KEY,
       SLEEPTIME_ORIENTATION_PROMPT_KEY,
       COMPACTION_SUMMARY_PROMPT_KEY,
+      RECENT_SESSION_SUMMARY_PROMPT_KEY,
     ]);
     expect(seeded.getPrompt(EXTRACTION_PROMPT_KEY)).toBe(getDefaultPromptText(EXTRACTION_PROMPT_KEY));
   });
@@ -108,6 +110,15 @@ describe('PromptRegistryStore', () => {
     expect(prompt).toContain('Do not override the character card');
     expect(prompt).toContain('"orient"');
     expect(prompt).not.toMatch(/you are an? .*assistant/i);
+  });
+
+  it('seeds the recent session summary prompt for prose summaries without tool-result dumps', () => {
+    const prompt = getDefaultPromptText(RECENT_SESSION_SUMMARY_PROMPT_KEY);
+
+    expect(prompt).toContain('one compact prose paragraph');
+    expect(prompt).toContain('Do not write a transcript');
+    expect(prompt).toContain('Do not repeat tool results');
+    expect(prompt).not.toBe(getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY));
   });
 
   it('updates prompt text and writes history entry', () => {

@@ -255,7 +255,12 @@ describe('image tools', () => {
       ['agent.charge', 'externalModelConsult'],
     ]);
     expect(result.details.mediaResult?.requestId).toBe('req-media-1');
+    expect(result.details.mediaResult?.images[0]?.url).toBe('https://images.example.test/media-selfie.png');
     expect(result.details.visionReview?.summary).toContain('consistent');
+    expect(resultText(result)).toContain('"imageCount": 1');
+    expect(resultText(result)).toContain('chat attachment');
+    expect(resultText(result)).not.toContain('https://images.example.test/media-selfie.png');
+    expect(resultText(result)).not.toContain('/tmp/media-selfie.png');
   });
 
   it('analyzes images through the unified media tool', async () => {
@@ -433,8 +438,12 @@ describe('image tools', () => {
       mode: 'create',
     });
     expect(result.details.mediaResult?.requestId).toBe('req-vision-1');
+    expect(result.details.mediaResult?.images[0]?.url).toBe('https://images.example.test/selfie.png');
     expect(result.details.visionReview?.summary).toContain('matches the companion look');
-    expect(resultText(result)).toContain('"requestId": "req-vision-1"');
+    expect(resultText(result)).toContain('"imageCount": 1');
+    expect(resultText(result)).not.toContain('"requestId": "req-vision-1"');
+    expect(resultText(result)).not.toContain('https://images.example.test/selfie.png');
+    expect(resultText(result)).not.toContain('/tmp/selfie.png');
     expect(resultText(result)).toContain('Vision review:');
   });
 
@@ -482,7 +491,12 @@ describe('image tools', () => {
       mode: 'create',
     });
     expect(result.details.visionReview?.summary).toContain('consistent companion portrait');
-    expect(resultText(result)).toContain('"requestId": "req-selfie-1"');
+    expect(result.details.imageResult?.requestId).toBe('req-selfie-1');
+    expect(result.details.imageResult?.images[0]?.url).toBe('https://images.example.test/selfie-explicit.png');
+    expect(resultText(result)).toContain('"imageCount": 1');
+    expect(resultText(result)).not.toContain('"requestId": "req-selfie-1"');
+    expect(resultText(result)).not.toContain('https://images.example.test/selfie-explicit.png');
+    expect(resultText(result)).not.toContain('/tmp/selfie-explicit.png');
     expect(resultText(result)).toContain('Vision review:');
   });
 
@@ -624,7 +638,9 @@ describe('image tools', () => {
     expect(result.details.imageResult?.fallbackReason).toBe('selfie_edit_chain_fallback');
     expect(resultText(result)).toContain('content policy block');
     expect(resultText(result)).toContain('Fell back to fal-ai/nano-banana-2/edit');
-    expect(resultText(result)).toContain('"requestId": "req-selfie-fallback-1"');
+    expect(result.details.imageResult?.requestId).toBe('req-selfie-fallback-1');
+    expect(resultText(result)).not.toContain('"requestId": "req-selfie-fallback-1"');
+    expect(resultText(result)).not.toContain('https://images.example.test/selfie-fallback.png');
   });
 
   it('starts the selfie edit chain at the requested tier and skips stricter models', async () => {

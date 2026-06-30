@@ -101,9 +101,24 @@ export interface ImageReferenceResolver {
 }
 
 function formatResult(result: ImageGenerationResult): string {
+  const imageCount = result.images.length;
   return JSON.stringify({
-    ...result,
-    images: result.images.map(({ localPath: _localPath, ...image }) => image),
+    status: 'image_generated',
+    provider: result.provider,
+    mode: result.mode,
+    ...(result.model ? { model: result.model } : {}),
+    imageCount,
+    fallbackUsed: result.fallbackUsed,
+    ...(result.fallbackReason ? { fallbackReason: result.fallbackReason } : {}),
+    delivery: imageCount === 1
+      ? 'The generated image is available as a chat attachment.'
+      : 'The generated images are available as chat attachments.',
+    images: result.images.map((image, index) => ({
+      index: index + 1,
+      ...(image.contentType ? { contentType: image.contentType } : {}),
+      ...(image.fileName ? { fileName: image.fileName } : {}),
+      hasLocalFile: Boolean(image.localPath?.trim()),
+    })),
   }, null, 2);
 }
 

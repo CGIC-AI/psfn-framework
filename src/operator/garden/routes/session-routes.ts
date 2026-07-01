@@ -3,7 +3,11 @@ import { sendCompressedJson, sendJson } from '../../../channels/backplane/http/p
 import { exactPath, prefixedParamPath } from '../route-matchers.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { parseAdminJsonBody } from '../request-body.js';
-import type { AdminSessionRouteResetInput, AdminSessionService } from '../services/types.js';
+import type {
+  AdminCogSecRemediationInput,
+  AdminSessionRouteResetInput,
+  AdminSessionService,
+} from '../services/types.js';
 import { MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT } from '../services/session-service.js';
 import { parseRequestUrl } from '../request-url.js';
 import { toSanitizedMessage } from './shared.js';
@@ -74,6 +78,76 @@ function parseResetMode(value: unknown): AdminSessionRouteResetInput['mode'] {
   throw new Error('mode must be fresh_split or break_glass_quarantine');
 }
 
+function parseOptionalPositiveInteger(value: unknown, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${field} must be a positive integer`);
+  }
+  return value;
+}
+
+function parseRequiredPositiveInteger(value: unknown, field: string): number {
+  const parsed = parseOptionalPositiveInteger(value, field);
+  if (parsed === undefined) {
+    throw new Error(`${field} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function parseOptionalBoolean(value: unknown, field: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') {
+    throw new Error(`${field} must be a boolean`);
+  }
+  return value;
+}
+
+function parseOptionalStringArray(value: unknown, field: string): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`${field} must be an array`);
+  }
+  const values = value
+    .map((item, index) => parseRequiredString(item, `${field}[${index}]`));
+  return values.length > 0 ? values : undefined;
+}
+
+function parseOptionalNumberArray(value: unknown, field: string): number[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error(`${field} must be an array`);
+  }
+  const values = value
+    .map((item, index) => parseRequiredPositiveInteger(item, `${field}[${index}]`));
+  return values.length > 0 ? values : undefined;
+}
+
+function parseCogSecRanges(value: unknown): AdminCogSecRemediationInput['affectedMessageRanges'] {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new Error('affectedMessageRanges must be an array');
+  }
+  return value.map((item, index) => {
+    if (!isRecord(item)) {
+      throw new Error(`affectedMessageRanges[${index}] must be an object`);
+    }
+    const sourceChannelId = parseOptionalString(item.sourceChannelId, `affectedMessageRanges[${index}].sourceChannelId`);
+    const logicalSessionId = parseOptionalString(item.logicalSessionId, `affectedMessageRanges[${index}].logicalSessionId`);
+    const startEntryId = parseOptionalPositiveInteger(item.startEntryId, `affectedMessageRanges[${index}].startEntryId`);
+    const endEntryId = parseOptionalPositiveInteger(item.endEntryId, `affectedMessageRanges[${index}].endEntryId`);
+    const messageIds = parseOptionalNumberArray(item.messageIds, `affectedMessageRanges[${index}].messageIds`);
+    const discordMessageIds = parseOptionalStringArray(item.discordMessageIds, `affectedMessageRanges[${index}].discordMessageIds`);
+    return {
+      ...(sourceChannelId ? { sourceChannelId } : {}),
+      ...(logicalSessionId ? { logicalSessionId } : {}),
+      ...(startEntryId !== undefined ? { startEntryId } : {}),
+      ...(endEntryId !== undefined ? { endEntryId } : {}),
+      ...(messageIds ? { messageIds } : {}),
+      ...(discordMessageIds ? { discordMessageIds } : {}),
+    };
+  });
+}
+
 function parseSessionRouteResetInput(value: unknown): AdminSessionRouteResetInput {
   if (!isRecord(value)) {
     throw new Error('Request body must be a JSON object');
@@ -85,6 +159,34 @@ function parseSessionRouteResetInput(value: unknown): AdminSessionRouteResetInpu
     reason: parseRequiredString(value.reason, 'reason'),
     ...(actor ? { actor } : {}),
     ...(mode ? { mode } : {}),
+  };
+}
+
+function parseCogSecInput(value: unknown): AdminCogSecRemediationInput {
+  if (!isRecord(value)) {
+    throw new Error('Request body must be a JSON object');
+  }
+  const actor = parseOptionalString(value.actor, 'actor');
+  const caseId = parseOptionalString(value.caseId, 'caseId');
+  const affectedLogicalSessionIds = parseOptionalStringArray(value.affectedLogicalSessionIds, 'affectedLogicalSessionIds');
+  const affectedMessageRanges = parseCogSecRanges(value.affectedMessageRanges);
+  const messageIds = parseOptionalNumberArray(value.messageIds, 'messageIds');
+  const startEntryId = parseOptionalPositiveInteger(value.startEntryId, 'startEntryId');
+  const endEntryId = parseOptionalPositiveInteger(value.endEntryId, 'endEntryId');
+  const cutEpoch = parseOptionalBoolean(value.cutEpoch, 'cutEpoch');
+  return {
+    ...(caseId ? { caseId } : {}),
+    sourceChannelId: parseRequiredString(value.sourceChannelId, 'sourceChannelId'),
+    ...(affectedLogicalSessionIds ? { affectedLogicalSessionIds } : {}),
+    ...(affectedMessageRanges ? { affectedMessageRanges } : {}),
+    ...(messageIds ? { messageIds } : {}),
+    ...(startEntryId !== undefined ? { startEntryId } : {}),
+    ...(endEntryId !== undefined ? { endEntryId } : {}),
+    type: parseRequiredString(value.type, 'type') as AdminCogSecRemediationInput['type'],
+    severity: parseRequiredString(value.severity, 'severity') as AdminCogSecRemediationInput['severity'],
+    reason: parseRequiredString(value.reason, 'reason'),
+    ...(actor ? { actor } : {}),
+    ...(cutEpoch !== undefined ? { cutEpoch } : {}),
   };
 }
 
@@ -148,6 +250,78 @@ export function buildAdminSessionRoutes(options: {
             error => sendJson(res, 500, {
               ok: false,
               message: toSanitizedMessage(error, 'Failed to reset session route'),
+            }),
+          );
+        });
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/session-routes/cogsec/events'),
+      handle: (_req, res) => {
+        sessionService.listCogSecEvents().then(
+          payload => sendJson(res, 200, payload),
+          error => sendJson(res, 500, {
+            error: toSanitizedMessage(error, 'Failed to load CogSec events'),
+          }),
+        );
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/session-routes/cogsec/preview'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsedBody = parseAdminJsonBody(body);
+          if (!parsedBody.ok) {
+            sendJson(res, 400, { ok: false, message: parsedBody.error });
+            return;
+          }
+          let input: AdminCogSecRemediationInput;
+          try {
+            input = parseCogSecInput(parsedBody.value);
+          } catch (error) {
+            sendJson(res, 400, {
+              ok: false,
+              message: error instanceof Error ? error.message : String(error),
+            });
+            return;
+          }
+          sessionService.previewCogSecRemediation(input).then(
+            payload => sendJson(res, 200, payload),
+            error => sendJson(res, 500, {
+              ok: false,
+              message: toSanitizedMessage(error, 'Failed to preview CogSec remediation'),
+            }),
+          );
+        });
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/session-routes/cogsec/apply'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsedBody = parseAdminJsonBody(body);
+          if (!parsedBody.ok) {
+            sendJson(res, 400, { ok: false, message: parsedBody.error });
+            return;
+          }
+          let input: AdminCogSecRemediationInput;
+          try {
+            input = parseCogSecInput(parsedBody.value);
+          } catch (error) {
+            sendJson(res, 400, {
+              ok: false,
+              message: error instanceof Error ? error.message : String(error),
+            });
+            return;
+          }
+          sessionService.applyCogSecRemediation(input).then(
+            payload => sendJson(res, 200, payload),
+            error => sendJson(res, 500, {
+              ok: false,
+              message: toSanitizedMessage(error, 'Failed to apply CogSec remediation'),
             }),
           );
         });

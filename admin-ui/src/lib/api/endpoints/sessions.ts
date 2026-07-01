@@ -1,5 +1,9 @@
 import { apiGet, apiPost } from '$lib/api/client';
 import type {
+  AdminCogSecEventListData,
+  AdminCogSecRemediationApplyData,
+  AdminCogSecRemediationInput,
+  AdminCogSecRemediationPreviewData,
   AdminSessionListData,
   AdminSessionMessagesData,
   AdminSessionRouteListData,
@@ -49,4 +53,20 @@ export function resetSourceChannelSession(
   input: AdminSessionRouteResetInput,
 ): Promise<AdminSessionRouteResetData> {
   return apiPost<AdminSessionRouteResetData>('/api/admin/session-routes/reset', input);
+}
+
+export function listCogSecEvents(): Promise<AdminCogSecEventListData> {
+  return apiGet<AdminCogSecEventListData>('/api/admin/session-routes/cogsec/events');
+}
+
+export function previewCogSecRemediation(
+  input: AdminCogSecRemediationInput,
+): Promise<AdminCogSecRemediationPreviewData> {
+  return apiPost<AdminCogSecRemediationPreviewData>('/api/admin/session-routes/cogsec/preview', input);
+}
+
+export function applyCogSecRemediation(
+  input: AdminCogSecRemediationInput,
+): Promise<AdminCogSecRemediationApplyData> {
+  return apiPost<AdminCogSecRemediationApplyData>('/api/admin/session-routes/cogsec/apply', input);
 }

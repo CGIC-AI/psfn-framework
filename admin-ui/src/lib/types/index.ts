@@ -77,6 +77,10 @@ export type {
 } from '../../../../src/operator/garden/services/types.js';
 export type {
   AdminDashboardData,
+  AdminCogSecEventListData,
+  AdminCogSecRemediationApplyData,
+  AdminCogSecRemediationInput,
+  AdminCogSecRemediationPreviewData,
   AdminPromptDetailData,
   AdminPromptListData,
   AdminSessionListData,

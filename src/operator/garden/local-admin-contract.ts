@@ -241,6 +241,8 @@ export function createInProcessGardenAdminContract(
       sessionManager: options.sessionManager,
       eventBus: options.eventBus,
       contactStore: options.contactStore,
+      memoryStore: options.memoryStore,
+      config: options.config,
     }),
     contacts: new AdminContactsDataService({
       contactStore: options.contactStore,

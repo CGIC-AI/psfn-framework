@@ -36,6 +36,19 @@ import type {
   SessionRouteResetMode,
   SourceChannelSessionRoute,
 } from '../../../core/session/session-routes.js';
+import type {
+  CogSecAffectedMessageRange,
+  CogSecCaseType,
+  CogSecSeverity,
+} from '../../../core/cogsec/events.js';
+import type { CogSecLineagePreview } from '../../../core/cogsec/lineage.js';
+import type {
+  CogSecAgentVisibleEvent,
+  CogSecOperatorVisibleEvent,
+} from '../../../core/cogsec/safe-log.js';
+import type { CogSecL0TombstoneResult } from '../../../persistence/sessions/store.js';
+import type { CogSecRevocationResult } from '../../../core/cogsec/revocation.js';
+import type { CogSecRegenerationResult } from '../../../core/cogsec/regeneration.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type {
   ContextMessage,
@@ -802,6 +815,75 @@ export interface AdminSessionRouteResetData {
   retiredSession: SourceChannelSessionRoute['retiredSessions'][number];
 }
 
+export interface AdminCogSecRemediationInput {
+  caseId?: string;
+  sourceChannelId: string;
+  affectedLogicalSessionIds?: string[];
+  affectedMessageRanges?: CogSecAffectedMessageRange[];
+  messageIds?: number[];
+  startEntryId?: number;
+  endEntryId?: number;
+  type: CogSecCaseType;
+  severity: CogSecSeverity;
+  reason: string;
+  actor?: string;
+  cutEpoch?: boolean;
+}
+
+export interface AdminCogSecCaseDraftView {
+  caseId: string;
+  type: CogSecCaseType;
+  severity: CogSecSeverity;
+  status: 'planned';
+  sourceChannelId: string;
+  affectedLogicalSessionIds: string[];
+  affectedMessageRanges: CogSecAffectedMessageRange[];
+  actor: string;
+  safeSummary: string;
+}
+
+export interface AdminCogSecPreviewCounts {
+  l0Rows: number;
+  projectionRows: number;
+  memories: number;
+  embeddingMemoryRows: number;
+  compactionSummaries: number;
+  externalArtifacts: number;
+  lineageGaps: number;
+}
+
+export interface AdminCogSecEventListData {
+  events: CogSecOperatorVisibleEvent[];
+}
+
+export interface AdminCogSecRemediationPreviewData {
+  ok: boolean;
+  draft: AdminCogSecCaseDraftView;
+  preview: CogSecLineagePreview;
+  counts: AdminCogSecPreviewCounts;
+  existingEvents: CogSecOperatorVisibleEvent[];
+}
+
+export interface AdminCogSecRouteResetResult {
+  sourceChannelId: string;
+  oldLogicalSessionId: string;
+  newLogicalSessionId: string;
+  routeGeneration?: number;
+}
+
+export interface AdminCogSecRemediationApplyData {
+  ok: boolean;
+  message: string;
+  event: CogSecAgentVisibleEvent;
+  operatorEvent: CogSecOperatorVisibleEvent;
+  preview: CogSecLineagePreview;
+  counts: AdminCogSecPreviewCounts;
+  tombstones: CogSecL0TombstoneResult[];
+  revocation: CogSecRevocationResult;
+  regeneration: CogSecRegenerationResult;
+  routeReset?: AdminCogSecRouteResetResult;
+}
+
 export interface AdminSessionMessageOntologyView {
   sessionEntryId: number;
   transportRole: SessionEntry['role'];
@@ -842,6 +924,9 @@ export interface AdminSessionService {
   getSessionMessages(sessionId: string, options?: AdminSessionMessagePaginationOptions): AdminSessionMessagesData;
   listSessionRoutes(): Promise<AdminSessionRouteListData>;
   resetSourceChannelSession(input: AdminSessionRouteResetInput): Promise<AdminSessionRouteResetData>;
+  listCogSecEvents(): Promise<AdminCogSecEventListData>;
+  previewCogSecRemediation(input: AdminCogSecRemediationInput): Promise<AdminCogSecRemediationPreviewData>;
+  applyCogSecRemediation(input: AdminCogSecRemediationInput): Promise<AdminCogSecRemediationApplyData>;
 }
 
 export type AdminObservedMemory = ObservedMemory;

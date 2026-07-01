@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -13,6 +13,8 @@ import {
 import { SessionStore } from '../../../persistence/sessions/store.js';
 import { createTurnId } from '../../../core/turns/id.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
+import type { PurrMemory } from '../../../faculties/memory/types.js';
 import { AdminSessionDataService } from './session-service.js';
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
@@ -120,6 +122,155 @@ describe('AdminSessionDataService', () => {
       totalMessages: 250,
       returnedMessages: 50,
     });
+  });
+
+  it('previews and applies CogSec remediation without exposing sealed content in safe event logs', async () => {
+    const channelId = 'api:cogsec-admin';
+    const dirtyText = 'DIRTY_ADMIN_COGSEC_TEXT';
+    const dirtyMessageId = store.append({
+      channelId,
+      role: 'user',
+      content: dirtyText,
+      timestamp: 1,
+      authorName: 'Operator',
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'clean response remains',
+      timestamp: 2,
+      authorName: 'Companion',
+    });
+    store.insertCompaction(channelId, 'DIRTY_ADMIN_COGSEC_SUMMARY', dirtyMessageId);
+
+    const taintedMemory: PurrMemory = {
+      id: 'memory-cogsec-admin',
+      text: 'tainted memory linked by provenance',
+      type: 'semantic',
+      importance: 0.8,
+      confidence: 0.9,
+      emotionalValence: 0,
+      salience: 0.9,
+      sourceRef: `${channelId}:extract|source:session|session:${channelId}|message:${dirtyMessageId}`,
+      extractedAt: 1,
+      lastAccessed: 1,
+      accessCount: 0,
+      tags: [],
+      sensitivity: 'personal',
+    };
+    const softDeleteMemory = vi.fn().mockResolvedValue({
+      deleteId: 'delete-1',
+      memoryId: taintedMemory.id,
+      snapshot: taintedMemory,
+      deletedAt: 1,
+      deletedBy: 'operator:garden',
+    });
+    const memoryStore = {
+      listMemories: vi.fn().mockResolvedValue([taintedMemory]),
+      softDeleteMemory,
+    } as unknown as MemoryStorePort;
+
+    const config = makeConfig({ dataDir: dir });
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, config),
+      eventBus: new EventBus(),
+      memoryStore,
+      config,
+    });
+
+    const input = {
+      sourceChannelId: channelId,
+      messageIds: [dirtyMessageId],
+      type: 'memory_poisoning' as const,
+      severity: 'high' as const,
+      reason: 'operator selected contaminated row',
+      actor: 'operator:garden',
+      cutEpoch: false,
+    };
+    const preview = await service.previewCogSecRemediation(input);
+    expect(preview.counts).toMatchObject({
+      l0Rows: 1,
+      projectionRows: 1,
+      memories: 1,
+      compactionSummaries: 1,
+    });
+    expect(JSON.stringify(preview)).not.toContain(dirtyText);
+
+    const applied = await service.applyCogSecRemediation(input);
+    expect(applied.tombstones).toHaveLength(1);
+    expect(applied.tombstones[0]?.tombstonedL0RowCount).toBe(1);
+    expect(applied.revocation.revokedMemoryIds).toEqual(['memory-cogsec-admin']);
+    expect(softDeleteMemory).toHaveBeenCalledWith('memory-cogsec-admin', expect.objectContaining({
+      deletedBy: 'operator:garden',
+      reason: expect.stringContaining(applied.event.caseId),
+    }));
+    expect(store.getRecent(channelId, 5).map(entry => entry.content)).not.toContain(dirtyText);
+
+    const events = await service.listCogSecEvents();
+    const serializedEvents = JSON.stringify(events);
+    expect(events.events[0]?.caseId).toBe(applied.event.caseId);
+    expect(serializedEvents).not.toContain(dirtyText);
+    expect(serializedEvents).not.toContain('cogsec-forensic://');
+    expect(serializedEvents).not.toContain('sealedForensicPayloadRefs');
+  });
+
+  it('keeps CogSec previews scoped to the operator-selected logical session', async () => {
+    const sourceChannelId = 'discord:guild:room';
+    const oldLogicalSessionId = sourceChannelId;
+    const dirtyMessageId = store.append({
+      channelId: oldLogicalSessionId,
+      role: 'user',
+      content: 'DIRTY_OLD_LOGICAL_SESSION_TEXT',
+      timestamp: 1,
+      authorName: 'Vega',
+    });
+    const config = makeConfig({ dataDir: dir });
+    const sessionManager = new SessionManager(store, config);
+    const reset = sessionManager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'operator:garden',
+      reason: 'cut a fresh lane before CogSec cleanup',
+      mode: 'break_glass_quarantine',
+    });
+    store.append({
+      channelId: reset.newLogicalSessionId,
+      role: 'user',
+      content: 'clean active lane text',
+      timestamp: 2,
+      originChannelId: sourceChannelId,
+    });
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager,
+      eventBus: new EventBus(),
+      config,
+    });
+
+    const preview = await service.previewCogSecRemediation({
+      sourceChannelId,
+      affectedMessageRanges: [{
+        sourceChannelId,
+        logicalSessionId: oldLogicalSessionId,
+        messageIds: [dirtyMessageId],
+      }],
+      type: 'content_poisoning',
+      severity: 'high',
+      reason: 'operator selected old logical session row',
+      actor: 'operator:garden',
+    });
+
+    expect(preview.draft.affectedLogicalSessionIds).toEqual([oldLogicalSessionId]);
+    expect(preview.draft.affectedLogicalSessionIds).not.toContain(reset.newLogicalSessionId);
+    expect(preview.counts.l0Rows).toBe(1);
+    expect(preview.preview.l0Messages).toEqual([
+      expect.objectContaining({
+        logicalSessionId: oldLogicalSessionId,
+        messageId: dirtyMessageId,
+      }),
+    ]);
+    expect(JSON.stringify(preview)).not.toContain('DIRTY_OLD_LOGICAL_SESSION_TEXT');
   });
 
   it('returns persisted turn observability without requiring live event-bus state', () => {

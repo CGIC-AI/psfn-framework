@@ -21,10 +21,18 @@ import type { EmbeddingProviderPort } from '../../agent/contracts.js';
 import {
   buildDynamicPromptTemplateVariables,
   buildPromptTemplateVariables,
+  resolveAuthorContext,
+  type ResolvedAuthorContext,
 } from '../../agent/substrate-agent/runtime-context.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
 import { resolveConversationScopeFromMetadata } from '../conversation-scope.js';
+import {
+  classifyGroupMemoryChannel,
+  type GroupMemoryClassification,
+} from '../../../faculties/memory/extraction/group-classifier.js';
+import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
+import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { Contact } from '../../contacts/types.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -521,4 +529,98 @@ export function makeEmbeddingProvider(): EmbeddingProviderPort {
     embedBatch: async () => [],
     dims: 1024,
   } as unknown as EmbeddingProviderPort;
+}
+
+// ---------------------------------------------------------------------------
+// Author-context resolution (peer-companion binding correctness)
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimal ContactStorePort double for resolveAuthorContext. Resolves the
+ * synthetic harness contacts by their `api` channel identity so the REAL
+ * author-context resolution (trust, relationship, machine-intelligence flag,
+ * canonical binding) runs against live-shaped contact records.
+ */
+export function makeAuthorContextContactStore(): ContactStorePort {
+  const contacts = makeGroupChatContacts();
+  const byAuthorId = new Map<string, Contact>();
+  for (const contact of contacts.values()) {
+    for (const identity of contact.channelIdentities ?? []) {
+      byAuthorId.set(identity.userId, contact);
+    }
+  }
+  return {
+    getById: async (id: string) => contacts.get(id),
+    getByChannelIdentity: async (_channel: string, userId: string) => byAuthorId.get(userId),
+    resolveChannelIdentity: async (_channel: string, userId: string, _name?: string) => {
+      const contact = byAuthorId.get(userId);
+      if (!contact) {
+        throw new Error(`Unknown harness channel identity: ${userId}`);
+      }
+      return contact;
+    },
+    updateLastSeen: async () => undefined,
+    recordChannelActivity: async () => undefined,
+    getConversationChannelPrivacy: async () => undefined,
+  } as unknown as ContactStorePort;
+}
+
+/**
+ * Resolve author context for a harness participant on a given channel through
+ * the REAL resolveAuthorContext path. Used to prove that a peer companion in a
+ * genuine DM binds normally (canonicalContactKey + machine-intelligence flag)
+ * while a companion speaking in a room is never bound as the canonical human.
+ */
+export function resolveHarnessAuthorContext(
+  speaker: HarnessParticipant,
+  channelId: string,
+  isDirectMessage: boolean,
+): Promise<ResolvedAuthorContext> {
+  const message: SubstrateMessage = makeMessage({
+    channelId,
+    channelType: 'api',
+    isDirectMessage,
+    authorId: speaker.authorId,
+    authorName: speaker.name,
+  });
+  return resolveAuthorContext({
+    message,
+    contactStore: makeAuthorContextContactStore(),
+    logger: { warn: () => undefined, debug: () => undefined, info: () => undefined },
+    companionIdentityKey: 'companion-self',
+    companionDisplayName: 'Companion',
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Group-memory classification (extraction weighting of the peer companion)
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the REAL group-memory classifier over the synthetic room window so the
+ * peer companion's extraction weighting is provable: humans drive group-mode
+ * detection, and the companion is surfaced as a machine-intelligence
+ * participant only when `includeAiCompanions` is enabled.
+ */
+export function classifyHarnessRoomGroupMemory(
+  options: { includeAiCompanions: boolean },
+): Promise<GroupMemoryClassification> {
+  const contactStore = makeAuthorContextContactStore();
+  const defaults = createDefaultGroupMemorySettings();
+  return classifyGroupMemoryChannel({
+    channelId: GROUP_ROOM_ID,
+    channelType: 'api',
+    contactStore: { getByChannelIdentity: contactStore.getByChannelIdentity.bind(contactStore) },
+    recentEntries: makeGroupRoomRecentEntries(),
+    channelTopology: { kind: 'group_channel' },
+    groupMemory: {
+      ...defaults,
+      enabled: true,
+      memoryMode: 'auto',
+      autoDetection: {
+        ...defaults.autoDetection,
+        includeAiCompanions: options.includeAiCompanions,
+      },
+    },
+  });
 }

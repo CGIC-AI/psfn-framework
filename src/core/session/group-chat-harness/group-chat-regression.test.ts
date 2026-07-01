@@ -22,6 +22,10 @@ import { join } from 'node:path';
 import { injectPromptRuntimeTokens, renderPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { hydrateStartupActiveCoreMemoryBlocks } from '../../../faculties/core-memory/startup-hydration.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
+import {
+  peerCompanionMayBindAsCanonicalContact,
+  resolveConversationScopeFromMetadata,
+} from '../conversation-scope.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import type { MemoryScopeQuery } from '../../../faculties/memory/types.js';
 import {
@@ -45,6 +49,7 @@ import {
   OTHER_ROOM_ID,
   buildDmWithGuestSession,
   buildGroupChatSession,
+  classifyHarnessRoomGroupMemory,
   restartGroupChatSession,
   conversationScope,
   dmChannelId,
@@ -56,6 +61,7 @@ import {
   makeLeakProbeMemories,
   makeLeakProbeStore,
   renderTurnRuntimePrompt,
+  resolveHarnessAuthorContext,
   stableAttributionId,
 } from './fixtures.js';
 
@@ -416,6 +422,119 @@ describe('group-chat regression harness', () => {
       expectNoMemoryFrom(output, dmChannelId(ALICE), [MEMORY_SENTINELS.dmAlice]);
       expectNoMemoryFrom(output, OTHER_ROOM_ID, [MEMORY_SENTINELS.roomBackchannel]);
       expectNoMemoryFrom(output, dmChannelId(DANA), [MEMORY_SENTINELS.dmDanaNonMember]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // E1.8: multi-companion observation correctness in shared rooms.
+  //
+  // A peer companion (a contact with isMachineIntelligence) in a room is an
+  // OBSERVED participant: it is attributed in history, listed in the participant
+  // roster, and weighted by the group-memory classifier -- but it is NEVER
+  // selected as the canonical human for any binding (scope contact, core-memory
+  // participant subject, contact-continuity fallback). A companion binds
+  // normally ONLY in a genuine DM with that companion.
+  // -------------------------------------------------------------------------
+  describe('peer-companion observation correctness (E1.8)', () => {
+    let dir: string;
+    beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'psfn-group-harness-e18-')); });
+    afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+    it('never binds a peer companion as the canonical human in room core memory, even when the companion is the current author', async () => {
+      const { manager } = buildGroupChatSession(dir);
+      // The companion (Nova) is the current author of the room turn.
+      const context = await manager.buildContext(
+        GROUP_ROOM_ID,
+        'System prompt',
+        '',
+        undefined,
+        NOVA.authorId,
+        { isDirectMessage: false },
+      );
+      // Room-scoped core memory: no single-human participant binding at all.
+      expectBlock(context.systemPrompt, 'room_context');
+      expectNoBlock(context.systemPrompt, 'participant_context');
+      // Human/profile binding carries the room block, with zero companion-
+      // derived content in the human-profile subject.
+      expectBlockScope(context.systemPrompt, 'core_memory', GROUP_ROOM_ID);
+      expect(context.systemPrompt).toContain('keep individual confidences out of the room');
+      // The companion is still an observed participant: it appears in the
+      // room's active-participants roster (attributed, not a subject binding).
+      const roomBlockStart = context.systemPrompt.indexOf('<room_context');
+      const roomBlockEnd = context.systemPrompt.indexOf('</room_context>');
+      const roomBlock = context.systemPrompt.slice(roomBlockStart, roomBlockEnd);
+      expect(roomBlock).toContain(NOVA.name);
+    });
+
+    it('lists the peer companion in the group conversation_state participant roster when it speaks (observed, not bound)', () => {
+      const { prompt, variables } = renderTurnRuntimePrompt(
+        makeGroupTurnMessage(NOVA),
+        NOVA,
+        'api',
+        { recentChannelEntries: makeGroupRoomRecentEntries() },
+      );
+      expect(variables.runtime_chat_type).toBe('group');
+      // Companion listed in the participant roster (observed context).
+      expect(variables.runtime_recent_active_participants_xml).toContain(`id="${NOVA.authorId}"`);
+      // Group scope: no one-on-one participant_context canonical-human binding.
+      expectNoBlock(prompt, 'participant_context');
+    });
+
+    it('resolves a group scope with NO canonical contact even when the current author is a peer companion', () => {
+      const authorContext = { canonicalContactKey: NOVA.id, speakingWithIsMachineIntelligence: true };
+      // Mirror the pre-turn-state guard: a peer companion may not bind in a room.
+      const mayBind = peerCompanionMayBindAsCanonicalContact({
+        isDirectMessage: false,
+        contactIsMachineIntelligence: authorContext.speakingWithIsMachineIntelligence,
+      });
+      expect(mayBind).toBe(false);
+      const scope = resolveConversationScopeFromMetadata({
+        channelId: GROUP_ROOM_ID,
+        isDirectMessage: false,
+        ...(mayBind ? { contact: { contactId: authorContext.canonicalContactKey } } : {}),
+      });
+      expect(scope.kind).toBe('group');
+      expect((scope as { contact?: unknown }).contact).toBeUndefined();
+    });
+
+    it('binds a companion-DM normally: canonical contact + machine-intelligence flag flow to prompt state', async () => {
+      const authorContext = await resolveHarnessAuthorContext(NOVA, dmChannelId(NOVA), true);
+      // Companion-DM is legitimate: it binds normally.
+      expect(authorContext.canonicalContactKey).toBe(NOVA.id);
+      expect(authorContext.speakingWithIsMachineIntelligence).toBe(true);
+      expect(authorContext.relationshipType).toBe('ai_companion');
+      // The guard permits the canonical binding for a genuine DM with the companion.
+      expect(peerCompanionMayBindAsCanonicalContact({
+        isDirectMessage: true,
+        contactIsMachineIntelligence: authorContext.speakingWithIsMachineIntelligence,
+      })).toBe(true);
+      const scope = resolveConversationScopeFromMetadata({
+        channelId: dmChannelId(NOVA),
+        isDirectMessage: true,
+        contact: { contactId: authorContext.canonicalContactKey, displayName: NOVA.name },
+      });
+      expect(scope.kind).toBe('dm');
+      expect(scope.kind === 'dm' && scope.contact.contactId).toBe(NOVA.id);
+    });
+
+    it('does not set the machine-intelligence flag for a genuine human DM (regression guard)', async () => {
+      const authorContext = await resolveHarnessAuthorContext(ALICE, dmChannelId(ALICE), true);
+      expect(authorContext.canonicalContactKey).toBe(ALICE.id);
+      expect(authorContext.speakingWithIsMachineIntelligence).not.toBe(true);
+    });
+
+    it('exercises group-classifier weighting: humans drive group mode; the companion is excluded by default and marked machine-intelligence when included', async () => {
+      const excluded = await classifyHarnessRoomGroupMemory({ includeAiCompanions: false });
+      // Humans drive group-mode detection; the companion is filtered by policy.
+      expect(excluded.mode).toBe('group');
+      expect(excluded.recentParticipantContactIds).toContain(ALICE.id);
+      expect(excluded.recentParticipantContactIds).not.toContain(NOVA.id);
+
+      const included = await classifyHarnessRoomGroupMemory({ includeAiCompanions: true });
+      expect(included.mode).toBe('group');
+      const nova = included.recentParticipants.find(participant => participant.contactId === NOVA.id);
+      expect(nova).toBeDefined();
+      expect(nova?.isMachineIntelligence).toBe(true);
     });
   });
 });

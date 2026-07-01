@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PromptLayerStore } from './prompt-store.js';
@@ -793,5 +794,71 @@ describe('values feedback loop across store instances', () => {
     } finally {
       rmSync(loopDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('static prompt layer volatility enforcement', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = mkdtempSync(join(tmpdir(), 'psfn-composer-volatility-'));
+  });
+
+  afterEach(() => {
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeStore(): PromptLayerStore {
+    return new PromptLayerStore(join(tmpDir, 'layers.json'), join(tmpDir, 'history.jsonl'));
+  }
+
+  it('rejects creating a base layer that references a turn-volatile macro', () => {
+    const store = makeStore();
+    expect(() => store.create({
+      type: 'base',
+      name: 'Bad Base',
+      content: 'Right now it is {{runtime_current_datetime_iso}}.',
+    })).toThrow(/turn-volatile/);
+  });
+
+  it('rejects updating an operator layer content to include a turn-volatile macro', () => {
+    const store = makeStore();
+    const layer = store.create({
+      type: 'operator',
+      name: 'Operator Policy',
+      content: 'Stay grounded, {{char}}.',
+    });
+    expect(() => store.update(layer.id, 'The unix time is {{unix_timestamp}}.', 'operator'))
+      .toThrow(/turn-volatile/);
+  });
+
+  it('still allows turn-volatile macros in dynamic-class layers', () => {
+    const store = makeStore();
+    expect(() => store.create({
+      type: 'runtime',
+      name: 'Runtime State',
+      content: '<runtime_state>{{runtime_current_datetime_iso}}</runtime_state>',
+    })).not.toThrow();
+  });
+
+  it('fails composeSplit closed when a persisted static layer contains a turn-volatile macro', () => {
+    const layersPath = join(tmpDir, 'layers.json');
+    const store = makeStore();
+    const layer = store.create({
+      type: 'base',
+      name: 'Base Identity',
+      content: 'You are {{char}}.',
+    });
+    // Simulate a pre-existing persisted layer that bypassed edit-time validation.
+    const persisted = JSON.parse(readFileSync(layersPath, 'utf-8')) as Array<Record<string, unknown>>;
+    const target = persisted.find(entry => entry.id === layer.id);
+    expect(target).toBeDefined();
+    target!.content = 'You are {{char}} and it is {{current_time}}.';
+    target!.checksum = createHash('sha256').update(target!.content as string).digest('hex').slice(0, 16);
+    writeFileSync(layersPath, JSON.stringify(persisted));
+
+    const reloaded = new PromptLayerStore(layersPath, join(tmpDir, 'history.jsonl'));
+    const composer = new PromptComposer(reloaded, undefined, join(tmpDir, 'lkg.json'));
+    expect(() => composer.composeSplit()).toThrow(/turn-volatile macro/);
   });
 });

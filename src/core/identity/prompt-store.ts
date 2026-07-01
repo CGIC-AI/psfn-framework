@@ -37,10 +37,17 @@ import {
 } from './system-language-contracts.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
+import { assertStaticPromptLayerMacroVolatility } from './prompt-runtime.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 
 const log = createComponentLogger('PromptStore');
+
+// Layer types composed into the byte-stable static prompt prefix. Content writes
+// to these layers are validated against the macro manifest so turn-volatile
+// macros cannot contaminate the static prefix (fail closed at edit time; the
+// composer enforces the same rule at compose time).
+const STATIC_PREFIX_VALIDATED_LAYER_TYPES = new Set<LayerType>(['base', 'operator']);
 const HISTORY_SCAN_CHUNK_BYTES = 32 * 1024;
 const HISTORY_CORRUPTION_DETAIL_LIMIT = 5;
 const PROMPT_LAYER_STORE_MIGRATION_UPDATED_BY = 'system:migration:prompt-layer-store';
@@ -538,6 +545,9 @@ export class PromptLayerStore {
     if (params.type === SYSTEM_LANGUAGE_LAYER_TYPE) {
       validateSystemLanguageLayerContent(params.content);
     }
+    if (STATIC_PREFIX_VALIDATED_LAYER_TYPES.has(params.type)) {
+      assertStaticPromptLayerMacroVolatility(params.content, params.identifier ?? params.name);
+    }
 
     const identifier = normalizePromptIdentifier(params.identifier);
     const role = validatePromptRole(params.role);
@@ -647,6 +657,9 @@ export class PromptLayerStore {
     }
     if (layer.type === SYSTEM_LANGUAGE_LAYER_TYPE && hasContent) {
       validateSystemLanguageLayerContent(nextContent);
+    }
+    if (hasContent && STATIC_PREFIX_VALIDATED_LAYER_TYPES.has(layer.type)) {
+      assertStaticPromptLayerMacroVolatility(nextContent, layer.identifier ?? layer.name);
     }
     const nextChecksum = contentChecksum(nextContent);
 

@@ -1114,7 +1114,9 @@ export function buildDynamicPromptTemplateVariables(input: {
   const responseStyleState = buildResponseStylePromptState(responseStyle);
   const trustState = buildTrustPromptState(input.trustLevel);
   const dynamicVariables = {
-    active_timezone: resolveActiveTimezone(),
+    // NOTE: active_timezone is intentionally NOT produced here. It is owned by
+    // buildPromptTemplateVariables (session phase); writing it again here would be
+    // a duplicate write in the turn prompt variable namespace (fail closed).
     runtime_current_datetime_human: formatPromptRuntimeDateTime(now),
     runtime_current_datetime_iso: formatActiveDateTimeIso(now),
     runtime_current_weekday: formatPromptRuntimeWeekday(now),

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import { injectPromptRuntimeTokens, resolvePromptMacroManifestEntry } from '../../identity/prompt-runtime.js';
+import { TurnPromptVariableNamespace } from '../../identity/prompt-variable-namespace.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
 import { formatActiveConcernsContextBlock } from '../../intention/concerns.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
@@ -2346,5 +2347,111 @@ describe('internal state continuity gap context', () => {
     const rendered = buildRuntimeContext(buildMinimalRuntimeContextInput());
     expect(rendered).not.toContain('runtime_continuity_notice');
     expect(rendered).not.toContain('<runtime_substrate_health>');
+  });
+});
+
+describe('turn prompt variable namespace conformance', () => {
+  it('builds every session and turn variable with a registered macro and no duplicate producers', () => {
+    const now = new Date('2026-03-18T13:30:00Z');
+    const message = makeMessage({
+      channelId: 'discord:dm:alex',
+      channelType: 'discord_text',
+      isDirectMessage: true,
+      authorId: 'alex',
+      authorName: 'Alex',
+      content: 'hey',
+    });
+    const { templateVariables: sessionVariables } = buildPromptTemplateVariables({
+      message,
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      subjectIdentityKey: 'alex',
+      now,
+      characterPromptVariables: {
+        name: 'Purrsephone',
+        char: 'Purrsephone',
+        char_name: 'Purrsephone',
+        character: 'Purrsephone',
+        character_name: 'Purrsephone',
+        description: 'A companion.',
+        personality: 'Warm.',
+        scenario: '{{user}} and {{char}} are chatting.',
+        system_prompt: '',
+        post_history_instructions: '',
+        mes_example: '',
+        first_mes: 'Hi.',
+        creator: 'system',
+        creator_notes: '',
+        tags: 'bootstrap',
+        alternate_greetings: '',
+        visual_description: 'Silver eyes.',
+        extensions_visual_description: 'Silver eyes.',
+        'character.name': 'Purrsephone',
+        'character.visual_description': 'Silver eyes.',
+        'character.extensions.likes': 'jazz',
+        extensions_likes: 'jazz',
+      },
+      modelId: 'test-model',
+      fallbackCharacterName: 'Purrsephone',
+    });
+
+    const dynamicVariables = buildDynamicPromptTemplateVariables({
+      message,
+      resolvedUserName: 'Alex',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+      channelType: 'discord_text',
+      canonicalContactKey: 'contact-alex',
+      subjectIdentityKey: 'alex',
+      responseStyle: 'expressive',
+      now,
+      taskKind: undefined,
+      templateVariables: sessionVariables,
+      internalState: TEST_INTERNAL_STATE,
+      metacognitiveFlags: [],
+      emotionAppraisalChain: [],
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 2,
+        promoted: 1,
+        extendedLoaded: 1,
+        autoload: 1,
+        deferred: 0,
+        total: 5,
+      },
+      extendedTools: [{ name: 'generate_image', description: 'Generate an image.' }] as any,
+      loadedExtended: new Map([['generate_image', { source: 'autoload' } as any]]),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(['selfie_create']),
+      skillsContext: '<skills_index><skill id="memory.write">Persist.</skill></skills_index>',
+      activeConcernsBlock: '',
+      behavioralNotesBlock: '',
+      lastMessageReceivedAtMs: new Date('2026-03-16T09:15:00Z').getTime(),
+      analysisWorkbenchAvailable: true,
+      config: {},
+    });
+
+    // Single construction path: session phase, prompt-assembly overlay, turn phase.
+    // Any unregistered key or duplicate cross-phase write throws (fail closed).
+    const namespace = new TurnPromptVariableNamespace();
+    namespace.assignRecord('session', sessionVariables, 'substrate-agent:buildPromptTemplateVariables');
+    namespace.assign('session', 'runtime_speaking_with_is_machine_intelligence', 'false', 'turn-execution:assembleTurnPrompt');
+    namespace.assignRecord('turn', dynamicVariables, 'substrate-agent:buildDynamicPromptTemplateVariables');
+    const { variables } = namespace.freeze();
+
+    for (const key of Object.keys(variables)) {
+      expect(
+        resolvePromptMacroManifestEntry(key),
+        `Prompt variable "${key}" is not registered in the macro manifest`,
+      ).not.toBeNull();
+    }
+    // active_timezone is owned by the session phase and must not be re-produced
+    // by the dynamic builder (that was the pre-manifest double write).
+    expect(sessionVariables.active_timezone).toBeTruthy();
+    expect('active_timezone' in dynamicVariables).toBe(false);
+    expect(variables.active_timezone).toBe(sessionVariables.active_timezone);
   });
 });

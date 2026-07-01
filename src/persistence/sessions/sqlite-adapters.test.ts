@@ -100,4 +100,40 @@ describe('sqlite session adapters', () => {
     expect(hits[0].channelId).toBe('api:legacy-session-stack');
     expect(existsSync(join(sessionsDir, 'session-search.sqlite'))).toBe(true);
   });
+
+  it('excludes CogSec tombstones from the sqlite transcript projection', async () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-sqlite-cogsec-projection-'));
+    dirs.push(sessionsDir);
+    const adapters = createDefaultSQLiteSessionAdapters(sessionsDir, { enableSearchIndex: true });
+    expect(adapters.transcriptSearch).toBeDefined();
+    expect(adapters.transcriptProjection).toBeDefined();
+    const search = adapters.transcriptSearch!;
+    const projection = adapters.transcriptProjection!;
+
+    projection.upsertSessionEntry({
+      id: 1,
+      channelId: 'api:sqlite-cogsec',
+      role: 'user',
+      content: 'sqlite dirty search needle',
+      timestamp: 1_000,
+    });
+    await expect(search.searchByKeywords('dirty needle')).resolves.toHaveLength(1);
+
+    projection.upsertSessionEntry({
+      id: 1,
+      channelId: 'api:sqlite-cogsec',
+      role: 'user',
+      content: '[CogSec redaction: cogsec_20260701T000000Z_sqlite]',
+      metadata: JSON.stringify({
+        kind: 'cogsec_l0_tombstone',
+        caseId: 'cogsec_20260701T000000Z_sqlite',
+        redactedAt: '2026-07-01T00:00:00.000Z',
+      }),
+      timestamp: 1_000,
+    });
+
+    await expect(search.searchByKeywords('dirty needle')).resolves.toHaveLength(0);
+    await expect(search.searchByKeywords('CogSec redaction')).resolves.toHaveLength(0);
+    expect(projection.countProjectedMessages('api:sqlite-cogsec')).toBe(0);
+  });
 });

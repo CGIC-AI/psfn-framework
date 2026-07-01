@@ -2,12 +2,15 @@ import {
   closeSync,
   existsSync,
   fstatSync,
+  mkdirSync,
   openSync,
   readFileSync,
   readSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { dirname } from 'node:path';
 import type { JournalEntry } from '../../../core/session/types.js';
 import { appendJsonLine } from '../../jsonl.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
@@ -451,4 +454,23 @@ export function readJournalTailEntries(
 
 export function appendJournalEntry(filePath: string, entry: JournalEntry): void {
   appendJsonLine(filePath, entry);
+}
+
+export function writeJournalFileAtomic(filePath: string, entries: readonly JournalEntry[]): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+  const body = entries.map(entry => JSON.stringify(entry)).join('\n');
+  const payload = body.length > 0 ? `${body}\n` : '';
+
+  try {
+    writeFileSync(tmpPath, payload, 'utf-8');
+    renameSync(tmpPath, filePath);
+  } catch (error) {
+    try {
+      unlinkSync(tmpPath);
+    } catch {
+      // Best-effort cleanup only.
+    }
+    throw error;
+  }
 }

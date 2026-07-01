@@ -19,6 +19,7 @@ import {
 } from '../session/search-runtime.js';
 import { textResult, textResultWithError } from './results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { isCogSecTombstoneSessionEntry } from '../cogsec/tombstones.js';
 
 const DEFAULT_SESSION_GREP_LIMIT = 10;
 const MAX_SESSION_GREP_LIMIT = 50;
@@ -472,6 +473,7 @@ export function createSessionGrepTool(
         for (const match of raw.matches) {
           const entry = parseJournalMessageEntry(match.lineText);
           if (!entry) continue;
+          if (isCogSecTombstoneSessionEntry(entry)) continue;
           if (channelId && entry.channelId !== channelId) continue;
           scannedMatchCount += 1;
           if (!canViewerAccessSessionHit(viewer, entry)) {

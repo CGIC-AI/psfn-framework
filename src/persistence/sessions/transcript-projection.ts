@@ -3,6 +3,7 @@ import { classifyChannel } from '../../system/trust/policy.js';
 import type { ChannelVisibility } from '../../system/trust/types.js';
 import { initDatabase } from '../sqlite-utils.js';
 import type { SessionEntry } from '../../core/session/types.js';
+import { isCogSecTombstoneSessionEntry } from '../../core/cogsec/tombstones.js';
 import type {
   KeywordSearchableTranscriptProjection,
   SessionSearchHit,
@@ -79,6 +80,7 @@ export class SqliteTranscriptProjection implements KeywordSearchableTranscriptPr
   private db: Database.Database;
   private readonly upsertStmt: Database.Statement;
   private readonly deleteChannelStmt: Database.Statement;
+  private readonly deleteEntryStmt: Database.Statement;
   private readonly searchStmt: Database.Statement;
   private readonly countChannelStmt: Database.Statement;
   private readonly markDriftStmt: Database.Statement;
@@ -111,6 +113,10 @@ export class SqliteTranscriptProjection implements KeywordSearchableTranscriptPr
     this.deleteChannelStmt = this.db.prepare(`
       DELETE FROM session_messages_index
       WHERE channel_id = ?
+    `);
+    this.deleteEntryStmt = this.db.prepare(`
+      DELETE FROM session_messages_index
+      WHERE channel_id = ? AND message_id = ?
     `);
     this.searchStmt = this.db.prepare(`
       SELECT
@@ -200,6 +206,12 @@ export class SqliteTranscriptProjection implements KeywordSearchableTranscriptPr
 
   upsertSessionEntry(entry: SessionEntry, options: { channelId?: string } = {}): void {
     const channelId = options.channelId ?? entry.channelId;
+    if (isCogSecTombstoneSessionEntry(entry)) {
+      this.deleteEntryStmt.run(channelId, entry.id);
+      this.clearProjectionDrift(channelId);
+      return;
+    }
+
     const visibility = normalizeChannelVisibility(entry.channelVisibility, entry.channelId);
     this.upsertStmt.run(
       channelId,

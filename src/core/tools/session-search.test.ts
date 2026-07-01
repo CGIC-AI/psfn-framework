@@ -162,6 +162,58 @@ describe('session search tools', () => {
     expect(llmProvider.complete).not.toHaveBeenCalled();
   });
 
+  it('session_search excludes CogSec tombstone hits even when the search port returns them', async () => {
+    transcriptSearch.record({
+      channelId: 'api:cogsec-search',
+      role: 'user',
+      content: '[CogSec redaction: cogsec_20260701T000000Z_search]',
+      timestamp: 1_000,
+      channelVisibility: 'public',
+    });
+    transcriptSearch.record({
+      channelId: 'api:normal-search',
+      role: 'assistant',
+      content: 'Normal CogSec planning note without a tombstone marker.',
+      timestamp: 2_000,
+      channelVisibility: 'public',
+    });
+
+    const llmProvider = {
+      complete: vi.fn(async () => ({
+        content: 'Model summary should not be used.',
+        toolCalls: [],
+        model: 'mock',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+      })),
+    } as any;
+    const tool = createSessionSearchTool(manager, llmProvider);
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId: 'api:public-search',
+        viewerTrustLevel: 'regular',
+        viewerChannelVisibility: 'public',
+      },
+      () => tool.execute('session-search-cogsec', { query: 'CogSec' }),
+    );
+    const payload = JSON.parse(toolText(result)) as {
+      totalHits: number;
+      hits: Array<{ channelId: string; snippet: string }>;
+    };
+
+    expect(payload.totalHits).toBe(1);
+    expect(payload.hits).toEqual([
+      expect.objectContaining({
+        channelId: 'api:normal-search',
+      }),
+    ]);
+    expect(JSON.stringify(payload)).not.toContain('cogsec_20260701T000000Z_search');
+  });
+
   it('session_search can summarize and scope to a specific channel', async () => {
     store.append({
       channelId: 'api:alpha',
@@ -405,6 +457,72 @@ describe('session search tools', () => {
     expect(payload.hits[0]?.channelId).toBe('api:public-session');
     expect(payload.hits[0]?.authorName).toBe('Purrsephone');
     expect(payload.hits[0]?.snippet).toContain('Orion launch date');
+  });
+
+  it('session_grep excludes CogSec tombstone rows from normal companion results', async () => {
+    const runRipgrep = vi.fn(async () => ({
+      matches: [
+        {
+          filePath: '20260701_api-cogsec_user_000001.jsonl',
+          lineNumber: 3,
+          lineText: JSON.stringify({
+            type: 'message',
+            id: 1,
+            channelId: 'api:cogsec-grep',
+            role: 'user',
+            content: '[CogSec redaction: cogsec_20260701T000000Z_grep]',
+            metadata: JSON.stringify({
+              kind: 'cogsec_l0_tombstone',
+              caseId: 'cogsec_20260701T000000Z_grep',
+              redactedAt: '2026-07-01T00:00:00.000Z',
+            }),
+            timestamp: 1_000,
+            channelVisibility: 'public',
+          }),
+        },
+        {
+          filePath: '20260701_api-normal_user_000002.jsonl',
+          lineNumber: 8,
+          lineText: JSON.stringify({
+            type: 'message',
+            id: 2,
+            channelId: 'api:normal-grep',
+            role: 'assistant',
+            content: 'Normal CogSec planning note without a tombstone marker.',
+            timestamp: 2_000,
+            channelVisibility: 'public',
+          }),
+        },
+      ],
+      truncated: false,
+    }));
+    const tool = createSessionGrepTool({
+      sessionsDir: join(dir, 'sessions'),
+      runRipgrep,
+    });
+
+    const result = await runWithRequestContext(
+      {
+        callType: 'tool',
+        purpose: 'agent.turn.prompt',
+        channelId: 'api:public-search',
+        viewerTrustLevel: 'regular',
+        viewerChannelVisibility: 'public',
+      },
+      () => tool.execute('session-grep-cogsec', { pattern: 'CogSec' }),
+    );
+    const payload = JSON.parse(toolText(result)) as {
+      scannedMatchCount: number;
+      hits: Array<{ channelId: string; snippet: string }>;
+    };
+
+    expect(payload.scannedMatchCount).toBe(1);
+    expect(payload.hits).toEqual([
+      expect.objectContaining({
+        channelId: 'api:normal-grep',
+      }),
+    ]);
+    expect(JSON.stringify(payload)).not.toContain('cogsec_20260701T000000Z_grep');
   });
 
   it('session_grep labels retired logical session route hits for audit', async () => {

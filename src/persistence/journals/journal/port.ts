@@ -18,6 +18,7 @@ import {
   readJournalFirstEntry,
   readJournalTailEntries,
   scanJournalFileMetadata,
+  writeJournalFileAtomic,
 } from './file-io.js';
 import { makeReadableFilePath } from '../../sessions/store/channel-filenames.js';
 import type { SessionEntryRole } from '../../../core/session/types.js';
@@ -25,6 +26,7 @@ import type { SessionFileSeed } from '../../sessions/store-file-contracts.js';
 
 export interface SessionJournalPort {
   appendJournalEntry(filePath: string, entry: JournalEntry): void;
+  writeJournalFile(filePath: string, entries: readonly JournalEntry[]): void;
   quarantineSidecarPath(filePath: string): string;
   readJournalFile(filePath: string, options?: ReadJournalFileOptions): ReadJournalResult;
   readJournalFirstEntry(filePath: string): JournalEntry | null;
@@ -75,6 +77,7 @@ export interface SessionArchivePort {
   ): SessionArchiveHandle;
   resolveArchivePath(handle: SessionArchiveHandle): string;
   appendJournalEntry(handle: SessionArchiveHandle, entry: JournalEntry): void;
+  writeJournalFile(handle: SessionArchiveHandle, entries: readonly JournalEntry[]): void;
   quarantineSidecarPath(handle: SessionArchiveHandle): string;
   readJournalFile(handle: SessionArchiveHandle, options?: ReadJournalFileOptions): ReadJournalResult;
   readJournalFirstEntry(handle: SessionArchiveHandle): JournalEntry | null;
@@ -90,6 +93,7 @@ export interface SessionArchivePort {
 export function createFilesystemSessionJournalPort(): SessionJournalPort {
   return {
     appendJournalEntry,
+    writeJournalFile: writeJournalFileAtomic,
     quarantineSidecarPath,
     readJournalFile,
     readJournalFirstEntry,
@@ -125,6 +129,9 @@ export function createFilesystemSessionArchivePort(
     resolveArchivePath: (handle) => requireFilesystemHandle(handle).filePath,
     appendJournalEntry: (handle, entry) => (
       journalPort.appendJournalEntry(requireFilesystemHandle(handle).filePath, entry)
+    ),
+    writeJournalFile: (handle, entries) => (
+      journalPort.writeJournalFile(requireFilesystemHandle(handle).filePath, entries)
     ),
     quarantineSidecarPath: (handle) => (
       journalPort.quarantineSidecarPath(requireFilesystemHandle(handle).filePath)

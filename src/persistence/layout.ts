@@ -716,6 +716,14 @@ export function resolveSessionRoutesPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'session-routes.json');
 }
 
+export function resolveCogSecEventsPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'cogsec-events.json');
+}
+
+export function resolveCogSecForensicArchiveDir(companionDataDir: string): string {
+  return join(resolveCompanionVaultDir(companionDataDir), 'cogsec-forensics');
+}
+
 export function resolveIdentityAssetsDir(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'identity-assets');
 }

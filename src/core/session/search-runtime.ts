@@ -4,6 +4,7 @@ import type { SourceChannelSessionRoute, SessionRouteResetMode } from './session
 import { classifyChannel, getAllowedSensitivities } from '../../system/trust/policy.js';
 import type { ChannelVisibility, SensitivityLevel, TrustLevel } from '../../system/trust/types.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
+import { isCogSecTombstoneSessionEntry } from '../cogsec/tombstones.js';
 
 const DEFAULT_SESSION_SEARCH_LIMIT = 8;
 const MAX_SESSION_SEARCH_LIMIT = 25;
@@ -265,9 +266,10 @@ export async function runSessionSearch(params: {
     normalizedQuery,
     requestedLimit * SESSION_SEARCH_OVERSAMPLE_FACTOR,
   );
+  const nonTombstoneHits = rawHits.filter(hit => !isCogSecTombstoneSessionEntry(hit));
   const scopedHits = scopedChannelId
-    ? rawHits.filter(hit => hit.channelId === scopedChannelId)
-    : rawHits;
+    ? nonTombstoneHits.filter(hit => hit.channelId === scopedChannelId)
+    : nonTombstoneHits;
   const filteredHits = scopedHits.filter(hit => canViewerAccessSessionHit(params.viewer, hit));
 
   const hits: SessionSearchHitResult[] = filteredHits

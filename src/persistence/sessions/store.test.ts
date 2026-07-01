@@ -7,6 +7,12 @@ import { buildSessionHmacKeyring, signJournalEntry, verifyJournalEntryIntegrity 
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
 import { createTurnId, isTurnId } from '../../core/turns/id.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
+import { CogSecEventStore } from '../../core/cogsec/events.js';
+import { CogSecForensicArchive } from '../../core/cogsec/forensic-archive.js';
+import {
+  resolveCogSecEventsPath,
+  resolveCogSecForensicArchiveDir,
+} from '../layout.js';
 
 function appendSessionMessages(
   targetStore: SessionStore,
@@ -612,6 +618,195 @@ describe('SessionStore', () => {
     const hits = await reloaded.searchByKeywords('aurora protocol', 5);
     expect(hits).toHaveLength(1);
     expect(hits[0].channelId).toBe('api:legacy-search');
+  });
+
+  it('seals contaminated rows before replacing companion L0 rows with CogSec tombstones', async () => {
+    const companionRoot = join(dir, 'companion-data');
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot), {
+      now: () => new Date('2026-07-01T00:00:00.000Z'),
+    });
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionRoot), {
+      now: () => new Date('2026-07-01T00:00:00.000Z'),
+    });
+    eventStore.createEvent({
+      caseId: 'cogsec_20260701T000000Z_l0',
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: 'discord-source-channel',
+      safeAgentSummary: 'Unsafe instruction-like content was sealed and removed from active cognition.',
+    });
+
+    const searchStore = new SessionStore(dir, { enableSearchIndex: true });
+    const dirtyId = searchStore.append({
+      channelId: 'api:cogsec-l0',
+      role: 'user',
+      content: 'dirty payload text about poisoned basil',
+      authorId: 'discord-user-1',
+      authorName: 'Vega',
+      timestamp: 1_000,
+      metadata: JSON.stringify({ unsafe: 'metadata should not survive redaction' }),
+    });
+    searchStore.append({
+      channelId: 'api:cogsec-l0',
+      role: 'assistant',
+      content: 'clean reply stays visible',
+      timestamp: 2_000,
+    });
+
+    const result = searchStore.applyCogSecTombstones({
+      channelId: 'api:cogsec-l0',
+      caseId: 'cogsec_20260701T000000Z_l0',
+      eventStore,
+      forensicArchive,
+      messageIds: [dirtyId],
+      actor: 'admin:test',
+      timestamp: Date.parse('2026-07-01T00:01:00.000Z'),
+    });
+
+    expect(result.tombstonedL0RowCount).toBe(1);
+    expect(result.tombstonedMessageIds).toEqual([dirtyId]);
+    expect(result.sealedForensicPayloadRef).toBeDefined();
+    expect(result.sealedForensicPayloadHash).toMatch(/^sha256:[a-f0-9]{64}$/u);
+
+    const journalPath = findSessionJournalPath(dir, 'cogsec-l0');
+    const journalText = readFileSync(journalPath, 'utf-8');
+    expect(journalText).not.toContain('dirty payload text');
+    expect(journalText).not.toContain('metadata should not survive');
+    expect(journalText).toContain('[CogSec redaction: cogsec_20260701T000000Z_l0]');
+
+    const recent = searchStore.getRecent('api:cogsec-l0', 10);
+    expect(recent.map(entry => entry.content)).toEqual([
+      '[CogSec redaction: cogsec_20260701T000000Z_l0]',
+      'clean reply stays visible',
+    ]);
+    expect(JSON.parse(recent[0].metadata ?? '{}')).toEqual({
+      kind: 'cogsec_l0_tombstone',
+      caseId: 'cogsec_20260701T000000Z_l0',
+      redactedAt: '2026-07-01T00:01:00.000Z',
+      actor: 'admin:test',
+    });
+
+    await expect(searchStore.searchByKeywords('poisoned basil', 5)).resolves.toHaveLength(0);
+    await expect(searchStore.searchByKeywords('CogSec redaction', 5)).resolves.toHaveLength(0);
+    await expect(searchStore.searchByKeywords('cogsec_20260701T000000Z_l0', 5)).resolves.toHaveLength(0);
+
+    expect(searchStore.listCogSecTombstoneDiagnostics()).toEqual([{
+      caseId: 'cogsec_20260701T000000Z_l0',
+      rowCount: 1,
+      channels: [{
+        channelId: 'api:cogsec-l0',
+        rowCount: 1,
+        messageIds: [dirtyId],
+      }],
+    }]);
+
+    const sealed = forensicArchive.readArtifact(result.sealedForensicPayloadRef!);
+    expect(JSON.stringify(sealed.payload)).toContain('dirty payload text');
+
+    const updatedEvent = eventStore.getEvent('cogsec_20260701T000000Z_l0');
+    expect(updatedEvent?.tombstonedL0RowCount).toBe(1);
+    expect(updatedEvent?.sealedForensicPayloadRefs).toEqual([result.sealedForensicPayloadRef]);
+    expect(updatedEvent?.actions).toEqual(['seal', 'tombstone']);
+
+    const reloaded = new SessionStore(dir, { enableSearchIndex: true });
+    expect(reloaded.getRecent('api:cogsec-l0', 10).map(entry => entry.content)).toEqual([
+      '[CogSec redaction: cogsec_20260701T000000Z_l0]',
+      'clean reply stays visible',
+    ]);
+    await expect(reloaded.searchByKeywords('CogSec redaction', 5)).resolves.toHaveLength(0);
+    expect(reloaded.listCogSecTombstoneDiagnostics({ channelId: 'api:cogsec-l0' })[0]?.rowCount).toBe(1);
+  });
+
+  it('does not modify companion L0 when sealed forensic archive write fails', () => {
+    const eventStore = new CogSecEventStore(join(dir, 'cogsec-events.json'));
+    eventStore.createEvent({
+      caseId: 'cogsec_20260701T000000Z_sealfail',
+      type: 'content_poisoning',
+      severity: 'high',
+      sourceChannelId: 'discord-source-channel',
+      safeAgentSummary: 'Unsafe instruction-like content was sealed and removed from active cognition.',
+    });
+    const dirtyId = store.append({
+      channelId: 'api:cogsec-seal-fail',
+      role: 'user',
+      content: 'dirty payload survives because seal failed',
+      timestamp: 1_000,
+    });
+
+    expect(() => store.applyCogSecTombstones({
+      channelId: 'api:cogsec-seal-fail',
+      caseId: 'cogsec_20260701T000000Z_sealfail',
+      eventStore,
+      forensicArchive: {
+        sealArtifact: () => {
+          throw new Error('seal failed');
+        },
+      },
+      messageIds: [dirtyId],
+    })).toThrow('seal failed');
+
+    const journalPath = findSessionJournalPath(dir, 'cogsec-seal-fail');
+    expect(readFileSync(journalPath, 'utf-8')).toContain('dirty payload survives because seal failed');
+    expect(eventStore.getEvent('cogsec_20260701T000000Z_sealfail')?.tombstonedL0RowCount).toBe(0);
+  });
+
+  it('re-signs integrity-protected journals after CogSec tombstoning', () => {
+    const keyring = buildSessionHmacKeyring({
+      serializedKeys: 'v1:integrity-key',
+      activeVersion: 'v1',
+    });
+    expect(keyring).not.toBeNull();
+    const signedStore = new SessionStore(dir, { integrityKeyring: keyring });
+    const companionRoot = join(dir, 'companion-data');
+    const eventStore = new CogSecEventStore(resolveCogSecEventsPath(companionRoot));
+    const forensicArchive = new CogSecForensicArchive(resolveCogSecForensicArchiveDir(companionRoot));
+    eventStore.createEvent({
+      caseId: 'cogsec_20260701T000000Z_hmac',
+      type: 'content_poisoning',
+      severity: 'medium',
+      sourceChannelId: 'discord-source-channel',
+      safeAgentSummary: 'Unsafe instruction-like content was sealed and removed from active cognition.',
+    });
+
+    const dirtyId = signedStore.append({
+      channelId: 'api:cogsec-hmac',
+      role: 'user',
+      content: 'dirty signed payload',
+      timestamp: 1_000,
+    });
+    signedStore.append({
+      channelId: 'api:cogsec-hmac',
+      role: 'assistant',
+      content: 'signed clean reply',
+      timestamp: 2_000,
+    });
+
+    signedStore.applyCogSecTombstones({
+      channelId: 'api:cogsec-hmac',
+      caseId: 'cogsec_20260701T000000Z_hmac',
+      eventStore,
+      forensicArchive,
+      messageIds: [dirtyId],
+    });
+
+    const journalPath = findSessionJournalPath(dir, 'cogsec-hmac');
+    const lines = readFileSync(journalPath, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(line => JSON.parse(line) as import('../../core/session/types.js').JournalEntry);
+
+    let previousHmac: string | null = null;
+    for (const line of lines) {
+      const verification = verifyJournalEntryIntegrity(line, keyring!, previousHmac);
+      expect(verification.verified).toBe(true);
+      previousHmac = typeof line._hmac === 'string' ? line._hmac : previousHmac;
+    }
+
+    const reloaded = new SessionStore(dir, { integrityKeyring: keyring });
+    expect(reloaded.getRecent('api:cogsec-hmac', 10).map(entry => entry.content)).toEqual([
+      '[CogSec redaction: cogsec_20260701T000000Z_hmac]',
+      'signed clean reply',
+    ]);
   });
 
   it('rebuilds transcript projections from authoritative JSONL archives through the injected port', () => {

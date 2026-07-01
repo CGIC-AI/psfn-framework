@@ -11,6 +11,7 @@ export {
   readJournalFirstEntry,
   readJournalTailEntries,
   scanJournalFileMetadata,
+  writeJournalFileAtomic,
 } from './journal/file-io.js';
 
 export {

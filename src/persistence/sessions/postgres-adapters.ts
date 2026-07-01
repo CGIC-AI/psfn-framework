@@ -10,6 +10,7 @@ import {
 import { POSTGRES_TRANSCRIPT_MIGRATIONS } from '../postgres/migrations.js';
 import type { SessionArchivePort } from '../journals/journal/port.js';
 import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
+import { isCogSecTombstoneSessionEntry } from '../../core/cogsec/tombstones.js';
 import type {
   KeywordSearchableTranscriptProjection,
   SessionSearchHit,
@@ -189,6 +190,16 @@ async function upsertProjectionRecord(client: PoolClient, record: ProjectionReco
   );
 }
 
+async function deleteProjectionRecord(client: PoolClient, channelId: string, messageId: number): Promise<void> {
+  await client.query(
+    `
+      DELETE FROM session_messages_projection
+      WHERE channel_id = $1 AND message_id = $2
+    `,
+    [channelId, messageId],
+  );
+}
+
 class PostgresTranscriptProjection implements KeywordSearchableTranscriptProjection {
   private readonly pool: Pool;
   private readonly messageIdsByChannel: Map<string, Set<number>>;
@@ -235,6 +246,26 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     entry: import('../../core/session/types.js').SessionEntry,
     options: { channelId?: string } = {},
   ): void {
+    const channelId = options.channelId ?? entry.channelId;
+    if (isCogSecTombstoneSessionEntry(entry)) {
+      const messageIds = this.messageIdsByChannel.get(channelId) ?? new Set<number>();
+      messageIds.delete(entry.id);
+      this.messageIdsByChannel.set(channelId, messageIds);
+      this.driftByChannel.delete(channelId);
+
+      this.enqueueWrite(channelId, async (client) => {
+        await deleteProjectionRecord(client, channelId, entry.id);
+        await client.query(
+          `
+            DELETE FROM session_projection_drift
+            WHERE channel_id = $1
+          `,
+          [channelId],
+        );
+      });
+      return;
+    }
+
     const record = toProjectionRecord(entry, options);
     const messageIds = this.messageIdsByChannel.get(record.channelId) ?? new Set<number>();
     messageIds.add(record.messageId);
@@ -257,7 +288,9 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     channelId: string,
     entries: readonly import('../../core/session/types.js').SessionEntry[],
   ): void {
-    const records = entries.map(entry => toProjectionRecord(entry, { channelId }));
+    const records = entries
+      .filter(entry => !isCogSecTombstoneSessionEntry(entry))
+      .map(entry => toProjectionRecord(entry, { channelId }));
     this.replaceCachedChannel(channelId, records.map(record => record.messageId));
     this.driftByChannel.delete(channelId);
 

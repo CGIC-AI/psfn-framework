@@ -61,6 +61,7 @@ import {
   writeStartupSessionMetadata,
 } from './session-activity.js';
 import { hydrateStartupActiveMemoryContexts } from '../../faculties/memory/startup-hydration.js';
+import { hydrateStartupActiveCoreMemoryBlocks } from '../../faculties/core-memory/startup-hydration.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
 import {
   createOptionalJournalAutoPublisher,
@@ -207,6 +208,13 @@ async function main(): Promise<void> {
     });
   } catch (error) {
     log.warn('Startup active memory hydration failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+  try {
+    hydrateStartupActiveCoreMemoryBlocks({ sessionManager });
+  } catch (error) {
+    log.warn('Startup active core-memory hydration failed', {
       error: error instanceof Error ? error.message : String(error),
     });
   }

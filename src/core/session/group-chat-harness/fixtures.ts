@@ -255,6 +255,23 @@ export function buildGroupChatSession(dir: string): GroupChatSessionFixture {
 }
 
 /**
+ * Simulate a cold restart: a brand-new SessionManager + CoreMemoryStore over
+ * the same on-disk companion-data as a prior `buildGroupChatSession(dir)`, with
+ * NO async memory (sleeptime/orient) having run. Used to prove that startup
+ * core-memory hydration surfaces the persisted scoped blocks on the first
+ * post-restart prompt.
+ */
+export function restartGroupChatSession(dir: string): GroupChatSessionFixture {
+  const store = new SessionStore(join(dir, 'sessions'));
+  const manager = new SessionManager(store, makeGroupChatConfig(dir));
+  const characterName = 'Companion';
+  manager.characterName = characterName;
+  const coreMemory = new CoreMemoryStore(join(dir, 'core-memory.json'));
+  manager.setCoreMemoryProvider(coreMemory);
+  return { manager, store, coreMemory, characterName };
+}
+
+/**
  * A DM session whose recent window starts with a stray user-role entry from a
  * DIFFERENT author (a relayed guest line) before the canonical partner speaks.
  * This is the trigger for the "core memory participant binds to

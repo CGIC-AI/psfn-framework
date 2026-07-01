@@ -20,6 +20,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import { hydrateStartupActiveCoreMemoryBlocks } from '../../../faculties/core-memory/startup-hydration.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import type { MemoryScopeQuery } from '../../../faculties/memory/types.js';
@@ -44,6 +45,7 @@ import {
   OTHER_ROOM_ID,
   buildDmWithGuestSession,
   buildGroupChatSession,
+  restartGroupChatSession,
   conversationScope,
   dmChannelId,
   makeDmTurnMessage,
@@ -204,13 +206,11 @@ describe('group-chat regression harness', () => {
       });
     });
 
-    // KNOWN BUG: buildCoreMemoryFormatContext derives participantName from
-    // recentParticipants[0] (arbitrary session-history speaker) instead of the
-    // canonical userId-resolved partner. When a relayed guest line appears
-    // first in the DM window, the <participant_context> name follows the guest
-    // even though the canonical partner id is known. Flip to `it(...)` once
-    // the binding uses the canonical contact.
-    it.fails('binds DM core memory to the canonical partner even when a guest line appears in the window', async () => {
+    // FIXED (E1.2): buildCoreMemoryFormatContext now binds the DM
+    // participant_context to the canonical contact from the resolved
+    // ConversationScope, not to recentParticipants[0]. A relayed guest line
+    // landing first in the DM window no longer flips the subject binding.
+    it('binds DM core memory to the canonical partner even when a guest line appears in the window', async () => {
       const { manager } = buildDmWithGuestSession(dir);
       const context = await manager.buildContext(
         dmChannelId(ALICE),
@@ -220,7 +220,65 @@ describe('group-chat regression harness', () => {
         ALICE.authorId,
         { isDirectMessage: true },
       );
-      expectParticipantContextBinding(context.systemPrompt, { name: ALICE.name });
+      expectParticipantContextBinding(context.systemPrompt, { name: ALICE.name, id: ALICE.authorId });
+    });
+
+    // AC1 (E1.2): in the 3-human room fixture, the core-memory subject binding
+    // stays stable as the speaker changes across consecutive turns. Content may
+    // evolve, but the binding (room-scoped, never a single-person block) must
+    // not flip to follow whoever spoke last.
+    it('keeps the group core-memory binding stable across speaker changes on 3 consecutive turns', async () => {
+      const { manager } = buildGroupChatSession(dir);
+      const openTags: string[] = [];
+      for (const speaker of [ALICE, BOB, CAROL]) {
+        const context = await manager.buildContext(
+          GROUP_ROOM_ID,
+          'System prompt',
+          '',
+          undefined,
+          speaker.authorId,
+          { isDirectMessage: false },
+        );
+        expectBlockScope(context.systemPrompt, 'core_memory', GROUP_ROOM_ID);
+        expectBlock(context.systemPrompt, 'room_context');
+        // Never a single-person binding, regardless of who spoke this turn.
+        expectNoBlock(context.systemPrompt, 'participant_context');
+        const match = /<room_context[^>]*>/u.exec(context.systemPrompt);
+        expect(match).not.toBeNull();
+        openTags.push(match?.[0] ?? '');
+        // The room-summary binding never carries the current speaker's identity.
+        expect(match?.[0]).not.toContain(speaker.authorId);
+      }
+      // The subject binding is byte-identical across all three speaker turns.
+      expect(openTags[0]).toBe(openTags[1]);
+      expect(openTags[1]).toBe(openTags[2]);
+    });
+
+    // AC4 (E1.2): after a simulated cold restart (fresh SessionManager +
+    // CoreMemoryStore over the same on-disk companion-data, no async memory yet)
+    // startup hydration warms the recently active channels, and the first
+    // post-restart context build carries the persisted scoped block.
+    it('hydrates scoped core-memory blocks for recently active channels after a restart', async () => {
+      // Seed activity + persist scoped core memory to disk, then discard.
+      buildGroupChatSession(dir);
+
+      const { manager } = restartGroupChatSession(dir);
+      const result = hydrateStartupActiveCoreMemoryBlocks({ sessionManager: manager });
+      expect(result.hydrated).toBeGreaterThan(0);
+      expect(result.channels.some(channel => channel.channelId === GROUP_ROOM_ID && channel.hasContent))
+        .toBe(true);
+
+      const context = await manager.buildContext(
+        GROUP_ROOM_ID,
+        'System prompt',
+        '',
+        undefined,
+        CAROL.authorId,
+        { isDirectMessage: false },
+      );
+      expectBlock(context.systemPrompt, 'core_memory');
+      expectBlock(context.systemPrompt, 'room_context');
+      expect(context.systemPrompt).toContain('coordinating an offsite');
     });
   });
 

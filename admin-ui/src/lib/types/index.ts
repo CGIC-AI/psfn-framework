@@ -392,6 +392,18 @@ export interface AdminPromptSectionCacheability {
   reason: string;
 }
 
+export type AdminPromptSectionScopeClass = 'dm' | 'room' | 'global';
+
+export type AdminPromptSectionVolatilityClass = 'static' | 'session_stable' | 'append_only' | 'volatile';
+
+export interface AdminPromptSectionScopeProvenance {
+  producer?: string;
+  scopeKey?: string;
+  scopeClass?: AdminPromptSectionScopeClass;
+  volatility?: AdminPromptSectionVolatilityClass;
+  sourceHint?: string;
+}
+
 export interface AdminPromptSectionTelemetry {
   id: string;
   title: string;
@@ -399,6 +411,7 @@ export interface AdminPromptSectionTelemetry {
   charCount: number;
   tokenCount: number;
   provenance?: AdminAuthenticityProvenance;
+  scopeProvenance?: AdminPromptSectionScopeProvenance;
 }
 
 export interface AdminTurnProviderWireMessage {
@@ -449,6 +462,7 @@ export interface AdminTurnPromptContextSnapshotData {
   response?: AdminTurnPromptResponseSnapshotData;
   inputSections?: AdminPromptSectionTelemetry[];
   runtimeContextSections?: AdminPromptSectionTelemetry[];
+  memoryContextSections?: AdminPromptSectionTelemetry[];
   finalSystemSections?: AdminPromptSectionTelemetry[];
   sectionCacheability?: AdminPromptSectionCacheability[];
 }

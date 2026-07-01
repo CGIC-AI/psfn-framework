@@ -271,6 +271,7 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
       contextMessages: [],
       inputSections: [],
       runtimeContextSections: [],
+      memoryContextSections: [],
       finalSystemSections: [],
     },
     providerPayload: {

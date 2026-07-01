@@ -240,6 +240,9 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
           ...(snapshot.promptContext.runtimeContextSections
             ? { runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSectionTelemetry) }
             : {}),
+          ...(snapshot.promptContext.memoryContextSections
+            ? { memoryContextSections: snapshot.promptContext.memoryContextSections.map(clonePromptSectionTelemetry) }
+            : {}),
           ...(snapshot.promptContext.finalSystemSections
             ? { finalSystemSections: snapshot.promptContext.finalSystemSections.map(clonePromptSectionTelemetry) }
             : {}),
@@ -357,6 +360,9 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
             : {}),
           ...(snapshot.promptContext.runtimeContextSections
             ? { runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSectionTelemetry) }
+            : {}),
+          ...(snapshot.promptContext.memoryContextSections
+            ? { memoryContextSections: snapshot.promptContext.memoryContextSections.map(clonePromptSectionTelemetry) }
             : {}),
           ...(snapshot.promptContext.finalSystemSections
             ? { finalSystemSections: snapshot.promptContext.finalSystemSections.map(clonePromptSectionTelemetry) }

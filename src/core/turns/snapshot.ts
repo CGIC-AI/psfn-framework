@@ -136,6 +136,7 @@ export interface TurnPromptContextSnapshot {
   response?: TurnPromptResponseSnapshot;
   inputSections?: PromptSectionTelemetry[];
   runtimeContextSections?: PromptSectionTelemetry[];
+  memoryContextSections?: PromptSectionTelemetry[];
   finalSystemSections?: PromptSectionTelemetry[];
   sectionCacheability?: PromptSectionCacheability[];
 }
@@ -239,6 +240,7 @@ export function clonePromptSectionTelemetry(section: PromptSectionTelemetry): Pr
   return {
     ...section,
     ...(section.provenance ? { provenance: cloneAuthenticityProvenance(section.provenance) } : {}),
+    ...(section.scopeProvenance ? { scopeProvenance: { ...section.scopeProvenance } } : {}),
   };
 }
 

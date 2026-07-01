@@ -966,6 +966,7 @@ export interface AdminPromptLoomGeneratedPromptData {
   contextMessages: ContextMessage[];
   inputSections: PromptSectionTelemetry[];
   runtimeContextSections: PromptSectionTelemetry[];
+  memoryContextSections: PromptSectionTelemetry[];
   finalSystemSections: PromptSectionTelemetry[];
 }
 

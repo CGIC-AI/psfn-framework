@@ -151,6 +151,7 @@ function clonePromptSection(
   return {
     ...section,
     ...(section.provenance ? { provenance: cloneProvenance(section.provenance) } : {}),
+    ...(section.scopeProvenance ? { scopeProvenance: { ...section.scopeProvenance } } : {}),
   };
 }
 
@@ -175,6 +176,11 @@ function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
           ...(snapshot.promptContext.runtimeContextSections
             ? {
               runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSection),
+            }
+            : {}),
+          ...(snapshot.promptContext.memoryContextSections
+            ? {
+              memoryContextSections: snapshot.promptContext.memoryContextSections.map(clonePromptSection),
             }
             : {}),
           ...(snapshot.promptContext.finalSystemSections
@@ -446,6 +452,7 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
       contextMessages: clonePromptContextMessagesForLoom(promptContext?.messages),
       inputSections: clonePromptSectionsForLoom(promptContext?.inputSections),
       runtimeContextSections: clonePromptSectionsForLoom(promptContext?.runtimeContextSections),
+      memoryContextSections: clonePromptSectionsForLoom(promptContext?.memoryContextSections),
       finalSystemSections: clonePromptSectionsForLoom(promptContext?.finalSystemSections),
     },
     providerPayload: {

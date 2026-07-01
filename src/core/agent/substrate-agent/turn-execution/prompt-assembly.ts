@@ -30,6 +30,10 @@ import {
   buildPromptSectionTelemetryList,
   extractWrappedPromptSections,
 } from '../../../identity/prompt-sections.js';
+import {
+  buildTurnPromptSectionScopeResolver,
+  resolveTurnPromptScopeKeys,
+} from '../../../identity/prompt-section-provenance.js';
 import type { ContextManifestMemorySeed } from '../../../session/context-manifest.js';
 import type { EmotionAppraisalEntry } from '../../../emotion/appraisal.js';
 import type { TurnRetrievalTelemetryRecord } from '../../../turns/observability.js';
@@ -390,6 +394,12 @@ export async function assembleTurnPrompt(input: {
         : JSON.stringify(providerMessage.content),
     });
   }
+  const promptScopeKeys = resolveTurnPromptScopeKeys({
+    ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
+    channelId: message.channelId,
+    isDirectMessage: channelMeta.isDirectMessage === true,
+  });
+  const resolveSectionScope = buildTurnPromptSectionScopeResolver(promptScopeKeys);
   turnSnapshot.promptContext = {
     renderedStaticPrefix,
     renderedDynamicSuffix,
@@ -404,26 +414,39 @@ export async function assembleTurnPrompt(input: {
         id: 'rendered_static_prefix',
         title: 'Rendered Static Prefix',
         content: renderedStaticPrefix,
+        ...(resolveSectionScope('rendered_static_prefix')
+          ? { scopeProvenance: resolveSectionScope('rendered_static_prefix')! }
+          : {}),
       },
       ...staticTemporalRuleSections.map(section => ({
         id: section.id,
         title: section.title,
         content: section.content,
+        ...(resolveSectionScope(section.id) ? { scopeProvenance: resolveSectionScope(section.id)! } : {}),
       })),
       {
         id: 'rendered_dynamic_suffix',
         title: 'Rendered Dynamic Suffix',
         content: renderedDynamicSuffix,
+        ...(resolveSectionScope('rendered_dynamic_suffix')
+          ? { scopeProvenance: resolveSectionScope('rendered_dynamic_suffix')! }
+          : {}),
       },
       {
         id: 'runtime_context',
         title: 'Runtime Context',
         content: runtimeContextWithFatigue,
+        ...(resolveSectionScope('runtime_context')
+          ? { scopeProvenance: resolveSectionScope('runtime_context')! }
+          : {}),
       },
       {
         id: 'memory_context',
         title: 'Memory Context',
         content: memoryContextBlock,
+        ...(resolveSectionScope('memory_context')
+          ? { scopeProvenance: resolveSectionScope('memory_context')! }
+          : {}),
         provenance: buildAuthenticityProvenance({
           kind: 'memory_retrieval',
           sourceAuthor: 'memory',
@@ -441,12 +464,19 @@ export async function assembleTurnPrompt(input: {
         id: 'scratchpad_context',
         title: 'Scratchpad Context',
         content: scratchpadBlock,
+        ...(resolveSectionScope('scratchpad_context')
+          ? { scopeProvenance: resolveSectionScope('scratchpad_context')! }
+          : {}),
       },
     ]),
-    runtimeContextSections: extractWrappedPromptSections(runtimeContextWithFatigue),
+    runtimeContextSections: extractWrappedPromptSections(runtimeContextWithFatigue, resolveSectionScope),
+    memoryContextSections: extractWrappedPromptSections(memoryContextBlock, resolveSectionScope),
     finalSystemSections: context.systemPromptSections
       ? [
-        ...context.systemPromptSections,
+        ...context.systemPromptSections.map(section => {
+          const scopeProvenance = resolveSectionScope(section.id);
+          return scopeProvenance && !section.scopeProvenance ? { ...section, scopeProvenance } : section;
+        }),
         ...staticTemporalRuleSections,
         ...(systemContextPromptBlock
           ? [{
@@ -455,6 +485,9 @@ export async function assembleTurnPrompt(input: {
             content: systemContextPromptBlock,
             charCount: systemContextPromptBlock.length,
             tokenCount: countTokens(systemContextPromptBlock),
+            ...(resolveSectionScope('session_context')
+              ? { scopeProvenance: resolveSectionScope('session_context')! }
+              : {}),
             provenance: buildAuthenticityProvenance({
               kind: 'system_injection',
               sourceAuthor: 'system',

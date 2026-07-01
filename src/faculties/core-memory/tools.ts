@@ -27,6 +27,7 @@ import {
 import type { ValuesJournalStore } from '../values/store.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { evaluateCogSecMemoryCandidacy } from '../../core/cogsec/memory-candidacy.js';
 import {
   CORE_MEMORY_LABELS,
   coreMemoryChannelScope,
@@ -160,6 +161,17 @@ function requireConcernStore(concernStore: ConcernStorePort | null | undefined):
     throw new Error('orient concern support is not wired');
   }
   return concernStore;
+}
+
+function validateOrientCandidacy(text: string, context: string): string | null {
+  const decision = evaluateCogSecMemoryCandidacy({
+    text,
+    type: 'reflection',
+    tags: ['orient', context],
+    sourceType: 'tool_write',
+  });
+  if (decision.disposition === 'allow') return null;
+  return `Error: orient rejected ${context} by CogSec candidacy policy (${decision.riskClass}: ${decision.reasonCodes.join(', ')})`;
 }
 
 function resolveCurrentCoreMemoryScope(): CoreMemoryScopeDescriptor | null {
@@ -484,6 +496,10 @@ export function createOrientTool(
           if (!appendText) {
             return textResultWithError('Error: text is required for action=append', true);
           }
+          const candidacyError = validateOrientCandidacy(appendText, label);
+          if (candidacyError) {
+            return textResultWithError(candidacyError, true);
+          }
           if (params.separator !== undefined && typeof params.separator !== 'string') {
             return textResultWithError('Error: separator must be a string when provided', true);
           }
@@ -512,6 +528,10 @@ export function createOrientTool(
           if (replacementText === null) {
             return textResultWithError('Error: text must be a string for action=replace', true);
           }
+          const candidacyError = validateOrientCandidacy(replacementText, label);
+          if (candidacyError) {
+            return textResultWithError(candidacyError, true);
+          }
           const block = store.replace(label, replacementText, { scope });
           return textResult(
             `Replaced ${label} orientation (${block.content.length}/${block.maxChars} chars).`,
@@ -529,6 +549,14 @@ export function createOrientTool(
         const goals = ensureReplacementText(params.goals);
         if (goals === null) {
           return textResultWithError('Error: goals must be a string for action=reorient', true);
+        }
+        const candidacyErrors = [
+          validateOrientCandidacy(persona, 'persona'),
+          validateOrientCandidacy(human, 'human'),
+          validateOrientCandidacy(goals, 'goals'),
+        ].filter((error): error is string => Boolean(error));
+        if (candidacyErrors.length > 0) {
+          return textResultWithError(candidacyErrors[0], true);
         }
         const scope = resolveCurrentCoreMemoryScope();
         if (!scope) {

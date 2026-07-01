@@ -47,6 +47,10 @@ import {
   MemoryMaintenanceScheduler,
   type MemoryMaintenanceSchedulerOptions,
 } from './maintenance-review.js';
+import {
+  evaluateCogSecMemoryCandidacy,
+  type CogSecMemoryCandidacyDecision,
+} from '../../core/cogsec/memory-candidacy.js';
 
 const log = createComponentLogger('MemoryWriter');
 const IMPORT_BATCH_EMBED_CHUNK_SIZE = 200;
@@ -166,6 +170,19 @@ export class MemoryWritePolicyError extends Error {
     this.novelty = input.novelty;
     this.minSalience = input.minSalience;
     this.minNovelty = input.minNovelty;
+  }
+}
+
+export class MemoryCandidacyPolicyError extends Error {
+  readonly decision: CogSecMemoryCandidacyDecision;
+
+  constructor(decision: CogSecMemoryCandidacyDecision) {
+    super(
+      `Memory write rejected by CogSec candidacy policy: ${decision.riskClass} `
+      + `(${decision.reasonCodes.join(', ')})`,
+    );
+    this.name = 'MemoryCandidacyPolicyError';
+    this.decision = decision;
   }
 }
 
@@ -699,6 +716,30 @@ export class MemoryWriter {
     this.maintenanceScheduler?.queuePostWriteReview(input);
   }
 
+  private assertCogSecCandidacy(
+    opts: MemoryWriteOptions,
+    options: { logRejection?: boolean } = {},
+  ): void {
+    const decision = evaluateCogSecMemoryCandidacy({
+      text: opts.text,
+      type: opts.type,
+      tags: opts.tags,
+      sourceRef: opts.sourceRef,
+      sourceType: opts.sourceType,
+    });
+    if (decision.disposition === 'allow') return;
+    if (options.logRejection ?? true) {
+      log.info('Rejected memory write by CogSec candidacy policy', {
+        type: opts.type,
+        riskClass: decision.riskClass,
+        disposition: decision.disposition,
+        reasonCodes: decision.reasonCodes,
+        sourceType: opts.sourceType,
+      });
+    }
+    throw new MemoryCandidacyPolicyError(decision);
+  }
+
   /**
    * Write a single memory with dedup/contradiction handling.
    *
@@ -708,6 +749,7 @@ export class MemoryWriter {
    * 4. Insert new memory
    */
   async write(opts: MemoryWriteOptions): Promise<WriteResult> {
+    this.assertCogSecCandidacy(opts);
     const embedding = await this.embeddingService.embed(opts.text);
     return this.writeWithEmbedding(opts, embedding);
   }
@@ -716,6 +758,7 @@ export class MemoryWriter {
     opts: MemoryWriteOptions,
     embedding: Float32Array,
   ): Promise<WriteResult> {
+    this.assertCogSecCandidacy(opts);
     this.validateEmbedding(embedding, 'write');
 
     const {
@@ -1304,6 +1347,14 @@ export class MemoryWriter {
 
     let embedding: Float32Array | undefined;
     if (updates.text !== undefined) {
+      this.assertCogSecCandidacy({
+        text: updates.text,
+        type: existing.type,
+        tags: updates.tags ?? existing.tags,
+        sourceRef: opts.sourceRef,
+        sourceType: opts.sourceType,
+        provenance: opts.provenance,
+      });
       embedding = await this.embeddingService.embed(updates.text);
       this.validateEmbedding(embedding, 'patchMemory');
       updates.embedding = embedding;
@@ -1386,6 +1437,14 @@ export class MemoryWriter {
     const referenceRef = reviewReferencePath ? `reference:${reviewReferencePath}` : undefined;
     const replacementId = uuidv7();
     const now = Date.now();
+    this.assertCogSecCandidacy({
+      text: nextText,
+      type: existing.type,
+      tags: [...existing.tags, 'corrected'],
+      sourceRef: opts.sourceRef,
+      sourceType: opts.sourceType,
+      provenance: opts.provenance,
+    });
     const embedding = await this.embeddingService.embed(nextText);
     this.validateEmbedding(embedding, 'patch');
     const replacementRetention = applyRetentionSemantics({
@@ -1568,11 +1627,36 @@ export class MemoryWriter {
       return { written, deduplicated, superseded, errors, results };
     }
 
+    const acceptedRecords: MemoryWriteOptions[] = [];
+    for (const record of records) {
+      try {
+        this.assertCogSecCandidacy(record, { logRejection: false });
+        acceptedRecords.push(record);
+      } catch (err) {
+        errors++;
+        if (err instanceof MemoryCandidacyPolicyError) {
+          log.info('Rejected memory during batch import by CogSec candidacy policy', {
+            riskClass: err.decision.riskClass,
+            disposition: err.decision.disposition,
+            reasonCodes: err.decision.reasonCodes,
+            type: record.type,
+          });
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    if (acceptedRecords.length === 0) {
+      log.info('Batch import complete', { written, deduplicated, superseded, errors, total: records.length });
+      return { written, deduplicated, superseded, errors, results };
+    }
+
     let batchEmbeddings: Float32Array[] | null = null;
     try {
       const embeddedChunks: Float32Array[][] = [];
-      for (let start = 0; start < records.length; start += IMPORT_BATCH_EMBED_CHUNK_SIZE) {
-        const chunk = records.slice(start, start + IMPORT_BATCH_EMBED_CHUNK_SIZE);
+      for (let start = 0; start < acceptedRecords.length; start += IMPORT_BATCH_EMBED_CHUNK_SIZE) {
+        const chunk = acceptedRecords.slice(start, start + IMPORT_BATCH_EMBED_CHUNK_SIZE);
         const embedded = await this.embeddingService.embedBatch(chunk.map(record => record.text));
         if (embedded.length !== chunk.length) {
           throw new Error(`Expected ${chunk.length} embeddings, received ${embedded.length}`);
@@ -1586,11 +1670,11 @@ export class MemoryWriter {
     } catch (error) {
       log.warn('Batch embedding failed during import; falling back to per-record embedding', {
         error: String(error),
-        total: records.length,
+        total: acceptedRecords.length,
       });
     }
 
-    for (const [index, record] of records.entries()) {
+    for (const [index, record] of acceptedRecords.entries()) {
       try {
         const result = batchEmbeddings
           ? await this.writeWithEmbedding(record, batchEmbeddings[index])
@@ -1614,6 +1698,15 @@ export class MemoryWriter {
         }
       } catch (err) {
         errors++;
+        if (err instanceof MemoryCandidacyPolicyError) {
+          log.info('Rejected memory during batch import by CogSec candidacy policy', {
+            riskClass: err.decision.riskClass,
+            disposition: err.decision.disposition,
+            reasonCodes: err.decision.reasonCodes,
+            type: record.type,
+          });
+          continue;
+        }
         if (err instanceof MemoryWritePolicyError) {
           log.info('Rejected memory during batch import by sensitivity policy', {
             reason: err.reason,

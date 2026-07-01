@@ -36,6 +36,7 @@ export type ExtractionRejectionReason =
   | 'low_confidence'
   | 'low_novelty'
   | 'low_signal'
+  | 'cogsec_risk'
   | 'ambiguous_speaker'
   | 'write_cap';
 

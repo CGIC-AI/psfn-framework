@@ -47,6 +47,7 @@ import {
   evaluateFactAcceptance,
   evaluateExtractionPreLlmGate,
 } from './signals.js';
+import { evaluateCogSecMemoryCandidacy } from '../../../core/cogsec/memory-candidacy.js';
 import { isNonConversationalSessionEntry } from '../../../core/session/manager-primitives.js';
 import type {
   AcceptedFactCandidate,
@@ -104,6 +105,7 @@ function createEmptyRejectionBreakdown(): Record<ExtractionRejectionReason, numb
     low_confidence: 0,
     low_novelty: 0,
     low_signal: 0,
+    cogsec_risk: 0,
     ambiguous_speaker: 0,
     write_cap: 0,
   };
@@ -385,6 +387,27 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
             confidence: fact.confidence,
             minConfidence: options.gateConfig.minConfidence,
             textPreview: fact.text.slice(0, 120),
+          });
+        }
+        continue;
+      }
+
+      const cogSecCandidacy = evaluateCogSecMemoryCandidacy({
+        text: fact.text,
+        type: fact.type,
+        tags: fact.tags,
+      });
+      if (cogSecCandidacy.disposition !== 'allow') {
+        rejectionBreakdown.cogsec_risk++;
+        if (options.telemetryEnabled) {
+          log.info('Rejected extracted fact by CogSec memory candidacy gate', {
+            channelId: options.channelId,
+            triggerReason: options.triggerReason,
+            factIndex: index,
+            factType: fact.type,
+            riskClass: cogSecCandidacy.riskClass,
+            disposition: cogSecCandidacy.disposition,
+            reasonCodes: cogSecCandidacy.reasonCodes,
           });
         }
         continue;

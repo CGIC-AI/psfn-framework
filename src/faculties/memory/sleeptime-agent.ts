@@ -4,6 +4,10 @@ import {
   getDefaultPromptText,
   SLEEPTIME_ORIENTATION_PROMPT_KEY,
 } from '../../core/identity/prompt-registry.js';
+import {
+  evaluateCogSecMemoryCandidacy,
+  type CogSecMemoryCandidacyDecision,
+} from '../../core/cogsec/memory-candidacy.js';
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
 import { coreMemoryChannelScope } from '../core-memory/store.js';
 import { evaluateRestWindowEligibility } from '../../core/scheduler/rest-window.js';
@@ -102,6 +106,12 @@ interface NormalizedSleeptimePlan {
     goals: string;
   };
   memoryWrites: NormalizedMemoryWrite[];
+}
+
+type SleeptimeOrientBlockName = keyof NormalizedSleeptimePlan['orient'];
+interface SleeptimeOrientCandidacyRejection {
+  block: SleeptimeOrientBlockName;
+  decision: CogSecMemoryCandidacyDecision;
 }
 
 export interface SleeptimeMemoryAgentOptions {
@@ -264,6 +274,24 @@ function normalizeSleeptimePlan(raw: string, maxMemoryWrites: number): Normalize
     orient,
     memoryWrites,
   };
+}
+
+function evaluateSleeptimeOrientCandidacy(
+  orient: NormalizedSleeptimePlan['orient'],
+): SleeptimeOrientCandidacyRejection | null {
+  const blocks: SleeptimeOrientBlockName[] = ['persona', 'human', 'goals'];
+  for (const block of blocks) {
+    const decision = evaluateCogSecMemoryCandidacy({
+      text: orient[block],
+      type: 'reflection',
+      tags: ['sleeptime', 'orient', block],
+      sourceType: 'reflection',
+    });
+    if (decision.disposition !== 'allow') {
+      return { block, decision };
+    }
+  }
+  return null;
 }
 
 function summarizeSessionEntry(entry: SessionEntry): string {
@@ -673,11 +701,23 @@ export class SleeptimeMemoryAgent {
     );
     const plan = normalizeSleeptimePlan(response.content, this.maxMemoryWrites);
 
-    this.coreMemoryStore.rethink({
-      persona: plan.orient.persona,
-      human: plan.orient.human,
-      goals: plan.orient.goals,
-    }, { scope: coreMemoryScope });
+    const orientRejection = evaluateSleeptimeOrientCandidacy(plan.orient);
+    if (orientRejection) {
+      log.warn('Sleeptime orient rewrite skipped by CogSec candidacy policy', {
+        sessionId,
+        actionId: action.id,
+        block: orientRejection.block,
+        riskClass: orientRejection.decision.riskClass,
+        disposition: orientRejection.decision.disposition,
+        reasonCodes: orientRejection.decision.reasonCodes,
+      });
+    } else {
+      this.coreMemoryStore.rethink({
+        persona: plan.orient.persona,
+        human: plan.orient.human,
+        goals: plan.orient.goals,
+      }, { scope: coreMemoryScope });
+    }
 
     let writtenCount = 0;
     let reviewQueuedCount = await this.queueStaleMemoryReviews();

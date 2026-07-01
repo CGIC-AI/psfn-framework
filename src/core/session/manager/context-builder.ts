@@ -25,7 +25,11 @@ import {
 } from '../../identity/prompt-runtime.js';
 import { resolveCachedPromptRuntimeLayoutStore } from '../../identity/prompt-runtime-store-cache.js';
 import type { TurnSessionContextSnapshot } from '../../turns/snapshot.js';
-import { cloneSessionEntry } from '../../turns/snapshot.js';
+import {
+  buildSnapshotVersionPointer,
+  cloneSessionContinuityArtifact,
+  cloneSessionEntry,
+} from '../../turns/snapshot.js';
 import type { SessionEntry } from '../types.js';
 import type { SessionContinuityArtifact } from '../continuity-artifacts.js';
 import { resolveSessionEntryTurnContext } from '../turn-provenance.js';
@@ -215,48 +219,6 @@ function buildSessionHistoryMessages(
     buildHistorySummaryMessage(trimmedSummary, channelVisibility, summarySourceSpanCount),
     ...tailMessages,
   ];
-}
-
-export function assembleSessionHistoryForContext(params: {
-  entries: SessionEntry[];
-  channelVisibility: ChannelVisibility;
-  renderGroupUserAttribution: boolean;
-  tokenBudget: number;
-  characterName?: string;
-}): {
-  summaryText: string;
-  summarizedEntryCount: number;
-  verbatimEntries: SessionEntry[];
-  messages: ContextMessage[];
-} {
-  const directAssembly = assembleVerbatimSessionHistory(params);
-  if (directAssembly) return directAssembly;
-
-  const candidate = selectHistorySummaryCandidate(params);
-  if (candidate) {
-    const fallbackSummaryText = buildRecentSessionSummaryFallbackText({
-      entries: candidate.summaryEntries,
-      characterName: params.characterName,
-      maxTokens: candidate.remainingBudget,
-    });
-    const fittedSummaryText = fitHistorySummaryTextToBudget({
-      summaryText: fallbackSummaryText,
-      candidate,
-      channelVisibility: params.channelVisibility,
-      renderGroupUserAttribution: params.renderGroupUserAttribution,
-      tokenBudget: params.tokenBudget,
-    });
-    if (fittedSummaryText) {
-      return buildHistoryAssemblyFromSummary({
-        summaryText: fittedSummaryText,
-        candidate,
-        channelVisibility: params.channelVisibility,
-        renderGroupUserAttribution: params.renderGroupUserAttribution,
-      });
-    }
-  }
-
-  return assembleTrimmedSessionHistory(params);
 }
 
 export async function assembleSessionHistoryForContextWithLlmSummary(params: {
@@ -752,6 +714,163 @@ export function buildOrientationNoteTelemetry(params: {
   };
 }
 
+export interface CaptureTurnSessionContextParams {
+  /** Resolved session channel id. */
+  channelId: string;
+  sourceChannelId: string;
+  userId?: string;
+  channelMeta?: ChannelMeta;
+  continuityFallbackUserIds?: string[];
+  turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
+  config: SubstrateConfig;
+  /** Compaction-boundary-scoped store: recent entries + compaction summaries. */
+  store: SessionStore;
+  /** Raw session store used for the orientation recent-activity scan. */
+  activityStore: SessionStore;
+  crossChannelContinuity: CrossChannelContinuityPort;
+  focusCompactionRanges: FocusCompactionRange[];
+  focusKnowledgeTexts: string[];
+  wakeReturnArtifacts: SessionContinuityArtifact[];
+  compactionPromptText: string;
+  characterName?: string;
+  /** Optional LLM provider for foreground history-budget summarization. */
+  llmProvider?: LLMProviderPort;
+  promptRegistry: PromptRegistryStatePort | null;
+}
+
+/**
+ * The single session-context derivation for a turn (E2.2).
+ *
+ * This is the ONE place session history, continuity, focus knowledge,
+ * compaction summaries, and the orientation note are derived for a context
+ * build. The turn pipeline captures once (pre-turn, feeding the retrieval
+ * query and the persisted PromptPlan turn snapshot) and buildSessionContext
+ * consumes the captured snapshot; direct callers capture through
+ * SessionManager.buildContext, which performs this capture inline. The former
+ * session-manager snapshot builder and the builder's live re-derivation
+ * branches were both deleted with the PromptPlan consolidation.
+ */
+export async function captureTurnSessionContext(
+  params: CaptureTurnSessionContextParams,
+): Promise<TurnSessionContextSnapshot> {
+  const adaptiveProfile = resolveAdaptiveContextBudgetProfile(
+    params.config,
+    params.turnBudgetCharacteristics,
+  );
+  const historyBudget = resolveSessionHistoryBudget(params.config, {
+    ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
+    adaptiveProfile,
+  });
+  const maxHistorySpanMs = resolveMaxHistorySpanMs(params.config);
+  const collected = collectRecentEntriesWithinHistorySpan({
+    store: params.store,
+    channelId: params.channelId,
+    estimatedCount: historyBudget.estimatedCount,
+    maxHistorySpanMs,
+  });
+  let recent = applyTemporalSessionHistoryWindow(
+    collected.entries,
+    params.turnBudgetCharacteristics,
+  );
+  const focusCompaction = applyFocusCompactionRanges(recent, params.focusCompactionRanges);
+  recent = focusCompaction.entries;
+  const intentionAppraisalArtifactCount = countIntentionAppraisalArtifacts(recent);
+  recent = applyObservationMasking(
+    recent,
+    params.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
+  ).entries;
+  const channelVisibility = classifyChannel(params.sourceChannelId, params.channelMeta);
+  const assembledHistory = await assembleSessionHistoryForContextWithLlmSummary({
+    entries: recent,
+    channelVisibility,
+    renderGroupUserAttribution: shouldRenderSessionHistoryUserAttribution(
+      channelVisibility,
+      params.channelMeta,
+    ),
+    tokenBudget: historyBudget.tokenBudget,
+    characterName: params.characterName,
+    channelId: params.channelId,
+    llmProvider: params.llmProvider,
+    promptRegistry: params.promptRegistry,
+  });
+  recent = assembledHistory.verbatimEntries;
+
+  const continuityEntries = params.userId
+    ? params.crossChannelContinuity.getMerged({
+      canonicalUserId: params.userId,
+      limit: params.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT,
+      fallbackUserIds: params.continuityFallbackUserIds ?? [],
+      channelId: params.sourceChannelId,
+      channelMeta: params.channelMeta,
+    })
+    : [];
+  const orientationContinuityEntries = filterContinuityEntriesForChannel(
+    params.sourceChannelId,
+    continuityEntries,
+  );
+  const orientationRecentActivityEntries = getOrientationRecentActivityEntries({
+    channelId: params.channelId,
+    userId: params.userId,
+    channelMeta: params.channelMeta,
+    continuityFallbackUserIds: params.continuityFallbackUserIds ?? [],
+    store: params.activityStore,
+    config: params.config,
+    crossChannelContinuity: params.crossChannelContinuity,
+  });
+  const compactionSummaryTexts = params.store
+    .getCompactionSummaries(params.channelId)
+    .map(summary => summary.summary);
+  const orientation = buildOrientationNoteTelemetry({
+    channelId: params.channelId,
+    recentActivityEntries: orientationRecentActivityEntries,
+    continuityEntries: orientationContinuityEntries,
+    focusKnowledgeTexts: params.focusKnowledgeTexts,
+    characterName: params.characterName,
+  });
+
+  return {
+    channelId: params.channelId,
+    recentEntries: recent.map(cloneSessionEntry),
+    sourceEntryCount: collected.sourceCount,
+    ...(assembledHistory.summaryText
+      ? { historySummaryText: assembledHistory.summaryText }
+      : {}),
+    ...(assembledHistory.summarizedEntryCount > 0
+      ? { historySummaryEntryCount: assembledHistory.summarizedEntryCount }
+      : {}),
+    compactionSummaryTexts: [...compactionSummaryTexts],
+    focusKnowledgeTexts: [...params.focusKnowledgeTexts],
+    continuityEntries: continuityEntries.map(cloneSessionEntry),
+    wakeReturnArtifacts: params.wakeReturnArtifacts.map(cloneSessionContinuityArtifact),
+    orientation,
+    intentionAppraisalArtifactCount,
+    compactionPromptText: params.compactionPromptText,
+    versionPointer: buildSnapshotVersionPointer([
+      params.channelId,
+      recent.at(-1)?.id,
+      recent.at(-1)?.timestamp,
+      assembledHistory.summaryText,
+      assembledHistory.summarizedEntryCount,
+      compactionSummaryTexts.join('\n'),
+      params.focusKnowledgeTexts.join('\n'),
+      focusCompaction.compactedCount,
+      continuityEntries.at(-1)?.id,
+      continuityEntries.at(-1)?.timestamp,
+      params.wakeReturnArtifacts.at(0)?.id,
+      params.wakeReturnArtifacts.at(0)?.createdAt,
+      params.wakeReturnArtifacts.at(0)?.summary,
+      params.wakeReturnArtifacts.at(0)?.nextAnchor,
+      params.compactionPromptText,
+      orientation.fired ? 'orientation:fired' : `orientation:${orientation.reason}`,
+      orientation.idleGapMs,
+      orientation.lastActivityAt,
+      orientation.noteText,
+      orientation.timeTexture?.kind,
+      orientation.timeTexture?.reconnectionWarmth,
+    ]),
+  };
+}
+
 interface BuildSessionContextParams {
   channelId: string;
   sourceChannelId?: string;
@@ -778,9 +897,12 @@ interface BuildSessionContextParams {
   wakeReturnArtifacts: readonly SessionContinuityArtifact[];
   /** Character name from identity card (e.g. 'Companion'). Used for display labels. */
   characterName?: string;
-  turnSnapshot?: TurnSessionContextSnapshot;
-  focusKnowledgeTexts: string[];
-  focusCompactionRanges: FocusCompactionRange[];
+  /**
+   * The turn's captured session context (captureTurnSessionContext). The
+   * builder is a pure consumer of this snapshot: there is no parallel live
+   * re-derivation path (E2.2).
+   */
+  turnSessionContext: TurnSessionContextSnapshot;
   memoryManifestSeed?: ContextManifestMemorySeed;
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
   compactionMode?: 'deferred' | 'foreground';
@@ -808,43 +930,20 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
     adaptiveProfile: adaptiveBudgetProfile,
   });
-  const maxHistorySpanMs = resolveMaxHistorySpanMs(params.config);
-  const collectedRecent = params.turnSnapshot
-    ? null
-    : collectRecentEntriesWithinHistorySpan({
-      store: params.store,
-      channelId: params.channelId,
-      estimatedCount: historyBudget.estimatedCount,
-      maxHistorySpanMs,
-    });
-  let recent = params.turnSnapshot
-    ? params.turnSnapshot.recentEntries.map(cloneSessionEntry)
-    : collectedRecent!.entries;
-  if (!params.turnSnapshot) {
-    recent = applyTemporalSessionHistoryWindow(recent, params.turnBudgetCharacteristics);
-  }
-  const sourceEntryCount = params.turnSnapshot
-    ? recent.length + (params.turnSnapshot.historySummaryEntryCount ?? 0)
-    : collectedRecent!.sourceCount;
-  const focusCompaction = applyFocusCompactionRanges(
-    recent,
-    params.focusCompactionRanges,
-  );
-  recent = focusCompaction.entries;
-  let historySummaryText = params.turnSnapshot?.historySummaryText?.trim() ?? '';
-  let historySummaryEntryCount = params.turnSnapshot?.historySummaryEntryCount ?? 0;
+  let recent = params.turnSessionContext.recentEntries.map(cloneSessionEntry);
+  const historySummaryEntryCountFromSnapshot = params.turnSessionContext.historySummaryEntryCount ?? 0;
+  const sourceEntryCount = params.turnSessionContext.sourceEntryCount
+    ?? (recent.length + historySummaryEntryCountFromSnapshot);
+  const historySummaryText = params.turnSessionContext.historySummaryText?.trim() ?? '';
+  const historySummaryEntryCount = historySummaryEntryCountFromSnapshot;
   const intentionAppraisalArtifactCount = countIntentionAppraisalArtifacts(recent);
   const masking = applyObservationMasking(
     recent,
     params.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
   );
   recent = masking.entries;
-  let compactionSummaryTexts = params.turnSnapshot
-    ? [...params.turnSnapshot.compactionSummaryTexts]
-    : params.store.getCompactionSummaries(params.channelId).map(summary => summary.summary);
-  const focusKnowledgeTexts = params.turnSnapshot
-    ? [...params.turnSnapshot.focusKnowledgeTexts]
-    : [...params.focusKnowledgeTexts];
+  let compactionSummaryTexts = [...params.turnSessionContext.compactionSummaryTexts];
+  const focusKnowledgeTexts = [...params.turnSessionContext.focusKnowledgeTexts];
   const memoryIncludedCount = params.memoryManifestSeed?.returnedCount ?? 0;
   const coreMemoryProvenance = buildAuthenticityProvenance({
     kind: 'memory_retrieval',
@@ -914,7 +1013,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       recent,
       channelVisibility,
       systemTokens,
-      compactionPromptText: params.compactionPromptText ?? params.turnSnapshot?.compactionPromptText,
+      compactionPromptText: params.compactionPromptText ?? params.turnSessionContext.compactionPromptText,
       llmProvider: params.llmProvider,
       store: params.store,
       config: params.config,
@@ -968,34 +1067,8 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     focusKnowledgeSectionText = '[Focus knowledge]\n' + focusKnowledgeTexts.join('\n');
   }
 
-  if (!params.turnSnapshot) {
-    const assembledHistory = await assembleSessionHistoryForContextWithLlmSummary({
-      entries: recent,
-      channelVisibility,
-      renderGroupUserAttribution,
-      tokenBudget: historyBudget.tokenBudget,
-      characterName: params.characterName,
-      channelId: params.channelId,
-      llmProvider: foregroundRecentSummaryProvider,
-      promptRegistry: params.promptRegistry,
-    });
-    recent = assembledHistory.verbatimEntries;
-    historySummaryText = assembledHistory.summaryText;
-    historySummaryEntryCount = assembledHistory.summarizedEntryCount;
-  }
-
   // Cross-channel continuity: include recent activity from other channels
-  const rawCrossChannel = params.turnSnapshot
-    ? params.turnSnapshot.continuityEntries.map(cloneSessionEntry)
-    : params.userId
-      ? params.crossChannelContinuity.getMerged({
-        canonicalUserId: params.userId,
-        limit: params.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT,
-        fallbackUserIds: params.continuityFallbackUserIds,
-        channelId: sourceChannelId,
-        channelMeta: params.channelMeta,
-      })
-      : [];
+  const rawCrossChannel = params.turnSessionContext.continuityEntries.map(cloneSessionEntry);
   const crossChannel = filterContinuityEntriesForChannel(sourceChannelId, rawCrossChannel);
   const recentActivityEntries = getOrientationRecentActivityEntries({
     channelId: params.channelId,
@@ -1013,7 +1086,9 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     focusKnowledgeTexts,
     characterName: params.characterName,
   });
-  const shouldUseSnapshotOrientation = params.turnSnapshot && !isInternalReflectionChannel(params.channelId);
+  // Internal reflection turns recompute orientation live (they reflect on the
+  // room, not on the internal transport channel the snapshot was keyed to).
+  const shouldUseSnapshotOrientation = !isInternalReflectionChannel(params.channelId);
   if (!shouldUseSnapshotOrientation && computedOrientationTelemetry.fired) {
     const latestWakeReturnSummary = params.wakeReturnArtifacts.at(0)?.summary.trim();
     const relevantRecentEntries = recentActivityEntries.filter(
@@ -1053,7 +1128,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     });
   }
   const orientationTelemetry = shouldUseSnapshotOrientation
-    ? (params.turnSnapshot.orientation ?? computedOrientationTelemetry)
+    ? (params.turnSessionContext.orientation ?? computedOrientationTelemetry)
     : computedOrientationTelemetry;
 
   const orientationSectionText = buildContinuityAnchorLines({
@@ -1140,10 +1215,13 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       content: cogSecNoticeSectionText,
     },
   ], promptRuntimeLayout);
+  // Ordered nonempty session blocks, exposed for PromptPlan block emission.
+  const sessionPromptBlocks: Array<{ id: string; content: string }> = [];
   for (const section of orderedRuntimeSections) {
     const trimmed = section.content.trim();
     if (!trimmed) continue;
     fullSystem += '\n\n' + trimmed;
+    sessionPromptBlocks.push({ id: section.id, content: trimmed });
   }
 
   // Convert session entries to LLM messages
@@ -1367,6 +1445,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
 
   return {
     systemPrompt: fullSystem,
+    sessionPromptBlocks,
     messages,
     manifest,
     systemPromptSections,

@@ -6,7 +6,6 @@ import { createHash } from 'node:crypto';
 import type {
   CompanionValuesLayerSnapshot,
   ComposeContext,
-  ComposeResult,
   ComposeSplitResult,
   LayerType,
   NorthStarLayerSnapshot,
@@ -257,18 +256,11 @@ export class PromptComposer {
     this.lastKnownGood = null;
   }
 
-  compose(ctx?: ComposeContext): ComposeResult {
-    const split = this.composeSplit(ctx);
-    return {
-      text: split.text,
-      hash: split.hash,
-      layerCount: split.layerCount,
-      layerIds: split.layerIds,
-      promptIdentifiers: split.promptIdentifiers,
-      autoHealedPromptIdentifiers: split.autoHealedPromptIdentifiers,
-    };
-  }
-
+  /**
+   * The single composer entrypoint (E2.2). The static/dynamic split is the
+   * source of the PromptPlan volatility boundaries; the legacy unsplit
+   * compose() fallback was deleted with the PromptPlan consolidation.
+   */
   composeSplit(ctx?: ComposeContext): ComposeSplitResult {
     const layers = this.store.getAll();
     const sorted = this.resolveSortedLayers(layers, ctx);

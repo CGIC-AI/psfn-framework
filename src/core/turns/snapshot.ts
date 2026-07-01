@@ -22,6 +22,7 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import { cloneAuthenticityProvenance } from '../../shared/authenticity-provenance.js';
 import type { TrustLevel } from '../../system/trust/types.js';
+import type { PromptPlan } from '../agent/substrate-agent/turn-execution/prompt-plan.js';
 
 export type { FatigueEnforcementMetadata };
 
@@ -65,6 +66,8 @@ export interface TurnPromptSnapshot {
 export interface TurnSessionContextSnapshot {
   channelId: string;
   recentEntries: SessionEntry[];
+  /** Entries collected from the store before windowing/summarization. */
+  sourceEntryCount?: number;
   historySummaryText?: string;
   historySummaryEntryCount?: number;
   compactionSummaryTexts: string[];
@@ -122,15 +125,14 @@ export interface TurnPromptResponseSnapshot {
   toolCallCount?: number;
 }
 
+/**
+ * Turn prompt observability that is NOT derivable from the PromptPlan:
+ * provider wire observability, the model response, section telemetry lists,
+ * and cacheability annotations. The rendered prompt strings and the shipped
+ * message history live on TurnSnapshot.plan (E2.2) — the persisted snapshot
+ * IS the plan; there is no duplicated prompt-string state here.
+ */
 export interface TurnPromptContextSnapshot {
-  renderedStaticPrefix: string;
-  renderedDynamicSuffix: string;
-  runtimeContext: string;
-  memoryContextBlock: string;
-  scratchpadContext: string;
-  assembledPrompt: string;
-  finalSystemPrompt: string;
-  messages: ContextMessage[];
   currentTurnInput?: string;
   providerObservability?: LLMProviderObservability;
   response?: TurnPromptResponseSnapshot;
@@ -154,6 +156,12 @@ export interface TurnSnapshot {
   trustLevel: TrustLevel;
   canonicalContactKey?: string;
   prompt?: TurnPromptSnapshot;
+  /**
+   * The turn's PromptPlan (schema-versioned): the single assembly artifact.
+   * The persisted turn snapshot IS the plan — the Loom and provider
+   * serialization read the same ordered blocks/messages/tool definitions.
+   */
+  plan?: PromptPlan;
   promptContext?: TurnPromptContextSnapshot;
   toolContext?: TurnToolContextSnapshot;
   sessionContext?: TurnSessionContextSnapshot;

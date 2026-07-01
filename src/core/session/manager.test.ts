@@ -319,7 +319,7 @@ describe('SessionManager', () => {
         createdAt: new Date(currentAt - 500).toISOString(),
       });
 
-      const snapshot = mgr.captureTurnContextSnapshot('api:main', 'u1');
+      const snapshot = await mgr.captureTurnSessionContext({ channelId: 'api:main', userId: 'u1' });
       expect(snapshot.orientation).toMatchObject({
         fired: true,
         reason: 'idle_gap_exceeded',
@@ -431,7 +431,7 @@ describe('SessionManager', () => {
         timestamp: currentAt - 250,
       });
 
-      const snapshot = mgr.captureTurnContextSnapshot('internal:reflection:daily', 'u1');
+      const snapshot = await mgr.captureTurnSessionContext({ channelId: 'internal:reflection:daily', userId: 'u1' });
       expect(snapshot.orientation).toMatchObject({
         fired: true,
         reason: 'idle_gap_exceeded',
@@ -492,7 +492,7 @@ describe('SessionManager', () => {
         timestamp: currentAt,
       });
 
-      const snapshot = mgr.captureTurnContextSnapshot('ch1', 'u1');
+      const snapshot = await mgr.captureTurnSessionContext({ channelId: 'ch1', userId: 'u1' });
       expect(snapshot.orientation).toMatchObject({
         fired: false,
         reason: 'below_threshold',
@@ -524,7 +524,7 @@ describe('SessionManager', () => {
         timestamp: currentAt,
       });
 
-      const snapshot = mgr.captureTurnContextSnapshot('api:new', 'u1');
+      const snapshot = await mgr.captureTurnSessionContext({ channelId: 'api:new', userId: 'u1' });
       expect(snapshot.orientation).toMatchObject({
         fired: false,
         reason: 'no_previous_activity',
@@ -574,7 +574,7 @@ describe('SessionManager', () => {
       });
 
       const publicMeta = { privacyLevel: 'public' as const };
-      const snapshot = mgr.captureTurnContextSnapshot('api:public', 'u1', publicMeta);
+      const snapshot = await mgr.captureTurnSessionContext({ channelId: 'api:public', userId: 'u1', channelMeta: publicMeta });
       expect(snapshot.orientation).toMatchObject({
         fired: true,
         reason: 'idle_gap_exceeded',
@@ -1433,13 +1433,10 @@ describe('SessionManager', () => {
         timestamp: may9Evening - 5_000,
       });
 
-      const snapshot = mgr.captureTurnContextSnapshot(
-        'ch-snapshot-temporal',
-        undefined,
-        undefined,
-        [],
-        temporalTurn,
-      );
+      const snapshot = await mgr.captureTurnSessionContext({
+        channelId: 'ch-snapshot-temporal',
+        turnBudgetCharacteristics: temporalTurn,
+      });
       vi.setSystemTime(may10Morning);
 
       const snapshotContext = await mgr.buildContext(
@@ -1572,7 +1569,7 @@ describe('SessionManager', () => {
       append(currentAt - (1 * hourMs), 'assistant', 'recent-a5-theta-10-window');
 
       const liveContext = await mgr.buildContext('ch-span-window', 'Sys', '');
-      const snapshot = mgr.captureTurnContextSnapshot('ch-span-window');
+      const snapshot = await mgr.captureTurnSessionContext({ channelId: 'ch-span-window' });
       const snapshotContext = await mgr.buildContext(
         'ch-span-window',
         'Sys',
@@ -1630,20 +1627,14 @@ describe('SessionManager', () => {
 
     const recallTurn = { messageText: 'Can you remember what I told you last week?' };
     const taskTurn = { messageText: 'Please implement this step-by-step refactor plan.' };
-    const recallSnapshot = mgr.captureTurnContextSnapshot(
-      'ch-adaptive',
-      undefined,
-      undefined,
-      [],
-      recallTurn,
-    );
-    const taskSnapshot = mgr.captureTurnContextSnapshot(
-      'ch-adaptive',
-      undefined,
-      undefined,
-      [],
-      taskTurn,
-    );
+    const recallSnapshot = await mgr.captureTurnSessionContext({
+      channelId: 'ch-adaptive',
+      turnBudgetCharacteristics: recallTurn,
+    });
+    const taskSnapshot = await mgr.captureTurnSessionContext({
+      channelId: 'ch-adaptive',
+      turnBudgetCharacteristics: taskTurn,
+    });
 
     expect(recallSnapshot.recentEntries.length).toBeLessThan(taskSnapshot.recentEntries.length);
 
@@ -1727,13 +1718,11 @@ describe('SessionManager', () => {
         timestamp: now.getTime(),
       });
 
-      const snapshot = mgr.captureTurnContextSnapshot(
-        'ch-temporal',
-        'u1',
-        undefined,
-        [],
-        temporalTurn,
-      );
+      const snapshot = await mgr.captureTurnSessionContext({
+        channelId: 'ch-temporal',
+        userId: 'u1',
+        turnBudgetCharacteristics: temporalTurn,
+      });
       const context = await mgr.buildContext(
         'ch-temporal',
         'System prompt',
@@ -2063,7 +2052,7 @@ describe('SessionManager', () => {
       channelVisibility: 'private',
     });
 
-    const snapshot = mgr.captureTurnContextSnapshot('api:main', 'user1');
+    const snapshot = await mgr.captureTurnSessionContext({ channelId: 'api:main', userId: 'user1' });
 
     mgr.recordAssistantMessage('api:main', 'late drift');
     continuityStore.append('user1', {
@@ -3063,7 +3052,7 @@ describe('SessionManager', () => {
       mgr.recordAssistantMessage('ch1', 'B'.repeat(400));
     }
 
-    const snapshot = mgr.captureTurnContextSnapshot('ch1', 'u1');
+    const snapshot = await mgr.captureTurnSessionContext({ channelId: 'ch1', userId: 'u1' });
     promptRegistry.update(COMPACTION_SUMMARY_PROMPT_KEY, 'Live prompt v2', 'test');
 
     await runScheduledCompaction(mgr, mockLLM, {

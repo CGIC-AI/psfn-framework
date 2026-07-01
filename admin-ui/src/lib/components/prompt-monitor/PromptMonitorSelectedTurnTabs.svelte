@@ -500,33 +500,33 @@
           <div class="mt-3 space-y-3 text-sm">
             <PromptMonitorTextBlock
               title="Rendered Static Prefix"
-              value={turn.snapshot?.promptContext?.renderedStaticPrefix}
+              value={promptLoom.generatedPrompt.renderedStaticPrefix}
               emptyText="No rendered static prefix recorded."
               cacheability={cacheabilityFor('renderedStaticPrefix')}
             />
             <PromptMonitorTextBlock
               title="Rendered Dynamic Suffix"
-              value={turn.snapshot?.promptContext?.renderedDynamicSuffix}
+              value={promptLoom.generatedPrompt.renderedDynamicSuffix}
               emptyText="No rendered dynamic suffix recorded."
               cacheability={cacheabilityFor('renderedDynamicSuffix')}
             />
             <PromptMonitorTextBlock
               title="Runtime Context Block"
-              value={turn.snapshot?.promptContext?.runtimeContext}
+              value={promptLoom.generatedPrompt.runtimeContext}
               emptyText="No runtime context block recorded."
               maxHeightClass="max-h-64"
               cacheability={cacheabilityFor('runtimeContext')}
             />
             <PromptMonitorTextBlock
               title="Memory Context Block"
-              value={turn.snapshot?.promptContext?.memoryContextBlock}
+              value={promptLoom.generatedPrompt.memoryContextBlock}
               emptyText="No memory context block recorded."
               maxHeightClass="max-h-64"
               cacheability={cacheabilityFor('memoryContextBlock')}
             />
             <PromptMonitorTextBlock
               title="Scratchpad Context"
-              value={turn.snapshot?.promptContext?.scratchpadContext}
+              value={promptLoom.generatedPrompt.scratchpadContext}
               emptyText="No scratchpad context recorded."
               cacheability={cacheabilityFor('scratchpadContext')}
             />
@@ -540,14 +540,14 @@
           <div class="mt-3 space-y-3">
             <PromptMonitorTextBlock
               title="Pre-Session Prompt"
-              value={turn.snapshot?.promptContext?.assembledPrompt}
+              value={promptLoom.generatedPrompt.assembledPrompt}
               emptyText="No assembled prompt recorded."
               maxHeightClass="max-h-[28rem]"
               cacheability={cacheabilityFor('assembledPrompt')}
             />
             <PromptMonitorTextBlock
               title="Final System Prompt"
-              value={turn.snapshot?.promptContext?.finalSystemPrompt}
+              value={promptLoom.providerPayload.finalSystemPrompt}
               emptyText="No final system prompt recorded."
               maxHeightClass="max-h-[28rem]"
               cacheability={cacheabilityFor('finalSystemPrompt')}
@@ -557,7 +557,7 @@
 
         <PromptMonitorMessageList
           title="Model Context Messages"
-          messages={turn.snapshot?.promptContext?.messages ?? []}
+          messages={promptLoom.generatedPrompt.contextMessages}
           cacheability={cacheabilityFor('messages')}
         />
       </div>

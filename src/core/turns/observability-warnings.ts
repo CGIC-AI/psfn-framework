@@ -6,6 +6,7 @@ import {
 } from '../session/tool-observation.js';
 import type { TurnRetrievalTelemetryRecord } from './observability.js';
 import type { TurnMemorySnapshot, TurnSnapshot } from './snapshot.js';
+import { getPromptPlanBlockText } from '../agent/substrate-agent/turn-execution/prompt-plan.js';
 
 const REFLECTION_PROVENANCE_PREFIXES = ['reflection:', 'internal:reflection:', 'values:'] as const;
 const RECENT_LIVE_ACTIVITY_MAX_AGE_MS = 6 * 60 * 60 * 1000;
@@ -83,7 +84,9 @@ export function detectTurnObservabilityWarnings(input: {
   const valuesContradictionWarning = detectValuesActivityContradictionWarning({
     sessionContext,
     memorySnapshot,
-    renderedDynamicSuffix: input.snapshot?.promptContext?.renderedDynamicSuffix ?? '',
+    renderedDynamicSuffix: input.snapshot?.plan
+      ? getPromptPlanBlockText(input.snapshot.plan, 'dynamic_suffix')
+      : '',
     nowMs: input.nowMs,
   });
   if (valuesContradictionWarning) {

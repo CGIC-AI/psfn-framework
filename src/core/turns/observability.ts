@@ -29,6 +29,10 @@ import {
   cloneTurnPromptResponseSnapshot,
   cloneToolSchema,
 } from './snapshot.js';
+import {
+  clonePromptPlan,
+  type PromptPlan,
+} from '../agent/substrate-agent/turn-execution/prompt-plan.js';
 
 export type TurnObservabilityCallType =
   | 'chat'
@@ -47,6 +51,7 @@ export interface ObservedScoredMemory extends ObservedMemory {
 export interface TurnSessionContextSnapshotRecord {
   channelId: string;
   recentEntries: SessionEntry[];
+  sourceEntryCount?: number;
   historySummaryText?: string;
   historySummaryEntryCount?: number;
   compactionSummaryTexts: string[];
@@ -80,6 +85,8 @@ export interface TurnSnapshotRecord {
   trustLevel: string;
   canonicalContactKey?: string;
   prompt?: TurnPromptSnapshot;
+  /** The turn's PromptPlan (schema-versioned): the persisted snapshot IS the plan. */
+  plan?: PromptPlan;
   promptContext?: TurnPromptContextSnapshot;
   toolContext?: TurnToolContextSnapshot;
   sessionContext?: TurnSessionContextSnapshotRecord;
@@ -217,11 +224,13 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         },
       }
       : {}),
+    ...(snapshot.plan
+      ? { plan: clonePromptPlan(snapshot.plan, cloneContextMessage, cloneToolSchema) }
+      : {}),
     ...(snapshot.promptContext
       ? {
         promptContext: {
           ...snapshot.promptContext,
-          messages: snapshot.promptContext.messages.map(cloneContextMessage),
           ...(snapshot.promptContext.currentTurnInput !== undefined
             ? { currentTurnInput: snapshot.promptContext.currentTurnInput }
             : {}),
@@ -264,6 +273,9 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         sessionContext: {
           channelId: snapshot.sessionContext.channelId,
           recentEntries: snapshot.sessionContext.recentEntries.map(cloneSessionEntry),
+          ...(snapshot.sessionContext.sourceEntryCount !== undefined
+            ? { sourceEntryCount: snapshot.sessionContext.sourceEntryCount }
+            : {}),
           ...(snapshot.sessionContext.historySummaryText
             ? { historySummaryText: snapshot.sessionContext.historySummaryText }
             : {}),
@@ -338,11 +350,13 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
         },
       }
       : {}),
+    ...(snapshot.plan
+      ? { plan: clonePromptPlan(snapshot.plan, cloneContextMessage, cloneToolSchema) }
+      : {}),
     ...(snapshot.promptContext
       ? {
         promptContext: {
           ...snapshot.promptContext,
-          messages: snapshot.promptContext.messages.map(cloneContextMessage),
           ...(snapshot.promptContext.currentTurnInput !== undefined
             ? { currentTurnInput: snapshot.promptContext.currentTurnInput }
             : {}),
@@ -385,6 +399,9 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
         sessionContext: {
           channelId: snapshot.sessionContext.channelId,
           recentEntries: snapshot.sessionContext.recentEntries.map(cloneSessionEntry),
+          ...(snapshot.sessionContext.sourceEntryCount !== undefined
+            ? { sourceEntryCount: snapshot.sessionContext.sourceEntryCount }
+            : {}),
           ...(snapshot.sessionContext.historySummaryText
             ? { historySummaryText: snapshot.sessionContext.historySummaryText }
             : {}),

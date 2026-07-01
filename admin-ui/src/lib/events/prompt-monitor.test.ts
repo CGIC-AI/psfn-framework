@@ -110,6 +110,8 @@ function buildTurn(seed: {
         staticHash: `${seed.promptVersionPointer}-hash`,
         versionPointer: seed.promptVersionPointer,
       },
+      // Historical persisted snapshot shape: records that predate the
+      // PromptPlan (E2.2) stored rendered prompt strings on promptContext.
       promptContext: {
         renderedStaticPrefix: 'Rendered static prefix',
         renderedDynamicSuffix: 'Rendered dynamic suffix',
@@ -152,7 +154,7 @@ function buildTurn(seed: {
           stopReason: 'stop',
           toolCallCount: 0,
         },
-      },
+      } as unknown as NonNullable<AdminSessionTurnData['snapshot']>['promptContext'],
       toolContext: {
         activeTools: [
           {
@@ -366,15 +368,51 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
           staticHash: 'live-hash',
           versionPointer: 'prompt-live',
         },
-        promptContext: {
-          renderedStaticPrefix: 'Rendered live static',
-          renderedDynamicSuffix: 'Rendered live dynamic',
-          runtimeContext: 'Live runtime context',
-          memoryContextBlock: 'Live memory block',
-          scratchpadContext: 'Live scratchpad block',
-          assembledPrompt: 'Live assembled prompt',
-          finalSystemPrompt: 'Live final system prompt',
-          currentTurnInput: 'live user input',
+        plan: {
+          schemaVersion: 1,
+          blocks: [
+            {
+              id: 'static_prefix',
+              layer: 'prompt_stack',
+              volatility: 'static',
+              producer: 'identity.prompt-runtime',
+              renderedText: 'Rendered live static',
+              tokensEst: 3,
+            },
+            {
+              id: 'dynamic_suffix',
+              layer: 'prompt_stack',
+              volatility: 'turn',
+              producer: 'identity.prompt-runtime',
+              renderedText: 'Rendered live dynamic',
+              tokensEst: 3,
+            },
+            {
+              id: 'runtime.context',
+              layer: 'runtime',
+              volatility: 'turn',
+              producer: 'substrate-agent.runtime-context',
+              renderedText: 'Live runtime context',
+              tokensEst: 3,
+            },
+            {
+              id: 'runtime.scratchpad',
+              layer: 'runtime',
+              volatility: 'turn',
+              producer: 'substrate-agent.scratchpad',
+              renderedText: 'Live scratchpad block',
+              tokensEst: 3,
+            },
+            {
+              id: 'memory.retrieval',
+              layer: 'session',
+              volatility: 'turn',
+              producer: 'memory.retrieval.formatting',
+              renderedText: 'Live memory block',
+              tokensEst: 3,
+            },
+          ],
+          variables: {},
           messages: [
             {
               role: 'user',
@@ -395,6 +433,17 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
             },
             { role: 'assistant', content: 'reply' },
           ],
+          toolDefinitions: [],
+          cachePlan: { staticBoundary: 1, sessionStableBoundary: 1 },
+          scope: {
+            kind: 'group',
+            channelId: 'api:monitor',
+            recentSpeakers: [],
+            key: 'room:api:monitor',
+          },
+        },
+        promptContext: {
+          currentTurnInput: 'live user input',
           inputSections: [
             {
               id: 'analysis_workbench_guidance',
@@ -519,9 +568,19 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
   assert.equal(metrics.ttftMs, 18);
   assert.equal(metrics.promptVersionPointer, 'prompt-live');
   assert.equal(metrics.isComplete, false);
-  assert.equal(mergedStages[0]?.snapshot?.promptContext?.finalSystemPrompt, 'Live final system prompt');
+  const liveFinalSystemPrompt = [
+    'Rendered live static',
+    'Rendered live dynamic',
+    'Live runtime context',
+    'Live scratchpad block',
+    'Live memory block',
+  ].join('\n\n');
+  assert.equal(
+    mergedStages[0]?.snapshot?.plan?.blocks.find(block => block.id === 'static_prefix')?.renderedText,
+    'Rendered live static',
+  );
   assert.equal(mergedStages[0]?.snapshot?.promptContext?.currentTurnInput, 'live user input');
-  assert.deepEqual(mergedStages[0]?.snapshot?.promptContext?.messages, [
+  assert.deepEqual(mergedStages[0]?.snapshot?.plan?.messages, [
     {
       role: 'user',
       content: 'earlier',
@@ -549,6 +608,7 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
     { role: 'developer', source: 'system_prompt', content: 'Live final system prompt' },
     { role: 'user', source: 'message', content: 'earlier' },
   ]);
+  assert.equal(mergedStages[0]?.snapshot?.plan?.cachePlan.staticBoundary, 1);
   assert.deepEqual(mergedStages[0]?.snapshot?.promptContext?.response, {
     content: 'reply',
     reasoning: 'live reasoning',
@@ -566,7 +626,15 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
     },
   ]);
   const promptLoom = resolvePromptMonitorPromptLoom(mergedStages[0]!);
-  assert.equal(promptLoom.providerPayload.finalSystemPrompt, 'Live final system prompt');
+  assert.equal(promptLoom.providerPayload.finalSystemPrompt, liveFinalSystemPrompt);
+  assert.equal(promptLoom.generatedPrompt.renderedStaticPrefix, 'Rendered live static');
+  assert.equal(promptLoom.generatedPrompt.memoryContextBlock, 'Live memory block');
+  assert.equal(promptLoom.generatedPrompt.assembledPrompt, [
+    'Rendered live static',
+    'Rendered live dynamic',
+    'Live runtime context',
+    'Live scratchpad block',
+  ].join('\n\n'));
   assert.deepEqual(promptLoom.providerPayload.providerMessages, [
     { role: 'developer', source: 'system_prompt', content: 'Live final system prompt' },
     { role: 'user', source: 'message', content: 'earlier' },

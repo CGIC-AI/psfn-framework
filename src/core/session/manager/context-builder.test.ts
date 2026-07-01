@@ -103,7 +103,8 @@ describe('orientation context surface wiring', () => {
     const manifestSource = readFileSync(resolve('src/core/session/context-manifest.ts'), 'utf-8');
 
     expect(builderSource).toContain('buildOrientationNoteTelemetry');
-    expect(builderSource).toContain('params.turnSnapshot && !isInternalReflectionChannel(params.channelId)');
+    expect(builderSource).toContain('!isInternalReflectionChannel(params.channelId)');
+    expect(builderSource).toContain('captureTurnSessionContext');
     expect(builderSource).toContain('buildContinuityAnchorLines({');
     expect(builderSource).toContain('<continuity_anchor authority="companion_context"');
     expect(builderSource).toContain('<cross_channel_continuity authority="retrieved_context"');
@@ -148,8 +149,15 @@ describe('orientation context surface wiring', () => {
       },
       wakeReturnArtifacts: [],
       characterName: 'Companion',
-      focusKnowledgeTexts: [],
-      focusCompactionRanges: [],
+      turnSessionContext: {
+        channelId: 'logical-session-1',
+        recentEntries: [],
+        sourceEntryCount: 0,
+        compactionSummaryTexts: [],
+        focusKnowledgeTexts: [],
+        continuityEntries: [],
+        versionPointer: 'test-snapshot',
+      },
       cogSecEvents: [unrelatedEvent, relevantEvent],
     });
 
@@ -468,8 +476,11 @@ describe('orientation context surface wiring', () => {
       };
     });
 
+    // Live orientation enrichment (wake summaries) runs on the
+    // internal-reflection consumption branch; non-internal channels consume
+    // the orientation captured once in captureTurnSessionContext (E2.2).
     const ctx = await buildSessionContext({
-      channelId: 'api:main',
+      channelId: 'internal:reflection:daily',
       systemPrompt: 'System prompt.',
       coreMemoryBlock: '',
       memoriesBlock: '',
@@ -489,8 +500,15 @@ describe('orientation context surface wiring', () => {
       },
       wakeReturnArtifacts: [],
       characterName: 'Companion',
-      focusKnowledgeTexts: [],
-      focusCompactionRanges: [],
+      turnSessionContext: {
+        channelId: 'internal:reflection:daily',
+        recentEntries,
+        sourceEntryCount: recentEntries.length,
+        compactionSummaryTexts: [],
+        focusKnowledgeTexts: [],
+        continuityEntries,
+        versionPointer: 'test-snapshot',
+      },
       recentSummaryMode: 'foreground',
     });
 

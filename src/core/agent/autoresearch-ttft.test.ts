@@ -98,6 +98,15 @@ function makeMockSessionManager(): SessionManager {
     appendSystemNote: vi.fn(),
     awaitPendingAutoCompaction: vi.fn().mockResolvedValue(undefined),
     scheduleAutoCompactionBetweenTurns: vi.fn().mockResolvedValue(undefined),
+    captureTurnSessionContext: vi.fn(async (input: { channelId: string }) => ({
+      channelId: input.channelId,
+      recentEntries: [],
+      sourceEntryCount: 0,
+      compactionSummaryTexts: [],
+      focusKnowledgeTexts: [],
+      continuityEntries: [],
+      versionPointer: 'mock-session-context',
+    })),
     buildContext: vi.fn().mockResolvedValue({
       systemPrompt: TEST_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: 'Hello' }],

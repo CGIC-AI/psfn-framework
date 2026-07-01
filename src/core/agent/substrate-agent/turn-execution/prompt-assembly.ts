@@ -6,11 +6,19 @@ import {
 import { TurnPromptVariableNamespace } from '../../../identity/prompt-variable-namespace.js';
 import { resolveCachedPromptRuntimeLayoutStore } from '../../../identity/prompt-runtime-store-cache.js';
 import { composeDefaultRuntimePromptTemplate } from '../../../identity/runtime-prompt-layers.js';
+import { buildSystemContextPromptBlock } from '../../../../primitives/llm/message-conversion.js';
+import type { PiChatMessage } from '../../../../primitives/llm/message-conversion.js';
 import {
-  buildSystemContextPromptBlock,
-  contextMessagesToPiMessages,
-  mergeSystemContextIntoSystemPrompt,
-} from '../../../../primitives/llm/message-conversion.js';
+  buildCurrentDatetimeProximityAnchor,
+  createPromptPlan,
+  createPromptPlanBlock,
+  DATETIME_ANCHOR_BLOCK_ID,
+  renderPromptPlanAssembledPrompt,
+  serializePromptPlanForProvider,
+  stripCurrentDatetimePromptBlocks,
+  type PromptPlan,
+  type PromptPlanBlock,
+} from './prompt-plan.js';
 import { runWithRequestContext } from '../../../../primitives/llm/request-context.js';
 import { countTokens } from '../../../../primitives/llm/tokens.js';
 import { resolveSystemRoleCapabilityMetadata } from '../../../../primitives/llm/models.js';
@@ -18,7 +26,6 @@ import type { ContextBudgetTurnCharacteristics } from '../../../../shared/contex
 import type {
   CorrelationMetadata,
   FatigueEnforcementMetadata,
-  LLMProviderWireMessage,
   MessagePromptOverrideMode,
   ObservabilityCallType,
   SubstrateMessage,
@@ -53,64 +60,11 @@ export interface TurnPromptAssemblyResult {
   fullPrompt: string;
   contextMessageCount: number;
   context: Awaited<ReturnType<TurnExecutionRuntime['sessionManager']['buildContext']>>;
+  /** The turn's PromptPlan: the single assembly artifact (E2.2). */
+  plan: PromptPlan;
   providerSystemPrompt: string;
-  piMessages: ReturnType<typeof contextMessagesToPiMessages>;
+  piMessages: PiChatMessage[];
   templateVariables: Record<string, string>;
-}
-
-function readPromptVariable(variables: Record<string, unknown>, key: string): string {
-  const value = variables[key];
-  return typeof value === 'string' ? value.trim() : '';
-}
-
-function buildCurrentDatetimeProximityAnchor(variables: Record<string, unknown>): string {
-  const fields = [
-    ['iso', readPromptVariable(variables, 'runtime_current_datetime_iso')],
-    ['timezone', readPromptVariable(variables, 'active_timezone')],
-    ['weekday', readPromptVariable(variables, 'runtime_current_weekday')],
-    ['date', readPromptVariable(variables, 'runtime_current_date_human')],
-    ['time', readPromptVariable(variables, 'runtime_current_time_human')],
-    ['today', readPromptVariable(variables, 'runtime_current_today')],
-    ['yesterday', readPromptVariable(variables, 'runtime_current_yesterday')],
-    ['tomorrow', readPromptVariable(variables, 'runtime_current_tomorrow')],
-    ['part_of_day', readPromptVariable(variables, 'runtime_current_part_of_day')],
-  ] as const;
-  const renderedFields = fields
-    .filter(([, value]) => value.length > 0)
-    .map(([tag, value]) => `<${tag}>${value}</${tag}>`);
-  if (renderedFields.length === 0) {
-    return '';
-  }
-  return [
-    '<runtime.current_datetime authority="canonical" overrides="memory,conversation_history,continuity_anchor,wake_orientation,cross_channel_continuity">',
-    ...renderedFields,
-    '</runtime.current_datetime>',
-  ].join('\n');
-}
-
-function stripCurrentDatetimePromptBlocks(text: string): string {
-  return text
-    .replace(/<runtime\.current_datetime(?:\s+[^>]*)?>\s*[\s\S]*?<\/runtime\.current_datetime>/g, '')
-    .replace(/<current_datetime>\s*[\s\S]*?<\/current_datetime>/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function appendCurrentDatetimeProximityAnchor(
-  systemPrompt: string,
-  variables: Record<string, unknown>,
-): { systemPrompt: string; anchor: string } {
-  const anchor = buildCurrentDatetimeProximityAnchor(variables);
-  if (!anchor) {
-    return { systemPrompt, anchor };
-  }
-  const trimmedSystemPrompt = systemPrompt.trim();
-  return {
-    systemPrompt: trimmedSystemPrompt
-      ? `${trimmedSystemPrompt}\n\n${anchor}`
-      : anchor,
-    anchor,
-  };
 }
 
 function buildTurnObservabilityWarningPayload(input: {
@@ -336,6 +290,12 @@ export async function assembleTurnPrompt(input: {
       content: scratchpadBlock,
     },
   ], promptRuntimeLayout);
+  const promptScopeKeys = resolveTurnPromptScopeKeys({
+    ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
+    channelId: message.channelId,
+    isDirectMessage: channelMeta.isDirectMessage === true,
+  });
+  const resolveSectionScope = buildTurnPromptSectionScopeResolver(promptScopeKeys);
   let renderedStaticPrefix = '';
   let promptPrefix = '';
 
@@ -367,10 +327,55 @@ export async function assembleTurnPrompt(input: {
   }
   const staticTemporalRuleSections = extractWrappedPromptSections(renderedStaticPrefix)
     .filter(section => section.id === 'temporal_rules');
-  const fullPrompt = [promptPrefix, renderedDynamicSuffix, ...orderedRuntimeSections.map(section => section.content)]
-    .map(section => section.trim())
-    .filter(section => section.length > 0)
-    .join('\n\n');
+
+  // ── PromptPlan block emission (E2.2): every producer emits an ordered
+  // block; the assembled prompt and the provider system prompt are pure
+  // functions of the block list.
+  const RUNTIME_SECTION_SCOPE_IDS: Record<string, string> = {
+    'runtime.persona_adaptation': 'companion_persona_adaptation',
+    'runtime.context': 'runtime_context',
+    'runtime.scratchpad': 'scratchpad_context',
+  };
+  const planBlocks: PromptPlanBlock[] = [];
+  if (promptPrefix.trim().length > 0) {
+    const prefixScope = resolveSectionScope('rendered_static_prefix');
+    planBlocks.push(createPromptPlanBlock({
+      id: promptOverride.mode === 'default' ? 'static_prefix' : 'prompt_override',
+      layer: 'prompt_stack',
+      volatility: promptOverride.mode === 'default' ? 'static' : 'turn',
+      producer: promptOverride.mode === 'default'
+        ? (prefixScope?.producer ?? 'identity.prompt-composer')
+        : 'turn-override.custom-prompt',
+      ...(promptOverride.mode === 'default' && prefixScope?.scopeKey
+        ? { scopeKey: prefixScope.scopeKey }
+        : {}),
+      renderedText: promptPrefix,
+    }));
+  }
+  if (renderedDynamicSuffix.trim().length > 0) {
+    const suffixScope = resolveSectionScope('rendered_dynamic_suffix');
+    planBlocks.push(createPromptPlanBlock({
+      id: 'dynamic_suffix',
+      layer: 'prompt_stack',
+      volatility: 'turn',
+      producer: suffixScope?.producer ?? 'identity.prompt-runtime',
+      ...(suffixScope?.scopeKey ? { scopeKey: suffixScope.scopeKey } : {}),
+      renderedText: renderedDynamicSuffix,
+    }));
+  }
+  for (const section of orderedRuntimeSections) {
+    if (section.content.trim().length === 0) continue;
+    const sectionScope = resolveSectionScope(RUNTIME_SECTION_SCOPE_IDS[section.id] ?? section.id);
+    planBlocks.push(createPromptPlanBlock({
+      id: section.id,
+      layer: 'runtime',
+      volatility: 'turn',
+      producer: sectionScope?.producer ?? 'substrate-agent.runtime-context',
+      ...(sectionScope?.scopeKey ? { scopeKey: sectionScope.scopeKey } : {}),
+      renderedText: section.content,
+    }));
+  }
+  const fullPrompt = renderPromptPlanAssembledPrompt({ blocks: planBlocks });
 
   const contextStageStart = Date.now();
   const context = await runWithRequestContext(
@@ -392,55 +397,71 @@ export async function assembleTurnPrompt(input: {
       conversationScope,
     ),
   );
-  const { systemPrompt: providerSystemPrompt, anchor: currentDatetimeProximityAnchor } = appendCurrentDatetimeProximityAnchor(
-    stripCurrentDatetimePromptBlocks(mergeSystemContextIntoSystemPrompt(
-      context.systemPrompt,
-      context.messages,
-    )),
-    promptRuntimeVariables,
-  );
+  // ── Session-derived blocks emitted into the plan (same ordered sections the
+  // context builder appended to context.systemPrompt).
+  const SESSION_BLOCK_SCOPE_IDS: Record<string, string> = {
+    'memory.core': 'core_memory',
+    'memory.retrieval': 'memory_context',
+  };
+  for (const sessionBlock of context.sessionPromptBlocks ?? []) {
+    const sessionScope = resolveSectionScope(
+      SESSION_BLOCK_SCOPE_IDS[sessionBlock.id] ?? sessionBlock.id,
+    );
+    planBlocks.push(createPromptPlanBlock({
+      id: sessionBlock.id,
+      layer: 'session',
+      volatility: 'turn',
+      producer: sessionScope?.producer ?? 'session.context-builder',
+      ...(sessionScope?.scopeKey ? { scopeKey: sessionScope.scopeKey } : {}),
+      renderedText: sessionBlock.content,
+    }));
+  }
   const systemContextPromptBlock = buildSystemContextPromptBlock(context.messages);
-  const contextMessageCount = context.messages.length;
-  turnSnapshot.capturedAt = Date.now();
+  if (systemContextPromptBlock) {
+    const sessionContextScope = resolveSectionScope('session_context');
+    planBlocks.push(createPromptPlanBlock({
+      id: 'session_context',
+      layer: 'provider',
+      volatility: 'turn',
+      producer: sessionContextScope?.producer ?? 'session.context-builder',
+      ...(sessionContextScope?.scopeKey ? { scopeKey: sessionContextScope.scopeKey } : {}),
+      renderedText: systemContextPromptBlock,
+    }));
+  }
+  // The canonical clock ships as an ordered turn-volatile block, rendered from
+  // the frozen variable namespace — not appended by string surgery.
+  const currentDatetimeProximityAnchor = buildCurrentDatetimeProximityAnchor(promptRuntimeVariables);
+  if (currentDatetimeProximityAnchor) {
+    const anchorScope = resolveSectionScope('runtime_current_datetime');
+    planBlocks.push(createPromptPlanBlock({
+      id: DATETIME_ANCHOR_BLOCK_ID,
+      layer: 'provider',
+      volatility: 'turn',
+      producer: anchorScope?.producer ?? 'runtime-context.current-datetime',
+      scopeKey: 'global',
+      renderedText: currentDatetimeProximityAnchor,
+    }));
+  }
+  const plan = createPromptPlan({
+    blocks: planBlocks,
+    variables: promptRuntimeVariables,
+    messages: context.messages.map(contextMessage => ({ ...contextMessage })),
+    toolDefinitions: [],
+    scope: conversationScope,
+  });
+
   const providerModel = runtime.agent.state.model;
   const providerSystemRole = resolveSystemRoleCapabilityMetadata(providerModel);
-  const providerWireMessages: LLMProviderWireMessage[] = [];
-  if (providerSystemPrompt) {
-    providerWireMessages.push({
-      role: providerSystemRole.transport === 'openai_developer'
-        ? 'developer'
-        : providerSystemRole.transport === 'google_system_instruction'
-          ? 'system_instruction'
-          : 'system',
-      source: 'system_prompt',
-      content: providerSystemPrompt,
-    });
-  }
-  const piMessages = contextMessagesToPiMessages(context.messages);
-  for (const providerMessage of piMessages) {
-    providerWireMessages.push({
-      role: providerMessage.role === 'assistant' ? 'assistant' : 'user',
-      source: 'message',
-      content: typeof providerMessage.content === 'string'
-        ? providerMessage.content
-        : JSON.stringify(providerMessage.content),
-    });
-  }
-  const promptScopeKeys = resolveTurnPromptScopeKeys({
-    ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
-    channelId: message.channelId,
-    isDirectMessage: channelMeta.isDirectMessage === true,
-  });
-  const resolveSectionScope = buildTurnPromptSectionScopeResolver(promptScopeKeys);
+  // Provider serialization is a pure function of the plan.
+  const {
+    systemPrompt: providerSystemPrompt,
+    piMessages,
+    providerWireMessages,
+  } = serializePromptPlanForProvider(plan, providerSystemRole.transport);
+  const contextMessageCount = context.messages.length;
+  turnSnapshot.capturedAt = Date.now();
+  turnSnapshot.plan = plan;
   turnSnapshot.promptContext = {
-    renderedStaticPrefix,
-    renderedDynamicSuffix,
-    runtimeContext: runtimeContextWithFatigue,
-    memoryContextBlock,
-    scratchpadContext: scratchpadBlock,
-    assembledPrompt: fullPrompt,
-    finalSystemPrompt: providerSystemPrompt,
-    messages: context.messages.map(contextMessage => ({ ...contextMessage })),
     inputSections: buildPromptSectionTelemetryList([
       {
         id: 'rendered_static_prefix',
@@ -621,6 +642,7 @@ export async function assembleTurnPrompt(input: {
     fullPrompt,
     contextMessageCount,
     context,
+    plan,
     providerSystemPrompt,
     piMessages,
     templateVariables,

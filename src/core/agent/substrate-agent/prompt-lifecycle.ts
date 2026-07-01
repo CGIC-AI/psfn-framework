@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { AppCache } from '../../../shared/cache/types.js';
 import type { PromptComposer } from '../../identity/prompt-composer.js';
-import type { ComposeContext, ComposeSplitResult } from '../../identity/prompt-types.js';
+import type { ComposeContext } from '../../identity/prompt-types.js';
 import {
   getVolatileClockPromptMacroNames,
   injectPromptRuntimeTokens,
@@ -263,30 +263,16 @@ export function composePromptSections(input: {
     };
   }
 
-  const splitComposer = promptComposer as PromptComposer & {
-    composeSplit?: (ctx?: ComposeContext) => ComposeSplitResult;
-  };
-  if (typeof splitComposer.composeSplit === 'function') {
-    const split = splitComposer.composeSplit(composeContext);
-    return {
+  // Single composer entrypoint (E2.2): composeSplit's static/dynamic split is
+  // the source of the PromptPlan volatility boundaries. No unsplit fallback.
+  const split = promptComposer.composeSplit(composeContext);
+  return {
+    staticPrefix: split.staticPrefix,
+    dynamicSuffix: split.dynamicSuffix,
+    staticHash: split.staticHash,
+    sectionCacheability: buildPromptTemplateSectionCacheability({
       staticPrefix: split.staticPrefix,
       dynamicSuffix: split.dynamicSuffix,
-      staticHash: split.staticHash,
-      sectionCacheability: buildPromptTemplateSectionCacheability({
-        staticPrefix: split.staticPrefix,
-        dynamicSuffix: split.dynamicSuffix,
-      }),
-    };
-  }
-
-  const composed = promptComposer.compose(composeContext);
-  return {
-    staticPrefix: composed.text,
-    dynamicSuffix: '',
-    staticHash: composed.hash,
-    sectionCacheability: buildPromptTemplateSectionCacheability({
-      staticPrefix: composed.text,
-      dynamicSuffix: '',
     }),
   };
 }

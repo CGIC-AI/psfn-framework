@@ -131,7 +131,7 @@ describe('PromptComposer', () => {
 
       store.reorderByLayerIds([operator.id, runtime.id, base.id], 'admin');
 
-      const result = composer.compose();
+      const result = composer.composeSplit();
       const parts = result.text.split('\n\n');
 
       expect(parts[0]).toBe('OPERATOR');
@@ -146,7 +146,7 @@ describe('PromptComposer', () => {
 
       store.reorderByLayerIds([task.id, runtime.id, channel.id], 'admin');
 
-      const result = composer.compose({ channelType: 'discord_text', taskKind: 'heartbeat' });
+      const result = composer.composeSplit({ channelType: 'discord_text', taskKind: 'heartbeat' });
       const parts = result.text.split('\n\n');
 
       expect(parts[0]).toBe('TASK');
@@ -173,7 +173,7 @@ describe('PromptComposer', () => {
       const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
       store.toggle(runtime.id); // disable it
 
-      const result = composer.compose();
+      const result = composer.composeSplit();
 
       expect(result.text).toBe('BASE');
       expect(result.layerCount).toBe(1);
@@ -186,7 +186,7 @@ describe('PromptComposer', () => {
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
       store.create({ type: 'channel', name: 'API', content: 'API', channelType: 'api' });
 
-      const result = composer.compose({ channelType: 'discord_text' });
+      const result = composer.composeSplit({ channelType: 'discord_text' });
 
       expect(result.text).toContain('BASE');
       expect(result.text).toContain('DISCORD');
@@ -198,7 +198,7 @@ describe('PromptComposer', () => {
       store.create({ type: 'base', name: 'Base', content: 'BASE' });
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
 
-      const result = composer.compose();
+      const result = composer.composeSplit();
 
       expect(result.text).toBe('BASE');
       expect(result.layerCount).toBe(1);
@@ -208,7 +208,7 @@ describe('PromptComposer', () => {
       store.create({ type: 'base', name: 'Base', content: 'BASE' });
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
 
-      const result = composer.compose({ channelType: 'api' });
+      const result = composer.composeSplit({ channelType: 'api' });
 
       expect(result.text).toBe('BASE');
       expect(result.layerCount).toBe(1);
@@ -221,7 +221,7 @@ describe('PromptComposer', () => {
       store.create({ type: 'task', name: 'Heartbeat', content: 'HEARTBEAT', taskKind: 'heartbeat' });
       store.create({ type: 'task', name: 'Reflection', content: 'REFLECTION', taskKind: 'reflection' });
 
-      const result = composer.compose({ taskKind: 'heartbeat' });
+      const result = composer.composeSplit({ taskKind: 'heartbeat' });
 
       expect(result.text).toContain('BASE');
       expect(result.text).toContain('HEARTBEAT');
@@ -233,7 +233,7 @@ describe('PromptComposer', () => {
       store.create({ type: 'base', name: 'Base', content: 'BASE' });
       store.create({ type: 'task', name: 'Heartbeat', content: 'HEARTBEAT', taskKind: 'heartbeat' });
 
-      const result = composer.compose();
+      const result = composer.composeSplit();
 
       expect(result.text).toBe('BASE');
       expect(result.layerCount).toBe(1);
@@ -245,7 +245,7 @@ describe('PromptComposer', () => {
       const base = store.create({ type: 'base', name: 'Base', content: 'BASE' });
       const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
 
-      const result = composer.compose();
+      const result = composer.composeSplit();
 
       expect(result.layerCount).toBe(2);
       expect(result.layerIds).toEqual([base.id, runtime.id]);
@@ -255,8 +255,8 @@ describe('PromptComposer', () => {
       store.create({ type: 'base', name: 'Base', content: 'BASE' });
       store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
 
-      const result1 = composer.compose();
-      const result2 = composer.compose();
+      const result1 = composer.composeSplit();
+      const result2 = composer.composeSplit();
 
       expect(result1.hash).toBe(result2.hash);
       expect(result1.hash).toHaveLength(16);
@@ -264,10 +264,10 @@ describe('PromptComposer', () => {
 
     it('produces different hash for different content', () => {
       const layer = store.create({ type: 'base', name: 'Base', content: 'content-A' });
-      const hash1 = composer.compose().hash;
+      const hash1 = composer.composeSplit().hash;
 
       store.update(layer.id, 'content-B', 'test');
-      const hash2 = composer.compose().hash;
+      const hash2 = composer.composeSplit().hash;
 
       expect(hash1).not.toBe(hash2);
     });
@@ -296,9 +296,6 @@ describe('PromptComposer', () => {
       expect(split.staticLayerIds).toEqual([base.id]);
       expect(split.dynamicLayerIds).toEqual([runtime.id, channel.id, task.id]);
 
-      const composed = composer.compose({ channelType: 'discord_text', taskKind: 'heartbeat' });
-      expect(composed.text).toBe(split.text);
-      expect(composed.hash).toBe(split.hash);
     });
 
     it('keeps static hash stable when only dynamic layers change', () => {
@@ -336,7 +333,7 @@ describe('PromptComposer', () => {
 
   describe('fail closed when no prompt content is available', () => {
     it('returns an empty result when no layers match and no recovery is available', () => {
-      const result = composer.compose();
+      const result = composer.composeSplit();
 
       expect(result.text).toBe('');
       expect(result.layerCount).toBe(0);
@@ -345,7 +342,7 @@ describe('PromptComposer', () => {
 
     it('persists a snapshot for diagnostics without reusing it on restart', () => {
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
-      const warm = composer.compose({ channelType: 'discord_text' });
+      const warm = composer.composeSplit({ channelType: 'discord_text' });
       expect(warm.text).toBe('DISCORD');
 
       expect(existsSync(lastKnownGoodPath)).toBe(true);
@@ -365,7 +362,7 @@ describe('PromptComposer', () => {
       writeFileSync(layersPath, '[]', 'utf-8');
       const restartedStore = new PromptLayerStore(layersPath, historyPath);
       const restartedComposer = new PromptComposer(restartedStore, undefined, lastKnownGoodPath);
-      const cold = restartedComposer.compose({ channelType: 'api' });
+      const cold = restartedComposer.composeSplit({ channelType: 'api' });
 
       expect(cold.text).toBe('');
       expect(cold.hash).not.toBe(warm.hash);
@@ -373,7 +370,7 @@ describe('PromptComposer', () => {
 
     it('does not reuse persisted snapshots when prompt layers are broken', () => {
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
-      composer.compose({ channelType: 'discord_text' });
+      composer.composeSplit({ channelType: 'discord_text' });
       expect(existsSync(lastKnownGoodPath)).toBe(true);
 
       writeFileSync(layersPath, '{broken-json', 'utf-8');
@@ -381,7 +378,7 @@ describe('PromptComposer', () => {
         throwOnLoadError: false,
       });
       const restartedComposer = new PromptComposer(restartedStore, undefined, lastKnownGoodPath);
-      const fallback = restartedComposer.compose({ channelType: 'api' });
+      const fallback = restartedComposer.composeSplit({ channelType: 'api' });
 
       expect(fallback.text).toBe('');
       expect(fallback.layerCount).toBe(0);
@@ -395,7 +392,7 @@ describe('PromptComposer', () => {
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
       store.create({ type: 'task', name: 'Heartbeat', content: 'HEARTBEAT', taskKind: 'heartbeat' });
 
-      const result = composer.compose({ channelType: 'discord_text', taskKind: 'heartbeat' });
+      const result = composer.composeSplit({ channelType: 'discord_text', taskKind: 'heartbeat' });
 
       expect(result.text).toContain('BASE');
       expect(result.text).toContain('DISCORD');
@@ -712,7 +709,7 @@ describe('PromptComposer', () => {
       );
       store.create({ type: 'base', name: 'Base', content: 'BASE' });
 
-      const result = constitutionComposer.compose();
+      const result = constitutionComposer.composeSplit();
       expect(result.text).toContain('<immutable_human_safety_amendments>');
       expect(result.text).toContain('BASE');
       expect(result.text).not.toContain('[Companion-Derived Values Layer]');

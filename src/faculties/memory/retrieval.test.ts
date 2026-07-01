@@ -235,6 +235,35 @@ describe('MemoryRetriever active memory context', () => {
     expect(active?.refreshStatus).toBe('degraded');
     expect(active?.lastRefreshError).toBe('vector store unavailable');
   });
+
+  it('invalidates active memory contexts by selected memory id or session channel id', async () => {
+    const recalled = makeMemory({
+      text: 'V prefers oolong tea in the afternoon.',
+      sensitivity: 'public',
+      similarity: 0.95,
+    });
+    const store = makeMockStore([recalled]);
+    const retriever = new MemoryRetriever(store, makeMockEmbedding(), { retrievalBudgetPct: 0.1 }, makeMockEventBus());
+    const request = {
+      contextText: 'oolong tea',
+      channelId: 'api:test',
+      trustLevel: 'regular' as const,
+    };
+
+    await retriever.refreshActiveMemoryContext(request);
+    expect(retriever.getActiveMemoryContext(request)?.selectedMemoryIds).toContain(recalled.id);
+
+    const result = retriever.invalidateActiveMemoryContexts({
+      memoryIds: [recalled.id],
+      sessionChannelIds: [],
+      reason: 'cogsec_revocation',
+    });
+
+    expect(result.invalidatedContextCount).toBe(1);
+    expect(result.invalidatedMemoryEntryCount).toBe(1);
+    expect(result.invalidatedKeys[0]).toContain('session:api:test');
+    expect(retriever.getActiveMemoryContext(request)).toBeNull();
+  });
 });
 
 // ── Tests ──

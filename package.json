@@ -42,6 +42,7 @@
     "e2e": "tsx src/app/e2e/e2e-test.ts",
     "e2e:voice": "tsx src/app/e2e/e2e-voice-roundtrip.ts",
     "smoke:chat": "node scripts/chat-cockpit-smoke.mjs",
+    "smoke:cogsec": "tsx scripts/cogsec-remediation-smoke.ts",
     "smoke:garden:postgres-memory": "node scripts/garden-postgres-memory-cutover-smoke.mjs",
     "smoke:discord:dm-voice": "node scripts/discord-dm-voice-smoke.mjs",
     "walkthrough": "tsx src/app/e2e/e2e-walkthrough.ts",

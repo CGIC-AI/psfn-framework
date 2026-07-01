@@ -98,6 +98,8 @@ import {
   renderPromptBlock,
 } from './retrieval/formatting.js';
 import type {
+  ActiveMemoryContextInvalidationRequest,
+  ActiveMemoryContextInvalidationResult,
   ActiveMemoryContextRequest,
   ActiveMemoryContextSnapshot,
 } from './active-context.js';
@@ -329,6 +331,50 @@ export class MemoryRetriever implements MemoryProvider {
     const state = this.activeMemoryContexts.get(identity.key);
     if (!state) return null;
     return cloneActiveMemorySnapshot(state.snapshot);
+  }
+
+  invalidateActiveMemoryContexts(
+    request: ActiveMemoryContextInvalidationRequest,
+  ): ActiveMemoryContextInvalidationResult {
+    const memoryIds = new Set((request.memoryIds ?? []).map(id => id.trim()).filter(Boolean));
+    const sessionChannelIds = new Set((request.sessionChannelIds ?? []).map(id => id.trim()).filter(Boolean));
+    const invalidatedKeys: string[] = [];
+    let invalidatedMemoryEntryCount = 0;
+
+    for (const [key, state] of this.activeMemoryContexts.entries()) {
+      const keyParts = key.split('|');
+      const sessionMatches = state.snapshot.channelId && sessionChannelIds.has(state.snapshot.channelId)
+        ? true
+        : [...sessionChannelIds].some(sessionId => keyParts.includes(`session:${sessionId}`));
+      const selectedMemoryMatches = state.snapshot.selectedMemoryIds.some(id => memoryIds.has(id));
+      const activeEntryMatches = [...state.entries.keys()].some(id => memoryIds.has(id));
+      if (!sessionMatches && !selectedMemoryMatches && !activeEntryMatches) continue;
+
+      invalidatedMemoryEntryCount += [...state.entries.keys()]
+        .filter(id => memoryIds.has(id)).length;
+      invalidatedKeys.push(key);
+      this.activeMemoryContexts.delete(key);
+    }
+
+    if (invalidatedKeys.length > 0) {
+      void this.eventBus?.emit('memory.active_context.invalidate', {
+        reason: request.reason,
+        memoryIds: [...memoryIds],
+        sessionChannelIds: [...sessionChannelIds],
+        invalidatedKeys: [...invalidatedKeys],
+        timestamp: Date.now(),
+      }).catch((error: unknown) => {
+        log.debug('Failed to emit active memory invalidation event', {
+          error: toErrorMessage(error),
+        });
+      });
+    }
+
+    return {
+      invalidatedContextCount: invalidatedKeys.length,
+      invalidatedMemoryEntryCount,
+      invalidatedKeys,
+    };
   }
 
   refreshActiveMemoryContext(request: ActiveMemoryContextRequest): Promise<ActiveMemoryContextSnapshot | null> {

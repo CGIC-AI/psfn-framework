@@ -9,6 +9,7 @@ import { createTurnId, isTurnId } from '../../core/turns/id.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { CogSecForensicArchive } from '../../core/cogsec/forensic-archive.js';
+import { buildCogSecInvalidatedSummaryContent } from '../../core/cogsec/tombstones.js';
 import {
   resolveCogSecEventsPath,
   resolveCogSecForensicArchiveDir,
@@ -807,6 +808,42 @@ describe('SessionStore', () => {
       '[CogSec redaction: cogsec_20260701T000000Z_hmac]',
       'signed clean reply',
     ]);
+  });
+
+  it('replaces CogSec-affected compaction summaries with safe invalidation markers', () => {
+    store.append({
+      channelId: 'api:cogsec-summary',
+      role: 'user',
+      content: 'clean turn',
+      timestamp: 1_000,
+    });
+    store.insertCompaction(
+      'api:cogsec-summary',
+      'dirty summary text that should leave active cognition',
+      1,
+    );
+    const compactionId = store.getCompactionSummaries('api:cogsec-summary')[0]?.id;
+    expect(compactionId).toBeDefined();
+
+    const result = store.applyCogSecCompactionInvalidations({
+      channelId: 'api:cogsec-summary',
+      caseId: 'cogsec_20260701T000000Z_summary',
+      compactionIds: [compactionId!],
+    });
+
+    expect(result.invalidatedCompactionIds).toEqual([compactionId]);
+    expect(store.getCompactionSummaries('api:cogsec-summary')[0]?.summary).toBe(
+      buildCogSecInvalidatedSummaryContent('cogsec_20260701T000000Z_summary'),
+    );
+    const journalPath = findSessionJournalPath(dir, 'cogsec-summary');
+    const journalText = readFileSync(journalPath, 'utf-8');
+    expect(journalText).not.toContain('dirty summary text');
+    expect(journalText).toContain('[CogSec summary invalidated: cogsec_20260701T000000Z_summary]');
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getCompactionSummaries('api:cogsec-summary')[0]?.summary).toBe(
+      buildCogSecInvalidatedSummaryContent('cogsec_20260701T000000Z_summary'),
+    );
   });
 
   it('rebuilds transcript projections from authoritative JSONL archives through the injected port', () => {

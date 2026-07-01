@@ -73,6 +73,7 @@ import { resolveSessionEntryTurnContext } from '../../core/session/turn-provenan
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
 import { indexedChannelId, resolvePrimarySessionId } from './store/session-index-keys.js';
 import {
+  buildCogSecInvalidatedSummaryContent,
   buildCogSecTombstoneContent,
   buildCogSecTombstoneMetadata,
   normalizeCogSecCaseId,
@@ -152,6 +153,18 @@ export interface CogSecTombstoneDiagnostic {
   caseId: string;
   rowCount: number;
   channels: CogSecTombstoneChannelDiagnostic[];
+}
+
+export interface CogSecCompactionInvalidationOptions {
+  channelId: string;
+  caseId: string;
+  compactionIds: readonly number[];
+}
+
+export interface CogSecCompactionInvalidationResult {
+  caseId: string;
+  channelId: string;
+  invalidatedCompactionIds: number[];
 }
 
 const DEFAULT_MESSAGE_PREVIEW_CHARS = 120;
@@ -261,6 +274,23 @@ function buildCogSecTombstoneJournalEntry(
     metadata,
     originChannelId: entry.originChannelId,
     channelVisibility: entry.channelVisibility,
+  };
+}
+
+function buildCogSecInvalidatedCompactionJournalEntry(
+  entry: JournalEntry,
+  summary: string,
+): JournalEntry {
+  if (entry.type !== 'compaction') {
+    throw new Error('CogSec summary invalidation can only replace compaction journal entries');
+  }
+  return {
+    type: 'compaction',
+    id: entry.id,
+    channelId: entry.channelId,
+    timestamp: entry.timestamp,
+    summary,
+    coveredUpTo: entry.coveredUpTo,
   };
 }
 
@@ -988,6 +1018,57 @@ export class SessionStore implements TranscriptSearchPort {
           channels,
         };
       });
+  }
+  applyCogSecCompactionInvalidations(
+    options: CogSecCompactionInvalidationOptions,
+  ): CogSecCompactionInvalidationResult {
+    const caseId = normalizeCogSecCaseId(options.caseId);
+    const compactionIds = new Set(options.compactionIds.map((id, index) => (
+      normalizeEntryId(id, `compactionIds[${index}]`)
+    )));
+    if (compactionIds.size === 0) {
+      throw new Error('CogSec compaction invalidation requires at least one compaction ID');
+    }
+
+    const result = this.withLockedExistingChannelWrite(options.channelId, (cache) => {
+      const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
+      const rawEntries = this.journalRuntime.readJournalEntries(archive);
+      const selectedIds = rawEntries
+        .filter(entry => entry.type === 'compaction' && compactionIds.has(entry.id))
+        .map(entry => entry.id);
+      if (selectedIds.length === 0) {
+        return {
+          caseId,
+          channelId: cache.channelId,
+          invalidatedCompactionIds: [],
+        } satisfies CogSecCompactionInvalidationResult;
+      }
+
+      const invalidatedSummary = buildCogSecInvalidatedSummaryContent(caseId);
+      const selectedIdSet = new Set(selectedIds);
+      const rewrittenEntries = rawEntries.map(entry => (
+        entry.type === 'compaction' && selectedIdSet.has(entry.id)
+          ? buildCogSecInvalidatedCompactionJournalEntry(entry, invalidatedSummary)
+          : entry
+      ));
+
+      this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
+      const reloaded = this.journalRuntime.loadChannel(archive);
+      const sessionKey = this.resolveCacheSessionKey(cache);
+      this.channels.set(sessionKey, reloaded);
+      this.upsertChannelIndex(sessionKey, snapshotIndexEntry(reloaded));
+
+      return {
+        caseId,
+        channelId: cache.channelId,
+        invalidatedCompactionIds: selectedIds,
+      } satisfies CogSecCompactionInvalidationResult;
+    });
+
+    if (!result) {
+      throw new Error(`Session channel not found for CogSec compaction invalidation: ${options.channelId}`);
+    }
+    return result;
   }
   getRecentDiscordMessageIds(channelId: string, limit: number): Set<string> {
     const entries = this.getRecent(channelId, limit);

@@ -3,6 +3,7 @@ export const COGSEC_TOMBSTONE_METADATA_KIND = 'cogsec_l0_tombstone' as const;
 const CASE_ID_PATTERN = /^cogsec_[A-Za-z0-9_-]+$/u;
 const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
 const TOMBSTONE_PATTERN = /^\[CogSec redaction: (cogsec_[A-Za-z0-9_-]+)\]$/u;
+const INVALIDATED_SUMMARY_PATTERN = /^\[CogSec summary invalidated: (cogsec_[A-Za-z0-9_-]+)\]$/u;
 
 function normalizeRequiredString(value: string, field: string): string {
   const normalized = value.trim();
@@ -24,8 +25,16 @@ export function buildCogSecTombstoneContent(caseId: string): string {
   return `[CogSec redaction: ${normalizeCogSecCaseId(caseId)}]`;
 }
 
+export function buildCogSecInvalidatedSummaryContent(caseId: string): string {
+  return `[CogSec summary invalidated: ${normalizeCogSecCaseId(caseId)}]`;
+}
+
 export function isCogSecTombstoneContent(content: string): boolean {
   return TOMBSTONE_PATTERN.test(content.trim());
+}
+
+export function isCogSecInvalidatedSummaryContent(content: string): boolean {
+  return INVALIDATED_SUMMARY_PATTERN.test(content.trim());
 }
 
 export function parseCogSecTombstoneCaseId(input: {

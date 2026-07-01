@@ -44,6 +44,18 @@ export interface ActiveMemoryContextSnapshot {
   lastRefreshError?: string;
 }
 
+export interface ActiveMemoryContextInvalidationRequest {
+  memoryIds?: readonly string[];
+  sessionChannelIds?: readonly string[];
+  reason?: string;
+}
+
+export interface ActiveMemoryContextInvalidationResult {
+  invalidatedContextCount: number;
+  invalidatedMemoryEntryCount: number;
+  invalidatedKeys: string[];
+}
+
 export interface ActiveMemoryContextIdentity {
   key: string;
   subjectKey: string;

@@ -32,6 +32,10 @@ describe('scheduler config seed defaults', () => {
           timeZone: 'America/New_York',
           inactivityThresholdMinutes: 45,
         },
+        sleeptime: {
+          direct: { cadenceTurns: 5 },
+          group: { minIntervalMinutes: 20, minNewEntries: 12 },
+        },
       });
 
       expect(loadSchedulerSeedDefaults({ seedDir })).toEqual({
@@ -50,6 +54,10 @@ describe('scheduler config seed defaults', () => {
           endLocalTime: '07:30',
           timeZone: 'America/New_York',
           inactivityThresholdMinutes: 45,
+        },
+        sleeptime: {
+          direct: { cadenceTurns: 5 },
+          group: { minIntervalMinutes: 20, minNewEntries: 12 },
         },
       });
     } finally {

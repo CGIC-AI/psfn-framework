@@ -54,6 +54,7 @@ export class AdminServerTelemetryTransport {
       'agent.tool.end',
       'memory.retrieval',
       'memory.extraction.end',
+      'memory.sleeptime.cadence',
       'reflection.guardrail',
       'message.sent',
       'broadcast.approval.required',

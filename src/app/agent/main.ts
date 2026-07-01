@@ -461,6 +461,22 @@ async function main(): Promise<void> {
   // Journal auto-publisher (for heartbeat reflections -> markdown journal)
   const journalAutoPublisher = createOptionalJournalAutoPublisher(pathSnapshot.workspaceRoot, config);
 
+  // Group-memory observation scheduler doubles as the canonical direct-vs-group
+  // scope classifier for sleeptime cadence, so it is built before the heartbeat
+  // runtime wiring below.
+  const observedGroupMemoryScheduler = new ObservedGroupMemoryScheduler({
+    channelGroupMemory: channelsConfig.discord.groupMemory,
+    sessionReader: sessionStore,
+    watermarkStore: new JsonGroupMemoryWatermarkStore(
+      join(pathSnapshot.companionDataDir, 'group-memory-watermarks.json'),
+    ),
+    memoryExtractor,
+    contactStore,
+    companionNames: [card.data.name],
+    companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],
+    ...(config.groupMemory ? { groupMemory: config.groupMemory } : {}),
+  });
+
   // Heartbeat reflections — policy-driven multi-template reflection system
   wireHeartbeatRuntime(
     agentLoop,
@@ -500,6 +516,8 @@ async function main(): Promise<void> {
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
+      sleeptimeCadence: schedulerConfig.sleeptime,
+      sleeptimeScopeClassifier: observedGroupMemoryScheduler,
       intentionAppraisalEnabled: config.intentionAppraisalEnabled !== false,
       ...(journalAutoPublisher ? { vaultAutoPublisher: journalAutoPublisher } : {}),
     },
@@ -509,18 +527,6 @@ async function main(): Promise<void> {
     sessionManager,
     pathSnapshot.companionDataDir,
   );
-  const observedGroupMemoryScheduler = new ObservedGroupMemoryScheduler({
-    channelGroupMemory: channelsConfig.discord.groupMemory,
-    sessionReader: sessionStore,
-    watermarkStore: new JsonGroupMemoryWatermarkStore(
-      join(pathSnapshot.companionDataDir, 'group-memory-watermarks.json'),
-    ),
-    memoryExtractor,
-    contactStore,
-    companionNames: [card.data.name],
-    companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],
-    ...(config.groupMemory ? { groupMemory: config.groupMemory } : {}),
-  });
 
   // ── Register gateway inbound message handlers ──
   // Handles generic voice.handleMessage / voice.stream.* with legacy discord.* aliases.

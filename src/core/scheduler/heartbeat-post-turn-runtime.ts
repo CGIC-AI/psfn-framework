@@ -16,6 +16,7 @@ import { evaluateCompositionalPolicyForChannelId } from '../../system/capabiliti
 import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
+  type SleeptimeCadenceTelemetry,
 } from '../../faculties/memory/sleeptime-agent.js';
 import {
   IntentionAppraisal,
@@ -100,7 +101,31 @@ export function wireHeartbeatPostTurnRuntime(
       coreMemoryStore: runtimeOptions.coreMemoryStore,
       memoryWriter: runtimeOptions.memoryWriter,
       promptRegistry: runtimeOptions.promptRegistry ?? null,
-      cadenceTurns: runtimeOptions.sleeptimeCadenceTurns,
+      ...(runtimeOptions.sleeptimeCadence ? { cadence: runtimeOptions.sleeptimeCadence } : {}),
+      scopeClassifier: runtimeOptions.sleeptimeScopeClassifier ?? null,
+      ...(telemetryEventBus
+        ? {
+          onCadenceTelemetry: (event: SleeptimeCadenceTelemetry): void => {
+            telemetryEventBus.emit('memory.sleeptime.cadence', {
+              channelId: event.channelId,
+              sessionId: event.sessionId,
+              scope: event.scope,
+              trigger: event.trigger,
+              turnCount: event.turnCount,
+              newEntriesSinceLastRun: event.newEntriesSinceLastRun,
+              firedAtMs: event.firedAtMs,
+              firesLastHour: event.firesLastHour,
+              timestamp: Date.now(),
+            }).catch((error) => {
+              log.warn('Sleeptime cadence telemetry emit failed', {
+                channelId: event.channelId,
+                scope: event.scope,
+                error: String(error),
+              });
+            });
+          },
+        }
+        : {}),
       restWindow: runtimeOptions.episodicProcessingRestWindow,
       episodicSynthesizer: runtimeOptions.episodicSynthesizer,
       sleepConsolidator: runtimeOptions.sleepConsolidator,
@@ -1106,7 +1131,7 @@ export function wireHeartbeatPostTurnRuntime(
           },
         });
       if (sleeptimeAgent) {
-        inferred.push(...sleeptimeAgent.inferPostTurnActions({ message }));
+        inferred.push(...await sleeptimeAgent.inferPostTurnActions({ message }));
       }
       triggerIntentionPostTurnAppraisal({
         message,

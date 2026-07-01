@@ -237,6 +237,10 @@ describe('subsystem config round-trip', () => {
         timeZone: 'local',
         inactivityThresholdMinutes: 60,
       },
+      sleeptime: {
+        direct: { cadenceTurns: 3 },
+        group: { minIntervalMinutes: 15, minNewEntries: 8 },
+      },
     };
 
     expect(saveSchedulerConfig(dataDir, expected)).toEqual(expected);

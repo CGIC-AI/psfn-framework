@@ -29,5 +29,9 @@ export function resolveRuntimeSchedulerConfig(
     salienceDecayIntervalMs: persisted.salienceDecayIntervalMs,
     artifactLifecycle: { ...persisted.artifactLifecycle },
     episodicProcessing: { ...persisted.episodicProcessing },
+    sleeptime: {
+      direct: { ...persisted.sleeptime.direct },
+      group: { ...persisted.sleeptime.group },
+    },
   };
 }

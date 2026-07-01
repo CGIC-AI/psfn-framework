@@ -104,6 +104,10 @@ describe('startup owner-file loaders', () => {
         timeZone: 'local',
         inactivityThresholdMinutes: 60,
       },
+      sleeptime: {
+        direct: { cadenceTurns: 3 },
+        group: { minIntervalMinutes: 15, minNewEntries: 8 },
+      },
     };
     saveSchedulerConfig(rootDir, scheduler);
 

@@ -99,15 +99,56 @@ export class ObservedGroupMemoryScheduler {
     this.estimateEntryTokens = options.estimateEntryTokens;
   }
 
+  /**
+   * Canonical direct-vs-group memory scope for a channel, shared by group
+   * extraction scheduling and other group-aware maintenance (e.g. sleeptime
+   * cadence). Reuses the same memoryMode/topology classification pipeline as
+   * observed extraction — do not add parallel detection paths.
+   *
+   * `group_capable_direct_tail` maps to 'group' to match observeMessage, which
+   * only treats an explicit 'direct' classification as not-group.
+   */
+  async classifyChannelMemoryScope(
+    message: Pick<SubstrateMessage, 'channelId' | 'channelType'>,
+  ): Promise<'direct' | 'group'> {
+    const settings = this.resolveSettingsForChannel(message.channelId);
+    if (!settings.enabled) {
+      return 'direct';
+    }
+    const classification = await this.classifyChannel(message, settings);
+    return classification.mode === 'direct' ? 'direct' : 'group';
+  }
+
+  private resolveSettingsForChannel(channelId: string): GroupMemorySettings {
+    return resolveGroupMemorySettingsForChannel({
+      base: this.groupMemory,
+      channelConfig: this.channelGroupMemory,
+      channelId,
+    }).settings;
+  }
+
+  private async classifyChannel(
+    message: Pick<SubstrateMessage, 'channelId' | 'channelType'>,
+    settings: GroupMemorySettings,
+  ): Promise<Awaited<ReturnType<typeof classifyGroupMemoryChannel>>> {
+    const recentEntries = await this.sessionReader.getRecent(
+      message.channelId,
+      settings.autoDetection.recentParticipantWindowMessages,
+    );
+    return await classifyGroupMemoryChannel({
+      channelId: message.channelId,
+      channelType: message.channelType,
+      groupMemory: settings,
+      recentEntries,
+      contactStore: this.contactStore,
+      companionAuthorIds: this.companionAuthorIds,
+    });
+  }
+
   async observeMessage(
     message: SubstrateMessage,
   ): Promise<ObservedGroupMemoryScheduleDecision> {
-    const resolved = resolveGroupMemorySettingsForChannel({
-      base: this.groupMemory,
-      channelConfig: this.channelGroupMemory,
-      channelId: message.channelId,
-    });
-    const settings = resolved.settings;
+    const settings = this.resolveSettingsForChannel(message.channelId);
     if (!settings.enabled) {
       return {
         status: 'skipped',
@@ -116,18 +157,7 @@ export class ObservedGroupMemoryScheduler {
       };
     }
 
-    const recentEntries = await this.sessionReader.getRecent(
-      message.channelId,
-      settings.autoDetection.recentParticipantWindowMessages,
-    );
-    const classification = await classifyGroupMemoryChannel({
-      channelId: message.channelId,
-      channelType: message.channelType,
-      groupMemory: settings,
-      recentEntries,
-      contactStore: this.contactStore,
-      companionAuthorIds: this.companionAuthorIds,
-    });
+    const classification = await this.classifyChannel(message, settings);
     if (classification.mode === 'direct') {
       return {
         status: 'skipped',

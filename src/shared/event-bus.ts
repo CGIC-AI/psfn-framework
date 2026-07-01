@@ -159,6 +159,17 @@ export interface EventMap {
     canonicalAction: string;
     migrationSurface: string;
   } & EventCorrelationFields;
+  'memory.sleeptime.cadence': {
+    channelId: string;
+    sessionId: string;
+    scope: 'direct' | 'group';
+    trigger: 'cadence' | 'rest_window';
+    turnCount: number;
+    newEntriesSinceLastRun: number;
+    firedAtMs: number;
+    firesLastHour: number;
+    timestamp: number;
+  };
   'agent.tools.adaptive.decision': AdaptiveToolDecisionTelemetry & EventCorrelationFields;
   'agent.tools.adaptive.snapshot': AdaptiveToolSnapshotTelemetry & EventCorrelationFields;
   'agent.turn.stage': {

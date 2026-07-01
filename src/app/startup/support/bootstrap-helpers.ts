@@ -270,6 +270,10 @@ export function hydrateCanonicalStartupConfig(
     salienceDecayIntervalMs: persistedScheduler.salienceDecayIntervalMs,
     artifactLifecycle: { ...persistedScheduler.artifactLifecycle },
     episodicProcessing: { ...persistedScheduler.episodicProcessing },
+    sleeptime: {
+      direct: { ...persistedScheduler.sleeptime.direct },
+      group: { ...persistedScheduler.sleeptime.group },
+    },
   };
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();

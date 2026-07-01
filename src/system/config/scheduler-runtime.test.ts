@@ -59,6 +59,10 @@ describe('resolveRuntimeSchedulerConfig', () => {
           timeZone: 'America/New_York',
           inactivityThresholdMinutes: 45,
         },
+        sleeptime: {
+          direct: { cadenceTurns: 3 },
+          group: { minIntervalMinutes: 15, minNewEntries: 8 },
+        },
       });
 
       const resolved = resolveRuntimeSchedulerConfig({
@@ -82,6 +86,10 @@ describe('resolveRuntimeSchedulerConfig', () => {
           endLocalTime: '07:00',
           timeZone: 'America/New_York',
           inactivityThresholdMinutes: 45,
+        },
+        sleeptime: {
+          direct: { cadenceTurns: 3 },
+          group: { minIntervalMinutes: 15, minNewEntries: 8 },
         },
       });
     } finally {
@@ -132,6 +140,10 @@ describe('resolveRuntimeSchedulerConfig', () => {
           timeZone: 'UTC',
           inactivityThresholdMinutes: 15,
         },
+        sleeptime: {
+          direct: { cadenceTurns: 3 },
+          group: { minIntervalMinutes: 15, minNewEntries: 8 },
+        },
       });
 
       const resolved = resolveRuntimeSchedulerConfig({
@@ -155,6 +167,10 @@ describe('resolveRuntimeSchedulerConfig', () => {
           endLocalTime: '02:00',
           timeZone: 'UTC',
           inactivityThresholdMinutes: 15,
+        },
+        sleeptime: {
+          direct: { cadenceTurns: 3 },
+          group: { minIntervalMinutes: 15, minNewEntries: 8 },
         },
       });
     } finally {

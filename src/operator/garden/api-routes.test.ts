@@ -4358,6 +4358,10 @@ describe('AdminServer JSON API routes', () => {
         timeZone: 'local',
         inactivityThresholdMinutes: 60,
       },
+      sleeptime: {
+        direct: { cadenceTurns: 3 },
+        group: { minIntervalMinutes: 15, minNewEntries: 8 },
+      },
     });
     const expectedSkills = saveSkillsConfig(tempDir, {
       enabled: true,

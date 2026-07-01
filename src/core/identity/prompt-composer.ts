@@ -17,6 +17,7 @@ import type { PromptLayerStatePort } from './prompt-state-port.js';
 import { PromptManager } from './prompt-manager.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { assertStaticPromptLayerMacroVolatility } from './prompt-runtime.js';
 import { wrapPromptSectionXml } from './prompt-sections.js';
 import { SYSTEM_LANGUAGE_LAYER_TYPE } from './system-language.js';
 
@@ -307,6 +308,12 @@ export class PromptComposer {
       const sourceLayer = prompt.sourceLayerId ? layerById.get(prompt.sourceLayerId) : undefined;
       const target = this.resolvePromptSection(sourceLayer);
       if (target === 'static') {
+        // Volatility enforcement (fail closed): a turn-volatile macro in a
+        // static-class layer would contaminate the byte-stable static prefix.
+        assertStaticPromptLayerMacroVolatility(
+          prompt.content,
+          sourceLayer?.identifier ?? sourceLayer?.name ?? prompt.identifier,
+        );
         staticChunks.push(prompt.content);
         if (sourceLayer && !seenStaticLayerIds.has(sourceLayer.id)) {
           seenStaticLayerIds.add(sourceLayer.id);

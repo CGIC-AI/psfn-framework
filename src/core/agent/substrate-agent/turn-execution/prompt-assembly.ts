@@ -3,6 +3,7 @@ import {
   orderPromptRuntimeSystemPromptSections,
   type PromptRuntimeSystemPromptBlockId,
 } from '../../../identity/prompt-runtime.js';
+import { TurnPromptVariableNamespace } from '../../../identity/prompt-variable-namespace.js';
 import { resolveCachedPromptRuntimeLayoutStore } from '../../../identity/prompt-runtime-store-cache.js';
 import { composeDefaultRuntimePromptTemplate } from '../../../identity/runtime-prompt-layers.js';
 import {
@@ -208,18 +209,34 @@ export async function assembleTurnPrompt(input: {
   const runtimeNow = new Date();
   const promptOverride = runtime.normalizeTurnPromptOverride(message);
   const promptMode = promptOverride.mode;
-  const templateVariables = runtime.buildPromptTemplateVariables(
-    message,
-    authorContext.resolvedUserName,
-    trustLevel,
-    channelType,
-    authorContext.canonicalContactKey,
-    authorContext.subjectIdentityKey,
-    runtimeNow,
+  // Single construction path for the turn's prompt variables. Every variable is
+  // registered against the macro manifest, duplicate writes throw, and the
+  // namespace freezes before any template rendering happens.
+  //
+  // SEAM (E2 epic): the 'session' phase inputs will later come from a
+  // ConversationScope object and the 'turn' phase inputs from a Context Envelope;
+  // this two-phase assemble/freeze shape is where those slot in.
+  const variableNamespace = new TurnPromptVariableNamespace();
+  variableNamespace.assignRecord(
+    'session',
+    runtime.buildPromptTemplateVariables(
+      message,
+      authorContext.resolvedUserName,
+      trustLevel,
+      channelType,
+      authorContext.canonicalContactKey,
+      authorContext.subjectIdentityKey,
+      runtimeNow,
+    ),
+    'substrate-agent:buildPromptTemplateVariables',
   );
-  templateVariables.runtime_speaking_with_is_machine_intelligence = authorContext.speakingWithIsMachineIntelligence === true
-    ? 'true'
-    : 'false';
+  variableNamespace.assign(
+    'session',
+    'runtime_speaking_with_is_machine_intelligence',
+    authorContext.speakingWithIsMachineIntelligence === true ? 'true' : 'false',
+    'turn-execution:assembleTurnPrompt',
+  );
+  const templateVariables = variableNamespace.snapshotPhase('session') as Record<string, string>;
   const preTurnInternalStateSnapshotRef = buildInternalStateSnapshotRef(preTurnInternalState);
   const preTurnMetacognitiveFlags = runtime.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
     internalState: preTurnInternalState,
@@ -233,27 +250,29 @@ export async function assembleTurnPrompt(input: {
     preTurnInternalStateSnapshotRef,
     preTurnMetacognitiveFlags,
   );
-  const dynamicPromptVariables = runtime.buildDynamicPromptTemplateVariables(
-    message,
-    authorContext.resolvedUserName,
-    trustLevel,
-    authorContext.relationshipType,
-    channelType,
-    authorContext.canonicalContactKey,
-    authorContext.subjectIdentityKey,
-    responseStyle,
-    runtimeNow,
-    taskKind,
-    templateVariables,
-    preTurnInternalState,
-    preTurnMetacognitiveFlags,
-    emotionAppraisalChain,
-    buildCurrentUserRuntimeProfile({ authorContext, message }),
+  variableNamespace.assignRecord(
+    'turn',
+    runtime.buildDynamicPromptTemplateVariables(
+      message,
+      authorContext.resolvedUserName,
+      trustLevel,
+      authorContext.relationshipType,
+      channelType,
+      authorContext.canonicalContactKey,
+      authorContext.subjectIdentityKey,
+      responseStyle,
+      runtimeNow,
+      taskKind,
+      templateVariables,
+      preTurnInternalState,
+      preTurnMetacognitiveFlags,
+      emotionAppraisalChain,
+      buildCurrentUserRuntimeProfile({ authorContext, message }),
+    ),
+    'substrate-agent:buildDynamicPromptTemplateVariables',
   );
-  const promptRuntimeVariables = {
-    ...templateVariables,
-    ...dynamicPromptVariables,
-  };
+  // The namespace freezes before rendering: any later write throws.
+  const { variables: promptRuntimeVariables } = variableNamespace.freeze();
   const runtimeContext = runtime.buildRuntimeContext(
     message,
     authorContext.resolvedUserName,

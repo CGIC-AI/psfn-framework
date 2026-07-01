@@ -3,7 +3,12 @@ import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { AppCache } from '../../../shared/cache/types.js';
 import type { PromptComposer } from '../../identity/prompt-composer.js';
 import type { ComposeContext, ComposeSplitResult } from '../../identity/prompt-types.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import {
+  getVolatileClockPromptMacroNames,
+  injectPromptRuntimeTokens,
+  isStaticVolatilityPromptVariable,
+  normalizePromptMacroName,
+} from '../../identity/prompt-runtime.js';
 import type {
   PromptCacheBreaker,
   PromptCacheabilityClass,
@@ -40,47 +45,12 @@ interface FrozenPromptPrefixCacheRecord extends FrozenPromptPrefix {
 export const STATIC_PROMPT_PREFIX_CACHE_KEY_PREFIX = 'prompt:static-prefix:v1:';
 const PROMPT_HASH_LENGTH = 16;
 const PROMPT_MACRO_PATTERN = /\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g;
-const VOLATILE_MACRO_TOKENS = new Set([
-  'current_datetime',
-  'current_datetime_iso',
-  'now',
-  'now()',
-  'current_date',
-  'date',
-  'date()',
-  'current_time',
-  'time',
-  'time()',
-  'current_timestamp',
-  'unix_timestamp',
-  'timestamp',
-  'timestamp()',
-]);
+// Derived from the prompt macro manifest (PROMPT_RUNTIME_MACRO_HINTS): the clock
+// alias macros are the only tokens that re-render from the wall clock inside an
+// otherwise cached static prefix render. Other turn-volatile macros are rejected
+// from static-class layers by assertStaticPromptLayerMacroVolatility instead.
+const VOLATILE_MACRO_TOKENS = new Set(getVolatileClockPromptMacroNames());
 const CHANNEL_MACRO_TOKENS = new Set(['channel_id', 'channel_type']);
-const STATIC_PROMPT_DYNAMIC_VARIABLE_KEYS = new Set([
-  'user',
-  'user_name',
-  'user_id',
-  'channel',
-  'channel_id',
-  'channel_type',
-  'channel_visibility',
-  'trust_level',
-  'canonical_contact_id',
-  'model',
-  'model_id',
-  'now_iso',
-]);
-const STATIC_PROMPT_DYNAMIC_VARIABLE_PREFIXES = [
-  'runtime_',
-  'memory_',
-  'charge_',
-  'tool_',
-  'tools_',
-  'session_',
-  'scratchpad_',
-  'current_',
-] as const;
 
 interface TemplateSectionConfig {
   section: 'staticPrefixTemplate' | 'dynamicSuffixTemplate';
@@ -95,7 +65,7 @@ export function hashPromptText(text: string): string {
 }
 
 function normalizePromptMacroToken(token: string): string {
-  return token.trim().toLowerCase();
+  return normalizePromptMacroName(token);
 }
 
 function collectPromptMacroTokens(text: string): string[] {
@@ -352,10 +322,11 @@ export function buildPromptPrefixCacheKey(
   ].join('::');
 }
 
+// Derived from the prompt macro manifest: only 'static'-volatility variables
+// (character card fields, config-owned identifiers) participate in the static
+// settings hash. Unknown keys fail closed to non-stable.
 function isStaticPromptStableVariable(key: string): boolean {
-  const normalized = normalizePromptMacroToken(key);
-  if (STATIC_PROMPT_DYNAMIC_VARIABLE_KEYS.has(normalized)) return false;
-  return !STATIC_PROMPT_DYNAMIC_VARIABLE_PREFIXES.some(prefix => normalized.startsWith(prefix));
+  return isStaticVolatilityPromptVariable(key);
 }
 
 export function buildStaticPromptSettingsHash(

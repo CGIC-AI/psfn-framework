@@ -1,8 +1,14 @@
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
+import { composeDefaultFoundationTemplate } from './foundation-sections.js';
+import { TEMPORAL_RULES_LAYER_CONTENT } from './temporal-rules-layer.js';
 import {
+  assertStaticPromptLayerMacroVolatility,
+  buildPromptMacroManifest,
+  getVolatileClockPromptMacroNames,
+  resolvePromptMacroManifestEntry,
   getPromptRuntimeBlockDefinition,
   getPromptRuntimeBlockIdsByClassification,
   getPromptRuntimeImmutableAnchorDefinitions,
@@ -654,5 +660,100 @@ describe('prompt runtime macro hints', () => {
       expect(hint?.description).toBeTruthy();
       expect(hint?.example).toBeTruthy();
     }
+  });
+});
+
+describe('prompt macro manifest', () => {
+  it('registers every hint with a volatility class and a producer', () => {
+    for (const hint of PROMPT_RUNTIME_MACRO_HINTS) {
+      expect(['static', 'session_stable', 'turn']).toContain(hint.volatility);
+      expect(hint.producer).toBeTruthy();
+    }
+  });
+
+  it('throws on duplicate macro registration (fail closed)', () => {
+    const hint = {
+      group: 'global_aliases' as const,
+      token: '{{user}}',
+      description: 'dup',
+      example: 'dup',
+      volatility: 'session_stable' as const,
+      producer: 'test:dup',
+    };
+    expect(() => buildPromptMacroManifest([hint, hint]))
+      .toThrow(/Duplicate prompt macro registration: "user"/);
+  });
+
+  it('resolves aliases and prefix rules through the manifest', () => {
+    expect(resolvePromptMacroManifestEntry('user_name')?.volatility).toBe('session_stable');
+    expect(resolvePromptMacroManifestEntry('char_name')?.volatility).toBe('static');
+    expect(resolvePromptMacroManifestEntry('now()')?.volatility).toBe('turn');
+    expect(resolvePromptMacroManifestEntry('character.extensions.likes')?.volatility).toBe('static');
+    expect(resolvePromptMacroManifestEntry('extensions_anything')?.volatility).toBe('static');
+    expect(resolvePromptMacroManifestEntry('runtime_not_a_real_macro')).toBeNull();
+  });
+
+  it('derives the volatile clock token set from the manifest', () => {
+    const clockNames = new Set(getVolatileClockPromptMacroNames());
+    for (const expected of [
+      'current_datetime',
+      'current_datetime_iso',
+      'now',
+      'current_date',
+      'date',
+      'current_time',
+      'time',
+      'current_timestamp',
+      'unix_timestamp',
+      'timestamp',
+    ]) {
+      expect(clockNames.has(expected)).toBe(true);
+    }
+    // Non-clock turn macros are enforced by static-layer validation, not by the
+    // clock-volatility cacheability classification.
+    expect(clockNames.has('runtime_current_datetime_iso')).toBe(false);
+  });
+
+  it('registers every macro used by the seeded runtime prompt layers', () => {
+    const seedPath = join(process.cwd(), 'config', 'runtime-prompt-layers.seed.json');
+    const seed = JSON.parse(readFileSync(seedPath, 'utf-8')) as {
+      layers: Array<{ identifier: string; content: string }>;
+    };
+    expect(seed.layers.length).toBeGreaterThan(0);
+
+    const tokenPattern = /\{\{\s*(?:#if\s+)?([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g;
+    for (const layer of seed.layers) {
+      for (const match of layer.content.matchAll(tokenPattern)) {
+        const name = match[1];
+        if (name === '/if') continue;
+        expect(
+          resolvePromptMacroManifestEntry(name),
+          `Unregistered macro {{${name}}} in seeded layer ${layer.identifier}`,
+        ).not.toBeNull();
+      }
+    }
+  });
+
+  it('keeps the seeded static-class layers free of turn-volatile macros', () => {
+    expect(() => assertStaticPromptLayerMacroVolatility(composeDefaultFoundationTemplate(), 'foundation'))
+      .not.toThrow();
+    expect(() => assertStaticPromptLayerMacroVolatility(TEMPORAL_RULES_LAYER_CONTENT, 'operator.temporal_rules'))
+      .not.toThrow();
+  });
+
+  it('fails validation with a clear error when a static layer references a turn-volatile macro', () => {
+    expect(() => assertStaticPromptLayerMacroVolatility(
+      'Today is {{runtime_current_datetime_iso}}.',
+      'base.identity',
+    )).toThrow(/Static prompt layer "base.identity" references turn-volatile macro\(s\): \{\{runtime_current_datetime_iso\}\}/);
+
+    expect(() => assertStaticPromptLayerMacroVolatility('The time is {{now()}}.', 'base.identity'))
+      .toThrow(/turn-volatile/);
+
+    // Static and session-stable macros stay legal in static-class layers.
+    expect(() => assertStaticPromptLayerMacroVolatility(
+      'You are {{char}}, speaking with {{user}} on {{channel_type}}. {{description}}',
+      'base.identity',
+    )).not.toThrow();
   });
 });

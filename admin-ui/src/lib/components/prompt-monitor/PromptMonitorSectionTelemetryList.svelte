@@ -30,6 +30,21 @@
   function formatSafetyLabel(provenance: AdminAuthenticityProvenance): string {
     return provenance.safeAsPartnerSpeech ? 'safe as partner speech' : 'not partner speech';
   }
+
+  function scopeTone(
+    scopeClass: NonNullable<AdminPromptSectionTelemetry['scopeProvenance']>['scopeClass'],
+  ): string {
+    switch (scopeClass) {
+      case 'dm':
+        return 'border-gold-300 bg-gold-50 text-shadow-900';
+      case 'room':
+        return 'border-sky-300 bg-sky-50 text-sky-800';
+      case 'global':
+        return 'border-moss-300 bg-moss-50 text-moss-800';
+      default:
+        return 'border-bark-300 bg-bark-100 text-shadow-700';
+    }
+  }
 </script>
 
 <div class="rounded-xl border border-bark-200 bg-white p-4">
@@ -49,6 +64,33 @@
               {formatCount(section.charCount)} chars . {formatCount(section.tokenCount)} tokens
             </p>
           </div>
+          {#if section.scopeProvenance}
+            <div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              {#if section.scopeProvenance.scopeKey}
+                <span
+                  class={`rounded-full border px-2 py-0.5 font-medium ${scopeTone(section.scopeProvenance.scopeClass)}`}
+                  title={`Scope key: ${section.scopeProvenance.scopeKey}`}
+                >
+                  {section.scopeProvenance.scopeKey}
+                </span>
+              {/if}
+              {#if section.scopeProvenance.producer}
+                <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 font-mono text-shadow-700" title="Producer module">
+                  {section.scopeProvenance.producer}
+                </span>
+              {/if}
+              {#if section.scopeProvenance.volatility}
+                <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 uppercase tracking-wide text-shadow-600">
+                  {section.scopeProvenance.volatility.replace('_', ' ')}
+                </span>
+              {/if}
+              {#if section.scopeProvenance.sourceHint}
+                <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-shadow-600" title="Source data hint">
+                  {section.scopeProvenance.sourceHint}
+                </span>
+              {/if}
+            </div>
+          {/if}
           {#if section.provenance}
             <div class="mt-3 flex flex-wrap gap-2 text-xs">
               <span class="rounded border border-bark-300 bg-white px-2 py-0.5 text-shadow-700">

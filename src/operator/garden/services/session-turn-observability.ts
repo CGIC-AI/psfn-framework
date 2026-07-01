@@ -19,6 +19,47 @@ import type {
 } from './types.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 
+/**
+ * Truncation-point inventory (bead psfn-framework-u9jo.2).
+ *
+ * Every point between the assembled prompt and the rendered Loom view where
+ * content could shrink, with its classification:
+ *   (a) display cap   — UI-only, full content still present upstream
+ *   (b) storage cap   — content dropped before/at storage
+ *   (c) real prompt   — the prompt genuinely carried less (by design)
+ *
+ * 1. Snapshot capture (turn-execution/prompt-assembly.ts + agent-invocation.ts):
+ *    captures the FULL provider system prompt, every provider wire message, and
+ *    every prompt block verbatim. No content cap. → not a truncation point.
+ * 2. Event bus (shared/event-bus.ts): in-process typed bus, structuredClone
+ *    delivery, no payload size limit. → not a truncation point.
+ * 3. Sanitize/clone (core/turns/observability.ts + snapshot.ts): deep clones;
+ *    the only subtraction is policy-withheld memory candidates, already
+ *    disclosed via memory.withheldSummary. → not a content truncation point.
+ * 4. In-memory admin buffers (THIS FILE): DEFAULT_TURN_BUFFER_LIMIT /
+ *    DEFAULT_STAGE_BUFFER_LIMIT / DEFAULT_RETRIEVAL_BUFFER_LIMIT cap the COUNT
+ *    of buffered turns/stage-events/retrieval-events (last-N), NOT the content
+ *    within any item. → (b) storage cap, surfaced in the Loom Timeline tab
+ *    ("live buffer keeps last N …").
+ * 5. Persistence (persistence/sessions/turn-records.ts): validates and stores
+ *    the snapshot in full. → not a truncation point.
+ * 6. Admin API assembly (buildPromptLoomData / buildTurnData below): full
+ *    clones via cloneUnknownValue. → not a truncation point.
+ * 7. Admin-ui event merge (admin-ui/src/lib/events/prompt-monitor.ts): full
+ *    clone incl. tool input schemas + section provenance. → not a truncation.
+ * 8. Svelte rendering:
+ *    - PromptMonitorTextBlock / MessageList / ToolList use `overflow-auto`
+ *      scroll panes (max-height) — the full content is in the DOM and
+ *      scrollable. → (a) display cap, non-destructive.
+ *    - `truncateValue(...)` shortens IDs/purpose strings for chrome; marks
+ *      shortened values with their original length. → (a) display cap, marked.
+ *
+ * Conclusion: no silent content truncation exists between the assembled prompt
+ * and the Loom. The historical "looked truncated" Provider Wire view is
+ * classification (c) — the real session-budgeted context (compaction / history
+ * span) — now labelled in the Provider Wire tab. See the DM/group fixture test
+ * in session-turn-observability.test.ts.
+ */
 const DEFAULT_TURN_BUFFER_LIMIT = 128;
 const DEFAULT_STAGE_BUFFER_LIMIT = 16;
 const DEFAULT_RETRIEVAL_BUFFER_LIMIT = 8;
@@ -167,6 +208,7 @@ function buildPromptLoomData(
       contextMessages: promptContext?.messages.map(message => cloneUnknownValue(message)) ?? [],
       inputSections: clonePromptSections(promptContext?.inputSections),
       runtimeContextSections: clonePromptSections(promptContext?.runtimeContextSections),
+      memoryContextSections: clonePromptSections(promptContext?.memoryContextSections),
       finalSystemSections: clonePromptSections(promptContext?.finalSystemSections),
     },
     providerPayload: {

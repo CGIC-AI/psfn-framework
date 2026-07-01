@@ -94,7 +94,46 @@
   function truncateValue(value: string | null | undefined, limit: number = 18): string {
     if (!value) return '—';
     if (value.length <= limit) return value;
-    return `${value.slice(0, limit)}…`;
+    // Honest display cap: mark shortened values with their original length so
+    // the operator never mistakes a UI cap for real truncation (bead u9jo.2).
+    return `${value.slice(0, limit)}… [${value.length} chars]`;
+  }
+
+  // Source of truth: AdminSessionTurnObservabilityStore buffer caps
+  // (src/operator/garden/services/session-turn-observability.ts). Surfaced so a
+  // trimmed buffer is never mistaken for missing telemetry (bead u9jo.2).
+  const STAGE_BUFFER_LIMIT = 16;
+  const RETRIEVAL_BUFFER_LIMIT = 8;
+
+  interface ToolInvocationView {
+    sequence: number;
+    toolName: string;
+    toolCallId?: string;
+    argumentsJson: string | null;
+    resultStatus: 'ok' | 'error' | 'pending';
+    resultText?: string;
+    rationale?: string;
+    provenanceRefs?: string[];
+  }
+
+  function toolInvocations(currentTurn: PromptMonitorTurn): ToolInvocationView[] {
+    const calls = currentTurn.record?.toolCalls ?? [];
+    return calls.map((call, index) => ({
+      sequence: index + 1,
+      toolName: call.toolName,
+      ...(call.toolCallId ? { toolCallId: call.toolCallId } : {}),
+      argumentsJson: call.arguments ? JSON.stringify(call.arguments, null, 2) : null,
+      resultStatus: call.isError === true
+        ? 'error'
+        : (call.resultText !== undefined || call.details !== undefined || call.isError === false)
+          ? 'ok'
+          : 'pending',
+      ...(call.resultText ? { resultText: call.resultText } : {}),
+      ...(call.rationale ? { rationale: call.rationale } : {}),
+      ...(call.provenanceRefs && call.provenanceRefs.length > 0
+        ? { provenanceRefs: call.provenanceRefs }
+        : {}),
+    }));
   }
 
   function metricTone(value: number | null, warningThreshold: number): string {
@@ -523,7 +562,7 @@
         />
       </div>
 
-      <div class="grid grid-cols-1 gap-4 xl:grid-cols-3">
+      <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <PromptMonitorSectionTelemetryList
           title="Input Sections"
           sections={turn.snapshot?.promptContext?.inputSections ?? []}
@@ -535,11 +574,20 @@
           emptyText="No runtime context section telemetry recorded."
         />
         <PromptMonitorSectionTelemetryList
+          title="Memory Context Sections"
+          sections={turn.snapshot?.promptContext?.memoryContextSections ?? []}
+          emptyText="No memory context section telemetry recorded."
+        />
+        <PromptMonitorSectionTelemetryList
           title="Final System Sections"
           sections={turn.snapshot?.promptContext?.finalSystemSections ?? []}
           emptyText="No final system section telemetry recorded."
         />
       </div>
+      <p class="text-xs text-shadow-600">
+        Each prompt block header shows its producer module and resolved scope key
+        (<span class="font-mono">dm:&lt;contactId&gt;</span> / <span class="font-mono">room:&lt;channelId&gt;</span> / <span class="font-mono">global</span>).
+      </p>
 
       <div class="rounded-xl border border-bark-200 bg-white p-4">
         <h3 class="font-medium text-shadow-900">Prompt Review Notes</h3>
@@ -681,9 +729,16 @@
         />
       </div>
     {:else if activeTab === 'tools'}
+      <div class="rounded-xl border border-bark-200 bg-white p-3 text-xs text-shadow-700">
+        <span class="font-medium text-shadow-900">Tool surface:</span>
+        The schemas below are <span class="font-medium">direct</span> tools serialized to the provider
+        exactly as shown (name, description, input schema). REPL-only helpers (e.g.
+        <span class="font-mono">grep</span>, <span class="font-mono">memory_search</span>) run only inside the
+        <span class="font-mono">analysis_workbench</span> sandbox and are not part of this provider-visible catalog.
+      </div>
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <PromptMonitorToolList
-          title="Active Tool Schemas"
+          title="Active Tool Schemas (direct, provider-visible)"
           tools={turn.snapshot?.toolContext?.activeTools ?? []}
         />
 
@@ -733,14 +788,87 @@
               emptyText="No adaptive tool activation snapshot recorded."
               maxHeightClass="max-h-56"
             />
-            <PromptMonitorTextBlock
-              title="Adaptive Skips"
-              value={formatJson(turn.snapshot?.toolContext?.adaptiveSnapshot?.skipped)}
-              emptyText="No adaptive tool skips recorded."
-              maxHeightClass="max-h-56"
-            />
           </div>
         </div>
+      </div>
+
+      <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="font-medium text-shadow-900">Skipped / Withheld Tools</h3>
+          <span class="text-sm text-shadow-600">{skippedToolCount(turn)} skipped</span>
+        </div>
+        {#if (turn.snapshot?.toolContext?.adaptiveSnapshot?.skipped?.length ?? 0) === 0}
+          <p class="mt-3 text-sm text-shadow-600">No tools were skipped or withheld this turn.</p>
+        {:else}
+          <div class="mt-3 space-y-2">
+            {#each turn.snapshot?.toolContext?.adaptiveSnapshot?.skipped ?? [] as skip (skip.toolName)}
+              <div class="rounded-lg border border-wilt-200 bg-wilt-50 p-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="font-mono text-sm font-medium text-shadow-900">{skip.toolName}</span>
+                  <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">{skip.source}</span>
+                  <span class="rounded-full border border-wilt-300 bg-white px-2 py-0.5 text-xs font-medium text-wilt-700" title="Reason code">{skip.reason}</span>
+                </div>
+                {#if skip.missingTokens && skip.missingTokens.length > 0}
+                  <p class="mt-1 text-xs text-shadow-600">Missing capability tokens: <span class="font-mono">{skip.missingTokens.join(', ')}</span></p>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <div class="rounded-xl border border-bark-200 bg-white p-4">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="font-medium text-shadow-900">Tool Call Sequence</h3>
+          <span class="text-sm text-shadow-600">{toolInvocations(turn).length} call{toolInvocations(turn).length === 1 ? '' : 's'}</span>
+        </div>
+        <p class="mt-1 text-xs text-shadow-600">Tool calls the model issued this turn, in order, with inputs and results/errors.</p>
+        {#if toolInvocations(turn).length === 0}
+          <p class="mt-3 text-sm text-shadow-600">No tool calls were issued this turn.</p>
+        {:else}
+          <div class="mt-3 space-y-3">
+            {#each toolInvocations(turn) as call (call.sequence)}
+              <div class="rounded-lg border border-bark-200 bg-bark-50 p-3">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="rounded-full border border-bark-300 bg-white px-2 py-0.5 text-xs text-shadow-700">#{call.sequence}</span>
+                  <span class="font-mono text-sm font-medium text-shadow-900">{call.toolName}</span>
+                  <span
+                    class={`rounded-full border px-2 py-0.5 text-xs font-medium ${
+                      call.resultStatus === 'error'
+                        ? 'border-wilt-300 bg-wilt-50 text-wilt-700'
+                        : call.resultStatus === 'ok'
+                          ? 'border-moss-300 bg-moss-50 text-moss-700'
+                          : 'border-bark-300 bg-bark-100 text-shadow-600'
+                    }`}
+                  >
+                    {call.resultStatus}
+                  </span>
+                  {#if call.toolCallId}
+                    <span class="font-mono text-xs text-shadow-500">{truncateValue(call.toolCallId, 24)}</span>
+                  {/if}
+                </div>
+                {#if call.rationale}
+                  <p class="mt-2 text-sm text-shadow-700">{call.rationale}</p>
+                {/if}
+                <PromptMonitorTextBlock
+                  title="Input Arguments"
+                  value={call.argumentsJson}
+                  emptyText="No input arguments recorded."
+                  maxHeightClass="max-h-48"
+                />
+                <PromptMonitorTextBlock
+                  title={call.resultStatus === 'error' ? 'Tool Error' : 'Tool Result'}
+                  value={call.resultText}
+                  emptyText={call.resultStatus === 'pending' ? 'No result observed for this call.' : 'No result text recorded.'}
+                  maxHeightClass="max-h-48"
+                />
+                {#if call.provenanceRefs && call.provenanceRefs.length > 0}
+                  <p class="mt-2 text-xs text-shadow-600">Provenance: <span class="font-mono">{call.provenanceRefs.join(', ')}</span></p>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {:else if activeTab === 'exact'}
       <div class="rounded-xl border border-bark-200 bg-white p-4">
@@ -953,9 +1081,14 @@
         </div>
       </div>
 
+      <p class="text-xs text-shadow-600">
+        Provider wire messages carry the full, untruncated content sent to the provider. If the
+        message set looks shorter than the raw session history, that reflects the real
+        session-budgeted context (compaction / history span), not a snapshot or UI cap.
+      </p>
       <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <PromptMonitorMessageList
-          title="Provider Wire Messages"
+          title={`Provider Wire Messages (${providerWireMessages(turn).length})`}
           messages={providerWireMessages(turn)}
           emptyText="No provider-wire message snapshot recorded."
         />
@@ -998,7 +1131,17 @@
       </div>
     {:else if activeTab === 'timeline'}
       <div class="rounded-xl border border-bark-200 bg-white p-4">
-        <h3 class="font-medium text-shadow-900">Stage Timeline</h3>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <h3 class="font-medium text-shadow-900">Stage Timeline</h3>
+          <span class="text-xs text-shadow-600">
+            live buffer keeps last {STAGE_BUFFER_LIMIT} stage · {RETRIEVAL_BUFFER_LIMIT} retrieval events per turn
+          </span>
+        </div>
+        {#if turn.stages.length >= STAGE_BUFFER_LIMIT}
+          <p class="mt-1 text-xs text-wilt-700">
+            Showing the last {STAGE_BUFFER_LIMIT} buffered stage events; earlier live events for this turn may have been trimmed from the in-memory buffer.
+          </p>
+        {/if}
         <div class="mt-3 space-y-3">
           {#each PROMPT_MONITOR_STAGE_ORDER as stageName}
             {@const stage = turn.stages.find(candidate => candidate.stage === stageName)}

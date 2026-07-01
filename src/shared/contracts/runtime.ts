@@ -37,6 +37,16 @@ export interface TurnRecordToolCall {
   toolCallId?: string;
   isError?: boolean;
   provenanceRefs?: string[];
+  /** Normalized input arguments the model issued for this tool call. */
+  arguments?: Record<string, unknown>;
+  /** Text result returned by the tool (present once the result is observed). */
+  resultText?: string;
+  /** Structured result details returned by the tool, when provided. */
+  details?: unknown;
+  /** Assistant reasoning that accompanied the tool call, when captured. */
+  rationale?: string;
+  /** Provider thought signature attached to the tool call, when captured. */
+  thoughtSignature?: string;
 }
 
 export interface TurnRecordVersionPointers {
@@ -550,13 +560,41 @@ export interface ContextMessage {
   provenance?: AuthenticityProvenance;
 }
 
+/** Scope class for a prompt block: DM contact, room/channel, or global. */
+export type PromptSectionScopeClass = 'dm' | 'room' | 'global';
+
+export type PromptSectionVolatilityClass = 'static' | 'session_stable' | 'append_only' | 'volatile';
+
+/**
+ * Per-block producer + scope labels (Loom block inspection, bead u9jo.3).
+ * Distinct from `AuthenticityProvenance` (which describes source authorship /
+ * authenticity of the rendered text); this describes WHICH producer emitted the
+ * block and WHAT scope it was keyed to. Interim shape carried on the current
+ * snapshot; a later epic replaces the plumbing but keeps this UI contract.
+ */
+export interface PromptSectionScopeProvenance {
+  /** Producer module/function that emitted the block. */
+  producer?: string;
+  /** Resolved scope key: `dm:<contactId>` / `room:<channelId>` / `global`. */
+  scopeKey?: string;
+  /** Scope class the block was keyed to. */
+  scopeClass?: PromptSectionScopeClass;
+  /** Volatility / cacheability class, when determinable. */
+  volatility?: PromptSectionVolatilityClass;
+  /** Source data hint (e.g. core-memory scope key, memory IDs). */
+  sourceHint?: string;
+}
+
 export interface PromptSectionTelemetry {
   id: string;
   title: string;
   content: string;
   charCount: number;
   tokenCount: number;
+  /** Source authorship / authenticity of the rendered text. */
   provenance?: AuthenticityProvenance;
+  /** Producer module + scope labels for Loom block inspection (bead u9jo.3). */
+  scopeProvenance?: PromptSectionScopeProvenance;
 }
 
 export interface LLMContext {

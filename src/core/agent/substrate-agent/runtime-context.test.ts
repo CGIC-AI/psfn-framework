@@ -7,13 +7,17 @@ import { formatActiveConcernsContextBlock } from '../../intention/concerns.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { ApiHealthResponse, ApiHealthSubsystemStatus } from '../../../channels/api/types.js';
 import type { SessionEntry } from '../../session/types.js';
-import { resolveConversationScopeFromMetadata } from '../../session/conversation-scope.js';
+import {
+  createGroupConversationScope,
+  resolveConversationScopeFromMetadata,
+} from '../../session/conversation-scope.js';
 import type { InternalState } from '../../self-model/state.js';
 import {
   buildDynamicPromptTemplateVariables,
   buildPromptTemplateVariables,
   buildRuntimeContext,
   buildScratchpadContextBlock,
+  collectContinuityFallbackKeys,
   getPersonaAdaptation,
   resolveAuthorContext,
   resolveIdentityChannel,
@@ -385,6 +389,115 @@ describe('runtime subject identity', () => {
       subjectIdentityKey: DEFAULT_COMPANION_ID,
       continuitySubjectKey: DEFAULT_COMPANION_ID,
     });
+  });
+
+  // ── E1.7: reflection/heartbeat turns take a ConversationScope ──
+
+  it('AC1: a dm/default reflection turn never consults the group branch (byte-identical binding)', async () => {
+    const logger = { warn: () => undefined, debug: () => undefined };
+    const baseInput = {
+      contactStore: null,
+      logger,
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    } as const;
+
+    // Default reflection (no scope hint at all).
+    const defaultContext = await resolveAuthorContext({
+      message: makeMessage({ authorId: 'contact-primary', routing: { canonicalContactId: 'contact-primary' } }),
+      ...baseInput,
+    });
+    // Same message, but explicitly tagged as a dm reflection scope: must be
+    // identical to the default — the dm path is inert to the new hint.
+    const dmScopedContext = await resolveAuthorContext({
+      message: makeMessage({
+        authorId: 'contact-primary',
+        routing: {
+          canonicalContactId: 'contact-primary',
+          reflectionScope: { kind: 'dm', contactId: 'contact-primary', displayName: 'Primary' },
+        },
+      }),
+      ...baseInput,
+    });
+
+    expect(defaultContext).toEqual(dmScopedContext);
+    expect(defaultContext.canonicalContactKey).toBe('contact-primary');
+    expect(defaultContext.continuityFallbackKeys).toEqual([]);
+  });
+
+  it('AC2: a group reflection turn reflects on the room with no single-member binding', async () => {
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        authorId: 'scheduler',
+        routing: {
+          // A single member id must NOT leak into the binding on a group scope.
+          canonicalContactId: 'contact-alice',
+          reflectionScope: { kind: 'group', roomId: 'discord:group:townsquare', roomName: 'Town Square' },
+        },
+      }),
+      contactStore: null,
+      logger: { warn: () => undefined, debug: () => undefined },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    // No single canonical contact is bound for a room reflection.
+    expect(authorContext.canonicalContactKey).toBeUndefined();
+    // Continuity fallback keys are room-based (no contact fallback).
+    expect(authorContext.continuityFallbackKeys).toEqual(['room:discord:group:townsquare']);
+    expect(authorContext).toMatchObject({
+      trustLevel: 'primary',
+      speakerRole: 'system',
+      resolvedUserName: 'Companion',
+      subjectIdentityKey: DEFAULT_COMPANION_ID,
+      continuitySubjectKey: DEFAULT_COMPANION_ID,
+    });
+  });
+
+  it('AC2: a group reflection prompt carries no speaking_with content', () => {
+    const roomScope = createGroupConversationScope({
+      channelId: 'discord:group:townsquare',
+      roomName: 'Town Square',
+    });
+    const variables = buildDynamicPromptTemplateVariables(withConversationScope({
+      ...buildMinimalRuntimeContextInput(),
+      message: makeMessage({ channelId: 'internal:reflection:whisper', channelType: 'terminal' }),
+      resolvedUserName: 'Companion',
+      trustLevel: 'primary',
+      subjectIdentityKey: DEFAULT_COMPANION_ID,
+      taskKind: 'reflection',
+      conversationScope: roomScope,
+    }));
+
+    expect(variables.runtime_speaking_with_name).toBe('');
+    expect(variables.runtime_speaking_with_trust_level).toBe('');
+    // Internal reflection turns do not surface a live conversation participant roster.
+    expect(variables.runtime_conversation_state_available).toBe('false');
+    expect(variables.runtime_room_id).toBe('');
+  });
+
+  it('collectContinuityFallbackKeys is scope-aware: dm keeps contact keys, group is room-only', () => {
+    const contact = {
+      id: 'contact-alice',
+      discordUserId: 'discord-alice',
+      channelIdentities: [{ channel: 'api', userId: 'api-alice' }],
+    } as never;
+
+    // dm scope (or no scope) => contact-derived fallback keys, as before.
+    const dmScope = resolveConversationScopeFromMetadata({
+      channelId: 'discord:dm:alice',
+      isDirectMessage: true,
+      contact: { contactId: 'contact-alice' },
+    });
+    expect(collectContinuityFallbackKeys('author-alice', 'contact-alice', contact, dmScope))
+      .toEqual(['api-alice', 'author-alice', 'discord-alice']);
+    expect(collectContinuityFallbackKeys('author-alice', 'contact-alice', contact))
+      .toEqual(['api-alice', 'author-alice', 'discord-alice']);
+
+    // group scope => room key only, never a single member's identities.
+    const groupScope = createGroupConversationScope({ channelId: 'discord:group:townsquare' });
+    expect(collectContinuityFallbackKeys('author-alice', 'contact-alice', contact, groupScope))
+      .toEqual(['room:discord:group:townsquare']);
   });
 
   it('renders prompt-owned runtime layers for reflection turns against the companion subject', () => {

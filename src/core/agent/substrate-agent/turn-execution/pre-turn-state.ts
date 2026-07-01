@@ -250,19 +250,31 @@ export async function prepareTurnIdentityState(input: {
   // Single per-turn ConversationScope resolution (session-manager ingress).
   // Resolved after the turn's user message is recorded so the recent-speaker
   // scan sees the same session state the context build sees.
-  const conversationScope = runtime.sessionManager.resolveConversationScope({
-    channelId: message.channelId,
-    channelMeta,
-    ...(continuitySubjectKey ? { userId: continuitySubjectKey } : {}),
-    ...(authorContext.canonicalContactKey
-      ? {
-        contact: {
-          contactId: authorContext.canonicalContactKey,
-          displayName: authorContext.resolvedUserName,
-        },
-      }
-      : {}),
-  });
+  //
+  // E1.7: a scheduler-dispatched reflection/heartbeat turn may carry an explicit
+  // group scope hint. When present, the reflection reflects on the ROOM: the
+  // conversation scope is rebuilt around the room channel (its own recent-speaker
+  // roster and room key), decoupled from the internal reflection transport
+  // channel, and no single canonical contact is bound. A dm/absent hint leaves
+  // the channel-derived resolution byte-identical.
+  const reflectionScopeHint = message.routing?.reflectionScope;
+  const conversationScope = reflectionScopeHint?.kind === 'group'
+    ? runtime.sessionManager.resolveConversationScope({
+      channelId: reflectionScopeHint.roomId,
+    })
+    : runtime.sessionManager.resolveConversationScope({
+      channelId: message.channelId,
+      channelMeta,
+      ...(continuitySubjectKey ? { userId: continuitySubjectKey } : {}),
+      ...(authorContext.canonicalContactKey
+        ? {
+          contact: {
+            contactId: authorContext.canonicalContactKey,
+            displayName: authorContext.resolvedUserName,
+          },
+        }
+        : {}),
+    });
 
   return {
     authorContext,

@@ -72,6 +72,8 @@ The authoritative, always-current list is `PROMPT_RUNTIME_MACRO_HINTS` (exported
 | attention | `{{runtime_concerns_count}}` `{{runtime_concerns_top_lines}}` `{{runtime_concerns_top_priorities}}` `{{runtime_concerns_omitted_count}}`, emotion-appraisal values, behavioral-note counts | turn | bare values + data-shaped lists |
 | tooling | `{{runtime_tooling_*_count}}`, `{{runtime_tooling_summary}}`, `{{runtime_extended_tool_names}}`, directory lines, skills count/body | turn | bare values + data-shaped lists |
 
+The `speaking_with` macros (`{{runtime_speaking_with_name}}`, `{{runtime_speaking_with_trust_level}}`, `{{runtime_speaking_with_is_machine_intelligence}}`) are a one-on-one binding: they carry values **only on DM turns** (`ConversationScope.kind === 'dm'`) and are blank on group and internal turns, so any `{{#if}}` or XML-wrapped `speaking_with` section prunes cleanly in a multi-human room. Use the group-aware `conversation_state` / author macros for group turns.
+
 ## Known prose/convenience macros (and their bare siblings)
 
 These macros intentionally render *default phrasing or formatting* as a convenience for the default layers. Custom layers should prefer the bare siblings.

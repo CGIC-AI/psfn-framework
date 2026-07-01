@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
+import { injectPromptRuntimeTokens, renderPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import { MemoryRetriever } from '../../../faculties/memory/retrieval.js';
 import type { MemoryScopeQuery } from '../../../faculties/memory/types.js';
@@ -101,9 +101,9 @@ describe('group-chat regression harness', () => {
       expectNoBlock(group.prompt, 'speaking_with');
     });
 
-    // KNOWN BUG: flip to `it(...)` once group turns blank the speaking_with
-    // tokens (as internal turns already do), so persisted legacy layers prune.
-    it.fails('leaves speaking_with tokens empty on multi-human group turns', () => {
+    // FIXED (E1.3): group turns blank the speaking_with tokens (as internal
+    // turns already do), so persisted legacy layers prune.
+    it('leaves speaking_with tokens empty on multi-human group turns', () => {
       const { variables } = renderTurnRuntimePrompt(
         makeGroupTurnMessage(CAROL),
         CAROL,
@@ -114,10 +114,10 @@ describe('group-chat regression harness', () => {
       expect(variables.runtime_speaking_with_trust_level).toBe('');
     });
 
-    // KNOWN BUG (same root cause, prompt-shape manifestation): a persisted
-    // legacy prompt layer that still carries the speaking_with section renders
-    // it on group turns bound to the most-recent speaker.
-    it.fails('prunes a legacy speaking_with prompt layer on multi-human group turns', () => {
+    // FIXED (E1.3, same root cause, prompt-shape manifestation): a persisted
+    // legacy prompt layer that still carries the speaking_with section now
+    // prunes on group turns instead of binding to the most-recent speaker.
+    it('prunes a legacy speaking_with prompt layer on multi-human group turns', () => {
       const { variables } = renderTurnRuntimePrompt(
         makeGroupTurnMessage(CAROL),
         CAROL,
@@ -126,6 +126,20 @@ describe('group-chat regression harness', () => {
       );
       const rendered = injectPromptRuntimeTokens(LEGACY_SPEAKING_WITH_LAYER, { variables });
       expectNoBlock(rendered, 'speaking_with');
+    });
+
+    // AC3 (E1.3): gating blanks the speaking_with tokens rather than dropping
+    // them, so the renderer still resolves every token and reports no
+    // unresolved-token leak on a group turn.
+    it('reports no unresolved speaking_with tokens on a group turn', () => {
+      const { variables } = renderTurnRuntimePrompt(
+        makeGroupTurnMessage(CAROL),
+        CAROL,
+        'api',
+        { recentChannelEntries: makeGroupRoomRecentEntries() },
+      );
+      const { unresolvedTokens } = renderPromptRuntimeTokens(LEGACY_SPEAKING_WITH_LAYER, { variables });
+      expect(unresolvedTokens).toEqual([]);
     });
 
     it('keeps speaking_with tokens populated for genuine one-on-one DM turns (correct)', () => {

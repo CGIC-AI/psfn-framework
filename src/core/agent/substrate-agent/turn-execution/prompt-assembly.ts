@@ -237,10 +237,17 @@ export async function assembleTurnPrompt(input: {
     ),
     'substrate-agent:buildPromptTemplateVariables',
   );
+  // E1.3: the machine-intelligence flag is part of the one-on-one speaking_with
+  // binding, so it is gated to DM scope alongside runtime_speaking_with_name /
+  // _trust_level. On group turns it is blank (absent), matching the other
+  // speaking_with tokens so {{#if}} sections prune cleanly. DM turns keep the
+  // byte-identical 'true'/'false' value.
   variableNamespace.assign(
     'session',
     'runtime_speaking_with_is_machine_intelligence',
-    authorContext.speakingWithIsMachineIntelligence === true ? 'true' : 'false',
+    conversationScope.kind === 'dm'
+      ? (authorContext.speakingWithIsMachineIntelligence === true ? 'true' : 'false')
+      : '',
     'turn-execution:assembleTurnPrompt',
   );
   const templateVariables = variableNamespace.snapshotPhase('session') as Record<string, string>;

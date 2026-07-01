@@ -218,6 +218,11 @@ Privacy boundaries:
 - Structured source metadata is required for safe cross-contact facts. Ambiguous or conflicting mixed-speaker attribution fails closed.
 - Retrieval privacy remains contact/trust scoped. A person sharing a group room with the companion does not gain access to another person's private memories.
 
+Multi-companion rooms (charter gate, Law 26 / 8.10):
+
+- Peer companions (contacts flagged `isMachineIntelligence`) may share a room with the companion. When one speaks, it is treated as an OBSERVED participant: its turns are attributed in history, it appears in the participant roster, and group-memory extraction weights it (see `groupMemory.autoDetection.includeAiCompanions`). It is never selected as the canonical human for any binding (DM/room scope contact, core-memory participant subject, or contact-continuity fallback). A companion binds normally only in a genuine 1:1 DM with that companion.
+- Companions replying to companions in a live conversational room is a separate, gated capability. It is governed by the FatigueBudgetPort epic (relationship/channel fatigue budgets that bound machine-intelligence-triggered turns and prevent companion-to-companion reply loops). Until fatigue budgets are enabled and tuned for a room, do NOT enable companions-replying-to-companions for live multi-companion rooms — observation is supported, autonomous companion-to-companion conversation is not.
+
 ## Backups And Integrity
 
 - Backup cadence and retention live in `backup.json` and `scheduler.json`.

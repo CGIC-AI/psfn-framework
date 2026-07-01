@@ -6,7 +6,10 @@ import { normalizeChannelVisibility, type ChannelVisibility, type TrustLevel } f
 import type { MemoryScopeQuery, RetrievalCallerContext, RetrievalModeInput } from '../../../../faculties/memory/types.js';
 import type { ContextManifestMemorySeed } from '../../../session/context-manifest.js';
 import { formatAttributedSystemContent } from '../../../session/entry-attribution.js';
-import type { ConversationScope } from '../../../session/conversation-scope.js';
+import {
+  peerCompanionMayBindAsCanonicalContact,
+  type ConversationScope,
+} from '../../../session/conversation-scope.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { EmotionStateSnapshot } from '../../../emotion/state.js';
 import type { EmotionAppraisalEntry } from '../../../emotion/appraisal.js';
@@ -250,11 +253,21 @@ export async function prepareTurnIdentityState(input: {
   // Single per-turn ConversationScope resolution (session-manager ingress).
   // Resolved after the turn's user message is recorded so the recent-speaker
   // scan sees the same session state the context build sees.
+  //
+  // E1.8 guard: a peer companion (machine intelligence) is never selected as the
+  // canonical human for a shared room. It binds as the canonical contact only in
+  // a genuine DM with that companion (companion-DM is legitimate; the
+  // speaking_with machine-intelligence flag still flows to prompt state via
+  // authorContext independently of this binding).
+  const canonicalContactMayBind = peerCompanionMayBindAsCanonicalContact({
+    isDirectMessage: channelMeta.isDirectMessage,
+    contactIsMachineIntelligence: authorContext.speakingWithIsMachineIntelligence,
+  });
   const conversationScope = runtime.sessionManager.resolveConversationScope({
     channelId: message.channelId,
     channelMeta,
     ...(continuitySubjectKey ? { userId: continuitySubjectKey } : {}),
-    ...(authorContext.canonicalContactKey
+    ...(canonicalContactMayBind && authorContext.canonicalContactKey
       ? {
         contact: {
           contactId: authorContext.canonicalContactKey,

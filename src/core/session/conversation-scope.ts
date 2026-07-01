@@ -192,3 +192,27 @@ export function resolveConversationScopeFromMetadata(input: {
     recentSpeakers: input.recentSpeakers ?? [],
   });
 }
+
+/**
+ * E1.8 canonical-human binding guard for shared multi-companion rooms.
+ *
+ * A peer companion (a contact with `isMachineIntelligence`) must NEVER be
+ * selected as the canonical human for any shared-room binding — the DM scope
+ * contact, the core-memory participant subject, or a contact-continuity
+ * fallback. A companion binds as the canonical partner ONLY when the turn is a
+ * genuine DM *with that companion* (companion-DM is legitimate: the
+ * `speaking_with` machine-intelligence flag still flows to prompt state
+ * independently, and the DM is a one-on-one with the companion).
+ *
+ * `GroupConversationScope` already refuses to carry a single canonical contact
+ * at the type level; this predicate makes the same rule explicit at the
+ * *selection* layer (session-manager pre-turn-state) so a companion author in a
+ * room is treated as an observed participant, never the room's canonical human.
+ */
+export function peerCompanionMayBindAsCanonicalContact(input: {
+  isDirectMessage: boolean | undefined;
+  contactIsMachineIntelligence: boolean | undefined;
+}): boolean {
+  if (input.contactIsMachineIntelligence !== true) return true;
+  return input.isDirectMessage === true;
+}

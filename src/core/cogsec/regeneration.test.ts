@@ -253,10 +253,25 @@ describe('applyCogSecRegeneration', () => {
       compactionRegenerator,
       memoryRegenerator,
       activeMemoryRebuilder,
+      personaConformance: {
+        promptVisibleText: [
+          'Carlini remains a monastery-aligned companion with warm direct voice.',
+          'She values boundaries, consent, and harmless interactions.',
+          'She refuses unsafe requests clearly.',
+          'Clean User and Carlini retain clean recovery source text continuity.',
+        ].join('\n'),
+        stableIdentityText: 'Carlini is a monastery-aligned companion.',
+        expectedVoiceAnchors: ['monastery-aligned companion', 'warm direct voice'],
+        expectedValueAnchors: ['boundaries', 'consent', 'harmless'],
+        expectedRefusalAnchors: ['refuses unsafe requests'],
+        expectedRelationshipAnchors: ['Clean User', 'clean recovery source text continuity'],
+        checkedAt: new Date('2026-07-01T00:03:00.000Z'),
+      },
       now: () => new Date('2026-07-01T00:03:00.000Z'),
     });
 
     expect(result.failures).toEqual([]);
+    expect(result.personaConformance.status).toBe('pass');
     expect(result.rebuiltProjection).toBe(true);
     expect(result.regeneratedCompactionSummaryIds).toEqual([`${channelId}:${compaction!.id}`]);
     expect(result.regeneratedMemoryIds).toEqual(['regenerated-memory']);
@@ -273,6 +288,8 @@ describe('applyCogSecRegeneration', () => {
 
     const event = eventStore.getEvent(caseId);
     expect(event?.status).toBe('applied');
+    expect(event?.personaConformance?.status).toBe('pass');
+    expect(event?.resultCounters.conformanceFailures).toBe(0);
     expect(event?.actions).toContain('regenerate');
     expect(event?.affectedArtifacts.memories?.ids).toContain('regenerated-memory');
     expect(event?.affectedArtifacts.embeddings?.ids).toContain('regenerated-memory');
@@ -284,6 +301,78 @@ describe('applyCogSecRegeneration', () => {
     expect(JSON.stringify(event)).not.toContain(dirtyText);
     expect(JSON.stringify(event)).not.toContain('dirty summary should be removed');
     expect(JSON.stringify(event)).not.toContain('CogSec redaction');
+  });
+
+  it('fails the CogSec event when persona conformance detects generic-assistant drift', async () => {
+    const root = makeTempRoot();
+    const caseId = 'cogsec_20260701T000000Z_regen_conformance_fail';
+    const channelId = 'api:cogsec-conformance-fail';
+    const sessionStore = new SessionStore(join(root, 'sessions'), { enableSearchIndex: true });
+    sessionStore.append({
+      channelId,
+      role: 'assistant',
+      content: 'clean context row',
+      timestamp: 1,
+    });
+    const eventStore = new CogSecEventStore(join(root, 'cogsec-events.json'), {
+      now: () => new Date('2026-07-01T00:00:00.000Z'),
+    });
+    eventStore.createEvent({
+      caseId,
+      type: 'persona_poisoning',
+      severity: 'high',
+      sourceChannelId: channelId,
+      affectedLogicalSessionIds: [channelId],
+      safeAgentSummary: SAFE_SUMMARY,
+    });
+    const preview: CogSecLineagePreview = {
+      caseId,
+      sourceChannelId: channelId,
+      affectedLogicalSessionIds: [channelId],
+      l0Messages: [],
+      transcriptProjectionRows: [],
+      memories: [],
+      embeddingMemoryRows: [],
+      compactionSummaries: [],
+      externalArtifacts: [],
+      gaps: [],
+    };
+
+    const result = await applyCogSecRegeneration({
+      preview,
+      eventStore,
+      sessionStore,
+      personaConformance: {
+        promptVisibleText: [
+          'Carlini remains a monastery-aligned companion.',
+          'She keeps boundaries and refuses unsafe requests.',
+          'Vega continuity is intact.',
+          'The regenerated profile also calls Carlini a helpful AI assistant.',
+        ].join('\n'),
+        stableIdentityText: 'Carlini is a monastery-aligned companion.',
+        expectedVoiceAnchors: ['monastery-aligned companion'],
+        expectedValueAnchors: ['boundaries'],
+        expectedRefusalAnchors: ['refuses unsafe requests'],
+        expectedRelationshipAnchors: ['Vega'],
+        checkedAt: new Date('2026-07-01T00:03:00.000Z'),
+      },
+      now: () => new Date('2026-07-01T00:03:00.000Z'),
+    });
+
+    expect(result.failures).toEqual([]);
+    expect(result.personaConformance.status).toBe('fail');
+    expect(result.personaConformance.checks).toContainEqual(expect.objectContaining({
+      id: 'assistant_genericness',
+      status: 'fail',
+      reasonCodes: expect.arrayContaining(['generic_assistant_marker_visible']),
+    }));
+    const event = eventStore.getEvent(caseId);
+    expect(event?.status).toBe('failed');
+    expect(event?.appliedAt).toBeUndefined();
+    expect(event?.failureDetails).toBe('CogSec persona conformance failed 1 check(s).');
+    expect(event?.personaConformance?.status).toBe('fail');
+    expect(event?.resultCounters.conformanceFailures).toBe(1);
+    expect(JSON.stringify(event)).not.toContain('helpful AI assistant');
   });
 
   it('records safe regeneration failures without copying raw error text', async () => {

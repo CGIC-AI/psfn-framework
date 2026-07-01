@@ -174,6 +174,49 @@ describe('CogSecEventStore', () => {
     }]);
   });
 
+  it('persists safe persona conformance diagnostics without prompt text', () => {
+    const root = makeTempRoot();
+    const path = resolveCogSecEventsPath(root);
+    const store = new CogSecEventStore(path, {
+      now: () => new Date('2026-07-01T00:00:00.000Z'),
+    });
+    store.createEvent({
+      caseId: 'cogsec_20260701T000000Z_conformance',
+      type: 'persona_poisoning',
+      severity: 'high',
+      sourceChannelId: 'discord-channel-1',
+      safeAgentSummary: SAFE_SUMMARY,
+    });
+
+    store.updateEvent('cogsec_20260701T000000Z_conformance', {
+      status: 'failed',
+      resultCounters: {
+        conformanceFailures: 1,
+        conformanceWarnings: 0,
+      },
+      personaConformance: {
+        status: 'fail',
+        checkedAt: '2026-07-01T00:00:00.000Z',
+        summary: 'Persona conformance checks failed and require operator review before the CogSec case is clean.',
+        failureCount: 1,
+        warningCount: 0,
+        promptContextHash: `sha256:${'c'.repeat(64)}`,
+        checks: [{
+          id: 'assistant_genericness',
+          status: 'fail',
+          reasonCodes: ['generic_assistant_marker_visible'],
+        }],
+      },
+    });
+
+    const reloaded = new CogSecEventStore(path).getEvent('cogsec_20260701T000000Z_conformance');
+    expect(reloaded?.personaConformance?.status).toBe('fail');
+    expect(reloaded?.personaConformance?.checks[0]?.id).toBe('assistant_genericness');
+    expect(reloaded?.resultCounters.conformanceFailures).toBe(1);
+    expect(JSON.stringify(reloaded)).not.toContain('helpful AI assistant');
+    expect(JSON.stringify(reloaded)).not.toContain('promptVisibleText');
+  });
+
   it('returns defensive copies from reads', () => {
     const root = makeTempRoot();
     const path = resolveCogSecEventsPath(root);

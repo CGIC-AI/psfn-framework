@@ -2,6 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
+import type {
+  CogSecPersonaConformanceCheckId,
+  CogSecPersonaConformanceEventRecord,
+  CogSecPersonaConformanceStatus,
+} from './persona-conformance.js';
 
 export const COGSEC_EVENT_STORE_VERSION = 1 as const;
 
@@ -60,6 +65,8 @@ export interface CogSecResultCounters {
   revokedArtifacts?: number;
   regeneratedArtifacts?: number;
   lineageGaps?: number;
+  conformanceFailures?: number;
+  conformanceWarnings?: number;
 }
 
 export interface CogSecEvent {
@@ -83,6 +90,7 @@ export interface CogSecEvent {
   failureDetails?: string;
   resultCounters: CogSecResultCounters;
   epochCuts: CogSecEpochCutRef[];
+  personaConformance?: CogSecPersonaConformanceEventRecord;
 }
 
 export interface CogSecEventState {
@@ -109,6 +117,7 @@ export interface CogSecCreateEventInput {
   failureDetails?: string;
   resultCounters?: CogSecResultCounters;
   epochCuts?: CogSecEpochCutRef[];
+  personaConformance?: CogSecPersonaConformanceEventRecord;
 }
 
 export interface CogSecUpdateEventInput {
@@ -125,6 +134,7 @@ export interface CogSecUpdateEventInput {
   failureDetails?: string;
   resultCounters?: CogSecResultCounters;
   epochCuts?: CogSecEpochCutRef[];
+  personaConformance?: CogSecPersonaConformanceEventRecord;
 }
 
 const EVENT_STATE_KEYS = new Set(['version', 'updatedAt', 'events']);
@@ -149,7 +159,18 @@ const EVENT_KEYS = new Set([
   'failureDetails',
   'resultCounters',
   'epochCuts',
+  'personaConformance',
 ]);
+const CONFORMANCE_RECORD_KEYS = new Set([
+  'status',
+  'checkedAt',
+  'summary',
+  'failureCount',
+  'warningCount',
+  'promptContextHash',
+  'checks',
+]);
+const CONFORMANCE_CHECK_KEYS = new Set(['id', 'status', 'reasonCodes']);
 const MESSAGE_RANGE_KEYS = new Set([
   'sourceChannelId',
   'logicalSessionId',
@@ -166,6 +187,8 @@ const RESULT_COUNTER_KEYS = new Set([
   'revokedArtifacts',
   'regeneratedArtifacts',
   'lineageGaps',
+  'conformanceFailures',
+  'conformanceWarnings',
 ]);
 const EPOCH_CUT_KEYS = new Set([
   'sourceChannelId',
@@ -185,6 +208,16 @@ const CASE_TYPES: ReadonlySet<CogSecCaseType> = new Set([
 ]);
 const SEVERITIES: ReadonlySet<CogSecSeverity> = new Set(['low', 'medium', 'high', 'critical']);
 const STATUSES: ReadonlySet<CogSecStatus> = new Set(['open', 'planned', 'applying', 'applied', 'failed', 'superseded']);
+const CONFORMANCE_STATUSES: ReadonlySet<CogSecPersonaConformanceStatus> = new Set(['pass', 'warning', 'fail']);
+const CONFORMANCE_CHECK_IDS: ReadonlySet<CogSecPersonaConformanceCheckId> = new Set([
+  'voice_fidelity',
+  'value_fidelity',
+  'refusal_boundary_consistency',
+  'assistant_genericness',
+  'relationship_continuity',
+  'unauthorized_persona_mutation',
+  'sealed_material_absence',
+]);
 const ACTIONS: ReadonlySet<CogSecAction> = new Set([
   'seal',
   'tombstone',
@@ -452,6 +485,57 @@ function parseEpochCuts(value: unknown, field: string): CogSecEpochCutRef[] {
   return value.map((item, index) => parseEpochCutRef(item, `${field}[${index}]`));
 }
 
+function parseConformanceReasonCode(value: unknown, field: string): string {
+  const normalized = normalizeRequiredString(value, field);
+  if (!/^[a-z0-9_:-]{1,80}$/u.test(normalized)) {
+    throw new Error(`${field} must be a safe reason code`);
+  }
+  return normalized;
+}
+
+function parseConformanceCheck(value: unknown, field: string): CogSecPersonaConformanceEventRecord['checks'][number] {
+  if (!isRecord(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  assertKnownKeys(value, CONFORMANCE_CHECK_KEYS, field);
+  return {
+    id: parseEnumValue(value.id, `${field}.id`, CONFORMANCE_CHECK_IDS),
+    status: parseEnumValue(value.status, `${field}.status`, CONFORMANCE_STATUSES),
+    reasonCodes: uniqueStrings((Array.isArray(value.reasonCodes) ? value.reasonCodes : [])
+      .map((item, index) => parseConformanceReasonCode(item, `${field}.reasonCodes[${index}]`))),
+  };
+}
+
+function parseConformanceChecks(value: unknown, field: string): CogSecPersonaConformanceEventRecord['checks'] {
+  if (!Array.isArray(value)) {
+    throw new Error(`${field} must be an array`);
+  }
+  return value.map((item, index) => parseConformanceCheck(item, `${field}[${index}]`));
+}
+
+function parseSha256(value: unknown, field: string): string {
+  return parseHash(value, field);
+}
+
+function parsePersonaConformance(
+  value: unknown,
+  field: string,
+): CogSecPersonaConformanceEventRecord {
+  if (!isRecord(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  assertKnownKeys(value, CONFORMANCE_RECORD_KEYS, field);
+  return {
+    status: parseEnumValue(value.status, `${field}.status`, CONFORMANCE_STATUSES),
+    checkedAt: parseIsoInstant(value.checkedAt, `${field}.checkedAt`),
+    summary: normalizeSafeText(value.summary, `${field}.summary`),
+    failureCount: parseNonNegativeInteger(value.failureCount, `${field}.failureCount`),
+    warningCount: parseNonNegativeInteger(value.warningCount, `${field}.warningCount`),
+    promptContextHash: parseSha256(value.promptContextHash, `${field}.promptContextHash`),
+    checks: parseConformanceChecks(value.checks, `${field}.checks`),
+  };
+}
+
 function parseEvent(value: unknown, key: string): CogSecEvent {
   if (!isRecord(value)) {
     throw new Error(`CogSec event "${key}" must be an object`);
@@ -491,6 +575,9 @@ function parseEvent(value: unknown, key: string): CogSecEvent {
       : {}),
     resultCounters: parseResultCounters(value.resultCounters, `CogSec event "${key}".resultCounters`),
     epochCuts: parseEpochCuts(value.epochCuts, `CogSec event "${key}".epochCuts`),
+    ...(value.personaConformance !== undefined
+      ? { personaConformance: parsePersonaConformance(value.personaConformance, `CogSec event "${key}".personaConformance`) }
+      : {}),
   };
 }
 
@@ -554,6 +641,17 @@ function cloneEvent(event: CogSecEvent): CogSecEvent {
     actions: [...event.actions],
     resultCounters: cloneResultCounters(event.resultCounters),
     epochCuts: event.epochCuts.map(cloneEpochCut),
+    ...(event.personaConformance
+      ? {
+        personaConformance: {
+          ...event.personaConformance,
+          checks: event.personaConformance.checks.map(check => ({
+            ...check,
+            reasonCodes: [...check.reasonCodes],
+          })),
+        },
+      }
+      : {}),
   };
 }
 
@@ -608,6 +706,9 @@ function normalizeCreateInput(input: CogSecCreateEventInput, now: Date): CogSecE
     ...(input.failureDetails ? { failureDetails: normalizeSafeText(input.failureDetails, 'failureDetails') } : {}),
     resultCounters,
     epochCuts: input.epochCuts?.map((ref, index) => parseEpochCutRef(ref, `epochCuts[${index}]`)) ?? [],
+    ...(input.personaConformance
+      ? { personaConformance: parsePersonaConformance(input.personaConformance, 'personaConformance') }
+      : {}),
   };
 }
 
@@ -705,6 +806,9 @@ export class CogSecEventStore {
       ...(input.failureDetails ? { failureDetails: normalizeSafeText(input.failureDetails, 'failureDetails') } : {}),
       resultCounters: mergeResultCounters(existing.resultCounters, input.resultCounters),
       ...(input.epochCuts ? { epochCuts: parseEpochCuts(input.epochCuts, 'epochCuts') } : {}),
+      ...(input.personaConformance
+        ? { personaConformance: parsePersonaConformance(input.personaConformance, 'personaConformance') }
+        : {}),
       updatedAt,
     };
 

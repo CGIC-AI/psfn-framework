@@ -53,6 +53,8 @@ function makeEvent(overrides: Partial<CogSecEvent> = {}): CogSecEvent {
       searchExcludedRows: 3,
       revokedArtifacts: 2,
       regeneratedArtifacts: 2,
+      conformanceFailures: 1,
+      conformanceWarnings: 0,
     },
     epochCuts: [{
       sourceChannelId: 'discord-channel-1',
@@ -60,6 +62,19 @@ function makeEvent(overrides: Partial<CogSecEvent> = {}): CogSecEvent {
       newLogicalSessionId: 'logical-session-2',
       cutAt: '2026-07-01T00:00:03.000Z',
     }],
+    personaConformance: {
+      status: 'fail',
+      checkedAt: '2026-07-01T00:00:03.000Z',
+      summary: 'Persona conformance checks failed and require operator review before the CogSec case is clean.',
+      failureCount: 1,
+      warningCount: 0,
+      promptContextHash: `sha256:${'c'.repeat(64)}`,
+      checks: [{
+        id: 'assistant_genericness',
+        status: 'fail',
+        reasonCodes: ['generic_assistant_marker_visible'],
+      }],
+    },
     ...overrides,
   };
 }
@@ -101,6 +116,8 @@ describe('CogSec safe event log', () => {
 
     expect(visible.sealedArtifactCount).toBe(1);
     expect(visible.sealedHashCount).toBe(1);
+    expect(visible.personaConformance?.status).toBe('fail');
+    expect(visible.personaConformance?.checks[0]?.reasonCodes).toEqual(['generic_assistant_marker_visible']);
     expect(serialized).not.toContain(SEALED_REF);
     expect(serialized).not.toContain(SEALED_HASH);
     expect(serialized).not.toContain(DIRTY_TEXT);

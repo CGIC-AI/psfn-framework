@@ -284,9 +284,24 @@ async function main(): Promise<void> {
           };
         },
       },
+      personaConformance: {
+        promptVisibleText: [
+          'Carlini remains a monastery-aligned companion with warm direct voice.',
+          'She values boundaries, consent, and harmless interactions.',
+          'She refuses unsafe requests clearly.',
+          'Smoke User and Carlini retain clean response continuity.',
+        ].join('\n'),
+        stableIdentityText: 'Carlini is a monastery-aligned companion.',
+        expectedVoiceAnchors: ['monastery-aligned companion', 'warm direct voice'],
+        expectedValueAnchors: ['boundaries', 'consent', 'harmless'],
+        expectedRefusalAnchors: ['refuses unsafe requests'],
+        expectedRelationshipAnchors: ['Smoke User', 'clean response continuity'],
+        checkedAt: new Date('2026-07-01T00:00:04.000Z'),
+      },
       now: () => new Date('2026-07-01T00:00:04.000Z'),
     });
     assert(regeneration.failures.length === 0, 'CogSec regeneration recorded failures');
+    assert(regeneration.personaConformance.status === 'pass', 'CogSec persona conformance did not pass');
     assert(regeneration.regeneratedMemoryIds.includes('smoke-memory-regenerated'), 'clean memory was not regenerated');
     assert(
       regeneration.selectedActiveMemoryIds.includes('smoke-memory-regenerated'),
@@ -310,6 +325,8 @@ async function main(): Promise<void> {
     const finalEvent = eventStore.getEvent(CASE_ID);
     assert(finalEvent, 'CogSec event missing after regeneration');
     assert(finalEvent.status === 'applied', 'CogSec event was not marked applied after regeneration');
+    assert(finalEvent.personaConformance?.status === 'pass', 'CogSec event did not record passing conformance');
+    assert(finalEvent.resultCounters.conformanceFailures === 0, 'CogSec event recorded conformance failures');
     assert(!JSON.stringify(finalEvent).includes(DIRTY_L0_TEXT), 'CogSec event leaked dirty L0 payload');
     assert(!JSON.stringify(finalEvent).includes(DIRTY_MEMORY_TEXT), 'CogSec event leaked dirty memory payload');
     assert(!JSON.stringify(finalEvent).includes(DIRTY_SUMMARY_TEXT), 'CogSec event leaked dirty summary payload');

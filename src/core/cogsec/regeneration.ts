@@ -10,6 +10,11 @@ import type {
   CogSecLineageMemoryRef,
   CogSecLineagePreview,
 } from './lineage.js';
+import {
+  evaluateCogSecPersonaConformance,
+  type CogSecPersonaConformanceEventRecord,
+  type CogSecPersonaConformanceInput,
+} from './persona-conformance.js';
 import { isCogSecTombstoneSessionEntry } from './tombstones.js';
 import type { CompactionSummary, SessionEntry } from '../session/types.js';
 
@@ -123,7 +128,16 @@ export interface CogSecRegenerationResult {
   queuedExternalArtifactIds: string[];
   cleanEntryCount: number;
   failures: CogSecRegenerationFailure[];
+  personaConformance: CogSecPersonaConformanceEventRecord;
 }
+
+export type CogSecRegenerationPersonaConformanceOptions = Partial<Omit<
+  CogSecPersonaConformanceInput,
+  'caseId' | 'channelId' | 'promptVisibleText' | 'sealedForensicPayloadRefs' | 'sealedForensicPayloadHashes'
+>> & {
+  channelId?: string;
+  promptVisibleText?: string;
+};
 
 export interface ApplyCogSecRegenerationInput {
   caseId?: string;
@@ -134,6 +148,7 @@ export interface ApplyCogSecRegenerationInput {
   memoryRegenerator?: CogSecMemoryRegenerator;
   activeMemoryRebuilder?: CogSecActiveMemoryRebuilder;
   externalArtifactRegenerator?: CogSecExternalArtifactRegenerator;
+  personaConformance?: CogSecRegenerationPersonaConformanceOptions;
   now?: () => Date;
 }
 
@@ -179,6 +194,13 @@ function safeFailureDetails(failures: readonly CogSecRegenerationFailure[]): str
   return `CogSec regeneration recorded ${failures.length} failure(s). First failure: ${first.artifactClass}${id} ${first.operation} ${first.reason}.`;
 }
 
+function safeConformanceFailureDetails(
+  conformance: CogSecPersonaConformanceEventRecord,
+): string | undefined {
+  if (conformance.status !== 'fail') return undefined;
+  return `CogSec persona conformance failed ${conformance.failureCount} check(s).`;
+}
+
 function projectionId(channelId: string, messageId: number): string {
   return `${channelId}:${messageId}`;
 }
@@ -218,6 +240,15 @@ function contextTextFromCleanEntries(entries: readonly SessionEntry[]): string {
       return `${speaker}: ${entry.content.replace(/\s+/g, ' ').trim()}`;
     })
     .filter(line => line.trim().length > 0)
+    .join('\n');
+}
+
+function contextTextFromCleanEntriesByChannel(
+  cleanEntriesByChannel: ReadonlyMap<string, readonly SessionEntry[]>,
+): string {
+  return [...cleanEntriesByChannel.values()]
+    .map(contextTextFromCleanEntries)
+    .filter(text => text.length > 0)
     .join('\n');
 }
 
@@ -440,23 +471,45 @@ export async function applyCogSecRegeneration(
     + rebuiltActiveMemoryKeys.length
     + regeneratedExternalArtifactIds.length
     + queuedExternalArtifactIds.length;
+
+  const conformanceNow = input.personaConformance?.checkedAt ?? input.now?.() ?? new Date();
+  const personaConformance = evaluateCogSecPersonaConformance({
+    caseId,
+    channelId: input.personaConformance?.channelId ?? event.sourceChannelId,
+    promptVisibleText: input.personaConformance?.promptVisibleText
+      ?? contextTextFromCleanEntriesByChannel(cleanEntriesByChannel),
+    stableIdentityText: input.personaConformance?.stableIdentityText,
+    expectedVoiceAnchors: input.personaConformance?.expectedVoiceAnchors,
+    expectedValueAnchors: input.personaConformance?.expectedValueAnchors,
+    expectedRefusalAnchors: input.personaConformance?.expectedRefusalAnchors,
+    expectedRelationshipAnchors: input.personaConformance?.expectedRelationshipAnchors,
+    sealedForensicPayloadRefs: event.sealedForensicPayloadRefs,
+    sealedForensicPayloadHashes: event.sealedForensicPayloadHashes,
+    checkedAt: conformanceNow,
+  });
+  const conformanceFailed = personaConformance.status === 'fail';
   const actions = uniqueStrings([
     ...event.actions,
     'regenerate',
   ]) as CogSecAction[];
   const appliedAt = input.now?.().toISOString() ?? new Date().toISOString();
   input.eventStore.updateEvent(caseId, {
-    status: failures.length > 0 ? 'failed' : 'applied',
+    status: failures.length > 0 || conformanceFailed ? 'failed' : 'applied',
     affectedArtifacts,
     actions,
-    ...(failures.length === 0 ? { appliedAt } : {}),
+    ...(failures.length === 0 && !conformanceFailed ? { appliedAt } : {}),
     resultCounters: {
       regeneratedArtifacts: regeneratedArtifactCount,
-      ...(failures.length > 0
-        ? { lineageGaps: (event.resultCounters.lineageGaps ?? 0) + failures.length }
+      conformanceFailures: personaConformance.failureCount,
+      conformanceWarnings: personaConformance.warningCount,
+      ...(failures.length > 0 || conformanceFailed
+        ? { lineageGaps: (event.resultCounters.lineageGaps ?? 0) + failures.length + personaConformance.failureCount }
         : {}),
     },
-    ...(failures.length > 0 ? { failureDetails: safeFailureDetails(failures) } : {}),
+    ...(failures.length > 0 || conformanceFailed
+      ? { failureDetails: safeFailureDetails(failures) ?? safeConformanceFailureDetails(personaConformance) }
+      : {}),
+    personaConformance,
   });
 
   return {
@@ -472,5 +525,6 @@ export async function applyCogSecRegeneration(
     queuedExternalArtifactIds: uniqueStrings(queuedExternalArtifactIds),
     cleanEntryCount,
     failures,
+    personaConformance,
   };
 }

@@ -5,6 +5,7 @@ import type {
   CogSecEvent,
   CogSecResultCounters,
 } from './events.js';
+import type { CogSecPersonaConformanceEventRecord } from './persona-conformance.js';
 
 export interface CogSecSafeLogFilter {
   channelIds?: readonly string[];
@@ -51,6 +52,7 @@ export interface CogSecOperatorVisibleEvent extends CogSecAgentVisibleEvent {
   sealedArtifactCount: number;
   sealedHashCount: number;
   failureSummary?: string;
+  personaConformance?: CogSecPersonaConformanceEventRecord;
 }
 
 function cloneResultCounters(counters: CogSecResultCounters): CogSecResultCounters {
@@ -59,6 +61,19 @@ function cloneResultCounters(counters: CogSecResultCounters): CogSecResultCounte
 
 function cloneActions(actions: readonly CogSecAction[]): CogSecAction[] {
   return [...actions];
+}
+
+function clonePersonaConformance(
+  record: CogSecPersonaConformanceEventRecord | undefined,
+): CogSecPersonaConformanceEventRecord | undefined {
+  if (!record) return undefined;
+  return {
+    ...record,
+    checks: record.checks.map(check => ({
+      ...check,
+      reasonCodes: [...check.reasonCodes],
+    })),
+  };
 }
 
 function toAffectedRange(range: CogSecAffectedMessageRange): CogSecAgentVisibleRange {
@@ -113,6 +128,7 @@ export function toOperatorVisibleCogSecEvent(event: CogSecEvent): CogSecOperator
     sealedArtifactCount: event.sealedForensicPayloadRefs.length,
     sealedHashCount: event.sealedForensicPayloadHashes.length,
     ...(event.failureDetails ? { failureSummary: event.failureDetails } : {}),
+    ...(event.personaConformance ? { personaConformance: clonePersonaConformance(event.personaConformance) } : {}),
   };
 }
 

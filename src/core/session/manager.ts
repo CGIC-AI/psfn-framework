@@ -48,12 +48,8 @@ import {
   type ContextBudgetTurnCharacteristics,
 } from '../../shared/context-budget.js';
 import {
-  applyTemporalSessionHistoryWindow,
-  collectRecentEntriesWithinHistorySpan,
   collectRecentEntriesWithinTokenBudget,
-  DEFAULT_CONTINUITY_CONTEXT_LIMIT,
   isNonConversationalSessionEntry,
-  resolveMaxHistorySpanMs,
   type SessionMessageRecordOptions,
 } from './manager-primitives.js';
 import {
@@ -65,13 +61,10 @@ import {
   mirrorMessageToActiveSessions,
 } from './manager/mirroring.js';
 import {
-  assembleSessionHistoryForContext,
   buildSessionContext,
+  captureTurnSessionContext,
   DEFAULT_OBSERVATION_MASKING_WINDOW,
   applyObservationMasking,
-  buildOrientationNoteTelemetry,
-  filterContinuityEntriesForChannel,
-  getOrientationRecentActivityEntries,
 } from './manager/context-builder.js';
 import {
   buildSessionMetadataWithTurn,
@@ -84,14 +77,7 @@ import type {
 } from './manager/contracts.js';
 import { runAutoCompaction } from './manager/compaction-service.js';
 import type { TurnSessionContextSnapshot } from '../turns/snapshot.js';
-import {
-  buildSnapshotVersionPointer,
-  cloneSessionContinuityArtifact,
-  cloneSessionEntry,
-} from '../turns/snapshot.js';
-import {
-  countIntentionAppraisalArtifacts,
-} from './manager/context-support.js';
+import { cloneSessionContinuityArtifact } from '../turns/snapshot.js';
 import {
   buildToolObservationMetadata,
   normalizeToolObservation,
@@ -1104,6 +1090,50 @@ export class SessionManager {
     });
   }
 
+  /**
+   * Capture the turn's session-context snapshot through the single derivation
+   * path (context-builder captureTurnSessionContext). The turn pipeline calls
+   * this once pre-turn (feeding the retrieval query and the persisted
+   * PromptPlan); buildContext captures inline for direct callers. There is no
+   * parallel live re-derivation (E2.2).
+   */
+  async captureTurnSessionContext(input: {
+    channelId: string;
+    userId?: string;
+    channelMeta?: ChannelMeta;
+    continuityFallbackUserIds?: string[];
+    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
+    /** Optional LLM provider for foreground history-budget summarization. */
+    llmProvider?: LLMProviderPort;
+  }): Promise<TurnSessionContextSnapshot> {
+    const resolvedChannelId = this.resolveSessionChannelId(input.channelId);
+    const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
+    const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
+      ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
+    return captureTurnSessionContext({
+      channelId: resolvedChannelId,
+      sourceChannelId,
+      userId: input.userId,
+      channelMeta: input.channelMeta,
+      continuityFallbackUserIds: input.continuityFallbackUserIds ?? [],
+      turnBudgetCharacteristics: input.turnBudgetCharacteristics,
+      config: this.config,
+      store: this.compactionBoundaryStore,
+      activityStore: this.store,
+      crossChannelContinuity: this.crossChannelContinuity,
+      focusCompactionRanges: this.getFocusCompactionRanges(resolvedChannelId),
+      focusKnowledgeTexts: this.getFocusKnowledgeTexts(resolvedChannelId),
+      wakeReturnArtifacts: this.listSessionContinuityArtifacts(resolvedChannelId, {
+        kind: 'wake_return',
+        limit: 2,
+      }),
+      compactionPromptText: this.resolveCompactionPromptText(baseCompactionPrompt),
+      characterName: this.resolveContextCharacterName(),
+      llmProvider: input.llmProvider,
+      promptRegistry: this.promptRegistry,
+    });
+  }
+
   async buildContext(
     channelId: string,
     systemPrompt: string,
@@ -1112,7 +1142,7 @@ export class SessionManager {
     userId?: string,
     channelMeta?: ChannelMeta,
     continuityFallbackUserIds: string[] = [],
-    turnSnapshot?: TurnSessionContextSnapshot,
+    turnSessionContext?: TurnSessionContextSnapshot,
     memoryManifestSeed?: ContextManifestMemorySeed,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
     conversationScope?: ConversationScope,
@@ -1133,6 +1163,18 @@ export class SessionManager {
         ...(channelMeta ? { channelMeta } : {}),
         ...(userId ? { userId } : {}),
       });
+    // Single derivation path: the turn pipeline passes the snapshot it captured
+    // pre-turn (the one persisted in the PromptPlan turn snapshot); direct
+    // callers capture inline through the same function.
+    const sessionContext = turnSessionContext
+      ?? await this.captureTurnSessionContext({
+        channelId: resolvedChannelId,
+        userId,
+        channelMeta,
+        continuityFallbackUserIds,
+        turnBudgetCharacteristics,
+        llmProvider,
+      });
     const coreMemoryBlock = this.coreMemoryProvider
       ? this.coreMemoryProvider.formatForContext(
         this.buildCoreMemoryFormatContext(scope),
@@ -1140,19 +1182,10 @@ export class SessionManager {
       : '';
     const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
-    const compactionPromptText = turnSnapshot?.compactionPromptText
+    const compactionPromptText = sessionContext.compactionPromptText
       ?? this.resolveCompactionPromptText(baseCompactionPrompt);
-    const focusKnowledgeTexts = turnSnapshot?.focusKnowledgeTexts
-      ?? this.getFocusKnowledgeTexts(resolvedChannelId);
-    const focusCompactionRanges = turnSnapshot
-      ? []
-      : this.getFocusCompactionRanges(resolvedChannelId);
-    const wakeReturnArtifacts = turnSnapshot?.wakeReturnArtifacts
-      ? turnSnapshot.wakeReturnArtifacts.map(cloneSessionContinuityArtifact)
-      : this.listSessionContinuityArtifacts(resolvedChannelId, {
-        kind: 'wake_return',
-        limit: 2,
-      });
+    const wakeReturnArtifacts = (sessionContext.wakeReturnArtifacts ?? [])
+      .map(cloneSessionContinuityArtifact);
     return buildSessionContext({
       channelId: resolvedChannelId,
       sourceChannelId,
@@ -1180,140 +1213,12 @@ export class SessionManager {
       crossChannelContinuity: this.crossChannelContinuity,
       wakeReturnArtifacts,
       characterName: this.resolveContextCharacterName(),
-      turnSnapshot,
-      focusKnowledgeTexts,
-      focusCompactionRanges,
+      turnSessionContext: sessionContext,
       memoryManifestSeed,
       turnBudgetCharacteristics,
       compactionMode: 'deferred',
       pendingCompaction: this.pendingAutoCompactions.has(resolvedChannelId),
     });
-  }
-
-  captureTurnContextSnapshot(
-    channelId: string,
-    userId?: string,
-    channelMeta?: ChannelMeta,
-    continuityFallbackUserIds: string[] = [],
-    turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
-  ): TurnSessionContextSnapshot {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
-    const adaptiveProfile = resolveAdaptiveContextBudgetProfile(
-      this.config,
-      turnBudgetCharacteristics,
-    );
-    const historyBudget = resolveSessionHistoryBudget(this.config, {
-      ...(turnBudgetCharacteristics ? { turn: turnBudgetCharacteristics } : {}),
-      adaptiveProfile,
-    });
-    const maxHistorySpanMs = resolveMaxHistorySpanMs(this.config);
-    let recent = collectRecentEntriesWithinHistorySpan({
-      store: this.compactionBoundaryStore,
-      channelId: resolvedChannelId,
-      estimatedCount: historyBudget.estimatedCount,
-      maxHistorySpanMs,
-    }).entries;
-    recent = applyTemporalSessionHistoryWindow(recent, turnBudgetCharacteristics);
-    const focusCompaction = applyFocusCompactionRanges(
-      recent,
-      this.getFocusCompactionRanges(resolvedChannelId),
-    );
-    recent = focusCompaction.entries;
-    const intentionAppraisalArtifactCount = countIntentionAppraisalArtifacts(recent);
-    recent = applyObservationMasking(
-      recent,
-      this.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
-    ).entries;
-    const assembledHistory = assembleSessionHistoryForContext({
-      entries: recent,
-      channelVisibility: classifyChannel(sourceChannelId, channelMeta),
-      tokenBudget: historyBudget.tokenBudget,
-      characterName: this.resolveContextCharacterName(),
-    });
-    recent = assembledHistory.verbatimEntries;
-    const focusKnowledgeTexts = this.getFocusKnowledgeTexts(resolvedChannelId);
-
-    const continuityEntries = userId
-      ? this.crossChannelContinuity.getMerged({
-        canonicalUserId: userId,
-        limit: this.config.continuityMessageLimit ?? DEFAULT_CONTINUITY_CONTEXT_LIMIT,
-        fallbackUserIds: continuityFallbackUserIds,
-        channelId: sourceChannelId,
-        channelMeta,
-      })
-      : [];
-    const orientationContinuityEntries = filterContinuityEntriesForChannel(
-      sourceChannelId,
-      continuityEntries,
-    );
-    const orientationRecentActivityEntries = getOrientationRecentActivityEntries({
-      channelId: resolvedChannelId,
-      userId,
-      channelMeta,
-      continuityFallbackUserIds,
-      store: this.store,
-      config: this.config,
-      crossChannelContinuity: this.crossChannelContinuity,
-    });
-    const compactionSummaryTexts = this.compactionBoundaryStore
-      .getCompactionSummaries(resolvedChannelId)
-      .map(summary => summary.summary);
-    const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
-      ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
-    const compactionPromptText = this.resolveCompactionPromptText(baseCompactionPrompt);
-    const orientation = buildOrientationNoteTelemetry({
-      channelId: resolvedChannelId,
-      recentActivityEntries: orientationRecentActivityEntries,
-      continuityEntries: orientationContinuityEntries,
-      focusKnowledgeTexts,
-      characterName: this.resolveContextCharacterName(),
-    });
-    const wakeReturnArtifacts = this.listSessionContinuityArtifacts(resolvedChannelId, {
-      kind: 'wake_return',
-      limit: 2,
-    });
-
-    return {
-      channelId: resolvedChannelId,
-      recentEntries: recent.map(cloneSessionEntry),
-      ...(assembledHistory.summaryText
-        ? { historySummaryText: assembledHistory.summaryText }
-        : {}),
-      ...(assembledHistory.summarizedEntryCount > 0
-        ? { historySummaryEntryCount: assembledHistory.summarizedEntryCount }
-        : {}),
-      compactionSummaryTexts: [...compactionSummaryTexts],
-      focusKnowledgeTexts: [...focusKnowledgeTexts],
-      continuityEntries: continuityEntries.map(cloneSessionEntry),
-      wakeReturnArtifacts: wakeReturnArtifacts.map(cloneSessionContinuityArtifact),
-      orientation,
-      intentionAppraisalArtifactCount,
-      compactionPromptText,
-      versionPointer: buildSnapshotVersionPointer([
-        resolvedChannelId,
-        recent.at(-1)?.id,
-        recent.at(-1)?.timestamp,
-        assembledHistory.summaryText,
-        assembledHistory.summarizedEntryCount,
-        compactionSummaryTexts.join('\n'),
-        focusKnowledgeTexts.join('\n'),
-        focusCompaction.compactedCount,
-        continuityEntries.at(-1)?.id,
-        continuityEntries.at(-1)?.timestamp,
-        wakeReturnArtifacts.at(0)?.id,
-        wakeReturnArtifacts.at(0)?.createdAt,
-        wakeReturnArtifacts.at(0)?.summary,
-        wakeReturnArtifacts.at(0)?.nextAnchor,
-        compactionPromptText,
-        orientation.fired ? 'orientation:fired' : `orientation:${orientation.reason}`,
-        orientation.idleGapMs,
-        orientation.lastActivityAt,
-        orientation.noteText,
-        orientation.timeTexture?.kind,
-        orientation.timeTexture?.reconnectionWarmth,
-      ]),
-    };
   }
 
   /** Append a system note to a session's internal lane. Hidden from ordinary context builds. */

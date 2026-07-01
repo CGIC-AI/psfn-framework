@@ -29,7 +29,12 @@ import {
   cloneObservedAdaptiveToolSnapshot,
   readActiveTurnToolSchemas,
 } from '../turn-tool-context.js';
-import { buildRuntimeDatetimeAnchorRetryPrompt, buildRuntimeDatetimeContradictionRefusal, detectRuntimeDatetimeContradiction } from '../runtime-datetime-contradiction-guard.js';
+import {
+  buildRuntimeDatetimeAnchorRetryPrompt,
+  buildRuntimeDatetimeContradictionRefusal,
+  buildRuntimeDatetimeDetectionContext,
+  detectRuntimeDatetimeContradiction,
+} from '../runtime-datetime-contradiction-guard.js';
 import { resolveAppearanceContextFromTemplateVariables } from '../runtime-context.js';
 import { sanitizePersistedReasoningText } from '../turn-records.js';
 import {
@@ -466,6 +471,11 @@ export async function invokeAgentForTurn(input: {
     runtime.getAdaptiveToolRuntimeState().lastSnapshot,
   );
   const activeTools = readActiveTurnToolSchemas(runtime.agent);
+  if (turnSnapshot.plan) {
+    // The plan carries exactly what ships to the provider: bind the resolved
+    // tool definitions before the snapshot is (re-)emitted and persisted.
+    turnSnapshot.plan.toolDefinitions = activeTools;
+  }
   if (activeTools.length > 0 || adaptiveToolSnapshot) {
     turnSnapshot.toolContext = {
       activeTools,
@@ -637,7 +647,10 @@ export async function invokeAgentForTurn(input: {
 
   responseText = runtime.extractResponseText();
   const runtimeContradictionDetection = detectRuntimeDatetimeContradiction(
-    turnSnapshot.promptContext,
+    buildRuntimeDatetimeDetectionContext({
+      plan: turnSnapshot.plan,
+      promptContext: turnSnapshot.promptContext,
+    }),
     responseText,
   );
   if (runtimeContradictionDetection.anchorDetected && runtimeContradictionDetection.contradictionDetected) {
@@ -713,7 +726,10 @@ export async function invokeAgentForTurn(input: {
     responseText = runtime.extractResponseText();
 
     const retryContradictionDetection = detectRuntimeDatetimeContradiction(
-      turnSnapshot.promptContext,
+      buildRuntimeDatetimeDetectionContext({
+        plan: turnSnapshot.plan,
+        promptContext: turnSnapshot.promptContext,
+      }),
       responseText,
     );
     if (retryContradictionDetection.contradictionDetected) {

@@ -1,3 +1,10 @@
+import {
+  getPromptPlanBlockText,
+  renderPromptPlanAssembledPrompt,
+  serializePromptPlanSystemPrompt,
+  type PromptPlan,
+} from './turn-execution/prompt-plan.js';
+
 export interface RuntimeDatetimePromptContextLike {
   assembledPrompt?: string;
   runtimeContext?: string;
@@ -85,6 +92,32 @@ function hasRuntimeDatetimeAnchor(promptContext: RuntimeDatetimePromptContextLik
     || section.content?.includes('<runtime.current_datetime')
     || section.content?.includes('<current_datetime>')
   )) ?? false);
+}
+
+/**
+ * Build the detection context from the turn's PromptPlan (the shipped prompt)
+ * plus section telemetry. The plan is the source of truth for what the
+ * provider actually received (E2.2).
+ */
+export function buildRuntimeDatetimeDetectionContext(input: {
+  plan?: PromptPlan;
+  promptContext?: RuntimeDatetimePromptContextLike | null;
+}): RuntimeDatetimePromptContextLike {
+  return {
+    ...(input.plan
+      ? {
+        assembledPrompt: renderPromptPlanAssembledPrompt(input.plan),
+        finalSystemPrompt: serializePromptPlanSystemPrompt(input.plan),
+        runtimeContext: getPromptPlanBlockText(input.plan, 'runtime.context'),
+      }
+      : {}),
+    ...(input.promptContext?.runtimeContextSections
+      ? { runtimeContextSections: input.promptContext.runtimeContextSections }
+      : {}),
+    ...(input.promptContext?.finalSystemSections
+      ? { finalSystemSections: input.promptContext.finalSystemSections }
+      : {}),
+  };
 }
 
 export function detectRuntimeDatetimeContradiction(

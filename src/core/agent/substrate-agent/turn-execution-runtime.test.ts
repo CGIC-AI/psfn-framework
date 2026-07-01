@@ -10,6 +10,12 @@ import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
 import { resolveConversationScopeFromMetadata } from '../../session/conversation-scope.js';
 import type { SessionManager } from '../../session/manager.js';
 import {
+  getPromptPlanBlockText,
+  renderPromptPlanAssembledPrompt,
+  serializePromptPlanSystemPrompt,
+  type PromptPlan,
+} from './turn-execution/prompt-plan.js';
+import {
   buildToolObservationMetadata,
   normalizeToolObservation,
 } from '../../session/tool-observation.js';
@@ -476,6 +482,15 @@ function createRuntime(params: {
     imageVisionReviewer: params.imageVisionReviewer ?? null,
     sessionManager: {
       buildContext: params.buildContext,
+      captureTurnSessionContext: vi.fn(async (input: { channelId: string }) => ({
+        channelId: input.channelId,
+        recentEntries: [],
+        sourceEntryCount: 0,
+        compactionSummaryTexts: [],
+        focusKnowledgeTexts: [],
+        continuityEntries: [],
+        versionPointer: 'mock-session-context',
+      })),
       recordTurn: vi.fn(),
       appendSystemNote: vi.fn(),
       awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
@@ -1798,25 +1813,28 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
     const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    const plan = recordedInput.turnSnapshot?.plan as PromptPlan;
     const toolContext = recordedInput.turnSnapshot?.toolContext as Record<string, unknown> | undefined;
-    expect(promptContext).toMatchObject({
-      renderedStaticPrefix: [
-        'Rendered static prefix',
-        temporalRulesBlock,
-      ].join('\n\n'),
-      renderedDynamicSuffix: 'Dynamic suffix template',
-      runtimeContext: 'Runtime context block',
-      memoryContextBlock: 'Retrieved memory block',
-      scratchpadContext: 'Scratchpad block',
-      finalSystemPrompt: 'Final system prompt',
-    });
-    expect(promptContext?.assembledPrompt).toContain('Rendered static prefix');
-    expect(promptContext?.assembledPrompt).toContain('Persona hint');
-    expect(promptContext?.assembledPrompt).toContain('Runtime context block');
-    expect(promptContext?.messages).toEqual([
+    expect(plan.schemaVersion).toBe(1);
+    expect(getPromptPlanBlockText(plan, 'static_prefix')).toBe([
+      'Rendered static prefix',
+      temporalRulesBlock,
+    ].join('\n\n'));
+    expect(getPromptPlanBlockText(plan, 'dynamic_suffix')).toBe('Dynamic suffix template');
+    expect(getPromptPlanBlockText(plan, 'runtime.context')).toBe('Runtime context block');
+    expect(getPromptPlanBlockText(plan, 'runtime.scratchpad')).toBe('Scratchpad block');
+    const assembledPrompt = renderPromptPlanAssembledPrompt(plan);
+    expect(assembledPrompt).toContain('Rendered static prefix');
+    expect(assembledPrompt).toContain('Persona hint');
+    expect(assembledPrompt).toContain('Runtime context block');
+    const finalSystemPrompt = serializePromptPlanSystemPrompt(plan);
+    expect(plan.messages).toEqual([
       { role: 'user', content: 'Earlier user message' },
       { role: 'assistant', content: 'Earlier assistant reply' },
     ]);
+    expect(plan.toolDefinitions).toMatchObject([{ name: 'contact' }]);
+    const inputSections = promptContext?.inputSections as Array<{ id: string; content: string }> | undefined;
+    expect(inputSections?.find(section => section.id === 'memory_context')?.content).toContain('Retrieved memory block');
     expect(promptContext?.currentTurnInput).toBe('Hello there');
     expect(promptContext?.response).toMatchObject({
       content: 'assistant reply',
@@ -1829,7 +1847,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         transport: 'openai_system',
       },
       providerWireMessages: [
-        { role: 'system', source: 'system_prompt', content: 'Final system prompt' },
+        { role: 'system', source: 'system_prompt', content: finalSystemPrompt },
         { role: 'user', source: 'message', content: 'Earlier user message' },
         { role: 'assistant', source: 'message', content: expect.stringContaining('Earlier assistant reply') },
       ],
@@ -1850,8 +1868,6 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(emittedSnapshots).toHaveLength(5);
     expect(emittedSnapshots.at(-1)?.promptContext).toMatchObject({
       currentTurnInput: 'Hello there',
-      finalSystemPrompt: 'Final system prompt',
-      runtimeContext: 'Runtime context block',
       response: {
         content: 'assistant reply',
         model: 'test-model',
@@ -1860,6 +1876,10 @@ describe('handleMessageForTurn compaction scheduling', () => {
         backendApi: 'openai-completions',
       },
     });
+    expect(getPromptPlanBlockText(
+      emittedSnapshots.at(-1)?.plan as PromptPlan,
+      'runtime.context',
+    )).toBe('Runtime context block');
     expect(emittedSnapshots.at(-1)?.toolContext).toMatchObject({
       activeTools: [{ name: 'contact' }],
     });
@@ -1958,8 +1978,11 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
     const recordedInput = buildTurnRecordMock.mock.calls[0]?.[0] as { turnSnapshot?: Record<string, unknown> };
     const promptContext = recordedInput.turnSnapshot?.promptContext as Record<string, unknown> | undefined;
+    const plan = recordedInput.turnSnapshot?.plan as PromptPlan;
     const mergedSystemPrompt = [
-      'Final system prompt',
+      'Rendered static prefix',
+      'Dynamic suffix template',
+      'Runtime context block',
       '<session_context>',
       '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.',
       '</session_context>',
@@ -1968,12 +1991,15 @@ describe('handleMessageForTurn compaction scheduling', () => {
       providerWireMessages?: Array<{ role: string; source: string; content: string }>;
     } | undefined)?.providerWireMessages;
 
-    expect(promptContext?.messages).toEqual([
+    expect(plan.messages).toEqual([
       { role: 'user', content: 'Earlier user message' },
       { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
       { role: 'assistant', content: 'Earlier assistant reply' },
     ]);
-    expect(promptContext?.finalSystemPrompt).toBe(mergedSystemPrompt);
+    expect(getPromptPlanBlockText(plan, 'session_context')).toContain(
+      '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.',
+    );
+    expect(serializePromptPlanSystemPrompt(plan)).toBe(mergedSystemPrompt);
     expect(providerWireMessages).toEqual([
       { role: 'system', source: 'system_prompt', content: mergedSystemPrompt },
       { role: 'user', source: 'message', content: 'Earlier user message' },
@@ -2061,13 +2087,17 @@ describe('handleMessageForTurn compaction scheduling', () => {
       '</runtime.current_datetime>',
     ].join('\n');
     const mergedSystemPrompt = [
-      'Final system prompt',
+      'Rendered static prefix',
+      temporalRulesBlock,
+      'Dynamic suffix template',
+      'Runtime context block',
       '<session_context>',
       '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.',
       '</session_context>',
       currentDatetimeAnchor,
     ].join('\n\n');
-    const finalSystemPrompt = promptContext?.finalSystemPrompt as string | undefined;
+    const plan = recordedInput.turnSnapshot?.plan as PromptPlan;
+    const finalSystemPrompt = serializePromptPlanSystemPrompt(plan);
     const providerWireMessages = (promptContext?.providerObservability as {
       providerWireMessages?: Array<{ role: string; source: string; content: string }>;
     } | undefined)?.providerWireMessages;
@@ -2078,9 +2108,9 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(fullPrompt).toContain(temporalRulesBlock);
     expect(fullPrompt).not.toContain('Stale legacy date');
     expect(finalSystemPrompt).toBe(mergedSystemPrompt);
-    expect(finalSystemPrompt?.endsWith(currentDatetimeAnchor)).toBe(true);
-    expect(finalSystemPrompt?.indexOf('</session_context>')).toBeLessThan(
-      finalSystemPrompt?.lastIndexOf('<runtime.current_datetime') ?? -1,
+    expect(finalSystemPrompt.endsWith(currentDatetimeAnchor)).toBe(true);
+    expect(finalSystemPrompt.indexOf('</session_context>')).toBeLessThan(
+      finalSystemPrompt.lastIndexOf('<runtime.current_datetime'),
     );
     expect(providerWireMessages?.[0]).toEqual({
       role: 'system',
@@ -2589,7 +2619,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       const runtime = createRuntime({
         eventBus,
         sessionManager: {
-          captureTurnContextSnapshot: vi.fn(() => ({
+          captureTurnSessionContext: vi.fn(async () => ({
             channelId: 'ch1',
             recentEntries: [
               {

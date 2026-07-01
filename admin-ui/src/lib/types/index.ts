@@ -448,15 +448,21 @@ export interface AdminTurnPromptResponseSnapshotData {
   toolCallCount?: number;
 }
 
+/**
+ * Prompt observability that is not derivable from the PromptPlan (E2.2).
+ * Rendered prompt strings and the shipped message history live on
+ * AdminTurnSnapshotData.plan for current records; the optional string fields
+ * here exist only on historical persisted records that predate the plan.
+ */
 export interface AdminTurnPromptContextSnapshotData {
-  renderedStaticPrefix: string;
-  renderedDynamicSuffix: string;
-  runtimeContext: string;
-  memoryContextBlock: string;
-  scratchpadContext: string;
-  assembledPrompt: string;
-  finalSystemPrompt: string;
-  messages: AdminTurnPromptContextMessage[];
+  renderedStaticPrefix?: string;
+  renderedDynamicSuffix?: string;
+  runtimeContext?: string;
+  memoryContextBlock?: string;
+  scratchpadContext?: string;
+  assembledPrompt?: string;
+  finalSystemPrompt?: string;
+  messages?: AdminTurnPromptContextMessage[];
   currentTurnInput?: string;
   providerObservability?: AdminTurnProviderObservabilityData;
   response?: AdminTurnPromptResponseSnapshotData;
@@ -535,6 +541,26 @@ export interface AdminTurnMemorySnapshotData {
   versionPointer: string;
 }
 
+export interface AdminPromptPlanBlock {
+  id: string;
+  layer: 'prompt_stack' | 'runtime' | 'session' | 'provider';
+  volatility: 'static' | 'session_stable' | 'turn';
+  producer: string;
+  scopeKey?: string;
+  renderedText: string;
+  tokensEst: number;
+}
+
+export interface AdminPromptPlanData {
+  schemaVersion: number;
+  blocks: AdminPromptPlanBlock[];
+  variables: Record<string, string>;
+  messages: AdminTurnPromptContextMessage[];
+  toolDefinitions: AdminTurnToolSchema[];
+  cachePlan: { staticBoundary: number; sessionStableBoundary: number };
+  scope: unknown;
+}
+
 export interface AdminTurnSnapshotData {
   turnId: string;
   requestId: string;
@@ -543,6 +569,8 @@ export interface AdminTurnSnapshotData {
   trustLevel: string;
   canonicalContactKey?: string;
   prompt?: AdminTurnPromptSnapshotData;
+  /** The turn's PromptPlan: the persisted snapshot IS the plan (E2.2). */
+  plan?: AdminPromptPlanData;
   promptContext?: AdminTurnPromptContextSnapshotData;
   toolContext?: AdminTurnToolContextSnapshotData;
   sessionContext?: AdminTurnSessionContextSnapshotData;

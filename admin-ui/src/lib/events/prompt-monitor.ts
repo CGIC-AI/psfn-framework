@@ -1,6 +1,8 @@
 import type {
   AdminAuthenticityProvenance,
   AdminPromptLoomData,
+  AdminPromptPlanBlock,
+  AdminPromptPlanData,
   AdminPromptSectionTelemetry,
   AdminSessionTurnData,
   AdminTurnPromptContextMessage,
@@ -163,11 +165,14 @@ function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
   return {
     ...snapshot,
     ...(snapshot.prompt ? { prompt: { ...snapshot.prompt } } : {}),
+    ...(snapshot.plan ? { plan: cloneJsonSafe(snapshot.plan) } : {}),
     ...(snapshot.promptContext
       ? {
         promptContext: {
           ...snapshot.promptContext,
-          messages: snapshot.promptContext.messages.map(clonePromptContextMessage),
+          ...(snapshot.promptContext.messages
+            ? { messages: snapshot.promptContext.messages.map(clonePromptContextMessage) }
+            : {}),
           ...(snapshot.promptContext.inputSections
             ? {
               inputSections: snapshot.promptContext.inputSections.map(clonePromptSection),
@@ -427,9 +432,74 @@ function cloneProviderMessagesForLoom(
   return (messages?.map(message => ({ ...message })) ?? []) as AdminPromptLoomData['providerPayload']['providerMessages'];
 }
 
+function getPlanBlockText(
+  plan: AdminPromptPlanData | undefined,
+  id: string,
+): string | null {
+  return plan?.blocks.find(block => block.id === id)?.renderedText ?? null;
+}
+
+function joinPlanBlockTexts(blocks: readonly AdminPromptPlanBlock[]): string {
+  return blocks
+    .map(block => block.renderedText.trim())
+    .filter(text => text.length > 0)
+    .join('\n\n');
+}
+
+interface PromptLoomPlanStrings {
+  renderedStaticPrefix: string | null;
+  renderedDynamicSuffix: string | null;
+  runtimeContext: string | null;
+  memoryContextBlock: string | null;
+  scratchpadContext: string | null;
+  assembledPrompt: string | null;
+  finalSystemPrompt: string | null;
+  contextMessages: AdminPromptLoomData['generatedPrompt']['contextMessages'];
+}
+
+/**
+ * Live-event fallback mirror of the server-side plan derivation (E2.2): the
+ * snapshot's PromptPlan is the source of truth for prompt strings; the legacy
+ * promptContext string fields exist only on historical records.
+ */
+function derivePromptLoomPlanStrings(
+  snapshot: AdminTurnSnapshotData | undefined | null,
+): PromptLoomPlanStrings {
+  const plan = snapshot?.plan;
+  if (plan) {
+    const anchorBlock = plan.blocks.find(block => block.id === 'runtime.current_datetime');
+    const body = joinPlanBlockTexts(plan.blocks.filter(block => block.id !== 'runtime.current_datetime'));
+    const anchor = anchorBlock?.renderedText.trim() ?? '';
+    return {
+      renderedStaticPrefix: getPlanBlockText(plan, 'static_prefix') ?? '',
+      renderedDynamicSuffix: getPlanBlockText(plan, 'dynamic_suffix') ?? '',
+      runtimeContext: getPlanBlockText(plan, 'runtime.context') ?? '',
+      memoryContextBlock: getPlanBlockText(plan, 'memory.retrieval') ?? '',
+      scratchpadContext: getPlanBlockText(plan, 'runtime.scratchpad') ?? '',
+      assembledPrompt: joinPlanBlockTexts(
+        plan.blocks.filter(block => block.layer === 'prompt_stack' || block.layer === 'runtime'),
+      ),
+      finalSystemPrompt: anchor ? (body ? `${body}\n\n${anchor}` : anchor) : body,
+      contextMessages: clonePromptContextMessagesForLoom(plan.messages),
+    };
+  }
+  const promptContext = snapshot?.promptContext;
+  return {
+    renderedStaticPrefix: promptContext?.renderedStaticPrefix ?? null,
+    renderedDynamicSuffix: promptContext?.renderedDynamicSuffix ?? null,
+    runtimeContext: promptContext?.runtimeContext ?? null,
+    memoryContextBlock: promptContext?.memoryContextBlock ?? null,
+    scratchpadContext: promptContext?.scratchpadContext ?? null,
+    assembledPrompt: promptContext?.assembledPrompt ?? null,
+    finalSystemPrompt: promptContext?.finalSystemPrompt ?? null,
+    contextMessages: clonePromptContextMessagesForLoom(promptContext?.messages),
+  };
+}
+
 function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
   const snapshot = turn.snapshot;
   const promptContext = snapshot?.promptContext;
+  const planStrings = derivePromptLoomPlanStrings(snapshot);
   const response = promptContext?.response ?? null;
   const renderedChatOutput = response?.content ?? turn.record?.assistantMessage?.content ?? null;
   const historicalHits = collectHistoricalSnapshotHits(snapshot);
@@ -443,20 +513,20 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
       hits: historicalHits,
     },
     generatedPrompt: {
-      renderedStaticPrefix: promptContext?.renderedStaticPrefix ?? null,
-      renderedDynamicSuffix: promptContext?.renderedDynamicSuffix ?? null,
-      runtimeContext: promptContext?.runtimeContext ?? null,
-      memoryContextBlock: promptContext?.memoryContextBlock ?? null,
-      scratchpadContext: promptContext?.scratchpadContext ?? null,
-      assembledPrompt: promptContext?.assembledPrompt ?? null,
-      contextMessages: clonePromptContextMessagesForLoom(promptContext?.messages),
+      renderedStaticPrefix: planStrings.renderedStaticPrefix,
+      renderedDynamicSuffix: planStrings.renderedDynamicSuffix,
+      runtimeContext: planStrings.runtimeContext,
+      memoryContextBlock: planStrings.memoryContextBlock,
+      scratchpadContext: planStrings.scratchpadContext,
+      assembledPrompt: planStrings.assembledPrompt,
+      contextMessages: planStrings.contextMessages,
       inputSections: clonePromptSectionsForLoom(promptContext?.inputSections),
       runtimeContextSections: clonePromptSectionsForLoom(promptContext?.runtimeContextSections),
       memoryContextSections: clonePromptSectionsForLoom(promptContext?.memoryContextSections),
       finalSystemSections: clonePromptSectionsForLoom(promptContext?.finalSystemSections),
     },
     providerPayload: {
-      finalSystemPrompt: promptContext?.finalSystemPrompt ?? null,
+      finalSystemPrompt: planStrings.finalSystemPrompt,
       providerMessages: cloneProviderMessagesForLoom(promptContext?.providerObservability?.providerWireMessages),
       activeTools: snapshot?.toolContext?.activeTools.map(tool => ({
         ...tool,

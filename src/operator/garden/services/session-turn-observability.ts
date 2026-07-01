@@ -17,7 +17,12 @@ import type {
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
 } from './types.js';
-import type { TurnRecord } from '../../../shared/contracts/runtime.js';
+import type { ContextMessage, TurnRecord } from '../../../shared/contracts/runtime.js';
+import {
+  getPromptPlanBlockText,
+  renderPromptPlanAssembledPrompt,
+  serializePromptPlanSystemPrompt,
+} from '../../../core/agent/substrate-agent/turn-execution/prompt-plan.js';
 
 /**
  * Truncation-point inventory (bead psfn-framework-u9jo.2).
@@ -182,6 +187,65 @@ function hasToolResultPayload(toolCall: TurnRecord['toolCalls'][number]): boolea
     || record.details !== undefined;
 }
 
+/**
+ * Prompt-string fields for records that predate the PromptPlan snapshot
+ * (E2.2). Historical persisted turn records stored these strings on
+ * promptContext; current records carry the plan and the strings are derived
+ * from it. This shape exists ONLY to keep historical turns viewable.
+ */
+interface HistoricalPromptContextRecordFields {
+  renderedStaticPrefix?: string;
+  renderedDynamicSuffix?: string;
+  runtimeContext?: string;
+  memoryContextBlock?: string;
+  scratchpadContext?: string;
+  assembledPrompt?: string;
+  finalSystemPrompt?: string;
+  messages?: ContextMessage[];
+}
+
+interface PromptLoomPromptStrings {
+  renderedStaticPrefix: string | null;
+  renderedDynamicSuffix: string | null;
+  runtimeContext: string | null;
+  memoryContextBlock: string | null;
+  scratchpadContext: string | null;
+  assembledPrompt: string | null;
+  finalSystemPrompt: string | null;
+  contextMessages: ContextMessage[];
+}
+
+function derivePromptLoomPromptStrings(
+  snapshot: AdminTurnSnapshotData | null,
+): PromptLoomPromptStrings {
+  const plan = snapshot?.plan;
+  if (plan) {
+    // The persisted snapshot IS the plan: every prompt string the Loom shows
+    // is derived from the same ordered blocks that shipped to the provider.
+    return {
+      renderedStaticPrefix: getPromptPlanBlockText(plan, 'static_prefix'),
+      renderedDynamicSuffix: getPromptPlanBlockText(plan, 'dynamic_suffix'),
+      runtimeContext: getPromptPlanBlockText(plan, 'runtime.context'),
+      memoryContextBlock: getPromptPlanBlockText(plan, 'memory.retrieval'),
+      scratchpadContext: getPromptPlanBlockText(plan, 'runtime.scratchpad'),
+      assembledPrompt: renderPromptPlanAssembledPrompt(plan),
+      finalSystemPrompt: serializePromptPlanSystemPrompt(plan),
+      contextMessages: plan.messages.map(message => cloneUnknownValue(message)),
+    };
+  }
+  const historical = (snapshot?.promptContext ?? null) as HistoricalPromptContextRecordFields | null;
+  return {
+    renderedStaticPrefix: historical?.renderedStaticPrefix ?? null,
+    renderedDynamicSuffix: historical?.renderedDynamicSuffix ?? null,
+    runtimeContext: historical?.runtimeContext ?? null,
+    memoryContextBlock: historical?.memoryContextBlock ?? null,
+    scratchpadContext: historical?.scratchpadContext ?? null,
+    assembledPrompt: historical?.assembledPrompt ?? null,
+    finalSystemPrompt: historical?.finalSystemPrompt ?? null,
+    contextMessages: historical?.messages?.map(message => cloneUnknownValue(message)) ?? [],
+  };
+}
+
 function buildPromptLoomData(
   record: TurnRecord,
   snapshot: AdminTurnSnapshotData | null,
@@ -190,6 +254,7 @@ function buildPromptLoomData(
   const response = promptContext?.response ?? null;
   const renderedChatOutput = response?.content ?? record.assistantMessage?.content ?? null;
   const historicalHits = collectHistoricalSnapshotHits(snapshot);
+  const promptStrings = derivePromptLoomPromptStrings(snapshot);
   return {
     source: 'turn_snapshot',
     snapshotCapturedAt: snapshot?.capturedAt ?? null,
@@ -199,20 +264,20 @@ function buildPromptLoomData(
       hits: historicalHits,
     },
     generatedPrompt: {
-      renderedStaticPrefix: promptContext?.renderedStaticPrefix ?? null,
-      renderedDynamicSuffix: promptContext?.renderedDynamicSuffix ?? null,
-      runtimeContext: promptContext?.runtimeContext ?? null,
-      memoryContextBlock: promptContext?.memoryContextBlock ?? null,
-      scratchpadContext: promptContext?.scratchpadContext ?? null,
-      assembledPrompt: promptContext?.assembledPrompt ?? null,
-      contextMessages: promptContext?.messages.map(message => cloneUnknownValue(message)) ?? [],
+      renderedStaticPrefix: promptStrings.renderedStaticPrefix,
+      renderedDynamicSuffix: promptStrings.renderedDynamicSuffix,
+      runtimeContext: promptStrings.runtimeContext,
+      memoryContextBlock: promptStrings.memoryContextBlock,
+      scratchpadContext: promptStrings.scratchpadContext,
+      assembledPrompt: promptStrings.assembledPrompt,
+      contextMessages: promptStrings.contextMessages,
       inputSections: clonePromptSections(promptContext?.inputSections),
       runtimeContextSections: clonePromptSections(promptContext?.runtimeContextSections),
       memoryContextSections: clonePromptSections(promptContext?.memoryContextSections),
       finalSystemSections: clonePromptSections(promptContext?.finalSystemSections),
     },
     providerPayload: {
-      finalSystemPrompt: promptContext?.finalSystemPrompt ?? null,
+      finalSystemPrompt: promptStrings.finalSystemPrompt,
       providerMessages: cloneProviderMessages(snapshot),
       activeTools: cloneActiveTools(snapshot),
     },

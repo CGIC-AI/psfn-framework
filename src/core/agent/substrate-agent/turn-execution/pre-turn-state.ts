@@ -10,7 +10,6 @@ import {
   peerCompanionMayBindAsCanonicalContact,
   type ConversationScope,
 } from '../../../session/conversation-scope.js';
-import type { SessionManager } from '../../../session/manager.js';
 import type { EmotionStateSnapshot } from '../../../emotion/state.js';
 import type { EmotionAppraisalEntry } from '../../../emotion/appraisal.js';
 import type { InternalState } from '../../../self-model/state.js';
@@ -352,17 +351,16 @@ export async function computePreTurnState(input: {
   const memoryProvider = runtime.memoryProvider;
   const bypassMemoryForVisionTurn = hasVisionTurnInputs(message);
   const promptSnapshot = runtime.captureTurnPromptSnapshot({ channelType, taskKind });
-  const sessionContextSnapshot = typeof (runtime.sessionManager as SessionManager & {
-    captureTurnContextSnapshot?: SessionManager['captureTurnContextSnapshot'];
-  }).captureTurnContextSnapshot === 'function'
-    ? runtime.sessionManager.captureTurnContextSnapshot(
-      message.channelId,
-      input.continuitySubjectKey,
-      channelMeta,
-      authorContext.continuityFallbackKeys,
-      turnBudgetCharacteristics,
-    )
-    : undefined;
+  // Single session-context derivation for the turn (E2.2): captured once here,
+  // it feeds the retrieval query, the live context build (assembleTurnPrompt
+  // passes it to buildContext), and the persisted PromptPlan turn snapshot.
+  const sessionContextSnapshot = await runtime.sessionManager.captureTurnSessionContext({
+    channelId: message.channelId,
+    userId: input.continuitySubjectKey,
+    channelMeta,
+    continuityFallbackUserIds: authorContext.continuityFallbackKeys,
+    turnBudgetCharacteristics,
+  });
   const memoryRetrievalContextText = buildMemoryRetrievalContextText(message, sessionContextSnapshot);
   const sessionChannelId = runtime.resolveSessionChannelId(message.channelId);
   const activeMemoryRequest = {
@@ -495,7 +493,7 @@ export async function computePreTurnState(input: {
     trustLevel,
     ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
     prompt: promptSnapshot,
-    ...(sessionContextSnapshot ? { sessionContext: sessionContextSnapshot as TurnSessionContextSnapshot } : {}),
+    sessionContext: sessionContextSnapshot,
   };
   observability.emitTurnSnapshotInBackground(turnSnapshot);
 

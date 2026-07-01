@@ -80,16 +80,18 @@ export interface PromptComposerOptions {
   persistLastKnownGood?: boolean;
 }
 
-export interface ComposeResult {
+/**
+ * Result of the single composer entrypoint (PromptComposer.composeSplit).
+ * The static/dynamic split semantics survive downstream as PromptPlan
+ * volatility boundaries; there is no unsplit compose() fallback (E2.2).
+ */
+export interface ComposeSplitResult {
   text: string;
   hash: string;
   layerCount: number;
   layerIds: string[];
   promptIdentifiers?: string[];
   autoHealedPromptIdentifiers?: string[];
-}
-
-export interface ComposeSplitResult extends ComposeResult {
   staticPrefix: string;
   dynamicSuffix: string;
   staticHash: string;

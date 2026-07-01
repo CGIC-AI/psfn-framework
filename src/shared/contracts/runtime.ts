@@ -619,6 +619,13 @@ export interface PromptSectionTelemetry {
 
 export interface LLMContext {
   systemPrompt: string;
+  /**
+   * Ordered nonempty session-derived blocks appended to the base system
+   * prompt by the session context builder (memories, compaction summaries,
+   * orientation, continuity, ...). Consumed by the PromptPlan builder so the
+   * plan carries the same blocks the systemPrompt string was joined from.
+   */
+  sessionPromptBlocks?: Array<{ id: string; content: string }>;
   messages: ContextMessage[];
   tools?: ToolSchema[];
   modelHint?: LLMModelHint;

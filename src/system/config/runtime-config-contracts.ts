@@ -6,6 +6,7 @@ import type { CapabilityTier } from '../capabilities/tier-types.js';
 import type { ChargePolicyConfig } from './charge-policy-config.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import type { GroupMemorySettings } from './group-memory-config.js';
+import type { EmotionScopingSettings } from './emotion-scoping-config.js';
 import type {
   CanonicalModelRegistry,
   CanonicalProviderRegistry,
@@ -126,6 +127,7 @@ export interface SubstrateConfig {
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
   groupMemory?: GroupMemorySettings;
+  emotionScoping?: EmotionScopingSettings;
   profileSynthesisEnabled?: boolean;
   profileSynthesisRefreshIntervalMs?: number;
   profileSynthesisCooldownMs?: number;

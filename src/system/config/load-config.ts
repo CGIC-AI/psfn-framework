@@ -28,6 +28,7 @@ import {
   sanitizeCoreSubstrateConfig,
 } from './runtime-config-contracts.js';
 import { createDefaultGroupMemorySettings } from './group-memory-config.js';
+import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js';
 import {
   DEFAULT_COMPANION_CARD_FILE_NAME,
 } from '../../core/identity/companion-naming.js';
@@ -310,6 +311,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     memoryExtractionTelemetryEnabled: true,
     memoryRetrievalTelemetryEnabled: true,
     groupMemory: createDefaultGroupMemorySettings(),
+    emotionScoping: createDefaultEmotionScopingSettings(),
     profileSynthesisEnabled: true,
     profileSynthesisRefreshIntervalMs: DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS,
     profileSynthesisCooldownMs: DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS,

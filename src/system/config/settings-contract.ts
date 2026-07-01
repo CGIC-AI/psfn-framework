@@ -241,6 +241,7 @@ const SETTINGS_NUMBER_FIELDS = new Set<string>([
 const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'compositionalPolicy',
   'groupMemory',
+  'emotionScoping',
   'observerEvalSidecar',
   'imageWorkflows',
   'modelCatalog',

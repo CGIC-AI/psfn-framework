@@ -1,7 +1,21 @@
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../../emotion/appraisal.js';
 import type { EmotionObserver, EmotionObserverResult } from '../../emotion/observer.js';
-import { EmotionState, type EmotionObservation, type EmotionStateSnapshot } from '../../emotion/state.js';
+import { EmotionState, type EmotionObservation, type EmotionStateSnapshot, type VADVector } from '../../emotion/state.js';
 import { parseSessionEmotionState } from '../../emotion/session-metadata.js';
+import {
+  applyCarryOverToSnapshot,
+  blendGlobalMoodBaseline,
+  carryOverModifierIsSpent,
+  decayCarryOverModifier,
+  deriveCarryOverModifier,
+  isDmContactGroupMember,
+  neutralVad,
+  type EmotionCarryOverModifier,
+} from '../../emotion/scoped-emotion.js';
+import {
+  createDefaultEmotionScopingSettings,
+  type EmotionScopingSettings,
+} from '../../../system/config/emotion-scoping-config.js';
 import type { ActiveConcern } from '../../intention/concerns.js';
 import type { ActiveConcernContextProvider } from '../../intention/concern-store-port.js';
 import {
@@ -39,10 +53,22 @@ export interface EmotionSelfModelRuntimeWiring {
   requireWiring?: boolean;
 }
 
+/** One scope's transient emotion slot (bead E1.5). */
+interface ScopedEmotionEntry {
+  state: EmotionState;
+  updatedAtMs: number | null;
+}
+
 export interface EmotionSelfModelRuntimeOptions {
   sessionManager: SessionManager;
   llmProvider: LLMProviderPort;
   emotionRuntime?: EmotionSelfModelRuntimeWiring;
+  /**
+   * E1.5 scoped-emotion config (owner file `emotionScoping`). When omitted,
+   * built-in defaults are used so callers that do not thread config (tests,
+   * heartbeat) keep working; production wires it from runtime config.
+   */
+  emotionScopingConfig?: EmotionScopingSettings;
   getActiveConcernProvider: () => ActiveConcernContextProvider | null;
   getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
   getContactStore: () => ContactStorePort | null;
@@ -55,10 +81,27 @@ export class EmotionSelfModelRuntime {
   private emotionObserver: EmotionObserver | null = null;
   private emotionAppraisal: EmotionAppraisal | null = null;
   private emotionRuntimeRequired = false;
-  private emotionStateSessionId: string | null = null;
   private emotionStateUpdatedAtMs: number | null = null;
   private readonly internalStateComputer = new InternalStateComputer();
   private readonly metacognitiveMonitor = new MetacognitiveMonitor();
+
+  // ── E1.5 scoped emotion state ──
+  // Per-scope transient EmotionState keyed by ConversationScope.key
+  // ('dm:<contactId>' | 'room:<channelId>'), replacing the pre-E1.5 single
+  // channel-keyed slot. The companion-global mood baseline is a SEPARATE layer
+  // that scope moods modulate (EMA) and that seeds fresh scopes; "her mood"
+  // therefore stays a single coherent thing rather than fragmenting per scope.
+  private readonly scopedStates = new Map<string, ScopedEmotionEntry>();
+  private globalMoodBaseline: VADVector = neutralVad();
+  private globalBaselineSeeded = false;
+  // Directional carry-over modifiers keyed by the receiving DM scope key.
+  private readonly carryOverModifiers = new Map<string, EmotionCarryOverModifier>();
+  // The scope processed by the most recent observation (drives switch detection).
+  private lastObservedScope: ConversationScope | null = null;
+  // Absorbs the wired EmotionState into the first scope so single-scope callers
+  // and tests keep using the instance they provided.
+  private wiredStateAdopted = false;
+  private readonly emotionScopingConfig: EmotionScopingSettings;
 
   private readonly sessionManager: SessionManager;
   private readonly getActiveConcernProvider: () => ActiveConcernContextProvider | null;
@@ -74,6 +117,8 @@ export class EmotionSelfModelRuntime {
     this.getContactStore = options.getContactStore;
     this.getSelfModelRuntimeRequired = options.getSelfModelRuntimeRequired;
     this.logger = options.logger;
+    this.emotionScopingConfig = options.emotionScopingConfig
+      ?? createDefaultEmotionScopingSettings();
 
     this.emotionState = options.emotionRuntime?.state ?? null;
     this.emotionObserver = options.emotionRuntime?.observer ?? null;
@@ -129,25 +174,47 @@ export class EmotionSelfModelRuntime {
   async observeEmotionState(
     text: string,
     sessionChannelId: string,
+    // E1.5: the turn ConversationScope keys the per-scope emotion slot. When
+    // omitted (heartbeat, legacy callers) the channel id is used as the key,
+    // preserving pre-E1.5 single-channel behavior.
+    conversationScope?: ConversationScope,
   ): Promise<EmotionStateSnapshot | null> {
     this.assertEmotionRuntimeConfigured();
     if (!this.emotionState || !this.emotionObserver) {
       return null;
     }
-    this.hydrateEmotionStateForSession(sessionChannelId);
+    const scopeKey = conversationScope?.key ?? sessionChannelId;
+    const entry = this.getOrHydrateScopedState(scopeKey, sessionChannelId);
+
+    // Arm the directional carry-over modifier BEFORE observing: it reads the
+    // (unchanged) previous group scope's transient VAD, so ordering is safe.
+    await this.maybeArmCarryOverModifier(conversationScope);
 
     const now = Date.now();
-    const elapsedSeconds = this.emotionStateUpdatedAtMs === null
+    const elapsedSeconds = entry.updatedAtMs === null
       ? 0
-      : Math.max(0, (now - this.emotionStateUpdatedAtMs) / 1000);
+      : Math.max(0, (now - entry.updatedAtMs) / 1000);
     const rawObservation = await this.emotionObserver.observe(
       text,
       elapsedSeconds,
     ) as EmotionObserverResult | EmotionObservation;
     const observation = this.normalizeEmotionObservation(rawObservation);
-    const snapshot = this.emotionState.update(observation, elapsedSeconds);
+    const snapshot = entry.state.update(observation, elapsedSeconds);
+    entry.updatedAtMs = now;
     this.emotionStateUpdatedAtMs = now;
-    return snapshot;
+
+    // Each scope mood modulates the single companion-global baseline (EMA);
+    // "her mood" stays coherent instead of fragmenting per scope.
+    this.updateGlobalMoodBaseline(snapshot.mood);
+
+    // Surface the decayed carry-over on top of the stored transient state. The
+    // stored EmotionState is NOT mutated by the modifier.
+    const effective = this.applyActiveCarryOver(scopeKey, snapshot, now);
+
+    if (conversationScope) {
+      this.lastObservedScope = conversationScope;
+    }
+    return effective;
   }
 
   async computeInternalStateForTurn(input: {
@@ -308,9 +375,18 @@ export class EmotionSelfModelRuntime {
     }
   }
 
-  private hydrateEmotionStateForSession(sessionChannelId: string): void {
-    if (!this.emotionState) return;
-    if (this.emotionStateSessionId === sessionChannelId) return;
+  /**
+   * Resolve the per-scope emotion slot, hydrating it from the channel's session
+   * metadata (restart continuity, unchanged mechanism) on first use. A fresh
+   * scope with no persisted snapshot is seeded from the companion-global mood
+   * baseline when configured, so it opens in "her mood" rather than at neutral.
+   */
+  private getOrHydrateScopedState(
+    scopeKey: string,
+    sessionChannelId: string,
+  ): ScopedEmotionEntry {
+    const existing = this.scopedStates.get(scopeKey);
+    if (existing) return existing;
 
     const manager = this.sessionManager as SessionManager & {
       getRecentMessages?: (channelId: string, limit?: number) => Array<{
@@ -318,14 +394,12 @@ export class EmotionSelfModelRuntime {
         timestamp: number;
       }>;
     };
+
     if (typeof manager.getRecentMessages !== 'function') {
       if (this.emotionRuntimeRequired) {
         throw new Error('Emotion runtime wiring requires SessionManager.getRecentMessages for metadata recovery');
       }
-      this.emotionState = new EmotionState();
-      this.emotionStateSessionId = sessionChannelId;
-      this.emotionStateUpdatedAtMs = null;
-      return;
+      return this.registerScopedState(scopeKey, this.createFreshScopedState(), null);
     }
 
     const recentEntries = manager.getRecentMessages(sessionChannelId, 64)
@@ -344,15 +418,143 @@ export class EmotionSelfModelRuntime {
         );
       }
       if (!snapshot) continue;
-      this.emotionState = EmotionState.deserialize(snapshot);
-      this.emotionStateSessionId = sessionChannelId;
-      this.emotionStateUpdatedAtMs = entry.timestamp;
-      return;
+      // Restart continuity: the first restored scope also re-seeds the global
+      // mood baseline so "her mood" survives the restart, not just the scope.
+      this.seedGlobalBaselineFromMood(snapshot.mood);
+      return this.registerScopedState(
+        scopeKey,
+        EmotionState.deserialize(snapshot),
+        entry.timestamp,
+      );
     }
 
-    this.emotionState = new EmotionState();
-    this.emotionStateSessionId = sessionChannelId;
-    this.emotionStateUpdatedAtMs = null;
+    return this.registerScopedState(scopeKey, this.createFreshScopedState(), null);
+  }
+
+  private registerScopedState(
+    scopeKey: string,
+    state: EmotionState,
+    updatedAtMs: number | null,
+  ): ScopedEmotionEntry {
+    const entry: ScopedEmotionEntry = { state, updatedAtMs };
+    this.scopedStates.set(scopeKey, entry);
+    return entry;
+  }
+
+  /**
+   * Build a fresh transient state for a scope. The first fresh scope adopts the
+   * wired EmotionState instance (single-scope / test parity); later scopes get
+   * their own instance, seeded from the global mood baseline when configured.
+   */
+  private createFreshScopedState(): EmotionState {
+    if (!this.wiredStateAdopted && this.emotionState) {
+      this.wiredStateAdopted = true;
+      return this.emotionState;
+    }
+    if (this.emotionScopingConfig.baseline.seedNewScopesFromBaseline && this.globalBaselineSeeded) {
+      return new EmotionState({}, { mood: { ...this.globalMoodBaseline } });
+    }
+    return new EmotionState();
+  }
+
+  private seedGlobalBaselineFromMood(mood: VADVector): void {
+    if (this.globalBaselineSeeded) return;
+    this.globalMoodBaseline = { ...mood };
+    this.globalBaselineSeeded = true;
+  }
+
+  private updateGlobalMoodBaseline(mood: VADVector): void {
+    if (!this.globalBaselineSeeded) {
+      this.seedGlobalBaselineFromMood(mood);
+      return;
+    }
+    this.globalMoodBaseline = blendGlobalMoodBaseline(
+      this.globalMoodBaseline,
+      mood,
+      this.emotionScopingConfig.baseline.moodBlendAlpha,
+    );
+  }
+
+  /** Current companion-global mood baseline (test/telemetry surface). */
+  getGlobalMoodBaseline(): VADVector {
+    return { ...this.globalMoodBaseline };
+  }
+
+  /**
+   * Arm the directional carry-over modifier for a group→member-DM switch.
+   * Every non-qualifying transition (DM→group, group→group, DM→DM, non-member
+   * DM) leaves the receiving scope with no modifier.
+   */
+  private async maybeArmCarryOverModifier(
+    currentScope: ConversationScope | undefined,
+  ): Promise<void> {
+    if (!currentScope || currentScope.kind !== 'dm') return;
+    const previousScope = this.lastObservedScope;
+    if (!previousScope || previousScope.kind !== 'group') return;
+
+    const groupEntry = this.scopedStates.get(previousScope.key);
+    if (!groupEntry) return;
+
+    const dmContactIsGroupMember = await this.resolveDmGroupMembership(
+      currentScope.contact.contactId,
+      previousScope,
+    );
+
+    const modifier = deriveCarryOverModifier({
+      previousScope,
+      previousScopeVad: groupEntry.state.getState().vad,
+      currentScope,
+      dmContactIsGroupMember,
+      nowMs: Date.now(),
+      config: this.emotionScopingConfig.carryOver,
+    });
+    if (modifier) {
+      this.carryOverModifiers.set(currentScope.key, modifier);
+      this.logger.debug('Armed emotion carry-over modifier', {
+        fromScope: previousScope.key,
+        toScope: currentScope.key,
+        vad: modifier.vad,
+        halfLifeSeconds: modifier.halfLifeSeconds,
+      });
+    }
+  }
+
+  private async resolveDmGroupMembership(
+    dmContactId: string,
+    groupScope: import('../../session/conversation-scope.js').GroupConversationScope,
+  ): Promise<boolean> {
+    let contactRoomIds: Set<string> | undefined;
+    const contactStore = this.getContactStore();
+    if (contactStore) {
+      const contact = await contactStore.getById(dmContactId);
+      const channels = contact?.conversationChannels ?? [];
+      if (channels.length > 0) {
+        contactRoomIds = new Set<string>();
+        for (const conversation of channels) {
+          const roomId = conversation.channelId.trim();
+          if (roomId) contactRoomIds.add(roomId);
+        }
+      }
+    }
+    return isDmContactGroupMember({
+      dmContactId,
+      groupScope,
+      ...(contactRoomIds ? { contactRoomIds } : {}),
+    });
+  }
+
+  private applyActiveCarryOver(
+    scopeKey: string,
+    snapshot: EmotionStateSnapshot,
+    nowMs: number,
+  ): EmotionStateSnapshot {
+    const modifier = this.carryOverModifiers.get(scopeKey);
+    if (!modifier) return snapshot;
+    if (carryOverModifierIsSpent(modifier, nowMs, this.emotionScopingConfig.carryOver.minEffectThreshold)) {
+      this.carryOverModifiers.delete(scopeKey);
+      return snapshot;
+    }
+    return applyCarryOverToSnapshot(snapshot, decayCarryOverModifier(modifier, nowMs));
   }
 
   private resolveInternalStateActiveConcerns(canonicalContactKey?: string): ActiveConcern[] {

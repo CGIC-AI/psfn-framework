@@ -4,6 +4,7 @@ import {
   PROMOTED_EXTENDED_TOOL_SLOTS_MAX,
 } from '../config/runtime-config-contracts.js';
 import { normalizeGroupMemorySettings } from '../config/group-memory-config.js';
+import { normalizeEmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import { normalizeImageWorkflowSettings } from '../../primitives/images/types.js';
 import {
   MEMORY_RETRIEVAL_BUDGET_PCT_RANGE,
@@ -483,6 +484,12 @@ function normalizeEndpointAndGardenSettings(
     normalized.groupMemory = normalizeGroupMemorySettings(
       settings.groupMemory,
       'groupMemory',
+    );
+  }
+  if ('emotionScoping' in settings) {
+    normalized.emotionScoping = normalizeEmotionScopingSettings(
+      settings.emotionScoping,
+      'emotionScoping',
     );
   }
 }

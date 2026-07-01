@@ -9,6 +9,10 @@ import {
   createDefaultGroupMemorySettings,
 } from '../config/group-memory-config.js';
 import {
+  cloneEmotionScopingSettings,
+  createDefaultEmotionScopingSettings,
+} from '../config/emotion-scoping-config.js';
+import {
   cloneImageWorkflowSettings,
   normalizeImageWorkflowSettings,
 } from '../../primitives/images/types.js';
@@ -87,6 +91,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
   'groupMemory',
+  'emotionScoping',
   'profileSynthesisEnabled',
   'profileSynthesisRefreshIntervalMs',
   'profileSynthesisCooldownMs',
@@ -184,6 +189,9 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     groupMemory: cloneGroupMemorySettings(
       config.groupMemory ?? createDefaultGroupMemorySettings(),
     ),
+    emotionScoping: cloneEmotionScopingSettings(
+      config.emotionScoping ?? createDefaultEmotionScopingSettings(),
+    ),
     profileSynthesisEnabled: config.profileSynthesisEnabled ?? true,
     profileSynthesisRefreshIntervalMs:
       config.profileSynthesisRefreshIntervalMs ?? null,
@@ -213,6 +221,7 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'memoryExtractionTelemetryEnabled'
     | 'memoryRetrievalTelemetryEnabled'
     | 'groupMemory'
+    | 'emotionScoping'
     | 'profileSynthesisEnabled'
     | 'profileSynthesisRefreshIntervalMs'
     | 'profileSynthesisCooldownMs'
@@ -504,6 +513,11 @@ function applyCoreSettings(
   if ('groupMemory' in settings) {
     config.groupMemory = cloneGroupMemorySettings(
       settings.groupMemory ?? createDefaultGroupMemorySettings(),
+    );
+  }
+  if ('emotionScoping' in settings) {
+    config.emotionScoping = cloneEmotionScopingSettings(
+      settings.emotionScoping ?? createDefaultEmotionScopingSettings(),
     );
   }
   if ('sessionRestartBehavior' in settings) {

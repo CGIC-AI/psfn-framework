@@ -68,10 +68,13 @@ describe('prompt section scope provenance labels', () => {
     const runtimeContext = '<runtime_context>\nNow: 2026-07-01\n</runtime_context>';
     const [section] = extractWrappedPromptSections(runtimeContext, resolver);
 
-    expect(section?.scopeProvenance?.scopeKey).toBe('global');
-    expect(section?.scopeProvenance?.scopeClass).toBe('global');
-    expect(section?.scopeProvenance?.producer).toBe('substrate-agent.runtime-context');
-    expect(section?.scopeProvenance?.volatility).toBe('volatile');
+    expect(section.scopeProvenance).toBeDefined();
+    expect(section.scopeProvenance).toMatchObject({
+      scopeKey: 'global',
+      scopeClass: 'global',
+      producer: 'substrate-agent.runtime-context',
+      volatility: 'volatile',
+    });
   });
 
   it('returns undefined provenance for unregistered blocks', () => {

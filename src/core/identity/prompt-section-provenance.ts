@@ -24,7 +24,10 @@ export interface PromptSectionScopeProvenanceSpec {
   volatility?: PromptSectionVolatilityClass;
 }
 
-export const PROMPT_SECTION_SCOPE_REGISTRY: Record<string, PromptSectionScopeProvenanceSpec> = {
+export const PROMPT_SECTION_SCOPE_REGISTRY: Record<
+  string,
+  PromptSectionScopeProvenanceSpec | undefined
+> = {
   // Runtime context / identity producers (global)
   rendered_static_prefix: { producer: 'identity.prompt-runtime', scopeClass: 'global', volatility: 'static' },
   rendered_dynamic_suffix: { producer: 'identity.prompt-runtime', scopeClass: 'global', volatility: 'volatile' },

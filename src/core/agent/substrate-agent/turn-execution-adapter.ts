@@ -67,7 +67,8 @@ interface TurnExecutionAdapterCallbacks {
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
-    currentUserRuntimeProfile?: UserRuntimeProfile,
+    currentUserRuntimeProfile: UserRuntimeProfile | undefined,
+    conversationScope: import('../../session/conversation-scope.js').ConversationScope,
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,
@@ -89,6 +90,7 @@ interface TurnExecutionAdapterCallbacks {
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
+    conversationScope?: import('../../session/conversation-scope.js').ConversationScope,
   ) => string;
   buildPromptPrefixCacheKey: (
     message: SubstrateMessage,
@@ -240,6 +242,7 @@ export function createTurnExecutionRuntimeAdapter(
       metacognitiveFlags,
       emotionAppraisalChain,
       currentUserRuntimeProfile,
+      conversationScope,
     ) => options.callbacks.buildDynamicPromptTemplateVariables(
       message,
       resolvedUserName,
@@ -256,6 +259,7 @@ export function createTurnExecutionRuntimeAdapter(
       metacognitiveFlags,
       emotionAppraisalChain,
       currentUserRuntimeProfile,
+      conversationScope,
     ),
     setCurrentSelfModelState: (
       state,
@@ -277,6 +281,7 @@ export function createTurnExecutionRuntimeAdapter(
       internalState,
       metacognitiveFlags,
       emotionAppraisalChain,
+      conversationScope,
     ) => options.callbacks.buildRuntimeContext(
       message,
       resolvedUserName,
@@ -292,6 +297,7 @@ export function createTurnExecutionRuntimeAdapter(
       internalState,
       metacognitiveFlags,
       emotionAppraisalChain,
+      conversationScope,
     ),
     buildPromptPrefixCacheKey: (message, channelType, canonicalContactKey, subjectIdentityKey) => options.callbacks
       .buildPromptPrefixCacheKey(message, channelType, canonicalContactKey, subjectIdentityKey),

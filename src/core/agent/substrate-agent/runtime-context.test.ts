@@ -7,6 +7,7 @@ import { formatActiveConcernsContextBlock } from '../../intention/concerns.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { ApiHealthResponse, ApiHealthSubsystemStatus } from '../../../channels/api/types.js';
 import type { SessionEntry } from '../../session/types.js';
+import { resolveConversationScopeFromMetadata } from '../../session/conversation-scope.js';
 import type { InternalState } from '../../self-model/state.js';
 import {
   buildDynamicPromptTemplateVariables,
@@ -208,10 +209,30 @@ function makeApiHealthResponse(overrides: {
   };
 }
 
+type DynamicPromptVariablesInput = Parameters<typeof buildDynamicPromptTemplateVariables>[0];
+type DynamicPromptVariablesTestInput =
+  Omit<DynamicPromptVariablesInput, 'conversationScope'>
+  & Partial<Pick<DynamicPromptVariablesInput, 'conversationScope'>>;
+
+/**
+ * Tests simulate turn ingress: unless a case provides an explicit scope, it is
+ * resolved from the message metadata with the same shared rule the
+ * SessionManager applies (resolveConversationScopeFromMetadata).
+ */
+function withConversationScope(input: DynamicPromptVariablesTestInput): DynamicPromptVariablesInput {
+  return {
+    ...input,
+    conversationScope: input.conversationScope ?? resolveConversationScopeFromMetadata({
+      channelId: input.message.channelId,
+      isDirectMessage: input.message.isDirectMessage,
+    }),
+  };
+}
+
 function buildRuntimePromptOutputs(
-  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+  input: DynamicPromptVariablesTestInput,
 ): { variables: Record<string, string>; rendered: string } {
-  const variables = buildDynamicPromptTemplateVariables(input);
+  const variables = buildDynamicPromptTemplateVariables(withConversationScope(input));
   return {
     variables,
     rendered: injectPromptRuntimeTokens(DEFAULT_RUNTIME_PROMPT_TEMPLATE, {
@@ -225,15 +246,15 @@ function buildRuntimePromptOutputs(
 }
 
 function renderPromptOwnedRuntimeLayers(
-  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+  input: DynamicPromptVariablesTestInput,
 ): string {
   return buildRuntimePromptOutputs(input).rendered;
 }
 
 function buildAtomicAffectTemplateOutput(
-  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+  input: DynamicPromptVariablesTestInput,
 ): string {
-  const variables = buildDynamicPromptTemplateVariables(input);
+  const variables = buildDynamicPromptTemplateVariables(withConversationScope(input));
   return injectPromptRuntimeTokens([
     'present={{runtime_affect_snapshot_present}}',
     'mode={{runtime_affect_mode}}',
@@ -251,9 +272,9 @@ function buildAtomicAffectTemplateOutput(
 }
 
 function buildInternalStateTemplateOutput(
-  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+  input: DynamicPromptVariablesTestInput,
 ): string {
-  const variables = buildDynamicPromptTemplateVariables(input);
+  const variables = buildDynamicPromptTemplateVariables(withConversationScope(input));
   return injectPromptRuntimeTokens([
     'cognitive={{runtime_internal_state_cognitive_processing_quality}}/{{runtime_internal_state_cognitive_certainty_label}}/{{runtime_internal_state_cognitive_topic_engagement_label}}',
     'attention={{runtime_internal_state_attention_conversation_trajectory}}/{{runtime_internal_state_attention_active_concern_count}}/{{runtime_internal_state_attention_pending_follow_up_count}}',
@@ -269,9 +290,9 @@ function buildInternalStateTemplateOutput(
 }
 
 function buildAtomicMetacognitionTemplateOutput(
-  input: Parameters<typeof buildDynamicPromptTemplateVariables>[0],
+  input: DynamicPromptVariablesTestInput,
 ): string {
-  const variables = buildDynamicPromptTemplateVariables(input);
+  const variables = buildDynamicPromptTemplateVariables(withConversationScope(input));
   return injectPromptRuntimeTokens([
     'uncertainty={{runtime_flag_uncertainty_present}}|{{runtime_flag_uncertainty_confidence}}|{{runtime_flag_uncertainty_evidence}}',
     'avoidance={{runtime_flag_avoidance_present}}|{{runtime_flag_avoidance_confidence}}|{{runtime_flag_avoidance_evidence}}',
@@ -1297,7 +1318,7 @@ describe('runtime subject identity', () => {
   });
 
   it('exposes granular runtime prompt variables for editable prompt-owned phrasing', () => {
-    const variables = buildDynamicPromptTemplateVariables({
+    const variables = buildDynamicPromptTemplateVariables(withConversationScope({
       message: makeMessage({
         channelId: 'discord:dm:alex',
         channelType: 'discord_text',
@@ -1332,7 +1353,7 @@ describe('runtime subject identity', () => {
       behavioralNotesBlock: '',
       lastMessageReceivedAtMs: new Date('2026-03-16T09:15:00Z').getTime(),
       config: {},
-    });
+    }));
 
     expect(variables.runtime_current_datetime_iso).toBe('2026-03-18T09:30:00.000-04:00');
     expect(variables.runtime_current_today).toBe('2026-03-18');
@@ -1686,7 +1707,7 @@ describe('runtime subject identity', () => {
         summary: 'Latest summary',
       },
     ] as const;
-    const variables = buildDynamicPromptTemplateVariables({
+    const variables = buildDynamicPromptTemplateVariables(withConversationScope({
       message: makeMessage({
         channelId: 'api:test',
         channelType: 'api',
@@ -1768,7 +1789,7 @@ describe('runtime subject identity', () => {
       ].join('\n'),
       emotionAppraisalChain,
       config: {},
-    });
+    }));
 
     expect(variables.runtime_concerns_count).toBe('3');
     expect(variables.runtime_concerns_top_priorities).toBe('high, low');
@@ -1856,7 +1877,7 @@ describe('runtime subject identity', () => {
     };
 
     const output = buildAtomicMetacognitionTemplateOutput(baseInput);
-    const variables = buildDynamicPromptTemplateVariables(baseInput);
+    const variables = buildDynamicPromptTemplateVariables(withConversationScope(baseInput));
 
     expect(output).toBe(
       'uncertainty=true|0.583|certainty=0.220 (<0.400); contradictory_memory_signals=2'
@@ -2067,7 +2088,7 @@ describe('runtime subject identity', () => {
   });
 
   it('fails closed with structured fallback variables when prior-message context is unavailable', () => {
-    const variables = buildDynamicPromptTemplateVariables({
+    const variables = buildDynamicPromptTemplateVariables(withConversationScope({
       message: makeMessage(),
       resolvedUserName: 'Companion',
       trustLevel: 'primary',
@@ -2097,7 +2118,7 @@ describe('runtime subject identity', () => {
       behavioralNotesBlock: '',
       lastMessageReceivedAtMs: null,
       config: {},
-    });
+    }));
 
     expect(variables.runtime_affect_snapshot_present).toBe('false');
     expect(variables.runtime_affect_mode).toBe('');
@@ -2397,7 +2418,7 @@ describe('turn prompt variable namespace conformance', () => {
       fallbackCharacterName: 'Purrsephone',
     });
 
-    const dynamicVariables = buildDynamicPromptTemplateVariables({
+    const dynamicVariables = buildDynamicPromptTemplateVariables(withConversationScope({
       message,
       resolvedUserName: 'Alex',
       trustLevel: 'trusted',
@@ -2432,7 +2453,7 @@ describe('turn prompt variable namespace conformance', () => {
       lastMessageReceivedAtMs: new Date('2026-03-16T09:15:00Z').getTime(),
       analysisWorkbenchAvailable: true,
       config: {},
-    });
+    }));
 
     // Single construction path: session phase, prompt-assembly overlay, turn phase.
     // Any unregistered key or duplicate cross-phase write throws (fail closed).

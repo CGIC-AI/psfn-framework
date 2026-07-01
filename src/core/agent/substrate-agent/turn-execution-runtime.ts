@@ -190,7 +190,8 @@ export interface TurnExecutionRuntime {
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
-    currentUserRuntimeProfile?: UserRuntimeProfile,
+    currentUserRuntimeProfile: UserRuntimeProfile | undefined,
+    conversationScope: import('../../session/conversation-scope.js').ConversationScope,
   ) => Record<string, string>;
   setCurrentSelfModelState: (
     state: InternalState,
@@ -212,6 +213,7 @@ export interface TurnExecutionRuntime {
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     emotionAppraisalChain: readonly import('../../emotion/appraisal.js').EmotionAppraisalEntry[],
+    conversationScope?: import('../../session/conversation-scope.js').ConversationScope,
   ) => string;
   buildPromptPrefixCacheKey: (
     message: SubstrateMessage,
@@ -566,6 +568,7 @@ export async function handleMessageForTurn(
     trustLevel,
     speakerRole,
     canonicalContactKey,
+    conversationScope,
   } = identityState;
   let promptMode: MessagePromptOverrideMode = 'default';
   let fullPrompt = '';
@@ -685,6 +688,7 @@ export async function handleMessageForTurn(
       requestId,
       channelMeta,
       authorContext,
+      conversationScope,
       continuitySubjectKey,
       trustLevel,
       emotionSessionId,
@@ -718,6 +722,7 @@ export async function handleMessageForTurn(
       taskKind,
       channelMeta,
       authorContext,
+      conversationScope,
       trustLevel,
       responseStyle,
       emotionSessionId,
@@ -846,6 +851,7 @@ export async function handleMessageForTurn(
       emotionSnapshot: preTurnState.emotionSnapshot,
       toolCallCount: turnUsage.toolCalls,
       sessionChannelId: emotionSessionId,
+      conversationScope,
     });
     internalStateSnapshotRef = buildInternalStateSnapshotRef(internalState);
     const metacognitiveFlags = runtime.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
@@ -1000,6 +1006,7 @@ export async function handleMessageForTurn(
       templateVariables: promptAssembly.templateVariables,
       emotionSessionId,
       channelMeta,
+      conversationScope,
       turnBudgetCharacteristics,
       observability,
       persistedUserMessageContent,

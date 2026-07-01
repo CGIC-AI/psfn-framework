@@ -158,6 +158,7 @@ export async function assembleTurnPrompt(input: {
   taskKind: string | undefined;
   channelMeta: import('../../../../system/trust/policy.js').ChannelMeta;
   authorContext: ResolvedAuthorContext;
+  conversationScope: import('../../../session/conversation-scope.js').ConversationScope;
   trustLevel: import('../../../../system/trust/types.js').TrustLevel;
   responseStyle: import('../../../../shared/contracts/runtime.js').ResponseStyle;
   emotionSessionId: string;
@@ -185,6 +186,7 @@ export async function assembleTurnPrompt(input: {
     taskKind,
     channelMeta,
     authorContext,
+    conversationScope,
     trustLevel,
     responseStyle,
     emotionSessionId,
@@ -213,9 +215,10 @@ export async function assembleTurnPrompt(input: {
   // registered against the macro manifest, duplicate writes throw, and the
   // namespace freezes before any template rendering happens.
   //
-  // SEAM (E2 epic): the 'session' phase inputs will later come from a
-  // ConversationScope object and the 'turn' phase inputs from a Context Envelope;
-  // this two-phase assemble/freeze shape is where those slot in.
+  // SEAM (E2 epic): the turn's ConversationScope (resolved once at
+  // session-manager ingress) now feeds the scope-derived variables; the 'turn'
+  // phase inputs will later come from a Context Envelope. Keep this two-phase
+  // assemble/freeze shape — that is where the envelope slots in.
   const variableNamespace = new TurnPromptVariableNamespace();
   variableNamespace.assignRecord(
     'session',
@@ -268,6 +271,7 @@ export async function assembleTurnPrompt(input: {
       preTurnMetacognitiveFlags,
       emotionAppraisalChain,
       buildCurrentUserRuntimeProfile({ authorContext, message }),
+      conversationScope,
     ),
     'substrate-agent:buildDynamicPromptTemplateVariables',
   );
@@ -288,6 +292,7 @@ export async function assembleTurnPrompt(input: {
     preTurnInternalState,
     preTurnMetacognitiveFlags,
     emotionAppraisalChain,
+    conversationScope,
   );
   const runtimeContextWithFatigue = [
     runtimeContext,
@@ -373,6 +378,7 @@ export async function assembleTurnPrompt(input: {
       turnSnapshot.sessionContext,
       memoryManifestSeed,
       turnBudgetCharacteristics,
+      conversationScope,
     ),
   );
   const { systemPrompt: providerSystemPrompt, anchor: currentDatetimeProximityAnchor } = appendCurrentDatetimeProximityAnchor(

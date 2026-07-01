@@ -7,6 +7,7 @@ import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { PromptRuntimeLayoutStore, resolvePromptRuntimeLayoutPath } from '../../identity/prompt-runtime.js';
 import { getVisionToolRequestContext } from '../../../primitives/images/request-context.js';
 import { buildFocusMemoryScopeQuery } from '../../session/focus-knowledge.js';
+import { resolveConversationScopeFromMetadata } from '../../session/conversation-scope.js';
 import type { SessionManager } from '../../session/manager.js';
 import {
   buildToolObservationMetadata,
@@ -481,6 +482,17 @@ function createRuntime(params: {
       scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
       getActiveFocusMemoryScopeQuery: vi.fn(() => null),
       getRecentMessages: vi.fn(() => []),
+      resolveConversationScope: vi.fn((input: {
+        channelId: string;
+        channelMeta?: { isDirectMessage?: boolean };
+        userId?: string;
+        contact?: { contactId: string; displayName?: string };
+      }) => resolveConversationScopeFromMetadata({
+        channelId: input.channelId,
+        isDirectMessage: input.channelMeta?.isDirectMessage,
+        ...(input.contact ? { contact: input.contact } : {}),
+        ...(input.userId ? { participantId: input.userId } : {}),
+      })),
       ...(params.sessionManager as Record<string, unknown>),
     } as unknown as SessionManager,
     config: {

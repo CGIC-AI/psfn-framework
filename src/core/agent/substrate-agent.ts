@@ -17,6 +17,7 @@ import { getRunChargeContext, runWithChargeContext } from '../../shared/telemetr
 import { createMemoryAppCache } from '../../shared/cache/memory-cache.js';
 import type { AppCache } from '../../shared/cache/types.js';
 import type { SessionManager } from '../session/manager.js';
+import type { ConversationScope } from '../session/conversation-scope.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
 import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
@@ -954,6 +955,7 @@ export class SubstrateAgent {
           metacognitiveFlags,
           emotionAppraisalChain,
           currentUserRuntimeProfile,
+          conversationScope,
         ) => this.buildDynamicPromptTemplateVariables(
           turnMessage,
           resolvedUserName,
@@ -970,6 +972,7 @@ export class SubstrateAgent {
           metacognitiveFlags,
           emotionAppraisalChain,
           currentUserRuntimeProfile,
+          conversationScope,
         ),
         setCurrentSelfModelState: (state, snapshotRef, metacognitiveFlags) => {
           this.currentInternalState = state;
@@ -997,6 +1000,7 @@ export class SubstrateAgent {
           internalState,
           metacognitiveFlags,
           emotionAppraisalChain,
+          conversationScope,
         ) => this.buildRuntimeContext(
           turnMessage,
           resolvedUserName,
@@ -1012,6 +1016,7 @@ export class SubstrateAgent {
           internalState,
           metacognitiveFlags,
           emotionAppraisalChain,
+          conversationScope,
         ),
         buildPromptPrefixCacheKey: (
           turnMessage,
@@ -1203,7 +1208,8 @@ export class SubstrateAgent {
     internalState: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[],
     emotionAppraisalChain: readonly EmotionAppraisalEntry[],
-    currentUserRuntimeProfile?: UserRuntimeProfile,
+    currentUserRuntimeProfile: UserRuntimeProfile | undefined,
+    conversationScope: ConversationScope,
   ): Record<string, string> {
     const recentMessages = this.sessionManager.getRecentMessages(message.channelId, 32);
     const latestPriorMessage = [...recentMessages]
@@ -1232,6 +1238,7 @@ export class SubstrateAgent {
 
     return buildDynamicPromptTemplateVariablesForTurn({
       message,
+      conversationScope,
       resolvedUserName,
       trustLevel,
       relationshipType,
@@ -1279,6 +1286,7 @@ export class SubstrateAgent {
     internalState?: InternalState,
     metacognitiveFlags: readonly MetacognitiveFlag[] = [],
     emotionAppraisalChain: readonly EmotionAppraisalEntry[] = [],
+    conversationScope?: ConversationScope,
   ): string {
     const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
     const analysisWorkbenchAvailable = this.toolRuntimeFacade
@@ -1290,6 +1298,7 @@ export class SubstrateAgent {
     }
     return buildRuntimeContextForTurn({
       message,
+      ...(conversationScope ? { conversationScope } : {}),
       resolvedUserName,
       trustLevel,
       relationshipType,

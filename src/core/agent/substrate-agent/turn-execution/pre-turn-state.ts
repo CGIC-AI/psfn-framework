@@ -6,6 +6,7 @@ import { normalizeChannelVisibility, type ChannelVisibility, type TrustLevel } f
 import type { MemoryScopeQuery, RetrievalCallerContext, RetrievalModeInput } from '../../../../faculties/memory/types.js';
 import type { ContextManifestMemorySeed } from '../../../session/context-manifest.js';
 import { formatAttributedSystemContent } from '../../../session/entry-attribution.js';
+import type { ConversationScope } from '../../../session/conversation-scope.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { EmotionStateSnapshot } from '../../../emotion/state.js';
 import type { EmotionAppraisalEntry } from '../../../emotion/appraisal.js';
@@ -44,6 +45,11 @@ export interface PreparedTurnIdentityState {
   trustLevel: TrustLevel;
   speakerRole: 'user' | 'system';
   canonicalContactKey?: string;
+  /**
+   * The turn's ConversationScope, resolved exactly once per turn at
+   * session-manager ingress and threaded to every scope consumer.
+   */
+  conversationScope: ConversationScope;
 }
 
 export interface PreTurnComputationResult {
@@ -241,6 +247,23 @@ export async function prepareTurnIdentityState(input: {
         continuitySubjectKey,
       );
 
+  // Single per-turn ConversationScope resolution (session-manager ingress).
+  // Resolved after the turn's user message is recorded so the recent-speaker
+  // scan sees the same session state the context build sees.
+  const conversationScope = runtime.sessionManager.resolveConversationScope({
+    channelId: message.channelId,
+    channelMeta,
+    ...(continuitySubjectKey ? { userId: continuitySubjectKey } : {}),
+    ...(authorContext.canonicalContactKey
+      ? {
+        contact: {
+          contactId: authorContext.canonicalContactKey,
+          displayName: authorContext.resolvedUserName,
+        },
+      }
+      : {}),
+  });
+
   return {
     authorContext,
     ...(resolvedChannelPrivacy ? { resolvedChannelPrivacy } : {}),
@@ -256,6 +279,7 @@ export async function prepareTurnIdentityState(input: {
     trustLevel: authorContext.trustLevel,
     speakerRole: authorContext.speakerRole,
     ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
+    conversationScope,
   };
 }
 
@@ -268,6 +292,7 @@ export async function computePreTurnState(input: {
   requestId: string;
   channelMeta: ChannelMeta;
   authorContext: ResolvedAuthorContext;
+  conversationScope: ConversationScope;
   continuitySubjectKey: string | undefined;
   trustLevel: TrustLevel;
   emotionSessionId: string;
@@ -288,6 +313,7 @@ export async function computePreTurnState(input: {
     requestId,
     channelMeta,
     authorContext,
+    conversationScope,
     trustLevel,
     emotionSessionId,
     turnBudgetCharacteristics,
@@ -320,6 +346,7 @@ export async function computePreTurnState(input: {
     sessionChannelId,
     trustLevel,
     channelMeta,
+    conversationScope,
     turnBudgetCharacteristics,
     ...(authorContext.canonicalContactKey ? { canonicalContactId: authorContext.canonicalContactKey } : {}),
     ...(focusMemoryScopeQuery ? { scopeQuery: focusMemoryScopeQuery } : {}),
@@ -345,6 +372,7 @@ export async function computePreTurnState(input: {
       focusMemoryScopeQuery ?? undefined,
       temporalRetrievalCallerContext,
       temporalRetrievalMode,
+      conversationScope,
     )
     : '';
   const refreshActiveMemoryContext = (
@@ -452,6 +480,7 @@ export async function computePreTurnState(input: {
     emotionSnapshot,
     toolCallCount: 0,
     sessionChannelId: emotionSessionId,
+    conversationScope,
   });
   const memoryContextBlock = bypassMemoryForVisionTurn
     ? ''

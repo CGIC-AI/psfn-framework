@@ -24,6 +24,7 @@ import {
 } from '../../agent/substrate-agent/runtime-context.js';
 import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
+import { resolveConversationScopeFromMetadata } from '../conversation-scope.js';
 import type { Contact } from '../../contacts/types.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
@@ -389,9 +390,20 @@ export function renderTurnRuntimePrompt(
   options: { recentChannelEntries?: readonly SessionEntry[] } = {},
 ): { prompt: string; variables: Record<string, string> } {
   const templateVariables = buildTurnTemplateVariables(message, speaker, channelType);
+  // Mirror runtime ingress: the ConversationScope is resolved once from the
+  // turn message's metadata (canonical contact binding on DM turns) and
+  // threaded into the dynamic prompt variable build.
+  const turnConversationScope = resolveConversationScopeFromMetadata({
+    channelId: message.channelId,
+    isDirectMessage: message.isDirectMessage,
+    ...(message.isDirectMessage === true
+      ? { contact: { contactId: speaker.id, displayName: speaker.name } }
+      : {}),
+  });
   const variables = buildDynamicPromptTemplateVariables({
     ...BASE_DYNAMIC_INPUT,
     message,
+    conversationScope: turnConversationScope,
     resolvedUserName: speaker.name,
     trustLevel: speaker.trustLevel,
     relationshipType: speaker.isMachineIntelligence ? 'ai_companion' : 'friend',

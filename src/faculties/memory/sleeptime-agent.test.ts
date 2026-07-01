@@ -12,7 +12,23 @@ import { coreMemoryChannelScope } from '../core-memory/store.js';
 import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
+  type SleeptimeCadenceTelemetry,
 } from './sleeptime-agent.js';
+import type { SleeptimeCadenceConfig } from '../../system/config/scheduler-config.js';
+
+function cadence(overrides: {
+  directCadenceTurns?: number;
+  groupMinIntervalMinutes?: number;
+  groupMinNewEntries?: number;
+} = {}): SleeptimeCadenceConfig {
+  return {
+    direct: { cadenceTurns: overrides.directCadenceTurns ?? 3 },
+    group: {
+      minIntervalMinutes: overrides.groupMinIntervalMinutes ?? 15,
+      minNewEntries: overrides.groupMinNewEntries ?? 8,
+    },
+  };
+}
 
 function makeMessage(channelId = 'terminal:test'): SubstrateMessage {
   return {
@@ -89,7 +105,7 @@ describe('SleeptimeMemoryAgent', () => {
     };
   }
 
-  it('triggers post-turn actions on configured cadence for external sessions', () => {
+  it('triggers post-turn actions on configured cadence for external sessions', async () => {
     const llmProvider = makeLLMProvider('{}');
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
@@ -104,12 +120,12 @@ describe('SleeptimeMemoryAgent', () => {
       sessionManager,
       coreMemoryStore,
       memoryWriter,
-      cadenceTurns: 3,
+      cadence: cadence({ directCadenceTurns: 3 }),
     });
 
-    expect(agent.inferPostTurnAction({ id: 'm1', channelId: 'terminal:alpha' })).toBeNull();
-    expect(agent.inferPostTurnAction({ id: 'm2', channelId: 'terminal:alpha' })).toBeNull();
-    const third = agent.inferPostTurnAction({ id: 'm3', channelId: 'terminal:alpha' });
+    expect(await agent.inferPostTurnAction({ id: 'm1', channelId: 'terminal:alpha' })).toBeNull();
+    expect(await agent.inferPostTurnAction({ id: 'm2', channelId: 'terminal:alpha' })).toBeNull();
+    const third = await agent.inferPostTurnAction({ id: 'm3', channelId: 'terminal:alpha' });
     expect(third).toMatchObject({
       kind: SLEEPTIME_MEMORY_ACTION_KIND,
       dedupeKey: `${SLEEPTIME_MEMORY_ACTION_KIND}:terminal:alpha`,
@@ -118,10 +134,10 @@ describe('SleeptimeMemoryAgent', () => {
         cadenceTurn: 3,
       },
     });
-    expect(agent.inferPostTurnAction({ id: 'm4', channelId: 'internal:reflection:whisper' })).toBeNull();
+    expect(await agent.inferPostTurnAction({ id: 'm4', channelId: 'internal:reflection:whisper' })).toBeNull();
   });
 
-  it('does not enqueue sleeptime from an active turn before inactivity threshold', () => {
+  it('does not enqueue sleeptime from an active turn before inactivity threshold', async () => {
     const llmProvider = makeLLMProvider('{}');
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
@@ -139,7 +155,7 @@ describe('SleeptimeMemoryAgent', () => {
       sessionManager,
       coreMemoryStore,
       memoryWriter,
-      cadenceTurns: 1,
+      cadence: cadence({ directCadenceTurns: 1 }),
       restWindow: {
         enabled: true,
         startLocalTime: '00:00',
@@ -149,7 +165,7 @@ describe('SleeptimeMemoryAgent', () => {
       },
     });
 
-    const action = agent.inferPostTurnAction({
+    const action = await agent.inferPostTurnAction({
       id: 'm1',
       channelId: 'terminal:alpha',
       timestamp: new Date('2026-03-16T23:30:00.000Z'),
@@ -185,7 +201,7 @@ describe('SleeptimeMemoryAgent', () => {
       sessionManager,
       coreMemoryStore,
       memoryWriter,
-      cadenceTurns: 1,
+      cadence: cadence({ directCadenceTurns: 1 }),
       restWindow: {
         enabled: true,
         startLocalTime: '00:00',
@@ -278,7 +294,7 @@ describe('SleeptimeMemoryAgent', () => {
         sessionManager,
         coreMemoryStore,
         memoryWriter,
-        cadenceTurns: 1,
+        cadence: cadence({ directCadenceTurns: 1 }),
         episodicSynthesizer,
       });
 
@@ -360,7 +376,7 @@ describe('SleeptimeMemoryAgent', () => {
       sessionManager,
       coreMemoryStore,
       memoryWriter,
-      cadenceTurns: 1,
+      cadence: cadence({ directCadenceTurns: 1 }),
     });
 
     await agent.execute(makeSleeptimeAction({
@@ -454,7 +470,7 @@ describe('SleeptimeMemoryAgent', () => {
       sessionManager,
       coreMemoryStore: makeCoreMemoryStore(),
       memoryWriter,
-      cadenceTurns: 1,
+      cadence: cadence({ directCadenceTurns: 1 }),
       memoryMaintenanceStore,
     });
 
@@ -580,7 +596,7 @@ describe('SleeptimeMemoryAgent', () => {
       sessionManager,
       coreMemoryStore: makeCoreMemoryStore(),
       memoryWriter,
-      cadenceTurns: 1,
+      cadence: cadence({ directCadenceTurns: 1 }),
       episodicSynthesizer,
       memoryMaintenanceStore,
       episodicDiagnosticsStore,
@@ -751,5 +767,208 @@ describe('SleeptimeMemoryAgent', () => {
     expect(episodicSynthesizer.run).not.toHaveBeenCalled();
     expect(llmProvider.complete).not.toHaveBeenCalled();
     expect(coreMemoryStore.rethink).not.toHaveBeenCalled();
+  });
+
+  function makeScopeClassifier(scope: 'direct' | 'group') {
+    // Stands in for ObservedGroupMemoryScheduler.classifyChannelMemoryScope —
+    // the canonical memoryMode/topology classifier shared with group extraction.
+    return {
+      classifyChannelMemoryScope: vi.fn(async () => scope),
+    };
+  }
+
+  function makeCadenceAgent(options: {
+    cadence: SleeptimeCadenceConfig;
+    scope?: 'direct' | 'group';
+    onCadenceTelemetry?: (event: SleeptimeCadenceTelemetry) => void;
+  }): SleeptimeMemoryAgent {
+    return new SleeptimeMemoryAgent({
+      llmProvider: makeLLMProvider('{}'),
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([]),
+      },
+      coreMemoryStore: { getSnapshot: vi.fn(), rethink: vi.fn() },
+      memoryWriter: { write: vi.fn() },
+      cadence: options.cadence,
+      ...(options.scope ? { scopeClassifier: makeScopeClassifier(options.scope) } : {}),
+      ...(options.onCadenceTelemetry ? { onCadenceTelemetry: options.onCadenceTelemetry } : {}),
+    });
+  }
+
+  it('batches group-room sleeptime by interval + watermark (AC1: 30 rapid turns << per-3-turn)', async () => {
+    // Group cadence: minNewEntries=8, minIntervalMinutes=30. Today (per-3-turns)
+    // 30 turns would fire ~10 sleeptime runs. With interval batching, rapid
+    // turns in a tight wall-clock window collapse to at most a couple runs.
+    const agent = makeCadenceAgent({
+      cadence: cadence({ groupMinIntervalMinutes: 30, groupMinNewEntries: 8 }),
+      scope: 'group',
+    });
+
+    const baseMs = Date.parse('2026-06-01T12:00:00.000Z');
+    let fired = 0;
+    for (let turn = 1; turn <= 30; turn += 1) {
+      // Rapid turns: one second apart, well inside the 30-minute interval gate.
+      const action = await agent.inferPostTurnAction({
+        id: `g${turn}`,
+        channelId: 'discord:room-1',
+        channelType: 'discord',
+        timestamp: new Date(baseMs + turn * 1_000),
+      });
+      if (action) fired += 1;
+    }
+
+    // Far below the ~10 per-3-turns baseline, and below any reasonable
+    // "configured" batch bound for a tight burst.
+    expect(fired).toBeLessThanOrEqual(2);
+    expect(fired).toBeLessThan(10);
+    expect(fired).toBeGreaterThanOrEqual(1);
+  });
+
+  it('fires additional group runs once the interval genuinely elapses', async () => {
+    const agent = makeCadenceAgent({
+      cadence: cadence({ groupMinIntervalMinutes: 30, groupMinNewEntries: 4 }),
+      scope: 'group',
+    });
+    const baseMs = Date.parse('2026-06-01T12:00:00.000Z');
+    const channelId = 'discord:room-2';
+
+    const fireCounts: number[] = [];
+    // Two bursts of 4 turns each, 31 minutes apart -> interval gate opens twice.
+    for (let burst = 0; burst < 2; burst += 1) {
+      let fired = 0;
+      for (let turn = 1; turn <= 4; turn += 1) {
+        const action = await agent.inferPostTurnAction({
+          id: `b${burst}-${turn}`,
+          channelId,
+          channelType: 'discord',
+          timestamp: new Date(baseMs + burst * 31 * 60_000 + turn * 1_000),
+        });
+        if (action) fired += 1;
+      }
+      fireCounts.push(fired);
+    }
+
+    expect(fireCounts).toEqual([1, 1]);
+  });
+
+  it('keeps DM cadence unchanged by default (AC2: every 3rd turn)', async () => {
+    const agent = makeCadenceAgent({
+      cadence: cadence({ directCadenceTurns: 3 }),
+      scope: 'direct',
+    });
+    const baseMs = Date.parse('2026-06-01T12:00:00.000Z');
+
+    let fired = 0;
+    for (let turn = 1; turn <= 30; turn += 1) {
+      const action = await agent.inferPostTurnAction({
+        id: `d${turn}`,
+        channelId: 'discord:dm-1',
+        channelType: 'discord',
+        timestamp: new Date(baseMs + turn * 1_000),
+      });
+      if (action) fired += 1;
+    }
+
+    // Unchanged from historical behavior: 30 / 3 = 10 runs.
+    expect(fired).toBe(10);
+  });
+
+  it('treats sessions without a scope classifier as direct scope (historical posture)', async () => {
+    const agent = makeCadenceAgent({ cadence: cadence({ directCadenceTurns: 3 }) });
+    expect(await agent.inferPostTurnAction({ id: 'u1', channelId: 'terminal:x' })).toBeNull();
+    expect(await agent.inferPostTurnAction({ id: 'u2', channelId: 'terminal:x' })).toBeNull();
+    expect(await agent.inferPostTurnAction({ id: 'u3', channelId: 'terminal:x' })).not.toBeNull();
+  });
+
+  it('degrades to group batching when scope classification fails (logged, compute-conservative)', async () => {
+    const failingClassifier = {
+      classifyChannelMemoryScope: vi.fn(async () => {
+        throw new Error('classifier unavailable');
+      }),
+    };
+    const agent = new SleeptimeMemoryAgent({
+      llmProvider: makeLLMProvider('{}'),
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([]),
+      },
+      coreMemoryStore: { getSnapshot: vi.fn(), rethink: vi.fn() },
+      memoryWriter: { write: vi.fn() },
+      cadence: cadence({ directCadenceTurns: 1, groupMinIntervalMinutes: 30, groupMinNewEntries: 8 }),
+      scopeClassifier: failingClassifier,
+    });
+
+    const baseMs = Date.parse('2026-06-01T12:00:00.000Z');
+    let fired = 0;
+    for (let turn = 1; turn <= 6; turn += 1) {
+      const action = await agent.inferPostTurnAction({
+        id: `f${turn}`,
+        channelId: 'discord:room-err',
+        channelType: 'discord',
+        timestamp: new Date(baseMs + turn * 1_000),
+      });
+      if (action) fired += 1;
+    }
+
+    // direct cadence of 1 would have fired 6 times; group batching (8 new
+    // entries required) fires zero times in a 6-turn burst.
+    expect(fired).toBe(0);
+    expect(failingClassifier.classifyChannelMemoryScope).toHaveBeenCalled();
+  });
+
+  it('emits fire-rate cadence telemetry per channel (AC4)', async () => {
+    const events: SleeptimeCadenceTelemetry[] = [];
+    const agent = makeCadenceAgent({
+      cadence: cadence({ directCadenceTurns: 1 }),
+      scope: 'direct',
+      onCadenceTelemetry: (event) => { events.push(event); },
+    });
+    const baseMs = Date.parse('2026-06-01T12:00:00.000Z');
+
+    for (let turn = 1; turn <= 3; turn += 1) {
+      await agent.inferPostTurnAction({
+        id: `t${turn}`,
+        channelId: 'discord:dm-9',
+        channelType: 'discord',
+        timestamp: new Date(baseMs + turn * 1_000),
+      });
+    }
+
+    expect(events).toHaveLength(3);
+    expect(events[0]).toMatchObject({
+      channelId: 'discord:dm-9',
+      scope: 'direct',
+      trigger: 'cadence',
+      turnCount: 1,
+      firesLastHour: 1,
+    });
+    // Rolling per-channel fire-rate accumulates within the hour window.
+    expect(events[2]).toMatchObject({ firesLastHour: 3, scope: 'direct' });
+  });
+
+  it('tags group cadence telemetry with the group scope', async () => {
+    const events: SleeptimeCadenceTelemetry[] = [];
+    const agent = makeCadenceAgent({
+      cadence: cadence({ groupMinIntervalMinutes: 30, groupMinNewEntries: 3 }),
+      scope: 'group',
+      onCadenceTelemetry: (event) => { events.push(event); },
+    });
+    const baseMs = Date.parse('2026-06-01T12:00:00.000Z');
+    for (let turn = 1; turn <= 3; turn += 1) {
+      await agent.inferPostTurnAction({
+        id: `gg${turn}`,
+        channelId: 'discord:guild-room',
+        channelType: 'discord',
+        timestamp: new Date(baseMs + turn * 1_000),
+      });
+    }
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      scope: 'group',
+      trigger: 'cadence',
+      turnCount: 3,
+      newEntriesSinceLastRun: 3,
+    });
   });
 });

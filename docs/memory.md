@@ -262,6 +262,19 @@ The memory system is actively maintained by runtime jobs:
 - extraction marker updates
 - database integrity and embedding-dimension checks at startup
 
+### Sleeptime cadence (group-aware, JSON-owned)
+
+Sleeptime memory maintenance (orientation-block reorientation plus optional durable memory writes) is scheduled per conversation and is owned by `scheduler.json` under the `sleeptime` key:
+
+- `sleeptime.direct.cadenceTurns` — direct/1:1 (DM) scopes keep the historical per-N-turns posture (default every 3 turns). This is now configurable rather than a hardcoded constant.
+- `sleeptime.group.minIntervalMinutes` and `sleeptime.group.minNewEntries` — group/room scopes use watermark + interval batching instead of per-N-turns. A group run is only eligible once at least `minNewEntries` new turns have accumulated AND at least `minIntervalMinutes` of wall-clock time has elapsed since the last run.
+
+Direct-vs-group topology reuses the canonical group-memory classification pipeline (`groupMemory` settings, `memoryMode` direct/group/auto, channel overrides, and participant-window auto-detection) via `ObservedGroupMemoryScheduler.classifyChannelMemoryScope` — the same classifier that gates observed group extraction; there is no parallel detector. If classification fails, sleeptime logs the error and degrades to group batching (the compute-conservative direction). In a busy multi-person room this collapses near-continuous per-turn sleeptime firing into a small number of batched maintenance passes, honoring the compute-budget-as-care charter. When a rest window is configured, rest-window eligibility continues to govern post-turn sleeptime for both scopes, unchanged.
+
+Each sleeptime run emits a `memory.sleeptime.cadence` telemetry event (scope, turn count, new-entries-since-last-run, and a rolling per-channel `firesLastHour` fire-rate) on the runtime event bus, streamed to the Garden admin telemetry websocket for scheduler/observability views.
+
+Open question (not implemented): whether group sleeptime should defer entirely to rest-window / nightly consolidation rather than running interval batches during active hours. Interval batching is the conservative choice landed here.
+
 If embeddings change materially, re-embed and validate the store before trusting retrieval quality. Operational steps live in [`docs/operations.md`](./operations.md).
 
 ## Files And Code To Trust

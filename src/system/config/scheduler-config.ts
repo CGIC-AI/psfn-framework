@@ -24,12 +24,38 @@ export interface EpisodicProcessingRestWindowConfig {
   inactivityThresholdMinutes: number;
 }
 
+/**
+ * Direct (1:1 / DM) sleeptime cadence. Preserves the historical per-N-turns
+ * posture; `cadenceTurns` is now JSON-owned instead of a hardcoded constant.
+ */
+export interface SleeptimeDirectCadenceConfig {
+  cadenceTurns: number;
+}
+
+/**
+ * Group-scope sleeptime cadence. Instead of firing every N turns (which in a
+ * busy multi-person room is near-continuous background LLM work), group scopes
+ * use watermark/interval batching: a run is only eligible once at least
+ * `minNewEntries` new conversational turns have accumulated AND at least
+ * `minIntervalMinutes` of wall-clock time has elapsed since the last run.
+ */
+export interface SleeptimeGroupCadenceConfig {
+  minIntervalMinutes: number;
+  minNewEntries: number;
+}
+
+export interface SleeptimeCadenceConfig {
+  direct: SleeptimeDirectCadenceConfig;
+  group: SleeptimeGroupCadenceConfig;
+}
+
 export interface SchedulerRuntimeConfig {
   tickIntervalMs: number;
   heartbeatIntervalMs: number;
   salienceDecayIntervalMs: number;
   artifactLifecycle: ArtifactLifecyclePolicyConfig;
   episodicProcessing: EpisodicProcessingRestWindowConfig;
+  sleeptime: SleeptimeCadenceConfig;
 }
 
 interface SchedulerRuntimeLoadOptions {
@@ -132,6 +158,39 @@ function validateEpisodicProcessingConfig(
   };
 }
 
+function validateSleeptimeConfig(
+  raw: unknown,
+  sourcePath: string,
+): SleeptimeCadenceConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: sleeptime must be an object`);
+  }
+  if (!isRecord(raw.direct)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: sleeptime.direct must be an object`);
+  }
+  if (!isRecord(raw.group)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: sleeptime.group must be an object`);
+  }
+
+  return {
+    direct: {
+      cadenceTurns: toPositiveInteger(raw.direct.cadenceTurns, 'sleeptime.direct.cadenceTurns', 1),
+    },
+    group: {
+      minIntervalMinutes: toPositiveInteger(
+        raw.group.minIntervalMinutes,
+        'sleeptime.group.minIntervalMinutes',
+        1,
+      ),
+      minNewEntries: toPositiveInteger(
+        raw.group.minNewEntries,
+        'sleeptime.group.minNewEntries',
+        1,
+      ),
+    },
+  };
+}
+
 function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRuntimeConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: expected object`);
@@ -143,6 +202,7 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     salienceDecayIntervalMs: toInterval(raw.salienceDecayIntervalMs, 'salienceDecayIntervalMs'),
     artifactLifecycle: validateArtifactLifecycleConfig(raw.artifactLifecycle, sourcePath),
     episodicProcessing: validateEpisodicProcessingConfig(raw.episodicProcessing, sourcePath),
+    sleeptime: validateSleeptimeConfig(raw.sleeptime, sourcePath),
   };
 }
 

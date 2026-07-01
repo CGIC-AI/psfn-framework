@@ -4,7 +4,10 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
 import type { CompositionalPolicyConfig } from '../../system/config/runtime-config-contracts.js';
-import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
+import type {
+  EpisodicProcessingRestWindowConfig,
+  SleeptimeCadenceConfig,
+} from '../../system/config/scheduler-config.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import type {
@@ -18,6 +21,7 @@ import type { EpisodicSynthesizer } from '../../faculties/memory/episodic/synthe
 import type { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
 import type { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import type { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
+import type { SleeptimeScopeClassifierPort } from '../../faculties/memory/sleeptime-agent.js';
 import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
 import type { OutreachOutboxStore } from '../intention/outreach-outbox.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
@@ -146,7 +150,13 @@ export interface HeartbeatRuntimeOptions {
     observedAtMs?: number;
   }) => Promise<void> | void;
   coreMemoryStore?: Pick<CoreMemoryStore, 'getSnapshot' | 'rethink'>;
-  sleeptimeCadenceTurns?: number;
+  sleeptimeCadence?: SleeptimeCadenceConfig;
+  /**
+   * Canonical group-memory scope classifier (ObservedGroupMemoryScheduler)
+   * so sleeptime cadence shares the memoryMode/topology detection used by
+   * group extraction instead of duplicating it.
+   */
+  sleeptimeScopeClassifier?: SleeptimeScopeClassifierPort | null;
   episodicSynthesizer?: Pick<EpisodicSynthesizer, 'run'> | null;
   sleepConsolidator?: Pick<SleepCycleEpisodeConsolidator, 'run'> | null;
   arcWeaver?: Pick<EpisodeArcWeaver, 'run'> | null;

@@ -15,7 +15,10 @@ import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage 
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SessionManager } from '../../core/session/manager.js';
-import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
+import type {
+  EpisodicProcessingRestWindowConfig,
+  SleeptimeCadenceConfig,
+} from '../../system/config/scheduler-config.js';
 import type {
   CoreMemoryStorePort,
   MemoryMaintenanceDiagnostics,
@@ -47,8 +50,19 @@ const log = createComponentLogger('SleeptimeMemoryAgent');
 
 export const SLEEPTIME_MEMORY_ACTION_KIND = 'memory.sleeptime.run';
 
-const DEFAULT_CADENCE_TURNS = 3;
+const DEFAULT_DIRECT_CADENCE_TURNS = 3;
+const DEFAULT_GROUP_MIN_INTERVAL_MINUTES = 15;
+const DEFAULT_GROUP_MIN_NEW_ENTRIES = 8;
+const ONE_HOUR_MS = 3_600_000;
 const DEFAULT_IDLE_SESSION_LIMIT = 20;
+
+const DEFAULT_SLEEPTIME_CADENCE: SleeptimeCadenceConfig = {
+  direct: { cadenceTurns: DEFAULT_DIRECT_CADENCE_TURNS },
+  group: {
+    minIntervalMinutes: DEFAULT_GROUP_MIN_INTERVAL_MINUTES,
+    minNewEntries: DEFAULT_GROUP_MIN_NEW_ENTRIES,
+  },
+};
 const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 24;
 const DEFAULT_MAX_MEMORY_WRITES = 4;
 const MAX_TRANSCRIPT_ENTRY_CHARS = 600;
@@ -114,13 +128,58 @@ interface SleeptimeOrientCandidacyRejection {
   decision: CogSecMemoryCandidacyDecision;
 }
 
+export type SleeptimeMemoryScope = 'direct' | 'group';
+
+/**
+ * Port over the canonical group-memory topology classifier
+ * (ObservedGroupMemoryScheduler.classifyChannelMemoryScope), which resolves
+ * memoryMode direct/group/auto plus channel overrides and participant-window
+ * auto-detection. Sleeptime must reuse that pipeline rather than growing a
+ * parallel direct-vs-group detector.
+ */
+export interface SleeptimeScopeClassifierPort {
+  classifyChannelMemoryScope(
+    message: Pick<SubstrateMessage, 'channelId' | 'channelType'>,
+  ): Promise<SleeptimeMemoryScope>;
+}
+
+/**
+ * Fire-rate telemetry emitted each time a sleeptime maintenance run is
+ * inferred for a channel. `firesLastHour` is a rolling per-channel count so
+ * Garden can render a fire-rate (runs/hour) without re-aggregating raw events.
+ */
+export interface SleeptimeCadenceTelemetry {
+  channelId: string;
+  sessionId: string;
+  scope: SleeptimeMemoryScope;
+  trigger: 'cadence' | 'rest_window';
+  turnCount: number;
+  newEntriesSinceLastRun: number;
+  firedAtMs: number;
+  firesLastHour: number;
+}
+
+interface GroupCadenceState {
+  lastRunAtMs: number;
+  turnCountAtLastRun: number;
+}
+
 export interface SleeptimeMemoryAgentOptions {
   llmProvider: LLMProviderPort;
   sessionManager: SessionMemoryReader;
   coreMemoryStore: CoreMemoryRewriter;
   memoryWriter: SleeptimeMemoryWriter;
   promptRegistry?: PromptRegistryStatePort | null;
-  cadenceTurns?: number;
+  /**
+   * Group-aware, JSON-owned cadence (scheduler.json `sleeptime`). When omitted,
+   * conservative defaults apply (direct: every 3 turns; group: 15m interval /
+   * 8 new-entry watermark batching).
+   */
+  cadence?: SleeptimeCadenceConfig;
+  /** Canonical direct-vs-group scope classification; absent => direct scope. */
+  scopeClassifier?: SleeptimeScopeClassifierPort | null;
+  /** Fire-rate telemetry sink; wired to the runtime event bus by composition. */
+  onCadenceTelemetry?: (event: SleeptimeCadenceTelemetry) => void;
   transcriptMessageLimit?: number;
   maxMemoryWrites?: number;
   restWindow?: EpisodicProcessingRestWindowConfig;
@@ -138,6 +197,27 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
   }
   const normalized = Math.floor(value);
   return normalized > 0 ? normalized : fallback;
+}
+
+function normalizeCadence(cadence: SleeptimeCadenceConfig | undefined): SleeptimeCadenceConfig {
+  return {
+    direct: {
+      cadenceTurns: normalizePositiveInteger(
+        cadence?.direct.cadenceTurns,
+        DEFAULT_SLEEPTIME_CADENCE.direct.cadenceTurns,
+      ),
+    },
+    group: {
+      minIntervalMinutes: normalizePositiveInteger(
+        cadence?.group.minIntervalMinutes,
+        DEFAULT_SLEEPTIME_CADENCE.group.minIntervalMinutes,
+      ),
+      minNewEntries: normalizePositiveInteger(
+        cadence?.group.minNewEntries,
+        DEFAULT_SLEEPTIME_CADENCE.group.minNewEntries,
+      ),
+    },
+  };
 }
 
 function clampUnit(value: unknown, fallback: number): number {
@@ -481,7 +561,9 @@ export class SleeptimeMemoryAgent {
   private readonly coreMemoryStore: CoreMemoryRewriter;
   private readonly memoryWriter: SleeptimeMemoryWriter;
   private readonly promptRegistry: PromptRegistryStatePort | null;
-  private readonly cadenceTurns: number;
+  private readonly cadence: SleeptimeCadenceConfig;
+  private readonly scopeClassifier: SleeptimeScopeClassifierPort | null;
+  private readonly onCadenceTelemetry?: (event: SleeptimeCadenceTelemetry) => void;
   private readonly transcriptMessageLimit: number;
   private readonly maxMemoryWrites: number;
   private readonly restWindow?: EpisodicProcessingRestWindowConfig;
@@ -492,6 +574,8 @@ export class SleeptimeMemoryAgent {
   private readonly memoryMaintenanceStore: SleeptimeMaintenanceStore | null;
   private readonly episodicDiagnosticsStore: SleeptimeEpisodicDiagnosticsStore | null;
   private readonly turnCountBySession = new Map<string, number>();
+  private readonly groupStateBySession = new Map<string, GroupCadenceState>();
+  private readonly fireTimestampsByChannel = new Map<string, number[]>();
 
   constructor(options: SleeptimeMemoryAgentOptions) {
     this.llmProvider = options.llmProvider;
@@ -499,7 +583,9 @@ export class SleeptimeMemoryAgent {
     this.coreMemoryStore = options.coreMemoryStore;
     this.memoryWriter = options.memoryWriter;
     this.promptRegistry = options.promptRegistry ?? null;
-    this.cadenceTurns = normalizePositiveInteger(options.cadenceTurns, DEFAULT_CADENCE_TURNS);
+    this.cadence = normalizeCadence(options.cadence);
+    this.scopeClassifier = options.scopeClassifier ?? null;
+    this.onCadenceTelemetry = options.onCadenceTelemetry;
     this.transcriptMessageLimit = normalizePositiveInteger(
       options.transcriptMessageLimit,
       DEFAULT_TRANSCRIPT_MESSAGE_LIMIT,
@@ -517,28 +603,38 @@ export class SleeptimeMemoryAgent {
     this.episodicDiagnosticsStore = options.episodicDiagnosticsStore ?? null;
   }
 
-  inferPostTurnActions(input: {
-    message: Pick<SubstrateMessage, 'id' | 'channelId'> & { timestamp?: Date };
-  }): PostTurnActionCandidate[] {
-    const candidate = this.inferPostTurnAction(input.message);
+  async inferPostTurnActions(input: {
+    message: Pick<SubstrateMessage, 'id' | 'channelId'>
+      & Partial<Pick<SubstrateMessage, 'channelType'>>
+      & { timestamp?: Date };
+  }): Promise<PostTurnActionCandidate[]> {
+    const candidate = await this.inferPostTurnAction(input.message);
     return candidate ? [candidate] : [];
   }
 
-  inferPostTurnAction(
-    message: Pick<SubstrateMessage, 'id' | 'channelId'> & { timestamp?: Date },
-  ): PostTurnActionCandidate | null {
+  async inferPostTurnAction(
+    message: Pick<SubstrateMessage, 'id' | 'channelId'>
+      & Partial<Pick<SubstrateMessage, 'channelType'>>
+      & { timestamp?: Date },
+  ): Promise<PostTurnActionCandidate | null> {
     if (message.channelId.startsWith('internal:')) {
       return null;
     }
 
-	    const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
-	    if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) return null;
-	    const nextCount = (this.turnCountBySession.get(sessionId) ?? 0) + 1;
+    const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
+    if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) return null;
+    const nextCount = (this.turnCountBySession.get(sessionId) ?? 0) + 1;
     this.turnCountBySession.set(sessionId, nextCount);
     const lastUserActivityAtMs = message.timestamp instanceof Date
       ? message.timestamp.getTime()
       : Date.now();
+
+    let scope: SleeptimeMemoryScope;
+    let trigger: SleeptimeCadenceTelemetry['trigger'];
+    let newEntriesSinceLastRun: number;
     if (this.restWindow) {
+      // Rest-window posture is unchanged: eligibility is governed entirely by
+      // the configured window plus the inactivity threshold, for both scopes.
       const restWindowDecision = evaluateRestWindowEligibility({
         config: this.restWindow,
         nowMs: lastUserActivityAtMs,
@@ -547,21 +643,145 @@ export class SleeptimeMemoryAgent {
       if (!restWindowDecision.allowed) {
         return null;
       }
-    } else if (nextCount % this.cadenceTurns !== 0) {
-      return null;
+      scope = await this.resolveMemoryScope(message);
+      trigger = 'rest_window';
+      newEntriesSinceLastRun = 0;
+    } else {
+      scope = await this.resolveMemoryScope(message);
+      const decision = scope === 'group'
+        ? this.evaluateGroupCadence(sessionId, nextCount, lastUserActivityAtMs)
+        : this.evaluateDirectCadence(nextCount);
+      if (!decision.fire) {
+        return null;
+      }
+      trigger = 'cadence';
+      newEntriesSinceLastRun = decision.newEntriesSinceLastRun;
     }
+
+    this.emitCadenceTelemetry({
+      channelId: message.channelId,
+      sessionId,
+      scope,
+      trigger,
+      turnCount: nextCount,
+      newEntriesSinceLastRun,
+      firedAtMs: lastUserActivityAtMs,
+    });
 
     return {
       kind: SLEEPTIME_MEMORY_ACTION_KIND,
       payload: {
         sessionId,
         sourceChannelId: message.channelId,
+        scope,
         cadenceTurn: nextCount,
         lastUserActivityAtMs,
       },
       dedupeKey: `${SLEEPTIME_MEMORY_ACTION_KIND}:${sessionId}`,
       maxRetries: 1,
     };
+  }
+
+  /**
+   * Resolves direct-vs-group via the injected canonical group-memory
+   * classifier (same memoryMode/topology pipeline as group extraction).
+   * Without a classifier (or channelType), the historical direct posture
+   * applies. If classification fails, the error is logged and the scope
+   * degrades to 'group' — the fail-closed direction for background compute:
+   * batching fires less, and rest-window/nightly consolidation still runs.
+   */
+  private async resolveMemoryScope(
+    message: Pick<SubstrateMessage, 'channelId'> & Partial<Pick<SubstrateMessage, 'channelType'>>,
+  ): Promise<SleeptimeMemoryScope> {
+    if (!this.scopeClassifier || !message.channelType) {
+      return 'direct';
+    }
+    try {
+      return await this.scopeClassifier.classifyChannelMemoryScope({
+        channelId: message.channelId,
+        channelType: message.channelType,
+      });
+    } catch (error) {
+      log.warn('Sleeptime scope classification failed; batching as group scope', {
+        channelId: message.channelId,
+        channelType: message.channelType,
+        error: String(error),
+      });
+      return 'group';
+    }
+  }
+
+  /**
+   * Direct (1:1/DM) scope keeps the historical per-N-turns posture: fire on
+   * every `cadenceTurns`-th turn. This preserves DM behavior by default; the
+   * turn count is now JSON-owned (scheduler.json sleeptime.direct.cadenceTurns).
+   */
+  private evaluateDirectCadence(
+    nextCount: number,
+  ): { fire: boolean; newEntriesSinceLastRun: number } {
+    if (nextCount % this.cadence.direct.cadenceTurns !== 0) {
+      return { fire: false, newEntriesSinceLastRun: 0 };
+    }
+    return { fire: true, newEntriesSinceLastRun: this.cadence.direct.cadenceTurns };
+  }
+
+  /**
+   * Group scope uses watermark/interval batching instead of per-N-turns. A run
+   * is only eligible once BOTH gates pass: at least `minNewEntries` new turns
+   * have accumulated since the last run, AND at least `minIntervalMinutes` of
+   * wall-clock time has elapsed since the last run. In a busy multi-person
+   * room this collapses near-continuous per-turn firing into a small number of
+   * batched maintenance passes (charter 8.8/8.9: compute budget is care
+   * infrastructure).
+   *
+   * Open question (NOT implemented here, see E1.6): whether group sleeptime
+   * should defer entirely to rest-window/nightly consolidation instead of
+   * running interval batches during active hours. Interval batching is the
+   * conservative choice; full deferral would remove daytime group sleeptime
+   * cost but risks orientation staleness in long-lived active rooms.
+   */
+  private evaluateGroupCadence(
+    sessionId: string,
+    nextCount: number,
+    nowMs: number,
+  ): { fire: boolean; newEntriesSinceLastRun: number } {
+    const state = this.groupStateBySession.get(sessionId)
+      ?? { lastRunAtMs: 0, turnCountAtLastRun: 0 };
+    const newEntriesSinceLastRun = nextCount - state.turnCountAtLastRun;
+
+    const enoughNewEntries = newEntriesSinceLastRun >= this.cadence.group.minNewEntries;
+    const minIntervalMs = this.cadence.group.minIntervalMinutes * 60_000;
+    const intervalElapsed = state.lastRunAtMs === 0
+      || (nowMs - state.lastRunAtMs) >= minIntervalMs;
+
+    if (!enoughNewEntries || !intervalElapsed) {
+      return { fire: false, newEntriesSinceLastRun };
+    }
+
+    this.groupStateBySession.set(sessionId, {
+      lastRunAtMs: nowMs,
+      turnCountAtLastRun: nextCount,
+    });
+    return { fire: true, newEntriesSinceLastRun };
+  }
+
+  private emitCadenceTelemetry(input: Omit<SleeptimeCadenceTelemetry, 'firesLastHour'>): void {
+    const firesLastHour = this.recordFireRate(input.channelId, input.firedAtMs);
+    if (!this.onCadenceTelemetry) {
+      return;
+    }
+    this.onCadenceTelemetry({
+      ...input,
+      firesLastHour,
+    });
+  }
+
+  private recordFireRate(channelId: string, nowMs: number): number {
+    const retained = (this.fireTimestampsByChannel.get(channelId) ?? [])
+      .filter(timestampMs => nowMs - timestampMs < ONE_HOUR_MS);
+    retained.push(nowMs);
+    this.fireTimestampsByChannel.set(channelId, retained);
+    return retained.length;
   }
 
   inferIdlePostTurnActions(options: {

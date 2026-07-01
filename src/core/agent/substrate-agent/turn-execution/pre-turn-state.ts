@@ -436,6 +436,9 @@ export async function computePreTurnState(input: {
   const emotionSnapshot = await runtime.emotionSelfModelRuntime.observeEmotionState(
     message.content,
     emotionSessionId,
+    // E1.5: the turn's ConversationScope keys the per-scope emotion slot and
+    // drives directional group→DM carry-over.
+    conversationScope,
   );
   const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
   const turnSnapshotCapturedAt = Date.now();

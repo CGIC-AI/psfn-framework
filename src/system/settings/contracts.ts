@@ -1,5 +1,6 @@
 import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEntry, ModelPurpose, ModelRoleAssignments, ModelSlot, ObserverEvalSidecarSettings } from '../../shared/contracts/runtime.js';
 import type { GroupMemorySettings } from '../config/group-memory-config.js';
+import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import type { CapabilityTier, CompositionalPolicyConfig, SessionRestartBehavior, SubstrateConfig } from '../config/runtime-config-contracts.js';
 import type { ImageWorkflowSettings } from '../../primitives/images/types.js';
 
@@ -96,6 +97,7 @@ export interface EditableSettings {
   memoryExtractionTelemetryEnabled?: boolean;
   memoryRetrievalTelemetryEnabled?: boolean;
   groupMemory?: GroupMemorySettings;
+  emotionScoping?: EmotionScopingSettings;
   profileSynthesisEnabled?: boolean;
   profileSynthesisRefreshIntervalMs?: number;
   profileSynthesisCooldownMs?: number;
@@ -221,6 +223,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'memoryExtractionTelemetryEnabled',
   'memoryRetrievalTelemetryEnabled',
   'groupMemory',
+  'emotionScoping',
   'profileSynthesisEnabled',
   'profileSynthesisRefreshIntervalMs',
   'profileSynthesisCooldownMs',
@@ -316,6 +319,7 @@ export type RuntimeSettingValue =
   | string[]
   | CompositionalPolicyConfig
   | GroupMemorySettings
+  | EmotionScopingSettings
   | ObserverEvalSidecarSettings
   | ImageWorkflowSettings
   | Record<string, boolean>

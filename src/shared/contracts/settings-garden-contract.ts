@@ -73,6 +73,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   memoryExtractionTelemetryEnabled: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryRetrievalTelemetryEnabled: { sectionId: 'extraction-tuning', surface: 'advanced' },
   groupMemory: { sectionId: 'extraction-tuning', surface: 'advanced' },
+  emotionScoping: { sectionId: 'memory', surface: 'advanced' },
   embeddingProvider: { sectionId: 'memory', surface: 'advanced' },
   embeddingModel: { sectionId: 'memory', surface: 'advanced' },
   embeddingDims: { sectionId: 'memory', surface: 'advanced' },

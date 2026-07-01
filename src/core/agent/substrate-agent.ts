@@ -330,6 +330,7 @@ export class SubstrateAgent {
       sessionManager: this.sessionManager,
       llmProvider: this.llmClient,
       emotionRuntime: options?.emotionRuntime,
+      ...(config.emotionScoping ? { emotionScopingConfig: config.emotionScoping } : {}),
       getActiveConcernProvider: () => this.activeConcernProvider,
       getPendingFollowUpProvider: () => this.pendingFollowUpProvider,
       getContactStore: () => this.contactStore,

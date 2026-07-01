@@ -1038,6 +1038,11 @@ export function buildDynamicPromptTemplateVariables(input: {
   config: Record<string, unknown>;
 }): Record<string, string> {
   const internalTurn = isInternalJournalChannel(input.message.channelId);
+  // E1.3: speaking_with is a one-on-one binding. It is active only on genuine
+  // DM turns (scope.kind === 'dm') and never on internal or multi-human group
+  // turns. When inactive, every runtime_speaking_with_* token is blank so
+  // persisted/custom prompt layers that still reference them prune cleanly.
+  const speakingWithActive = !internalTurn && input.conversationScope.kind === 'dm';
   const visibility = classifyChannel(input.message.channelId, resolveMessageChannelMeta(input.message));
   const hasActiveSelfImageTool = (): boolean => {
     for (const toolName of SELF_IMAGE_TOOL_NAMES) {
@@ -1141,12 +1146,12 @@ export function buildDynamicPromptTemplateVariables(input: {
     ...conversationStateVariables,
     runtime_internal_turn_context: internalTurn ? `This is an internal ${input.taskKind ?? 'background'} turn.` : '',
     runtime_internal_turn_kind: internalTurn ? (input.taskKind ?? 'background') : '',
-    // E1.3: speaking_with tokens are still populated on every non-internal
-    // turn, including multi-human group turns (the known binding bug). The
-    // speaking_with gating fix blanks them unless
-    // input.conversationScope.kind === 'dm'.
-    runtime_speaking_with_name: internalTurn ? '' : input.resolvedUserName,
-    runtime_speaking_with_trust_level: internalTurn ? '' : input.trustLevel,
+    // E1.3: speaking_with context populates ONLY on genuine DM turns. On group
+    // turns (and internal turns) speakingWithActive is false, so these tokens
+    // are blank and any prompt layer that still references them prunes cleanly
+    // instead of binding a multi-human room to the most-recent speaker.
+    runtime_speaking_with_name: speakingWithActive ? input.resolvedUserName : '',
+    runtime_speaking_with_trust_level: speakingWithActive ? input.trustLevel : '',
     runtime_channel_type: internalTurn ? '' : (input.channelType ?? 'unknown'),
     runtime_channel_visibility: internalTurn ? '' : visibility,
     runtime_capability_tier: input.capabilityTier,

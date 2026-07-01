@@ -15,6 +15,7 @@ import { buildCogSecLineagePreview } from '../src/core/cogsec/lineage.js';
 import type { CogSecLineageCompactionRef } from '../src/core/cogsec/lineage.js';
 import { applyCogSecRegeneration } from '../src/core/cogsec/regeneration.js';
 import { applyCogSecRevocation } from '../src/core/cogsec/revocation.js';
+import { buildCogSecEventNoticeBlock } from '../src/core/cogsec/safe-log.js';
 import {
   resolveCogSecEventsPath,
   resolveCogSecForensicArchiveDir,
@@ -313,6 +314,15 @@ async function main(): Promise<void> {
     assert(!JSON.stringify(finalEvent).includes(DIRTY_MEMORY_TEXT), 'CogSec event leaked dirty memory payload');
     assert(!JSON.stringify(finalEvent).includes(DIRTY_SUMMARY_TEXT), 'CogSec event leaked dirty summary payload');
     assert(!JSON.stringify(finalEvent).includes('CogSec redaction'), 'CogSec event leaked tombstone text');
+    const noticeBlock = buildCogSecEventNoticeBlock(eventStore.listEvents(), {
+      channelIds: [CHANNEL_ID],
+    });
+    assert(noticeBlock.includes(CASE_ID), 'safe CogSec notice did not include case id');
+    assert(!noticeBlock.includes(DIRTY_L0_TEXT), 'safe CogSec notice leaked dirty L0 payload');
+    assert(!noticeBlock.includes(DIRTY_MEMORY_TEXT), 'safe CogSec notice leaked dirty memory payload');
+    assert(!noticeBlock.includes(DIRTY_SUMMARY_TEXT), 'safe CogSec notice leaked dirty summary payload');
+    assert(!noticeBlock.includes(tombstone.sealedForensicPayloadRef!), 'safe CogSec notice leaked sealed forensic ref');
+    assert(!/\bpayload\b/iu.test(noticeBlock), 'safe CogSec notice used payload wording');
   } catch (error) {
     console.error('[cogsec-smoke] failed');
     console.error(error);

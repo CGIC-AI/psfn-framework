@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { __test as tokenTestUtils } from '../../../primitives/llm/tokens.js';
 import type { LLMProviderPort } from '../../agent/contracts.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
+import type { CogSecEvent } from '../../cogsec/events.js';
 import {
   assembleSessionHistoryForContextWithLlmSummary,
   buildOrientationNoteTelemetry,
@@ -57,6 +58,45 @@ function makeSummaryProvider(
   };
 }
 
+function makeCogSecEvent(overrides: Partial<CogSecEvent> = {}): CogSecEvent {
+  return {
+    caseId: 'cogsec_20260701T000000Z_context',
+    type: 'memory_poisoning',
+    severity: 'high',
+    status: 'applied',
+    sourceChannelId: 'discord-channel-1',
+    affectedLogicalSessionIds: ['logical-session-1'],
+    affectedMessageRanges: [{
+      sourceChannelId: 'discord-channel-1',
+      logicalSessionId: 'logical-session-1',
+      startEntryId: 3,
+      endEntryId: 4,
+    }],
+    sealedForensicPayloadRefs: ['cogsec-forensic://cogsec_20260701T000000Z_context/SMOKE_DIRTY_CONTEXT_TEXT.json'],
+    sealedForensicPayloadHashes: [`sha256:${'c'.repeat(64)}`],
+    tombstonedL0RowCount: 2,
+    affectedArtifacts: {
+      memories: {
+        ids: ['memory-dirty'],
+        count: 1,
+      },
+    },
+    actions: ['seal', 'tombstone', 'search_exclude', 'revoke', 'regenerate'],
+    actor: 'operator',
+    createdAt: '2026-07-01T00:00:00.000Z',
+    updatedAt: '2026-07-01T00:00:03.000Z',
+    appliedAt: '2026-07-01T00:00:03.000Z',
+    safeAgentSummary: 'Unsafe instruction-like content was sealed and removed from active cognition.',
+    resultCounters: {
+      tombstonedL0Rows: 2,
+      revokedArtifacts: 1,
+      regeneratedArtifacts: 1,
+    },
+    epochCuts: [],
+    ...overrides,
+  };
+}
+
 describe('orientation context surface wiring', () => {
   it('threads orientation telemetry into a dedicated runtime prompt section', () => {
     const builderSource = readFileSync(resolve('src/core/session/manager/context-builder.ts'), 'utf-8');
@@ -68,8 +108,71 @@ describe('orientation context surface wiring', () => {
     expect(builderSource).toContain('<continuity_anchor authority="companion_context"');
     expect(builderSource).toContain('<cross_channel_continuity authority="retrieved_context"');
     expect(builderSource).toContain("id: 'session.orientation'");
+    expect(builderSource).toContain("id: 'session.cogsec_notices'");
     expect(builderSource).toContain("id: 'wake_orientation'");
     expect(manifestSource).toContain("| 'orientation'");
+    expect(manifestSource).toContain("| 'cogsec_notices'");
+  });
+
+  it('includes relevant safe CogSec notices without sealed refs or dirty text', async () => {
+    const relevantEvent = makeCogSecEvent();
+    const unrelatedEvent = makeCogSecEvent({
+      caseId: 'cogsec_20260701T000000Z_unrelated',
+      sourceChannelId: 'discord-channel-2',
+      affectedLogicalSessionIds: ['logical-session-9'],
+      affectedMessageRanges: [{
+        sourceChannelId: 'discord-channel-2',
+        logicalSessionId: 'logical-session-9',
+      }],
+      updatedAt: '2026-07-01T00:00:04.000Z',
+    });
+
+    const ctx = await buildSessionContext({
+      channelId: 'logical-session-1',
+      sourceChannelId: 'discord-channel-1',
+      systemPrompt: 'System prompt.',
+      coreMemoryBlock: '',
+      memoriesBlock: '',
+      userId: 'u1',
+      continuityFallbackUserIds: [],
+      store: {
+        getRecent: () => [],
+        getCompactionSummaries: () => [],
+      } as never,
+      config: makeConfig(),
+      eventBus: null,
+      promptRegistry: null,
+      preCompactionExtractionHandler: null,
+      crossChannelContinuity: {
+        getMerged: () => [],
+      },
+      wakeReturnArtifacts: [],
+      characterName: 'Companion',
+      focusKnowledgeTexts: [],
+      focusCompactionRanges: [],
+      cogSecEvents: [unrelatedEvent, relevantEvent],
+    });
+
+    expect(ctx.systemPrompt).toContain('<cogsec_notices>');
+    expect(ctx.systemPrompt).toContain('cogsec_20260701T000000Z_context');
+    expect(ctx.systemPrompt).toContain('Unsafe instruction-like content was sealed');
+    expect(ctx.systemPrompt).not.toContain('cogsec_20260701T000000Z_unrelated');
+    expect(ctx.systemPrompt).not.toContain('SMOKE_DIRTY_CONTEXT_TEXT');
+    expect(ctx.systemPrompt).not.toContain('cogsec-forensic://');
+    expect(ctx.systemPrompt).not.toMatch(/\bpayload\b/iu);
+    expect(ctx.manifest?.budgets.sections.some(section => section.section === 'cogsec_notices')).toBe(true);
+
+    const cogSecSection = ctx.systemPromptSections?.find(section => section.id === 'cogsec_notices');
+    expect(cogSecSection?.content).toContain('cogsec_20260701T000000Z_context');
+    expect(cogSecSection?.content).not.toContain('SMOKE_DIRTY_CONTEXT_TEXT');
+    expect(cogSecSection?.content).not.toContain('cogsec-forensic://');
+    expect(cogSecSection?.provenance).toMatchObject({
+      kind: 'system_note',
+      sourceAuthor: 'system',
+      transformedBy: 'redaction',
+      wording: 'redacted',
+      safeAsPartnerSpeech: false,
+    });
   });
 
   it('keeps heartbeat internal while allowing reflection orientation telemetry', () => {

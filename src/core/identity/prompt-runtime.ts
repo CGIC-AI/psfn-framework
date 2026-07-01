@@ -375,6 +375,7 @@ export type PromptRuntimeBlockId =
   | 'session.focus_knowledge'
   | 'session.orientation'
   | 'session.continuity'
+  | 'session.cogsec_notices'
   | 'session.current_messages'
   | 'tools.active_schemas';
 
@@ -416,6 +417,7 @@ export type PromptRuntimeSystemPromptBlockId = Extract<
   | 'session.focus_knowledge'
   | 'session.orientation'
   | 'session.continuity'
+  | 'session.cogsec_notices'
 >;
 
 export interface PromptRuntimeLayout {
@@ -565,6 +567,17 @@ const PROMPT_RUNTIME_BLOCKS: readonly PromptRuntimeBlockDefinition[] = Object.fr
     visibility: 'runtime_generated',
     reorderable: true,
     contentVisible: false,
+  },
+  {
+    id: 'session.cogsec_notices',
+    label: 'CogSec Notices',
+    description: 'Safe cognitive-security notices explaining intentionally sealed context without exposing the sealed material.',
+    source: 'session-context:cogsec safe event log',
+    schema: OPTIONAL_RUNTIME_AWARE_SCHEMA,
+    placement: 'system_prompt',
+    visibility: 'runtime_generated',
+    reorderable: true,
+    contentVisible: true,
   },
   {
     id: 'runtime.current_datetime',

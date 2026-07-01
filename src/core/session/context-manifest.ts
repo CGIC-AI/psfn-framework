@@ -47,6 +47,7 @@ export type ContextManifestSection =
   | 'memories'
   | 'compaction_summary'
   | 'continuity'
+  | 'cogsec_notices'
   | 'session_history';
 
 export interface ContextManifestSectionUsage {

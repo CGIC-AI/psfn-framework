@@ -429,6 +429,7 @@ describe('injectPromptRuntimeTokens', () => {
 
     store.reorderSystemPromptBlocks([
       'session.continuity',
+      'session.cogsec_notices',
       'memory.core',
       'memory.retrieval',
       'runtime.persona_adaptation',
@@ -442,6 +443,7 @@ describe('injectPromptRuntimeTokens', () => {
     const reloadedStore = new PromptRuntimeLayoutStore(join(root, 'prompt-runtime-layout.json'));
     expect(reloadedStore.getSystemPromptBlockOrder()).toEqual([
       'session.continuity',
+      'session.cogsec_notices',
       'memory.core',
       'memory.retrieval',
       'runtime.persona_adaptation',
@@ -471,6 +473,7 @@ describe('injectPromptRuntimeTokens', () => {
 
     firstStore.reorderSystemPromptBlocks([
       'session.continuity',
+      'session.cogsec_notices',
       'memory.core',
       'memory.retrieval',
       'runtime.persona_adaptation',
@@ -485,6 +488,7 @@ describe('injectPromptRuntimeTokens', () => {
     expect(secondStore).toBe(firstStore);
     expect(secondStore.getSystemPromptBlockOrder()).toEqual([
       'session.continuity',
+      'session.cogsec_notices',
       'memory.core',
       'memory.retrieval',
       'runtime.persona_adaptation',
@@ -507,6 +511,7 @@ describe('injectPromptRuntimeTokens', () => {
     );
     store.reorderSystemPromptBlocks([
       'session.continuity',
+      'session.cogsec_notices',
       'memory.core',
       'memory.retrieval',
       'runtime.persona_adaptation',
@@ -547,6 +552,7 @@ describe('injectPromptRuntimeTokens', () => {
     expect(store.getSystemPromptBlockOrder()).toEqual([
       'session.orientation',
       'session.continuity',
+      'session.cogsec_notices',
       'memory.core',
       'memory.retrieval',
       'runtime.persona_adaptation',

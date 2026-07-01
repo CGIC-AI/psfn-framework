@@ -64,6 +64,11 @@ import { applyFocusCompactionRanges, type FocusCompactionRange } from '../focus-
 import { buildPromptSectionTelemetryList } from '../../identity/prompt-sections.js';
 import { formatActiveDateTimeIso } from '../../../shared/time/active-timezone.js';
 import { classifyIdleGapTexture, type IdleGapTexture } from '../../scheduler/time-texture.js';
+import type { CogSecEvent } from '../../cogsec/events.js';
+import {
+  buildCogSecEventNoticeBlock,
+  listAgentVisibleCogSecEvents,
+} from '../../cogsec/safe-log.js';
 
 const log = createComponentLogger('ContextBuilder');
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
@@ -781,6 +786,7 @@ interface BuildSessionContextParams {
   compactionMode?: 'deferred' | 'foreground';
   recentSummaryMode?: 'deferred' | 'foreground';
   pendingCompaction?: boolean;
+  cogSecEvents?: readonly CogSecEvent[];
 }
 
 export async function buildSessionContext(params: BuildSessionContextParams): Promise<LLMContext> {
@@ -1091,6 +1097,17 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
   const continuitySectionText = continuityBlock
     ? continuityBlock
     : '';
+  const cogSecNoticeChannelIds = sourceChannelId === params.channelId
+    ? [params.channelId]
+    : [params.channelId, sourceChannelId];
+  const cogSecVisibleEvents = listAgentVisibleCogSecEvents(params.cogSecEvents ?? [], {
+    channelIds: cogSecNoticeChannelIds,
+    limit: 5,
+  });
+  const cogSecNoticeSectionText = buildCogSecEventNoticeBlock(params.cogSecEvents ?? [], {
+    channelIds: cogSecNoticeChannelIds,
+    limit: 5,
+  });
 
   const promptRuntimeLayout = resolveCachedPromptRuntimeLayoutStore(params.config);
   const orderedRuntimeSections = orderPromptRuntimeSystemPromptSections([
@@ -1117,6 +1134,10 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
     {
       id: 'session.continuity' as PromptRuntimeSystemPromptBlockId,
       content: continuitySectionText,
+    },
+    {
+      id: 'session.cogsec_notices' as PromptRuntimeSystemPromptBlockId,
+      content: cogSecNoticeSectionText,
     },
   ], promptRuntimeLayout);
   for (const section of orderedRuntimeSections) {
@@ -1244,6 +1265,7 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
         },
         { section: 'orientation', tokenCount: countTokens(markedOrientationSectionText) },
         { section: 'continuity', tokenCount: countTokens(continuitySectionText) },
+        { section: 'cogsec_notices', tokenCount: countTokens(cogSecNoticeSectionText) },
         { section: 'session_history', tokenCount: sessionMessageTokenCount },
       ],
     },
@@ -1323,6 +1345,23 @@ export async function buildSessionContext(params: BuildSessionContextParams): Pr
       title: 'Cross-Channel Continuity',
       content: continuitySectionText,
       provenance: continuityProvenance,
+    },
+    {
+      id: 'cogsec_notices',
+      title: 'CogSec Notices',
+      content: cogSecNoticeSectionText,
+      provenance: buildAuthenticityProvenance({
+        kind: 'system_note',
+        sourceAuthor: 'system',
+        transformedBy: 'redaction',
+        wording: 'redacted',
+        directSpeech: false,
+        detailLoss: 'likely',
+        emotionalTexture: 'unknown',
+        safeAsPartnerSpeech: false,
+        sourceSpanCount: cogSecVisibleEvents.length || undefined,
+        notes: ['Safe CogSec notice; sealed material remains outside companion runtime.'],
+      }),
     },
   ]);
 

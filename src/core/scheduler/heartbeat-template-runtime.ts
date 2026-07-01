@@ -22,7 +22,9 @@ import type {
   ContextMessage,
   ObservabilityCallType,
   PostTurnActionCandidate,
+  ReflectionScopeHint,
 } from '../../shared/contracts/runtime.js';
+import type { ConversationScope } from '../session/conversation-scope.js';
 import type {
   HeartbeatAgent,
   HeartbeatRunTemplateResult,
@@ -1813,7 +1815,17 @@ export function createHeartbeatTemplateRuntime(
 
   const executeTemplate = async (
     template: ReflectionTemplate,
-    options: { sendToDiscordOverride?: boolean; requestedSource?: ReflectionRequestSource } = {},
+    options: {
+      sendToDiscordOverride?: boolean;
+      requestedSource?: ReflectionRequestSource;
+      /**
+       * E1.7: explicit ConversationScope the reflection reflects over. A group
+       * scope makes the reflection reflect on the ROOM (room-scoped context and
+       * memories, no single canonical contact binding). Absent or dm-scoped
+       * keeps the pre-E1.7 canonical-contact reflection behavior byte-identical.
+       */
+      conversationScope?: ConversationScope;
+    } = {},
     source: HeartbeatExecutionSource = 'scheduled',
   ): Promise<Omit<HeartbeatRunTemplateResult, 'queued' | 'queuedVia' | 'deferredAction'>> => {
     assertTemplateExecutionAllowed(template.id, source);
@@ -1822,6 +1834,19 @@ export function createHeartbeatTemplateRuntime(
     const reflectionChannelId = `internal:reflection:${template.id}`;
     const internalStateContext = resolveInternalStateContext(template);
     const reflectionCanonicalContactId = resolveReflectionCanonicalContactId(internalStateContext);
+    // E1.7: only an explicit group scope diverges from today. It drops the single
+    // canonical-contact binding and carries a room hint the turn pipeline rebuilds
+    // the ConversationScope around.
+    const reflectionGroupScope = options.conversationScope?.kind === 'group'
+      ? options.conversationScope
+      : undefined;
+    const reflectionScopeHint: ReflectionScopeHint | undefined = reflectionGroupScope
+      ? {
+        kind: 'group',
+        roomId: reflectionGroupScope.channelId,
+        ...(reflectionGroupScope.roomName ? { roomName: reflectionGroupScope.roomName } : {}),
+      }
+      : undefined;
     const plannedReflectionMode: 'agent' | 'deliberation' = shouldUseDeliberation(template)
       ? 'deliberation'
       : 'agent';
@@ -1961,20 +1986,22 @@ export function createHeartbeatTemplateRuntime(
     } else {
       // E1.7: reflection/heartbeat turns enter the same turn pipeline as chat
       // turns, so the turn's ConversationScope is resolved at session-manager
-      // ingress from this message (internal channel, no isDirectMessage flag
-      // => group scope). The reflection scoping bead acts on that scope —
-      // choosing which conversation scope a reflection deliberates over —
-      // starting from this dispatch site.
+      // ingress from this message. A dm/absent scope keeps the internal-channel
+      // canonical-contact binding byte-identical; an explicit group scope makes
+      // the reflection reflect on the ROOM (room-scoped context/memories, no
+      // single canonical contact) via the reflectionScope routing hint.
       const response = await agentLoop.handleMessage({
         id: `reflection-${template.id}-${Date.now()}`,
         channelId: reflectionChannelId,
         channelType: 'terminal',
-        authorId: reflectionCanonicalContactId ?? 'scheduler',
+        authorId: reflectionScopeHint ? 'scheduler' : (reflectionCanonicalContactId ?? 'scheduler'),
         authorName: template.name,
         content: reflectionPrompt,
         timestamp: new Date(),
         routing: {
-          ...(reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {}),
+          ...(reflectionScopeHint
+            ? { reflectionScope: reflectionScopeHint }
+            : (reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {})),
           workerExecution: createWorkerExecutionPolicy(WHISPER_WORKER_LANE),
         },
       });

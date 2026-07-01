@@ -29,7 +29,10 @@ import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { Contact } from '../../contacts/types.js';
 import type { ScratchpadProvider } from '../contracts.js';
 import type { SessionEntry } from '../../session/types.js';
-import type { ConversationScope } from '../../session/conversation-scope.js';
+import {
+  createGroupConversationScope,
+  type ConversationScope,
+} from '../../session/conversation-scope.js';
 import type { EmotionAppraisalEntry } from '../../emotion/appraisal.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import type { ActiveConcernContextProvider } from '../../intention/concern-store-port.js';
@@ -1388,7 +1391,16 @@ export function collectContinuityFallbackKeys(
   authorId: string,
   canonicalContactKey: string,
   contact?: Contact,
+  scope?: ConversationScope,
 ): string[] {
+  // E1.7: continuity fallback keys are scope-aware. A group scope reflects on
+  // the ROOM, so the only fallback key is the room key — never a single
+  // participant's contact/channel identities (that single-member fallback is
+  // exactly the group mis-binding this scope threading exists to prevent).
+  if (scope?.kind === 'group') {
+    return [scope.key];
+  }
+
   const keys = new Set<string>();
   const addKey = (value?: string): void => {
     if (!value || value === canonicalContactKey) return;
@@ -1527,6 +1539,30 @@ export async function resolveAuthorContext(input: {
         throw new Error('Missing companion identity key for self-directed runtime turn');
       }
       const resolvedUserName = input.companionDisplayName?.trim() || resolvePromptUserName(input.message);
+      // E1.7: a group-scoped reflection reflects on the ROOM. It binds no single
+      // canonical contact and its continuity fallback keys are room-based. A
+      // dm/absent scope keeps the pre-E1.7 binding (routed canonical contact hint,
+      // empty fallback keys) byte-identical.
+      const reflectionScopeHint = isReflectionChannel ? input.message.routing?.reflectionScope : undefined;
+      if (reflectionScopeHint?.kind === 'group') {
+        const roomScope = createGroupConversationScope({
+          channelId: reflectionScopeHint.roomId,
+          ...(reflectionScopeHint.roomName ? { roomName: reflectionScopeHint.roomName } : {}),
+        });
+        return {
+          trustLevel: 'primary',
+          speakerRole: 'system',
+          resolvedUserName,
+          ...(subjectIdentityKey ? { subjectIdentityKey } : {}),
+          ...(subjectIdentityKey ? { continuitySubjectKey: subjectIdentityKey } : {}),
+          continuityFallbackKeys: collectContinuityFallbackKeys(
+            subjectIdentityKey,
+            subjectIdentityKey,
+            undefined,
+            roomScope,
+          ),
+        };
+      }
       const canonicalContactKey = isReflectionChannel
         ? input.message.routing?.canonicalContactId?.trim() || undefined
         : undefined;

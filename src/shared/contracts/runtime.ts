@@ -192,6 +192,18 @@ export interface GeneratedMessageProvenanceMetadata {
   sourceAuthorName: string;
 }
 
+/**
+ * E1.7: self-contained ConversationScope decision for scheduler-dispatched
+ * reflection/heartbeat turns. Deliberately structural (no core/session import)
+ * so the shared contract layer stays clean. A `group` hint makes the reflection
+ * reflect on the ROOM: no single canonical contact is bound and continuity keys
+ * become room-based. A `dm` hint (or absence) leaves reflection binding
+ * byte-identical to the pre-E1.7 behavior.
+ */
+export type ReflectionScopeHint =
+  | { kind: 'dm'; contactId: string; displayName?: string }
+  | { kind: 'group'; roomId: string; roomName?: string };
+
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'satellite' | 'unknown';
   /**
@@ -215,6 +227,14 @@ export interface MessageRoutingMetadata {
   canonicalContactId?: string;
   /** Internal provenance for generated messages so runtime handoffs do not masquerade as user-authored turns. */
   generated?: GeneratedMessageProvenanceMetadata;
+  /**
+   * E1.7: explicit ConversationScope decision for scheduler-dispatched
+   * reflection/heartbeat turns. When present with `kind: 'group'`, the turn
+   * pipeline reflects on the ROOM (`roomId`), binds no single canonical contact,
+   * and derives room-based continuity fallback keys. Absent (or `kind: 'dm'`)
+   * leaves the existing DM/internal reflection binding byte-identical.
+   */
+  reflectionScope?: ReflectionScopeHint;
   workerExecution?: {
     lane: string;
     profileClass: string;

@@ -952,7 +952,6 @@ export class SessionManager {
               ...(params.channelMeta ? { channelMeta: params.channelMeta } : {}),
               ...(params.userId ? { userId: params.userId } : {}),
             }),
-            params.userId,
           ))
           .trim() ?? '';
         const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
@@ -1136,7 +1135,7 @@ export class SessionManager {
       });
     const coreMemoryBlock = this.coreMemoryProvider
       ? this.coreMemoryProvider.formatForContext(
-        this.buildCoreMemoryFormatContext(scope, userId),
+        this.buildCoreMemoryFormatContext(scope),
       )
       : '';
     const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
@@ -1419,24 +1418,68 @@ export class SessionManager {
 
   private buildCoreMemoryFormatContext(
     scope: ConversationScope,
-    userId?: string,
   ): CoreMemoryFormatContext {
-    const recentParticipants = scope.recentSpeakers.map(speaker => speaker.name);
+    if (scope.kind === 'dm') {
+      // DM scope: bind the canonical DM partner from the resolved scope, never
+      // a history-derived speaker. The rendered block is named for the contact
+      // (participant_context name=<contact>), so a relayed guest line in the
+      // window can no longer flip the subject binding.
+      const contactId = scope.contact.contactId;
+      const participantName = scope.contact.displayName
+        ?? scope.recentSpeakers.find(speaker => speaker.authorId === contactId)?.name;
+      return {
+        channelId: scope.channelId,
+        isDirectMessage: true,
+        participantId: contactId,
+        ...(participantName ? { participantName } : {}),
+      };
+    }
+    // Group scope: NEVER a single-person binding. The block represents the room
+    // (room identity + <=5 recently active speaker names); per-person detail
+    // stays in per-contact profiles and is never blended into this block.
+    const activeParticipantNames = scope.recentSpeakers.map(speaker => speaker.name);
     return {
       channelId: scope.channelId,
-      isDirectMessage: scope.kind === 'dm',
-      // E1.2: participantId still binds to the loose userId param — even on
-      // group scopes, where a single participant binding is the known bug.
-      // The core-memory binding fix replaces this with scope.contact (DM only).
-      ...(userId ? { participantId: userId } : {}),
-      // E1.2: participantName still binds to recentSpeakers[0] (arbitrary
-      // session-history speaker). The core-memory binding fix binds it to the
-      // canonical scope.contact instead.
-      ...(scope.kind === 'dm' && recentParticipants[0]
-        ? { participantName: recentParticipants[0] }
-        : {}),
-      ...(recentParticipants.length > 0 ? { activeParticipantNames: recentParticipants } : {}),
+      isDirectMessage: false,
+      ...(scope.roomName ? { roomName: scope.roomName } : {}),
+      ...(scope.memberCountHint !== undefined ? { participantCount: scope.memberCountHint } : {}),
+      ...(activeParticipantNames.length > 0 ? { activeParticipantNames } : {}),
     };
+  }
+
+  /**
+   * Resolve the ConversationScope for a channel from its persisted session
+   * state (the last user turn's author id and DM classification) and render the
+   * scoped core-memory block through the same read path a turn uses. Startup
+   * hydration calls this so the first post-restart prompt carries a non-empty
+   * scoped block for recently active channels while async memory catches up.
+   */
+  renderActiveCoreMemoryBlock(channelId: string): string {
+    if (!this.coreMemoryProvider) return '';
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    let userId: string | undefined;
+    let channelVisibility: string | undefined;
+    const recent = this.store.getRecent(resolvedChannelId, 50);
+    for (let i = recent.length - 1; i >= 0; i -= 1) {
+      const entry = recent[i];
+      if (entry.role !== 'user') continue;
+      userId = entry.authorId?.trim() || undefined;
+      channelVisibility = entry.channelVisibility;
+      break;
+    }
+    // The most authoritative persisted DM signal is the channelVisibility that
+    // classifyChannel stamped on the recorded turn: 'private' is the honne DM
+    // channel class. Group rooms carry any non-private visibility.
+    const channelMeta: ChannelMeta | undefined = channelVisibility
+      ? { isDirectMessage: channelVisibility === 'private' }
+      : undefined;
+    const scope = this.resolveConversationScopeForResolvedChannel(resolvedChannelId, {
+      ...(channelMeta ? { channelMeta } : {}),
+      ...(userId ? { userId } : {}),
+    });
+    return this.coreMemoryProvider.formatForContext(
+      this.buildCoreMemoryFormatContext(scope),
+    );
   }
 
   setInternalRoleEnvelopeLedger(ledger: InternalRoleEnvelopeLedger | null): void {

@@ -13,6 +13,7 @@ import { CogSecEventStore } from '../src/core/cogsec/events.js';
 import { CogSecForensicArchive } from '../src/core/cogsec/forensic-archive.js';
 import { buildCogSecLineagePreview } from '../src/core/cogsec/lineage.js';
 import type { CogSecLineageCompactionRef } from '../src/core/cogsec/lineage.js';
+import { applyCogSecRegeneration } from '../src/core/cogsec/regeneration.js';
 import { applyCogSecRevocation } from '../src/core/cogsec/revocation.js';
 import {
   resolveCogSecEventsPath,
@@ -26,6 +27,7 @@ const CHANNEL_ID = 'api:cogsec-smoke';
 const DIRTY_L0_TEXT = 'SMOKE_DIRTY_L0_PAYLOAD';
 const DIRTY_MEMORY_TEXT = 'SMOKE_DIRTY_MEMORY_PAYLOAD';
 const DIRTY_SUMMARY_TEXT = 'SMOKE_DIRTY_SUMMARY_PAYLOAD';
+const REGENERATED_MEMORY_TEXT = 'SMOKE_CLEAN_REGENERATED_MEMORY';
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -129,13 +131,13 @@ async function main(): Promise<void> {
       authorId: 'smoke-user',
       authorName: 'Smoke User',
     });
-    sessionStore.append({
+    const cleanMessageId = sessionStore.append({
       channelId: CHANNEL_ID,
       role: 'assistant',
       content: 'clean response remains',
       timestamp: 2,
     });
-    sessionStore.insertCompaction(CHANNEL_ID, DIRTY_SUMMARY_TEXT, dirtyMessageId);
+    sessionStore.insertCompaction(CHANNEL_ID, DIRTY_SUMMARY_TEXT, cleanMessageId);
 
     const db = new Database(':memory:');
     sqliteVec.load(db);
@@ -156,6 +158,11 @@ async function main(): Promise<void> {
     const retriever = new MemoryRetriever(
       memoryStore as unknown as MemoryStorePort,
       makeEmbeddingProvider(dirtyEmbedding),
+      { retrievalBudgetPct: 0.1 },
+    );
+    const cleanRetriever = new MemoryRetriever(
+      memoryStore as unknown as MemoryStorePort,
+      makeEmbeddingProvider(cleanEmbedding),
       { retrievalBudgetPct: 0.1 },
     );
     const activeRequest = {
@@ -227,13 +234,85 @@ async function main(): Promise<void> {
       'dirty compaction summary remained active',
     );
 
+    const regeneration = await applyCogSecRegeneration({
+      preview,
+      eventStore,
+      sessionStore,
+      compactionRegenerator: {
+        regenerateCompactionSummary: input => {
+          const sourceText = input.cleanEntries.map(entry => entry.content).join('\n');
+          assert(!sourceText.includes(DIRTY_L0_TEXT), 'dirty L0 text reached compaction regeneration');
+          assert(!sourceText.includes('CogSec redaction'), 'tombstone text reached compaction regeneration');
+          return { summary: 'Regenerated smoke summary from clean response remains.' };
+        },
+      },
+      memoryRegenerator: {
+        regenerateMemories: input => {
+          const sourceText = input.cleanEntries.map(entry => entry.content).join('\n');
+          assert(!sourceText.includes(DIRTY_L0_TEXT), 'dirty L0 text reached memory regeneration');
+          assert(!sourceText.includes('CogSec redaction'), 'tombstone text reached memory regeneration');
+          memoryStore.insertMemory({
+            ...makeMemory('smoke-memory-regenerated', REGENERATED_MEMORY_TEXT, cleanMessageId),
+            sourceRef: `${CHANNEL_ID}:extract|source:session|session:${CHANNEL_ID}|message:${cleanMessageId}`,
+            provenance: {
+              channelId: CHANNEL_ID,
+              sessionId: CHANNEL_ID,
+              sourceMessageIds: [cleanMessageId],
+            },
+          }, cleanEmbedding);
+          return {
+            memoryIds: ['smoke-memory-regenerated'],
+            embeddingMemoryIds: ['smoke-memory-regenerated'],
+          };
+        },
+      },
+      activeMemoryRebuilder: {
+        rebuildActiveMemoryContext: async input => {
+          assert(!input.contextText.includes(DIRTY_L0_TEXT), 'dirty L0 text reached active memory rebuild');
+          assert(!input.contextText.includes('CogSec redaction'), 'tombstone text reached active memory rebuild');
+          const request = {
+            contextText: input.contextText,
+            channelId: CHANNEL_ID,
+            trustLevel: 'primary' as const,
+          };
+          await cleanRetriever.refreshActiveMemoryContext(request);
+          const active = cleanRetriever.getActiveMemoryContext(request);
+          return {
+            rebuiltContextKeys: active ? [`${CHANNEL_ID}:clean-active`] : [],
+            selectedMemoryIds: active?.selectedMemoryIds ?? [],
+          };
+        },
+      },
+      now: () => new Date('2026-07-01T00:00:04.000Z'),
+    });
+    assert(regeneration.failures.length === 0, 'CogSec regeneration recorded failures');
+    assert(regeneration.regeneratedMemoryIds.includes('smoke-memory-regenerated'), 'clean memory was not regenerated');
+    assert(
+      regeneration.selectedActiveMemoryIds.includes('smoke-memory-regenerated'),
+      'regenerated memory was not selected for active memory',
+    );
+    assert(
+      memoryStore.searchByText(REGENERATED_MEMORY_TEXT, 10).some(memory => memory.id === 'smoke-memory-regenerated'),
+      'regenerated memory was not searchable',
+    );
+    assert(
+      sessionStore.getCompactionSummaries(CHANNEL_ID).some(summary => summary.summary.includes('Regenerated smoke summary')),
+      'compaction summary was not regenerated',
+    );
+    assert(
+      sessionStore.getCompactionSummaries(CHANNEL_ID).every(summary => !summary.summary.includes('CogSec summary invalidated')),
+      'invalidated compaction summary remained active after regeneration',
+    );
+
     const sealed = archive.readArtifact(tombstone.sealedForensicPayloadRef!);
     assert(JSON.stringify(sealed.payload).includes(DIRTY_L0_TEXT), 'sealed archive did not preserve dirty L0 payload');
     const finalEvent = eventStore.getEvent(CASE_ID);
-    assert(finalEvent, 'CogSec event missing after revocation');
+    assert(finalEvent, 'CogSec event missing after regeneration');
+    assert(finalEvent.status === 'applied', 'CogSec event was not marked applied after regeneration');
     assert(!JSON.stringify(finalEvent).includes(DIRTY_L0_TEXT), 'CogSec event leaked dirty L0 payload');
     assert(!JSON.stringify(finalEvent).includes(DIRTY_MEMORY_TEXT), 'CogSec event leaked dirty memory payload');
     assert(!JSON.stringify(finalEvent).includes(DIRTY_SUMMARY_TEXT), 'CogSec event leaked dirty summary payload');
+    assert(!JSON.stringify(finalEvent).includes('CogSec redaction'), 'CogSec event leaked tombstone text');
   } catch (error) {
     console.error('[cogsec-smoke] failed');
     console.error(error);

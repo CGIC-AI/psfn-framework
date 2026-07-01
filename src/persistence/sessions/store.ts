@@ -76,6 +76,8 @@ import {
   buildCogSecInvalidatedSummaryContent,
   buildCogSecTombstoneContent,
   buildCogSecTombstoneMetadata,
+  isCogSecInvalidatedSummaryContent,
+  isCogSecTombstoneContent,
   normalizeCogSecCaseId,
   parseCogSecTombstoneCaseId,
 } from '../../core/cogsec/tombstones.js';
@@ -165,6 +167,24 @@ export interface CogSecCompactionInvalidationResult {
   caseId: string;
   channelId: string;
   invalidatedCompactionIds: number[];
+}
+
+export interface CogSecCompactionRegenerationSummary {
+  compactionId: number;
+  summary: string;
+}
+
+export interface CogSecCompactionRegenerationOptions {
+  channelId: string;
+  caseId: string;
+  summaries: readonly CogSecCompactionRegenerationSummary[];
+}
+
+export interface CogSecCompactionRegenerationResult {
+  caseId: string;
+  channelId: string;
+  regeneratedCompactionIds: number[];
+  skippedCompactionIds: number[];
 }
 
 const DEFAULT_MESSAGE_PREVIEW_CHARS = 120;
@@ -292,6 +312,22 @@ function buildCogSecInvalidatedCompactionJournalEntry(
     summary,
     coveredUpTo: entry.coveredUpTo,
   };
+}
+
+function normalizeCogSecRegeneratedSummary(summary: string, field: string): string {
+  const normalized = summary.trim();
+  if (!normalized) {
+    throw new Error(`${field} must be non-empty`);
+  }
+  if (
+    isCogSecTombstoneContent(normalized)
+    || isCogSecInvalidatedSummaryContent(normalized)
+    || normalized.includes('[CogSec redaction:')
+    || normalized.includes('[CogSec summary invalidated:')
+  ) {
+    throw new Error(`${field} must not contain CogSec tombstone or invalidation marker text`);
+  }
+  return normalized;
 }
 
 function sleepSync(ms: number): void {
@@ -1067,6 +1103,65 @@ export class SessionStore implements TranscriptSearchPort {
 
     if (!result) {
       throw new Error(`Session channel not found for CogSec compaction invalidation: ${options.channelId}`);
+    }
+    return result;
+  }
+  applyCogSecCompactionRegenerations(
+    options: CogSecCompactionRegenerationOptions,
+  ): CogSecCompactionRegenerationResult {
+    const caseId = normalizeCogSecCaseId(options.caseId);
+    const summariesById = new Map<number, string>();
+    for (const [index, summary] of options.summaries.entries()) {
+      const compactionId = normalizeEntryId(summary.compactionId, `summaries[${index}].compactionId`);
+      summariesById.set(
+        compactionId,
+        normalizeCogSecRegeneratedSummary(summary.summary, `summaries[${index}].summary`),
+      );
+    }
+    if (summariesById.size === 0) {
+      throw new Error('CogSec compaction regeneration requires at least one summary');
+    }
+
+    const result = this.withLockedExistingChannelWrite(options.channelId, (cache) => {
+      const archive = this.journalRuntime.openArchive(cache.channelId, cache.resolvedPath);
+      const rawEntries = this.journalRuntime.readJournalEntries(archive);
+      const regeneratedIds: number[] = [];
+      const skippedIds: number[] = [];
+      const rewrittenEntries = rawEntries.map(entry => {
+        if (entry.type !== 'compaction' || !summariesById.has(entry.id)) return entry;
+        const currentSummary = entry.summary ?? '';
+        if (!isCogSecInvalidatedSummaryContent(currentSummary)) {
+          skippedIds.push(entry.id);
+          return entry;
+        }
+        regeneratedIds.push(entry.id);
+        return buildCogSecInvalidatedCompactionJournalEntry(entry, summariesById.get(entry.id)!);
+      });
+
+      for (const id of summariesById.keys()) {
+        if (!regeneratedIds.includes(id) && !skippedIds.includes(id)) {
+          skippedIds.push(id);
+        }
+      }
+
+      if (regeneratedIds.length > 0) {
+        this.journalRuntime.rewriteJournalEntries(archive, rewrittenEntries);
+        const reloaded = this.journalRuntime.loadChannel(archive);
+        const sessionKey = this.resolveCacheSessionKey(cache);
+        this.channels.set(sessionKey, reloaded);
+        this.upsertChannelIndex(sessionKey, snapshotIndexEntry(reloaded));
+      }
+
+      return {
+        caseId,
+        channelId: cache.channelId,
+        regeneratedCompactionIds: regeneratedIds,
+        skippedCompactionIds: skippedIds,
+      } satisfies CogSecCompactionRegenerationResult;
+    });
+
+    if (!result) {
+      throw new Error(`Session channel not found for CogSec compaction regeneration: ${options.channelId}`);
     }
     return result;
   }

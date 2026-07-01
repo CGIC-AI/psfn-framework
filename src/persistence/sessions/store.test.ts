@@ -846,6 +846,77 @@ describe('SessionStore', () => {
     );
   });
 
+  it('replaces invalidated CogSec compaction summaries with regenerated clean summaries', () => {
+    store.append({
+      channelId: 'api:cogsec-regenerated-summary',
+      role: 'user',
+      content: 'clean turn',
+      timestamp: 1_000,
+    });
+    store.insertCompaction(
+      'api:cogsec-regenerated-summary',
+      'dirty summary text that should be replaced',
+      1,
+    );
+    const compactionId = store.getCompactionSummaries('api:cogsec-regenerated-summary')[0]?.id;
+    expect(compactionId).toBeDefined();
+    store.applyCogSecCompactionInvalidations({
+      channelId: 'api:cogsec-regenerated-summary',
+      caseId: 'cogsec_20260701T000000Z_summary',
+      compactionIds: [compactionId!],
+    });
+
+    const result = store.applyCogSecCompactionRegenerations({
+      channelId: 'api:cogsec-regenerated-summary',
+      caseId: 'cogsec_20260701T000000Z_summary',
+      summaries: [{
+        compactionId: compactionId!,
+        summary: 'Clean regenerated summary from tombstoned-safe source.',
+      }],
+    });
+
+    expect(result.regeneratedCompactionIds).toEqual([compactionId]);
+    expect(result.skippedCompactionIds).toEqual([]);
+    expect(store.getCompactionSummaries('api:cogsec-regenerated-summary')[0]?.summary).toBe(
+      'Clean regenerated summary from tombstoned-safe source.',
+    );
+    const journalPath = findSessionJournalPath(dir, 'cogsec-regenerated-summary');
+    const journalText = readFileSync(journalPath, 'utf-8');
+    expect(journalText).not.toContain('dirty summary text');
+    expect(journalText).not.toContain('[CogSec summary invalidated: cogsec_20260701T000000Z_summary]');
+    expect(journalText).toContain('Clean regenerated summary from tombstoned-safe source.');
+
+    const reloaded = new SessionStore(dir);
+    expect(reloaded.getCompactionSummaries('api:cogsec-regenerated-summary')[0]?.summary).toBe(
+      'Clean regenerated summary from tombstoned-safe source.',
+    );
+  });
+
+  it('rejects regenerated CogSec compaction summaries that contain tombstone markers', () => {
+    store.append({
+      channelId: 'api:cogsec-bad-regeneration',
+      role: 'user',
+      content: 'clean turn',
+      timestamp: 1_000,
+    });
+    store.insertCompaction(
+      'api:cogsec-bad-regeneration',
+      buildCogSecInvalidatedSummaryContent('cogsec_20260701T000000Z_summary'),
+      1,
+    );
+    const compactionId = store.getCompactionSummaries('api:cogsec-bad-regeneration')[0]?.id;
+    expect(compactionId).toBeDefined();
+
+    expect(() => store.applyCogSecCompactionRegenerations({
+      channelId: 'api:cogsec-bad-regeneration',
+      caseId: 'cogsec_20260701T000000Z_summary',
+      summaries: [{
+        compactionId: compactionId!,
+        summary: '[CogSec redaction: cogsec_20260701T000000Z_summary]',
+      }],
+    })).toThrow(/must not contain CogSec tombstone/u);
+  });
+
   it('rebuilds transcript projections from authoritative JSONL archives through the injected port', () => {
     const noProjectionStore = new SessionStore(dir, { disableSearchIndex: true });
     noProjectionStore.append({

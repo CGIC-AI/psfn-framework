@@ -1959,6 +1959,12 @@ export function createHeartbeatTemplateRuntime(
         throw error;
       }
     } else {
+      // E1.7: reflection/heartbeat turns enter the same turn pipeline as chat
+      // turns, so the turn's ConversationScope is resolved at session-manager
+      // ingress from this message (internal channel, no isDirectMessage flag
+      // => group scope). The reflection scoping bead acts on that scope —
+      // choosing which conversation scope a reflection deliberates over —
+      // starting from this dispatch site.
       const response = await agentLoop.handleMessage({
         id: `reflection-${template.id}-${Date.now()}`,
         channelId: reflectionChannelId,

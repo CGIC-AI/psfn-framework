@@ -6,6 +6,7 @@ import type { MemoryProvider, MemoryExtractor, LLMProviderPort } from './substra
 import { SubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SessionManager } from '../session/manager.js';
+import { resolveConversationScopeFromMetadata } from '../session/conversation-scope.js';
 import type { ContextManifest } from '../session/context-manifest.js';
 import type { ContactStore } from '../contacts/store.js';
 import type { ChannelPromptDock } from '../../channels/backplane/types.js';
@@ -280,6 +281,17 @@ function makeMockSessionManager(): SessionManager {
     getRecentMessages: vi.fn().mockReturnValue([]),
     getRoleEnvelopeRefsForEntries: vi.fn().mockReturnValue([]),
     resolveSessionChannelId,
+    resolveConversationScope: vi.fn((input: {
+      channelId: string;
+      channelMeta?: { isDirectMessage?: boolean };
+      userId?: string;
+      contact?: { contactId: string; displayName?: string };
+    }) => resolveConversationScopeFromMetadata({
+      channelId: resolveSessionChannelId(input.channelId),
+      isDirectMessage: input.channelMeta?.isDirectMessage,
+      ...(input.contact ? { contact: input.contact } : {}),
+      ...(input.userId ? { participantId: input.userId } : {}),
+    })),
     getActiveFocusMemoryScopeQuery: vi.fn().mockReturnValue(null),
     setActiveContextSession,
     getActiveContextSession,

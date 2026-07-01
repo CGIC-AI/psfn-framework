@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SessionManager } from '../session/manager.js';
+import { resolveConversationScopeFromMetadata } from '../session/conversation-scope.js';
 import type { LLMProviderPort, LLMResponse } from './substrate-agent.js';
 import type {
   LLMContext,
@@ -104,6 +105,17 @@ function makeMockSessionManager(): SessionManager {
     getRecentMessages: vi.fn().mockReturnValue([]),
     getRoleEnvelopeRefsForEntries: vi.fn().mockReturnValue([]),
     resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+    resolveConversationScope: vi.fn((input: {
+      channelId: string;
+      channelMeta?: { isDirectMessage?: boolean };
+      userId?: string;
+      contact?: { contactId: string; displayName?: string };
+    }) => resolveConversationScopeFromMetadata({
+      channelId: input.channelId,
+      isDirectMessage: input.channelMeta?.isDirectMessage,
+      ...(input.contact ? { contact: input.contact } : {}),
+      ...(input.userId ? { participantId: input.userId } : {}),
+    })),
     getActiveFocusMemoryScopeQuery: vi.fn().mockReturnValue(null),
     setActiveContextSession: vi.fn(),
     getActiveContextSession: vi.fn().mockReturnValue(null),

@@ -12,6 +12,7 @@ import {
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
 import type { SessionManager } from '../../session/manager.js';
+import type { ConversationScope } from '../../session/conversation-scope.js';
 import { isIntentionAppraisalArtifact } from '../../session/entry-attribution.js';
 import { MetacognitiveMonitor, type MetacognitiveFlag } from '../../self-model/metacognition.js';
 import {
@@ -157,6 +158,10 @@ export class EmotionSelfModelRuntime {
     emotionSnapshot: EmotionStateSnapshot | null;
     toolCallCount: number;
     sessionChannelId: string;
+    // E1.5: turn ConversationScope, plumbed as an available input. Emotion
+    // scoping will use it (dm vs group binding of relational state); this
+    // bead does not change emotion behavior.
+    conversationScope?: ConversationScope;
   }): Promise<InternalState> {
     const activeConcerns = this.resolveInternalStateActiveConcerns(input.canonicalContactKey);
     const pendingFollowUps = this.resolveInternalStatePendingFollowUps(
@@ -259,6 +264,9 @@ export class EmotionSelfModelRuntime {
     turnId: TurnID;
     internalState: InternalState;
     templateVariables: Record<string, string> | undefined;
+    // E1.5: turn ConversationScope, plumbed as an available input for the
+    // emotion scoping bead. Appraisal behavior is unchanged here.
+    conversationScope?: ConversationScope;
   }): Promise<void> {
     if (!this.emotionAppraisal) return;
 

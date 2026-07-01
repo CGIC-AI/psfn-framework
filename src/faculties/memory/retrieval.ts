@@ -36,6 +36,7 @@ import { resolveBroadcastVisibilityScope } from '../../system/trust/broadcast-sa
 import { createComponentLogger } from '../../shared/logger.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { Contact, SocialRelationshipEdge } from '../../core/contacts/types.js';
+import type { ConversationScope } from '../../core/session/conversation-scope.js';
 import type { EmotionalSnapshot } from '../../core/contacts/store/emotional-baseline.js';
 import type { TurnMemorySnapshot } from '../../core/turns/snapshot.js';
 import {
@@ -169,6 +170,7 @@ function buildRoomVisibilityContext(
   channelId: string,
   channelMeta: ChannelMeta | undefined,
   canonicalContact: Contact | undefined,
+  conversationScope: ConversationScope | undefined,
 ): RetrievalRoomVisibilityContext {
   const canonicalContactRoomIds = new Set<string>();
   for (const conversation of canonicalContact?.conversationChannels ?? []) {
@@ -176,12 +178,17 @@ function buildRoomVisibilityContext(
     if (roomId.length > 0) canonicalContactRoomIds.add(roomId);
   }
 
+  // The turn ConversationScope is plumbed through as an available input
+  // (E1 epic); the gating fields below intentionally keep deriving from
+  // channelMeta and the canonical contact until a dependent bead flips the
+  // room-visibility gate to consume the scope.
   return {
     currentChannelId: channelId,
     ...(channelMeta?.isDirectMessage !== undefined
       ? { currentIsDirectMessage: channelMeta.isDirectMessage }
       : {}),
     ...(canonicalContactRoomIds.size > 0 ? { canonicalContactRoomIds } : {}),
+    ...(conversationScope ? { conversationScope } : {}),
   };
 }
 
@@ -449,6 +456,7 @@ export class MemoryRetriever implements MemoryProvider {
         request.scopeQuery,
         request.callerContext,
         request.retrievalMode,
+        request.conversationScope,
         {
           request,
           startedAt,
@@ -512,11 +520,12 @@ export class MemoryRetriever implements MemoryProvider {
     channelId: string,
     channelMeta: ChannelMeta | undefined,
     canonicalContactId: string | undefined,
+    conversationScope: ConversationScope | undefined,
   ): Promise<RetrievalRoomVisibilityContext> {
     const canonicalContact = canonicalContactId && this.contactStore
       ? await this.contactStore.getById(canonicalContactId)
       : undefined;
-    return buildRoomVisibilityContext(channelId, channelMeta, canonicalContact);
+    return buildRoomVisibilityContext(channelId, channelMeta, canonicalContact, conversationScope);
   }
 
   private getRetiredLogicalSessionIds(): ReadonlySet<string> {
@@ -683,7 +692,7 @@ export class MemoryRetriever implements MemoryProvider {
     const channelVisibility = classifyChannel(channelId, channelMeta);
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
-    const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId);
+    const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId, undefined);
     const rawProfile = canonicalContactId
       ? await this.memoryStore.getContactProfile(canonicalContactId)
       : undefined;
@@ -1039,6 +1048,7 @@ export class MemoryRetriever implements MemoryProvider {
     scopeQuery?: MemoryScopeQuery,
     callerContext?: RetrievalCallerContext,
     retrievalMode?: RetrievalModeInput,
+    conversationScope?: ConversationScope,
     activeContextTarget?: ActiveMemoryRefreshTarget,
   ): Promise<string> {
     const hasDirectRetrievalContext = callerContext !== undefined || retrievalMode !== undefined;
@@ -1060,7 +1070,12 @@ export class MemoryRetriever implements MemoryProvider {
     const channelVisibility = classifyChannel(channelId, channelMeta);
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
-    const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId);
+    const roomVisibility = await this.resolveRoomVisibilityContext(
+      channelId,
+      channelMeta,
+      canonicalContactId,
+      conversationScope,
+    );
     const socialContext = canonicalContactId
       ? await this.resolveRetrievalSocialContext(canonicalContactId, effectiveTrust, channelVisibility)
       : undefined;
@@ -1742,7 +1757,7 @@ export class MemoryRetriever implements MemoryProvider {
     const channelVisibility = classifyChannel(channelId, channelMeta);
     const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
     const operatorApproval = visibilityScope === 'approved_private_context';
-      const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId);
+      const roomVisibility = await this.resolveRoomVisibilityContext(channelId, channelMeta, canonicalContactId, undefined);
       const candidates = this.filterQuarantinedMemories(
         turnSnapshot?.proactiveCandidates.map(cloneMemory)
         ?? await this.collectProactiveRecallCandidates(channelId, canonicalContactId),

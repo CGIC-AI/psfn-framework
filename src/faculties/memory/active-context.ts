@@ -9,6 +9,7 @@ import type {
   RetrievalModeInput,
 } from './types.js';
 import { normalizeMemoryScopeQuery } from './types.js';
+import type { ConversationScope } from '../../core/session/conversation-scope.js';
 
 export type ActiveMemoryRefreshStatus = 'ready' | 'refreshing' | 'degraded';
 
@@ -23,6 +24,12 @@ export interface ActiveMemoryContextRequest {
   scopeQuery?: MemoryScopeQuery;
   callerContext?: RetrievalCallerContext;
   retrievalMode?: RetrievalModeInput;
+  /**
+   * Turn ConversationScope (E1 epic), plumbed so active-context refreshes run
+   * retrieval with the same scope the turn resolved. Not part of the request
+   * identity; gating does not consume it yet.
+   */
+  conversationScope?: ConversationScope;
 }
 
 export interface ActiveMemoryContextSnapshot {

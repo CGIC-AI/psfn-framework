@@ -9,6 +9,7 @@ import {
   type DisclosureBoundaryDirective,
 } from '../../../system/trust/policy.js';
 import type { PurrMemory } from '../types.js';
+import type { ConversationScope } from '../../../core/session/conversation-scope.js';
 import {
   createEmptyMemoryWithheldSummary,
   incrementMemoryWithheldRelevanceBand,
@@ -44,6 +45,13 @@ export interface RetrievalRoomVisibilityContext {
   currentChannelId: string;
   currentIsDirectMessage?: boolean;
   canonicalContactRoomIds?: ReadonlySet<string>;
+  /**
+   * Turn ConversationScope, plumbed as an available input (E1 epic).
+   * Room-visibility gating still derives from the loose fields above; a
+   * dependent bead flips the gate to consume the scope directly. Do not
+   * change gating here as part of the threading bead.
+   */
+  conversationScope?: ConversationScope;
 }
 
 function violatesHighIntimacyContactScope(

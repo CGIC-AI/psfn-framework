@@ -22,6 +22,7 @@ import {
 } from '../../completion-handoff.js';
 import type { ChannelMeta } from '../../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../../system/trust/types.js';
+import type { ConversationScope } from '../../../session/conversation-scope.js';
 import type { InternalState } from '../../../self-model/state.js';
 import type { TurnSnapshot } from '../../../turns/snapshot.js';
 import {
@@ -185,6 +186,7 @@ export async function schedulePostTurnWork(input: {
   templateVariables: Record<string, string>;
   emotionSessionId: string;
   channelMeta: ChannelMeta;
+  conversationScope: ConversationScope;
   turnBudgetCharacteristics: ContextBudgetTurnCharacteristics;
   persistedUserMessageContent?: string;
   observability: Pick<
@@ -231,6 +233,7 @@ export async function schedulePostTurnWork(input: {
     templateVariables,
     emotionSessionId,
     channelMeta,
+    conversationScope,
     turnBudgetCharacteristics,
     persistedUserMessageContent,
     observability,
@@ -405,11 +408,15 @@ export async function schedulePostTurnWork(input: {
 
   postTurnBackgroundWork.push(createPostTurnBackgroundTask({
     name: 'emotion_appraisal',
+    // E1.5: the turn's ConversationScope is plumbed into the appraisal params
+    // as an available input; emotion scoping acts on it without changing this
+    // call site's shape.
     run: () => runtime.emotionSelfModelRuntime.triggerEmotionAppraisal({
       sessionChannelId: emotionSessionId,
       turnId,
       internalState,
       templateVariables,
+      conversationScope,
     }),
     onError: (error) => {
       log.error('Emotion appraisal error', {

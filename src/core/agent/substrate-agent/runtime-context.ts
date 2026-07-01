@@ -29,6 +29,7 @@ import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { Contact } from '../../contacts/types.js';
 import type { ScratchpadProvider } from '../contracts.js';
 import type { SessionEntry } from '../../session/types.js';
+import type { ConversationScope } from '../../session/conversation-scope.js';
 import type { EmotionAppraisalEntry } from '../../emotion/appraisal.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import type { ActiveConcernContextProvider } from '../../intention/concern-store-port.js';
@@ -563,8 +564,14 @@ function buildLastMessagePromptVariables(input: {
   };
 }
 
-function resolveConversationChatType(message: Pick<SubstrateMessage, 'isDirectMessage'>): 'direct_message' | 'group' {
-  return message.isDirectMessage === true ? 'direct_message' : 'group';
+/**
+ * Chat-type accessor over the turn's ConversationScope. The scope is resolved
+ * once per turn at session-manager ingress (with the same
+ * `isDirectMessage === true` rule this function previously applied to the raw
+ * message), so this is a pure projection — no rederivation from loose params.
+ */
+function resolveConversationChatType(scope: ConversationScope): 'direct_message' | 'group' {
+  return scope.kind === 'dm' ? 'direct_message' : 'group';
 }
 
 function formatXmlEmptyElement(tag: string, attributes: Record<string, string>): string {
@@ -654,6 +661,7 @@ function formatRecentActiveParticipantsXml(input: {
 
 function buildConversationStatePromptVariables(input: {
   message: SubstrateMessage;
+  conversationScope: ConversationScope;
   internalTurn: boolean;
   trustLevel: TrustLevel;
   relationshipType?: Contact['relationshipType'];
@@ -681,7 +689,7 @@ function buildConversationStatePromptVariables(input: {
     };
   }
 
-  const chatType = resolveConversationChatType(input.message);
+  const chatType = resolveConversationChatType(input.conversationScope);
   const runtimeProfilesByUserId = buildRuntimeProfileByUserId(
     input.recentActiveParticipantRuntimeProfiles,
     input.now,
@@ -997,6 +1005,8 @@ export function buildPromptTemplateVariables(input: {
 
 export function buildDynamicPromptTemplateVariables(input: {
   message: SubstrateMessage;
+  /** Resolved once per turn at session-manager ingress; see conversation-scope.ts. */
+  conversationScope: ConversationScope;
   resolvedUserName: string;
   trustLevel: TrustLevel;
   relationshipType?: Contact['relationshipType'];
@@ -1103,6 +1113,7 @@ export function buildDynamicPromptTemplateVariables(input: {
   });
   const conversationStateVariables = buildConversationStatePromptVariables({
     message: input.message,
+    conversationScope: input.conversationScope,
     internalTurn,
     trustLevel: input.trustLevel,
     relationshipType: input.relationshipType,
@@ -1130,6 +1141,10 @@ export function buildDynamicPromptTemplateVariables(input: {
     ...conversationStateVariables,
     runtime_internal_turn_context: internalTurn ? `This is an internal ${input.taskKind ?? 'background'} turn.` : '',
     runtime_internal_turn_kind: internalTurn ? (input.taskKind ?? 'background') : '',
+    // E1.3: speaking_with tokens are still populated on every non-internal
+    // turn, including multi-human group turns (the known binding bug). The
+    // speaking_with gating fix blanks them unless
+    // input.conversationScope.kind === 'dm'.
     runtime_speaking_with_name: internalTurn ? '' : input.resolvedUserName,
     runtime_speaking_with_trust_level: internalTurn ? '' : input.trustLevel,
     runtime_channel_type: internalTurn ? '' : (input.channelType ?? 'unknown'),
@@ -1165,6 +1180,11 @@ export function buildDynamicPromptTemplateVariables(input: {
 
 export function buildRuntimeContext(input: {
   message: SubstrateMessage;
+  /**
+   * Turn ConversationScope, plumbed for runtime-context overlays (available
+   * param; no overlay consumes it yet — dependent E1 beads act on it here).
+   */
+  conversationScope?: ConversationScope;
   resolvedUserName: string;
   trustLevel: TrustLevel;
   relationshipType?: Contact['relationshipType'];

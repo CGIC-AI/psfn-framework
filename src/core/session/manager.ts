@@ -33,6 +33,12 @@ import {
 import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
 import type { CoreMemoryFormatContext } from '../../faculties/core-memory/store.js';
 import {
+  resolveConversationScopeFromMetadata,
+  type ConversationScope,
+  type ConversationScopeContact,
+  type ConversationScopeSpeaker,
+} from './conversation-scope.js';
+import {
   markCompactionSummaryAsUntrustedRecord,
   wrapCompactionSummaryAsUntrustedContext,
 } from '../identity/prompt-composer.js';
@@ -940,9 +946,13 @@ export class SessionManager {
         ).entries;
         const coreMemoryBlock = this.coreMemoryProvider
           ?.formatForContext(this.buildCoreMemoryFormatContext(
-            resolvedChannelId,
+            // Between-turns work resolves its own scope at drain time; the
+            // session store may have advanced since the turn that scheduled it.
+            this.resolveConversationScopeForResolvedChannel(resolvedChannelId, {
+              ...(params.channelMeta ? { channelMeta: params.channelMeta } : {}),
+              ...(params.userId ? { userId: params.userId } : {}),
+            }),
             params.userId,
-            params.channelMeta,
           ))
           .trim() ?? '';
         const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
@@ -1106,12 +1116,27 @@ export class SessionManager {
     turnSnapshot?: TurnSessionContextSnapshot,
     memoryManifestSeed?: ContextManifestMemorySeed,
     turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics,
+    conversationScope?: ConversationScope,
   ): Promise<LLMContext> {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
+    if (conversationScope && conversationScope.channelId !== resolvedChannelId) {
+      throw new Error(
+        `ConversationScope channel mismatch: scope is bound to "${conversationScope.channelId}" `
+        + `but buildContext resolved "${resolvedChannelId}". The scope must be resolved for the `
+        + 'same session channel as the context it feeds.',
+      );
+    }
+    // The turn pipeline resolves the scope exactly once per turn and passes it
+    // in; direct callers (tests, non-turn surfaces) resolve at this entry.
+    const scope = conversationScope
+      ?? this.resolveConversationScopeForResolvedChannel(resolvedChannelId, {
+        ...(channelMeta ? { channelMeta } : {}),
+        ...(userId ? { userId } : {}),
+      });
     const coreMemoryBlock = this.coreMemoryProvider
       ? this.coreMemoryProvider.formatForContext(
-        this.buildCoreMemoryFormatContext(resolvedChannelId, userId, channelMeta),
+        this.buildCoreMemoryFormatContext(scope, userId),
       )
       : '';
     const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
@@ -1328,12 +1353,55 @@ export class SessionManager {
     this.coreMemoryProvider = provider;
   }
 
-  private buildCoreMemoryFormatContext(
-    channelId: string,
-    userId?: string,
-    channelMeta?: ChannelMeta,
-  ): CoreMemoryFormatContext {
-    const recentParticipants: string[] = [];
+  /**
+   * Resolve the ConversationScope for a conversation from ingress metadata.
+   *
+   * This is the single scope construction path: the turn pipeline calls it
+   * exactly once per turn (turn-execution prepareTurnIdentityState) and
+   * threads the resulting value object to every scope consumer. Non-turn
+   * callers (between-turns compaction, direct buildContext callers) resolve
+   * at their own entry with the same rule.
+   *
+   * Group/direct determination matches the runtime's existing detector
+   * (resolveConversationChatType / message.isDirectMessage): only an explicit
+   * `isDirectMessage === true` is a DM.
+   */
+  resolveConversationScope(input: {
+    channelId: string;
+    channelMeta?: ChannelMeta;
+    userId?: string;
+    contact?: ConversationScopeContact;
+  }): ConversationScope {
+    return this.resolveConversationScopeForResolvedChannel(
+      this.resolveSessionChannelId(input.channelId),
+      input,
+    );
+  }
+
+  private resolveConversationScopeForResolvedChannel(
+    resolvedChannelId: string,
+    input: {
+      channelMeta?: ChannelMeta;
+      userId?: string;
+      contact?: ConversationScopeContact;
+    },
+  ): ConversationScope {
+    return resolveConversationScopeFromMetadata({
+      channelId: resolvedChannelId,
+      isDirectMessage: input.channelMeta?.isDirectMessage,
+      ...(input.contact ? { contact: input.contact } : {}),
+      ...(input.userId ? { participantId: input.userId } : {}),
+      recentSpeakers: this.scanRecentConversationSpeakers(resolvedChannelId),
+    });
+  }
+
+  /**
+   * Distinct recent user-role speakers in the session window (max 5). This is
+   * the recent-participant scan that previously lived inside
+   * buildCoreMemoryFormatContext; it now feeds ConversationScope construction.
+   */
+  private scanRecentConversationSpeakers(channelId: string): ConversationScopeSpeaker[] {
+    const recentSpeakers: ConversationScopeSpeaker[] = [];
     const seenParticipantKeys = new Set<string>();
     for (const entry of this.store.getRecent(channelId, 50)) {
       if (entry.role !== 'user') continue;
@@ -1342,15 +1410,29 @@ export class SessionManager {
       seenParticipantKeys.add(key);
       const name = entry.authorName?.trim() || entry.authorId?.trim();
       if (name) {
-        recentParticipants.push(name);
+        recentSpeakers.push({ authorId: key, name });
       }
-      if (recentParticipants.length >= 5) break;
+      if (recentSpeakers.length >= 5) break;
     }
+    return recentSpeakers;
+  }
+
+  private buildCoreMemoryFormatContext(
+    scope: ConversationScope,
+    userId?: string,
+  ): CoreMemoryFormatContext {
+    const recentParticipants = scope.recentSpeakers.map(speaker => speaker.name);
     return {
-      channelId,
-      ...(channelMeta?.isDirectMessage !== undefined ? { isDirectMessage: channelMeta.isDirectMessage } : {}),
+      channelId: scope.channelId,
+      isDirectMessage: scope.kind === 'dm',
+      // E1.2: participantId still binds to the loose userId param — even on
+      // group scopes, where a single participant binding is the known bug.
+      // The core-memory binding fix replaces this with scope.contact (DM only).
       ...(userId ? { participantId: userId } : {}),
-      ...(channelMeta?.isDirectMessage && recentParticipants[0]
+      // E1.2: participantName still binds to recentSpeakers[0] (arbitrary
+      // session-history speaker). The core-memory binding fix binds it to the
+      // canonical scope.contact instead.
+      ...(scope.kind === 'dm' && recentParticipants[0]
         ? { participantName: recentParticipants[0] }
         : {}),
       ...(recentParticipants.length > 0 ? { activeParticipantNames: recentParticipants } : {}),

@@ -16,6 +16,7 @@ import type {
   ActiveMemoryContextRequest,
   ActiveMemoryContextSnapshot,
 } from '../../faculties/memory/active-context.js';
+import type { ConversationScope } from '../session/conversation-scope.js';
 export type { ScratchpadEntry, ScratchpadProvider } from './scratchpad-port.js';
 
 export interface LLMProviderPort {
@@ -70,6 +71,7 @@ export interface MemoryProvider {
     scopeQuery?: MemoryScopeQuery,
     callerContext?: RetrievalCallerContext,
     retrievalMode?: RetrievalModeInput,
+    conversationScope?: ConversationScope,
   ): Promise<string>;
   retrieveProactiveRecall?(
     channelId: string,

@@ -310,7 +310,45 @@ export function buildDmWithGuestSession(dir: string): GroupChatSessionFixture {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
-const FIXTURE_NOW = new Date('2026-07-01T12:00:00Z');
+/** Injected fixture clock shared by every harness render (determinism anchor). */
+export const FIXTURE_NOW = new Date('2026-07-01T12:00:00Z');
+
+// ---------------------------------------------------------------------------
+// Internal (self-directed) turn fixtures: heartbeat and reflection channels.
+// These mirror the scheduler-driven turn shape (resolveAuthorContext binds the
+// companion as the subject with trust 'primary'; reflection turns may carry a
+// canonical-contact routing hint for DM-scoped reflection).
+// ---------------------------------------------------------------------------
+
+export const HEARTBEAT_CHANNEL_ID = 'internal:heartbeat';
+/** Reflection channel id shaped like heartbeat-template-runtime: internal:reflection:<templateId>. */
+export const REFLECTION_CHANNEL_ID = 'internal:reflection:evening-reflection';
+
+/** The companion itself, as the subject of self-directed internal turns. */
+export const COMPANION_SELF: HarnessParticipant = {
+  id: 'companion-self',
+  name: 'Companion',
+  authorId: 'companion-self',
+  trustLevel: 'primary',
+  isMachineIntelligence: false,
+};
+
+/** Build a SubstrateMessage for a self-directed internal turn (heartbeat/reflection). */
+export function makeInternalTurnMessage(
+  channelId: string,
+  options: { routing?: SubstrateMessage['routing']; content?: string } = {},
+): SubstrateMessage {
+  return {
+    id: 'msg-group-harness-internal',
+    channelId,
+    channelType: 'terminal',
+    authorId: COMPANION_SELF.authorId,
+    authorName: COMPANION_SELF.name,
+    content: options.content ?? 'Internal turn prompt seed.',
+    timestamp: FIXTURE_NOW,
+    ...(options.routing ? { routing: options.routing } : {}),
+  };
+}
 
 function makeMessage(overrides: Partial<SubstrateMessage>): SubstrateMessage {
   return {
@@ -388,6 +426,7 @@ export function buildTurnTemplateVariables(
   message: SubstrateMessage,
   speaker: HarnessParticipant,
   channelType: string,
+  options: { now?: Date } = {},
 ): Record<string, string> {
   const { templateVariables } = buildPromptTemplateVariables({
     message,
@@ -396,7 +435,7 @@ export function buildTurnTemplateVariables(
     channelType,
     canonicalContactKey: speaker.id,
     subjectIdentityKey: undefined,
-    now: FIXTURE_NOW,
+    now: options.now ?? FIXTURE_NOW,
     characterPromptVariables: { char_name: 'Companion' },
     modelId: 'test-model',
     fallbackCharacterName: 'Companion',
@@ -412,7 +451,11 @@ export function renderTurnRuntimePrompt(
   message: SubstrateMessage,
   speaker: HarnessParticipant,
   channelType: string,
-  options: { recentChannelEntries?: readonly SessionEntry[] } = {},
+  options: {
+    recentChannelEntries?: readonly SessionEntry[];
+    /** Internal task kind for heartbeat/reflection turns (mirrors resolveTaskKind). */
+    taskKind?: string;
+  } = {},
 ): { prompt: string; variables: Record<string, string> } {
   const templateVariables = buildTurnTemplateVariables(message, speaker, channelType);
   // Mirror runtime ingress: the ConversationScope is resolved once from the
@@ -435,6 +478,7 @@ export function renderTurnRuntimePrompt(
     channelType,
     canonicalContactKey: speaker.id,
     templateVariables,
+    ...(options.taskKind ? { taskKind: options.taskKind } : {}),
     ...(options.recentChannelEntries ? { recentChannelEntries: options.recentChannelEntries } : {}),
   });
   const prompt = injectPromptRuntimeTokens(DEFAULT_RUNTIME_PROMPT_TEMPLATE, {

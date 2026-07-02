@@ -142,6 +142,12 @@ import {
   querySuggestsContactFocus,
 } from './retrieval/social.js';
 import {
+  computeSharedBackground,
+  SHARED_BACKGROUND_DEFAULT_LIMIT,
+  type SharedBackgroundAccessOptions,
+  type SharedBackgroundResult,
+} from './retrieval/shared-background.js';
+import {
   collectContactProfileProvenanceRefs,
   mergeProvenanceRefs,
 } from './retrieval/provenance.js';
@@ -312,6 +318,43 @@ export class MemoryRetriever implements MemoryProvider {
     this.lastProactiveRecallTurn = Number.NEGATIVE_INFINITY;
     this.activeMemoryContexts = new Map();
     this.activeMemoryRefreshLoops = new Map();
+  }
+
+  /**
+   * Shared-background retrieval mode (E4.5): the union of memories that link two
+   * contacts (edge-evidence, co-mention, shared-room), gated by the asking
+   * context and bounded to top-K. Exposed to the model only as the
+   * `shared_background` ACTION of the canonical memory tool (Charter Law 33).
+   */
+  async sharedBackground(input: {
+    contactAId: string;
+    contactBId: string;
+    access: SharedBackgroundAccessOptions;
+    limit?: number;
+  }): Promise<SharedBackgroundResult> {
+    if (!this.contactStore) {
+      // Fail closed: no contact store means the social graph and rosters are
+      // unavailable, so no link can be established.
+      return {
+        contactAId: input.contactAId,
+        contactBId: input.contactBId,
+        resolved: false,
+        missingContactIds: [input.contactAId, input.contactBId],
+        items: [],
+        totalCandidates: 0,
+        truncated: false,
+        limit: input.limit ?? SHARED_BACKGROUND_DEFAULT_LIMIT,
+      };
+    }
+    return computeSharedBackground(
+      { memoryStore: this.memoryStore, contactStore: this.contactStore },
+      {
+        contactAId: input.contactAId,
+        contactBId: input.contactBId,
+        access: input.access,
+        ...(input.limit !== undefined ? { limit: input.limit } : {}),
+      },
+    );
   }
 
   private resolveRetrievalBudget(

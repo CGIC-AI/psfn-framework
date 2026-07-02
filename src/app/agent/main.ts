@@ -361,6 +361,7 @@ async function main(): Promise<void> {
     writer: memoryWriter,
     memoryStore,
     episodicStore,
+    contactStore,
   });
   log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 

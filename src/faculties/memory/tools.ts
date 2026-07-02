@@ -45,6 +45,11 @@ import {
   evaluateRetrievalAccessDecision,
   summarizeWithheldMemories,
 } from './retrieval/access.js';
+import type {
+  SharedBackgroundProvider,
+  SharedBackgroundResult,
+  SharedBackgroundSource,
+} from './retrieval/shared-background.js';
 import {
   formatMemoryWithheldReasonLabel,
   formatMemoryWithheldRelevanceBandLabel,
@@ -71,6 +76,7 @@ const ISO_INSTANT_WITH_ZONE_PATTERN = /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:?\d{2
 const MEMORY_TOOL_ACTIONS = [
   'write',
   'search',
+  'shared_background',
   'census',
   'exists',
   'timeline',
@@ -80,6 +86,8 @@ const MEMORY_TOOL_ACTIONS = [
   'delete',
   'restore',
 ] as const;
+const SHARED_BACKGROUND_TOOL_LIMIT_DEFAULT = 12;
+const SHARED_BACKGROUND_TOOL_LIMIT_MAX = 25;
 type MemoryToolAction = (typeof MEMORY_TOOL_ACTIONS)[number];
 type ScratchpadToolAction = 'list' | 'add' | 'replace' | 'append' | 'remove';
 const SCRATCHPAD_TOOL_ACTIONS: ScratchpadToolAction[] = ['list', 'add', 'replace', 'append', 'remove'];
@@ -290,6 +298,11 @@ export interface MemoryWriteToolOptions {
 
 export interface MemoryToolOptions extends MemoryWriteToolOptions {
   episodicStore?: EpisodicTimelineStore | null;
+  /**
+   * Shared-background provider (E4.5) backing `action=shared_background`. When
+   * absent the action fails closed with an explicit not-configured error.
+   */
+  sharedBackgroundProvider?: SharedBackgroundProvider | null;
 }
 
 interface MemoryToolParams {
@@ -338,6 +351,10 @@ interface MemoryToolParams {
   channelVisibility?: ChannelPrivacy;
   canonical_contact_id?: string;
   canonicalContactId?: string;
+  contact_a?: string;
+  contactA?: string;
+  contact_b?: string;
+  contactB?: string;
   formation_vad?: MemoryFormationVAD;
   clear_formation_vad?: boolean;
   append_tags?: string;
@@ -359,7 +376,7 @@ type TimelineVisibilityResult =
   }
   | { ok: false; error: string };
 
-type MemoryVisibilityAction = 'timeline' | 'census' | 'exists';
+type MemoryVisibilityAction = 'timeline' | 'census' | 'exists' | 'shared_background';
 
 type MemoryScopeFilterResult =
   | {
@@ -791,6 +808,64 @@ function formatMemoryExistsResult(partition: MemoryAccessPartition): string {
   lines.push(...formatVisibleMemoryBreakdown(partition.visible));
   lines.push(...formatWithheldContext(partition.withheldSummary, partition.withheld));
   lines.push('No memory text returned.');
+  return lines.join('\n');
+}
+
+const SHARED_BACKGROUND_SOURCE_LABELS: Record<SharedBackgroundSource, string> = {
+  edge_evidence: 'edge-evidence',
+  co_mention: 'co-mention',
+  shared_room: 'shared-room',
+};
+
+function formatSharedBackgroundSources(sources: readonly SharedBackgroundSource[]): string {
+  if (sources.length === 0) return 'unknown';
+  return sources.map(source => SHARED_BACKGROUND_SOURCE_LABELS[source]).join(', ');
+}
+
+function formatSharedBackgroundResult(result: SharedBackgroundResult): string {
+  const nameA = result.contactADisplayName ?? result.contactAId;
+  const nameB = result.contactBDisplayName ?? result.contactBId;
+  const lines = [`Shared background between ${nameA} and ${nameB}:`];
+
+  if (!result.resolved) {
+    const missing = result.missingContactIds.length > 0
+      ? result.missingContactIds.join(', ')
+      : 'one or both contacts';
+    lines.push(`- Could not resolve both contacts (${missing}). No shared background returned.`);
+    lines.push('No memory text returned.');
+    return lines.join('\n');
+  }
+
+  if (result.items.length === 0) {
+    lines.push('- No shared-background memories are visible in this context.');
+  } else {
+    lines.push(`- Visible shared-background memories: ${result.items.length} (of ${result.totalCandidates} candidate${result.totalCandidates === 1 ? '' : 's'}).`);
+    for (const item of result.items) {
+      lines.push(
+        `- [${formatSharedBackgroundSources(item.sources)}] `
+        + `(${item.memory.type}; ${item.memory.sensitivity}): ${item.memory.text}`,
+      );
+    }
+  }
+
+  if (result.truncated) {
+    lines.push(`- Result truncated to the top ${result.limit} by evidence-source priority, then salience, then recency.`);
+  }
+
+  if (result.withheldSummary && result.withheldSummary.totalCount > 0) {
+    const plural = result.withheldSummary.totalCount === 1 ? 'memory was' : 'memories were';
+    lines.push(
+      `- Withheld context: ${result.withheldSummary.totalCount} candidate ${plural} present but withheld by trust/privacy gates.`,
+    );
+    const reasonLine = listMemoryWithheldReasonEntries(result.withheldSummary.reasonCounts)
+      .map(({ reason, count }) => `${count} ${formatMemoryWithheldReasonLabel(reason)}`)
+      .join(', ');
+    if (reasonLine) {
+      lines.push(`- Withheld trust/privacy reasons: ${reasonLine}.`);
+    }
+    lines.push('- Protected withheld memory text, memory IDs, contact IDs, and scope labels are not included.');
+  }
+
   return lines.join('\n');
 }
 
@@ -1279,13 +1354,14 @@ export function createMemoryTool(
       'Unified long-term memory tool. '
       + 'Use action=search with required query for lookup, action=write with required text and type to store memory, '
       + 'and action=census|exists|timeline for orientation before writing. '
+      + 'Use action=shared_background with contact_a and contact_b to find what links two people. '
       + 'Mutation actions require exact IDs: patch/redact/delete use memory_id; restore uses delete_id.',
     label: 'memory',
     parameters: Type.Object({
       action: Type.Unsafe<MemoryToolAction>({
         type: 'string',
         enum: [...MEMORY_TOOL_ACTIONS],
-        description: 'One of: write, search, census, exists, timeline, import, patch, redact, delete, restore.',
+        description: 'One of: write, search, shared_background, census, exists, timeline, import, patch, redact, delete, restore.',
       }),
       text: Type.Optional(
         Type.String({ description: 'Required for action=write. The memory text to store.' }),
@@ -1364,6 +1440,12 @@ export function createMemoryTool(
       ),
       canonical_contact_id: Type.Optional(
         Type.String({ description: 'For action=census, action=exists, or action=timeline, optional canonical contact id for trusted cross-channel continuity.' }),
+      ),
+      contact_a: Type.Optional(
+        Type.String({ description: 'Required for action=shared_background. First contact id of the pair to find shared background for.' }),
+      ),
+      contact_b: Type.Optional(
+        Type.String({ description: 'Required for action=shared_background. Second contact id of the pair to find shared background for.' }),
       ),
       records: Type.Optional(
         Type.Array(
@@ -1498,6 +1580,51 @@ export function createMemoryTool(
               sensitivity: memory.sensitivity,
               similarity: memory.similarity,
             }))));
+          }
+
+          case 'shared_background': {
+            const provider = options.sharedBackgroundProvider;
+            if (!provider) {
+              return textResultWithError(
+                'Error: shared-background retrieval is not configured for action=shared_background',
+                true,
+              );
+            }
+            const contactAId = normalizeOptionalToolString(normalizedParams.contact_a)
+              ?? normalizeOptionalToolString(normalizedParams.contactA);
+            const contactBId = normalizeOptionalToolString(normalizedParams.contact_b)
+              ?? normalizeOptionalToolString(normalizedParams.contactB);
+            if (!contactAId || !contactBId) {
+              return textResultWithError(
+                'Error: contact_a and contact_b are both required for action=shared_background',
+                true,
+              );
+            }
+            if (contactAId === contactBId) {
+              return textResultWithError(
+                'Error: contact_a and contact_b must be different contacts for action=shared_background',
+                true,
+              );
+            }
+            const visibility = resolveMemoryVisibility(normalizedParams, 'shared_background');
+            if (!visibility.ok) {
+              return textResultWithError(visibility.error, true);
+            }
+            const limit = normalizedParams.limit === undefined
+              ? SHARED_BACKGROUND_TOOL_LIMIT_DEFAULT
+              : clampInt(normalizedParams.limit, 1, SHARED_BACKGROUND_TOOL_LIMIT_MAX);
+            const result = await provider.sharedBackground({
+              contactAId,
+              contactBId,
+              access: {
+                trustLevel: visibility.trustLevel,
+                channelPrivacy: visibility.channelVisibility,
+                broadcast: visibility.broadcast,
+                ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
+              },
+              limit,
+            });
+            return textResult(formatSharedBackgroundResult(result));
           }
 
           case 'census': {

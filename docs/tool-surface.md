@@ -343,7 +343,7 @@ The table below maps current or retired first-party tool names to the canonical 
 
 | Retired or current name | Canonical surface | Exposure | Notes |
 | --- | --- | --- | --- |
-| `memory` | `memory` | always-on | Unified long-term memory surface with `action=write|search|census|exists|timeline|import|patch|redact|delete|restore`; capability gating still distinguishes read/write/delete-sensitive paths. |
+| `memory` | `memory` | always-on | Unified long-term memory surface with `action=write|search|shared_background|census|exists|timeline|import|patch|redact|delete|restore`; capability gating still distinguishes read/write/delete-sensitive paths. `action=shared_background` (contact_a/contact_b) returns the memories that link two contacts (edge-evidence, co-mention, shared-room) under the asking context's gates — it is an ACTION only, never a separate model-facing tool (Charter Law 33). |
 | `scratchpad` | `scratchpad` | always-on | Unified ephemeral workspace with `action=list|add|replace|append|remove`; short-lived working notes stay explicit and non-canonical. |
 | `wiki` | `wiki` | always-on | Internal PSFN-owned durable reference knowledge with `action=list|read|search|write|import`; separate from memory, scratchpad, journals, orientation, and Obsidian/Vault. |
 | `core_memory_append` | `orient` | always-on | Now maps to `orient action="append"` for incremental orientation updates. |

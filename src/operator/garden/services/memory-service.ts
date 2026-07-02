@@ -17,6 +17,11 @@ import {
   type MemoryType,
 } from '../../../faculties/memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../system/trust/types.js';
+import {
+  collectSharedBackgroundUnion,
+  SHARED_BACKGROUND_DEFAULT_LIMIT,
+  SHARED_BACKGROUND_MAX_LIMIT,
+} from '../../../faculties/memory/retrieval/shared-background.js';
 import { AdminMemoryBodyGate } from './memory-body-gate.js';
 import {
   buildManagedScopeEvidence,
@@ -35,6 +40,7 @@ import type {
   AdminMemoryPrivacySummary,
   AdminMemorySearchResult,
   AdminMemoryService,
+  AdminSharedBackgroundResult,
   AdminMemoryScopeDetailData,
   AdminMemoryScopeListData,
   AdminMemoryScopeMutationResult,
@@ -431,6 +437,58 @@ export class AdminMemoryDataService implements AdminMemoryService {
       results: results.map(memory => this.bodyGate.toAdminView(memory)),
       contactsById: await this.buildContactSummaryMap(),
       privacySummary: buildPrivacySummary(privacySummary, results.length, results.length),
+      elevation: this.bodyGate.status(),
+    };
+  }
+
+  async sharedBackground(
+    contactAId: string,
+    contactBId: string,
+    limit?: number,
+  ): Promise<AdminSharedBackgroundResult> {
+    const effectiveLimit = Math.min(
+      Math.max(1, Number.isFinite(limit) ? Math.floor(limit as number) : SHARED_BACKGROUND_DEFAULT_LIMIT),
+      SHARED_BACKGROUND_MAX_LIMIT,
+    );
+    const contactStore = this.deps.contactStore;
+    if (!contactStore) {
+      return {
+        contactAId,
+        contactBId,
+        resolved: false,
+        missingContactIds: [contactAId, contactBId],
+        items: [],
+        contactsById: new Map(),
+        totalCandidates: 0,
+        truncated: false,
+        limit: effectiveLimit,
+        elevation: this.bodyGate.status(),
+      };
+    }
+
+    const union = await collectSharedBackgroundUnion(
+      { memoryStore: this.deps.memoryStore, contactStore },
+      { contactAId, contactBId },
+    );
+    const items = union.candidates.slice(0, effectiveLimit).map(candidate => ({
+      // Body redaction inherited from the E3.5 admin body gate.
+      memory: this.bodyGate.toAdminView(candidate.memory),
+      sources: candidate.sources,
+      score: candidate.score,
+    }));
+
+    return {
+      contactAId: union.contactAId,
+      contactBId: union.contactBId,
+      ...(union.contactADisplayName ? { contactADisplayName: union.contactADisplayName } : {}),
+      ...(union.contactBDisplayName ? { contactBDisplayName: union.contactBDisplayName } : {}),
+      resolved: union.resolved,
+      missingContactIds: union.missingContactIds,
+      items,
+      contactsById: await this.buildContactSummaryMap(),
+      totalCandidates: union.candidates.length,
+      truncated: union.candidates.length > effectiveLimit,
+      limit: effectiveLimit,
       elevation: this.bodyGate.status(),
     };
   }

@@ -24,6 +24,7 @@ import type {
   MemoryLink,
 } from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
+import type { SharedBackgroundSource } from '../../../faculties/memory/retrieval/shared-background.js';
 import type {
   Episode,
   EpisodeArc,
@@ -558,6 +559,30 @@ export interface AdminMemorySearchResult {
   elevation: AdminMemoryElevationStatus;
 }
 
+/** One shared-background item in the operator/admin view (E4.5). */
+export interface AdminSharedBackgroundItem {
+  /** Body redaction is inherited from the E3.5 admin body gate. */
+  memory: AdminMemoryView;
+  sources: SharedBackgroundSource[];
+  score: number;
+}
+
+/** Operator/admin shared-background query result ("what links A and B"). */
+export interface AdminSharedBackgroundResult {
+  contactAId: string;
+  contactBId: string;
+  contactADisplayName?: string;
+  contactBDisplayName?: string;
+  resolved: boolean;
+  missingContactIds: string[];
+  items: AdminSharedBackgroundItem[];
+  contactsById: Map<string, AdminMemoryContactSummary>;
+  totalCandidates: number;
+  truncated: boolean;
+  limit: number;
+  elevation: AdminMemoryElevationStatus;
+}
+
 export interface MemoryMutationResult {
   ok: boolean;
   message?: string;
@@ -631,6 +656,15 @@ export interface AdminMemoryService {
   listManagedScopes(params?: URLSearchParams): Promise<AdminMemoryScopeListData>;
   getManagedScopeDetail(kind: string, id: string): Promise<AdminMemoryScopeDetailData | null>;
   searchMemories(query: string): Promise<AdminMemorySearchResult>;
+  /**
+   * Shared-background query (E4.5): the union of memories linking two contacts.
+   * Bodies inherit the E3.5 admin body gate (redacted unless revealed/elevated).
+   */
+  sharedBackground(
+    contactAId: string,
+    contactBId: string,
+    limit?: number,
+  ): Promise<AdminSharedBackgroundResult>;
   supersedeMemory(id: string): Promise<MemoryMutationResult>;
   updateMemoryScope(
     id: string,

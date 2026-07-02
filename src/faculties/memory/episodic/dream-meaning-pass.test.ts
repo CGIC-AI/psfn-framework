@@ -175,6 +175,31 @@ describe('DreamMeaningPass', () => {
     expect(third.skippedReason).toBe('no_episodes');
     expect(handleMessage).toHaveBeenCalledTimes(1);
   });
+
+  it('emits typed gate events for ran, cadence skip, and no_episodes skip (jpvd.4)', async () => {
+    const store = makeStore();
+    await store.createEpisode(episodeInput('a', '2026-06-09T20:00:00.000Z', '2026-06-09T21:00:00.000Z'));
+    const handleMessage = vi.fn(async () => ({ content: meaningBlock({ a: 'It mattered.' }) }));
+    const events: Array<{ outcome: string; reason: string }> = [];
+    const pass = new DreamMeaningPass(store, { handleMessage }, {
+      now: () => NOW,
+      onGateEvent: (event) => events.push({ outcome: event.outcome, reason: event.reason }),
+    });
+
+    await pass.run({ sessionId: 'discord:main' }); // ran
+    await pass.run({ sessionId: 'discord:main' }); // cadence skip
+    const later = new DreamMeaningPass(store, { handleMessage }, {
+      now: () => new Date('2026-06-11T07:30:00.000Z'),
+      onGateEvent: (event) => events.push({ outcome: event.outcome, reason: event.reason }),
+    });
+    await later.run({ sessionId: 'discord:main' }); // no_episodes skip
+
+    expect(events).toEqual([
+      { outcome: 'ran', reason: 'open' },
+      { outcome: 'skipped', reason: 'cadence' },
+      { outcome: 'skipped', reason: 'no_episodes' },
+    ]);
+  });
 });
 
 describe('parseMeaningContribution', () => {

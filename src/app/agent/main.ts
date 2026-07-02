@@ -408,7 +408,13 @@ async function main(): Promise<void> {
     reviewWindowMs: schedulerConfig.arcFormation.reviewWindowDays * DAY_MS,
     minConfidence: schedulerConfig.arcFormation.minConfidence,
   });
-  const dreamMeaningPass = new DreamMeaningPass(episodicStore, agentLoop);
+  const dreamMeaningPass = new DreamMeaningPass(episodicStore, agentLoop, {
+    onGateEvent: (event) => {
+      eventBus.emit('memory.dream_meaning.gate', event).catch((error: unknown) => {
+        log.warn('Dream-meaning gate event emit failed', { error: String(error) });
+      });
+    },
+  });
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
   );

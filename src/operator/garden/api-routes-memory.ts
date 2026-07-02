@@ -137,6 +137,41 @@ export function buildAdminMemoryRoutes(options: {
         );
       },
     },
+    // ── Shared background: what links contact A and contact B (E4.5) ──
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/memory/shared-background'),
+      handle: (req, res) => {
+        const url = parseRequestUrl(req, '/api/admin/memory/shared-background');
+        const contactAId = url.searchParams.get('a')?.trim() ?? '';
+        const contactBId = url.searchParams.get('b')?.trim() ?? '';
+        if (!contactAId || !contactBId) {
+          sendJson(res, 400, { error: 'Both a and b query parameters are required' });
+          return;
+        }
+        if (contactAId === contactBId) {
+          sendJson(res, 400, { error: 'a and b must be different contacts' });
+          return;
+        }
+        const limitRaw = url.searchParams.get('limit');
+        let limit: number | undefined;
+        if (limitRaw !== null) {
+          const parsed = Number.parseInt(limitRaw, 10);
+          if (!Number.isFinite(parsed) || parsed <= 0) {
+            sendJson(res, 400, { error: 'Invalid limit parameter' });
+            return;
+          }
+          limit = parsed;
+        }
+        memoryService.sharedBackground(contactAId, contactBId, limit).then(
+          (data) => sendJson(res, 200, {
+            ...data,
+            contactsById: Object.fromEntries(data.contactsById.entries()),
+          }),
+          (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load shared background') }),
+        );
+      },
+    },
     // ── High-intimacy body access elevation ──
     {
       method: 'GET',

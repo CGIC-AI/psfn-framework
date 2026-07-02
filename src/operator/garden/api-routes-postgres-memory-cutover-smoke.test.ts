@@ -260,6 +260,18 @@ function makeMemoryService(memory: PurrMemory): AdminMemoryService {
       contactsById: new Map(),
       privacySummary,
     }),
+    sharedBackground: async (contactAId, contactBId) => ({
+      contactAId,
+      contactBId,
+      resolved: true,
+      missingContactIds: [],
+      items: [],
+      contactsById: new Map(),
+      totalCandidates: 0,
+      truncated: false,
+      limit: 12,
+      elevation: { elevated: false, ttlMs: 900_000 },
+    }),
     supersedeMemory: async () => ({ ok: true }),
     updateMemoryScope: async () => ({
       ok: true,

@@ -31,6 +31,12 @@ export interface RoutingCandidate {
   promptCacheStrategy?: PromptCacheStrategy;
   promptCacheRetention?: PromptCacheRetention;
   promptCacheScope?: PromptCacheScope;
+  /**
+   * Model-agnostic provider cache engagement (E2.4): true when the
+   * models.json registry-wide promptCaching policy is enabled. Distinct from
+   * the per-model `promptCacheStrategy` (openai_responses API selection).
+   */
+  promptCacheEnabled?: boolean;
   slotKey?: string;
   requestBaseUrl?: string;
   requestApiKeyEnv?: string;
@@ -225,6 +231,39 @@ function resolvePromptCacheConfig(entry: ModelRegistryEntry): Pick<
   return {};
 }
 
+export interface GlobalPromptCachePolicy {
+  retention: PromptCacheRetention;
+  scope: PromptCacheScope;
+}
+
+/**
+ * Resolve the registry-wide promptCaching policy (models.json owner, E2.4).
+ * Returns null when the flag is off or absent — the default: no provider
+ * request carries any cache parameter.
+ */
+export function resolveGlobalPromptCachePolicy(config: SubstrateConfig): GlobalPromptCachePolicy | null {
+  const policy = config.modelRegistry?.promptCaching;
+  if (policy?.enabled !== true) return null;
+  return {
+    retention: policy.retention ?? 'short',
+    scope: policy.scope ?? 'channel',
+  };
+}
+
+export function applyGlobalPromptCachePolicy(
+  candidate: RoutingCandidate,
+  policy: GlobalPromptCachePolicy | null,
+): RoutingCandidate {
+  if (!policy) return candidate;
+  return {
+    ...candidate,
+    promptCacheEnabled: true,
+    // Per-model tuning (openai_responses strategy entries) beats the global default.
+    promptCacheRetention: candidate.promptCacheRetention ?? policy.retention,
+    promptCacheScope: candidate.promptCacheScope ?? policy.scope,
+  };
+}
+
 function resolveCandidateTuning(entry: ModelRegistryEntry): Pick<
   RoutingCandidate,
   'thinkingEnabled'
@@ -341,7 +380,7 @@ function candidateFromRegistryEntry(
   const tuning = resolveCandidateTuning(entry);
   const endpointRoute = resolveOpenRouterEndpointRoute(config, entry, provider);
   return {
-    candidate: withOpenRouterPreferences({
+    candidate: applyGlobalPromptCachePolicy(withOpenRouterPreferences({
       slotKey: entry.id,
       provider: endpointRoute.provider,
       model,
@@ -352,7 +391,7 @@ function candidateFromRegistryEntry(
       ...(endpointRoute.requestBaseUrl ? { requestBaseUrl: endpointRoute.requestBaseUrl } : {}),
       ...(endpointRoute.requestApiKeyEnv ? { requestApiKeyEnv: endpointRoute.requestApiKeyEnv } : {}),
       ...tuning,
-    }, config),
+    }, config), resolveGlobalPromptCachePolicy(config)),
     primary: purposeTag.primary === true,
     rank: Number.isFinite(entry.rank) ? Math.floor(entry.rank) : Number.MAX_SAFE_INTEGER,
     maxTokens,

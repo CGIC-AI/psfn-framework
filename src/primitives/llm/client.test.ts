@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -845,6 +846,186 @@ describe('LLMClient prompt caching', () => {
         reason: 'missing_channel_id',
       },
     });
+  });
+});
+
+describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
+  const STATIC_TEXT = 'STATIC IDENTITY.';
+  const SESSION_TEXT = 'SESSION NOTES.';
+  const VOLATILE_TEXT = 'TURN CONTEXT.';
+  const SYSTEM_PROMPT = [STATIC_TEXT, SESSION_TEXT, VOLATILE_TEXT].join('\n\n');
+  const STATIC_PREFIX = STATIC_TEXT;
+  const SESSION_STABLE_PREFIX = `${STATIC_TEXT}\n\n${SESSION_TEXT}`;
+
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockReturnValue([]);
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  function makeRegistry(model: string): CanonicalModelRegistry {
+    return {
+      schemaVersion: 1,
+      promptCaching: { enabled: true, retention: 'short', scope: 'channel' },
+      models: [
+        {
+          id: 'summary-primary',
+          rank: 10,
+          identity: {
+            provider: 'openrouter',
+            model,
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'summary', primary: true }],
+          capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 4096 },
+        },
+      ],
+    };
+  }
+
+  function makeBoundaries() {
+    const hash = (value: string) => createHash('sha256').update(value, 'utf8').digest('hex');
+    return {
+      staticPrefixChars: STATIC_PREFIX.length,
+      staticPrefixHash: hash(STATIC_PREFIX),
+      sessionStablePrefixChars: SESSION_STABLE_PREFIX.length,
+      sessionStablePrefixHash: hash(SESSION_STABLE_PREFIX),
+    };
+  }
+
+  async function runComplete(model: string, options: { boundaries?: boolean; enabled?: boolean } = {}) {
+    const registry = makeRegistry(model);
+    if (options.enabled === false) {
+      delete (registry as { promptCaching?: unknown }).promptCaching;
+    }
+    const client = new LLMClient(makeConfig({ modelRegistry: registry }), 'http://litellm.test/v1');
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      model,
+      usage: { input: 9, output: 4 },
+      stopReason: 'stop',
+    });
+    const response = await client.complete(
+      {
+        systemPrompt: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: 'Hi' }],
+        ...(options.boundaries === false ? {} : { promptCacheBoundaries: makeBoundaries() }),
+        correlation: {
+          requestId: 'req-e24-1',
+          channelId: 'discord:e24-channel',
+          callType: 'summary',
+          originType: 'summary',
+          originStage: 'agent.summary',
+          purpose: 'summary',
+        },
+      },
+      'summary',
+      { disableRetry: true },
+    );
+    const requestOptions = mocks.completeSimple.mock.calls[0][2] as {
+      cacheRetention?: string;
+      sessionId?: string;
+      onPayload?: (payload: unknown, model: unknown) => unknown;
+    };
+    return { response, requestOptions };
+  }
+
+  it('applies cache_control passthrough for OpenRouter anthropic targets at the plan boundaries (AC2)', async () => {
+    const { response, requestOptions } = await runComplete('anthropic/claude-sonnet-4.5');
+
+    expect(requestOptions.cacheRetention).toBe('short');
+    expect(requestOptions.sessionId).toBe('discord:e24-channel');
+    expect(typeof requestOptions.onPayload).toBe('function');
+
+    // Exercise the transformer against the completions payload shape pi-ai builds.
+    const payload = {
+      model: 'openrouter/anthropic/claude-sonnet-4.5',
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: 'Hi' },
+      ],
+    };
+    const transformed = await requestOptions.onPayload!(payload, { provider: 'openrouter' }) as typeof payload;
+    expect(transformed.messages[0]).toEqual({
+      role: 'system',
+      content: [
+        { type: 'text', text: STATIC_PREFIX, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: `\n\n${SESSION_TEXT}`, cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: `\n\n${VOLATILE_TEXT}` },
+      ],
+    });
+    expect(transformed.messages[1]).toEqual({ role: 'user', content: 'Hi' });
+
+    expect(response.providerObservability).toMatchObject({
+      promptCaching: {
+        configured: true,
+        engaged: true,
+        mechanism: 'openrouter_cache_control_passthrough',
+        retention: 'short',
+        scope: 'channel',
+        sessionId: 'discord:e24-channel',
+        boundaries: {
+          staticPrefixChars: STATIC_PREFIX.length,
+          sessionStablePrefixChars: SESSION_STABLE_PREFIX.length,
+        },
+        appliedBreakpoints: 2,
+      },
+    });
+  });
+
+  it('sends only supported passthrough params for open models — no payload transformer (AC2)', async () => {
+    const { response, requestOptions } = await runComplete('z-ai/glm-5');
+
+    expect(requestOptions.cacheRetention).toBe('short');
+    expect(requestOptions.sessionId).toBe('discord:e24-channel');
+    expect(requestOptions.onPayload).toBeUndefined();
+    expect(response.providerObservability).toMatchObject({
+      promptCaching: {
+        configured: true,
+        engaged: true,
+        mechanism: 'implicit_prefix',
+        retention: 'short',
+        scope: 'channel',
+      },
+    });
+  });
+
+  it('keeps the wire byte-identical when the flag is off (default)', async () => {
+    const { response, requestOptions } = await runComplete('anthropic/claude-sonnet-4.5', { enabled: false });
+
+    expect(requestOptions.cacheRetention).toBeUndefined();
+    expect(requestOptions.sessionId).toBeUndefined();
+    expect(requestOptions.onPayload).toBeUndefined();
+    expect(response.providerObservability).toMatchObject({
+      promptCaching: {
+        configured: false,
+        engaged: false,
+      },
+    });
+  });
+
+  it('skips breakpoints (but keeps retention) when no boundaries accompany the request', async () => {
+    const { response, requestOptions } = await runComplete('anthropic/claude-sonnet-4.5', { boundaries: false });
+
+    expect(requestOptions.cacheRetention).toBe('short');
+    expect(requestOptions.onPayload).toBeUndefined();
+    expect(response.providerObservability).toMatchObject({
+      promptCaching: {
+        configured: true,
+        engaged: true,
+        mechanism: 'openrouter_cache_control_passthrough',
+      },
+    });
+    const promptCaching = (response.providerObservability as { promptCaching: Record<string, unknown> }).promptCaching;
+    expect(promptCaching.boundaries).toBeUndefined();
+    expect(promptCaching.appliedBreakpoints).toBeUndefined();
   });
 });
 describe('LLMClient completion model hints', () => {

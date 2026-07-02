@@ -61,6 +61,7 @@ import {
 import { invokeAgentForTurn, type AgentInvocationMutableState } from './turn-execution/agent-invocation.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
 import { assembleTurnPrompt } from './turn-execution/prompt-assembly.js';
+import type { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
 import { computePreTurnState, prepareTurnIdentityState } from './turn-execution/pre-turn-state.js';
 import {
   collectTurnResponseAttachments,
@@ -88,6 +89,8 @@ export interface TurnExecutionRuntime {
   agent: Agent;
   bridge: EventBridge;
   systemPrompt: string;
+  /** Prompt-cache directive holder + prefix-stability tracker (E2.4). */
+  promptCacheRuntime: PromptCacheTurnRuntime;
   memoryProvider: MemoryProvider | null;
   memoryExtractor: MemoryExtractor | null;
   skillsRuntime: SkillsRuntime | null;

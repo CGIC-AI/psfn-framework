@@ -634,3 +634,53 @@ describe('evaluateImportPolicy', () => {
     expect(decision.reason).toBeUndefined();
   });
 });
+
+describe('registry-wide promptCaching policy (E2.4)', () => {
+  it('leaves candidates untouched when the policy is absent or disabled (default off)', () => {
+    for (const config of [
+      makeConfig(),
+      makeConfig({
+        modelRegistry: { ...makeBaseRegistry(), promptCaching: { enabled: false } },
+      }),
+    ]) {
+      const candidates = resolveRoutingCandidates(config, 'chat');
+      expect(candidates.length).toBeGreaterThan(0);
+      for (const candidate of candidates) {
+        expect(candidate.promptCacheEnabled).toBeUndefined();
+        expect(candidate.promptCacheRetention).toBeUndefined();
+        expect(candidate.promptCacheScope).toBeUndefined();
+      }
+    }
+  });
+
+  it('marks every candidate cache-enabled with policy retention/scope when enabled', () => {
+    const config = makeConfig({
+      modelRegistry: {
+        ...makeBaseRegistry(),
+        promptCaching: { enabled: true, retention: 'long', scope: 'request' },
+      },
+    });
+    for (const purpose of ['chat', 'background'] as const) {
+      const candidates = resolveRoutingCandidates(config, purpose);
+      expect(candidates.length).toBeGreaterThan(0);
+      for (const candidate of candidates) {
+        expect(candidate.promptCacheEnabled).toBe(true);
+        expect(candidate.promptCacheRetention).toBe('long');
+        expect(candidate.promptCacheScope).toBe('request');
+      }
+    }
+  });
+
+  it('defaults retention to short and scope to channel', () => {
+    const config = makeConfig({
+      modelRegistry: {
+        ...makeBaseRegistry(),
+        promptCaching: { enabled: true },
+      },
+    });
+    const [candidate] = resolveRoutingCandidates(config, 'chat');
+    expect(candidate.promptCacheEnabled).toBe(true);
+    expect(candidate.promptCacheRetention).toBe('short');
+    expect(candidate.promptCacheScope).toBe('channel');
+  });
+});

@@ -41,6 +41,7 @@ import {
 } from '../fatigue/fatigue-budget.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
+import { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
 import type { ResolvedAuthorContext } from './runtime-context.js';
 import { runMoaTurn } from './moa-turn.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
@@ -549,6 +550,7 @@ function createRuntime(params: {
       clearChannel: vi.fn(),
     },
     systemPrompt: 'System prompt',
+    promptCacheRuntime: new PromptCacheTurnRuntime(),
     memoryProvider: params.memoryProvider ?? null,
     memoryExtractor: null,
     skillsRuntime: null,

@@ -16,6 +16,7 @@ import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import type { ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
+import type { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
 import type { TurnSupportRuntime } from './turn-support-runtime.js';
 import type { ToolRuntimeFacade } from './tool-runtime-facade.js';
 import type { ChannelMeta } from '../../../system/trust/policy.js';
@@ -143,6 +144,7 @@ export interface TurnExecutionAdapterOptions {
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   turnSupportRuntime: TurnSupportRuntime;
   toolRuntimeFacade: ToolRuntimeFacade;
+  promptCacheRuntime: PromptCacheTurnRuntime;
   callbacks: TurnExecutionAdapterCallbacks;
 }
 
@@ -162,6 +164,7 @@ export function createTurnExecutionRuntimeAdapter(
     agent: options.agent,
     bridge: options.bridge,
     systemPrompt: options.systemPrompt,
+    promptCacheRuntime: options.promptCacheRuntime,
     memoryProvider: options.memoryProvider,
     memoryExtractor: options.memoryExtractor,
     skillsRuntime: options.skillsRuntime,

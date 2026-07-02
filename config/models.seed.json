@@ -1,5 +1,8 @@
 {
   "schemaVersion": 1,
+  "promptCaching": {
+    "enabled": false
+  },
   "models": [
     {
       "id": "primary",

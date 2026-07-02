@@ -118,6 +118,70 @@ describe('subsystem config round-trip', () => {
     expect(loadModelsConfig(dataDir, { defaultContextWindow: 128_000 }).modelRegistry).toEqual(expected);
   });
 
+  it('round-trips the registry-wide promptCaching policy and validates it fail-closed', () => {
+    const dataDir = makeDataDir('psfn-models-prompt-caching-');
+    const base = {
+      schemaVersion: 1,
+      models: [
+        {
+          id: 'primary',
+          rank: 100,
+          identity: {
+            model: 'openai/gpt-4.1-mini',
+            provider: 'openrouter',
+            source: { type: 'openrouter' },
+          },
+          purposes: [
+            { purpose: 'chat', primary: true },
+            { purpose: 'summary', primary: true },
+            { purpose: 'reasoning', primary: true },
+            { purpose: 'longContext', primary: true },
+            { purpose: 'vision', primary: true },
+            { purpose: 'moa', primary: true },
+            { purpose: 'background', primary: true },
+            { purpose: 'memory', primary: true },
+            { purpose: 'extraction', primary: true },
+            { purpose: 'import_processing', primary: true },
+          ],
+          capabilities: { maxOutputTokens: 4096, contextWindow: 128_000 },
+          tuning: { maxOutputTokens: 4096 },
+        },
+      ],
+    };
+
+    const enabled = {
+      ...base,
+      promptCaching: { enabled: true, retention: 'long', scope: 'channel' },
+    };
+    const saved = saveModelsConfig(dataDir, enabled, { defaultContextWindow: 128_000 });
+    expect(saved.modelRegistry.promptCaching).toEqual({ enabled: true, retention: 'long', scope: 'channel' });
+    expect(readJsonFile(join(dataDir, MODELS_FILE_NAME))).toEqual(enabled);
+    expect(loadModelsConfig(dataDir, { defaultContextWindow: 128_000 }).modelRegistry.promptCaching)
+      .toEqual({ enabled: true, retention: 'long', scope: 'channel' });
+
+    // Absent policy stays absent (default OFF; no silent defaulting).
+    const withoutPolicy = saveModelsConfig(dataDir, base, { defaultContextWindow: 128_000 });
+    expect(withoutPolicy.modelRegistry.promptCaching).toBeUndefined();
+
+    // Fail-closed validation.
+    expect(() => saveModelsConfig(dataDir, { ...base, promptCaching: { enabled: 'maybe' } }, { defaultContextWindow: 128_000 }))
+      .toThrow(/promptCaching\.enabled: expected boolean/);
+    expect(() => saveModelsConfig(dataDir, { ...base, promptCaching: { enabled: true, retention: 'forever' } }, { defaultContextWindow: 128_000 }))
+      .toThrow(/promptCaching\.retention: expected one of none, short, long/);
+    expect(() => saveModelsConfig(dataDir, { ...base, promptCaching: { enabled: true, scope: 'global' } }, { defaultContextWindow: 128_000 }))
+      .toThrow(/promptCaching\.scope: expected one of channel, request/);
+    expect(() => saveModelsConfig(dataDir, { ...base, promptCaching: [] }, { defaultContextWindow: 128_000 }))
+      .toThrow(/promptCaching: expected object/);
+  });
+
+  it('validates the distributed models seed with promptCaching disabled by default', () => {
+    const dataDir = makeDataDir('psfn-models-seed-prompt-caching-');
+    const seed = readJsonFile<Record<string, unknown>>(join('config', 'models.seed.json'));
+    writeFileSync(join(dataDir, MODELS_FILE_NAME), JSON.stringify(seed, null, 2));
+    const loaded = loadModelsConfig(dataDir, { defaultContextWindow: 128_000 });
+    expect(loaded.modelRegistry.promptCaching).toEqual({ enabled: false });
+  });
+
   it('fails closed when canonical primary-per-purpose invariant is violated', () => {
     const dataDir = makeDataDir('psfn-models-config-invalid-');
     const invalid = {

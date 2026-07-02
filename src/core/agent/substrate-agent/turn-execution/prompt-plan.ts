@@ -236,6 +236,57 @@ export function serializePromptPlanSystemPrompt(plan: Pick<PromptPlan, 'blocks'>
   return body ? `${body}\n\n${anchor}` : anchor;
 }
 
+// ── Cache-prefix projection (E2.4) ──
+// The serializer contract guarantees the static region serializes FIRST and
+// byte-stable: the serialized static-only prompt must be a byte-exact prefix
+// of the full serialized system prompt (and likewise for the session-stable
+// region). computePromptPlanCachePrefixes asserts that contract and projects
+// the block-index cachePlan boundaries onto char offsets in the serialized
+// system prompt so provider serializers can place cache breakpoints.
+
+export type PromptPlanCachePrefixes =
+  | {
+    ok: true;
+    /** Serialized static region: byte-exact prefix of the full system prompt. */
+    staticPrefixText: string;
+    /** Serialized static + session-stable region: byte-exact prefix of the full system prompt. */
+    sessionStablePrefixText: string;
+  }
+  | {
+    ok: false;
+    reason: 'static_prefix_not_byte_prefix' | 'session_stable_prefix_not_byte_prefix';
+  };
+
+/**
+ * Project the plan's cachePlan block boundaries onto the serialized provider
+ * system prompt. Fail-closed: if either region does not serialize to a
+ * byte-exact prefix of the full system prompt (serializer contract
+ * violation), returns `{ ok: false }` so callers surface it instead of
+ * applying misaligned provider cache breakpoints.
+ */
+export function computePromptPlanCachePrefixes(
+  plan: Pick<PromptPlan, 'blocks' | 'cachePlan'>,
+): PromptPlanCachePrefixes {
+  const fullSystemPrompt = serializePromptPlanSystemPrompt(plan);
+  const staticPrefixText = serializePromptPlanSystemPrompt({
+    blocks: plan.blocks.slice(0, plan.cachePlan.staticBoundary),
+  });
+  if (!fullSystemPrompt.startsWith(staticPrefixText)) {
+    return { ok: false, reason: 'static_prefix_not_byte_prefix' };
+  }
+  const sessionStablePrefixText = serializePromptPlanSystemPrompt({
+    blocks: plan.blocks.slice(0, plan.cachePlan.sessionStableBoundary),
+  });
+  if (!fullSystemPrompt.startsWith(sessionStablePrefixText)) {
+    return { ok: false, reason: 'session_stable_prefix_not_byte_prefix' };
+  }
+  return {
+    ok: true,
+    staticPrefixText,
+    sessionStablePrefixText,
+  };
+}
+
 export interface SerializedPromptPlanProviderPayload {
   systemPrompt: string;
   piMessages: PiChatMessage[];

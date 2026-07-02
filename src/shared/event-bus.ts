@@ -199,6 +199,17 @@ export interface EventMap {
     error?: string;
     timestamp: number;
   };
+  // Nightly sleep-cycle consolidation failed closed for one candidate
+  // cluster (m58.1): malformed or failed LLM thematic grouping leaves the
+  // candidates untouched and surfaces here instead of being swallowed.
+  'memory.sleep_consolidation.failure': {
+    sessionId: string;
+    scopeKey: string;
+    candidateEpisodeIds: string[];
+    stage: 'thematic_grouping';
+    error: string;
+    timestamp: number;
+  };
   // Social-graph builder worker completion (E4.2). Law 31: results are visible,
   // never silent — Garden renders the proposal queue and these counts.
   'memory.social_graph.builder': {

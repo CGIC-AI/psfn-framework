@@ -188,17 +188,24 @@ class FakeEpisodicPool {
       return queryResult([], 'UPDATE');
     }
 
+    if (normalized.startsWith("update l01_episodes set status = 'canonical'")) {
+      const row = this.episodes.get(String(values[0] ?? ''));
+      if (!row || row.merged_into_episode_id !== null || row.superseded_by_episode_id !== null) {
+        return queryResult([], 'UPDATE');
+      }
+      row.status = 'canonical';
+      return queryResult([{}], 'UPDATE');
+    }
+
     if (normalized.startsWith('update l01_episodes set')) {
+      // Content update: lifecycle columns (status, canonical/merged/
+      // superseded links) are intentionally preserved.
       const row = this.episodes.get(String(values[0] ?? ''));
       if (row) {
-        row.status = values[4] === null ? null : String(values[4] ?? '');
-        row.canonical_episode_id = values[5] === null ? null : String(values[5] ?? '');
-        row.merged_into_episode_id = values[6] === null ? null : String(values[6] ?? '');
-        row.superseded_by_episode_id = values[7] === null ? null : String(values[7] ?? '');
-        row.thread_id = values[8] === null ? null : String(values[8] ?? '');
-        row.started_at = String(values[10] ?? '');
-        row.ended_at = String(values[11] ?? '');
-        row.episode_json = values[21];
+        row.thread_id = values[4] === null ? null : String(values[4] ?? '');
+        row.started_at = String(values[6] ?? '');
+        row.ended_at = String(values[7] ?? '');
+        row.episode_json = values[17];
       }
       return queryResult([], 'UPDATE');
     }
@@ -677,7 +684,7 @@ describe('PostgresEpisodicStore', () => {
     })).resolves.toEqual([first]);
     await expect(store.searchByThread('thread-alpha')).resolves.toEqual([first, second]);
     expect(pool.episodes.get('episode-1')?.episode_json).toBe(serializeEpisode(first));
-    expect(pool.queries.some(query => query.text.includes("status IS NULL OR status = 'canonical'"))).toBe(true);
+    expect(pool.queries.some(query => query.text.includes("status IS NULL OR status IN ('canonical', 'candidate')"))).toBe(true);
   });
 
   it('updates canonical episodes while preserving their creation timestamp', async () => {

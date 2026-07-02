@@ -392,6 +392,16 @@ async function main(): Promise<void> {
     refinementWindowMs: schedulerConfig.sleepConsolidation.refinementWindowHours * HOUR_MS,
     adjacencyGapMs: schedulerConfig.sleepConsolidation.adjacencyGapMinutes * MINUTE_MS,
     maxRefinementsPerRun: schedulerConfig.sleepConsolidation.maxRefinementsPerRun,
+    maxConsolidationsPerRun: schedulerConfig.sleepConsolidation.maxConsolidationsPerRun,
+    // Fail-closed consolidation failures are typed events, never silence.
+    onConsolidationFailure: (failure) => {
+      eventBus.emit('memory.sleep_consolidation.failure', failure).catch((error: unknown) => {
+        log.warn('Sleep-consolidation failure event emit failed', {
+          sessionId: failure.sessionId,
+          error: String(error),
+        });
+      });
+    },
   });
   const arcWeaver = new EpisodeArcWeaver(episodicStore, llmProvider, {
     passIntervalMs: schedulerConfig.arcFormation.passIntervalDays * DAY_MS,

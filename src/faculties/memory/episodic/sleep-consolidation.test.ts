@@ -277,6 +277,436 @@ describe('SleepCycleEpisodeConsolidator', () => {
   });
 });
 
+describe('SleepCycleEpisodeConsolidator candidate consolidation (m58.1)', () => {
+  let db: Database.Database | undefined;
+
+  afterEach(() => {
+    db?.close();
+    db = undefined;
+  });
+
+  const RUN_AT = new Date('2026-06-12T03:00:00.000Z');
+
+  function makeStore(): EpisodicStore {
+    db = new Database(':memory:');
+    return new EpisodicStore(db, { now: () => RUN_AT });
+  }
+
+  function candidateInput(
+    id: string,
+    startedAt: string,
+    endedAt: string,
+    overrides: Partial<EpisodeCreateInput> = {},
+  ): EpisodeCreateInput {
+    return {
+      id,
+      title: `(machine cut) ${id}`,
+      landmark: `A 7-message exchange with 4 user turns from ${startedAt} to ${endedAt}.`,
+      startedAt,
+      endedAt,
+      threadId: 'discord:main',
+      channelId: 'discord:main',
+      participantContactIds: ['contact:vega'],
+      salience: { score: 0.6, novelty: 0.3, emotionalIntensity: 0.2 },
+      affect: { valence: 0.2, arousal: 0.3, labels: ['curious'] },
+      themes: ['they', 'what'],
+      spanRefs: [{ spanId: `span-${id}`, sessionId: 'discord:main' }],
+      artifactRefs: [],
+      provenanceRefs: [{ kind: 'l0_span', refId: `span-${id}` }],
+      lifecycleStatus: 'candidate',
+      ...overrides,
+    };
+  }
+
+  async function seedClaimedCandidate(
+    store: EpisodicStore,
+    input: EpisodeCreateInput,
+    claimKeys: readonly string[],
+  ): Promise<void> {
+    await store.createEpisode(input);
+    await store.claimEpisodeMessages({
+      episodeId: input.id!,
+      sessionId: 'discord:main',
+      claims: claimKeys.map(claimKey => ({ claimKey })),
+    });
+  }
+
+  function groupingResponse(groups: Array<Record<string, unknown>>): { content: string } {
+    return { content: JSON.stringify({ groups }) } as { content: string };
+  }
+
+  function activeClaimKeyDuplicates(): string[] {
+    const rows = db!.prepare(`
+      SELECT claim_key, COUNT(*) AS n
+      FROM l01_episode_message_claims
+      WHERE status = 'active'
+      GROUP BY claim_key
+      HAVING n > 1
+    `).all() as Array<{ claim_key: string }>;
+    return rows.map(row => row.claim_key);
+  }
+
+  function complete(handler: (systemPrompt: string, content: string) => { content: string }) {
+    return vi.fn(async (request: { systemPrompt: string; messages: Array<{ content: string }> }) => (
+      handler(request.systemPrompt, request.messages[0]?.content ?? '')
+    ));
+  }
+
+  it('consolidates a synthetic day of overlapping candidates into thematic episodes', async () => {
+    const store = makeStore();
+    // The 16:51/16:52 failure mode: overlapping/fragmented same-scope
+    // candidates re-covering one stretch, plus a distinct-topic fragment
+    // the adjacency cut mis-joined into the same sitting.
+    await seedClaimedCandidate(
+      store,
+      candidateInput('rel-1', '2026-06-10T16:40:00.000Z', '2026-06-10T16:51:00.000Z'),
+      ['msg-1', 'msg-2', 'msg-3'],
+    );
+    await seedClaimedCandidate(
+      store,
+      candidateInput('rel-2', '2026-06-10T16:47:00.000Z', '2026-06-10T16:52:00.000Z'),
+      ['msg-4', 'msg-5'],
+    );
+    await seedClaimedCandidate(
+      store,
+      candidateInput('tech-1', '2026-06-10T16:55:00.000Z', '2026-06-10T17:10:00.000Z', {
+        themes: ['raspberry pi', 'backups'],
+        affect: { valence: 0.1, arousal: 0.5, labels: ['focused'] },
+        salience: { score: 0.7, novelty: 0.6, emotionalIntensity: 0.1 },
+      }),
+      ['msg-6', 'msg-7'],
+    );
+    await seedClaimedCandidate(
+      store,
+      candidateInput('rel-3', '2026-06-10T17:12:00.000Z', '2026-06-10T17:25:00.000Z'),
+      ['msg-8'],
+    );
+
+    const failures: unknown[] = [];
+    const llm = complete((systemPrompt) => {
+      if (!systemPrompt.includes('memory-consolidation stage')) {
+        throw new Error(`unexpected non-grouping call: ${systemPrompt.slice(0, 60)}`);
+      }
+      return groupingResponse([
+        {
+          candidate_ids: ['rel-1', 'rel-2', 'rel-3'],
+          title: 'Talking about the relationship',
+          landmark: 'A long evening stretch spent talking through what they mean to each other.',
+          themes: ['relationship', 'affection', 'trust'],
+          salience: 0.85,
+        },
+        {
+          candidate_ids: ['tech-1'],
+          title: 'Pi backup tinkering',
+          landmark: 'A short detour into backup configuration on the Pi.',
+          themes: ['raspberry pi', 'backups'],
+          salience: 0.45,
+        },
+      ]);
+    });
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      { getRecentMessages: () => [] },
+      { complete: llm },
+      {
+        now: () => RUN_AT,
+        onConsolidationFailure: event => failures.push(event),
+      },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+
+    expect(result.candidateEpisodesReviewed).toBe(4);
+    expect(result.candidateClusters).toBe(1);
+    expect(result.consolidatedEpisodesCreated).toBe(1);
+    expect(result.candidatesSuperseded).toBe(3);
+    expect(result.candidatesConfirmed).toBe(1);
+    expect(result.consolidationFailures).toBe(0);
+    expect(failures).toEqual([]);
+    expect(llm).toHaveBeenCalledTimes(1);
+
+    // Live view: one consolidated thematic episode plus the confirmed
+    // distinct-topic candidate; the superseded fragments left list/search.
+    const live = await store.listEpisodes();
+    expect(live).toHaveLength(2);
+    const consolidated = live.find(episode => episode.title === 'Talking about the relationship')!;
+    const confirmed = live.find(episode => episode.id === 'tech-1')!;
+    expect(consolidated).toBeDefined();
+    expect(confirmed).toBeDefined();
+    expect(await store.searchByTime({
+      from: '2026-06-10T00:00:00.000Z',
+      to: '2026-06-11T00:00:00.000Z',
+      lifecycleStatus: 'candidate',
+    })).toEqual([]);
+
+    // The consolidated episode spans the covered stretch and carries L0
+    // provenance for every covered transcript span.
+    expect(consolidated.startedAt).toBe('2026-06-10T16:40:00.000Z');
+    expect(consolidated.endedAt).toBe('2026-06-10T17:25:00.000Z');
+    expect(consolidated.spanRefs.map(ref => ref.spanId).sort())
+      .toEqual(['span-rel-1', 'span-rel-2', 'span-rel-3']);
+    const l0Provenance = consolidated.provenanceRefs
+      .filter(ref => ref.kind === 'l0_span')
+      .map(ref => ref.refId)
+      .sort();
+    expect(l0Provenance).toEqual(['span-rel-1', 'span-rel-2', 'span-rel-3']);
+    expect(consolidated.themes).toEqual(['relationship', 'affection', 'trust']);
+    expect(consolidated.salience.score).toBe(0.85);
+
+    // Claims moved to the consolidated episode; superseded candidates keep
+    // their transferred claim history; sources retrievable by id forever.
+    const consolidatedClaims = await store.listEpisodeMessageClaims({
+      episodeId: consolidated.id,
+      status: 'active',
+    });
+    expect(consolidatedClaims.map(claim => claim.claimKey).sort())
+      .toEqual(['msg-1', 'msg-2', 'msg-3', 'msg-4', 'msg-5', 'msg-8']);
+    const history = await store.listEpisodeMessageClaims({ episodeId: 'rel-1' });
+    expect(history).toHaveLength(3);
+    expect(history.every(claim => (
+      claim.status === 'transferred' && claim.transferredToEpisodeId === consolidated.id
+    ))).toBe(true);
+    expect(await store.getEpisode('rel-1')).toBeDefined();
+    expect(await store.getEpisode('rel-2')).toBeDefined();
+    expect(await store.getEpisode('rel-3')).toBeDefined();
+
+    // One active claim per source message survives consolidation.
+    expect(activeClaimKeyDuplicates()).toEqual([]);
+
+    // Decision + lineage provenance rows recorded for every superseded source.
+    const decisions = await store.listEpisodeCandidateDecisions({
+      canonicalEpisodeId: consolidated.id,
+    });
+    expect(decisions.map(decision => decision.candidateEpisodeId).sort())
+      .toEqual(['rel-1', 'rel-2', 'rel-3']);
+    expect(decisions.every(decision => decision.status === 'superseded')).toBe(true);
+  });
+
+  it('fails closed with a typed event when the grouping output is malformed', async () => {
+    const store = makeStore();
+    await seedClaimedCandidate(
+      store,
+      candidateInput('c-1', '2026-06-10T16:40:00.000Z', '2026-06-10T16:51:00.000Z'),
+      ['msg-1'],
+    );
+    await seedClaimedCandidate(
+      store,
+      candidateInput('c-2', '2026-06-10T16:47:00.000Z', '2026-06-10T16:52:00.000Z'),
+      ['msg-2'],
+    );
+
+    const failures: Array<{ stage: string; candidateEpisodeIds: string[]; error: string }> = [];
+    // Malformed: drops c-2 from the partition.
+    const llm = complete(() => groupingResponse([{
+      candidate_ids: ['c-1'],
+      title: 'Half a grouping',
+      landmark: 'The model lost a candidate.',
+      themes: ['loss'],
+      salience: 0.5,
+    }]));
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      { getRecentMessages: () => [] },
+      { complete: llm },
+      {
+        now: () => RUN_AT,
+        onConsolidationFailure: event => failures.push(event),
+      },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+
+    expect(result.consolidationFailures).toBe(1);
+    expect(result.consolidatedEpisodesCreated).toBe(0);
+    expect(result.candidatesSuperseded).toBe(0);
+    expect(result.candidatesConfirmed).toBe(0);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].stage).toBe('thematic_grouping');
+    expect(failures[0].candidateEpisodeIds).toEqual(['c-1', 'c-2']);
+    expect(failures[0].error).toContain('omitted candidate ids: c-2');
+
+    // Candidates untouched: still live, still candidates, claims unmoved.
+    const stillCandidates = await store.searchByTime({
+      from: '2026-06-10T00:00:00.000Z',
+      to: '2026-06-11T00:00:00.000Z',
+      lifecycleStatus: 'candidate',
+    });
+    expect(stillCandidates.map(episode => episode.id)).toEqual(['c-1', 'c-2']);
+    const claims = await store.listEpisodeMessageClaims({ episodeId: 'c-1', status: 'active' });
+    expect(claims.map(claim => claim.claimKey)).toEqual(['msg-1']);
+    expect(activeClaimKeyDuplicates()).toEqual([]);
+  });
+
+  it('bounds LLM grouping by maxConsolidationsPerRun and defers the rest', async () => {
+    const store = makeStore();
+    // Two multi-candidate clusters in different scopes.
+    await store.createEpisode(candidateInput('a-1', '2026-06-10T10:00:00.000Z', '2026-06-10T10:10:00.000Z'));
+    await store.createEpisode(candidateInput('a-2', '2026-06-10T10:05:00.000Z', '2026-06-10T10:15:00.000Z'));
+    await store.createEpisode(candidateInput('b-1', '2026-06-10T10:00:00.000Z', '2026-06-10T10:10:00.000Z', {
+      channelId: 'telegram:dm',
+      threadId: 'telegram:dm',
+      spanRefs: [{ spanId: 'span-b-1', sessionId: 'telegram:dm' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-b-1' }],
+    }));
+    await store.createEpisode(candidateInput('b-2', '2026-06-10T10:05:00.000Z', '2026-06-10T10:15:00.000Z', {
+      channelId: 'telegram:dm',
+      threadId: 'telegram:dm',
+      spanRefs: [{ spanId: 'span-b-2', sessionId: 'telegram:dm' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-b-2' }],
+    }));
+
+    const llm = complete((_, content) => {
+      const ids = ['a-1', 'a-2', 'b-1', 'b-2'].filter(id => content.includes(`"${id}"`));
+      return groupingResponse([{
+        candidate_ids: ids,
+        title: 'One consolidated stretch',
+        landmark: 'A stretch consolidated within the per-run budget.',
+        themes: ['budget'],
+        salience: 0.5,
+      }]);
+    });
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      { getRecentMessages: () => [] },
+      { complete: llm },
+      { now: () => RUN_AT, maxConsolidationsPerRun: 1 },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+
+    expect(llm).toHaveBeenCalledTimes(1);
+    expect(result.consolidatedEpisodesCreated).toBe(1);
+    expect(result.consolidationDeferred).toBe(1);
+    // The deferred cluster's candidates stay candidates for the next night.
+    const remaining = await store.searchByTime({
+      from: '2026-06-10T00:00:00.000Z',
+      to: '2026-06-11T00:00:00.000Z',
+      lifecycleStatus: 'candidate',
+    });
+    expect(remaining).toHaveLength(2);
+  });
+
+  it('confirms lone candidates deterministically without LLM spend', async () => {
+    const store = makeStore();
+    await seedClaimedCandidate(
+      store,
+      candidateInput('solo', '2026-06-10T10:00:00.000Z', '2026-06-10T10:10:00.000Z'),
+      ['msg-1'],
+    );
+
+    const llm = complete(() => {
+      throw new Error('no LLM call expected');
+    });
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      { getRecentMessages: () => [] },
+      { complete: llm },
+      { now: () => RUN_AT },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+
+    expect(result.candidatesConfirmed).toBe(1);
+    expect(result.consolidatedEpisodesCreated).toBe(0);
+    expect(llm).not.toHaveBeenCalled();
+    expect(await store.searchByTime({
+      from: '2026-06-10T00:00:00.000Z',
+      to: '2026-06-11T00:00:00.000Z',
+      lifecycleStatus: 'canonical',
+    })).toHaveLength(1);
+    // Confirmed candidates keep their claims: the deterministic adjacent
+    // repair may never fold claim-holding episodes.
+    expect((await store.listEpisodeMessageClaims({ episodeId: 'solo', status: 'active' })))
+      .toHaveLength(1);
+  });
+
+  it('protects claim-holding canonical episodes from the deterministic adjacent merge', async () => {
+    const store = makeStore();
+    // Two adjacent same-scope canonical episodes — products of a previous
+    // night's thematic consolidation, deliberately split by topic.
+    await store.createEpisode(candidateInput('themed-1', '2026-06-10T10:00:00.000Z', '2026-06-10T10:20:00.000Z', {
+      lifecycleStatus: 'canonical',
+      title: 'Talking about the relationship',
+    }));
+    await store.createEpisode(candidateInput('themed-2', '2026-06-10T10:21:00.000Z', '2026-06-10T10:40:00.000Z', {
+      lifecycleStatus: 'canonical',
+      title: 'Pi backup tinkering',
+    }));
+    await store.claimEpisodeMessages({
+      episodeId: 'themed-1',
+      claims: [{ claimKey: 'msg-1' }],
+    });
+    await store.claimEpisodeMessages({
+      episodeId: 'themed-2',
+      claims: [{ claimKey: 'msg-2' }],
+    });
+    // A claim-free historical overlap backlog still gets repaired.
+    await store.createEpisode(candidateInput('legacy-1', '2026-06-01T10:00:00.000Z', '2026-06-01T10:20:00.000Z', {
+      lifecycleStatus: 'canonical',
+    }));
+    await store.createEpisode(candidateInput('legacy-2', '2026-06-01T10:10:00.000Z', '2026-06-01T10:30:00.000Z', {
+      lifecycleStatus: 'canonical',
+    }));
+
+    const llm = complete(() => ({ content: 'not json at all' }));
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      { getRecentMessages: () => [] },
+      { complete: llm },
+      { now: () => RUN_AT },
+    );
+
+    const result = await consolidator.run({ sessionId: 'discord:main' });
+
+    expect(result.mergeChains).toBe(1);
+    expect(result.mergedAwayEpisodes).toBe(1);
+    const live = await store.listEpisodes();
+    expect(live.map(episode => episode.id).sort()).toEqual(['legacy-1', 'themed-1', 'themed-2']);
+  });
+
+  it('recovers idempotently when a previous run crashed between creation and claim transfer', async () => {
+    const store = makeStore();
+    await seedClaimedCandidate(
+      store,
+      candidateInput('c-1', '2026-06-10T16:40:00.000Z', '2026-06-10T16:51:00.000Z'),
+      ['msg-1'],
+    );
+    await seedClaimedCandidate(
+      store,
+      candidateInput('c-2', '2026-06-10T16:47:00.000Z', '2026-06-10T16:52:00.000Z'),
+      ['msg-2'],
+    );
+
+    const grouping = [{
+      candidate_ids: ['c-1', 'c-2'],
+      title: 'One stretch',
+      landmark: 'One consolidated stretch of conversation.',
+      themes: ['one'],
+      salience: 0.5,
+    }];
+    const llm = complete(() => groupingResponse(grouping));
+    const consolidator = new SleepCycleEpisodeConsolidator(
+      store,
+      { getRecentMessages: () => [] },
+      { complete: llm },
+      { now: () => RUN_AT },
+    );
+
+    const first = await consolidator.run({ sessionId: 'discord:main' });
+    expect(first.consolidatedEpisodesCreated).toBe(1);
+    const liveAfterFirst = await store.listEpisodes();
+    expect(liveAfterFirst).toHaveLength(1);
+
+    // Second night: candidates are gone, nothing re-consolidates, no
+    // duplicate consolidated episode appears.
+    const second = await consolidator.run({ sessionId: 'discord:main' });
+    expect(second.candidateEpisodesReviewed).toBe(0);
+    expect(second.consolidatedEpisodesCreated).toBe(0);
+    expect(await store.listEpisodes()).toHaveLength(1);
+    expect(activeClaimKeyDuplicates()).toEqual([]);
+  });
+});
+
 describe('buildMergeChains', () => {
   it('chains only adjacent episodes within the gap threshold', () => {
     const make = (id: string, startedAt: string, endedAt: string) => ({

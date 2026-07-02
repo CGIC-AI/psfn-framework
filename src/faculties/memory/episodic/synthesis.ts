@@ -1144,7 +1144,9 @@ export class EpisodicSynthesizer {
           score: consolidationTarget,
         };
       } else {
-        episode = await this.store.createEpisode(episodeInput);
+        // Near-real-time output is a CANDIDATE until the nightly sleep
+        // cycle consolidates or confirms it (m58.1).
+        episode = await this.store.createEpisode({ ...episodeInput, lifecycleStatus: 'candidate' });
         created = true;
         state.createdEpisodes.push(episode);
         decision = {

@@ -438,6 +438,63 @@ describe('EpisodicStore', () => {
     })).toThrow('claim.episodeId references unknown episode "missing-episode"');
   });
 
+  it('tracks candidate lifecycle: candidates stay live, filter by status, and confirm to canonical', () => {
+    const store = makeStore();
+    store.createEpisode(baseEpisode({ id: 'candidate-1', lifecycleStatus: 'candidate' }));
+    store.createEpisode(baseEpisode({
+      id: 'canonical-1',
+      startedAt: '2026-03-30T12:00:00.000Z',
+      endedAt: '2026-03-30T12:05:00.000Z',
+      spanRefs: [{ spanId: 'span-2' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+    }));
+
+    // Candidates are live memory: visible in unfiltered lists and searches.
+    expect(store.listEpisodes({ limit: 10 }).map(episode => episode.id))
+      .toEqual(['candidate-1', 'canonical-1']);
+    const window = { from: '2026-03-30T00:00:00.000Z', to: '2026-03-30T23:59:59.999Z' };
+    expect(store.searchByTime(window).map(episode => episode.id))
+      .toEqual(['candidate-1', 'canonical-1']);
+    expect(store.searchByTime({ ...window, lifecycleStatus: 'candidate' }).map(episode => episode.id))
+      .toEqual(['candidate-1']);
+    expect(store.searchByTime({ ...window, lifecycleStatus: 'canonical' }).map(episode => episode.id))
+      .toEqual(['canonical-1']);
+
+    // Sleep-cycle confirmation promotes the candidate; idempotent re-confirm.
+    store.confirmEpisodeCanonical('candidate-1');
+    store.confirmEpisodeCanonical('candidate-1');
+    expect(store.searchByTime({ ...window, lifecycleStatus: 'candidate' })).toEqual([]);
+    expect(store.searchByTime({ ...window, lifecycleStatus: 'canonical' }).map(episode => episode.id))
+      .toEqual(['candidate-1', 'canonical-1']);
+  });
+
+  it('fails closed on invalid lifecycle transitions', () => {
+    const store = makeStore();
+    store.createEpisode(baseEpisode({ id: 'candidate-1', lifecycleStatus: 'candidate' }));
+    store.createEpisode(baseEpisode({
+      id: 'consolidated',
+      startedAt: '2026-03-30T12:00:00.000Z',
+      endedAt: '2026-03-30T12:05:00.000Z',
+      spanRefs: [{ spanId: 'span-2' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+    }));
+
+    expect(() => store.createEpisode(baseEpisode({
+      id: 'bad',
+      lifecycleStatus: 'confirmed' as never,
+    }))).toThrow('episode lifecycleStatus is not supported: confirmed');
+    expect(() => store.confirmEpisodeCanonical('missing-episode'))
+      .toThrow('episode "missing-episode" does not exist');
+
+    store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1'],
+      targetEpisodeId: 'consolidated',
+      reason: 'nightly consolidation into a thematic episode',
+    });
+    expect(() => store.confirmEpisodeCanonical('candidate-1'))
+      .toThrow('episode "candidate-1" is no longer live and cannot be confirmed canonical');
+  });
+
   it('transfers claims to a consolidated episode and supersedes candidates without deleting them', () => {
     const store = makeStore();
     store.createEpisode(baseEpisode({ id: 'candidate-1' }));

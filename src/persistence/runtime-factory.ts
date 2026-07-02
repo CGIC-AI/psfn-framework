@@ -12,6 +12,7 @@ import type {
   IntentionRuntimeProviders,
   IntentionRuntimeWiring,
 } from '../core/intention/runtime-wiring.js';
+import type { WeightedThoughtStorePort } from '../core/intention/weighted-thought-store-port.js';
 import type {
   PersistenceBackend,
   SubstrateConfig,
@@ -43,6 +44,7 @@ export interface AgentPersistenceRuntime {
   contactStore?: ContactStorePort;
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
+  weightedThoughtStore?: WeightedThoughtStorePort;
   internalStateStore: InternalStateStorePort;
   participantTrendStore: ParticipantTrendStorePort;
 }
@@ -87,6 +89,7 @@ export async function createAgentPersistenceRuntime(
     }),
     intentionRuntime,
     intentionProviders: intentionRuntime,
+    weightedThoughtStore: intentionRuntime.weightedThoughtStore,
     internalStateStore: await PostgresInternalStateStore.connect(databaseUrl),
     participantTrendStore: await PostgresParticipantTrendStore.connect(databaseUrl),
   };

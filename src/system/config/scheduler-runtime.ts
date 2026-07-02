@@ -42,5 +42,23 @@ export function resolveRuntimeSchedulerConfig(
       morningWake: { ...persisted.temporalWakeup.morningWake },
       idleRefresher: { ...persisted.temporalWakeup.idleRefresher },
     },
+    weightedThoughtOutreach: {
+      enabled: persisted.weightedThoughtOutreach.enabled,
+      checkIntervalMs: persisted.weightedThoughtOutreach.checkIntervalMs,
+      nudgeThreshold: persisted.weightedThoughtOutreach.nudgeThreshold,
+      maxNudgesPerRun: persisted.weightedThoughtOutreach.maxNudgesPerRun,
+      lifecycle: {
+        classes: {
+          time_sensitive: { ...persisted.weightedThoughtOutreach.lifecycle.classes.time_sensitive },
+          standard: { ...persisted.weightedThoughtOutreach.lifecycle.classes.standard },
+          trivial: { ...persisted.weightedThoughtOutreach.lifecycle.classes.trivial },
+        },
+        reinforcement: { ...persisted.weightedThoughtOutreach.lifecycle.reinforcement },
+        accumulatedWeightCap: persisted.weightedThoughtOutreach.lifecycle.accumulatedWeightCap,
+        contradictionDampeningFactor: persisted.weightedThoughtOutreach.lifecycle.contradictionDampeningFactor,
+        declineDampeningFactor: persisted.weightedThoughtOutreach.lifecycle.declineDampeningFactor,
+        relevanceFloor: persisted.weightedThoughtOutreach.lifecycle.relevanceFloor,
+      },
+    },
   };
 }

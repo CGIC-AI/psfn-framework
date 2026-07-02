@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+  DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
   loadSchedulerSeedDefaults,
   SCHEDULER_SEED_FILE_NAME,
 } from './scheduler-config.js';
@@ -92,6 +93,7 @@ describe('scheduler config seed defaults', () => {
       expect(loadSchedulerSeedDefaults({ seedDir })).toEqual({
         ...config,
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+        weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
       });
     });
   });

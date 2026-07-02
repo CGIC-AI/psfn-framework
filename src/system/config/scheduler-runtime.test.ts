@@ -2,7 +2,10 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_TEMPORAL_WAKEUP_CONFIG } from './scheduler-config.js';
+import {
+  DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+  DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
+} from './scheduler-config.js';
 import { resolveRuntimeSchedulerConfig } from './scheduler-runtime.js';
 
 function writeJson(path: string, value: unknown): void {
@@ -108,6 +111,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           scanMemoryLimit: 500,
         },
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+        weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -172,6 +176,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
           scanMemoryLimit: 500,
         },
         temporalWakeup: DEFAULT_TEMPORAL_WAKEUP_CONFIG,
+        weightedThoughtOutreach: DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
       });
     } finally {
       rmSync(root, { recursive: true, force: true });

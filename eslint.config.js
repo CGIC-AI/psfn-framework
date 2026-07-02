@@ -19,6 +19,9 @@ const GLOBAL_IGNORES = [
   '**/import/**',
   'PSFN-Satellite-Hub/**',
   '**/PSFN-Satellite-Hub/**',
+  // Coding-agent worktrees (transient full repo copies) must never be linted.
+  '.claude/**',
+  '**/.claude/**',
 ];
 
 export default [

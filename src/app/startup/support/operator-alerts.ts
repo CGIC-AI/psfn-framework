@@ -129,9 +129,6 @@ export function createActiveMemoryRefreshFailureAlertHandler(
       alertedKeys.delete(event.key);
       return;
     }
-    if (event.phase !== 'degraded') {
-      return;
-    }
 
     const failureCount = (consecutiveFailuresByKey.get(event.key) ?? 0) + 1;
     consecutiveFailuresByKey.set(event.key, failureCount);

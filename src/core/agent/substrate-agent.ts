@@ -349,6 +349,13 @@ export class SubstrateAgent {
       getContactStore: () => this.contactStore,
       getSelfModelRuntimeRequired: () => this.selfModelRuntimeRequired,
       logger: log,
+      onEmotionAppraisalGateEvent: (event) => {
+        this.eventBus.emit('emotion.appraisal.gate', event).catch((error) => {
+          log.warn('Failed to emit emotion appraisal gate telemetry', {
+            error: toErrorMessage(error),
+          });
+        });
+      },
     });
     this.emotionSelfModelRuntime.assertEmotionRuntimeConfigured();
 

@@ -38,6 +38,7 @@ import type { SubstrateMessage, TurnID } from '../../../shared/contracts/runtime
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { LLMProviderPort } from '../contracts.js';
+import type { DeterministicGateEvent } from '../../../shared/event-bus.js';
 
 const TOP_EMOTION_COUNT = 3;
 const MIN_TOP_EMOTION_SCORE = 0.05;
@@ -74,6 +75,13 @@ export interface EmotionSelfModelRuntimeOptions {
   getContactStore: () => ContactStorePort | null;
   getSelfModelRuntimeRequired: () => boolean;
   logger: EmotionSelfModelRuntimeLogger;
+  /**
+   * Typed emotion-appraisal gate telemetry sink (jpvd.4). Forwarded to the
+   * internally-constructed EmotionAppraisal so its periodic/vad-shift decision
+   * surfaces on the Garden subsystem-health lane. Optional: callers that do not
+   * thread it (tests) keep working with no emission.
+   */
+  onEmotionAppraisalGateEvent?: (event: DeterministicGateEvent) => void;
 }
 
 export class EmotionSelfModelRuntime {
@@ -124,7 +132,12 @@ export class EmotionSelfModelRuntime {
     this.emotionObserver = options.emotionRuntime?.observer ?? null;
     this.emotionAppraisal = options.emotionRuntime?.appraisal
       ?? ((this.emotionState && this.emotionObserver)
-        ? new EmotionAppraisal({ llmProvider: options.llmProvider })
+        ? new EmotionAppraisal({
+          llmProvider: options.llmProvider,
+          ...(options.onEmotionAppraisalGateEvent
+            ? { onGateEvent: options.onEmotionAppraisalGateEvent }
+            : {}),
+        })
         : null);
     this.emotionRuntimeRequired = options.emotionRuntime?.requireWiring ?? false;
   }

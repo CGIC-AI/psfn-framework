@@ -122,6 +122,10 @@ export interface ArcFormationConfig {
   reviewWindowDays: number;
   /** Confidence floor below which proposed arcs are rejected (0..1). */
   minConfidence: number;
+  /** Cap on arcs written per pass. */
+  maxArcsPerRun: number;
+  /** Cap on canonical episodes included in the LLM judgment prompt. */
+  maxEpisodesPerRun: number;
 }
 
 /**
@@ -481,6 +485,8 @@ function validateArcFormationConfig(
     passIntervalDays: toPositiveInteger(raw.passIntervalDays, 'arcFormation.passIntervalDays', 1),
     reviewWindowDays: toPositiveInteger(raw.reviewWindowDays, 'arcFormation.reviewWindowDays', 1),
     minConfidence: toUnitInterval(raw.minConfidence, 'arcFormation.minConfidence'),
+    maxArcsPerRun: toPositiveInteger(raw.maxArcsPerRun, 'arcFormation.maxArcsPerRun', 1),
+    maxEpisodesPerRun: toPositiveInteger(raw.maxEpisodesPerRun, 'arcFormation.maxEpisodesPerRun', 1),
   };
 }
 

@@ -57,6 +57,8 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       passIntervalDays: 6,
       reviewWindowDays: 30,
       minConfidence: 0.5,
+      maxArcsPerRun: 12,
+      maxEpisodesPerRun: 60,
     },
     socialGraphBuilder: {
       intervalMs: 900_000,

@@ -20,7 +20,14 @@ import {
   registerTemporalWakeupTasks,
   TEMPORAL_WAKEUP_MORNING_TASK_NAME,
 } from '../../core/scheduler/temporal-wakeup.js';
+import { registerFreeTimeTasks } from '../../core/scheduler/free-time.js';
+import { formatReflectionPersonaBlock } from '../../core/scheduler/heartbeat-template-runtime.js';
 import { HEARTBEAT_SILENT_REFLECTION_TOKEN } from '../../core/scheduler/heartbeat-policy.js';
+import {
+  getRunChargeSnapshot,
+  runWithChargeContext,
+} from '../../shared/telemetry/run-charge.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { summarizeRecentSessionEntries } from '../../core/session/manager/compaction-service.js';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
 import { createFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
@@ -702,6 +709,67 @@ async function main(): Promise<void> {
         }),
       }
       : {}),
+  });
+
+  // ── Free-time lanes (E8.1) ──
+  // Self-directed time: two entry lanes (quiet-hours inside the rest window;
+  // idle after a long partner gap) share one bounded, budget-capped, multi-turn
+  // agent-loop block on an INTERNAL channel. Full persona (E6.2), her normal
+  // tools under existing policy, outputs durable only. Deterministic gates run
+  // before any spend; the block runs inside a 'background' charge context and
+  // ends gracefully when the per-block turn/charge budget is exhausted. After a
+  // block WITH activity, a "while you were away" note is placed on the partner
+  // session via the shared summarizer; empty "loafed" blocks surface nothing.
+  const freeTimePersonaVariablesProvider = buildCharacterPromptVariablesProvider(cardVersionStore);
+  registerFreeTimeTasks({
+    scheduler,
+    sessionManager,
+    config: schedulerConfig.freeTime,
+    restWindow: schedulerConfig.episodicProcessing,
+    eventBus,
+    resolvePersonaBlock: () => formatReflectionPersonaBlock(freeTimePersonaVariablesProvider()),
+    // The whole block runs inside a 'background' charge context so per-turn LLM
+    // spend accumulates against the background lane; getRunChargeSnapshot lets
+    // the runner read cumulative spend before each turn for the hard cap.
+    runBlock: ({ run }) => {
+      const chargePolicy = config.chargePolicy;
+      if (!chargePolicy) {
+        // No charge policy → run with a zero reader; the turn cap still bounds.
+        return run(() => 0);
+      }
+      return runWithChargeContext({
+        chargePolicy,
+        eventBus,
+        lane: 'background',
+        correlation: getRequestContext(),
+      }, () => run(() => getRunChargeSnapshot()?.spentByLane.background ?? 0));
+    },
+    // One free-time turn through the ordinary agent loop on the internal
+    // channel. Internal channelId => isInternalSessionId() true => the loop
+    // cannot dispatch outward to a partner channel. Full persona + her normal
+    // tools apply (no restricted reflection policy). A "silent" reply ends the
+    // block; staying quiet / loafing is a valid outcome.
+    invokeTurn: async ({ lane, channelId, turnIndex, content }) => {
+      const response = await agentLoop.handleMessage({
+        id: `free-time-${lane}-${turnIndex}-${Date.now()}`,
+        channelId,
+        channelType: 'terminal',
+        authorId: 'scheduler',
+        authorName: 'Free Time',
+        content,
+        timestamp: new Date(),
+      });
+      return { content: response.content };
+    },
+    summarizeActivity: async ({ channelId, entries }) => summarizeRecentSessionEntries({
+      channelId,
+      entries,
+      characterName: card.data.name,
+      llmProvider,
+      promptRegistry: promptState.registry,
+      maxTokens: schedulerConfig.temporalWakeup.morningWake.catchUpSummaryMaxTokens,
+      purpose: 'wake_session',
+    }),
   });
 
   // Journal auto-publisher (for heartbeat reflections -> markdown journal)

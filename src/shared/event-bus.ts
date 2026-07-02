@@ -909,6 +909,27 @@ export interface EventMap {
     windowStartLocalTime?: string;
     windowEndLocalTime?: string;
   };
+  // Free-time lanes (E8.1). The pre-spend deterministic gate emits the shared
+  // DeterministicGateEvent shape so the subsystem-health view can render why a
+  // free-time block did or did not run (min interval, daily cap, active
+  // conversation, or lane-not-eligible), with zero LLM spend on a skip.
+  'scheduler.free_time.gate': DeterministicGateEvent;
+  // Emitted once per free-time block that actually ran. Charter 8.9: spend is
+  // visible, never silent. `activity` is false for a zero-output "loaf".
+  'scheduler.free_time.block': {
+    lane: 'quiet_hours' | 'idle';
+    channelId: string;
+    turnsUsed: number;
+    activity: boolean;
+    endReason: string;
+    spentChargeUnits: number;
+    maxChargeUnits: number;
+    maxTurns: number;
+    startedAtMs: number;
+    endedAtMs: number;
+    returnSurfaced: boolean;
+    timestamp: number;
+  };
 }
 
 export type EventName = keyof EventMap;

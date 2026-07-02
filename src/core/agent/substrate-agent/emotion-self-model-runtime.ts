@@ -16,6 +16,19 @@ import {
   createDefaultEmotionScopingSettings,
   type EmotionScopingSettings,
 } from '../../../system/config/emotion-scoping-config.js';
+import {
+  cloneParticipantTrend,
+  createParticipantTrend,
+  maintainRoomTrends,
+  participantMovementIsMeaningful,
+  updateParticipantTrend,
+  type ParticipantEmotionTrend,
+} from '../../emotion/participant-trends.js';
+import {
+  fromPersistedParticipantTrend,
+  toPersistedParticipantTrend,
+  type ParticipantTrendStorePort,
+} from '../../emotion/participant-trend-persistence.js';
 import type { ActiveConcern } from '../../intention/concerns.js';
 import type { ActiveConcernContextProvider } from '../../intention/concern-store-port.js';
 import {
@@ -69,6 +82,12 @@ export interface EmotionSelfModelRuntimeOptions {
    * heartbeat) keep working; production wires it from runtime config.
    */
   emotionScopingConfig?: EmotionScopingSettings;
+  /**
+   * E6.3 per-participant trend store (Postgres in production). Optional so
+   * single-scope callers and tests can run without persistence; when omitted,
+   * trends accumulate in-memory only for the process lifetime.
+   */
+  participantTrendStore?: ParticipantTrendStorePort | null;
   getActiveConcernProvider: () => ActiveConcernContextProvider | null;
   getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
   getContactStore: () => ContactStorePort | null;
@@ -103,6 +122,15 @@ export class EmotionSelfModelRuntime {
   private wiredStateAdopted = false;
   private readonly emotionScopingConfig: EmotionScopingSettings;
 
+  // ── E6.3 per-participant trend lines ──
+  // Per room ('room:<channelId>') → per participant (canonical contact key,
+  // else authorId) → slow EMA trend fed ONLY by that participant's own
+  // messages. Bots/companions are ordinary contacts here. Bounded by config
+  // (cap + stale eviction). Hydrated lazily from the trend store per room.
+  private readonly roomTrends = new Map<string, Map<string, ParticipantEmotionTrend>>();
+  private readonly roomTrendsLoaded = new Set<string>();
+  private readonly participantTrendStore: ParticipantTrendStorePort | null;
+
   private readonly sessionManager: SessionManager;
   private readonly getActiveConcernProvider: () => ActiveConcernContextProvider | null;
   private readonly getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
@@ -119,6 +147,7 @@ export class EmotionSelfModelRuntime {
     this.logger = options.logger;
     this.emotionScopingConfig = options.emotionScopingConfig
       ?? createDefaultEmotionScopingSettings();
+    this.participantTrendStore = options.participantTrendStore ?? null;
 
     this.emotionState = options.emotionRuntime?.state ?? null;
     this.emotionObserver = options.emotionRuntime?.observer ?? null;
@@ -178,6 +207,10 @@ export class EmotionSelfModelRuntime {
     // omitted (heartbeat, legacy callers) the channel id is used as the key,
     // preserving pre-E1.5 single-channel behavior.
     conversationScope?: ConversationScope,
+    // E6.3: identity of the author of THIS message (canonical contact key,
+    // else authorId). Drives the per-participant trend line in a group room —
+    // only this participant's own trend moves; idle participants never appear.
+    authorParticipantKey?: string,
   ): Promise<EmotionStateSnapshot | null> {
     this.assertEmotionRuntimeConfigured();
     if (!this.emotionState || !this.emotionObserver) {
@@ -206,6 +239,11 @@ export class EmotionSelfModelRuntime {
     // Each scope mood modulates the single companion-global baseline (EMA);
     // "her mood" stays coherent instead of fragmenting per scope.
     this.updateGlobalMoodBaseline(snapshot.mood);
+
+    // E6.3: fold THIS participant's own message into their room trend line.
+    // Reuses the observation already computed above — zero extra classifier /
+    // LLM calls in the accumulation path.
+    await this.accumulateParticipantTrend(conversationScope, authorParticipantKey, observation, now);
 
     // Surface the decayed carry-over on top of the stored transient state. The
     // stored EmotionState is NOT mutated by the modifier.
@@ -500,9 +538,18 @@ export class EmotionSelfModelRuntime {
       previousScope,
     );
 
+    // E6.3 consumer: when enabled, source the carry-over from the DM contact's
+    // OWN trend in that room (weighted by their own interactions) rather than
+    // the room aggregate. Default flag off ⇒ room aggregate ⇒ E1.5 behavior.
+    const previousScopeVad = await this.resolveCarryOverSourceVad(
+      previousScope.key,
+      currentScope.contact.contactId,
+      groupEntry.state.getState().vad,
+    );
+
     const modifier = deriveCarryOverModifier({
       previousScope,
-      previousScopeVad: groupEntry.state.getState().vad,
+      previousScopeVad,
       currentScope,
       dmContactIsGroupMember,
       nowMs: Date.now(),
@@ -555,6 +602,124 @@ export class EmotionSelfModelRuntime {
       return snapshot;
     }
     return applyCarryOverToSnapshot(snapshot, decayCarryOverModifier(modifier, nowMs));
+  }
+
+  // ── E6.3 per-participant trend accumulation & consumption ──
+
+  /**
+   * Carry-over source VAD. With the behavior flag off (default) this is the
+   * room aggregate transient VAD — identical to the E1.5 contract. With the
+   * flag on, and only when the DM contact has meaningful movement in that room,
+   * it is the contact's own trend VAD.
+   */
+  private async resolveCarryOverSourceVad(
+    roomKey: string,
+    dmContactId: string,
+    aggregateVad: VADVector,
+  ): Promise<VADVector> {
+    const config = this.emotionScopingConfig.participantTrends;
+    if (!config.enabled || !config.carryOverUsesParticipantTrend) return aggregateVad;
+    const contactId = dmContactId.trim();
+    if (!contactId) return aggregateVad;
+    const roomMap = await this.ensureRoomTrendsLoaded(roomKey);
+    const trend = roomMap.get(contactId);
+    if (!trend) return aggregateVad;
+    const meaningful = participantMovementIsMeaningful(trend, {
+      minInteractions: config.minInteractionsForMovement,
+      minTrendDelta: config.minTrendDelta,
+    });
+    if (!meaningful) return aggregateVad;
+    return { ...trend.vad };
+  }
+
+  private async accumulateParticipantTrend(
+    conversationScope: ConversationScope | undefined,
+    authorParticipantKey: string | undefined,
+    observation: EmotionObservation,
+    nowMs: number,
+  ): Promise<void> {
+    const config = this.emotionScopingConfig.participantTrends;
+    if (!config.enabled) return;
+    if (!conversationScope || conversationScope.kind !== 'group') return;
+    const participantKey = authorParticipantKey?.trim();
+    if (!participantKey) return;
+
+    const roomKey = conversationScope.key;
+    const roomMap = await this.ensureRoomTrendsLoaded(roomKey);
+
+    const previous = roomMap.get(participantKey)
+      ?? createParticipantTrend(participantKey, nowMs);
+    const updated = updateParticipantTrend(previous, observation, config.emaAlpha, nowMs);
+    roomMap.set(participantKey, updated);
+
+    // Enforce cap + stale eviction; delete evicted trends from the store too.
+    const { evictedKeys } = maintainRoomTrends(roomMap, {
+      maxTrackedParticipants: config.maxTrackedParticipantsPerRoom,
+      staleEvictionSeconds: config.staleEvictionSeconds,
+    }, nowMs);
+
+    if (this.participantTrendStore) {
+      const store = this.participantTrendStore;
+      // The just-updated participant may itself have been evicted (cap of 0 is
+      // rejected by config, so in practice it survives); only persist if kept.
+      if (roomMap.has(participantKey)) {
+        await store.saveTrend(toPersistedParticipantTrend(roomKey, updated));
+      }
+      const evictedToDelete = evictedKeys.filter((key) => key !== participantKey || !roomMap.has(participantKey));
+      if (evictedToDelete.length > 0) {
+        await store.deleteTrends(roomKey, evictedToDelete);
+      }
+    }
+  }
+
+  private async ensureRoomTrendsLoaded(
+    roomKey: string,
+  ): Promise<Map<string, ParticipantEmotionTrend>> {
+    let roomMap = this.roomTrends.get(roomKey);
+    if (!roomMap) {
+      roomMap = new Map<string, ParticipantEmotionTrend>();
+      this.roomTrends.set(roomKey, roomMap);
+    }
+    if (this.roomTrendsLoaded.has(roomKey)) return roomMap;
+    this.roomTrendsLoaded.add(roomKey);
+    if (!this.participantTrendStore) return roomMap;
+    const persisted = await this.participantTrendStore.loadRoom(roomKey);
+    for (const record of persisted) {
+      // In-memory updates within this process take precedence over stale reads.
+      if (roomMap.has(record.participantKey)) continue;
+      roomMap.set(record.participantKey, fromPersistedParticipantTrend(record));
+    }
+    return roomMap;
+  }
+
+  /** Consumption surface: one participant's trend in a room, cloned. */
+  getParticipantTrend(
+    roomKey: string,
+    participantKey: string,
+  ): ParticipantEmotionTrend | null {
+    const trend = this.roomTrends.get(roomKey)?.get(participantKey);
+    return trend ? cloneParticipantTrend(trend) : null;
+  }
+
+  /** Consumption surface: all tracked participant trends in a room, cloned. */
+  getRoomParticipantTrends(roomKey: string): ParticipantEmotionTrend[] {
+    const roomMap = this.roomTrends.get(roomKey);
+    if (!roomMap) return [];
+    return [...roomMap.values()].map(cloneParticipantTrend);
+  }
+
+  /**
+   * Consumption gate: has THIS participant produced enough signal (volume +
+   * displacement, both config-owned) to move orientation toward them?
+   */
+  hasMeaningfulParticipantMovement(roomKey: string, participantKey: string): boolean {
+    const trend = this.roomTrends.get(roomKey)?.get(participantKey);
+    if (!trend) return false;
+    const config = this.emotionScopingConfig.participantTrends;
+    return participantMovementIsMeaningful(trend, {
+      minInteractions: config.minInteractionsForMovement,
+      minTrendDelta: config.minTrendDelta,
+    });
   }
 
   private resolveInternalStateActiveConcerns(canonicalContactKey?: string): ActiveConcern[] {

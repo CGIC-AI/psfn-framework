@@ -56,6 +56,7 @@ export class AdminServerTelemetryTransport {
       'memory.extraction.end',
       'memory.near_turn.cadence',
       'memory.episode_synthesis.gate',
+      'memory.episode_synthesis.segmentation',
       'reflection.guardrail',
       'message.sent',
       'broadcast.approval.required',

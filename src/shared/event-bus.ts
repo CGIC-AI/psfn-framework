@@ -186,6 +186,19 @@ export interface EventMap {
     minRelevantTurns: number;
     timestamp: number;
   };
+  // Contextual topic-cutting outcome per gated chunk (E5.4). A malformed
+  // segmentation proposal fails closed: outcome 'failed', no episode written
+  // for the chunk, nothing claimed, watermark not advanced past the chunk.
+  'memory.episode_synthesis.segmentation': {
+    sessionId: string;
+    channelId: string;
+    outcome: 'segmented' | 'failed';
+    chunkEntryCount: number;
+    segmentCount: number;
+    heldBackEntryCount: number;
+    error?: string;
+    timestamp: number;
+  };
   // Social-graph builder worker completion (E4.2). Law 31: results are visible,
   // never silent — Garden renders the proposal queue and these counts.
   'memory.social_graph.builder': {

@@ -315,6 +315,7 @@ describe('subsystem config round-trip', () => {
         maxEntriesPerEpisode: 14,
         minConversationalEntries: 2,
         minSingleEntryChars: 120,
+        topicSegmentationEnabled: false,
       },
       sleepConsolidation: {
         reviewWindowDays: 60,

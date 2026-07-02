@@ -19,7 +19,6 @@ import {
   FREE_TIME_RETURN_NOTE_SOURCE,
   registerFreeTimeTasks,
   runFreeTimeBlock,
-  type FreeTimeBlockResult,
   type FreeTimeRuntimeOptions,
 } from './free-time.js';
 

@@ -104,7 +104,7 @@ function makeCompactionInvalidator(sessionStore: SessionStore) {
 }
 
 async function main(): Promise<void> {
-  const root = mkdtempSync(join(tmpdir(), 'psfn-cogsec-smoke-'));
+  const root = mkdtempSync(join(tmpdir(), 'cogsec-smoke-'));
   try {
     const companionRoot = join(root, 'companion-data');
     const sessionsRoot = join(root, 'sessions');

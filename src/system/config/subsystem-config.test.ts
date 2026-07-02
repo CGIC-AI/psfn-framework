@@ -309,6 +309,15 @@ describe('subsystem config round-trip', () => {
         minNewEntriesSinceRewrite: 4,
         refreshAfterQuietDays: 7,
       },
+      wikiPass: {
+        enabled: true,
+        reviewWindowHours: 36,
+        minNewCanonicalEpisodes: 1,
+        minNewDurableMemories: 3,
+        maxEntriesPerRun: 3,
+        maxSourceEpisodes: 12,
+        maxSourceMemories: 30,
+      },
       episodeSynthesis: {
         timerIntervalMinutes: 30,
         turnThreshold: 24,

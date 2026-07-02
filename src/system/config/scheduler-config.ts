@@ -135,6 +135,40 @@ export interface OrientationRewriteGateConfig {
 }
 
 /**
+ * Sleeptime wiki update pass (E8.2). A nightly rest-window lane that reviews the
+ * day's newly-canonical episodes and notable durable memories for non-private
+ * world knowledge worth creating/updating wiki entries. A deterministic gate
+ * skips the pass with zero LLM spend on days that produced nothing wiki-shaped.
+ * Optional block — conservative defaults apply when absent. Rest-window
+ * scheduler lane only.
+ */
+export interface SleeptimeWikiPassConfig {
+  enabled: boolean;
+  /** How far back the pass looks for new canonical episodes / durable memories (hours). */
+  reviewWindowHours: number;
+  /** Gate: new canonical episodes since the watermark required to open the pass. */
+  minNewCanonicalEpisodes: number;
+  /** Gate: new durable (semantic/procedural) memories since the watermark required to open the pass. */
+  minNewDurableMemories: number;
+  /** Cap on wiki entries created/updated per run. */
+  maxEntriesPerRun: number;
+  /** Cap on canonical episodes fed into the proposal prompt. */
+  maxSourceEpisodes: number;
+  /** Cap on durable memories fed into the proposal prompt. */
+  maxSourceMemories: number;
+}
+
+export const DEFAULT_SLEEPTIME_WIKI_PASS: SleeptimeWikiPassConfig = {
+  enabled: true,
+  reviewWindowHours: 36,
+  minNewCanonicalEpisodes: 1,
+  minNewDurableMemories: 3,
+  maxEntriesPerRun: 3,
+  maxSourceEpisodes: 12,
+  maxSourceMemories: 30,
+};
+
+/**
  * Cross-day arc weaving tuning (rest-window scheduler lane only).
  */
 export interface ArcFormationConfig {
@@ -305,6 +339,7 @@ export interface SchedulerRuntimeConfig {
   episodeSynthesis: EpisodeSynthesisLaneConfig;
   sleepConsolidation: SleepConsolidationConfig;
   orientationRewrite: OrientationRewriteGateConfig;
+  wikiPass: SleeptimeWikiPassConfig;
   arcFormation: ArcFormationConfig;
   socialGraphBuilder: SocialGraphBuilderCadenceConfig;
   temporalWakeup: TemporalWakeupConfig;
@@ -521,6 +556,51 @@ function validateOrientationRewriteGateConfig(
     refreshAfterQuietDays: toPositiveInteger(
       raw.refreshAfterQuietDays ?? DEFAULT_ORIENTATION_REWRITE_GATE.refreshAfterQuietDays,
       'orientationRewrite.refreshAfterQuietDays',
+      1,
+    ),
+  };
+}
+
+function validateSleeptimeWikiPassConfig(
+  raw: unknown,
+  sourcePath: string,
+): SleeptimeWikiPassConfig {
+  if (raw === undefined) {
+    return { ...DEFAULT_SLEEPTIME_WIKI_PASS };
+  }
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: wikiPass must be an object`);
+  }
+  return {
+    enabled: toBoolean(raw.enabled ?? DEFAULT_SLEEPTIME_WIKI_PASS.enabled, 'wikiPass.enabled'),
+    reviewWindowHours: toPositiveInteger(
+      raw.reviewWindowHours ?? DEFAULT_SLEEPTIME_WIKI_PASS.reviewWindowHours,
+      'wikiPass.reviewWindowHours',
+      1,
+    ),
+    minNewCanonicalEpisodes: toPositiveInteger(
+      raw.minNewCanonicalEpisodes ?? DEFAULT_SLEEPTIME_WIKI_PASS.minNewCanonicalEpisodes,
+      'wikiPass.minNewCanonicalEpisodes',
+      1,
+    ),
+    minNewDurableMemories: toPositiveInteger(
+      raw.minNewDurableMemories ?? DEFAULT_SLEEPTIME_WIKI_PASS.minNewDurableMemories,
+      'wikiPass.minNewDurableMemories',
+      1,
+    ),
+    maxEntriesPerRun: toPositiveInteger(
+      raw.maxEntriesPerRun ?? DEFAULT_SLEEPTIME_WIKI_PASS.maxEntriesPerRun,
+      'wikiPass.maxEntriesPerRun',
+      1,
+    ),
+    maxSourceEpisodes: toPositiveInteger(
+      raw.maxSourceEpisodes ?? DEFAULT_SLEEPTIME_WIKI_PASS.maxSourceEpisodes,
+      'wikiPass.maxSourceEpisodes',
+      1,
+    ),
+    maxSourceMemories: toPositiveInteger(
+      raw.maxSourceMemories ?? DEFAULT_SLEEPTIME_WIKI_PASS.maxSourceMemories,
+      'wikiPass.maxSourceMemories',
       1,
     ),
   };
@@ -784,6 +864,7 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     episodeSynthesis: validateEpisodeSynthesisConfig(raw.episodeSynthesis, sourcePath),
     sleepConsolidation: validateSleepConsolidationConfig(raw.sleepConsolidation, sourcePath),
     orientationRewrite: validateOrientationRewriteGateConfig(raw.orientationRewrite, sourcePath),
+    wikiPass: validateSleeptimeWikiPassConfig(raw.wikiPass, sourcePath),
     arcFormation: validateArcFormationConfig(raw.arcFormation, sourcePath),
     socialGraphBuilder: validateSocialGraphBuilderConfig(raw.socialGraphBuilder, sourcePath),
     temporalWakeup: validateTemporalWakeupConfig(raw.temporalWakeup, sourcePath),

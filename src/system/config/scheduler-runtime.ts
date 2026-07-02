@@ -35,6 +35,8 @@ export function resolveRuntimeSchedulerConfig(
     },
     episodeSynthesis: { ...persisted.episodeSynthesis },
     sleepConsolidation: { ...persisted.sleepConsolidation },
+    orientationRewrite: { ...persisted.orientationRewrite },
+    wikiPass: { ...persisted.wikiPass },
     arcFormation: { ...persisted.arcFormation },
     socialGraphBuilder: { ...persisted.socialGraphBuilder },
     temporalWakeup: {

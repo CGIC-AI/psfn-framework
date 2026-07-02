@@ -33,6 +33,19 @@ const MEMORY_LANE_BLOCKS = {
     maxRefinementsPerRun: 8,
     maxConsolidationsPerRun: 6,
   },
+  orientationRewrite: {
+    minNewEntriesSinceRewrite: 4,
+    refreshAfterQuietDays: 7,
+  },
+  wikiPass: {
+    enabled: true,
+    reviewWindowHours: 36,
+    minNewCanonicalEpisodes: 1,
+    minNewDurableMemories: 3,
+    maxEntriesPerRun: 3,
+    maxSourceEpisodes: 12,
+    maxSourceMemories: 30,
+  },
   arcFormation: {
     passIntervalDays: 6,
     reviewWindowDays: 30,

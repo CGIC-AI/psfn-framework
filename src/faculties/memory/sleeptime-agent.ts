@@ -15,7 +15,16 @@ import type { InferredPostTurnAction, PostTurnActionCandidate } from '../../shar
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SessionManager } from '../../core/session/manager.js';
-import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
+import {
+  DEFAULT_ORIENTATION_REWRITE_GATE,
+  type EpisodicProcessingRestWindowConfig,
+  type OrientationRewriteGateConfig,
+} from '../../system/config/scheduler-config.js';
+import type { DeterministicGateEvent } from '../../shared/event-bus.js';
+import {
+  evaluateDeterministicGate,
+  type DeterministicGateDefinition,
+} from '../../shared/gating/deterministic-gate.js';
 import type {
   CoreMemoryStorePort,
   MemoryMaintenanceDiagnostics,
@@ -48,6 +57,27 @@ export const SLEEPTIME_MEMORY_ACTION_KIND = 'memory.sleeptime.run';
 const DEFAULT_IDLE_SESSION_LIMIT = 20;
 const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 24;
 const DEFAULT_MAX_MEMORY_WRITES = 4;
+const ORIENTATION_REWRITE_GATE_LANE = 'orientation_rewrite';
+const DAY_MS = 24 * 60 * 60_000;
+
+/**
+ * Orientation-rewrite gate (jpvd.4): the nightly core-memory orient rewrite is
+ * the heaviest sleeptime LLM pass. It fires only on deterministic evidence of
+ * change since the last rewrite — enough new conversational turns, OR any new
+ * activity once the last rewrite is stale. On quiet nights the gate closes and
+ * the whole orient plan call is skipped with zero LLM spend.
+ */
+function buildOrientationRewriteGate(config: OrientationRewriteGateConfig): DeterministicGateDefinition {
+  return {
+    lane: ORIENTATION_REWRITE_GATE_LANE,
+    openWhenAny: [
+      { input: 'newEntriesSinceRewrite', comparator: 'gte', threshold: config.minNewEntriesSinceRewrite },
+      { input: 'staleWithActivityDays', comparator: 'gte', threshold: config.refreshAfterQuietDays },
+    ],
+    closedReason: 'no_change',
+    openReason: 'evidence_of_change',
+  };
+}
 const MAX_TRANSCRIPT_ENTRY_CHARS = 600;
 const EVIDENCE_TOKEN_STOP_WORDS = new Set([
   'about',
@@ -121,6 +151,14 @@ export interface SleeptimeMemoryAgentOptions {
    * construction rather than degrading into a turn-cadence process.
    */
   restWindow: EpisodicProcessingRestWindowConfig;
+  /**
+   * Deterministic gate for the orient rewrite (scheduler.json
+   * `orientationRewrite`). Optional: conservative defaults apply when absent.
+   */
+  orientationRewriteGate?: OrientationRewriteGateConfig;
+  /** Typed gate telemetry sink; wired to the runtime event bus by composition. */
+  onGateEvent?: (event: DeterministicGateEvent) => void;
+  now?: () => number;
   sleepConsolidator?: SleeptimeEpisodeConsolidator | null;
   arcWeaver?: SleeptimeArcWeaver | null;
   dreamMeaningPass?: SleeptimeDreamMeaningPass | null;
@@ -414,6 +452,9 @@ export class SleeptimeMemoryAgent {
   private readonly transcriptMessageLimit: number;
   private readonly maxMemoryWrites: number;
   private readonly restWindow: EpisodicProcessingRestWindowConfig;
+  private readonly orientationRewriteGate: DeterministicGateDefinition;
+  private readonly onGateEvent: ((event: DeterministicGateEvent) => void) | null;
+  private readonly now: () => number;
   private readonly sleepConsolidator: SleeptimeEpisodeConsolidator | null;
   private readonly arcWeaver: SleeptimeArcWeaver | null;
   private readonly dreamMeaningPass: SleeptimeDreamMeaningPass | null;
@@ -442,6 +483,11 @@ export class SleeptimeMemoryAgent {
       DEFAULT_MAX_MEMORY_WRITES,
     );
     this.restWindow = options.restWindow;
+    this.orientationRewriteGate = buildOrientationRewriteGate(
+      options.orientationRewriteGate ?? DEFAULT_ORIENTATION_REWRITE_GATE,
+    );
+    this.onGateEvent = options.onGateEvent ?? null;
+    this.now = options.now ?? (() => Date.now());
     this.sleepConsolidator = options.sleepConsolidator ?? null;
     this.arcWeaver = options.arcWeaver ?? null;
     this.dreamMeaningPass = options.dreamMeaningPass ?? null;
@@ -551,6 +597,24 @@ export class SleeptimeMemoryAgent {
 
     const coreMemoryScope = coreMemoryChannelScope({ channelId: sessionId });
     const currentSnapshot = this.coreMemoryStore.getSnapshot({ scope: coreMemoryScope });
+
+    // Deterministic orientation-rewrite gate (jpvd.4): the orient plan call
+    // below is the heaviest nightly LLM pass. Skip it entirely when nothing has
+    // changed since the last rewrite. `updatedAt` is the last time the orient
+    // blocks changed (rethink is the only writer in this scope).
+    const gate = this.evaluateOrientationRewriteGate(currentSnapshot, recentEntries);
+    if (!gate.open) {
+      this.emitGateEvent({ sessionId, outcome: 'skipped', reason: gate.reason, inputs: gate.inputs });
+      log.info('Sleeptime orient rewrite skipped: no deterministic evidence of change', {
+        sessionId,
+        actionId: action.id,
+        reason: gate.reason,
+        ...gate.inputs,
+      });
+      return;
+    }
+    this.emitGateEvent({ sessionId, outcome: 'ran', reason: gate.reason, inputs: gate.inputs });
+
     const transcript = recentEntries.map(summarizeSessionEntry).join('\n');
     const requestPrompt = [
       'Current orientation blocks:',
@@ -650,6 +714,60 @@ export class SleeptimeMemoryAgent {
       ...(dreamMeaning?.ran ? { dreamMeaning } : {}),
       ...(memoryMaintenanceDiagnostics ? { memoryMaintenanceDiagnostics } : {}),
       ...(episodicMaintenanceDiagnostics ? { episodicMaintenanceDiagnostics } : {}),
+    });
+  }
+
+  private evaluateOrientationRewriteGate(
+    snapshot: { updatedAt: string; blocks: Record<'persona' | 'human' | 'goals', { content: string }> },
+    recentEntries: readonly SessionEntry[],
+  ): { open: boolean; reason: string; inputs: Record<string, number | string> } {
+    const nowMs = this.now();
+    // A never-oriented companion (all orient blocks empty) has no baseline to
+    // preserve: the first rewrite should fire on any activity. `updatedAt` on a
+    // lazily-created snapshot is read-time, not a real rewrite, so it must not
+    // gate the first orientation closed.
+    const orientedBefore = (['persona', 'human', 'goals'] as const)
+      .some(block => snapshot.blocks[block].content.trim().length > 0);
+    const updatedAtMs = Date.parse(snapshot.updatedAt);
+    // Without a real baseline (never oriented, or unreadable timestamp) we
+    // cannot prove nothing changed, so the gate opens (fail open toward doing
+    // the work once).
+    const hasBaseline = orientedBefore && Number.isFinite(updatedAtMs);
+    const newEntriesSinceRewrite = hasBaseline
+      ? recentEntries.filter(entry => entry.timestamp > updatedAtMs).length
+      : recentEntries.length;
+    const daysSinceRewrite = hasBaseline
+      ? (nowMs - updatedAtMs) / DAY_MS
+      : Number.POSITIVE_INFINITY;
+    // Elapsed time only re-opens the gate when there is at least some new
+    // activity — never rewrite orientation from an empty transcript.
+    const staleWithActivityDays = newEntriesSinceRewrite >= 1
+      ? (Number.isFinite(daysSinceRewrite) ? daysSinceRewrite : Number.MAX_SAFE_INTEGER)
+      : 0;
+    const decision = evaluateDeterministicGate(this.orientationRewriteGate, {
+      newEntriesSinceRewrite,
+      staleWithActivityDays,
+      daysSinceRewrite: Number.isFinite(daysSinceRewrite)
+        ? Math.round(daysSinceRewrite * 100) / 100
+        : Number.MAX_SAFE_INTEGER,
+    });
+    return { open: decision.open, reason: decision.reason, inputs: decision.inputs };
+  }
+
+  private emitGateEvent(input: {
+    sessionId: string;
+    outcome: 'ran' | 'skipped';
+    reason: string;
+    inputs: Record<string, number | string>;
+  }): void {
+    if (!this.onGateEvent) return;
+    this.onGateEvent({
+      lane: ORIENTATION_REWRITE_GATE_LANE,
+      outcome: input.outcome,
+      reason: input.reason,
+      inputs: input.inputs,
+      timestamp: this.now(),
+      sessionId: input.sessionId,
     });
   }
 

@@ -35,6 +35,23 @@ export interface ExternalTelemetryEvent {
 
 type EventCorrelationFields = Partial<CorrelationMetadata>;
 
+/**
+ * Shared shape for deterministic pre-LLM gate outcomes (jpvd.4). Every
+ * recurring LLM pass that is gated by `evaluateDeterministicGate` emits one of
+ * these: `ran` when the gate opened (the LLM pass fired), `skipped` when it
+ * closed (zero LLM spend). `reason` carries the gate reason and `inputs` echoes
+ * the deterministic signals so the Garden subsystem-health view can show why.
+ */
+export interface DeterministicGateEvent {
+  lane: string;
+  outcome: 'ran' | 'skipped';
+  reason: string;
+  inputs: Record<string, number | string>;
+  timestamp: number;
+  sessionId?: string;
+  channelId?: string;
+}
+
 export interface EventMap {
   'message.received': { message: SubstrateMessage } & EventCorrelationFields;
   'message.sent': { response: AgentResponse } & EventCorrelationFields;
@@ -210,6 +227,25 @@ export interface EventMap {
     error: string;
     timestamp: number;
   };
+  // Deterministic pre-LLM gate outcomes (jpvd.4). One per recurring LLM pass;
+  // a `skipped` outcome means the gate closed and the pass spent zero tokens.
+  // Reasons + inputs surface on the Garden subsystem-health lanes.
+  //   - orientation rewrite: nightly core-memory orient-block rewrite, gated on
+  //     evidence of change since the last rewrite (new transcript turns / stale
+  //     with activity). Skipping is the common case on quiet days.
+  //   - dream meaning: nightly first-person meaning pass, gated on cadence and
+  //     new consolidated episodes without a meaning.
+  //   - sleep-consolidation refinement: bounded LLM cleanup, gated on the count
+  //     of unrefined episodes in reach with transcript coverage.
+  //   - emotion appraisal: gated on turn cadence OR VAD movement magnitude.
+  //   - extraction pre-LLM: textual signal scoring (byte-identical refactor).
+  //   - concern candidate review: pending-count and turn-interval gates.
+  'memory.orientation_rewrite.gate': DeterministicGateEvent;
+  'memory.dream_meaning.gate': DeterministicGateEvent;
+  'memory.sleep_consolidation.refinement_gate': DeterministicGateEvent;
+  'emotion.appraisal.gate': DeterministicGateEvent;
+  'memory.extraction.gate': DeterministicGateEvent;
+  'intention.concern_candidate.gate': DeterministicGateEvent;
   // Social-graph builder worker completion (E4.2). Law 31: results are visible,
   // never silent — Garden renders the proposal queue and these counts.
   'memory.social_graph.builder': {

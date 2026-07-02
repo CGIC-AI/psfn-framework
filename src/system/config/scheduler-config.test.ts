@@ -53,6 +53,10 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       maxRefinementsPerRun: 8,
       maxConsolidationsPerRun: 6,
     },
+    orientationRewrite: {
+      minNewEntriesSinceRewrite: 4,
+      refreshAfterQuietDays: 7,
+    },
     arcFormation: {
       passIntervalDays: 6,
       reviewWindowDays: 30,

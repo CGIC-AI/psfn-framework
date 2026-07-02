@@ -32,6 +32,7 @@ const GARDEN_CLIENT_ROUTES = new Set([
   '/settings',
   '/shards',
   '/skills',
+  '/subsystem-health',
   '/telemetry',
   '/theme',
   '/tools',

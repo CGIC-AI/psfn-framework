@@ -255,6 +255,7 @@ export interface EventMap {
   'memory.orientation_rewrite.gate': DeterministicGateEvent;
   'memory.dream_meaning.gate': DeterministicGateEvent;
   'memory.sleep_consolidation.refinement_gate': DeterministicGateEvent;
+  'memory.sleeptime_wiki.gate': DeterministicGateEvent;
   'emotion.appraisal.gate': DeterministicGateEvent;
   'intention.concern_candidate.gate': DeterministicGateEvent;
   // Social-graph builder worker completion (E4.2). Law 31: results are visible,

@@ -23,6 +23,7 @@ import type { EpisodicSynthesizer } from '../../faculties/memory/episodic/synthe
 import type { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
 import type { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import type { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
+import type { SleeptimeWikiPass } from '../../faculties/wiki/sleeptime-wiki-pass.js';
 import type { NearTurnMemoryScopeClassifierPort } from '../../faculties/memory/near-turn-memory-lane.js';
 import type { ProactiveOutboundDispatcher } from '../intention/proactive-outbound.js';
 import type { OutreachOutboxStore } from '../intention/outreach-outbox.js';
@@ -172,6 +173,8 @@ export interface HeartbeatRuntimeOptions {
   sleepConsolidator?: Pick<SleepCycleEpisodeConsolidator, 'run'> | null;
   arcWeaver?: Pick<EpisodeArcWeaver, 'run'> | null;
   dreamMeaningPass?: Pick<DreamMeaningPass, 'run'> | null;
+  /** Sleeptime wiki update pass (E8.2): runs inside the sleeptime stack after settling. */
+  sleeptimeWikiPass?: Pick<SleeptimeWikiPass, 'run'> | null;
   proactiveOutbound?: Pick<ProactiveOutboundDispatcher, 'dispatch'> | null;
   outreachOutbox?: OutreachOutboxStore | null;
   memoryMaintenanceStore?: Pick<

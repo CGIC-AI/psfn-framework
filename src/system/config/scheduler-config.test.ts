@@ -57,6 +57,15 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       minNewEntriesSinceRewrite: 4,
       refreshAfterQuietDays: 7,
     },
+    wikiPass: {
+      enabled: true,
+      reviewWindowHours: 36,
+      minNewCanonicalEpisodes: 1,
+      minNewDurableMemories: 3,
+      maxEntriesPerRun: 3,
+      maxSourceEpisodes: 12,
+      maxSourceMemories: 30,
+    },
     arcFormation: {
       passIntervalDays: 6,
       reviewWindowDays: 30,

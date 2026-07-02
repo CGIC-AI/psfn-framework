@@ -44,7 +44,8 @@ export type SubsystemPersonaId =
   | 'sleep_thematic_grouping'
   | 'sleep_refinement'
   | 'arc_formation'
-  | 'concern_review';
+  | 'concern_review'
+  | 'wiki_curation';
 
 export interface SubsystemPersonaSeed {
   id: SubsystemPersonaId;
@@ -124,6 +125,14 @@ export const SUBSYSTEM_PERSONA_SEEDS: readonly SubsystemPersonaSeed[] = Object.f
     instructionKey: instructionKey('concern_review'),
     instruction: 'look over the loose threads I have been carrying and judge which ones still deserve my attention',
     consumers: ['src/core/intention/concern-candidates.ts'],
+  },
+  {
+    id: 'wiki_curation',
+    labelKey: labelKey('wiki_curation'),
+    label: 'sense of what is worth keeping as durable knowledge',
+    instructionKey: instructionKey('wiki_curation'),
+    instruction: 'gather the durable, shareable knowledge the day turned up into notes I can rely on later, keeping what is private to memory',
+    consumers: ['src/faculties/wiki/sleeptime-wiki-pass.ts'],
   },
 ]);
 

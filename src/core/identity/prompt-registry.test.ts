@@ -9,6 +9,7 @@ import {
   RECENT_SESSION_SUMMARY_PROMPT_KEY,
   PROFILE_SYNTHESIS_PROMPT_KEY,
   SLEEPTIME_ORIENTATION_PROMPT_KEY,
+  WIKI_PASS_PROMPT_KEY,
   getDefaultPromptText,
 } from './prompt-registry.js';
 import { subsystemPersonaPromptKeys } from './persona-preamble-seeds.js';
@@ -73,6 +74,7 @@ describe('PromptRegistryStore', () => {
       EXTRACTION_PROMPT_KEY,
       PROFILE_SYNTHESIS_PROMPT_KEY,
       SLEEPTIME_ORIENTATION_PROMPT_KEY,
+      WIKI_PASS_PROMPT_KEY,
       COMPACTION_SUMMARY_PROMPT_KEY,
       RECENT_SESSION_SUMMARY_PROMPT_KEY,
       ...subsystemPersonaPromptKeys().sort((a, b) => a.localeCompare(b)),

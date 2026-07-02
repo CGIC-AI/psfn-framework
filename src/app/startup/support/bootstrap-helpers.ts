@@ -276,6 +276,8 @@ export function hydrateCanonicalStartupConfig(
     },
     episodeSynthesis: { ...persistedScheduler.episodeSynthesis },
     sleepConsolidation: { ...persistedScheduler.sleepConsolidation },
+    orientationRewrite: { ...persistedScheduler.orientationRewrite },
+    wikiPass: { ...persistedScheduler.wikiPass },
     arcFormation: { ...persistedScheduler.arcFormation },
     socialGraphBuilder: { ...persistedScheduler.socialGraphBuilder },
     temporalWakeup: {

@@ -21,13 +21,15 @@ export const COMPACTION_SUMMARY_PROMPT_KEY = 'session.compaction.summary' as con
 export const RECENT_SESSION_SUMMARY_PROMPT_KEY = 'session.recent.summary' as const;
 export const PROFILE_SYNTHESIS_PROMPT_KEY = 'memory.profile.synthesis' as const;
 export const SLEEPTIME_ORIENTATION_PROMPT_KEY = 'memory.sleeptime.orientation' as const;
+export const WIKI_PASS_PROMPT_KEY = 'memory.sleeptime.wiki' as const;
 
 export type PromptRegistryKey =
   | typeof EXTRACTION_PROMPT_KEY
   | typeof COMPACTION_SUMMARY_PROMPT_KEY
   | typeof RECENT_SESSION_SUMMARY_PROMPT_KEY
   | typeof PROFILE_SYNTHESIS_PROMPT_KEY
-  | typeof SLEEPTIME_ORIENTATION_PROMPT_KEY;
+  | typeof SLEEPTIME_ORIENTATION_PROMPT_KEY
+  | typeof WIKI_PASS_PROMPT_KEY;
 
 interface PromptSeed {
   // Core registry prompts use the typed PromptRegistryKey union; the persona
@@ -190,6 +192,43 @@ Respond with JSON only:
     }
   ]
 }`,
+  },
+  {
+    key: WIKI_PASS_PROMPT_KEY,
+    description:
+      'Sleeptime wiki update pass (E8.2). Reviews the day\'s newly-settled canonical episodes and '
+      + 'durable memories for durable, NON-PRIVATE world knowledge worth recording in the wiki. Must '
+      + 'produce a JSON {proposals:[...]} envelope and must keep personal facts out of the wiki.',
+    consumers: ['src/faculties/wiki/sleeptime-wiki-pass.ts'],
+    text: `Review the day's newly-settled canonical episodes and durable memories for durable, NON-PRIVATE world knowledge worth recording in the wiki: interests, research results and findings, facts about the world or environment, project and technical details, definitions, and reference material that stays useful over time.
+
+The wiki is durable reference knowledge. It is NOT memory, NOT skills, and NOT actions.
+
+Hard boundaries. Do NOT create or update a wiki entry for:
+- Personal facts about a specific person: who they are, their relationships, feelings, preferences, where they live or grew up, their history. Those belong to memory, never the wiki. (A partner being from a Paris neighborhood is memory; general facts about that neighborhood are wiki.)
+- Repeatable step-by-step procedures or how-to workflows. Those belong to skills.
+- One-off actions to perform. Those are tool calls.
+- Transient status, logistics, or small talk.
+
+Prefer UPDATING an existing entry over creating a near-duplicate; the existing-entry list gives current wiki ids and titles. For each entry, cite the source episode ids and/or memory ids it is grounded in.
+
+Respond with strict JSON only:
+{
+  "proposals": [
+    {
+      "operation": "create|update",
+      "id": "<existing wiki id, required for update>",
+      "title": "...",
+      "summary": "one-line summary",
+      "body": "markdown body",
+      "tags": ["..."],
+      "source_episode_ids": ["..."],
+      "source_memory_ids": ["..."],
+      "reason": "why this is durable, non-private world knowledge"
+    }
+  ]
+}
+If nothing in the day is durable, non-private world knowledge, respond with {"proposals": []}.`,
   },
 ];
 

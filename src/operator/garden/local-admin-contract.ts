@@ -69,6 +69,7 @@ import { AdminChargeLedgerDataService } from './services/charge-ledger-service.j
 import { AdminConcernDataService } from './services/concern-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { createAdminPendingContactsService } from './services/pending-contacts-service.js';
+import { createAdminRoomsService } from './services/rooms-service.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
 import { AdminEpisodicMemoryDataService } from './services/episodic-memory-service.js';
 import { AdminGroupMemoryDataService } from './services/group-memory-diagnostics-service.js';
@@ -259,6 +260,9 @@ export function createInProcessGardenAdminContract(
         contactStore: options.contactStore ?? null,
       })
       : null,
+    rooms: createAdminRoomsService({
+      contactStore: options.contactStore ?? null,
+    }),
     concerns: options.concernStore
       ? new AdminConcernDataService(options.concernStore)
       : null,

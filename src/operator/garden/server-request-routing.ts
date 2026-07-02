@@ -7,6 +7,7 @@ export const GARDEN_PREFIX = '/';
 const GARDEN_CLIENT_ROUTES = new Set([
   '/',
   '/action-pipe',
+  '/channels',
   '/charge-budget',
   '/chat',
   '/confirmations',
@@ -22,6 +23,7 @@ const GARDEN_CLIENT_ROUTES = new Set([
   '/primer',
   '/prompt-monitor',
   '/prompts',
+  '/rooms',
   '/satellites',
   '/scheduler',
   '/session-recovery',

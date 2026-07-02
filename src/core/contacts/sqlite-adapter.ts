@@ -24,6 +24,10 @@ function asyncContactStore(store: ContactStore): ContactStorePort {
     recordChannelActivity: async (contactId, channel, channelId, privacyLevel) => {
       store.recordChannelActivity(contactId, channel, channelId, privacyLevel);
     },
+    listKnownRooms: async (options) => store.listKnownRooms(options),
+    countKnownRooms: async () => store.countKnownRooms(),
+    listRoomRoster: async (channelId, options) => store.listRoomRoster(channelId, options),
+    countRoomRoster: async (channelId, options) => store.countRoomRoster(channelId, options),
     mergeContacts: async (sourceContactId, targetContactId) => store.mergeContacts(sourceContactId, targetContactId),
     updateNotes: async (id, notes, actor) => store.updateNotes(id, notes, actor),
     updateEmotionalBaseline: async (id, observation) => store.updateEmotionalBaseline(id, observation),

@@ -7,7 +7,18 @@ import type {
   ContactChannel,
   ContactIdentityLinkResult,
   ContactMutationAuditEntry,
+  RelationshipType,
+  RoomQueryOptions,
+  RoomRosterMember,
+  RoomSummary,
 } from '../types.js';
+import {
+  DEFAULT_KNOWN_ROOMS_LIMIT,
+  DEFAULT_ROOM_ROSTER_LIMIT,
+  MAX_KNOWN_ROOMS_LIMIT,
+  MAX_ROOM_ROSTER_LIMIT,
+} from '../types.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EmotionalTimeSeriesPoint } from '../store/emotional-baseline.js';
 import { normalizeEmotionalTimeSeries } from '../store/emotional-baseline.js';
 import { defaultPrivacyForChannel, normalizeIdentity, normalizePrivacyLevel } from '../store/identity-utils.js';
@@ -15,6 +26,20 @@ import type { ContactChannelActivityRow, ContactIdentityRow, ContactRow } from '
 import { normalizeAuditActor, rowToContact } from './mapping.js';
 import { queryOne, queryRows } from './connection.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
+
+// ── Room roster (E4.1) ── bound helpers, mirrored with the SQLite adapter.
+function clampRoomLimit(limit: number | undefined, fallback: number, max: number): number {
+  if (limit === undefined || !Number.isFinite(limit)) return fallback;
+  const floored = Math.floor(limit);
+  if (floored <= 0) return fallback;
+  return Math.min(floored, max);
+}
+
+function clampRoomOffset(offset: number | undefined): number {
+  if (offset === undefined || !Number.isFinite(offset)) return 0;
+  const floored = Math.floor(offset);
+  return floored > 0 ? floored : 0;
+}
 
 const postgresContactSharedOperations: PostgresContactOperationMap = {
   async tableExists(tableName: string): Promise<boolean> {
@@ -127,6 +152,143 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
     await this.pool.query('UPDATE contacts SET last_seen = $1 WHERE id = $2', [now, id]);
     await this.pool.query('UPDATE contact_channel_ids SET last_seen = $1 WHERE contact_id = $2', [now, id]);
     await this.pool.query('UPDATE contact_channel_activity SET last_seen = $1 WHERE contact_id = $2', [now, id]);
+  },
+
+  // ── Room roster (E4.1) ──
+  // Bounded read-only queries over contact_channel_activity joined to the owning
+  // contact row (only the columns the room surface needs — no full-contact
+  // hydration). E3.3 (audienceScope) and E4.4 are the later consumers.
+  async listKnownRooms(options?: Pick<RoomQueryOptions, 'limit' | 'offset'>): Promise<RoomSummary[]> {
+    const limit = clampRoomLimit(options?.limit, DEFAULT_KNOWN_ROOMS_LIMIT, MAX_KNOWN_ROOMS_LIMIT);
+    const offset = clampRoomOffset(options?.offset);
+    const rows = await queryRows<{
+      channel: string;
+      channel_id: string;
+      member_count: string | number;
+      first_activity: string;
+      last_activity: string;
+    }>(
+      this.pool,
+      `
+        SELECT channel,
+               channel_id,
+               COUNT(*) AS member_count,
+               MIN(first_seen) AS first_activity,
+               MAX(last_seen) AS last_activity
+        FROM contact_channel_activity
+        GROUP BY channel, channel_id
+        ORDER BY last_activity DESC, channel ASC, channel_id ASC
+        LIMIT $1 OFFSET $2
+      `,
+      [limit, offset],
+    );
+    return rows.map(row => ({
+      channel: row.channel,
+      channelId: row.channel_id,
+      memberCount: Number(row.member_count),
+      firstActivity: row.first_activity,
+      lastActivity: row.last_activity,
+    }));
+  },
+
+  async countKnownRooms(): Promise<number> {
+    const row = await queryOne<{ total: string | number }>(
+      this.pool,
+      `
+        SELECT COUNT(*) AS total FROM (
+          SELECT 1 FROM contact_channel_activity GROUP BY channel, channel_id
+        ) AS rooms
+      `,
+      [],
+    );
+    return Number(row?.total ?? 0);
+  },
+
+  async listRoomRoster(channelId: string, options?: RoomQueryOptions): Promise<RoomRosterMember[]> {
+    const trimmedChannelId = channelId.trim();
+    if (!trimmedChannelId) return [];
+    const limit = clampRoomLimit(options?.limit, DEFAULT_ROOM_ROSTER_LIMIT, MAX_ROOM_ROSTER_LIMIT);
+    const offset = clampRoomOffset(options?.offset);
+    const normalizedChannel = options?.channel?.trim().toLowerCase() || undefined;
+
+    const params: Array<string | number> = [trimmedChannelId];
+    let channelFilter = '';
+    if (normalizedChannel) {
+      params.push(normalizedChannel);
+      channelFilter = `AND a.channel = $${params.length}`;
+    }
+    params.push(limit);
+    const limitPlaceholder = `$${params.length}`;
+    params.push(offset);
+    const offsetPlaceholder = `$${params.length}`;
+
+    const rows = await queryRows<{
+      contact_id: string;
+      display_name: string;
+      trust_level: string;
+      relationship_type: string;
+      channel: string;
+      channel_id: string;
+      privacy_level: string | null;
+      first_seen: string;
+      last_seen: string;
+    }>(
+      this.pool,
+      `
+        SELECT c.id AS contact_id,
+               c.display_name,
+               c.trust_level,
+               c.relationship_type,
+               a.channel,
+               a.channel_id,
+               a.privacy_level,
+               a.first_seen,
+               a.last_seen
+        FROM contact_channel_activity a
+        INNER JOIN contacts c ON c.id = a.contact_id
+        WHERE a.channel_id = $1
+          ${channelFilter}
+        ORDER BY a.last_seen DESC, c.display_name ASC, c.id ASC
+        LIMIT ${limitPlaceholder} OFFSET ${offsetPlaceholder}
+      `,
+      params,
+    );
+    return rows.map(row => ({
+      contactId: row.contact_id,
+      displayName: row.display_name,
+      trustLevel: row.trust_level as TrustLevel,
+      relationshipType: row.relationship_type as RelationshipType,
+      channel: row.channel,
+      channelId: row.channel_id,
+      privacyLevel: row.privacy_level
+        ? normalizePrivacyLevel(row.privacy_level as ChannelPrivacyLevel, row.channel)
+        : null,
+      firstSeen: row.first_seen,
+      lastSeen: row.last_seen,
+    }));
+  },
+
+  async countRoomRoster(channelId: string, options?: Pick<RoomQueryOptions, 'channel'>): Promise<number> {
+    const trimmedChannelId = channelId.trim();
+    if (!trimmedChannelId) return 0;
+    const normalizedChannel = options?.channel?.trim().toLowerCase() || undefined;
+    const params: string[] = [trimmedChannelId];
+    let channelFilter = '';
+    if (normalizedChannel) {
+      params.push(normalizedChannel);
+      channelFilter = `AND channel = $${params.length}`;
+    }
+    const row = await queryOne<{ total: string | number }>(
+      this.pool,
+      `
+        SELECT COUNT(*) AS total
+        FROM contact_channel_activity
+        WHERE channel_id = $1
+          ${channelFilter}
+      `,
+      params,
+    );
+    return Number(row?.total ?? 0);
   },
 
   async appendMutationAuditEntry(

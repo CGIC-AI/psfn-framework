@@ -37,6 +37,7 @@ export const navGroups: NavGroup[] = [
     { id: 'wiki', path: '/wiki', defaultLabel: 'Wiki', icon: '\u{1F4D8}' },
     { id: 'contacts', path: '/contacts', defaultLabel: 'Contacts', icon: '\u{1F6AA}' },
     { id: 'contact-approvals', path: '/contact-approvals', defaultLabel: 'Contact Approvals', icon: '\u{1F91D}' },
+    { id: 'rooms', path: '/rooms', defaultLabel: 'Rooms', icon: '\u{1F6CB}\u{FE0F}' },
     { id: 'identity', path: '/identity', defaultLabel: 'Identity', icon: '\u{1F331}' },
     { id: 'images', path: '/images', defaultLabel: 'Images', icon: '\u{1F5BC}\u{FE0F}' },
     { id: 'values', path: '/values', defaultLabel: 'Values', icon: '\u{1F4D6}' },

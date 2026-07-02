@@ -18,6 +18,9 @@ import type {
   ContactMutationAuditEntry,
   ContactMutationAuditQuery,
   RelationshipType,
+  RoomQueryOptions,
+  RoomRosterMember,
+  RoomSummary,
   SocialGraphEntity,
   SocialGraphEntityQuery,
   SocialGraphEntityUpsertInput,
@@ -88,6 +91,19 @@ export interface ContactStorePort {
     channelId: string,
     privacyLevel?: ChannelPrivacyLevel,
   ): Awaitable<void>;
+  // ── Room roster (E4.1) ──
+  // Bounded, read-only queries over contact_channel_activity for the operator
+  // room surface. These are the seam that E3.3 (audienceScope derivation) and
+  // E4.4 will later consume for roster size — do NOT wire those consumers here,
+  // and never route this data into prompt content.
+  /** Distinct known rooms (channel + channelId) with member counts and activity bounds. */
+  listKnownRooms(options?: Pick<RoomQueryOptions, 'limit' | 'offset'>): Awaitable<RoomSummary[]>;
+  /** Total count of distinct known rooms (for room-list pagination). */
+  countKnownRooms(): Awaitable<number>;
+  /** Known members of a room ordered by last-seen desc; bounded + paginated. */
+  listRoomRoster(channelId: string, options?: RoomQueryOptions): Awaitable<RoomRosterMember[]>;
+  /** Total known-member count for a room (for roster pagination). */
+  countRoomRoster(channelId: string, options?: Pick<RoomQueryOptions, 'channel'>): Awaitable<number>;
   mergeContacts(sourceContactId: string, targetContactId: string): Awaitable<boolean>;
   updateNotes(id: string, notes: string, actor?: string): Awaitable<boolean>;
   updateEmotionalBaseline(

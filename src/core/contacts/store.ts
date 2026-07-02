@@ -16,6 +16,9 @@ import type {
   ContactMutationAuditQuery,
   ChannelPrivacyLevel,
   RelationshipType,
+  RoomQueryOptions,
+  RoomRosterMember,
+  RoomSummary,
   SocialGraphEntity,
   SocialGraphEntityQuery,
   SocialGraphEntityUpsertInput,
@@ -70,6 +73,8 @@ import {
   updateContactRelationshipType,
 } from './store/mutation-operations.js';
 import {
+  countKnownRooms,
+  countRoomRoster,
   getCanonicalContactKey,
   getContactByChannelIdentity,
   getConversationChannelPrivacy,
@@ -78,6 +83,8 @@ import {
   getContactsByTrustLevel,
   listAllContacts,
   listIdentityLinkVerifications,
+  listKnownRooms,
+  listRoomRoster,
 } from './store/read-operations.js';
 import { initializeContactStoreSchema } from './store/schema.js';
 import {
@@ -632,6 +639,23 @@ export class ContactStore implements ContactStorePort {
   ): void {
     recordContactChannelActivity(this.db, contactId, channel, channelId, privacyLevel);
     this.syncContactExports();
+  }
+
+  // ── Room roster (E4.1) ── bounded read-only queries over channel activity.
+  listKnownRooms(options?: Pick<RoomQueryOptions, 'limit' | 'offset'>): RoomSummary[] {
+    return listKnownRooms(this.db, options);
+  }
+
+  countKnownRooms(): number {
+    return countKnownRooms(this.db);
+  }
+
+  listRoomRoster(channelId: string, options?: RoomQueryOptions): RoomRosterMember[] {
+    return listRoomRoster(this.db, channelId, options);
+  }
+
+  countRoomRoster(channelId: string, options?: Pick<RoomQueryOptions, 'channel'>): number {
+    return countRoomRoster(this.db, channelId, options);
   }
 
   mergeContacts(sourceContactId: string, targetContactId: string): boolean {

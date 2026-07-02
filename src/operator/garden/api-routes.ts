@@ -12,6 +12,8 @@ import {
 import { buildAdminContactRoutes } from './routes/contact-routes.js';
 import { buildAdminContactApprovalRoutes } from './api-routes-contact-approvals.js';
 import type { AdminPendingContactsService } from './services/pending-contacts-service.js';
+import { buildAdminRoomRoutes } from './api-routes-rooms.js';
+import type { AdminRoomsService } from './services/rooms-service.js';
 import { buildAdminConcernRoutes } from './routes/concern-routes.js';
 import { buildAdminIdentityRoutes } from './routes/identity-routes.js';
 import { buildAdminImageRoutes } from './routes/image-routes.js';
@@ -195,6 +197,7 @@ export function buildAdminApiRoutes(options: {
   sessionService: AdminSessionService;
   contactsService: AdminContactsService;
   pendingContactsService?: AdminPendingContactsService | null;
+  roomsService?: AdminRoomsService | null;
   concernService?: AdminConcernService | null;
   settingsService: AdminSettingsService;
   identityService: AdminIdentityService;
@@ -232,6 +235,7 @@ export function buildAdminApiRoutes(options: {
     sessionService,
     contactsService,
     pendingContactsService,
+    roomsService,
     concernService,
     settingsService,
     identityService,
@@ -623,6 +627,9 @@ export function buildAdminApiRoutes(options: {
     ...buildAdminContactRoutes({ contactsService, withBody }),
     ...(pendingContactsService
       ? buildAdminContactApprovalRoutes({ pendingContactsService })
+      : []),
+    ...(roomsService
+      ? buildAdminRoomRoutes({ roomsService })
       : []),
     ...buildAdminConcernRoutes({ concernService, withBody }),
     ...buildAdminSettingsRoutes({ settingsService, appendAuditTimelineEntry, withBody }),

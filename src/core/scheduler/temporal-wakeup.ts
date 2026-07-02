@@ -141,7 +141,7 @@ function describeLocalMoment(timestampMs: number, timeZone: string): LocalMoment
     minute: '2-digit',
     hour12: false,
   });
-  const parts = Object.fromEntries(
+  const parts: Partial<Record<Intl.DateTimeFormatPartTypes, string>> = Object.fromEntries(
     formatter.formatToParts(new Date(timestampMs))
       .filter(part => part.type !== 'literal')
       .map(part => [part.type, part.value]),

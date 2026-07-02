@@ -2,8 +2,15 @@ export {
   EpisodicStore,
   type EpisodeArcListOptions,
   type EpisodeArcWriteInput,
+  type EpisodeClaimTransferInput,
+  type EpisodeClaimTransferResult,
   type EpisodeCreateInput,
   type EpisodeListOptions,
+  type EpisodeMessageClaim,
+  type EpisodeMessageClaimEntryInput,
+  type EpisodeMessageClaimListOptions,
+  type EpisodeMessageClaimStatus,
+  type EpisodeMessageClaimWriteInput,
   type EpisodeTimeSearchOptions,
   type EpisodeUpdateInput,
   type EpisodicStoreOptions,
@@ -40,6 +47,7 @@ export {
 } from './sleep-consolidation.js';
 export {
   EpisodicSynthesizer,
+  sessionEntryClaimKey,
   type EpisodicSynthesisOptions,
   type EpisodicSynthesisProcessingWatermark,
   type EpisodicSynthesisRunInput,

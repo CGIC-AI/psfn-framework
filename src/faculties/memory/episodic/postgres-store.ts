@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import {
   createPostgresPool,
   executeQuery,
   queryOne,
   queryRows,
+  withPostgresClient,
 } from '../../../persistence/postgres.js';
 import {
   EPISODIC_CONTRACT_VERSION,
@@ -18,6 +19,8 @@ import {
   type EpisodeProvenanceRef,
 } from '../../../shared/contracts/episodic-memory.js';
 import {
+  normalizeEpisodeClaimTransferInput,
+  normalizeEpisodeMessageClaimWriteInput,
   normalizeEpisodicDiagnosticsNow,
   summarizeEpisodicMaintenanceDiagnostics,
 } from './store.js';
@@ -28,10 +31,16 @@ import type {
   EpisodeCandidateDecisionListOptions,
   EpisodeCandidateDecisionStatus,
   EpisodeCandidateDecisionWriteInput,
+  EpisodeClaimTransferInput,
+  EpisodeClaimTransferResult,
   EpisodeCreateInput,
   EpisodeLineage,
   EpisodeLineageRelation,
   EpisodeLineageWriteInput,
+  EpisodeMessageClaim,
+  EpisodeMessageClaimListOptions,
+  EpisodeMessageClaimStatus,
+  EpisodeMessageClaimWriteInput,
   EpisodicMaintenanceDiagnostics,
   EpisodicMaintenanceDiagnosticsOptions,
   EpisodeListOptions,
@@ -99,6 +108,19 @@ interface PostgresCandidateDecisionRow {
   updated_at: string;
 }
 
+interface PostgresEpisodeMessageClaimRow {
+  episode_id: string;
+  claim_key: string;
+  turn_id: string | null;
+  channel_id: string | null;
+  session_id: string | null;
+  status: string;
+  claimed_at: string;
+  transferred_to_episode_id: string | null;
+  transferred_at: string | null;
+  reason: string | null;
+}
+
 const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 1000;
 const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -122,6 +144,7 @@ const EPISODE_LINEAGE_RELATIONS = new Set<EpisodeLineageRelation>([
   'conflicts_with',
   'updates',
 ]);
+const MESSAGE_CLAIM_STATUSES = new Set<EpisodeMessageClaimStatus>(['active', 'transferred']);
 const ACTIVE_CANONICAL_EPISODE_FILTER = `
   (status IS NULL OR status = 'canonical')
   AND (canonical_episode_id IS NULL OR canonical_episode_id = id)
@@ -305,6 +328,25 @@ function mapCandidateDecisionRow(row: PostgresCandidateDecisionRow): EpisodeCand
     ),
     createdAt: new Date(row.created_at).toISOString(),
     updatedAt: new Date(row.updated_at).toISOString(),
+  };
+}
+
+function mapMessageClaimRow(row: PostgresEpisodeMessageClaimRow): EpisodeMessageClaim {
+  const status = row.status as EpisodeMessageClaimStatus;
+  if (!MESSAGE_CLAIM_STATUSES.has(status)) {
+    throw new Error(`malformed persisted episode message claim "${row.episode_id}:${row.claim_key}": unsupported status`);
+  }
+  return {
+    episodeId: row.episode_id,
+    claimKey: row.claim_key,
+    ...(row.turn_id ? { turnId: row.turn_id } : {}),
+    ...(row.channel_id ? { channelId: row.channel_id } : {}),
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    status,
+    claimedAt: new Date(row.claimed_at).toISOString(),
+    ...(row.transferred_to_episode_id ? { transferredToEpisodeId: row.transferred_to_episode_id } : {}),
+    ...(row.transferred_at ? { transferredAt: new Date(row.transferred_at).toISOString() } : {}),
+    ...(row.reason ? { reason: row.reason } : {}),
   };
 }
 
@@ -613,8 +655,8 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
   }
 
   async writeEpisodeArc(input: EpisodeArcWriteInput): Promise<EpisodeArc> {
-    await this.assertEpisodeExists(input.sourceEpisodeId, 'sourceEpisodeId');
-    await this.assertEpisodeExists(input.targetEpisodeId, 'targetEpisodeId');
+    await this.assertEpisodeExists(input.sourceEpisodeId, 'episodeArc.sourceEpisodeId');
+    await this.assertEpisodeExists(input.targetEpisodeId, 'episodeArc.targetEpisodeId');
 
     const now = this.now().toISOString();
     const arc = parseEpisodeArc({
@@ -1090,6 +1132,154 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     return lineage;
   }
 
+  async claimEpisodeMessages(input: EpisodeMessageClaimWriteInput): Promise<EpisodeMessageClaim[]> {
+    const normalized = normalizeEpisodeMessageClaimWriteInput(input);
+    const claimedAt = normalizeInstant(normalized.claimedAt, 'claimedAt') ?? this.now().toISOString();
+    const claimKeys = normalized.claims.map(claim => claim.claimKey);
+
+    await withPostgresClient(this.pool, async (client) => {
+      await this.assertEpisodeExists(normalized.episodeId, 'claim.episodeId', client);
+      const activeRows = (await client.query<PostgresEpisodeMessageClaimRow>(`
+        SELECT *
+        FROM l01_episode_message_claims
+        WHERE status = 'active' AND claim_key = ANY($1::text[])
+        FOR UPDATE
+      `, [claimKeys])).rows;
+      const activeKeys = new Set<string>();
+      for (const row of activeRows) {
+        if (row.episode_id !== normalized.episodeId) {
+          throw new Error(
+            `source message "${row.claim_key}" is already claimed by episode "${row.episode_id}"; `
+            + `refusing to claim it for episode "${normalized.episodeId}"`,
+          );
+        }
+        activeKeys.add(row.claim_key);
+      }
+
+      for (const claim of normalized.claims) {
+        if (activeKeys.has(claim.claimKey)) continue;
+        await client.query(`
+          INSERT INTO l01_episode_message_claims (
+            episode_id, claim_key, turn_id, channel_id, session_id, status, claimed_at
+          )
+          VALUES ($1, $2, $3, $4, $5, 'active', $6)
+        `, [
+          normalized.episodeId,
+          claim.claimKey,
+          claim.turnId ?? null,
+          claim.channelId ?? null,
+          normalized.sessionId ?? null,
+          claimedAt,
+        ]);
+      }
+    });
+
+    return this.listEpisodeMessageClaims({
+      episodeId: normalized.episodeId,
+      claimKeys,
+      status: 'active',
+      limit: Math.min(MAX_LIMIT, claimKeys.length),
+    });
+  }
+
+  async listEpisodeMessageClaims(options: EpisodeMessageClaimListOptions = {}): Promise<EpisodeMessageClaim[]> {
+    const where: string[] = [];
+    const params: unknown[] = [];
+    if (options.episodeId !== undefined) {
+      params.push(parseRequiredText(options.episodeId, 'episodeId'));
+      where.push(`episode_id = $${params.length}`);
+    }
+    if (options.claimKeys !== undefined) {
+      const claimKeys = normalizeRequiredTextList(options.claimKeys, 'claimKeys');
+      if (claimKeys.length === 0) return [];
+      params.push(claimKeys);
+      where.push(`claim_key = ANY($${params.length}::text[])`);
+    }
+    if (options.status !== undefined) {
+      if (!MESSAGE_CLAIM_STATUSES.has(options.status)) {
+        throw new Error(`episode message claim status is not supported: ${options.status}`);
+      }
+      params.push(options.status);
+      where.push(`status = $${params.length}`);
+    }
+    params.push(normalizeLimit(options.limit));
+    const limitIndex = params.length;
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+
+    const rows = await queryRows<PostgresEpisodeMessageClaimRow>(this.pool, `
+      SELECT *
+      FROM l01_episode_message_claims
+      ${whereClause}
+      ORDER BY claimed_at ASC, episode_id ASC, claim_key ASC
+      LIMIT $${limitIndex}
+    `, params);
+    return rows.map(mapMessageClaimRow);
+  }
+
+  async transferEpisodeMessageClaims(input: EpisodeClaimTransferInput): Promise<EpisodeClaimTransferResult> {
+    const normalized = normalizeEpisodeClaimTransferInput(input);
+    const transferredAt = normalizeInstant(normalized.transferredAt, 'transferredAt') ?? this.now().toISOString();
+
+    const transferredClaimKeys = await withPostgresClient(this.pool, async (client) => {
+      await this.assertLiveEpisode(normalized.targetEpisodeId, 'transfer.targetEpisodeId', client);
+      for (const sourceEpisodeId of normalized.sourceEpisodeIds) {
+        await this.assertLiveEpisode(sourceEpisodeId, 'transfer.sourceEpisodeIds', client);
+      }
+
+      const activeClaims = (await client.query<PostgresEpisodeMessageClaimRow>(`
+        SELECT *
+        FROM l01_episode_message_claims
+        WHERE status = 'active' AND episode_id = ANY($1::text[])
+        FOR UPDATE
+      `, [normalized.sourceEpisodeIds])).rows;
+
+      await client.query(`
+        UPDATE l01_episode_message_claims
+        SET status = 'transferred', transferred_to_episode_id = $1, transferred_at = $2, reason = $3
+        WHERE status = 'active' AND episode_id = ANY($4::text[])
+      `, [normalized.targetEpisodeId, transferredAt, normalized.reason, normalized.sourceEpisodeIds]);
+
+      for (const claim of activeClaims) {
+        await client.query(`
+          INSERT INTO l01_episode_message_claims (
+            episode_id, claim_key, turn_id, channel_id, session_id, status, claimed_at, reason
+          )
+          VALUES ($1, $2, $3, $4, $5, 'active', $6, $7)
+        `, [
+          normalized.targetEpisodeId,
+          claim.claim_key,
+          claim.turn_id,
+          claim.channel_id,
+          claim.session_id,
+          transferredAt,
+          normalized.reason,
+        ]);
+      }
+
+      await client.query(`
+        UPDATE l01_episodes
+        SET status = 'superseded', superseded_by_episode_id = $1, updated_at = $2
+        WHERE id = ANY($3::text[])
+      `, [normalized.targetEpisodeId, transferredAt, normalized.sourceEpisodeIds]);
+
+      return activeClaims.map(claim => claim.claim_key).sort();
+    });
+
+    const transferredClaims = transferredClaimKeys.length > 0
+      ? await this.listEpisodeMessageClaims({
+        episodeId: normalized.targetEpisodeId,
+        claimKeys: transferredClaimKeys,
+        status: 'active',
+        limit: Math.min(MAX_LIMIT, transferredClaimKeys.length),
+      })
+      : [];
+    return {
+      targetEpisodeId: normalized.targetEpisodeId,
+      supersededEpisodeIds: normalized.sourceEpisodeIds,
+      transferredClaims,
+    };
+  }
+
   async getMaintenanceDiagnostics(
     options: EpisodicMaintenanceDiagnosticsOptions = {},
   ): Promise<EpisodicMaintenanceDiagnostics> {
@@ -1109,16 +1299,38 @@ export class PostgresEpisodicStore implements EpisodicStorePort {
     });
   }
 
-  private async assertEpisodeExists(id: string, field: string): Promise<void> {
-    const normalizedId = parseRequiredText(id, `episodeArc.${field}`);
-    const row = await queryOne<{ id: string }>(this.pool, `
+  private async assertEpisodeExists(id: string, field: string, client?: PoolClient): Promise<void> {
+    const normalizedId = parseRequiredText(id, field);
+    const queryable = client ?? this.pool;
+    const result = await queryable.query<{ id: string }>(`
       SELECT id
       FROM l01_episodes
       WHERE id = $1
       LIMIT 1
     `, [normalizedId]);
+    if (result.rows.length === 0) {
+      throw new Error(`${field} references unknown episode "${normalizedId}"`);
+    }
+  }
+
+  private async assertLiveEpisode(id: string, field: string, client: PoolClient): Promise<void> {
+    const normalizedId = parseRequiredText(id, field);
+    const result = await client.query<{
+      id: string;
+      merged_into_episode_id: string | null;
+      superseded_by_episode_id: string | null;
+    }>(`
+      SELECT id, merged_into_episode_id, superseded_by_episode_id
+      FROM l01_episodes
+      WHERE id = $1
+      LIMIT 1
+    `, [normalizedId]);
+    const row = result.rows[0];
     if (!row) {
-      throw new Error(`episodeArc.${field} references unknown episode "${normalizedId}"`);
+      throw new Error(`${field} references unknown episode "${normalizedId}"`);
+    }
+    if (row.merged_into_episode_id !== null || row.superseded_by_episode_id !== null) {
+      throw new Error(`${field} references episode "${normalizedId}" which is no longer live`);
     }
   }
 }

@@ -375,4 +375,198 @@ describe('EpisodicStore', () => {
       provenanceRefs: [{ kind: 'l0_span', refId: 'span-1' }],
     })).toThrow('episodeArc.targetEpisodeId references unknown episode "missing-episode"');
   });
+
+  function activeClaimKeyDuplicates(): unknown[] {
+    if (!db) throw new Error('store database is not open');
+    return db.prepare(`
+      SELECT claim_key
+      FROM l01_episode_message_claims
+      WHERE status = 'active'
+      GROUP BY claim_key
+      HAVING COUNT(*) > 1
+    `).all();
+  }
+
+  it('claims source messages and enforces one live episode per message at the database level', () => {
+    const store = makeStore();
+    store.createEpisode(baseEpisode({ id: 'episode-1' }));
+    store.createEpisode(baseEpisode({
+      id: 'episode-2',
+      startedAt: '2026-03-30T11:00:00.000Z',
+      endedAt: '2026-03-30T11:05:00.000Z',
+      spanRefs: [{ spanId: 'span-2' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+    }));
+
+    const claims = store.claimEpisodeMessages({
+      episodeId: 'episode-1',
+      sessionId: 'terminal:daily',
+      claims: [
+        { claimKey: 'l0-message:terminal:daily:1', turnId: 'turn-1', channelId: 'terminal:daily' },
+        { claimKey: 'l0-message:terminal:daily:2', turnId: 'turn-2', channelId: 'terminal:daily' },
+      ],
+    });
+    expect(claims).toHaveLength(2);
+    expect(claims.every(claim => claim.status === 'active' && claim.episodeId === 'episode-1')).toBe(true);
+
+    // Re-claiming the same messages for the same episode is idempotent.
+    expect(store.claimEpisodeMessages({
+      episodeId: 'episode-1',
+      claims: [{ claimKey: 'l0-message:terminal:daily:1' }],
+    })).toHaveLength(1);
+
+    // A different episode can never claim an already-claimed message.
+    expect(() => store.claimEpisodeMessages({
+      episodeId: 'episode-2',
+      claims: [{ claimKey: 'l0-message:terminal:daily:2' }],
+    })).toThrow('source message "l0-message:terminal:daily:2" is already claimed by episode "episode-1"');
+
+    // Even raw SQL that bypasses the store API hits the partial unique index.
+    expect(() => db?.prepare(`
+      INSERT INTO l01_episode_message_claims (
+        episode_id, claim_key, turn_id, channel_id, session_id, status, claimed_at
+      )
+      VALUES ('episode-2', 'l0-message:terminal:daily:1', NULL, NULL, NULL, 'active', '2026-04-01T00:00:00.000Z')
+    `).run()).toThrow(/UNIQUE constraint failed/);
+
+    expect(activeClaimKeyDuplicates()).toEqual([]);
+    expect(() => store.claimEpisodeMessages({ episodeId: 'episode-1', claims: [] }))
+      .toThrow('claimEpisodeMessages requires at least one source message claim');
+    expect(() => store.claimEpisodeMessages({
+      episodeId: 'missing-episode',
+      claims: [{ claimKey: 'l0-message:terminal:daily:9' }],
+    })).toThrow('claim.episodeId references unknown episode "missing-episode"');
+  });
+
+  it('transfers claims to a consolidated episode and supersedes candidates without deleting them', () => {
+    const store = makeStore();
+    store.createEpisode(baseEpisode({ id: 'candidate-1' }));
+    store.createEpisode(baseEpisode({
+      id: 'candidate-2',
+      startedAt: '2026-03-30T10:10:00.000Z',
+      endedAt: '2026-03-30T10:15:00.000Z',
+      spanRefs: [{ spanId: 'span-2' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+    }));
+    store.createEpisode(baseEpisode({
+      id: 'consolidated',
+      startedAt: '2026-03-30T10:00:00.000Z',
+      endedAt: '2026-03-30T10:15:00.000Z',
+      spanRefs: [{ spanId: 'span-consolidated' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-consolidated' }],
+    }));
+
+    store.claimEpisodeMessages({
+      episodeId: 'candidate-1',
+      sessionId: 'terminal:daily',
+      claims: [
+        { claimKey: 'l0-message:terminal:daily:1', turnId: 'turn-1' },
+        { claimKey: 'l0-message:terminal:daily:2', turnId: 'turn-2' },
+      ],
+    });
+    store.claimEpisodeMessages({
+      episodeId: 'candidate-2',
+      sessionId: 'terminal:daily',
+      claims: [{ claimKey: 'l0-message:terminal:daily:3', turnId: 'turn-3' }],
+    });
+
+    const result = store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1', 'candidate-2'],
+      targetEpisodeId: 'consolidated',
+      reason: 'nightly consolidation into a thematic episode',
+    });
+
+    expect(result.targetEpisodeId).toBe('consolidated');
+    expect(result.supersededEpisodeIds).toEqual(['candidate-1', 'candidate-2']);
+    expect(result.transferredClaims.map(claim => claim.claimKey).sort()).toEqual([
+      'l0-message:terminal:daily:1',
+      'l0-message:terminal:daily:2',
+      'l0-message:terminal:daily:3',
+    ]);
+    expect(result.transferredClaims.every(claim => (
+      claim.episodeId === 'consolidated' && claim.status === 'active'
+    ))).toBe(true);
+
+    // Superseded candidates retain their full claim history.
+    const history = store.listEpisodeMessageClaims({ episodeId: 'candidate-1' });
+    expect(history).toHaveLength(2);
+    expect(history.every(claim => (
+      claim.status === 'transferred'
+      && claim.transferredToEpisodeId === 'consolidated'
+      && claim.transferredAt !== undefined
+      && claim.reason === 'nightly consolidation into a thematic episode'
+      && claim.turnId !== undefined
+    ))).toBe(true);
+
+    // Superseded candidates are hidden from live queries but never deleted.
+    expect(store.listEpisodes({ limit: 10 }).map(episode => episode.id)).toEqual(['consolidated']);
+    expect(store.searchByTime({
+      from: '2026-03-30T00:00:00.000Z',
+      to: '2026-03-30T23:59:59.999Z',
+    }).map(episode => episode.id)).toEqual(['consolidated']);
+    expect(store.searchByThread('thread-alpha').map(episode => episode.id)).toEqual(['consolidated']);
+    expect(store.getEpisode('candidate-1')).toBeDefined();
+    expect(store.getEpisode('candidate-2')).toBeDefined();
+
+    // The one-live-episode-per-message invariant survives the transfer.
+    expect(activeClaimKeyDuplicates()).toEqual([]);
+    expect(() => store.claimEpisodeMessages({
+      episodeId: 'candidate-1',
+      claims: [{ claimKey: 'l0-message:terminal:daily:1' }],
+    })).toThrow('source message "l0-message:terminal:daily:1" is already claimed by episode "consolidated"');
+  });
+
+  it('fails closed on invalid claim transfers', () => {
+    const store = makeStore();
+    store.createEpisode(baseEpisode({ id: 'candidate-1' }));
+    store.createEpisode(baseEpisode({
+      id: 'consolidated',
+      startedAt: '2026-03-30T11:00:00.000Z',
+      endedAt: '2026-03-30T11:05:00.000Z',
+      spanRefs: [{ spanId: 'span-2' }],
+      provenanceRefs: [{ kind: 'l0_span', refId: 'span-2' }],
+    }));
+    store.claimEpisodeMessages({
+      episodeId: 'candidate-1',
+      claims: [{ claimKey: 'l0-message:terminal:daily:1' }],
+    });
+
+    expect(() => store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1'],
+      targetEpisodeId: 'missing-episode',
+      reason: 'nightly consolidation',
+    })).toThrow('transfer.targetEpisodeId references unknown episode "missing-episode"');
+    expect(() => store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1', 'consolidated'],
+      targetEpisodeId: 'consolidated',
+      reason: 'nightly consolidation',
+    })).toThrow('an episode cannot receive claims transferred from itself');
+    expect(() => store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['missing-episode'],
+      targetEpisodeId: 'consolidated',
+      reason: 'nightly consolidation',
+    })).toThrow('transfer.sourceEpisodeIds references unknown episode "missing-episode"');
+    expect(() => store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1'],
+      targetEpisodeId: 'consolidated',
+      reason: '',
+    })).toThrow('reason must be non-empty');
+    expect(() => store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: [],
+      targetEpisodeId: 'consolidated',
+      reason: 'nightly consolidation',
+    })).toThrow('transferEpisodeMessageClaims requires at least one source episode');
+
+    // A superseded source cannot transfer twice: history is immutable.
+    store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1'],
+      targetEpisodeId: 'consolidated',
+      reason: 'nightly consolidation',
+    });
+    expect(() => store.transferEpisodeMessageClaims({
+      sourceEpisodeIds: ['candidate-1'],
+      targetEpisodeId: 'consolidated',
+      reason: 'nightly consolidation',
+    })).toThrow('transfer.sourceEpisodeIds references episode "candidate-1" which is no longer live');
+  });
 });

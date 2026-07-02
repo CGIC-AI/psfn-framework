@@ -40,6 +40,8 @@ export interface EpisodicSynthesisRunInput {
 
 export interface EpisodicSynthesisRunResult {
   consideredEntries: number;
+  /** Entries dropped because another live episode already claims them. */
+  claimedEntriesSkipped: number;
   candidateEpisodeCount: number;
   createdEpisodes: Episode[];
   skippedEpisodeIds: string[];
@@ -106,6 +108,7 @@ const MIN_CONSOLIDATION_SEARCH_WINDOW_MS = 2 * 60 * 60_000;
 const MAX_CONSOLIDATION_SEARCH_WINDOW_MS = 24 * 60 * 60_000;
 const WATERMARK_LOOKBACK_MS = Math.max(MAX_CONSOLIDATION_BOUNDARY_GAP_MS, 45 * 60_000);
 const EPISODIC_SYNTHESIS_PROCESSOR = 'episodic_synthesis';
+const CLAIM_LOOKUP_CHUNK_SIZE = 200;
 const MINUTE_MS = 60_000;
 const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const STOP_WORDS = new Set([
@@ -188,6 +191,14 @@ function getTurnId(entry: SessionEntry): string {
   } catch {
     return `session-entry:${entry.channelId}:${entry.id}`;
   }
+}
+
+/**
+ * Deterministic per-source-message claim key. One live episode may hold the
+ * active claim for a key; synthesis drops claimed messages from its input.
+ */
+export function sessionEntryClaimKey(entry: Pick<SessionEntry, 'channelId' | 'id'>): string {
+  return `l0-message:${entry.channelId}:${entry.id}`;
 }
 
 function getEntryFingerprint(entry: SessionEntry): string {
@@ -782,6 +793,8 @@ export class EpisodicSynthesizer {
     | 'upsertProcessingWatermark'
     | 'writeEpisodeCandidateDecision'
     | 'writeEpisodeLineage'
+    | 'claimEpisodeMessages'
+    | 'listEpisodeMessageClaims'
   >;
   private readonly sessionReader: EpisodicSynthesisSessionReader;
   private readonly transcriptMessageLimit: number;
@@ -803,6 +816,8 @@ export class EpisodicSynthesizer {
       | 'upsertProcessingWatermark'
       | 'writeEpisodeCandidateDecision'
       | 'writeEpisodeLineage'
+      | 'claimEpisodeMessages'
+      | 'listEpisodeMessageClaims'
     >,
     sessionReader: EpisodicSynthesisSessionReader,
     options: EpisodicSynthesisOptions = {},
@@ -844,7 +859,11 @@ export class EpisodicSynthesizer {
     let durableWatermark = await this.store.getProcessingWatermark(watermarkScope);
     if (durableWatermark) this.rememberProcessingWatermark(durableWatermark);
 
-    const entries = this.applyWatermarkLookback(rawEntries, durableWatermark);
+    const lookbackEntries = this.applyWatermarkLookback(rawEntries, durableWatermark);
+    // Hard claim rule: a message actively claimed by any episode can never
+    // enter a new episode from this daytime synthesis path.
+    const entries = await this.filterClaimedEntries(lookbackEntries);
+    const claimedEntriesSkipped = lookbackEntries.length - entries.length;
 
     const groups = groupEntries(entries, {
       gapSplitMs: this.gapSplitMs,
@@ -901,6 +920,18 @@ export class EpisodicSynthesizer {
         }
       }
 
+      // Claim the group's source messages for the surviving episode before
+      // recording downstream artifacts; a claim conflict aborts the run.
+      await this.store.claimEpisodeMessages({
+        episodeId: episode.id,
+        sessionId: input.sessionId,
+        claims: group.entries.map(entry => ({
+          claimKey: sessionEntryClaimKey(entry),
+          turnId: getTurnId(entry),
+          channelId: entry.channelId,
+        })),
+      });
+
       const candidateDecision = await this.persistCandidateDecisionAndWatermark(
         input,
         episodeInput,
@@ -942,11 +973,30 @@ export class EpisodicSynthesizer {
 
     return {
       consideredEntries: entries.length,
+      claimedEntriesSkipped,
       candidateEpisodeCount: groups.length,
       createdEpisodes,
       skippedEpisodeIds,
       linkedArcs,
     };
+  }
+
+  private async filterClaimedEntries(entries: readonly SessionEntry[]): Promise<SessionEntry[]> {
+    if (entries.length === 0) return [];
+    const claimedKeys = new Set<string>();
+    const keys = entries.map(sessionEntryClaimKey);
+    for (let offset = 0; offset < keys.length; offset += CLAIM_LOOKUP_CHUNK_SIZE) {
+      const chunk = keys.slice(offset, offset + CLAIM_LOOKUP_CHUNK_SIZE);
+      const claims = await this.store.listEpisodeMessageClaims({
+        claimKeys: chunk,
+        status: 'active',
+        limit: chunk.length,
+      });
+      for (const claim of claims) {
+        claimedKeys.add(claim.claimKey);
+      }
+    }
+    return entries.filter(entry => !claimedKeys.has(sessionEntryClaimKey(entry)));
   }
 
   private async resolvePriorCandidates(

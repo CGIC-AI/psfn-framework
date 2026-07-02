@@ -175,6 +175,60 @@ export type EpisodeLineageWriteInput = Omit<EpisodeLineage, 'id' | 'createdAt'> 
   createdAt?: string;
 };
 
+export type EpisodeMessageClaimStatus = 'active' | 'transferred';
+
+/**
+ * A hard claim by an episode on one source message (L0 session entry).
+ * At most one ACTIVE claim may exist per claim key across all episodes; the
+ * database enforces this with a partial unique index. Transferred claims are
+ * retained forever as history — claims are never deleted.
+ */
+export interface EpisodeMessageClaim {
+  episodeId: string;
+  claimKey: string;
+  turnId?: string;
+  channelId?: string;
+  sessionId?: string;
+  status: EpisodeMessageClaimStatus;
+  claimedAt: string;
+  transferredToEpisodeId?: string;
+  transferredAt?: string;
+  reason?: string;
+}
+
+export interface EpisodeMessageClaimEntryInput {
+  claimKey: string;
+  turnId?: string;
+  channelId?: string;
+}
+
+export interface EpisodeMessageClaimWriteInput {
+  episodeId: string;
+  sessionId?: string;
+  claimedAt?: string;
+  claims: readonly EpisodeMessageClaimEntryInput[];
+}
+
+export interface EpisodeMessageClaimListOptions {
+  episodeId?: string;
+  claimKeys?: readonly string[];
+  status?: EpisodeMessageClaimStatus;
+  limit?: number;
+}
+
+export interface EpisodeClaimTransferInput {
+  sourceEpisodeIds: readonly string[];
+  targetEpisodeId: string;
+  reason: string;
+  transferredAt?: string;
+}
+
+export interface EpisodeClaimTransferResult {
+  targetEpisodeId: string;
+  supersededEpisodeIds: string[];
+  transferredClaims: EpisodeMessageClaim[];
+}
+
 export interface EpisodeListOptions {
   limit?: number;
   offset?: number;
@@ -226,6 +280,20 @@ export interface EpisodicStorePort {
   writeEpisodeCandidateDecision(input: EpisodeCandidateDecisionWriteInput): EpisodicStoreResult<EpisodeCandidateDecision>;
   listEpisodeCandidateDecisions(options?: EpisodeCandidateDecisionListOptions): EpisodicStoreResult<EpisodeCandidateDecision[]>;
   writeEpisodeLineage(input: EpisodeLineageWriteInput): EpisodicStoreResult<EpisodeLineage>;
+  /**
+   * Claims source messages for an episode. Fails closed if any message is
+   * already actively claimed by a different episode; re-claiming for the same
+   * episode is idempotent.
+   */
+  claimEpisodeMessages(input: EpisodeMessageClaimWriteInput): EpisodicStoreResult<EpisodeMessageClaim[]>;
+  listEpisodeMessageClaims(options?: EpisodeMessageClaimListOptions): EpisodicStoreResult<EpisodeMessageClaim[]>;
+  /**
+   * Nightly-consolidation claim restructuring: atomically moves every active
+   * claim held by the source candidate episodes onto the consolidated target
+   * episode and marks the sources superseded (never deleted). Superseded
+   * candidates keep their transferred claim rows as history.
+   */
+  transferEpisodeMessageClaims(input: EpisodeClaimTransferInput): EpisodicStoreResult<EpisodeClaimTransferResult>;
   getMaintenanceDiagnostics(options?: EpisodicMaintenanceDiagnosticsOptions): EpisodicStoreResult<EpisodicMaintenanceDiagnostics>;
 }
 
@@ -257,6 +325,19 @@ interface ProcessingWatermarkRow {
   artifacts_json: string;
   last_processed_at: string;
   updated_at: string;
+}
+
+interface EpisodeMessageClaimRow {
+  episode_id: string;
+  claim_key: string;
+  turn_id: string | null;
+  channel_id: string | null;
+  session_id: string | null;
+  status: string;
+  claimed_at: string;
+  transferred_to_episode_id: string | null;
+  transferred_at: string | null;
+  reason: string | null;
 }
 
 interface EpisodeCandidateDecisionRow {
@@ -296,6 +377,7 @@ const CANDIDATE_DECISION_STATUSES = new Set<EpisodeCandidateDecisionStatus>([
   'rejected',
   'needs_review',
 ]);
+const MESSAGE_CLAIM_STATUSES = new Set<EpisodeMessageClaimStatus>(['active', 'transferred']);
 const EPISODE_LINEAGE_RELATIONS = new Set<EpisodeLineageRelation>([
   'canonicalizes',
   'merges',
@@ -321,6 +403,7 @@ function createEpisodicSchema(db: Database.Database): void {
       salience_score REAL NOT NULL,
       status TEXT,
       merged_into_episode_id TEXT,
+      superseded_by_episode_id TEXT,
       episode_json TEXT NOT NULL,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -424,6 +507,26 @@ function createEpisodicSchema(db: Database.Database): void {
       ON l01_episode_lineage(source_episode_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_l01_episode_lineage_target
       ON l01_episode_lineage(target_episode_id, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS l01_episode_message_claims (
+      episode_id TEXT NOT NULL,
+      claim_key TEXT NOT NULL,
+      turn_id TEXT,
+      channel_id TEXT,
+      session_id TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
+      claimed_at TEXT NOT NULL,
+      transferred_to_episode_id TEXT,
+      transferred_at TEXT,
+      reason TEXT,
+      PRIMARY KEY (episode_id, claim_key),
+      CHECK (status IN ('active', 'transferred')),
+      FOREIGN KEY (episode_id) REFERENCES l01_episodes(id) ON DELETE CASCADE
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_l01_episode_message_claims_active_key
+      ON l01_episode_message_claims(claim_key) WHERE status = 'active';
+    CREATE INDEX IF NOT EXISTS idx_l01_episode_message_claims_episode
+      ON l01_episode_message_claims(episode_id, status);
   `);
 }
 
@@ -567,6 +670,25 @@ function mapCandidateDecisionRow(row: EpisodeCandidateDecisionRow): EpisodeCandi
   };
 }
 
+function mapMessageClaimRow(row: EpisodeMessageClaimRow): EpisodeMessageClaim {
+  const status = row.status as EpisodeMessageClaimStatus;
+  if (!MESSAGE_CLAIM_STATUSES.has(status)) {
+    throw new Error(`malformed persisted episode message claim "${row.episode_id}:${row.claim_key}": unsupported status`);
+  }
+  return {
+    episodeId: row.episode_id,
+    claimKey: row.claim_key,
+    ...(row.turn_id ? { turnId: row.turn_id } : {}),
+    ...(row.channel_id ? { channelId: row.channel_id } : {}),
+    ...(row.session_id ? { sessionId: row.session_id } : {}),
+    status,
+    claimedAt: row.claimed_at,
+    ...(row.transferred_to_episode_id ? { transferredToEpisodeId: row.transferred_to_episode_id } : {}),
+    ...(row.transferred_at ? { transferredAt: row.transferred_at } : {}),
+    ...(row.reason ? { reason: row.reason } : {}),
+  };
+}
+
 function parseRequiredText(value: string, field: string): string {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
@@ -699,6 +821,70 @@ function normalizeOptionalUnit(value: number | undefined, field: string): number
   return normalizeUnit(value, field);
 }
 
+export interface NormalizedEpisodeMessageClaimWriteInput {
+  episodeId: string;
+  sessionId?: string;
+  claimedAt?: string;
+  claims: EpisodeMessageClaimEntryInput[];
+}
+
+export function normalizeEpisodeMessageClaimWriteInput(
+  input: EpisodeMessageClaimWriteInput,
+): NormalizedEpisodeMessageClaimWriteInput {
+  const episodeId = parseRequiredText(input.episodeId, 'episodeId');
+  const sessionId = parseOptionalText(input.sessionId, 'sessionId');
+  if (input.claims.length === 0) {
+    throw new Error('claimEpisodeMessages requires at least one source message claim');
+  }
+  const byKey = new Map<string, EpisodeMessageClaimEntryInput>();
+  for (const claim of input.claims) {
+    const claimKey = parseRequiredText(claim.claimKey, 'claims[].claimKey');
+    if (byKey.has(claimKey)) {
+      throw new Error(`duplicate source message claim key "${claimKey}" in claim input`);
+    }
+    const turnId = parseOptionalText(claim.turnId, 'claims[].turnId');
+    const channelId = parseOptionalText(claim.channelId, 'claims[].channelId');
+    byKey.set(claimKey, {
+      claimKey,
+      ...(turnId ? { turnId } : {}),
+      ...(channelId ? { channelId } : {}),
+    });
+  }
+  return {
+    episodeId,
+    ...(sessionId ? { sessionId } : {}),
+    ...(input.claimedAt !== undefined ? { claimedAt: input.claimedAt } : {}),
+    claims: [...byKey.values()],
+  };
+}
+
+export interface NormalizedEpisodeClaimTransferInput {
+  sourceEpisodeIds: string[];
+  targetEpisodeId: string;
+  reason: string;
+  transferredAt?: string;
+}
+
+export function normalizeEpisodeClaimTransferInput(
+  input: EpisodeClaimTransferInput,
+): NormalizedEpisodeClaimTransferInput {
+  const targetEpisodeId = parseRequiredText(input.targetEpisodeId, 'targetEpisodeId');
+  const reason = parseRequiredText(input.reason, 'reason');
+  const sourceEpisodeIds = normalizeRequiredTextList(input.sourceEpisodeIds, 'sourceEpisodeIds');
+  if (sourceEpisodeIds.length === 0) {
+    throw new Error('transferEpisodeMessageClaims requires at least one source episode');
+  }
+  if (sourceEpisodeIds.includes(targetEpisodeId)) {
+    throw new Error('an episode cannot receive claims transferred from itself');
+  }
+  return {
+    sourceEpisodeIds,
+    targetEpisodeId,
+    reason,
+    ...(input.transferredAt !== undefined ? { transferredAt: input.transferredAt } : {}),
+  };
+}
+
 function normalizeWatermarkScope(scope: EpisodicProcessingWatermarkScope): EpisodicProcessingWatermarkScope {
   return {
     processor: parseRequiredText(scope.processor, 'processor'),
@@ -727,8 +913,8 @@ export class EpisodicStore implements EpisodicStorePort {
     this.ensureMergeColumns();
   }
 
-  // Pre-existing databases predate the merge-tracking columns; CREATE TABLE
-  // IF NOT EXISTS does not add them.
+  // Pre-existing databases predate the merge/supersede-tracking columns;
+  // CREATE TABLE IF NOT EXISTS does not add them.
   private ensureMergeColumns(): void {
     const columns = this.db.prepare("SELECT name FROM pragma_table_info('l01_episodes')").all() as Array<{ name: string }>;
     const names = new Set(columns.map(column => column.name));
@@ -737,6 +923,9 @@ export class EpisodicStore implements EpisodicStorePort {
     }
     if (!names.has('merged_into_episode_id')) {
       this.db.exec('ALTER TABLE l01_episodes ADD COLUMN merged_into_episode_id TEXT');
+    }
+    if (!names.has('superseded_by_episode_id')) {
+      this.db.exec('ALTER TABLE l01_episodes ADD COLUMN superseded_by_episode_id TEXT');
     }
   }
 
@@ -840,7 +1029,7 @@ export class EpisodicStore implements EpisodicStorePort {
     const rows = this.db.prepare(`
       SELECT id, episode_json
       FROM l01_episodes
-      WHERE merged_into_episode_id IS NULL
+      WHERE merged_into_episode_id IS NULL AND superseded_by_episode_id IS NULL
       ORDER BY started_at ASC, id ASC
       LIMIT ? OFFSET ?
     `).all(normalizeLimit(options.limit), normalizeOffset(options.offset)) as EpisodeRow[];
@@ -882,7 +1071,7 @@ export class EpisodicStore implements EpisodicStorePort {
       throw new Error('from must be before or equal to to');
     }
 
-    const where: string[] = ['merged_into_episode_id IS NULL'];
+    const where: string[] = ['merged_into_episode_id IS NULL', 'superseded_by_episode_id IS NULL'];
     const params: Array<string | number> = [];
     if (from !== undefined) {
       where.push('ended_at >= ?');
@@ -912,7 +1101,7 @@ export class EpisodicStore implements EpisodicStorePort {
     const rows = this.db.prepare(`
       SELECT id, episode_json
       FROM l01_episodes
-      WHERE thread_id = ? AND merged_into_episode_id IS NULL
+      WHERE thread_id = ? AND merged_into_episode_id IS NULL AND superseded_by_episode_id IS NULL
       ORDER BY started_at ASC, id ASC
       LIMIT ? OFFSET ?
     `).all(
@@ -924,8 +1113,8 @@ export class EpisodicStore implements EpisodicStorePort {
   }
 
   writeEpisodeArc(input: EpisodeArcWriteInput): EpisodeArc {
-    this.assertEpisodeExists(input.sourceEpisodeId, 'sourceEpisodeId');
-    this.assertEpisodeExists(input.targetEpisodeId, 'targetEpisodeId');
+    this.assertEpisodeExists(input.sourceEpisodeId, 'episodeArc.sourceEpisodeId');
+    this.assertEpisodeExists(input.targetEpisodeId, 'episodeArc.targetEpisodeId');
 
     const now = this.now().toISOString();
     const arc = parseEpisodeArc({
@@ -1361,6 +1550,152 @@ export class EpisodicStore implements EpisodicStorePort {
     return lineage;
   }
 
+  claimEpisodeMessages(input: EpisodeMessageClaimWriteInput): EpisodeMessageClaim[] {
+    const normalized = normalizeEpisodeMessageClaimWriteInput(input);
+    const claimedAt = normalizeInstant(normalized.claimedAt, 'claimedAt') ?? this.now().toISOString();
+    this.assertEpisodeExists(normalized.episodeId, 'claim.episodeId');
+
+    const claimKeys = normalized.claims.map(claim => claim.claimKey);
+    const write = this.db.transaction(() => {
+      const placeholders = claimKeys.map(() => '?').join(', ');
+      const activeRows = this.db.prepare(`
+        SELECT * FROM l01_episode_message_claims
+        WHERE status = 'active' AND claim_key IN (${placeholders})
+      `).all(...claimKeys) as EpisodeMessageClaimRow[];
+      const activeByKey = new Map(activeRows.map(row => [row.claim_key, row]));
+      for (const row of activeRows) {
+        if (row.episode_id !== normalized.episodeId) {
+          throw new Error(
+            `source message "${row.claim_key}" is already claimed by episode "${row.episode_id}"; `
+            + `refusing to claim it for episode "${normalized.episodeId}"`,
+          );
+        }
+      }
+
+      const insert = this.db.prepare(`
+        INSERT INTO l01_episode_message_claims (
+          episode_id, claim_key, turn_id, channel_id, session_id, status, claimed_at
+        )
+        VALUES (?, ?, ?, ?, ?, 'active', ?)
+      `);
+      for (const claim of normalized.claims) {
+        if (activeByKey.has(claim.claimKey)) continue;
+        insert.run(
+          normalized.episodeId,
+          claim.claimKey,
+          claim.turnId ?? null,
+          claim.channelId ?? null,
+          normalized.sessionId ?? null,
+          claimedAt,
+        );
+      }
+    });
+    write();
+
+    return this.listEpisodeMessageClaims({
+      episodeId: normalized.episodeId,
+      claimKeys,
+      status: 'active',
+      limit: Math.min(MAX_LIMIT, claimKeys.length),
+    });
+  }
+
+  listEpisodeMessageClaims(options: EpisodeMessageClaimListOptions = {}): EpisodeMessageClaim[] {
+    const where: string[] = [];
+    const params: Array<string | number> = [];
+    if (options.episodeId !== undefined) {
+      where.push('episode_id = ?');
+      params.push(parseRequiredText(options.episodeId, 'episodeId'));
+    }
+    if (options.claimKeys !== undefined) {
+      const claimKeys = normalizeRequiredTextList(options.claimKeys, 'claimKeys');
+      if (claimKeys.length === 0) return [];
+      where.push(`claim_key IN (${claimKeys.map(() => '?').join(', ')})`);
+      params.push(...claimKeys);
+    }
+    if (options.status !== undefined) {
+      if (!MESSAGE_CLAIM_STATUSES.has(options.status)) {
+        throw new Error(`episode message claim status is not supported: ${options.status}`);
+      }
+      where.push('status = ?');
+      params.push(options.status);
+    }
+    const whereClause = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
+    const rows = this.db.prepare(`
+      SELECT *
+      FROM l01_episode_message_claims
+      ${whereClause}
+      ORDER BY claimed_at ASC, episode_id ASC, claim_key ASC
+      LIMIT ?
+    `).all(...params, normalizeLimit(options.limit)) as EpisodeMessageClaimRow[];
+    return rows.map(mapMessageClaimRow);
+  }
+
+  transferEpisodeMessageClaims(input: EpisodeClaimTransferInput): EpisodeClaimTransferResult {
+    const normalized = normalizeEpisodeClaimTransferInput(input);
+    const transferredAt = normalizeInstant(normalized.transferredAt, 'transferredAt') ?? this.now().toISOString();
+
+    const transfer = this.db.transaction(() => {
+      this.assertLiveEpisode(normalized.targetEpisodeId, 'transfer.targetEpisodeId');
+      for (const sourceEpisodeId of normalized.sourceEpisodeIds) {
+        this.assertLiveEpisode(sourceEpisodeId, 'transfer.sourceEpisodeIds');
+      }
+
+      const sourcePlaceholders = normalized.sourceEpisodeIds.map(() => '?').join(', ');
+      const activeClaims = this.db.prepare(`
+        SELECT * FROM l01_episode_message_claims
+        WHERE status = 'active' AND episode_id IN (${sourcePlaceholders})
+      `).all(...normalized.sourceEpisodeIds) as EpisodeMessageClaimRow[];
+
+      this.db.prepare(`
+        UPDATE l01_episode_message_claims
+        SET status = 'transferred', transferred_to_episode_id = ?, transferred_at = ?, reason = ?
+        WHERE status = 'active' AND episode_id IN (${sourcePlaceholders})
+      `).run(normalized.targetEpisodeId, transferredAt, normalized.reason, ...normalized.sourceEpisodeIds);
+
+      const insert = this.db.prepare(`
+        INSERT INTO l01_episode_message_claims (
+          episode_id, claim_key, turn_id, channel_id, session_id, status, claimed_at, reason
+        )
+        VALUES (?, ?, ?, ?, ?, 'active', ?, ?)
+      `);
+      for (const claim of activeClaims) {
+        insert.run(
+          normalized.targetEpisodeId,
+          claim.claim_key,
+          claim.turn_id,
+          claim.channel_id,
+          claim.session_id,
+          transferredAt,
+          normalized.reason,
+        );
+      }
+
+      this.db.prepare(`
+        UPDATE l01_episodes
+        SET status = 'superseded', superseded_by_episode_id = ?, updated_at = ?
+        WHERE id IN (${sourcePlaceholders})
+      `).run(normalized.targetEpisodeId, transferredAt, ...normalized.sourceEpisodeIds);
+
+      return activeClaims.map(claim => claim.claim_key).sort();
+    });
+    const transferredClaimKeys = transfer();
+
+    const transferredClaims = transferredClaimKeys.length > 0
+      ? this.listEpisodeMessageClaims({
+        episodeId: normalized.targetEpisodeId,
+        claimKeys: transferredClaimKeys,
+        status: 'active',
+        limit: Math.min(MAX_LIMIT, transferredClaimKeys.length),
+      })
+      : [];
+    return {
+      targetEpisodeId: normalized.targetEpisodeId,
+      supersededEpisodeIds: normalized.sourceEpisodeIds,
+      transferredClaims,
+    };
+  }
+
   getMaintenanceDiagnostics(
     options: EpisodicMaintenanceDiagnosticsOptions = {},
   ): EpisodicMaintenanceDiagnostics {
@@ -1379,7 +1714,7 @@ export class EpisodicStore implements EpisodicStorePort {
   }
 
   private assertEpisodeExists(id: string, field: string): void {
-    const normalizedId = parseRequiredText(id, `episodeArc.${field}`);
+    const normalizedId = parseRequiredText(id, field);
     const row = this.db.prepare(`
       SELECT id
       FROM l01_episodes
@@ -1387,7 +1722,27 @@ export class EpisodicStore implements EpisodicStorePort {
       LIMIT 1
     `).get(normalizedId) as { id: string } | undefined;
     if (!row) {
-      throw new Error(`episodeArc.${field} references unknown episode "${normalizedId}"`);
+      throw new Error(`${field} references unknown episode "${normalizedId}"`);
+    }
+  }
+
+  private assertLiveEpisode(id: string, field: string): void {
+    const normalizedId = parseRequiredText(id, field);
+    const row = this.db.prepare(`
+      SELECT id, merged_into_episode_id, superseded_by_episode_id
+      FROM l01_episodes
+      WHERE id = ?
+      LIMIT 1
+    `).get(normalizedId) as {
+      id: string;
+      merged_into_episode_id: string | null;
+      superseded_by_episode_id: string | null;
+    } | undefined;
+    if (!row) {
+      throw new Error(`${field} references unknown episode "${normalizedId}"`);
+    }
+    if (row.merged_into_episode_id !== null || row.superseded_by_episode_id !== null) {
+      throw new Error(`${field} references episode "${normalizedId}" which is no longer live`);
     }
   }
 }

@@ -390,6 +390,26 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_l01_episode_reviews_artifacts_gin ON l01_episode_reviews USING GIN (artifacts_json);`,
   `CREATE INDEX IF NOT EXISTS idx_l01_episode_reviews_provenance_refs_gin ON l01_episode_reviews USING GIN (provenance_refs);`,
   `
+  CREATE TABLE IF NOT EXISTS l01_episode_message_claims (
+    episode_id TEXT NOT NULL REFERENCES l01_episodes(id) ON DELETE CASCADE,
+    claim_key TEXT NOT NULL,
+    turn_id TEXT,
+    channel_id TEXT,
+    session_id TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    claimed_at TIMESTAMPTZ NOT NULL,
+    transferred_to_episode_id TEXT REFERENCES l01_episodes(id) ON DELETE SET NULL,
+    transferred_at TIMESTAMPTZ,
+    reason TEXT,
+    PRIMARY KEY (episode_id, claim_key),
+    CHECK (status IN ('active', 'transferred')),
+    CHECK (status <> 'transferred' OR transferred_at IS NOT NULL)
+  );
+  `,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_l01_episode_message_claims_active_key ON l01_episode_message_claims(claim_key) WHERE status = 'active';`,
+  `CREATE INDEX IF NOT EXISTS idx_l01_episode_message_claims_episode ON l01_episode_message_claims(episode_id, status);`,
+  `CREATE INDEX IF NOT EXISTS idx_l01_episode_message_claims_key ON l01_episode_message_claims(claim_key, status);`,
+  `
   CREATE TABLE IF NOT EXISTS memory_processing_watermarks (
     id TEXT PRIMARY KEY,
     processor TEXT NOT NULL,

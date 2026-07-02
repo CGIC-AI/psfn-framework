@@ -15,10 +15,33 @@
  * - "scope" means the conversation a memory/block belongs to, e.g.
  *   `room:townsquare` or `dm:alice`.
  */
+import {
+  formatMemoryWithheldReasonLabel,
+  type MemoryWithheldReasonTag,
+} from '../../../faculties/memory/withheld-summary.js';
 
 export interface HistoryMessageLike {
   role: string;
   content: string;
+}
+
+/**
+ * Assert that the rendered retrieval output cites the given withheld-reason
+ * tag's human-readable label (`formatMemoryWithheldReasonLabel`), the same
+ * label the real `<memory_context_note>` rendering path
+ * (`retrieval/formatting.ts` renderWithheldSummary) emits. Tying the
+ * assertion to the labeling function itself (rather than a hand-copied
+ * string) means a reason-tag/label drift fails this test instead of the two
+ * silently diverging.
+ */
+export function expectWithheldReason(output: string, reasonTag: MemoryWithheldReasonTag): void {
+  const label = formatMemoryWithheldReasonLabel(reasonTag);
+  if (!output.includes(label)) {
+    throw new Error(
+      `expectWithheldReason: assembled output does not cite the withheld-reason label `
+      + `${JSON.stringify(label)} for reason tag "${reasonTag}".`,
+    );
+  }
 }
 
 export interface AttributionParticipant {

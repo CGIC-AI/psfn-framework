@@ -29,6 +29,7 @@
     "test:leak-audit": "vitest run src/core/session/context-leak-audit.test.ts",
     "test:group-harness": "vitest run src/core/session/group-chat-harness/group-chat-regression.test.ts",
     "test:prompt-goldens": "vitest run src/core/session/group-chat-harness/prompt-shape-goldens.test.ts",
+    "test:leak-matrix": "vitest run src/core/session/group-chat-harness/envelope-leak-matrix.test.ts",
     "test:watch": "vitest",
     "chat": "tsx src/app/cli/chat-cli.ts",
     "session:repair": "tsx src/app/maintenance/session-repair.ts",

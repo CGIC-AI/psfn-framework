@@ -675,3 +675,118 @@ export function classifyHarnessRoomGroupMemory(
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// E3.6: envelope leak-rate matrix fixture variants.
+//
+// Additive-only extensions of the leak-probe fixtures above: a broadcast
+// surface (classified public+broadcast via the demoted `social:` prefix
+// heuristic, so no global runtime-policy/label mutation is needed), a
+// dedicated "public" room used with an explicit `channelMeta.privacyLevel`
+// override at call time, and an anonymous-audience room with no resolvable
+// speakers. Also a set of sensitivity/consent/boundary/contact-scope
+// sentinel memories that exercise every remaining PolicyReasonTag and the
+// high-intimacy contact-scope gate through the REAL MemoryRetriever.retrieve
+// path (evaluateRetrievalAccessDecision / evaluateMemoryPolicy), matching the
+// same "real retrieval, no mocked output" discipline as makeLeakProbeMemories.
+// ---------------------------------------------------------------------------
+
+/**
+ * Classifies as `{ channelPrivacy: 'public', broadcast: true }` purely from
+ * the demoted `social:` prefix heuristic (DEFAULT_POLICY.channelClassification
+ * .broadcastPrefixes) — a pure function of the channel id, so no
+ * setRuntimeChannelEnvelopeLabels/reset bookkeeping is required.
+ */
+export const BROADCAST_ROOM_ID = 'social:leak-matrix-broadcast';
+
+/**
+ * Classifies as `invite_only` by derived default like any other unlabeled
+ * room; callers reclassify it as `public` for a given retrieval by passing
+ * `channelMeta.privacyLevel: 'public'` (a derived-default-tier input), so the
+ * "public room" corner needs no global label/override registration either.
+ */
+export const PUBLIC_ROOM_ID = 'room:leak-matrix-public';
+
+/** A group room with no members resolvable to contacts: audienceKnowledge derives 'anonymous'. */
+export const ANONYMOUS_ROOM_ID = 'room:leak-matrix-anonymous';
+
+/** Distinct sentinel memory texts for the E3.6 leak-rate matrix. */
+export const LEAK_MATRIX_SENTINELS = {
+  consentDenied: 'Consent-denied recall detail must never surface once allowRecall is false',
+  boundaryWithhold: 'Boundary-withheld secret must never surface even at full trust',
+  boundaryConsentRequired: 'Consent-gated disclosure surfaces only once per-turn consent is explicitly granted',
+  highIntimacyRoomAlice: 'Alice high-intimacy room-scoped fact tied to her own contact record',
+  personalScopeMismatch: 'Personal-sensitivity room fact not gated by contact-scope mismatch',
+  personalInPublicRoom: 'Personal-sensitivity detail recorded in a public-classified room',
+  publicFloorInPublicRoom: 'Public-sensitivity floor detail recorded in a public-classified room',
+  personalOnBroadcast: 'Personal-sensitivity detail recorded on a broadcast surface',
+  publicFloorOnBroadcast: 'Public-sensitivity floor detail recorded on a broadcast surface',
+  intimateDmDetail: 'Intimate-sensitivity detail recorded in a private one-on-one DM',
+  intimateRoomDetail: 'Intimate-sensitivity detail recorded in an invite-only room, unowned by any contact',
+  confidentialRoomDetail: 'Confidential-sensitivity detail recorded in an invite-only room',
+  anonymousRoomPersonal: 'Personal-sensitivity detail recorded in the anonymous-audience room',
+  anonymousRoomIntimate: 'Intimate-sensitivity detail recorded in the anonymous-audience room',
+} as const;
+
+/**
+ * Builds the full set of E3.6 matrix sentinel memories. Each memory is scoped
+ * (conversation scope + matching provenance.channelId) to the channel the
+ * matrix row retrieves from, so the room-visibility gate never trips as a
+ * side effect of an unrelated axis (sensitivity/trust/consent/boundary) under
+ * test in that row.
+ */
+export function makeLeakMatrixMemories(): ScopedMemory[] {
+  return [
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.consentDenied, conversationScope(dmChannelId(ALICE)), {
+      sensitivity: 'personal',
+      consentFlags: { allowRecall: false },
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.boundaryWithhold, conversationScope(dmChannelId(ALICE)), {
+      sensitivity: 'personal',
+      tags: ['withhold'],
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.boundaryConsentRequired, conversationScope(dmChannelId(ALICE)), {
+      sensitivity: 'personal',
+      tags: ['consent_required'],
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.highIntimacyRoomAlice, conversationScope(GROUP_ROOM_ID), {
+      sensitivity: 'intimate',
+      contactId: ALICE.id,
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.personalScopeMismatch, conversationScope(GROUP_ROOM_ID), {
+      sensitivity: 'personal',
+      contactId: ALICE.id,
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.personalInPublicRoom, conversationScope(PUBLIC_ROOM_ID), {
+      sensitivity: 'personal',
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.publicFloorInPublicRoom, conversationScope(PUBLIC_ROOM_ID), {
+      sensitivity: 'public',
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.personalOnBroadcast, conversationScope(BROADCAST_ROOM_ID), {
+      sensitivity: 'personal',
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.publicFloorOnBroadcast, conversationScope(BROADCAST_ROOM_ID), {
+      sensitivity: 'public',
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.intimateDmDetail, conversationScope(dmChannelId(ALICE)), {
+      sensitivity: 'intimate',
+      // Owned by Alice herself so DM retrievals that legitimately pass her
+      // own canonicalContactId are not incidentally caught by the
+      // high-intimacy contact-scope gate (a separate, dedicated axis below).
+      contactId: ALICE.id,
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.intimateRoomDetail, conversationScope(GROUP_ROOM_ID), {
+      sensitivity: 'intimate',
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.confidentialRoomDetail, conversationScope(GROUP_ROOM_ID), {
+      sensitivity: 'confidential',
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.anonymousRoomPersonal, conversationScope(ANONYMOUS_ROOM_ID), {
+      sensitivity: 'personal',
+    }),
+    makeScopedMemory(LEAK_MATRIX_SENTINELS.anonymousRoomIntimate, conversationScope(ANONYMOUS_ROOM_ID), {
+      sensitivity: 'intimate',
+    }),
+  ];
+}

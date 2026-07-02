@@ -15,10 +15,11 @@ Last updated: 2026-06-29.
 
 ### L0.1: Episodic landmarks
 
-- Stored in PostgreSQL through the runtime episodic store tables `l01_episodes`, `l01_episode_spans`, `l01_episode_arcs`, lineage, review, candidate, and watermark tables
+- Stored in PostgreSQL through the runtime episodic store tables `l01_episodes`, `l01_episode_spans`, `l01_episode_arcs`, lineage, review, candidate, watermark, and message-claim tables
 - Represents bounded lived episodes with L0 span/artifact provenance, salience, affect, themes, participants, thread IDs, and channel IDs
 - Created during configured rest/me-time windows after user inactivity by the sleeptime episodic synthesizer
 - Allows multiple episodes per day; a long-running theme is a graph of linked episodes, not one large aggregate record
+- Hard message claiming: each episode claims its source messages in `l01_episode_message_claims`, and a partial unique index guarantees at most one live episode per source message. Daytime synthesis drops actively claimed messages from its input before grouping, so overlapping passes can never re-process the same turns. Nightly consolidation is the only process allowed to restructure claims, via `transferEpisodeMessageClaims`: claims move to the consolidated episode and the covered candidates are marked superseded (hidden from live queries, never deleted, claim history retained). The >50% span-overlap merge heuristic remains as defense in depth for pre-claiming data.
 - Retrieved before raw span/artifact drill-down so L1 can search a scoped episode chain instead of all chats and all memories
 - Exposed in Garden through the episodic memory page for episode, provenance, arc, and thread inspection
 - Must stay separate from L2 typed memories and from generic transcript summary/vector caches

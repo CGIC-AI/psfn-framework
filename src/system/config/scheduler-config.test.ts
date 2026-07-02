@@ -134,6 +134,62 @@ describe('scheduler config seed defaults', () => {
     });
   });
 
+  it('accepts the habit wake-timing toggle and habit overrides (E7.2)', () => {
+    withSeedDir((seedDir) => {
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        temporalWakeup: {
+          enabled: true,
+          morningWake: {
+            timing: 'habit',
+            habit: { minSampleDays: 3, wakeBandStartHour: 4, recentWeight: 3 },
+          },
+          idleRefresher: {},
+        },
+      });
+      const loaded = loadSchedulerSeedDefaults({ seedDir });
+      expect(loaded.temporalWakeup.morningWake.timing).toBe('habit');
+      expect(loaded.temporalWakeup.morningWake.habit).toEqual({
+        ...DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.habit,
+        minSampleDays: 3,
+        wakeBandStartHour: 4,
+        recentWeight: 3,
+      });
+    });
+  });
+
+  it('defaults wake timing to fixed and fails closed on invalid timing/habit config (E7.2)', () => {
+    withSeedDir((seedDir) => {
+      // Default remains 'fixed' when unspecified.
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), buildValidSchedulerConfig());
+      expect(loadSchedulerSeedDefaults({ seedDir }).temporalWakeup.morningWake.timing).toBe('fixed');
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        temporalWakeup: { morningWake: { timing: 'sensor' } },
+      });
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'temporalWakeup.morningWake.timing must be "fixed" or "habit"',
+      );
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        temporalWakeup: { morningWake: { habit: { extendedWindowDays: 3, recentWindowDays: 7 } } },
+      });
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'temporalWakeup.morningWake.habit.extendedWindowDays must be >= recentWindowDays',
+      );
+
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), {
+        ...buildValidSchedulerConfig(),
+        temporalWakeup: { morningWake: { habit: { wakeBandStartHour: 12, wakeBandEndHour: 6 } } },
+      });
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'temporalWakeup.morningWake.habit.wakeBandEndHour must be greater than wakeBandStartHour',
+      );
+    });
+  });
+
   it('fails closed on malformed rest-window config', () => {
     withSeedDir((seedDir) => {
       const config = buildValidSchedulerConfig();

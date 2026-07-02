@@ -47,6 +47,21 @@ export function buildAdminSchedulerRoutes(options: {
       },
     },
     {
+      // ── Habit wake-window read surface (E7.2) ──
+      // Honest read-only view of the current estimate + data sufficiency. Full
+      // dashboard work belongs to another bead; this stays a thin read route.
+      method: 'GET',
+      match: exactPath('/api/admin/scheduler/wake-window'),
+      handle: (_req, res) => {
+        if (!scheduler?.getWakeWindow) {
+          sendJson(res, 200, { available: false, snapshot: null });
+          return;
+        }
+        const snapshot = scheduler.getWakeWindow();
+        sendJson(res, 200, { available: snapshot !== null, snapshot });
+      },
+    },
+    {
       method: 'PATCH',
       match: prefixedParamPath('/api/admin/scheduler/tasks/', 'taskId'),
       handle: (req, res, { taskId }) => {

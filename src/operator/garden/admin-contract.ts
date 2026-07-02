@@ -9,6 +9,7 @@ import type { ConfirmationResolveResult } from '../../system/capabilities/confir
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ReflectionTemplate } from '../../core/scheduler/heartbeat-policy.js';
 import type { RecurringCadence, ScheduledTask, TaskType } from '../../core/scheduler/types.js';
+import type { WakeWindowSnapshot } from '../../core/scheduler/temporal-wakeup.js';
 import type { SkillSnapshot } from '../../faculties/skills/types.js';
 import type { ValuesJournalEntry } from '../../faculties/values/store.js';
 import type { ModelDiscoveryBackend } from '../../primitives/llm/discovery.js';
@@ -95,6 +96,8 @@ export interface AdminSchedulerApi {
   }): { ok: boolean; message: string };
   removeTask?(id: string): { ok: boolean; message: string };
   updateReflection?(id: string, updates: Partial<ReflectionTemplate>): { ok: boolean; message: string };
+  /** Current habit wake-window estimate + data sufficiency (E7.2). */
+  getWakeWindow?(): WakeWindowSnapshot | null;
 }
 
 export interface ManagedSkillRecord {

@@ -763,6 +763,20 @@ export interface EventMap {
   'system.ready': Record<string, never>;
   'system.shutdown': Record<string, never>;
   'system.error': { error: Error; context?: string };
+  // Habit-derived morning wake timing resolution (E7.2). Emitted when the
+  // morning wake slot is resolved: 'fixed', a successful 'habit' estimate, or a
+  // 'habit_fallback' to the fixed time with a reason. Makes the fallback reason
+  // and the effective wake slot visible without coupling the estimator to a bus.
+  'scheduler.wake_timing.resolved': {
+    timingMode: 'fixed' | 'habit';
+    source: 'fixed' | 'habit' | 'habit_fallback';
+    effectiveLocalTime: string;
+    timeZone: string;
+    sampleDays: number;
+    fallbackReason?: string;
+    windowStartLocalTime?: string;
+    windowEndLocalTime?: string;
+  };
 }
 
 export type EventName = keyof EventMap;

@@ -15,6 +15,7 @@ import {
 import { invalidateCachedPromptRuntimeLayoutStore } from '../../core/identity/prompt-runtime-store-cache.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
+import { resolveMorningWakeSnapshot } from '../../core/scheduler/temporal-wakeup.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { PostTurnActionRuntime } from '../../core/agent/post-turn-action-runtime.js';
 import { getObserverEvalSidecarHealthSnapshot } from '../../core/eval/observer-sidecar/runtime.js';
@@ -182,7 +183,16 @@ export function createInProcessGardenAdminContract(
     stateProvider: options.adaptiveToolsStateProvider ?? null,
     toolHealthProvider: options.toolHealthProvider ?? null,
   });
-  const schedulerService = new AdminSchedulerService(options.scheduler, options.config.dataDir);
+  const schedulerService = new AdminSchedulerService(
+    options.scheduler,
+    options.config.dataDir,
+    // Live habit wake-window snapshot: recompute from the current scheduler
+    // config + active-session partner timestamps on each read (E7.2).
+    () => resolveMorningWakeSnapshot({
+      sessionManager: options.sessionManager,
+      morning: configStore.loadScheduler().temporalWakeup.morningWake,
+    }),
+  );
   const subsystemHealth = new AdminSubsystemHealthDataService({
     eventBus: options.eventBus,
     scheduler: schedulerService,

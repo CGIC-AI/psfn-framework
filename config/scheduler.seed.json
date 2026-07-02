@@ -56,8 +56,22 @@
     "enabled": true,
     "morningWake": {
       "enabled": true,
+      "timing": "fixed",
       "localTime": "08:00",
       "timezone": "local",
+      "habit": {
+        "recentWindowDays": 7,
+        "extendedWindowDays": 30,
+        "minSleepGapHours": 4,
+        "wakeBandStartHour": 3,
+        "wakeBandEndHour": 12,
+        "minSampleDays": 4,
+        "recentWeight": 2,
+        "extendedWeight": 1,
+        "lowerQuantile": 0.25,
+        "upperQuantile": 0.75,
+        "maxSamplesScanned": 2000
+      },
       "catchUpEntryLimit": 32,
       "catchUpSummaryMaxTokens": 160,
       "fullTurnMaxIdleHours": 72

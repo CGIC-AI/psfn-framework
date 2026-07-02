@@ -166,8 +166,9 @@ const EVENT_LANE_DEFINITIONS: readonly EventLaneDefinition[] = [
 /**
  * Deterministic pre-LLM gate lanes (jpvd.4): every one emits the shared
  * `DeterministicGateEvent` shape, so a single generic subscriber feeds them.
- * The extraction lane keeps its bespoke `memory.extraction.end` subscriber
- * above and additionally consumes `memory.extraction.gate` skips here.
+ * The extraction pre-LLM gate uses the same primitive but keeps surfacing its
+ * skips through the existing `memory.extraction.end` telemetry (the extractor
+ * has no direct event-bus handle), so it is not listed here.
  */
 const GATE_EVENT_LANES: ReadonlyArray<{
   readonly event:
@@ -175,7 +176,6 @@ const GATE_EVENT_LANES: ReadonlyArray<{
     | 'memory.dream_meaning.gate'
     | 'memory.sleep_consolidation.refinement_gate'
     | 'emotion.appraisal.gate'
-    | 'memory.extraction.gate'
     | 'intention.concern_candidate.gate';
   readonly lane: string;
 }> = [
@@ -183,7 +183,6 @@ const GATE_EVENT_LANES: ReadonlyArray<{
   { event: 'memory.dream_meaning.gate', lane: 'dream_meaning' },
   { event: 'memory.sleep_consolidation.refinement_gate', lane: 'sleep_consolidation_refinement' },
   { event: 'emotion.appraisal.gate', lane: 'emotion_appraisal' },
-  { event: 'memory.extraction.gate', lane: 'extraction' },
   { event: 'intention.concern_candidate.gate', lane: 'concern_candidate_review' },
 ];
 

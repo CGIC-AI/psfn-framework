@@ -281,6 +281,38 @@ describe('extraction acceptance gates', () => {
     expect(decision.reason).toBeUndefined();
     expect(decision.signalCount).toBeGreaterThan(0);
   });
+
+  // jpvd.4: the pre-LLM gate is now expressed on the shared deterministic-gate
+  // primitive. These lock the decision byte-for-byte across the reasons.
+  it('closes as empty_transcript with zeroed counts on an empty transcript', () => {
+    const decision = extractionTestUtils.evaluateExtractionPreLlmGate([] as never);
+    expect(decision).toEqual({
+      allowed: false,
+      reason: 'empty_transcript',
+      signalScore: 0,
+      signalCount: 0,
+      recentEntryCount: 0,
+      userEntryCount: 0,
+    });
+  });
+
+  it('treats a whitespace-only transcript as empty', () => {
+    const decision = extractionTestUtils.evaluateExtractionPreLlmGate([
+      { role: 'user', content: '   ' },
+      { role: 'assistant', content: '' },
+    ] as never);
+    expect(decision.allowed).toBe(false);
+    expect(decision.reason).toBe('empty_transcript');
+    expect(decision.recentEntryCount).toBe(0);
+  });
+
+  it('allows neutral turns that are not explicit filler', () => {
+    const decision = extractionTestUtils.evaluateExtractionPreLlmGate([
+      { role: 'user', content: 'The build pipeline runs the integration suite nightly.' },
+    ] as never);
+    expect(decision.allowed).toBe(true);
+    expect(decision.reason).toBeUndefined();
+  });
 });
 
 describe('MemoryExtractor telemetry payloads', () => {

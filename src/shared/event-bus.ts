@@ -238,13 +238,13 @@ export interface EventMap {
   //   - sleep-consolidation refinement: bounded LLM cleanup, gated on the count
   //     of unrefined episodes in reach with transcript coverage.
   //   - emotion appraisal: gated on turn cadence OR VAD movement magnitude.
-  //   - extraction pre-LLM: textual signal scoring (byte-identical refactor).
   //   - concern candidate review: pending-count and turn-interval gates.
+  // The extraction pre-LLM gate uses the same primitive but keeps surfacing its
+  // skips through memory.extraction.end telemetry (no direct event-bus handle).
   'memory.orientation_rewrite.gate': DeterministicGateEvent;
   'memory.dream_meaning.gate': DeterministicGateEvent;
   'memory.sleep_consolidation.refinement_gate': DeterministicGateEvent;
   'emotion.appraisal.gate': DeterministicGateEvent;
-  'memory.extraction.gate': DeterministicGateEvent;
   'intention.concern_candidate.gate': DeterministicGateEvent;
   // Social-graph builder worker completion (E4.2). Law 31: results are visible,
   // never silent — Garden renders the proposal queue and these counts.

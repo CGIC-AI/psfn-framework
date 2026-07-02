@@ -768,6 +768,11 @@ export class DiscordAdapter implements ChannelAdapterPort {
       routing: {
         source: 'discord',
         responseMode: respondToMessage ? 'respond' : 'observe',
+        // Provenance-honest MI marker from Discord's bot/app metadata. Only ever
+        // set true for bot-authored messages so a human author never triggers
+        // machine-intelligence auto-tagging. Consumed by author-context
+        // resolution to mark the contact (operator corrections survive).
+        ...(msg.author.bot ? { authorIsMachineIntelligence: true } : {}),
       },
     };
   }

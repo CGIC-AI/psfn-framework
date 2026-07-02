@@ -584,6 +584,64 @@ describe('DiscordAdapter DM routing', () => {
     expect(interactive.sent).toContain('dm reply');
   });
 
+  it('marks allowlisted companion-bot messages as machine intelligence in routing metadata (E7.3)', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus, { allowedBotUserIds: ['companion-bot'] });
+    await adapter.init();
+
+    const channelId = 'guild-room';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async (message: SubstrateMessage) => ({
+      content: '',
+      channelId: message.channelId,
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, {
+        id: 'bot-msg',
+        content: 'peer companion says hi',
+        guildId: 'guild-1',
+        authorId: 'companion-bot',
+        authorDisplayName: 'Purrsephone',
+        bot: true,
+      }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const message = handler.mock.calls[0][0] as SubstrateMessage;
+    expect(message.routing?.authorIsMachineIntelligence).toBe(true);
+    expect(message.routing?.responseMode).toBe('observe');
+  });
+
+  it('does not mark human-authored messages as machine intelligence (E7.3)', async () => {
+    const eventBus = new EventBus();
+    const adapter = new DiscordAdapter(makeConfig(), eventBus);
+    await adapter.init();
+
+    const channelId = 'dm-human';
+    const interactive = makeInteractiveTextChannel();
+    discordMock.channelsById.set(channelId, interactive.channel);
+
+    const handler = vi.fn(async (message: SubstrateMessage) => ({
+      content: 'ok',
+      channelId: message.channelId,
+      metadata: { model: 'test', inputTokens: 0, outputTokens: 0, durationMs: 1 },
+    }));
+    adapter.onMessage(handler);
+
+    await (adapter as any).onDiscordMessage(
+      makeDiscordIncomingMessage(channelId, interactive.channel, { id: 'h1', content: 'hi there' }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    const message = handler.mock.calls[0][0] as SubstrateMessage;
+    expect(message.routing?.authorIsMachineIntelligence).toBeUndefined();
+  });
+
   it('keeps DM ingress responsive across channels while another DM turn is in flight', async () => {
     const eventBus = new EventBus();
     const adapter = new DiscordAdapter(makeConfig(), eventBus);

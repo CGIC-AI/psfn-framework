@@ -441,6 +441,33 @@ export interface EventMap {
     capResolvedCount: number;
     activeCountBeforeCap: number;
     activeCountAfterCap: number;
+    routedCount?: number;
+    blockedRouteCount?: number;
+    timestamp: number;
+  } & EventCorrelationFields;
+  // Durable handoff of a routed concern outcome into an existing substrate
+  // (north-star, reflection journal, etc.). Emitted by ConcernRouteDispatcher so
+  // Garden intention/subsystem-health surfaces can show routed vs blocked routes.
+  'intention.concern.routed': {
+    target: string;
+    source: string;
+    substrate: string;
+    reason: string;
+    targetRef?: string;
+    candidateId?: string;
+    concernId?: string;
+    timestamp: number;
+  } & EventCorrelationFields;
+  // A route decision that could not hand off (no configured handler, invalid
+  // handler, or handler failure). Surfaced explicitly; the source item is never
+  // silently dropped and concerns are not reopened on routing failure.
+  'intention.concern.route_blocked': {
+    target: string;
+    source: string;
+    substrate: string;
+    reason: string;
+    candidateId?: string;
+    concernId?: string;
     timestamp: number;
   } & EventCorrelationFields;
   'memory.extraction.flush': {

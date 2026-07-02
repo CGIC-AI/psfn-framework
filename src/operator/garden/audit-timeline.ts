@@ -14,6 +14,7 @@ export const ADMIN_AUDIT_ACTION_TYPES: AdminAuditActionType[] = [
   'identity_edit',
   'external_action',
   'memory_mutation',
+  'memory_access',
   'settings_change',
   'confirmation',
   'charge_decision',

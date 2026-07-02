@@ -141,7 +141,24 @@ export type AdminUiPurrMemory = Omit<CanonicalPurrMemory, 'type' | 'scopeRef' | 
   updatedAt?: number;
   emotionalWeight?: number;
   supersededAt?: number;
+  bodyRedacted?: boolean;
+  bodyRedaction?: AdminMemoryBodyRedaction;
 };
+
+// Explicit redaction descriptor for a hidden high-intimacy memory body.
+export interface AdminMemoryBodyRedaction {
+  sensitivity: string;
+  originalLength: number;
+  reason: 'high_intimacy_sensitivity';
+  revealHint: string;
+}
+
+// Session-elevation state for reading high-intimacy memory bodies.
+export interface AdminMemoryElevationStatus {
+  elevated: boolean;
+  expiresAt?: number;
+  ttlMs: number;
+}
 
 export type AdminUiMemoryScopeRef = Omit<CanonicalMemoryScopeRef, 'kind'> & {
   kind: CanonicalMemoryScopeRef['kind'] | string;
@@ -176,6 +193,7 @@ export interface AdminMemoryListData {
     hasPrevious: boolean;
     hasNext: boolean;
   };
+  elevation?: AdminMemoryElevationStatus;
 }
 
 export interface AdminMemoryDetailData {
@@ -183,6 +201,7 @@ export interface AdminMemoryDetailData {
   linkedContact?: AdminMemoryContactSummary;
   scopeAssignments: AdminMemoryScopeAssignmentView[];
   scopeRepair?: AdminMemoryScopeRepairView;
+  elevation?: AdminMemoryElevationStatus;
 }
 
 export interface AdminMemorySearchResult {
@@ -190,6 +209,7 @@ export interface AdminMemorySearchResult {
   results: AdminUiPurrMemory[];
   contactsById: Record<string, AdminMemoryContactSummary>;
   privacySummary: AdminMemoryPrivacySummary;
+  elevation?: AdminMemoryElevationStatus;
 }
 
 export interface AdminMemoryLink {
@@ -254,6 +274,7 @@ export interface AdminMemoryScopeListData {
 export interface AdminMemoryScopeDetailData {
   scope: AdminMemoryScopeSummary;
   memories: AdminMemoryScopedMemoryView[];
+  elevation?: AdminMemoryElevationStatus;
 }
 
 export interface AdminMemoryScopeMutationResult {
@@ -1033,6 +1054,7 @@ export type AuditActionType =
   | 'identity_edit'
   | 'external_action'
   | 'memory_mutation'
+  | 'memory_access'
   | 'settings_change'
   | 'confirmation'
   | 'charge_decision'

@@ -252,6 +252,16 @@ Memory access is not just similarity-based.
 - Broadcast contexts use additional visibility-scope checks.
 - High-intimacy memories are scoped to the canonical contact they belong to.
 
+### Garden Admin Body Gate
+
+The Garden admin memory API (`/api/admin/memory*`) sensitivity-gates memory bodies for the operator:
+
+- `intimate` and `confidential` bodies are redacted by default in list, search, detail, and managed-scope views; metadata (id, type, sensitivity, scope, timestamps, salience, provenance summary) stays browsable.
+- Redactions are explicit, never silent: the body is replaced by a marker naming the sensitivity level, original character count, and how to reveal.
+- Access is granted by an audited per-memory reveal (`POST /api/admin/memory/<id>/reveal`) or an audited session elevation (`POST`/`DELETE`/`GET /api/admin/memory/elevation`). Both grants expire after a fixed TTL (`ADMIN_MEMORY_BODY_ACCESS_TTL_MS`, 15 minutes) and every reveal/elevation writes a `memory_access` audit entry.
+- Metadata operations (supersede, bulk delete, bulk field update, scope edits, linking) do not require body access. Patching the body of a redacted memory fails closed until it is revealed or the session is elevated.
+- Session transcripts and Loom per-turn retrieval views are conversation/debugging surfaces, not memory rows, and are outside this gate.
+
 ## Maintenance
 
 The memory system is actively maintained by runtime jobs:

@@ -479,6 +479,35 @@ export interface AdminMemoryContactSummary {
   displayName: string;
 }
 
+/**
+ * Explicit redaction descriptor for a high-intimacy memory body hidden from
+ * the Garden admin memory API. The marker is honest: it names the sensitivity
+ * level, the original body length, and how to reveal it.
+ */
+export interface AdminMemoryBodyRedaction {
+  sensitivity: SensitivityLevel;
+  originalLength: number;
+  reason: 'high_intimacy_sensitivity';
+  revealHint: string;
+}
+
+/**
+ * A memory row as served by the Garden admin memory API. Identical to the
+ * stored row for public/personal rows or when body access is granted;
+ * otherwise `text` carries a redaction marker and `bodyRedacted` is set.
+ */
+export type AdminMemoryView = PurrMemory & {
+  bodyRedacted?: boolean;
+  bodyRedaction?: AdminMemoryBodyRedaction;
+};
+
+/** Session-elevation state for reading high-intimacy memory bodies. */
+export interface AdminMemoryElevationStatus {
+  elevated: boolean;
+  expiresAt?: number;
+  ttlMs: number;
+}
+
 export interface AdminMemoryPrivacySummary {
   activeMemoryCount: number;
   matchingMemoryCount: number;
@@ -493,7 +522,7 @@ export interface AdminMemoryPrivacySummary {
 }
 
 export interface AdminMemoryListData {
-  memories: PurrMemory[];
+  memories: AdminMemoryView[];
   contactsById: Map<string, AdminMemoryContactSummary>;
   privacySummary: AdminMemoryPrivacySummary;
   pagination: {
@@ -503,20 +532,23 @@ export interface AdminMemoryListData {
     hasPrevious: boolean;
     hasNext: boolean;
   };
+  elevation: AdminMemoryElevationStatus;
 }
 
 export interface AdminMemoryDetailData {
-  memory: PurrMemory;
+  memory: AdminMemoryView;
   linkedContact?: AdminMemoryContactSummary;
   scopeAssignments: AdminMemoryScopeAssignmentView[];
   scopeRepair?: AdminMemoryScopeRepairView;
+  elevation: AdminMemoryElevationStatus;
 }
 
 export interface AdminMemorySearchResult {
   query: string;
-  results: PurrMemory[];
+  results: AdminMemoryView[];
   contactsById: Map<string, AdminMemoryContactSummary>;
   privacySummary: AdminMemoryPrivacySummary;
+  elevation: AdminMemoryElevationStatus;
 }
 
 export interface MemoryMutationResult {
@@ -565,7 +597,7 @@ export interface AdminMemoryScopeSummary {
 }
 
 export interface AdminMemoryScopedMemoryView {
-  memory: PurrMemory;
+  memory: AdminMemoryView;
   evidence: AdminMemoryScopeEvidenceItem[];
   repair: AdminMemoryScopeRepairView;
 }
@@ -577,6 +609,7 @@ export interface AdminMemoryScopeListData {
 export interface AdminMemoryScopeDetailData {
   scope: AdminMemoryScopeSummary;
   memories: AdminMemoryScopedMemoryView[];
+  elevation: AdminMemoryElevationStatus;
 }
 
 export interface AdminMemoryScopeMutationResult extends MemoryMutationResult {
@@ -605,6 +638,14 @@ export interface AdminMemoryService {
   getMemoryLinks(id: string): Promise<MemoryLink[]>;
   bulkDelete(ids: string[]): Promise<AdminBulkMutationResult>;
   bulkUpdate(ids: string[], fields: { memoryType?: string; sensitivity?: string; retentionClass?: string }): Promise<AdminBulkMutationResult>;
+  /** Current session-elevation state for high-intimacy memory bodies. */
+  getBodyElevationStatus(): AdminMemoryElevationStatus;
+  /** Grants TTL-bound access to all high-intimacy memory bodies. Audit-logged. */
+  elevateBodyAccess(): AdminMemoryElevationStatus;
+  /** Ends an active body-access elevation immediately. Audit-logged. */
+  dropBodyElevation(): AdminMemoryElevationStatus;
+  /** Reveals a single memory body (TTL-bound grant for that id). Audit-logged when it uncovers a high-intimacy body. */
+  revealMemory(id: string): Promise<AdminMemoryDetailData | null>;
 }
 
 export interface AdminGroupMemoryClassificationView {

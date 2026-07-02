@@ -48,11 +48,15 @@ type TokenResolver = (now: Date) => string;
 const EMPTY_WRAPPED_SECTION_PATTERN = /<([a-z0-9_]+)>\s*<\/\1>/g;
 const CONDITIONAL_BLOCK_PATTERN = /\{\{#if\s+([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}([\s\S]*?)\{\{\/if\}\}/g;
 
+// One canonical spelling per clock datum (E2.5 macro consolidation). The
+// removed alias spellings ({{now}}, {{date}}, {{time}}, {{timestamp}}, ...)
+// live in REMOVED_PROMPT_MACROS so persisted layers that still use them fail
+// closed with a clear message naming the canonical replacement.
 const TOKEN_RESOLVERS: Array<[RegExp, TokenResolver]> = [
-  [/\{\{\s*(?:current_datetime|current_datetime_iso|now|now\(\))\s*\}\}/gi, activeIso],
-  [/\{\{\s*(?:current_date|date|date\(\))\s*\}\}/gi, activeDate],
-  [/\{\{\s*(?:current_time|time|time\(\))\s*\}\}/gi, activeTime],
-  [/\{\{\s*(?:current_timestamp|unix_timestamp|timestamp|timestamp\(\))\s*\}\}/gi, unixTimestamp],
+  [/\{\{\s*current_datetime\s*\}\}/gi, activeIso],
+  [/\{\{\s*current_date\s*\}\}/gi, activeDate],
+  [/\{\{\s*current_time\s*\}\}/gi, activeTime],
+  [/\{\{\s*unix_timestamp\s*\}\}/gi, unixTimestamp],
 ];
 
 /**
@@ -192,12 +196,11 @@ const METACOGNITIVE_FLAG_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = METACOG
 const GLOBAL_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   createPromptRuntimeMacroHint(
     'global_aliases',
-    '{{current_datetime}} / {{now()}}',
+    '{{current_datetime}}',
     'turn',
     CLOCK_MACRO_PRODUCER,
     `Current active timezone datetime in ISO-8601 format (${resolveActiveTimezone()}).`,
     '2026-02-21T08:20:11.123-05:00',
-    ['current_datetime_iso'],
   ),
   createPromptRuntimeMacroHint(
     'global_aliases',
@@ -206,7 +209,6 @@ const GLOBAL_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     CLOCK_MACRO_PRODUCER,
     `Current calendar date in the active timezone (${resolveActiveTimezone()}).`,
     '2026-02-21',
-    ['date'],
   ),
   createPromptRuntimeMacroHint(
     'global_aliases',
@@ -215,10 +217,8 @@ const GLOBAL_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
     CLOCK_MACRO_PRODUCER,
     `Current time in the active timezone (${resolveActiveTimezone()}).`,
     '08:20:11-05:00',
-    ['time'],
   ),
-  createPromptRuntimeMacroHint('global_aliases', '{{unix_timestamp}}', 'turn', CLOCK_MACRO_PRODUCER, 'Current Unix epoch timestamp in seconds.', '1769020811', ['current_timestamp', 'timestamp']),
-  createPromptRuntimeMacroHint('global_aliases', '{{now_iso}}', 'turn', SESSION_BASE_PRODUCER, 'ISO-8601 timestamp captured when the current turn started.', '2026-02-21T08:20:11.123-05:00'),
+  createPromptRuntimeMacroHint('global_aliases', '{{unix_timestamp}}', 'turn', CLOCK_MACRO_PRODUCER, 'Current Unix epoch timestamp in seconds.', '1769020811'),
   createPromptRuntimeMacroHint('global_aliases', '{{user}}', 'session_stable', SESSION_BASE_PRODUCER, 'Current author/user display name from runtime context.', 'PrimaryUser', ['user_name']),
   createPromptRuntimeMacroHint('global_aliases', '{{user_id}}', 'session_stable', SESSION_BASE_PRODUCER, 'Stable subject identity key for the current author.', 'discord:123456789'),
   createPromptRuntimeMacroHint('global_aliases', '{{char}}', 'static', SESSION_BASE_PRODUCER, 'Character/assistant name from runtime context.', 'Companion', ['char_name', 'character', 'character_name']),
@@ -235,12 +235,12 @@ const GLOBAL_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   createPromptRuntimeMacroHint('global_aliases', '{{tags}}', 'static', CHARACTER_CARD_PRODUCER, 'Comma-joined character card tags.', 'bootstrap'),
   createPromptRuntimeMacroHint('global_aliases', '{{alternate_greetings}}', 'static', CHARACTER_CARD_PRODUCER, 'Newline-joined character card alternate greetings.', 'Hello again!'),
   createPromptRuntimeMacroHint('global_aliases', '{{visual_description}}', 'static', CHARACTER_CARD_PRODUCER, 'Character card visual description extension field.', 'Silver eyes and a weathered jacket.', ['extensions_visual_description']),
-  createPromptRuntimeMacroHint('global_aliases', '{{channel_id}}', 'session_stable', SESSION_BASE_PRODUCER, 'Resolved channel/session identifier.', 'discord:dm:123456789', ['channel']),
+  createPromptRuntimeMacroHint('global_aliases', '{{channel_id}}', 'session_stable', SESSION_BASE_PRODUCER, 'Resolved channel/session identifier.', 'discord:dm:123456789'),
   createPromptRuntimeMacroHint('global_aliases', '{{channel_type}}', 'session_stable', SESSION_BASE_PRODUCER, 'Resolved channel type.', 'discord_text'),
   createPromptRuntimeMacroHint('global_aliases', '{{channel_visibility}}', 'session_stable', SESSION_BASE_PRODUCER, 'Resolved channel visibility classification.', 'private'),
   createPromptRuntimeMacroHint('global_aliases', '{{trust_level}}', 'session_stable', SESSION_BASE_PRODUCER, 'Current trust tier for the author/context.', 'primary'),
   createPromptRuntimeMacroHint('global_aliases', '{{canonical_contact_id}}', 'session_stable', SESSION_BASE_PRODUCER, 'Canonical contact identity key for the current author when resolved.', 'contact-1234'),
-  createPromptRuntimeMacroHint('global_aliases', '{{model}}', 'session_stable', SESSION_BASE_PRODUCER, 'Current active model identifier.', 'moonshotai/kimi-k2.5', ['model_id']),
+  createPromptRuntimeMacroHint('global_aliases', '{{model}}', 'session_stable', SESSION_BASE_PRODUCER, 'Current active model identifier.', 'moonshotai/kimi-k2.5'),
   createPromptRuntimeMacroHint('global_aliases', '{{active_timezone}}', 'static', SESSION_BASE_PRODUCER, 'Active runtime timezone identifier.', 'America/New_York'),
 ];
 
@@ -254,7 +254,6 @@ const RUNTIME_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   runtimeStateTurnHint('{{runtime_current_yesterday}}', 'Previous local calendar date in YYYY-MM-DD form.', '2026-03-26'),
   runtimeStateTurnHint('{{runtime_current_tomorrow}}', 'Next local calendar date in YYYY-MM-DD form.', '2026-03-28'),
   runtimeStateTurnHint('{{runtime_current_part_of_day}}', 'Broad local part of day for temporal phrasing.', 'late morning'),
-  runtimeStateTurnHint('{{runtime_last_message_received_human}}', 'Last pre-turn message timestamp plus relative elapsed wording.', 'Friday, March 27, 2026 at 10:11 PM America/New_York (16 minutes ago)'),
   runtimeStateTurnHint('{{runtime_last_message_received_at_iso}}', 'ISO-8601 timestamp for the most recent pre-turn message.', '2026-03-27T22:11:04.112-04:00'),
   runtimeStateTurnHint('{{runtime_last_message_received_weekday}}', 'Weekday of the most recent pre-turn message when available.', 'Friday'),
   runtimeStateTurnHint('{{runtime_last_message_received_date_human}}', 'Calendar date of the most recent pre-turn message when available.', 'March 27, 2026'),
@@ -262,13 +261,15 @@ const RUNTIME_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   runtimeStateTurnHint('{{runtime_last_message_received_timezone}}', 'Timezone label for the most recent pre-turn message when available.', 'America/New_York'),
   runtimeStateTurnHint('{{runtime_last_message_received_ago}}', 'Relative time since the most recent pre-turn message.', '16 minutes ago'),
   runtimeStateTurnHint('{{runtime_last_message_received_days_hours}}', 'Approximate elapsed time since the most recent pre-turn message in day/hour form.', '2 days 3 hours'),
-  runtimeStateTurnHint('{{runtime_last_message_received_missing_notice}}', 'Fallback note when no earlier message is loaded for the current channel.', 'No earlier message is loaded for this channel.'),
   runtimeStateTurnHint('{{runtime_last_message_received_present}}', 'Whether an earlier message is loaded for the current channel (bare boolean for custom phrasing).', 'true'),
+  runtimeStateTurnHint('{{runtime_last_message_received_missing}}', 'Whether NO earlier message is loaded for the current channel (bare boolean; inverse of _present for {{#if}} phrasing).', 'false'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_speaking_with_is_machine_intelligence}}', 'session_stable', PROMPT_ASSEMBLY_PRODUCER, 'Whether the resolved speaking partner is another machine intelligence (peer companion/agent). DM scope only; blank on group turns so speaking_with sections prune.', 'false'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_persona_adaptation_extra}}', 'session_stable', RUNTIME_LAYOUT_OVERLAY_PRODUCER, 'Companion-authored persona adaptation overlay text from the prompt runtime layout.', 'Lean into gentle humor tonight.'),
   createPromptRuntimeMacroHint('runtime_state', '{{runtime_context_extra}}', 'session_stable', RUNTIME_LAYOUT_OVERLAY_PRODUCER, 'Companion-authored runtime context overlay text from the prompt runtime layout.', 'The operator is travelling this week.'),
   runtimeStateTurnHint('{{runtime_internal_turn_kind}}', 'Internal task kind for heartbeat/reflection/planning/maintenance turns when applicable.', 'reflection'),
-  runtimeStateTurnHint('{{runtime_internal_turn_context}}', 'Default prose sentence describing the internal turn kind when the turn is not user-facing.', 'This is an internal reflection turn.'),
+  runtimeStateTurnHint('{{runtime_continuity_gap_present}}', 'Whether the runtime restarted after an offline gap too long to carry internal state forward (bare boolean).', 'false'),
+  runtimeStateTurnHint('{{runtime_continuity_gap_duration}}', 'Approximate offline gap duration in day/hour form when a continuity gap is present.', '26 hours'),
+  runtimeStateTurnHint('{{runtime_continuity_gap_offline_since}}', 'ISO-8601 timestamp of the last persisted running state when a continuity gap is present.', '2026-03-26T20:11:04.112-04:00'),
   runtimeStateTurnHint('{{runtime_conversation_state_available}}', 'Whether compact conversation state is available for the current turn.', 'true'),
   runtimeStateTurnHint('{{runtime_chat_type}}', 'Conversation shape for this turn: direct_message or group.', 'group'),
   runtimeStateTurnHint('{{runtime_room_id}}', 'Room identity for the current turn; this is the channel ID.', '1486443955561299979'),
@@ -291,7 +292,6 @@ const RUNTIME_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
 ];
 
 const TRUST_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
-  trustTurnHint('{{runtime_trust_level}}', 'Resolved trust tier for the current turn.', 'trusted'),
   trustTurnHint('{{runtime_trust_is_primary}}', 'Whether the current turn is with the primary person.', 'false'),
   trustTurnHint('{{runtime_trust_is_trusted}}', 'Whether the current turn is with a trusted contact.', 'true'),
   trustTurnHint('{{runtime_trust_is_regular}}', 'Whether the current turn is with a regular acquaintance.', 'false'),
@@ -316,11 +316,6 @@ const AFFECT_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   affectTurnHint('{{runtime_affect_energy}}', 'Signed energy modifier derived from the current affect state.', '+0.310'),
   affectTurnHint('{{runtime_affect_assertiveness}}', 'Signed assertiveness modifier derived from the current affect state.', '+0.205'),
   affectTurnHint('{{runtime_affect_expressiveness}}', 'Expressiveness level derived from the current affect state.', '0.615'),
-  affectTurnHint('{{runtime_affect_profile_intensity}}', 'Resolved affect profile intensity used for prompt shaping.', '0.500'),
-  affectTurnHint('{{runtime_affect_profile_variability}}', 'Resolved affect profile variability used for prompt shaping.', '0.500'),
-  affectTurnHint('{{runtime_affect_profile_control}}', 'Resolved affect profile control used for prompt shaping.', '0.600'),
-  affectTurnHint('{{runtime_affect_profile_display_range_min}}', 'Lower bound of the affect profile display range.', '0.000'),
-  affectTurnHint('{{runtime_affect_profile_display_range_max}}', 'Upper bound of the affect profile display range.', '0.800'),
   affectTurnHint('{{runtime_affect_intensity}}', 'Resolved affect intensity used for prompt shaping.', '0.500'),
   affectTurnHint('{{runtime_affect_variability}}', 'Resolved affect variability used for prompt shaping.', '0.500'),
   affectTurnHint('{{runtime_affect_control}}', 'Resolved affect control used for prompt shaping.', '0.600'),
@@ -329,9 +324,6 @@ const AFFECT_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   affectTurnHint('{{runtime_affect_valence}}', 'Signed valence from the current affect snapshot.', '+0.320'),
   affectTurnHint('{{runtime_affect_arousal}}', 'Signed arousal from the current affect snapshot.', '+0.180'),
   affectTurnHint('{{runtime_affect_dominance}}', 'Signed dominance from the current affect snapshot.', '-0.120'),
-  affectTurnHint('{{runtime_affect_snapshot_vad_valence}}', 'Signed valence from the current emotion snapshot.', '+0.320'),
-  affectTurnHint('{{runtime_affect_snapshot_vad_arousal}}', 'Signed arousal from the current emotion snapshot.', '+0.180'),
-  affectTurnHint('{{runtime_affect_snapshot_vad_dominance}}', 'Signed dominance from the current emotion snapshot.', '-0.120'),
   affectTurnHint('{{runtime_affect_snapshot_mood_valence}}', 'Signed mood valence from the current emotion snapshot.', '+0.280'),
   affectTurnHint('{{runtime_affect_snapshot_mood_arousal}}', 'Signed mood arousal from the current emotion snapshot.', '+0.090'),
   affectTurnHint('{{runtime_affect_snapshot_mood_dominance}}', 'Signed mood dominance from the current emotion snapshot.', '-0.060'),
@@ -341,7 +333,6 @@ const AFFECT_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   affectTurnHint('{{runtime_affect_guidance_energy_label}}', 'Human-readable energy guidance derived from the current affect state.', 'higher energy'),
   affectTurnHint('{{runtime_affect_guidance_assertiveness_label}}', 'Human-readable assertiveness guidance derived from the current affect state.', 'more assertive'),
   affectTurnHint('{{runtime_affect_guidance_expressiveness_label}}', 'Human-readable expressiveness guidance derived from the current affect state.', 'moderate'),
-  affectTurnHint('{{runtime_affect_privacy_guidance}}', 'Privacy wording derived from the current trust-gated affect mode.', 'Express warmth openly; intimate details are okay here.'),
 ];
 
 const INTERNAL_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
@@ -359,10 +350,9 @@ const INTERNAL_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   internalStateTurnHint('{{runtime_internal_state_relational_last_seen_label}}', 'Last-seen recency label from the current internal relational state.', 'recently interacted'),
   internalStateTurnHint('{{runtime_internal_state_emotional_mood_valence_label}}', 'Mood valence label from the current internal emotional state.', 'warm'),
   internalStateTurnHint('{{runtime_internal_state_emotional_mood_arousal_label}}', 'Mood arousal label from the current internal emotional state.', 'calm'),
-  internalStateTurnHint('{{runtime_internal_state_emotional_prefix}}', 'Optional prose prefix when secondary emotions are present.', 'mostly '),
-  internalStateTurnHint('{{runtime_internal_state_emotional_secondary_clause}}', 'Optional prose clause describing secondary emotions.', ', with hopeful and curious secondary emotions present'),
   internalStateTurnHint('{{runtime_internal_state_emotional_secondary_emotions}}', 'Bare comma-separated secondary emotion names for custom phrasing.', 'hopeful, curious'),
-  internalStateTurnHint('{{runtime_internal_state_emotional_validation_clause}}', 'Optional prose clause flagging degraded emotion telemetry for the current snapshot.', ' Emotion telemetry is degraded (uncalibrated); treat affect as uncertain.'),
+  internalStateTurnHint('{{runtime_internal_state_emotional_telemetry_status}}', 'Degraded emotion-telemetry status for the current snapshot; empty when telemetry is trusted (bare value).', 'degraded'),
+  internalStateTurnHint('{{runtime_internal_state_emotional_telemetry_reasons}}', 'Comma-joined degraded emotion-telemetry reasons; empty when telemetry is trusted (bare list).', 'uncalibrated'),
 ];
 
 const ATTENTION_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
@@ -375,18 +365,15 @@ const ATTENTION_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   attentionTurnHint('{{runtime_emotion_appraisal_latest_trigger}}', 'Trigger label for the latest emotion appraisal entry.', 'user_checkin'),
   attentionTurnHint('{{runtime_emotion_appraisal_latest_summary}}', 'Compacted summary text from the latest emotion appraisal entry.', 'She relaxed after the reassurance and shifted back toward curiosity.'),
   attentionTurnHint('{{runtime_emotion_appraisal_latest_timestamp_iso}}', 'ISO-8601 timestamp for the latest emotion appraisal entry.', '2026-03-27T22:27:11.123Z'),
-  attentionTurnHint('{{runtime_emotion_appraisal_recent_lines}}', 'Last two formatted emotion appraisal bullet lines, newline-joined.', '- Friday, March 27, 2026 at 10:27 PM (user_checkin): She relaxed after the reassurance.'),
-  attentionTurnHint('{{runtime_emotion_appraisal_body}}', 'Preformatted appraisal-chain body ready to drop into the legacy attention section.', '- Friday, March 27, 2026 at 10:27 PM (user_checkin): She relaxed after the reassurance.'),
+  attentionTurnHint('{{runtime_emotion_appraisal_recent_lines}}', 'Last two formatted emotion appraisal bullet lines, newline-joined (data-shaped list).', '- Friday, March 27, 2026 at 10:27 PM (user_checkin): She relaxed after the reassurance.'),
   attentionTurnHint('{{runtime_behavioral_notes_count}}', 'Count of current behavioral note lines available for the active contact.', '2'),
-  attentionTurnHint('{{runtime_behavioral_notes_body_raw}}', 'Raw behavioral-notes body text without the wrapping XML tag.', '- validation: avg +0.45 over 1 outcome sample(s), 100% positive'),
-  attentionTurnHint('{{runtime_behavioral_notes_body}}', 'Preformatted behavioral-notes body ready to drop into the legacy attention section.', '- validation: avg +0.45 over 1 outcome sample(s), 100% positive'),
+  attentionTurnHint('{{runtime_behavioral_notes_body}}', 'Behavioral-notes body lines without the wrapping XML tag (data-shaped list).', '- validation: avg +0.45 over 1 outcome sample(s), 100% positive'),
   attentionTurnHint('{{runtime_skills_count}}', 'Count of skill entries present in the current skills index XML.', '2'),
   attentionTurnHint('{{runtime_skills_index_body}}', 'Preformatted skills-index body ready to drop into the legacy attention section.', '<skill id="memory.write">Persist durable relational memories.</skill>'),
 ];
 
 const TOOLING_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   toolingTurnHint('{{runtime_analysis_workbench_available}}', 'Whether analysis_workbench is active and callable for the current turn.', 'false'),
-  toolingTurnHint('{{runtime_tooling_summary}}', 'Preformatted one-line tooling summary sentence for the current turn.', 'Tooling: 6 active now (4 core, 1 promoted, 1 loaded).'),
   toolingTurnHint('{{runtime_tooling_active_count}}', 'Count of currently active tools.', '6'),
   toolingTurnHint('{{runtime_tooling_core_count}}', 'Count of active core tools.', '4'),
   toolingTurnHint('{{runtime_tooling_promoted_count}}', 'Count of promoted extended tools that are always active.', '1'),
@@ -401,6 +388,11 @@ const TOOLING_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   toolingTurnHint('{{runtime_extended_tools_blocked_count}}', 'Count of extended tools blocked by the current capability tier.', '1'),
   toolingTurnHint('{{runtime_extended_tool_names}}', 'Comma-joined extended tool names in registered order.', 'web, notify, background_probe'),
   toolingTurnHint('{{runtime_extended_tool_directory_lines}}', 'Extended tool directory lines without any extra prose preface.', '- web: Fetch a web page (use toolset action="activate")'),
+  toolingTurnHint('{{runtime_charge_budget_present}}', 'Whether a run-charge policy is configured and budget values are available this turn (bare boolean).', 'true'),
+  toolingTurnHint('{{runtime_charge_lane}}', 'Run-charge lane for the current turn.', 'interactive'),
+  toolingTurnHint('{{runtime_charge_quota}}', 'Total run-charge quota for the current lane/window.', '12'),
+  toolingTurnHint('{{runtime_charge_remaining}}', 'Remaining run-charge units for the current lane/window.', '9.5'),
+  toolingTurnHint('{{runtime_charge_cost_lines}}', 'Costed charge-surface lines, newline-joined (data-shaped list).', '- paid image/video generation: 2'),
 ];
 
 export const PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
@@ -597,6 +589,107 @@ export function assertStaticPromptLayerMacroVolatility(content: string, layerLab
     `Static prompt layer "${layerLabel}" references turn-volatile macro(s): ${offending.map(name => `{{${name}}}`).join(', ')}. `
     + 'Turn-volatile macros re-render every turn and would contaminate the byte-stable static prompt prefix. '
     + 'Move them to a runtime, channel, or task layer (dynamic suffix), or use a static/session-stable macro instead.',
+  );
+}
+
+// ── Removed prompt macros (E2.5 macro consolidation) ──
+// One canonical macro per datum: the alias spellings and prose/convenience
+// macros below were removed with a clean break. This table exists ONLY to
+// produce clear validation errors naming the canonical replacement when a
+// persisted operator-customized layer still references a removed name. It is
+// NOT a runtime alias map — removed names never resolve.
+
+export interface RemovedPromptMacroInfo {
+  /** The canonical macro (or macros/technique) to use instead. */
+  canonical: string;
+}
+
+export const REMOVED_PROMPT_MACROS: ReadonlyMap<string, RemovedPromptMacroInfo> = new Map<string, RemovedPromptMacroInfo>([
+  // Clock alias spellings (canonical: one spelling per format).
+  ['now', { canonical: '{{current_datetime}}' }],
+  ['current_datetime_iso', { canonical: '{{current_datetime}}' }],
+  ['date', { canonical: '{{current_date}}' }],
+  ['time', { canonical: '{{current_time}}' }],
+  ['current_timestamp', { canonical: '{{unix_timestamp}}' }],
+  ['timestamp', { canonical: '{{unix_timestamp}}' }],
+  ['now_iso', { canonical: '{{current_datetime}}' }],
+  // Session-scope alias spellings.
+  ['channel', { canonical: '{{channel_id}}' }],
+  ['model_id', { canonical: '{{model}}' }],
+  // Exact-duplicate turn variables.
+  ['runtime_trust_level', { canonical: '{{trust_level}}' }],
+  ['runtime_affect_profile_intensity', { canonical: '{{runtime_affect_intensity}}' }],
+  ['runtime_affect_profile_variability', { canonical: '{{runtime_affect_variability}}' }],
+  ['runtime_affect_profile_control', { canonical: '{{runtime_affect_control}}' }],
+  ['runtime_affect_profile_display_range_min', { canonical: '{{runtime_affect_display_range_min}}' }],
+  ['runtime_affect_profile_display_range_max', { canonical: '{{runtime_affect_display_range_max}}' }],
+  ['runtime_affect_snapshot_vad_valence', { canonical: '{{runtime_affect_valence}}' }],
+  ['runtime_affect_snapshot_vad_arousal', { canonical: '{{runtime_affect_arousal}}' }],
+  ['runtime_affect_snapshot_vad_dominance', { canonical: '{{runtime_affect_dominance}}' }],
+  ['runtime_emotion_appraisal_body', { canonical: '{{runtime_emotion_appraisal_recent_lines}}' }],
+  ['runtime_behavioral_notes_body_raw', { canonical: '{{runtime_behavioral_notes_body}}' }],
+  // Prose/convenience macros migrated to editable layer text (purity rule).
+  ['runtime_last_message_received_human', { canonical: '{{runtime_last_message_received_date_human}} + {{runtime_last_message_received_time_human}} + {{runtime_last_message_received_timezone}} + {{runtime_last_message_received_ago}} with your own phrasing' }],
+  ['runtime_last_message_received_missing_notice', { canonical: '{{#if runtime_last_message_received_missing}}your own wording{{/if}}' }],
+  ['runtime_internal_turn_context', { canonical: '{{runtime_internal_turn_kind}} with your own phrasing' }],
+  ['runtime_affect_privacy_guidance', { canonical: '{{runtime_affect_mode_is_honne}} / {{runtime_affect_mode_is_tatemae}} conditionals with your own wording' }],
+  ['runtime_internal_state_emotional_prefix', { canonical: '{{runtime_internal_state_emotional_secondary_emotions}} with your own phrasing' }],
+  ['runtime_internal_state_emotional_secondary_clause', { canonical: '{{runtime_internal_state_emotional_secondary_emotions}} with your own phrasing' }],
+  ['runtime_internal_state_emotional_validation_clause', { canonical: '{{runtime_internal_state_emotional_telemetry_status}} + {{runtime_internal_state_emotional_telemetry_reasons}} with your own phrasing' }],
+  ['runtime_tooling_summary', { canonical: '{{runtime_tooling_active_count}} and the other runtime_tooling_*_count values with your own phrasing' }],
+]);
+
+// Fail closed at module init: a removed macro name must never also resolve in
+// the live manifest — that would silently turn the error table into an alias.
+for (const removedName of REMOVED_PROMPT_MACROS.keys()) {
+  if (PROMPT_MACRO_MANIFEST.has(removedName)) {
+    throw new Error(
+      `Removed prompt macro "${removedName}" is still registered in PROMPT_RUNTIME_MACRO_HINTS. `
+      + 'A name may live in the manifest or in REMOVED_PROMPT_MACROS, never both.',
+    );
+  }
+}
+
+export interface RemovedPromptMacroReference {
+  name: string;
+  canonical: string;
+}
+
+/** Collect references to removed macros in template content (includes {{#if}} conditions). */
+export function collectRemovedPromptMacroReferences(content: string): RemovedPromptMacroReference[] {
+  const seen = new Map<string, RemovedPromptMacroReference>();
+  const record = (rawName: string): void => {
+    const name = normalizePromptMacroName(rawName);
+    const removed = REMOVED_PROMPT_MACROS.get(name);
+    if (removed && !seen.has(name)) {
+      seen.set(name, { name, canonical: removed.canonical });
+    }
+  };
+  for (const match of content.matchAll(MACRO_NAME_IN_TOKEN_PATTERN)) {
+    record(match[1]);
+  }
+  for (const match of content.matchAll(new RegExp(CONDITIONAL_BLOCK_PATTERN.source, 'g'))) {
+    record(match[1]);
+  }
+  return [...seen.values()];
+}
+
+/**
+ * Persisted-layer safety valve (E2.5): a layer that still references a removed
+ * macro fails validation with a clear error naming the canonical replacement.
+ * Applied at layer create/update and at compose time — fail closed but
+ * recoverable (the operator edits the layer; nothing is silently rewritten).
+ */
+export function assertNoRemovedPromptMacros(content: string, layerLabel: string): void {
+  const references = collectRemovedPromptMacroReferences(content);
+  if (references.length === 0) return;
+  const detail = references
+    .map(reference => `{{${reference.name}}} (removed; use ${reference.canonical})`)
+    .join(', ');
+  throw new Error(
+    `Prompt layer "${layerLabel}" references removed prompt macro(s): ${detail}. `
+    + 'These names were consolidated in the macro diet and are no longer runtime aliases. '
+    + 'Edit the layer to use the canonical macro; see docs/prompt-macros.md ("Removed macros").',
   );
 }
 
@@ -1370,20 +1463,21 @@ function buildVariableLookup(variables: Record<string, unknown>): Map<string, st
   return lookup;
 }
 
-function collectUnresolvedTokens(text: string): string[] {
-  const unresolved = new Set<string>();
-  text.replace(/\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g, (_full, rawToken: string) => {
-    unresolved.add(normalizeTokenName(rawToken));
-    return '';
-  });
-  return [...unresolved];
-}
+// Empty-section pruning iterates to a fixpoint so wrappers that only become
+// empty after an inner wrapper is pruned still collapse (bounded; E1.3
+// legacy-layer pruning semantics preserved).
+const EMPTY_SECTION_PRUNE_MAX_ROUNDS = 8;
 
 function pruneEmptyWrappedSections(text: string): string {
-  return text
-    .replace(EMPTY_WRAPPED_SECTION_PATTERN, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  let output = text;
+  for (let round = 0; round < EMPTY_SECTION_PRUNE_MAX_ROUNDS; round += 1) {
+    const next = output
+      .replace(EMPTY_WRAPPED_SECTION_PATTERN, '')
+      .replace(/\n{3,}/g, '\n\n');
+    if (next === output) break;
+    output = next;
+  }
+  return output.trim();
 }
 
 function isConditionTruthy(value: string | undefined): boolean {
@@ -1408,9 +1502,86 @@ export interface PromptRuntimeRenderResult {
   unresolvedTokens: string[];
 }
 
+// ── Renderer (E2.5): single token-resolution pass ──
+// The previous fixed-point loop ran up to three whole-template passes so that
+// macros nested inside substituted VALUES (e.g. a card scenario containing
+// {{user}}) would eventually resolve. The single-pass design walks the
+// template exactly once; a substituted value that itself contains macro syntax
+// is expanded recursively with a bounded depth (fail closed on cycles).
+// Conditional blocks resolve before token substitution; conditionals
+// introduced by substituted values resolve inside the recursive expansion.
+// Empty-section pruning then iterates to a fixpoint. Unresolved tokens are
+// preserved in the returned text (template-composition callers rely on this)
+// and reported via unresolvedTokens — final render sites enforce the
+// no-silent-leak invariant through renderFinalPromptSection.
+
+const MACRO_VALUE_EXPANSION_MAX_DEPTH = 8;
+const CONDITIONAL_RESOLUTION_MAX_ROUNDS = 8;
+const VARIABLE_TOKEN_PATTERN = /\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g;
+const LEFTOVER_CONDITIONAL_MARKER_PATTERN = /\{\{\s*(?:#if\b[^}]*|\/if)\s*\}\}/;
+
+function resolvePromptTextOnce(
+  text: string,
+  now: Date,
+  lookup: Map<string, string>,
+  unresolved: Set<string>,
+  expanding: Set<string>,
+  depth: number,
+): string {
+  if (depth > MACRO_VALUE_EXPANSION_MAX_DEPTH) {
+    throw new Error(
+      `Prompt macro expansion exceeded max depth (${MACRO_VALUE_EXPANSION_MAX_DEPTH}); `
+      + 'a variable value most likely references itself (macro cycle).',
+    );
+  }
+
+  let output = text;
+  // Sequential (non-nested) conditionals resolve in one round; a bounded loop
+  // covers conditionals whose markers only pair up after an earlier round.
+  for (let round = 0; round < CONDITIONAL_RESOLUTION_MAX_ROUNDS; round += 1) {
+    const next = resolveConditionalBlocks(output, lookup);
+    if (next === output) break;
+    output = next;
+  }
+
+  for (const [pattern, resolver] of TOKEN_RESOLVERS) {
+    output = output.replace(pattern, () => resolver(now));
+  }
+
+  output = output.replace(VARIABLE_TOKEN_PATTERN, (fullToken, rawName: string) => {
+    const cleaned = normalizeTokenName(rawName);
+    const normalized = normalizeLookupKey(cleaned);
+    // Cycle guard: a variable expanding inside its own value (including the
+    // template-composition idiom user='{{user}}') terminates as an unresolved
+    // literal token instead of recursing.
+    if (expanding.has(normalized)) {
+      unresolved.add(cleaned);
+      return fullToken;
+    }
+    const resolved = lookup.get(normalized);
+    if (resolved === undefined) {
+      unresolved.add(cleaned);
+      return fullToken;
+    }
+    if (!resolved.includes('{{')) {
+      return resolved;
+    }
+    expanding.add(normalized);
+    try {
+      return resolvePromptTextOnce(resolved, now, lookup, unresolved, expanding, depth + 1);
+    } finally {
+      expanding.delete(normalized);
+    }
+  });
+
+  return output;
+}
+
 /**
- * Replace runtime date/time tokens in prompt text.
- * All values are UTC to keep behavior deterministic across environments.
+ * Render prompt macros in template text: one pass over the template with
+ * bounded recursive expansion of substituted values, then fixpoint
+ * empty-section pruning. Unresolved tokens stay in the output text; callers
+ * that produce FINAL prompt bytes must go through renderFinalPromptSection.
  */
 export function renderPromptRuntimeTokens(
   text: string,
@@ -1420,30 +1591,12 @@ export function renderPromptRuntimeTokens(
 
   const now = context.now ?? new Date();
   const variableLookup = buildVariableLookup(context.variables ?? {});
-  let output = text;
+  const unresolved = new Set<string>();
 
-  for (let pass = 0; pass < 3; pass += 1) {
-    const before = output;
+  const resolvedText = resolvePromptTextOnce(text, now, variableLookup, unresolved, new Set<string>(), 0);
+  const output = pruneEmptyWrappedSections(resolvedText);
 
-    for (const [pattern, resolver] of TOKEN_RESOLVERS) {
-      output = output.replace(pattern, () => resolver(now));
-    }
-
-    output = resolveConditionalBlocks(output, variableLookup);
-
-    output = output.replace(/\{\{\s*([a-zA-Z0-9_.-]+(?:\(\))?)\s*\}\}/g, (fullToken, rawName: string) => {
-      const cleaned = normalizeTokenName(rawName);
-      const normalized = normalizeLookupKey(cleaned);
-      const resolved = variableLookup.get(normalized);
-      return resolved ?? fullToken;
-    });
-
-    output = pruneEmptyWrappedSections(output);
-
-    if (output === before) break;
-  }
-
-  const unresolvedTokens = collectUnresolvedTokens(output);
+  const unresolvedTokens = [...unresolved];
   if (context.onUnresolvedToken) {
     for (const token of unresolvedTokens) {
       context.onUnresolvedToken(token);
@@ -1457,11 +1610,98 @@ export function renderPromptRuntimeTokens(
 }
 
 /**
- * Backward-compatible helper that returns only rendered text.
+ * Helper that returns only rendered text (template-composition stages where
+ * unresolved tokens legitimately remain for a later render).
  */
 export function injectPromptRuntimeTokens(
   text: string,
   context: PromptRuntimeContext = {},
 ): string {
   return renderPromptRuntimeTokens(text, context).text;
+}
+
+// ── Final-render enforcement (E2.5 no-silent-leak invariant) ──
+// A token that is still unresolved when prompt BYTES are produced never leaks
+// into the assembled prompt:
+// - required section  -> hard error (the turn fails loudly);
+// - optional section  -> the whole section is dropped and reported via
+//   onSectionDrop (telemetry), the prompt continues without it.
+
+export class PromptRuntimeRenderError extends Error {
+  readonly sectionLabel: string;
+  readonly unresolvedTokens: string[];
+
+  constructor(message: string, sectionLabel: string, unresolvedTokens: string[]) {
+    super(message);
+    this.name = 'PromptRuntimeRenderError';
+    this.sectionLabel = sectionLabel;
+    this.unresolvedTokens = unresolvedTokens;
+  }
+}
+
+export interface PromptRuntimeSectionDrop {
+  sectionLabel: string;
+  unresolvedTokens: string[];
+}
+
+export interface RenderFinalPromptSectionOptions {
+  now?: Date;
+  variables?: Record<string, unknown>;
+  /** Label used in errors/telemetry (layer identifier or section name). */
+  sectionLabel: string;
+  /** Required sections fail the render loudly; optional sections drop. */
+  required: boolean;
+  /** Telemetry hook invoked when an optional section is dropped. */
+  onSectionDrop?: (drop: PromptRuntimeSectionDrop) => void;
+}
+
+function describeUnresolvedTokens(tokens: readonly string[]): string {
+  return tokens
+    .map((token) => {
+      const removed = REMOVED_PROMPT_MACROS.get(normalizePromptMacroName(token));
+      return removed
+        ? `{{${token}}} (removed macro; use ${removed.canonical})`
+        : `{{${token}}} (no value produced for this turn)`;
+    })
+    .join(', ');
+}
+
+/**
+ * Render one final prompt section with the no-silent-leak invariant. Returns
+ * the rendered text, or '' when an optional section was dropped.
+ */
+export function renderFinalPromptSection(
+  text: string,
+  options: RenderFinalPromptSectionOptions,
+): string {
+  const { text: rendered, unresolvedTokens } = renderPromptRuntimeTokens(text, {
+    ...(options.now ? { now: options.now } : {}),
+    ...(options.variables ? { variables: options.variables } : {}),
+  });
+
+  const leftoverConditional = LEFTOVER_CONDITIONAL_MARKER_PATTERN.test(rendered);
+  if (unresolvedTokens.length === 0 && !leftoverConditional) {
+    return rendered;
+  }
+
+  const tokens = leftoverConditional && unresolvedTokens.length === 0
+    ? ['#if (unbalanced conditional markers)']
+    : unresolvedTokens;
+
+  if (options.required) {
+    throw new PromptRuntimeRenderError(
+      `Unresolved prompt macro(s) in required prompt section "${options.sectionLabel}": `
+      + `${describeUnresolvedTokens(tokens)}. `
+      + 'No unresolved token may reach the assembled prompt (fail closed). '
+      + 'Fix the layer template or produce the variable; see docs/prompt-macros.md.',
+      options.sectionLabel,
+      tokens,
+    );
+  }
+
+  options.onSectionDrop?.({
+    sectionLabel: options.sectionLabel,
+    unresolvedTokens: tokens,
+  });
+  return '';
 }

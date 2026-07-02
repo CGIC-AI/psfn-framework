@@ -2,11 +2,18 @@
   "schemaVersion": 1,
   "layers": [
     {
+      "identifier": "runtime.continuity_notice",
+      "name": "Runtime Continuity Notice",
+      "priority": 95,
+      "required": false,
+      "content": "<runtime_continuity_notice>\n{{#if runtime_continuity_gap_present}}[Continuity notice]\nThe runtime restarted after being offline for about {{runtime_continuity_gap_duration}} (last running state was saved {{runtime_continuity_gap_offline_since}}).\nYour internal emotional and attention state from before the gap was too old to carry forward safely, so this is a fresh start of that state — it will rebuild naturally as you talk.\nA gap this long usually means something interrupted the system itself (maintenance, a crash, or hardware trouble) rather than an ordinary quiet stretch. It is okay to notice the gap, wonder about it, or ask what happened.{{/if}}\n</runtime_continuity_notice>"
+    },
+    {
       "identifier": "runtime.attention",
       "name": "Runtime Attention",
       "priority": 100,
       "required": false,
-      "content": "<runtime_attention>\n<open_threads>\n{{runtime_concerns_top_lines}}\n</open_threads>\n\n<behavioral_notes>\n{{runtime_behavioral_notes_body}}\n</behavioral_notes>\n\n<skills_index>\n{{runtime_skills_index_body}}\n</skills_index>\n</runtime_attention>"
+      "content": "<runtime_attention>\n<open_threads>\n{{#if runtime_concerns_count}}Treat these as soft threads to verify, not alarms that must dominate the turn.\n{{/if}}{{runtime_concerns_top_lines}}{{#if runtime_concerns_omitted_count}}\n- {{runtime_concerns_omitted_count}} additional lower-salience thread{{runtime_concerns_omitted_plural_suffix}} omitted.{{/if}}\n</open_threads>\n\n<behavioral_notes>\n{{runtime_behavioral_notes_body}}\n</behavioral_notes>\n\n<skills_index>\n{{runtime_skills_index_body}}\n</skills_index>\n</runtime_attention>"
     },
     {
       "identifier": "runtime.response_style",
@@ -23,11 +30,18 @@
       "content": "<runtime_tooling>\n<self_image_tool_guidance>\n{{#if runtime_self_image_tool_active}}Use selfie_create for new selfies, portraits, or self-representation. Preserve stable appearance cues from the character appearance section unless the user explicitly asks to vary them. When a saved reference photo exists, selfie_create uses the default reference through image edit by default; set use_reference_image=false only when the user wants a free generation, or pick a saved variant with reference_image_id/reference_image_tags. Write the prompt as the complete shot, combining identity, pose, camera angle, expression, lighting, environment, mood, and style. Use media action=\"generate\" for non-self images, media action=\"edit\" for transforming an existing image, and media action=\"analyze\" only for explicit URLs or generated outputs. If the current user message already includes attached image bytes, inspect that attachment directly instead of passing a stale URL. Generated image tools already return a vision review; use it before asking the user whether the result looks right, unless you need their subjective preference.{{/if}}\n</self_image_tool_guidance>\n\n<extended_tools>\n{{#if runtime_extended_tools_total}}Never claim a tool executed, failed, or was denied unless this turn contains the actual tool call and tool result.\nIf a non-default tool is not already active, activate it before you describe its outcome.\nCore tools are already active through the structured tool registry and are not duplicated here.\n{{runtime_extended_tool_directory_lines}}{{/if}}\n</extended_tools>\n</runtime_tooling>"
     },
     {
+      "identifier": "runtime.charge_budget",
+      "name": "Runtime Charge Budget",
+      "priority": 112,
+      "required": false,
+      "content": "<runtime_charge_budget>\n{{#if runtime_charge_budget_present}}[Charge budget]\nYou have {{runtime_charge_remaining}} of {{runtime_charge_quota}} run-charge units left for the {{runtime_charge_lane}} lane/window.\nAvailable charge action costs:\n{{runtime_charge_cost_lines}}{{/if}}\n</runtime_charge_budget>"
+    },
+    {
       "identifier": "runtime.state",
       "name": "Runtime State",
       "priority": 120,
       "required": true,
-      "content": "<runtime_state>\n<last_message_received>\n<weekday>{{runtime_last_message_received_weekday}}</weekday>\n<date>{{runtime_last_message_received_date_human}}</date>\n<time>{{runtime_last_message_received_time_human}}</time>\n<timezone>{{runtime_last_message_received_timezone}}</timezone>\n<elapsed_time_since_last>{{runtime_last_message_received_ago}}</elapsed_time_since_last>\n<status>{{runtime_last_message_received_missing_notice}}</status>\n</last_message_received>\n\n<internal_turn_context>\n<kind>{{runtime_internal_turn_kind}}</kind>\n</internal_turn_context>\n\n<conversation_state>\n<chat_type>{{runtime_chat_type}}</chat_type>\n<channel_id>{{runtime_room_id}}</channel_id>\n<channel_type>{{runtime_channel_type}}</channel_type>\n<channel_visibility>{{runtime_channel_visibility}}</channel_visibility>\n{{runtime_current_message_author_xml}}\n{{runtime_recent_active_participants_xml}}\n</conversation_state>\n</runtime_state>"
+      "content": "<runtime_state>\n<last_message_received>\n<weekday>{{runtime_last_message_received_weekday}}</weekday>\n<date>{{runtime_last_message_received_date_human}}</date>\n<time>{{runtime_last_message_received_time_human}}</time>\n<timezone>{{runtime_last_message_received_timezone}}</timezone>\n<elapsed_time_since_last>{{runtime_last_message_received_ago}}</elapsed_time_since_last>\n<status>{{#if runtime_last_message_received_missing}}No earlier message is loaded for this channel.{{/if}}</status>\n</last_message_received>\n\n<internal_turn_context>\n<kind>{{runtime_internal_turn_kind}}</kind>\n</internal_turn_context>\n\n<conversation_state>\n<chat_type>{{runtime_chat_type}}</chat_type>\n<channel_id>{{runtime_room_id}}</channel_id>\n<channel_type>{{runtime_channel_type}}</channel_type>\n<channel_visibility>{{runtime_channel_visibility}}</channel_visibility>\n{{runtime_current_message_author_xml}}\n{{runtime_recent_active_participants_xml}}\n</conversation_state>\n</runtime_state>"
     }
   ]
 }

@@ -81,6 +81,17 @@ export interface PromptComposerOptions {
 }
 
 /**
+ * One dynamic-suffix section with its render policy (E2.5): required sections
+ * fail the turn loudly on unresolved macros; optional sections drop with
+ * telemetry instead of leaking tokens into the prompt.
+ */
+export interface ComposedDynamicSection {
+  identifier: string;
+  required: boolean;
+  content: string;
+}
+
+/**
  * Result of the single composer entrypoint (PromptComposer.composeSplit).
  * The static/dynamic split semantics survive downstream as PromptPlan
  * volatility boundaries; there is no unsplit compose() fallback (E2.2).
@@ -94,6 +105,8 @@ export interface ComposeSplitResult {
   autoHealedPromptIdentifiers?: string[];
   staticPrefix: string;
   dynamicSuffix: string;
+  /** Per-layer dynamic sections in suffix order (dynamicSuffix = join('\n\n')). */
+  dynamicSections: ComposedDynamicSection[];
   staticHash: string;
   dynamicHash: string;
   staticLayerIds: string[];

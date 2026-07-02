@@ -15,7 +15,7 @@ describe('TurnPromptVariableNamespace', () => {
     namespace.assign('session', 'runtime_speaking_with_is_machine_intelligence', 'false', 'test:assembly');
     namespace.assignRecord('turn', {
       runtime_current_weekday: 'Friday',
-      runtime_trust_level: 'trusted',
+      runtime_capability_tier: 'trusted',
     }, 'test:turn-builder');
 
     const { variables, sessionVariables } = namespace.freeze();
@@ -26,7 +26,7 @@ describe('TurnPromptVariableNamespace', () => {
       active_timezone: 'America/New_York',
       runtime_speaking_with_is_machine_intelligence: 'false',
       runtime_current_weekday: 'Friday',
-      runtime_trust_level: 'trusted',
+      runtime_capability_tier: 'trusted',
     });
     expect(sessionVariables).toEqual({
       user: 'Vega',
@@ -58,7 +58,7 @@ describe('TurnPromptVariableNamespace', () => {
     namespace.assign('session', 'user', 'Vega', 'test:a');
     const { variables } = namespace.freeze();
 
-    expect(() => namespace.assign('turn', 'runtime_trust_level', 'trusted', 'test:late'))
+    expect(() => namespace.assign('turn', 'runtime_capability_tier', 'apprentice', 'test:late'))
       .toThrow(/frozen/);
     // Frozen records reject direct property writes too (strict-mode TypeError).
     expect(() => {
@@ -82,7 +82,7 @@ describe('TurnPromptVariableNamespace', () => {
 
   it('enforces phase ordering: session writes after turn writes throw', () => {
     const namespace = new TurnPromptVariableNamespace();
-    namespace.assign('turn', 'runtime_trust_level', 'trusted', 'test:turn-builder');
+    namespace.assign('turn', 'runtime_capability_tier', 'trusted', 'test:turn-builder');
     expect(() => namespace.assign('session', 'user', 'Vega', 'test:late-session'))
       .toThrow(/cannot be written after a later phase/);
   });

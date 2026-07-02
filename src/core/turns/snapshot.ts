@@ -55,9 +55,18 @@ export interface PromptSectionCacheability {
   reason: string;
 }
 
+export interface TurnPromptSnapshotDynamicSection {
+  identifier: string;
+  /** Required sections fail the turn loudly on unresolved macros (E2.5). */
+  required: boolean;
+  content: string;
+}
+
 export interface TurnPromptSnapshot {
   staticPrefixTemplate: string;
   dynamicSuffixTemplate: string;
+  /** Per-layer dynamic sections (dynamicSuffixTemplate = join('\n\n')). */
+  dynamicSuffixSections?: TurnPromptSnapshotDynamicSection[];
   staticHash: string;
   versionPointer: string;
   sectionCacheability?: PromptSectionCacheability[];

@@ -11,6 +11,7 @@ import {
 import { createComponentLogger } from '../../shared/logger.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { collectRemovedPromptMacroReferences } from './prompt-runtime.js';
 
 const log = createComponentLogger('PromptRegistry');
 
@@ -502,6 +503,16 @@ export class PromptRegistryStore {
   private validatePromptText(key: string, text: string): string | null {
     if (text.trim().length === 0) {
       return 'Prompt text cannot be empty';
+    }
+
+    // Safety valve (E2.5): operator-customized registry prompts that still
+    // reference removed macro aliases fail with the canonical replacement.
+    const removedReferences = collectRemovedPromptMacroReferences(text);
+    if (removedReferences.length > 0) {
+      const detail = removedReferences
+        .map(reference => `{{${reference.name}}} (removed; use ${reference.canonical})`)
+        .join(', ');
+      return `Prompt "${key}" references removed prompt macro(s): ${detail}`;
     }
 
     const knownKey = key as PromptRegistryKey;

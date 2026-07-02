@@ -1,11 +1,11 @@
 import {
-  injectPromptRuntimeTokens,
   orderPromptRuntimeSystemPromptSections,
+  renderFinalPromptSection,
   type PromptRuntimeSystemPromptBlockId,
 } from '../../../identity/prompt-runtime.js';
 import { TurnPromptVariableNamespace } from '../../../identity/prompt-variable-namespace.js';
 import { resolveCachedPromptRuntimeLayoutStore } from '../../../identity/prompt-runtime-store-cache.js';
-import { composeDefaultRuntimePromptTemplate } from '../../../identity/runtime-prompt-layers.js';
+import { getDefaultRuntimePromptSections } from '../../../identity/runtime-prompt-layers.js';
 import { buildSystemContextPromptBlock } from '../../../../primitives/llm/message-conversion.js';
 import type { PiChatMessage } from '../../../../primitives/llm/message-conversion.js';
 import {
@@ -53,7 +53,37 @@ import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
-const DEFAULT_RUNTIME_PROMPT_TEMPLATE = composeDefaultRuntimePromptTemplate();
+
+interface DynamicSuffixRenderSection {
+  identifier: string;
+  required: boolean;
+  content: string;
+}
+
+/**
+ * Resolve the per-layer dynamic suffix sections for this turn (E2.5). The
+ * turn snapshot's composed sections win; a snapshot that only carries the
+ * joined template renders as ONE required unit (fail closed — never a silent
+ * partial render); with no snapshot the seeded runtime layers apply.
+ */
+function resolveDynamicSuffixSections(
+  promptSnapshot: TurnSnapshot['prompt'],
+): DynamicSuffixRenderSection[] {
+  if (promptSnapshot?.dynamicSuffixSections && promptSnapshot.dynamicSuffixSections.length > 0) {
+    return promptSnapshot.dynamicSuffixSections;
+  }
+  const joinedTemplate = typeof promptSnapshot?.dynamicSuffixTemplate === 'string'
+    ? promptSnapshot.dynamicSuffixTemplate.trim()
+    : '';
+  if (joinedTemplate) {
+    return [{
+      identifier: 'prompt-stack.dynamic_suffix',
+      required: true,
+      content: joinedTemplate,
+    }];
+  }
+  return getDefaultRuntimePromptSections();
+}
 
 export interface TurnPromptAssemblyResult {
   promptMode: MessagePromptOverrideMode;
@@ -263,12 +293,38 @@ export async function assembleTurnPrompt(input: {
     runtimeContext,
     buildFatiguePromptAlert(fatigue),
   ].map(section => section.trim()).filter(Boolean).join('\n\n');
-  const dynamicSuffixTemplate = turnSnapshot.prompt?.dynamicSuffixTemplate
-    || DEFAULT_RUNTIME_PROMPT_TEMPLATE;
-  const renderedDynamicSuffix = stripCurrentDatetimePromptBlocks(injectPromptRuntimeTokens(dynamicSuffixTemplate, {
-    now: runtimeNow,
-    variables: promptRuntimeVariables,
-  }));
+  // Per-section dynamic suffix render (E2.5 no-silent-leak invariant): a
+  // required section with an unresolved macro fails the turn loudly; an
+  // optional section drops with telemetry. No token ever leaks into bytes.
+  const dynamicSuffixSections = resolveDynamicSuffixSections(turnSnapshot.prompt);
+  const renderedDynamicSuffix = stripCurrentDatetimePromptBlocks(
+    dynamicSuffixSections
+      .map(section => renderFinalPromptSection(section.content, {
+        now: runtimeNow,
+        variables: promptRuntimeVariables,
+        sectionLabel: section.identifier,
+        required: section.required,
+        onSectionDrop: (drop) => {
+          log.warn('Optional prompt section dropped: unresolved macros', {
+            channelId: message.channelId,
+            turnId: turnSnapshot.turnId,
+            sectionLabel: drop.sectionLabel,
+            unresolvedTokens: drop.unresolvedTokens,
+          });
+          void runtime.eventBus.emit('agent.prompt.section_dropped', {
+            channelId: message.channelId,
+            turnId: turnSnapshot.turnId,
+            sectionLabel: drop.sectionLabel,
+            unresolvedTokens: drop.unresolvedTokens,
+          }).catch((error: unknown) => {
+            log.warn('Failed to emit prompt section drop telemetry', { error: String(error) });
+          });
+        },
+      }))
+      .map(text => text.trim())
+      .filter(text => text.length > 0)
+      .join('\n\n'),
+  );
   const promptRuntimeLayout = resolveCachedPromptRuntimeLayoutStore(runtime.config);
   const personaHint = runtime.getPersonaAdaptation(
     trustLevel,

@@ -1,7 +1,5 @@
 import type { TrustLevel } from '../../system/trust/types.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
-import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
-import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 
 export interface EmotionalExpressionDisplayRange {
   min: number;
@@ -68,8 +66,6 @@ const DEFAULT_TRUST_GATE: TrustGate = {
 };
 
 const EPSILON = 1e-6;
-
-export const EMOTIONAL_AFFECT_BODY_TEMPLATE = '{{#if runtime_affect_snapshot_present}}Trust gate: {{runtime_affect_mode_label}}\nAffect modifiers: warmth={{runtime_affect_warmth}}, formality={{runtime_affect_formality}}, energy={{runtime_affect_energy}}, assertiveness={{runtime_affect_assertiveness}}, expressiveness={{runtime_affect_expressiveness}}\nExpression controls: intensity={{runtime_affect_intensity}}, variability={{runtime_affect_variability}}, control={{runtime_affect_control}}, display_range={{runtime_affect_display_range_min}}..{{runtime_affect_display_range_max}}\nGuidance: {{runtime_affect_guidance_warmth_label}}, {{runtime_affect_guidance_formality_label}}, {{runtime_affect_guidance_energy_label}}, {{runtime_affect_guidance_assertiveness_label}}, with {{runtime_affect_guidance_expressiveness_label}} emotional display. {{runtime_affect_privacy_guidance}}{{/if}}';
 
 const PROMPT_VARIABLE_KEYS = {
   intensity: [
@@ -224,20 +220,6 @@ export function mapEmotionToPersonaAffect(input: PersonaAffectInput): PersonaAff
   };
 }
 
-export function buildEmotionalAffectSection(input: EmotionalAffectSectionInput): string | null {
-  if (!input.emotionSnapshot) return null;
-
-  const body = injectPromptRuntimeTokens(EMOTIONAL_AFFECT_BODY_TEMPLATE, {
-    variables: buildEmotionalAffectPromptVariables(input),
-  });
-  if (!body) return null;
-
-  return wrapPromptSectionXml({
-    id: 'emotional_affect',
-    content: body,
-  });
-}
-
 export function buildEmotionalAffectPromptVariables(
   input: EmotionalAffectSectionInput,
 ): Record<string, string> {
@@ -257,17 +239,9 @@ export function buildEmotionalAffectPromptVariables(
     runtime_affect_control: '',
     runtime_affect_display_range_min: '',
     runtime_affect_display_range_max: '',
-    runtime_affect_profile_intensity: '',
-    runtime_affect_profile_variability: '',
-    runtime_affect_profile_control: '',
-    runtime_affect_profile_display_range_min: '',
-    runtime_affect_profile_display_range_max: '',
     runtime_affect_valence: '',
     runtime_affect_arousal: '',
     runtime_affect_dominance: '',
-    runtime_affect_snapshot_vad_valence: '',
-    runtime_affect_snapshot_vad_arousal: '',
-    runtime_affect_snapshot_vad_dominance: '',
     runtime_affect_snapshot_mood_valence: '',
     runtime_affect_snapshot_mood_arousal: '',
     runtime_affect_snapshot_mood_dominance: '',
@@ -277,7 +251,6 @@ export function buildEmotionalAffectPromptVariables(
     runtime_affect_guidance_energy_label: '',
     runtime_affect_guidance_assertiveness_label: '',
     runtime_affect_guidance_expressiveness_label: '',
-    runtime_affect_privacy_guidance: '',
   } satisfies Record<string, string>;
 
   if (!input.emotionSnapshot) {
@@ -309,17 +282,9 @@ export function buildEmotionalAffectPromptVariables(
     runtime_affect_control: affect.profile.control.toFixed(3),
     runtime_affect_display_range_min: affect.profile.displayRange.min.toFixed(3),
     runtime_affect_display_range_max: affect.profile.displayRange.max.toFixed(3),
-    runtime_affect_profile_intensity: affect.profile.intensity.toFixed(3),
-    runtime_affect_profile_variability: affect.profile.variability.toFixed(3),
-    runtime_affect_profile_control: affect.profile.control.toFixed(3),
-    runtime_affect_profile_display_range_min: affect.profile.displayRange.min.toFixed(3),
-    runtime_affect_profile_display_range_max: affect.profile.displayRange.max.toFixed(3),
     runtime_affect_valence: formatSigned(input.emotionSnapshot.vad.valence),
     runtime_affect_arousal: formatSigned(input.emotionSnapshot.vad.arousal),
     runtime_affect_dominance: formatSigned(input.emotionSnapshot.vad.dominance),
-    runtime_affect_snapshot_vad_valence: formatSigned(input.emotionSnapshot.vad.valence),
-    runtime_affect_snapshot_vad_arousal: formatSigned(input.emotionSnapshot.vad.arousal),
-    runtime_affect_snapshot_vad_dominance: formatSigned(input.emotionSnapshot.vad.dominance),
     runtime_affect_snapshot_mood_valence: formatSigned(input.emotionSnapshot.mood.valence),
     runtime_affect_snapshot_mood_arousal: formatSigned(input.emotionSnapshot.mood.arousal),
     runtime_affect_snapshot_mood_dominance: formatSigned(input.emotionSnapshot.mood.dominance),
@@ -333,9 +298,6 @@ export function buildEmotionalAffectPromptVariables(
       'more deferential',
     ),
     runtime_affect_guidance_expressiveness_label: describeExpressiveness(affect.expressiveness),
-    runtime_affect_privacy_guidance: affect.mode === 'honne'
-      ? 'You may show genuine internal affect.'
-      : 'Keep emotional expression surface-level and privacy-safe.',
   };
 }
 

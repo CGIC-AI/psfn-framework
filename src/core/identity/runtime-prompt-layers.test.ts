@@ -25,7 +25,7 @@ const LEGACY_RUNTIME_LAYER_SEEDS = [
     identifier: 'runtime.self',
     name: 'Runtime Self',
     priority: 90,
-    content: '<runtime_self><style>{{runtime_response_style}}</style><trust>{{runtime_trust_level}}</trust></runtime_self>',
+    content: '<runtime_self><style>{{runtime_response_style}}</style><trust>{{runtime_trust_is_primary}}</trust></runtime_self>',
   },
   {
     identifier: 'runtime.last_message_received',
@@ -73,7 +73,7 @@ const LEGACY_RUNTIME_LAYER_SEEDS = [
     identifier: 'runtime.trust',
     name: 'Trust Guidance',
     priority: 170,
-    content: '<trust>{{runtime_trust_level}}</trust>',
+    content: '<trust>{{runtime_trust_is_primary}}</trust>',
   },
   {
     identifier: 'runtime.appearance_context',
@@ -158,14 +158,18 @@ afterEach(() => {
 describe('runtime prompt layer schema', () => {
   it('loads only seed-backed current runtime layers', () => {
     expect(getRuntimePromptLayerDefinitions().map(definition => definition.identifier)).toEqual([
+      'runtime.continuity_notice',
       'runtime.attention',
       'runtime.response_style',
       'runtime.tooling',
+      'runtime.charge_budget',
       'runtime.state',
     ]);
 
     expect(isRequiredRuntimePromptLayer('runtime.state')).toBe(true);
     expect(isRequiredRuntimePromptLayer('runtime.attention')).toBe(false);
+    expect(isRequiredRuntimePromptLayer('runtime.continuity_notice')).toBe(false);
+    expect(isRequiredRuntimePromptLayer('runtime.charge_budget')).toBe(false);
     expect(isRequiredRuntimePromptLayer('runtime.response_style')).toBe(false);
     expect(isRequiredRuntimePromptLayer('runtime.tooling')).toBe(false);
     expect(isRequiredRuntimePromptLayer('runtime.self')).toBe(false);
@@ -223,7 +227,7 @@ describe('runtime prompt layer schema', () => {
         runtime_last_message_received_time_human: '',
         runtime_last_message_received_timezone: '',
         runtime_last_message_received_ago: '',
-        runtime_last_message_received_missing_notice: 'No earlier message is loaded for this channel.',
+        runtime_last_message_received_missing: 'true',
         runtime_internal_turn_kind: '',
         runtime_chat_type: 'direct_message',
         runtime_room_id: 'discord:dm:alex',
@@ -318,9 +322,11 @@ describe('runtime prompt layer schema', () => {
     const summary = ensureRuntimePromptLayers(store, { logger });
 
     expect(store.getByType('runtime').map(layer => layer.identifier)).toEqual([
+      'runtime.continuity_notice',
       'runtime.attention',
       'runtime.response_style',
       'runtime.tooling',
+      'runtime.charge_budget',
       'runtime.state',
     ]);
     for (const definition of getRuntimePromptLayerDefinitions()) {
@@ -330,7 +336,14 @@ describe('runtime prompt layer schema', () => {
     }
     expect(summary).toMatchObject({
       outcome: 'seeded_umbrella_defaults',
-      createdUmbrellaIdentifiers: ['runtime.attention', 'runtime.response_style', 'runtime.tooling', 'runtime.state'],
+      createdUmbrellaIdentifiers: [
+        'runtime.continuity_notice',
+        'runtime.attention',
+        'runtime.response_style',
+        'runtime.tooling',
+        'runtime.charge_budget',
+        'runtime.state',
+      ],
     });
     expect(events).toEqual([
       {
@@ -358,6 +371,8 @@ describe('runtime prompt layer schema', () => {
 
     expect(migratedLayers).toEqual([
       'runtime.attention',
+      'runtime.charge_budget',
+      'runtime.continuity_notice',
       'runtime.response_style',
       'runtime.state',
       'runtime.tooling',

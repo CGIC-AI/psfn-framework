@@ -66,6 +66,88 @@ describe('PromptComposer', () => {
     };
   }
 
+  describe('persisted-layer removed-macro safety valve (E2.5)', () => {
+    function checksumOf(content: string): string {
+      return createHash('sha256').update(content).digest('hex').slice(0, 16);
+    }
+
+    function writePersistedLayer(content: string): void {
+      // Simulate an operator-customized layer persisted BEFORE the macro
+      // consolidation: the file predates edit-time validation, so the valve
+      // must catch it at compose time.
+      const persistedContent = content;
+      writeFileSync(layersPath, JSON.stringify([{
+        id: 'legacy-layer-1',
+        type: 'runtime',
+        name: 'Operator Customized Runtime',
+        identifier: 'runtime.operator_custom',
+        role: 'system',
+        content: persistedContent,
+        enabled: true,
+        priority: 100,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        updatedBy: 'operator',
+        checksum: checksumOf(persistedContent),
+        version: 3,
+      }]));
+    }
+
+    it('fails compose with a clear error naming the canonical replacement', () => {
+      writePersistedLayer('Current time: {{now}} for {{user}}.');
+      const restartedStore = new PromptLayerStore(layersPath, historyPath);
+      const restartedComposer = new PromptComposer(restartedStore, undefined, undefined, {
+        persistLastKnownGood: false,
+      });
+
+      expect(() => restartedComposer.composeSplit())
+        .toThrow(/Prompt layer "runtime\.operator_custom" references removed prompt macro\(s\): \{\{now\}\} \(removed; use \{\{current_datetime\}\}\)/);
+    });
+
+    it('rejects removed aliases at layer create and update time', () => {
+      expect(() => store.create({
+        type: 'runtime',
+        name: 'Bad Layer',
+        identifier: 'runtime.bad',
+        content: 'Trust: {{runtime_trust_level}}',
+      })).toThrow(/removed prompt macro\(s\): \{\{runtime_trust_level\}\} \(removed; use \{\{trust_level\}\}\)/);
+
+      const layer = store.create({
+        type: 'runtime',
+        name: 'Good Layer',
+        identifier: 'runtime.good',
+        content: 'Trust: {{trust_level}}',
+      });
+      expect(() => store.update(layer.id, 'Updated {{model_id}}', 'operator'))
+        .toThrow(/removed prompt macro\(s\): \{\{model_id\}\} \(removed; use \{\{model\}\}\)/);
+    });
+
+    it('exposes per-layer dynamic sections with required flags on composeSplit', () => {
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main', promptOrder: 0 });
+      store.create({
+        type: 'runtime',
+        name: 'Runtime State',
+        identifier: 'runtime.state',
+        content: '<runtime_state>{{runtime_chat_type}}</runtime_state>',
+        promptOrder: 120,
+      });
+      store.create({
+        type: 'runtime',
+        name: 'Runtime Attention',
+        identifier: 'runtime.attention',
+        content: '<runtime_attention>{{runtime_concerns_top_lines}}</runtime_attention>',
+        promptOrder: 100,
+      });
+
+      const result = composer.composeSplit();
+      const sectionsById = new Map(result.dynamicSections.map(section => [section.identifier, section]));
+      expect(sectionsById.get('runtime.state')?.required).toBe(true);
+      expect(sectionsById.get('runtime.attention')?.required).toBe(false);
+      expect(result.dynamicSuffix).toBe(
+        result.dynamicSections.map(section => section.content).join('\n\n'),
+      );
+    });
+  });
+
   describe('layer ordering', () => {
     it('seeds temporal rules as a static operator layer near the bottom of the prefix', () => {
       const base = store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main', promptOrder: 0 });

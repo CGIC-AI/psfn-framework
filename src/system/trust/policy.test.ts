@@ -413,8 +413,9 @@ describe('classifyChannel', () => {
 
 describe('prompt-facing trust/style state', () => {
   it('emits one-hot trust state variables for prompt templates', () => {
+    // {{runtime_trust_level}} was removed as an exact duplicate of the
+    // session-stable {{trust_level}} macro (E2.5).
     expect(buildTrustPromptState('trusted')).toEqual({
-      runtime_trust_level: 'trusted',
       runtime_trust_is_primary: 'false',
       runtime_trust_is_trusted: 'true',
       runtime_trust_is_regular: 'false',

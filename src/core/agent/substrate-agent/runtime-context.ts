@@ -36,7 +36,11 @@ import {
 import type { EmotionAppraisalEntry } from '../../emotion/appraisal.js';
 import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import type { ActiveConcernContextProvider } from '../../intention/concern-store-port.js';
-import { formatActiveConcernsContextBlock } from '../../intention/concerns.js';
+import {
+  buildActiveConcernsPromptVariables,
+  buildActiveConcernsRuntimeData,
+  type ActiveConcernRuntimeData,
+} from '../../intention/concerns.js';
 import type { BehavioralPatternContextProvider } from '../../intention/patterns.js';
 import { buildEmotionalAffectPromptVariables } from '../../emotion/persona-adaptation.js';
 import type { MetacognitiveFlag } from '../../self-model/metacognition.js';
@@ -103,8 +107,6 @@ export interface CompanionSubstrateHealthContext {
   warnings?: readonly CompanionSubstrateHealthWarning[];
 }
 
-const OMITTED_CONCERN_LINE_PATTERN = /^- (\d+) additional lower-salience thread(?:s)? omitted\.$/;
-const CONCERN_PRIORITY_PATTERN = /\[(high|medium|low);/i;
 const SKILL_TAG_PATTERN = /<skill\b/gi;
 
 const CHARGE_SURFACE_PROMPT_LABELS: Record<ChargePolicySurface, string> = {
@@ -185,12 +187,23 @@ function formatChargeAmount(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/u, '').replace(/\.$/u, '');
 }
 
-function buildChargeBudgetContextBlock(input: {
+// Bare charge-budget values (E2.5 purity rule): the numbers and the costed
+// surface lines are data; the sentence framing lives in the editable
+// runtime.charge_budget prompt layer.
+function buildChargePromptVariables(input: {
   config?: Record<string, unknown>;
   analysisWorkbenchAvailable?: boolean;
-}): string {
+}): Record<string, string> {
   const chargePolicy = resolveChargePolicyConfig(input.config);
-  if (!chargePolicy) return '';
+  if (!chargePolicy) {
+    return {
+      runtime_charge_budget_present: 'false',
+      runtime_charge_lane: '',
+      runtime_charge_quota: '',
+      runtime_charge_remaining: '',
+      runtime_charge_cost_lines: '',
+    };
+  }
 
   const snapshot = getRunChargeSnapshot();
   const lane = snapshot?.lane && isChargePolicyRuntimeLane(snapshot.lane)
@@ -213,17 +226,15 @@ function buildChargeBudgetContextBlock(input: {
     ))
     .sort((left, right) => right.amount - left.amount || left.surface.localeCompare(right.surface));
 
-  const lines = [
-    '[Charge budget]',
-    `You have ${formatChargeAmount(remaining)} of ${formatChargeAmount(quota)} run-charge units left for the ${lane} lane/window.`,
-    'Available charge action costs:',
-    ...costedSurfaces.map(entry => `- ${CHARGE_SURFACE_PROMPT_LABELS[entry.surface]}: ${formatChargeAmount(entry.amount)}`),
-  ];
-
-  return wrapPromptSectionXml({
-    id: 'runtime_charge_budget',
-    content: lines.join('\n'),
-  });
+  return {
+    runtime_charge_budget_present: 'true',
+    runtime_charge_lane: lane,
+    runtime_charge_quota: formatChargeAmount(quota),
+    runtime_charge_remaining: formatChargeAmount(remaining),
+    runtime_charge_cost_lines: costedSurfaces
+      .map(entry => `- ${CHARGE_SURFACE_PROMPT_LABELS[entry.surface]}: ${formatChargeAmount(entry.amount)}`)
+      .join('\n'),
+  };
 }
 
 function formatGapDuration(gapMs: number): string {
@@ -234,20 +245,24 @@ function formatGapDuration(gapMs: number): string {
   return `${String(Math.round(hours / 24))} days`;
 }
 
-export function buildInternalStateContinuityGapContextBlock(
+// Bare continuity-gap values (E2.5 purity rule): gap duration and offline
+// timestamp are data; the notice wording lives in the editable
+// runtime.continuity_notice prompt layer.
+export function buildContinuityGapPromptVariables(
   gap: InternalStateContinuityGap | null | undefined,
-): string {
-  if (!gap) return '';
-  const lines = [
-    '[Continuity notice]',
-    `The runtime restarted after being offline for about ${formatGapDuration(gap.gapMs)} (last running state was saved ${gap.offlineSince}).`,
-    'Your internal emotional and attention state from before the gap was too old to carry forward safely, so this is a fresh start of that state — it will rebuild naturally as you talk.',
-    'A gap this long usually means something interrupted the system itself (maintenance, a crash, or hardware trouble) rather than an ordinary quiet stretch. It is okay to notice the gap, wonder about it, or ask what happened.',
-  ];
-  return wrapPromptSectionXml({
-    id: 'runtime_continuity_notice',
-    content: lines.join('\n'),
-  });
+): Record<string, string> {
+  if (!gap) {
+    return {
+      runtime_continuity_gap_present: 'false',
+      runtime_continuity_gap_duration: '',
+      runtime_continuity_gap_offline_since: '',
+    };
+  }
+  return {
+    runtime_continuity_gap_present: 'true',
+    runtime_continuity_gap_duration: formatGapDuration(gap.gapMs),
+    runtime_continuity_gap_offline_since: gap.offlineSince,
+  };
 }
 
 function buildSatelliteEndpointContextBlock(message: SubstrateMessage): string {
@@ -539,7 +554,7 @@ function buildLastMessagePromptVariables(input: {
   if (!lastMessageReceivedAt) {
     return {
       runtime_last_message_received_present: 'false',
-      runtime_last_message_received_human: 'no earlier message is loaded for this channel',
+      runtime_last_message_received_missing: 'true',
       runtime_last_message_received_at_iso: '',
       runtime_last_message_received_weekday: '',
       runtime_last_message_received_date_human: '',
@@ -547,7 +562,6 @@ function buildLastMessagePromptVariables(input: {
       runtime_last_message_received_timezone: '',
       runtime_last_message_received_ago: '',
       runtime_last_message_received_days_hours: '',
-      runtime_last_message_received_missing_notice: 'No earlier message is loaded for this channel.',
     };
   }
 
@@ -555,7 +569,7 @@ function buildLastMessagePromptVariables(input: {
   const relativeElapsed = formatRelativeElapsed(now, lastMessageReceivedAt);
   return {
     runtime_last_message_received_present: 'true',
-    runtime_last_message_received_human: `${formatPromptRuntimeDateTime(lastMessageReceivedAt)} ${activeTimezone} (${relativeElapsed})`,
+    runtime_last_message_received_missing: 'false',
     runtime_last_message_received_at_iso: formatActiveDateTimeIso(lastMessageReceivedAt),
     runtime_last_message_received_weekday: formatPromptRuntimeWeekday(lastMessageReceivedAt),
     runtime_last_message_received_date_human: formatPromptRuntimeDate(lastMessageReceivedAt),
@@ -563,7 +577,6 @@ function buildLastMessagePromptVariables(input: {
     runtime_last_message_received_timezone: activeTimezone,
     runtime_last_message_received_ago: relativeElapsed,
     runtime_last_message_received_days_hours: formatElapsedDaysHours(now, lastMessageReceivedAt),
-    runtime_last_message_received_missing_notice: '',
   };
 }
 
@@ -792,13 +805,22 @@ function resolveTopEmotionNames(
     .map(([emotion]) => emotion);
 }
 
-function describeEmotionTelemetryValidation(internalState: InternalState): string {
+// Bare degraded-telemetry values (E2.5 purity rule): status and reasons are
+// data; any cautionary wording belongs in editable layer text.
+function resolveEmotionTelemetryPromptValues(internalState: InternalState): {
+  status: string;
+  reasons: string;
+} {
   const telemetry = (internalState.emotional as {
     telemetry?: InternalState['emotional']['telemetry'];
   }).telemetry;
-  if (!telemetry || telemetry.status === 'trusted') return '';
-  const reasons = telemetry.reasons.length > 0 ? telemetry.reasons.join(', ') : 'uncalibrated';
-  return ` Emotion telemetry is ${telemetry.status} (${reasons}); treat affect as uncertain.`;
+  if (!telemetry || telemetry.status === 'trusted') {
+    return { status: '', reasons: '' };
+  }
+  return {
+    status: telemetry.status,
+    reasons: telemetry.reasons.length > 0 ? telemetry.reasons.join(', ') : 'uncalibrated',
+  };
 }
 
 function buildInternalStatePromptVariables(internalState?: InternalState): Record<string, string> {
@@ -817,10 +839,9 @@ function buildInternalStatePromptVariables(internalState?: InternalState): Recor
     runtime_internal_state_relational_last_seen_label: '',
     runtime_internal_state_emotional_mood_valence_label: '',
     runtime_internal_state_emotional_mood_arousal_label: '',
-    runtime_internal_state_emotional_prefix: '',
-    runtime_internal_state_emotional_secondary_clause: '',
     runtime_internal_state_emotional_secondary_emotions: '',
-    runtime_internal_state_emotional_validation_clause: '',
+    runtime_internal_state_emotional_telemetry_status: '',
+    runtime_internal_state_emotional_telemetry_reasons: '',
   } satisfies Record<string, string>;
 
   if (!internalState) {
@@ -829,6 +850,7 @@ function buildInternalStatePromptVariables(internalState?: InternalState): Recor
 
   const pendingFollowUps = internalState.attention.pendingFollowUps ?? [];
   const secondaryEmotions = resolveTopEmotionNames(internalState.emotional.discreteEmotions);
+  const emotionTelemetry = resolveEmotionTelemetryPromptValues(internalState);
   return {
     runtime_internal_state_present: 'true',
     runtime_internal_state_cognitive_processing_quality: internalState.cognitive.processingQuality,
@@ -846,18 +868,19 @@ function buildInternalStatePromptVariables(internalState?: InternalState): Recor
     runtime_internal_state_relational_last_seen_label: describeLastSeenRecency(internalState.relational.lastSeenDeltaSeconds),
     runtime_internal_state_emotional_mood_valence_label: describeValence(internalState.emotional.mood.valence),
     runtime_internal_state_emotional_mood_arousal_label: describeArousal(internalState.emotional.mood.arousal),
-    runtime_internal_state_emotional_prefix: secondaryEmotions.length > 0 ? 'mostly ' : '',
-    runtime_internal_state_emotional_secondary_clause: secondaryEmotions.length > 0
-      ? `, with ${secondaryEmotions.join(' and ')} present`
-      : '',
     runtime_internal_state_emotional_secondary_emotions: secondaryEmotions.join(', '),
-    runtime_internal_state_emotional_validation_clause: describeEmotionTelemetryValidation(internalState),
+    runtime_internal_state_emotional_telemetry_status: emotionTelemetry.status,
+    runtime_internal_state_emotional_telemetry_reasons: emotionTelemetry.reasons,
   };
 }
 
-function buildConcernPromptVariables(activeConcernsBlock: string | null | undefined): Record<string, string> {
-  const body = unwrapPromptSectionBody(activeConcernsBlock);
-  if (!body) {
+// Concern data flows as structured ActiveConcernRuntimeData (E2.5): no more
+// formatting a prose block in code and re-parsing it back into variables. The
+// open-threads framing sentence lives in the runtime.attention prompt layer.
+function buildConcernPromptVariables(
+  activeConcerns: ActiveConcernRuntimeData | null | undefined,
+): Record<string, string> {
+  if (!activeConcerns || activeConcerns.totalCount === 0) {
     return {
       runtime_concerns_count: '0',
       runtime_concerns_top_lines: '',
@@ -866,30 +889,7 @@ function buildConcernPromptVariables(activeConcernsBlock: string | null | undefi
       runtime_concerns_omitted_plural_suffix: 's',
     };
   }
-
-  const lines = body
-    .split('\n')
-    .map(line => line.trim())
-    .filter(Boolean);
-  const topLines = lines.filter(line => (
-    line.startsWith('- ')
-    && !OMITTED_CONCERN_LINE_PATTERN.test(line)
-  ));
-  const omittedLine = lines.find(line => OMITTED_CONCERN_LINE_PATTERN.test(line));
-  const omittedCount = omittedLine
-    ? Number.parseInt(omittedLine.match(OMITTED_CONCERN_LINE_PATTERN)?.[1] ?? '0', 10)
-    : 0;
-  const topPriorities = topLines
-    .map(line => line.match(CONCERN_PRIORITY_PATTERN)?.[1]?.toLowerCase() ?? '')
-    .filter((priority): priority is string => priority.length > 0);
-
-  return {
-    runtime_concerns_count: String(topLines.length + omittedCount),
-    runtime_concerns_top_lines: topLines.join('\n'),
-    runtime_concerns_top_priorities: topPriorities.join(', '),
-    runtime_concerns_omitted_count: String(omittedCount),
-    runtime_concerns_omitted_plural_suffix: omittedCount === 1 ? '' : 's',
-  };
+  return buildActiveConcernsPromptVariables(activeConcerns);
 }
 
 function countNonEmptyLines(body: string): number {
@@ -904,7 +904,7 @@ function buildBehavioralNotesPromptVariables(behavioralNotesBlock: string | null
   const body = unwrapPromptSectionBody(behavioralNotesBlock);
   return {
     runtime_behavioral_notes_count: body ? String(countNonEmptyLines(body)) : '0',
-    runtime_behavioral_notes_body_raw: body,
+    runtime_behavioral_notes_body: body,
   };
 }
 
@@ -991,15 +991,12 @@ export function buildPromptTemplateVariables(input: {
       char_name: runtimeCharacterName,
       character: runtimeCharacterName,
       character_name: runtimeCharacterName,
-      channel: input.message.channelId,
       channel_id: input.message.channelId,
       channel_type: input.channelType ?? 'unknown',
       channel_visibility: visibility,
       trust_level: input.trustLevel,
       canonical_contact_id: canonicalIdentityKey,
       model: input.modelId,
-      model_id: input.modelId,
-      now_iso: formatActiveDateTimeIso(input.now),
       active_timezone: resolveActiveTimezone(),
     },
     runtimeCharacterName,
@@ -1031,13 +1028,14 @@ export function buildDynamicPromptTemplateVariables(input: {
   classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
   promotedExtendedToolNames: Set<string>;
   skillsContext?: string;
-  activeConcernsBlock?: string;
+  activeConcerns?: ActiveConcernRuntimeData | null;
   behavioralNotesBlock?: string;
   lastMessageReceivedAtMs?: number | null;
   recentChannelEntries?: readonly SessionEntry[];
   currentUserRuntimeProfile?: UserRuntimeProfile;
   recentActiveParticipantRuntimeProfiles?: readonly UserRuntimeProfile[];
   analysisWorkbenchAvailable?: boolean;
+  internalStateContinuityGap?: InternalStateContinuityGap | null;
   config: Record<string, unknown>;
 }): Record<string, string> {
   const internalTurn = isInternalJournalChannel(input.message.channelId);
@@ -1074,17 +1072,6 @@ export function buildDynamicPromptTemplateVariables(input: {
     classifyExtendedToolForTurn: input.classifyExtendedToolForTurn,
     promotedExtendedToolNames: input.promotedExtendedToolNames,
   });
-  const activeToolSummary = `${activeCount} active now (${coreCount} core`
-    + (promotedCount > 0 ? `, ${promotedCount} promoted` : '')
-    + (extendedLoadedCount > 0 ? `, ${extendedLoadedCount} loaded` : '')
-    + (autoloadCount > 0 ? `, ${autoloadCount} autoload` : '')
-    + (deferredCount > 0 ? `, ${deferredCount} deferred` : '')
-    + `)${extendedCount > 0
-      ? `; ${extendedToolGuide.activatableCount} more activatable via toolset action="activate"`
-        + (extendedToolGuide.blockedCount > 0
-          ? `, ${extendedToolGuide.blockedCount} blocked by the current capability tier.`
-          : '.')
-      : '.'}`;
 
   const emotionSnapshot = input.internalState ? toEmotionSnapshotFromInternalState(input.internalState) : null;
   const affectVariables = buildEmotionalAffectPromptVariables({
@@ -1096,9 +1083,7 @@ export function buildDynamicPromptTemplateVariables(input: {
   const metacognitiveVariables = buildMetacognitiveFlagPromptVariables(input.metacognitiveFlags ?? []);
   const internalStateVariables = buildInternalStatePromptVariables(input.internalState);
   const emotionAppraisalVariables = buildEmotionAppraisalPromptVariables(emotionAppraisalChain);
-  const emotionAppraisalBody = emotionAppraisalVariables.runtime_emotion_appraisal_recent_lines;
-  const concernVariables = buildConcernPromptVariables(input.activeConcernsBlock);
-  const behavioralNotesBody = unwrapPromptSectionBody(input.behavioralNotesBlock);
+  const concernVariables = buildConcernPromptVariables(input.activeConcerns);
   const behavioralNotesVariables = buildBehavioralNotesPromptVariables(input.behavioralNotesBlock);
   const skillsIndexBody = unwrapPromptSectionBody(input.skillsContext);
   const skillsVariables = buildSkillsPromptVariables(input.skillsContext);
@@ -1147,7 +1132,11 @@ export function buildDynamicPromptTemplateVariables(input: {
     runtime_current_part_of_day: formatPromptRuntimePartOfDay(now),
     ...lastMessagePromptVariables,
     ...conversationStateVariables,
-    runtime_internal_turn_context: internalTurn ? `This is an internal ${input.taskKind ?? 'background'} turn.` : '',
+    ...buildContinuityGapPromptVariables(input.internalStateContinuityGap),
+    ...buildChargePromptVariables({
+      config: input.config,
+      analysisWorkbenchAvailable: input.analysisWorkbenchAvailable === true,
+    }),
     runtime_internal_turn_kind: internalTurn ? (input.taskKind ?? 'background') : '',
     // E1.3: speaking_with context populates ONLY on genuine DM turns. On group
     // turns (and internal turns) speakingWithActive is false, so these tokens
@@ -1159,7 +1148,6 @@ export function buildDynamicPromptTemplateVariables(input: {
     runtime_channel_visibility: internalTurn ? '' : visibility,
     runtime_capability_tier: input.capabilityTier,
     runtime_analysis_workbench_available: String(input.analysisWorkbenchAvailable === true),
-    runtime_tooling_summary: `Tooling: ${activeToolSummary}`,
     runtime_tooling_active_count: String(activeCount),
     runtime_tooling_core_count: String(coreCount),
     runtime_tooling_promoted_count: String(promotedCount),
@@ -1177,8 +1165,6 @@ export function buildDynamicPromptTemplateVariables(input: {
     ...behavioralNotesVariables,
     ...skillsVariables,
     ...extendedToolVariables,
-    runtime_emotion_appraisal_body: emotionAppraisalBody,
-    runtime_behavioral_notes_body: behavioralNotesBody,
     runtime_skills_index_body: skillsIndexBody,
     runtime_appearance_context_body: appearanceContextBody,
     runtime_self_image_tool_active: String(selfImageToolActive),
@@ -1215,13 +1201,10 @@ export function buildRuntimeContext(input: {
   classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
   promotedExtendedToolNames: Set<string>;
   skillsContext?: string;
-  activeConcernsBlock?: string;
   behavioralNotesBlock?: string;
   formatTopEmotions: (discrete: Record<string, number>) => string;
   config?: Record<string, unknown>;
-  internalStateContinuityGap?: InternalStateContinuityGap | null;
   substrateHealth?: CompanionSubstrateHealthContext | null;
-  analysisWorkbenchAvailable?: boolean;
 }): string {
   const runtimeContextExtra = (() => {
     const raw = input.templateVariables?.runtime_context_extra;
@@ -1234,17 +1217,10 @@ export function buildRuntimeContext(input: {
       content: runtimeContextExtra,
     }));
   }
-  const continuityGapContext = buildInternalStateContinuityGapContextBlock(input.internalStateContinuityGap);
-  if (continuityGapContext) {
-    sections.push(continuityGapContext);
-  }
-  const chargeBudgetContext = buildChargeBudgetContextBlock({
-    config: input.config,
-    analysisWorkbenchAvailable: input.analysisWorkbenchAvailable,
-  });
-  if (chargeBudgetContext) {
-    sections.push(chargeBudgetContext);
-  }
+  // The continuity-gap notice and the charge-budget block moved to the layer
+  // system (E2.5): bare values from buildDynamicPromptTemplateVariables plus
+  // operator-editable wording in the runtime.continuity_notice and
+  // runtime.charge_budget seeded layers.
   const satelliteEndpointContext = buildSatelliteEndpointContextBlock(input.message);
   if (satelliteEndpointContext) {
     sections.push(satelliteEndpointContext);
@@ -1252,22 +1228,23 @@ export function buildRuntimeContext(input: {
   return sections.join('\n\n');
 }
 
-export function buildActiveConcernsContextBlock(input: {
+/** Resolve the deduplicated/capped concern runtime data for the current turn. */
+export function resolveActiveConcernsRuntimeData(input: {
   activeConcernProvider: ActiveConcernContextProvider | null | undefined;
   canonicalContactKey?: string;
   logger: RuntimeContextLogger;
-}): string {
-  if (!input.activeConcernProvider) return '';
+}): ActiveConcernRuntimeData | undefined {
+  if (!input.activeConcernProvider) return undefined;
 
   try {
     const concerns = input.activeConcernProvider.getActiveConcerns(input.canonicalContactKey);
-    if (concerns.length === 0) return '';
-    return formatActiveConcernsContextBlock(concerns);
+    if (concerns.length === 0) return undefined;
+    return buildActiveConcernsRuntimeData(concerns);
   } catch (error) {
     input.logger.warn('Active concerns context injection skipped due to provider error', {
       error: toErrorMessage(error),
     });
-    return '';
+    return undefined;
   }
 }
 

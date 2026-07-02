@@ -11,29 +11,22 @@ export interface PromptSyncResult {
   errorCode?: 'missing_required_fields' | 'unsupported_unresolved_macros' | 'prompt_store_update_failed';
 }
 
+// Canonical macro names only (E2.5): removed alias spellings are rejected by
+// the prompt-store safety valve before this validation ever sees them.
 const ALLOWED_RUNTIME_UNRESOLVED_TOKENS = new Set([
   'user',
   'user_name',
   'user_id',
-  'channel',
   'channel_id',
   'channel_type',
   'channel_visibility',
   'trust_level',
   'canonical_contact_id',
   'model',
-  'model_id',
-  'now_iso',
   'current_datetime',
-  'current_datetime_iso',
-  'now',
   'current_date',
-  'date',
   'current_time',
-  'time',
-  'current_timestamp',
   'unix_timestamp',
-  'timestamp',
 ]);
 const REQUIRED_CHARACTER_MACRO_FIELDS = ['name', 'personality'] as const;
 

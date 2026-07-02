@@ -180,6 +180,13 @@ export interface EventMap {
     [key: string]: unknown;
   };
   'agent.turn.usage': { message: SubstrateMessage; usage: TurnUsage } & EventCorrelationFields;
+  /** An optional prompt section was dropped because macros stayed unresolved (E2.5 no-silent-leak). */
+  'agent.prompt.section_dropped': {
+    channelId: string;
+    turnId?: string;
+    sectionLabel: string;
+    unresolvedTokens: string[];
+  } & EventCorrelationFields;
   'agent.no_reply.intentional': IntentionalNoReplyMetadata & EventCorrelationFields;
   'agent.charge': RunChargeEvent;
   'agent.fatigue': FatigueBudgetEvent;

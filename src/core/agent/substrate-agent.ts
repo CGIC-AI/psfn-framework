@@ -82,6 +82,7 @@ import { EmotionState } from '../emotion/state.js';
 import type { EmotionObserver } from '../emotion/observer.js';
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../emotion/appraisal.js';
 import type { ActiveConcernContextProvider } from '../intention/concern-store-port.js';
+import type { ActiveConcernRuntimeData } from '../intention/concerns.js';
 import type { PendingFollowUpContextProvider } from '../intention/pending-follow-ups.js';
 import type { BehavioralPatternContextProvider } from '../intention/patterns.js';
 import {
@@ -111,13 +112,13 @@ import {
   type PostTurnActionInferer,
 } from './substrate-agent/post-turn-actions.js';
 import {
-  buildActiveConcernsContextBlock as buildActiveConcernsContextBlockForTurn,
   buildBehavioralNotesContextBlock as buildBehavioralNotesContextBlockForTurn,
   buildDynamicPromptTemplateVariables as buildDynamicPromptTemplateVariablesForTurn,
   buildPromptTemplateVariables as buildPromptTemplateVariablesForTurn,
   buildRuntimeContext as buildRuntimeContextForTurn,
   buildScratchpadContextBlock as buildScratchpadContextBlockForTurn,
   getPersonaAdaptation as getPersonaAdaptationForTurn,
+  resolveActiveConcernsRuntimeData as resolveActiveConcernsRuntimeDataForTurn,
   resolveContinuitySubjectKey,
   resolveAuthorContext as resolveAuthorContextForTurn,
   type CompanionSubstrateHealthContext,
@@ -1237,6 +1238,13 @@ export class SubstrateAgent {
     );
     const extendedTools = [...this.toolRuntimeFacade.getExtendedTools()];
 
+    // A continuity gap stays visible for the first turn after restart, then
+    // clears (see setCurrentSelfModelState). The gap variables render through
+    // the runtime.continuity_notice layer.
+    if (this.internalStateContinuityGap) {
+      this.internalStateContinuityGapRenderCount += 1;
+    }
+
     return buildDynamicPromptTemplateVariablesForTurn({
       message,
       conversationScope,
@@ -1261,12 +1269,13 @@ export class SubstrateAgent {
       classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
       promotedExtendedToolNames: this.getCapabilityEligiblePromotedToolNames(),
       skillsContext: this.skillsRuntime?.getPromptXml() ?? '',
-      activeConcernsBlock: this.buildActiveConcernsContextBlock(canonicalContactKey),
+      activeConcerns: this.resolveActiveConcernsRuntimeData(canonicalContactKey),
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       lastMessageReceivedAtMs: latestPriorMessage?.timestamp ?? null,
       recentChannelEntries: recentMessages,
       currentUserRuntimeProfile,
       analysisWorkbenchAvailable,
+      internalStateContinuityGap: this.internalStateContinuityGap,
       config: this.config as Record<string, unknown>,
     });
   }
@@ -1290,13 +1299,6 @@ export class SubstrateAgent {
     conversationScope?: ConversationScope,
   ): string {
     const activeToolCounts = this.toolRuntimeFacade.resolveActiveToolCounts();
-    const analysisWorkbenchAvailable = this.toolRuntimeFacade
-      .getAdaptiveToolRuntimeState()
-      .activeTools
-      .some(entry => entry.toolName === 'analysis_workbench');
-    if (this.internalStateContinuityGap) {
-      this.internalStateContinuityGapRenderCount += 1;
-    }
     return buildRuntimeContextForTurn({
       message,
       ...(conversationScope ? { conversationScope } : {}),
@@ -1325,18 +1327,15 @@ export class SubstrateAgent {
       classifyExtendedToolForTurn: (toolName) => this.classifyExtendedToolForTurn(toolName),
       promotedExtendedToolNames: this.getCapabilityEligiblePromotedToolNames(),
       skillsContext: this.skillsRuntime?.getPromptXml() ?? '',
-      activeConcernsBlock: this.buildActiveConcernsContextBlock(canonicalContactKey),
       behavioralNotesBlock: this.buildBehavioralNotesContextBlock(canonicalContactKey),
       formatTopEmotions: (discrete) => this.emotionSelfModelRuntime.formatTopEmotions(discrete),
       config: this.config as unknown as Record<string, unknown>,
-      internalStateContinuityGap: this.internalStateContinuityGap,
       substrateHealth: this.companionSubstrateHealthContext,
-      analysisWorkbenchAvailable,
     });
   }
 
-  private buildActiveConcernsContextBlock(canonicalContactKey?: string): string {
-    return buildActiveConcernsContextBlockForTurn({
+  private resolveActiveConcernsRuntimeData(canonicalContactKey?: string): ActiveConcernRuntimeData | undefined {
+    return resolveActiveConcernsRuntimeDataForTurn({
       activeConcernProvider: this.activeConcernProvider,
       canonicalContactKey,
       logger: log,

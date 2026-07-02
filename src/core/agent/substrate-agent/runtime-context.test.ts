@@ -3,7 +3,7 @@ import { DEFAULT_COMPANION_ID } from '../../identity/companion-naming.js';
 import { injectPromptRuntimeTokens, resolvePromptMacroManifestEntry } from '../../identity/prompt-runtime.js';
 import { TurnPromptVariableNamespace } from '../../identity/prompt-variable-namespace.js';
 import { composeDefaultRuntimePromptTemplate } from '../../identity/runtime-prompt-layers.js';
-import { formatActiveConcernsContextBlock } from '../../intention/concerns.js';
+import { buildActiveConcernsRuntimeData } from '../../intention/concerns.js';
 import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { ApiHealthResponse, ApiHealthSubsystemStatus } from '../../../channels/api/types.js';
 import type { SessionEntry } from '../../session/types.js';
@@ -13,6 +13,7 @@ import {
 } from '../../session/conversation-scope.js';
 import type { InternalState } from '../../self-model/state.js';
 import {
+  buildContinuityGapPromptVariables,
   buildDynamicPromptTemplateVariables,
   buildPromptTemplateVariables,
   buildRuntimeContext,
@@ -550,7 +551,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
@@ -712,15 +712,17 @@ describe('runtime subject identity', () => {
       authorName: 'User',
     });
 
-    const runtimeContext = buildRuntimeContext({
+    // E2.5: the charge budget renders through the editable runtime.charge_budget
+    // layer from bare charge variables; it never enters the static prompt prefix.
+    const rendered = renderPromptOwnedRuntimeLayers({
       message,
       resolvedUserName: 'User',
       trustLevel: 'primary',
       channelType: 'api',
       responseStyle: 'concise',
       now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables: {},
       modelId: 'test-model',
-      contextWindow: 4096,
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 6,
@@ -734,27 +736,28 @@ describe('runtime subject identity', () => {
       loadedExtended: new Map(),
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
-      formatTopEmotions: () => '',
+      skillsContext: '',
+      behavioralNotesBlock: '',
       config: { chargePolicy: TEST_CHARGE_POLICY },
     });
 
-    expect(runtimeContext).toContain('<runtime_charge_budget>');
-    expect(runtimeContext).toContain('You have 24 of 24 run-charge units left for the interactive lane/window.');
-    expect(runtimeContext).toContain('Available charge action costs:');
-    expect(runtimeContext).toContain('paid image/video generation: 6');
-    expect(runtimeContext).not.toContain('analysis_workbench extension pass after the first iteration: 4');
-    expect(runtimeContext).not.toContain('analysis_workbench first pass: 0 charge units');
-    expect(runtimeContext).not.toContain('Use analysis_workbench only');
-    expect(runtimeContext).not.toContain('visible in Garden Charge / Budget');
-    expect(runtimeContext).not.toContain('think');
+    expect(rendered).toContain('<runtime_charge_budget>');
+    expect(rendered).toContain('You have 24 of 24 run-charge units left for the interactive lane/window.');
+    expect(rendered).toContain('Available charge action costs:');
+    expect(rendered).toContain('paid image/video generation: 6');
+    expect(rendered).not.toContain('analysis_workbench extension pass after the first iteration: 4');
+    expect(rendered).not.toContain('analysis_workbench first pass: 0 charge units');
+    expect(rendered).not.toContain('Use analysis_workbench only');
+    expect(rendered).not.toContain('visible in Garden Charge / Budget');
+    expect(rendered).not.toContain('think');
   });
 
   it('lists Workbench extension cost only when analysis_workbench is available', async () => {
-    const runtimeContext = await runWithChargeContext({
+    const rendered = await runWithChargeContext({
       chargePolicy: TEST_CHARGE_POLICY,
       lane: 'interactive',
       runId: 'charge-workbench-available',
-    }, async () => buildRuntimeContext({
+    }, async () => renderPromptOwnedRuntimeLayers({
       message: makeMessage({
         channelId: 'api:general',
         channelType: 'api',
@@ -766,8 +769,8 @@ describe('runtime subject identity', () => {
       channelType: 'api',
       responseStyle: 'concise',
       now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables: {},
       modelId: 'test-model',
-      contextWindow: 4096,
       capabilityTier: 'autonomous',
       activeToolCounts: {
         core: 6,
@@ -781,14 +784,15 @@ describe('runtime subject identity', () => {
       loadedExtended: new Map(),
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
-      formatTopEmotions: () => '',
+      skillsContext: '',
+      behavioralNotesBlock: '',
       config: { chargePolicy: TEST_CHARGE_POLICY },
       analysisWorkbenchAvailable: true,
     }));
 
-    expect(runtimeContext).toContain('analysis_workbench extension pass after the first iteration: 4');
-    expect(runtimeContext).not.toContain('analysis_workbench first pass: 0 charge units');
-    expect(runtimeContext).not.toContain('Use analysis_workbench only');
+    expect(rendered).toContain('analysis_workbench extension pass after the first iteration: 4');
+    expect(rendered).not.toContain('analysis_workbench first pass: 0 charge units');
+    expect(rendered).not.toContain('Use analysis_workbench only');
   });
 
   it('renders satellite endpoint capability context for registered mobile speech turns', () => {
@@ -952,7 +956,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
@@ -1023,7 +1026,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
@@ -1093,7 +1095,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
@@ -1163,7 +1164,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
@@ -1265,7 +1265,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
@@ -1462,7 +1461,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(['selfie_create']),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       lastMessageReceivedAtMs: new Date('2026-03-16T09:15:00Z').getTime(),
       config: {},
@@ -1478,7 +1476,7 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_last_message_received_time_human).toBe('5:15 AM');
     expect(variables.runtime_last_message_received_timezone).toBe('America/New_York');
     expect(variables.runtime_last_message_received_days_hours).toBe('2 days 4 hours');
-    expect(variables.runtime_last_message_received_missing_notice).toBe('');
+    expect(variables.runtime_last_message_received_missing).toBe('false');
     expect(variables.runtime_speaking_with_trust_level).toBe('trusted');
     expect(variables.runtime_chat_type).toBe('direct_message');
     expect(variables.runtime_room_id).toBe('discord:dm:alex');
@@ -1534,7 +1532,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       currentUserRuntimeProfile: {
         user_id: 'discord:u-current',
@@ -1630,7 +1627,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       currentUserRuntimeProfile: {
         user_id: 'discord:u-alex',
@@ -1683,7 +1679,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay' as const,
       promotedExtendedToolNames: new Set<string>(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     };
@@ -1734,7 +1729,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay' as const,
       promotedExtendedToolNames: new Set<string>(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
       internalState: TEST_INTERNAL_STATE,
@@ -1789,7 +1783,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay' as const,
       promotedExtendedToolNames: new Set<string>(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
       internalState: TEST_INTERNAL_STATE,
@@ -1868,7 +1861,7 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: (toolName) => (toolName === 'background_probe' ? 'background' : 'overlay'),
       promotedExtendedToolNames: new Set(),
       skillsContext: '<skills_index><skill name="conversation" /><skill name="memory" /></skills_index>',
-      activeConcernsBlock: formatActiveConcernsContextBlock([
+      activeConcerns: buildActiveConcernsRuntimeData([
         {
           id: 'concern-1',
           text: 'medication reminder logistics',
@@ -1971,7 +1964,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay' as const,
       promotedExtendedToolNames: new Set<string>(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
       internalState: TEST_INTERNAL_STATE,
@@ -2076,7 +2068,7 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: (toolName) => (toolName === 'background_probe' ? 'background' : 'overlay'),
       promotedExtendedToolNames: new Set(['selfie_create']),
       skillsContext: '<skills_index><skill name="conversation" /><skill name="memory" /></skills_index>',
-      activeConcernsBlock: formatActiveConcernsContextBlock([
+      activeConcerns: buildActiveConcernsRuntimeData([
         {
           id: 'concern-1',
           text: 'medication reminder logistics',
@@ -2227,7 +2219,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       lastMessageReceivedAtMs: null,
       config: {},
@@ -2245,17 +2236,9 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_affect_control).toBe('');
     expect(variables.runtime_affect_display_range_min).toBe('');
     expect(variables.runtime_affect_display_range_max).toBe('');
-    expect(variables.runtime_affect_profile_intensity).toBe('');
-    expect(variables.runtime_affect_profile_variability).toBe('');
-    expect(variables.runtime_affect_profile_control).toBe('');
-    expect(variables.runtime_affect_profile_display_range_min).toBe('');
-    expect(variables.runtime_affect_profile_display_range_max).toBe('');
     expect(variables.runtime_affect_valence).toBe('');
     expect(variables.runtime_affect_arousal).toBe('');
     expect(variables.runtime_affect_dominance).toBe('');
-    expect(variables.runtime_affect_snapshot_vad_valence).toBe('');
-    expect(variables.runtime_affect_snapshot_vad_arousal).toBe('');
-    expect(variables.runtime_affect_snapshot_vad_dominance).toBe('');
     expect(variables.runtime_affect_snapshot_mood_valence).toBe('');
     expect(variables.runtime_affect_snapshot_mood_arousal).toBe('');
     expect(variables.runtime_affect_snapshot_mood_dominance).toBe('');
@@ -2283,7 +2266,7 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_emotion_appraisal_latest_timestamp_iso).toBe('');
     expect(variables.runtime_emotion_appraisal_recent_lines).toBe('');
     expect(variables.runtime_behavioral_notes_count).toBe('0');
-    expect(variables.runtime_behavioral_notes_body_raw).toBe('');
+    expect(variables.runtime_behavioral_notes_body).toBe('');
     expect(variables.runtime_skills_count).toBe('0');
     expect(variables.runtime_extended_tools_total).toBe('0');
     expect(variables.runtime_extended_tools_activatable_count).toBe('0');
@@ -2306,9 +2289,8 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_channel_visibility).toBe('');
     expect(variables.runtime_last_message_received_weekday).toBe('');
     expect(variables.runtime_last_message_received_ago).toBe('');
-    expect(variables.runtime_last_message_received_missing_notice).toBe(
-      'No earlier message is loaded for this channel.',
-    );
+    expect(variables.runtime_last_message_received_present).toBe('false');
+    expect(variables.runtime_last_message_received_missing).toBe('true');
   });
 
   it('uses persisted conversation-channel privacy and records it on activity', async () => {
@@ -2408,7 +2390,6 @@ describe('runtime subject identity', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(),
       skillsContext: '',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       config: {},
     });
@@ -2450,13 +2431,18 @@ describe('companion-facing substrate health context', () => {
 });
 
 describe('internal state continuity gap context', () => {
+  // E2.5: the continuity notice wording lives in the editable
+  // runtime.continuity_notice layer; the runtime produces only bare gap values.
+  function renderContinuityLayer(gap: { offlineSince: string; gapMs: number } | null): string {
+    return injectPromptRuntimeTokens(DEFAULT_RUNTIME_PROMPT_TEMPLATE, {
+      variables: buildContinuityGapPromptVariables(gap),
+    });
+  }
+
   it('renders a continuity notice when a gap is present', () => {
-    const rendered = buildRuntimeContext({
-      ...buildMinimalRuntimeContextInput(),
-      internalStateContinuityGap: {
-        offlineSince: '2026-06-07T12:00:00.000Z',
-        gapMs: 3 * 24 * 60 * 60 * 1000,
-      },
+    const rendered = renderContinuityLayer({
+      offlineSince: '2026-06-07T12:00:00.000Z',
+      gapMs: 3 * 24 * 60 * 60 * 1000,
     });
 
     expect(rendered).toContain('<runtime_continuity_notice>');
@@ -2466,21 +2452,30 @@ describe('internal state continuity gap context', () => {
   });
 
   it('formats sub-two-day gaps in hours', () => {
-    const rendered = buildRuntimeContext({
-      ...buildMinimalRuntimeContextInput(),
-      internalStateContinuityGap: {
-        offlineSince: '2026-06-10T01:00:00.000Z',
-        gapMs: 11 * 60 * 60 * 1000,
-      },
+    const variables = buildContinuityGapPromptVariables({
+      offlineSince: '2026-06-10T01:00:00.000Z',
+      gapMs: 11 * 60 * 60 * 1000,
     });
+    expect(variables.runtime_continuity_gap_present).toBe('true');
+    expect(variables.runtime_continuity_gap_duration).toBe('11 hours');
 
-    expect(rendered).toContain('offline for about 11 hours');
+    expect(renderContinuityLayer({
+      offlineSince: '2026-06-10T01:00:00.000Z',
+      gapMs: 11 * 60 * 60 * 1000,
+    })).toContain('offline for about 11 hours');
   });
 
-  it('omits the continuity notice without a gap', () => {
-    const rendered = buildRuntimeContext(buildMinimalRuntimeContextInput());
-    expect(rendered).not.toContain('runtime_continuity_notice');
-    expect(rendered).not.toContain('<runtime_substrate_health>');
+  it('omits the continuity notice without a gap (bare values blank, section prunes)', () => {
+    expect(buildContinuityGapPromptVariables(null)).toEqual({
+      runtime_continuity_gap_present: 'false',
+      runtime_continuity_gap_duration: '',
+      runtime_continuity_gap_offline_since: '',
+    });
+    expect(renderContinuityLayer(null)).not.toContain('runtime_continuity_notice');
+
+    const runtimeContext = buildRuntimeContext(buildMinimalRuntimeContextInput());
+    expect(runtimeContext).not.toContain('runtime_continuity_notice');
+    expect(runtimeContext).not.toContain('<runtime_substrate_health>');
   });
 });
 
@@ -2561,7 +2556,6 @@ describe('turn prompt variable namespace conformance', () => {
       classifyExtendedToolForTurn: () => 'overlay',
       promotedExtendedToolNames: new Set(['selfie_create']),
       skillsContext: '<skills_index><skill id="memory.write">Persist.</skill></skills_index>',
-      activeConcernsBlock: '',
       behavioralNotesBlock: '',
       lastMessageReceivedAtMs: new Date('2026-03-16T09:15:00Z').getTime(),
       analysisWorkbenchAvailable: true,

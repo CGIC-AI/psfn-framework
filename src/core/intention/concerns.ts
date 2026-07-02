@@ -1,8 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js';
-import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
-import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
+import { getConcernSofteningConfig } from './concern-softening.js';
 import type { ActiveConcernContextProvider } from './concern-store-port.js';
 
 export const ACTIVE_CONCERN_PRIORITIES = ['high', 'medium', 'low'] as const;
@@ -159,12 +158,6 @@ export interface ActiveConcernRuntimeData {
   omittedCount: number;
 }
 
-export const OPEN_THREADS_BODY_TEMPLATE = [
-  '{{#if runtime_concerns_count}}Treat these as soft threads to verify, not alarms that must dominate the turn.{{/if}}',
-  '{{runtime_concerns_top_lines}}',
-  '{{#if runtime_concerns_omitted_count}}- {{runtime_concerns_omitted_count}} additional lower-salience thread{{runtime_concerns_omitted_plural_suffix}} omitted.{{/if}}',
-].join('\n');
-
 interface ActiveConcernRow {
   id: string;
   text: string;
@@ -193,7 +186,6 @@ const MAX_CONCERN_RESOLUTION_CHARS = 400;
 const DEFAULT_LIST_LIMIT = 32;
 const MAX_LIST_LIMIT = 200;
 const DEFAULT_RUNTIME_CONTEXT_LIMIT = 3;
-const MAX_RUNTIME_CONTEXT_TEXT_CHARS = 140;
 const MAX_CONCERN_REF_CHARS = 240;
 const DEFAULT_RECENT_RESOLUTION_WINDOW_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_RECENT_RESOLUTION_LIMIT = 8;
@@ -621,16 +613,19 @@ function scoreConcernTextSimilarity(left: string, right: string): number {
   return (2 * intersection) / (leftTokens.length + rightTokens.length);
 }
 
+// Concern wording rewrites are operator-tunable data (E2.5 purity rule):
+// config/concern-softening.json owns the rules; the shipped default matches
+// the previous hardcoded behavior byte-for-byte.
 function softenConcernText(value: string): string {
-  const normalized = compactWhitespace(value)
-    .replace(/^user['’]s\s+/i, '')
-    .replace(/^purrsephone['’]s\s+/i, '')
-    .replace(/\bactive concern\b/gi, 'open thread')
-    .replace(/\bconcern\b/gi, 'thread');
-  if (normalized.length <= MAX_RUNTIME_CONTEXT_TEXT_CHARS) {
+  const config = getConcernSofteningConfig();
+  let normalized = compactWhitespace(value);
+  for (const rule of config.rewriteRules) {
+    normalized = normalized.replace(rule.pattern, rule.replacement);
+  }
+  if (normalized.length <= config.maxTextChars) {
     return normalized;
   }
-  return `${normalized.slice(0, MAX_RUNTIME_CONTEXT_TEXT_CHARS - 3)}...`;
+  return `${normalized.slice(0, config.maxTextChars - 3)}...`;
 }
 
 function dedupeConcernsForRuntime(concerns: readonly ActiveConcern[]): ActiveConcern[] {
@@ -768,23 +763,6 @@ function resolveConcernTtlByPriority(
 
 function isConcernPastHardLifetime(concern: ActiveConcern, asOfMs: number): boolean {
   return Date.parse(concern.createdAt) + MAX_ACTIVE_CONCERN_LIFETIME_MS <= asOfMs;
-}
-
-export function formatActiveConcernsContextBlock(
-  concerns: readonly ActiveConcern[],
-  limit = DEFAULT_RUNTIME_CONTEXT_LIMIT,
-): string {
-  const runtimeData = buildActiveConcernsRuntimeData(concerns, limit);
-  if (runtimeData.totalCount === 0) return '';
-  const content = injectPromptRuntimeTokens(OPEN_THREADS_BODY_TEMPLATE, {
-    variables: buildActiveConcernsPromptVariables(runtimeData),
-  });
-  if (!content) return '';
-
-  return wrapPromptSectionXml({
-    id: 'open_threads',
-    content,
-  });
 }
 
 export function buildActiveConcernsPromptVariables(

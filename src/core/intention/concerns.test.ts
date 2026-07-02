@@ -2,9 +2,11 @@ import Database from 'better-sqlite3';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   ActiveConcernStore,
+  buildActiveConcernsPromptVariables,
   buildActiveConcernsRuntimeData,
-  formatActiveConcernsContextBlock,
 } from './concerns.js';
+import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
+import { getRuntimePromptLayerDefinition } from '../identity/runtime-prompt-layers.js';
 
 function textFixture(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
@@ -511,7 +513,18 @@ describe('ActiveConcernStore', () => {
       });
     }
 
-    const block = formatActiveConcernsContextBlock(store.getActiveConcerns(), 5);
+    // E2.5 purity rule: the open-threads framing sentence lives in the
+    // editable runtime.attention layer, rendered from bare concern variables —
+    // no prose is constructed in concerns.ts anymore.
+    const runtimeData = buildActiveConcernsRuntimeData(store.getActiveConcerns(), 5);
+    const attentionLayer = getRuntimePromptLayerDefinition('runtime.attention')?.content ?? '';
+    const block = injectPromptRuntimeTokens(attentionLayer, {
+      variables: {
+        ...buildActiveConcernsPromptVariables(runtimeData),
+        runtime_behavioral_notes_body: '',
+        runtime_skills_index_body: '',
+      },
+    });
     expect(block).toContain('<open_threads>');
     expect(block).toContain('Treat these as soft threads to verify, not alarms that must dominate the turn.');
     expect(block).toContain('additional lower-salience threads omitted');

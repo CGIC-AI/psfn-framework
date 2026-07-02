@@ -4430,13 +4430,13 @@ describe('SubstrateAgent.handleMessage', () => {
         { characterName: TEST_COMPANION_NAME },
       );
       const composeSplit = vi.fn().mockReturnValue({
-        staticPrefix: '[STATIC] {{user}} @ {{now_iso}}',
-        dynamicSuffix: '[DYNAMIC] {{now_iso}}',
+        staticPrefix: '[STATIC] {{user}} @ {{current_datetime}}',
+        dynamicSuffix: '[DYNAMIC] {{current_datetime}}',
         staticHash: 'static-v1',
         dynamicHash: 'dynamic-v1',
         staticLayerIds: ['layer-static'],
         dynamicLayerIds: ['layer-dynamic'],
-        text: '[STATIC] {{user}} @ {{now_iso}}\n\n[DYNAMIC] {{now_iso}}',
+        text: '[STATIC] {{user}} @ {{current_datetime}}\n\n[DYNAMIC] {{current_datetime}}',
         hash: 'full-v1',
         layerCount: 2,
         layerIds: ['layer-static', 'layer-dynamic'],
@@ -4476,25 +4476,25 @@ describe('SubstrateAgent.handleMessage', () => {
       );
       const composeSplit = vi.fn()
         .mockReturnValueOnce({
-          staticPrefix: '[STATIC-v1] {{now_iso}}',
+          staticPrefix: '[STATIC-v1] {{current_datetime}}',
           dynamicSuffix: '',
           staticHash: 'static-v1',
           dynamicHash: 'dynamic-v1',
           staticLayerIds: ['layer-static'],
           dynamicLayerIds: [],
-          text: '[STATIC-v1] {{now_iso}}',
+          text: '[STATIC-v1] {{current_datetime}}',
           hash: 'full-v1',
           layerCount: 1,
           layerIds: ['layer-static'],
         })
         .mockReturnValueOnce({
-          staticPrefix: '[STATIC-v2] {{now_iso}}',
+          staticPrefix: '[STATIC-v2] {{current_datetime}}',
           dynamicSuffix: '',
           staticHash: 'static-v2',
           dynamicHash: 'dynamic-v1',
           staticLayerIds: ['layer-static'],
           dynamicLayerIds: [],
-          text: '[STATIC-v2] {{now_iso}}',
+          text: '[STATIC-v2] {{current_datetime}}',
           hash: 'full-v2',
           layerCount: 1,
           layerIds: ['layer-static'],

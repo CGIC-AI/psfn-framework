@@ -23,6 +23,12 @@ import {
   type NearTurnMemoryCadenceTelemetry,
 } from '../../faculties/memory/near-turn-memory-lane.js';
 import {
+  EpisodeSynthesisLane,
+  EPISODE_SYNTHESIS_ACTION_KIND,
+  EPISODE_SYNTHESIS_TIMER_TASK_ID,
+  type EpisodeSynthesisGateEvent,
+} from '../../faculties/memory/episodic/synthesis-lane.js';
+import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,
   INTENTION_OUTBOUND_MESSAGE_ACTION_KIND,
@@ -145,6 +151,48 @@ export function wireHeartbeatPostTurnRuntime(
               log.warn('Near-turn cadence telemetry emit failed', {
                 channelId: event.channelId,
                 scope: event.scope,
+                error: String(error),
+              });
+            });
+          },
+        }
+        : {}),
+    })
+    : null;
+  // Candidate-episode synthesis lane: timer-or-turn-threshold trigger with a
+  // deterministic gate (E5.3). Zero LLM spend when the gate is closed.
+  const episodeSynthesisLane = (
+    runtimeOptions.sessionManager
+    && runtimeOptions.episodicSynthesizer
+    && runtimeOptions.episodicWatermarkStore
+    && runtimeOptions.episodeSynthesis
+  )
+    ? new EpisodeSynthesisLane({
+      sessionManager: runtimeOptions.sessionManager,
+      synthesizer: runtimeOptions.episodicSynthesizer,
+      watermarkStore: runtimeOptions.episodicWatermarkStore,
+      config: runtimeOptions.episodeSynthesis,
+      scopeClassifier: runtimeOptions.memoryScopeClassifier ?? null,
+      ...(runtimeOptions.companionNames ? { companionNames: runtimeOptions.companionNames } : {}),
+      ...(runtimeOptions.companionAuthorIds ? { companionAuthorIds: runtimeOptions.companionAuthorIds } : {}),
+      memoryWriter: runtimeOptions.memoryWriter ?? null,
+      ...(telemetryEventBus
+        ? {
+          onGateEvent: (event: EpisodeSynthesisGateEvent): void => {
+            telemetryEventBus.emit('memory.episode_synthesis.gate', {
+              sessionId: event.sessionId,
+              channelId: event.channelId,
+              trigger: event.trigger,
+              outcome: event.outcome,
+              ...(event.reason ? { reason: event.reason } : {}),
+              newEntryCount: event.newEntryCount,
+              relevantTurnCount: event.relevantTurnCount,
+              minRelevantTurns: event.minRelevantTurns,
+              timestamp: event.timestamp,
+            }).catch((error) => {
+              log.warn('Episode-synthesis gate telemetry emit failed', {
+                sessionId: event.sessionId,
+                outcome: event.outcome,
                 error: String(error),
               });
             });
@@ -1076,16 +1124,17 @@ export function wireHeartbeatPostTurnRuntime(
             const channelType = inferredChannelType && inferredChannelType !== 'subagent'
               ? inferredChannelType
               : 'api';
+            const syntheticMessage = {
+              id: `sleeptime-idle:${channelId}:${Date.now()}`,
+              channelId,
+              channelType,
+              authorId: 'system:sleeptime',
+              authorName: 'Sleeptime',
+              content: 'Sleeptime rest-window maintenance became eligible.',
+              timestamp: new Date(),
+            };
             await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
-              message: {
-                id: `sleeptime-idle:${channelId}:${Date.now()}`,
-                channelId,
-                channelType,
-                authorId: 'system:sleeptime',
-                authorName: 'Sleeptime',
-                content: 'Sleeptime idle maintenance became eligible.',
-                timestamp: new Date(),
-              },
+              message: syntheticMessage,
               response: {
                 content: '',
                 channelId,
@@ -1096,7 +1145,7 @@ export function wireHeartbeatPostTurnRuntime(
                   durationMs: 0,
                 },
               },
-              actions: [action],
+              actions: toInferredPostTurnActions([action], syntheticMessage),
             });
           }
         },
@@ -1143,6 +1192,73 @@ export function wireHeartbeatPostTurnRuntime(
     });
   }
 
+  if (episodeSynthesisLane) {
+    runtimeOptions.postTurnActions.registerHandler(
+      EPISODE_SYNTHESIS_ACTION_KIND,
+      async (action) => {
+        await episodeSynthesisLane.execute(action);
+      },
+      {
+        executionMode: 'background',
+        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      },
+    );
+    if (telemetryEventBus && !scheduler.getTask(EPISODE_SYNTHESIS_TIMER_TASK_ID)) {
+      scheduler.register({
+        id: EPISODE_SYNTHESIS_TIMER_TASK_ID,
+        name: 'Episode Synthesis Gate Timer',
+        type: 'every',
+        intervalMs: episodeSynthesisLane.timerIntervalMs,
+        handler: async () => {
+          for (const action of episodeSynthesisLane.inferTimerActions()) {
+            const payload = action.payload ?? {};
+            const channelId = typeof payload.sourceChannelId === 'string'
+              ? payload.sourceChannelId
+              : typeof payload.sessionId === 'string'
+                ? payload.sessionId
+                : 'api:episode-synthesis';
+            const inferredChannelType = inferSessionChannelType(channelId);
+            const channelType = inferredChannelType && inferredChannelType !== 'subagent'
+              ? inferredChannelType
+              : 'api';
+            const syntheticMessage = {
+              id: `episode-synthesis-timer:${channelId}:${Date.now()}`,
+              channelId,
+              channelType,
+              authorId: 'system:episode-synthesis',
+              authorName: 'Episode Synthesis',
+              content: 'Episode-synthesis gate timer fired.',
+              timestamp: new Date(),
+            };
+            await telemetryEventBus.emit('agent.post_turn.actions.inferred', {
+              message: syntheticMessage,
+              response: {
+                content: '',
+                channelId,
+                metadata: {
+                  model: 'scheduler:episode-synthesis-timer',
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  durationMs: 0,
+                },
+              },
+              actions: toInferredPostTurnActions([action], syntheticMessage),
+            });
+          }
+        },
+        eligibility: { requiredTokens: ['memory.write'] },
+        state: 'idle',
+      }, { skipFirstRun: true });
+    }
+  } else {
+    log.info('Episode-synthesis lane wiring skipped: missing dependencies', {
+      hasSessionManager: Boolean(runtimeOptions.sessionManager),
+      hasSynthesizer: Boolean(runtimeOptions.episodicSynthesizer),
+      hasWatermarkStore: Boolean(runtimeOptions.episodicWatermarkStore),
+      hasGateConfig: Boolean(runtimeOptions.episodeSynthesis),
+    });
+  }
+
   if (agentLoop.registerPostTurnActionInferer) {
     const inferDeferredPostTurnActions: PostTurnActionInferer = async ({
       message,
@@ -1171,6 +1287,12 @@ export function wireHeartbeatPostTurnRuntime(
       // turn cadence may reach consolidation, arc weaving, or the dream pass.
       if (nearTurnLane) {
         inferred.push(...await nearTurnLane.inferPostTurnActions({ message }));
+      }
+      if (episodeSynthesisLane) {
+        const thresholdAction = episodeSynthesisLane.noteTurn(message);
+        if (thresholdAction) {
+          inferred.push(thresholdAction);
+        }
       }
       triggerIntentionPostTurnAppraisal({
         message,

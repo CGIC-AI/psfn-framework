@@ -351,6 +351,53 @@ function resolveSubjectSpeaker(
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+export type SessionEntryCompanionRelevance =
+  | 'companion_turn'
+  | 'reply_to_companion'
+  | 'direct_to_companion'
+  | 'mention_of_companion'
+  | 'not_relevant';
+
+/**
+ * Deterministic per-entry companion-relevance classification for background
+ * gating (E5.3). Reuses the same addressing/mention detection as group fact
+ * routing (`inferAddressMode`) instead of growing a parallel detector:
+ *
+ * - the companion's own turns are relevant (conversation with her);
+ * - replies to the companion, direct address, and mentions are relevant;
+ * - async group traffic between other members is NOT relevant on its own.
+ */
+export function classifySessionEntryCompanionRelevance(
+  entry: SessionEntry,
+  options: FactRoutingOptions,
+): SessionEntryCompanionRelevance {
+  if (entry.role === 'assistant') {
+    return 'companion_turn';
+  }
+  if (entry.role !== 'user') {
+    return 'not_relevant';
+  }
+  if (isReplyToCompanion(entry, options)) {
+    return 'reply_to_companion';
+  }
+  if (isDirectCompanionAddress(entry, options)) {
+    return 'direct_to_companion';
+  }
+  if (containsCompanionMention(entry, options)) {
+    return 'mention_of_companion';
+  }
+  return 'not_relevant';
+}
+
+function isReplyToCompanion(entry: SessionEntry, options: FactRoutingOptions): boolean {
+  const companionAuthorIds = options.companionAuthorIds ?? [];
+  if (companionAuthorIds.length === 0) return false;
+  const metadata = parseEntryMetadata(entry);
+  const replyAuthorId = normalizeOptionalMetadataString(metadata?.replyToAuthorId)
+    ?? normalizeOptionalMetadataString(metadata?.referencedMessageAuthorId);
+  return replyAuthorId !== undefined && companionAuthorIds.includes(replyAuthorId);
+}
+
 function inferAddressMode(
   sourceEntries: readonly SessionEntry[],
   options: FactRoutingOptions,

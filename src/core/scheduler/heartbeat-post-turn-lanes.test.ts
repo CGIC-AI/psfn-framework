@@ -9,6 +9,10 @@ import { Scheduler } from './scheduler.js';
 import { SLEEPTIME_REST_WINDOW_TASK_ID } from './heartbeat-post-turn-runtime.js';
 import { SLEEPTIME_MEMORY_ACTION_KIND } from '../../faculties/memory/sleeptime-agent.js';
 import { NEAR_TURN_MEMORY_ACTION_KIND } from '../../faculties/memory/near-turn-memory-lane.js';
+import {
+  EPISODE_SYNTHESIS_ACTION_KIND,
+  EPISODE_SYNTHESIS_TIMER_TASK_ID,
+} from '../../faculties/memory/episodic/synthesis-lane.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 
 const TEMP_DIRS: string[] = [];
@@ -62,8 +66,9 @@ describe('heartbeat post-turn lane split (E5.2)', () => {
     const arcWeaver = { run: vi.fn() };
     const dreamMeaningPass = { run: vi.fn() };
     const episodicSynthesizer = { run: vi.fn() };
+    const episodicWatermarkStore = { getProcessingWatermark: vi.fn(async () => undefined) };
     const llmProvider = { stream: vi.fn(), complete: vi.fn() };
-    let capturedInferer: PostTurnActionInferer | null = null;
+    const inferers: PostTurnActionInferer[] = [];
 
     wireHeartbeatRuntime(
       { registerTool: vi.fn() },
@@ -73,7 +78,7 @@ describe('heartbeat post-turn lane split (E5.2)', () => {
         followUp: vi.fn(),
         waitForIdle: vi.fn(),
         registerPostTurnActionInferer: vi.fn((inferer: PostTurnActionInferer) => {
-          capturedInferer = inferer;
+          inferers.push(inferer);
           return () => {};
         }),
       } as any,
@@ -101,6 +106,20 @@ describe('heartbeat post-turn lane split (E5.2)', () => {
           direct: { cadenceTurns: 3 },
           group: { minIntervalMinutes: 15, minNewEntries: 8 },
         },
+        episodeSynthesis: {
+          timerIntervalMinutes: 30,
+          turnThreshold: 5,
+          minRelevantTurns: 10,
+          transcriptMessageLimit: 96,
+          maxEpisodesPerRun: 6,
+          gapSplitMinutes: 45,
+          maxEntriesPerEpisode: 14,
+          minConversationalEntries: 2,
+          minSingleEntryChars: 120,
+        },
+        episodicWatermarkStore: episodicWatermarkStore as any,
+        companionNames: ['Purrsephone'],
+        companionAuthorIds: ['bot-1'],
         episodicSynthesizer,
         sleepConsolidator,
         arcWeaver,
@@ -109,7 +128,8 @@ describe('heartbeat post-turn lane split (E5.2)', () => {
       },
     );
 
-    if (!capturedInferer) {
+    const inferer = inferers.at(0);
+    if (!inferer) {
       throw new Error('Post-turn action inferer was not registered');
     }
     return {
@@ -120,7 +140,7 @@ describe('heartbeat post-turn lane split (E5.2)', () => {
       dreamMeaningPass,
       episodicSynthesizer,
       llmProvider,
-      inferer: capturedInferer as PostTurnActionInferer,
+      inferer,
     };
   }
 
@@ -137,10 +157,14 @@ describe('heartbeat post-turn lane split (E5.2)', () => {
       inferredKinds.push(...inferred.map(action => action.kind));
     }
 
-    // Turn cadence produces near-turn lane actions only — never the heavy
-    // sleeptime action, and never a direct heavy-pass invocation.
+    // Turn cadence produces near-turn lane actions and gated episode-synthesis
+    // evaluations only — never the heavy sleeptime action, and never a direct
+    // heavy-pass invocation.
     expect(inferredKinds).not.toContain(SLEEPTIME_MEMORY_ACTION_KIND);
     expect(inferredKinds.filter(kind => kind === NEAR_TURN_MEMORY_ACTION_KIND)).toHaveLength(4);
+    // turnThreshold=5 over 12 turns => two gate evaluations (the gate itself
+    // runs in the handler, so no synthesis happens at inference time).
+    expect(inferredKinds.filter(kind => kind === EPISODE_SYNTHESIS_ACTION_KIND)).toHaveLength(2);
     expect(harness.sleepConsolidator.run).not.toHaveBeenCalled();
     expect(harness.arcWeaver.run).not.toHaveBeenCalled();
     expect(harness.dreamMeaningPass.run).not.toHaveBeenCalled();
@@ -148,15 +172,19 @@ describe('heartbeat post-turn lane split (E5.2)', () => {
     expect(harness.llmProvider.complete).not.toHaveBeenCalled();
   });
 
-  it('registers the rest-window sleeptime task in the scheduler task list', () => {
+  it('registers the rest-window sleeptime task and gate timer in the scheduler task list', () => {
     const harness = wireLanes();
     const task = harness.scheduler.getTask(SLEEPTIME_REST_WINDOW_TASK_ID);
     expect(task).toBeDefined();
     expect(task?.name).toContain('Rest-Window');
+    const timerTask = harness.scheduler.getTask(EPISODE_SYNTHESIS_TIMER_TASK_ID);
+    expect(timerTask).toBeDefined();
+    expect(timerTask?.intervalMs).toBe(30 * 60_000);
     // The heavy sleeptime handler is registered for the scheduler-owned action
-    // kind; the near-turn lane handler is registered separately.
+    // kind; the near-turn and episode-synthesis handlers are separate lanes.
     const registeredKinds = harness.postTurnActions.registerHandler.mock.calls.map(call => call[0]);
     expect(registeredKinds).toContain(SLEEPTIME_MEMORY_ACTION_KIND);
     expect(registeredKinds).toContain(NEAR_TURN_MEMORY_ACTION_KIND);
+    expect(registeredKinds).toContain(EPISODE_SYNTHESIS_ACTION_KIND);
   });
 });

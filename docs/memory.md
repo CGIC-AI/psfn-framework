@@ -17,7 +17,7 @@ Last updated: 2026-06-29.
 
 - Stored in PostgreSQL through the runtime episodic store tables `l01_episodes`, `l01_episode_spans`, `l01_episode_arcs`, lineage, review, candidate, watermark, and message-claim tables
 - Represents bounded lived episodes with L0 span/artifact provenance, salience, affect, themes, participants, thread IDs, and channel IDs
-- Created during configured rest/me-time windows after user inactivity by the sleeptime episodic synthesizer
+- Candidate episodes are created by the gated episode-synthesis lane (timer-or-turn-threshold trigger plus a deterministic relevance gate; see "Background memory lanes" below); nightly rest-window sleeptime work consolidates and refines them
 - Allows multiple episodes per day; a long-running theme is a graph of linked episodes, not one large aggregate record
 - Hard message claiming: each episode claims its source messages in `l01_episode_message_claims`, and a partial unique index guarantees at most one live episode per source message. Daytime synthesis drops actively claimed messages from its input before grouping, so overlapping passes can never re-process the same turns. Nightly consolidation is the only process allowed to restructure claims, via `transferEpisodeMessageClaims`: claims move to the consolidated episode and the covered candidates are marked superseded (hidden from live queries, never deleted, claim history retained). The >50% span-overlap merge heuristic remains as defense in depth for pre-claiming data.
 - Retrieved before raw span/artifact drill-down so L1 can search a scoped episode chain instead of all chats and all memories
@@ -279,18 +279,27 @@ The memory system is actively maintained by runtime jobs:
 - extraction marker updates
 - database integrity and embedding-dimension checks at startup
 
-### Sleeptime cadence (group-aware, JSON-owned)
+### Background memory lanes (E5.2/E5.3, JSON-owned)
 
-Sleeptime memory maintenance (orientation-block reorientation plus optional durable memory writes) is scheduled per conversation and is owned by `scheduler.json` under the `sleeptime` key:
+Background memory work is split into three lanes. Every cadence, threshold, and window is owned by `scheduler.json` (schema-guarded, fail closed on missing or invalid config); nothing is hardcoded.
 
-- `sleeptime.direct.cadenceTurns` — direct/1:1 (DM) scopes keep the historical per-N-turns posture (default every 3 turns). This is now configurable rather than a hardcoded constant.
-- `sleeptime.group.minIntervalMinutes` and `sleeptime.group.minNewEntries` — group/room scopes use watermark + interval batching instead of per-N-turns. A group run is only eligible once at least `minNewEntries` new turns have accumulated AND at least `minIntervalMinutes` of wall-clock time has elapsed since the last run.
+**Near-turn lane (`nearTurnMemory`)** — lightweight, deterministic, zero LLM spend (the lane holds no LLM provider at all). It keeps only extraction trigger evaluation (the existing per-turn and observed-group extraction wiring), active-memory review refresh (stale-memory maintenance reviews), and concern-candidate derivation (the intention appraisal path). Cadence keys:
 
-Direct-vs-group topology reuses the canonical group-memory classification pipeline (`groupMemory` settings, `memoryMode` direct/group/auto, channel overrides, and participant-window auto-detection) via `ObservedGroupMemoryScheduler.classifyChannelMemoryScope` — the same classifier that gates observed group extraction; there is no parallel detector. If classification fails, sleeptime logs the error and degrades to group batching (the compute-conservative direction). In a busy multi-person room this collapses near-continuous per-turn sleeptime firing into a small number of batched maintenance passes, honoring the compute-budget-as-care charter. When a rest window is configured, rest-window eligibility continues to govern post-turn sleeptime for both scopes, unchanged.
+- `nearTurnMemory.direct.cadenceTurns` — direct/1:1 (DM) scopes keep the historical per-N-turns posture (default every 3 turns).
+- `nearTurnMemory.group.minIntervalMinutes` and `nearTurnMemory.group.minNewEntries` — group/room scopes use watermark + interval batching. A group run is only eligible once at least `minNewEntries` new turns have accumulated AND at least `minIntervalMinutes` of wall-clock time has elapsed since the last run.
 
-Each sleeptime run emits a `memory.sleeptime.cadence` telemetry event (scope, turn count, new-entries-since-last-run, and a rolling per-channel `firesLastHour` fire-rate) on the runtime event bus, streamed to the Garden admin telemetry websocket for scheduler/observability views.
+Direct-vs-group topology reuses the canonical group-memory classification pipeline (`groupMemory` settings, `memoryMode` direct/group/auto, channel overrides, and participant-window auto-detection) via `ObservedGroupMemoryScheduler.classifyChannelMemoryScope` — the same classifier that gates observed group extraction; there is no parallel detector. If classification fails, the lane logs the error and degrades to group batching (the compute-conservative direction). Each fire emits a `memory.near_turn.cadence` telemetry event (scope, turn count, new-entries-since-last-run, rolling per-channel `firesLastHour`), streamed to the Garden admin telemetry websocket.
 
-Open question (not implemented): whether group sleeptime should defer entirely to rest-window / nightly consolidation rather than running interval batches during active hours. Interval batching is the conservative choice landed here.
+**Candidate-episode synthesis lane (`episodeSynthesis`)** — the deterministic trigger gate for episode-candidate creation. The gate evaluates when the scheduler timer fires (`timerIntervalMinutes`, task `memory.episode-synthesis.timer`) OR a per-session turn threshold is reached (`turnThreshold`), whichever comes first. Two deterministic checks then run with zero LLM spend when closed:
+
+1. Gate 1 — any new messages since the durable synthesis processing watermark? None => no-op.
+2. Gate 2 — at least `minRelevantTurns` (default 10) companion-relevant turns. Relevance reuses the group-chat addressing/mention/attribution detection (`classifySessionEntryCompanionRelevance` in the extraction speaker-routing module): the companion's own turns, replies to her, direct address, and mentions count; async group traffic between other members does not. DMs count every conversational turn.
+
+Below the minimum the lane holds and accumulates: the watermark does not advance, so the next period evaluates the whole accumulated chunk (9 relevant now => hold; 25 total next period => process as one chunk). Every evaluation — processed or skipped, with a typed reason (`no_new_messages`, `below_relevance_minimum`, `session_retired`) — emits a `memory.episode_synthesis.gate` event for the subsystem-health view. Synthesis tuning (`transcriptMessageLimit`, `maxEpisodesPerRun`, `gapSplitMinutes`, `maxEntriesPerEpisode`, `minConversationalEntries`, `minSingleEntryChars`) lives in the same block.
+
+**Sleeptime (rest-window scheduler lane)** — actual sleeptime: nightly scheduler-owned work, like dreaming. Sleep consolidation, arc weaving, the dream-meaning pass, and the orientation-block rewrite run ONLY from the `memory.sleeptime.rest-window` scheduler task inside the `episodicProcessing` rest window (default 00:00–09:00 plus 60 min of inactivity). No code path from turn cadence can reach them — the sleeptime agent has no turn-based inference surface and fails closed at construction without a rest-window config; unreachability is test-enforced. Heavy-pass tuning is JSON-owned: `sleepConsolidation` (`reviewWindowDays`, `refinementWindowHours`, `adjacencyGapMinutes`, `maxRefinementsPerRun`) and `arcFormation` (`passIntervalDays`, `reviewWindowDays`, `minConfidence`).
+
+Note: the old `scheduler.json` `sleeptime` cadence key was removed with no legacy alias; configs still carrying it fail validation with rename guidance.
 
 ### Social-graph builder worker (E4.2, memory-agent lane)
 

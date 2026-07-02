@@ -87,7 +87,7 @@ The agent talks to the gateway through `GatewayClient`, which acts as the LLM an
 - Runtime memory/session composition requires PostgreSQL-backed ports.
 - SQLite-backed stores remain legacy/migration/test surfaces and must not be selected by runtime defaults.
 - `EpisodicStore` owns the L0.1 `l01_episodes` and `l01_episode_arcs` tables. These records are bounded landmarks with L0 span/artifact provenance, not generic transcript summaries and not L2 typed memories.
-- `EpisodicSynthesizer` runs from rest/me-time sleeptime work after user inactivity. It can create multiple episodes for one day and links longer themes as graph arcs.
+- `EpisodicSynthesizer` runs from the gated episode-synthesis lane (scheduler timer or turn threshold, then a deterministic new-messages + relevance-minimum gate). It can create multiple candidate episodes for one day and links longer themes as graph arcs; nightly rest-window sleeptime consolidates them.
 - `MemoryRetriever` combines L0.1 landmark-chain retrieval, semantic retrieval, lexical fallback, trust filtering, emotional continuity, and optional compositional reranking.
 - `MemoryExtractor` runs post-turn extraction, crash-recovery extraction, compaction extraction, and profile refresh flows.
 - Garden exposes episodic memory through a dedicated operator page for episode, provenance, arc, and thread inspection.
@@ -116,7 +116,7 @@ See [`docs/memory.md`](./memory.md) for the memory contract.
 ### Scheduler and background work
 
 - `Scheduler` handles heartbeat/reflection tasks, maintenance, one-shot tasks, backups, and deferred work.
-- Rest/me-time configuration gates sleeptime episodic processing so background review can happen during explicit inactive windows without blocking foreground chat.
+- Rest/me-time configuration owns sleeptime entirely: heavy passes (sleep consolidation, arc weaving, dream meaning, orientation rewrite) run only from the rest-window scheduler task, never from turn cadence. The lightweight near-turn lane and the gated episode-synthesis lane cover daytime work.
 - Post-turn actions and intention appraisal live outside the main response path but stay in the same audited runtime.
 
 ## Persistence Topology

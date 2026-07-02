@@ -212,7 +212,9 @@ describe('AdminContactsDataService', () => {
         }),
         expect.objectContaining({
           relationshipType: 'sibling',
-          direction: 'incoming',
+          // E4.3: sibling is a SYMMETRIC kind — a directional write is
+          // normalized to one undirected canonical row.
+          direction: 'undirected',
           neighbor: expect.objectContaining({
             contactId: sibling.id,
             mentionOnly: true,

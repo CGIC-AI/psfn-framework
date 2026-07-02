@@ -108,6 +108,12 @@ describe('startup owner-file loaders', () => {
         direct: { cadenceTurns: 3 },
         group: { minIntervalMinutes: 15, minNewEntries: 8 },
       },
+      socialGraphBuilder: {
+        intervalMs: 1_800_000,
+        coPresenceMinSessions: 3,
+        coPresenceWindowMinutes: 1440,
+        scanMemoryLimit: 500,
+      },
     };
     saveSchedulerConfig(rootDir, scheduler);
 

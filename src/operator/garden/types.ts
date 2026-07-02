@@ -89,6 +89,7 @@ export type AdminAuditActionType =
   | 'identity_edit'
   | 'external_action'
   | 'memory_mutation'
+  | 'memory_access'
   | 'settings_change'
   | 'confirmation'
   | 'charge_decision'

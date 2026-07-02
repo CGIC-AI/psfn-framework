@@ -17,6 +17,7 @@ import {
   type MemoryType,
 } from '../../../faculties/memory/types.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../system/trust/types.js';
+import { AdminMemoryBodyGate } from './memory-body-gate.js';
 import {
   buildManagedScopeEvidence,
   buildManagedScopeRepairPreview,
@@ -28,6 +29,7 @@ import {
 import type {
   AdminBulkMutationResult,
   AdminMemoryDetailData,
+  AdminMemoryElevationStatus,
   AdminMemoryLinkResult,
   AdminMemoryListData,
   AdminMemoryPrivacySummary,
@@ -152,18 +154,23 @@ function buildPrivacySummary(
 }
 
 export class AdminMemoryDataService implements AdminMemoryService {
+  private readonly bodyGate: AdminMemoryBodyGate;
+
   constructor(private readonly deps: {
     memoryStore: MemoryStorePort;
     contactStore?: ContactStorePort | null;
     embeddingService?: EmbeddingProviderPort | null;
     resolveCompanionName?: () => string;
     appendAuditTimelineEntry?: (
-      actionType: 'memory_mutation',
+      actionType: 'memory_mutation' | 'memory_access',
       decision: 'allowed' | 'denied',
       narrative: string,
       details?: Array<string | null | undefined>,
     ) => void;
-  }) {}
+    now?: () => number;
+  }) {
+    this.bodyGate = new AdminMemoryBodyGate(deps.now ? { now: deps.now } : undefined);
+  }
 
   private resolveCompanionName(): string {
     return this.deps.resolveCompanionName?.() ?? DEFAULT_COMPANION_NAME;
@@ -233,7 +240,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const memories = result.memories;
     const total = result.total;
     return {
-      memories,
+      memories: memories.map(memory => this.bodyGate.toAdminView(memory)),
       contactsById: await this.buildContactSummaryMap(),
       privacySummary: buildPrivacySummary(result.privacySummary, total, memories.length),
       pagination: {
@@ -243,6 +250,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
         hasPrevious: offset > 0,
         hasNext: offset + memories.length < total,
       },
+      elevation: this.bodyGate.status(),
     };
   }
 
@@ -253,11 +261,62 @@ export class AdminMemoryDataService implements AdminMemoryService {
       ? (await this.buildContactSummaryMap()).get(memory.contactId)
       : undefined;
     return {
-      memory,
+      memory: this.bodyGate.toAdminView(memory),
       linkedContact,
       scopeAssignments: this.buildScopeAssignments(memory),
       scopeRepair: this.buildScopeRepair(memory),
+      elevation: this.bodyGate.status(),
     };
+  }
+
+  getBodyElevationStatus(): AdminMemoryElevationStatus {
+    return this.bodyGate.status();
+  }
+
+  elevateBodyAccess(): AdminMemoryElevationStatus {
+    const status = this.bodyGate.elevate();
+    const ttlMinutes = Math.round(status.ttlMs / 60_000);
+    this.deps.appendAuditTimelineEntry?.(
+      'memory_access',
+      'allowed',
+      `Operator elevated Garden memory body access for ${ttlMinutes} minutes; intimate/confidential memory bodies are visible.`,
+      [status.expiresAt !== undefined ? `expiresAt=${new Date(status.expiresAt).toISOString()}` : null],
+    );
+    return status;
+  }
+
+  dropBodyElevation(): AdminMemoryElevationStatus {
+    const status = this.bodyGate.dropElevation();
+    this.deps.appendAuditTimelineEntry?.(
+      'memory_access',
+      'allowed',
+      'Operator ended Garden memory body access elevation; intimate/confidential memory bodies are redacted again.',
+    );
+    return status;
+  }
+
+  async revealMemory(id: string): Promise<AdminMemoryDetailData | null> {
+    const memory = await this.deps.memoryStore.getById(id);
+    if (!memory) {
+      this.deps.appendAuditTimelineEntry?.(
+        'memory_access',
+        'denied',
+        `Memory reveal failed: memory "${id}" was not found.`,
+      );
+      return null;
+    }
+
+    const wasRedacted = !this.bodyGate.canReadBody(memory);
+    this.bodyGate.recordReveal(memory.id);
+    if (wasRedacted) {
+      this.deps.appendAuditTimelineEntry?.(
+        'memory_access',
+        'allowed',
+        `Operator revealed ${memory.sensitivity} memory "${memory.id}" body (${memory.text.length} chars).`,
+        [`source=${memory.sourceRef}`],
+      );
+    }
+    return this.getMemoryDetail(id);
   }
 
   async listManagedScopes(params?: URLSearchParams): Promise<AdminMemoryScopeListData> {
@@ -323,7 +382,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       )))
       .sort(compareMemoryRecency)
       .map(memory => ({
-        memory,
+        memory: this.bodyGate.toAdminView(memory),
         evidence: buildManagedScopeEvidence(memory, scope),
         repair: this.buildScopeRepair(memory),
       }));
@@ -346,6 +405,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
         needsRepairCount: memories.filter(item => item.repair.needsRepair).length,
       },
       memories,
+      elevation: this.bodyGate.status(),
     };
   }
 
@@ -358,6 +418,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
         results: [],
         contactsById: await this.buildContactSummaryMap(),
         privacySummary: buildPrivacySummary(privacySummary, 0, 0),
+        elevation: this.bodyGate.status(),
       };
     }
     const embedding = await embeddingService.embed(query);
@@ -367,9 +428,10 @@ export class AdminMemoryDataService implements AdminMemoryService {
       .filter(memory => !isInternalMemoryArtifact(memory));
     return {
       query,
-      results,
+      results: results.map(memory => this.bodyGate.toAdminView(memory)),
       contactsById: await this.buildContactSummaryMap(),
       privacySummary: buildPrivacySummary(privacySummary, results.length, results.length),
+      elevation: this.bodyGate.status(),
     };
   }
 
@@ -462,7 +524,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
 
     return {
       ok: true,
-      memory: updated,
+      memory: this.bodyGate.toAdminView(updated),
       scopeAssignments: this.buildScopeAssignments(updated),
       scopeRepair: this.buildScopeRepair(updated),
     };

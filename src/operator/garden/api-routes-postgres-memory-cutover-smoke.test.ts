@@ -271,6 +271,10 @@ function makeMemoryService(memory: PurrMemory): AdminMemoryService {
     getMemoryLinks: async () => [],
     bulkDelete: async ids => ({ ok: true, count: ids.length }),
     bulkUpdate: async ids => ({ ok: true, count: ids.length }),
+    getBodyElevationStatus: () => ({ elevated: false, ttlMs: 900_000 }),
+    elevateBodyAccess: () => ({ elevated: true, expiresAt: Date.now() + 900_000, ttlMs: 900_000 }),
+    dropBodyElevation: () => ({ elevated: false, ttlMs: 900_000 }),
+    revealMemory: async () => null,
   };
 }
 

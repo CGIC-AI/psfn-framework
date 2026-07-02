@@ -4,12 +4,15 @@
     bulkDeleteMemories,
     bulkUpdateMemories,
     deleteMemory,
+    dropMemoryBodyElevation,
+    elevateMemoryBodyAccess,
     getMemoryDetail,
     getManagedMemoryScopeDetail,
     getMemoryLinks,
     linkMemories,
     listManagedMemoryScopes,
     listMemories,
+    revealMemory,
     searchMemories,
     unlinkMemories,
     updateMemoryScope,
@@ -18,6 +21,7 @@
     AdminBulkMutationResult,
     AdminMemoryContactSummary,
     AdminMemoryDetailData,
+    AdminMemoryElevationStatus,
     AdminMemoryLink,
     AdminMemoryListData,
     AdminMemorySearchResult,
@@ -81,6 +85,9 @@
   let scopeEditorRefLabel = $state('');
   let scopeEditorTags = $state('');
   let scopeMutating = $state(false);
+  let elevation = $state<AdminMemoryElevationStatus | null>(null);
+  let elevationMutating = $state(false);
+  let revealingId = $state<string | null>(null);
 
   let selectedCount = $derived(selectedIds.length);
 
@@ -206,6 +213,7 @@
         limit: PAGE_SIZE,
         offset,
       });
+      elevation = data.elevation ?? elevation;
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load memories';
     } finally {
@@ -232,6 +240,7 @@
       if (requestId !== searchRequestId) return;
       searchResults = nextResults;
       searchActive = true;
+      elevation = nextResults.elevation ?? elevation;
     } catch (e) {
       if (requestId !== searchRequestId) return;
       error = e instanceof Error ? e.message : 'Search failed';
@@ -260,6 +269,7 @@
 
     try {
       detailModalData = await getMemoryDetail(id);
+      elevation = detailModalData.elevation ?? elevation;
       syncScopeEditorFromDetail();
       await ensureLinksLoaded(id);
     } catch (e) {
@@ -660,6 +670,52 @@
     }
   }
 
+  async function handleElevate(): Promise<void> {
+    elevationMutating = true;
+    try {
+      elevation = await elevateMemoryBodyAccess();
+      flash(true, 'Memory body access elevated (audited). Intimate/confidential bodies are visible until the elevation expires.');
+      await Promise.all([
+        loadMemories(),
+        detailModalId ? openDetailModal(detailModalId) : Promise.resolve(),
+      ]);
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to elevate memory body access');
+    } finally {
+      elevationMutating = false;
+    }
+  }
+
+  async function handleDropElevation(): Promise<void> {
+    elevationMutating = true;
+    try {
+      elevation = await dropMemoryBodyElevation();
+      flash(true, 'Memory body access elevation ended. High-intimacy bodies are redacted again.');
+      await Promise.all([
+        loadMemories(),
+        detailModalId ? openDetailModal(detailModalId) : Promise.resolve(),
+      ]);
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to end memory elevation');
+    } finally {
+      elevationMutating = false;
+    }
+  }
+
+  async function handleReveal(id: string): Promise<void> {
+    revealingId = id;
+    try {
+      detailModalData = await revealMemory(id);
+      elevation = detailModalData.elevation ?? elevation;
+      syncScopeEditorFromDetail();
+      flash(true, 'Memory body revealed (audited).');
+    } catch (e) {
+      flash(false, e instanceof Error ? e.message : 'Failed to reveal memory body');
+    } finally {
+      revealingId = null;
+    }
+  }
+
   onMount(() => {
     loadMemories();
     loadManagedScopes();
@@ -686,6 +742,39 @@
       <p class="mt-1 text-sm text-shadow-600">
         Operator-only metadata for trust-ceiling and consent-gated memory. This surface exposes counts and policy shape, not withheld memory text.
       </p>
+    </div>
+
+    <div class="flex flex-wrap items-center gap-3 rounded-xl border p-3
+      {elevation?.elevated ? 'border-wilt-200 bg-wilt-50' : 'border-bark-200 bg-bark-50'}">
+      {#if elevation?.elevated}
+        <span class="px-2.5 py-0.5 text-sm rounded-full font-medium bg-wilt-600 text-white">
+          Elevated
+        </span>
+        <span class="text-sm text-wilt-700">
+          Intimate and confidential memory bodies are visible
+          {#if elevation.expiresAt}until {formatDate(elevation.expiresAt)}{/if}. Every elevation is audit-logged.
+        </span>
+        <button
+          onclick={() => { void handleDropElevation(); }}
+          disabled={elevationMutating}
+          class="ml-auto px-3 py-1.5 rounded-lg border border-wilt-300 text-wilt-700 text-sm font-medium
+                 hover:bg-wilt-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          End elevation
+        </button>
+      {:else}
+        <span class="text-sm text-shadow-600">
+          Intimate and confidential memory bodies are redacted by default. Metadata stays browsable; reveal per memory or elevate this session (both audited).
+        </span>
+        <button
+          onclick={() => { void handleElevate(); }}
+          disabled={elevationMutating}
+          class="ml-auto px-3 py-1.5 rounded-lg border border-bark-300 text-shadow-800 text-sm font-medium
+                 hover:bg-bark-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          Elevate{elevation?.ttlMs ? ` for ${Math.round(elevation.ttlMs / 60000)} min` : ''} (audited)
+        </button>
+      {/if}
     </div>
 
     <div class="grid grid-cols-2 gap-3 lg:grid-cols-7">
@@ -863,6 +952,14 @@
                     {#if entry.repair.needsRepair}
                       <span class="rounded-full bg-wilt-50 px-2 py-0.5 text-wilt-700 border border-wilt-200">
                         Repair suggested
+                      </span>
+                    {/if}
+                    {#if entry.memory.bodyRedacted}
+                      <span
+                        class="rounded-full bg-wilt-50 px-2 py-0.5 text-wilt-700 border border-wilt-200"
+                        title={entry.memory.bodyRedaction?.revealHint ?? 'Body hidden; reveal or elevate to view (audited).'}
+                      >
+                        body hidden{entry.memory.bodyRedaction ? ` (${entry.memory.bodyRedaction.originalLength} chars)` : ''}
                       </span>
                     {/if}
                     <span class="rounded-full bg-bark-200 px-2 py-0.5 text-shadow-700">
@@ -1146,6 +1243,14 @@
                   superseded
                 </span>
               {/if}
+              {#if memory.bodyRedacted}
+                <span
+                  class="px-2 py-0.5 text-sm rounded border bg-wilt-50 text-wilt-700 border-wilt-200"
+                  title={memory.bodyRedaction?.revealHint ?? 'Body hidden; reveal or elevate to view (audited).'}
+                >
+                  body hidden{memory.bodyRedaction ? ` (${memory.bodyRedaction.originalLength} chars)` : ''}
+                </span>
+              {/if}
             </div>
             <button
               onclick={() => { void openDetailModal(memory.id); }}
@@ -1294,7 +1399,27 @@
             {/if}
           </div>
 
-          <p class="text-shadow-800 leading-relaxed">{memText(detailModalData.memory)}</p>
+          {#if detailModalData.memory.bodyRedacted}
+            <div class="rounded-lg border border-wilt-200 bg-wilt-50 p-3 space-y-2">
+              <p class="text-sm font-medium text-wilt-700">
+                Body redacted ({detailModalData.memory.bodyRedaction?.sensitivity ?? detailModalData.memory.sensitivity}
+                {detailModalData.memory.bodyRedaction ? ` -- ${detailModalData.memory.bodyRedaction.originalLength} chars hidden` : ''})
+              </p>
+              <p class="text-sm text-wilt-700">
+                {detailModalData.memory.bodyRedaction?.revealHint ?? 'Reveal this memory or elevate memory body access to view (both are audit-logged).'}
+              </p>
+              <button
+                onclick={() => { void handleReveal(detailMemoryId); }}
+                disabled={revealingId === detailModalData.memory.id}
+                class="px-3 py-1.5 rounded-lg border border-wilt-300 text-wilt-700 text-sm font-medium
+                       hover:bg-wilt-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              >
+                {revealingId === detailModalData.memory.id ? 'Revealing...' : 'Reveal body (audited)'}
+              </button>
+            </div>
+          {:else}
+            <p class="text-shadow-800 leading-relaxed">{memText(detailModalData.memory)}</p>
+          {/if}
 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-shadow-700">
             <span>Extracted: <span class="text-shadow-800">{formatDate(memCreated(detailModalData.memory))}</span></span>

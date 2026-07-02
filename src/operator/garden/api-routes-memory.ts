@@ -137,6 +137,28 @@ export function buildAdminMemoryRoutes(options: {
         );
       },
     },
+    // ── High-intimacy body access elevation ──
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/memory/elevation'),
+      handle: (_req, res) => {
+        sendJson(res, 200, memoryService.getBodyElevationStatus());
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/memory/elevation'),
+      handle: (_req, res) => {
+        sendJson(res, 200, memoryService.elevateBodyAccess());
+      },
+    },
+    {
+      method: 'DELETE',
+      match: exactPath('/api/admin/memory/elevation'),
+      handle: (_req, res) => {
+        sendJson(res, 200, memoryService.dropBodyElevation());
+      },
+    },
     {
       method: 'GET',
       match: exactPath('/api/admin/memory/scopes'),
@@ -365,7 +387,23 @@ export function buildAdminMemoryRoutes(options: {
         });
       },
     },
-    // Sub-path route MUST come before generic prefixed param route
+    // Sub-path routes MUST come before generic prefixed param routes
+    {
+      method: 'POST',
+      match: paramWithSuffix('/api/admin/memory/', 'id', '/reveal'),
+      handle: (_req, res, { id }) => {
+        memoryService.revealMemory(id).then(
+          (detail) => {
+            if (!detail) {
+              sendJson(res, 404, { error: 'Memory not found' });
+              return;
+            }
+            sendJson(res, 200, detail);
+          },
+          (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to reveal memory') }),
+        );
+      },
+    },
     {
       method: 'GET',
       match: paramWithSuffix('/api/admin/memory/', 'id', '/links'),
@@ -408,8 +446,26 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          void patchMemory(id, { text, reason, referencePath })
+          // Fail closed: the body of a redacted high-intimacy memory cannot
+          // be edited without an explicit (audited) reveal or elevation --
+          // you cannot honestly edit what you cannot see.
+          void memoryService.getMemoryDetail(id)
+            .then((detail) => {
+              if (!detail) {
+                sendJson(res, 404, { error: 'Memory not found' });
+                return;
+              }
+              if (detail.memory.bodyRedacted) {
+                sendJson(res, 403, {
+                  error: `Memory body is redacted (${detail.memory.sensitivity}). `
+                    + 'Reveal the memory or elevate memory body access before editing its body.',
+                });
+                return;
+              }
+              return patchMemory(id, { text, reason, referencePath });
+            })
             .then((result) => {
+              if (!result) return;
               if (!result.ok) {
                 const status = result.message === 'Memory not found' ? 404 : 400;
                 sendJson(res, status, { error: result.message ?? 'Failed to patch memory' });

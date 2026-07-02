@@ -65,6 +65,14 @@ function makeMemoryService(overrides: Partial<AdminMemoryService> = {}): AdminMe
     getMemoryLinks: vi.fn(async () => []),
     bulkDelete: vi.fn(async ids => ({ ok: true, count: ids.length })),
     bulkUpdate: vi.fn(async ids => ({ ok: true, count: ids.length })),
+    getBodyElevationStatus: vi.fn(() => ({ elevated: false, ttlMs: 900_000 })),
+    elevateBodyAccess: vi.fn(() => ({ elevated: true, expiresAt: 900_000, ttlMs: 900_000 })),
+    dropBodyElevation: vi.fn(() => ({ elevated: false, ttlMs: 900_000 })),
+    revealMemory: vi.fn(async id => ({
+      memory: { id },
+      scopeAssignments: [],
+      elevation: { elevated: false, ttlMs: 900_000 },
+    } as never)),
     ...overrides,
   };
 }
@@ -191,5 +199,100 @@ describe('admin memory API route split', () => {
     );
     expect(response.status).toBe(400);
     expect(parseBody(response).error).toBe('Memory patching is not available');
+  });
+
+  it('rejects body patches for redacted high-intimacy memories without a reveal', async () => {
+    const patchMemory = vi.fn(async () => ({ ok: true }));
+    const memoryService = makeMemoryService({
+      getMemoryDetail: vi.fn(async id => ({
+        memory: {
+          id,
+          sensitivity: 'intimate',
+          bodyRedacted: true,
+          bodyRedaction: {
+            sensitivity: 'intimate',
+            originalLength: 42,
+            reason: 'high_intimacy_sensitivity',
+            revealHint: 'reveal or elevate',
+          },
+        },
+        scopeAssignments: [],
+        elevation: { elevated: false, ttlMs: 900_000 },
+      } as never)),
+    }) as AdminMemoryService & { patchMemory: typeof patchMemory };
+    memoryService.patchMemory = patchMemory;
+    const routes = makeRoutes(memoryService);
+
+    const response = await invokeRoute(
+      routes,
+      'PATCH',
+      '/api/admin/memory/mem-intimate/patch',
+      JSON.stringify({ text: 'Rewritten body.' }),
+    );
+    expect(response.status).toBe(403);
+    expect(parseBody(response).error).toBe(
+      'Memory body is redacted (intimate). Reveal the memory or elevate memory body access before editing its body.',
+    );
+    expect(patchMemory).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for body patches of missing memories before invoking patchMemory', async () => {
+    const patchMemory = vi.fn(async () => ({ ok: true }));
+    const memoryService = makeMemoryService({
+      getMemoryDetail: vi.fn(async () => null),
+    }) as AdminMemoryService & { patchMemory: typeof patchMemory };
+    memoryService.patchMemory = patchMemory;
+    const routes = makeRoutes(memoryService);
+
+    const response = await invokeRoute(
+      routes,
+      'PATCH',
+      '/api/admin/memory/missing/patch',
+      JSON.stringify({ text: 'Rewritten body.' }),
+    );
+    expect(response.status).toBe(404);
+    expect(parseBody(response).error).toBe('Memory not found');
+    expect(patchMemory).not.toHaveBeenCalled();
+  });
+
+  it('wires the elevation status, elevate, and drop routes to the memory service', async () => {
+    const memoryService = makeMemoryService();
+    const routes = makeRoutes(memoryService);
+
+    const statusResponse = await invokeRoute(routes, 'GET', '/api/admin/memory/elevation');
+    expect(statusResponse.status).toBe(200);
+    expect(parseBody(statusResponse)).toEqual({ elevated: false, ttlMs: 900_000 });
+    expect(memoryService.getBodyElevationStatus).toHaveBeenCalledTimes(1);
+    // The generic detail route must not swallow the elevation path.
+    expect(memoryService.getMemoryDetail).not.toHaveBeenCalled();
+
+    const elevateResponse = await invokeRoute(routes, 'POST', '/api/admin/memory/elevation');
+    expect(elevateResponse.status).toBe(200);
+    expect(parseBody(elevateResponse)).toEqual({ elevated: true, expiresAt: 900_000, ttlMs: 900_000 });
+    expect(memoryService.elevateBodyAccess).toHaveBeenCalledTimes(1);
+
+    const dropResponse = await invokeRoute(routes, 'DELETE', '/api/admin/memory/elevation');
+    expect(dropResponse.status).toBe(200);
+    expect(parseBody(dropResponse)).toEqual({ elevated: false, ttlMs: 900_000 });
+    expect(memoryService.dropBodyElevation).toHaveBeenCalledTimes(1);
+  });
+
+  it('dispatches per-item reveals ahead of the generic detail route and handles missing memories', async () => {
+    const memoryService = makeMemoryService();
+    const routes = makeRoutes(memoryService);
+
+    const revealResponse = await invokeRoute(routes, 'POST', '/api/admin/memory/mem-1/reveal');
+    expect(revealResponse.status).toBe(200);
+    expect(parseBody(revealResponse).memory).toEqual({ id: 'mem-1' });
+    expect(memoryService.revealMemory).toHaveBeenCalledWith('mem-1');
+
+    const missingService = makeMemoryService({ revealMemory: vi.fn(async () => null) });
+    const missingResponse = await invokeRoute(
+      makeRoutes(missingService),
+      'POST',
+      '/api/admin/memory/missing/reveal',
+    );
+    expect(missingResponse.status).toBe(404);
+    expect(parseBody(missingResponse).error).toBe('Memory not found');
   });
 });

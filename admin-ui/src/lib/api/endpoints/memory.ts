@@ -1,6 +1,7 @@
 import { apiDelete, apiGet, apiPost } from '$lib/api/client';
 import type {
   AdminBulkMutationResult,
+  AdminMemoryElevationStatus,
   AdminMemoryLink,
   AdminMemoryLinkResult,
   AdminMemoryListData,
@@ -49,6 +50,27 @@ export function getMemoryDetail(id: string): Promise<AdminMemoryDetailData> {
   return apiGet<AdminMemoryDetailData>(
     `/api/admin/memory/${encodeURIComponent(id)}`
   );
+}
+
+// Reveals a single high-intimacy memory body. Audit-logged server-side.
+export function revealMemory(id: string): Promise<AdminMemoryDetailData> {
+  return apiPost<AdminMemoryDetailData>(
+    `/api/admin/memory/${encodeURIComponent(id)}/reveal`,
+    {}
+  );
+}
+
+export function getMemoryElevation(): Promise<AdminMemoryElevationStatus> {
+  return apiGet<AdminMemoryElevationStatus>('/api/admin/memory/elevation');
+}
+
+// Grants TTL-bound access to all high-intimacy memory bodies. Audit-logged server-side.
+export function elevateMemoryBodyAccess(): Promise<AdminMemoryElevationStatus> {
+  return apiPost<AdminMemoryElevationStatus>('/api/admin/memory/elevation', {});
+}
+
+export function dropMemoryBodyElevation(): Promise<AdminMemoryElevationStatus> {
+  return apiDelete<AdminMemoryElevationStatus>('/api/admin/memory/elevation');
 }
 
 export function listManagedMemoryScopes(kind?: 'project' | 'north_star'): Promise<AdminMemoryScopeListData> {

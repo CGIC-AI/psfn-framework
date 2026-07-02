@@ -274,6 +274,7 @@ export function hydrateCanonicalStartupConfig(
       direct: { ...persistedScheduler.sleeptime.direct },
       group: { ...persistedScheduler.sleeptime.group },
     },
+    socialGraphBuilder: { ...persistedScheduler.socialGraphBuilder },
   };
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();

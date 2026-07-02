@@ -117,7 +117,7 @@ function inferRelationshipTypeFromKeyword(keyword: string): RelationshipType {
   return 'acquaintance';
 }
 
-function inferRelationshipTypeFromFact(fact: ExtractedFact): RelationshipType | undefined {
+export function inferRelationshipTypeFromFact(fact: ExtractedFact): RelationshipType | undefined {
   const normalizedTags = fact.tags.map(tag => tag.trim().toLowerCase());
   if (normalizedTags.includes('family')) return 'family';
   if (normalizedTags.includes('friend')) return 'friend';

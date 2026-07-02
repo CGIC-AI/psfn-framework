@@ -13,7 +13,9 @@ import { buildAdminContactRoutes } from './routes/contact-routes.js';
 import { buildAdminContactApprovalRoutes } from './api-routes-contact-approvals.js';
 import type { AdminPendingContactsService } from './services/pending-contacts-service.js';
 import { buildAdminRoomRoutes } from './api-routes-rooms.js';
+import { buildAdminGraphProposalRoutes } from './api-routes-graph-proposals.js';
 import type { AdminRoomsService } from './services/rooms-service.js';
+import type { AdminGraphProposalsService } from './services/graph-proposals-service.js';
 import { buildAdminConcernRoutes } from './routes/concern-routes.js';
 import { buildAdminIdentityRoutes } from './routes/identity-routes.js';
 import { buildAdminImageRoutes } from './routes/image-routes.js';
@@ -198,6 +200,7 @@ export function buildAdminApiRoutes(options: {
   contactsService: AdminContactsService;
   pendingContactsService?: AdminPendingContactsService | null;
   roomsService?: AdminRoomsService | null;
+  graphProposalsService?: AdminGraphProposalsService | null;
   concernService?: AdminConcernService | null;
   settingsService: AdminSettingsService;
   identityService: AdminIdentityService;
@@ -236,6 +239,7 @@ export function buildAdminApiRoutes(options: {
     contactsService,
     pendingContactsService,
     roomsService,
+    graphProposalsService,
     concernService,
     settingsService,
     identityService,
@@ -630,6 +634,9 @@ export function buildAdminApiRoutes(options: {
       : []),
     ...(roomsService
       ? buildAdminRoomRoutes({ roomsService })
+      : []),
+    ...(graphProposalsService
+      ? buildAdminGraphProposalRoutes({ graphProposalsService, withBody })
       : []),
     ...buildAdminConcernRoutes({ concernService, withBody }),
     ...buildAdminSettingsRoutes({ settingsService, appendAuditTimelineEntry, withBody }),

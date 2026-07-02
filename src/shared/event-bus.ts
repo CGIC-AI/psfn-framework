@@ -170,6 +170,18 @@ export interface EventMap {
     firesLastHour: number;
     timestamp: number;
   };
+  // Social-graph builder worker completion (E4.2). Law 31: results are visible,
+  // never silent — Garden renders the proposal queue and these counts.
+  'memory.social_graph.builder': {
+    scanned: number;
+    proposed: number;
+    conflicts: number;
+    skippedUntracked: number;
+    deduped: number;
+    watermarkAdvancedToMs: number;
+    runAtMs: number;
+    timestamp: number;
+  };
   'agent.tools.adaptive.decision': AdaptiveToolDecisionTelemetry & EventCorrelationFields;
   'agent.tools.adaptive.snapshot': AdaptiveToolSnapshotTelemetry & EventCorrelationFields;
   'agent.turn.stage': {

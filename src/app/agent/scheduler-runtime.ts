@@ -15,6 +15,16 @@ import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { registerAmbientPresenceTask } from '../../core/scheduler/ambient-presence.js';
 import { registerConcernGroomingTask } from '../../core/intention/concern-grooming.js';
 import type { ConcernStorePort } from '../../core/intention/concern-store-port.js';
+import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+import {
+  SocialGraphBuilderWorker,
+  createSocialGraphBuilderMemoryReader,
+  SOCIAL_GRAPH_BUILDER_TASK_ID,
+} from '../../faculties/memory/social-graph/graph-builder-worker.js';
+import type {
+  SocialGraphProposalStore,
+  SocialGraphBuilderWatermarkStore,
+} from '../../faculties/memory/social-graph/proposals.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { EligibilityGate } from '../../system/capabilities/eligibility.js';
@@ -51,6 +61,10 @@ export interface BuildAgentSchedulerRuntimeOptions {
   db?: Database.Database | null;
   backupConfig: BackupRuntimeConfig;
   pathSnapshot: RuntimePathSnapshot;
+  // ── Social-graph builder worker (E4.2) ──
+  contactStore?: ContactStorePort | null;
+  socialGraphProposalStore?: SocialGraphProposalStore | null;
+  socialGraphWatermarkStore?: SocialGraphBuilderWatermarkStore | null;
 }
 
 export function buildAgentSchedulerRuntime(
@@ -194,6 +208,59 @@ export function buildAgentSchedulerRuntime(
       scheduler,
       concernStore: options.concernStore,
       eventBus: options.eventBus,
+    });
+  }
+
+  // ── Social-graph builder worker (E4.2, memory-agent lane) ──
+  // Background job that proposes social-graph edges from accumulated room
+  // evidence. Purely heuristic (no LLM call, so no model charge); it runs on the
+  // same background-maintenance posture as sleeptime/salience-decay via the
+  // scheduler eligibility gate. NEVER inline in the chat path. Law 31: results
+  // land in the durable proposal store and are surfaced in Garden — never silent.
+  if (
+    options.contactStore
+    && options.socialGraphProposalStore
+    && options.socialGraphWatermarkStore
+  ) {
+    const contactStore = options.contactStore;
+    const memoryStore = options.memoryStore;
+    const builderCadence = options.schedulerConfig.socialGraphBuilder;
+    const socialGraphBuilder = new SocialGraphBuilderWorker({
+      memoryReader: createSocialGraphBuilderMemoryReader({
+        listRoomChannelIds: async () => (
+          await contactStore.listKnownRooms({ limit: builderCadence.scanMemoryLimit })
+        ).map(room => room.channelId),
+        getMemoriesByChannel: (channelId, limit) => memoryStore.getMemoriesByChannel(channelId, limit),
+      }),
+      contacts: contactStore,
+      proposalStore: options.socialGraphProposalStore,
+      watermarkStore: options.socialGraphWatermarkStore,
+      config: {
+        coPresenceMinSessions: builderCadence.coPresenceMinSessions,
+        coPresenceWindowMinutes: builderCadence.coPresenceWindowMinutes,
+        scanMemoryLimit: builderCadence.scanMemoryLimit,
+      },
+      onComplete: (telemetry) => {
+        void options.eventBus.emit('memory.social_graph.builder', {
+          ...telemetry,
+          timestamp: Date.now(),
+        });
+      },
+    });
+    scheduler.register({
+      id: SOCIAL_GRAPH_BUILDER_TASK_ID,
+      name: 'Social Graph Builder',
+      type: 'every',
+      intervalMs: builderCadence.intervalMs,
+      handler: async () => {
+        await socialGraphBuilder.run();
+      },
+      eligibility: { requiredTokens: ['memory.write'] },
+      state: 'idle',
+    });
+    log.info('Social-graph builder worker registered', {
+      intervalMs: builderCadence.intervalMs,
+      coPresenceMinSessions: builderCadence.coPresenceMinSessions,
     });
   }
 

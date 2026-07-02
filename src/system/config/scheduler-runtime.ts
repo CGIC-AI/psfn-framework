@@ -33,5 +33,6 @@ export function resolveRuntimeSchedulerConfig(
       direct: { ...persisted.sleeptime.direct },
       group: { ...persisted.sleeptime.group },
     },
+    socialGraphBuilder: { ...persisted.socialGraphBuilder },
   };
 }

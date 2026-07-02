@@ -36,6 +36,12 @@ describe('scheduler config seed defaults', () => {
           direct: { cadenceTurns: 5 },
           group: { minIntervalMinutes: 20, minNewEntries: 12 },
         },
+        socialGraphBuilder: {
+          intervalMs: 900_000,
+          coPresenceMinSessions: 4,
+          coPresenceWindowMinutes: 720,
+          scanMemoryLimit: 250,
+        },
       });
 
       expect(loadSchedulerSeedDefaults({ seedDir })).toEqual({
@@ -58,6 +64,12 @@ describe('scheduler config seed defaults', () => {
         sleeptime: {
           direct: { cadenceTurns: 5 },
           group: { minIntervalMinutes: 20, minNewEntries: 12 },
+        },
+        socialGraphBuilder: {
+          intervalMs: 900_000,
+          coPresenceMinSessions: 4,
+          coPresenceWindowMinutes: 720,
+          scanMemoryLimit: 250,
         },
       });
     } finally {

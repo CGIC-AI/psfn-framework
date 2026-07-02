@@ -49,6 +49,30 @@ export interface SleeptimeCadenceConfig {
   group: SleeptimeGroupCadenceConfig;
 }
 
+/**
+ * Social-graph builder worker cadence (E4.2). Background job in the memory-agent
+ * lane that proposes social-graph edges from accumulated room evidence. Runs on
+ * a poll interval; the worker itself only acts on memories past its watermark.
+ * Optional block — conservative defaults apply when absent.
+ */
+export interface SocialGraphBuilderCadenceConfig {
+  /** Poll interval for the background worker (ms). */
+  intervalMs: number;
+  /** Distinct co-presence windows required before an acquaintance is proposed. */
+  coPresenceMinSessions: number;
+  /** Fallback co-presence window size when a memory has no session id (minutes). */
+  coPresenceWindowMinutes: number;
+  /** Max memories scanned per run. */
+  scanMemoryLimit: number;
+}
+
+export const DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE: SocialGraphBuilderCadenceConfig = {
+  intervalMs: 1_800_000,
+  coPresenceMinSessions: 3,
+  coPresenceWindowMinutes: 1440,
+  scanMemoryLimit: 500,
+};
+
 export interface SchedulerRuntimeConfig {
   tickIntervalMs: number;
   heartbeatIntervalMs: number;
@@ -56,6 +80,7 @@ export interface SchedulerRuntimeConfig {
   artifactLifecycle: ArtifactLifecyclePolicyConfig;
   episodicProcessing: EpisodicProcessingRestWindowConfig;
   sleeptime: SleeptimeCadenceConfig;
+  socialGraphBuilder: SocialGraphBuilderCadenceConfig;
 }
 
 interface SchedulerRuntimeLoadOptions {
@@ -191,6 +216,39 @@ function validateSleeptimeConfig(
   };
 }
 
+function validateSocialGraphBuilderConfig(
+  raw: unknown,
+  sourcePath: string,
+): SocialGraphBuilderCadenceConfig {
+  if (raw === undefined) {
+    return { ...DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE };
+  }
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: socialGraphBuilder must be an object`);
+  }
+  return {
+    intervalMs: toInterval(
+      raw.intervalMs ?? DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE.intervalMs,
+      'socialGraphBuilder.intervalMs',
+    ),
+    coPresenceMinSessions: toPositiveInteger(
+      raw.coPresenceMinSessions ?? DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE.coPresenceMinSessions,
+      'socialGraphBuilder.coPresenceMinSessions',
+      1,
+    ),
+    coPresenceWindowMinutes: toPositiveInteger(
+      raw.coPresenceWindowMinutes ?? DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE.coPresenceWindowMinutes,
+      'socialGraphBuilder.coPresenceWindowMinutes',
+      1,
+    ),
+    scanMemoryLimit: toPositiveInteger(
+      raw.scanMemoryLimit ?? DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE.scanMemoryLimit,
+      'socialGraphBuilder.scanMemoryLimit',
+      1,
+    ),
+  };
+}
+
 function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRuntimeConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid scheduler config at ${sourcePath}: expected object`);
@@ -203,6 +261,7 @@ function validateSchedulerConfig(raw: unknown, sourcePath: string): SchedulerRun
     artifactLifecycle: validateArtifactLifecycleConfig(raw.artifactLifecycle, sourcePath),
     episodicProcessing: validateEpisodicProcessingConfig(raw.episodicProcessing, sourcePath),
     sleeptime: validateSleeptimeConfig(raw.sleeptime, sourcePath),
+    socialGraphBuilder: validateSocialGraphBuilderConfig(raw.socialGraphBuilder, sourcePath),
   };
 }
 

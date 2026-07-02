@@ -23,5 +23,11 @@
       "minIntervalMinutes": 15,
       "minNewEntries": 8
     }
+  },
+  "socialGraphBuilder": {
+    "intervalMs": 1800000,
+    "coPresenceMinSessions": 3,
+    "coPresenceWindowMinutes": 1440,
+    "scanMemoryLimit": 500
   }
 }

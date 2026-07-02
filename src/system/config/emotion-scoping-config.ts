@@ -41,17 +41,62 @@ export interface EmotionBaselineSettings {
   moodBlendAlpha: number;
 }
 
+/**
+ * Per-participant emotional trend tracking inside group rooms (bead E6.3).
+ *
+ * A deterministic EMA trend line per participant, fed ONLY by that
+ * participant's own messages, so one person being cruel and another being
+ * protective move the companion's stance toward each of them SEPARATELY, while
+ * an idle participant moves nothing. All knobs are config-owned; the
+ * accumulation path never calls an LLM.
+ */
+export interface EmotionParticipantTrendSettings {
+  /** Master switch for per-participant trend accumulation in group rooms. */
+  enabled: boolean;
+  /**
+   * EMA rate (0..1) at which a participant's trend tracks their own messages.
+   * Deliberately slow: orientation moves over many interactions, never on one
+   * sentence.
+   */
+  emaAlpha: number;
+  /** Max participants tracked per room (small-room design point). */
+  maxTrackedParticipantsPerRoom: number;
+  /** Trends untouched for longer than this (seconds) are evicted. */
+  staleEvictionSeconds: number;
+  /** Minimum interaction volume before a trend may move orientation. */
+  minInteractionsForMovement: number;
+  /** Minimum VAD displacement (0..1, max axis) for "meaningful" movement. */
+  minTrendDelta: number;
+  /**
+   * When true, the group→DM carry-over sources from the DM contact's OWN trend
+   * in that room (weighted by their own interactions) instead of the room
+   * aggregate. Default false preserves the E1.5 carry-over contract exactly.
+   */
+  carryOverUsesParticipantTrend: boolean;
+}
+
 export interface EmotionScopingSettings {
   carryOver: EmotionCarryOverSettings;
   baseline: EmotionBaselineSettings;
+  participantTrends: EmotionParticipantTrendSettings;
 }
 
 export interface EmotionScopingSettingsPatch {
   carryOver?: Partial<EmotionCarryOverSettings>;
   baseline?: Partial<EmotionBaselineSettings>;
+  participantTrends?: Partial<EmotionParticipantTrendSettings>;
 }
 
-const ROOT_KEYS = new Set<string>(['carryOver', 'baseline']);
+const ROOT_KEYS = new Set<string>(['carryOver', 'baseline', 'participantTrends']);
+const PARTICIPANT_TREND_KEYS = new Set<string>([
+  'enabled',
+  'emaAlpha',
+  'maxTrackedParticipantsPerRoom',
+  'staleEvictionSeconds',
+  'minInteractionsForMovement',
+  'minTrendDelta',
+  'carryOverUsesParticipantTrend',
+]);
 const CARRY_OVER_KEYS = new Set<string>([
   'enabled',
   'halfLifeSeconds',
@@ -77,6 +122,19 @@ export function createDefaultEmotionScopingSettings(): EmotionScopingSettings {
     baseline: {
       seedNewScopesFromBaseline: true,
       moodBlendAlpha: 0.05,
+    },
+    participantTrends: {
+      enabled: true,
+      // Slow: ~7-10 of a participant's own messages to approach their level.
+      emaAlpha: 0.12,
+      // Rooms are small by design (a dozen participants max).
+      maxTrackedParticipantsPerRoom: 16,
+      // 14 days: an inactive participant's trend is evicted, not carried forever.
+      staleEvictionSeconds: 14 * 24 * 60 * 60,
+      minInteractionsForMovement: 3,
+      minTrendDelta: 0.1,
+      // Behavior flag: default preserves the E1.5 carry-over contract.
+      carryOverUsesParticipantTrend: false,
     },
   };
 }
@@ -110,6 +168,12 @@ export function normalizeEmotionScopingSettingsPatch(
   if (Object.hasOwn(root, 'baseline')) {
     patch.baseline = normalizeBaselinePatch(root.baseline, `${fieldPath}.baseline`);
   }
+  if (Object.hasOwn(root, 'participantTrends')) {
+    patch.participantTrends = normalizeParticipantTrendPatch(
+      root.participantTrends,
+      `${fieldPath}.participantTrends`,
+    );
+  }
   return patch;
 }
 
@@ -119,6 +183,7 @@ export function mergeEmotionScopingSettingsPatch(
 ): EmotionScopingSettings {
   const carryOver = patch.carryOver ?? {};
   const baseline = patch.baseline ?? {};
+  const participantTrends = patch.participantTrends ?? {};
   return {
     carryOver: {
       enabled: carryOver.enabled ?? base.carryOver.enabled,
@@ -133,6 +198,22 @@ export function mergeEmotionScopingSettingsPatch(
       seedNewScopesFromBaseline:
         baseline.seedNewScopesFromBaseline ?? base.baseline.seedNewScopesFromBaseline,
       moodBlendAlpha: baseline.moodBlendAlpha ?? base.baseline.moodBlendAlpha,
+    },
+    participantTrends: {
+      enabled: participantTrends.enabled ?? base.participantTrends.enabled,
+      emaAlpha: participantTrends.emaAlpha ?? base.participantTrends.emaAlpha,
+      maxTrackedParticipantsPerRoom:
+        participantTrends.maxTrackedParticipantsPerRoom
+        ?? base.participantTrends.maxTrackedParticipantsPerRoom,
+      staleEvictionSeconds:
+        participantTrends.staleEvictionSeconds ?? base.participantTrends.staleEvictionSeconds,
+      minInteractionsForMovement:
+        participantTrends.minInteractionsForMovement
+        ?? base.participantTrends.minInteractionsForMovement,
+      minTrendDelta: participantTrends.minTrendDelta ?? base.participantTrends.minTrendDelta,
+      carryOverUsesParticipantTrend:
+        participantTrends.carryOverUsesParticipantTrend
+        ?? base.participantTrends.carryOverUsesParticipantTrend,
     },
   };
 }
@@ -161,6 +242,23 @@ function normalizeBaselinePatch(
   const patch: Partial<EmotionBaselineSettings> = {};
   setBooleanIfPresent(patch, root, 'seedNewScopesFromBaseline', fieldPath);
   setNumberIfPresent(patch, root, 'moodBlendAlpha', fieldPath, 0, 1);
+  return patch;
+}
+
+function normalizeParticipantTrendPatch(
+  value: unknown,
+  fieldPath: string,
+): Partial<EmotionParticipantTrendSettings> {
+  const root = expectRecord(value, fieldPath);
+  rejectUnknownKeys(root, PARTICIPANT_TREND_KEYS, fieldPath);
+  const patch: Partial<EmotionParticipantTrendSettings> = {};
+  setBooleanIfPresent(patch, root, 'enabled', fieldPath);
+  setNumberIfPresent(patch, root, 'emaAlpha', fieldPath, 0, 1);
+  setNumberIfPresent(patch, root, 'maxTrackedParticipantsPerRoom', fieldPath, 1, 1000);
+  setNumberIfPresent(patch, root, 'staleEvictionSeconds', fieldPath, 1, 365 * 24 * 60 * 60);
+  setNumberIfPresent(patch, root, 'minInteractionsForMovement', fieldPath, 0, 10000);
+  setNumberIfPresent(patch, root, 'minTrendDelta', fieldPath, 0, 1);
+  setBooleanIfPresent(patch, root, 'carryOverUsesParticipantTrend', fieldPath);
   return patch;
 }
 

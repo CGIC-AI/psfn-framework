@@ -139,6 +139,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       sessionService: deps.services.sessions,
       contactsService: deps.services.contacts,
       pendingContactsService: deps.services.pendingContacts ?? null,
+      roomsService: deps.services.rooms ?? null,
       concernService: deps.services.concerns,
       settingsService: deps.services.settings,
       identityService: deps.services.identity,

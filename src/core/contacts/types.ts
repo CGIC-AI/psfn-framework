@@ -279,3 +279,52 @@ export interface Contact {
   lastSeen: string;   // ISO timestamp
   notes?: string;
 }
+
+// ── Room roster (E4.1) ──
+// A "room" is a conversation channel keyed by channelId. Roster data is derived
+// ENTIRELY from existing contact_channel_activity rows (who has been seen in a
+// channel) joined to the owning contact row — no new modeling, no schema change.
+// This is DATA for operator/admin surfaces and future audience-scope consumers
+// (E3.3 audienceScope derivation, E4.4). It is NEVER loaded into prompt content.
+
+/** Default page size for a room roster query (operator constraint: bounded, ~50). */
+export const DEFAULT_ROOM_ROSTER_LIMIT = 50;
+/** Hard upper bound on a single room roster page. */
+export const MAX_ROOM_ROSTER_LIMIT = 200;
+/** Default cap on the known-rooms listing. */
+export const DEFAULT_KNOWN_ROOMS_LIMIT = 100;
+/** Hard upper bound on a known-rooms page. */
+export const MAX_KNOWN_ROOMS_LIMIT = 500;
+
+/** Summary of one known room (distinct channel + channelId) with membership stats. */
+export interface RoomSummary {
+  channel: ContactChannel;
+  channelId: string;
+  /** Count of distinct known contacts with activity in this room. */
+  memberCount: number;
+  /** Earliest first_seen across members (ISO timestamp). */
+  firstActivity: string;
+  /** Latest last_seen across members (ISO timestamp). */
+  lastActivity: string;
+}
+
+/** One known member of a room: channel-activity row joined to the owning contact. */
+export interface RoomRosterMember {
+  contactId: string;
+  displayName: string;
+  trustLevel: TrustLevel;
+  relationshipType: RelationshipType;
+  channel: ContactChannel;
+  channelId: string;
+  privacyLevel: ChannelPrivacyLevel | null;
+  firstSeen: string;  // ISO timestamp of first activity in this room
+  lastSeen: string;   // ISO timestamp of most recent activity in this room
+}
+
+/** Pagination / filter options for room queries. */
+export interface RoomQueryOptions {
+  /** Optional channel filter (channelId is the room key, but ids can be scoped per channel). */
+  channel?: ContactChannel;
+  limit?: number;
+  offset?: number;
+}

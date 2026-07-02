@@ -97,6 +97,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       sessionService: config.services.sessions,
       contactsService: config.services.contacts,
       pendingContactsService: config.services.pendingContacts ?? null,
+      roomsService: config.services.rooms ?? null,
       settingsService: config.services.settings,
       identityService: config.services.identity,
       promptsService: config.services.prompts,

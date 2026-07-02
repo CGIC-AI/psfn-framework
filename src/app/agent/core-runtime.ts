@@ -65,6 +65,7 @@ import {
   type PromptStatePort,
 } from '../../core/identity/prompt-state-port.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
+import { createPersonaPreambleService, type PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import {
@@ -126,6 +127,7 @@ export interface AgentCoreRuntime {
   intentionBehavioralHooks: IntentionBehavioralPatternHooks;
   observerEvalSidecar: ObserverEvalSidecarRuntime;
   memoryExtractor: MemoryExtractor;
+  personaPreamble: PersonaPreamblePort;
   imageVisionReviewer: DefaultImageVisionReviewer;
   appCache: AppCache;
   fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
@@ -196,13 +198,22 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       }));
     })();
 
+  const characterPromptVariablesProvider = buildCharacterPromptVariablesProvider(cardVersionStore);
+  // E6.1: one shared persona preamble service. Its template + per-subsystem
+  // labels/instructions are operator-editable through the prompt registry; the
+  // companion name and compressed persona derive from the live character card.
+  const personaPreamble = createPersonaPreambleService({
+    registry: promptRegistry,
+    personaVariables: characterPromptVariablesProvider,
+  });
+
   const agentLoop = composeSubstrateAgent({
     eventBus,
     llmProvider,
     sessionManager,
     systemPrompt,
     characterName: card.data.name,
-    characterPromptVariablesProvider: buildCharacterPromptVariablesProvider(cardVersionStore),
+    characterPromptVariablesProvider,
     config,
     runtimeMode: 'gateway',
     streamTransport: {
@@ -348,6 +359,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     eventBus,
     llmProvider,
     concernStore: intentionRuntime.concernStore,
+    personaPreamble,
   });
   const memoryExtractor = wireMemoryRuntime({
     agentLoop,
@@ -365,6 +377,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     isAutoContactCreationAllowed: contactTrackingGate
       ? (channelId: string) => contactTrackingGate.isAutoContactCreationAllowed(channelId)
       : null,
+    personaPreamble,
   });
   const promptState = createPromptStatePort({
     layers: promptStore,
@@ -385,6 +398,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     intentionBehavioralHooks,
     observerEvalSidecar,
     memoryExtractor,
+    personaPreamble,
     imageVisionReviewer,
     appCache,
     fatigueBudget: fatigueRuntime.fatigueBudget,

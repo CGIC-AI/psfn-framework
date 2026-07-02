@@ -11,6 +11,7 @@ import {
   SLEEPTIME_ORIENTATION_PROMPT_KEY,
   getDefaultPromptText,
 } from './prompt-registry.js';
+import { subsystemPersonaPromptKeys } from './persona-preamble-seeds.js';
 
 describe('PromptRegistryStore', () => {
   let tmpDir: string;
@@ -65,12 +66,16 @@ describe('PromptRegistryStore', () => {
     rmSync(filePath, { force: true });
     const seeded = new PromptRegistryStore(filePath, historyPath);
 
+    // list() is sorted by key.localeCompare; the persona preamble surface (E6.1)
+    // registers additional operator-editable keys under subsystem.persona.*,
+    // which sort after the core prompts.
     expect(seeded.list().map(entry => entry.key)).toEqual([
       EXTRACTION_PROMPT_KEY,
       PROFILE_SYNTHESIS_PROMPT_KEY,
       SLEEPTIME_ORIENTATION_PROMPT_KEY,
       COMPACTION_SUMMARY_PROMPT_KEY,
       RECENT_SESSION_SUMMARY_PROMPT_KEY,
+      ...subsystemPersonaPromptKeys().sort((a, b) => a.localeCompare(b)),
     ]);
     expect(seeded.getPrompt(EXTRACTION_PROMPT_KEY)).toBe(getDefaultPromptText(EXTRACTION_PROMPT_KEY));
   });

@@ -248,6 +248,7 @@ async function main(): Promise<void> {
     intentionAppraisalHooks,
     intentionBehavioralHooks,
     memoryExtractor,
+    personaPreamble,
     observerEvalSidecar,
     appCache,
   } = coreRuntime;
@@ -376,6 +377,7 @@ async function main(): Promise<void> {
     topicSegmentation: {
       enabled: schedulerConfig.episodeSynthesis.topicSegmentationEnabled,
       llmProvider,
+      personaPreamble,
       onEvent: (event) => {
         eventBus.emit('memory.episode_synthesis.segmentation', event).catch((error) => {
           log.warn('Episode-synthesis segmentation telemetry emit failed', {
@@ -393,6 +395,7 @@ async function main(): Promise<void> {
     adjacencyGapMs: schedulerConfig.sleepConsolidation.adjacencyGapMinutes * MINUTE_MS,
     maxRefinementsPerRun: schedulerConfig.sleepConsolidation.maxRefinementsPerRun,
     maxConsolidationsPerRun: schedulerConfig.sleepConsolidation.maxConsolidationsPerRun,
+    personaPreamble,
     // Fail-closed consolidation failures are typed events, never silence.
     onConsolidationFailure: (failure) => {
       eventBus.emit('memory.sleep_consolidation.failure', failure).catch((error: unknown) => {
@@ -407,6 +410,7 @@ async function main(): Promise<void> {
     passIntervalMs: schedulerConfig.arcFormation.passIntervalDays * DAY_MS,
     reviewWindowMs: schedulerConfig.arcFormation.reviewWindowDays * DAY_MS,
     minConfidence: schedulerConfig.arcFormation.minConfidence,
+    personaPreamble,
   });
   const dreamMeaningPass = new DreamMeaningPass(episodicStore, agentLoop);
   intentionRuntime.behavioralPatternTracker.setPromotionHook(

@@ -10,6 +10,7 @@ import {
   getDefaultPromptText,
 } from '../../../core/identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../../../core/identity/prompt-runtime.js';
+import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import { extractBoundaryFactsFromEntries } from '../boundary-log.js';
 import { extractExplicitPreferenceFactsFromEntries } from './preference.js';
@@ -127,6 +128,8 @@ export interface ExtractionRunOptions {
   sessionManager: SessionManager;
   memoryStore: MemoryStorePort;
   promptRegistry: PromptRegistryStatePort | null;
+  /** Shared persona preamble service (E6.1). Prepends soft persona framing before the schema-bound task prompt. */
+  personaPreamble?: PersonaPreamblePort | null;
   gateConfig: ExtractionGateConfig;
   maxWrites: number;
   groupWriteCaps?: GroupMemoryWriteCapSettings;
@@ -264,9 +267,14 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
             userName: participantNames.userName,
           }));
         const namingGuidance = buildExtractionNamingGuidance(participantNames);
-        const prompt = namingGuidance
+        const taskPrompt = namingGuidance
           ? `${renderedPrompt}\n\n${namingGuidance}`
           : renderedPrompt;
+        // E6.1: soft persona framing precedes the strict task instructions and
+        // JSON schema; the schema/format sections stay byte-identical.
+        const prompt = options.personaPreamble
+          ? options.personaPreamble.prepend('memory_extraction', taskPrompt)
+          : taskPrompt;
         const chunkRequestId = entryChunks.length > 1
           ? `${requestId}:chunk:${index + 1}`
           : requestId;

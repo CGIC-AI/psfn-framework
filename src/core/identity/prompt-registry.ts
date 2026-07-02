@@ -12,6 +12,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { appendJsonLine } from '../../persistence/jsonl.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { collectRemovedPromptMacroReferences } from './prompt-runtime.js';
+import { buildSubsystemPersonaPromptSeeds } from './persona-preamble-seeds.js';
 
 const log = createComponentLogger('PromptRegistry');
 
@@ -29,13 +30,16 @@ export type PromptRegistryKey =
   | typeof SLEEPTIME_ORIENTATION_PROMPT_KEY;
 
 interface PromptSeed {
-  key: PromptRegistryKey;
+  // Core registry prompts use the typed PromptRegistryKey union; the persona
+  // preamble surface (E6.1) registers additional operator-editable keys owned
+  // by persona-preamble-seeds.ts, so the seed table accepts plain string keys.
+  key: PromptRegistryKey | string;
   description: string;
   consumers: string[];
   text: string;
 }
 
-const PROMPT_SEEDS: PromptSeed[] = [
+const CORE_PROMPT_SEEDS: PromptSeed[] = [
   {
     key: EXTRACTION_PROMPT_KEY,
     description:
@@ -189,7 +193,14 @@ Respond with JSON only:
   },
 ];
 
-const REQUIRED_KEYS = new Set<PromptRegistryKey>(PROMPT_SEEDS.map(seed => seed.key));
+// Persona preamble template + per-subsystem labels/instructions (E6.1). These
+// are operator-editable through the same registry surface as the core prompts.
+const PROMPT_SEEDS: PromptSeed[] = [
+  ...CORE_PROMPT_SEEDS,
+  ...buildSubsystemPersonaPromptSeeds(),
+];
+
+const REQUIRED_KEYS = new Set<string>(PROMPT_SEEDS.map(seed => seed.key));
 
 const REQUIRED_SUBSTRINGS: Partial<Record<PromptRegistryKey, string[]>> = {
   [EXTRACTION_PROMPT_KEY]: ['{existing_facts}', '{recent_messages}', '<response>', '<fact>'],
@@ -271,7 +282,7 @@ function buildSeedEntries(timestamp: string): PromptRegistryEntry[] {
 export class PromptRegistryStore {
   private filePath: string;
   private historyPath: string;
-  private seedByKey: Map<PromptRegistryKey, PromptSeed>;
+  private seedByKey: Map<string, PromptSeed>;
   private entries: Map<string, PromptRegistryEntry>;
   private lastLoadedMtimeMs: number;
   private readonly onMutation: ((reason: string) => void) | undefined;
@@ -427,7 +438,7 @@ export class PromptRegistryStore {
         throw new Error(`Invalid prompt "${key}": ${validationError}`);
       }
 
-      const seed = this.seedByKey.get(key as PromptRegistryKey);
+      const seed = this.seedByKey.get(key);
       const description = typeof row.description === 'string'
         ? row.description
         : (seed?.description ?? '');

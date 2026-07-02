@@ -1,5 +1,6 @@
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import type { SessionEntry } from '../../../core/session/types.js';
+import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 
 /**
  * Contextual topic cutting for candidate-episode synthesis (E5.4).
@@ -155,6 +156,7 @@ export interface TopicSegmentationRequest {
 export async function proposeTopicSegments(
   llmProvider: Pick<LLMProviderPort, 'complete'>,
   request: TopicSegmentationRequest,
+  personaPreamble?: PersonaPreamblePort | null,
 ): Promise<TopicSegment[]> {
   if (request.entries.length === 0) {
     throw new Error('segmentation requires a non-empty chunk');
@@ -168,9 +170,15 @@ export async function proposeTopicSegments(
     'Return the segments JSON only.',
   ].join('\n');
 
+  // E6.1: soft persona framing precedes the strict task instructions and JSON
+  // schema; the schema/format sections stay byte-identical.
+  const systemPrompt = personaPreamble
+    ? personaPreamble.prepend('topic_segmentation', TOPIC_SEGMENTATION_SYSTEM_PROMPT)
+    : TOPIC_SEGMENTATION_SYSTEM_PROMPT;
+
   const response = await llmProvider.complete(
     {
-      systemPrompt: TOPIC_SEGMENTATION_SYSTEM_PROMPT,
+      systemPrompt,
       messages: [{ role: 'user', content: requestPrompt }],
       correlation: {
         requestId: `episode-segmentation:${request.sessionId}:${String(first.id)}-${String(last.id)}`,

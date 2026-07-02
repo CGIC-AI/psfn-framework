@@ -1,5 +1,6 @@
 import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
+import type { PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { resolvePreferredContactName } from '../../core/contacts/preferred-name.js';
 import type { SessionManager } from '../../core/session/manager.js';
@@ -86,6 +87,12 @@ export interface MemoryExtractorFormationOptions {
    * use inside the predicate (fail closed).
    */
   isAutoContactCreationAllowed?: (channelId: string) => boolean;
+  /**
+   * Shared persona preamble service (E6.1). When present, extraction and
+   * profile-synthesis prompts are prefixed with the companion's soft persona
+   * framing before their strict schema-bound instructions.
+   */
+  personaPreamble?: PersonaPreamblePort | null;
 }
 
 export interface ObservedGroupExtractionOptions {
@@ -134,6 +141,7 @@ export class MemoryExtractor {
   private getFormationVAD: (() => MemoryFormationVAD | undefined) | null = null;
   private emitConcernCandidates: ConcernCandidateExtractionSink | null = null;
   private isAutoContactCreationAllowed: ((channelId: string) => boolean) | null = null;
+  private personaPreamble: PersonaPreamblePort | null = null;
 
   constructor(
     llmClient: LLMProviderPort,
@@ -185,6 +193,7 @@ export class MemoryExtractor {
     this.getFormationVAD = formationOptions?.getFormationVAD ?? null;
     this.emitConcernCandidates = formationOptions?.emitConcernCandidates ?? null;
     this.isAutoContactCreationAllowed = formationOptions?.isAutoContactCreationAllowed ?? null;
+    this.personaPreamble = formationOptions?.personaPreamble ?? null;
   }
 
   async queueRetroactiveExtraction(
@@ -460,6 +469,7 @@ export class MemoryExtractor {
       sessionManager: this.sessionManager,
       memoryStore: this.memoryStore,
       promptRegistry: this.promptRegistry,
+      personaPreamble: this.personaPreamble,
       gateConfig: resolveGateConfig(this.runtimeConfig, {
         minImportance: this.minImportance,
         minConfidence: this.minConfidence,
@@ -730,6 +740,7 @@ export class MemoryExtractor {
     await runProfileRefresh({
       llmClient: this.llmClient,
       promptRegistry: this.promptRegistry,
+      personaPreamble: this.personaPreamble,
       memoryStore: this.memoryStore,
       channelId,
       triggerReason,

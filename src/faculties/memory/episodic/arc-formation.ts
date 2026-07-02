@@ -1,4 +1,5 @@
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
   EPISODE_ARC_KINDS,
@@ -22,6 +23,8 @@ export interface ArcFormationOptions {
   maxEpisodesPerRun?: number;
   /** Confidence floor below which proposed arcs are rejected (0..1). */
   minConfidence?: number;
+  /** Shared persona preamble service (E6.1); soft persona framing before the arc-judgment task prompt. */
+  personaPreamble?: PersonaPreamblePort | null;
 }
 
 export interface ArcFormationRunInput {
@@ -189,6 +192,7 @@ export class EpisodeArcWeaver {
   private readonly maxArcsPerRun: number;
   private readonly maxEpisodesPerRun: number;
   private readonly minConfidence: number;
+  private readonly personaPreamble: PersonaPreamblePort | null;
 
   constructor(
     store: EpisodicStorePort,
@@ -207,6 +211,7 @@ export class EpisodeArcWeaver {
       throw new Error('ArcFormationOptions.minConfidence must be a number between 0 and 1');
     }
     this.minConfidence = minConfidence;
+    this.personaPreamble = options.personaPreamble ?? null;
   }
 
   async run(input: ArcFormationRunInput): Promise<ArcFormationRunResult> {
@@ -335,9 +340,13 @@ export class EpisodeArcWeaver {
     ].join('\n');
 
     try {
+      // E6.1: soft persona framing precedes the strict task instructions and JSON schema.
+      const systemPrompt = this.personaPreamble
+        ? this.personaPreamble.prepend('arc_formation', ARC_JUDGMENT_SYSTEM_PROMPT)
+        : ARC_JUDGMENT_SYSTEM_PROMPT;
       const response = await this.llmProvider.complete(
         {
-          systemPrompt: ARC_JUDGMENT_SYSTEM_PROMPT,
+          systemPrompt,
           messages: [{ role: 'user', content: requestPrompt }],
           correlation: {
             requestId: `arc-formation:${input.sessionId}:${String(this.now().getTime())}`,

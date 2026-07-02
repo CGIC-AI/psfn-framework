@@ -94,8 +94,10 @@ import {
   listRelatedContactIds,
   listSocialGraphEntities,
   listSocialRelationshipEdges,
+  reconcileSocialGraphConsistency,
   upsertSocialGraphEntity,
   upsertSocialRelationshipEdge,
+  type SocialGraphConsistencyReport,
 } from './store/social-graph.js';
 import {
   collectUpsertIdentities,
@@ -388,6 +390,10 @@ export class ContactStore implements ContactStorePort {
     return listRelatedContactIds(this.db, contactId, query)
       .map(id => this.getById(id))
       .filter((contact): contact is Contact => contact !== undefined);
+  }
+
+  reconcileSocialGraphConsistency(options: { apply?: boolean } = {}): SocialGraphConsistencyReport {
+    return reconcileSocialGraphConsistency(this.db, options);
   }
 
   private isBehaviorDriftMutationAllowed(

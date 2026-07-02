@@ -15,6 +15,10 @@
 // E4.3.
 
 import type { RelationshipType, SocialRelationshipKind } from '../../../core/contacts/types.js';
+import {
+  SYMMETRIC_SOCIAL_RELATIONSHIP_KINDS,
+  isSymmetricRelationship,
+} from '../../../core/contacts/social-relationship-classification.js';
 
 export interface RelationshipKindInference {
   kind: SocialRelationshipKind;
@@ -23,22 +27,15 @@ export interface RelationshipKindInference {
 }
 
 /**
- * Symmetric social-graph kinds: represented as one undirected edge. Asymmetric
- * kinds (parent, child, manager, direct_report, caregiver) get a single
- * directional edge; their inverse is bead E4.3.
+ * Symmetric social-graph kinds: represented as one undirected edge. The
+ * canonical classification (symmetric / inverse_pair / genuinely_directional)
+ * now lives in core/contacts/social-relationship-classification.ts (E4.3); this
+ * re-export preserves the worker's existing import surface.
  */
-export const SYMMETRIC_SOCIAL_RELATIONSHIP_KINDS: ReadonlySet<SocialRelationshipKind> = new Set([
-  'partner',
-  'friend',
-  'acquaintance',
-  'colleague',
-  'sibling',
-  'household',
-  'family',
-]);
+export { SYMMETRIC_SOCIAL_RELATIONSHIP_KINDS };
 
 export function isSymmetricSocialRelationshipKind(kind: SocialRelationshipKind): boolean {
-  return SYMMETRIC_SOCIAL_RELATIONSHIP_KINDS.has(kind);
+  return isSymmetricRelationship(kind);
 }
 
 // Ordered fine-grained rules: first match wins. Kept intentionally conservative —

@@ -6,17 +6,7 @@ import type {
   ResponseStyle,
 } from '../../../shared/contracts/runtime.js';
 import type { ApiHealthResponse } from '../../../channels/api/types.js';
-import {
-  CHARGE_POLICY_RUNTIME_LANE_VALUES,
-  CHARGE_POLICY_SURFACE_VALUES,
-  type ChargePolicyConfig,
-  type ChargePolicyRuntimeLane,
-  type ChargePolicySurface,
-} from '../../../shared/contracts/charge-policy.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
-import { resolveTierCapabilityTokens } from '../../../system/capabilities/tiers.js';
-import { resolveToolRequiredCapabilities } from '../../../system/capabilities/requirements.js';
-import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
 import type { ChannelVisibility, TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelVisibility } from '../../../system/trust/types.js';
 import {
@@ -34,10 +24,8 @@ import {
   type ConversationScope,
 } from '../../session/conversation-scope.js';
 import type { EmotionAppraisalEntry } from '../../emotion/appraisal.js';
-import type { EmotionStateSnapshot } from '../../emotion/state.js';
 import type { ActiveConcernContextProvider } from '../../intention/concern-store-port.js';
 import {
-  buildActiveConcernsPromptVariables,
   buildActiveConcernsRuntimeData,
   type ActiveConcernRuntimeData,
 } from '../../intention/concerns.js';
@@ -55,42 +43,58 @@ import type { ExtendedToolTurnClass } from '../extended-tool-autoload-policy.js'
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { resolvePreferredContactName } from '../../contacts/preferred-name.js';
-import {
-  formatActiveDate,
-  formatActiveDateTimeIso,
-  formatActiveDateTimeLabel,
-  resolveActiveTimezone,
-} from '../../../shared/time/active-timezone.js';
-import {
-  unwrapSingleWrappedPromptSection,
-  wrapPromptSectionXml,
-} from '../../identity/prompt-sections.js';
+import { resolveActiveTimezone } from '../../../shared/time/active-timezone.js';
+import { wrapPromptSectionXml } from '../../identity/prompt-sections.js';
 import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
+import { trimNonEmptyString } from './runtime-context-sections/section-format.js';
+import {
+  buildCurrentDatetimePromptVariables,
+  buildLastMessagePromptVariables,
+  normalizeRuntimeTimezone,
+} from './runtime-context-sections/datetime.js';
+import {
+  buildConversationStatePromptVariables,
+  type UserRuntimeProfile,
+} from './runtime-context-sections/conversation-state.js';
+import { buildTurnBindingPromptVariables } from './runtime-context-sections/turn-binding.js';
+import {
+  buildChargePromptVariables,
+  resolveChargePolicyConfig,
+} from './runtime-context-sections/charge.js';
+import { buildContinuityGapPromptVariables } from './runtime-context-sections/continuity-gap.js';
+import {
+  buildInternalStatePromptVariables,
+  toEmotionSnapshotFromInternalState,
+} from './runtime-context-sections/internal-state.js';
+import { buildConcernPromptVariables } from './runtime-context-sections/concerns.js';
+import { buildEmotionAppraisalPromptVariables } from './runtime-context-sections/emotion-appraisal.js';
+import {
+  buildExtendedToolGuide,
+  buildExtendedToolPromptVariables,
+  buildToolingPromptVariables,
+  type RuntimeContextActiveToolCounts,
+} from './runtime-context-sections/tooling.js';
+import {
+  buildBehavioralNotesPromptVariables,
+  buildSkillsPromptVariables,
+} from './runtime-context-sections/notes-and-skills.js';
+import { buildSelfPresentationPromptVariables } from './runtime-context-sections/self-presentation.js';
+import { buildSatelliteEndpointContextBlock } from './runtime-context-sections/satellite.js';
+
+// The section producers moved into ./runtime-context-sections/ (E2.6). This
+// module stays the public entry point for the names other modules consume.
+export { buildContinuityGapPromptVariables, toEmotionSnapshotFromInternalState };
+export type { UserRuntimeProfile };
+export { resolveAppearanceContextFromTemplateVariables } from './runtime-context-sections/self-presentation.js';
 
 const SCRATCHPAD_PROMPT_SCAN_LIMIT = 64;
 const SCRATCHPAD_PROMPT_MAX_ENTRIES = 8;
 const SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS = 240;
 const SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS = 1_600;
-const RECENT_ACTIVE_PARTICIPANT_LIMIT = 5;
 
 interface RuntimeContextLogger {
   warn: (message: string, payload: Record<string, unknown>) => void;
   debug: (message: string, payload: Record<string, unknown>) => void;
-}
-
-interface RuntimeContextActiveToolCounts {
-  core: number;
-  promoted: number;
-  extendedLoaded: number;
-  autoload: number;
-  deferred: number;
-  total: number;
-}
-
-interface ExtendedToolGuideEntry {
-  line: string;
-  blocked: boolean;
-  activatable: boolean;
 }
 
 export type CompanionSubstrateHealthStatus = 'healthy' | 'degraded' | 'unavailable';
@@ -105,41 +109,6 @@ export interface CompanionSubstrateHealthContext {
   apiHealth?: ApiHealthResponse | null;
   unavailableReason?: string;
   warnings?: readonly CompanionSubstrateHealthWarning[];
-}
-
-const SKILL_TAG_PATTERN = /<skill\b/gi;
-
-const CHARGE_SURFACE_PROMPT_LABELS: Record<ChargePolicySurface, string> = {
-  ownerFileInspection: 'owner-file inspection',
-  localFilesystem: 'local filesystem read',
-  memoryRead: 'memory read',
-  memoryWrite: 'memory write through direct memory tools',
-  localEmbedding: 'local embedding',
-  externalEmbedding: 'external embedding',
-  localImageGeneration: 'local image generation',
-  paidImageGeneration: 'paid image/video generation',
-  analysisWorkbenchExtensionBand: 'analysis_workbench extension pass after the first iteration',
-  subagentLaunch: 'subagent launch',
-  shardLaunch: 'shard launch',
-  externalModelConsult: 'external model consult',
-  moaRoundBase: 'multi-model deliberation round',
-};
-
-const ANALYSIS_WORKBENCH_EXTENSION_SURFACE: ChargePolicySurface = 'analysisWorkbenchExtensionBand';
-
-
-function trimNonEmptyString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
-function escapeXmlAttribute(value: string): string {
-  return value
-    .replace(/&/gu, '&amp;')
-    .replace(/"/gu, '&quot;')
-    .replace(/</gu, '&lt;')
-    .replace(/>/gu, '&gt;');
 }
 
 function normalizeGeneratedMessageProvenance(
@@ -163,136 +132,6 @@ function normalizeGeneratedMessageProvenance(
   };
 }
 
-function isChargePolicyRuntimeLane(value: string): value is ChargePolicyRuntimeLane {
-  return (CHARGE_POLICY_RUNTIME_LANE_VALUES as readonly string[]).includes(value);
-}
-
-function isChargePolicyConfig(value: unknown): value is ChargePolicyConfig {
-  if (!isRecord(value)) return false;
-  if (value.schemaVersion !== 1) return false;
-  return (
-    isRecord(value.runChargeQuotaByLane)
-    && isRecord(value.surfaceCosts)
-    && isRecord(value.moa)
-    && isRecord(value.referenceModelClassPricing)
-  );
-}
-
-function resolveChargePolicyConfig(config: Record<string, unknown> | undefined): ChargePolicyConfig | null {
-  const raw = config?.chargePolicy;
-  return isChargePolicyConfig(raw) ? raw : null;
-}
-
-function formatChargeAmount(value: number): string {
-  return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/0+$/u, '').replace(/\.$/u, '');
-}
-
-// Bare charge-budget values (E2.5 purity rule): the numbers and the costed
-// surface lines are data; the sentence framing lives in the editable
-// runtime.charge_budget prompt layer.
-function buildChargePromptVariables(input: {
-  config?: Record<string, unknown>;
-  analysisWorkbenchAvailable?: boolean;
-}): Record<string, string> {
-  const chargePolicy = resolveChargePolicyConfig(input.config);
-  if (!chargePolicy) {
-    return {
-      runtime_charge_budget_present: 'false',
-      runtime_charge_lane: '',
-      runtime_charge_quota: '',
-      runtime_charge_remaining: '',
-      runtime_charge_cost_lines: '',
-    };
-  }
-
-  const snapshot = getRunChargeSnapshot();
-  const lane = snapshot?.lane && isChargePolicyRuntimeLane(snapshot.lane)
-    ? snapshot.lane
-    : 'interactive';
-  const quota = chargePolicy.runChargeQuotaByLane[lane];
-  const spent = snapshot?.quotaSpentByLane[lane] ?? 0;
-  const remaining = Math.max(0, quota - spent);
-  const costedSurfaces = CHARGE_POLICY_SURFACE_VALUES
-    .map(surface => ({
-      surface,
-      amount: chargePolicy.surfaceCosts[surface],
-    }))
-    .filter(entry => (
-      entry.amount > 0
-      && (
-        entry.surface !== ANALYSIS_WORKBENCH_EXTENSION_SURFACE
-        || input.analysisWorkbenchAvailable === true
-      )
-    ))
-    .sort((left, right) => right.amount - left.amount || left.surface.localeCompare(right.surface));
-
-  return {
-    runtime_charge_budget_present: 'true',
-    runtime_charge_lane: lane,
-    runtime_charge_quota: formatChargeAmount(quota),
-    runtime_charge_remaining: formatChargeAmount(remaining),
-    runtime_charge_cost_lines: costedSurfaces
-      .map(entry => `- ${CHARGE_SURFACE_PROMPT_LABELS[entry.surface]}: ${formatChargeAmount(entry.amount)}`)
-      .join('\n'),
-  };
-}
-
-function formatGapDuration(gapMs: number): string {
-  const hours = gapMs / (60 * 60 * 1000);
-  if (hours < 48) {
-    return `${String(Math.round(hours))} hours`;
-  }
-  return `${String(Math.round(hours / 24))} days`;
-}
-
-// Bare continuity-gap values (E2.5 purity rule): gap duration and offline
-// timestamp are data; the notice wording lives in the editable
-// runtime.continuity_notice prompt layer.
-export function buildContinuityGapPromptVariables(
-  gap: InternalStateContinuityGap | null | undefined,
-): Record<string, string> {
-  if (!gap) {
-    return {
-      runtime_continuity_gap_present: 'false',
-      runtime_continuity_gap_duration: '',
-      runtime_continuity_gap_offline_since: '',
-    };
-  }
-  return {
-    runtime_continuity_gap_present: 'true',
-    runtime_continuity_gap_duration: formatGapDuration(gap.gapMs),
-    runtime_continuity_gap_offline_since: gap.offlineSince,
-  };
-}
-
-function buildSatelliteEndpointContextBlock(message: SubstrateMessage): string {
-  const satellite = message.routing?.satellite;
-  if (!satellite) return '';
-
-  const effectiveCapabilities = satellite.capabilities.effective.join(', ') || 'none';
-  const policyDeniedCapabilities = satellite.capabilities.policyDenied.join(', ') || 'none';
-  const telemetryScopes = satellite.telemetryScopes.join(', ') || 'none';
-  const locationLine = satellite.staticLocationLabel
-    ? `Static location label: ${satellite.staticLocationLabel}`
-    : `Mobility: ${satellite.mobility}`;
-
-  return wrapPromptSectionXml({
-    id: 'runtime_satellite_endpoint',
-    content: [
-      '[Satellite endpoint]',
-      `Satellite: ${satellite.satelliteDisplayName} (${satellite.satelliteId})`,
-      `Endpoint: ${satellite.endpointDisplayName} (${satellite.endpointId}); claim ${satellite.claimType}; session ${satellite.sessionId}`,
-      `Prompt channel type: ${satellite.promptChannelType}`,
-      locationLine,
-      `Effective capabilities: ${effectiveCapabilities}`,
-      `Policy-denied or not-yet-modeled capabilities: ${policyDeniedCapabilities}`,
-      `Allowed telemetry scopes: ${telemetryScopes}`,
-      'Use only the effective capabilities listed here. Do not assume microphone, speech output, camera, avatar, location, or telemetry unless that capability is present.',
-      'If audio_input/speech_to_text are present, spoken user input may arrive as text. If audio_output/text_to_speech are present, ordinary replies may be spoken by the satellite.',
-    ].join('\n'),
-  });
-}
-
 export interface ResolvedAuthorContext {
   trustLevel: TrustLevel;
   speakerRole: 'user' | 'system';
@@ -308,27 +147,6 @@ export interface ResolvedAuthorContext {
   continuityFallbackKeys: string[];
 }
 
-export interface UserRuntimeProfile {
-  user_id: string;
-  display_name: string;
-  timezone?: string;
-  local_time?: string;
-}
-
-const SELF_IMAGE_TOOL_NAMES = ['selfie_create'] as const;
-
-export function resolveAppearanceContextFromTemplateVariables(
-  templateVariables?: Record<string, string>,
-): string {
-  const promptVariables = templateVariables ?? {};
-  return (
-    promptVariables['character.visual_description']
-    || promptVariables.extensions_visual_description
-    || promptVariables.visual_description
-    || ''
-  ).trim();
-}
-
 function isInternalJournalChannel(channelId: string): boolean {
   return channelId === 'internal:heartbeat' || channelId.startsWith('internal:reflection:');
 }
@@ -340,12 +158,6 @@ function resolveMessageChannelMeta(message: Pick<SubstrateMessage, 'isDirectMess
     ...(message.isDirectMessage !== undefined ? { isDirectMessage: message.isDirectMessage } : {}),
     ...(privacyLevel ? { privacyLevel } : {}),
   };
-}
-
-function compactPromptText(value: string, maxChars = 220): string {
-  const normalized = value.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return `${normalized.slice(0, maxChars - 3)}...`;
 }
 
 function formatScratchpadOmissionMetadata(entries: Array<{ updatedAt: number }>): string {
@@ -363,602 +175,9 @@ function formatScratchpadOmissionMetadata(entries: Array<{ updatedAt: number }>)
   ].join(' ');
 }
 
-function formatPromptRuntimeDateTime(now: Date): string {
-  const timeZone = resolveActiveTimezone();
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  }).format(now);
-}
-
-function formatPromptRuntimeDate(now: Date): string {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: resolveActiveTimezone(),
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  }).format(now);
-}
-
-function formatPromptRuntimeTime(now: Date): string {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: resolveActiveTimezone(),
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  }).format(now);
-}
-
-function formatPromptRuntimeTimeForTimezone(now: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  }).format(now);
-}
-
-function normalizeRuntimeTimezone(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  if (!trimmed) return undefined;
-  try {
-    void new Intl.DateTimeFormat('en-US', { timeZone: trimmed }).format(new Date());
-    return trimmed;
-  } catch {
-    return undefined;
-  }
-}
-
 function resolveContactRuntimeTimezone(contact: Contact | undefined): string | undefined {
   if (!contact || !isRecord(contact)) return undefined;
   return normalizeRuntimeTimezone(contact.timezone);
-}
-
-function formatPromptRuntimeRelativeDate(now: Date, dayOffset: number): string {
-  const [yearText, monthText, dayText] = formatActiveDate(now).split('-');
-  const year = Number(yearText);
-  const month = Number(monthText);
-  const day = Number(dayText);
-  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
-    return formatActiveDate(now);
-  }
-  const shifted = new Date(Date.UTC(year, month - 1, day + dayOffset));
-  return shifted.toISOString().slice(0, 10);
-}
-
-function formatPromptRuntimePartOfDay(now: Date): string {
-  const hourPart = new Intl.DateTimeFormat('en-US', {
-    timeZone: resolveActiveTimezone(),
-    hour: 'numeric',
-    hour12: false,
-  }).formatToParts(now).find(part => part.type === 'hour')?.value;
-  const parsedHour = Number(hourPart);
-  if (!Number.isFinite(parsedHour)) return '';
-  const hour = parsedHour % 24;
-  if (hour < 5) return 'overnight';
-  if (hour < 9) return 'morning';
-  if (hour < 12) return 'late morning';
-  if (hour < 15) return 'early afternoon';
-  if (hour < 18) return 'late afternoon';
-  if (hour < 21) return 'evening';
-  return 'night';
-}
-
-function buildExtendedToolGuide(input: {
-  capabilityTier: CapabilityTier;
-  extendedTools: AgentTool<any>[];
-  loadedExtended: Map<string, AdaptiveLoadedExtendedToolState>;
-  classifyExtendedToolForTurn: (toolName: string) => ExtendedToolTurnClass;
-  promotedExtendedToolNames: Set<string>;
-}): {
-  lines: string[];
-  activatableCount: number;
-  blockedCount: number;
-} {
-  const grantedTokens = new Set<CapabilityToken>(resolveTierCapabilityTokens(input.capabilityTier));
-  const entries: ExtendedToolGuideEntry[] = input.extendedTools.map((tool) => {
-    const loaded = input.loadedExtended.get(tool.name);
-    const turnClass = input.classifyExtendedToolForTurn(tool.name);
-
-    if (turnClass !== 'overlay') {
-      return {
-        line: `- ${tool.name}: ${tool.description.split('.')[0]} (background-only; not callable in-turn)`,
-        blocked: false,
-        activatable: false,
-      };
-    }
-
-    const missingTokens = resolveToolRequiredCapabilities(tool, {})
-      .filter(token => !grantedTokens.has(token));
-    const blockedSuffix = missingTokens.length > 0
-      ? `; current tier blocks execution: ${missingTokens.join(', ')}`
-      : '';
-
-    let suffix = '(use toolset action="activate")';
-    let activatable = true;
-    if (input.promotedExtendedToolNames.has(tool.name)) {
-      suffix = `(promoted, always active${blockedSuffix})`;
-      activatable = false;
-    } else if (loaded?.source === 'autoload') {
-      suffix = `(autoload active${blockedSuffix})`;
-      activatable = false;
-    } else if (loaded?.source === 'deferred') {
-      suffix = `(deferred active${blockedSuffix})`;
-      activatable = false;
-    } else if (loaded?.source === 'extended_loaded') {
-      suffix = `(loaded active${blockedSuffix})`;
-      activatable = false;
-    } else if (missingTokens.length > 0) {
-      suffix = `(blocked by current tier: ${missingTokens.join(', ')})`;
-      activatable = false;
-    }
-
-    return {
-      line: `- ${tool.name}: ${tool.description.split('.')[0]} ${suffix}`.replace(/\s+\(/, ' ('),
-      blocked: missingTokens.length > 0,
-      activatable,
-    };
-  });
-
-  return {
-    lines: entries.map(entry => entry.line),
-    activatableCount: entries.filter(entry => entry.activatable).length,
-    blockedCount: entries.filter(entry => entry.blocked).length,
-  };
-}
-
-function formatPromptRuntimeWeekday(now: Date): string {
-  return new Intl.DateTimeFormat('en-US', {
-    timeZone: resolveActiveTimezone(),
-    weekday: 'long',
-  }).format(now);
-}
-
-function formatRelativeElapsed(now: Date, then: Date): string {
-  const deltaMs = Math.max(0, now.getTime() - then.getTime());
-  const deltaMinutes = Math.floor(deltaMs / 60_000);
-  if (deltaMinutes < 1) return 'just now';
-  if (deltaMinutes < 60) return `${deltaMinutes} minute${deltaMinutes === 1 ? '' : 's'} ago`;
-  const deltaHours = Math.floor(deltaMinutes / 60);
-  if (deltaHours < 24) return `${deltaHours} hour${deltaHours === 1 ? '' : 's'} ago`;
-  const deltaDays = Math.floor(deltaHours / 24);
-  return `${deltaDays} day${deltaDays === 1 ? '' : 's'} ago`;
-}
-
-function formatElapsedDaysHours(now: Date, then: Date): string {
-  const deltaMs = Math.max(0, now.getTime() - then.getTime());
-  const totalHours = Math.floor(deltaMs / 3_600_000);
-  const days = Math.floor(totalHours / 24);
-  const hours = totalHours % 24;
-  if (days > 0 && hours > 0) {
-    return `${days} day${days === 1 ? '' : 's'} ${hours} hour${hours === 1 ? '' : 's'}`;
-  }
-  if (days > 0) return `${days} day${days === 1 ? '' : 's'}`;
-  if (hours > 0) return `${hours} hour${hours === 1 ? '' : 's'}`;
-  const minutes = Math.max(1, Math.floor(deltaMs / 60_000));
-  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
-}
-
-function buildLastMessagePromptVariables(input: {
-  now: Date;
-  lastMessageReceivedAt: Date | null;
-}): Record<string, string> {
-  const { now, lastMessageReceivedAt } = input;
-  if (!lastMessageReceivedAt) {
-    return {
-      runtime_last_message_received_present: 'false',
-      runtime_last_message_received_missing: 'true',
-      runtime_last_message_received_at_iso: '',
-      runtime_last_message_received_weekday: '',
-      runtime_last_message_received_date_human: '',
-      runtime_last_message_received_time_human: '',
-      runtime_last_message_received_timezone: '',
-      runtime_last_message_received_ago: '',
-      runtime_last_message_received_days_hours: '',
-    };
-  }
-
-  const activeTimezone = resolveActiveTimezone();
-  const relativeElapsed = formatRelativeElapsed(now, lastMessageReceivedAt);
-  return {
-    runtime_last_message_received_present: 'true',
-    runtime_last_message_received_missing: 'false',
-    runtime_last_message_received_at_iso: formatActiveDateTimeIso(lastMessageReceivedAt),
-    runtime_last_message_received_weekday: formatPromptRuntimeWeekday(lastMessageReceivedAt),
-    runtime_last_message_received_date_human: formatPromptRuntimeDate(lastMessageReceivedAt),
-    runtime_last_message_received_time_human: formatPromptRuntimeTime(lastMessageReceivedAt),
-    runtime_last_message_received_timezone: activeTimezone,
-    runtime_last_message_received_ago: relativeElapsed,
-    runtime_last_message_received_days_hours: formatElapsedDaysHours(now, lastMessageReceivedAt),
-  };
-}
-
-/**
- * Chat-type accessor over the turn's ConversationScope. The scope is resolved
- * once per turn at session-manager ingress (with the same
- * `isDirectMessage === true` rule this function previously applied to the raw
- * message), so this is a pure projection — no rederivation from loose params.
- */
-function resolveConversationChatType(scope: ConversationScope): 'direct_message' | 'group' {
-  return scope.kind === 'dm' ? 'direct_message' : 'group';
-}
-
-function formatXmlEmptyElement(tag: string, attributes: Record<string, string>): string {
-  const renderedAttributes = Object.entries(attributes)
-    .filter(([, value]) => value.trim().length > 0)
-    .map(([key, value]) => `${key}="${escapeXmlAttribute(value)}"`)
-    .join(' ');
-  return renderedAttributes ? `<${tag} ${renderedAttributes} />` : `<${tag} />`;
-}
-
-function normalizeUserRuntimeProfile(
-  profile: UserRuntimeProfile | undefined,
-  now: Date,
-): UserRuntimeProfile | undefined {
-  const userId = trimNonEmptyString(profile?.user_id);
-  if (!userId) return undefined;
-
-  const timezone = normalizeRuntimeTimezone(profile?.timezone);
-  const displayName = trimNonEmptyString(profile?.display_name) ?? userId;
-  return {
-    user_id: userId,
-    display_name: displayName,
-    ...(timezone
-      ? {
-        timezone,
-        local_time: formatPromptRuntimeTimeForTimezone(now, timezone),
-      }
-      : {}),
-  };
-}
-
-function buildRuntimeProfileByUserId(
-  profiles: readonly UserRuntimeProfile[] | undefined,
-  now: Date,
-): Map<string, UserRuntimeProfile> {
-  const map = new Map<string, UserRuntimeProfile>();
-  for (const profile of profiles ?? []) {
-    const normalized = normalizeUserRuntimeProfile(profile, now);
-    if (!normalized) continue;
-    map.set(normalized.user_id, normalized);
-  }
-  return map;
-}
-
-function formatRecentActiveParticipantsXml(input: {
-  chatType: 'direct_message' | 'group';
-  recentChannelEntries: readonly SessionEntry[];
-  runtimeProfilesByUserId?: ReadonlyMap<string, UserRuntimeProfile>;
-}): string {
-  if (input.chatType !== 'group') return '';
-
-  const sortedEntries = [...input.recentChannelEntries]
-    .filter(entry => (
-      entry.role === 'user'
-      && trimNonEmptyString(entry.authorId) !== undefined
-      && Number.isFinite(entry.timestamp)
-    ))
-    .sort((left, right) => (
-      right.timestamp - left.timestamp
-      || right.id - left.id
-    ));
-
-  const seenAuthorIds = new Set<string>();
-  const participantLines: string[] = [];
-  for (const entry of sortedEntries) {
-    const authorId = trimNonEmptyString(entry.authorId);
-    if (!authorId || seenAuthorIds.has(authorId)) continue;
-
-    seenAuthorIds.add(authorId);
-    const profile = input.runtimeProfilesByUserId?.get(authorId);
-    participantLines.push(formatXmlEmptyElement('participant', {
-      name: trimNonEmptyString(entry.authorName) ?? profile?.display_name ?? authorId,
-      id: authorId,
-      timezone: profile?.timezone ?? '',
-      local_time: profile?.local_time ?? '',
-    }));
-    if (participantLines.length >= RECENT_ACTIVE_PARTICIPANT_LIMIT) break;
-  }
-
-  if (participantLines.length === 0) return '';
-  return [
-    `<recent_active_participants max="${RECENT_ACTIVE_PARTICIPANT_LIMIT}">`,
-    ...participantLines.map(line => `  ${line}`),
-    '</recent_active_participants>',
-  ].join('\n');
-}
-
-function buildConversationStatePromptVariables(input: {
-  message: SubstrateMessage;
-  conversationScope: ConversationScope;
-  internalTurn: boolean;
-  trustLevel: TrustLevel;
-  relationshipType?: Contact['relationshipType'];
-  now: Date;
-  recentChannelEntries?: readonly SessionEntry[];
-  currentUserRuntimeProfile?: UserRuntimeProfile;
-  recentActiveParticipantRuntimeProfiles?: readonly UserRuntimeProfile[];
-}): Record<string, string> {
-  if (input.internalTurn) {
-    return {
-      runtime_conversation_state_available: 'false',
-      runtime_chat_type: '',
-      runtime_room_id: '',
-      runtime_current_message_author_xml: '',
-      runtime_current_message_author_name: '',
-      runtime_current_message_author_id: '',
-      runtime_current_message_author_name_xml_attr: '',
-      runtime_current_message_author_id_xml_attr: '',
-      runtime_current_message_author_trust_level: '',
-      runtime_current_message_author_relationship: '',
-      runtime_current_message_author_timezone: '',
-      runtime_current_message_author_local_time: '',
-      runtime_recent_active_participants_xml: '',
-      runtime_recent_active_participants_count: '0',
-    };
-  }
-
-  const chatType = resolveConversationChatType(input.conversationScope);
-  const runtimeProfilesByUserId = buildRuntimeProfileByUserId(
-    input.recentActiveParticipantRuntimeProfiles,
-    input.now,
-  );
-  const currentAuthorId = trimNonEmptyString(input.message.authorId) ?? '';
-  const currentAuthorName = trimNonEmptyString(input.message.authorName) ?? 'Unknown';
-  const normalizedCurrentProfile = normalizeUserRuntimeProfile(input.currentUserRuntimeProfile, input.now);
-  const currentProfile = normalizedCurrentProfile?.user_id === currentAuthorId
-    ? normalizedCurrentProfile
-    : undefined;
-  if (currentProfile) {
-    runtimeProfilesByUserId.set(currentProfile.user_id, currentProfile);
-  }
-  const recentActiveParticipantsXml = formatRecentActiveParticipantsXml({
-    chatType,
-    recentChannelEntries: input.recentChannelEntries ?? [],
-    runtimeProfilesByUserId,
-  });
-  const participantCount = recentActiveParticipantsXml
-    ? String((recentActiveParticipantsXml.match(/<participant\b/gu) ?? []).length)
-    : '0';
-  const currentMessageAuthorXml = formatXmlEmptyElement('current_message_author', {
-    name: currentAuthorName,
-    id: currentAuthorId,
-    trust: input.trustLevel,
-    relationship: input.relationshipType ?? '',
-    timezone: currentProfile?.timezone ?? '',
-    local_time: currentProfile?.local_time ?? '',
-  });
-
-  return {
-    runtime_conversation_state_available: 'true',
-    runtime_chat_type: chatType,
-    runtime_room_id: input.message.channelId,
-    runtime_current_message_author_xml: currentMessageAuthorXml,
-    runtime_current_message_author_name: currentAuthorName,
-    runtime_current_message_author_id: currentAuthorId,
-    runtime_current_message_author_name_xml_attr: escapeXmlAttribute(currentAuthorName),
-    runtime_current_message_author_id_xml_attr: escapeXmlAttribute(currentAuthorId),
-    runtime_current_message_author_trust_level: input.trustLevel,
-    runtime_current_message_author_relationship: input.relationshipType ?? '',
-    runtime_current_message_author_timezone: currentProfile?.timezone ?? '',
-    runtime_current_message_author_local_time: currentProfile?.local_time ?? '',
-    runtime_recent_active_participants_xml: recentActiveParticipantsXml,
-    runtime_recent_active_participants_count: participantCount,
-  };
-}
-
-function unwrapPromptSectionBody(section: string | null | undefined): string {
-  if (!section) return '';
-  return unwrapSingleWrappedPromptSection(section)?.content ?? section.trim();
-}
-
-function describeValence(value: number): string {
-  if (value >= 0.45) return 'positive';
-  if (value >= 0.15) return 'warm';
-  if (value <= -0.45) return 'heavy';
-  if (value <= -0.15) return 'strained';
-  return 'steady';
-}
-
-function describeArousal(value: number): string {
-  if (value >= 0.55) return 'high-energy';
-  if (value >= 0.2) return 'engaged';
-  if (value <= -0.2) return 'quiet';
-  return 'calm';
-}
-
-function describeCertainty(value: number): string {
-  if (value >= 0.75) return 'confident';
-  if (value >= 0.45) return 'steady';
-  return 'tentative';
-}
-
-function describeInteractionFrequency(value: number): string {
-  if (value >= 0.75) return 'very frequent';
-  if (value >= 0.4) return 'frequent';
-  if (value > 0) return 'occasional';
-  return 'new or infrequent';
-}
-
-function describeLastSeenRecency(lastSeenDeltaSeconds: number | null | undefined): string {
-  if (lastSeenDeltaSeconds == null) return 'unknown recency';
-  if (lastSeenDeltaSeconds <= 300) return 'just interacted';
-  if (lastSeenDeltaSeconds <= 3_600) return 'recently interacted';
-  return 'not recently seen';
-}
-
-function resolveTopEmotionNames(
-  discrete: Record<string, number>,
-  max = 2,
-): string[] {
-  return Object.entries(discrete)
-    .filter(([emotion, score]) => emotion !== 'neutral' && score >= 0.15)
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, max)
-    .map(([emotion]) => emotion);
-}
-
-// Bare degraded-telemetry values (E2.5 purity rule): status and reasons are
-// data; any cautionary wording belongs in editable layer text.
-function resolveEmotionTelemetryPromptValues(internalState: InternalState): {
-  status: string;
-  reasons: string;
-} {
-  const telemetry = (internalState.emotional as {
-    telemetry?: InternalState['emotional']['telemetry'];
-  }).telemetry;
-  if (!telemetry || telemetry.status === 'trusted') {
-    return { status: '', reasons: '' };
-  }
-  return {
-    status: telemetry.status,
-    reasons: telemetry.reasons.length > 0 ? telemetry.reasons.join(', ') : 'uncalibrated',
-  };
-}
-
-function buildInternalStatePromptVariables(internalState?: InternalState): Record<string, string> {
-  const emptyInternalStateVariables = {
-    runtime_internal_state_present: 'false',
-    runtime_internal_state_cognitive_processing_quality: '',
-    runtime_internal_state_cognitive_certainty_label: '',
-    runtime_internal_state_cognitive_topic_engagement_label: '',
-    runtime_internal_state_attention_conversation_trajectory: '',
-    runtime_internal_state_attention_active_concern_count: '',
-    runtime_internal_state_attention_active_concern_plural_suffix: '',
-    runtime_internal_state_attention_pending_follow_up_count: '',
-    runtime_internal_state_attention_pending_follow_up_plural_suffix: '',
-    runtime_internal_state_relational_trust_level: '',
-    runtime_internal_state_relational_recent_interaction_frequency_label: '',
-    runtime_internal_state_relational_last_seen_label: '',
-    runtime_internal_state_emotional_mood_valence_label: '',
-    runtime_internal_state_emotional_mood_arousal_label: '',
-    runtime_internal_state_emotional_secondary_emotions: '',
-    runtime_internal_state_emotional_telemetry_status: '',
-    runtime_internal_state_emotional_telemetry_reasons: '',
-  } satisfies Record<string, string>;
-
-  if (!internalState) {
-    return emptyInternalStateVariables;
-  }
-
-  const pendingFollowUps = internalState.attention.pendingFollowUps ?? [];
-  const secondaryEmotions = resolveTopEmotionNames(internalState.emotional.discreteEmotions);
-  const emotionTelemetry = resolveEmotionTelemetryPromptValues(internalState);
-  return {
-    runtime_internal_state_present: 'true',
-    runtime_internal_state_cognitive_processing_quality: internalState.cognitive.processingQuality,
-    runtime_internal_state_cognitive_certainty_label: describeCertainty(internalState.cognitive.certaintyLevel),
-    runtime_internal_state_cognitive_topic_engagement_label: describeArousal(internalState.cognitive.topicEngagement),
-    runtime_internal_state_attention_conversation_trajectory: internalState.attention.conversationTrajectory,
-    runtime_internal_state_attention_active_concern_count: String(internalState.attention.activeConcerns.length),
-    runtime_internal_state_attention_active_concern_plural_suffix: internalState.attention.activeConcerns.length === 1 ? '' : 's',
-    runtime_internal_state_attention_pending_follow_up_count: String(pendingFollowUps.length),
-    runtime_internal_state_attention_pending_follow_up_plural_suffix: pendingFollowUps.length === 1 ? '' : 's',
-    runtime_internal_state_relational_trust_level: internalState.relational.trustLevel,
-    runtime_internal_state_relational_recent_interaction_frequency_label: describeInteractionFrequency(
-      internalState.relational.recentInteractionFrequency,
-    ),
-    runtime_internal_state_relational_last_seen_label: describeLastSeenRecency(internalState.relational.lastSeenDeltaSeconds),
-    runtime_internal_state_emotional_mood_valence_label: describeValence(internalState.emotional.mood.valence),
-    runtime_internal_state_emotional_mood_arousal_label: describeArousal(internalState.emotional.mood.arousal),
-    runtime_internal_state_emotional_secondary_emotions: secondaryEmotions.join(', '),
-    runtime_internal_state_emotional_telemetry_status: emotionTelemetry.status,
-    runtime_internal_state_emotional_telemetry_reasons: emotionTelemetry.reasons,
-  };
-}
-
-// Concern data flows as structured ActiveConcernRuntimeData (E2.5): no more
-// formatting a prose block in code and re-parsing it back into variables. The
-// open-threads framing sentence lives in the runtime.attention prompt layer.
-function buildConcernPromptVariables(
-  activeConcerns: ActiveConcernRuntimeData | null | undefined,
-): Record<string, string> {
-  if (!activeConcerns || activeConcerns.totalCount === 0) {
-    return {
-      runtime_concerns_count: '0',
-      runtime_concerns_top_lines: '',
-      runtime_concerns_top_priorities: '',
-      runtime_concerns_omitted_count: '0',
-      runtime_concerns_omitted_plural_suffix: 's',
-    };
-  }
-  return buildActiveConcernsPromptVariables(activeConcerns);
-}
-
-function countNonEmptyLines(body: string): number {
-  return body
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-    .length;
-}
-
-function buildBehavioralNotesPromptVariables(behavioralNotesBlock: string | null | undefined): Record<string, string> {
-  const body = unwrapPromptSectionBody(behavioralNotesBlock);
-  return {
-    runtime_behavioral_notes_count: body ? String(countNonEmptyLines(body)) : '0',
-    runtime_behavioral_notes_body: body,
-  };
-}
-
-function buildSkillsPromptVariables(skillsContext: string | null | undefined): Record<string, string> {
-  const count = skillsContext?.match(SKILL_TAG_PATTERN)?.length ?? 0;
-  return {
-    runtime_skills_count: String(count),
-  };
-}
-
-function formatEmotionAppraisalLines(
-  emotionAppraisalChain: readonly EmotionAppraisalEntry[],
-): string[] {
-  return emotionAppraisalChain
-    .slice(-2)
-    .map(entry => (
-      `- ${formatActiveDateTimeLabel(new Date(entry.timestamp))} (${entry.trigger}): ${compactPromptText(entry.summary, 220)}`
-    ));
-}
-
-function buildEmotionAppraisalPromptVariables(
-  emotionAppraisalChain: readonly EmotionAppraisalEntry[],
-): Record<string, string> {
-  const latestEntry = emotionAppraisalChain.at(-1);
-  const recentLines = formatEmotionAppraisalLines(emotionAppraisalChain);
-  const latestTimestamp = latestEntry ? new Date(latestEntry.timestamp) : null;
-  const latestTimestampIso = latestTimestamp && Number.isFinite(latestTimestamp.getTime())
-    ? latestTimestamp.toISOString()
-    : '';
-
-  return {
-    runtime_emotion_appraisal_length: String(emotionAppraisalChain.length),
-    runtime_emotion_appraisal_latest_trigger: latestEntry?.trigger ?? '',
-    runtime_emotion_appraisal_latest_summary: latestEntry ? compactPromptText(latestEntry.summary, 220) : '',
-    runtime_emotion_appraisal_latest_timestamp_iso: latestTimestampIso,
-    runtime_emotion_appraisal_recent_lines: recentLines.join('\n'),
-  };
-}
-
-function buildExtendedToolPromptVariables(input: {
-  extendedTools: AgentTool<any>[];
-  extendedToolGuide: {
-    lines: string[];
-    activatableCount: number;
-    blockedCount: number;
-  };
-}): Record<string, string> {
-  return {
-    runtime_extended_tools_total: String(input.extendedTools.length),
-    runtime_extended_tools_activatable_count: String(input.extendedToolGuide.activatableCount),
-    runtime_extended_tools_blocked_count: String(input.extendedToolGuide.blockedCount),
-    runtime_extended_tool_names: input.extendedTools.map(tool => tool.name).join(', '),
-    runtime_extended_tool_directory_lines: input.extendedToolGuide.lines.join('\n'),
-  };
 }
 
 export function buildPromptTemplateVariables(input: {
@@ -1003,7 +222,7 @@ export function buildPromptTemplateVariables(input: {
   };
 }
 
-export function buildDynamicPromptTemplateVariables(input: {
+export interface DynamicPromptTemplateVariablesInput {
   message: SubstrateMessage;
   /** Resolved once per turn at session-manager ingress; see conversation-scope.ts. */
   conversationScope: ConversationScope;
@@ -1037,7 +256,17 @@ export function buildDynamicPromptTemplateVariables(input: {
   analysisWorkbenchAvailable?: boolean;
   internalStateContinuityGap?: InternalStateContinuityGap | null;
   config: Record<string, unknown>;
-}): Record<string, string> {
+}
+
+/**
+ * Orchestrator for the turn-phase prompt variables (E2.6): gather the
+ * turn-scoped inputs once, call the declared section producers in order, and
+ * assemble their records. Every section lives in ./runtime-context-sections/
+ * and receives its inputs as parameters — no producer reads runtime state.
+ */
+export function buildDynamicPromptTemplateVariables(
+  input: DynamicPromptTemplateVariablesInput,
+): Record<string, string> {
   const internalTurn = isInternalJournalChannel(input.message.channelId);
   // E1.3: speaking_with is a one-on-one binding. It is active only on genuine
   // DM turns (scope.kind === 'dm') and never on internal or multi-human group
@@ -1045,26 +274,9 @@ export function buildDynamicPromptTemplateVariables(input: {
   // persisted/custom prompt layers that still reference them prune cleanly.
   const speakingWithActive = !internalTurn && input.conversationScope.kind === 'dm';
   const visibility = classifyChannel(input.message.channelId, resolveMessageChannelMeta(input.message));
-  const hasActiveSelfImageTool = (): boolean => {
-    for (const toolName of SELF_IMAGE_TOOL_NAMES) {
-      if (input.promotedExtendedToolNames.has(toolName)) return true;
-      if (input.loadedExtended.has(toolName)) return true;
-    }
-    return false;
-  };
-
-  const responseStyle = input.responseStyle ?? 'concise';
   const now = input.now ?? new Date();
-  const emotionAppraisalChain = input.emotionAppraisalChain ?? [];
-  const {
-    core: coreCount,
-    promoted: promotedCount,
-    extendedLoaded: extendedLoadedCount,
-    autoload: autoloadCount,
-    deferred: deferredCount,
-    total: activeCount,
-  } = input.activeToolCounts;
-  const extendedCount = input.extendedTools.length;
+  const analysisWorkbenchAvailable = input.analysisWorkbenchAvailable === true;
+  const emotionSnapshot = input.internalState ? toEmotionSnapshotFromInternalState(input.internalState) : null;
   const extendedToolGuide = buildExtendedToolGuide({
     capabilityTier: input.capabilityTier,
     extendedTools: input.extendedTools,
@@ -1073,103 +285,64 @@ export function buildDynamicPromptTemplateVariables(input: {
     promotedExtendedToolNames: input.promotedExtendedToolNames,
   });
 
-  const emotionSnapshot = input.internalState ? toEmotionSnapshotFromInternalState(input.internalState) : null;
-  const affectVariables = buildEmotionalAffectPromptVariables({
-    trustLevel: input.trustLevel,
-    emotionSnapshot,
-    promptVariables: input.templateVariables,
-    config: input.config,
-  });
-  const metacognitiveVariables = buildMetacognitiveFlagPromptVariables(input.metacognitiveFlags ?? []);
-  const internalStateVariables = buildInternalStatePromptVariables(input.internalState);
-  const emotionAppraisalVariables = buildEmotionAppraisalPromptVariables(emotionAppraisalChain);
-  const concernVariables = buildConcernPromptVariables(input.activeConcerns);
-  const behavioralNotesVariables = buildBehavioralNotesPromptVariables(input.behavioralNotesBlock);
-  const skillsIndexBody = unwrapPromptSectionBody(input.skillsContext);
-  const skillsVariables = buildSkillsPromptVariables(input.skillsContext);
-  const selfImageToolActive = hasActiveSelfImageTool();
-  const appearanceContextBody = internalTurn
-    ? ''
-    : resolveAppearanceContextFromTemplateVariables(input.templateVariables);
-  const extendedToolVariables = buildExtendedToolPromptVariables({
-    extendedTools: input.extendedTools,
-    extendedToolGuide,
-  });
-  const lastMessageReceivedAt = (
-    typeof input.lastMessageReceivedAtMs === 'number' && Number.isFinite(input.lastMessageReceivedAtMs)
-  )
-    ? new Date(input.lastMessageReceivedAtMs)
-    : null;
-  const lastMessagePromptVariables = buildLastMessagePromptVariables({
-    now,
-    lastMessageReceivedAt,
-  });
-  const conversationStateVariables = buildConversationStatePromptVariables({
-    message: input.message,
-    conversationScope: input.conversationScope,
-    internalTurn,
-    trustLevel: input.trustLevel,
-    relationshipType: input.relationshipType,
-    now,
-    recentChannelEntries: input.recentChannelEntries,
-    currentUserRuntimeProfile: input.currentUserRuntimeProfile,
-    recentActiveParticipantRuntimeProfiles: input.recentActiveParticipantRuntimeProfiles,
-  });
-  const responseStyleState = buildResponseStylePromptState(responseStyle);
-  const trustState = buildTrustPromptState(input.trustLevel);
-  const dynamicVariables = {
-    // NOTE: active_timezone is intentionally NOT produced here. It is owned by
-    // buildPromptTemplateVariables (session phase); writing it again here would be
-    // a duplicate write in the turn prompt variable namespace (fail closed).
-    runtime_current_datetime_human: formatPromptRuntimeDateTime(now),
-    runtime_current_datetime_iso: formatActiveDateTimeIso(now),
-    runtime_current_weekday: formatPromptRuntimeWeekday(now),
-    runtime_current_date_human: formatPromptRuntimeDate(now),
-    runtime_current_time_human: formatPromptRuntimeTime(now),
-    runtime_current_today: formatPromptRuntimeRelativeDate(now, 0),
-    runtime_current_yesterday: formatPromptRuntimeRelativeDate(now, -1),
-    runtime_current_tomorrow: formatPromptRuntimeRelativeDate(now, 1),
-    runtime_current_part_of_day: formatPromptRuntimePartOfDay(now),
-    ...lastMessagePromptVariables,
-    ...conversationStateVariables,
+  return {
+    ...buildCurrentDatetimePromptVariables(now),
+    ...buildLastMessagePromptVariables({ now, lastMessageReceivedAtMs: input.lastMessageReceivedAtMs }),
+    ...buildConversationStatePromptVariables({
+      message: input.message,
+      conversationScope: input.conversationScope,
+      internalTurn,
+      trustLevel: input.trustLevel,
+      relationshipType: input.relationshipType,
+      now,
+      recentChannelEntries: input.recentChannelEntries,
+      currentUserRuntimeProfile: input.currentUserRuntimeProfile,
+      recentActiveParticipantRuntimeProfiles: input.recentActiveParticipantRuntimeProfiles,
+    }),
     ...buildContinuityGapPromptVariables(input.internalStateContinuityGap),
     ...buildChargePromptVariables({
-      config: input.config,
-      analysisWorkbenchAvailable: input.analysisWorkbenchAvailable === true,
+      chargePolicy: resolveChargePolicyConfig(input.config),
+      chargeSnapshot: getRunChargeSnapshot(),
+      analysisWorkbenchAvailable,
     }),
-    runtime_internal_turn_kind: internalTurn ? (input.taskKind ?? 'background') : '',
-    // E1.3: speaking_with context populates ONLY on genuine DM turns. On group
-    // turns (and internal turns) speakingWithActive is false, so these tokens
-    // are blank and any prompt layer that still references them prunes cleanly
-    // instead of binding a multi-human room to the most-recent speaker.
-    runtime_speaking_with_name: speakingWithActive ? input.resolvedUserName : '',
-    runtime_speaking_with_trust_level: speakingWithActive ? input.trustLevel : '',
-    runtime_channel_type: internalTurn ? '' : (input.channelType ?? 'unknown'),
-    runtime_channel_visibility: internalTurn ? '' : visibility,
-    runtime_capability_tier: input.capabilityTier,
-    runtime_analysis_workbench_available: String(input.analysisWorkbenchAvailable === true),
-    runtime_tooling_active_count: String(activeCount),
-    runtime_tooling_core_count: String(coreCount),
-    runtime_tooling_promoted_count: String(promotedCount),
-    runtime_tooling_loaded_count: String(extendedLoadedCount),
-    runtime_tooling_autoload_count: String(autoloadCount),
-    runtime_tooling_deferred_count: String(deferredCount),
-    runtime_tooling_available_extended_count: String(extendedCount),
-    ...trustState,
-    ...responseStyleState,
-    ...affectVariables,
-    ...metacognitiveVariables,
-    ...internalStateVariables,
-    ...concernVariables,
-    ...emotionAppraisalVariables,
-    ...behavioralNotesVariables,
-    ...skillsVariables,
-    ...extendedToolVariables,
-    runtime_skills_index_body: skillsIndexBody,
-    runtime_appearance_context_body: appearanceContextBody,
-    runtime_self_image_tool_active: String(selfImageToolActive),
+    ...buildTurnBindingPromptVariables({
+      internalTurn,
+      taskKind: input.taskKind,
+      speakingWithActive,
+      resolvedUserName: input.resolvedUserName,
+      trustLevel: input.trustLevel,
+      channelType: input.channelType,
+      visibility,
+    }),
+    ...buildToolingPromptVariables({
+      capabilityTier: input.capabilityTier,
+      analysisWorkbenchAvailable,
+      activeToolCounts: input.activeToolCounts,
+      availableExtendedCount: input.extendedTools.length,
+    }),
+    ...buildTrustPromptState(input.trustLevel),
+    ...buildResponseStylePromptState(input.responseStyle ?? 'concise'),
+    ...buildEmotionalAffectPromptVariables({
+      trustLevel: input.trustLevel,
+      emotionSnapshot,
+      promptVariables: input.templateVariables,
+      config: input.config,
+    }),
+    ...buildMetacognitiveFlagPromptVariables(input.metacognitiveFlags ?? []),
+    ...buildInternalStatePromptVariables(input.internalState),
+    ...buildConcernPromptVariables(input.activeConcerns),
+    ...buildEmotionAppraisalPromptVariables(input.emotionAppraisalChain ?? []),
+    ...buildBehavioralNotesPromptVariables(input.behavioralNotesBlock),
+    ...buildSkillsPromptVariables(input.skillsContext),
+    ...buildExtendedToolPromptVariables({ extendedTools: input.extendedTools, extendedToolGuide }),
+    ...buildSelfPresentationPromptVariables({
+      internalTurn,
+      templateVariables: input.templateVariables,
+      skillsContext: input.skillsContext,
+      loadedExtended: input.loadedExtended,
+      promotedExtendedToolNames: input.promotedExtendedToolNames,
+    }),
   } satisfies Record<string, string>;
-  return dynamicVariables;
 }
 
 export function buildRuntimeContext(input: {
@@ -1327,15 +500,6 @@ export function buildScratchpadContextBlock(input: {
     });
     return '';
   }
-}
-
-export function toEmotionSnapshotFromInternalState(internalState: InternalState): EmotionStateSnapshot {
-  return {
-    vad: { ...internalState.emotional.vad },
-    mood: { ...internalState.emotional.mood },
-    discrete: { ...internalState.emotional.discreteEmotions },
-    confidence: internalState.emotional.confidence,
-  };
 }
 
 export function getPersonaAdaptation(input: {

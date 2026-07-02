@@ -569,6 +569,10 @@ export function resolveContinuityDir(dataDir: string): string {
   return join(resolveContactsDir(dataDir), 'continuity');
 }
 
+export function resolvePendingContactApprovalsPath(dataDir: string): string {
+  return join(resolveContactsDir(dataDir), 'pending-approvals.json');
+}
+
 export function resolveValuesJournalPath(dataDir: string): string {
   return join(resolveNotesDir(dataDir), 'values.jsonl');
 }

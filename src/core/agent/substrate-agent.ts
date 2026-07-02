@@ -26,6 +26,7 @@ import {
 import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { CapabilityTier, CoreSubstrateConfig, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
+import type { ContactTrackingGate } from '../contacts/tracking-gate.js';
 import type { ImageVisionReviewer } from '../../primitives/images/types.js';
 import type { LLMProviderPort, MemoryProvider, MemoryExtractor, ScratchpadProvider } from './contracts.js';
 import type { TrustLevel } from '../../system/trust/types.js';
@@ -224,6 +225,8 @@ export interface SubstrateAgentOptions {
   fatigueBudget?: FatigueBudgetPort | null;
   streamTransport?: SubstrateStreamTransport;
   appCache?: AppCache;
+  /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
+  contactTrackingGate?: ContactTrackingGate | null;
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
 
@@ -297,6 +300,9 @@ export class SubstrateAgent {
   // Trust resolution — null until contacts are wired
   contactStore: ContactStorePort | null = null;
 
+  // Contact-tracking policy gate (E3.4) — null behaves as 'auto' everywhere
+  private readonly contactTrackingGate: ContactTrackingGate | null;
+
   // Prompt composition — null falls back to static systemPrompt
   promptComposer: PromptComposer | null = null;
 
@@ -329,6 +335,7 @@ export class SubstrateAgent {
     this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
     this.observerEvalSidecar = options?.observerEvalSidecar ?? null;
     this.fatigueBudget = options?.fatigueBudget ?? null;
+    this.contactTrackingGate = options?.contactTrackingGate ?? null;
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
       sessionManager: this.sessionManager,
       llmProvider: this.llmClient,
@@ -1384,6 +1391,7 @@ export class SubstrateAgent {
       logger: log,
       companionIdentityKey: resolveCompanionIdFromConfig(this.config),
       companionDisplayName: this.characterName,
+      ...(this.contactTrackingGate ? { contactTracking: this.contactTrackingGate } : {}),
     });
   }
 }

@@ -38,6 +38,7 @@ import type {
   AdminWikiService,
 } from './services/types.js';
 import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
+import type { AdminPendingContactsService } from './services/pending-contacts-service.js';
 
 export interface ConfirmationQueueAdminApi {
   listConfirmationQueue(): Promise<ConfirmationListResult>;
@@ -146,6 +147,7 @@ export interface GardenAdminDomainServices {
   memory: AdminMemoryService;
   sessions: AdminSessionService;
   contacts: AdminContactsService;
+  pendingContacts?: AdminPendingContactsService | null;
   concerns?: AdminConcernService | null;
   settings: AdminSettingsService;
   identity: AdminIdentityService;

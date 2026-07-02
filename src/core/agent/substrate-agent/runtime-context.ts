@@ -17,6 +17,8 @@ import {
 } from '../../../system/trust/policy.js';
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { Contact } from '../../contacts/types.js';
+import type { ContactTrackingGate } from '../../contacts/tracking-gate.js';
+import { normalizeIdentity } from '../../contacts/store/identity-utils.js';
 import type { ScratchpadProvider } from '../contracts.js';
 import type { SessionEntry } from '../../session/types.js';
 import {
@@ -670,6 +672,8 @@ export async function resolveAuthorContext(input: {
   logger: RuntimeContextLogger;
   companionIdentityKey: string;
   companionDisplayName?: string;
+  /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
+  contactTracking?: ContactTrackingGate;
 }): Promise<ResolvedAuthorContext> {
   if (input.message.channelId.startsWith('internal:')) {
     const isHeartbeatChannel = input.message.channelId === 'internal:heartbeat';
@@ -777,6 +781,59 @@ export async function resolveAuthorContext(input: {
       }),
       continuityFallbackKeys: [],
     };
+  }
+
+  // ── Contact-tracking policy gate (E3.4) ──
+  // The mode is resolved OUTSIDE the resolution try/catch below so a reserved
+  // mode ('role_gated') fails closed with its clear not-implemented error
+  // instead of being absorbed into the untracked fallback.
+  const trackingMode = input.contactTracking
+    ? input.contactTracking.resolveMode(input.message.channelId)
+    : 'auto';
+
+  if (input.contactTracking && trackingMode === 'approval') {
+    const buildUntrackedSpeakerContext = (): ResolvedAuthorContext => ({
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      resolvedUserName: resolvePromptUserName(input.message),
+      continuitySubjectKey: resolveContinuitySubjectKey({
+        subjectIdentityKey: input.message.authorId,
+        authorId: input.message.authorId,
+      }),
+      continuityFallbackKeys: [],
+    });
+
+    try {
+      const channel = resolveIdentityChannel(input.message);
+      const identity = normalizeIdentity(channel, input.message.authorId);
+      const canonicalHint = input.message.routing?.canonicalContactId?.trim();
+      const hintedContact = canonicalHint ? await input.contactStore.getById(canonicalHint) : undefined;
+      const existingContact = hintedContact
+        ?? await input.contactStore.getByChannelIdentity(identity.channel, identity.userId);
+      if (!existingContact) {
+        // NEW speaker in an approval-mode channel: no contact auto-upsert.
+        // Enqueue a durable pending-contact request (first sighting notifies
+        // the operator) and keep the speaker UNTRACKED — transcript/prefix
+        // attribution only, no contact record, no canonical contact key.
+        await input.contactTracking.reportUntrackedSpeaker({
+          channel: identity.channel,
+          channelUserId: identity.userId,
+          displayName: input.message.authorName,
+          channelId: input.message.channelId,
+          messageId: input.message.id,
+          messagePreview: input.message.content,
+        });
+        return buildUntrackedSpeakerContext();
+      }
+      // Existing contact: fall through to the unchanged resolution path below.
+    } catch (error) {
+      input.logger.warn('Contact-tracking approval gate failed; treating speaker as untracked', {
+        authorId: input.message.authorId,
+        channelId: input.message.channelId,
+        error: toErrorMessage(error),
+      });
+      return buildUntrackedSpeakerContext();
+    }
   }
 
   try {

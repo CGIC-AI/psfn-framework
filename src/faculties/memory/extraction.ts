@@ -77,6 +77,15 @@ const log = createComponentLogger('Extraction');
 export interface MemoryExtractorFormationOptions {
   getFormationVAD?: () => MemoryFormationVAD | undefined;
   emitConcernCandidates?: ConcernCandidateExtractionSink;
+  /**
+   * Contact-tracking policy gate predicate (E3.4). When it returns false for a
+   * channel, extraction must not create contact rows for that channel — the
+   * mention-only contact path is skipped and facts keep transcript/provenance
+   * attribution (sourceSpeakerName) without contact-keyed records. Absent
+   * predicate behaves as 'auto' (allowed) everywhere. Reserved modes throw at
+   * use inside the predicate (fail closed).
+   */
+  isAutoContactCreationAllowed?: (channelId: string) => boolean;
 }
 
 export interface ObservedGroupExtractionOptions {
@@ -124,6 +133,7 @@ export class MemoryExtractor {
   private inFlightProfileByContact = new Map<string, Promise<void>>();
   private getFormationVAD: (() => MemoryFormationVAD | undefined) | null = null;
   private emitConcernCandidates: ConcernCandidateExtractionSink | null = null;
+  private isAutoContactCreationAllowed: ((channelId: string) => boolean) | null = null;
 
   constructor(
     llmClient: LLMProviderPort,
@@ -174,6 +184,7 @@ export class MemoryExtractor {
     this.contactStore = contactStore ?? null;
     this.getFormationVAD = formationOptions?.getFormationVAD ?? null;
     this.emitConcernCandidates = formationOptions?.emitConcernCandidates ?? null;
+    this.isAutoContactCreationAllowed = formationOptions?.isAutoContactCreationAllowed ?? null;
   }
 
   async queueRetroactiveExtraction(
@@ -553,7 +564,13 @@ export class MemoryExtractor {
     routing?: ExtractionFactRouting,
   ): Promise<WriteResult> {
     let factContactId = canonicalContactId;
-    if (fact.type === 'relational' && this.contactStore && channelId) {
+    // Contact-tracking policy gate (E3.4): non-'auto' channels must not have
+    // extraction create contact rows (mention-only path included). Facts keep
+    // speaker-name provenance; they just gain no contact-keyed records.
+    const contactCreationAllowed = !channelId
+      || this.isAutoContactCreationAllowed === null
+      || this.isAutoContactCreationAllowed(channelId);
+    if (fact.type === 'relational' && this.contactStore && channelId && contactCreationAllowed) {
       const mentionOnlyContact = await resolveMentionOnlyContactForFact({
         fact,
         channelId,

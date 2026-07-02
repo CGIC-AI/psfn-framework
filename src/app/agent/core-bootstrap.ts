@@ -27,6 +27,7 @@ import type { CoreSubstrateConfig } from '../../system/config/runtime-config-con
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
 import type { EpisodicStorePort } from '../../faculties/memory/episodic/store.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+import type { ContactTrackingGate } from '../../core/contacts/tracking-gate.js';
 import type {
   IntentionRuntimeProviders,
   IntentionRuntimeWiring,
@@ -60,6 +61,8 @@ export interface BootstrapAgentCoreRuntimeOptions {
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
   capabilityRuntime: CapabilityRuntime;
+  /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
+  contactTrackingGate?: ContactTrackingGate | null;
 }
 
 export async function bootstrapAgentCoreRuntime(
@@ -144,6 +147,7 @@ export async function bootstrapAgentCoreRuntime(
       ?? process.env.TELEGRAM_PRIMARY_USER_ID
       ?? ''
     ).trim() || undefined,
+    contactTrackingGate: options.contactTrackingGate ?? null,
   });
 
   return {

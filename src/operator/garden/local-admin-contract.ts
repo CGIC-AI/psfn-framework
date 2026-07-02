@@ -1,6 +1,7 @@
 import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
 import { join } from 'node:path';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+import type { PendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
 import type { CharacterCardVersionStore } from '../../core/identity/card-versioning.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
 import {
@@ -67,6 +68,7 @@ import { registerAuditTimelineSources } from './services/audit-event-collector.j
 import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
 import { AdminConcernDataService } from './services/concern-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
+import { createAdminPendingContactsService } from './services/pending-contacts-service.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
 import { AdminEpisodicMemoryDataService } from './services/episodic-memory-service.js';
 import { AdminGroupMemoryDataService } from './services/group-memory-diagnostics-service.js';
@@ -115,6 +117,8 @@ export interface InProcessGardenAdminContractOptions {
   channelGroupMemory?: ChannelGroupMemoryConfig;
   memoryExtractor?: GroupMemoryBackfillExtractorPort | null;
   companionAuthorIds?: readonly string[];
+  /** Pending contact approvals queue (E3.4 contact-tracking policy gate). */
+  pendingContactApprovals?: PendingContactApprovalStore | null;
 }
 
 export function createInProcessGardenAdminContract(
@@ -249,6 +253,12 @@ export function createInProcessGardenAdminContract(
       memoryStore: options.memoryStore,
       sessionStore: options.sessionStore,
     }),
+    pendingContacts: options.pendingContactApprovals
+      ? createAdminPendingContactsService({
+        pendingApprovals: options.pendingContactApprovals,
+        contactStore: options.contactStore ?? null,
+      })
+      : null,
     concerns: options.concernStore
       ? new AdminConcernDataService(options.concernStore)
       : null,

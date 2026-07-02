@@ -47,6 +47,14 @@ import { isInternalSessionId } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
 import { classifyIdleGapTexture, type IdleGapTexture } from './time-texture.js';
+import {
+  estimateWakeWindow,
+  formatMinuteOfDay,
+  minuteOfDayToHourMinute,
+  type WakeWindowEstimate,
+  type WakeWindowInsufficientReason,
+} from './wake-window-estimator.js';
+import type { TemporalWakeupMorningConfig } from '../../system/config/scheduler-config.js';
 
 const log = createComponentLogger('TemporalWakeup');
 
@@ -196,6 +204,123 @@ export function parseWakeLocalTime(localTime: string): { hour: number; minute: n
     throw new Error(`Invalid temporal wake-up localTime "${localTime}" — expected HH:mm`);
   }
   return { hour, minute };
+}
+
+// ── Habit-derived wake window (E7.2) ──
+// A single snapshot builder is the ONE source of truth for the effective wake
+// time, shared by (a) daily-task registration, which sets the scheduler cadence
+// to the resolved hour/minute, and (b) the Garden admin read route, which
+// surfaces the live estimate and data sufficiency. Keeping both on the same
+// function means the operator sees exactly what the scheduler will use.
+
+export type WakeWindowSnapshotSource = 'fixed' | 'habit' | 'habit_fallback';
+
+export interface WakeWindowSnapshot {
+  /** Configured timing mode ('fixed' or 'habit'). */
+  timingMode: 'fixed' | 'habit';
+  /** Where the effective wake time actually came from this snapshot. */
+  source: WakeWindowSnapshotSource;
+  /** Effective daily wake slot the scheduler cadence uses. */
+  effective: {
+    hour: number;
+    minute: number;
+    /** HH:mm rendering of the effective wake slot. */
+    localTime: string;
+  };
+  /** Local zone the estimate/cadence is expressed in. */
+  timeZone: string;
+  /**
+   * Deterministic estimated window (visibility only; the cadence always fires
+   * at the median). Present only when a habit estimate succeeded.
+   */
+  window?: {
+    startLocalTime: string;
+    endLocalTime: string;
+    medianLocalTime: string;
+  };
+  /** Distinct sample days the estimate drew on (0 when no history). */
+  sampleDays: number;
+  /** Why a habit estimate fell back to the fixed time (absent when not fallback). */
+  fallbackReason?: WakeWindowInsufficientReason;
+  /** The fixed configured HH:mm — the habit fallback target. */
+  configuredLocalTime: string;
+}
+
+export interface WakeWindowSnapshotInput {
+  morning: TemporalWakeupMorningConfig;
+  /** Partner (role 'user') timestamps in ms; ignored in 'fixed' mode. */
+  partnerTimestampsMs: readonly number[];
+  nowMs: number;
+  timeZone: string;
+}
+
+/**
+ * Resolve the effective morning wake slot for the current timing mode.
+ * Deterministic: 'habit' fires at the weighted-median estimated wake time;
+ * insufficient history falls back to the fixed `localTime` with a visible
+ * reason. Pure — no I/O, no clock reads beyond the supplied `nowMs`.
+ */
+export function buildWakeWindowSnapshot(input: WakeWindowSnapshotInput): WakeWindowSnapshot {
+  const { morning, timeZone } = input;
+  const fixed = parseWakeLocalTime(morning.localTime);
+
+  if (morning.timing !== 'habit') {
+    return {
+      timingMode: 'fixed',
+      source: 'fixed',
+      effective: { hour: fixed.hour, minute: fixed.minute, localTime: morning.localTime },
+      timeZone,
+      sampleDays: 0,
+      configuredLocalTime: morning.localTime,
+    };
+  }
+
+  const estimate: WakeWindowEstimate = estimateWakeWindow({
+    partnerTimestampsMs: input.partnerTimestampsMs,
+    nowMs: input.nowMs,
+    timeZone,
+    config: morning.habit,
+  });
+
+  if (!estimate.sufficient) {
+    return {
+      timingMode: 'habit',
+      source: 'habit_fallback',
+      effective: { hour: fixed.hour, minute: fixed.minute, localTime: morning.localTime },
+      timeZone,
+      sampleDays: estimate.sampleDays,
+      fallbackReason: estimate.reason,
+      configuredLocalTime: morning.localTime,
+    };
+  }
+
+  const { hour, minute } = minuteOfDayToHourMinute(estimate.wakeMinuteOfDay);
+  return {
+    timingMode: 'habit',
+    source: 'habit',
+    effective: { hour, minute, localTime: formatMinuteOfDay(estimate.wakeMinuteOfDay) },
+    timeZone,
+    window: {
+      startLocalTime: formatMinuteOfDay(estimate.windowStartMinuteOfDay),
+      endLocalTime: formatMinuteOfDay(estimate.windowEndMinuteOfDay),
+      medianLocalTime: formatMinuteOfDay(estimate.wakeMinuteOfDay),
+    },
+    sampleDays: estimate.sampleDays,
+    configuredLocalTime: morning.localTime,
+  };
+}
+
+/** Zone the habit estimate/cadence is expressed in, matching the cadence slot. */
+export function resolveWakeEstimateTimeZone(morning: TemporalWakeupMorningConfig): string {
+  return morning.timezone === 'utc' ? 'UTC' : resolveActiveTimezone();
+}
+
+/** Partner (role 'user') timestamps from recent session entries, bounded by the scan cap. */
+export function partnerTimestampsFromEntries(entries: readonly SessionEntry[]): number[] {
+  return entries
+    .filter(entry => entry.role === 'user')
+    .map(entry => entry.timestamp)
+    .filter(ts => Number.isFinite(ts));
 }
 
 // ── Morning wake eligibility ──
@@ -491,12 +616,56 @@ export interface TemporalWakeupRuntimeOptions {
     channelType: ChannelType;
     content: string;
   }) => Promise<TemporalWakeupOutboundResult>;
+  /**
+   * Typed notification of how the morning wake slot was resolved (E7.2). Fires
+   * once at registration with the effective snapshot — 'fixed', a successful
+   * 'habit' estimate, or a 'habit_fallback' to the fixed time with a reason.
+   * Lets callers surface the decision (event bus, telemetry) without this
+   * module depending on any bus.
+   */
+  onWakeTimingResolved?: (snapshot: WakeWindowSnapshot) => void;
 }
 
 function resolveWakeupChannelType(value: string | undefined): ChannelType {
   return value !== undefined && (CHANNEL_TYPES as readonly string[]).includes(value)
     ? value as ChannelType
     : 'api';
+}
+
+/**
+ * Pull partner (role 'user') message timestamps from the active session's
+ * recent-entry tail — the cheapest existing query path (no new projection) —
+ * and build the effective wake snapshot for the current timing mode. In
+ * 'fixed' mode no history is read.
+ *
+ * Shared by daily-task registration and the Garden admin read route so both
+ * see the same effective wake slot.
+ */
+export function resolveMorningWakeSnapshot(input: {
+  sessionManager: TemporalWakeupSessionManagerPort;
+  morning: TemporalWakeupMorningConfig;
+  nowMs?: number;
+}): WakeWindowSnapshot {
+  const { sessionManager, morning } = input;
+  const nowMs = input.nowMs ?? Date.now();
+  const timeZone = resolveWakeEstimateTimeZone(morning);
+  if (morning.timing !== 'habit') {
+    return buildWakeWindowSnapshot({ morning, partnerTimestampsMs: [], nowMs, timeZone });
+  }
+  const session = sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
+  const sessionId = session?.sessionId;
+  const scanLimit = Math.max(1, morning.habit.maxSamplesScanned);
+  const entries = sessionId
+    ? (sessionManager.getRecentSessionEntries
+      ? sessionManager.getRecentSessionEntries(sessionId, scanLimit)
+      : sessionManager.getRecentMessages(sessionId, scanLimit))
+    : [];
+  return buildWakeWindowSnapshot({
+    morning,
+    partnerTimestampsMs: partnerTimestampsFromEntries(entries),
+    nowMs,
+    timeZone,
+  });
 }
 
 interface ResolvedWakeupSessionContext {
@@ -626,7 +795,34 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
   const refresher = options.config.idleRefresher;
 
   if (morning.enabled) {
-    const { hour, minute } = parseWakeLocalTime(morning.localTime);
+    // Resolve the daily wake slot for the configured timing mode. In 'habit'
+    // mode this reads the partner's own message-timestamp history (via the
+    // cheapest existing session surface) and fires at the deterministic
+    // weighted-median wake time; insufficient history falls back to the fixed
+    // localTime with a visible reason. The estimate is resolved once here (at
+    // registration / process start); the Garden admin route recomputes it live
+    // so operators see habit drift before the next restart applies it.
+    const registrationSnapshot = resolveMorningWakeSnapshot({
+      sessionManager: options.sessionManager,
+      morning,
+    });
+    const { hour, minute } = registrationSnapshot.effective;
+    if (options.onWakeTimingResolved) {
+      options.onWakeTimingResolved(registrationSnapshot);
+    }
+    log.info('Morning wake timing resolved', {
+      timingMode: registrationSnapshot.timingMode,
+      source: registrationSnapshot.source,
+      effectiveLocalTime: registrationSnapshot.effective.localTime,
+      timeZone: registrationSnapshot.timeZone,
+      sampleDays: registrationSnapshot.sampleDays,
+      ...(registrationSnapshot.fallbackReason
+        ? { fallbackReason: registrationSnapshot.fallbackReason }
+        : {}),
+      ...(registrationSnapshot.window
+        ? { window: `${registrationSnapshot.window.startLocalTime}-${registrationSnapshot.window.endLocalTime}` }
+        : {}),
+    });
     options.scheduler.register({
       id: TEMPORAL_WAKEUP_MORNING_TASK_ID,
       name: TEMPORAL_WAKEUP_MORNING_TASK_NAME,

@@ -21,6 +21,7 @@ import type {
   ScheduledTask,
   TaskType,
 } from '../../../core/scheduler/types.js';
+import type { WakeWindowSnapshot } from '../../../core/scheduler/temporal-wakeup.js';
 import { resolveReflectionMetacognitionJournalPath } from '../../../persistence/layout.js';
 import {
   ReflectionMetacognitionJournalStore,
@@ -241,11 +242,23 @@ export class AdminSchedulerService {
   constructor(
     private readonly scheduler: Scheduler,
     private readonly dataDir: string,
+    /**
+     * Live habit wake-window snapshot provider (E7.2). Recomputes the effective
+     * morning wake slot + data sufficiency on demand so the Garden read surface
+     * reflects the current estimate (including habit drift not yet applied to
+     * the running cadence). Absent → the read route reports it unavailable.
+     */
+    private readonly wakeWindowProvider?: (() => WakeWindowSnapshot | null) | null,
   ) {
     this.policyStore = new HeartbeatPolicyStore(join(dataDir, 'heartbeat-policy.json'));
     this.reflectionMetacognitionJournal = new ReflectionMetacognitionJournalStore(
       resolveReflectionMetacognitionJournalPath(dataDir),
     );
+  }
+
+  /** Current habit wake-window estimate + sufficiency, or null when unavailable. */
+  getWakeWindow(): WakeWindowSnapshot | null {
+    return this.wakeWindowProvider ? this.wakeWindowProvider() : null;
   }
 
   /** List all tasks and reflection templates. */

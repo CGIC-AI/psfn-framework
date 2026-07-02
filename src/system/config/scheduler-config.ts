@@ -143,10 +143,20 @@ export const DEFAULT_SOCIAL_GRAPH_BUILDER_CADENCE: SocialGraphBuilderCadenceConf
  */
 export interface TemporalWakeupMorningConfig {
   enabled: boolean;
-  /** HH:mm wall-clock wake time (default 08:00). */
+  /**
+   * Wake timing mode (E7.2).
+   * - 'fixed'  — fire the daily wake at `localTime` (default, unchanged E7.1).
+   * - 'habit'  — fire inside a wake window derived deterministically from the
+   *   partner's own message timestamps; falls back to `localTime` (with a
+   *   visible reason) when history is insufficient.
+   */
+  timing: 'fixed' | 'habit';
+  /** HH:mm wall-clock wake time (default 08:00). Also the 'habit' fallback. */
   localTime: string;
   /** Scheduler cadence timezone for the wake slot. */
   timezone: 'local' | 'utc';
+  /** Habit-mode estimator tuning (E7.2); only consulted when timing = 'habit'. */
+  habit: TemporalWakeupHabitConfig;
   /** Max recent session entries fed to the shared catch-up summarizer. */
   catchUpEntryLimit: number;
   /** Token budget for the shared catch-up summary. */
@@ -156,6 +166,36 @@ export interface TemporalWakeupMorningConfig {
    * at most this old; staler sessions get the cheap note-only injection.
    */
   fullTurnMaxIdleHours: number;
+}
+
+/**
+ * Habit-derived wake-window estimator tuning (E7.2). All estimator thresholds
+ * are config-owned — nothing hardcoded. See
+ * src/core/scheduler/wake-window-estimator.ts for the estimation approach.
+ */
+export interface TemporalWakeupHabitConfig {
+  /** Trailing window (days) whose samples get `recentWeight`. */
+  recentWindowDays: number;
+  /** Full trailing window (days) scanned for samples; must be >= recentWindowDays. */
+  extendedWindowDays: number;
+  /** Minimum inter-message gap (hours) that counts as an overnight sleep gap. */
+  minSleepGapHours: number;
+  /** Wake band lower bound (local hour, inclusive) a gap-end must fall in. */
+  wakeBandStartHour: number;
+  /** Wake band upper bound (local hour, exclusive) a gap-end must fall in. */
+  wakeBandEndHour: number;
+  /** Distinct sample days required before the estimate is trusted (else fallback). */
+  minSampleDays: number;
+  /** Aggregation weight for samples inside the recent window. */
+  recentWeight: number;
+  /** Aggregation weight for samples in the older extended window. */
+  extendedWeight: number;
+  /** Lower reporting quantile for the visible window (0..1). */
+  lowerQuantile: number;
+  /** Upper reporting quantile for the visible window (0..1). */
+  upperQuantile: number;
+  /** Cap on scanned partner timestamps per estimate (bounds cost). */
+  maxSamplesScanned: number;
 }
 
 /**
@@ -188,8 +228,22 @@ export const DEFAULT_TEMPORAL_WAKEUP_CONFIG: TemporalWakeupConfig = {
   enabled: true,
   morningWake: {
     enabled: true,
+    timing: 'fixed',
     localTime: '08:00',
     timezone: 'local',
+    habit: {
+      recentWindowDays: 7,
+      extendedWindowDays: 30,
+      minSleepGapHours: 4,
+      wakeBandStartHour: 3,
+      wakeBandEndHour: 12,
+      minSampleDays: 4,
+      recentWeight: 2,
+      extendedWeight: 1,
+      lowerQuantile: 0.25,
+      upperQuantile: 0.75,
+      maxSamplesScanned: 2000,
+    },
     catchUpEntryLimit: 32,
     catchUpSummaryMaxTokens: 160,
     fullTurnMaxIdleHours: 72,
@@ -449,6 +503,116 @@ function toCadenceTimezone(value: unknown, field: string): 'local' | 'utc' {
   return value;
 }
 
+function toWakeTimingMode(value: unknown, field: string): 'fixed' | 'habit' {
+  if (value !== 'fixed' && value !== 'habit') {
+    throw new Error(`Invalid scheduler config: ${field} must be "fixed" or "habit"`);
+  }
+  return value;
+}
+
+function toHourOfDay(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 23) {
+    throw new Error(`Invalid scheduler config: ${field} must be an integer between 0 and 23`);
+  }
+  return value;
+}
+
+function toPositiveNumber(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    throw new Error(`Invalid scheduler config: ${field} must be a number greater than 0`);
+  }
+  return value;
+}
+
+function validateTemporalWakeupHabitConfig(
+  raw: unknown,
+  sourcePath: string,
+): TemporalWakeupHabitConfig {
+  const defaults = DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.habit;
+  if (raw === undefined) {
+    return { ...defaults };
+  }
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: temporalWakeup.morningWake.habit must be an object`);
+  }
+
+  const recentWindowDays = toPositiveInteger(
+    raw.recentWindowDays ?? defaults.recentWindowDays,
+    'temporalWakeup.morningWake.habit.recentWindowDays',
+    1,
+  );
+  const extendedWindowDays = toPositiveInteger(
+    raw.extendedWindowDays ?? defaults.extendedWindowDays,
+    'temporalWakeup.morningWake.habit.extendedWindowDays',
+    1,
+  );
+  if (extendedWindowDays < recentWindowDays) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: temporalWakeup.morningWake.habit.extendedWindowDays `
+      + 'must be >= recentWindowDays',
+    );
+  }
+  const wakeBandStartHour = toHourOfDay(
+    raw.wakeBandStartHour ?? defaults.wakeBandStartHour,
+    'temporalWakeup.morningWake.habit.wakeBandStartHour',
+  );
+  const wakeBandEndHour = toHourOfDay(
+    raw.wakeBandEndHour ?? defaults.wakeBandEndHour,
+    'temporalWakeup.morningWake.habit.wakeBandEndHour',
+  );
+  if (wakeBandEndHour <= wakeBandStartHour) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: temporalWakeup.morningWake.habit.wakeBandEndHour `
+      + 'must be greater than wakeBandStartHour',
+    );
+  }
+  const lowerQuantile = toUnitInterval(
+    raw.lowerQuantile ?? defaults.lowerQuantile,
+    'temporalWakeup.morningWake.habit.lowerQuantile',
+  );
+  const upperQuantile = toUnitInterval(
+    raw.upperQuantile ?? defaults.upperQuantile,
+    'temporalWakeup.morningWake.habit.upperQuantile',
+  );
+  if (upperQuantile < lowerQuantile) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: temporalWakeup.morningWake.habit.upperQuantile `
+      + 'must be >= lowerQuantile',
+    );
+  }
+
+  return {
+    recentWindowDays,
+    extendedWindowDays,
+    minSleepGapHours: toPositiveNumber(
+      raw.minSleepGapHours ?? defaults.minSleepGapHours,
+      'temporalWakeup.morningWake.habit.minSleepGapHours',
+    ),
+    wakeBandStartHour,
+    wakeBandEndHour,
+    minSampleDays: toPositiveInteger(
+      raw.minSampleDays ?? defaults.minSampleDays,
+      'temporalWakeup.morningWake.habit.minSampleDays',
+      1,
+    ),
+    recentWeight: toPositiveNumber(
+      raw.recentWeight ?? defaults.recentWeight,
+      'temporalWakeup.morningWake.habit.recentWeight',
+    ),
+    extendedWeight: toPositiveNumber(
+      raw.extendedWeight ?? defaults.extendedWeight,
+      'temporalWakeup.morningWake.habit.extendedWeight',
+    ),
+    lowerQuantile,
+    upperQuantile,
+    maxSamplesScanned: toPositiveInteger(
+      raw.maxSamplesScanned ?? defaults.maxSamplesScanned,
+      'temporalWakeup.morningWake.habit.maxSamplesScanned',
+      1,
+    ),
+  };
+}
+
 function validateTemporalWakeupConfig(
   raw: unknown,
   sourcePath: string,
@@ -478,8 +642,10 @@ function validateTemporalWakeupConfig(
     enabled: toBoolean(raw.enabled ?? DEFAULT_TEMPORAL_WAKEUP_CONFIG.enabled, 'temporalWakeup.enabled'),
     morningWake: {
       enabled: toBoolean(morningRaw.enabled ?? morningDefaults.enabled, 'temporalWakeup.morningWake.enabled'),
+      timing: toWakeTimingMode(morningRaw.timing ?? morningDefaults.timing, 'temporalWakeup.morningWake.timing'),
       localTime: toLocalTime(morningRaw.localTime ?? morningDefaults.localTime, 'temporalWakeup.morningWake.localTime'),
       timezone: toCadenceTimezone(morningRaw.timezone ?? morningDefaults.timezone, 'temporalWakeup.morningWake.timezone'),
+      habit: validateTemporalWakeupHabitConfig(morningRaw.habit, sourcePath),
       catchUpEntryLimit: toPositiveInteger(
         morningRaw.catchUpEntryLimit ?? morningDefaults.catchUpEntryLimit,
         'temporalWakeup.morningWake.catchUpEntryLimit',

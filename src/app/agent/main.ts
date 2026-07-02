@@ -562,6 +562,24 @@ async function main(): Promise<void> {
     sessionManager,
     config: schedulerConfig.temporalWakeup,
     quietHours: schedulerConfig.episodicProcessing,
+    // Surface how the morning wake slot was resolved (E7.2): fixed, habit
+    // estimate, or habit fallback with a reason. Typed event + Garden read route.
+    onWakeTimingResolved: (snapshot) => {
+      void eventBus.emit('scheduler.wake_timing.resolved', {
+        timingMode: snapshot.timingMode,
+        source: snapshot.source,
+        effectiveLocalTime: snapshot.effective.localTime,
+        timeZone: snapshot.timeZone,
+        sampleDays: snapshot.sampleDays,
+        ...(snapshot.fallbackReason ? { fallbackReason: snapshot.fallbackReason } : {}),
+        ...(snapshot.window
+          ? {
+            windowStartLocalTime: snapshot.window.startLocalTime,
+            windowEndLocalTime: snapshot.window.endLocalTime,
+          }
+          : {}),
+      });
+    },
     summarizeCatchUp: async ({ channelId, entries }) => summarizeRecentSessionEntries({
       channelId,
       entries,

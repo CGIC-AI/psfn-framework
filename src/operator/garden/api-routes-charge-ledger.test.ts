@@ -106,6 +106,40 @@ describe('charge ledger admin API route', () => {
     });
   });
 
+  it('passes per-room / per-peer fatigue filters through to the ledger (E7.3)', async () => {
+    const service: AdminChargeLedgerService = {
+      getChargeLedgerData: vi.fn(async query => ({
+        activeRun: null,
+        recentRuns: [],
+        aggregates: {
+          amount: 0,
+          eventCount: 0,
+          byLane: [],
+          bySurface: [],
+          byLineage: [],
+        },
+        events: [],
+        query,
+      })),
+    } as AdminChargeLedgerService;
+    const route = makeRoutes(service).find(candidate => candidate.match('/api/admin/charges'));
+    expect(route).toBeDefined();
+
+    const response = await invokeChargeRoute(
+      route!,
+      '/api/admin/charges?channelId=discord%3Acompanion-room-1&peerContactId=peer-nova'
+        + '&localCompanionId=companion-selene&dayKey=2026-03-08',
+    );
+
+    expect(response.status).toBe(200);
+    expect(service.getChargeLedgerData).toHaveBeenCalledWith({
+      channelId: 'discord:companion-room-1',
+      peerContactId: 'peer-nova',
+      localCompanionId: 'companion-selene',
+      dayKey: '2026-03-08',
+    });
+  });
+
   it('rejects malformed charge ledger query parameters', async () => {
     const service: AdminChargeLedgerService = {
       getChargeLedgerData: vi.fn(),

@@ -47,6 +47,7 @@ import type { ExtendedToolTurnClass } from '../extended-tool-autoload-policy.js'
 import { isDeferredToolHandoffMessageId } from '../deferred-tool-handoff.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { resolvePreferredContactName } from '../../contacts/preferred-name.js';
+import { applyObservedMachineIntelligence } from '../../contacts/observed-machine-intelligence.js';
 import { resolveActiveTimezone } from '../../../shared/time/active-timezone.js';
 import { wrapPromptSectionXml } from '../../identity/prompt-sections.js';
 import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
@@ -852,12 +853,22 @@ export async function resolveAuthorContext(input: {
     // etc.) is used regardless of which API auth principal is making the request.
     const canonicalHint = input.message.routing?.canonicalContactId?.trim();
     const hintedContact = canonicalHint ? await input.contactStore.getById(canonicalHint) : undefined;
-    const contact = hintedContact
+    const resolvedContact = hintedContact
       ?? await input.contactStore.resolveChannelIdentity(channel, input.message.authorId, input.message.authorName);
     if (hintedContact) {
       // Still update last seen so the contact record stays fresh.
       await input.contactStore.updateLastSeen(hintedContact.id);
     }
+    // E7.3: auto-tag machine-intelligence contacts from channel bot/app metadata
+    // so conversation-fatigue relationship classes apply without manual tagging.
+    // Additive only; a deliberate operator/tool correction is never clobbered.
+    const { contact } = await applyObservedMachineIntelligence({
+      contactStore: input.contactStore,
+      contact: resolvedContact,
+      observedIsMachineIntelligence: input.message.routing?.authorIsMachineIntelligence === true,
+      channelType: channel,
+      logger: input.logger,
+    });
     const canonicalContactKey = contact.id;
     // E3.2: adapter-declared routing privacy is recorded on the contact's
     // conversation-channel row as provenance EVIDENCE only. The stored

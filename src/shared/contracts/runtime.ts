@@ -212,6 +212,16 @@ export interface MessageRoutingMetadata {
    * context but must not trigger model response generation or channel egress.
    */
   responseMode?: 'respond' | 'observe';
+  /**
+   * Provenance-honest marker that the message author is another machine
+   * intelligence (peer companion/agent), sourced from CHANNEL bot/app metadata
+   * (e.g. Discord `author.bot`). Consumed by author-context resolution to
+   * auto-tag the contact as machine-intelligence so conversation-fatigue
+   * relationship classes apply without manual tagging. Observation only ever
+   * ADDS the marker; a deliberate operator/tool correction on the contact
+   * (non-`system:` audit actor) is never clobbered by re-observation.
+   */
+  authorIsMachineIntelligence?: boolean;
   gateway?: GatewayRoutingMetadata;
   wyoming?: WyomingRoutingMetadata;
   satellite?: SatelliteRoutingMetadata;

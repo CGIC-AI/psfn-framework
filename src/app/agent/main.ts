@@ -357,9 +357,30 @@ async function main(): Promise<void> {
   // Memory write/import tools — intentional memory creation
   const memoryWriter = new MemoryWriter(memoryStore, gateway);
   const episodicStore = companionEpisodicStore;
-  const episodicSynthesizer = new EpisodicSynthesizer(episodicStore, sessionManager);
-  const sleepConsolidator = new SleepCycleEpisodeConsolidator(episodicStore, sessionManager, llmProvider);
-  const arcWeaver = new EpisodeArcWeaver(episodicStore, llmProvider);
+  // Episodic lane tuning is JSON-owned (scheduler.json episodeSynthesis /
+  // sleepConsolidation / arcFormation) — no hardcoded cadences or windows.
+  const MINUTE_MS = 60_000;
+  const HOUR_MS = 60 * MINUTE_MS;
+  const DAY_MS = 24 * HOUR_MS;
+  const episodicSynthesizer = new EpisodicSynthesizer(episodicStore, sessionManager, {
+    transcriptMessageLimit: schedulerConfig.episodeSynthesis.transcriptMessageLimit,
+    maxEpisodesPerRun: schedulerConfig.episodeSynthesis.maxEpisodesPerRun,
+    gapSplitMinutes: schedulerConfig.episodeSynthesis.gapSplitMinutes,
+    maxEntriesPerEpisode: schedulerConfig.episodeSynthesis.maxEntriesPerEpisode,
+    minConversationalEntries: schedulerConfig.episodeSynthesis.minConversationalEntries,
+    minSingleEntryChars: schedulerConfig.episodeSynthesis.minSingleEntryChars,
+  });
+  const sleepConsolidator = new SleepCycleEpisodeConsolidator(episodicStore, sessionManager, llmProvider, {
+    reviewWindowMs: schedulerConfig.sleepConsolidation.reviewWindowDays * DAY_MS,
+    refinementWindowMs: schedulerConfig.sleepConsolidation.refinementWindowHours * HOUR_MS,
+    adjacencyGapMs: schedulerConfig.sleepConsolidation.adjacencyGapMinutes * MINUTE_MS,
+    maxRefinementsPerRun: schedulerConfig.sleepConsolidation.maxRefinementsPerRun,
+  });
+  const arcWeaver = new EpisodeArcWeaver(episodicStore, llmProvider, {
+    passIntervalMs: schedulerConfig.arcFormation.passIntervalDays * DAY_MS,
+    reviewWindowMs: schedulerConfig.arcFormation.reviewWindowDays * DAY_MS,
+    minConfidence: schedulerConfig.arcFormation.minConfidence,
+  });
   const dreamMeaningPass = new DreamMeaningPass(episodicStore, agentLoop);
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
@@ -650,8 +671,12 @@ async function main(): Promise<void> {
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
-      sleeptimeCadence: schedulerConfig.sleeptime,
-      sleeptimeScopeClassifier: observedGroupMemoryScheduler,
+      nearTurnMemoryCadence: schedulerConfig.nearTurnMemory,
+      episodeSynthesis: schedulerConfig.episodeSynthesis,
+      episodicWatermarkStore: episodicStore,
+      companionNames: [card.data.name],
+      companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],
+      memoryScopeClassifier: observedGroupMemoryScheduler,
       intentionAppraisalEnabled: config.intentionAppraisalEnabled !== false,
       ...(journalAutoPublisher ? { vaultAutoPublisher: journalAutoPublisher } : {}),
     },

@@ -11,14 +11,11 @@ import {
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
 import { coreMemoryChannelScope } from '../core-memory/store.js';
 import { evaluateRestWindowEligibility } from '../../core/scheduler/rest-window.js';
-import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { InferredPostTurnAction, PostTurnActionCandidate } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SessionManager } from '../../core/session/manager.js';
-import type {
-  EpisodicProcessingRestWindowConfig,
-  SleeptimeCadenceConfig,
-} from '../../system/config/scheduler-config.js';
+import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
 import type {
   CoreMemoryStorePort,
   MemoryMaintenanceDiagnostics,
@@ -27,7 +24,6 @@ import type {
   MemoryStorePort,
 } from './memory-store-port.js';
 import type { MemoryWriteOptions, MemoryWriter, WriteResult } from './writer.js';
-import type { EpisodicSynthesisRunResult, EpisodicSynthesizer } from './episodic/synthesis.js';
 import type { SleepCycleEpisodeConsolidator } from './episodic/sleep-consolidation.js';
 import type { EpisodeArcWeaver } from './episodic/arc-formation.js';
 import type { DreamMeaningPass } from './episodic/dream-meaning-pass.js';
@@ -35,7 +31,6 @@ import type { EpisodicMaintenanceDiagnostics } from './episodic/store.js';
 import {
   buildConflictingMemoryReviewInput,
   buildHighImpactLowConfidenceReviewInput,
-  buildStaleMemoryReviewInput,
   type UncertainMemoryReviewSubject,
 } from './maintenance-review.js';
 import {
@@ -50,25 +45,10 @@ const log = createComponentLogger('SleeptimeMemoryAgent');
 
 export const SLEEPTIME_MEMORY_ACTION_KIND = 'memory.sleeptime.run';
 
-const DEFAULT_DIRECT_CADENCE_TURNS = 3;
-const DEFAULT_GROUP_MIN_INTERVAL_MINUTES = 15;
-const DEFAULT_GROUP_MIN_NEW_ENTRIES = 8;
-const ONE_HOUR_MS = 3_600_000;
 const DEFAULT_IDLE_SESSION_LIMIT = 20;
-
-const DEFAULT_SLEEPTIME_CADENCE: SleeptimeCadenceConfig = {
-  direct: { cadenceTurns: DEFAULT_DIRECT_CADENCE_TURNS },
-  group: {
-    minIntervalMinutes: DEFAULT_GROUP_MIN_INTERVAL_MINUTES,
-    minNewEntries: DEFAULT_GROUP_MIN_NEW_ENTRIES,
-  },
-};
 const DEFAULT_TRANSCRIPT_MESSAGE_LIMIT = 24;
 const DEFAULT_MAX_MEMORY_WRITES = 4;
 const MAX_TRANSCRIPT_ENTRY_CHARS = 600;
-const MAX_STALE_REVIEW_SCAN = 50;
-const MAX_STALE_REVIEWS_PER_RUN = 3;
-const MAX_BEHAVIORAL_SUMMARY_WRITES = 1;
 const EVIDENCE_TOKEN_STOP_WORDS = new Set([
   'about',
   'after',
@@ -91,13 +71,12 @@ type CoreMemoryRewriter = Pick<CoreMemoryStorePort, 'getSnapshot' | 'rethink'>;
 type SessionMemoryReader = Pick<SessionManager, 'resolveSessionChannelId' | 'getRecentMessages'>
   & Partial<Pick<SessionManager, 'listRecentSessions' | 'isSessionRetiredOrQuarantined'>>;
 type SleeptimeMemoryWriter = Pick<MemoryWriter, 'write'>;
-type SleeptimeEpisodicSynthesizer = Pick<EpisodicSynthesizer, 'run'>;
 type SleeptimeEpisodeConsolidator = Pick<SleepCycleEpisodeConsolidator, 'run'>;
 type SleeptimeArcWeaver = Pick<EpisodeArcWeaver, 'run'>;
 type SleeptimeDreamMeaningPass = Pick<DreamMeaningPass, 'run'>;
 type SleeptimeMaintenanceStore = Pick<
   MemoryStorePort,
-  'upsertMemoryMaintenanceReview' | 'listActiveMemories' | 'getById' | 'getMemoryMaintenanceDiagnostics'
+  'upsertMemoryMaintenanceReview' | 'getById' | 'getMemoryMaintenanceDiagnostics'
 >;
 type SleeptimeEpisodicDiagnosticsStore = {
   getMaintenanceDiagnostics(): EpisodicMaintenanceDiagnostics | Promise<EpisodicMaintenanceDiagnostics>;
@@ -128,62 +107,20 @@ interface SleeptimeOrientCandidacyRejection {
   decision: CogSecMemoryCandidacyDecision;
 }
 
-export type SleeptimeMemoryScope = 'direct' | 'group';
-
-/**
- * Port over the canonical group-memory topology classifier
- * (ObservedGroupMemoryScheduler.classifyChannelMemoryScope), which resolves
- * memoryMode direct/group/auto plus channel overrides and participant-window
- * auto-detection. Sleeptime must reuse that pipeline rather than growing a
- * parallel direct-vs-group detector.
- */
-export interface SleeptimeScopeClassifierPort {
-  classifyChannelMemoryScope(
-    message: Pick<SubstrateMessage, 'channelId' | 'channelType'>,
-  ): Promise<SleeptimeMemoryScope>;
-}
-
-/**
- * Fire-rate telemetry emitted each time a sleeptime maintenance run is
- * inferred for a channel. `firesLastHour` is a rolling per-channel count so
- * Garden can render a fire-rate (runs/hour) without re-aggregating raw events.
- */
-export interface SleeptimeCadenceTelemetry {
-  channelId: string;
-  sessionId: string;
-  scope: SleeptimeMemoryScope;
-  trigger: 'cadence' | 'rest_window';
-  turnCount: number;
-  newEntriesSinceLastRun: number;
-  firedAtMs: number;
-  firesLastHour: number;
-}
-
-interface GroupCadenceState {
-  lastRunAtMs: number;
-  turnCountAtLastRun: number;
-}
-
 export interface SleeptimeMemoryAgentOptions {
   llmProvider: LLMProviderPort;
   sessionManager: SessionMemoryReader;
   coreMemoryStore: CoreMemoryRewriter;
   memoryWriter: SleeptimeMemoryWriter;
   promptRegistry?: PromptRegistryStatePort | null;
-  /**
-   * Group-aware, JSON-owned cadence (scheduler.json `sleeptime`). When omitted,
-   * conservative defaults apply (direct: every 3 turns; group: 15m interval /
-   * 8 new-entry watermark batching).
-   */
-  cadence?: SleeptimeCadenceConfig;
-  /** Canonical direct-vs-group scope classification; absent => direct scope. */
-  scopeClassifier?: SleeptimeScopeClassifierPort | null;
-  /** Fire-rate telemetry sink; wired to the runtime event bus by composition. */
-  onCadenceTelemetry?: (event: SleeptimeCadenceTelemetry) => void;
   transcriptMessageLimit?: number;
   maxMemoryWrites?: number;
-  restWindow?: EpisodicProcessingRestWindowConfig;
-  episodicSynthesizer?: SleeptimeEpisodicSynthesizer | null;
+  /**
+   * Rest-window eligibility (scheduler.json `episodicProcessing`). Required:
+   * sleeptime is scheduler-owned nightly work, so the agent fails closed at
+   * construction rather than degrading into a turn-cadence process.
+   */
+  restWindow: EpisodicProcessingRestWindowConfig;
   sleepConsolidator?: SleeptimeEpisodeConsolidator | null;
   arcWeaver?: SleeptimeArcWeaver | null;
   dreamMeaningPass?: SleeptimeDreamMeaningPass | null;
@@ -197,27 +134,6 @@ function normalizePositiveInteger(value: number | undefined, fallback: number): 
   }
   const normalized = Math.floor(value);
   return normalized > 0 ? normalized : fallback;
-}
-
-function normalizeCadence(cadence: SleeptimeCadenceConfig | undefined): SleeptimeCadenceConfig {
-  return {
-    direct: {
-      cadenceTurns: normalizePositiveInteger(
-        cadence?.direct.cadenceTurns,
-        DEFAULT_SLEEPTIME_CADENCE.direct.cadenceTurns,
-      ),
-    },
-    group: {
-      minIntervalMinutes: normalizePositiveInteger(
-        cadence?.group.minIntervalMinutes,
-        DEFAULT_SLEEPTIME_CADENCE.group.minIntervalMinutes,
-      ),
-      minNewEntries: normalizePositiveInteger(
-        cadence?.group.minNewEntries,
-        DEFAULT_SLEEPTIME_CADENCE.group.minNewEntries,
-      ),
-    },
-  };
 }
 
 function clampUnit(value: unknown, fallback: number): number {
@@ -387,20 +303,6 @@ function summarizeSessionEntry(entry: SessionEntry): string {
   return `${rolePrefix}: ${clipped || '[empty]'}`;
 }
 
-function summarizeEpisodicSynthesis(result: EpisodicSynthesisRunResult): {
-  episodicCandidateEpisodes: number;
-  episodicCreatedEpisodes: number;
-  episodicSkippedEpisodes: number;
-  episodicLinkedArcs: number;
-} {
-  return {
-    episodicCandidateEpisodes: result.candidateEpisodeCount,
-    episodicCreatedEpisodes: result.createdEpisodes.length,
-    episodicSkippedEpisodes: result.skippedEpisodeIds.length,
-    episodicLinkedArcs: result.linkedArcs.length,
-  };
-}
-
 function stableId(prefix: string, parts: readonly string[]): string {
   const fingerprint = createHash('sha256')
     .update(parts.join('\u001f'))
@@ -503,89 +405,34 @@ function buildSleepTimeMemoryWritePayload(input: {
   };
 }
 
-function buildBehavioralSummaryWrites(input: {
-  sessionId: string;
-  actionId: string;
-  sourceMessageId?: string;
-  episodicSynthesis: EpisodicSynthesisRunResult | null;
-}): MemoryWriteOptions[] {
-  const arcs = input.episodicSynthesis?.linkedArcs
-    .filter(arc => arc.confidence >= 0.7)
-    .filter(arc => arc.arcKind !== 'same_theme')
-    .slice(0, MAX_BEHAVIORAL_SUMMARY_WRITES) ?? [];
-  return arcs.map(arc => {
-    const themes = arc.themes.slice(0, 3).join(', ') || 'recent continuity';
-    const sourceRef = `source:sleeptime|session:${input.sessionId}|episode_arc:${arc.id}`;
-    return {
-      text: `Sleep-time evidence chain shows a ${arc.arcKind.replace(/_/g, ' ')} pattern around ${themes}.`,
-      type: 'reflection',
-      importance: 0.62,
-      confidence: Math.min(0.84, Math.max(0.7, arc.confidence)),
-      emotionalValence: 0,
-      sensitivity: 'personal',
-      sourceRef,
-      sourceType: 'autonomous_action',
-      provenance: {
-        channelId: input.sessionId,
-        sessionId: input.sessionId,
-        actor: 'system',
-        reason: 'sleeptime_behavioral_summary',
-      },
-      provenanceRefs: [
-        sourceRef,
-        `l01_episode_arc:${arc.id}`,
-        `l01_episode:${arc.sourceEpisodeId}`,
-        `l01_episode:${arc.targetEpisodeId}`,
-        `sleeptime_action:${input.actionId}`,
-        ...(input.sourceMessageId ? [`source_message:${input.sourceMessageId}`] : []),
-      ],
-      tags: [
-        'sleeptime',
-        'behavioral_summary',
-        'evidence_chain',
-        `episode_arc:${arc.arcKind}`,
-      ],
-      scopeRef: {
-        kind: 'conversation',
-        id: input.sessionId,
-        label: 'sleeptime source session',
-      },
-      scopeTags: [`channel:${input.sessionId}`, 'sleeptime'],
-    };
-  });
-}
-
 export class SleeptimeMemoryAgent {
   private readonly llmProvider: LLMProviderPort;
   private readonly sessionManager: SessionMemoryReader;
   private readonly coreMemoryStore: CoreMemoryRewriter;
   private readonly memoryWriter: SleeptimeMemoryWriter;
   private readonly promptRegistry: PromptRegistryStatePort | null;
-  private readonly cadence: SleeptimeCadenceConfig;
-  private readonly scopeClassifier: SleeptimeScopeClassifierPort | null;
-  private readonly onCadenceTelemetry?: (event: SleeptimeCadenceTelemetry) => void;
   private readonly transcriptMessageLimit: number;
   private readonly maxMemoryWrites: number;
-  private readonly restWindow?: EpisodicProcessingRestWindowConfig;
-  private readonly episodicSynthesizer: SleeptimeEpisodicSynthesizer | null;
+  private readonly restWindow: EpisodicProcessingRestWindowConfig;
   private readonly sleepConsolidator: SleeptimeEpisodeConsolidator | null;
   private readonly arcWeaver: SleeptimeArcWeaver | null;
   private readonly dreamMeaningPass: SleeptimeDreamMeaningPass | null;
   private readonly memoryMaintenanceStore: SleeptimeMaintenanceStore | null;
   private readonly episodicDiagnosticsStore: SleeptimeEpisodicDiagnosticsStore | null;
-  private readonly turnCountBySession = new Map<string, number>();
-  private readonly groupStateBySession = new Map<string, GroupCadenceState>();
-  private readonly fireTimestampsByChannel = new Map<string, number[]>();
 
   constructor(options: SleeptimeMemoryAgentOptions) {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime guard for JS callers
+    if (!options.restWindow) {
+      throw new Error(
+        'SleeptimeMemoryAgent requires a rest-window config (scheduler.json episodicProcessing); '
+        + 'sleeptime is scheduler-owned nightly work and must not run from turn cadence',
+      );
+    }
     this.llmProvider = options.llmProvider;
     this.sessionManager = options.sessionManager;
     this.coreMemoryStore = options.coreMemoryStore;
     this.memoryWriter = options.memoryWriter;
     this.promptRegistry = options.promptRegistry ?? null;
-    this.cadence = normalizeCadence(options.cadence);
-    this.scopeClassifier = options.scopeClassifier ?? null;
-    this.onCadenceTelemetry = options.onCadenceTelemetry;
     this.transcriptMessageLimit = normalizePositiveInteger(
       options.transcriptMessageLimit,
       DEFAULT_TRANSCRIPT_MESSAGE_LIMIT,
@@ -595,7 +442,6 @@ export class SleeptimeMemoryAgent {
       DEFAULT_MAX_MEMORY_WRITES,
     );
     this.restWindow = options.restWindow;
-    this.episodicSynthesizer = options.episodicSynthesizer ?? null;
     this.sleepConsolidator = options.sleepConsolidator ?? null;
     this.arcWeaver = options.arcWeaver ?? null;
     this.dreamMeaningPass = options.dreamMeaningPass ?? null;
@@ -603,192 +449,15 @@ export class SleeptimeMemoryAgent {
     this.episodicDiagnosticsStore = options.episodicDiagnosticsStore ?? null;
   }
 
-  async inferPostTurnActions(input: {
-    message: Pick<SubstrateMessage, 'id' | 'channelId'>
-      & Partial<Pick<SubstrateMessage, 'channelType'>>
-      & { timestamp?: Date };
-  }): Promise<PostTurnActionCandidate[]> {
-    const candidate = await this.inferPostTurnAction(input.message);
-    return candidate ? [candidate] : [];
-  }
-
-  async inferPostTurnAction(
-    message: Pick<SubstrateMessage, 'id' | 'channelId'>
-      & Partial<Pick<SubstrateMessage, 'channelType'>>
-      & { timestamp?: Date },
-  ): Promise<PostTurnActionCandidate | null> {
-    if (message.channelId.startsWith('internal:')) {
-      return null;
-    }
-
-    const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
-    if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) return null;
-    const nextCount = (this.turnCountBySession.get(sessionId) ?? 0) + 1;
-    this.turnCountBySession.set(sessionId, nextCount);
-    const lastUserActivityAtMs = message.timestamp instanceof Date
-      ? message.timestamp.getTime()
-      : Date.now();
-
-    let scope: SleeptimeMemoryScope;
-    let trigger: SleeptimeCadenceTelemetry['trigger'];
-    let newEntriesSinceLastRun: number;
-    if (this.restWindow) {
-      // Rest-window posture is unchanged: eligibility is governed entirely by
-      // the configured window plus the inactivity threshold, for both scopes.
-      const restWindowDecision = evaluateRestWindowEligibility({
-        config: this.restWindow,
-        nowMs: lastUserActivityAtMs,
-        lastUserActivityAtMs,
-      });
-      if (!restWindowDecision.allowed) {
-        return null;
-      }
-      scope = await this.resolveMemoryScope(message);
-      trigger = 'rest_window';
-      newEntriesSinceLastRun = 0;
-    } else {
-      scope = await this.resolveMemoryScope(message);
-      const decision = scope === 'group'
-        ? this.evaluateGroupCadence(sessionId, nextCount, lastUserActivityAtMs)
-        : this.evaluateDirectCadence(nextCount);
-      if (!decision.fire) {
-        return null;
-      }
-      trigger = 'cadence';
-      newEntriesSinceLastRun = decision.newEntriesSinceLastRun;
-    }
-
-    this.emitCadenceTelemetry({
-      channelId: message.channelId,
-      sessionId,
-      scope,
-      trigger,
-      turnCount: nextCount,
-      newEntriesSinceLastRun,
-      firedAtMs: lastUserActivityAtMs,
-    });
-
-    return {
-      kind: SLEEPTIME_MEMORY_ACTION_KIND,
-      payload: {
-        sessionId,
-        sourceChannelId: message.channelId,
-        scope,
-        cadenceTurn: nextCount,
-        lastUserActivityAtMs,
-      },
-      dedupeKey: `${SLEEPTIME_MEMORY_ACTION_KIND}:${sessionId}`,
-      maxRetries: 1,
-    };
-  }
-
   /**
-   * Resolves direct-vs-group via the injected canonical group-memory
-   * classifier (same memoryMode/topology pipeline as group extraction).
-   * Without a classifier (or channelType), the historical direct posture
-   * applies. If classification fails, the error is logged and the scope
-   * degrades to 'group' — the fail-closed direction for background compute:
-   * batching fires less, and rest-window/nightly consolidation still runs.
+   * Rest-window inference is the ONLY trigger surface for sleeptime work. The
+   * scheduler polls this on an interval; turn cadence has no code path here.
    */
-  private async resolveMemoryScope(
-    message: Pick<SubstrateMessage, 'channelId'> & Partial<Pick<SubstrateMessage, 'channelType'>>,
-  ): Promise<SleeptimeMemoryScope> {
-    if (!this.scopeClassifier || !message.channelType) {
-      return 'direct';
-    }
-    try {
-      return await this.scopeClassifier.classifyChannelMemoryScope({
-        channelId: message.channelId,
-        channelType: message.channelType,
-      });
-    } catch (error) {
-      log.warn('Sleeptime scope classification failed; batching as group scope', {
-        channelId: message.channelId,
-        channelType: message.channelType,
-        error: String(error),
-      });
-      return 'group';
-    }
-  }
-
-  /**
-   * Direct (1:1/DM) scope keeps the historical per-N-turns posture: fire on
-   * every `cadenceTurns`-th turn. This preserves DM behavior by default; the
-   * turn count is now JSON-owned (scheduler.json sleeptime.direct.cadenceTurns).
-   */
-  private evaluateDirectCadence(
-    nextCount: number,
-  ): { fire: boolean; newEntriesSinceLastRun: number } {
-    if (nextCount % this.cadence.direct.cadenceTurns !== 0) {
-      return { fire: false, newEntriesSinceLastRun: 0 };
-    }
-    return { fire: true, newEntriesSinceLastRun: this.cadence.direct.cadenceTurns };
-  }
-
-  /**
-   * Group scope uses watermark/interval batching instead of per-N-turns. A run
-   * is only eligible once BOTH gates pass: at least `minNewEntries` new turns
-   * have accumulated since the last run, AND at least `minIntervalMinutes` of
-   * wall-clock time has elapsed since the last run. In a busy multi-person
-   * room this collapses near-continuous per-turn firing into a small number of
-   * batched maintenance passes (charter 8.8/8.9: compute budget is care
-   * infrastructure).
-   *
-   * Open question (NOT implemented here, see E1.6): whether group sleeptime
-   * should defer entirely to rest-window/nightly consolidation instead of
-   * running interval batches during active hours. Interval batching is the
-   * conservative choice; full deferral would remove daytime group sleeptime
-   * cost but risks orientation staleness in long-lived active rooms.
-   */
-  private evaluateGroupCadence(
-    sessionId: string,
-    nextCount: number,
-    nowMs: number,
-  ): { fire: boolean; newEntriesSinceLastRun: number } {
-    const state = this.groupStateBySession.get(sessionId)
-      ?? { lastRunAtMs: 0, turnCountAtLastRun: 0 };
-    const newEntriesSinceLastRun = nextCount - state.turnCountAtLastRun;
-
-    const enoughNewEntries = newEntriesSinceLastRun >= this.cadence.group.minNewEntries;
-    const minIntervalMs = this.cadence.group.minIntervalMinutes * 60_000;
-    const intervalElapsed = state.lastRunAtMs === 0
-      || (nowMs - state.lastRunAtMs) >= minIntervalMs;
-
-    if (!enoughNewEntries || !intervalElapsed) {
-      return { fire: false, newEntriesSinceLastRun };
-    }
-
-    this.groupStateBySession.set(sessionId, {
-      lastRunAtMs: nowMs,
-      turnCountAtLastRun: nextCount,
-    });
-    return { fire: true, newEntriesSinceLastRun };
-  }
-
-  private emitCadenceTelemetry(input: Omit<SleeptimeCadenceTelemetry, 'firesLastHour'>): void {
-    const firesLastHour = this.recordFireRate(input.channelId, input.firedAtMs);
-    if (!this.onCadenceTelemetry) {
-      return;
-    }
-    this.onCadenceTelemetry({
-      ...input,
-      firesLastHour,
-    });
-  }
-
-  private recordFireRate(channelId: string, nowMs: number): number {
-    const retained = (this.fireTimestampsByChannel.get(channelId) ?? [])
-      .filter(timestampMs => nowMs - timestampMs < ONE_HOUR_MS);
-    retained.push(nowMs);
-    this.fireTimestampsByChannel.set(channelId, retained);
-    return retained.length;
-  }
-
   inferIdlePostTurnActions(options: {
     nowMs?: number;
     limit?: number;
   } = {}): PostTurnActionCandidate[] {
-    if (!this.restWindow || !this.sessionManager.listRecentSessions) {
+    if (!this.sessionManager.listRecentSessions) {
       return [];
     }
     const nowMs = typeof options.nowMs === 'number' && Number.isFinite(options.nowMs)
@@ -831,13 +500,11 @@ export class SleeptimeMemoryAgent {
 	      });
 	      return;
 	    }
-	    const restWindowDecision = this.restWindow
-      ? evaluateRestWindowEligibility({
-        config: this.restWindow,
-        lastUserActivityAtMs: this.resolveActionLastUserActivityAtMs(action),
-      })
-      : null;
-    if (restWindowDecision && !restWindowDecision.allowed) {
+	    const restWindowDecision = evaluateRestWindowEligibility({
+      config: this.restWindow,
+      lastUserActivityAtMs: this.resolveActionLastUserActivityAtMs(action),
+    });
+    if (!restWindowDecision.allowed) {
       log.info('Skipping sleeptime run outside rest-window eligibility', {
         sessionId,
         actionId: action.id,
@@ -860,13 +527,6 @@ export class SleeptimeMemoryAgent {
       });
       return;
     }
-
-    const episodicSynthesis = this.episodicSynthesizer
-      ? await this.episodicSynthesizer.run({
-        sessionId,
-        sourceMessageId: action.sourceMessageId,
-      })
-      : null;
 
     const sleepConsolidation = this.sleepConsolidator
       ? await this.sleepConsolidator.run({
@@ -940,7 +600,7 @@ export class SleeptimeMemoryAgent {
     }
 
     let writtenCount = 0;
-    let reviewQueuedCount = await this.queueStaleMemoryReviews();
+    let reviewQueuedCount = 0;
     for (const memory of plan.memoryWrites) {
       const queuedReview = await this.queueUncertainMemoryWriteReview({
         memory,
@@ -974,24 +634,6 @@ export class SleeptimeMemoryAgent {
         });
       }
     }
-    for (const writePayload of buildBehavioralSummaryWrites({
-      sessionId,
-      actionId: action.id,
-      sourceMessageId: action.sourceMessageId,
-      episodicSynthesis,
-    })) {
-      try {
-        await this.memoryWriter.write(writePayload);
-        writtenCount += 1;
-      } catch (error) {
-        log.warn('Sleeptime behavioral summary write skipped after error', {
-          sessionId,
-          actionId: action.id,
-          error: String(error),
-        });
-      }
-    }
-
     const memoryMaintenanceDiagnostics = await this.getMemoryMaintenanceDiagnostics();
     const episodicMaintenanceDiagnostics = await this.getEpisodicMaintenanceDiagnostics();
 
@@ -1003,7 +645,6 @@ export class SleeptimeMemoryAgent {
       memoryWritesRequested: plan.memoryWrites.length,
       memoryWritesSucceeded: writtenCount,
       memoryMaintenanceReviewsQueued: reviewQueuedCount,
-      ...(episodicSynthesis ? summarizeEpisodicSynthesis(episodicSynthesis) : {}),
       ...(sleepConsolidation ? { sleepConsolidation } : {}),
       ...(arcFormation?.ran ? { arcFormation } : {}),
       ...(dreamMeaning?.ran ? { dreamMeaning } : {}),
@@ -1032,20 +673,6 @@ export class SleeptimeMemoryAgent {
   }): Promise<MemoryMaintenanceReview | null> {
     const review = buildHighImpactLowConfidenceReviewInput(reviewSubjectForMemoryWrite(input));
     return this.queueMaintenanceReview(review);
-  }
-
-  private async queueStaleMemoryReviews(): Promise<number> {
-    if (!this.memoryMaintenanceStore?.listActiveMemories || !this.memoryMaintenanceStore.upsertMemoryMaintenanceReview) {
-      return 0;
-    }
-    const memories = await this.memoryMaintenanceStore.listActiveMemories({ limit: MAX_STALE_REVIEW_SCAN });
-    let queued = 0;
-    for (const memory of memories) {
-      if (queued >= MAX_STALE_REVIEWS_PER_RUN) break;
-      const review = await this.queueMaintenanceReview(buildStaleMemoryReviewInput(memory));
-      if (review) queued += 1;
-    }
-    return queued;
   }
 
   private async queueConflictReviewFromWriteResult(result: WriteResult): Promise<number> {

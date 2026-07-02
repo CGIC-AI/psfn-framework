@@ -20,6 +20,8 @@ export interface ArcFormationOptions {
   maxArcsPerRun?: number;
   /** Cap on episodes included in the LLM judgment prompt. */
   maxEpisodesPerRun?: number;
+  /** Confidence floor below which proposed arcs are rejected (0..1). */
+  minConfidence?: number;
 }
 
 export interface ArcFormationRunInput {
@@ -186,6 +188,7 @@ export class EpisodeArcWeaver {
   private readonly reviewWindowMs: number;
   private readonly maxArcsPerRun: number;
   private readonly maxEpisodesPerRun: number;
+  private readonly minConfidence: number;
 
   constructor(
     store: EpisodicStorePort,
@@ -199,6 +202,11 @@ export class EpisodeArcWeaver {
     this.reviewWindowMs = options.reviewWindowMs ?? DEFAULT_REVIEW_WINDOW_MS;
     this.maxArcsPerRun = options.maxArcsPerRun ?? DEFAULT_MAX_ARCS_PER_RUN;
     this.maxEpisodesPerRun = options.maxEpisodesPerRun ?? DEFAULT_MAX_EPISODES_PER_RUN;
+    const minConfidence = options.minConfidence ?? MIN_ARC_CONFIDENCE;
+    if (!Number.isFinite(minConfidence) || minConfidence < 0 || minConfidence > 1) {
+      throw new Error('ArcFormationOptions.minConfidence must be a number between 0 and 1');
+    }
+    this.minConfidence = minConfidence;
   }
 
   async run(input: ArcFormationRunInput): Promise<ArcFormationRunResult> {
@@ -259,7 +267,7 @@ export class EpisodeArcWeaver {
         });
         break;
       }
-      if (proposal.confidence < MIN_ARC_CONFIDENCE) {
+      if (proposal.confidence < this.minConfidence) {
         result.rejectedArcs += 1;
         continue;
       }

@@ -159,15 +159,31 @@ export interface EventMap {
     canonicalAction: string;
     migrationSurface: string;
   } & EventCorrelationFields;
-  'memory.sleeptime.cadence': {
+  // Lightweight near-turn memory lane fire-rate telemetry (E5.2). The lane
+  // replaced the old turn-based "sleeptime" cadence; heavy passes now run
+  // only from the rest-window scheduler task.
+  'memory.near_turn.cadence': {
     channelId: string;
     sessionId: string;
     scope: 'direct' | 'group';
-    trigger: 'cadence' | 'rest_window';
     turnCount: number;
     newEntriesSinceLastRun: number;
     firedAtMs: number;
     firesLastHour: number;
+    timestamp: number;
+  };
+  // Deterministic episode-synthesis trigger gate outcome (E5.3). Every skip
+  // carries a reason so the Garden subsystem-health view can display why the
+  // lane did or did not process (zero LLM spend on skips).
+  'memory.episode_synthesis.gate': {
+    sessionId: string;
+    channelId: string;
+    trigger: 'timer' | 'turn_threshold';
+    outcome: 'processed' | 'skipped';
+    reason?: 'no_new_messages' | 'below_relevance_minimum' | 'session_retired';
+    newEntryCount: number;
+    relevantTurnCount: number;
+    minRelevantTurns: number;
     timestamp: number;
   };
   // Social-graph builder worker completion (E4.2). Law 31: results are visible,

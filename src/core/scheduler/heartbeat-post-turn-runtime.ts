@@ -16,8 +16,12 @@ import { evaluateCompositionalPolicyForChannelId } from '../../system/capabiliti
 import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
-  type SleeptimeCadenceTelemetry,
 } from '../../faculties/memory/sleeptime-agent.js';
+import {
+  NearTurnMemoryLane,
+  NEAR_TURN_MEMORY_ACTION_KIND,
+  type NearTurnMemoryCadenceTelemetry,
+} from '../../faculties/memory/near-turn-memory-lane.js';
 import {
   IntentionAppraisal,
   INTENTION_FOLLOW_UP_ACTION_KIND,
@@ -52,8 +56,8 @@ import type { HeartbeatTemplateRuntime } from './heartbeat-template-runtime.js';
 import type { Scheduler } from './scheduler.js';
 
 const log = createComponentLogger('HeartbeatPostTurn');
-const SLEEPTIME_IDLE_INFER_TASK_ID = 'memory.sleeptime.idle-infer';
-const SLEEPTIME_IDLE_INFER_INTERVAL_MS = 5 * 60_000;
+export const SLEEPTIME_REST_WINDOW_TASK_ID = 'memory.sleeptime.rest-window';
+const SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS = 5 * 60_000;
 
 interface WireHeartbeatPostTurnRuntimeOptions {
   scheduler: Scheduler;
@@ -89,11 +93,16 @@ export function wireHeartbeatPostTurnRuntime(
       purpose: 'appraisal',
     }).allowed
   );
+  // True sleeptime: heavy passes (sleep consolidation, arc weaving, dream
+  // meaning, orientation rewrite) are scheduler-owned rest-window work. The
+  // agent is intentionally NOT reachable from the post-turn inferer below —
+  // its only trigger surface is the rest-window scheduler task.
   const sleeptimeAgent = (
     runtimeOptions.llmProvider
     && runtimeOptions.memoryWriter
     && runtimeOptions.sessionManager
     && runtimeOptions.coreMemoryStore
+    && runtimeOptions.episodicProcessingRestWindow
   )
     ? new SleeptimeMemoryAgent({
       llmProvider: runtimeOptions.llmProvider,
@@ -101,23 +110,39 @@ export function wireHeartbeatPostTurnRuntime(
       coreMemoryStore: runtimeOptions.coreMemoryStore,
       memoryWriter: runtimeOptions.memoryWriter,
       promptRegistry: runtimeOptions.promptRegistry ?? null,
-      ...(runtimeOptions.sleeptimeCadence ? { cadence: runtimeOptions.sleeptimeCadence } : {}),
-      scopeClassifier: runtimeOptions.sleeptimeScopeClassifier ?? null,
+      restWindow: runtimeOptions.episodicProcessingRestWindow,
+      sleepConsolidator: runtimeOptions.sleepConsolidator,
+      arcWeaver: runtimeOptions.arcWeaver,
+      dreamMeaningPass: runtimeOptions.dreamMeaningPass,
+      memoryMaintenanceStore: runtimeOptions.memoryMaintenanceStore,
+      episodicDiagnosticsStore: runtimeOptions.episodicDiagnosticsStore,
+    })
+    : null;
+  // Lightweight near-turn memory lane (no LLM provider: structurally zero
+  // token spend). Fires on the JSON-owned nearTurnMemory cadence.
+  const nearTurnLane = (
+    runtimeOptions.sessionManager
+    && runtimeOptions.nearTurnMemoryCadence
+  )
+    ? new NearTurnMemoryLane({
+      sessionManager: runtimeOptions.sessionManager,
+      cadence: runtimeOptions.nearTurnMemoryCadence,
+      scopeClassifier: runtimeOptions.memoryScopeClassifier ?? null,
+      memoryMaintenanceStore: runtimeOptions.memoryMaintenanceStore ?? null,
       ...(telemetryEventBus
         ? {
-          onCadenceTelemetry: (event: SleeptimeCadenceTelemetry): void => {
-            telemetryEventBus.emit('memory.sleeptime.cadence', {
+          onCadenceTelemetry: (event: NearTurnMemoryCadenceTelemetry): void => {
+            telemetryEventBus.emit('memory.near_turn.cadence', {
               channelId: event.channelId,
               sessionId: event.sessionId,
               scope: event.scope,
-              trigger: event.trigger,
               turnCount: event.turnCount,
               newEntriesSinceLastRun: event.newEntriesSinceLastRun,
               firedAtMs: event.firedAtMs,
               firesLastHour: event.firesLastHour,
               timestamp: Date.now(),
             }).catch((error) => {
-              log.warn('Sleeptime cadence telemetry emit failed', {
+              log.warn('Near-turn cadence telemetry emit failed', {
                 channelId: event.channelId,
                 scope: event.scope,
                 error: String(error),
@@ -126,13 +151,6 @@ export function wireHeartbeatPostTurnRuntime(
           },
         }
         : {}),
-      restWindow: runtimeOptions.episodicProcessingRestWindow,
-      episodicSynthesizer: runtimeOptions.episodicSynthesizer,
-      sleepConsolidator: runtimeOptions.sleepConsolidator,
-      arcWeaver: runtimeOptions.arcWeaver,
-      dreamMeaningPass: runtimeOptions.dreamMeaningPass,
-      memoryMaintenanceStore: runtimeOptions.memoryMaintenanceStore,
-      episodicDiagnosticsStore: runtimeOptions.episodicDiagnosticsStore,
     })
     : null;
   const intentionAppraisalEnabled = runtimeOptions.intentionAppraisalEnabled !== false;
@@ -1039,12 +1057,12 @@ export function wireHeartbeatPostTurnRuntime(
   }
 
   if (sleeptimeAgent) {
-    if (telemetryEventBus && !scheduler.getTask(SLEEPTIME_IDLE_INFER_TASK_ID)) {
+    if (telemetryEventBus && !scheduler.getTask(SLEEPTIME_REST_WINDOW_TASK_ID)) {
       scheduler.register({
-        id: SLEEPTIME_IDLE_INFER_TASK_ID,
-        name: 'Sleeptime Idle Inference',
+        id: SLEEPTIME_REST_WINDOW_TASK_ID,
+        name: 'Sleeptime Rest-Window Heavy Passes',
         type: 'every',
-        intervalMs: SLEEPTIME_IDLE_INFER_INTERVAL_MS,
+        intervalMs: SLEEPTIME_REST_WINDOW_POLL_INTERVAL_MS,
         handler: async () => {
           const actions = sleeptimeAgent.inferIdlePostTurnActions();
           for (const action of actions) {
@@ -1103,6 +1121,25 @@ export function wireHeartbeatPostTurnRuntime(
       hasMemoryWriter: Boolean(runtimeOptions.memoryWriter),
       hasSessionManager: Boolean(runtimeOptions.sessionManager),
       hasCoreMemoryStore: Boolean(runtimeOptions.coreMemoryStore),
+      hasRestWindow: Boolean(runtimeOptions.episodicProcessingRestWindow),
+    });
+  }
+
+  if (nearTurnLane) {
+    runtimeOptions.postTurnActions.registerHandler(
+      NEAR_TURN_MEMORY_ACTION_KIND,
+      async (action) => {
+        await nearTurnLane.execute(action);
+      },
+      {
+        executionMode: 'background',
+        runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+      },
+    );
+  } else {
+    log.info('Near-turn memory lane wiring skipped: missing dependencies', {
+      hasSessionManager: Boolean(runtimeOptions.sessionManager),
+      hasCadence: Boolean(runtimeOptions.nearTurnMemoryCadence),
     });
   }
 
@@ -1130,8 +1167,10 @@ export function wireHeartbeatPostTurnRuntime(
             deferredToolHandoffPayloads.set(dedupeKey, payload);
           },
         });
-      if (sleeptimeAgent) {
-        inferred.push(...await sleeptimeAgent.inferPostTurnActions({ message }));
+      // Heavy sleeptime work is intentionally absent here: no code path from
+      // turn cadence may reach consolidation, arc weaving, or the dream pass.
+      if (nearTurnLane) {
+        inferred.push(...await nearTurnLane.inferPostTurnActions({ message }));
       }
       triggerIntentionPostTurnAppraisal({
         message,

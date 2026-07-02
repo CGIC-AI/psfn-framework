@@ -31,6 +31,10 @@ export interface EpisodicSynthesisOptions {
   maxPriorCandidates?: number;
   gapSplitMinutes?: number;
   maxEntriesPerEpisode?: number;
+  /** Salience minimum: conversational entries required for a group to count. */
+  minConversationalEntries?: number;
+  /** Salience minimum: single-entry character floor for one-entry groups. */
+  minSingleEntryChars?: number;
 }
 
 export interface EpisodicSynthesisRunInput {
@@ -222,6 +226,8 @@ function groupEntries(
   options: {
     gapSplitMs: number;
     maxEntriesPerEpisode: number;
+    minConversationalEntries: number;
+    minSingleEntryChars: number;
   },
 ): EpisodeGroup[] {
   const groups: EpisodeGroup[] = [];
@@ -247,15 +253,18 @@ function groupEntries(
     groups.push({ entries: current });
   }
 
-  return groups.filter(group => isSalientGroup(group.entries));
+  return groups.filter(group => isSalientGroup(group.entries, options));
 }
 
-function isSalientGroup(entries: readonly SessionEntry[]): boolean {
-  if (entries.length >= MIN_CONVERSATIONAL_ENTRIES) {
+function isSalientGroup(
+  entries: readonly SessionEntry[],
+  minimums: { minConversationalEntries: number; minSingleEntryChars: number },
+): boolean {
+  if (entries.length >= minimums.minConversationalEntries) {
     return true;
   }
   const totalChars = entries.reduce((sum, entry) => sum + normalizeContent(entry.content).length, 0);
-  return totalChars >= MIN_SINGLE_ENTRY_CHARS;
+  return totalChars >= minimums.minSingleEntryChars;
 }
 
 function extractWords(entries: readonly SessionEntry[]): string[] {
@@ -802,6 +811,8 @@ export class EpisodicSynthesizer {
   private readonly maxPriorCandidates: number;
   private readonly gapSplitMs: number;
   private readonly maxEntriesPerEpisode: number;
+  private readonly minConversationalEntries: number;
+  private readonly minSingleEntryChars: number;
   private readonly processingWatermarks = new Map<string, EpisodicSynthesisProcessingWatermark>();
 
   constructor(
@@ -834,6 +845,14 @@ export class EpisodicSynthesizer {
     this.maxEntriesPerEpisode = normalizePositiveInteger(
       options.maxEntriesPerEpisode,
       DEFAULT_MAX_ENTRIES_PER_EPISODE,
+    );
+    this.minConversationalEntries = normalizePositiveInteger(
+      options.minConversationalEntries,
+      MIN_CONVERSATIONAL_ENTRIES,
+    );
+    this.minSingleEntryChars = normalizePositiveInteger(
+      options.minSingleEntryChars,
+      MIN_SINGLE_ENTRY_CHARS,
     );
   }
 
@@ -868,6 +887,8 @@ export class EpisodicSynthesizer {
     const groups = groupEntries(entries, {
       gapSplitMs: this.gapSplitMs,
       maxEntriesPerEpisode: this.maxEntriesPerEpisode,
+      minConversationalEntries: this.minConversationalEntries,
+      minSingleEntryChars: this.minSingleEntryChars,
     }).slice(-this.maxEpisodesPerRun);
     const createdEpisodes: Episode[] = [];
     const skippedEpisodeIds: string[] = [];

@@ -9,24 +9,31 @@ import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import { CoreMemoryStore } from '../core-memory/store.js';
 import { coreMemoryChannelScope } from '../core-memory/store.js';
+import type { EpisodicProcessingRestWindowConfig } from '../../system/config/scheduler-config.js';
 import {
   SleeptimeMemoryAgent,
   SLEEPTIME_MEMORY_ACTION_KIND,
-  type SleeptimeCadenceTelemetry,
+  type SleeptimeMemoryAgentOptions,
 } from './sleeptime-agent.js';
-import type { SleeptimeCadenceConfig } from '../../system/config/scheduler-config.js';
 
-function cadence(overrides: {
-  directCadenceTurns?: number;
-  groupMinIntervalMinutes?: number;
-  groupMinNewEntries?: number;
-} = {}): SleeptimeCadenceConfig {
+/** start == end means the window covers the whole day. */
+function alwaysOpenRestWindow(): EpisodicProcessingRestWindowConfig {
   return {
-    direct: { cadenceTurns: overrides.directCadenceTurns ?? 3 },
-    group: {
-      minIntervalMinutes: overrides.groupMinIntervalMinutes ?? 15,
-      minNewEntries: overrides.groupMinNewEntries ?? 8,
-    },
+    enabled: true,
+    startLocalTime: '00:00',
+    endLocalTime: '00:00',
+    timeZone: 'UTC',
+    inactivityThresholdMinutes: 60,
+  };
+}
+
+function nightRestWindow(): EpisodicProcessingRestWindowConfig {
+  return {
+    enabled: true,
+    startLocalTime: '00:00',
+    endLocalTime: '09:00',
+    timeZone: 'UTC',
+    inactivityThresholdMinutes: 60,
   };
 }
 
@@ -105,77 +112,37 @@ describe('SleeptimeMemoryAgent', () => {
     };
   }
 
-  it('triggers post-turn actions on configured cadence for external sessions', async () => {
-    const llmProvider = makeLLMProvider('{}');
-    const sessionManager = {
-      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([]),
-    };
-    const coreMemoryStore = makeCoreMemoryStore();
-    const memoryWriter = {
-      write: vi.fn(),
-    };
-    const agent = new SleeptimeMemoryAgent({
-      llmProvider,
-      sessionManager,
-      coreMemoryStore,
-      memoryWriter,
-      cadence: cadence({ directCadenceTurns: 3 }),
-    });
-
-    expect(await agent.inferPostTurnAction({ id: 'm1', channelId: 'terminal:alpha' })).toBeNull();
-    expect(await agent.inferPostTurnAction({ id: 'm2', channelId: 'terminal:alpha' })).toBeNull();
-    const third = await agent.inferPostTurnAction({ id: 'm3', channelId: 'terminal:alpha' });
-    expect(third).toMatchObject({
-      kind: SLEEPTIME_MEMORY_ACTION_KIND,
-      dedupeKey: `${SLEEPTIME_MEMORY_ACTION_KIND}:terminal:alpha`,
-      payload: {
-        sessionId: 'terminal:alpha',
-        cadenceTurn: 3,
+  function makeAgentOptions(overrides: Partial<SleeptimeMemoryAgentOptions> = {}): SleeptimeMemoryAgentOptions {
+    return {
+      llmProvider: makeLLMProvider('{}'),
+      sessionManager: {
+        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+        getRecentMessages: vi.fn().mockReturnValue([]),
       },
-    });
-    expect(await agent.inferPostTurnAction({ id: 'm4', channelId: 'internal:reflection:whisper' })).toBeNull();
+      coreMemoryStore: makeCoreMemoryStore(),
+      memoryWriter: { write: vi.fn() },
+      restWindow: alwaysOpenRestWindow(),
+      ...overrides,
+    };
+  }
+
+  it('fails closed at construction without a rest-window config', () => {
+    const options = makeAgentOptions();
+    delete (options as Partial<SleeptimeMemoryAgentOptions>).restWindow;
+    expect(() => new SleeptimeMemoryAgent(options)).toThrow(
+      /requires a rest-window config.*must not run from turn cadence/s,
+    );
   });
 
-  it('does not enqueue sleeptime from an active turn before inactivity threshold', async () => {
-    const llmProvider = makeLLMProvider('{}');
-    const sessionManager = {
-      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-      getRecentMessages: vi.fn().mockReturnValue([]),
-    };
-    const coreMemoryStore = {
-      getSnapshot: vi.fn(),
-      rethink: vi.fn(),
-    };
-    const memoryWriter = {
-      write: vi.fn(),
-    };
-    const agent = new SleeptimeMemoryAgent({
-      llmProvider,
-      sessionManager,
-      coreMemoryStore,
-      memoryWriter,
-      cadence: cadence({ directCadenceTurns: 1 }),
-      restWindow: {
-        enabled: true,
-        startLocalTime: '00:00',
-        endLocalTime: '09:00',
-        timeZone: 'UTC',
-        inactivityThresholdMinutes: 60,
-      },
-    });
-
-    const action = await agent.inferPostTurnAction({
-      id: 'm1',
-      channelId: 'terminal:alpha',
-      timestamp: new Date('2026-03-16T23:30:00.000Z'),
-    });
-
-    expect(action).toBeNull();
+  it('exposes no turn-cadence inference surface (heavy passes unreachable from turns)', () => {
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions());
+    const surface = agent as unknown as Record<string, unknown>;
+    expect(surface.inferPostTurnAction).toBeUndefined();
+    expect(surface.inferPostTurnActions).toBeUndefined();
+    expect(typeof surface.inferIdlePostTurnActions).toBe('function');
   });
 
   it('infers idle sleeptime actions for quiet rest-window sessions', () => {
-    const llmProvider = makeLLMProvider('{}');
     const sessionManager = {
       resolveSessionChannelId: vi.fn((channelId: string) => channelId),
       getRecentMessages: vi.fn().mockReturnValue([]),
@@ -189,27 +156,10 @@ describe('SleeptimeMemoryAgent', () => {
         },
       ]),
     };
-    const coreMemoryStore = {
-      getSnapshot: vi.fn(),
-      rethink: vi.fn(),
-    };
-    const memoryWriter = {
-      write: vi.fn(),
-    };
-    const agent = new SleeptimeMemoryAgent({
-      llmProvider,
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       sessionManager,
-      coreMemoryStore,
-      memoryWriter,
-      cadence: cadence({ directCadenceTurns: 1 }),
-      restWindow: {
-        enabled: true,
-        startLocalTime: '00:00',
-        endLocalTime: '09:00',
-        timeZone: 'UTC',
-        inactivityThresholdMinutes: 60,
-      },
-    });
+      restWindow: nightRestWindow(),
+    }));
 
     const actions = agent.inferIdlePostTurnActions({
       nowMs: Date.parse('2026-03-16T03:30:00.000Z'),
@@ -225,6 +175,30 @@ describe('SleeptimeMemoryAgent', () => {
         lastUserActivityAtMs: Date.parse('2026-03-16T01:00:00.000Z'),
       },
     });
+  });
+
+  it('does not infer idle actions for sessions active inside the window', () => {
+    const sessionManager = {
+      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getRecentMessages: vi.fn().mockReturnValue([]),
+      listRecentSessions: vi.fn().mockReturnValue([
+        {
+          channelId: 'terminal:alpha',
+          channelType: 'terminal',
+          messageCount: 10,
+          lastActivityAt: Date.parse('2026-03-16T03:10:00.000Z'),
+          lastRole: 'user',
+        },
+      ]),
+    };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      sessionManager,
+      restWindow: nightRestWindow(),
+    }));
+
+    expect(agent.inferIdlePostTurnActions({
+      nowMs: Date.parse('2026-03-16T03:30:00.000Z'),
+    })).toHaveLength(0);
   });
 
   it('reorients active blocks and writes long-term memory facts from a sleeptime plan', async () => {
@@ -280,23 +254,12 @@ describe('SleeptimeMemoryAgent', () => {
       const memoryWriter = {
         write: vi.fn().mockResolvedValue({ action: 'created' }),
       };
-      const episodicSynthesizer = {
-        run: vi.fn().mockReturnValue({
-          consideredEntries: 2,
-          candidateEpisodeCount: 1,
-          createdEpisodes: [],
-          skippedEpisodeIds: [],
-          linkedArcs: [],
-        }),
-      };
-      const agent = new SleeptimeMemoryAgent({
+      const agent = new SleeptimeMemoryAgent(makeAgentOptions({
         llmProvider,
         sessionManager,
         coreMemoryStore,
         memoryWriter,
-        cadence: cadence({ directCadenceTurns: 1 }),
-        episodicSynthesizer,
-      });
+      }));
 
       await agent.execute(makeSleeptimeAction({
         payload: { sessionId: 'terminal:test' },
@@ -315,10 +278,6 @@ describe('SleeptimeMemoryAgent', () => {
         sourceRef: expect.stringContaining('source:sleeptime|session:terminal:test|message:msg-42'),
         tags: expect.arrayContaining(['preferences', 'coding', 'sleeptime']),
       }));
-      expect(episodicSynthesizer.run).toHaveBeenCalledWith({
-        sessionId: 'terminal:test',
-        sourceMessageId: 'msg-42',
-      });
       expect((llmProvider.complete as ReturnType<typeof vi.fn>)).toHaveBeenCalledWith(
         expect.objectContaining({
           correlation: expect.objectContaining({
@@ -334,6 +293,57 @@ describe('SleeptimeMemoryAgent', () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it('runs the heavy passes (consolidation, arc weaving, dream meaning) inside the rest window', async () => {
+    const llmProvider = makeLLMProvider(JSON.stringify({
+      orient: {
+        persona: 'Calm and clear.',
+        human: 'User is focused on implementation details.',
+        goals: 'Preserve continuity across turns.',
+      },
+      memory_writes: [],
+    }));
+    const sessionManager = {
+      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
+      getRecentMessages: vi.fn().mockReturnValue([
+        {
+          id: 1,
+          channelId: 'terminal:test',
+          role: 'user',
+          content: 'Summarize the day tonight.',
+          timestamp: Date.now(),
+        },
+      ]),
+    };
+    const sleepConsolidator = { run: vi.fn().mockResolvedValue({ reviewedEpisodes: 0 }) };
+    const arcWeaver = { run: vi.fn().mockResolvedValue({ ran: false }) };
+    const dreamMeaningPass = { run: vi.fn().mockResolvedValue({ ran: false }) };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
+      llmProvider,
+      sessionManager,
+      sleepConsolidator,
+      arcWeaver,
+      dreamMeaningPass,
+    }));
+
+    await agent.execute(makeSleeptimeAction({
+      payload: { sessionId: 'terminal:test' },
+      sourceMessageId: 'msg-77',
+    }));
+
+    expect(sleepConsolidator.run).toHaveBeenCalledWith({
+      sessionId: 'terminal:test',
+      sourceMessageId: 'msg-77',
+    });
+    expect(arcWeaver.run).toHaveBeenCalledWith({
+      sessionId: 'terminal:test',
+      sourceMessageId: 'msg-77',
+    });
+    expect(dreamMeaningPass.run).toHaveBeenCalledWith({
+      sessionId: 'terminal:test',
+      sourceMessageId: 'msg-77',
+    });
   });
 
   it('skips CogSec-risk sleeptime orient rewrites while keeping safe memory writes', async () => {
@@ -371,13 +381,12 @@ describe('SleeptimeMemoryAgent', () => {
     const memoryWriter = {
       write: vi.fn().mockResolvedValue({ action: 'created' }),
     };
-    const agent = new SleeptimeMemoryAgent({
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       llmProvider,
       sessionManager,
       coreMemoryStore,
       memoryWriter,
-      cadence: cadence({ directCadenceTurns: 1 }),
-    });
+    }));
 
     await agent.execute(makeSleeptimeAction({
       payload: { sessionId: 'terminal:test' },
@@ -435,7 +444,6 @@ describe('SleeptimeMemoryAgent', () => {
       write: vi.fn().mockResolvedValue({ action: 'created' }),
     };
     const memoryMaintenanceStore = {
-      listActiveMemories: vi.fn().mockResolvedValue([]),
       getById: vi.fn(),
       upsertMemoryMaintenanceReview: vi.fn(async input => ({
         id: input.id ?? 'review-1',
@@ -465,14 +473,12 @@ describe('SleeptimeMemoryAgent', () => {
         conflictDecisionCount: 0,
       }),
     };
-    const agent = new SleeptimeMemoryAgent({
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       llmProvider,
       sessionManager,
-      coreMemoryStore: makeCoreMemoryStore(),
       memoryWriter,
-      cadence: cadence({ directCadenceTurns: 1 }),
       memoryMaintenanceStore,
-    });
+    }));
 
     await agent.execute(makeSleeptimeAction());
 
@@ -494,7 +500,7 @@ describe('SleeptimeMemoryAgent', () => {
     });
   });
 
-  it('promotes repeated facts as stable durable memories and writes behavioral summaries from episode arcs', async () => {
+  it('promotes repeated facts as stable durable memories', async () => {
     const llmProvider = makeLLMProvider(JSON.stringify({
       orient: {
         persona: 'Concise and implementation-focused.',
@@ -535,24 +541,7 @@ describe('SleeptimeMemoryAgent', () => {
     const memoryWriter = {
       write: vi.fn().mockResolvedValue({ action: 'created' }),
     };
-    const episodicSynthesizer = {
-      run: vi.fn().mockResolvedValue({
-        consideredEntries: 2,
-        candidateEpisodeCount: 2,
-        createdEpisodes: [],
-        skippedEpisodeIds: [],
-        linkedArcs: [{
-          id: 'arc-recurrence-1',
-          sourceEpisodeId: 'episode-1',
-          targetEpisodeId: 'episode-2',
-          arcKind: 'recurrence',
-          confidence: 0.78,
-          themes: ['atlas', 'validation'],
-        }],
-      }),
-    };
     const memoryMaintenanceStore = {
-      listActiveMemories: vi.fn().mockResolvedValue([]),
       getById: vi.fn(),
       upsertMemoryMaintenanceReview: vi.fn(),
       getMemoryMaintenanceDiagnostics: vi.fn().mockResolvedValue({
@@ -591,38 +580,25 @@ describe('SleeptimeMemoryAgent', () => {
         averageProcessingLatencyMs: 0,
       }),
     };
-    const agent = new SleeptimeMemoryAgent({
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       llmProvider,
       sessionManager,
-      coreMemoryStore: makeCoreMemoryStore(),
       memoryWriter,
-      cadence: cadence({ directCadenceTurns: 1 }),
-      episodicSynthesizer,
       memoryMaintenanceStore,
       episodicDiagnosticsStore,
-    });
+    }));
 
     await agent.execute(makeSleeptimeAction({
       payload: { sessionId: 'terminal:test' },
       sourceMessageId: 'msg-42',
     }));
 
-    expect(memoryWriter.write).toHaveBeenCalledTimes(2);
-    expect(memoryWriter.write).toHaveBeenNthCalledWith(1, expect.objectContaining({
+    expect(memoryWriter.write).toHaveBeenCalledTimes(1);
+    expect(memoryWriter.write).toHaveBeenCalledWith(expect.objectContaining({
       text: 'Atlas project uses nightly canary validation for releases.',
       retentionClass: 'durable',
       provenanceRefs: expect.arrayContaining(['evidence_count:2', 'source_message:msg-42']),
       tags: expect.arrayContaining(['workflow', 'sleeptime', 'repeated_fact', 'stable_fact']),
-    }));
-    expect(memoryWriter.write).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      type: 'reflection',
-      text: expect.stringContaining('recurrence pattern'),
-      provenanceRefs: expect.arrayContaining([
-        'l01_episode_arc:arc-recurrence-1',
-        'l01_episode:episode-1',
-        'l01_episode:episode-2',
-      ]),
-      tags: expect.arrayContaining(['behavioral_summary', 'evidence_chain', 'episode_arc:recurrence']),
     }));
     expect(memoryMaintenanceStore.upsertMemoryMaintenanceReview).not.toHaveBeenCalled();
     expect(episodicDiagnosticsStore.getMaintenanceDiagnostics).toHaveBeenCalledOnce();
@@ -667,12 +643,12 @@ describe('SleeptimeMemoryAgent', () => {
       const memoryWriter = {
         write: vi.fn().mockResolvedValue({ action: 'created' }),
       };
-      const sleeptimeAgent = new SleeptimeMemoryAgent({
+      const sleeptimeAgent = new SleeptimeMemoryAgent(makeAgentOptions({
         llmProvider,
         sessionManager,
         coreMemoryStore,
         memoryWriter,
-      });
+      }));
       const agentLoop = {
         waitForIdle: vi.fn().mockImplementation(() => new Promise<void>(() => {})),
       };
@@ -704,7 +680,7 @@ describe('SleeptimeMemoryAgent', () => {
     }
   });
 
-  it('does not synthesize episodes until rest-window inactivity is eligible', async () => {
+  it('performs no heavy passes and no LLM calls when rest-window inactivity is not eligible', async () => {
     const llmProvider = makeLLMProvider(JSON.stringify({
       orient: {
         persona: 'Calm.',
@@ -723,39 +699,23 @@ describe('SleeptimeMemoryAgent', () => {
           content: 'Summarize today later.',
           timestamp: Date.parse('2026-03-17T00:05:00.000Z'),
         },
-        {
-          id: 2,
-          channelId: 'terminal:test',
-          role: 'assistant',
-          content: 'I will wait for the rest window.',
-          timestamp: Date.parse('2026-03-17T00:05:30.000Z'),
-        },
       ]),
     };
     const coreMemoryStore = {
       getSnapshot: vi.fn(),
       rethink: vi.fn(),
     };
-    const memoryWriter = {
-      write: vi.fn(),
-    };
-    const episodicSynthesizer = {
-      run: vi.fn(),
-    };
-    const agent = new SleeptimeMemoryAgent({
+    const sleepConsolidator = { run: vi.fn() };
+    const arcWeaver = { run: vi.fn() };
+    const dreamMeaningPass = { run: vi.fn() };
+    const agent = new SleeptimeMemoryAgent(makeAgentOptions({
       llmProvider,
       sessionManager,
       coreMemoryStore,
-      memoryWriter,
-      restWindow: {
-        enabled: true,
-        startLocalTime: '00:00',
-        endLocalTime: '00:00',
-        timeZone: 'UTC',
-        inactivityThresholdMinutes: 60,
-      },
-      episodicSynthesizer,
-    });
+      sleepConsolidator,
+      arcWeaver,
+      dreamMeaningPass,
+    }));
 
     await agent.execute(makeSleeptimeAction({
       payload: {
@@ -764,211 +724,10 @@ describe('SleeptimeMemoryAgent', () => {
       },
     }));
 
-    expect(episodicSynthesizer.run).not.toHaveBeenCalled();
+    expect(sleepConsolidator.run).not.toHaveBeenCalled();
+    expect(arcWeaver.run).not.toHaveBeenCalled();
+    expect(dreamMeaningPass.run).not.toHaveBeenCalled();
     expect(llmProvider.complete).not.toHaveBeenCalled();
     expect(coreMemoryStore.rethink).not.toHaveBeenCalled();
-  });
-
-  function makeScopeClassifier(scope: 'direct' | 'group') {
-    // Stands in for ObservedGroupMemoryScheduler.classifyChannelMemoryScope —
-    // the canonical memoryMode/topology classifier shared with group extraction.
-    return {
-      classifyChannelMemoryScope: vi.fn(async () => scope),
-    };
-  }
-
-  function makeCadenceAgent(options: {
-    cadence: SleeptimeCadenceConfig;
-    scope?: 'direct' | 'group';
-    onCadenceTelemetry?: (event: SleeptimeCadenceTelemetry) => void;
-  }): SleeptimeMemoryAgent {
-    return new SleeptimeMemoryAgent({
-      llmProvider: makeLLMProvider('{}'),
-      sessionManager: {
-        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([]),
-      },
-      coreMemoryStore: { getSnapshot: vi.fn(), rethink: vi.fn() },
-      memoryWriter: { write: vi.fn() },
-      cadence: options.cadence,
-      ...(options.scope ? { scopeClassifier: makeScopeClassifier(options.scope) } : {}),
-      ...(options.onCadenceTelemetry ? { onCadenceTelemetry: options.onCadenceTelemetry } : {}),
-    });
-  }
-
-  it('batches group-room sleeptime by interval + watermark (AC1: 30 rapid turns << per-3-turn)', async () => {
-    // Group cadence: minNewEntries=8, minIntervalMinutes=30. Today (per-3-turns)
-    // 30 turns would fire ~10 sleeptime runs. With interval batching, rapid
-    // turns in a tight wall-clock window collapse to at most a couple runs.
-    const agent = makeCadenceAgent({
-      cadence: cadence({ groupMinIntervalMinutes: 30, groupMinNewEntries: 8 }),
-      scope: 'group',
-    });
-
-    const baseMs = Date.parse('2026-06-01T12:00:00.000Z');
-    let fired = 0;
-    for (let turn = 1; turn <= 30; turn += 1) {
-      // Rapid turns: one second apart, well inside the 30-minute interval gate.
-      const action = await agent.inferPostTurnAction({
-        id: `g${turn}`,
-        channelId: 'discord:room-1',
-        channelType: 'discord',
-        timestamp: new Date(baseMs + turn * 1_000),
-      });
-      if (action) fired += 1;
-    }
-
-    // Far below the ~10 per-3-turns baseline, and below any reasonable
-    // "configured" batch bound for a tight burst.
-    expect(fired).toBeLessThanOrEqual(2);
-    expect(fired).toBeLessThan(10);
-    expect(fired).toBeGreaterThanOrEqual(1);
-  });
-
-  it('fires additional group runs once the interval genuinely elapses', async () => {
-    const agent = makeCadenceAgent({
-      cadence: cadence({ groupMinIntervalMinutes: 30, groupMinNewEntries: 4 }),
-      scope: 'group',
-    });
-    const baseMs = Date.parse('2026-06-01T12:00:00.000Z');
-    const channelId = 'discord:room-2';
-
-    const fireCounts: number[] = [];
-    // Two bursts of 4 turns each, 31 minutes apart -> interval gate opens twice.
-    for (let burst = 0; burst < 2; burst += 1) {
-      let fired = 0;
-      for (let turn = 1; turn <= 4; turn += 1) {
-        const action = await agent.inferPostTurnAction({
-          id: `b${burst}-${turn}`,
-          channelId,
-          channelType: 'discord',
-          timestamp: new Date(baseMs + burst * 31 * 60_000 + turn * 1_000),
-        });
-        if (action) fired += 1;
-      }
-      fireCounts.push(fired);
-    }
-
-    expect(fireCounts).toEqual([1, 1]);
-  });
-
-  it('keeps DM cadence unchanged by default (AC2: every 3rd turn)', async () => {
-    const agent = makeCadenceAgent({
-      cadence: cadence({ directCadenceTurns: 3 }),
-      scope: 'direct',
-    });
-    const baseMs = Date.parse('2026-06-01T12:00:00.000Z');
-
-    let fired = 0;
-    for (let turn = 1; turn <= 30; turn += 1) {
-      const action = await agent.inferPostTurnAction({
-        id: `d${turn}`,
-        channelId: 'discord:dm-1',
-        channelType: 'discord',
-        timestamp: new Date(baseMs + turn * 1_000),
-      });
-      if (action) fired += 1;
-    }
-
-    // Unchanged from historical behavior: 30 / 3 = 10 runs.
-    expect(fired).toBe(10);
-  });
-
-  it('treats sessions without a scope classifier as direct scope (historical posture)', async () => {
-    const agent = makeCadenceAgent({ cadence: cadence({ directCadenceTurns: 3 }) });
-    expect(await agent.inferPostTurnAction({ id: 'u1', channelId: 'terminal:x' })).toBeNull();
-    expect(await agent.inferPostTurnAction({ id: 'u2', channelId: 'terminal:x' })).toBeNull();
-    expect(await agent.inferPostTurnAction({ id: 'u3', channelId: 'terminal:x' })).not.toBeNull();
-  });
-
-  it('degrades to group batching when scope classification fails (logged, compute-conservative)', async () => {
-    const failingClassifier = {
-      classifyChannelMemoryScope: vi.fn(async () => {
-        throw new Error('classifier unavailable');
-      }),
-    };
-    const agent = new SleeptimeMemoryAgent({
-      llmProvider: makeLLMProvider('{}'),
-      sessionManager: {
-        resolveSessionChannelId: vi.fn((channelId: string) => channelId),
-        getRecentMessages: vi.fn().mockReturnValue([]),
-      },
-      coreMemoryStore: { getSnapshot: vi.fn(), rethink: vi.fn() },
-      memoryWriter: { write: vi.fn() },
-      cadence: cadence({ directCadenceTurns: 1, groupMinIntervalMinutes: 30, groupMinNewEntries: 8 }),
-      scopeClassifier: failingClassifier,
-    });
-
-    const baseMs = Date.parse('2026-06-01T12:00:00.000Z');
-    let fired = 0;
-    for (let turn = 1; turn <= 6; turn += 1) {
-      const action = await agent.inferPostTurnAction({
-        id: `f${turn}`,
-        channelId: 'discord:room-err',
-        channelType: 'discord',
-        timestamp: new Date(baseMs + turn * 1_000),
-      });
-      if (action) fired += 1;
-    }
-
-    // direct cadence of 1 would have fired 6 times; group batching (8 new
-    // entries required) fires zero times in a 6-turn burst.
-    expect(fired).toBe(0);
-    expect(failingClassifier.classifyChannelMemoryScope).toHaveBeenCalled();
-  });
-
-  it('emits fire-rate cadence telemetry per channel (AC4)', async () => {
-    const events: SleeptimeCadenceTelemetry[] = [];
-    const agent = makeCadenceAgent({
-      cadence: cadence({ directCadenceTurns: 1 }),
-      scope: 'direct',
-      onCadenceTelemetry: (event) => { events.push(event); },
-    });
-    const baseMs = Date.parse('2026-06-01T12:00:00.000Z');
-
-    for (let turn = 1; turn <= 3; turn += 1) {
-      await agent.inferPostTurnAction({
-        id: `t${turn}`,
-        channelId: 'discord:dm-9',
-        channelType: 'discord',
-        timestamp: new Date(baseMs + turn * 1_000),
-      });
-    }
-
-    expect(events).toHaveLength(3);
-    expect(events[0]).toMatchObject({
-      channelId: 'discord:dm-9',
-      scope: 'direct',
-      trigger: 'cadence',
-      turnCount: 1,
-      firesLastHour: 1,
-    });
-    // Rolling per-channel fire-rate accumulates within the hour window.
-    expect(events[2]).toMatchObject({ firesLastHour: 3, scope: 'direct' });
-  });
-
-  it('tags group cadence telemetry with the group scope', async () => {
-    const events: SleeptimeCadenceTelemetry[] = [];
-    const agent = makeCadenceAgent({
-      cadence: cadence({ groupMinIntervalMinutes: 30, groupMinNewEntries: 3 }),
-      scope: 'group',
-      onCadenceTelemetry: (event) => { events.push(event); },
-    });
-    const baseMs = Date.parse('2026-06-01T12:00:00.000Z');
-    for (let turn = 1; turn <= 3; turn += 1) {
-      await agent.inferPostTurnAction({
-        id: `gg${turn}`,
-        channelId: 'discord:guild-room',
-        channelType: 'discord',
-        timestamp: new Date(baseMs + turn * 1_000),
-      });
-    }
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({
-      scope: 'group',
-      trigger: 'cadence',
-      turnCount: 3,
-      newEntriesSinceLastRun: 3,
-    });
   });
 });

@@ -252,6 +252,14 @@ export async function assembleTurnPrompt(input: {
     preTurnInternalStateSnapshotRef,
     preTurnMetacognitiveFlags,
   );
+  // E4.4: the orchestrator fetches participant-relationship edges (async,
+  // bounded, pre-prompt) so the sync variable build stays a pure render. The
+  // producer applies the deterministic envelope/sensitivity/cap gates.
+  const participantRelationshipEdges = await runtime.resolveParticipantRelationships(
+    message,
+    conversationScope,
+    trustLevel,
+  );
   variableNamespace.assignRecord(
     'turn',
     runtime.buildDynamicPromptTemplateVariables(
@@ -271,6 +279,7 @@ export async function assembleTurnPrompt(input: {
       emotionAppraisalChain,
       buildCurrentUserRuntimeProfile({ authorContext, message }),
       conversationScope,
+      participantRelationshipEdges,
     ),
     'substrate-agent:buildDynamicPromptTemplateVariables',
   );

@@ -284,6 +284,8 @@ const RUNTIME_STATE_PROMPT_RUNTIME_MACRO_HINTS: PromptRuntimeMacroHint[] = [
   runtimeStateTurnHint('{{runtime_current_message_author_local_time}}', 'Current local clock time for the current message author when timezone is known.', '9:42 PM'),
   runtimeStateTurnHint('{{runtime_recent_active_participants_xml}}', 'Compact recent active participant XML for group turns, capped at five deduped authors.', '<recent_active_participants max="5">...</recent_active_participants>'),
   runtimeStateTurnHint('{{runtime_recent_active_participants_count}}', 'Count of recent active participant entries rendered for group turns.', '3'),
+  runtimeStateTurnHint('{{runtime_participant_relationships_xml}}', 'Compact participant-relationship XML for group turns: live high-confidence edges between currently listed participants, envelope-gated and capped at five. Blank (absent) on DM/internal turns, anonymous/broadcast audiences, or when no edge qualifies.', '<participant_relationships>...</participant_relationships>'),
+  runtimeStateTurnHint('{{runtime_participant_relationships_count}}', 'Count of participant-relationship lines rendered for the current group turn.', '1'),
   runtimeStateTurnHint('{{runtime_speaking_with_name}}', 'Resolved speaking-partner display name on DM turns; blank on group and internal turns so speaking_with sections prune.', 'Vega'),
   runtimeStateTurnHint('{{runtime_speaking_with_trust_level}}', 'Trust level for the current speaking partner on DM turns; blank on group and internal turns so speaking_with sections prune.', 'trusted'),
   runtimeStateTurnHint('{{runtime_channel_type}}', 'Resolved channel type for the current speaking context when user-facing.', 'discord_text'),

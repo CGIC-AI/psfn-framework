@@ -1,5 +1,8 @@
 import type { TrustPolicyConfig } from '../config/trust-policy-config.js';
-import { DEFAULT_AUDIENCE_SCOPE_THRESHOLDS } from './context-envelope.js';
+import {
+  DEFAULT_AUDIENCE_SCOPE_THRESHOLDS,
+  DEFAULT_PARTICIPANT_RELATIONSHIP_CONFIDENCE_THRESHOLD,
+} from './context-envelope.js';
 
 const DEFAULT_POLICY: TrustPolicyConfig = {
   trustCeiling: {
@@ -14,6 +17,7 @@ const DEFAULT_POLICY: TrustPolicyConfig = {
     public: ['public'],
   },
   audienceScopeThresholds: DEFAULT_AUDIENCE_SCOPE_THRESHOLDS,
+  participantRelationshipConfidenceThreshold: DEFAULT_PARTICIPANT_RELATIONSHIP_CONFIDENCE_THRESHOLD,
   channelClassification: {
     privatePrefixes: ['api:', 'sillytavern:', 'openwebui:', 'subagent:', 'shard:', 'internal:'],
     broadcastPrefixes: ['twitter:', 'social:'],

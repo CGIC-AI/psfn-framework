@@ -22,6 +22,7 @@ import {
   buildDynamicPromptTemplateVariables,
   buildPromptTemplateVariables,
   resolveAuthorContext,
+  type ParticipantRelationshipEdgeInput,
   type ResolvedAuthorContext,
 } from '../../agent/substrate-agent/runtime-context.js';
 import { renderFinalPromptSection } from '../../identity/prompt-runtime.js';
@@ -453,6 +454,12 @@ export function renderTurnRuntimePrompt(
     recentChannelEntries?: readonly SessionEntry[];
     /** Internal task kind for heartbeat/reflection turns (mirrors resolveTaskKind). */
     taskKind?: string;
+    /** Pre-fetched participant-relationship edges (E4.4 orchestrator output). */
+    participantRelationshipEdges?: readonly ParticipantRelationshipEdgeInput[];
+    /** Recent-speaker window for envelope derivation (mirrors runtime ingress). */
+    recentSpeakers?: readonly { authorId: string; name: string }[];
+    /** Recent speakers resolvable to contacts (drives audienceKnowledge). */
+    resolvedSpeakerContactCount?: number;
   } = {},
 ): { prompt: string; variables: Record<string, string> } {
   const templateVariables = buildTurnTemplateVariables(message, speaker, channelType);
@@ -464,6 +471,10 @@ export function renderTurnRuntimePrompt(
     isDirectMessage: message.isDirectMessage,
     ...(message.isDirectMessage === true
       ? { contact: { contactId: speaker.id, displayName: speaker.name } }
+      : {}),
+    ...(options.recentSpeakers ? { recentSpeakers: options.recentSpeakers } : {}),
+    ...(options.resolvedSpeakerContactCount !== undefined
+      ? { resolvedSpeakerContactCount: options.resolvedSpeakerContactCount }
       : {}),
   });
   const variables = buildDynamicPromptTemplateVariables({
@@ -478,6 +489,9 @@ export function renderTurnRuntimePrompt(
     templateVariables,
     ...(options.taskKind ? { taskKind: options.taskKind } : {}),
     ...(options.recentChannelEntries ? { recentChannelEntries: options.recentChannelEntries } : {}),
+    ...(options.participantRelationshipEdges
+      ? { participantRelationshipEdges: options.participantRelationshipEdges }
+      : {}),
   });
   // Mirror the runtime path (prompt-assembly): each seeded runtime layer is a
   // final render unit with its required/optional policy (E2.5).

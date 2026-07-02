@@ -16,6 +16,8 @@ import {
   createDmConversationScope,
   createGroupConversationScope,
 } from '../../../session/conversation-scope.js';
+import type { ContextEnvelope } from '../../../../system/trust/context-envelope.js';
+import type { ParticipantRelationshipEdgeInput } from './conversation-state.js';
 import {
   buildCurrentDatetimePromptVariables,
   buildLastMessagePromptVariables,
@@ -252,6 +254,135 @@ describe('conversation-state producer', () => {
     expect(variables.runtime_chat_type).toBe('direct_message');
     expect(variables.runtime_recent_active_participants_xml).toBe('');
     expect(variables.runtime_recent_active_participants_count).toBe('0');
+  });
+});
+
+describe('conversation-state producer — participant relationships (E4.4)', () => {
+  const GROUP_KNOWN_ENVELOPE: ContextEnvelope = {
+    channelPrivacy: 'invite_only',
+    audienceScope: 'few',
+    audienceKnowledge: 'all_known',
+    broadcast: false,
+  };
+
+  function makeEdge(overrides: Partial<ParticipantRelationshipEdgeInput> = {}): ParticipantRelationshipEdgeInput {
+    return {
+      aName: 'Vega',
+      bName: 'Iki',
+      relationshipType: 'sibling',
+      sensitivity: 'personal',
+      confidence: 0.9,
+      updatedAt: '2026-06-01T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  function renderGroup(
+    edges: readonly ParticipantRelationshipEdgeInput[],
+    envelope: ContextEnvelope = GROUP_KNOWN_ENVELOPE,
+  ): Record<string, string> {
+    return buildConversationStatePromptVariables({
+      message: makeMessage({ channelId: 'discord:group:ops' }),
+      conversationScope: createGroupConversationScope({ channelId: 'discord:group:ops', envelope }),
+      internalTurn: false,
+      trustLevel: 'trusted',
+      now: FIXED_NOW,
+      participantRelationshipEdges: edges,
+    });
+  }
+
+  it('renders one compact rel line for a live edge between two present participants', () => {
+    const variables = renderGroup([makeEdge()]);
+    expect(variables.runtime_participant_relationships_count).toBe('1');
+    expect(variables.runtime_participant_relationships_xml).toBe(
+      '\n<participant_relationships>\n<rel a="Vega" b="Iki" type="sibling" />\n</participant_relationships>',
+    );
+  });
+
+  it('never renders an intimate edge in a room (sensitivity gate)', () => {
+    const variables = renderGroup([makeEdge({ sensitivity: 'intimate' })]);
+    expect(variables.runtime_participant_relationships_xml).toBe('');
+    expect(variables.runtime_participant_relationships_count).toBe('0');
+  });
+
+  it('never renders a confidential edge in a room (sensitivity gate)', () => {
+    const variables = renderGroup([makeEdge({ sensitivity: 'confidential' })]);
+    expect(variables.runtime_participant_relationships_xml).toBe('');
+  });
+
+  it('caps at five lines with confidence-desc then most-recent-evidence order', () => {
+    const edges: ParticipantRelationshipEdgeInput[] = [
+      makeEdge({ aName: 'A', bName: 'B', confidence: 0.71, updatedAt: '2026-01-01T00:00:00.000Z' }),
+      makeEdge({ aName: 'C', bName: 'D', confidence: 0.95, updatedAt: '2026-01-01T00:00:00.000Z' }),
+      makeEdge({ aName: 'E', bName: 'F', confidence: 0.90, updatedAt: '2026-05-01T00:00:00.000Z' }),
+      makeEdge({ aName: 'G', bName: 'H', confidence: 0.90, updatedAt: '2026-03-01T00:00:00.000Z' }),
+      makeEdge({ aName: 'I', bName: 'J', confidence: 0.85, updatedAt: '2026-01-01T00:00:00.000Z' }),
+      makeEdge({ aName: 'K', bName: 'L', confidence: 0.80, updatedAt: '2026-01-01T00:00:00.000Z' }),
+    ];
+    const variables = renderGroup(edges);
+    expect(variables.runtime_participant_relationships_count).toBe('5');
+    const lines = variables.runtime_participant_relationships_xml
+      .split('\n')
+      .filter(line => line.startsWith('<rel '));
+    expect(lines).toEqual([
+      '<rel a="C" b="D" type="sibling" />',
+      '<rel a="E" b="F" type="sibling" />',
+      '<rel a="G" b="H" type="sibling" />',
+      '<rel a="I" b="J" type="sibling" />',
+      '<rel a="K" b="L" type="sibling" />',
+    ]);
+    // The 0.71 edge is the lowest-confidence and is dropped by the cap.
+    expect(variables.runtime_participant_relationships_xml).not.toContain('a="A"');
+  });
+
+  it('renders nothing when there are no qualifying edges (no empty XML shell)', () => {
+    const variables = renderGroup([]);
+    expect(variables.runtime_participant_relationships_xml).toBe('');
+    expect(variables.runtime_participant_relationships_count).toBe('0');
+  });
+
+  it('renders nothing for an anonymous audience', () => {
+    const variables = renderGroup([makeEdge()], { ...GROUP_KNOWN_ENVELOPE, audienceKnowledge: 'anonymous' });
+    expect(variables.runtime_participant_relationships_xml).toBe('');
+  });
+
+  it('renders nothing for a broadcast surface', () => {
+    const variables = renderGroup([makeEdge()], {
+      channelPrivacy: 'public',
+      audienceScope: 'unbounded',
+      audienceKnowledge: 'all_known',
+      broadcast: true,
+    });
+    expect(variables.runtime_participant_relationships_xml).toBe('');
+  });
+
+  it('renders nothing on dm turns (a dm has one participant)', () => {
+    const variables = buildConversationStatePromptVariables({
+      message: makeMessage({ channelId: 'discord:dm:vega', authorId: 'user-vega', authorName: 'Vega' }),
+      conversationScope: createDmConversationScope({
+        channelId: 'discord:dm:vega',
+        contact: { contactId: 'contact-vega', displayName: 'Vega' },
+      }),
+      internalTurn: false,
+      trustLevel: 'trusted',
+      now: FIXED_NOW,
+      participantRelationshipEdges: [makeEdge()],
+    });
+    expect(variables.runtime_participant_relationships_xml).toBe('');
+    expect(variables.runtime_participant_relationships_count).toBe('0');
+  });
+
+  it('renders nothing on internal turns', () => {
+    const variables = buildConversationStatePromptVariables({
+      message: makeMessage({ channelId: 'internal:heartbeat' }),
+      conversationScope: createGroupConversationScope({ channelId: 'internal:heartbeat' }),
+      internalTurn: true,
+      trustLevel: 'primary',
+      now: FIXED_NOW,
+      participantRelationshipEdges: [makeEdge()],
+    });
+    expect(variables.runtime_participant_relationships_xml).toBe('');
+    expect(variables.runtime_participant_relationships_count).toBe('0');
   });
 });
 

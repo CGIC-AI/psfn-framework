@@ -346,6 +346,7 @@ describe('subsystem config round-trip', () => {
         fewMax: 8,
         manyMax: 80,
       },
+      participantRelationshipConfidenceThreshold: 0.8,
       channelClassification: {
         privatePrefixes: ['custom:'],
         broadcastPrefixes: ['social:'],
@@ -466,6 +467,8 @@ describe('subsystem config round-trip', () => {
       ...custom,
       // Absent audienceScopeThresholds resolve to the documented defaults.
       audienceScopeThresholds: { fewMax: 10, manyMax: 100 },
+      // Absent participantRelationshipConfidenceThreshold resolves to 0.7.
+      participantRelationshipConfidenceThreshold: 0.7,
     });
     expect(readJsonFile(join(dataDir, TRUST_POLICY_FILE_NAME))).toEqual(custom);
   });

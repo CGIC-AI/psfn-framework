@@ -221,7 +221,28 @@ Privacy boundaries:
 Multi-companion rooms (charter gate, Law 26 / 8.10):
 
 - Peer companions (contacts flagged `isMachineIntelligence`) may share a room with the companion. When one speaks, it is treated as an OBSERVED participant: its turns are attributed in history, it appears in the participant roster, and group-memory extraction weights it (see `groupMemory.autoDetection.includeAiCompanions`). It is never selected as the canonical human for any binding (DM/room scope contact, core-memory participant subject, or contact-continuity fallback). A companion binds normally only in a genuine 1:1 DM with that companion.
-- Companions replying to companions in a live conversational room is a separate, gated capability. It is governed by the FatigueBudgetPort epic (relationship/channel fatigue budgets that bound machine-intelligence-triggered turns and prevent companion-to-companion reply loops). Until fatigue budgets are enabled and tuned for a room, do NOT enable companions-replying-to-companions for live multi-companion rooms — observation is supported, autonomous companion-to-companion conversation is not.
+- Companions replying to companions in a live conversational room is a separate, gated capability. It is governed by the FatigueBudgetPort epic (relationship/channel fatigue budgets that bound machine-intelligence-triggered turns and prevent companion-to-companion reply loops). Observation is always supported; autonomous companion-to-companion conversation is bounded by the fatigue budget so a companion cannot loop nonsense at a peer after the salient things are said.
+
+### Machine-intelligence auto-tagging (E7.3)
+
+- Peer companions are identified automatically. When Discord reports a message author as a bot (`author.bot`), the runtime tags the resolved contact `isMachineIntelligence` at contact resolution time (provenance-honest: sourced from channel bot/app metadata, recorded under a `system:channel_observation:<channel>` audit actor). No manual tagging is required for fatigue relationship classes to apply.
+- Operator control wins. A deliberate correction — the Garden/contacts surface or the `set_machine_intelligence` contact tool (any non-`system:` audit actor) — is never clobbered by re-observation. To pin a bot as not-a-companion, correct an auto-tagged contact from the contacts surface; the correction survives.
+- Telegram currently ignores bot-authored messages entirely (the adapter drops `is_bot` senders), so there is no observed-contact path to tag there yet. Enabling bot-author observation on Telegram is a prerequisite follow-up before MI auto-tagging applies to that channel.
+
+### Enabling and tuning fatigue for companion rooms
+
+Fatigue evaluation is always wired and always runs, but it only ever SPENDS on machine-intelligence-triggered turns (a machine-intelligence peer whose turn is itself triggered by a machine intelligence). Human turns, and turns with a non-MI peer, are always free — the guard never bounds human conversation. Enabling companion-to-companion chat for a room is therefore two operator actions plus tuning:
+
+1. Let the peer's messages reach the runtime. On Discord, add the peer companion's bot user id to the adapter's allowed-bot set (`allowedBotUserIds`). Without this, peer bots are ignored outright.
+2. Auto-tagging then marks the peer `isMachineIntelligence` on first resolution (above), so the fatigue relationship class applies with no manual step.
+3. Tune the budgets in the `charge-policy.json` owner file under `fatigue` (schema-validated by `src/system/config/charge-policy-config.ts`; a missing/invalid `fatigue` section fails closed at startup). The knobs:
+   - `relationshipBudgets` — per relationship class (`stranger_mi` … `trusted_collaborator_mi`) `softTarget`/`hardCap` response counts per peer, per room, per UTC day.
+   - `channelSettingLimits` — per channel setting (`dm`, `busy_human_group`, `one_human_companion_hosted`, `quiet_companion_room`, `public_group`, `unknown`) `maxSoftTarget`/`maxHardCap` caps.
+   - `intentMultipliers` — scale soft/hard limits by inferred intent (casual, social, check_in, work, research, problem_solving).
+   - `activityThresholds` / `stateThresholds` — busy/quiet room classification and the nearing-limit / wrap-up remaining-response bands.
+   - `overcharge` — `enabled`, `reserveResponses` (bounded extra replies past the hard cap), and the recent-human-participation window/minimums. Overcharge fires only when a human recently participated OR the turn carries a work/research intent, so a companion can finish a genuinely useful exchange but cannot self-authorize an endless loop.
+- A human message in the room resets the dynamics: it is free, and recent human participation unlocks the bounded overcharge reserve for subsequent machine-to-machine replies.
+- Per-room fatigue state is readable in Garden via `GET /api/admin/charges`, which returns the fatigue ledger scope summaries and a tuning report. Filter to one room/peer/day with `channelId`, `peerContactId`, `localCompanionId`, and `dayKey` query parameters. The fatigue ledger is a companion-data JSONL file (`fatigue-ledger.jsonl`), scoped per (companion, peer, channel, UTC day) and reset daily.
 
 ## Backups And Integrity
 

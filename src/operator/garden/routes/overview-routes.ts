@@ -407,12 +407,23 @@ export function buildAdminOverviewRoutes(options: {
           return;
         }
         const runId = url.searchParams.get('runId')?.trim() || undefined;
+        // E7.3: per-room / per-peer fatigue read surface. These filters flow to
+        // the fatigue ledger (FatigueLedgerQuery) so an operator can inspect a
+        // single companion room's conversation-fatigue state and scope summaries.
+        const channelId = url.searchParams.get('channelId')?.trim() || undefined;
+        const peerContactId = url.searchParams.get('peerContactId')?.trim() || undefined;
+        const localCompanionId = url.searchParams.get('localCompanionId')?.trim() || undefined;
+        const dayKey = url.searchParams.get('dayKey')?.trim() || undefined;
 
         chargeLedgerService.getChargeLedgerData({
           ...(limit.value !== undefined ? { limit: limit.value } : {}),
           ...(sinceMs.value !== undefined ? { sinceMs: sinceMs.value } : {}),
           ...(untilMs.value !== undefined ? { untilMs: untilMs.value } : {}),
           ...(runId ? { runId } : {}),
+          ...(channelId ? { channelId } : {}),
+          ...(peerContactId ? { peerContactId } : {}),
+          ...(localCompanionId ? { localCompanionId } : {}),
+          ...(dayKey ? { dayKey } : {}),
         }).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, 500, {

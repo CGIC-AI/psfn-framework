@@ -31,6 +31,8 @@ import {
 import { PostgresReflectionMetacognitionMirrorStore } from './reflections/postgres-mirror.js';
 import { PostgresInternalStateStore } from './postgres/internal-state-store.js';
 import type { InternalStateStorePort } from '../core/self-model/internal-state-persistence.js';
+import { PostgresParticipantTrendStore } from './postgres/participant-trend-store.js';
+import type { ParticipantTrendStorePort } from '../core/emotion/participant-trend-persistence.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -42,6 +44,7 @@ export interface AgentPersistenceRuntime {
   intentionRuntime?: IntentionRuntimeWiring;
   intentionProviders?: IntentionRuntimeProviders;
   internalStateStore: InternalStateStorePort;
+  participantTrendStore: ParticipantTrendStorePort;
 }
 
 export interface CreateAgentPersistenceRuntimeOptions {
@@ -85,5 +88,6 @@ export async function createAgentPersistenceRuntime(
     intentionRuntime,
     intentionProviders: intentionRuntime,
     internalStateStore: await PostgresInternalStateStore.connect(databaseUrl),
+    participantTrendStore: await PostgresParticipantTrendStore.connect(databaseUrl),
   };
 }

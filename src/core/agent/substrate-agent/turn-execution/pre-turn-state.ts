@@ -512,6 +512,10 @@ export async function computePreTurnState(input: {
     // E1.5: the turn's ConversationScope keys the per-scope emotion slot and
     // drives directional group→DM carry-over.
     conversationScope,
+    // E6.3: this message's author identity (canonical contact key, else raw
+    // authorId) keys the per-participant trend line inside a group room. Only
+    // this author's own trend moves; idle participants are never touched.
+    authorContext.canonicalContactKey ?? message.authorId,
   );
   const emotionAppraisalChain = runtime.emotionSelfModelRuntime.getEmotionAppraisalChain(emotionSessionId);
   const turnSnapshotCapturedAt = Date.now();

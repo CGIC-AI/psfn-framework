@@ -275,6 +275,11 @@ export function hydrateCanonicalStartupConfig(
       group: { ...persistedScheduler.sleeptime.group },
     },
     socialGraphBuilder: { ...persistedScheduler.socialGraphBuilder },
+    temporalWakeup: {
+      enabled: persistedScheduler.temporalWakeup.enabled,
+      morningWake: { ...persistedScheduler.temporalWakeup.morningWake },
+      idleRefresher: { ...persistedScheduler.temporalWakeup.idleRefresher },
+    },
   };
   config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();

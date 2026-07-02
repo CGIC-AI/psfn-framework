@@ -34,5 +34,10 @@ export function resolveRuntimeSchedulerConfig(
       group: { ...persisted.sleeptime.group },
     },
     socialGraphBuilder: { ...persisted.socialGraphBuilder },
+    temporalWakeup: {
+      enabled: persisted.temporalWakeup.enabled,
+      morningWake: { ...persisted.temporalWakeup.morningWake },
+      idleRefresher: { ...persisted.temporalWakeup.idleRefresher },
+    },
   };
 }

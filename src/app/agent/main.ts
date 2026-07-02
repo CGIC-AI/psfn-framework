@@ -14,6 +14,13 @@ import { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/s
 import { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
 import { DreamMeaningPass } from '../../faculties/memory/episodic/dream-meaning-pass.js';
 import { ProactiveOutboundDispatcher } from '../../core/intention/proactive-outbound.js';
+import {
+  registerTemporalWakeupTasks,
+  TEMPORAL_WAKEUP_MORNING_TASK_NAME,
+} from '../../core/scheduler/temporal-wakeup.js';
+import { HEARTBEAT_SILENT_REFLECTION_TOKEN } from '../../core/scheduler/heartbeat-policy.js';
+import { summarizeRecentSessionEntries } from '../../core/session/manager/compaction-service.js';
+import type { ChannelType } from '../../shared/contracts/runtime.js';
 import { createFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
@@ -522,6 +529,69 @@ async function main(): Promise<void> {
       eventBus,
     })
     : null;
+
+  // ── Temporal wake-up lanes (E7.1) ──
+  // Morning wake + idle time-of-day refresher. Both inject explicit system
+  // notes (never partner speech). The catch-up summary reuses the SHARED
+  // session summarization service (summarizeRecentSessionEntries, purpose
+  // 'wake_session'); outward messages ride the existing proactive-outbound
+  // dispatcher and quiet-hours time gate.
+  registerTemporalWakeupTasks({
+    scheduler,
+    sessionManager,
+    config: schedulerConfig.temporalWakeup,
+    quietHours: schedulerConfig.episodicProcessing,
+    summarizeCatchUp: async ({ channelId, entries }) => summarizeRecentSessionEntries({
+      channelId,
+      entries,
+      characterName: card.data.name,
+      llmProvider,
+      promptRegistry: promptState.registry,
+      maxTokens: schedulerConfig.temporalWakeup.morningWake.catchUpSummaryMaxTokens,
+      purpose: 'wake_session',
+    }),
+    invokeWakeTurn: async ({ note }) => {
+      const response = await agentLoop.handleMessage({
+        id: `reflection-temporal-wakeup-${Date.now()}`,
+        channelId: 'internal:reflection:temporal-wakeup',
+        channelType: 'terminal',
+        authorId: 'scheduler',
+        authorName: TEMPORAL_WAKEUP_MORNING_TASK_NAME,
+        content: [
+          'A temporal wake note was just placed in your active session:',
+          '',
+          note,
+          '',
+          'This is your morning wake turn. If you want to send your partner an',
+          'outward message right now, reply with only that message. If you have',
+          `nothing you want to send outward, reply with "${HEARTBEAT_SILENT_REFLECTION_TOKEN}" — staying quiet is`,
+          'completely fine; nothing about this wake requires an outward response.',
+        ].join('\n'),
+        timestamp: new Date(),
+      });
+      const trimmed = response.content.trim();
+      if (!trimmed || trimmed.toLowerCase() === HEARTBEAT_SILENT_REFLECTION_TOKEN) {
+        return null;
+      }
+      return trimmed;
+    },
+    ...(proactiveOutbound
+      ? {
+        dispatchOutbound: async ({ channelId, channelType, content }: {
+          channelId: string;
+          channelType: ChannelType;
+          content: string;
+        }) => proactiveOutbound.dispatch({
+          actionId: `temporal-wakeup-${Date.now()}`,
+          channelId,
+          channelType,
+          content,
+          reason: 'temporal_wakeup_morning',
+        }),
+      }
+      : {}),
+  });
+
   // Journal auto-publisher (for heartbeat reflections -> markdown journal)
   const journalAutoPublisher = createOptionalJournalAutoPublisher(pathSnapshot.workspaceRoot, config);
 

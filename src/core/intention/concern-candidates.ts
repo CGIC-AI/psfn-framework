@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
+import type { PersonaPreamblePort } from '../identity/persona-preamble.js';
 import type { SessionEntry } from '../session/types.js';
 import type {
   ConcernCandidateExtractionContext,
@@ -302,13 +303,20 @@ function buildCandidateFromMessage(input: {
 }
 
 export class ConcernCandidateReviewer {
-  constructor(private readonly llmProvider: LLMProviderPort) {}
+  constructor(
+    private readonly llmProvider: LLMProviderPort,
+    private readonly personaPreamble: PersonaPreamblePort | null = null,
+  ) {}
 
   async review(candidates: readonly ConcernCandidate[]): Promise<ConcernCandidateReviewResult> {
     if (candidates.length === 0) {
       return { decisions: [], prompt: '' };
     }
-    const prompt = buildConcernCandidateReviewPrompt(candidates);
+    const reviewPrompt = buildConcernCandidateReviewPrompt(candidates);
+    // E6.1: soft persona framing precedes the strict JSON review instructions.
+    const prompt = this.personaPreamble
+      ? this.personaPreamble.prepend('concern_review', reviewPrompt)
+      : reviewPrompt;
     const response = await this.llmProvider.complete(
       {
         systemPrompt: prompt,
@@ -671,6 +679,8 @@ export interface CreateAutomatedConcernRuntimeOptions {
   concernStore: ConcernStorePort;
   reviewTurnInterval?: number;
   now?: () => Date;
+  /** Shared persona preamble service (E6.1); soft persona framing before the concern-review task prompt. */
+  personaPreamble?: PersonaPreamblePort | null;
 }
 
 export function createAutomatedConcernRuntime(
@@ -679,7 +689,7 @@ export function createAutomatedConcernRuntime(
   const queue = new ConcernCandidateQueue({
     ...(options.now ? { now: options.now } : {}),
   });
-  const reviewer = new ConcernCandidateReviewer(options.llmProvider);
+  const reviewer = new ConcernCandidateReviewer(options.llmProvider, options.personaPreamble ?? null);
   const worker = new ConcernCandidateWorker({
     queue,
     reviewer,

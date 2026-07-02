@@ -127,10 +127,11 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
 
     const prompt = capturedPrompts[0] ?? '';
     const internalStateSection = getPromptSection(prompt, '[Reflection Self Evidence]');
-    expect(internalStateSection).toContain('[Reflection Evidence Boundary]');
-    expect(internalStateSection).toContain('fallible clues to compare against conversation, memory, and self-report');
-    expect(internalStateSection).toContain('preserve the uncertainty instead of forcing reconciliation');
-    expect(internalStateSection).toContain('Do not copy raw scores, ids, hashes, provenance refs, or tool metadata');
+    // E6.2: the evidence boundary guards re-voiced first person (meaning preserved).
+    expect(internalStateSection).toContain('[What this evidence is]');
+    expect(internalStateSection).toContain('fallible clues to weigh against what I actually remember, feel, and know');
+    expect(internalStateSection).toContain('I keep the uncertainty rather than force them into agreement');
+    expect(internalStateSection).toContain('I keep the raw machinery — scores, ids, hashes, provenance refs, tool metadata — out of my own words');
     expect(internalStateSection).toContain('[Wellbeing and Affect Clues]');
     expect(internalStateSection).toContain('ACAC self-report clues: agency strong: The next action feels available.');
     expect(internalStateSection).toContain('connection present: The contact thread is present.');
@@ -563,6 +564,11 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       dataDir: tempDir,
       runtimeOptions: {
         llmProvider: llmProvider as any,
+        characterPromptVariablesProvider: () => ({
+          char: 'Purrsephone',
+          personality: 'A warm, wry cloistered gardener who tends what she plants and blesses the weeds among the herbs.',
+          description: 'Steady, earthy, unhurried.',
+        }),
         sessionManager: {
           resolveSessionChannelId: (channelId: string) => channelId,
           getRecentMessages: (channelId: string, limit?: number) => (
@@ -617,6 +623,14 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(capturedPrompts[0]).toContain('memory_retrieval_modes: temporal, reflection');
     expect(capturedPrompts[0]).toContain('[Reflection Contact Evidence]');
     expect(capturedPrompts[0]).toContain('We should revisit the recovery plan tomorrow.');
+    // E6.2 regression: the scheduled reflection assembles the FULL persona
+    // (first person) plus memory/self-model context, and the persona leads —
+    // soft framing before the introspection policy and task instructions.
+    expect(capturedPrompts[0]).toContain('I am Purrsephone');
+    expect(capturedPrompts[0]).toContain('cloistered gardener who tends what she plants');
+    expect(capturedPrompts[0]).toContain('trust-filtered contact memory');
+    expect(capturedPrompts[0].indexOf('I am Purrsephone'))
+      .toBeLessThan(capturedPrompts[0].indexOf('[Reflection Introspection Policy]'));
     expect(capturedPrompts[1]).toContain('Stage: synthesis');
     expect(capturedPrompts[2]).toContain('Stage: contradiction');
 
@@ -1671,9 +1685,9 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(prompt).not.toContain('{{reflection_self}}');
     expect(prompt).not.toContain('{{reflection_relational}}');
     expect(prompt).not.toContain('{{reflection_affect}}');
-    expect(internalStateSection).toContain('[Reflection Evidence Boundary]');
-    expect(internalStateSection).toContain('private evidence summary, not canonical self-truth');
-    expect(internalStateSection).toContain('fallible clues to compare against conversation, memory, and self-report');
+    expect(internalStateSection).toContain('[What this evidence is]');
+    expect(internalStateSection).toContain('private evidence I gather for myself, not the settled truth of who I am');
+    expect(internalStateSection).toContain('fallible clues to weigh against what I actually remember, feel, and know');
     expect(internalStateSection).toContain('[Wellbeing and Affect Clues]');
     expect(prompt).not.toContain(`snapshot_ref: ${currentSnapshotRef}`);
     expect(prompt).not.toContain('serialized_internal_state:');

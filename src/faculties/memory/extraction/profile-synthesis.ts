@@ -6,6 +6,7 @@ import {
   getDefaultPromptText,
 } from '../../../core/identity/prompt-registry.js';
 import { injectPromptRuntimeTokens } from '../../../core/identity/prompt-runtime.js';
+import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { PurrMemory } from '../types.js';
 import { computeProfileNovelty } from './signals.js';
@@ -31,6 +32,8 @@ export interface ProfileSynthesisTargetContact {
 export interface RefreshContactProfileOptions {
   llmClient: LLMProviderPort;
   promptRegistry: PromptRegistryStatePort | null;
+  /** Shared persona preamble service (E6.1). Prepends soft persona framing before the schema-bound task prompt. */
+  personaPreamble?: PersonaPreamblePort | null;
   memoryStore: MemoryStorePort;
   channelId: string;
   triggerReason: ExtractionTriggerReason;
@@ -188,7 +191,12 @@ export async function refreshContactProfile(
     .replace('{contact_relationship_type}', targetContext.relationshipType ?? '(unknown)')
     .replace('{existing_profile}', existingProfile?.summary ?? '(none yet)')
     .replace('{memory_facts}', memoryFacts);
-  const prompt = ensureTargetContextInPrompt(profilePrompt, renderedPrompt, targetContext);
+  const taskPrompt = ensureTargetContextInPrompt(profilePrompt, renderedPrompt, targetContext);
+  // E6.1: soft persona framing precedes the strict task instructions and XML
+  // schema; the schema/format sections stay byte-identical.
+  const prompt = options.personaPreamble
+    ? options.personaPreamble.prepend('profile_synthesis', taskPrompt)
+    : taskPrompt;
 
   const response = await options.llmClient.complete(
     {

@@ -22,7 +22,7 @@ describe('HeartbeatPolicyStore', () => {
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
     expect(policy.templates).toHaveLength(2);
-    expect(policy.version).toBe(3);
+    expect(policy.version).toBe(4);
     expect(policy.updatedBy).toBe('system');
 
     const ids = policy.templates.map(t => t.id);
@@ -66,13 +66,17 @@ describe('HeartbeatPolicyStore', () => {
     expect(dailyReview!.cadence).toEqual({ kind: 'daily', hour: 6, minute: 0, timezone: 'local' });
   });
 
-  it('daily-review treats ACAC as a private clue without schema narration', () => {
+  it('daily-review treats ACAC as a private clue without schema narration (E6.2 first-person guards)', () => {
     const policy = store.load();
     const template = policy.templates.find(t => t.id === 'daily-review');
-    expect(template?.prompt).toContain('private wellbeing-centered self-check');
-    expect(template?.prompt).toContain('ACAC, concerns, and memory as fallible clues');
-    expect(template?.prompt).toContain('keep structured telemetry separate from the reflection narrative');
-    expect(template?.prompt).toContain('Do not optimize, perform, or surface-shape public output around ACAC axes');
+    // Re-voiced first person, but the charter guards are all still present.
+    expect(template?.prompt).toContain('quiet look back at the day');
+    // Evidence/telemetry as fallible clues, not self-truth.
+    expect(template?.prompt).toContain('clues I hold loosely, not the truth of who I am');
+    // Telemetry kept separate from the reflection narrative.
+    expect(template?.prompt).toContain('stay in the telemetry, not in my own words');
+    // No ACAC performance shaping.
+    expect(template?.prompt).toContain('not trying to optimize or shape how I look');
     expect(template?.prompt).not.toContain('artifactType');
     expect(template?.prompt).not.toContain('provenance.kind');
     expect(template?.prompt).not.toContain('acac_self_report');
@@ -115,12 +119,12 @@ describe('HeartbeatPolicyStore', () => {
     const loaded = store.load();
     const daily = loaded.templates.find(t => t.id === 'daily-review');
     const weekly = loaded.templates.find(t => t.id === 'weekly-review');
-    expect(loaded.version).toBe(3);
+    expect(loaded.version).toBe(4);
     expect(daily?.enabled).toBe(false);
     expect(daily?.cadence).toEqual({ kind: 'daily', hour: 7, minute: 0, timezone: 'local' });
-    expect(daily?.prompt).toContain('private wellbeing-centered self-check');
+    expect(daily?.prompt).toContain('quiet look back at the day');
     expect(daily?.prompt).not.toContain('acac_self_report');
-    expect(weekly?.prompt).toContain('deeper private metacognitive and wellbeing review');
+    expect(weekly?.prompt).toContain('deeper look back across the week');
   });
 
   it('scheduled reflection templates do not send to Discord by default', () => {
@@ -137,7 +141,7 @@ describe('HeartbeatPolicyStore', () => {
     expect(weekly?.deliberation?.maxRounds).toBe(3);
     expect(weekly?.deliberation?.maxTotalTokens).toBe(14_000);
     expect(weekly?.internalStateInput).toBe(true);
-    expect(weekly?.prompt).toContain('durable values and north-star signals');
+    expect(weekly?.prompt).toContain('north-star signals that feel durable');
   });
 
   it('returns defaults for corrupt file', () => {

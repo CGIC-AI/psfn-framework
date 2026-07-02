@@ -1,0 +1,153 @@
+// ── Persona preamble service (E6.1) ──
+// One shared service that assembles the soft persona framing prepended to every
+// recurring schema-bound subprocess prompt. Consumers pick a subsystem id; the
+// service resolves the operator-editable template + per-subsystem label +
+// instruction from the prompt registry, derives the compressed persona and the
+// companion name from the live character card, and renders the preamble.
+//
+// The preamble PRECEDES strict task instructions and JSON schema sections. The
+// schema/format sections stay byte-identical — soft framing first, hard
+// instructions after. Nothing is hardcoded at a consumer site: editing the
+// registry template (or any label/instruction) changes every assembled prompt.
+
+import { injectPromptRuntimeTokens } from './prompt-runtime.js';
+import {
+  SUBSYSTEM_PERSONA_TEMPLATE_KEY,
+  SUBSYSTEM_PERSONA_TEMPLATE_TEXT,
+  getSubsystemPersonaSeed,
+  type SubsystemPersonaId,
+} from './persona-preamble-seeds.js';
+
+/** Minimal registry surface the service needs. PromptRegistryStatePort satisfies it. */
+export interface PersonaPreambleRegistryReader {
+  getByKey(key: string): { text: string } | undefined;
+}
+
+/** Live character-card variable source (characterPromptVariablesProvider). */
+export type PersonaVariablesProvider = () => Record<string, string>;
+
+/** Consumer-facing port: pick a subsystem, get its rendered preamble. */
+export interface PersonaPreamblePort {
+  build(subsystem: SubsystemPersonaId): string;
+  /** Prepend the preamble to a task prompt, keeping schema/format sections intact. */
+  prepend(subsystem: SubsystemPersonaId, taskPrompt: string): string;
+}
+
+export interface CreatePersonaPreambleServiceOptions {
+  registry: PersonaPreambleRegistryReader;
+  personaVariables: PersonaVariablesProvider;
+  /** Max characters of compressed persona. Default keeps it to a few sentences. */
+  maxPersonaSummaryChars?: number;
+  /** Max sentences of compressed persona. */
+  maxPersonaSummarySentences?: number;
+}
+
+const DEFAULT_MAX_PERSONA_SUMMARY_CHARS = 320;
+const DEFAULT_MAX_PERSONA_SUMMARY_SENTENCES = 2;
+const PERSONA_SUMMARY_FALLBACK = 'still becoming who I am';
+const COMPANION_NAME_FALLBACK = 'the companion';
+const UNRESOLVED_MACRO_PATTERN = /\{\{\s*[a-zA-Z0-9_.-]+(?:\(\))?\s*\}\}/g;
+
+function firstNonEmpty(...values: Array<string | undefined>): string {
+  for (const value of values) {
+    const trimmed = typeof value === 'string' ? value.trim() : '';
+    if (trimmed) return trimmed;
+  }
+  return '';
+}
+
+/**
+ * Compress the character card's persona into a few sentences. Deterministic (no
+ * extra LLM call): collapse whitespace, take the leading sentences, cap length.
+ * Sourced from the live card so there is no hand-maintained duplicate to drift.
+ */
+export function compressPersonaSummary(
+  variables: Record<string, string>,
+  options: { maxChars?: number; maxSentences?: number } = {},
+): string {
+  const maxChars = options.maxChars ?? DEFAULT_MAX_PERSONA_SUMMARY_CHARS;
+  const maxSentences = options.maxSentences ?? DEFAULT_MAX_PERSONA_SUMMARY_SENTENCES;
+
+  const source = firstNonEmpty(variables.personality, variables.description);
+  if (!source) return PERSONA_SUMMARY_FALLBACK;
+
+  const collapsed = source.replace(/\s+/g, ' ').trim();
+  // Split into sentences on terminal punctuation, keep the leading ones.
+  const sentences = (collapsed.match(/[^.!?]+[.!?]*/g) ?? [collapsed])
+    .map(sentence => sentence.trim())
+    .filter(sentence => sentence.length > 0);
+  let summary = sentences.slice(0, Math.max(1, maxSentences)).join(' ').trim();
+
+  if (summary.length > maxChars) {
+    summary = `${summary.slice(0, maxChars - 1).trimEnd()}…`;
+  }
+  return summary || PERSONA_SUMMARY_FALLBACK;
+}
+
+export function createPersonaPreambleService(
+  options: CreatePersonaPreambleServiceOptions,
+): PersonaPreamblePort {
+  const { registry, personaVariables } = options;
+
+  const resolveText = (key: string, fallback: string): string => {
+    const entry = registry.getByKey(key);
+    const text = typeof entry?.text === 'string' ? entry.text.trim() : '';
+    return text || fallback;
+  };
+
+  // Small memo so repeated builds within a card generation avoid recompressing.
+  let cachedSource: string | undefined;
+  let cachedSummary: string | undefined;
+
+  const resolvePersonalitySummary = (variables: Record<string, string>): string => {
+    const personality = typeof variables.personality === 'string' ? variables.personality : '';
+    const description = typeof variables.description === 'string' ? variables.description : '';
+    const source = `${personality} ${description}`;
+    if (source === cachedSource && cachedSummary !== undefined) {
+      return cachedSummary;
+    }
+    const summary = compressPersonaSummary(variables, {
+      ...(options.maxPersonaSummaryChars !== undefined ? { maxChars: options.maxPersonaSummaryChars } : {}),
+      ...(options.maxPersonaSummarySentences !== undefined ? { maxSentences: options.maxPersonaSummarySentences } : {}),
+    });
+    cachedSource = source;
+    cachedSummary = summary;
+    return summary;
+  };
+
+  const build = (subsystem: SubsystemPersonaId): string => {
+    const seed = getSubsystemPersonaSeed(subsystem);
+    const template = resolveText(SUBSYSTEM_PERSONA_TEMPLATE_KEY, SUBSYSTEM_PERSONA_TEMPLATE_TEXT);
+    const subsystemLabel = resolveText(seed.labelKey, seed.label);
+    const instruction = resolveText(seed.instructionKey, seed.instruction);
+
+    const variables = personaVariables();
+    const char = firstNonEmpty(
+      variables.char,
+      variables.character_name,
+      variables.name,
+      variables.character,
+    ) || COMPANION_NAME_FALLBACK;
+    const personalitySummary = resolvePersonalitySummary(variables);
+
+    const rendered = injectPromptRuntimeTokens(template, {
+      variables: {
+        char,
+        subsystem: subsystemLabel,
+        personality_summary: personalitySummary,
+        instruction,
+      },
+    });
+    // Defensive: drop any card-macro token the card text carried that has no
+    // value this pass (e.g. {{user}} embedded in a personality field), so no
+    // unresolved macro leaks into the soft framing.
+    return rendered.replace(UNRESOLVED_MACRO_PATTERN, '').replace(/\s{2,}/g, ' ').trim();
+  };
+
+  const prepend = (subsystem: SubsystemPersonaId, taskPrompt: string): string => {
+    const preamble = build(subsystem);
+    return preamble ? `${preamble}\n\n${taskPrompt}` : taskPrompt;
+  };
+
+  return { build, prepend };
+}

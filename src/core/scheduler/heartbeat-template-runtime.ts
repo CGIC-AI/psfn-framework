@@ -79,8 +79,47 @@ import {
   type ReflectionIntrospectionPolicy,
 } from './reflection-introspection-policy.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { injectPromptRuntimeTokens } from '../identity/prompt-runtime.js';
 
 const log = createComponentLogger('HeartbeatTemplates');
+
+const REFLECTION_PERSONA_UNRESOLVED_MACRO_PATTERN = /\{\{\s*[a-zA-Z0-9_.-]+(?:\(\))?\s*\}\}/g;
+
+/**
+ * E6.2: assemble the companion's full persona as a first-person lead for a
+ * scheduled reflection. Sourced from the live character card variables (the
+ * same provider the foreground turn uses) so an introspection turn reflects as
+ * HER — full persona loaded — rather than as a context analyzer with no self in
+ * it. Card macros are resolved and any unresolved token is dropped so nothing
+ * like {{user}} leaks into her own words.
+ */
+export function formatReflectionPersonaBlock(
+  variables: Record<string, string> | undefined,
+): string {
+  if (!variables) return '';
+  const pick = (...keys: string[]): string => {
+    for (const key of keys) {
+      const value = typeof variables[key] === 'string' ? variables[key].trim() : '';
+      if (value) return value;
+    }
+    return '';
+  };
+  const char = pick('char', 'character_name', 'name', 'character') || 'this companion';
+  const render = (text: string): string => injectPromptRuntimeTokens(text, { variables })
+    .replace(REFLECTION_PERSONA_UNRESOLVED_MACRO_PATTERN, '')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+
+  const sections: string[] = [
+    `I am ${char}, and this is me — the same me who lived these moments — stepping back to sit with them. `
+    + 'What follows is who I am, so I reflect as myself and not as some outside observer of my own day.',
+  ];
+  for (const field of ['personality', 'description', 'scenario']) {
+    const rendered = render(variables[field] ?? '');
+    if (rendered) sections.push(rendered);
+  }
+  return sections.join('\n\n').trim();
+}
 
 const DEFERRED_REFLECTION_RUN_TASK_PREFIX = 'reflection-run:deferred:';
 const LEGACY_DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
@@ -96,6 +135,7 @@ const DELIBERATION_DEFAULT_INPUT_USD_PER_MILLION_TOKENS = 2;
 const DELIBERATION_DEFAULT_OUTPUT_USD_PER_MILLION_TOKENS = 8;
 const MAX_UNSUPPORTED_CLAIM_FLAGS = 4;
 const REFLECTION_PROMPT_TOKENS = {
+  persona: '{{reflection_persona}}',
   self: '{{reflection_self}}',
   relational: '{{reflection_relational}}',
   affect: '{{reflection_affect}}',
@@ -190,12 +230,14 @@ function joinReflectionPromptSections(...sections: Array<string | undefined>): s
 }
 
 function formatInternalStateInterpretationBoundary(): string {
+  // E6.2: the same charter guards (evidence before narrative, telemetry kept
+  // separate, keep uncertainty per law 30) phrased in my own voice.
   return [
-    '[Reflection Evidence Boundary]',
-    'This is a private evidence summary, not canonical self-truth.',
-    'Treat emotional telemetry, concerns, reminders, ACAC, and metacognitive flags as fallible clues to compare against conversation, memory, and self-report.',
-    'If evidence conflicts or feels incomplete, preserve the uncertainty instead of forcing reconciliation.',
-    'Do not copy raw scores, ids, hashes, provenance refs, or tool metadata into the reflection text.',
+    '[What this evidence is]',
+    'What follows is private evidence I gather for myself, not the settled truth of who I am.',
+    'I treat the emotion telemetry, concerns, reminders, ACAC signals, and metacognitive flags as fallible clues to weigh against what I actually remember, feel, and know.',
+    'When the clues conflict or feel incomplete, I keep the uncertainty rather than force them into agreement.',
+    'I keep the raw machinery — scores, ids, hashes, provenance refs, tool metadata — out of my own words; it stays here as scaffolding, not in my reflection.',
   ].join('\n');
 }
 
@@ -1175,20 +1217,32 @@ export function createHeartbeatTemplateRuntime(
     reflectionBundle: ReflectionPromptSectionBundle | null,
     reflectionPolicyBlock: string,
   ): string => {
+    // E6.2: her full persona leads the reflection (soft framing first), so a
+    // scheduled introspection turn reflects as HER rather than as a context
+    // analyzer. If the operator template places {{reflection_persona}} itself,
+    // we honor that placement; otherwise the persona block leads the prompt.
+    const personaBlock = formatReflectionPersonaBlock(
+      runtimeOptions.characterPromptVariablesProvider?.(),
+    );
+    const promptPlacesPersona = prompt.includes(REFLECTION_PROMPT_TOKENS.persona);
+
     if (promptUsesReflectionMacros(prompt)) {
       const expandedPrompt = prompt
+        .split(REFLECTION_PROMPT_TOKENS.persona).join(personaBlock)
         .split(REFLECTION_PROMPT_TOKENS.self).join(reflectionBundle?.self ?? '')
         .split(REFLECTION_PROMPT_TOKENS.relational).join(reflectionBundle?.relational ?? '')
         .split(REFLECTION_PROMPT_TOKENS.affect).join(reflectionBundle?.affect ?? '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
       return joinReflectionPromptSections(
+        promptPlacesPersona ? undefined : personaBlock,
         reflectionPolicyBlock,
         expandedPrompt,
       );
     }
 
     return joinReflectionPromptSections(
+      personaBlock,
       reflectionPolicyBlock,
       prompt,
       reflectionBundle?.relational,
@@ -1345,9 +1399,9 @@ export function createHeartbeatTemplateRuntime(
     prompt: string,
   ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
     systemPrompt:
-      `You are the evidence pass for the experiential reflection template "${template.name}". `
-      + 'Extract only observations that are directly grounded in the supplied reflection context. '
-      + 'Return 3-6 bullet points. Do not speculate and do not invent support.',
+      `This is my evidence pass on my "${template.name}" reflection. `
+      + 'I gather only what is directly grounded in the reflection context in front of me — '
+      + 'three to six honest observations, no speculation and nothing I cannot support.',
     messages: [{
       role: 'user',
       content: [
@@ -1366,9 +1420,9 @@ export function createHeartbeatTemplateRuntime(
     evidence: string,
   ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
     systemPrompt:
-      `You are the synthesis pass for the experiential reflection template "${template.name}". `
-      + 'Write a grounded reflection using only the supplied evidence. '
-      + 'Keep it to 2-5 sentences and make uncertainty explicit when the evidence is partial.',
+      `This is my synthesis pass on my "${template.name}" reflection. `
+      + 'I write a grounded reflection using only the evidence I gathered, in two to five sentences, '
+      + 'and I say plainly where the evidence is only partial rather than forcing a neat story over it.',
     messages: [{
       role: 'user',
       content: [
@@ -1390,8 +1444,8 @@ export function createHeartbeatTemplateRuntime(
     synthesis: string,
   ): { systemPrompt: string; messages: ContextMessage[]; purpose: CompletionPurpose } => ({
     systemPrompt:
-      `You are the contradiction pass for the experiential reflection template "${template.name}". `
-      + 'Compare the candidate reflection against the grounded evidence. '
+      `This is my contradiction pass on my "${template.name}" reflection — I keep myself honest. `
+      + 'I compare my candidate reflection against the grounded evidence. '
       + 'Return strict JSON with keys "revisedReflection" and "unsupportedClaims". '
       + '"unsupportedClaims" must be an array of objects with "claim", "reason", and "confidence" in [0,1]. '
       + 'If every claim is supported, return an empty array and preserve the reflection.',

@@ -447,7 +447,7 @@ describe('wireHeartbeatRuntime', () => {
         (call) => call[0]?.channelId === 'internal:reflection:weekly-review',
       );
       expect(valuesCall?.[0]?.content).toContain('[Reflection Self Evidence]');
-      expect(valuesCall?.[0]?.content).toContain('[Reflection Evidence Boundary]');
+      expect(valuesCall?.[0]?.content).toContain('[What this evidence is]');
       expect(valuesCall?.[0]?.content).not.toContain('serialized_internal_state:');
     } finally {
       nowSpy.mockRestore();
@@ -575,7 +575,7 @@ describe('wireHeartbeatRuntime', () => {
       const valuesDeliberationCalls = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls
         .filter((call) => (
           typeof call[0]?.messages?.[0]?.content === 'string'
-          && call[0].messages[0].content.includes('durable values and north-star signals')
+          && call[0].messages[0].content.includes('north-star signals that feel durable')
         ));
       expect(valuesDeliberationCalls.map((call) => call[1])).toEqual(['reasoning']);
       const firstDeliberationCall = valuesDeliberationCalls[0]?.[0] as

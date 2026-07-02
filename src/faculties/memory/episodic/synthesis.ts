@@ -23,6 +23,7 @@ import type {
   EpisodicStorePort,
 } from './store.js';
 import { proposeTopicSegments, type TopicSegment } from './topic-segmentation.js';
+import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 
 const log = createComponentLogger('EpisodicSynthesis');
 
@@ -53,6 +54,8 @@ export interface EpisodicTopicSegmentationOptions {
   llmProvider?: Pick<LLMProviderPort, 'complete'> | null;
   /** Segmentation telemetry sink; wired to the runtime event bus by composition. */
   onEvent?: (event: EpisodeSegmentationEvent) => void;
+  /** Shared persona preamble service (E6.1); soft persona framing before the segmentation task prompt. */
+  personaPreamble?: PersonaPreamblePort | null;
   now?: () => number;
 }
 
@@ -873,6 +876,7 @@ export class EpisodicSynthesizer {
   private readonly minSingleEntryChars: number;
   private readonly segmentationEnabled: boolean;
   private readonly segmentationProvider: Pick<LLMProviderPort, 'complete'> | null;
+  private readonly segmentationPersonaPreamble: PersonaPreamblePort | null;
   private readonly onSegmentationEvent?: (event: EpisodeSegmentationEvent) => void;
   private readonly segmentationNow: () => number;
   private readonly processingWatermarks = new Map<string, EpisodicSynthesisProcessingWatermark>();
@@ -919,6 +923,7 @@ export class EpisodicSynthesizer {
     const segmentation = options.topicSegmentation;
     this.segmentationEnabled = segmentation?.enabled === true;
     this.segmentationProvider = segmentation?.llmProvider ?? null;
+    this.segmentationPersonaPreamble = segmentation?.personaPreamble ?? null;
     if (this.segmentationEnabled && !this.segmentationProvider) {
       // Fail closed at composition time: an enabled flag without a provider
       // must never silently degrade to deterministic-only cutting.
@@ -1032,7 +1037,7 @@ export class EpisodicSynthesizer {
           sessionId: input.sessionId,
           channelId,
           entries: group.entries,
-        });
+        }, this.segmentationPersonaPreamble);
       } catch (error) {
         // Fail closed: no episode is written for this chunk, nothing from it
         // is claimed, and the run stops so the watermark never advances past

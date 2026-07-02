@@ -68,6 +68,7 @@ import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-r
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
+import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import type { ShardAuditTrail } from '../../../faculties/shards/manager.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
@@ -323,6 +324,8 @@ export interface MemoryRuntimeOptions {
   concernCandidateSink?: ConcernCandidateExtractionSink | null;
   /** Contact-tracking policy gate predicate (E3.4); absent behaves as 'auto'. */
   isAutoContactCreationAllowed?: ((channelId: string) => boolean) | null;
+  /** Shared persona preamble service (E6.1); soft persona framing before extraction/profile prompts. */
+  personaPreamble?: PersonaPreamblePort | null;
 }
 
 export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtractor {
@@ -355,6 +358,9 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
       : {}),
     ...(options.isAutoContactCreationAllowed
       ? { isAutoContactCreationAllowed: options.isAutoContactCreationAllowed }
+      : {}),
+    ...(options.personaPreamble
+      ? { personaPreamble: options.personaPreamble }
       : {}),
   };
   const memoryExtractor = options.config

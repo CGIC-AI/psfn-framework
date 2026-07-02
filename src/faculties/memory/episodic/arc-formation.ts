@@ -1,4 +1,5 @@
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
   EPISODE_ARC_KINDS,
@@ -24,6 +25,8 @@ export interface ArcFormationOptions {
   minConfidence?: number;
   /** Typed fail-closed outcomes (rejected proposals, failed judgments); wired to the event bus by composition. */
   onEvent?: (event: ArcFormationOutcomeEvent) => void;
+  /** Shared persona preamble service (E6.1); soft persona framing before the arc-judgment task prompt. */
+  personaPreamble?: PersonaPreamblePort | null;
 }
 
 /**
@@ -213,6 +216,7 @@ export class EpisodeArcWeaver {
   private readonly maxEpisodesPerRun: number;
   private readonly minConfidence: number;
   private readonly onEvent: ((event: ArcFormationOutcomeEvent) => void) | null;
+  private readonly personaPreamble: PersonaPreamblePort | null;
 
   constructor(
     store: EpisodicStorePort,
@@ -232,6 +236,7 @@ export class EpisodeArcWeaver {
     }
     this.minConfidence = minConfidence;
     this.onEvent = options.onEvent ?? null;
+    this.personaPreamble = options.personaPreamble ?? null;
   }
 
   async run(input: ArcFormationRunInput): Promise<ArcFormationRunResult> {
@@ -385,9 +390,13 @@ export class EpisodeArcWeaver {
     ].join('\n');
 
     try {
+      // E6.1: soft persona framing precedes the strict task instructions and JSON schema.
+      const systemPrompt = this.personaPreamble
+        ? this.personaPreamble.prepend('arc_formation', ARC_JUDGMENT_SYSTEM_PROMPT)
+        : ARC_JUDGMENT_SYSTEM_PROMPT;
       const response = await this.llmProvider.complete(
         {
-          systemPrompt: ARC_JUDGMENT_SYSTEM_PROMPT,
+          systemPrompt,
           messages: [{ role: 'user', content: requestPrompt }],
           correlation: {
             requestId: `arc-formation:${input.sessionId}:${String(this.now().getTime())}`,

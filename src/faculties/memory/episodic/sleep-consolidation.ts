@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type {
   Episode,
@@ -51,6 +52,8 @@ export interface SleepCycleConsolidationOptions {
   maxTranscriptCharsPerEpisode?: number;
   /** Typed fail-closed consolidation failures; wired to the event bus by composition. */
   onConsolidationFailure?: (event: SleepConsolidationFailureEvent) => void;
+  /** Shared persona preamble service (E6.1); soft persona framing before the consolidation task prompts. */
+  personaPreamble?: PersonaPreamblePort | null;
 }
 
 export interface SleepCycleConsolidationRunInput {
@@ -576,6 +579,7 @@ export class SleepCycleEpisodeConsolidator {
   private readonly transcriptMessageLimit: number;
   private readonly maxTranscriptCharsPerEpisode: number;
   private readonly onConsolidationFailure: ((event: SleepConsolidationFailureEvent) => void) | null;
+  private readonly personaPreamble: PersonaPreamblePort | null;
 
   constructor(
     store: EpisodicStorePort,
@@ -595,6 +599,7 @@ export class SleepCycleEpisodeConsolidator {
     this.transcriptMessageLimit = options.transcriptMessageLimit ?? DEFAULT_TRANSCRIPT_MESSAGE_LIMIT;
     this.maxTranscriptCharsPerEpisode = options.maxTranscriptCharsPerEpisode ?? DEFAULT_MAX_TRANSCRIPT_CHARS;
     this.onConsolidationFailure = options.onConsolidationFailure ?? null;
+    this.personaPreamble = options.personaPreamble ?? null;
   }
 
   async run(input: SleepCycleConsolidationRunInput): Promise<SleepCycleConsolidationResult> {
@@ -978,9 +983,13 @@ export class SleepCycleEpisodeConsolidator {
       'Return the grouping JSON only.',
     ].join('\n');
 
+    // E6.1: soft persona framing precedes the strict task instructions and JSON schema.
+    const groupingSystemPrompt = this.personaPreamble
+      ? this.personaPreamble.prepend('sleep_thematic_grouping', THEMATIC_GROUPING_SYSTEM_PROMPT)
+      : THEMATIC_GROUPING_SYSTEM_PROMPT;
     const response = await this.llmProvider.complete(
       {
-        systemPrompt: THEMATIC_GROUPING_SYSTEM_PROMPT,
+        systemPrompt: groupingSystemPrompt,
         messages: [{ role: 'user', content: requestPrompt }],
         correlation: {
           requestId: `sleep-consolidation:group:${input.sessionId}:${cluster[0].id}`,
@@ -1029,9 +1038,12 @@ export class SleepCycleEpisodeConsolidator {
     ].join('\n');
 
     try {
+      const refinementSystemPrompt = this.personaPreamble
+        ? this.personaPreamble.prepend('sleep_refinement', REFINEMENT_SYSTEM_PROMPT)
+        : REFINEMENT_SYSTEM_PROMPT;
       const response = await this.llmProvider.complete(
         {
-          systemPrompt: REFINEMENT_SYSTEM_PROMPT,
+          systemPrompt: refinementSystemPrompt,
           messages: [{ role: 'user', content: requestPrompt }],
           correlation: {
             requestId: `sleep-consolidation:${input.sessionId}:${episode.id}`,

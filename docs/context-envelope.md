@@ -1,10 +1,13 @@
 # Context Envelope Contract (E3.1)
 
-Status: **contract ratified vocabulary, implementation staged** — this document is the operator-review
-surface for the Context Envelope. E3.1 lands the types, owner-file schemas, and the
-`semi_private → invite_only` vocabulary rename only. **No gating behavior changed in E3.1.**
-E3.2 wires owner-file classification; E3.3 attaches the envelope to `ConversationScope`
-and re-keys the policy gates.
+Status: **contract ratified; classification re-keyed (E3.2)** — this document is the
+operator-review surface for the Context Envelope. E3.1 landed the types, owner-file
+schemas, and the `semi_private → invite_only` vocabulary rename. **E3.2 executed the
+classification re-keying**: `classifyChannel` now consumes channels.json
+`contextEnvelope` labels as the top-precedence source, the broadcast split is executed
+at classification inputs, per-contact privacy fields are demoted to provenance
+evidence, and the one-time `migrate:channel-envelope` command seeds channel records.
+E3.3 attaches the envelope to `ConversationScope` and re-keys the policy gates.
 
 Canonical code: `src/system/trust/context-envelope.ts`.
 
@@ -98,7 +101,8 @@ Derived from the fraction of recent speakers resolvable to contacts
       "discord:friends-room": {
         "privacy": "invite_only",      // ChannelPrivacy — retired vocabulary rejected
         "broadcast": false,             // optional boolean
-        "contactTracking": "auto"      // auto | approval | role_gated
+        "contactTracking": "auto",     // auto | approval | role_gated
+        "needsReview": false            // optional; migration-seeded review flag (E3.2)
       }
     }
   }
@@ -107,9 +111,15 @@ Derived from the fraction of recent speakers resolvable to contacts
 
 - Section optional; absent means "no channel-owned labels".
 - Every present label must define at least one field; unknown keys fail closed.
-- Validated at load (`loadRuntimeChannelsConfig` → `parseContextEnvelopeSection`);
-  E3.1 carries the parsed labels on `RuntimeChannelsConfig.contextEnvelope` without
-  consuming them. E3.2 wires them into classification.
+- `broadcast: true` with a non-`public` `privacy` is rejected (a broadcast surface is
+  always `public`); a label carrying only `broadcast: true` implies `public`.
+- `needsReview` (E3.2) marks a migration-seeded fail-closed label awaiting operator
+  confirmation. It renders as a Garden warning badge and never changes gating.
+- Validated at load (`loadRuntimeChannelsConfig` → `parseContextEnvelopeSection`) AND
+  on every owner-file save (`saveChannelsOwnerFile` re-validates fail-closed).
+- **Consumed since E3.2**: startup publishes the labels
+  (`setRuntimeChannelEnvelopeLabels`) and `classifyChannelEnvelope` resolves them as
+  the top-precedence classification source.
 
 ### trust-policy.json (operator policy + derivation thresholds)
 
@@ -137,15 +147,44 @@ Derived from the fraction of recent speakers resolvable to contacts
 
 ## Precedence
 
-For a channel's `channelPrivacy` (highest wins):
+For a channel's `{channelPrivacy, broadcast}` pair (highest wins), **executed in E3.2**
+by `classifyChannelEnvelope` (`src/system/trust/policy.ts`):
 
-1. **Channel-owned label** — `channels.json` `contextEnvelope.channels.<channelId>.privacy`
+1. **Channel-owned label** — `channels.json` `contextEnvelope.channels.<channelId>`
+   (`privacy` + `broadcast`; a `broadcast: false`-only label pins the flag while
+   privacy falls through)
 2. **Operator trust-policy override** — `trust-policy.json`
-   `channelClassification.visibilityOverrides` (exact, then longest prefix) and prefix lists
-3. **Derived default** — `isDirectMessage → private`, else `invite_only`
+   `channelClassification.visibilityOverrides` (exact, then longest prefix), mapped
+   through the migration pair (`broadcast → public + flag`)
+3. **Derived default** — adapter-declared runtime metadata (`X-Channel-Privacy`,
+   satellite registry, routing → `ChannelMeta.privacyLevel`), `isDirectMessage →
+   private`, and the **demoted** prefix heuristics (`privatePrefixes` /
+   `broadcastPrefixes`), else `invite_only`
 
-This is the envelope re-expression of today's 7-step `classifyChannel` hierarchy;
-E3.2 re-keys that hierarchy onto the new vocabulary and sources.
+The prefix lists are no longer operator-tier authority: E3.2 demoted them to
+derived-default inputs and made them SEED data for channel records — the one-time
+`npm run migrate:channel-envelope` command derives channel-owned labels from them
+(plus persisted evidence) so labeled channels never consult heuristics again. The
+transitional `classifyChannel` (4-value `ChannelVisibility`, deleted in E3.3) is a
+pure projection: `broadcast ? 'broadcast' : privacy`.
+
+**Per-contact privacy fields are demoted (E3.2)**: `ContactChannelLink.privacyLevel`
+and `ContactConversationChannel.privacyLevel` are provenance evidence only. The
+`ResolvedAuthorContext.channelPrivacyLevel` seam was removed, so stored per-contact
+values can no longer reach `ChannelMeta.privacyLevel` or any gate. Rows are retained
+for history; column removal is a later cleanup bead.
+
+## One-time migration (`npm run migrate:channel-envelope`)
+
+Enumerates known channels from contact conversation-channel rows
+(`contact_channel_activity`, Postgres or SQLite) and the JSONL session journals, then
+seeds `contextEnvelope.channels` labels. Dry-run report is the **default**; `--apply`
+writes through the validated owner-file path. Derivation is deterministic: prefix
+heuristics seed verbatim; otherwise unanimous persisted evidence (stored visibility
+stamps, DM topology) seeds; conflicting or absent evidence is **reported, never
+guessed** — those channels get fail-closed `invite_only` plus `needsReview: true`
+(Garden warning badge). Channels already owned by an operator override are reported
+and left in trust-policy.json, not duplicated.
 
 ## Migration map (visibility → envelope)
 
@@ -154,7 +193,7 @@ E3.2 re-keys that hierarchy onto the new vocabulary and sources.
 | `private` | `{ channelPrivacy: 'private', broadcast: false }` | name unchanged |
 | `semi_private` | `{ channelPrivacy: 'invite_only', broadcast: false }` | **executed in E3.1** (pure rename, no alias) |
 | `public` | `{ channelPrivacy: 'public', broadcast: false }` | name unchanged |
-| `broadcast` | `{ channelPrivacy: 'public', broadcast: true }` | **documented only; executed in E3.2/E3.3** |
+| `broadcast` | `{ channelPrivacy: 'public', broadcast: true }` | **executed in E3.2 at classification inputs** (labels, overrides, meta, prefix seeds); the `ChannelVisibility` value itself is deleted in E3.3 |
 
 Code artifact: `CHANNEL_VISIBILITY_ENVELOPE_MIGRATION` in `context-envelope.ts`.
 
@@ -209,18 +248,22 @@ adds only the documented seam; no field, no wiring.
 These belong to the large-audience epic; the envelope vocabulary reserves their seams
 (`role_gated`, `audienceScope: 'many' | 'unbounded'`) without implementing them.
 
-## What E3.2 / E3.3 must still do
+## What remains after E3.2
 
-E3.1 stopped at the contract. Remaining wiring:
-
-**E3.2 — classification over owner files**
-- Re-key `classifyChannel` onto `ChannelPrivacy` + `broadcast` flag, consuming
-  `channels.json` `contextEnvelope.channels` as the top-precedence source.
-- Execute the `broadcast → (public + broadcast: true)` migration leg at classification
-  inputs (`broadcastPrefixes`, overrides, `ChannelMeta.privacyLevel`, satellite
-  registry, `X-Channel-Privacy`).
-- Derive `audienceScope` / `audienceKnowledge` at ingress from channel topology,
-  roster, and contact resolution using the config-owned thresholds.
+**E3.2 — classification over owner files (DONE)**
+- `classifyChannelEnvelope` re-keys classification onto `ChannelPrivacy` + the
+  `broadcast` flag, consuming `channels.json` `contextEnvelope.channels` as the
+  top-precedence source (published at startup via `setRuntimeChannelEnvelopeLabels`).
+- The `broadcast → (public + broadcast: true)` migration leg is executed at
+  classification inputs (labels, overrides, `ChannelMeta.privacyLevel` /
+  `X-Channel-Privacy` / satellite routing, and the demoted `broadcastPrefixes`).
+- Per-contact privacy fields are demoted to provenance evidence (no gating seam).
+- One-time `migrate:channel-envelope` seeds channel records; Garden gained the
+  CHANNELS list/edit view over the owner-file path.
+- Still with E3.3 (needs the `ConversationScope` seam): deriving `audienceScope` /
+  `audienceKnowledge` **at session ingress** from channel topology, roster, and
+  contact resolution using the config-owned thresholds (the derivation helpers are
+  contract-complete in `context-envelope.ts`).
 
 **E3.3 — envelope-keyed gating**
 - Attach `envelope: ContextEnvelope` to `ConversationScope` (the documented seam).

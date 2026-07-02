@@ -58,6 +58,7 @@ export const navGroups: NavGroup[] = [
   ]),
   navGroup('configure', 'Configure Garden', [
     { id: 'settings', path: '/settings', defaultLabel: 'Settings', icon: '\u{2600}\u{FE0F}' },
+    { id: 'channels', path: '/channels', defaultLabel: 'Channels', icon: '\u{1F4E1}' },
     { id: 'theme', path: '/theme', defaultLabel: 'Theme', icon: '\u{1F3A8}' },
     { id: 'primer', path: '/primer', defaultLabel: 'Primer', icon: '\u{1F4DA}' },
   ]),

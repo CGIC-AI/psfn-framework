@@ -28,6 +28,8 @@ import {
   runWithChargeContext,
 } from '../../../shared/telemetry/run-charge.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
+import { classifyChannel } from '../../../system/trust/policy.js';
+import { normalizeChannelVisibility } from '../../../system/trust/types.js';
 
 afterEach(() => {
   resetRunChargeRollingWindowForTests();
@@ -695,11 +697,13 @@ describe('runtime subject identity', () => {
       resolvedUserName: 'Tool Handoff',
       canonicalContactKey: 'contact-v',
       continuitySubjectKey: 'contact-v',
-      channelPrivacyLevel: 'private',
       continuityFallbackKeys: ['api-user-1'],
     });
+    // E3.2: per-contact conversation-channel privacy is demoted to provenance
+    // evidence — author resolution must not read it or surface it for gating.
+    expect(authorContext).not.toHaveProperty('channelPrivacyLevel');
     expect(getByChannelIdentity).toHaveBeenCalledWith('api', 'api-user-1');
-    expect(getConversationChannelPrivacy).toHaveBeenCalledWith('contact-v', 'api', 'api:session-1');
+    expect(getConversationChannelPrivacy).not.toHaveBeenCalled();
     expect(updateLastSeen).not.toHaveBeenCalled();
     expect(recordChannelActivity).not.toHaveBeenCalled();
   });
@@ -2293,7 +2297,7 @@ describe('runtime subject identity', () => {
     expect(variables.runtime_last_message_received_missing).toBe('true');
   });
 
-  it('uses persisted conversation-channel privacy and records it on activity', async () => {
+  it('records persisted conversation-channel privacy as evidence without surfacing it for gating', async () => {
     const recordedCalls: Array<{
       contactId: string;
       channel: string;
@@ -2336,13 +2340,27 @@ describe('runtime subject identity', () => {
       companionDisplayName: 'Companion',
     });
 
-    expect(authorContext.channelPrivacyLevel).toBe('private');
+    // E3.2: the stored per-contact value is re-recorded as provenance
+    // evidence, but the resolved author context must not expose it —
+    // classification consumes channels.json labels, operator overrides, and
+    // derived defaults only (docs/context-envelope.md).
+    expect(authorContext).not.toHaveProperty('channelPrivacyLevel');
     expect(recordedCalls).toEqual([{
       contactId: 'contact-alex',
       channel: 'discord',
       channelId: '1313001762793197678',
       privacyLevel: 'private',
     }]);
+
+    // AC (E3.2): a contact-level privacy label cannot change classification.
+    // The contact store labeled this conversation channel 'private', yet the
+    // channel still classifies by its own derived default (invite_only) —
+    // there is no seam from the resolved author context into ChannelMeta.
+    const routingPrivacy = normalizeChannelVisibility(undefined);
+    const channelMeta = {
+      ...(routingPrivacy ? { privacyLevel: routingPrivacy } : {}),
+    };
+    expect(classifyChannel('1313001762793197678', channelMeta)).toBe('invite_only');
   });
 
   it('labels blocked extended tools clearly in the prompt-owned runtime layers', () => {

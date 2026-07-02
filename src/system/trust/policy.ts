@@ -25,11 +25,26 @@ import {
 } from './types.js';
 import type { ResponseStyle, ResponseStyleOverrides } from '../../shared/contracts/runtime.js';
 import { getRuntimeTrustPolicy } from './runtime-policy.js';
+import type { TrustPolicyConfig } from '../config/trust-policy-config.js';
+import {
+  CHANNEL_VISIBILITY_ENVELOPE_MIGRATION,
+  DEFAULT_CONTACT_TRACKING_MODE,
+  type ChannelEnvelopeLabel,
+  type ChannelPrivacy,
+  type ContactTrackingMode,
+} from './context-envelope.js';
+import { getRuntimeChannelEnvelopeLabels } from './runtime-channel-labels.js';
 
 export interface ChannelMeta {
   isDirectMessage?: boolean;
   broadcastApprovalToken?: string;
   disclosureConsentGranted?: boolean;
+  /**
+   * Adapter-declared privacy hint (X-Channel-Privacy header, satellite
+   * registry, routing metadata). E3.2: a DERIVED-DEFAULT-tier input only —
+   * channel-owned labels and operator overrides always win, and per-contact
+   * privacy fields must never populate this (docs/context-envelope.md).
+   */
   privacyLevel?: ChannelVisibility;
 }
 
@@ -279,7 +294,30 @@ export function evaluateMemoryPolicy(ctx: PolicyContext): PolicyResult {
   };
 }
 
-// ── Channel classification ──
+// ── Channel classification (E3.2: envelope-keyed) ──
+//
+// classifyChannelEnvelope resolves the {channelPrivacy, broadcast} pair per
+// the Context Envelope contract precedence (docs/context-envelope.md):
+//   1. channel-owned label   — channels.json contextEnvelope.channels.<id>
+//   2. operator override     — trust-policy.json channelClassification
+//                              visibilityOverrides (exact, then longest prefix)
+//   3. derived default       — adapter-declared runtime metadata and DEMOTED
+//                              prefix heuristics; isDirectMessage → private,
+//                              else invite_only
+// The transitional 4-value ChannelVisibility (deleted in E3.3) is now a pure
+// projection of the envelope pair: (public + broadcast flag) → 'broadcast'.
+
+export type ChannelClassificationSource = 'channel_label' | 'operator_override' | 'derived_default';
+
+export interface ChannelEnvelopeClassification {
+  privacy: ChannelPrivacy;
+  broadcast: boolean;
+  contactTracking: ContactTrackingMode;
+  /** Which precedence tier resolved the {privacy, broadcast} pair. */
+  source: ChannelClassificationSource;
+  /** Migration-seeded fail-closed label awaiting operator review (never gates). */
+  needsReview: boolean;
+}
 
 function resolvePrefixVisibilityOverride(
   channelId: string,
@@ -295,42 +333,126 @@ function resolvePrefixVisibilityOverride(
   return bestMatch?.visibility;
 }
 
-export function classifyChannel(
+/**
+ * Pure envelope classification over explicit inputs. classifyChannelEnvelope
+ * wraps this with the runtime label/policy accessors; Garden and maintenance
+ * surfaces call it directly against freshly loaded owner files.
+ */
+export function resolveChannelEnvelopeClassification(
   channelId: string,
-  meta?: ChannelMeta,
-): ChannelVisibility {
-  const trustPolicy = getRuntimeTrustPolicy();
-  const visibilityOverrides = trustPolicy.channelClassification.visibilityOverrides;
+  meta: ChannelMeta | undefined,
+  inputs: {
+    label?: ChannelEnvelopeLabel;
+    trustPolicy: TrustPolicyConfig;
+  },
+): ChannelEnvelopeClassification {
+  const { label, trustPolicy } = inputs;
+  const contactTracking = label?.contactTracking ?? DEFAULT_CONTACT_TRACKING_MODE;
+  const needsReview = label?.needsReview === true;
 
+  // ── Tier 1: channel-owned label (channels.json contextEnvelope) ──
+  if (label?.broadcast === true) {
+    // Contract: a broadcast surface is always channelPrivacy 'public'.
+    // (Labels pairing broadcast=true with a non-public privacy are rejected
+    // fail-closed at validation.)
+    return { privacy: 'public', broadcast: true, contactTracking, source: 'channel_label', needsReview };
+  }
+  if (label?.privacy !== undefined) {
+    return { privacy: label.privacy, broadcast: false, contactTracking, source: 'channel_label', needsReview };
+  }
+  // A label carrying broadcast=false (without privacy) pins the flag while the
+  // privacy value falls through to the next tiers — channel ownership of the
+  // broadcast flag stays highest-precedence.
+  const broadcastPinnedFalse = label?.broadcast === false;
+  const applyPin = (pair: { channelPrivacy: ChannelPrivacy; broadcast: boolean }): {
+    privacy: ChannelPrivacy;
+    broadcast: boolean;
+  } => ({
+    privacy: broadcastPinnedFalse && pair.broadcast ? 'public' : pair.channelPrivacy,
+    broadcast: broadcastPinnedFalse ? false : pair.broadcast,
+  });
+
+  // ── Tier 2: operator trust-policy overrides (exact, then longest prefix) ──
+  const visibilityOverrides = trustPolicy.channelClassification.visibilityOverrides;
   const exactOverride = Object.prototype.hasOwnProperty.call(visibilityOverrides.exact, channelId)
     ? visibilityOverrides.exact[channelId]
     : undefined;
   if (exactOverride !== undefined) {
-    return exactOverride;
+    return {
+      ...applyPin(CHANNEL_VISIBILITY_ENVELOPE_MIGRATION[exactOverride]),
+      contactTracking,
+      source: 'operator_override',
+      needsReview,
+    };
   }
-
   const prefixOverride = resolvePrefixVisibilityOverride(channelId, visibilityOverrides.prefix);
   if (prefixOverride !== undefined) {
-    return prefixOverride;
+    return {
+      ...applyPin(CHANNEL_VISIBILITY_ENVELOPE_MIGRATION[prefixOverride]),
+      contactTracking,
+      source: 'operator_override',
+      needsReview,
+    };
   }
 
+  // ── Tier 3: derived default ──
+  // broadcastPrefixes / privatePrefixes are DEMOTED heuristics (E3.2): they
+  // are seed data for channel-owned records (npm run migrate:channel-envelope)
+  // and survive here only as derived-default inputs for channels that have no
+  // owned label yet. Adapter-declared metadata (X-Channel-Privacy, satellite
+  // registry, routing channelPrivacy → ChannelMeta.privacyLevel) and the DM
+  // flag are runtime observations, not operator policy, so they also live in
+  // this tier. Relative order is preserved from the pre-envelope hierarchy so
+  // unlabeled channels classify byte-identically.
+  const derived = (pair: { channelPrivacy: ChannelPrivacy; broadcast: boolean }): ChannelEnvelopeClassification => ({
+    ...applyPin(pair),
+    contactTracking,
+    source: 'derived_default',
+    needsReview,
+  });
+
   if (trustPolicy.channelClassification.broadcastPrefixes.some(prefix => channelId.startsWith(prefix))) {
-    return 'broadcast';
+    return derived(CHANNEL_VISIBILITY_ENVELOPE_MIGRATION.broadcast);
   }
 
   const explicitPrivacyLevel = normalizeChannelVisibility(meta?.privacyLevel);
   if (explicitPrivacyLevel !== undefined) {
-    return explicitPrivacyLevel;
+    return derived(CHANNEL_VISIBILITY_ENVELOPE_MIGRATION[explicitPrivacyLevel]);
   }
 
-  // Discord DMs explicitly flagged by adapter — private (honne)
-  if (meta?.isDirectMessage) return 'private';
+  // Direct messages explicitly flagged by adapter — private (honne)
+  if (meta?.isDirectMessage) {
+    return derived(CHANNEL_VISIBILITY_ENVELOPE_MIGRATION.private);
+  }
 
   if (trustPolicy.channelClassification.privatePrefixes.some(prefix => channelId.startsWith(prefix))) {
-    return 'private';
+    return derived(CHANNEL_VISIBILITY_ENVELOPE_MIGRATION.private);
   }
 
-  return trustPolicy.channelClassification.defaultVisibility;
+  return derived(CHANNEL_VISIBILITY_ENVELOPE_MIGRATION[trustPolicy.channelClassification.defaultVisibility]);
+}
+
+export function classifyChannelEnvelope(
+  channelId: string,
+  meta?: ChannelMeta,
+): ChannelEnvelopeClassification {
+  return resolveChannelEnvelopeClassification(channelId, meta, {
+    label: getRuntimeChannelEnvelopeLabels()[channelId],
+    trustPolicy: getRuntimeTrustPolicy(),
+  });
+}
+
+/**
+ * Transitional single-axis projection of the envelope classification
+ * (E3.3 removes ChannelVisibility entirely). broadcast=true implies
+ * privacy 'public' by construction, so the pair projects losslessly.
+ */
+export function classifyChannel(
+  channelId: string,
+  meta?: ChannelMeta,
+): ChannelVisibility {
+  const envelope = classifyChannelEnvelope(channelId, meta);
+  return envelope.broadcast ? 'broadcast' : envelope.privacy;
 }
 
 function resolvePrefixStyleOverride(

@@ -7,7 +7,7 @@ import type {
 } from '../../../shared/contracts/runtime.js';
 import type { ApiHealthResponse } from '../../../channels/api/types.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
-import type { ChannelVisibility, TrustLevel } from '../../../system/trust/types.js';
+import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelVisibility } from '../../../system/trust/types.js';
 import {
   buildResponseStylePromptState,
@@ -143,7 +143,9 @@ export interface ResolvedAuthorContext {
   canonicalContactKey?: string;
   subjectIdentityKey?: string;
   continuitySubjectKey?: string;
-  channelPrivacyLevel?: ChannelVisibility;
+  // E3.2: the per-contact `channelPrivacyLevel` field was removed. Per-contact
+  // conversation-channel privacy is provenance evidence only and must never
+  // reach ChannelMeta.privacyLevel / classifyChannel (docs/context-envelope.md).
   continuityFallbackKeys: string[];
 }
 
@@ -620,19 +622,9 @@ async function resolveGeneratedMessageSourceContext(input: {
     const contact = hintedContact
       ?? await input.contactStore.getByChannelIdentity(channel, input.provenance.sourceAuthorId);
     const canonicalContactKey = contact?.id ?? canonicalHint;
-    const explicitChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy);
-    const channelPrivacyLevel = explicitChannelPrivacy
-      ?? (
-        contact && canonicalContactKey
-          ? normalizeChannelVisibility(
-            await input.contactStore.getConversationChannelPrivacy(
-              canonicalContactKey,
-              channel,
-              input.provenance.sourceChannelId,
-            ),
-          )
-          : undefined
-      );
+    // E3.2: per-contact conversation-channel privacy is no longer consulted
+    // here — channel classification is owned by channels.json labels, operator
+    // overrides, and derived defaults (docs/context-envelope.md).
 
     return {
       trustLevel: contact?.trustLevel ?? 'regular',
@@ -645,7 +637,6 @@ async function resolveGeneratedMessageSourceContext(input: {
         subjectIdentityKey: input.provenance.sourceAuthorId,
         authorId: input.provenance.sourceAuthorId,
       }),
-      ...(channelPrivacyLevel ? { channelPrivacyLevel } : {}),
       continuityFallbackKeys: canonicalContactKey
         ? collectContinuityFallbackKeys(input.provenance.sourceAuthorId, canonicalContactKey, contact)
         : [],
@@ -751,7 +742,6 @@ export async function resolveAuthorContext(input: {
       ...(generatedSourceContext?.relationshipType ? { relationshipType: generatedSourceContext.relationshipType } : {}),
       ...(canonicalContactKey ? { canonicalContactKey } : {}),
       continuitySubjectKey: generatedSourceContext?.continuitySubjectKey ?? input.message.authorId,
-      ...(generatedSourceContext?.channelPrivacyLevel ? { channelPrivacyLevel: generatedSourceContext.channelPrivacyLevel } : {}),
       continuityFallbackKeys: generatedSourceContext?.continuityFallbackKeys ?? [],
     };
   }
@@ -793,8 +783,12 @@ export async function resolveAuthorContext(input: {
       await input.contactStore.updateLastSeen(hintedContact.id);
     }
     const canonicalContactKey = contact.id;
-    const explicitChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy);
-    const channelPrivacyLevel = explicitChannelPrivacy
+    // E3.2: adapter-declared routing privacy is recorded on the contact's
+    // conversation-channel row as provenance EVIDENCE only. The stored
+    // per-contact value is never read back into classification — channel
+    // privacy is owned by channels.json labels, operator overrides, and
+    // derived defaults (docs/context-envelope.md).
+    const observedChannelPrivacy = normalizeChannelVisibility(input.message.routing?.channelPrivacy)
       ?? normalizeChannelVisibility(
         await input.contactStore.getConversationChannelPrivacy(
           canonicalContactKey,
@@ -808,7 +802,7 @@ export async function resolveAuthorContext(input: {
         canonicalContactKey,
         channel,
         input.message.channelId,
-        channelPrivacyLevel,
+        observedChannelPrivacy,
       );
     }
 
@@ -825,7 +819,6 @@ export async function resolveAuthorContext(input: {
         subjectIdentityKey: input.message.authorId,
         authorId: input.message.authorId,
       }),
-      ...(channelPrivacyLevel ? { channelPrivacyLevel } : {}),
       continuityFallbackKeys: canonicalContactKey
         ? collectContinuityFallbackKeys(input.message.authorId, canonicalContactKey, contact)
         : [],

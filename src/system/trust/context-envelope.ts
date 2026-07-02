@@ -230,11 +230,18 @@ export interface ContextEnvelopeCarrier {
  * Channel-owned envelope label. Highest-precedence source for channelPrivacy:
  *   channel-owned label > operator trust-policy override > derived default.
  * All fields optional; omitted fields fall through to the next precedence layer.
+ *
+ * `needsReview` (E3.2) marks a label seeded by the one-time channel-envelope
+ * migration for a channel whose classification could not be derived
+ * unambiguously: it received the fail-closed default (invite_only) and the
+ * flag keeps it visible (Garden warning badge + migration report line) until
+ * the operator confirms or corrects it. The flag never changes gating.
  */
 export interface ChannelEnvelopeLabel {
   readonly privacy?: ChannelPrivacy;
   readonly broadcast?: boolean;
   readonly contactTracking?: ContactTrackingMode;
+  readonly needsReview?: boolean;
 }
 
 export function validateChannelEnvelopeLabel(raw: unknown, field: string): ChannelEnvelopeLabel {
@@ -243,7 +250,7 @@ export function validateChannelEnvelopeLabel(raw: unknown, field: string): Chann
   }
   const source = raw as Record<string, unknown>;
   const unknownKeys = Object.keys(source)
-    .filter(key => key !== 'privacy' && key !== 'broadcast' && key !== 'contactTracking');
+    .filter(key => key !== 'privacy' && key !== 'broadcast' && key !== 'contactTracking' && key !== 'needsReview');
   if (unknownKeys.length > 0) {
     throw new Error(`Invalid channel envelope label: ${field} has unsupported keys: ${unknownKeys.join(', ')}`);
   }
@@ -255,6 +262,7 @@ export function validateChannelEnvelopeLabel(raw: unknown, field: string): Chann
     privacy?: ChannelPrivacy;
     broadcast?: boolean;
     contactTracking?: ContactTrackingMode;
+    needsReview?: boolean;
   } = {};
 
   if (source.privacy !== undefined) {
@@ -278,6 +286,20 @@ export function validateChannelEnvelopeLabel(raw: unknown, field: string): Chann
       );
     }
     label.contactTracking = source.contactTracking;
+  }
+  if (source.needsReview !== undefined) {
+    if (typeof source.needsReview !== 'boolean') {
+      throw new Error(`Invalid channel envelope label: ${field}.needsReview must be a boolean`);
+    }
+    label.needsReview = source.needsReview;
+  }
+  // Contract rule (docs/context-envelope.md): a broadcast surface is always
+  // channelPrivacy 'public'. Reject contradictory labels fail-closed.
+  if (label.broadcast === true && label.privacy !== undefined && label.privacy !== 'public') {
+    throw new Error(
+      `Invalid channel envelope label: ${field} sets broadcast=true with privacy '${label.privacy}'; `
+      + "a broadcast surface is always 'public'",
+    );
   }
   return label;
 }

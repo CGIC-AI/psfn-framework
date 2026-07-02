@@ -25,6 +25,7 @@ import {
 import {
   loadSatelliteRegistryConfig,
 } from '../../channels/backplane/satellite-registry.js';
+import { setRuntimeChannelEnvelopeLabels } from '../../system/trust/runtime-channel-labels.js';
 import {
   buildRuntimeChannelsConfigOverrides,
 } from '../startup/support/bootstrap-helpers.js';
@@ -123,6 +124,12 @@ export function prepareAgentStartupContext(input: {
       },
     },
   );
+  // E3.2: publish channel-owned Context Envelope labels for classification
+  // (channel-owned label > operator override > derived default).
+  setRuntimeChannelEnvelopeLabels(channelsConfig.contextEnvelope.channels);
+  input.log.info('Loaded channel-owned context envelope labels', {
+    labeledChannelCount: Object.keys(channelsConfig.contextEnvelope.channels).length,
+  });
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(pathSnapshot.systemDataDir);
   const backupConfig = resolveBackupRuntimeConfig({
     dataDir: pathSnapshot.systemDataDir,

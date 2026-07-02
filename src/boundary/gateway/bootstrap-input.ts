@@ -22,6 +22,7 @@ import {
   resolveOptionalEnvCredential,
 } from '../custody/credential-vault.js';
 import { requireGatewaySessionHmacKeyring } from './session-hmac-env.js';
+import { setRuntimeChannelEnvelopeLabels } from '../../system/trust/runtime-channel-labels.js';
 import {
   buildRuntimeChannelsConfigOverrides,
   type StartupConfigHydrationResult,
@@ -345,6 +346,9 @@ export function resolveGatewayBootstrapInput(
     buildGatewayChannelsConfigOverrides(config, settingsDomains.runtime),
     { credentialVault: config.credentialVault },
   );
+  // E3.2: publish channel-owned Context Envelope labels so gateway-side
+  // classification consumers see the same precedence as the agent process.
+  setRuntimeChannelEnvelopeLabels(channelsConfig.contextEnvelope.channels);
 
   const ntfyConfigIncomplete = Boolean(
     (ntfyBaseUrl && !ntfyTopic) || (!ntfyBaseUrl && ntfyTopic),

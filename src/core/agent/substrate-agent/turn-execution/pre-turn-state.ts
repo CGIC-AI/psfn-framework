@@ -173,8 +173,10 @@ export async function prepareTurnIdentityState(input: {
   }
 
   const authorContext = await runtime.resolveAuthorContext(message);
-  const resolvedChannelPrivacy = normalizeChannelVisibility(message.routing?.channelPrivacy)
-    ?? authorContext.channelPrivacyLevel;
+  // E3.2: only adapter-declared routing privacy (X-Channel-Privacy header,
+  // satellite registry) reaches ChannelMeta. Per-contact conversation-channel
+  // privacy is provenance evidence and never gates (docs/context-envelope.md).
+  const resolvedChannelPrivacy = normalizeChannelVisibility(message.routing?.channelPrivacy);
   if (resolvedChannelPrivacy && message.routing?.channelPrivacy !== resolvedChannelPrivacy) {
     message.routing = {
       ...(message.routing ?? {}),

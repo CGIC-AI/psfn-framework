@@ -19,6 +19,7 @@ import { buildAdminSchedulerRoutes } from './routes/scheduler-routes.js';
 import { buildAdminSessionRoutes } from './routes/session-routes.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './routes/shared.js';
 import { buildAdminSettingsRoutes } from './routes/settings-routes.js';
+import { buildAdminChannelEnvelopeRoutes } from './routes/channel-envelope-routes.js';
 import type { AdminApiRoute } from './routes/types.js';
 import type {
   AdminActionPipeService,
@@ -618,6 +619,7 @@ export function buildAdminApiRoutes(options: {
     ...buildAdminContactRoutes({ contactsService, withBody }),
     ...buildAdminConcernRoutes({ concernService, withBody }),
     ...buildAdminSettingsRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
+    ...buildAdminChannelEnvelopeRoutes({ settingsService, appendAuditTimelineEntry, withBody }),
     ...buildAdminIdentityRoutes({ identityService, appendAuditTimelineEntry, withBody }),
     ...buildAdminPromptRoutes({ promptsService, withBody }),
     ...buildAdminSchedulerRoutes({ scheduler, withBody }),

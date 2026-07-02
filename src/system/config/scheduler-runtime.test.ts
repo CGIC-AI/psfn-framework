@@ -24,6 +24,7 @@ const MEMORY_LANE_BLOCKS = {
     maxEntriesPerEpisode: 14,
     minConversationalEntries: 2,
     minSingleEntryChars: 120,
+    topicSegmentationEnabled: false,
   },
   sleepConsolidation: {
     reviewWindowDays: 60,

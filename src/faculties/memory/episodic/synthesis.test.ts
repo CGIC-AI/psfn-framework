@@ -6,8 +6,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { runForcedEpisodicSynthesis } from '../../../app/maintenance/force-episodic-synthesis.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { EpisodicStore } from './store.js';
-import { EpisodicSynthesizer } from './synthesis.js';
+import {
+  EpisodicSynthesizer,
+  sessionEntryClaimKey,
+  type EpisodeSegmentationEvent,
+} from './synthesis.js';
 
 describe('EpisodicSynthesizer', () => {
   let db: Database.Database | undefined;
@@ -566,5 +571,288 @@ describe('EpisodicSynthesizer', () => {
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('EpisodicSynthesizer contextual topic cutting (E5.4)', () => {
+  let db: Database.Database | undefined;
+
+  afterEach(() => {
+    db?.close();
+    db = undefined;
+  });
+
+  const SESSION_ID = 'terminal:daily';
+  const WATERMARK_SCOPE = {
+    processor: 'episodic_synthesis',
+    sourceRef: SESSION_ID,
+    channelId: SESSION_ID,
+    threadId: SESSION_ID,
+    sessionId: SESSION_ID,
+  };
+
+  function makeStore(): EpisodicStore {
+    db = new Database(':memory:');
+    return new EpisodicStore(db, {
+      now: () => new Date('2026-04-02T08:00:00.000Z'),
+    });
+  }
+
+  function entryTimestamp(id: number): string {
+    return new Date(Date.parse('2026-04-01T10:00:00.000Z') + (id - 1) * 120_000).toISOString();
+  }
+
+  function turnId(id: number): string {
+    return `00000000-0000-7000-a000-${String(id).padStart(12, '0')}`;
+  }
+
+  function entry(id: number, role: SessionEntry['role'], content: string): SessionEntry {
+    return {
+      id,
+      channelId: SESSION_ID,
+      role,
+      content,
+      authorId: role === 'user' ? 'contact:vega' : 'assistant:psfn',
+      authorName: role === 'user' ? 'Vega' : 'PSFN',
+      timestamp: Date.parse(entryTimestamp(id)),
+      metadata: JSON.stringify({
+        turn: {
+          schemaVersion: 1,
+          turnId: turnId(id),
+          requestId: `request:${id}`,
+          role,
+        },
+      }),
+    };
+  }
+
+  /** Eight turns on topic A followed by two turns opening topic B. */
+  function eightPlusTwoEntries(): SessionEntry[] {
+    const topicA = [
+      'Please debug the atlas project scheduler tests.',
+      'I found the atlas scheduler failure and will patch the retry loop.',
+      'Does the atlas patch also cover the watchdog timer?',
+      'Yes, the atlas watchdog timer now resets after each retry.',
+      'Run the atlas scheduler suite again with the patch applied.',
+      'The atlas scheduler suite is green after the retry patch.',
+      'Great, prepare the atlas patch summary for review.',
+      'The atlas patch summary is drafted and ready for review.',
+    ];
+    const topicB = [
+      'Different question: what should we cook for dinner tonight?',
+      'Maybe pasta with roasted tomatoes — do we have basil left?',
+    ];
+    return [
+      ...topicA.map((content, index) => entry(index + 1, index % 2 === 0 ? 'user' : 'assistant', content)),
+      ...topicB.map((content, index) => entry(index + 9, index % 2 === 0 ? 'user' : 'assistant', content)),
+    ];
+  }
+
+  function segmentsJson(segments: Array<Record<string, unknown>>): string {
+    return JSON.stringify({ segments });
+  }
+
+  function queuedSegmentationProvider(
+    responses: string[],
+  ): Pick<LLMProviderPort, 'complete'> & { callCount: () => number } {
+    let calls = 0;
+    return {
+      callCount: () => calls,
+      complete: async () => {
+        calls += 1;
+        const next = responses.shift();
+        if (next === undefined) {
+          throw new Error('unexpected extra segmentation call');
+        }
+        return {
+          content: next,
+          toolCalls: [],
+          model: 'test-model',
+          inputTokens: 0,
+          outputTokens: 0,
+          stopReason: 'stop',
+        };
+      },
+    };
+  }
+
+  it('holds back the unfinished trailing topic: 8+2 yields one topic-A episode, 2 turns unclaimed', async () => {
+    const store = makeStore();
+    const entries = eightPlusTwoEntries();
+    const provider = queuedSegmentationProvider([
+      segmentsJson([
+        { start_index: 0, end_index: 7, topic: 'atlas scheduler debugging', status: 'closed' },
+        { start_index: 8, end_index: 9, topic: 'dinner planning', status: 'open' },
+      ]),
+    ]);
+    const events: EpisodeSegmentationEvent[] = [];
+    const synthesizer = new EpisodicSynthesizer(store, { getRecentMessages: () => entries }, {
+      topicSegmentation: {
+        enabled: true,
+        llmProvider: provider,
+        onEvent: event => events.push(event),
+        now: () => 1_000,
+      },
+    });
+
+    const result = await synthesizer.run({ sessionId: SESSION_ID, sourceMessageId: 'turn:10' });
+
+    expect(result.createdEpisodes).toHaveLength(1);
+    expect(result.candidateEpisodeCount).toBe(1);
+    expect(result.heldBackEntryCount).toBe(2);
+    expect(result.segmentationFailedChunkCount).toBe(0);
+    expect(result.createdEpisodes[0].spanRefs[0]).toMatchObject({
+      startTurnId: turnId(1),
+      endTurnId: turnId(8),
+    });
+
+    // Only the eight topic-A turns are claimed; the held B turns stay free.
+    const claims = store.listEpisodeMessageClaims({ status: 'active' });
+    expect(claims.map(claim => claim.claimKey).sort()).toEqual(
+      entries.slice(0, 8).map(sessionEntryClaimKey).sort(),
+    );
+
+    // Watermark stays behind the held turns so the next pass still sees them.
+    const watermark = store.getProcessingWatermark(WATERMARK_SCOPE);
+    expect(watermark?.processedEndedAt).toBe(entryTimestamp(8));
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        outcome: 'segmented',
+        segmentCount: 2,
+        chunkEntryCount: 10,
+        heldBackEntryCount: 2,
+        timestamp: 1_000,
+      }),
+    ]);
+    expect(provider.callCount()).toBe(1);
+  });
+
+  it('claims held turns when the next pass processes the continued topic', async () => {
+    const store = makeStore();
+    const firstPass = eightPlusTwoEntries();
+    const continuation = [
+      ...firstPass,
+      entry(11, 'user', 'Basil is in the fridge; pasta with roasted tomatoes it is.'),
+      entry(12, 'assistant', 'Pasta plan settled — roasting the tomatoes at seven.'),
+    ];
+    let current = firstPass;
+    const provider = queuedSegmentationProvider([
+      segmentsJson([
+        { start_index: 0, end_index: 7, topic: 'atlas scheduler debugging', status: 'closed' },
+        { start_index: 8, end_index: 9, topic: 'dinner planning', status: 'open' },
+      ]),
+      segmentsJson([
+        { start_index: 0, end_index: 3, topic: 'dinner planning', status: 'closed' },
+      ]),
+    ]);
+    const synthesizer = new EpisodicSynthesizer(store, { getRecentMessages: () => current }, {
+      topicSegmentation: { enabled: true, llmProvider: provider },
+    });
+
+    const first = await synthesizer.run({ sessionId: SESSION_ID });
+    expect(first.heldBackEntryCount).toBe(2);
+
+    current = continuation;
+    const second = await synthesizer.run({ sessionId: SESSION_ID });
+
+    // Claimed topic-A turns are dropped up front; the held B turns join the
+    // continuation and become one dinner-planning episode.
+    expect(second.claimedEntriesSkipped).toBe(8);
+    expect(second.createdEpisodes).toHaveLength(1);
+    expect(second.heldBackEntryCount).toBe(0);
+    expect(second.createdEpisodes[0].spanRefs[0]).toMatchObject({
+      startTurnId: turnId(9),
+      endTurnId: turnId(12),
+    });
+
+    const claims = store.listEpisodeMessageClaims({ status: 'active' });
+    expect(claims).toHaveLength(12);
+    const episodeByClaimKey = new Map(claims.map(claim => [claim.claimKey, claim.episodeId]));
+    expect(episodeByClaimKey.get(sessionEntryClaimKey(firstPass[8]))).toBe(second.createdEpisodes[0].id);
+    expect(episodeByClaimKey.get(sessionEntryClaimKey(firstPass[9]))).toBe(second.createdEpisodes[0].id);
+  });
+
+  it('fails closed on malformed segmentation output: nothing written, nothing claimed, watermark untouched', async () => {
+    const store = makeStore();
+    const entries = eightPlusTwoEntries();
+    const events: EpisodeSegmentationEvent[] = [];
+    const provider = queuedSegmentationProvider([
+      'Topic A covers debugging and then the conversation moves to dinner planning.',
+    ]);
+    const synthesizer = new EpisodicSynthesizer(store, { getRecentMessages: () => entries }, {
+      topicSegmentation: {
+        enabled: true,
+        llmProvider: provider,
+        onEvent: event => events.push(event),
+      },
+    });
+
+    const result = await synthesizer.run({ sessionId: SESSION_ID });
+
+    expect(result.createdEpisodes).toHaveLength(0);
+    expect(result.candidateEpisodeCount).toBe(0);
+    expect(result.segmentationFailedChunkCount).toBe(1);
+    expect(result.heldBackEntryCount).toBe(0);
+    expect(store.listEpisodeMessageClaims({ status: 'active' })).toHaveLength(0);
+    expect(store.getProcessingWatermark(WATERMARK_SCOPE)).toBeUndefined();
+    expect(events).toEqual([
+      expect.objectContaining({
+        outcome: 'failed',
+        chunkEntryCount: 10,
+        error: expect.stringContaining('JSON'),
+      }),
+    ]);
+  });
+
+  it('caps materialized episodes per run; uncapped segments stay unclaimed for the next pass', async () => {
+    const store = makeStore();
+    const entries = eightPlusTwoEntries();
+    const provider = queuedSegmentationProvider([
+      segmentsJson([
+        { start_index: 0, end_index: 7, topic: 'atlas scheduler debugging', status: 'closed' },
+        { start_index: 8, end_index: 9, topic: 'dinner planning', status: 'closed' },
+      ]),
+    ]);
+    const synthesizer = new EpisodicSynthesizer(store, { getRecentMessages: () => entries }, {
+      maxEpisodesPerRun: 1,
+      topicSegmentation: { enabled: true, llmProvider: provider },
+    });
+
+    const result = await synthesizer.run({ sessionId: SESSION_ID });
+
+    expect(result.createdEpisodes).toHaveLength(1);
+    expect(result.candidateEpisodeCount).toBe(1);
+    const claims = store.listEpisodeMessageClaims({ status: 'active' });
+    expect(claims.map(claim => claim.claimKey).sort()).toEqual(
+      entries.slice(0, 8).map(sessionEntryClaimKey).sort(),
+    );
+    const watermark = store.getProcessingWatermark(WATERMARK_SCOPE);
+    expect(watermark?.processedEndedAt).toBe(entryTimestamp(8));
+  });
+
+  it('never calls the provider when segmentation is disabled (deterministic regression)', async () => {
+    const store = makeStore();
+    const entries = eightPlusTwoEntries();
+    const provider = queuedSegmentationProvider([]);
+    const synthesizer = new EpisodicSynthesizer(store, { getRecentMessages: () => entries }, {
+      topicSegmentation: { enabled: false, llmProvider: provider },
+    });
+
+    const result = await synthesizer.run({ sessionId: SESSION_ID });
+
+    expect(provider.callCount()).toBe(0);
+    expect(result.createdEpisodes).toHaveLength(1);
+    expect(result.heldBackEntryCount).toBe(0);
+    expect(result.segmentationFailedChunkCount).toBe(0);
+    // Deterministic cutting keeps the whole 10-turn chunk as one episode.
+    expect(store.listEpisodeMessageClaims({ status: 'active' })).toHaveLength(10);
+  });
+
+  it('fails closed at construction when segmentation is enabled without a provider', () => {
+    const store = makeStore();
+    expect(() => new EpisodicSynthesizer(store, { getRecentMessages: () => [] }, {
+      topicSegmentation: { enabled: true },
+    })).toThrow('no LLM provider');
   });
 });

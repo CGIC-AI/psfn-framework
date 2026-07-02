@@ -44,6 +44,7 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
       maxEntriesPerEpisode: 14,
       minConversationalEntries: 2,
       minSingleEntryChars: 120,
+      topicSegmentationEnabled: false,
     },
     sleepConsolidation: {
       reviewWindowDays: 60,
@@ -247,6 +248,31 @@ describe('scheduler config seed defaults', () => {
       writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
       expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
         'episodeSynthesis.minRelevantTurns must be an integer >= 1',
+      );
+    });
+  });
+
+  it('defaults topicSegmentationEnabled to false when the key is absent (E5.4)', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      const episodeSynthesis = { ...(config.episodeSynthesis as Record<string, unknown>) };
+      delete episodeSynthesis.topicSegmentationEnabled;
+      config.episodeSynthesis = episodeSynthesis;
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(loadSchedulerSeedDefaults({ seedDir }).episodeSynthesis.topicSegmentationEnabled).toBe(false);
+    });
+  });
+
+  it('fails closed when topicSegmentationEnabled is not a boolean', () => {
+    withSeedDir((seedDir) => {
+      const config = buildValidSchedulerConfig();
+      config.episodeSynthesis = {
+        ...(config.episodeSynthesis as Record<string, unknown>),
+        topicSegmentationEnabled: 'yes',
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), config);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'episodeSynthesis.topicSegmentationEnabled must be true or false',
       );
     });
   });

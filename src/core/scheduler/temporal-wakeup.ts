@@ -14,9 +14,11 @@
 //      textures escalate to the full new-day framing.
 //
 // Message-ontology invariants (charter 6.17, 8.1-8.2, law 19):
-// - Both lanes emit SYSTEM NOTES via SessionManager.appendSystemNote —
-//   role 'system', authorId 'system', sessionLane metadata — so the
-//   attribution guard can never render them as partner speech.
+// - Both lanes emit SYSTEM NOTES via SessionManager.appendContextSystemNote —
+//   role 'system', authorId 'system', sessionLane kind 'system_note' — which
+//   participate in ordinary context builds as attributed `[SYSTEM: ...]`
+//   speech, so the frame update is actually visible to the companion while
+//   the attribution guard keeps it out of partner speech.
 // - Wake notes are refreshers, not partner activity: elapsed-time and
 //   ambient-presence idle accounting derive from user/assistant entries only,
 //   so system-role notes never reset them.
@@ -447,7 +449,8 @@ export interface TemporalWakeupSessionManagerPort {
   resolveStartupSessionMetadata(behavior?: 'reuse_latest_session'): StartupSessionMetadata | null;
   getRecentMessages(channelId: string, limit?: number): SessionEntry[];
   getRecentSessionEntries?(channelId: string, limit: number): SessionEntry[];
-  appendSystemNote(channelId: string, note: string, source?: string): void;
+  /** Context-visible system-note lane; see SessionManager.appendContextSystemNote. */
+  appendContextSystemNote(channelId: string, note: string, source?: string): void;
 }
 
 export type TemporalWakeupOutboundResult =
@@ -666,7 +669,7 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
 
         // Internal frame update FIRST — outward delivery failures must never
         // undo or block it.
-        options.sessionManager.appendSystemNote(
+        options.sessionManager.appendContextSystemNote(
           decision.sessionId,
           note,
           TEMPORAL_WAKEUP_MORNING_NOTE_SOURCE,
@@ -743,7 +746,7 @@ export function registerTemporalWakeupTasks(options: TemporalWakeupRuntimeOption
           });
         }
 
-        options.sessionManager.appendSystemNote(
+        options.sessionManager.appendContextSystemNote(
           decision.sessionId,
           note,
           TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE,

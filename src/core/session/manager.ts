@@ -1244,6 +1244,39 @@ export class SessionManager {
     });
   }
 
+  /**
+   * Append a context-visible system note (charter 6.17): an explicit
+   * runtime-to-companion message that participates in ordinary context builds
+   * as attributed system speech. Unlike appendSystemNote's internal journal
+   * lane (sessionLane.kind 'internal'), these entries are rendered into the
+   * assembled prompt via entriesToMessages with the `[SYSTEM: ...]` label, so
+   * the companion actually sees them. They keep role 'system' / authorId
+   * 'system', so the attribution guard can never present them as partner
+   * speech, and partner-activity/idle accounting (user/assistant roles only)
+   * is unaffected.
+   */
+  appendContextSystemNote(channelId: string, note: string, source = 'appendContextSystemNote'): void {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    if (!shouldPersistSessionChannel(resolvedChannelId)) return;
+    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
+    this.store.append({
+      channelId: resolvedChannelId,
+      role: 'system',
+      content: note,
+      authorId: 'system',
+      authorName: 'System',
+      timestamp: Date.now(),
+      ...(originChannelId ? { originChannelId } : {}),
+      metadata: JSON.stringify({
+        sessionLane: {
+          schemaVersion: 1,
+          kind: 'system_note',
+          source,
+        },
+      }),
+    });
+  }
+
   getRecentSessionEntries(channelId: string, limit: number): SessionEntry[] {
     const resolvedChannelId = this.resolveSessionChannelId(channelId);
     return this.store.getRecent(resolvedChannelId, limit);
